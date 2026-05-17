@@ -1,0 +1,466 @@
+classDiagram
+    direction TB
+
+    %% ==================== 用户与会话 ====================
+    class User {
+        +UUID id
+        +String email
+        +String username
+        +String password_hash
+        +String avatar_url
+        +UserRole role
+        +String api_key_encrypted
+        +DateTime created_at
+        +DateTime updated_at
+        +Boolean is_active
+        +login(credentials) AuthToken
+        +update_profile(data) User
+        +rotate_api_key() String
+    }
+
+    class Session {
+        +UUID id
+        +String title
+        +SessionType type
+        +UUID owner_id
+        +UUID project_id
+        +DateTime created_at
+        +DateTime updated_at
+        +Boolean is_archived
+        +add_member(user_id, role)
+        +remove_member(user_id)
+        +get_members() Member[]
+        +archive()
+    }
+
+    class Message {
+        +UUID id
+        +UUID session_id
+        +UUID sender_id
+        +SenderType sender_type
+        +String content
+        +MessageType type
+        +MessageStatus status
+        +JSON metadata
+        +DateTime created_at
+        +DateTime updated_at
+        +edit(new_content) Message
+        +mark_as_read()
+        +serialize() Dict
+    }
+
+    class SessionMember {
+        +UUID session_id
+        +UUID member_id
+        +MemberType member_type
+        +MemberRole role
+        +DateTime joined_at
+    }
+
+    %% ==================== Agent 核心 ====================
+    class Agent {
+        +UUID id
+        +String name
+        +String display_name
+        +String description
+        +AgentType type
+        +JSON capabilities
+        +String system_prompt
+        +JSON config
+        +Boolean is_builtin
+        +Boolean is_active
+        +DateTime created_at
+        +invoke(messages, context) EventStream
+        +get_capabilities() Capability[]
+        +validate_config() Boolean
+    }
+
+    class Capability {
+        +String name
+        +String description
+        +CapabilityType type
+        +JSON parameters_schema
+        +JSON returns_schema
+    }
+
+    %% ==================== 任务系统 ====================
+    class Task {
+        +UUID id
+        +UUID parent_id
+        +UUID session_id
+        +String title
+        +String description
+        +TaskStatus status
+        +UUID assigned_agent_id
+        +UUID created_by
+        +JSON result
+        +DateTime created_at
+        +DateTime started_at
+        +DateTime completed_at
+        +Float progress
+        +start() Task
+        +complete(result) Task
+        +fail(error) Task
+        +pause() Task
+        +resume() Task
+        +get_children() Task[]
+    }
+
+    class ExecutionPlan {
+        +UUID id
+        +UUID session_id
+        +List~Task~ tasks
+        +JSON dependency_graph
+        +PlanStatus status
+        +DateTime created_at
+        +execute() ExecutionResult
+        +get_parallel_groups() Task[][]
+        +get_critical_path() Task[]
+    }
+
+    %% ==================== 项目与文件 ====================
+    class Project {
+        +UUID id
+        +String name
+        +String description
+        +UUID owner_id
+        +String repo_url
+        +JSON file_tree
+        +DateTime created_at
+        +DateTime updated_at
+        +import_from_repo(url)
+        +get_file_tree() FileNode[]
+        +apply_changes(diff) Boolean
+    }
+
+    class FileChange {
+        +UUID id
+        +UUID project_id
+        +UUID message_id
+        +String file_path
+        +ChangeType type
+        +String old_content
+        +String new_content
+        +String diff_patch
+        +ChangeStatus status
+        +DateTime created_at
+        +approve() FileChange
+        +reject() FileChange
+        +get_diff() String
+    }
+
+    class FileNode {
+        +String path
+        +FileNodeType type
+        +String content_hash
+        +Int size
+        +List~FileNode~ children
+        +get_content() String
+        +get_diff(other) FileChange
+    }
+
+    %% ==================== 适配器层 ====================
+    class BaseAdapter {
+        <<abstract>>
+        +String adapter_id
+        +String adapter_type
+        +String display_name
+        +JSON config
+        +AdapterStatus status
+        +__init__(config)
+        +connect() Boolean
+        +disconnect()
+        +send(messages, context) AsyncIterator~Event~
+        +get_capabilities() Capability[]
+        +get_status() AdapterStatus
+        +validate_config() Boolean
+        +health_check() Boolean
+    }
+
+    class AdapterRegistry {
+        +Dict~String, BaseAdapter~ adapters
+        +register(adapter) Boolean
+        +unregister(adapter_id)
+        +get(adapter_id) BaseAdapter
+        +get_all() List~BaseAdapter~
+        +get_by_type(type) List~BaseAdapter~
+        +discover_capabilities() Capability[]
+    }
+
+    class ClaudeAdapter {
+        +String api_key
+        +String model
+        +AnthropicClient client
+        +send(messages) EventStream
+        +handle_tool_call(tool_call) ToolResult
+        +parse_response(response) Event[]
+    }
+
+    class CodexAdapter {
+        +String api_key
+        +String model
+        +OpenAIClient client
+        +send(messages) EventStream
+        +handle_code_request(request) CodeResult
+        +parse_response(response) Event[]
+    }
+
+    class MCPAdapter {
+        +String server_url
+        +List~Tool~ tools
+        +MCPClient client
+        +discover_tools() Tool[]
+        +call_tool(name, params) ToolResult
+        +send(messages) EventStream
+    }
+
+    class A2AAdapter {
+        +String agent_card_url
+        +AgentCard agent_card
+        +List~Skill~ skills
+        +discover_agent() AgentCard
+        +send_task(task) TaskResult
+        +send(messages) EventStream
+    }
+
+    %% ==================== Orchestrator ====================
+    class Orchestrator {
+        +UUID id
+        +String name
+        +classify_intent(message) Intent
+        +decompose_task(intent) Task[]
+        +route_task(task, agents) Agent
+        +schedule_tasks(tasks) ExecutionPlan
+        +aggregate_results(results) String
+        +handle_approval(task) Task
+        +manage_context(session) Context
+    }
+
+    class IntentClassifier {
+        +LLMClient llm
+        +classify(message) Intent
+        +extract_entities(message) Entity[]
+        +get_confidence() Float
+    }
+
+    class TaskPlanner {
+        +LLMClient llm
+        +plan(intent, requirement) Task[]
+        +estimate_complexity(tasks) Complexity
+        +identify_dependencies(tasks) Edge[]
+    }
+
+    class TaskDecomposer {
+        +LLMClient llm
+        +decompose(task, depth) SubTask[]
+        +is_atomic(task) Boolean
+        +merge_tasks(tasks) Task
+    }
+
+    class AgentRouter {
+        +capability_similarity(task, agent) Float
+        +historical_success_rate(agent, type) Float
+        +load_balance_score(agent) Float
+        +context_continuity(task, agent) Float
+        +route(task, agents) Agent
+    }
+
+    class AgentScheduler {
+        +topological_sort(tasks) Task[]
+        +find_parallel_groups(tasks) Task[][]
+        +calculate_critical_path(tasks) Task[]
+        +schedule(tasks) ExecutionPlan
+    }
+
+    class ResultAggregator {
+        +aggregate(results) String
+        +resolve_conflicts(results) Result
+        +summarize(task_tree) Summary
+    }
+
+    class ContextManager {
+        +get_context(session) Context
+        +compress_context(context) Context
+        +merge_contexts(contexts) Context
+        +summarize_history(messages) Summary
+    }
+
+    class HumanApprovalGate {
+        +UUID task_id
+        +ApprovalStatus status
+        +String description
+        +DateTime timeout_at
+        +request_approval(task) ApprovalRequest
+        +approve() Boolean
+        +reject() Boolean
+        +timeout() Boolean
+    }
+
+    %% ==================== Event Stream ====================
+    class Event {
+        +EventType type
+        +String adapter_id
+        +UUID session_id
+        +UUID message_id
+        +JSON payload
+        +DateTime timestamp
+        +String trace_id
+        +to_json() String
+    }
+
+    class EventBus {
+        +Dict~String, List~Handler~~ subscribers
+        +subscribe(event_type, handler)
+        +unsubscribe(event_type, handler)
+        +publish(event) Boolean
+        +get_history(trace_id) Event[]
+    }
+
+    class EventStream {
+        +AsyncIterator~Event~ stream
+        +on_event(callback)
+        +on_error(callback)
+        +on_complete(callback)
+        +cancel()
+    }
+
+    %% ==================== 沙箱与部署 ====================
+    class Sandbox {
+        +DockerClient docker
+        +create_container(image, files) Container
+        +execute(container, command) Result
+        +destroy_container(container_id)
+        +get_logs(container_id) String
+        +limit_resources(cpu, memory) Boolean
+    }
+
+    class BuildEngine {
+        +build_project(files) Artifact
+        +install_dependencies(package_json)
+        +run_vite_build() BuildResult
+        +get_errors() Error[]
+    }
+
+    class PreviewService {
+        +create_preview(project) Preview
+        +get_preview_url(token) String
+        +invalidate_preview(token)
+    }
+
+    class DeployManager {
+        +Dict~String, Deployer~ deployers
+        +register_deployer(platform, deployer)
+        +deploy(session, platform) Deployment
+        +rollback(deployment_id) Boolean
+        +get_status(deployment_id) Status
+    }
+
+    class VercelDeployer {
+        +String api_token
+        +deploy(artifact) Deployment
+        +get_status(deployment_id) Status
+    }
+
+    class NetlifyDeployer {
+        +String api_token
+        +deploy(artifact) Deployment
+        +get_status(deployment_id) Status
+    }
+
+    %% ==================== 服务层 ====================
+    class AuthService {
+        +register(credentials) User
+        +login(credentials) AuthToken
+        +logout(token)
+        +refresh_token(token) AuthToken
+        +verify_token(token) User
+    }
+
+    class SessionService {
+        +create(data) Session
+        +get(id) Session
+        +update(id, data) Session
+        +delete(id)
+        +list(user_id) Session[]
+        +add_member(session_id, member)
+        +remove_member(session_id, member_id)
+    }
+
+    class MessageService {
+        +create(session_id, data) Message
+        +get_history(session_id, cursor) Message[]
+        +edit(id, content) Message
+        +delete(id)
+        +search(query) Message[]
+    }
+
+    class DiffService {
+        +generate_diff(old, new) Diff
+        +apply_diff(diff_id) Boolean
+        +reject_diff(diff_id) Boolean
+        +batch_apply(diff_ids) Result
+    }
+
+    class AgentManager {
+        +create(config) Agent
+        +get(id) Agent
+        +update(id, config) Agent
+        +delete(id)
+        +list() Agent[]
+        +invoke(id, messages) EventStream
+    }
+
+    %% ==================== 关系 ====================
+    User "1" --> "*" Session : owns
+    User "1" --> "*" SessionMember : participates
+    Session "1" --> "*" SessionMember : has
+    Session "1" --> "*" Message : contains
+    Session "1" --> "*" Task : has
+    Session "1" --> "1" Project : associated_with
+    Message "1" --> "*" FileChange : generates
+
+    Agent "1" --> "*" Task : assigned_to
+    Agent "1" --> "*" Capability : exposes
+    Agent --> BaseAdapter : uses
+
+    Project "1" --> "*" FileChange : has
+    Project "1" --> "1" FileNode : root
+    FileNode "1" --> "*" FileNode : children
+
+    BaseAdapter <|-- ClaudeAdapter
+    BaseAdapter <|-- CodexAdapter
+    BaseAdapter <|-- MCPAdapter
+    BaseAdapter <|-- A2AAdapter
+
+    AdapterRegistry "1" --> "*" BaseAdapter : manages
+
+    Orchestrator --> AgentRouter : delegates
+    Orchestrator --> AgentScheduler : delegates
+    Orchestrator --> IntentClassifier : delegates
+    Orchestrator --> TaskPlanner : delegates
+    Orchestrator --> TaskDecomposer : delegates
+    Orchestrator --> ResultAggregator : delegates
+    Orchestrator --> ContextManager : delegates
+    Orchestrator --> HumanApprovalGate : delegates
+    Orchestrator --> Agent : routes_to
+    Orchestrator --> Task : manages
+
+    AgentRouter --> Agent : selects
+    AgentScheduler --> Task : schedules
+
+    EventBus "1" --> "*" Event : publishes
+    EventStream "1" --> "*" Event : produces
+    BaseAdapter --> EventStream : returns
+
+    Sandbox --> BuildEngine : uses
+    PreviewService --> Sandbox : uses
+    DeployManager --> VercelDeployer : uses
+    DeployManager --> NetlifyDeployer : uses
+    VercelDeployer --> PreviewService : gets_artifact
+    NetlifyDeployer --> PreviewService : gets_artifact
+
+    AuthService --> User : manages
+    SessionService --> Session : manages
+    MessageService --> Message : manages
+    DiffService --> FileChange : manages
+    AgentManager --> Agent : manages
