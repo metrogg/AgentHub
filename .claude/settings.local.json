@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ECC_GATEGUARD=off echo \"bypassing gateguard\")"
+      "Bash(ECC_GATEGUARD=off echo \"bypassing gateguard\")",
+      "Bash(ls \"C:\\\\Users\\\\www19\\\\.claude\\\\plugins\\\\cache\\\\superpowers-marketplace\\\\superpowers\\\\5.1.0\\\\skills\")",
+      "Read(//c/Users/www19/.claude/plugins/cache/superpowers-marketplace/superpowers/5.1.0/skills/**)"
     ]
   }
 }
