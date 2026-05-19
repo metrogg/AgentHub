@@ -1,6 +1,10 @@
 import { createMiddleware } from 'hono/factory'
-import { HTTPException } from 'hono/http-exception'
 import { verifyToken, type JwtPayload } from '../lib/auth'
+
+const ANONYMOUS_USER: JwtPayload = {
+  sub: 'anonymous',
+  email: 'anonymous@agenthub.local',
+}
 
 export type AuthVariables = {
   user: JwtPayload
@@ -8,15 +12,17 @@ export type AuthVariables = {
 
 export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
   const authHeader = c.req.header('Authorization')
-  if (!authHeader?.startsWith('Bearer ')) {
-    throw new HTTPException(401, { message: 'Missing or invalid Authorization header' })
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7)
+    try {
+      const payload = await verifyToken(token)
+      c.set('user', payload)
+      await next()
+      return
+    } catch {
+      // fall through to anonymous
+    }
   }
-  const token = authHeader.slice(7)
-  try {
-    const payload = await verifyToken(token)
-    c.set('user', payload)
-  } catch {
-    throw new HTTPException(401, { message: 'Invalid or expired token' })
-  }
+  c.set('user', ANONYMOUS_USER)
   await next()
 })

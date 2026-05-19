@@ -23,5 +23,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .insert(messages)
       .values({ sessionId, senderId: user.sub, senderType: 'user', type, content })
       .returning()
+    // Trigger agent reply asynchronously (do not await to keep response fast)
+    if (msg) {
+      import('../services/agent-runner').then(({ runAgentReply }) => {
+        runAgentReply(sessionId, msg).catch(() => {})
+      })
+    }
     return c.json(msg)
   })

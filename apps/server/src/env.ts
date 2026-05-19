@@ -7,7 +7,12 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(16).default('dev-secret-change-me-in-production-please'),
   JWT_EXPIRES_IN: z.string().default('7d'),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
-  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  LOG_LEVEL: z
+    .string()
+    .transform((s) => s.toLowerCase())
+    .pipe(z.enum(['debug', 'info', 'warn', 'error']))
+    .default('info'),
+  ANTHROPIC_API_KEY: z.string().optional(),
 })
 
 export const env = envSchema.parse(Bun.env)

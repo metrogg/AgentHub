@@ -8,23 +8,21 @@ interface User {
 }
 
 interface AuthState {
-  user: User | null
-  token: string | null
+  user: User
+  token: string
   isAuthenticated: boolean
-  setAuth: (user: User, token: string) => void
-  logout: () => void
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  token: null,
-  isAuthenticated: false,
-  setAuth: (user, token) => {
-    localStorage.setItem('token', token)
-    set({ user, token, isAuthenticated: true })
-  },
-  logout: () => {
-    localStorage.removeItem('token')
-    set({ user: null, token: null, isAuthenticated: false })
-  },
+const ANONYMOUS_USER: User = {
+  id: 'anonymous',
+  email: 'anonymous@agenthub.local',
+  username: '匿名用户',
+}
+
+localStorage.setItem('token', 'anonymous-token')
+
+export const useAuthStore = create<AuthState>(() => ({
+  user: ANONYMOUS_USER,
+  token: 'anonymous-token',
+  isAuthenticated: true,
 }))

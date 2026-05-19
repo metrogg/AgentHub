@@ -1,9 +1,8 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
 import CssBaseline from '@mui/material/CssBaseline'
 import MainLayout from './components/layout/MainLayout'
 import ChatPage from './pages/ChatPage'
-import LoginPage from './pages/LoginPage'
 
 const theme = createTheme({
   palette: {
@@ -19,10 +18,10 @@ function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Routes>
-        <Route path="/login" element={<LoginPage />} />
         <Route path="/" element={<MainLayout />}>
           <Route index element={<ChatPage />} />
         </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </ThemeProvider>
   )
