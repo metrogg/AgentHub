@@ -1,10 +1,18 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { db, settings, eq } from '@agenthub/db'
 import { env } from '../env'
 import { logger } from '../lib/logger'
+import { createAssistantAgent, DEFAULT_AGENT_INSTRUCTIONS } from '../mastra/agents'
 
-const client = env.ANTHROPIC_API_KEY
-  ? new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
-  : null
+async function getApiKey(): Promise<string | null> {
+  try {
+    const [row] = await db.select().from(settings).where(eq(settings.key, 'ANTHROPIC_API_KEY')).limit(1)
+    if (row?.value) return row.value
+  } catch {
+    // Settings are optional; fall back to environment configuration.
+  }
+
+  return env.ANTHROPIC_API_KEY ?? null
+}
 
 export interface LLMMessage {
   role: 'user' | 'assistant'
@@ -15,27 +23,23 @@ export async function* streamReply(
   messages: LLMMessage[],
   system?: string
 ): AsyncGenerator<string, void, unknown> {
-  if (!client) {
-    yield '⚠️ 未配置 ANTHROPIC_API_KEY，请在 .env 中设置后重启服务。'
+  const apiKey = await getApiKey()
+  if (!apiKey) {
+    yield 'ANTHROPIC_API_KEY is not configured. Add it in Settings or set it in .env and restart the server.'
     return
   }
 
   try {
-    const stream = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
-      system: system ?? '你是一个乐于助人的 AI 助手，来自 AgentHub 多 Agent 协作平台。',
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-      stream: true,
-    })
+    const agent = createAssistantAgent(apiKey, system ?? DEFAULT_AGENT_INSTRUCTIONS)
+    const stream = await agent.stream(
+      messages.map((m) => ({ role: m.role, content: m.content }))
+    )
 
-    for await (const chunk of stream) {
-      if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-        yield chunk.delta.text
-      }
+    for await (const delta of stream.textStream) {
+      yield delta
     }
   } catch (err: any) {
-    logger.error({ err: err.message }, 'LLM stream error')
-    yield `\n\n[错误: ${err.message || 'LLM 调用失败'}]`
+    logger.error({ err: err.message }, 'Mastra LLM stream error')
+    yield `\n\n[Error: ${err.message || 'LLM call failed'}]`
   }
 }

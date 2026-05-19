@@ -13,6 +13,9 @@ const envSchema = z.object({
     .pipe(z.enum(['debug', 'info', 'warn', 'error']))
     .default('info'),
   ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-6'),
+  MASTRA_REFERENCE_ROOT: z.string().default('F:\\Learning\\mastra\\mastra-main'),
+  AGENTHUB_WORKSPACE_ROOT: z.string().default('F:\\Learning\\AgentHub'),
 })
 
 export const env = envSchema.parse(Bun.env)

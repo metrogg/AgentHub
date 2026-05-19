@@ -58,6 +58,13 @@ export const agents = sqliteTable('agents', {
   createdAt: now(),
 })
 
+export const settings = sqliteTable('settings', {
+  id: id(),
+  key: text('key').notNull().unique(),
+  value: text('value').notNull(),
+  updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+})
+
 export const tasks = sqliteTable('tasks', {
   id: id(),
   sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),

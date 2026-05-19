@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api } from '../api/client'
+import { apiFetch } from '../api/client'
 
 export interface Session {
   id: string
@@ -29,7 +29,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   async fetchSessions() {
     set({ isLoading: true, error: null })
     try {
-      const res = await api.api.sessions.$get()
+      const res = await apiFetch('/api/sessions')
       const data = await res.json()
       set({ sessions: (data as any).items ?? [], isLoading: false })
     } catch (e: any) {
@@ -38,18 +38,21 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
 
   async createSession(title: string) {
+    set({ isLoading: true, error: null })
     try {
-      const res = await api.api.sessions.$post({
-        json: { title, type: 'direct', agentIds: [] },
+      const res = await apiFetch('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ title, type: 'direct', agentIds: [] }),
       })
       const session = await res.json()
       set((state) => ({
         sessions: [session as Session, ...state.sessions],
         currentSessionId: (session as Session).id,
+        isLoading: false,
       }))
       return session as Session
     } catch (e: any) {
-      set({ error: e.message })
+      set({ error: e.message || '无法创建会话', isLoading: false })
       return null
     }
   },

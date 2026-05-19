@@ -1,29 +1,22 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
-import { ThemeProvider, createTheme } from '@mui/material/styles'
-import CssBaseline from '@mui/material/CssBaseline'
+import { Navigate, Route, Routes } from 'react-router-dom'
 import MainLayout from './components/layout/MainLayout'
 import ChatPage from './pages/ChatPage'
-
-const theme = createTheme({
-  palette: {
-    mode: 'light',
-    primary: {
-      main: '#2563eb',
-    },
-  },
-})
+import StudioModulePage from './pages/StudioModulePage'
+import { StudioThemeProvider } from './theme/StudioThemeProvider'
 
 function App() {
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
+    <StudioThemeProvider>
       <Routes>
         <Route path="/" element={<MainLayout />}>
-          <Route index element={<ChatPage />} />
+          <Route index element={<Navigate to="/agents/weather-agent/chat/new" replace />} />
+          <Route path="agents" element={<StudioModulePage />} />
+          <Route path="agents/:agentId/chat/new" element={<ChatPage />} />
+          <Route path=":moduleKey" element={<StudioModulePage />} />
         </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/agents/weather-agent/chat/new" replace />} />
       </Routes>
-    </ThemeProvider>
+    </StudioThemeProvider>
   )
 }
 

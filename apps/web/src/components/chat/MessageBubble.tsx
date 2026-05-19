@@ -1,67 +1,123 @@
-import { Box, Paper, Typography, Avatar } from '@mui/material'
-import SmartToyIcon from '@mui/icons-material/SmartToy'
+import { Avatar, Box, Chip, Paper, Typography } from '@mui/material'
 import PersonIcon from '@mui/icons-material/Person'
+import SmartToyIcon from '@mui/icons-material/SmartToy'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 interface MessageBubbleProps {
   senderType: 'user' | 'agent' | 'system'
   content: string
+  createdAt?: string
   isStreaming?: boolean
 }
 
-export default function MessageBubble({ senderType, content, isStreaming }: MessageBubbleProps) {
+export default function MessageBubble({
+  senderType,
+  content,
+  createdAt,
+  isStreaming,
+}: MessageBubbleProps) {
   const isUser = senderType === 'user'
 
   return (
     <Box
       sx={{
-        display: 'flex',
-        flexDirection: isUser ? 'row-reverse' : 'row',
-        alignItems: 'flex-start',
-        gap: 1.5,
+        display: 'grid',
+        gridTemplateColumns: isUser ? 'minmax(0, 1fr) 34px' : '34px minmax(0, 1fr)',
+        gap: 1.4,
+        alignItems: 'start',
         mb: 2,
       }}
     >
-      <Avatar sx={{ bgcolor: isUser ? 'primary.main' : 'secondary.main', width: 36, height: 36 }}>
-        {isUser ? <PersonIcon fontSize="small" /> : <SmartToyIcon fontSize="small" />}
-      </Avatar>
-      <Paper
-        elevation={1}
-        sx={{
-          px: 2,
-          py: 1.5,
-          maxWidth: '70%',
-          bgcolor: isUser ? 'primary.50' : 'background.paper',
-          borderRadius: 2,
-          position: 'relative',
-        }}
-      >
-        {isUser ? (
-          <Typography whiteSpace="pre-wrap">{content}</Typography>
-        ) : (
-          <Box className="markdown-body" sx={{ '& p': { my: 0.5 } }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-          </Box>
-        )}
-        {isStreaming && (
-          <Box
-            component="span"
+      {!isUser && <MessageAvatar isUser={false} />}
+      <Box sx={{ justifySelf: isUser ? 'end' : 'start', maxWidth: { xs: '100%', md: '78%' } }}>
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: isUser ? 'flex-end' : 'flex-start',
+            alignItems: 'center',
+            gap: 0.8,
+            mb: 0.65,
+          }}
+        >
+          <Chip
+            size="small"
+            label={isUser ? '你' : 'Agent'}
             sx={{
-              display: 'inline-block',
-              width: 8,
-              height: 16,
-              ml: 0.5,
-              bgcolor: 'primary.main',
-              animation: 'blink 1s step-end infinite',
-              '@keyframes blink': {
-                '0%, 100%': { opacity: 1 },
-                '50%': { opacity: 0 },
-              },
+              height: 22,
+              bgcolor: isUser ? 'var(--studio-surface-soft)' : 'var(--studio-accent-soft)',
+              color: isUser ? 'text.secondary' : 'var(--studio-accent)',
+              border: '1px solid var(--studio-border)',
+              fontWeight: 800,
             }}
           />
-        )}
-      </Paper>
+          {createdAt && (
+            <Typography variant="caption" color="text.disabled">
+              {new Date(createdAt).toLocaleTimeString()}
+            </Typography>
+          )}
+        </Box>
+        <Paper
+          elevation={0}
+          sx={{
+            px: 1.7,
+            py: 1.35,
+            bgcolor: isUser ? 'var(--studio-text)' : 'var(--studio-surface)',
+            color: isUser ? 'var(--studio-inverse)' : 'text.primary',
+            border: isUser ? '1px solid var(--studio-text)' : '1px solid var(--studio-border)',
+            borderRadius: 2.4,
+          }}
+        >
+          {isUser ? (
+            <Typography whiteSpace="pre-wrap" sx={{ lineHeight: 1.65 }}>
+              {content}
+            </Typography>
+          ) : (
+            <Box className="markdown-body">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            </Box>
+          )}
+          {isStreaming && <StreamingCursor />}
+        </Paper>
+      </Box>
+      {isUser && <MessageAvatar isUser />}
     </Box>
+  )
+}
+
+function MessageAvatar({ isUser }: { isUser: boolean }) {
+  return (
+    <Avatar
+      sx={{
+        width: 34,
+        height: 34,
+        bgcolor: isUser ? 'var(--studio-text)' : 'var(--studio-surface-soft)',
+        color: isUser ? 'var(--studio-inverse)' : 'text.primary',
+        border: '1px solid var(--studio-border)',
+      }}
+    >
+      {isUser ? <PersonIcon fontSize="small" /> : <SmartToyIcon fontSize="small" />}
+    </Avatar>
+  )
+}
+
+function StreamingCursor() {
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: 'inline-block',
+        width: 7,
+        height: 17,
+        ml: 0.5,
+        verticalAlign: 'text-bottom',
+        bgcolor: 'secondary.main',
+        animation: 'blink 1s step-end infinite',
+        '@keyframes blink': {
+          '0%, 100%': { opacity: 1 },
+          '50%': { opacity: 0 },
+        },
+      }}
+    />
   )
 }
