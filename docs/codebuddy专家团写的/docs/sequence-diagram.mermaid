@@ -1,0 +1,291 @@
+%% AgentHub 核心时序图合集
+%% 包含：单聊、群聊@Agent、Orchestrator任务拆解、代码Diff、网页预览、一键部署
+
+sequenceDiagram
+    title 单聊流程
+    actor User
+    participant FE as Frontend (React)
+    participant WS as WebSocket Manager
+    participant Auth as Auth Middleware
+    participant MsgSvc as Message Service
+    participant EventBus as Event Bus
+    participant Adapter as Adapter Registry
+    participant Claude as Claude Adapter
+    participant PG as PostgreSQL
+    participant Redis as Redis
+
+    User->>FE: 输入消息并发送
+    FE->>WS: emit("message:send")
+    WS->>Auth: 验证JWT Token
+    Auth-->>WS: Token有效
+    WS->>MsgSvc: create_message(session_id, content)
+    MsgSvc->>PG: INSERT message
+    PG-->>MsgSvc: message记录
+    MsgSvc->>Redis: pub(channel, "message:received")
+    Redis-->>WS: 广播消息
+    WS-->>FE: on("message:received")
+    FE-->>User: 显示用户消息
+
+    MsgSvc->>EventBus: publish("agent.invoke", {session, message})
+    EventBus->>Adapter: get_adapter_for_session(session)
+    Adapter->>Claude: invoke(messages, context)
+    Claude->>Claude: 调用Anthropic API
+    Claude-->>Adapter: EventStream (SSE)
+
+    loop 流式响应
+        Adapter->>EventBus: publish("message:stream", delta)
+        EventBus->>Redis: pub(channel, delta)
+        Redis-->>WS: 推送增量
+        WS-->>FE: on("message:stream")
+        FE-->>User: 逐字显示Agent回复
+    end
+
+    Adapter->>EventBus: publish("message:completed")
+    EventBus->>MsgSvc: save_message(agent_response)
+    MsgSvc->>PG: INSERT agent_message
+    PG-->>MsgSvc: 完成
+    MsgSvc->>Redis: pub(channel, "message:completed")
+    Redis-->>WS: 广播完成事件
+    WS-->>FE: on("message:completed")
+    FE-->>User: 显示完整回复
+
+---
+
+sequenceDiagram
+    title 群聊 @Agent 流程
+    actor User
+    participant FE as Frontend
+    participant WS as WebSocket
+    participant MsgSvc as Message Service
+    participant MentionParser as Mention Parser
+    participant Orchestrator as Orchestrator
+    participant Router as Agent Router
+    participant EventBus as Event Bus
+    participant AdapterA as Adapter A (FrontendAgent)
+    participant AdapterB as Adapter B (BackendAgent)
+
+    User->>FE: 输入 "@FrontendAgent 写登录页 @BackendAgent 写API"
+    FE->>WS: emit("message:send")
+    WS->>MsgSvc: create_message()
+    MsgSvc->>MentionParser: parse_mentions(content)
+    MentionParser-->>MsgSvc: ["FrontendAgent", "BackendAgent"]
+    MsgSvc->>EventBus: publish("message:mentioned", {mentions, message})
+
+    EventBus->>Orchestrator: on_message(session, message)
+    Orchestrator->>Orchestrator: classify_intent(message)
+    Orchestrator->>Router: route_to_agents(mentions, intent)
+    Router->>Router: match_agents(mentions)
+    Router-->>Orchestrator: [AdapterA, AdapterB]
+
+    par 并行调度
+        Orchestrator->>EventBus: publish("agent:invoke", AdapterA)
+        EventBus->>AdapterA: invoke(messages)
+        AdapterA-->>EventBus: EventStream A
+        EventBus->>WS: stream "agent:typing" (A)
+        WS-->>FE: 显示A正在输入
+        loop 流式响应A
+            EventBus->>WS: stream "message:stream" (A)
+            WS-->>FE: 显示A的回复
+        end
+    and
+        Orchestrator->>EventBus: publish("agent:invoke", AdapterB)
+        EventBus->>AdapterB: invoke(messages)
+        AdapterB-->>EventBus: EventStream B
+        EventBus->>WS: stream "agent:typing" (B)
+        WS-->>FE: 显示B正在输入
+        loop 流式响应B
+            EventBus->>WS: stream "message:stream" (B)
+            WS-->>FE: 显示B的回复
+        end
+    end
+
+    Orchestrator->>EventBus: publish("message:completed")
+    EventBus->>MsgSvc: save_messages([A_response, B_response])
+
+---
+
+sequenceDiagram
+    title Orchestrator 任务拆解流程
+    actor User
+    participant FE as Frontend
+    participant REST as REST API
+    participant Orchestrator as Orchestrator
+    participant IntentCls as Intent Classifier
+    participant TaskPlanner as Task Planner
+    participant TaskDecomposer as Task Decomposer
+    participant AgentRouter as Agent Router
+    participant Scheduler as Agent Scheduler
+    participant TaskSvc as Task Service
+    participant PG as PostgreSQL
+
+    User->>FE: 输入 "创建一个带JWT登录的Todo应用"
+    FE->>REST: POST /api/v1/sessions/{id}/tasks/auto
+    REST->>Orchestrator: auto_decompose(session_id, requirement)
+
+    Orchestrator->>IntentCls: classify(requirement)
+    IntentCls->>IntentCls: LLM意图分类
+    IntentCls-->>Orchestrator: Intent{category: "fullstack_app", complexity: "medium"}
+
+    Orchestrator->>TaskPlanner: plan(intent, requirement)
+    TaskPlanner->>TaskPlanner: LLM生成顶层任务
+    TaskPlanner-->>Orchestrator: ["UI设计", "数据库设计", "API开发", "前端实现"]
+
+    loop 递归拆解
+        Orchestrator->>TaskDecomposer: decompose(task, depth)
+        TaskDecomposer->>TaskDecomposer: LLM子任务拆解
+        TaskDecomposer-->>Orchestrator: SubTask[]
+    end
+
+    Orchestrator->>AgentRouter: assign_agents(task_tree, available_agents)
+    AgentRouter->>AgentRouter: 能力匹配算法
+    AgentRouter-->>Orchestrator: Task[] with agent_id
+
+    Orchestrator->>Scheduler: schedule(tasks)
+    Scheduler->>Scheduler: 拓扑排序 + 并行度分析
+    Scheduler-->>Orchestrator: ExecutionPlan
+
+    Orchestrator->>TaskSvc: create_task_tree(tasks)
+    TaskSvc->>PG: INSERT tasks (with parent_id)
+    PG-->>TaskSvc: task_ids[]
+    TaskSvc-->>Orchestrator: TaskTree
+
+    Orchestrator-->>REST: TaskTree + ExecutionPlan
+    REST-->>FE: {code: 200, data: task_tree}
+    FE-->>User: 显示任务拆解树
+
+    Orchestrator->>Scheduler: execute_plan(execution_plan)
+    Scheduler->>Scheduler: 启动无依赖任务
+
+---
+
+sequenceDiagram
+    title 代码 Diff 生成流程
+    actor User
+    participant FE as Frontend
+    participant WS as WebSocket
+    participant MsgSvc as Message Service
+    participant Adapter as Adapter Registry
+    participant Claude as Claude Adapter
+    participant DiffEngine as Diff Engine
+    participant ProjectSvc as Project Service
+    participant PG as PostgreSQL
+    participant MinIO as MinIO
+
+    User->>FE: 请求 "把Button改成蓝色"
+    FE->>WS: emit("message:send")
+    WS->>MsgSvc: create_message()
+    MsgSvc->>EventBus: publish("agent:invoke")
+    EventBus->>Claude: invoke_with_context(requirement, project_files)
+
+    Claude->>Claude: 分析代码变更
+    Claude-->>Adapter: response {tool_calls: [edit_file]}
+    Adapter->>DiffEngine: generate_diff(file_path, old, new)
+    DiffEngine->>ProjectSvc: get_file_content(project_id, path)
+    ProjectSvc->>MinIO: read_object(path)
+    MinIO-->>ProjectSvc: original_content
+    ProjectSvc-->>DiffEngine: old_content
+    DiffEngine->>DiffEngine: diff-match-patch(old, new)
+    DiffEngine-->>Adapter: diff_patch
+
+    Adapter->>PG: INSERT file_change
+    PG-->>Adapter: change_id
+    Adapter->>EventBus: publish("diff:generated", change)
+    EventBus->>WS: emit("diff:generated")
+    WS-->>FE: on("diff:generated")
+    FE-->>User: 弹出Diff查看器
+
+    User->>FE: 点击"查看Diff"
+    FE->>FE: 渲染Monaco Diff Editor
+    FE->>FE: 文件树 + 行级Diff展示
+    User->>FE: 点击"接受变更"
+    FE->>WS: emit("diff:apply")
+    WS->>DiffEngine: apply_diff(change_id)
+    DiffEngine->>ProjectSvc: write_file(path, new_content)
+    ProjectSvc->>MinIO: update_object(path, new_content)
+    DiffEngine->>PG: UPDATE file_change status=applied
+    WS-->>FE: emit("diff:applied")
+    FE-->>User: 显示"已应用"
+
+---
+
+sequenceDiagram
+    title 网页预览流程
+    actor User
+    participant FE as Frontend
+    participant REST as REST API
+    participant PreviewSvc as Preview Service
+    participant Sandbox as Docker Sandbox
+    participant BuildEngine as Build Engine
+    participant MinIO as MinIO
+    participant Nginx as Preview Nginx
+
+    User->>FE: 点击"预览"
+    FE->>REST: POST /api/v1/sessions/{id}/preview/build
+    REST->>PreviewSvc: build_preview(session_id)
+
+    PreviewSvc->>MinIO: get_project_files(project_id)
+    MinIO-->>PreviewSvc: files[]
+    PreviewSvc->>Sandbox: create_container(image="node:20", files)
+    Sandbox-->>PreviewSvc: container_id
+
+    PreviewSvc->>BuildEngine: build(container_id, files)
+    BuildEngine->>BuildEngine: npm install
+    BuildEngine->>BuildEngine: vite build
+    BuildEngine-->>PreviewSvc: dist/
+
+    PreviewSvc->>MinIO: upload_dist(dist/, preview_token)
+    MinIO-->>PreviewSvc: public_url
+
+    PreviewSvc->>Nginx: register_route(preview_token, public_url)
+    Nginx-->>PreviewSvc: proxy_url
+
+    PreviewSvc-->>REST: {preview_url, build_time}
+    REST-->>FE: {code: 200, data: {url}}
+    FE-->>User: iframe加载预览页面
+
+    User->>FE: 切换移动端视图
+    FE->>FE: iframe width=375px
+    FE-->>User: 显示移动端预览
+
+---
+
+sequenceDiagram
+    title 一键部署流程
+    actor User
+    participant FE as Frontend
+    participant REST as REST API
+    participant DeploySvc as Deploy Service
+    participant PreviewSvc as Preview Service
+    participant VercelDeployer as Vercel Deployer
+    participant VercelAPI as Vercel API
+    participant PG as PostgreSQL
+
+    User->>FE: 点击"一键部署到Vercel"
+    FE->>REST: POST /api/v1/sessions/{id}/deploy
+    REST->>DeploySvc: deploy(session_id, platform="vercel")
+
+    DeploySvc->>PreviewSvc: get_build_artifact(session_id)
+    PreviewSvc->>DeploySvc: dist.zip
+
+    DeploySvc->>VercelDeployer: deploy(artifact, config)
+    VercelDeployer->>VercelDeployer: validate_config(api_token, project_name)
+    VercelDeployer->>VercelAPI: POST /v13/deployments
+    VercelAPI-->>VercelDeployer: {deployment_id, url, state: "BUILDING"}
+
+    loop 轮询部署状态
+        VercelDeployer->>VercelAPI: GET /v13/deployments/{id}
+        VercelAPI-->>VercelDeployer: {state: "BUILDING" | "READY" | "ERROR"}
+    end
+
+    VercelDeployer-->>DeploySvc: {deployment_id, url, status}
+    DeploySvc->>PG: INSERT deployment record
+    DeploySvc-->>REST: {code: 200, data: {url, status}}
+    REST-->>FE: 显示部署结果
+    FE-->>User: 展示可访问URL
+
+    alt 部署失败
+        VercelDeployer-->>DeploySvc: error
+        DeploySvc->>DeploySvc: 自动重试1次
+        DeploySvc->>VercelDeployer: retry
+        VercelDeployer->>VercelAPI: 重新部署
+    end
