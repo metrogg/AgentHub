@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+bun.lockb
+
+# Bun / TS
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+dist/
+build/
+.next/
+.turbo/
+apps/*/dist/
+packages/*/dist/
+.vite/
+
+# Drizzle / DB
+*.db
+*.db-journal
+storage/
+
+# Logs
+*.log
+npm-debug.log*

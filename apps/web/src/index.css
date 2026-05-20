@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --studio-bg: #050505;
+  --studio-paper: #111111;
+  --studio-surface: #151515;
+  --studio-surface-soft: #1f1f1f;
+  --studio-border: rgba(255, 255, 255, 0.09);
+  --studio-text: #f4f4f4;
+  --studio-text-muted: #9b9b9b;
+  --studio-accent: #8fd060;
+  --studio-accent-soft: rgba(143, 208, 96, 0.16);
+  --studio-inverse: #050505;
+  --studio-motion-fast: 160ms cubic-bezier(0.2, 0, 0, 1);
+  --studio-motion: 260ms cubic-bezier(0.2, 0, 0, 1);
+  --studio-motion-slow: 360ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Aptos', 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--studio-bg, #050505);
+  color: var(--studio-text, #f4f4f4);
+  transition:
+    background-color var(--studio-motion),
+    color var(--studio-motion);
+}
+
+.studio-theme-transition *,
+.studio-theme-transition *::before,
+.studio-theme-transition *::after {
+  transition:
+    background-color var(--studio-motion),
+    border-color var(--studio-motion),
+    color var(--studio-motion),
+    fill var(--studio-motion),
+    stroke var(--studio-motion),
+    box-shadow var(--studio-motion) !important;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--studio-text, #f4f4f4) 18%, transparent);
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--studio-text, #f4f4f4) 32%, transparent);
+}
+
+.markdown-body {
+  font-size: 0.96rem;
+  line-height: 1.7;
+}
+
+.markdown-body p {
+  margin: 0.3rem 0;
+}
+
+.markdown-body pre {
+  overflow: auto;
+  padding: 0.9rem;
+  border-radius: 8px;
+  background: var(--studio-bg, #050505);
+  color: var(--studio-text, #f4f4f4);
+  border: 1px solid var(--studio-border, rgba(255, 255, 255, 0.08));
+}
+
+.markdown-body code {
+  font-family: 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.markdown-body :not(pre) > code {
+  padding: 0.1rem 0.32rem;
+  border-radius: 5px;
+  background: var(--studio-surface-soft, #242424);
+  color: var(--studio-accent, #8fd060);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --studio-motion-fast: 1ms linear;
+    --studio-motion: 1ms linear;
+    --studio-motion-slow: 1ms linear;
+  }
+
+  .studio-theme-transition *,
+  .studio-theme-transition *::before,
+  .studio-theme-transition *::after {
+    transition-duration: 1ms !important;
+  }
+}

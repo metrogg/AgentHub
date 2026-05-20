@@ -1,0 +1,9 @@
+[install]
+# 使用精确版本，提升锁文件确定性
+exact = false
+# 全局缓存
+cache = true
+
+[install.scopes]
+# 国内镜像加速（如需）
+# "@npm" = { url = "https://registry.npmmirror.com" }
