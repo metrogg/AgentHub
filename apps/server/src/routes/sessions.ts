@@ -39,3 +39,13 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
     }
     return c.json(session)
   })
+  .delete('/:id', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1)
+    if (!session || session.ownerId !== user.sub) {
+      throw new HTTPException(404, { message: 'Session not found' })
+    }
+    await db.delete(sessions).where(eq(sessions.id, id))
+    return c.body(null, 204)
+  })

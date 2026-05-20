@@ -1,23 +1,43 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
-import MainLayout from './components/layout/MainLayout'
+import { useAuthStore } from './stores/authStore'
+import LoginPage from './pages/LoginPage'
 import ChatPage from './pages/ChatPage'
-import StudioModulePage from './pages/StudioModulePage'
-import { StudioThemeProvider } from './theme/StudioThemeProvider'
+import SettingsPage from './pages/SettingsPage'
 
-function App() {
-  return (
-    <StudioThemeProvider>
-      <Routes>
-        <Route path="/" element={<MainLayout />}>
-          <Route index element={<Navigate to="/agents/weather-agent/chat/new" replace />} />
-          <Route path="agents" element={<StudioModulePage />} />
-          <Route path="agents/:agentId/chat/new" element={<ChatPage />} />
-          <Route path=":moduleKey" element={<StudioModulePage />} />
-        </Route>
-        <Route path="*" element={<Navigate to="/agents/weather-agent/chat/new" replace />} />
-      </Routes>
-    </StudioThemeProvider>
-  )
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  return isAuthenticated ? children : <Navigate to="/login" replace />
 }
 
-export default App
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/"
+        element={
+          <RequireAuth>
+            <ChatPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/chat/:sessionId"
+        element={
+          <RequireAuth>
+            <ChatPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <SettingsPage />
+          </RequireAuth>
+        }
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}

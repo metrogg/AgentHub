@@ -1,28 +1,51 @@
 import { create } from 'zustand'
-
-interface User {
-  id: string
-  email: string
-  username: string
-  avatar_url?: string
-}
+import { authStorage, type AuthUser } from '../lib/auth'
+import { api } from '../lib/api'
 
 interface AuthState {
-  user: User
-  token: string
+  user: AuthUser | null
   isAuthenticated: boolean
+  loading: boolean
+  error: string | null
+  login: (email: string, password: string) => Promise<void>
+  register: (email: string, username: string, password: string) => Promise<void>
+  logout: () => void
 }
 
-const ANONYMOUS_USER: User = {
-  id: 'anonymous',
-  email: 'anonymous@agenthub.local',
-  username: '匿名用户',
-}
+export const useAuthStore = create<AuthState>((set) => ({
+  user: authStorage.getUser(),
+  isAuthenticated: !!authStorage.getToken(),
+  loading: false,
+  error: null,
 
-localStorage.setItem('token', 'anonymous-token')
+  async login(email, password) {
+    set({ loading: true, error: null })
+    try {
+      const { token, user } = await api.login({ email, password })
+      authStorage.setToken(token)
+      authStorage.setUser(user)
+      set({ user, isAuthenticated: true, loading: false })
+    } catch (e: any) {
+      set({ error: e.message ?? '登录失败', loading: false })
+      throw e
+    }
+  },
 
-export const useAuthStore = create<AuthState>(() => ({
-  user: ANONYMOUS_USER,
-  token: 'anonymous-token',
-  isAuthenticated: true,
+  async register(email, username, password) {
+    set({ loading: true, error: null })
+    try {
+      const { token, user } = await api.register({ email, username, password })
+      authStorage.setToken(token)
+      authStorage.setUser(user)
+      set({ user, isAuthenticated: true, loading: false })
+    } catch (e: any) {
+      set({ error: e.message ?? '注册失败', loading: false })
+      throw e
+    }
+  },
+
+  logout() {
+    authStorage.clearAll()
+    set({ user: null, isAuthenticated: false })
+  },
 }))
