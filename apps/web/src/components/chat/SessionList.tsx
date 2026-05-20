@@ -44,13 +44,6 @@ export default function SessionList() {
           </div>
           <span className="text-sm font-semibold text-neutral-950">AgentHub</span>
         </div>
-        <button
-          onClick={() => navigate('/settings')}
-          className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-200/70"
-          aria-label="侧栏设置"
-        >
-          <Settings2 className="h-4 w-4" />
-        </button>
       </div>
 
       <div className="px-2">

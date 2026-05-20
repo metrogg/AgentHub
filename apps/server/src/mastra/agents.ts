@@ -6,20 +6,22 @@ type MastraModelId = `${string}/${string}`
 export const DEFAULT_AGENT_INSTRUCTIONS =
   'You are AgentHub Assistant, a helpful AI collaborator inside a multi-agent collaboration platform. Reply clearly, keep context from the conversation, and surface practical next steps when useful.'
 
-function resolveAnthropicModel(): MastraModelId {
-  return env.ANTHROPIC_MODEL.includes('/')
-    ? (env.ANTHROPIC_MODEL as MastraModelId)
-    : `anthropic/${env.ANTHROPIC_MODEL}`
+function resolveAnthropicModel(model = env.ANTHROPIC_MODEL): MastraModelId {
+  return model.includes('/') ? (model as MastraModelId) : `anthropic/${model}`
 }
 
-export function createAssistantAgent(apiKey: string, instructions = DEFAULT_AGENT_INSTRUCTIONS) {
+export function createAssistantAgent(
+  apiKey: string,
+  instructions = DEFAULT_AGENT_INSTRUCTIONS,
+  model = env.ANTHROPIC_MODEL
+) {
   return new Agent({
     id: 'agenthub-assistant',
     name: 'AgentHub Assistant',
     description: 'Default chat agent powered by Mastra.',
     instructions,
     model: {
-      id: resolveAnthropicModel(),
+      id: resolveAnthropicModel(model),
       apiKey,
     },
   })

@@ -5,6 +5,13 @@ import { createAssistantAgent, DEFAULT_AGENT_INSTRUCTIONS } from '../mastra/agen
 
 async function getApiKey(): Promise<string | null> {
   try {
+    const [activeKey] = await db
+      .select()
+      .from(settings)
+      .where(eq(settings.key, 'ACTIVE_API_KEY'))
+      .limit(1)
+    if (activeKey?.value) return activeKey.value
+
     const [row] = await db.select().from(settings).where(eq(settings.key, 'ANTHROPIC_API_KEY')).limit(1)
     if (row?.value) return row.value
   } catch {
@@ -12,6 +19,24 @@ async function getApiKey(): Promise<string | null> {
   }
 
   return env.ANTHROPIC_API_KEY ?? null
+}
+
+async function getModel(): Promise<string> {
+  try {
+    const [activeModel] = await db
+      .select()
+      .from(settings)
+      .where(eq(settings.key, 'ACTIVE_MODEL'))
+      .limit(1)
+    if (activeModel?.value) return activeModel.value
+
+    const [row] = await db.select().from(settings).where(eq(settings.key, 'ANTHROPIC_MODEL')).limit(1)
+    if (row?.value) return row.value
+  } catch {
+    // Settings are optional; fall back to environment configuration.
+  }
+
+  return env.ANTHROPIC_MODEL
 }
 
 export interface LLMMessage {
@@ -30,7 +55,8 @@ export async function* streamReply(
   }
 
   try {
-    const agent = createAssistantAgent(apiKey, system ?? DEFAULT_AGENT_INSTRUCTIONS)
+    const model = await getModel()
+    const agent = createAssistantAgent(apiKey, system ?? DEFAULT_AGENT_INSTRUCTIONS, model)
     const stream = await agent.stream(
       messages.map((m) => ({ role: m.role, content: m.content }))
     )

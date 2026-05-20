@@ -68,4 +68,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  testModel: (data: {
+    provider: string
+    apiEndpoint: string
+    anthropicEndpoint?: string
+    apiKey?: string
+    apiKeyEnv?: string
+  }) =>
+    request<{ ok: boolean; status?: number; message: string }>('/settings/test-model', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 }
