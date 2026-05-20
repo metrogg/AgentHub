@@ -2,6 +2,24 @@ import { app } from './app'
 import { env } from './env'
 import { logger } from './lib/logger'
 import { joinRoom, cleanupWebSocket } from './services/agent-runner'
+import { db, users, eq } from '@agenthub/db'
+import { DEFAULT_USER } from './middleware/auth'
+
+// Seed the local default user (single-user mode, no auth)
+async function seedDefaultUser() {
+  const existing = await db.select().from(users).where(eq(users.id, DEFAULT_USER.sub)).limit(1)
+  if (existing.length === 0) {
+    await db.insert(users).values({
+      id: DEFAULT_USER.sub,
+      email: DEFAULT_USER.email,
+      username: DEFAULT_USER.username,
+      passwordHash: '',
+    })
+    logger.info('Seeded default user')
+  }
+}
+
+await seedDefaultUser()
 
 let currentPort = env.PORT
 const maxTries = 10

@@ -1,15 +1,22 @@
 import { useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Plus, MessageSquare, Trash2, Settings, LogOut, User } from 'lucide-react'
+import {
+  Bot,
+  Code2,
+  Folder,
+  History,
+  MessageCircle,
+  Plus,
+  Settings2,
+  Trash2,
+} from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
-import { useAuthStore } from '../../stores/authStore'
 import { cn, relativeTime } from '../../lib/utils'
 
 export default function SessionList() {
   const navigate = useNavigate()
   const { sessionId } = useParams()
   const { sessions, fetchSessions, createSession, deleteSession } = useChatStore()
-  const { user, logout } = useAuthStore()
 
   useEffect(() => {
     fetchSessions()
@@ -20,93 +27,120 @@ export default function SessionList() {
     navigate(`/chat/${session.id}`)
   }
 
-  async function handleDelete(e: React.MouseEvent, id: string) {
-    e.stopPropagation()
-    e.preventDefault()
+  async function handleDelete(event: React.MouseEvent, id: string) {
+    event.stopPropagation()
+    event.preventDefault()
     if (!confirm('删除这个会话?')) return
     await deleteSession(id)
     if (sessionId === id) navigate('/', { replace: true })
   }
 
-  function handleLogout() {
-    logout()
-    navigate('/login', { replace: true })
-  }
-
   return (
-    <aside className="w-64 shrink-0 flex flex-col bg-bg-elevated border-r border-border">
-      {/* Header */}
-      <div className="p-3">
-        <button onClick={handleNew} className="btn-primary w-full">
-          <Plus className="w-4 h-4" />
-          新建会话
+    <aside className="flex w-64 shrink-0 flex-col border-r border-neutral-200 bg-[#f7f7f4]">
+      <div className="flex h-14 items-center justify-between px-4">
+        <div className="flex items-center gap-2">
+          <div className="grid h-7 w-7 place-items-center rounded-lg bg-neutral-950 text-white">
+            <MessageCircle className="h-4 w-4" />
+          </div>
+          <span className="text-sm font-semibold text-neutral-950">AgentHub</span>
+        </div>
+        <button
+          onClick={() => navigate('/settings')}
+          className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-200/70"
+          aria-label="侧栏设置"
+        >
+          <Settings2 className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Session list */}
-      <div className="flex-1 overflow-y-auto px-2 pb-2">
-        {sessions.length === 0 ? (
-          <div className="text-xs text-zinc-500 text-center py-8 px-3">
-            还没有会话<br />点击上方按钮开始
+      <div className="px-2">
+        <button
+          onClick={handleNew}
+          className="mb-3 flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-white p-3 text-left shadow-sm transition hover:border-neutral-300"
+        >
+          <div className="grid h-10 w-10 place-items-center rounded-full bg-[#eef8f6] text-[#8ba9a4]">
+            <Bot className="h-5 w-5" />
           </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium text-neutral-950">新建会话</div>
+            <div className="mt-0.5 flex items-center gap-1 text-xs text-neutral-500">
+              <span className="h-2 w-2 rounded-full bg-blue-500" />
+              空闲中
+            </div>
+          </div>
+          <Plus className="h-4 w-4 text-neutral-400" />
+        </button>
+      </div>
+
+      <nav className="space-y-1 px-3">
+        <NavItem icon={Code2} label="扣子编程" />
+        <NavItem icon={MessageCircle} label="Agent World" strong />
+      </nav>
+
+      <div className="my-3 border-t border-neutral-200" />
+
+      <div className="flex-1 overflow-y-auto px-2">
+        <div className="mb-1 px-2 text-xs text-neutral-400">历史话题</div>
+        {sessions.length === 0 ? (
+          <div className="px-2 py-4 text-xs text-neutral-400">还没有会话</div>
         ) : (
-          <ul className="space-y-0.5">
-            {sessions.map((s) => (
-              <li key={s.id}>
-                <button
-                  onClick={() => navigate(`/chat/${s.id}`)}
-                  className={cn(
-                    'group w-full flex items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors',
-                    sessionId === s.id
-                      ? 'bg-bg-hover text-zinc-100'
-                      : 'text-zinc-400 hover:bg-bg-hover hover:text-zinc-200'
-                  )}
-                >
-                  <MessageSquare className="w-4 h-4 shrink-0 opacity-60" />
-                  <div className="flex-1 min-w-0">
-                    <div className="truncate">{s.title}</div>
-                    <div className="text-[10px] text-zinc-500 mt-0.5">{relativeTime(s.updatedAt)}</div>
-                  </div>
+          <ul className="space-y-1">
+            {sessions.map((session) => {
+              const active = sessionId === session.id
+              return (
+                <li key={session.id} className="group flex items-center gap-1">
                   <button
-                    onClick={(e) => handleDelete(e, s.id)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-400 p-1"
+                    onClick={() => navigate(`/chat/${session.id}`)}
+                    className={cn(
+                      'flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2 text-left text-sm transition',
+                      active ? 'bg-white text-neutral-950 shadow-sm' : 'text-neutral-600 hover:bg-white/70'
+                    )}
+                  >
+                    <History className="h-4 w-4 shrink-0 text-neutral-400" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{session.title}</span>
+                      <span className="block truncate text-[11px] text-neutral-400">
+                        {relativeTime(session.updatedAt)}
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    onClick={(event) => handleDelete(event, session.id)}
+                    className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
                     title="删除"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
-                </button>
-              </li>
-            ))}
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>
 
-      {/* Footer */}
-      <div className="border-t border-border p-2 space-y-0.5">
+      <div className="border-t border-neutral-200 p-2">
         <button
           onClick={() => navigate('/settings')}
-          className="w-full flex items-center gap-2 rounded-md px-2 py-2 text-sm text-zinc-400 hover:bg-bg-hover hover:text-zinc-200 transition-colors"
+          className="flex h-10 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-white/70"
         >
-          <Settings className="w-4 h-4" />
+          <Settings2 className="h-4 w-4 text-neutral-500" />
           设置
         </button>
-        <div className="flex items-center gap-2 rounded-md px-2 py-2">
-          <div className="w-7 h-7 rounded-full bg-accent/20 ring-1 ring-accent/30 flex items-center justify-center shrink-0">
-            <User className="w-3.5 h-3.5 text-accent" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm text-zinc-200 truncate">{user?.username}</div>
-            <div className="text-[10px] text-zinc-500 truncate">{user?.email}</div>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="text-zinc-500 hover:text-zinc-200 transition-colors p-1"
-            title="登出"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
-        </div>
       </div>
     </aside>
+  )
+}
+
+function NavItem({ icon: Icon, label, strong = false }: { icon: typeof Folder; label: string; strong?: boolean }) {
+  return (
+    <button
+      className={cn(
+        'flex h-9 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-white/70',
+        strong && 'font-semibold text-neutral-950'
+      )}
+    >
+      <Icon className="h-4 w-4 text-neutral-500" />
+      {label}
+    </button>
   )
 }

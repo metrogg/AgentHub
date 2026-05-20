@@ -1,75 +1,36 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
-import { Bot } from 'lucide-react'
+import { ArrowUp, ChevronDown, Folder, GitBranch, Plus, ShieldAlert } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
-import MessageItem from '../components/chat/MessageItem'
-import Composer from '../components/chat/Composer'
+import { Thread } from '../components/assistant-ui/Thread'
+import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { useChatStore } from '../stores/chatStore'
 
 export default function ChatPage() {
   const { sessionId } = useParams()
-  const {
-    currentSessionId,
-    messages,
-    streamingMessage,
-    agentTyping,
-    selectSession,
-    sendMessage,
-    initWebSocket,
-  } = useChatStore()
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const selectSession = useChatStore((state) => state.selectSession)
+  const initWebSocket = useChatStore((state) => state.initWebSocket)
 
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  // Init WebSocket once
   useEffect(() => {
     const off = initWebSocket()
     return off
   }, [initWebSocket])
 
-  // Switch session
   useEffect(() => {
     if (sessionId && sessionId !== currentSessionId) {
       selectSession(sessionId)
     }
   }, [sessionId, currentSessionId, selectSession])
 
-  // Auto-scroll
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages.length, streamingMessage?.content])
-
-  const hasSession = !!sessionId
-
   return (
-    <div className="h-screen flex bg-bg overflow-hidden">
+    <div className="flex h-screen overflow-hidden bg-white text-neutral-950">
       <SessionList />
-
-      <main className="flex-1 flex flex-col min-w-0">
-        {hasSession ? (
-          <>
-            <div ref={scrollRef} className="flex-1 overflow-y-auto">
-              <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
-                {messages.length === 0 && !streamingMessage && !agentTyping && (
-                  <Empty />
-                )}
-                {messages.map((m) => (
-                  <MessageItem key={m.id} message={m} />
-                ))}
-                {streamingMessage && <MessageItem streaming={streamingMessage} />}
-                {agentTyping && !streamingMessage && (
-                  <div className="flex items-center gap-2 text-xs text-zinc-500 px-10">
-                    <span className="flex gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </span>
-                    Agent 正在思考…
-                  </div>
-                )}
-              </div>
-            </div>
-            <Composer onSend={sendMessage} disabled={!hasSession} />
-          </>
+      <main className="min-w-0 flex-1">
+        {sessionId ? (
+          <AgentHubRuntimeProvider>
+            <Thread />
+          </AgentHubRuntimeProvider>
         ) : (
           <Welcome />
         )}
@@ -78,27 +39,60 @@ export default function ChatPage() {
   )
 }
 
-function Empty() {
-  return (
-    <div className="flex flex-col items-center justify-center text-center py-20">
-      <div className="w-12 h-12 rounded-xl bg-accent/10 ring-1 ring-accent/20 flex items-center justify-center mb-4">
-        <Bot className="w-6 h-6 text-accent" />
-      </div>
-      <h2 className="text-base font-medium text-zinc-200 mb-1">开始一段对话</h2>
-      <p className="text-sm text-zinc-500">在下方输入框中向 Agent 发送你的第一条消息</p>
-    </div>
-  )
-}
-
 function Welcome() {
   return (
-    <div className="flex-1 flex items-center justify-center text-center p-8">
-      <div>
-        <div className="w-14 h-14 rounded-2xl bg-accent/10 ring-1 ring-accent/20 flex items-center justify-center mx-auto mb-4">
-          <Bot className="w-7 h-7 text-accent" />
+    <div className="flex h-full items-center justify-center overflow-hidden bg-white px-8">
+      <div className="w-full max-w-[730px] -translate-y-8">
+        <h2 className="mb-10 text-center text-3xl font-medium tracking-normal text-neutral-900">
+          要在 AgentHub 中构建什么？
+        </h2>
+
+        <div className="overflow-hidden rounded-[22px] border border-neutral-200 bg-white shadow-sm">
+          <div className="px-4 pt-4">
+            <textarea
+              className="h-14 w-full resize-none bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-300"
+              placeholder="可向 AgentHub 询问任何事。输入 @ 使用插件或提及文件"
+            />
+          </div>
+          <div className="flex items-center justify-between px-4 pb-2">
+            <div className="flex items-center gap-4">
+              <button className="grid h-8 w-8 place-items-center rounded-full text-neutral-400 hover:bg-neutral-100">
+                <Plus className="h-4 w-4" />
+              </button>
+              <button className="inline-flex items-center gap-1 text-sm font-medium text-orange-600">
+                <ShieldAlert className="h-4 w-4" />
+                完全访问权限
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <button className="rounded-lg bg-neutral-100 px-3 py-1.5 text-xs text-neutral-600">OpenAI</button>
+              <button className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-neutral-600 hover:bg-neutral-100">
+                5.5 低
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              <button className="grid h-9 w-9 place-items-center rounded-full bg-neutral-400 text-white">
+                <ArrowUp className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-6 bg-neutral-50 px-4 py-3 text-sm text-neutral-500">
+            <button className="inline-flex items-center gap-1 hover:text-neutral-900">
+              <Folder className="h-4 w-4" />
+              AgentHub
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+            <button className="inline-flex items-center gap-1 hover:text-neutral-900">
+              本地模式
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+            <button className="inline-flex items-center gap-1 hover:text-neutral-900">
+              <GitBranch className="h-4 w-4" />
+              feat/master
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
-        <h2 className="text-lg font-semibold text-zinc-100 mb-1">欢迎使用 AgentHub</h2>
-        <p className="text-sm text-zinc-500">在左侧创建一个会话开始与 Agent 协作</p>
       </div>
     </div>
   )

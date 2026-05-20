@@ -7,11 +7,11 @@
     height: 100%;
   }
   body {
-    @apply bg-bg text-zinc-100 antialiased font-sans;
+    @apply bg-bg text-neutral-950 antialiased font-sans;
     font-feature-settings: 'cv11', 'ss01';
   }
   ::selection {
-    @apply bg-accent/40 text-white;
+    @apply bg-neutral-900 text-white;
   }
   /* Custom scrollbar */
   ::-webkit-scrollbar {
@@ -21,10 +21,26 @@
     @apply bg-transparent;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-zinc-700/60 rounded-full;
+    @apply bg-neutral-300 rounded-full;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-zinc-600;
+    @apply bg-neutral-400;
+  }
+}
+
+@layer utilities {
+  .agenthub-surface {
+    background: #ffffff;
+  }
+
+  .agenthub-panel {
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+
+  .agenthub-paper {
+    background: #f4f4f5;
+    color: #18181b;
   }
 }
 

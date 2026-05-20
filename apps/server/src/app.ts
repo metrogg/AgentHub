@@ -3,7 +3,6 @@ import { cors } from 'hono/cors'
 import { logger as honoLogger } from 'hono/logger'
 import { HTTPException } from 'hono/http-exception'
 import { env } from './env'
-import { authRoutes } from './routes/auth'
 import { sessionRoutes } from './routes/sessions'
 import { messageRoutes } from './routes/messages'
 import { settingsRoutes } from './routes/settings'
@@ -21,7 +20,6 @@ const app = new Hono()
   .get('/health', (c) => c.json({ status: 'ok', version: '0.1.0' }))
 
 const routes = app
-  .route('/api/auth', authRoutes)
   .route('/api/sessions', sessionRoutes)
   .route('/api/messages', messageRoutes)
   .route('/api/settings', settingsRoutes)

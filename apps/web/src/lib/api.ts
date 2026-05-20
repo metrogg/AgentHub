@@ -1,5 +1,3 @@
-import { authStorage } from './auth'
-
 const API_BASE = '/api'
 
 export class ApiError extends Error {
@@ -10,20 +8,13 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = authStorage.getToken()
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(init?.headers as Record<string, string> | undefined),
-  }
-  if (token) headers['Authorization'] = `Bearer ${token}`
-
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
-
-  if (res.status === 401) {
-    authStorage.clearAll()
-    window.location.href = '/login'
-    throw new ApiError(401, 'Unauthorized')
-  }
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers as Record<string, string> | undefined),
+    },
+  })
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }))
@@ -38,7 +29,7 @@ export interface Session {
   id: string
   ownerId: string
   title: string
-  type: 'single' | 'group'
+  type: 'direct' | 'group'
   createdAt: string
   updatedAt: string
 }
@@ -55,21 +46,9 @@ export interface Message {
 }
 
 export const api = {
-  // Auth
-  register: (data: { email: string; username: string; password: string }) =>
-    request<{ token: string; user: { id: string; email: string; username: string } }>(
-      '/auth/register',
-      { method: 'POST', body: JSON.stringify(data) }
-    ),
-  login: (data: { email: string; password: string }) =>
-    request<{ token: string; user: { id: string; email: string; username: string } }>(
-      '/auth/login',
-      { method: 'POST', body: JSON.stringify(data) }
-    ),
-
   // Sessions
   listSessions: () => request<{ items: Session[] }>('/sessions'),
-  createSession: (data: { title: string; type?: 'single' | 'group' }) =>
+  createSession: (data: { title: string; type?: 'direct' | 'group' }) =>
     request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
 

@@ -1,28 +1,21 @@
 import { createMiddleware } from 'hono/factory'
-import { verifyToken, type JwtPayload } from '../lib/auth'
 
-const ANONYMOUS_USER: JwtPayload = {
-  sub: 'anonymous',
-  email: 'anonymous@agenthub.local',
-}
+export const DEFAULT_USER = {
+  sub: 'default-user',
+  email: 'local@agenthub.local',
+  username: 'You',
+} as const
+
+export type CurrentUser = typeof DEFAULT_USER
 
 export type AuthVariables = {
-  user: JwtPayload
+  user: CurrentUser
 }
 
+/**
+ * Single-user mode: no authentication. Always injects the local default user.
+ */
 export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
-  const authHeader = c.req.header('Authorization')
-  if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.slice(7)
-    try {
-      const payload = await verifyToken(token)
-      c.set('user', payload)
-      await next()
-      return
-    } catch {
-      // fall through to anonymous
-    }
-  }
-  c.set('user', ANONYMOUS_USER)
+  c.set('user', DEFAULT_USER)
   await next()
 })

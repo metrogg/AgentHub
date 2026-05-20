@@ -40,7 +40,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async createSession(title = '新会话') {
-    const session = await api.createSession({ title, type: 'single' })
+    const session = await api.createSession({ title, type: 'direct' })
     set((s) => ({ sessions: [session, ...s.sessions] }))
     return session
   },
