@@ -45,6 +45,25 @@ export interface Message {
   createdAt: string
 }
 
+export interface ModelCatalogItem {
+  id: string
+  enabled: boolean
+  name: string
+  provider: string
+  modelId: string
+  apiEndpoint: string
+  anthropicEndpoint?: string
+  apiKeyEnv?: string
+  apiKey?: string
+}
+
+export interface CodingToolStatus {
+  id: string
+  command: string
+  installed: boolean
+  version: string | null
+}
+
 export const api = {
   // Sessions
   listSessions: () => request<{ items: Session[] }>('/sessions'),
@@ -59,6 +78,16 @@ export const api = {
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
       body: JSON.stringify({ content: data.content, type: data.type ?? 'text' }),
+    }),
+
+  sendMessageWithModel: (sessionId: string, data: { content: string; modelId?: string; type?: string }) =>
+    request<Message>(`/messages/${sessionId}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        content: data.content,
+        type: data.type ?? 'text',
+        metadata: data.modelId ? { modelId: data.modelId } : undefined,
+      }),
     }),
 
   // Settings (map-based)
@@ -79,4 +108,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  // Coding tools
+  getCodingToolStatus: () =>
+    request<{ platform: string; items: CodingToolStatus[] }>('/coding-tools/status'),
 }

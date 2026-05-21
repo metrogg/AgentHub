@@ -7,6 +7,7 @@ interface ChatState {
   currentSessionId: string | null
   messages: Message[]
   streamingMessage: { id: string; content: string } | null
+  selectedModelId: string | null
   loadingSessions: boolean
   loadingMessages: boolean
   agentTyping: boolean
@@ -16,6 +17,8 @@ interface ChatState {
   selectSession: (sessionId: string) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
+  sendMessageToSession: (sessionId: string, content: string) => Promise<void>
+  setSelectedModelId: (modelId: string | null) => void
   handleWSEvent: (e: WSEvent) => void
   initWebSocket: () => () => void
 }
@@ -25,6 +28,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentSessionId: null,
   messages: [],
   streamingMessage: null,
+  selectedModelId: null,
   loadingSessions: false,
   loadingMessages: false,
   agentTyping: false,
@@ -68,8 +72,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async sendMessage(content) {
     const sessionId = get().currentSessionId
     if (!sessionId) return
-    const msg = await api.sendMessage(sessionId, { content })
+    await get().sendMessageToSession(sessionId, content)
+  },
+
+  async sendMessageToSession(sessionId, content) {
+    const msg = await api.sendMessageWithModel(sessionId, {
+      content,
+      modelId: get().selectedModelId ?? undefined,
+    })
     set((s) => ({ messages: [...s.messages, msg] }))
+  },
+
+  setSelectedModelId(modelId) {
+    set({ selectedModelId: modelId })
   },
 
   handleWSEvent(e) {

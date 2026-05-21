@@ -83,11 +83,22 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow) {
   })
 
   let fullContent = ''
-  for await (const delta of streamReply(llmMessages)) {
+  const selectedModelId =
+    typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined
+
+  for await (const delta of streamReply(llmMessages, undefined, selectedModelId)) {
     fullContent += delta
     broadcast(sessionId, {
       type: 'message:stream',
       payload: { sessionId, messageId: streamMsgId, delta },
+    })
+  }
+
+  if (!fullContent.trim()) {
+    fullContent = '[Error: Model returned an empty response. Check the selected provider, model ID, base URL, and API key.]'
+    broadcast(sessionId, {
+      type: 'message:stream',
+      payload: { sessionId, messageId: streamMsgId, delta: fullContent },
     })
   }
 

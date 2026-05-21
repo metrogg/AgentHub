@@ -16,5 +16,6 @@ export const sendMessageSchema = z.object({
   content: z.string().min(1).max(10000),
   type: z.enum(['text', 'markdown']).default('text'),
   mentions: z.array(z.string()).default([]),
+  metadata: z.record(z.unknown()).optional(),
 })
 export type SendMessageInput = z.infer<typeof sendMessageSchema>

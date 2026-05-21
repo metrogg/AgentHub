@@ -6,6 +6,7 @@ import { env } from './env'
 import { sessionRoutes } from './routes/sessions'
 import { messageRoutes } from './routes/messages'
 import { settingsRoutes } from './routes/settings'
+import { codingToolsRoutes } from './routes/coding-tools'
 
 const app = new Hono()
   .use('*', honoLogger())
@@ -23,6 +24,7 @@ const routes = app
   .route('/api/sessions', sessionRoutes)
   .route('/api/messages', messageRoutes)
   .route('/api/settings', settingsRoutes)
+  .route('/api/coding-tools', codingToolsRoutes)
 
 export { app }
 export type AppType = typeof routes

@@ -18,10 +18,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
   .post('/:sessionId', zValidator('json', sendMessageSchema), async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
-    const { content, type } = c.req.valid('json')
+    const { content, type, metadata } = c.req.valid('json')
     const [msg] = await db
       .insert(messages)
-      .values({ sessionId, senderId: user.sub, senderType: 'user', type, content })
+      .values({ sessionId, senderId: user.sub, senderType: 'user', type, content, metadata })
       .returning()
     // Trigger agent reply asynchronously (do not await to keep response fast)
     if (msg) {
