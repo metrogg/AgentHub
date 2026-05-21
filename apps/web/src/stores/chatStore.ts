@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, type Message, type Session } from '../lib/api'
+import { api, mentionsOrchestrator, type Message, type Session } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 interface ChatState {
@@ -81,6 +81,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       modelId: get().selectedModelId ?? undefined,
     })
     set((s) => ({ messages: [...s.messages, msg] }))
+    if (mentionsOrchestrator(content)) {
+      const card = await api.createOrchestratorPlan(sessionId, content)
+      set((s) => ({ messages: [...s.messages, card] }))
+    }
   },
 
   setSelectedModelId(modelId) {

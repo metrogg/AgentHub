@@ -79,13 +79,13 @@ export default function SessionList() {
       <nav className="space-y-1 px-3">
         <NavItem
           icon={Code2}
-          label="扣子编程"
+          label="Code Agent"
           active={location.pathname === '/coding-tools'}
           onClick={() => navigate('/coding-tools')}
         />
         <NavItem
           icon={MessageCircle}
-          label="Agent World"
+          label="Agent Group"
           active={location.pathname === '/agent-world'}
           strong
           onClick={() => navigate('/agent-world')}

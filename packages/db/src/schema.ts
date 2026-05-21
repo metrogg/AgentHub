@@ -22,6 +22,41 @@ export const sessions = sqliteTable('sessions', {
   title: text('title').notNull(),
   type: text('type', { enum: ['direct', 'group'] }).notNull().default('direct'),
   ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id'),
+  workspaceAgentId: text('workspace_agent_id'),
+  createdAt: now(),
+  updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+})
+
+export const workspaces = sqliteTable('workspaces', {
+  id: id(),
+  ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  goal: text('goal').notNull().default(''),
+  createdAt: now(),
+  updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+})
+
+export const workspaceAgents = sqliteTable('workspace_agents', {
+  id: id(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  role: text('role').notNull(),
+  systemPrompt: text('system_prompt').notNull().default(''),
+  color: text('color').notNull().default('#6366f1'),
+  orderIdx: integer('order_idx').notNull().default(0),
+  createdAt: now(),
+})
+
+export const workspaceTasks = sqliteTable('workspace_tasks', {
+  id: id(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id'),
+  title: text('title').notNull(),
+  description: text('description').notNull().default(''),
+  status: text('status', { enum: ['pending', 'running', 'done'] }).notNull().default('pending'),
+  sessionId: text('session_id'),
+  orderIdx: integer('order_idx').notNull().default(0),
   createdAt: now(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })

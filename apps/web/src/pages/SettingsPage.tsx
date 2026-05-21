@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Archive,
@@ -189,18 +189,12 @@ export default function SettingsPage() {
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings)
   const [activeModelId, setActiveModelId] = useState(defaultModels[0].id)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [savedAt, setSavedAt] = useState<number | null>(null)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [draft, setDraft] = useState<ModelConfig>({ ...emptyDraft, id: crypto.randomUUID(), enabled: true })
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showEditor, setShowEditor] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [testMessages, setTestMessages] = useState<Record<string, string>>({})
-
-  const activeModel = useMemo(
-    () => models.find((item) => item.id === activeModelId) ?? models[0],
-    [activeModelId, models]
-  )
 
   useEffect(() => {
     api
@@ -227,31 +221,34 @@ export default function SettingsPage() {
       .catch(() => setLoading(false))
   }, [])
 
-  async function saveSettings(event?: FormEvent) {
-    event?.preventDefault()
-    setSaving(true)
-    try {
-      await api.saveSettings({
+  useEffect(() => {
+    if (loading) return
+    const timer = window.setTimeout(() => {
+      const selected = models.find((item) => item.id === activeModelId) ?? models[0]
+      setSaveState('saving')
+      void api.saveSettings({
         APP_SETTINGS: JSON.stringify(appSettings),
         MODEL_CATALOG: JSON.stringify(models),
-        ACTIVE_MODEL_ID: activeModel?.id ?? '',
-        MODEL_PROVIDER: activeModel?.provider ?? '',
-        MODEL_API_KEY: activeModel?.apiKey ?? '',
-        MODEL_BASE_URL: activeModel?.apiEndpoint ?? '',
-        MODEL_NAME: activeModel?.modelId ?? '',
-        ACTIVE_PROVIDER: activeModel?.provider ?? '',
-        ACTIVE_API_KEY: activeModel?.apiKey ?? '',
-        ACTIVE_BASE_URL: activeModel?.apiEndpoint ?? '',
-        ACTIVE_MODEL: activeModel?.modelId ?? '',
-        ANTHROPIC_API_KEY: activeModel?.provider === 'anthropic' ? activeModel.apiKey : '',
-        ANTHROPIC_MODEL: activeModel?.provider === 'anthropic' ? activeModel.modelId : 'claude-sonnet-4-6',
+        ACTIVE_MODEL_ID: selected?.id ?? '',
+        MODEL_PROVIDER: selected?.provider ?? '',
+        MODEL_API_KEY: selected?.apiKey ?? '',
+        MODEL_BASE_URL: selected?.apiEndpoint ?? '',
+        MODEL_NAME: selected?.modelId ?? '',
+        ACTIVE_PROVIDER: selected?.provider ?? '',
+        ACTIVE_API_KEY: selected?.apiKey ?? '',
+        ACTIVE_BASE_URL: selected?.apiEndpoint ?? '',
+        ACTIVE_MODEL: selected?.modelId ?? '',
+        ANTHROPIC_API_KEY: selected?.provider === 'anthropic' ? selected.apiKey : '',
+        ANTHROPIC_MODEL: selected?.provider === 'anthropic' ? selected.modelId : 'claude-sonnet-4-6',
       })
-      setSavedAt(Date.now())
-      window.setTimeout(() => setSavedAt(null), 2500)
-    } finally {
-      setSaving(false)
-    }
-  }
+        .then(() => {
+          setSaveState('saved')
+          window.setTimeout(() => setSaveState('idle'), 2500)
+        })
+        .catch(() => setSaveState('error'))
+    }, 650)
+    return () => window.clearTimeout(timer)
+  }, [activeModelId, appSettings, loading, models])
 
   function patchSettings(patch: Partial<AppSettings>) {
     setAppSettings((current) => ({ ...current, ...patch }))
@@ -329,7 +326,7 @@ export default function SettingsPage() {
               <h1 className="text-2xl font-semibold tracking-normal">{activeSection === '配置' ? '模型管理' : activeSection}</h1>
               <p className="mt-1 text-sm text-neutral-500">{sectionDescription(activeSection)}</p>
             </div>
-            <SaveButton saving={saving} savedAt={savedAt} onSave={() => void saveSettings()} />
+            <AutoSaveStatus state={saveState} />
           </div>
 
           {loading ? (
@@ -349,9 +346,6 @@ export default function SettingsPage() {
               testModel={testModel}
               testingId={testingId}
               testMessages={testMessages}
-              saving={saving}
-              savedAt={savedAt}
-              onSubmit={saveSettings}
             />
           ) : (
             <SettingsContent
@@ -427,7 +421,7 @@ function SettingsContent({
       return (
         <PanelGrid>
           <SettingCard title="启动与语言" desc="控制 AgentHub 打开时的默认位置和语言。">
-            <SelectRow label="启动页面" value={settings.startupPage} options={['上次会话', '新会话', 'Agent World', '扣子编程']} onChange={(startupPage) => patchSettings({ startupPage })} />
+            <SelectRow label="启动页面" value={settings.startupPage} options={['上次会话', '新会话', 'Agent Group', 'Code Agent']} onChange={(startupPage) => patchSettings({ startupPage })} />
             <SelectRow label="语言" value={settings.language} options={['简体中文', 'English']} onChange={(language) => patchSettings({ language })} />
           </SettingCard>
           <SettingCard title="基础行为" desc="让聊天记录和输入体验保持稳定。">
@@ -604,9 +598,6 @@ function ModelManagement({
   testModel,
   testingId,
   testMessages,
-  saving,
-  savedAt,
-  onSubmit,
 }: {
   models: ModelConfig[]
   activeModelId: string
@@ -618,16 +609,13 @@ function ModelManagement({
   testModel: (item: ModelConfig) => void
   testingId: string | null
   testMessages: Record<string, string>
-  saving: boolean
-  savedAt: number | null
-  onSubmit: (event: FormEvent) => void
 }) {
   const configuredCount = models.filter((item) => item.apiKey || item.apiKeyEnv).length
   const enabledCount = models.filter((item) => item.enabled).length
   const testedCount = models.filter((item) => item.tested).length
 
   return (
-    <form onSubmit={onSubmit}>
+    <div>
       <div className="mb-6 flex justify-end">
         <button type="button" onClick={openCreate} className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-900 px-3 text-sm font-medium text-white hover:bg-neutral-700">
           <Plus className="h-4 w-4" />
@@ -700,32 +688,40 @@ function ModelManagement({
         </table>
       </div>
 
-      <p className="mt-4 text-xs text-neutral-400">提示：当前激活模型会同步到聊天后端。不同 API 协议的 CLI 工具配置在“扣子编程”页面管理。</p>
-      <div className="mt-6">
-        <SaveButton saving={saving} savedAt={savedAt} submit />
-      </div>
-    </form>
+      <p className="mt-4 text-xs text-neutral-400">提示：模型变更会自动保存并同步到聊天后端。不同 API 协议的 CLI 工具配置在“Code Agent”页面管理。</p>
+    </div>
   )
 }
 
-function SaveButton({
-  saving,
-  savedAt,
-  onSave,
-  submit = false,
-}: {
-  saving: boolean
-  savedAt: number | null
-  onSave?: () => void
-  submit?: boolean
-}) {
+function AutoSaveStatus({ state }: { state: 'idle' | 'saving' | 'saved' | 'error' }) {
+  const label =
+    state === 'saving'
+      ? '自动保存中'
+      : state === 'saved'
+        ? '已自动保存'
+        : state === 'error'
+          ? '自动保存失败'
+          : '自动保存已开启'
+
   return (
-    <div className="flex items-center gap-3">
-      <button type={submit ? 'submit' : 'button'} onClick={onSave} disabled={saving} className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-900 px-4 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50">
-        {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-        保存
-      </button>
-      {savedAt && <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600"><CheckCircle2 className="h-3.5 w-3.5" />已保存</span>}
+    <div
+      className={cn(
+        'inline-flex h-9 items-center gap-2 rounded-full border px-3 text-xs font-medium',
+        state === 'error'
+          ? 'border-red-200 bg-red-50 text-red-600'
+          : state === 'saved'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            : 'border-neutral-200 bg-white text-neutral-500'
+      )}
+    >
+      {state === 'saving' ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : state === 'saved' ? (
+        <CheckCircle2 className="h-3.5 w-3.5" />
+      ) : (
+        <span className={cn('h-2 w-2 rounded-full', state === 'error' ? 'bg-red-500' : 'bg-neutral-300')} />
+      )}
+      {label}
     </div>
   )
 }

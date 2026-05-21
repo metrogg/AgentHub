@@ -12,14 +12,17 @@ import {
   Bot,
   Blocks,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Copy,
   FileText,
+  GitBranch,
   Globe2,
   ImagePlus,
   ListTodo,
+  Loader2,
   MessageSquare,
   PanelLeft,
   Paperclip,
@@ -31,8 +34,9 @@ import {
   User,
 } from 'lucide-react'
 import { type ComponentPropsWithoutRef, type FC, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
-import { api, type ModelCatalogItem } from '../../lib/api'
+import { api, type ModelCatalogItem, type OrchestratorDispatchResult, type OrchestratorPlan } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { useChatStore } from '../../stores/chatStore'
 
@@ -236,6 +240,7 @@ const ComposerMenu: FC<{
   onClose: () => void
 }> = ({ type, models, selectedModelId, planMode, onAttach, onPlanMode, onModel, onPick, onClose }) => {
   const agents = [
+    { title: '@Orchestrator', desc: '拆解任务并分发到 Agent Group' },
     { title: '@architect', desc: '架构与任务拆解' },
     { title: '@coder', desc: '代码实现' },
     { title: '@reviewer', desc: '审查与边界检查' },
@@ -362,13 +367,126 @@ const AssistantMessage: FC = () => (
     <Avatar role="assistant" />
     <div className="min-w-0 flex-1">
       <div className="text-sm leading-7 text-neutral-950">
-        <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
+        <MessagePrimitive.Parts
+          components={{
+            Text: MarkdownText,
+            data: { by_name: { orchestrator_plan: OrchestratorPlanCard } },
+          }}
+        />
       </div>
       <AssistantActionBar />
       <BranchPicker />
     </div>
   </MessagePrimitive.Root>
 )
+
+const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
+  const navigate = useNavigate()
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const [dispatching, setDispatching] = useState(false)
+  const [result, setResult] = useState<OrchestratorDispatchResult | null>(null)
+  const [error, setError] = useState('')
+
+  async function dispatchPlan() {
+    if (!currentSessionId || !data.messageId || dispatching) return
+    setDispatching(true)
+    setError('')
+    try {
+      const next = await api.dispatchOrchestratorPlan(currentSessionId, data.messageId)
+      setResult(next)
+    } catch (err: any) {
+      setError(err?.message || '分发失败')
+    } finally {
+      setDispatching(false)
+    }
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.08)]">
+      <div className="border-b border-neutral-200 bg-[#fbfbf8] px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.08em] text-neutral-400">
+              <GitBranch className="h-3.5 w-3.5" />
+              Orchestrator Plan
+            </div>
+            <h3 className="mt-1 truncate text-base font-semibold text-neutral-950">{data.title}</h3>
+          </div>
+          <span className="shrink-0 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-xs text-neutral-500">
+            {data.tasks.length} tasks
+          </span>
+        </div>
+        <p className="mt-2 line-clamp-2 text-sm leading-6 text-neutral-500">{data.goal}</p>
+      </div>
+
+      <div className="px-4 py-3">
+        <div className="space-y-2">
+          {data.tasks.map((task, index) => {
+            const agent = data.agents.find((item) => item.key === task.agentKey)
+            return (
+              <div key={task.id} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 rounded-xl border border-neutral-200 bg-white p-3">
+                <div
+                  className="grid h-7 w-7 place-items-center rounded-lg text-xs font-semibold text-white"
+                  style={{ background: agent?.color ?? '#111827' }}
+                >
+                  {index + 1}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="truncate text-sm font-semibold text-neutral-900">{task.title}</div>
+                    <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
+                      {agent?.name ?? 'Agent'} / {agent?.role ?? '-'}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">{task.description}</p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {error && <div className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{error}</div>}
+
+        {result ? (
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-emerald-700">
+              <CheckCircle2 className="h-4 w-4" />
+              已创建 Agent Group，并分发 {result.tasks.length} 个子任务
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => navigate('/agent-world', { state: { workspaceId: result.workspaceId } })}
+                className="inline-flex h-8 items-center gap-2 rounded-lg bg-neutral-950 px-3 text-xs font-medium text-white hover:bg-neutral-800"
+              >
+                打开 Agent Group
+              </button>
+              {result.tasks[0] && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/chat/${result.tasks[0].sessionId}`)}
+                  className="inline-flex h-8 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                >
+                  查看首个会话
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={dispatchPlan}
+            disabled={dispatching}
+            className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-300"
+          >
+            {dispatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+            {dispatching ? '正在创建并分发' : '创建并分发到 Agent Group'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
 
 const SystemMessage: FC = () => (
   <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] py-2">

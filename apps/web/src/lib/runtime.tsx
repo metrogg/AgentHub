@@ -16,10 +16,17 @@ function toThreadMessage(message: Message): ThreadMessageLike {
         ? 'system'
         : 'user'
 
+  const plan =
+    message.type === 'task_card' && message.metadata && 'plan' in message.metadata
+      ? { ...(message.metadata.plan as Record<string, unknown>), messageId: message.id }
+      : null
+
   return {
     id: message.id,
     role,
-    content: [{ type: 'text', text: message.content }],
+    content: plan
+      ? [{ type: 'data', name: 'orchestrator_plan', data: plan }]
+      : [{ type: 'text', text: message.content }],
     createdAt: new Date(message.createdAt),
   }
 }
