@@ -39,6 +39,8 @@ const envSchema = z.object({
   CODEX_HOME: z.string().optional(),
   MASTRA_REFERENCE_ROOT: z.string().default('.'),
   AGENTHUB_WORKSPACE_ROOT: z.string().default('.'),
+  AGENTHUB_SKILLS_ROOT: z.string().optional(),
+  AGENTHUB_NATIVE_MAX_TOOL_ROUNDS: z.coerce.number().int().min(1).max(12).default(6),
 })
 
 export const env = envSchema.parse(Bun.env)

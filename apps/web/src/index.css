@@ -65,6 +65,121 @@
     color: #18181b;
   }
 
+  .agenthub-menu-popover {
+    transform-origin: 1.25rem calc(100% + 0.5rem);
+    animation: agenthub-menu-enter 170ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    will-change: opacity, transform;
+  }
+
+  .agenthub-menu-popover button {
+    transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+  }
+
+  .agenthub-menu-popover button:hover:not(:disabled) {
+    transform: translateX(0.125rem);
+  }
+
+  .agenthub-menu-popover button:active:not(:disabled) {
+    transform: translateX(0.125rem) scale(0.98);
+  }
+
+  .agenthub-menu-popover button svg,
+  .agenthub-icon-button svg {
+    transition: transform 180ms ease, color 180ms ease, opacity 180ms ease;
+  }
+
+  .agenthub-menu-popover button:hover:not(:disabled) svg {
+    transform: scale(1.06);
+  }
+
+  .agenthub-menu-flyout {
+    transform-origin: left bottom;
+    transition-duration: 170ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+    will-change: opacity, transform;
+  }
+
+  .agenthub-icon-button {
+    transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  }
+
+  .agenthub-icon-button:hover {
+    transform: translateY(-0.0625rem);
+  }
+
+  .agenthub-icon-button:active {
+    transform: translateY(0) scale(0.94);
+  }
+
+  .agenthub-icon-button:focus-visible,
+  .agenthub-icon-button-open {
+    background: #f4f4f5;
+    color: #18181b;
+    box-shadow: inset 0 0 0 1px #e4e4e7;
+  }
+
+  @keyframes agenthub-menu-enter {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem) scale(0.97);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .agenthub-thinking {
+    display: inline-flex;
+    min-height: 2rem;
+    align-items: center;
+    gap: 0.5rem;
+    border-radius: 999px;
+    background: #f4f4f5;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+    line-height: 1;
+    color: #71717a;
+  }
+
+  .agenthub-thinking-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.1875rem;
+  }
+
+  .agenthub-thinking-dots i {
+    display: block;
+    height: 0.25rem;
+    width: 0.25rem;
+    border-radius: 999px;
+    background: #71717a;
+    animation: agenthub-thinking-pulse 1.1s ease-in-out infinite;
+  }
+
+  .agenthub-thinking-dots i:nth-child(2) {
+    animation-delay: 130ms;
+  }
+
+  .agenthub-thinking-dots i:nth-child(3) {
+    animation-delay: 260ms;
+  }
+
+  @keyframes agenthub-thinking-pulse {
+    0%,
+    80%,
+    100% {
+      opacity: 0.35;
+      transform: translateY(0);
+    }
+
+    40% {
+      opacity: 1;
+      transform: translateY(-0.125rem);
+    }
+  }
+
   .agenthub-inline-code {
     border-radius: 0.375rem;
     background: #f4f4f5;

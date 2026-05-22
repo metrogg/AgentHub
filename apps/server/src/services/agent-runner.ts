@@ -1,6 +1,7 @@
 import { db, messages, eq, desc } from '@agenthub/db'
 import { streamReply } from './llm'
 import { isCodeAgentProfile, streamCodeAgentReply } from './code-agent-adapter'
+import { isNativeAgentProfile, streamNativeAgentReply } from './native-agent-loop'
 import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
 
@@ -130,6 +131,8 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   const replyStream =
     profile && isCodeAgentProfile(profile)
       ? streamCodeAgentReply(profile, userMsg, historyAsc)
+      : profile && isNativeAgentProfile(profile)
+      ? streamNativeAgentReply(profile, userMsg, historyAsc)
       : streamReply(llmMessages, buildAgentSystem(profile), selectedModelId)
 
   for await (const delta of replyStream) {

@@ -16,6 +16,8 @@ import {
   startCodexLogin,
 } from '../services/codex-auth'
 import { getLlmRuntimeStatus } from '../services/llm-client'
+import { globalSkillRegistry } from '../services/skill-registry'
+import { readOnlyToolRegistry } from '../services/tool-registry'
 
 interface ToolProbe {
   apiKeyEnv?: string
@@ -46,6 +48,22 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   .get('/status', async (c) => {
     const items = await probeTools(probes)
     return c.json({ platform: process.platform, localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES, items })
+  })
+  .get('/native/status', async (c) => {
+    const skills = await globalSkillRegistry.listSkills()
+    const tools = readOnlyToolRegistry.list().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      readOnly: tool.readOnly,
+      scopes: tool.scopes,
+      inputSchema: tool.inputSchema,
+    }))
+    return c.json({
+      mode: 'read-only',
+      maxToolRounds: env.AGENTHUB_NATIVE_MAX_TOOL_ROUNDS,
+      skills,
+      tools,
+    })
   })
   .post('/status', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as { tools?: ToolProbe[] }

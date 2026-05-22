@@ -2,6 +2,10 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
+import { execFile } from 'node:child_process'
+import { statSync } from 'node:fs'
+import { isAbsolute, normalize, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import {
   db,
   workspaces,
@@ -17,6 +21,8 @@ import {
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile } from '../services/agent-runner'
+
+const execFileAsync = promisify(execFile)
 
 // ---------- Validation schemas ----------
 
@@ -155,7 +161,175 @@ function touchWorkspace(id: string) {
 
 function cleanProjectPath(value?: string | null) {
   const trimmed = value?.trim()
-  return trimmed || null
+  if (!trimmed) return null
+  return normalize(isAbsolute(trimmed) ? trimmed : resolve(trimmed))
+}
+
+function ensureProjectDirectory(value?: string | null) {
+  const projectPath = cleanProjectPath(value)
+  if (!projectPath) return null
+  try {
+    if (statSync(projectPath).isDirectory()) return projectPath
+  } catch {
+    // Fall through to a consistent API error below.
+  }
+  throw new HTTPException(400, { message: '项目文件夹不存在或不是目录' })
+}
+
+function workspaceNameFromPath(value: string) {
+  const normalized = value.trim().replace(/[\\/]+$/, '')
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
+}
+
+function projectPathKey(value?: string | null) {
+  const cleaned = cleanProjectPath(value)
+  if (!cleaned) return ''
+  const key = cleaned.replace(/[\\/]+$/, '').replace(/\\/g, '/')
+  return process.platform === 'win32' ? key.toLowerCase() : key
+}
+
+async function findWorkspaceByProjectPath(ownerId: string, projectPath: string) {
+  const key = projectPathKey(projectPath)
+  const list = await db.select().from(workspaces).where(eq(workspaces.ownerId, ownerId))
+  return list.find((workspace) => projectPathKey(workspace.projectPath) === key) ?? null
+}
+
+async function seedClassicAgents(workspaceId: string) {
+  await db.insert(workspaceAgents).values(
+    CLASSIC_AGENTS.map((agent, index) => ({ ...agent, workspaceId, orderIdx: index }))
+  )
+}
+
+async function pickNativeFolder() {
+  if (process.platform === 'win32') {
+    const modernScript = [
+      '$ErrorActionPreference = "Stop"',
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+      'Add-Type -AssemblyName System.Windows.Forms',
+      '$owner = New-Object System.Windows.Forms.Form',
+      '$owner.TopMost = $true',
+      '$owner.ShowInTaskbar = $false',
+      '$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen',
+      '$owner.Width = 1',
+      '$owner.Height = 1',
+      '$owner.Opacity = 0.01',
+      '[void]$owner.Show()',
+      '[void]$owner.Activate()',
+      'Add-Type -TypeDefinition @\'',
+      'using System;',
+      'using System.Runtime.InteropServices;',
+      'public static class ModernFolderPicker {',
+      '  [ComImport, Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]',
+      '  private class FileOpenDialog {}',
+      '  [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("d57c7288-d4ad-4768-be02-9d969532d960")]',
+      '  private interface IFileOpenDialog {',
+      '    [PreserveSig] int Show(IntPtr parent);',
+      '    void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);',
+      '    void SetFileTypeIndex(uint iFileType);',
+      '    void GetFileTypeIndex(out uint piFileType);',
+      '    void Advise(IntPtr pfde, out uint pdwCookie);',
+      '    void Unadvise(uint dwCookie);',
+      '    void SetOptions(uint fos);',
+      '    void GetOptions(out uint pfos);',
+      '    void SetDefaultFolder(IntPtr psi);',
+      '    void SetFolder(IntPtr psi);',
+      '    void GetFolder(out IntPtr ppsi);',
+      '    void GetCurrentSelection(out IntPtr ppsi);',
+      '    void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);',
+      '    void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);',
+      '    void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);',
+      '    void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);',
+      '    void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);',
+      '    void GetResult(out IShellItem ppsi);',
+      '    void AddPlace(IntPtr psi, int fdap);',
+      '    void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);',
+      '    void Close(int hr);',
+      '    void SetClientGuid(ref Guid guid);',
+      '    void ClearClientData();',
+      '    void SetFilter(IntPtr pFilter);',
+      '  }',
+      '  [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe")]',
+      '  private interface IShellItem {',
+      '    void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);',
+      '    void GetParent(out IShellItem ppsi);',
+      '    void GetDisplayName(uint sigdnName, out IntPtr ppszName);',
+      '    void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);',
+      '    void Compare(IShellItem psi, uint hint, out int piOrder);',
+      '  }',
+      '  public static string Pick(IntPtr owner) {',
+      '    const uint FOS_PICKFOLDERS = 0x20;',
+      '    const uint FOS_FORCEFILESYSTEM = 0x40;',
+      '    const uint FOS_NOCHANGEDIR = 0x8;',
+      '    const uint FOS_PATHMUSTEXIST = 0x800;',
+      '    const uint SIGDN_FILESYSPATH = 0x80058000;',
+      '    var dialog = (IFileOpenDialog)new FileOpenDialog();',
+      '    try {',
+      '      dialog.SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR | FOS_PATHMUSTEXIST);',
+      '      dialog.SetTitle("选择项目文件夹");',
+      '      dialog.SetOkButtonLabel("打开文件夹");',
+      '      if (dialog.Show(owner) != 0) return null;',
+      '      IShellItem item;',
+      '      dialog.GetResult(out item);',
+      '      IntPtr pathPtr;',
+      '      item.GetDisplayName(SIGDN_FILESYSPATH, out pathPtr);',
+      '      try { return Marshal.PtrToStringUni(pathPtr); }',
+      '      finally { Marshal.FreeCoTaskMem(pathPtr); if (item != null) Marshal.ReleaseComObject(item); }',
+      '    } finally { if (dialog != null) Marshal.ReleaseComObject(dialog); }',
+      '  }',
+      '}',
+      '\'@',
+      'try { [ModernFolderPicker]::Pick($owner.Handle) } finally { $owner.Close(); $owner.Dispose() }',
+    ].join('\n')
+    try {
+      const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', modernScript], {
+        windowsHide: false,
+      })
+      return stdout.trim() || null
+    } catch {
+      // Fall back to the older WinForms dialog on machines where the COM picker is unavailable.
+    }
+
+    const fallbackScript = [
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+      'Add-Type -AssemblyName System.Windows.Forms',
+      'Add-Type -AssemblyName System.Drawing',
+      '$owner = New-Object System.Windows.Forms.Form',
+      '$owner.TopMost = $true',
+      '$owner.ShowInTaskbar = $false',
+      '$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen',
+      '$owner.Size = New-Object System.Drawing.Size(1, 1)',
+      '$owner.Opacity = 0.01',
+      '[void]$owner.Show()',
+      '[void]$owner.Activate()',
+      '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
+      "$dialog.Description = '选择项目文件夹'",
+      '$dialog.ShowNewFolderButton = $true',
+      'try { if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath } } finally { $dialog.Dispose(); $owner.Close(); $owner.Dispose() }',
+    ].join('; ')
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', fallbackScript], {
+      windowsHide: false,
+    })
+    return stdout.trim() || null
+  }
+
+  if (process.platform === 'darwin') {
+    const script = 'POSIX path of (choose folder with prompt "选择项目文件夹")'
+    try {
+      const { stdout } = await execFileAsync('osascript', ['-e', script])
+      return stdout.trim() || null
+    } catch (err) {
+      if (typeof err === 'object' && err && 'code' in err && err.code === 1) return null
+      throw err
+    }
+  }
+
+  try {
+    const { stdout } = await execFileAsync('zenity', ['--file-selection', '--directory', '--title=选择项目文件夹'])
+    return stdout.trim() || null
+  } catch (err) {
+    if (typeof err === 'object' && err && 'code' in err && err.code === 1) return null
+    throw new HTTPException(501, { message: '当前环境没有可用的本机文件夹选择器' })
+  }
 }
 
 function workspaceAgentRunProfile(agent: typeof workspaceAgents.$inferSelect, projectPath?: string | null): AgentRunProfile {
@@ -198,18 +372,44 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
   .post('/', zValidator('json', createWorkspaceSchema), async (c) => {
     const user = c.get('user')
     const input = c.req.valid('json')
+    const projectPath = ensureProjectDirectory(input.projectPath)
     const [ws] = await db
       .insert(workspaces)
-      .values({ ownerId: user.sub, name: input.name, goal: input.goal, projectPath: cleanProjectPath(input.projectPath) })
+      .values({ ownerId: user.sub, name: input.name, goal: input.goal, projectPath })
       .returning()
     if (!ws) throw new HTTPException(500, { message: 'Failed to create workspace' })
 
     if (input.template === 'classic') {
-      await db.insert(workspaceAgents).values(
-        CLASSIC_AGENTS.map((a, i) => ({ ...a, workspaceId: ws.id, orderIdx: i }))
-      )
+      await seedClassicAgents(ws.id)
     }
     return c.json(await loadWorkspaceFull(ws.id, user.sub))
+  })
+
+  // Open a native folder picker and bind/create the matching project workspace.
+  .post('/open-folder', async (c) => {
+    const user = c.get('user')
+    let selectedPath: string | null = null
+    try {
+      selectedPath = await pickNativeFolder()
+    } catch (err) {
+      if (err instanceof HTTPException) throw err
+      throw new HTTPException(500, { message: '打开文件夹选择器失败' })
+    }
+    if (!selectedPath) return c.json({ cancelled: true as const, projectPath: null, workspace: null })
+
+    const projectPath = ensureProjectDirectory(selectedPath)
+    if (!projectPath) return c.json({ cancelled: true as const, projectPath: null, workspace: null })
+
+    const existing = await findWorkspaceByProjectPath(user.sub, projectPath)
+    if (existing) {
+      await touchWorkspace(existing.id)
+      return c.json({
+        cancelled: false as const,
+        projectPath,
+        workspace: (await loadWorkspaceFull(existing.id, user.sub)).workspace,
+      })
+    }
+    return c.json({ cancelled: false as const, projectPath, workspace: null })
   })
 
   // Get full workspace (with agents + tasks)
@@ -226,7 +426,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const input = c.req.valid('json')
     const patch = {
       ...input,
-      ...(input.projectPath !== undefined ? { projectPath: cleanProjectPath(input.projectPath) } : {}),
+      ...(input.projectPath !== undefined ? { projectPath: ensureProjectDirectory(input.projectPath) } : {}),
       updatedAt: new Date(),
     }
     await db

@@ -4,6 +4,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  type EmptyMessagePartComponent,
 } from '@assistant-ui/react'
 import {
   MarkdownTextPrimitive,
@@ -36,6 +37,8 @@ import {
   Copy,
   FileText,
   FolderOpen,
+  FolderPlus,
+  FolderX,
   GitBranch,
   Globe2,
   ImagePlus,
@@ -47,6 +50,7 @@ import {
   Plus,
   Presentation,
   RefreshCw,
+  Search,
   Sheet,
   Square,
   User,
@@ -121,7 +125,7 @@ export const Thread: FC<{
       <ThreadHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} />
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto scroll-smooth px-6">
+          <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
             <ThreadWelcome />
             <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, SystemMessage }} />
             <ThreadPrimitive.If empty={false}>
@@ -272,11 +276,13 @@ const Composer: FC = () => {
   const setSelectedModelId = useChatStore((state) => state.setSelectedModelId)
   const currentWorkspace = useChatStore((state) => state.currentWorkspace)
   const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
+  const selectSession = useChatStore((state) => state.selectSession)
   const [models, setModels] = useState<ModelCatalogItem[]>([])
   const [menu, setMenu] = useState<'tools' | 'agents' | 'models' | 'workspace' | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
-  const [workspaceDraft, setWorkspaceDraft] = useState({ name: '', goal: '', projectPath: '' })
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
   const [attachment, setAttachment] = useState<string | null>(null)
   const [hint, setHint] = useState<string | null>(null)
   const [planMode, setPlanMode] = useState(false)
@@ -349,35 +355,88 @@ const Composer: FC = () => {
   async function openWorkspace(workspaceId: string) {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
+    setOpeningWorkspaceId(workspaceId)
+    showHint('正在打开项目...')
     try {
       const { session } = await api.openWorkspaceGroupSession(workspaceId)
+      await fetchSessions()
+      await selectSession(session.id)
       setMenu(null)
       navigate(`/chat/${session.id}`)
+    } catch (err) {
+      showHint(errorMessage(err, '打开项目失败'))
     } finally {
       setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
     }
   }
 
-  async function createWorkspaceFromComposer() {
+  async function createBlankWorkspace() {
     if (workspaceBusy) return
-    const projectPath = workspaceDraft.projectPath.trim()
-    const name = workspaceDraft.name.trim() || workspaceNameFromPath(projectPath) || '项目工作区'
     setWorkspaceBusy(true)
     try {
       const full = await api.createWorkspace({
-        name,
-        goal: workspaceDraft.goal.trim(),
-        projectPath: projectPath || null,
+        name: '空白项目',
+        goal: '',
+        projectPath: null,
         template: 'classic',
       })
-      const { session } = await api.openWorkspaceGroupSession(full.workspace.id)
       setWorkspaces((items) => [full.workspace, ...items.filter((item) => item.id !== full.workspace.id)])
-      setWorkspaceDraft({ name: '', goal: '', projectPath: '' })
+      setOpeningWorkspaceId(full.workspace.id)
+      showHint('已创建项目，正在进入...')
+      const { session } = await api.openWorkspaceGroupSession(full.workspace.id)
+      await fetchSessions()
+      await selectSession(session.id)
       setMenu(null)
       navigate(`/chat/${session.id}`)
+    } catch (err) {
+      showHint(errorMessage(err, '创建空白项目失败'))
     } finally {
       setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
     }
+  }
+
+  async function openFolderFromComposer() {
+    if (workspaceBusy) return
+    setWorkspaceBusy(true)
+    showHint('正在打开文件夹选择器...')
+    try {
+      const result = await api.openWorkspaceFolder()
+      if (result.cancelled || !result.projectPath) {
+        showHint('已取消选择文件夹')
+        return
+      }
+      showHint('已选择文件夹，正在打开项目...')
+      const workspace =
+        result.workspace ??
+        (
+          await api.createWorkspace({
+            name: workspaceNameFromPath(result.projectPath),
+            goal: '',
+            projectPath: result.projectPath,
+            template: 'classic',
+          })
+        ).workspace
+      setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
+      setOpeningWorkspaceId(workspace.id)
+      showHint('项目已加入，正在进入...')
+      const { session } = await api.openWorkspaceGroupSession(workspace.id)
+      await fetchSessions()
+      await selectSession(session.id)
+      setMenu(null)
+      navigate(`/chat/${session.id}`)
+    } catch (err) {
+      showHint(errorMessage(err, '打开文件夹失败'))
+    } finally {
+      setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
+    }
+  }
+
+  function clearWorkspaceContext() {
+    setMenu(null)
+    navigate('/')
   }
 
   return (
@@ -386,13 +445,14 @@ const Composer: FC = () => {
         <div className="relative rounded-3xl border border-neutral-200 bg-white p-3 shadow-[0_10px_40px_rgba(15,23,42,0.10)] focus-within:border-neutral-300">
           {menu && (
             <ComposerMenu
+              key={menu}
               type={menu}
               models={models}
               agents={workspaceAgents}
               workspaces={workspaces}
               currentWorkspaceId={currentWorkspace?.id ?? null}
+              openingWorkspaceId={openingWorkspaceId}
               selectedModelId={selectedModelId}
-              workspaceDraft={workspaceDraft}
               workspaceBusy={workspaceBusy}
               planMode={planMode}
               onAttach={() => {
@@ -400,13 +460,10 @@ const Composer: FC = () => {
                 setMenu(null)
               }}
               onWorkspaceMenu={() => setMenu('workspace')}
-              onWorkspaceDraft={(patch) => setWorkspaceDraft((draft) => ({ ...draft, ...patch }))}
               onOpenWorkspace={(workspaceId) => void openWorkspace(workspaceId)}
-              onCreateWorkspace={() => void createWorkspaceFromComposer()}
-              onManageWorkspaces={() => {
-                setMenu(null)
-                navigate('/agent-world')
-              }}
+              onCreateBlankWorkspace={() => void createBlankWorkspace()}
+              onOpenFolderWorkspace={() => void openFolderFromComposer()}
+              onClearWorkspace={clearWorkspaceContext}
               onPlanMode={(next) => {
                 setPlanMode(next)
                 showHint(next ? '已开启计划模式' : '已关闭计划模式')
@@ -445,10 +502,10 @@ const Composer: FC = () => {
                 <Plus className="h-4 w-4" />
               </ComposerToolButton>
               <ComposerToolButton
-                aria-label="工作区"
-                title="工作区"
+                aria-label="项目文件夹"
+                title="项目文件夹"
                 onClick={() => setMenu(menu === 'workspace' ? null : 'workspace')}
-                className={currentWorkspace ? 'bg-neutral-100 text-neutral-900' : undefined}
+                className={cn((currentWorkspace || menu === 'workspace') && 'agenthub-icon-button-open')}
               >
                 <FolderOpen className="h-4 w-4" />
               </ComposerToolButton>
@@ -464,7 +521,10 @@ const Composer: FC = () => {
               <button
                 type="button"
                 onClick={() => setMenu(menu === 'models' ? null : 'models')}
-                className="hidden h-8 max-w-40 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-600 hover:bg-neutral-50 sm:inline-flex"
+                className={cn(
+                  'hidden h-8 max-w-40 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-600 transition-[background-color,border-color,color,box-shadow,transform] duration-200 ease-out hover:-translate-y-px hover:bg-neutral-50 sm:inline-flex',
+                  menu === 'models' && 'border-neutral-300 bg-neutral-100 text-neutral-950 shadow-sm'
+                )}
               >
                 <span className="truncate">{modelLabel}</span>
                 <ChevronDown className="h-3.5 w-3.5 shrink-0" />
@@ -484,16 +544,16 @@ const ComposerMenu: FC<{
   agents: WorkspaceAgent[]
   workspaces: Workspace[]
   currentWorkspaceId: string | null
+  openingWorkspaceId: string | null
   selectedModelId: string | null
-  workspaceDraft: { name: string; goal: string; projectPath: string }
   workspaceBusy: boolean
   planMode: boolean
   onAttach: () => void
   onWorkspaceMenu: () => void
-  onWorkspaceDraft: (patch: Partial<{ name: string; goal: string; projectPath: string }>) => void
   onOpenWorkspace: (workspaceId: string) => void
-  onCreateWorkspace: () => void
-  onManageWorkspaces: () => void
+  onCreateBlankWorkspace: () => void
+  onOpenFolderWorkspace: () => void
+  onClearWorkspace: () => void
   onPlanMode: (enabled: boolean) => void
   onModel: (modelId: string | null) => void
   onPick: (value: string) => void
@@ -504,21 +564,23 @@ const ComposerMenu: FC<{
   agents,
   workspaces,
   currentWorkspaceId,
+  openingWorkspaceId,
   selectedModelId,
-  workspaceDraft,
   workspaceBusy,
   planMode,
   onAttach,
   onWorkspaceMenu,
-  onWorkspaceDraft,
   onOpenWorkspace,
-  onCreateWorkspace,
-  onManageWorkspaces,
+  onCreateBlankWorkspace,
+  onOpenFolderWorkspace,
+  onClearWorkspace,
   onPlanMode,
   onModel,
   onPick,
   onClose,
 }) => {
+  const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [addProjectOpen, setAddProjectOpen] = useState(false)
   const legacyAgents = [
     { title: '@Orchestrator', desc: '拆解任务并分发到 Agent Group' },
     { title: '@architect', desc: '架构与任务拆解' },
@@ -540,12 +602,18 @@ const ComposerMenu: FC<{
     { title: 'Presentations', icon: Presentation, color: 'text-amber-500', value: '@presentations' },
     { title: '浏览器', icon: Globe2, color: 'text-sky-500', value: '@browser' },
   ]
+  const filteredWorkspaces = workspaces.filter((workspace) => {
+    const query = workspaceQuery.trim().toLowerCase()
+    if (!query) return true
+    return `${workspace.name} ${workspace.projectPath ?? ''}`.toLowerCase().includes(query)
+  })
 
   return (
     <div
       className={cn(
-        'absolute bottom-[4.5rem] left-3 z-20 rounded-2xl border border-neutral-200 bg-white p-2 text-sm shadow-xl',
-        type === 'workspace' ? 'w-[27rem]' : 'w-64'
+        'agenthub-menu-popover absolute bottom-[4.5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl',
+        type === 'models' ? 'right-12 w-64' : 'left-3',
+        type === 'workspace' ? 'w-80' : type === 'models' ? 'w-64' : 'w-64'
       )}
     >
       {type === 'tools' && (
@@ -556,7 +624,7 @@ const ComposerMenu: FC<{
           </button>
           <button type="button" onClick={onWorkspaceMenu} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
             <FolderOpen className="h-4 w-4 text-neutral-500" />
-            <span className="flex-1 text-neutral-900">工作区</span>
+            <span className="flex-1 text-neutral-900">打开项目文件夹</span>
           </button>
           <button type="button" onClick={() => onPlanMode(!planMode)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
             <ListTodo className="h-4 w-4 text-neutral-500" />
@@ -570,7 +638,7 @@ const ComposerMenu: FC<{
             <span className="flex-1 text-neutral-900">插件</span>
             <ChevronRight className="h-4 w-4 text-neutral-400" />
           </div>
-          <div className="invisible absolute bottom-0 left-[calc(100%+0.5rem)] w-52 rounded-2xl border border-neutral-200 bg-white p-2 opacity-0 shadow-xl transition group-hover/tools:visible group-hover/tools:opacity-100">
+          <div className="agenthub-menu-flyout invisible absolute bottom-0 left-[calc(100%+0.5rem)] w-52 -translate-x-1 scale-95 rounded-2xl border border-neutral-200 bg-white p-2 opacity-0 shadow-xl transition group-hover/tools:visible group-hover/tools:translate-x-0 group-hover/tools:scale-100 group-hover/tools:opacity-100">
             <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">4 个已装插件</div>
             {plugins.map((item) => {
               const Icon = item.icon
@@ -622,72 +690,89 @@ const ComposerMenu: FC<{
         </>
       )}
       {type === 'workspace' && (
-        <div className="space-y-3 p-1">
-          <div className="flex items-center justify-between gap-3 px-2 pt-1">
-            <div className="text-sm font-semibold text-neutral-950">工作区</div>
-            <button
-              type="button"
-              onClick={onManageWorkspaces}
-              className="h-7 rounded-lg px-2 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
-            >
-              管理
-            </button>
+        <div className="p-1">
+          <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
+            <Search className="h-4 w-4 shrink-0" />
+            <input
+              value={workspaceQuery}
+              onChange={(event) => setWorkspaceQuery(event.target.value)}
+              autoFocus
+              className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
+              placeholder="搜索项目"
+            />
           </div>
-          <div className="max-h-44 space-y-1 overflow-y-auto">
-            {workspaces.map((workspace) => (
+          <div className="max-h-44 space-y-1 overflow-y-auto py-1">
+            {filteredWorkspaces.map((workspace) => (
               <button
                 key={workspace.id}
                 type="button"
                 onClick={() => onOpenWorkspace(workspace.id)}
                 disabled={workspaceBusy}
                 className={cn(
-                  'flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50 disabled:opacity-60',
-                  workspace.id === currentWorkspaceId && 'bg-neutral-100'
+                  'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
+                  (workspace.id === currentWorkspaceId || workspace.id === openingWorkspaceId) && 'bg-neutral-100'
                 )}
               >
-                <FolderOpen className="h-4 w-4 shrink-0 text-neutral-500" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium text-neutral-900">{workspace.name}</span>
-                  <span className="block truncate text-xs text-neutral-500">
-                    {workspace.projectPath || '未绑定项目文件夹'}
-                  </span>
-                </span>
+                <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                <span className="min-w-0 flex-1 truncate text-neutral-900">{workspace.name}</span>
+                {workspace.id === openingWorkspaceId ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
+                ) : (
+                  workspace.id === currentWorkspaceId && <ChevronDown className="h-4 w-4 shrink-0 text-neutral-300" />
+                )}
               </button>
             ))}
-            {!workspaceBusy && workspaces.length === 0 && (
-              <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-4 text-center text-xs text-neutral-400">
-                暂无工作区
+            {!workspaceBusy && filteredWorkspaces.length === 0 && (
+              <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
+                没有匹配的项目
               </div>
             )}
-            {workspaceBusy && <div className="px-3 py-2 text-xs text-neutral-400">正在处理工作区...</div>}
+            {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理项目...</div>}
           </div>
-          <div className="grid gap-2 rounded-xl border border-neutral-200 p-3">
-            <input
-              value={workspaceDraft.name}
-              onChange={(event) => onWorkspaceDraft({ name: event.target.value })}
-              className="h-9 rounded-lg border border-neutral-200 px-3 text-sm outline-none placeholder:text-neutral-300 focus:border-neutral-400"
-              placeholder="工作区名称"
-            />
-            <input
-              value={workspaceDraft.projectPath}
-              onChange={(event) => onWorkspaceDraft({ projectPath: event.target.value })}
-              className="h-9 rounded-lg border border-neutral-200 px-3 text-sm outline-none placeholder:text-neutral-300 focus:border-neutral-400"
-              placeholder="项目文件夹路径，如 F:\\Learning\\AgentHub"
-            />
-            <textarea
-              value={workspaceDraft.goal}
-              onChange={(event) => onWorkspaceDraft({ goal: event.target.value })}
-              className="h-16 resize-none rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none placeholder:text-neutral-300 focus:border-neutral-400"
-              placeholder="协作目标，可选"
-            />
+          <div className="mt-1 border-t border-neutral-200 pt-1.5">
+            <div className="relative group/new-project">
+              <button
+                type="button"
+                onClick={() => setAddProjectOpen((open) => !open)}
+                className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50"
+              >
+                <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
+                <span className="min-w-0 flex-1 truncate text-neutral-900">添加新项目</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+              </button>
+              <div
+                className={cn(
+                  'agenthub-menu-flyout absolute bottom-0 left-[calc(100%+0.35rem)] w-56 -translate-x-1 scale-95 rounded-2xl border border-neutral-200 bg-white p-1.5 opacity-0 shadow-xl transition group-hover/new-project:visible group-hover/new-project:translate-x-0 group-hover/new-project:scale-100 group-hover/new-project:opacity-100',
+                  addProjectOpen ? 'visible translate-x-0 scale-100 opacity-100' : 'invisible opacity-0'
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={onCreateBlankWorkspace}
+                  disabled={workspaceBusy}
+                  className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-100 disabled:opacity-60"
+                >
+                  <Plus className="h-4 w-4 shrink-0 text-neutral-600" />
+                  新建空白项目
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenFolderWorkspace}
+                  disabled={workspaceBusy}
+                  className="flex h-9 w-full items-center gap-2.5 rounded-lg bg-neutral-100 px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-200 disabled:opacity-60"
+                >
+                  <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                  使用现有文件夹
+                </button>
+              </div>
+            </div>
             <button
               type="button"
-              onClick={onCreateWorkspace}
-              disabled={workspaceBusy || (!workspaceDraft.name.trim() && !workspaceDraft.projectPath.trim())}
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
+              onClick={onClearWorkspace}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50"
             >
-              <Plus className="h-4 w-4" />
-              新建并进入
+              <FolderX className="h-4 w-4 shrink-0 text-neutral-600" />
+              不使用项目
             </button>
           </div>
         </div>
@@ -696,10 +781,13 @@ const ComposerMenu: FC<{
   )
 }
 
+function errorMessage(err: unknown, fallback: string) {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
 function workspaceNameFromPath(value: string) {
   const normalized = value.trim().replace(/[\\/]+$/, '')
-  const last = normalized.split(/[\\/]/).filter(Boolean).pop()
-  return last ?? ''
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
 }
 
 const MenuRow: FC<{ title: string; desc: string; onClick: () => void }> = ({ title, desc, onClick }) => (
@@ -745,6 +833,7 @@ const AssistantMessage: FC = () => (
         <MessagePrimitive.Parts
           components={{
             Text: MarkdownText,
+            Empty: AssistantThinking,
             data: { by_name: { orchestrator_plan: OrchestratorPlanCard } },
           }}
         />
@@ -754,6 +843,21 @@ const AssistantMessage: FC = () => (
     </div>
   </MessagePrimitive.Root>
 )
+
+const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
+  if (status?.type !== 'running') return null
+
+  return (
+    <div className="agenthub-thinking not-prose" aria-label="思考中">
+      <span>思考中</span>
+      <span className="agenthub-thinking-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+    </div>
+  )
+}
 
 const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
   const navigate = useNavigate()
@@ -1012,7 +1116,14 @@ const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...prop
 )
 
 const ComposerToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
-  <button type="button" className={cn('grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900', className)} {...props} />
+  <button
+    type="button"
+    className={cn(
+      'agenthub-icon-button grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900',
+      className
+    )}
+    {...props}
+  />
 )
 
 const CodePre: NonNullable<MarkdownComponents['pre']> = ({ className, node: _node, ...props }) => (
@@ -1123,6 +1234,7 @@ function closeUnterminatedCodeFence(text: string) {
 const MarkdownText: FC = () => (
   <MarkdownTextPrimitive
     remarkPlugins={[remarkGfm]}
+    smooth={false}
     preprocess={closeUnterminatedCodeFence}
     components={{
       pre: CodePre,

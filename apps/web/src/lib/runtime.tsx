@@ -60,11 +60,19 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
         id: streamingMessage.id,
         role: 'assistant',
         content: [{ type: 'text', text: streamingMessage.content }],
+        status: { type: 'running' },
+      })
+    } else if (agentTyping) {
+      list.push({
+        id: 'agenthub-thinking',
+        role: 'assistant',
+        content: [],
+        status: { type: 'running' },
       })
     }
 
     return list
-  }, [messages, streamingMessage])
+  }, [agentTyping, messages, streamingMessage])
 
   const runtime = useExternalStoreRuntime({
     isRunning: agentTyping || streamingMessage !== null,

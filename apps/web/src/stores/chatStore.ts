@@ -2,6 +2,9 @@ import { create } from 'zustand'
 import { api, mentionsOrchestrator, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
+let pendingStream: { messageId: string; delta: string } | null = null
+let pendingStreamTimer: number | null = null
+
 interface ChatState {
   sessions: Session[]
   currentSession: Session | null
@@ -24,6 +27,14 @@ interface ChatState {
   setSelectedModelId: (modelId: string | null) => void
   handleWSEvent: (e: WSEvent) => void
   initWebSocket: () => () => void
+}
+
+function clearPendingStream() {
+  pendingStream = null
+  if (pendingStreamTimer !== null) {
+    window.clearTimeout(pendingStreamTimer)
+    pendingStreamTimer = null
+  }
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -56,6 +67,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async selectSession(sessionId) {
+    clearPendingStream()
     set({
       currentSessionId: sessionId,
       currentSession: null,
@@ -64,6 +76,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       loadingMessages: true,
       messages: [],
       streamingMessage: null,
+      agentTyping: false,
     })
     wsClient.joinSession(sessionId)
     try {
@@ -87,6 +100,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   async deleteSession(sessionId) {
     await api.deleteSession(sessionId)
+    clearPendingStream()
     set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== sessionId),
       currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
@@ -94,6 +108,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentWorkspace: s.currentSessionId === sessionId ? null : s.currentWorkspace,
       currentWorkspaceAgents: s.currentSessionId === sessionId ? [] : s.currentWorkspaceAgents,
       messages: s.currentSessionId === sessionId ? [] : s.messages,
+      streamingMessage: s.currentSessionId === sessionId ? null : s.streamingMessage,
+      agentTyping: s.currentSessionId === sessionId ? false : s.agentTyping,
     }))
   },
 
@@ -104,14 +120,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async sendMessageToSession(sessionId, content) {
-    const msg = await api.sendMessageWithModel(sessionId, {
-      content,
-      modelId: get().selectedModelId ?? undefined,
-    })
-    set((s) => ({ messages: [...s.messages, msg] }))
-    if (mentionsOrchestrator(content)) {
-      const card = await api.createOrchestratorPlan(sessionId, content)
-      set((s) => ({ messages: [...s.messages, card] }))
+    set({ agentTyping: true })
+    try {
+      const msg = await api.sendMessageWithModel(sessionId, {
+        content,
+        modelId: get().selectedModelId ?? undefined,
+      })
+      set((s) => ({ messages: [...s.messages, msg] }))
+      if (mentionsOrchestrator(content)) {
+        const card = await api.createOrchestratorPlan(sessionId, content)
+        set((s) => ({ messages: [...s.messages, card] }))
+      }
+    } catch (error) {
+      set({ agentTyping: false, streamingMessage: null })
+      throw error
     }
   },
 
@@ -130,17 +152,43 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break
       case 'message:stream': {
         const { messageId, delta } = e.payload as { messageId: string; delta: string }
-        set((s) => {
-          const current = s.streamingMessage
-          if (current?.id === messageId) {
-            return { streamingMessage: { id: messageId, content: current.content + delta } }
-          }
-          return { streamingMessage: { id: messageId, content: delta }, agentTyping: false }
-        })
+        const commitPendingStream = (pending: { messageId: string; delta: string }) => {
+          set((s) => {
+            const current = s.streamingMessage
+            if (current?.id === pending.messageId) {
+              return { streamingMessage: { id: pending.messageId, content: current.content + pending.delta } }
+            }
+            return { streamingMessage: { id: pending.messageId, content: pending.delta }, agentTyping: false }
+          })
+        }
+
+        if (pendingStream && pendingStream.messageId !== messageId) {
+          const previous = pendingStream
+          clearPendingStream()
+          commitPendingStream(previous)
+        }
+
+        if (pendingStream && pendingStream.messageId === messageId) {
+          pendingStream = { messageId, delta: pendingStream.delta + delta }
+        } else {
+          pendingStream = { messageId, delta }
+        }
+
+        if (pendingStreamTimer === null) {
+          pendingStreamTimer = window.setTimeout(() => {
+            const pending = pendingStream
+            pendingStream = null
+            pendingStreamTimer = null
+            if (!pending) return
+
+            commitPendingStream(pending)
+          }, 32)
+        }
         break
       }
       case 'message:completed': {
         const { message } = e.payload as { message: Message }
+        clearPendingStream()
         set((s) => ({
           messages: [...s.messages, message],
           streamingMessage: null,

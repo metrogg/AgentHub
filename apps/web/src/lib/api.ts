@@ -220,6 +220,10 @@ export interface WorkspaceFull {
   tasks: WorkspaceTask[]
 }
 
+export type WorkspaceFolderOpenResult =
+  | { cancelled: true; projectPath: null; workspace?: null }
+  | { cancelled: false; projectPath: string; workspace?: Workspace | null }
+
 export interface OrchestratorPlanAgent {
   key: string
   name: string
@@ -355,6 +359,8 @@ export const api = {
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
   createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>
     request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
+  openWorkspaceFolder: () =>
+    request<WorkspaceFolderOpenResult>('/workspaces/open-folder', { method: 'POST' }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
   updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>
     request<WorkspaceFull>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
