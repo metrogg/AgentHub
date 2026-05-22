@@ -7,6 +7,7 @@ import {
   db,
   messages,
   sessions,
+  sessionMembers,
   workspaceAgents,
   workspaces,
   workspaceTasks,
@@ -14,6 +15,7 @@ import {
   asc,
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 
 const orchestratorPlanSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -78,11 +80,16 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .insert(messages)
       .values({ sessionId, senderId: user.sub, senderType: 'user', type, content, metadata })
       .returning()
-    // Trigger agent reply asynchronously (do not await to keep response fast)
+    // Trigger agent reply asynchronously (do not await to keep response fast).
     if (msg && !metadata?.skipAgentReply) {
-      import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId, msg).catch(() => {})
-      })
+      const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+      if (session?.type === 'group' && session.workspaceId) {
+        runGroupReplies(session.workspaceId, sessionId, msg, content).catch(() => {})
+      } else {
+        import('../services/agent-runner').then(({ runAgentReply }) => {
+          runAgentReply(sessionId, msg).catch(() => {})
+        })
+      }
     }
     return c.json(msg)
   })
@@ -139,6 +146,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const agentByKey = new Map(parsed.agents.map((agent, index) => [agent.key, createdAgents[index]]))
     const taskResults: Array<{ taskId: string; sessionId: string; title: string; agentName: string }> = []
+    const groupSession = await createWorkspaceGroupSession(workspace.id, workspace.name, user.sub, createdAgents)
 
     for (const [index, task] of parsed.tasks.entries()) {
       const agent = agentByKey.get(task.agentKey)
@@ -197,7 +205,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       })
     }
 
-    return c.json({ workspaceId: workspace.id, tasks: taskResults })
+    return c.json({ workspaceId: workspace.id, groupSessionId: groupSession.id, tasks: taskResults })
   })
 
 function buildOrchestratorPlan(content: string): OrchestratorPlan {
@@ -262,4 +270,125 @@ function buildDispatchPrompt(
     `\n任务说明: ${task.description}`,
     '\n请先给出简短工作计划，再产出结果。遇到需要其他 Agent 配合的内容，请在结尾用「需协作:」列出。',
   ].join('')
+}
+
+const ORCHESTRATOR_PROFILE: AgentRunProfile = {
+  id: 'orchestrator',
+  name: 'Orchestrator',
+  role: 'Coordinator',
+  color: '#111827',
+  systemPrompt:
+    'You are the AgentHub coordinator. Read the group chat context, clarify the goal, split work between agents, and keep the team aligned. Reply with concise next actions.',
+}
+
+function toAgentProfile(agent: typeof workspaceAgents.$inferSelect): AgentRunProfile {
+  return {
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    color: agent.color,
+    systemPrompt: agent.systemPrompt,
+  }
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function hasMention(content: string, aliases: string[]) {
+  const lower = content.toLowerCase()
+  return aliases.some((alias) => {
+    const token = alias.trim()
+    if (!token) return false
+    const normalized = token.toLowerCase()
+    return lower.includes(`@${normalized}`) || new RegExp(`@\\s*${escapeRegExp(normalized)}\\b`, 'i').test(content)
+  })
+}
+
+function aliasesForAgent(agent: typeof workspaceAgents.$inferSelect) {
+  const role = agent.role.toLowerCase()
+  const name = agent.name.toLowerCase()
+  const aliases = new Set([agent.name, name, agent.role, role])
+  if (name.includes('coder') || role.includes('code') || role.includes('实现')) {
+    aliases.add('coder')
+    aliases.add('code')
+    aliases.add('代码')
+  }
+  if (name.includes('architect') || role.includes('arch') || role.includes('规划')) {
+    aliases.add('architect')
+    aliases.add('架构')
+    aliases.add('规划')
+  }
+  if (name.includes('review') || role.includes('review') || role.includes('审查')) {
+    aliases.add('reviewer')
+    aliases.add('review')
+    aliases.add('审查')
+  }
+  if (name.includes('research') || role.includes('research') || role.includes('研究')) {
+    aliases.add('researcher')
+    aliases.add('research')
+    aliases.add('研究')
+  }
+  return [...aliases]
+}
+
+async function runGroupReplies(workspaceId: string, sessionId: string, msg: MessageRow, content: string) {
+  const agentList = await db
+    .select()
+    .from(workspaceAgents)
+    .where(eq(workspaceAgents.workspaceId, workspaceId))
+    .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+
+  const profiles: AgentRunProfile[] = []
+  const seen = new Set<string>()
+  const pushProfile = (profile: AgentRunProfile) => {
+    if (seen.has(profile.id)) return
+    seen.add(profile.id)
+    profiles.push(profile)
+  }
+
+  if (hasMention(content, ['orchestrator', 'coordinator', 'agenthub', '协调器', '调度'])) {
+    pushProfile(ORCHESTRATOR_PROFILE)
+  }
+
+  for (const agent of agentList) {
+    if (hasMention(content, aliasesForAgent(agent))) {
+      pushProfile(toAgentProfile(agent))
+    }
+  }
+
+  if (!profiles.length) {
+    pushProfile(ORCHESTRATOR_PROFILE)
+  }
+
+  const { runAgentReply } = await import('../services/agent-runner')
+  for (const profile of profiles) {
+    await runAgentReply(sessionId, msg, profile)
+  }
+}
+
+async function createWorkspaceGroupSession(
+  workspaceId: string,
+  workspaceName: string,
+  ownerId: string,
+  agents: Array<typeof workspaceAgents.$inferSelect>
+) {
+  const [session] = await db
+    .insert(sessions)
+    .values({
+      title: `${workspaceName} / Agent Group`,
+      type: 'group',
+      ownerId,
+      workspaceId,
+    })
+    .returning()
+  if (!session) throw new HTTPException(500, { message: 'Failed to create group session' })
+
+  await db.insert(sessionMembers).values([
+    { sessionId: session.id, memberType: 'user', memberId: ownerId },
+    { sessionId: session.id, memberType: 'agent', memberId: 'orchestrator' },
+    ...agents.map((agent) => ({ sessionId: session.id, memberType: 'agent' as const, memberId: agent.id })),
+  ])
+
+  return session
 }

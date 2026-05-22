@@ -52,6 +52,7 @@ export default function AgentWorldPage() {
     deleteTask,
     dispatchTask,
     summarize,
+    openGroupSession,
   } = useWorkspaceStore()
   const [newGoal, setNewGoal] = useState('把一个复杂任务拆给多个 Agent 并行推进')
   const [newAgent, setNewAgent] = useState({ name: '', role: '', systemPrompt: '', color: '#111827' })
@@ -175,6 +176,11 @@ export default function AgentWorldPage() {
     if (sessionId) navigate(`/chat/${sessionId}`)
   }
 
+  async function enterGroupChat() {
+    const sessionId = await openGroupSession()
+    if (sessionId) navigate(`/chat/${sessionId}`)
+  }
+
   function openTaskSession(task: WorkspaceTask) {
     if (task.sessionId) navigate(`/chat/${task.sessionId}`)
   }
@@ -214,6 +220,15 @@ export default function AgentWorldPage() {
             >
               <GitBranch className="h-4 w-4" />
               群聊汇总
+            </button>
+            <button
+              type="button"
+              onClick={enterGroupChat}
+              disabled={!currentId}
+              className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm transition hover:bg-neutral-50 disabled:text-neutral-300"
+            >
+              <MessageSquare className="h-4 w-4" />
+              进入群聊
             </button>
           </div>
         </header>

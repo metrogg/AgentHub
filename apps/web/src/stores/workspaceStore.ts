@@ -40,6 +40,7 @@ interface WorkspaceState {
   deleteTask: (taskId: string) => Promise<void>
   dispatchTask: (taskId: string) => Promise<string | null>
   summarize: () => Promise<string | null>
+  openGroupSession: () => Promise<string | null>
 }
 
 function applyFull(full: WorkspaceFull) {
@@ -173,5 +174,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!id) return null
     const { sessionId } = await api.workspaceSummary(id)
     return sessionId
+  },
+
+  async openGroupSession() {
+    const id = get().currentId
+    if (!id) return null
+    const { session } = await api.openWorkspaceGroupSession(id)
+    return session.id
   },
 }))

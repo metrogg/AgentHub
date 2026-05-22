@@ -11,6 +11,7 @@ import {
   LogOut,
   PanelLeft,
   PlugZap,
+  Power,
   RefreshCw,
   Shield,
   Terminal,
@@ -215,6 +216,23 @@ export default function CodingToolsPage() {
       await refreshDockerStatus()
     } catch (error: any) {
       setDockerMessage(error?.message || '容器安装/启动失败')
+    } finally {
+      setDockerBusy(false)
+    }
+  }
+
+  async function restartDockerRuntime() {
+    setDockerBusy(true)
+    setDockerMessage('正在应用保存的配置并重启容器服务...')
+    setDockerOutput('')
+    try {
+      const result = await api.restartDockerRuntime()
+      setDockerMessage(result.message)
+      setDockerOutput(result.output || '')
+      await refreshDockerStatus()
+      await refreshStatus()
+    } catch (error: any) {
+      setDockerMessage(error?.message || '容器重启失败')
     } finally {
       setDockerBusy(false)
     }
@@ -507,6 +525,7 @@ export default function CodingToolsPage() {
             onInstallCli={installAllCliTools}
             onInstall={installDockerRuntime}
             onRefresh={refreshDockerStatus}
+            onRestart={restartDockerRuntime}
           />
 
           <section className="mt-8 grid gap-4 lg:grid-cols-3">
@@ -780,6 +799,7 @@ function DockerRuntimePanel({
   onInstall,
   onInstallCli,
   onRefresh,
+  onRestart,
 }: {
   busy: boolean
   cliBusy: boolean
@@ -791,6 +811,7 @@ function DockerRuntimePanel({
   onInstall: () => void
   onInstallCli: () => void
   onRefresh: () => void
+  onRestart: () => void
 }) {
   const canInstall = Boolean(status?.ready && status.installEnabled)
   const visibleOutput = cliOutput || output
@@ -867,6 +888,15 @@ function DockerRuntimePanel({
             >
               <Download className="h-4 w-4" />
               安装容器
+            </button>
+            <button
+              type="button"
+              onClick={onRestart}
+              disabled={busy || !canInstall}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-white text-sm font-semibold text-neutral-950 transition hover:bg-neutral-100 disabled:bg-neutral-700 disabled:text-neutral-400"
+            >
+              <Power className={cn('h-4 w-4', busy && 'animate-pulse')} />
+              应用配置并重启
             </button>
             <button
               type="button"

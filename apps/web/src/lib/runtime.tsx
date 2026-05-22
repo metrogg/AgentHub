@@ -20,13 +20,18 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     message.type === 'task_card' && message.metadata && 'plan' in message.metadata
       ? { ...(message.metadata.plan as Record<string, unknown>), messageId: message.id }
       : null
+  const agentName =
+    message.senderType === 'agent' && message.metadata && typeof message.metadata.agentName === 'string'
+      ? message.metadata.agentName
+      : null
+  const text = agentName ? `**${agentName}**\n\n${message.content}` : message.content
 
   return {
     id: message.id,
     role,
     content: plan
       ? [{ type: 'data', name: 'orchestrator_plan', data: plan }]
-      : [{ type: 'text', text: message.content }],
+      : [{ type: 'text', text }],
     createdAt: new Date(message.createdAt),
   }
 }

@@ -30,6 +30,8 @@ export interface Session {
   ownerId: string
   title: string
   type: 'direct' | 'group'
+  workspaceId?: string | null
+  workspaceAgentId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -215,12 +217,14 @@ export interface OrchestratorPlan {
 
 export interface OrchestratorDispatchResult {
   workspaceId: string
+  groupSessionId?: string
   tasks: Array<{ taskId: string; sessionId: string; title: string; agentName: string }>
 }
 
 export const api = {
   // Sessions
   listSessions: () => request<{ items: Session[] }>('/sessions'),
+  getSession: (id: string) => request<Session>(`/sessions/${id}`),
   createSession: (data: { title: string; type?: 'direct' | 'group' }) =>
     request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
@@ -304,6 +308,8 @@ export const api = {
     request<DockerRuntimeStatus>('/coding-tools/docker/status'),
   installDockerRuntime: () =>
     request<DockerRuntimeAction>('/coding-tools/docker/install', { method: 'POST' }),
+  restartDockerRuntime: () =>
+    request<DockerRuntimeAction>('/coding-tools/docker/restart', { method: 'POST' }),
 
   // Workspaces (Agent Group)
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
@@ -360,6 +366,8 @@ export const api = {
     ),
   workspaceSummary: (id: string) =>
     request<{ sessionId: string }>(`/workspaces/${id}/summary`, { method: 'POST' }),
+  openWorkspaceGroupSession: (id: string) =>
+    request<{ session: Session }>(`/workspaces/${id}/group-session`, { method: 'POST' }),
 }
 
 export function mentionsOrchestrator(content: string) {

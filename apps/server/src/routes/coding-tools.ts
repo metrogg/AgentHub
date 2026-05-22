@@ -1,5 +1,7 @@
 import { Hono } from 'hono'
 import { existsSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
+import { db, settings } from '@agenthub/db'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { env } from '../env'
@@ -37,6 +39,7 @@ const chatGptAuthDisabledMessage =
   'ChatGPT device auth is disabled for runtime use. Configure OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL in the environment instead.'
 const routeDir = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(routeDir, '../../../..')
+const envFilePath = resolve(projectRoot, '.env')
 
 export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -90,6 +93,43 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
       code: result.code,
       message: result.code === 0 ? 'Container images with CLI tools are built.' : 'Container install failed.',
       output: limitOutput(result.output),
+      statusBefore: status,
+    }, 200)
+  })
+  .post('/docker/restart', async (c) => {
+    const status = await getDockerStatus()
+    if (!status.installEnabled) {
+      return c.json({
+        ok: false,
+        status: 'failed',
+        message: 'Docker management is disabled. Set ENABLE_DOCKER_MANAGEMENT=true when running the local dev server.',
+        statusBefore: status,
+      }, 200)
+    }
+    if (!status.ready) {
+      return c.json({
+        ok: false,
+        status: 'failed',
+        message: status.message,
+        statusBefore: status,
+      }, 200)
+    }
+
+    const applied = await applySavedRuntimeConfigToEnv()
+    const result = await runFixedCommand(['docker', 'compose', 'up', '-d', '--build', 'server', 'web'], {
+      cwd: projectRoot,
+      timeoutMs: 10 * 60 * 1000,
+    })
+    return c.json({
+      ok: result.code === 0,
+      status: result.code === 0 ? 'completed' : 'failed',
+      code: result.code,
+      message: result.code === 0
+        ? applied.updated
+          ? 'Saved runtime config was written to .env, and AgentHub containers were rebuilt and restarted.'
+          : 'AgentHub containers were rebuilt and restarted. No saved runtime API key was found to apply.'
+        : 'Container restart failed.',
+      output: limitOutput([applied.message, result.output].filter(Boolean).join('\n')),
       statusBefore: status,
     }, 200)
   })
@@ -334,6 +374,112 @@ async function getApiKeyAuthStatus() {
         ? '尚未配置运行时 API Key，可使用 ChatGPT 账号登录，或设置 OPENAI_API_KEY / LLM_API_KEY。'
         : '尚未配置运行时 API Key，请设置 OPENAI_API_KEY 或 LLM_API_KEY。',
   }
+}
+
+async function applySavedRuntimeConfigToEnv() {
+  const map = await getSettingsMap()
+  const catalog = parseModelCatalog(map.MODEL_CATALOG)
+  const active = catalog.find((item) => item.id === map.ACTIVE_MODEL_ID && item.enabled !== false)
+    ?? catalog.find((item) => item.enabled !== false && cleanValue(item.apiKey))
+
+  if (!active?.modelId || !cleanValue(active.apiEndpoint)) {
+    return { updated: false, message: 'No saved model config was found.' }
+  }
+
+  const provider = cleanValue(active.provider)?.toLowerCase() || 'openai'
+  const apiKeyEnv = cleanValue(active.apiKeyEnv) || providerApiKeyEnv(provider)
+  const apiKey = cleanValue(active.apiKey)
+  const baseUrl = cleanValue(active.apiEndpoint)
+  const model = cleanValue(active.modelId)
+
+  if (!baseUrl || !model) {
+    return { updated: false, message: 'Saved model config is missing Base URL or model name.' }
+  }
+  if (!apiKey) {
+    return { updated: false, message: `Saved model config was found, but ${apiKeyEnv} has no saved API key.` }
+  }
+
+  const updates: Record<string, string> = {
+    LLM_PROVIDER: provider === 'openai-compatible' ? 'openai' : provider,
+    LLM_API_KEY: apiKey,
+    LLM_BASE_URL: baseUrl,
+    LLM_MODEL: model,
+    [apiKeyEnv]: apiKey,
+  }
+
+  if (provider === 'anthropic') {
+    updates.ANTHROPIC_API_KEY = apiKey
+    updates.ANTHROPIC_BASE_URL = cleanValue(active.anthropicEndpoint) || baseUrl
+    updates.ANTHROPIC_MODEL = model
+  } else {
+    updates.OPENAI_API_KEY = apiKey
+    updates.OPENAI_BASE_URL = baseUrl
+    updates.OPENAI_MODEL = model
+  }
+
+  await writeEnvFileUpdates(updates)
+  return { updated: true, message: `Applied saved model config to .env for ${model}.` }
+}
+
+async function getSettingsMap() {
+  const rows = await db.select().from(settings)
+  return Object.fromEntries(rows.map((row) => [row.key, row.value]))
+}
+
+function parseModelCatalog(value?: string) {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed as Array<{
+      anthropicEndpoint?: string
+      apiEndpoint?: string
+      apiKey?: string
+      apiKeyEnv?: string
+      enabled?: boolean
+      id?: string
+      modelId?: string
+      provider?: string
+    }> : []
+  } catch {
+    return []
+  }
+}
+
+async function writeEnvFileUpdates(updates: Record<string, string>) {
+  const current = await readFile(envFilePath, 'utf8').catch(() => '')
+  const lines = current ? current.split(/\r?\n/) : []
+  const remaining = new Set(Object.keys(updates))
+  const next = lines.map((line) => {
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line)
+    const key = match?.[1]
+    if (!key || !(key in updates)) return line
+    remaining.delete(key)
+    return `${key}=${formatEnvValue(updates[key] ?? '')}`
+  })
+
+  if (remaining.size) {
+    if (next.length && next[next.length - 1] !== '') next.push('')
+    next.push('# Applied from AgentHub saved model config')
+    for (const key of remaining) next.push(`${key}=${formatEnvValue(updates[key] ?? '')}`)
+  }
+
+  await writeFile(envFilePath, `${next.join('\n').replace(/\n+$/, '')}\n`, 'utf8')
+}
+
+function providerApiKeyEnv(provider: string) {
+  if (provider === 'anthropic') return 'ANTHROPIC_API_KEY'
+  if (provider === 'deepseek') return 'DEEPSEEK_API_KEY'
+  return 'OPENAI_API_KEY'
+}
+
+function cleanValue(value?: string | null) {
+  const trimmed = value?.trim()
+  return trimmed || undefined
+}
+
+function formatEnvValue(value: string) {
+  if (/^[^\s"'`#]+$/.test(value)) return value
+  return JSON.stringify(value)
 }
 
 async function getDockerStatus() {

@@ -1,9 +1,12 @@
 import { create } from 'zustand'
-import { api, mentionsOrchestrator, type Message, type Session } from '../lib/api'
+import { api, mentionsOrchestrator, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 interface ChatState {
   sessions: Session[]
+  currentSession: Session | null
+  currentWorkspace: Workspace | null
+  currentWorkspaceAgents: WorkspaceAgent[]
   currentSessionId: string | null
   messages: Message[]
   streamingMessage: { id: string; content: string } | null
@@ -25,6 +28,9 @@ interface ChatState {
 
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
+  currentSession: null,
+  currentWorkspace: null,
+  currentWorkspaceAgents: [],
   currentSessionId: null,
   messages: [],
   streamingMessage: null,
@@ -50,11 +56,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async selectSession(sessionId) {
-    set({ currentSessionId: sessionId, loadingMessages: true, messages: [], streamingMessage: null })
+    set({
+      currentSessionId: sessionId,
+      currentSession: null,
+      currentWorkspace: null,
+      currentWorkspaceAgents: [],
+      loadingMessages: true,
+      messages: [],
+      streamingMessage: null,
+    })
     wsClient.joinSession(sessionId)
     try {
-      const { items } = await api.listMessages(sessionId)
-      set({ messages: items, loadingMessages: false })
+      const [session, { items }] = await Promise.all([api.getSession(sessionId), api.listMessages(sessionId)])
+      if (session.workspaceId) {
+        const full = await api.getWorkspace(session.workspaceId)
+        set({
+          currentSession: session,
+          currentWorkspace: full.workspace,
+          currentWorkspaceAgents: full.agents,
+          messages: items,
+          loadingMessages: false,
+        })
+      } else {
+        set({ currentSession: session, messages: items, loadingMessages: false })
+      }
     } catch {
       set({ loadingMessages: false })
     }
@@ -65,6 +90,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== sessionId),
       currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
+      currentSession: s.currentSessionId === sessionId ? null : s.currentSession,
+      currentWorkspace: s.currentSessionId === sessionId ? null : s.currentWorkspace,
+      currentWorkspaceAgents: s.currentSessionId === sessionId ? [] : s.currentWorkspaceAgents,
       messages: s.currentSessionId === sessionId ? [] : s.messages,
     }))
   },

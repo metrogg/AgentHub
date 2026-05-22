@@ -32,11 +32,12 @@ import {
   Sheet,
   Square,
   User,
+  Users,
 } from 'lucide-react'
 import { type ComponentPropsWithoutRef, type FC, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
-import { api, type ModelCatalogItem, type OrchestratorDispatchResult, type OrchestratorPlan } from '../../lib/api'
+import { api, type ModelCatalogItem, type OrchestratorDispatchResult, type OrchestratorPlan, type WorkspaceAgent } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { useChatStore } from '../../stores/chatStore'
 
@@ -44,20 +45,28 @@ export const Thread: FC<{
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
 }> = ({ sidebarCollapsed, onToggleSidebar }) => {
+  const currentSession = useChatStore((state) => state.currentSession)
+  const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
+
   return (
     <ThreadPrimitive.Root
       className="relative flex h-full flex-col overflow-hidden bg-white"
       style={{ ['--thread-max-width' as string]: '44rem' }}
     >
       <ThreadHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} />
-      <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto scroll-smooth px-6">
-        <ThreadWelcome />
-        <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, SystemMessage }} />
-        <ThreadPrimitive.If empty={false}>
-          <div className="min-h-28" />
-        </ThreadPrimitive.If>
-      </ThreadPrimitive.Viewport>
-      <Composer />
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto scroll-smooth px-6">
+            <ThreadWelcome />
+            <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, SystemMessage }} />
+            <ThreadPrimitive.If empty={false}>
+              <div className="min-h-28" />
+            </ThreadPrimitive.If>
+          </ThreadPrimitive.Viewport>
+          <Composer />
+        </div>
+        {isGroupSession && <GroupMemberPanel />}
+      </div>
     </ThreadPrimitive.Root>
   )
 }
@@ -461,6 +470,15 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
               >
                 打开 Agent Group
               </button>
+              {result.groupSessionId && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/chat/${result.groupSessionId}`)}
+                  className="inline-flex h-8 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                >
+                  进入群聊
+                </button>
+              )}
               {result.tasks[0] && (
                 <button
                   type="button"

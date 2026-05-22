@@ -14,6 +14,14 @@ export interface MessageRow {
   createdAt: Date
 }
 
+export interface AgentRunProfile {
+  id: string
+  name: string
+  role?: string
+  systemPrompt?: string
+  color?: string
+}
+
 // In-memory map: sessionId -> Set of connected websockets
 const sessionRooms = new Map<string, Set<ServerWebSocket<unknown>>>()
 
@@ -55,8 +63,21 @@ function broadcast(sessionId: string, data: unknown) {
   }
 }
 
-export async function runAgentReply(sessionId: string, userMsg: MessageRow) {
-  logger.info({ sessionId, msgId: userMsg.id }, 'Agent reply started')
+function buildAgentSystem(profile?: AgentRunProfile) {
+  if (!profile) return undefined
+  return [
+    profile.systemPrompt || `You are ${profile.name}, a collaborative agent in AgentHub.`,
+    profile.role ? `Your role in this group chat is: ${profile.role}.` : '',
+    'You are replying inside a multi-agent group chat. Stay focused on your role, answer in the same language as the user, and mention handoff needs explicitly when another agent should continue.',
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+export async function runAgentReply(sessionId: string, userMsg: MessageRow, profile?: AgentRunProfile) {
+  const agentId = profile?.id ?? 'claude'
+  const agentName = profile?.name ?? 'Claude'
+  logger.info({ sessionId, msgId: userMsg.id, agentId }, 'Agent reply started')
 
   // Fetch recent message history as context
   const history = await db
@@ -79,14 +100,14 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow) {
   // Notify frontend that agent is typing
   broadcast(sessionId, {
     type: 'agent:typing',
-    payload: { sessionId, agentId: 'claude', agentName: 'Claude' },
+    payload: { sessionId, agentId, agentName },
   })
 
   let fullContent = ''
   const selectedModelId =
     typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined
 
-  for await (const delta of streamReply(llmMessages, undefined, selectedModelId)) {
+  for await (const delta of streamReply(llmMessages, buildAgentSystem(profile), selectedModelId)) {
     fullContent += delta
     broadcast(sessionId, {
       type: 'message:stream',
@@ -107,10 +128,17 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow) {
     .insert(messages)
     .values({
       sessionId,
-      senderId: 'claude',
+      senderId: agentId,
       senderType: 'agent',
       type: 'text',
       content: fullContent,
+      metadata: profile
+        ? {
+            agentName,
+            role: profile.role ?? null,
+            color: profile.color ?? null,
+          }
+        : null,
     })
     .returning()
 
