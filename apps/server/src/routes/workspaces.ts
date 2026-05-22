@@ -280,33 +280,7 @@ async function pickNativeFolder() {
       '\'@',
       'try { [ModernFolderPicker]::Pick($owner.Handle) } finally { $owner.Close(); $owner.Dispose() }',
     ].join('\n')
-    try {
-      const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', modernScript], {
-        windowsHide: false,
-      })
-      return stdout.trim() || null
-    } catch {
-      // Fall back to the older WinForms dialog on machines where the COM picker is unavailable.
-    }
-
-    const fallbackScript = [
-      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-      'Add-Type -AssemblyName System.Windows.Forms',
-      'Add-Type -AssemblyName System.Drawing',
-      '$owner = New-Object System.Windows.Forms.Form',
-      '$owner.TopMost = $true',
-      '$owner.ShowInTaskbar = $false',
-      '$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen',
-      '$owner.Size = New-Object System.Drawing.Size(1, 1)',
-      '$owner.Opacity = 0.01',
-      '[void]$owner.Show()',
-      '[void]$owner.Activate()',
-      '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
-      "$dialog.Description = '选择项目文件夹'",
-      '$dialog.ShowNewFolderButton = $true',
-      'try { if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath } } finally { $dialog.Dispose(); $owner.Close(); $owner.Dispose() }',
-    ].join('; ')
-    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', fallbackScript], {
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', modernScript], {
       windowsHide: false,
     })
     return stdout.trim() || null
