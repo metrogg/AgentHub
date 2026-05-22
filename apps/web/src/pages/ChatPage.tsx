@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, AtSign, ChevronDown, MessageSquare, PanelLeft, Paperclip, Plus } from 'lucide-react'
+import { ArrowUp, AtSign, ChevronDown, FolderOpen, MessageSquare, PanelLeft, Paperclip, Plus } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { Thread } from '../components/assistant-ui/Thread'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
@@ -181,6 +181,15 @@ function Welcome({
               <div className="flex items-center gap-1">
                 <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100">
                   <Plus className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/agent-world')}
+                  className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
+                  aria-label="工作区"
+                  title="工作区"
+                >
+                  <FolderOpen className="h-4 w-4" />
                 </button>
                 <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100">
                   <Paperclip className="h-4 w-4" />

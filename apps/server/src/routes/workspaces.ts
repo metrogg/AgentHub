@@ -16,25 +16,39 @@ import {
   asc,
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import type { AgentRunProfile } from '../services/agent-runner'
 
 // ---------- Validation schemas ----------
 
 const createWorkspaceSchema = z.object({
   name: z.string().min(1).max(120),
   goal: z.string().max(2000).default(''),
+  projectPath: z.string().max(1000).nullable().optional(),
   template: z.enum(['blank', 'classic']).optional(),
 })
 
 const updateWorkspaceSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   goal: z.string().max(2000).optional(),
+  projectPath: z.string().max(1000).nullable().optional(),
 })
 
 const createAgentSchema = z.object({
   name: z.string().min(1).max(60),
   role: z.string().min(1).max(60),
+  description: z.string().max(500).default(''),
+  avatar: z.string().max(500).nullable().optional(),
   systemPrompt: z.string().max(4000).default(''),
   color: z.string().max(20).default('#6366f1'),
+  modelId: z.string().max(120).nullable().optional(),
+  runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']).default('llm'),
+  codeAgentType: z.enum(['codex', 'claude-code', 'opencode']).nullable().optional(),
+  capabilityTags: z.array(z.string().max(40)).max(12).default([]),
+  toolPermissions: z.array(z.string().max(80)).max(30).default([]),
+  sandboxPolicy: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('workspace-write'),
+  contextPolicy: z.enum(['recent-only', 'pinned-recent', 'workspace-aware']).default('workspace-aware'),
+  autoInvoke: z.boolean().default(true),
+  approvalRequired: z.boolean().default(true),
 })
 
 const updateAgentSchema = createAgentSchema.partial()
@@ -54,7 +68,7 @@ const updateTaskSchema = z.object({
 
 // ---------- Helpers ----------
 
-const CLASSIC_AGENTS: Array<z.infer<typeof createAgentSchema>> = [
+const CLASSIC_AGENTS: Array<z.input<typeof createAgentSchema>> = [
   { name: 'Architect', role: '规划', systemPrompt: '你是架构师。优先拆解目标、定义边界、给出里程碑与依赖关系。', color: '#6366f1' },
   { name: 'Coder', role: '实现', systemPrompt: '你是实现者。负责代码实现、组件接入和小步验证。先理解上下文,再小步迭代。', color: '#10b981' },
   { name: 'Researcher', role: '研究', systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点。给出参考来源。', color: '#f59e0b' },
@@ -139,6 +153,31 @@ function touchWorkspace(id: string) {
   return db.update(workspaces).set({ updatedAt: new Date() }).where(eq(workspaces.id, id))
 }
 
+function cleanProjectPath(value?: string | null) {
+  const trimmed = value?.trim()
+  return trimmed || null
+}
+
+function workspaceAgentRunProfile(agent: typeof workspaceAgents.$inferSelect, projectPath?: string | null): AgentRunProfile {
+  return {
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    description: agent.description,
+    systemPrompt: agent.systemPrompt,
+    color: agent.color,
+    modelId: agent.modelId,
+    runtimeType: agent.runtimeType,
+    codeAgentType: agent.codeAgentType,
+    capabilityTags: agent.capabilityTags,
+    toolPermissions: agent.toolPermissions,
+    sandboxPolicy: agent.sandboxPolicy,
+    contextPolicy: agent.contextPolicy,
+    approvalRequired: agent.approvalRequired,
+    projectPath: cleanProjectPath(projectPath),
+  }
+}
+
 // ---------- Routes ----------
 
 export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -161,7 +200,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const input = c.req.valid('json')
     const [ws] = await db
       .insert(workspaces)
-      .values({ ownerId: user.sub, name: input.name, goal: input.goal })
+      .values({ ownerId: user.sub, name: input.name, goal: input.goal, projectPath: cleanProjectPath(input.projectPath) })
       .returning()
     if (!ws) throw new HTTPException(500, { message: 'Failed to create workspace' })
 
@@ -185,9 +224,14 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
     const input = c.req.valid('json')
+    const patch = {
+      ...input,
+      ...(input.projectPath !== undefined ? { projectPath: cleanProjectPath(input.projectPath) } : {}),
+      updatedAt: new Date(),
+    }
     await db
       .update(workspaces)
-      .set({ ...input, updatedAt: new Date() })
+      .set(patch)
       .where(eq(workspaces.id, id))
     return c.json(await loadWorkspaceFull(id, user.sub))
   })
@@ -359,6 +403,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
         ? `你是 ${agent.name}(${agent.role})。${agent.systemPrompt}`
         : '你是一个 Agent Group 中的协作 Agent。',
       ws.goal ? `\n协作组目标:${ws.goal}` : '',
+      ws.projectPath ? `\n项目文件夹:${ws.projectPath}` : '',
       `\n你被分配的任务:${task.title}`,
       task.description ? `\n任务详情:${task.description}` : '',
       '\n请先给出独立的工作计划,再开始推进;遇到需要其他角色配合的事,请在结尾用「需协作:」列出。',
@@ -384,7 +429,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     // Trigger agent reply asynchronously
     if (userMsg) {
       import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId!, userMsg).catch(() => {})
+        runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined).catch(() => {})
       })
     }
 
@@ -445,6 +490,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       `你是 Agent Group 的协调者。下面是各 Agent 的最新产出,请基于真实内容给出:`,
       `1) 整体进展评估  2) 不一致或风险点  3) 下一步统一行动方案与分派建议。`,
       `\n协作组目标:${ws.goal || '(未填写)'}`,
+      ws.projectPath ? `\n项目文件夹:${ws.projectPath}` : '',
       `\n各 Agent 当前最新产出:\n\n${sections.join('\n\n')}`,
     ].join('\n')
 

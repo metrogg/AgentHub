@@ -1,5 +1,6 @@
 import { db, messages, eq, desc } from '@agenthub/db'
 import { streamReply } from './llm'
+import { isCodeAgentProfile, streamCodeAgentReply } from './code-agent-adapter'
 import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
 
@@ -18,8 +19,18 @@ export interface AgentRunProfile {
   id: string
   name: string
   role?: string
+  description?: string
   systemPrompt?: string
   color?: string
+  modelId?: string | null
+  runtimeType?: 'llm' | 'code-agent' | 'mcp' | 'a2a'
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | null
+  capabilityTags?: string[]
+  toolPermissions?: string[]
+  sandboxPolicy?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  contextPolicy?: 'recent-only' | 'pinned-recent' | 'workspace-aware'
+  approvalRequired?: boolean
+  projectPath?: string | null
 }
 
 // In-memory map: sessionId -> Set of connected websockets
@@ -68,6 +79,16 @@ function buildAgentSystem(profile?: AgentRunProfile) {
   return [
     profile.systemPrompt || `You are ${profile.name}, a collaborative agent in AgentHub.`,
     profile.role ? `Your role in this group chat is: ${profile.role}.` : '',
+    profile.description ? `Your capability summary: ${profile.description}.` : '',
+    profile.runtimeType ? `Runtime binding: ${profile.runtimeType}${profile.codeAgentType ? ` (${profile.codeAgentType})` : ''}.` : '',
+    profile.capabilityTags?.length ? `Capability tags: ${profile.capabilityTags.join(', ')}.` : '',
+    profile.toolPermissions?.length ? `Allowed tool scopes: ${profile.toolPermissions.join(', ')}.` : 'Allowed tool scopes: chat-only.',
+    profile.sandboxPolicy ? `Sandbox policy: ${profile.sandboxPolicy}.` : '',
+    profile.contextPolicy ? `Context policy: ${profile.contextPolicy}.` : '',
+    profile.projectPath ? `Project workspace path: ${profile.projectPath}.` : '',
+    profile.approvalRequired
+      ? 'If a requested action can modify files, run commands, use network, deploy, or touch secrets, ask for explicit user approval before performing or instructing the action.'
+      : '',
     'You are replying inside a multi-agent group chat. Stay focused on your role, answer in the same language as the user, and mention handoff needs explicitly when another agent should continue.',
   ]
     .filter(Boolean)
@@ -105,9 +126,13 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
 
   let fullContent = ''
   const selectedModelId =
-    typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined
+    profile?.modelId ?? (typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined)
+  const replyStream =
+    profile && isCodeAgentProfile(profile)
+      ? streamCodeAgentReply(profile, userMsg, historyAsc)
+      : streamReply(llmMessages, buildAgentSystem(profile), selectedModelId)
 
-  for await (const delta of streamReply(llmMessages, buildAgentSystem(profile), selectedModelId)) {
+  for await (const delta of replyStream) {
     fullContent += delta
     broadcast(sessionId, {
       type: 'message:stream',
@@ -137,6 +162,11 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
             agentName,
             role: profile.role ?? null,
             color: profile.color ?? null,
+            runtimeType: profile.runtimeType ?? 'llm',
+            codeAgentType: profile.codeAgentType ?? null,
+            modelId: profile.modelId ?? null,
+            sandboxPolicy: profile.sandboxPolicy ?? null,
+            projectPath: profile.projectPath ?? null,
           }
         : null,
     })

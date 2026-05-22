@@ -5,6 +5,7 @@ import {
   Bot,
   CheckCircle2,
   Circle,
+  FolderOpen,
   GitBranch,
   Layers3,
   MessageSquare,
@@ -18,7 +19,7 @@ import {
   Users,
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
-import { type WorkspaceAgent, type WorkspaceTask, type TaskStatus } from '../lib/api'
+import { api, type ModelCatalogItem, type WorkspaceAgent, type WorkspaceTask, type TaskStatus, type AgentConfigInput } from '../lib/api'
 import { cn } from '../lib/utils'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
@@ -28,6 +29,23 @@ const agentPresets = [
   { name: 'Researcher', role: '研究', color: '#f59e0b', systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点。给出参考来源。' },
   { name: 'Reviewer', role: '审查', color: '#ef4444', systemPrompt: '你是审查者。检查风险、交互漏洞和缺失的测试。直接、克制、不绕弯。' },
 ]
+
+const defaultAgentDraft: AgentConfigInput = {
+  name: '',
+  role: '',
+  description: '',
+  systemPrompt: '',
+  color: '#111827',
+  modelId: null,
+  runtimeType: 'llm',
+  codeAgentType: null,
+  capabilityTags: [],
+  toolPermissions: ['chat'],
+  sandboxPolicy: 'workspace-write',
+  contextPolicy: 'workspace-aware',
+  autoInvoke: true,
+  approvalRequired: true,
+}
 
 export default function AgentWorldPage() {
   const navigate = useNavigate()
@@ -55,9 +73,11 @@ export default function AgentWorldPage() {
     openGroupSession,
   } = useWorkspaceStore()
   const [newGoal, setNewGoal] = useState('把一个复杂任务拆给多个 Agent 并行推进')
-  const [newAgent, setNewAgent] = useState({ name: '', role: '', systemPrompt: '', color: '#111827' })
+  const [newProjectPath, setNewProjectPath] = useState('')
+  const [newAgent, setNewAgent] = useState<AgentConfigInput>(defaultAgentDraft)
   const [newTask, setNewTask] = useState({ title: '', description: '', agentId: '' })
-  const [workspaceDraft, setWorkspaceDraft] = useState({ name: '', goal: '' })
+  const [workspaceDraft, setWorkspaceDraft] = useState({ name: '', goal: '', projectPath: '' })
+  const [models, setModels] = useState<ModelCatalogItem[]>([])
   const [savingGoal, setSavingGoal] = useState(false)
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
@@ -80,6 +100,21 @@ export default function AgentWorldPage() {
     })
   }, [fetchList, location.state])
 
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getSettings()
+      .then((settings) => {
+        if (cancelled || !settings.MODEL_CATALOG) return
+        const parsed = JSON.parse(settings.MODEL_CATALOG) as ModelCatalogItem[]
+        setModels(parsed.filter((item) => item.enabled))
+      })
+      .catch(() => setModels([]))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === currentId) ?? null,
     [currentId, workspaces]
@@ -92,14 +127,23 @@ export default function AgentWorldPage() {
 
   useEffect(() => {
     if (!activeWorkspace) return
-    setWorkspaceDraft({ name: activeWorkspace.name, goal: activeWorkspace.goal })
+    setWorkspaceDraft({
+      name: activeWorkspace.name,
+      goal: activeWorkspace.goal,
+      projectPath: activeWorkspace.projectPath ?? '',
+    })
   }, [activeWorkspace?.id])
 
   async function createClassicWorld(event: FormEvent) {
     event.preventDefault()
     const goal = newGoal.trim()
     if (!goal) return
-    const workspace = await createWorkspace({ name: titleFromGoal(goal), goal, template: 'classic' })
+    const workspace = await createWorkspace({
+      name: titleFromGoal(goal),
+      goal,
+      projectPath: newProjectPath.trim() || null,
+      template: 'classic',
+    })
     await selectWorkspace(workspace.id)
     const seededAgents = useWorkspaceStore.getState().agents
     for (const agent of seededAgents) {
@@ -110,6 +154,7 @@ export default function AgentWorldPage() {
       })
     }
     setNewGoal('')
+    setNewProjectPath('')
     toast('已创建经典协作组')
   }
 
@@ -120,6 +165,7 @@ export default function AgentWorldPage() {
       await updateWorkspace(activeWorkspace.id, {
         name: workspaceDraft.name.trim() || activeWorkspace.name,
         goal: workspaceDraft.goal,
+        projectPath: workspaceDraft.projectPath.trim() || null,
       })
       toast('协作组已保存')
     } finally {
@@ -133,10 +179,20 @@ export default function AgentWorldPage() {
     await addAgent({
       name: newAgent.name.trim(),
       role: newAgent.role.trim(),
-      systemPrompt: newAgent.systemPrompt.trim(),
-      color: newAgent.color,
+      description: newAgent.description?.trim() ?? '',
+      systemPrompt: newAgent.systemPrompt?.trim() ?? '',
+      color: newAgent.color ?? '#111827',
+      modelId: newAgent.modelId ?? null,
+      runtimeType: newAgent.runtimeType ?? 'llm',
+      codeAgentType: newAgent.runtimeType === 'code-agent' ? (newAgent.codeAgentType ?? 'codex') : null,
+      capabilityTags: newAgent.capabilityTags ?? [],
+      toolPermissions: newAgent.toolPermissions ?? ['chat'],
+      sandboxPolicy: newAgent.sandboxPolicy ?? 'workspace-write',
+      contextPolicy: newAgent.contextPolicy ?? 'workspace-aware',
+      autoInvoke: newAgent.autoInvoke ?? true,
+      approvalRequired: newAgent.approvalRequired ?? true,
     })
-    setNewAgent({ name: '', role: '', systemPrompt: '', color: '#111827' })
+    setNewAgent(defaultAgentDraft)
     toast('已添加 Agent')
   }
 
@@ -243,6 +299,15 @@ export default function AgentWorldPage() {
                 className="mt-2 h-24 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-300"
                 placeholder="输入一个需要多个 Agent 同时推进的任务"
               />
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-neutral-200 px-3">
+                <FolderOpen className="h-4 w-4 shrink-0 text-neutral-400" />
+                <input
+                  value={newProjectPath}
+                  onChange={(event) => setNewProjectPath(event.target.value)}
+                  className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-300"
+                  placeholder="项目文件夹路径，可选"
+                />
+              </div>
               <button type="submit" className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800">
                 <Plus className="h-4 w-4" />
                 新建协作组
@@ -265,10 +330,12 @@ export default function AgentWorldPage() {
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
                   >
                     <Layers3 className="h-4 w-4 shrink-0 text-neutral-500" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{workspace.name}</span>
-                      <span className="block truncate text-xs text-neutral-400">{formatTime(workspace.updatedAt)}</span>
-                    </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{workspace.name}</span>
+                        <span className="block truncate text-xs text-neutral-400">
+                          {workspace.projectPath || formatTime(workspace.updatedAt)}
+                        </span>
+                      </span>
                   </button>
                   <button
                     type="button"
@@ -307,6 +374,15 @@ export default function AgentWorldPage() {
                       onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, goal: event.target.value }))}
                       className="mt-3 h-16 w-full max-w-3xl resize-none bg-transparent text-sm leading-7 text-neutral-500 outline-none"
                     />
+                    <label className="mt-2 flex max-w-3xl items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-600 shadow-sm">
+                      <FolderOpen className="h-4 w-4 shrink-0 text-neutral-400" />
+                      <input
+                        value={workspaceDraft.projectPath}
+                        onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, projectPath: event.target.value }))}
+                        className="h-10 min-w-0 flex-1 bg-transparent outline-none placeholder:text-neutral-300"
+                        placeholder="项目文件夹路径，Code Agent 会在这里运行"
+                      />
+                    </label>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
@@ -338,12 +414,13 @@ export default function AgentWorldPage() {
 
                 <div className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
                   <div className="space-y-6">
-                    <Panel title="Agent 团队" action={<PresetButtons onPick={(preset) => setNewAgent(preset)} />}>
+                    <Panel title="Agent 团队" action={<PresetButtons onPick={(preset) => setNewAgent({ ...defaultAgentDraft, ...preset })} />}>
                       <div className="grid gap-3 md:grid-cols-2">
                         {agents.map((agent) => (
                           <AgentCard
                             key={agent.id}
                             agent={agent}
+                            models={models}
                             onChange={(patch) => updateAgent(agent.id, patch)}
                             onDelete={() => deleteAgent(agent.id)}
                           />
@@ -352,7 +429,39 @@ export default function AgentWorldPage() {
                       <form onSubmit={addAgentFromForm} className="mt-4 grid gap-3 rounded-2xl border border-dashed border-neutral-200 p-4 md:grid-cols-2">
                         <Field placeholder="名称，如 Designer" value={newAgent.name} onChange={(name) => setNewAgent((v) => ({ ...v, name }))} />
                         <Field placeholder="角色，如 设计" value={newAgent.role} onChange={(role) => setNewAgent((v) => ({ ...v, role }))} />
-                        <Field className="md:col-span-2" placeholder="系统提示词" value={newAgent.systemPrompt} onChange={(systemPrompt) => setNewAgent((v) => ({ ...v, systemPrompt }))} />
+                        <Field className="md:col-span-2" placeholder="能力说明，如 前端实现、接口联调、审查风险" value={newAgent.description ?? ''} onChange={(description) => setNewAgent((v) => ({ ...v, description }))} />
+                        <select value={newAgent.runtimeType ?? 'llm'} onChange={(event) => setNewAgent((v) => ({ ...v, runtimeType: event.target.value as WorkspaceAgent['runtimeType'] }))} className="h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-neutral-400">
+                          <option value="llm">普通 LLM Agent</option>
+                          <option value="code-agent">绑定 Code Agent</option>
+                          <option value="mcp">MCP Agent</option>
+                          <option value="a2a">A2A Agent</option>
+                        </select>
+                        <select value={newAgent.runtimeType === 'code-agent' ? (newAgent.codeAgentType ?? 'codex') : ''} onChange={(event) => setNewAgent((v) => ({ ...v, codeAgentType: (event.target.value || null) as WorkspaceAgent['codeAgentType'] }))} disabled={newAgent.runtimeType !== 'code-agent'} className="h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300">
+                          <option value="">不绑定 CLI</option>
+                          <option value="codex">Codex CLI</option>
+                          <option value="claude-code">Claude Code</option>
+                          <option value="opencode">OpenCode</option>
+                        </select>
+                        <select value={newAgent.modelId ?? ''} onChange={(event) => setNewAgent((v) => ({ ...v, modelId: event.target.value || null }))} className="h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-neutral-400">
+                          <option value="">自动模型</option>
+                          {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId}</option>)}
+                        </select>
+                        <select value={newAgent.sandboxPolicy ?? 'workspace-write'} onChange={(event) => setNewAgent((v) => ({ ...v, sandboxPolicy: event.target.value as WorkspaceAgent['sandboxPolicy'] }))} className="h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-neutral-400">
+                          <option value="read-only">只读权限</option>
+                          <option value="workspace-write">工作区写入</option>
+                          <option value="danger-full-access">完全访问</option>
+                        </select>
+                        <Field placeholder="能力标签，逗号分隔" value={(newAgent.capabilityTags ?? []).join(', ')} onChange={(value) => setNewAgent((v) => ({ ...v, capabilityTags: splitList(value) }))} />
+                        <Field placeholder="工具权限，逗号分隔" value={(newAgent.toolPermissions ?? []).join(', ')} onChange={(value) => setNewAgent((v) => ({ ...v, toolPermissions: splitList(value) }))} />
+                        <Field className="md:col-span-2" placeholder="系统提示词" value={newAgent.systemPrompt ?? ''} onChange={(systemPrompt) => setNewAgent((v) => ({ ...v, systemPrompt }))} />
+                        <label className="flex h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
+                          <input type="checkbox" checked={newAgent.autoInvoke ?? true} onChange={(event) => setNewAgent((v) => ({ ...v, autoInvoke: event.target.checked }))} />
+                          允许 Orchestrator 自动调用
+                        </label>
+                        <label className="flex h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
+                          <input type="checkbox" checked={newAgent.approvalRequired ?? true} onChange={(event) => setNewAgent((v) => ({ ...v, approvalRequired: event.target.checked }))} />
+                          高风险操作需要确认
+                        </label>
                         <button type="submit" className="h-10 rounded-xl bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 md:col-span-2">
                           添加 Agent
                         </button>
@@ -494,6 +603,13 @@ function formatTime(value: string) {
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
+function splitList(value: string) {
+  return value
+    .split(/[,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 function Stat({ value, label }: { value: number; label: string }) {
   return (
     <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-3">
@@ -544,11 +660,13 @@ function PresetButtons({ onPick }: { onPick: (preset: { name: string; role: stri
 
 function AgentCard({
   agent,
+  models,
   onChange,
   onDelete,
 }: {
   agent: WorkspaceAgent
-  onChange: (patch: Partial<{ name: string; role: string; systemPrompt: string; color: string }>) => void
+  models: ModelCatalogItem[]
+  onChange: (patch: Partial<AgentConfigInput>) => void
   onDelete: () => void
 }) {
   return (
@@ -572,6 +690,49 @@ function AgentCard({
         <button type="button" onClick={onDelete} className="grid h-8 w-8 place-items-center rounded-lg text-neutral-300 hover:bg-red-50 hover:text-red-500">
           <Trash2 className="h-4 w-4" />
         </button>
+      </div>
+      <input
+        value={agent.description}
+        onChange={(event) => onChange({ description: event.target.value })}
+        placeholder="能力说明"
+        className="mt-3 w-full rounded-xl border border-neutral-200 px-3 py-2 text-xs text-neutral-600 outline-none placeholder:text-neutral-300"
+      />
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <select value={agent.runtimeType} onChange={(event) => onChange({ runtimeType: event.target.value as WorkspaceAgent['runtimeType'] })} className="h-9 rounded-xl border border-neutral-200 bg-white px-3 text-xs outline-none">
+          <option value="llm">LLM Agent</option>
+          <option value="code-agent">Code Agent</option>
+          <option value="mcp">MCP Agent</option>
+          <option value="a2a">A2A Agent</option>
+        </select>
+        <select value={agent.runtimeType === 'code-agent' ? (agent.codeAgentType ?? 'codex') : ''} onChange={(event) => onChange({ codeAgentType: (event.target.value || null) as WorkspaceAgent['codeAgentType'] })} disabled={agent.runtimeType !== 'code-agent'} className="h-9 rounded-xl border border-neutral-200 bg-white px-3 text-xs outline-none disabled:bg-neutral-50 disabled:text-neutral-300">
+          <option value="">不绑定 CLI</option>
+          <option value="codex">Codex CLI</option>
+          <option value="claude-code">Claude Code</option>
+          <option value="opencode">OpenCode</option>
+        </select>
+        <select value={agent.modelId ?? ''} onChange={(event) => onChange({ modelId: event.target.value || null })} className="h-9 rounded-xl border border-neutral-200 bg-white px-3 text-xs outline-none">
+          <option value="">自动模型</option>
+          {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId}</option>)}
+        </select>
+        <select value={agent.sandboxPolicy} onChange={(event) => onChange({ sandboxPolicy: event.target.value as WorkspaceAgent['sandboxPolicy'] })} className="h-9 rounded-xl border border-neutral-200 bg-white px-3 text-xs outline-none">
+          <option value="read-only">只读</option>
+          <option value="workspace-write">工作区写入</option>
+          <option value="danger-full-access">完全访问</option>
+        </select>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <input value={agent.capabilityTags.join(', ')} onChange={(event) => onChange({ capabilityTags: splitList(event.target.value) })} placeholder="能力标签" className="h-9 rounded-xl border border-neutral-200 px-3 text-xs outline-none placeholder:text-neutral-300" />
+        <input value={agent.toolPermissions.join(', ')} onChange={(event) => onChange({ toolPermissions: splitList(event.target.value) })} placeholder="工具权限" className="h-9 rounded-xl border border-neutral-200 px-3 text-xs outline-none placeholder:text-neutral-300" />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <label className="inline-flex h-8 items-center gap-2 rounded-full border border-neutral-200 px-3 text-xs text-neutral-600">
+          <input type="checkbox" checked={agent.autoInvoke} onChange={(event) => onChange({ autoInvoke: event.target.checked })} />
+          自动调用
+        </label>
+        <label className="inline-flex h-8 items-center gap-2 rounded-full border border-neutral-200 px-3 text-xs text-neutral-600">
+          <input type="checkbox" checked={agent.approvalRequired} onChange={(event) => onChange({ approvalRequired: event.target.checked })} />
+          高风险确认
+        </label>
       </div>
       <textarea
         value={agent.systemPrompt}

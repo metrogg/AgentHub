@@ -154,6 +154,7 @@ export interface Workspace {
   ownerId: string
   name: string
   goal: string
+  projectPath: string | null
   createdAt: string
   updatedAt: string
 }
@@ -163,10 +164,39 @@ export interface WorkspaceAgent {
   workspaceId: string
   name: string
   role: string
+  description: string
+  avatar: string | null
   systemPrompt: string
   color: string
+  modelId: string | null
+  runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
+  codeAgentType: 'codex' | 'claude-code' | 'opencode' | null
+  capabilityTags: string[]
+  toolPermissions: string[]
+  sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
+  contextPolicy: 'recent-only' | 'pinned-recent' | 'workspace-aware'
+  autoInvoke: boolean
+  approvalRequired: boolean
   orderIdx: number
   createdAt: string
+}
+
+export interface AgentConfigInput {
+  name: string
+  role: string
+  description?: string
+  avatar?: string | null
+  systemPrompt?: string
+  color?: string
+  modelId?: string | null
+  runtimeType?: WorkspaceAgent['runtimeType']
+  codeAgentType?: WorkspaceAgent['codeAgentType']
+  capabilityTags?: string[]
+  toolPermissions?: string[]
+  sandboxPolicy?: WorkspaceAgent['sandboxPolicy']
+  contextPolicy?: WorkspaceAgent['contextPolicy']
+  autoInvoke?: boolean
+  approvalRequired?: boolean
 }
 
 export type TaskStatus = 'pending' | 'running' | 'done'
@@ -203,6 +233,7 @@ export interface OrchestratorPlanTask {
   title: string
   description: string
   agentKey: string
+  status?: TaskStatus
 }
 
 export interface OrchestratorPlan {
@@ -254,6 +285,15 @@ export const api = {
     request<Message>(`/messages/${sessionId}/orchestrator-plan`, {
       method: 'POST',
       body: JSON.stringify({ content }),
+    }),
+  updateOrchestratorPlan: (
+    sessionId: string,
+    messageId: string,
+    data: { tasks: Array<{ id: string; agentKey?: string; status?: TaskStatus }> }
+  ) =>
+    request<Message>(`/messages/${sessionId}/orchestrator-plan/${messageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
     }),
   dispatchOrchestratorPlan: (sessionId: string, messageId: string) =>
     request<OrchestratorDispatchResult>(
@@ -313,16 +353,16 @@ export const api = {
 
   // Workspaces (Agent Group)
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
-  createWorkspace: (data: { name: string; goal?: string; template?: 'blank' | 'classic' }) =>
+  createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>
     request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
-  updateWorkspace: (id: string, data: { name?: string; goal?: string }) =>
+  updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>
     request<WorkspaceFull>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteWorkspace: (id: string) => request<void>(`/workspaces/${id}`, { method: 'DELETE' }),
 
   addWorkspaceAgent: (
     id: string,
-    data: { name: string; role: string; systemPrompt?: string; color?: string }
+    data: AgentConfigInput
   ) =>
     request<WorkspaceAgent>(`/workspaces/${id}/agents`, {
       method: 'POST',
@@ -331,7 +371,7 @@ export const api = {
   updateWorkspaceAgent: (
     id: string,
     agentId: string,
-    data: Partial<{ name: string; role: string; systemPrompt: string; color: string }>
+    data: Partial<AgentConfigInput>
   ) =>
     request<WorkspaceAgent>(`/workspaces/${id}/agents/${agentId}`, {
       method: 'PATCH',

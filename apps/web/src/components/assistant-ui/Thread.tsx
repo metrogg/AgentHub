@@ -5,7 +5,24 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
 } from '@assistant-ui/react'
-import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
+import {
+  MarkdownTextPrimitive,
+  type CodeHeaderProps,
+  type MarkdownTextPrimitiveProps,
+  type SyntaxHighlighterProps,
+} from '@assistant-ui/react-markdown'
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
+import css from 'highlight.js/lib/languages/css'
+import diff from 'highlight.js/lib/languages/diff'
+import javascript from 'highlight.js/lib/languages/javascript'
+import json from 'highlight.js/lib/languages/json'
+import markdown from 'highlight.js/lib/languages/markdown'
+import python from 'highlight.js/lib/languages/python'
+import sql from 'highlight.js/lib/languages/sql'
+import typescript from 'highlight.js/lib/languages/typescript'
+import xml from 'highlight.js/lib/languages/xml'
+import yaml from 'highlight.js/lib/languages/yaml'
 import {
   ArrowUp,
   AtSign,
@@ -18,6 +35,7 @@ import {
   ChevronRight,
   Copy,
   FileText,
+  FolderOpen,
   GitBranch,
   Globe2,
   ImagePlus,
@@ -34,12 +52,59 @@ import {
   User,
   Users,
 } from 'lucide-react'
-import { type ComponentPropsWithoutRef, type FC, useEffect, useRef, useState } from 'react'
+import { type ComponentPropsWithoutRef, type FC, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
-import { api, type ModelCatalogItem, type OrchestratorDispatchResult, type OrchestratorPlan, type WorkspaceAgent } from '../../lib/api'
+import {
+  api,
+  type ModelCatalogItem,
+  type OrchestratorDispatchResult,
+  type OrchestratorPlan,
+  type TaskStatus,
+  type Workspace,
+  type WorkspaceAgent,
+} from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { useChatStore } from '../../stores/chatStore'
+
+const highlightLanguageMap = {
+  bash,
+  css,
+  diff,
+  javascript,
+  json,
+  markdown,
+  python,
+  sql,
+  typescript,
+  xml,
+  yaml,
+}
+
+Object.entries(highlightLanguageMap).forEach(([name, syntax]) => {
+  if (!hljs.getLanguage(name)) {
+    hljs.registerLanguage(name, syntax)
+  }
+})
+
+const languageAliases: Record<string, string> = {
+  cjs: 'javascript',
+  html: 'xml',
+  js: 'javascript',
+  jsx: 'javascript',
+  md: 'markdown',
+  mjs: 'javascript',
+  py: 'python',
+  sh: 'bash',
+  shell: 'bash',
+  ts: 'typescript',
+  tsx: 'typescript',
+  yml: 'yaml',
+  zsh: 'bash',
+}
+
+const autoHighlightLanguages = Object.keys(highlightLanguageMap)
+type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
 
 export const Thread: FC<{
   sidebarCollapsed: boolean
@@ -101,6 +166,83 @@ const ThreadHeader: FC<{
   </header>
 )
 
+const GroupMemberPanel: FC = () => {
+  const navigate = useNavigate()
+  const workspace = useChatStore((state) => state.currentWorkspace)
+  const agents = useChatStore((state) => state.currentWorkspaceAgents)
+  const messages = useChatStore((state) => state.messages)
+  const activeAgentIds = new Set(messages.filter((message) => message.senderType === 'agent').map((message) => message.senderId))
+
+  return (
+    <aside className="hidden w-72 shrink-0 border-l border-neutral-200 bg-[#fbfbf9] px-4 py-5 xl:block">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-neutral-950">群聊成员</div>
+          <div className="mt-1 truncate text-xs text-neutral-500">{workspace?.name ?? 'Agent Group'}</div>
+        </div>
+        <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
+          <Users className="h-4 w-4" />
+        </div>
+      </div>
+
+      <div className="mt-5 space-y-2">
+        <MemberRow name="You" role="发起人与决策者" active />
+        <MemberRow name="Orchestrator" role="拆解、协调、生成任务卡" active={activeAgentIds.has('orchestrator')} />
+        {agents.map((agent) => (
+          <MemberRow
+            key={agent.id}
+            name={agent.name}
+            role={`${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`}
+            color={agent.color}
+            active={activeAgentIds.has(agent.id)}
+          />
+        ))}
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+        <div className="font-medium text-neutral-900">提及方式</div>
+        <div className="mt-1">输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Orchestrator 接管。</div>
+      </div>
+
+      {workspace?.projectPath && (
+        <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+          <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
+          <div className="min-w-0">
+            <div className="font-medium text-neutral-900">项目文件夹</div>
+            <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
+          </div>
+        </div>
+      )}
+
+      {workspace && (
+        <button
+          type="button"
+          onClick={() => navigate('/agent-world', { state: { workspaceId: workspace.id } })}
+          className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
+        >
+          打开 Agent Group
+        </button>
+      )}
+    </aside>
+  )
+}
+
+const MemberRow: FC<{ name: string; role: string; color?: string; active?: boolean }> = ({ name, role, color, active }) => (
+  <div className="flex items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
+    <div
+      className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
+      style={{ background: color ?? (name === 'You' ? '#2563eb' : '#111827') }}
+    >
+      {name.slice(0, 1).toUpperCase()}
+    </div>
+    <div className="min-w-0 flex-1">
+      <div className="truncate text-sm font-medium text-neutral-950">{name}</div>
+      <div className="truncate text-xs text-neutral-500">{role}</div>
+    </div>
+    <span className={cn('h-2 w-2 rounded-full', active ? 'bg-emerald-500' : 'bg-neutral-300')} />
+  </div>
+)
+
 const ThreadWelcome: FC = () => (
   <ThreadPrimitive.Empty>
     <div className="mx-auto flex min-h-[calc(100vh-15rem)] w-full max-w-[var(--thread-max-width)] flex-col justify-center py-10">
@@ -124,11 +266,17 @@ const PromptCard: FC<{ title: string; text: string }> = ({ title, text }) => (
 )
 
 const Composer: FC = () => {
+  const navigate = useNavigate()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const selectedModelId = useChatStore((state) => state.selectedModelId)
   const setSelectedModelId = useChatStore((state) => state.setSelectedModelId)
+  const currentWorkspace = useChatStore((state) => state.currentWorkspace)
+  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const [models, setModels] = useState<ModelCatalogItem[]>([])
-  const [menu, setMenu] = useState<'tools' | 'agents' | 'models' | null>(null)
+  const [menu, setMenu] = useState<'tools' | 'agents' | 'models' | 'workspace' | null>(null)
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [workspaceDraft, setWorkspaceDraft] = useState({ name: '', goal: '', projectPath: '' })
+  const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [attachment, setAttachment] = useState<string | null>(null)
   const [hint, setHint] = useState<string | null>(null)
   const [planMode, setPlanMode] = useState(false)
@@ -150,6 +298,26 @@ const Composer: FC = () => {
     }
   }, [])
 
+  useEffect(() => {
+    if (menu !== 'workspace') return
+    let cancelled = false
+    setWorkspaceBusy(true)
+    api
+      .listWorkspaces()
+      .then(({ items }) => {
+        if (!cancelled) setWorkspaces(items)
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaces([])
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceBusy(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [menu])
+
   function showHint(text: string) {
     setHint(text)
     window.setTimeout(() => setHint(null), 1800)
@@ -161,6 +329,57 @@ const Composer: FC = () => {
     setAttachment(file.name)
   }
 
+  function insertComposerText(value: string) {
+    const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
+    if (!input) {
+      void navigator.clipboard?.writeText(value).catch(() => undefined)
+      return
+    }
+    const start = input.selectionStart ?? input.value.length
+    const end = input.selectionEnd ?? input.value.length
+    input.focus()
+    input.setSelectionRange(start, end)
+    const inserted = document.execCommand?.('insertText', false, value)
+    if (!inserted) {
+      input.setRangeText(value, start, end, 'end')
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
+    }
+  }
+
+  async function openWorkspace(workspaceId: string) {
+    if (workspaceBusy) return
+    setWorkspaceBusy(true)
+    try {
+      const { session } = await api.openWorkspaceGroupSession(workspaceId)
+      setMenu(null)
+      navigate(`/chat/${session.id}`)
+    } finally {
+      setWorkspaceBusy(false)
+    }
+  }
+
+  async function createWorkspaceFromComposer() {
+    if (workspaceBusy) return
+    const projectPath = workspaceDraft.projectPath.trim()
+    const name = workspaceDraft.name.trim() || workspaceNameFromPath(projectPath) || '项目工作区'
+    setWorkspaceBusy(true)
+    try {
+      const full = await api.createWorkspace({
+        name,
+        goal: workspaceDraft.goal.trim(),
+        projectPath: projectPath || null,
+        template: 'classic',
+      })
+      const { session } = await api.openWorkspaceGroupSession(full.workspace.id)
+      setWorkspaces((items) => [full.workspace, ...items.filter((item) => item.id !== full.workspace.id)])
+      setWorkspaceDraft({ name: '', goal: '', projectPath: '' })
+      setMenu(null)
+      navigate(`/chat/${session.id}`)
+    } finally {
+      setWorkspaceBusy(false)
+    }
+  }
+
   return (
     <div className="shrink-0 bg-gradient-to-t from-white via-white to-white/80 px-6 pb-6 pt-3">
       <ComposerPrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)]">
@@ -169,11 +388,24 @@ const Composer: FC = () => {
             <ComposerMenu
               type={menu}
               models={models}
+              agents={workspaceAgents}
+              workspaces={workspaces}
+              currentWorkspaceId={currentWorkspace?.id ?? null}
               selectedModelId={selectedModelId}
+              workspaceDraft={workspaceDraft}
+              workspaceBusy={workspaceBusy}
               planMode={planMode}
               onAttach={() => {
                 fileInputRef.current?.click()
                 setMenu(null)
+              }}
+              onWorkspaceMenu={() => setMenu('workspace')}
+              onWorkspaceDraft={(patch) => setWorkspaceDraft((draft) => ({ ...draft, ...patch }))}
+              onOpenWorkspace={(workspaceId) => void openWorkspace(workspaceId)}
+              onCreateWorkspace={() => void createWorkspaceFromComposer()}
+              onManageWorkspaces={() => {
+                setMenu(null)
+                navigate('/agent-world')
               }}
               onPlanMode={(next) => {
                 setPlanMode(next)
@@ -184,7 +416,7 @@ const Composer: FC = () => {
                 showHint(modelId ? `已切换到 ${models.find((item) => item.id === modelId)?.modelId ?? modelId}` : '已切换到自动选择')
               }}
               onPick={(value) => {
-                void navigator.clipboard?.writeText(value).catch(() => undefined)
+                insertComposerText(`${value} `)
                 showHint(`已复制 ${value}，可粘贴到输入框`)
               }}
               onClose={() => setMenu(null)}
@@ -202,6 +434,7 @@ const Composer: FC = () => {
           )}
           <ComposerPrimitive.Input
             autoFocus
+            data-agenthub-composer="true"
             placeholder="发消息给 AgentHub，@ 可提及 Agent"
             rows={1}
             className="max-h-[180px] min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-neutral-950 outline-none placeholder:text-neutral-400"
@@ -210,6 +443,14 @@ const Composer: FC = () => {
             <div className="flex items-center gap-1">
               <ComposerToolButton aria-label="添加" onClick={() => setMenu(menu === 'tools' ? null : 'tools')}>
                 <Plus className="h-4 w-4" />
+              </ComposerToolButton>
+              <ComposerToolButton
+                aria-label="工作区"
+                title="工作区"
+                onClick={() => setMenu(menu === 'workspace' ? null : 'workspace')}
+                className={currentWorkspace ? 'bg-neutral-100 text-neutral-900' : undefined}
+              >
+                <FolderOpen className="h-4 w-4" />
               </ComposerToolButton>
               <ComposerToolButton aria-label="附件" onClick={() => fileInputRef.current?.click()}>
                 <Paperclip className="h-4 w-4" />
@@ -238,22 +479,61 @@ const Composer: FC = () => {
 }
 
 const ComposerMenu: FC<{
-  type: 'tools' | 'agents' | 'models'
+  type: 'tools' | 'agents' | 'models' | 'workspace'
   models: ModelCatalogItem[]
+  agents: WorkspaceAgent[]
+  workspaces: Workspace[]
+  currentWorkspaceId: string | null
   selectedModelId: string | null
+  workspaceDraft: { name: string; goal: string; projectPath: string }
+  workspaceBusy: boolean
   planMode: boolean
   onAttach: () => void
+  onWorkspaceMenu: () => void
+  onWorkspaceDraft: (patch: Partial<{ name: string; goal: string; projectPath: string }>) => void
+  onOpenWorkspace: (workspaceId: string) => void
+  onCreateWorkspace: () => void
+  onManageWorkspaces: () => void
   onPlanMode: (enabled: boolean) => void
   onModel: (modelId: string | null) => void
   onPick: (value: string) => void
   onClose: () => void
-}> = ({ type, models, selectedModelId, planMode, onAttach, onPlanMode, onModel, onPick, onClose }) => {
-  const agents = [
+}> = ({
+  type,
+  models,
+  agents,
+  workspaces,
+  currentWorkspaceId,
+  selectedModelId,
+  workspaceDraft,
+  workspaceBusy,
+  planMode,
+  onAttach,
+  onWorkspaceMenu,
+  onWorkspaceDraft,
+  onOpenWorkspace,
+  onCreateWorkspace,
+  onManageWorkspaces,
+  onPlanMode,
+  onModel,
+  onPick,
+  onClose,
+}) => {
+  const legacyAgents = [
     { title: '@Orchestrator', desc: '拆解任务并分发到 Agent Group' },
     { title: '@architect', desc: '架构与任务拆解' },
     { title: '@coder', desc: '代码实现' },
     { title: '@reviewer', desc: '审查与边界检查' },
   ]
+  const agentRows = agents.length
+    ? [
+        { title: '@orchestrator', desc: '拆解任务、创建任务卡并协调 Agent Group' },
+        ...agents.map((agent) => ({
+          title: `@${agent.name}`,
+          desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${agent.capabilityTags.length ? ` · ${agent.capabilityTags.slice(0, 3).join(', ')}` : ''}`,
+        })),
+      ]
+    : legacyAgents
   const plugins = [
     { title: 'Documents', icon: FileText, color: 'text-blue-500', value: '@documents' },
     { title: 'Spreadsheets', icon: Sheet, color: 'text-emerald-600', value: '@spreadsheets' },
@@ -262,12 +542,21 @@ const ComposerMenu: FC<{
   ]
 
   return (
-    <div className="absolute bottom-[4.5rem] left-3 z-20 w-64 rounded-2xl border border-neutral-200 bg-white p-2 text-sm shadow-xl">
+    <div
+      className={cn(
+        'absolute bottom-[4.5rem] left-3 z-20 rounded-2xl border border-neutral-200 bg-white p-2 text-sm shadow-xl',
+        type === 'workspace' ? 'w-[27rem]' : 'w-64'
+      )}
+    >
       {type === 'tools' && (
         <div className="relative group/tools">
           <button type="button" onClick={onAttach} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
             <ImagePlus className="h-4 w-4 text-neutral-500" />
             <span className="flex-1 text-neutral-900">添加照片和文件</span>
+          </button>
+          <button type="button" onClick={onWorkspaceMenu} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
+            <FolderOpen className="h-4 w-4 text-neutral-500" />
+            <span className="flex-1 text-neutral-900">工作区</span>
           </button>
           <button type="button" onClick={() => onPlanMode(!planMode)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
             <ListTodo className="h-4 w-4 text-neutral-500" />
@@ -304,7 +593,7 @@ const ComposerMenu: FC<{
         </div>
       )}
       {type === 'agents' &&
-        agents.map((item) => <MenuRow key={item.title} title={item.title} desc={item.desc} onClick={() => { onPick(item.title); onClose() }} />)}
+        agentRows.map((item) => <MenuRow key={item.title} title={item.title} desc={item.desc} onClick={() => { onPick(item.title); onClose() }} />)}
       {type === 'models' && (
         <>
           <button
@@ -332,8 +621,85 @@ const ComposerMenu: FC<{
           {models.length === 0 && <div className="px-3 py-2 text-xs text-neutral-400">还没有启用的模型</div>}
         </>
       )}
+      {type === 'workspace' && (
+        <div className="space-y-3 p-1">
+          <div className="flex items-center justify-between gap-3 px-2 pt-1">
+            <div className="text-sm font-semibold text-neutral-950">工作区</div>
+            <button
+              type="button"
+              onClick={onManageWorkspaces}
+              className="h-7 rounded-lg px-2 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+            >
+              管理
+            </button>
+          </div>
+          <div className="max-h-44 space-y-1 overflow-y-auto">
+            {workspaces.map((workspace) => (
+              <button
+                key={workspace.id}
+                type="button"
+                onClick={() => onOpenWorkspace(workspace.id)}
+                disabled={workspaceBusy}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50 disabled:opacity-60',
+                  workspace.id === currentWorkspaceId && 'bg-neutral-100'
+                )}
+              >
+                <FolderOpen className="h-4 w-4 shrink-0 text-neutral-500" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium text-neutral-900">{workspace.name}</span>
+                  <span className="block truncate text-xs text-neutral-500">
+                    {workspace.projectPath || '未绑定项目文件夹'}
+                  </span>
+                </span>
+              </button>
+            ))}
+            {!workspaceBusy && workspaces.length === 0 && (
+              <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-4 text-center text-xs text-neutral-400">
+                暂无工作区
+              </div>
+            )}
+            {workspaceBusy && <div className="px-3 py-2 text-xs text-neutral-400">正在处理工作区...</div>}
+          </div>
+          <div className="grid gap-2 rounded-xl border border-neutral-200 p-3">
+            <input
+              value={workspaceDraft.name}
+              onChange={(event) => onWorkspaceDraft({ name: event.target.value })}
+              className="h-9 rounded-lg border border-neutral-200 px-3 text-sm outline-none placeholder:text-neutral-300 focus:border-neutral-400"
+              placeholder="工作区名称"
+            />
+            <input
+              value={workspaceDraft.projectPath}
+              onChange={(event) => onWorkspaceDraft({ projectPath: event.target.value })}
+              className="h-9 rounded-lg border border-neutral-200 px-3 text-sm outline-none placeholder:text-neutral-300 focus:border-neutral-400"
+              placeholder="项目文件夹路径，如 F:\\Learning\\AgentHub"
+            />
+            <textarea
+              value={workspaceDraft.goal}
+              onChange={(event) => onWorkspaceDraft({ goal: event.target.value })}
+              className="h-16 resize-none rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none placeholder:text-neutral-300 focus:border-neutral-400"
+              placeholder="协作目标，可选"
+            />
+            <button
+              type="button"
+              onClick={onCreateWorkspace}
+              disabled={workspaceBusy || (!workspaceDraft.name.trim() && !workspaceDraft.projectPath.trim())}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
+            >
+              <Plus className="h-4 w-4" />
+              新建并进入
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+function workspaceNameFromPath(value: string) {
+  const normalized = value.trim().replace(/[\\/]+$/, '')
+  const last = normalized.split(/[\\/]/).filter(Boolean).pop()
+  return last ?? ''
 }
 
 const MenuRow: FC<{ title: string; desc: string; onClick: () => void }> = ({ title, desc, onClick }) => (
@@ -392,15 +758,53 @@ const AssistantMessage: FC = () => (
 const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
   const navigate = useNavigate()
   const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const [plan, setPlan] = useState(data)
+  const [saving, setSaving] = useState(false)
   const [dispatching, setDispatching] = useState(false)
   const [result, setResult] = useState<OrchestratorDispatchResult | null>(null)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    setPlan(data)
+  }, [data])
+
+  function patchTask(taskId: string, patch: Partial<{ agentKey: string; status: TaskStatus }>) {
+    setPlan((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task)),
+    }))
+  }
+
+  async function savePlan() {
+    if (!currentSessionId || !data.messageId) return plan
+    setSaving(true)
+    setError('')
+    try {
+      const updated = await api.updateOrchestratorPlan(currentSessionId, data.messageId, {
+        tasks: plan.tasks.map((task) => ({
+          id: task.id,
+          agentKey: task.agentKey,
+          status: task.status,
+        })),
+      })
+      const nextPlan = (updated.metadata as { plan?: OrchestratorPlan } | null)?.plan ?? plan
+      setPlan(nextPlan)
+      return nextPlan
+    } catch (err: any) {
+      setError(err?.message || '保存任务卡失败')
+      return null
+    } finally {
+      setSaving(false)
+    }
+  }
 
   async function dispatchPlan() {
     if (!currentSessionId || !data.messageId || dispatching) return
     setDispatching(true)
     setError('')
     try {
+      const saved = await savePlan()
+      if (!saved) return
       const next = await api.dispatchOrchestratorPlan(currentSessionId, data.messageId)
       setResult(next)
     } catch (err: any) {
@@ -417,21 +821,22 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.08em] text-neutral-400">
               <GitBranch className="h-3.5 w-3.5" />
-              Orchestrator Plan
+              Orchestrator Plan Draft
             </div>
-            <h3 className="mt-1 truncate text-base font-semibold text-neutral-950">{data.title}</h3>
+            <h3 className="mt-1 truncate text-base font-semibold text-neutral-950">{plan.title}</h3>
           </div>
           <span className="shrink-0 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-xs text-neutral-500">
-            {data.tasks.length} tasks
+            {plan.tasks.length} tasks
           </span>
         </div>
-        <p className="mt-2 line-clamp-2 text-sm leading-6 text-neutral-500">{data.goal}</p>
+        <p className="mt-2 line-clamp-2 text-sm leading-6 text-neutral-500">{plan.goal}</p>
       </div>
 
       <div className="px-4 py-3">
         <div className="space-y-2">
-          {data.tasks.map((task, index) => {
-            const agent = data.agents.find((item) => item.key === task.agentKey)
+          {plan.tasks.map((task, index) => {
+            const agent = plan.agents.find((item) => item.key === task.agentKey)
+            const status = task.status ?? 'pending'
             return (
               <div key={task.id} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 rounded-xl border border-neutral-200 bg-white p-3">
                 <div
@@ -443,11 +848,38 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="truncate text-sm font-semibold text-neutral-900">{task.title}</div>
-                    <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
-                      {agent?.name ?? 'Agent'} / {agent?.role ?? '-'}
-                    </span>
+                    <select
+                      value={task.agentKey}
+                      onChange={(event) => patchTask(task.id, { agentKey: event.target.value })}
+                      disabled={Boolean(result)}
+                      className="h-7 rounded-full border border-neutral-200 bg-neutral-50 px-2 text-xs text-neutral-600 outline-none transition hover:bg-white focus:border-neutral-400 disabled:opacity-60"
+                    >
+                      {plan.agents.map((item) => (
+                        <option key={item.key} value={item.key}>
+                          {item.name} / {item.role}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">{task.description}</p>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {(['pending', 'running', 'done'] as TaskStatus[]).map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        disabled={Boolean(result)}
+                        onClick={() => patchTask(task.id, { status: item })}
+                        className={cn(
+                          'h-7 rounded-full border px-2.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-60',
+                          status === item
+                            ? 'border-neutral-900 bg-neutral-950 text-white'
+                            : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-900'
+                        )}
+                      >
+                        {taskStatusLabel(item)}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             )
@@ -491,19 +923,36 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
             </div>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={dispatchPlan}
-            disabled={dispatching}
-            className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-300"
-          >
-            {dispatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
-            {dispatching ? '正在创建并分发' : '创建并分发到 Agent Group'}
-          </button>
+          <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_1.4fr]">
+            <button
+              type="button"
+              onClick={() => void savePlan()}
+              disabled={saving || dispatching}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:bg-neutral-100 disabled:text-neutral-400"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              {saving ? '正在保存' : '保存调度'}
+            </button>
+            <button
+              type="button"
+              onClick={dispatchPlan}
+              disabled={dispatching || saving}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-300"
+            >
+              {dispatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+              {dispatching ? '正在创建并分发' : '创建并分发到 Agent Group'}
+            </button>
+          </div>
         )}
       </div>
     </div>
   )
+}
+
+function taskStatusLabel(status: TaskStatus) {
+  if (status === 'running') return '进行中'
+  if (status === 'done') return '已完成'
+  return '待处理'
 }
 
 const SystemMessage: FC = () => (
@@ -566,9 +1015,121 @@ const ComposerToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className,
   <button type="button" className={cn('grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900', className)} {...props} />
 )
 
+const CodePre: NonNullable<MarkdownComponents['pre']> = ({ className, node: _node, ...props }) => (
+  <pre className={cn('agenthub-code-pre not-prose', className)} {...props} />
+)
+
+const CodeToken: NonNullable<MarkdownComponents['code']> = ({ className, node: _node, ...props }) => {
+  const isBlock = className?.includes('agenthub-code') || className?.includes('language-')
+  return <code className={cn(isBlock ? 'agenthub-code' : 'agenthub-inline-code', className)} {...props} />
+}
+
+const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
+  const [copied, setCopied] = useState(false)
+  const label = formatLanguageLabel(language)
+
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(code.replace(/\n$/, ''))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <div className="agenthub-code-header not-prose">
+      <span>{label}</span>
+      <button type="button" className="agenthub-code-copy" onClick={copyCode} title="Copy code" aria-label="Copy code">
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+    </div>
+  )
+}
+
+const CodeSyntaxHighlighter: FC<SyntaxHighlighterProps> = ({ components: { Pre, Code }, language, code }) => {
+  const normalizedLanguage = normalizeHighlightLanguage(language)
+  const highlighted = useMemo(() => highlightCode(code, normalizedLanguage), [code, normalizedLanguage])
+
+  return (
+    <Pre className="agenthub-code-pre not-prose">
+      <Code
+        className={cn('agenthub-code', normalizedLanguage ? `language-${normalizedLanguage}` : 'language-text')}
+        dangerouslySetInnerHTML={{ __html: highlighted }}
+      />
+    </Pre>
+  )
+}
+
+function normalizeHighlightLanguage(language: string | undefined) {
+  const key = (language ?? '').toLowerCase().trim()
+  if (!key || key === 'unknown' || key === 'text' || key === 'txt' || key === 'plain' || key === 'plaintext') {
+    return ''
+  }
+  return languageAliases[key] ?? key
+}
+
+function formatLanguageLabel(language: string | undefined) {
+  const normalized = normalizeHighlightLanguage(language)
+  return normalized || 'text'
+}
+
+function highlightCode(code: string, language: string) {
+  try {
+    if (language && hljs.getLanguage(language)) {
+      return hljs.highlight(code, { language, ignoreIllegals: true }).value
+    }
+
+    if (code.trim()) {
+      return hljs.highlightAuto(code, autoHighlightLanguages).value
+    }
+  } catch {
+    return escapeHtml(code)
+  }
+
+  return escapeHtml(code)
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+function closeUnterminatedCodeFence(text: string) {
+  let openFence: string | null = null
+  const fencePattern = /(?:^|\n)[ \t]{0,3}(`{3,}|~{3,})[^\n]*/g
+
+  for (const match of text.matchAll(fencePattern)) {
+    const marker = match[1]
+    if (!openFence) {
+      openFence = marker
+      continue
+    }
+
+    if (marker[0] === openFence[0] && marker.length >= openFence.length) {
+      openFence = null
+    }
+  }
+
+  if (!openFence) return text
+  return `${text}${text.endsWith('\n') ? '' : '\n'}${openFence}`
+}
+
 const MarkdownText: FC = () => (
   <MarkdownTextPrimitive
     remarkPlugins={[remarkGfm]}
-    className="prose prose-neutral prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-pre:border prose-pre:border-neutral-200 prose-pre:bg-neutral-50 prose-code:before:content-none prose-code:after:content-none"
+    preprocess={closeUnterminatedCodeFence}
+    components={{
+      pre: CodePre,
+      code: CodeToken,
+      CodeHeader,
+      SyntaxHighlighter: CodeSyntaxHighlighter,
+    }}
+    className="agenthub-markdown prose prose-neutral prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-code:before:content-none prose-code:after:content-none"
   />
 )

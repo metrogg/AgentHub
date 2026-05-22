@@ -6,6 +6,7 @@ import {
   type WorkspaceFull,
   type WorkspaceTask,
   type TaskStatus,
+  type AgentConfigInput,
 } from '../lib/api'
 
 interface WorkspaceState {
@@ -18,16 +19,16 @@ interface WorkspaceState {
 
   // List ops
   fetchList: () => Promise<void>
-  createWorkspace: (data: { name: string; goal?: string; template?: 'blank' | 'classic' }) => Promise<Workspace>
+  createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) => Promise<Workspace>
   selectWorkspace: (id: string | null) => Promise<void>
-  updateWorkspace: (id: string, data: { name?: string; goal?: string }) => Promise<void>
+  updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) => Promise<void>
   deleteWorkspace: (id: string) => Promise<void>
 
   // Agent ops
-  addAgent: (data: { name: string; role: string; systemPrompt?: string; color?: string }) => Promise<void>
+  addAgent: (data: AgentConfigInput) => Promise<void>
   updateAgent: (
     agentId: string,
-    data: Partial<{ name: string; role: string; systemPrompt: string; color: string }>
+    data: Partial<AgentConfigInput>
   ) => Promise<void>
   deleteAgent: (agentId: string) => Promise<void>
 

@@ -24,7 +24,16 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     message.senderType === 'agent' && message.metadata && typeof message.metadata.agentName === 'string'
       ? message.metadata.agentName
       : null
-  const text = agentName ? `**${agentName}**\n\n${message.content}` : message.content
+  const runtimeLabel =
+    message.senderType === 'agent' && message.metadata?.runtimeType === 'code-agent'
+      ? `Code Agent / ${String(message.metadata.codeAgentType ?? 'cli')}`
+      : message.senderType === 'agent' &&
+          typeof message.metadata?.runtimeType === 'string' &&
+          message.metadata.runtimeType !== 'llm'
+        ? String(message.metadata.runtimeType).toUpperCase()
+        : null
+  const senderLabel = [agentName, runtimeLabel].filter(Boolean).join(' · ')
+  const text = senderLabel ? `**${senderLabel}**\n\n${message.content}` : message.content
 
   return {
     id: message.id,

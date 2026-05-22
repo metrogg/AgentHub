@@ -60,4 +60,120 @@
   .settings-input {
     @apply w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 outline-none transition focus:border-neutral-400;
   }
+
+  .agenthub-markdown {
+    color: #18181b;
+  }
+
+  .agenthub-inline-code {
+    border-radius: 0.375rem;
+    background: #f4f4f5;
+    padding: 0.125rem 0.375rem;
+    font-size: 0.85em;
+    font-weight: 500;
+    color: #27272a;
+  }
+
+  .agenthub-code-header {
+    margin-top: 0.875rem;
+    display: flex;
+    height: 2.25rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border: 1px solid #1f2937;
+    border-bottom: 0;
+    border-radius: 0.625rem 0.625rem 0 0;
+    background: #111827;
+    padding: 0 0.625rem 0 0.875rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    color: #a7f3d0;
+  }
+
+  .agenthub-code-copy {
+    display: grid;
+    height: 1.625rem;
+    width: 1.625rem;
+    place-items: center;
+    border-radius: 0.375rem;
+    color: #cbd5e1;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+
+  .agenthub-code-copy:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #ffffff;
+  }
+
+  .agenthub-code-pre {
+    margin: 0 0 0.875rem;
+    max-height: 34rem;
+    overflow: auto;
+    border: 1px solid #1f2937;
+    border-radius: 0 0 0.625rem 0.625rem;
+    background: #0b1020;
+    padding: 0.875rem 1rem;
+    color: #e5e7eb;
+    font-size: 0.8125rem;
+    line-height: 1.65;
+  }
+
+  .agenthub-code {
+    display: block;
+    min-width: max-content;
+    white-space: pre;
+    background: transparent;
+    padding: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    color: inherit;
+  }
+
+  .agenthub-code .hljs-keyword,
+  .agenthub-code .hljs-selector-tag,
+  .agenthub-code .hljs-built_in {
+    color: #c084fc;
+  }
+
+  .agenthub-code .hljs-string,
+  .agenthub-code .hljs-attr,
+  .agenthub-code .hljs-template-variable {
+    color: #86efac;
+  }
+
+  .agenthub-code .hljs-title,
+  .agenthub-code .hljs-function,
+  .agenthub-code .hljs-name {
+    color: #93c5fd;
+  }
+
+  .agenthub-code .hljs-number,
+  .agenthub-code .hljs-literal,
+  .agenthub-code .hljs-symbol,
+  .agenthub-code .hljs-bullet {
+    color: #fbbf24;
+  }
+
+  .agenthub-code .hljs-comment,
+  .agenthub-code .hljs-quote {
+    color: #94a3b8;
+    font-style: italic;
+  }
+
+  .agenthub-code .hljs-type,
+  .agenthub-code .hljs-class .hljs-title,
+  .agenthub-code .hljs-tag {
+    color: #5eead4;
+  }
+
+  .agenthub-code .hljs-deletion {
+    color: #fca5a5;
+  }
+
+  .agenthub-code .hljs-addition {
+    color: #bef264;
+  }
 }
