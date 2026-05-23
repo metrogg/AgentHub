@@ -81,6 +81,19 @@ const CLASSIC_AGENTS: Array<z.input<typeof createAgentSchema>> = [
   { name: 'Reviewer', role: '审查', systemPrompt: '你是审查者。检查风险、交互漏洞和缺失的测试。直接、克制、不绕弯。', color: '#ef4444' },
 ]
 
+type AgentConfigPatch = z.input<typeof createAgentSchema> | z.infer<typeof updateAgentSchema>
+
+function normalizeNativeReadOnlyAgent<T extends AgentConfigPatch>(input: T): T {
+  if (input.runtimeType !== 'mcp') return input
+  return {
+    ...input,
+    codeAgentType: null,
+    toolPermissions: ['workspace:read', 'skills:read'],
+    sandboxPolicy: 'read-only',
+    approvalRequired: true,
+  }
+}
+
 async function loadWorkspaceFull(id: string, ownerId: string) {
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1)
   if (!ws || ws.ownerId !== ownerId) {
@@ -345,7 +358,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
   // Create (optionally seed classic agent team)
   .post('/', zValidator('json', createWorkspaceSchema), async (c) => {
     const user = c.get('user')
-    const input = c.req.valid('json')
+    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
     const projectPath = ensureProjectDirectory(input.projectPath)
     const [ws] = await db
       .insert(workspaces)
@@ -397,7 +410,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
-    const input = c.req.valid('json')
+    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
     const patch = {
       ...input,
       ...(input.projectPath !== undefined ? { projectPath: ensureProjectDirectory(input.projectPath) } : {}),

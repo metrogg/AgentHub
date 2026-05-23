@@ -34,13 +34,14 @@ const envSchema = z.object({
   ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-6'),
   ENABLE_LOCAL_CLI_PROBES: envBoolean.default(true),
   ENABLE_CODEX_CHATGPT_AUTH: envBoolean.default(true),
-  ENABLE_DOCKER_MANAGEMENT: envBoolean.optional(),
   SYNC_CODEX_CLI_AUTH: envBoolean.default(true),
   CODEX_HOME: z.string().optional(),
   MASTRA_REFERENCE_ROOT: z.string().default('.'),
   AGENTHUB_WORKSPACE_ROOT: z.string().default('.'),
   AGENTHUB_SKILLS_ROOT: z.string().optional(),
   AGENTHUB_NATIVE_MAX_TOOL_ROUNDS: z.coerce.number().int().min(1).max(12).default(6),
+  AGENTHUB_ENABLE_CODE_AGENT_EXECUTION: envBoolean.default(false),
+  AGENTHUB_CODE_AGENT_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
 })
 
 export const env = envSchema.parse(Bun.env)

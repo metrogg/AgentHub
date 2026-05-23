@@ -51,7 +51,8 @@ export function isNativeAgentProfile(profile?: AgentRunProfile) {
 export async function* streamNativeAgentReply(
   profile: AgentRunProfile,
   userMsg: MessageRow,
-  history: Array<{ senderType: string; content: string }>
+  history: Array<{ senderType: string; content: string }>,
+  signal?: AbortSignal
 ): AsyncGenerator<string, void, unknown> {
   const cwdInfo = resolveExecutionCwd(profile.projectPath)
   if (!cwdInfo.valid || !cwdInfo.cwd) {
@@ -84,8 +85,8 @@ export async function* streamNativeAgentReply(
 
   try {
     const output = isAnthropicProvider(config)
-      ? await runAnthropicNativeLoop(config, system, messages, allowedTools, cwdInfo.cwd)
-      : await runOpenAINativeLoop(config, system, messages, allowedTools, cwdInfo.cwd)
+      ? await runAnthropicNativeLoop(config, system, messages, allowedTools, cwdInfo.cwd, signal)
+      : await runOpenAINativeLoop(config, system, messages, allowedTools, cwdInfo.cwd, signal)
     yield output.trim() || '(Native agent finished without a text response.)'
   } catch (error: any) {
     const message = redactSensitive(error?.message || 'Native agent loop failed', [config.apiKey])
@@ -99,7 +100,8 @@ async function runOpenAINativeLoop(
   system: string,
   inputMessages: LLMMessage[],
   tools: ToolDefinition[],
-  cwd: string
+  cwd: string,
+  signal?: AbortSignal
 ) {
   const messages: NativeChatMessage[] = inputMessages.map((message) => ({ role: message.role, content: message.content }))
   let finalText = ''
@@ -115,7 +117,8 @@ async function runOpenAINativeLoop(
     }
     if (tools.length) body.tools = tools.map(openAIToolSchema)
 
-    const parsed = await postJson(`${config.baseUrl}/chat/completions`, body, buildHeaders(config), config.timeoutMs)
+    throwIfAborted(signal)
+    const parsed = await postJson(`${config.baseUrl}/chat/completions`, body, buildHeaders(config), config.timeoutMs, signal)
     const message = firstChoiceMessage(parsed)
     finalText = typeof message.content === 'string' ? message.content : finalText
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls as OpenAIToolCall[] : []
@@ -147,7 +150,8 @@ async function runAnthropicNativeLoop(
   system: string,
   inputMessages: LLMMessage[],
   tools: ToolDefinition[],
-  cwd: string
+  cwd: string,
+  signal?: AbortSignal
 ) {
   const messages: NativeChatMessage[] = inputMessages.map((message) => ({ role: message.role, content: message.content }))
   let finalText = ''
@@ -161,7 +165,8 @@ async function runAnthropicNativeLoop(
     }
     if (tools.length) body.tools = tools.map(anthropicToolSchema)
 
-    const parsed = await postJson(`${config.baseUrl}/v1/messages`, body, buildHeaders(config), config.timeoutMs)
+    throwIfAborted(signal)
+    const parsed = await postJson(`${config.baseUrl}/v1/messages`, body, buildHeaders(config), config.timeoutMs, signal)
     const blocks = Array.isArray(parsed.content) ? parsed.content as AnthropicContentBlock[] : []
     const text = blocks.filter((block) => block.type === 'text' && typeof block.text === 'string').map((block) => block.text).join('')
     if (text) finalText = text
@@ -236,9 +241,18 @@ function firstChoiceMessage(parsed: JsonObject) {
   return first?.message ?? {}
 }
 
-async function postJson(url: string, body: JsonObject, headers: Record<string, string>, timeoutMs: number): Promise<JsonObject> {
+async function postJson(
+  url: string,
+  body: JsonObject,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<JsonObject> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(new Error('native agent request timed out')), timeoutMs)
+  const abortFromInput = () => controller.abort(signal?.reason ?? new Error('native agent request aborted'))
+  if (signal?.aborted) abortFromInput()
+  else signal?.addEventListener('abort', abortFromInput, { once: true })
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -253,7 +267,12 @@ async function postJson(url: string, body: JsonObject, headers: Record<string, s
     return JSON.parse(text) as JsonObject
   } finally {
     clearTimeout(timer)
+    signal?.removeEventListener('abort', abortFromInput)
   }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw signal.reason ?? new Error('native agent request aborted')
 }
 
 function buildHeaders(config: LlmRuntimeConfig): Record<string, string> {

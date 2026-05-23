@@ -51,6 +51,7 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
   const agentTyping = useChatStore((state) => state.agentTyping)
   const currentSessionId = useChatStore((state) => state.currentSessionId)
   const sendMessage = useChatStore((state) => state.sendMessage)
+  const cancelRun = useChatStore((state) => state.cancelRun)
 
   const threadMessages = useMemo<ThreadMessageLike[]>(() => {
     const list = messages.map(toThreadMessage)
@@ -78,6 +79,7 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
     isRunning: agentTyping || streamingMessage !== null,
     messages: threadMessages,
     convertMessage: (message: ThreadMessageLike) => message,
+    onCancel: cancelRun,
     onNew: async (message: AppendMessage) => {
       if (!currentSessionId) {
         throw new Error('请先选择或新建一个会话')

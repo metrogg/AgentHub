@@ -79,7 +79,7 @@ export interface CodingToolStatusResponse {
   items: CodingToolStatus[]
   localCliProbesEnabled: boolean
   platform: string
-  runtime?: 'local' | 'container'
+  runtime?: 'local' | 'host'
 }
 
 export interface CliInstallAction {
@@ -88,32 +88,23 @@ export interface CliInstallAction {
   ok: boolean
   output?: string
   message: string
-  runtime?: 'local' | 'container'
+  runtime?: 'local' | 'host'
   status: 'completed' | 'failed'
 }
 
-export interface DockerRuntimeStatus {
-  containers: string | null
-  composeFilePresent: boolean
-  composeInstalled: boolean
-  composeVersion: string | null
-  daemonRunning: boolean
-  dockerInstalled: boolean
-  dockerVersion: string | null
-  installEnabled: boolean
-  message: string
-  projectRoot: string
-  ready: boolean
-  serverVersion: string | null
+export interface OpencodeModelItem {
+  id: string
+  provider: string
+  model: string
 }
 
-export interface DockerRuntimeAction {
-  code?: number
+export interface OpencodeModelsResponse {
   ok: boolean
-  output?: string
+  defaultModel: string | null
+  smallModel: string | null
+  configPath: string
+  models: OpencodeModelItem[]
   message: string
-  status: 'completed' | 'failed'
-  statusBefore?: DockerRuntimeStatus
 }
 
 export interface CodexAuthStatus {
@@ -273,7 +264,10 @@ export const api = {
       body: JSON.stringify({ content: data.content, type: data.type ?? 'text' }),
     }),
 
-  sendMessageWithModel: (sessionId: string, data: { content: string; modelId?: string; type?: string }) =>
+  sendMessageWithModel: (
+    sessionId: string,
+    data: { content: string; modelId?: string; type?: string; skipAgentReply?: boolean }
+  ) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -281,9 +275,13 @@ export const api = {
         type: data.type ?? 'text',
         metadata: {
           ...(data.modelId ? { modelId: data.modelId } : {}),
-          ...(mentionsOrchestrator(data.content) ? { skipAgentReply: true } : {}),
+          ...(data.skipAgentReply || mentionsOrchestrator(data.content) ? { skipAgentReply: true } : {}),
         },
       }),
+    }),
+  cancelMessage: (sessionId: string) =>
+    request<{ cancelled: boolean }>(`/messages/${sessionId}/cancel`, {
+      method: 'POST',
     }),
   createOrchestratorPlan: (sessionId: string, content: string) =>
     request<Message>(`/messages/${sessionId}/orchestrator-plan`, {
@@ -318,6 +316,7 @@ export const api = {
     anthropicEndpoint?: string
     apiKey?: string
     apiKeyEnv?: string
+    modelId?: string
   }) =>
     request<{ ok: boolean; status?: number; message: string }>('/settings/test-model', {
       method: 'POST',
@@ -334,6 +333,8 @@ export const api = {
       : request<CodingToolStatusResponse>('/coding-tools/status'),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
+  getOpencodeModels: () =>
+    request<OpencodeModelsResponse>('/coding-tools/opencode/models'),
   getCodexAuthStatus: () => request<CodexAuthStatus>('/coding-tools/codex/auth/status'),
   startCodexChatGptLogin: () =>
     request<CodexLoginStart>('/coding-tools/codex/auth/start', { method: 'POST' }),
@@ -348,13 +349,6 @@ export const api = {
     request<CodexAuthAction>('/coding-tools/codex/auth/retry', { method: 'POST' }),
   logoutCodexChatGpt: () =>
     request<CodexAuthAction>('/coding-tools/codex/auth/logout', { method: 'POST' }),
-  getDockerRuntimeStatus: () =>
-    request<DockerRuntimeStatus>('/coding-tools/docker/status'),
-  installDockerRuntime: () =>
-    request<DockerRuntimeAction>('/coding-tools/docker/install', { method: 'POST' }),
-  restartDockerRuntime: () =>
-    request<DockerRuntimeAction>('/coding-tools/docker/restart', { method: 'POST' }),
-
   // Workspaces (Agent Group)
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
   createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>
@@ -417,5 +411,5 @@ export const api = {
 }
 
 export function mentionsOrchestrator(content: string) {
-  return /(^|\s)@orchestrator\b/i.test(content) || content.includes('@协调器')
+  return /(^|\s)@(orchestrator|coordinator|agenthub)\b/i.test(content) || content.includes('@协调器') || content.includes('@调度')
 }

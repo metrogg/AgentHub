@@ -36,6 +36,7 @@ export interface AgentRunProfile {
 
 // In-memory map: sessionId -> Set of connected websockets
 const sessionRooms = new Map<string, Set<ServerWebSocket<unknown>>>()
+const activeRuns = new Map<string, { cancelled: boolean; controller: AbortController }>()
 
 export function joinRoom(sessionId: string, ws: ServerWebSocket<unknown>) {
   const set = sessionRooms.get(sessionId) ?? new Set()
@@ -75,6 +76,19 @@ function broadcast(sessionId: string, data: unknown) {
   }
 }
 
+export function cancelAgentReply(sessionId: string) {
+  const run = activeRuns.get(sessionId)
+  if (!run) return false
+  run.cancelled = true
+  run.controller.abort(new Error('Agent run cancelled by user'))
+  broadcast(sessionId, {
+    type: 'message:cancelled',
+    payload: { sessionId },
+  })
+  logger.info({ sessionId }, 'Agent reply cancelled')
+  return true
+}
+
 function buildAgentSystem(profile?: AgentRunProfile) {
   if (!profile) return undefined
   return [
@@ -97,6 +111,10 @@ function buildAgentSystem(profile?: AgentRunProfile) {
 }
 
 export async function runAgentReply(sessionId: string, userMsg: MessageRow, profile?: AgentRunProfile) {
+  cancelAgentReply(sessionId)
+  const run = { cancelled: false, controller: new AbortController() }
+  activeRuns.set(sessionId, run)
+
   const agentId = profile?.id ?? 'claude'
   const agentName = profile?.name ?? 'Claude'
   logger.info({ sessionId, msgId: userMsg.id, agentId }, 'Agent reply started')
@@ -130,17 +148,41 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
     profile?.modelId ?? (typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined)
   const replyStream =
     profile && isCodeAgentProfile(profile)
-      ? streamCodeAgentReply(profile, userMsg, historyAsc)
+      ? streamCodeAgentReply(profile, userMsg, historyAsc, run.controller.signal)
       : profile && isNativeAgentProfile(profile)
-      ? streamNativeAgentReply(profile, userMsg, historyAsc)
-      : streamReply(llmMessages, buildAgentSystem(profile), selectedModelId)
+      ? streamNativeAgentReply(profile, userMsg, historyAsc, run.controller.signal)
+      : streamReply(llmMessages, buildAgentSystem(profile), selectedModelId, run.controller.signal)
 
-  for await (const delta of replyStream) {
-    fullContent += delta
-    broadcast(sessionId, {
-      type: 'message:stream',
-      payload: { sessionId, messageId: streamMsgId, delta },
-    })
+  try {
+    for await (const delta of replyStream) {
+      if (run.cancelled) break
+      fullContent += delta
+      broadcast(sessionId, {
+        type: 'message:stream',
+        payload: { sessionId, messageId: streamMsgId, delta },
+      })
+    }
+  } catch (error: any) {
+    if (run.cancelled || isAbortError(error)) {
+      run.cancelled = true
+    } else {
+      const message = error?.message || 'Agent reply failed'
+      logger.error({ err: message, sessionId, agentId }, 'Agent reply failed')
+      fullContent = `\n\n[Error: ${message}]`
+    }
+  }
+
+  if (activeRuns.get(sessionId) === run) activeRuns.delete(sessionId)
+
+  if (run.cancelled) {
+    if (!fullContent.trim()) {
+      broadcast(sessionId, {
+        type: 'message:cancelled',
+        payload: { sessionId },
+      })
+      return
+    }
+    fullContent = `${fullContent.trimEnd()}\n\n[Stopped by user]`
   }
 
   if (!fullContent.trim()) {
@@ -181,4 +223,8 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   })
 
   logger.info({ sessionId, msgId: agentMsg?.id, length: fullContent.length }, 'Agent reply completed')
+}
+
+function isAbortError(error: any) {
+  return error?.name === 'AbortError' || /abort|cancel/i.test(error?.message || '')
 }

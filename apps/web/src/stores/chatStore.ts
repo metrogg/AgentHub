@@ -4,6 +4,7 @@ import { wsClient, type WSEvent } from '../lib/ws'
 
 let pendingStream: { messageId: string; delta: string } | null = null
 let pendingStreamTimer: number | null = null
+const cancelledSessions = new Set<string>()
 
 interface ChatState {
   sessions: Session[]
@@ -24,6 +25,7 @@ interface ChatState {
   deleteSession: (sessionId: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
   sendMessageToSession: (sessionId: string, content: string) => Promise<void>
+  cancelRun: () => Promise<void>
   setSelectedModelId: (modelId: string | null) => void
   handleWSEvent: (e: WSEvent) => void
   initWebSocket: () => () => void
@@ -68,6 +70,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   async selectSession(sessionId) {
     clearPendingStream()
+    cancelledSessions.delete(sessionId)
     set({
       currentSessionId: sessionId,
       currentSession: null,
@@ -120,21 +123,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async sendMessageToSession(sessionId, content) {
+    cancelledSessions.delete(sessionId)
     set({ agentTyping: true })
+    const shouldCreatePlan = shouldRouteToOrchestratorPlan(
+      content,
+      get().currentSession,
+      get().currentWorkspaceAgents
+    )
     try {
       const msg = await api.sendMessageWithModel(sessionId, {
         content,
         modelId: get().selectedModelId ?? undefined,
+        skipAgentReply: shouldCreatePlan,
       })
       set((s) => ({ messages: [...s.messages, msg] }))
-      if (mentionsOrchestrator(content)) {
+      if (shouldCreatePlan) {
         const card = await api.createOrchestratorPlan(sessionId, content)
         set((s) => ({ messages: [...s.messages, card] }))
+        set({ agentTyping: false })
       }
     } catch (error) {
       set({ agentTyping: false, streamingMessage: null })
       throw error
     }
+  },
+
+  async cancelRun() {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return
+    cancelledSessions.add(sessionId)
+    clearPendingStream()
+    set({ agentTyping: false, streamingMessage: null })
+    await api.cancelMessage(sessionId).catch(() => undefined)
   },
 
   setSelectedModelId(modelId) {
@@ -148,9 +168,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     switch (e.type) {
       case 'agent:typing':
+        if (cancelledSessions.has(sessionId)) break
         set({ agentTyping: true })
         break
       case 'message:stream': {
+        if (cancelledSessions.has(sessionId)) break
         const { messageId, delta } = e.payload as { messageId: string; delta: string }
         const commitPendingStream = (pending: { messageId: string; delta: string }) => {
           set((s) => {
@@ -188,6 +210,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       case 'message:completed': {
         const { message } = e.payload as { message: Message }
+        cancelledSessions.delete(sessionId)
         clearPendingStream()
         set((s) => ({
           messages: [...s.messages, message],
@@ -196,6 +219,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }))
         break
       }
+      case 'message:cancelled':
+        cancelledSessions.add(sessionId)
+        clearPendingStream()
+        set({ streamingMessage: null, agentTyping: false })
+        break
     }
   },
 
@@ -204,3 +232,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return wsClient.on((e) => get().handleWSEvent(e))
   },
 }))
+
+function shouldRouteToOrchestratorPlan(content: string, session: Session | null, agents: WorkspaceAgent[]) {
+  if (mentionsOrchestrator(content)) return true
+  if (session?.type !== 'group' || !session.workspaceId) return false
+  return !agents.some((agent) => mentionsAgent(content, agent))
+}
+
+function mentionsAgent(content: string, agent: WorkspaceAgent) {
+  return [agent.name, agent.role]
+    .filter(Boolean)
+    .some((alias) => hasMention(content, alias))
+}
+
+function hasMention(content: string, alias: string) {
+  const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|\\s)@${escaped}(?=$|\\s|[，,。.!！?？:：])`, 'i').test(content)
+}

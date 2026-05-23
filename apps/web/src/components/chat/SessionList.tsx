@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
+  AlertTriangle,
   Bot,
   ChevronRight,
   Code2,
   Folder,
   History,
+  Loader2,
   MessageCircle,
   Settings2,
   Trash2,
+  X,
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
@@ -30,6 +34,8 @@ export default function SessionList() {
   const deleteSession = useChatStore((state) => state.deleteSession)
   const selectSession = useChatStore((state) => state.selectSession)
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
+  const [deleteTarget, setDeleteTarget] = useState<Session | null>(null)
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const sessionTree = useMemo(() => buildSessionTree(sessions), [sessions])
   const activeSession = sessions.find((session) => session.id === sessionId)
 
@@ -53,12 +59,27 @@ export default function SessionList() {
     navigate(`/chat/${session.id}`)
   }
 
-  async function handleDelete(event: React.MouseEvent, id: string) {
+  function requestDelete(event: React.MouseEvent, session: Session) {
     event.stopPropagation()
     event.preventDefault()
-    if (!confirm('删除这个会话?')) return
-    await deleteSession(id)
-    if (sessionId === id) navigate('/', { replace: true })
+    setDeleteTarget(session)
+  }
+
+  async function confirmDeleteSession() {
+    if (!deleteTarget || deletingSessionId) return
+    setDeletingSessionId(deleteTarget.id)
+    try {
+      await deleteSession(deleteTarget.id)
+      if (sessionId === deleteTarget.id) navigate('/', { replace: true })
+      setDeleteTarget(null)
+    } finally {
+      setDeletingSessionId(null)
+    }
+  }
+
+  function closeDeleteDialog() {
+    if (deletingSessionId) return
+    setDeleteTarget(null)
   }
 
   return (
@@ -164,7 +185,7 @@ export default function SessionList() {
                       </span>
                     </button>
                     <button
-                      onClick={(event) => handleDelete(event, item.parent.id)}
+                      onClick={(event) => requestDelete(event, item.parent)}
                       className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
                       title="删除"
                     >
@@ -190,7 +211,7 @@ export default function SessionList() {
                             </span>
                           </button>
                           <button
-                            onClick={(event) => handleDelete(event, child.id)}
+                            onClick={(event) => requestDelete(event, child)}
                             className="grid h-6 w-6 place-items-center rounded-md text-neutral-400 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover/child:opacity-100"
                             title="删除"
                           >
@@ -216,7 +237,93 @@ export default function SessionList() {
           设置
         </button>
       </div>
+
+      {deleteTarget && (
+        <DeleteSessionDialog
+          session={deleteTarget}
+          deleting={deletingSessionId === deleteTarget.id}
+          onClose={closeDeleteDialog}
+          onConfirm={confirmDeleteSession}
+        />
+      )}
     </aside>
+  )
+}
+
+function DeleteSessionDialog({
+  session,
+  deleting,
+  onClose,
+  onConfirm,
+}: {
+  session: Session
+  deleting: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30 px-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-session-title"
+      onMouseDown={onClose}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl border border-neutral-200 bg-white p-4 shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-red-50 text-red-500">
+            <AlertTriangle className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 id="delete-session-title" className="text-sm font-semibold text-neutral-950">
+              删除会话
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-neutral-500">
+              这个会话和其中的消息会被移除，此操作不可撤销。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={deleting}
+            className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-40"
+            aria-label="关闭"
+            title="关闭"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2">
+          <div className="truncate text-sm font-medium text-neutral-900">{session.title || '未命名会话'}</div>
+          <div className="mt-0.5 text-xs text-neutral-400">{relativeTime(session.updatedAt)}</div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={deleting}
+            className="inline-flex h-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={deleting}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-red-600 text-sm font-medium text-white transition hover:bg-red-500 disabled:bg-red-200"
+          >
+            {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
+            删除
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }
 

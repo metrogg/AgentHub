@@ -42,6 +42,7 @@ interface ProviderCandidate {
 
 interface StreamOptions {
   messages: LLMMessage[]
+  signal?: AbortSignal
   system?: string
 }
 
@@ -51,6 +52,7 @@ interface TestConnectionInput {
   anthropicEndpoint?: string
   apiKey?: string
   apiKeyEnv?: string
+  modelId?: string
 }
 
 async function getSettingsMap(): Promise<Record<string, string>> {
@@ -241,6 +243,7 @@ export async function testLlmConnection(input: TestConnectionInput) {
   const directKey = clean(input.apiKey)
   const envKey = readEnv(input.apiKeyEnv)
   const apiKey = directKey ?? envKey
+  const model = clean(input.modelId)
 
   if (!endpoint) {
     return { ok: false, message: 'API endpoint is required.' }
@@ -255,22 +258,21 @@ export async function testLlmConnection(input: TestConnectionInput) {
       apiKey,
       apiKeySource: directKey ? 'request' : input.apiKeyEnv,
       baseUrl: endpoint,
+      model,
       provider,
     },
     'settings'
   )
-  const url = isAnthropicProvider(config.provider, config.baseUrl)
-    ? `${config.baseUrl}/v1/models`
-    : `${config.baseUrl}/models`
-  const headers = buildHeaders(config)
 
   try {
-    const res = await fetchWithRetry(url, { headers }, { ...config, maxRetries: 0 }, 'model list')
+    const res = isAnthropicProvider(config.provider, config.baseUrl)
+      ? await testAnthropicMessage(config)
+      : await testOpenAICompatibleMessage(config)
     if (!res.ok) {
       return {
         ok: false,
         status: res.status,
-        message: await formatHttpError('model list', res, config),
+        message: await formatHttpError('connection test', res, config),
       }
     }
 
@@ -278,6 +280,42 @@ export async function testLlmConnection(input: TestConnectionInput) {
   } catch (error: any) {
     return { ok: false, message: redactSensitive(error?.message || 'Connection failed.', [apiKey]) }
   }
+}
+
+async function testAnthropicMessage(config: LlmRuntimeConfig) {
+  return fetchWithRetry(
+    `${config.baseUrl}/v1/messages`,
+    {
+      method: 'POST',
+      headers: buildHeaders(config),
+      body: JSON.stringify({
+        model: config.model,
+        max_tokens: 8,
+        messages: [{ role: 'user', content: 'Reply OK only.' }],
+        stream: false,
+      }),
+    },
+    { ...config, maxRetries: 0 },
+    'anthropic message test'
+  )
+}
+
+async function testOpenAICompatibleMessage(config: LlmRuntimeConfig) {
+  return fetchWithRetry(
+    `${config.baseUrl}/chat/completions`,
+    {
+      method: 'POST',
+      headers: buildHeaders(config),
+      body: JSON.stringify({
+        model: config.model,
+        messages: [{ role: 'user', content: 'Reply OK only.' }],
+        max_tokens: 8,
+        stream: false,
+      }),
+    },
+    { ...config, maxRetries: 0 },
+    'chat completion test'
+  )
 }
 
 async function* streamOpenAICompatible(
@@ -298,6 +336,7 @@ async function* streamOpenAICompatible(
         ],
         stream: true,
       }),
+      signal: options.signal,
     },
     config,
     'chat completion'
@@ -336,6 +375,7 @@ async function* streamAnthropic(
         messages: options.messages.map((message) => ({ role: message.role, content: message.content })),
         stream: true,
       }),
+      signal: options.signal,
     },
     config,
     'anthropic message'
@@ -388,13 +428,17 @@ async function fetchWithRetry(
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new Error(`${label} timed out`)), config.timeoutMs)
+    const abortFromInput = () => controller.abort(init.signal?.reason ?? new Error(`${label} aborted`))
+    if (init.signal?.aborted) abortFromInput()
+    else init.signal?.addEventListener('abort', abortFromInput, { once: true })
 
     try {
       const res = await fetch(url, {
         ...init,
-        signal: init.signal ?? controller.signal,
+        signal: controller.signal,
       })
       clearTimeout(timer)
+      init.signal?.removeEventListener('abort', abortFromInput)
 
       if (isRetryableStatus(res.status) && attempt < config.maxRetries) {
         await res.arrayBuffer().catch(() => undefined)
@@ -405,6 +449,7 @@ async function fetchWithRetry(
       return res
     } catch (error) {
       clearTimeout(timer)
+      init.signal?.removeEventListener('abort', abortFromInput)
       lastError = error
       if (attempt >= config.maxRetries) break
       await delay(backoffMs(attempt))

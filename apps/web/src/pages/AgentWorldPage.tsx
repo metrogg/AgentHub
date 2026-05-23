@@ -685,6 +685,7 @@ function agentToDraft(agent: WorkspaceAgent): AgentConfigInput {
 
 function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
   const runtimeType = draft.runtimeType ?? 'llm'
+  const nativeReadOnly = runtimeType === 'mcp'
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -696,11 +697,13 @@ function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
     runtimeType,
     codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
     capabilityTags: draft.capabilityTags ?? [],
-    toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
-    sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
+    toolPermissions: nativeReadOnly
+      ? ['workspace:read', 'skills:read']
+      : draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
+    sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: draft.approvalRequired ?? true,
+    approvalRequired: nativeReadOnly ? true : (draft.approvalRequired ?? true),
   }
 }
 
@@ -904,13 +907,20 @@ function AgentDialog({
               onChange({
                 runtimeType: nextRuntime,
                 codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+                ...(nextRuntime === 'mcp'
+                  ? {
+                      toolPermissions: ['workspace:read', 'skills:read'],
+                      sandboxPolicy: 'read-only' as const,
+                      approvalRequired: true,
+                    }
+                  : {}),
               })
             }}
             className={selectClass}
           >
             <option value="llm">普通 LLM Agent</option>
             <option value="code-agent">绑定 Code Agent</option>
-            <option value="mcp">MCP Agent</option>
+            <option value="mcp">Native Read-only Agent</option>
             <option value="a2a">A2A Agent</option>
           </select>
           <select
@@ -990,7 +1000,7 @@ function runtimeLabel(value: WorkspaceAgent['runtimeType']) {
   const map: Record<WorkspaceAgent['runtimeType'], string> = {
     llm: 'LLM Agent',
     'code-agent': 'Code Agent',
-    mcp: 'MCP Agent',
+    mcp: 'Native Read-only',
     a2a: 'A2A Agent',
   }
   return map[value]

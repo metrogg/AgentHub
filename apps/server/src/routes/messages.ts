@@ -99,6 +99,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .orderBy(asc(messages.createdAt))
     return c.json({ items: list })
   })
+  .post('/:sessionId/cancel', async (c) => {
+    const sessionId = c.req.param('sessionId')
+    const { cancelAgentReply } = await import('../services/agent-runner')
+    return c.json({ cancelled: cancelAgentReply(sessionId) })
+  })
   .post('/:sessionId', zValidator('json', sendMessageSchema), async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
@@ -767,7 +772,6 @@ async function dispatchPlanToExistingGroup(
   }
 
   const taskResults: Array<{ taskId: string; sessionId: string; title: string; agentName: string }> = []
-  const replyQueue: Array<{ promptMsg: MessageRow; agent: typeof workspaceAgents.$inferSelect; taskId: string }> = []
 
   for (const [index, task] of plan.tasks.entries()) {
     const agent = agentsByKey.get(task.agentKey)
@@ -779,47 +783,56 @@ async function dispatchPlanToExistingGroup(
         title: task.title,
         description: task.description,
         status: 'running',
-        sessionId: session.id,
         orderIdx: index,
       })
       .returning()
     if (!workspaceTask) continue
 
+    const [childSession] = await db
+      .insert(sessions)
+      .values({
+        title: `${workspace.name} / ${agent?.role ?? '任务'} / ${task.title.slice(0, 24)}`,
+        type: 'direct',
+        ownerId,
+        workspaceId: workspace.id,
+        workspaceAgentId: agent?.id ?? null,
+      })
+      .returning()
+    if (!childSession) continue
+
+    await db
+      .update(workspaceTasks)
+      .set({ sessionId: childSession.id, updatedAt: new Date() })
+      .where(eq(workspaceTasks.id, workspaceTask.id))
+
     const [promptMsg] = await db
       .insert(messages)
       .values({
-        sessionId: session.id,
+        sessionId: childSession.id,
         senderId: ownerId,
         senderType: 'user',
         type: 'text',
-        content: buildGroupDispatchPrompt(plan, task, agent),
+        content: buildDispatchPrompt(plan, task, agent),
       })
       .returning()
 
-    if (promptMsg && agent) replyQueue.push({ promptMsg, agent, taskId: workspaceTask.id })
+    if (promptMsg) {
+      import('../services/agent-runner').then(({ runAgentReply }) => {
+        runAgentReply(childSession.id, promptMsg, agent ? toAgentProfile(agent, workspace.projectPath) : undefined)
+          .then(() => markWorkspaceTaskDone(workspaceTask.id))
+          .catch(() => {})
+      })
+    }
 
     taskResults.push({
       taskId: workspaceTask.id,
-      sessionId: session.id,
+      sessionId: childSession.id,
       title: task.title,
       agentName: agent?.name ?? 'Agent',
     })
   }
 
-  void runGroupTaskQueue(session.id, replyQueue, workspace.projectPath)
   return { workspaceId: workspace.id, groupSessionId: session.id, tasks: taskResults }
-}
-
-async function runGroupTaskQueue(
-  sessionId: string,
-  queue: Array<{ promptMsg: MessageRow; agent: typeof workspaceAgents.$inferSelect; taskId: string }>,
-  projectPath?: string | null
-) {
-  const { runAgentReply } = await import('../services/agent-runner')
-  for (const item of queue) {
-    await runAgentReply(sessionId, item.promptMsg, toAgentProfile(item.agent, projectPath))
-    await markWorkspaceTaskDone(item.taskId)
-  }
 }
 
 async function markWorkspaceTaskDone(taskId: string) {
@@ -827,19 +840,4 @@ async function markWorkspaceTaskDone(taskId: string) {
     .update(workspaceTasks)
     .set({ status: 'done', updatedAt: new Date() })
     .where(eq(workspaceTasks.id, taskId))
-}
-
-function buildGroupDispatchPrompt(
-  plan: OrchestratorPlan,
-  task: PlanTask,
-  agent?: typeof workspaceAgents.$inferSelect
-) {
-  const mention = agent ? `@${agent.name}` : '@orchestrator'
-  return [
-    `${mention} 请在当前 Agent Group 群聊中处理这个子任务。`,
-    `协作目标: ${plan.goal}`,
-    `子任务: ${task.title}`,
-    `任务说明: ${task.description}`,
-    '请先给出你负责部分的执行方案，再产出结果；如需要其他成员接力，请明确写出“需要协作: @成员 + 原因”。',
-  ].join('\n')
 }

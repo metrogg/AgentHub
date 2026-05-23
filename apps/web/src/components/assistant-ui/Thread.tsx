@@ -56,7 +56,7 @@ import {
   User,
   Users,
 } from 'lucide-react'
-import { type ComponentPropsWithoutRef, type FC, useEffect, useMemo, useRef, useState } from 'react'
+import { type ComponentPropsWithoutRef, type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import {
@@ -116,6 +116,10 @@ export const Thread: FC<{
 }> = ({ sidebarCollapsed, onToggleSidebar }) => {
   const currentSession = useChatStore((state) => state.currentSession)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
+  const isWorkspaceChildSession =
+    currentSession?.type === 'direct' &&
+    Boolean(currentSession.workspaceId) &&
+    Boolean(currentSession.workspaceAgentId)
 
   return (
     <ThreadPrimitive.Root
@@ -135,8 +139,34 @@ export const Thread: FC<{
           <Composer />
         </div>
         {isGroupSession && <GroupMemberPanel />}
+        {!isGroupSession && isWorkspaceChildSession && <WorkspaceChildSessionRail />}
       </div>
     </ThreadPrimitive.Root>
+  )
+}
+
+const WorkspaceChildSessionRail: FC = () => {
+  const session = useChatStore((state) => state.currentSession)
+  const agents = useChatStore((state) => state.currentWorkspaceAgents)
+  const agent = agents.find((item) => item.id === session?.workspaceAgentId)
+
+  return (
+    <aside className="hidden w-72 shrink-0 border-l border-neutral-200 bg-[#fbfbf9] px-4 py-5 xl:block">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-neutral-950">子会话</div>
+          <div className="mt-1 truncate text-xs text-neutral-500">{agent ? `${agent.name} / ${agent.role}` : 'Agent Task'}</div>
+        </div>
+        <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
+          <Bot className="h-4 w-4" />
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+        <div className="font-medium text-neutral-900">独立输出</div>
+        <div className="mt-1">这个子会话只展示当前 Agent 的任务上下文和执行结果。</div>
+      </div>
+    </aside>
   )
 }
 
@@ -286,6 +316,8 @@ const Composer: FC = () => {
   const [attachment, setAttachment] = useState<string | null>(null)
   const [hint, setHint] = useState<string | null>(null)
   const [planMode, setPlanMode] = useState(false)
+  const [composerText, setComposerText] = useState('')
+  const [composerScrollTop, setComposerScrollTop] = useState(0)
   const selectedModel = models.find((item) => item.id === selectedModelId)
   const modelLabel = selectedModel?.modelId ?? '自动'
 
@@ -439,9 +471,34 @@ const Composer: FC = () => {
     navigate('/')
   }
 
+  function syncComposerTextFromInput() {
+    const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
+    setComposerText(input?.value ?? '')
+    setComposerScrollTop(input?.scrollTop ?? 0)
+  }
+
+  function syncComposerTextAfterComposerAction() {
+    window.setTimeout(syncComposerTextFromInput, 0)
+    window.setTimeout(syncComposerTextFromInput, 80)
+    window.setTimeout(syncComposerTextFromInput, 300)
+  }
+
   return (
     <div className="shrink-0 bg-gradient-to-t from-white via-white to-white/80 px-6 pb-6 pt-3">
-      <ComposerPrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)]">
+      <ComposerPrimitive.Root
+        className="mx-auto w-full max-w-[var(--thread-max-width)]"
+        onSubmitCapture={syncComposerTextAfterComposerAction}
+        onClickCapture={(event) => {
+          if ((event.target as HTMLElement).closest('button[aria-label="发送"]')) {
+            syncComposerTextAfterComposerAction()
+          }
+        }}
+        onKeyDownCapture={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            syncComposerTextAfterComposerAction()
+          }
+        }}
+      >
         <div className="relative rounded-3xl border border-neutral-200 bg-white p-3 shadow-[0_10px_40px_rgba(15,23,42,0.10)] focus-within:border-neutral-300">
           {menu && (
             <ComposerMenu
@@ -489,13 +546,33 @@ const Composer: FC = () => {
               </button>
             </div>
           )}
-          <ComposerPrimitive.Input
-            autoFocus
-            data-agenthub-composer="true"
-            placeholder="发消息给 AgentHub，@ 可提及 Agent"
-            rows={1}
-            className="max-h-[180px] min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-neutral-950 outline-none placeholder:text-neutral-400"
-          />
+          <div className="relative min-h-12">
+            {composerText && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 overflow-hidden px-2 py-2 text-sm leading-6 text-neutral-950"
+              >
+                <div
+                  className="whitespace-pre-wrap break-words"
+                  style={{ transform: `translateY(-${composerScrollTop}px)` }}
+                >
+                  {renderMentionHighlights(composerText, workspaceAgents)}
+                </div>
+              </div>
+            )}
+            <ComposerPrimitive.Input
+              autoFocus
+              data-agenthub-composer="true"
+              placeholder="发消息给 AgentHub，@ 可提及 Agent"
+              rows={1}
+              onInput={(event) => setComposerText(event.currentTarget.value)}
+              onScroll={(event) => setComposerScrollTop(event.currentTarget.scrollTop)}
+              className={cn(
+                'relative max-h-[180px] min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 outline-none placeholder:text-neutral-400',
+                composerText ? 'text-transparent caret-neutral-950' : 'text-neutral-950'
+              )}
+            />
+          </div>
           <div className="flex items-center justify-between pt-2">
             <div className="flex items-center gap-1">
               <ComposerToolButton aria-label="添加" onClick={() => setMenu(menu === 'tools' ? null : 'tools')}>
@@ -862,6 +939,7 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
 const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
   const navigate = useNavigate()
   const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
   const [plan, setPlan] = useState(data)
   const [saving, setSaving] = useState(false)
   const [dispatching, setDispatching] = useState(false)
@@ -911,6 +989,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
       if (!saved) return
       const next = await api.dispatchOrchestratorPlan(currentSessionId, data.messageId)
       setResult(next)
+      await fetchSessions()
     } catch (err: any) {
       setError(err?.message || '分发失败')
     } finally {
@@ -996,7 +1075,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
           <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
             <div className="flex items-center gap-2 text-sm font-medium text-emerald-700">
               <CheckCircle2 className="h-4 w-4" />
-              已创建 Agent Group，并分发 {result.tasks.length} 个子任务
+              已分发 {result.tasks.length} 个子任务到 Agent 子会话
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
@@ -1012,7 +1091,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                   onClick={() => navigate(`/chat/${result.groupSessionId}`)}
                   className="inline-flex h-8 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
                 >
-                  进入群聊
+                  回到群聊
                 </button>
               )}
               {result.tasks[0] && (
@@ -1021,7 +1100,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                   onClick={() => navigate(`/chat/${result.tasks[0].sessionId}`)}
                   className="inline-flex h-8 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
                 >
-                  查看首个会话
+                  查看首个子会话
                 </button>
               )}
             </div>
@@ -1114,6 +1193,55 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => (
 const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
   <button className={cn('grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700', className)} {...props} />
 )
+
+function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
+  const aliases = mentionAliases(agents)
+  if (!aliases.length) return text
+
+  const pattern = new RegExp(`@(${aliases.map(escapeRegExp).join('|')})(?=$|\\s|[，,。.!！?？:：；;）)\\]】])`, 'gi')
+  const parts: ReactNode[] = []
+  let lastIndex = 0
+
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0
+    if (index > lastIndex) parts.push(text.slice(lastIndex, index))
+    parts.push(
+      <span key={`${index}-${match[0]}`} className="font-medium text-blue-600">
+        {match[0]}
+      </span>
+    )
+    lastIndex = index + match[0].length
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+  return parts.length ? parts : text
+}
+
+function mentionAliases(agents: WorkspaceAgent[]) {
+  const aliases = [
+    'orchestrator',
+    'coordinator',
+    'agenthub',
+    '协调器',
+    '调度',
+    'Architect',
+    'Coder',
+    'Researcher',
+    'Reviewer',
+    '规划',
+    '实现',
+    '研究',
+    '审查',
+  ]
+  for (const agent of agents) {
+    aliases.push(agent.name, agent.role)
+  }
+  return Array.from(new Set(aliases.filter(Boolean))).sort((a, b) => b.length - a.length)
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 
 const ComposerToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
   <button
