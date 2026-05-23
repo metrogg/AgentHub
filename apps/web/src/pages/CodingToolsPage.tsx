@@ -587,7 +587,7 @@ export default function CodingToolsPage() {
                         </datalist>
                       </>
                     )}
-                    <ChevronDown className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-neutral-400" />
+                    {activeTool.id === 'opencode' && <ChevronDown className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-neutral-400" />}
                   </div>
                   {activeTool.id === 'opencode' && (
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
