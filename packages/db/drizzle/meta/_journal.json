@@ -22,6 +22,20 @@
       "when": 1779346308282,
       "tag": "0002_brief_moondragon",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1779421200000,
+      "tag": "0003_agent_registry",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1779440000000,
+      "tag": "0004_workspace_project_path",
+      "breakpoints": true
     }
   ]
 }

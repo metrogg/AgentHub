@@ -24,7 +24,16 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     message.senderType === 'agent' && message.metadata && typeof message.metadata.agentName === 'string'
       ? message.metadata.agentName
       : null
-  const text = agentName ? `**${agentName}**\n\n${message.content}` : message.content
+  const runtimeLabel =
+    message.senderType === 'agent' && message.metadata?.runtimeType === 'code-agent'
+      ? `Code Agent / ${String(message.metadata.codeAgentType ?? 'cli')}`
+      : message.senderType === 'agent' &&
+          typeof message.metadata?.runtimeType === 'string' &&
+          message.metadata.runtimeType !== 'llm'
+        ? String(message.metadata.runtimeType).toUpperCase()
+        : null
+  const senderLabel = [agentName, runtimeLabel].filter(Boolean).join(' · ')
+  const text = senderLabel ? `**${senderLabel}**\n\n${message.content}` : message.content
 
   return {
     id: message.id,
@@ -42,6 +51,7 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
   const agentTyping = useChatStore((state) => state.agentTyping)
   const currentSessionId = useChatStore((state) => state.currentSessionId)
   const sendMessage = useChatStore((state) => state.sendMessage)
+  const cancelRun = useChatStore((state) => state.cancelRun)
 
   const threadMessages = useMemo<ThreadMessageLike[]>(() => {
     const list = messages.map(toThreadMessage)
@@ -51,16 +61,25 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
         id: streamingMessage.id,
         role: 'assistant',
         content: [{ type: 'text', text: streamingMessage.content }],
+        status: { type: 'running' },
+      })
+    } else if (agentTyping) {
+      list.push({
+        id: 'agenthub-thinking',
+        role: 'assistant',
+        content: [],
+        status: { type: 'running' },
       })
     }
 
     return list
-  }, [messages, streamingMessage])
+  }, [agentTyping, messages, streamingMessage])
 
   const runtime = useExternalStoreRuntime({
     isRunning: agentTyping || streamingMessage !== null,
     messages: threadMessages,
     convertMessage: (message: ThreadMessageLike) => message,
+    onCancel: cancelRun,
     onNew: async (message: AppendMessage) => {
       if (!currentSessionId) {
         throw new Error('请先选择或新建一个会话')

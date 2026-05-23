@@ -1,5 +1,7 @@
 import { db, messages, eq, desc } from '@agenthub/db'
 import { streamReply } from './llm'
+import { isCodeAgentProfile, streamCodeAgentReply } from './code-agent-adapter'
+import { isNativeAgentProfile, streamNativeAgentReply } from './native-agent-loop'
 import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
 
@@ -18,12 +20,23 @@ export interface AgentRunProfile {
   id: string
   name: string
   role?: string
+  description?: string
   systemPrompt?: string
   color?: string
+  modelId?: string | null
+  runtimeType?: 'llm' | 'code-agent' | 'mcp' | 'a2a'
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | null
+  capabilityTags?: string[]
+  toolPermissions?: string[]
+  sandboxPolicy?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  contextPolicy?: 'recent-only' | 'pinned-recent' | 'workspace-aware'
+  approvalRequired?: boolean
+  projectPath?: string | null
 }
 
 // In-memory map: sessionId -> Set of connected websockets
 const sessionRooms = new Map<string, Set<ServerWebSocket<unknown>>>()
+const activeRuns = new Map<string, { cancelled: boolean; controller: AbortController }>()
 
 export function joinRoom(sessionId: string, ws: ServerWebSocket<unknown>) {
   const set = sessionRooms.get(sessionId) ?? new Set()
@@ -63,11 +76,34 @@ function broadcast(sessionId: string, data: unknown) {
   }
 }
 
+export function cancelAgentReply(sessionId: string) {
+  const run = activeRuns.get(sessionId)
+  if (!run) return false
+  run.cancelled = true
+  run.controller.abort(new Error('Agent run cancelled by user'))
+  broadcast(sessionId, {
+    type: 'message:cancelled',
+    payload: { sessionId },
+  })
+  logger.info({ sessionId }, 'Agent reply cancelled')
+  return true
+}
+
 function buildAgentSystem(profile?: AgentRunProfile) {
   if (!profile) return undefined
   return [
     profile.systemPrompt || `You are ${profile.name}, a collaborative agent in AgentHub.`,
     profile.role ? `Your role in this group chat is: ${profile.role}.` : '',
+    profile.description ? `Your capability summary: ${profile.description}.` : '',
+    profile.runtimeType ? `Runtime binding: ${profile.runtimeType}${profile.codeAgentType ? ` (${profile.codeAgentType})` : ''}.` : '',
+    profile.capabilityTags?.length ? `Capability tags: ${profile.capabilityTags.join(', ')}.` : '',
+    profile.toolPermissions?.length ? `Allowed tool scopes: ${profile.toolPermissions.join(', ')}.` : 'Allowed tool scopes: chat-only.',
+    profile.sandboxPolicy ? `Sandbox policy: ${profile.sandboxPolicy}.` : '',
+    profile.contextPolicy ? `Context policy: ${profile.contextPolicy}.` : '',
+    profile.projectPath ? `Project workspace path: ${profile.projectPath}.` : '',
+    profile.approvalRequired
+      ? 'If a requested action can modify files, run commands, use network, deploy, or touch secrets, ask for explicit user approval before performing or instructing the action.'
+      : '',
     'You are replying inside a multi-agent group chat. Stay focused on your role, answer in the same language as the user, and mention handoff needs explicitly when another agent should continue.',
   ]
     .filter(Boolean)
@@ -75,6 +111,10 @@ function buildAgentSystem(profile?: AgentRunProfile) {
 }
 
 export async function runAgentReply(sessionId: string, userMsg: MessageRow, profile?: AgentRunProfile) {
+  cancelAgentReply(sessionId)
+  const run = { cancelled: false, controller: new AbortController() }
+  activeRuns.set(sessionId, run)
+
   const agentId = profile?.id ?? 'claude'
   const agentName = profile?.name ?? 'Claude'
   logger.info({ sessionId, msgId: userMsg.id, agentId }, 'Agent reply started')
@@ -105,14 +145,44 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
 
   let fullContent = ''
   const selectedModelId =
-    typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined
+    profile?.modelId ?? (typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined)
+  const replyStream =
+    profile && isCodeAgentProfile(profile)
+      ? streamCodeAgentReply(profile, userMsg, historyAsc, run.controller.signal)
+      : profile && isNativeAgentProfile(profile)
+      ? streamNativeAgentReply(profile, userMsg, historyAsc, run.controller.signal)
+      : streamReply(llmMessages, buildAgentSystem(profile), selectedModelId, run.controller.signal)
 
-  for await (const delta of streamReply(llmMessages, buildAgentSystem(profile), selectedModelId)) {
-    fullContent += delta
-    broadcast(sessionId, {
-      type: 'message:stream',
-      payload: { sessionId, messageId: streamMsgId, delta },
-    })
+  try {
+    for await (const delta of replyStream) {
+      if (run.cancelled) break
+      fullContent += delta
+      broadcast(sessionId, {
+        type: 'message:stream',
+        payload: { sessionId, messageId: streamMsgId, delta },
+      })
+    }
+  } catch (error: any) {
+    if (run.cancelled || isAbortError(error)) {
+      run.cancelled = true
+    } else {
+      const message = error?.message || 'Agent reply failed'
+      logger.error({ err: message, sessionId, agentId }, 'Agent reply failed')
+      fullContent = `\n\n[Error: ${message}]`
+    }
+  }
+
+  if (activeRuns.get(sessionId) === run) activeRuns.delete(sessionId)
+
+  if (run.cancelled) {
+    if (!fullContent.trim()) {
+      broadcast(sessionId, {
+        type: 'message:cancelled',
+        payload: { sessionId },
+      })
+      return
+    }
+    fullContent = `${fullContent.trimEnd()}\n\n[Stopped by user]`
   }
 
   if (!fullContent.trim()) {
@@ -137,6 +207,11 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
             agentName,
             role: profile.role ?? null,
             color: profile.color ?? null,
+            runtimeType: profile.runtimeType ?? 'llm',
+            codeAgentType: profile.codeAgentType ?? null,
+            modelId: profile.modelId ?? null,
+            sandboxPolicy: profile.sandboxPolicy ?? null,
+            projectPath: profile.projectPath ?? null,
           }
         : null,
     })
@@ -148,4 +223,8 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   })
 
   logger.info({ sessionId, msgId: agentMsg?.id, length: fullContent.length }, 'Agent reply completed')
+}
+
+function isAbortError(error: any) {
+  return error?.name === 'AbortError' || /abort|cancel/i.test(error?.message || '')
 }

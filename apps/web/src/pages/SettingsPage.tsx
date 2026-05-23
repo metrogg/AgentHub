@@ -386,7 +386,7 @@ function SettingsSidebar({
         className="mb-2 flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm text-neutral-700 hover:bg-black/5"
       >
         <Settings className="h-4 w-4" />
-        设置
+        返回
       </button>
       <nav className="space-y-1">
         {sections.map((section) => (

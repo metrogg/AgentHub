@@ -79,7 +79,7 @@ export interface CodingToolStatusResponse {
   items: CodingToolStatus[]
   localCliProbesEnabled: boolean
   platform: string
-  runtime?: 'local' | 'container'
+  runtime?: 'local' | 'host'
 }
 
 export interface CliInstallAction {
@@ -88,32 +88,23 @@ export interface CliInstallAction {
   ok: boolean
   output?: string
   message: string
-  runtime?: 'local' | 'container'
+  runtime?: 'local' | 'host'
   status: 'completed' | 'failed'
 }
 
-export interface DockerRuntimeStatus {
-  containers: string | null
-  composeFilePresent: boolean
-  composeInstalled: boolean
-  composeVersion: string | null
-  daemonRunning: boolean
-  dockerInstalled: boolean
-  dockerVersion: string | null
-  installEnabled: boolean
-  message: string
-  projectRoot: string
-  ready: boolean
-  serverVersion: string | null
+export interface OpencodeModelItem {
+  id: string
+  provider: string
+  model: string
 }
 
-export interface DockerRuntimeAction {
-  code?: number
+export interface OpencodeModelsResponse {
   ok: boolean
-  output?: string
+  defaultModel: string | null
+  smallModel: string | null
+  configPath: string
+  models: OpencodeModelItem[]
   message: string
-  status: 'completed' | 'failed'
-  statusBefore?: DockerRuntimeStatus
 }
 
 export interface CodexAuthStatus {
@@ -154,6 +145,7 @@ export interface Workspace {
   ownerId: string
   name: string
   goal: string
+  projectPath: string | null
   createdAt: string
   updatedAt: string
 }
@@ -163,10 +155,39 @@ export interface WorkspaceAgent {
   workspaceId: string
   name: string
   role: string
+  description: string
+  avatar: string | null
   systemPrompt: string
   color: string
+  modelId: string | null
+  runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
+  codeAgentType: 'codex' | 'claude-code' | 'opencode' | null
+  capabilityTags: string[]
+  toolPermissions: string[]
+  sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
+  contextPolicy: 'recent-only' | 'pinned-recent' | 'workspace-aware'
+  autoInvoke: boolean
+  approvalRequired: boolean
   orderIdx: number
   createdAt: string
+}
+
+export interface AgentConfigInput {
+  name: string
+  role: string
+  description?: string
+  avatar?: string | null
+  systemPrompt?: string
+  color?: string
+  modelId?: string | null
+  runtimeType?: WorkspaceAgent['runtimeType']
+  codeAgentType?: WorkspaceAgent['codeAgentType']
+  capabilityTags?: string[]
+  toolPermissions?: string[]
+  sandboxPolicy?: WorkspaceAgent['sandboxPolicy']
+  contextPolicy?: WorkspaceAgent['contextPolicy']
+  autoInvoke?: boolean
+  approvalRequired?: boolean
 }
 
 export type TaskStatus = 'pending' | 'running' | 'done'
@@ -190,6 +211,10 @@ export interface WorkspaceFull {
   tasks: WorkspaceTask[]
 }
 
+export type WorkspaceFolderOpenResult =
+  | { cancelled: true; projectPath: null; workspace?: null }
+  | { cancelled: false; projectPath: string; workspace?: Workspace | null }
+
 export interface OrchestratorPlanAgent {
   key: string
   name: string
@@ -203,6 +228,7 @@ export interface OrchestratorPlanTask {
   title: string
   description: string
   agentKey: string
+  status?: TaskStatus
 }
 
 export interface OrchestratorPlan {
@@ -238,7 +264,10 @@ export const api = {
       body: JSON.stringify({ content: data.content, type: data.type ?? 'text' }),
     }),
 
-  sendMessageWithModel: (sessionId: string, data: { content: string; modelId?: string; type?: string }) =>
+  sendMessageWithModel: (
+    sessionId: string,
+    data: { content: string; modelId?: string; type?: string; skipAgentReply?: boolean }
+  ) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
       body: JSON.stringify({
@@ -246,14 +275,27 @@ export const api = {
         type: data.type ?? 'text',
         metadata: {
           ...(data.modelId ? { modelId: data.modelId } : {}),
-          ...(mentionsOrchestrator(data.content) ? { skipAgentReply: true } : {}),
+          ...(data.skipAgentReply || mentionsOrchestrator(data.content) ? { skipAgentReply: true } : {}),
         },
       }),
+    }),
+  cancelMessage: (sessionId: string) =>
+    request<{ cancelled: boolean }>(`/messages/${sessionId}/cancel`, {
+      method: 'POST',
     }),
   createOrchestratorPlan: (sessionId: string, content: string) =>
     request<Message>(`/messages/${sessionId}/orchestrator-plan`, {
       method: 'POST',
       body: JSON.stringify({ content }),
+    }),
+  updateOrchestratorPlan: (
+    sessionId: string,
+    messageId: string,
+    data: { tasks: Array<{ id: string; agentKey?: string; status?: TaskStatus }> }
+  ) =>
+    request<Message>(`/messages/${sessionId}/orchestrator-plan/${messageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
     }),
   dispatchOrchestratorPlan: (sessionId: string, messageId: string) =>
     request<OrchestratorDispatchResult>(
@@ -274,6 +316,7 @@ export const api = {
     anthropicEndpoint?: string
     apiKey?: string
     apiKeyEnv?: string
+    modelId?: string
   }) =>
     request<{ ok: boolean; status?: number; message: string }>('/settings/test-model', {
       method: 'POST',
@@ -290,6 +333,8 @@ export const api = {
       : request<CodingToolStatusResponse>('/coding-tools/status'),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
+  getOpencodeModels: () =>
+    request<OpencodeModelsResponse>('/coding-tools/opencode/models'),
   getCodexAuthStatus: () => request<CodexAuthStatus>('/coding-tools/codex/auth/status'),
   startCodexChatGptLogin: () =>
     request<CodexLoginStart>('/coding-tools/codex/auth/start', { method: 'POST' }),
@@ -304,25 +349,20 @@ export const api = {
     request<CodexAuthAction>('/coding-tools/codex/auth/retry', { method: 'POST' }),
   logoutCodexChatGpt: () =>
     request<CodexAuthAction>('/coding-tools/codex/auth/logout', { method: 'POST' }),
-  getDockerRuntimeStatus: () =>
-    request<DockerRuntimeStatus>('/coding-tools/docker/status'),
-  installDockerRuntime: () =>
-    request<DockerRuntimeAction>('/coding-tools/docker/install', { method: 'POST' }),
-  restartDockerRuntime: () =>
-    request<DockerRuntimeAction>('/coding-tools/docker/restart', { method: 'POST' }),
-
   // Workspaces (Agent Group)
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
-  createWorkspace: (data: { name: string; goal?: string; template?: 'blank' | 'classic' }) =>
+  createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>
     request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
+  openWorkspaceFolder: () =>
+    request<WorkspaceFolderOpenResult>('/workspaces/open-folder', { method: 'POST' }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
-  updateWorkspace: (id: string, data: { name?: string; goal?: string }) =>
+  updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>
     request<WorkspaceFull>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteWorkspace: (id: string) => request<void>(`/workspaces/${id}`, { method: 'DELETE' }),
 
   addWorkspaceAgent: (
     id: string,
-    data: { name: string; role: string; systemPrompt?: string; color?: string }
+    data: AgentConfigInput
   ) =>
     request<WorkspaceAgent>(`/workspaces/${id}/agents`, {
       method: 'POST',
@@ -331,7 +371,7 @@ export const api = {
   updateWorkspaceAgent: (
     id: string,
     agentId: string,
-    data: Partial<{ name: string; role: string; systemPrompt: string; color: string }>
+    data: Partial<AgentConfigInput>
   ) =>
     request<WorkspaceAgent>(`/workspaces/${id}/agents/${agentId}`, {
       method: 'PATCH',
@@ -371,5 +411,5 @@ export const api = {
 }
 
 export function mentionsOrchestrator(content: string) {
-  return /(^|\s)@orchestrator\b/i.test(content) || content.includes('@协调器')
+  return /(^|\s)@(orchestrator|coordinator|agenthub)\b/i.test(content) || content.includes('@协调器') || content.includes('@调度')
 }

@@ -1,8 +1,9 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, AtSign, ChevronDown, MessageSquare, PanelLeft, Paperclip, Plus } from 'lucide-react'
+import { ArrowUp, AtSign, ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, MessageSquare, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { Thread } from '../components/assistant-ui/Thread'
+import { api, type Workspace } from '../lib/api'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { useChatStore } from '../stores/chatStore'
 
@@ -33,14 +34,14 @@ export default function ChatPage() {
       <div
         aria-hidden={sidebarCollapsed}
         className={[
-          'h-full shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'h-full shrink-0 overflow-hidden',
           sidebarCollapsed ? 'w-0' : 'w-64',
         ].join(' ')}
       >
         <div
           className={[
-            'h-full w-64 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
-            sidebarCollapsed ? 'pointer-events-none -translate-x-4 opacity-0' : 'translate-x-0 opacity-100',
+            'h-full w-64 transform-gpu transition-[opacity,transform] duration-200 ease-out will-change-transform',
+            sidebarCollapsed ? 'pointer-events-none -translate-x-full opacity-0' : 'translate-x-0 opacity-100',
           ].join(' ')}
         >
           <SessionList />
@@ -69,9 +70,47 @@ function Welcome({
   const navigate = useNavigate()
   const createSession = useChatStore((state) => state.createSession)
   const selectSession = useChatStore((state) => state.selectSession)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
   const sendMessageToSession = useChatStore((state) => state.sendMessageToSession)
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false)
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
+  const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [addProjectOpen, setAddProjectOpen] = useState(false)
+  const [hint, setHint] = useState('')
+  const filteredWorkspaces = workspaces.filter((workspace) => {
+    const query = workspaceQuery.trim().toLowerCase()
+    if (!query) return true
+    return `${workspace.name} ${workspace.projectPath ?? ''}`.toLowerCase().includes(query)
+  })
+
+  useEffect(() => {
+    if (!projectMenuOpen) return
+    let cancelled = false
+    setWorkspaceBusy(true)
+    api
+      .listWorkspaces()
+      .then(({ items }) => {
+        if (!cancelled) setWorkspaces(items)
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaces([])
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceBusy(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectMenuOpen])
+
+  function showHint(text: string) {
+    setHint(text)
+    window.setTimeout(() => setHint(''), 1800)
+  }
 
   async function startThread(content: string) {
     const trimmed = content.trim()
@@ -98,6 +137,83 @@ function Welcome({
     const session = await createSession('新会话')
     await selectSession(session.id)
     navigate(`/chat/${session.id}`)
+  }
+
+  async function openWorkspace(workspaceId: string) {
+    if (workspaceBusy) return
+    setWorkspaceBusy(true)
+    setOpeningWorkspaceId(workspaceId)
+    showHint('正在打开项目...')
+    try {
+      const { session } = await api.openWorkspaceGroupSession(workspaceId)
+      await fetchSessions()
+      await selectSession(session.id)
+      setProjectMenuOpen(false)
+      navigate(`/chat/${session.id}`)
+    } catch (err) {
+      showHint(errorMessage(err, '打开项目失败'))
+    } finally {
+      setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
+    }
+  }
+
+  async function createBlankWorkspace() {
+    if (workspaceBusy) return
+    setWorkspaceBusy(true)
+    try {
+      const full = await api.createWorkspace({ name: '空白项目', goal: '', projectPath: null, template: 'classic' })
+      setWorkspaces((items) => [full.workspace, ...items.filter((item) => item.id !== full.workspace.id)])
+      setOpeningWorkspaceId(full.workspace.id)
+      showHint('已创建项目，正在进入...')
+      const { session } = await api.openWorkspaceGroupSession(full.workspace.id)
+      await fetchSessions()
+      await selectSession(session.id)
+      setProjectMenuOpen(false)
+      navigate(`/chat/${session.id}`)
+    } catch (err) {
+      showHint(errorMessage(err, '创建空白项目失败'))
+    } finally {
+      setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
+    }
+  }
+
+  async function openFolderWorkspace() {
+    if (workspaceBusy) return
+    setWorkspaceBusy(true)
+    showHint('正在打开文件夹选择器...')
+    try {
+      const result = await api.openWorkspaceFolder()
+      if (result.cancelled || !result.projectPath) {
+        showHint('已取消选择文件夹')
+        return
+      }
+      showHint('已选择文件夹，正在打开项目...')
+      const workspace =
+        result.workspace ??
+        (
+          await api.createWorkspace({
+            name: workspaceNameFromPath(result.projectPath),
+            goal: '',
+            projectPath: result.projectPath,
+            template: 'classic',
+          })
+        ).workspace
+      setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
+      setOpeningWorkspaceId(workspace.id)
+      showHint('项目已加入，正在进入...')
+      const { session } = await api.openWorkspaceGroupSession(workspace.id)
+      await fetchSessions()
+      await selectSession(session.id)
+      setProjectMenuOpen(false)
+      navigate(`/chat/${session.id}`)
+    } catch (err) {
+      showHint(errorMessage(err, '打开文件夹失败'))
+    } finally {
+      setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
+    }
   }
 
   return (
@@ -163,8 +279,93 @@ function Welcome({
         <div className="mt-auto w-full max-w-[704px] pb-5">
           <form
             onSubmit={handleSubmit}
-            className="rounded-[22px] border border-neutral-200 bg-white p-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)]"
+            className="relative rounded-[22px] border border-neutral-200 bg-white p-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)]"
           >
+            {hint && <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">{hint}</div>}
+            {projectMenuOpen && (
+              <div className="absolute bottom-[4.5rem] left-3 z-20 w-80 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl">
+                <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
+                  <Search className="h-4 w-4 shrink-0" />
+                  <input
+                    value={workspaceQuery}
+                    onChange={(event) => setWorkspaceQuery(event.target.value)}
+                    autoFocus
+                    className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
+                    placeholder="搜索项目"
+                  />
+                </div>
+                <div className="max-h-44 space-y-1 overflow-y-auto py-1">
+                  {filteredWorkspaces.map((workspace) => (
+                    <button
+                      key={workspace.id}
+                      type="button"
+                      onClick={() => void openWorkspace(workspace.id)}
+                      disabled={workspaceBusy}
+                      className={[
+                        'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
+                        workspace.id === openingWorkspaceId ? 'bg-neutral-100' : '',
+                      ].join(' ')}
+                    >
+                      <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                      <span className="min-w-0 flex-1 truncate text-neutral-900">{workspace.name}</span>
+                      {workspace.id === openingWorkspaceId && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />}
+                    </button>
+                  ))}
+                  {!workspaceBusy && filteredWorkspaces.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
+                      没有匹配的项目
+                    </div>
+                  )}
+                  {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理项目...</div>}
+                </div>
+                <div className="mt-1 border-t border-neutral-200 pt-1.5">
+                  <div className="relative group/new-project">
+                    <button
+                      type="button"
+                      onClick={() => setAddProjectOpen((open) => !open)}
+                      className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50"
+                    >
+                      <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
+                      <span className="min-w-0 flex-1 truncate text-neutral-900">添加新项目</span>
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                    </button>
+                    <div
+                      className={[
+                        'absolute bottom-0 left-[calc(100%+0.35rem)] w-56 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl transition group-hover/new-project:visible group-hover/new-project:opacity-100',
+                        addProjectOpen ? 'visible opacity-100' : 'invisible opacity-0',
+                      ].join(' ')}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void createBlankWorkspace()}
+                        disabled={workspaceBusy}
+                        className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-100 disabled:opacity-60"
+                      >
+                        <Plus className="h-4 w-4 shrink-0 text-neutral-600" />
+                        新建空白项目
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void openFolderWorkspace()}
+                        disabled={workspaceBusy}
+                        className="flex h-9 w-full items-center gap-2.5 rounded-lg bg-neutral-100 px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-200 disabled:opacity-60"
+                      >
+                        <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                        使用现有文件夹
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setProjectMenuOpen(false)}
+                    className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50"
+                  >
+                    <FolderX className="h-4 w-4 shrink-0 text-neutral-600" />
+                    不使用项目
+                  </button>
+                </div>
+              </div>
+            )}
             <textarea
               value={message}
               onChange={(event) => setMessage(event.target.value)}
@@ -181,6 +382,15 @@ function Welcome({
               <div className="flex items-center gap-1">
                 <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100">
                   <Plus className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProjectMenuOpen((open) => !open)}
+                  className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
+                  aria-label="打开项目文件夹"
+                  title="打开项目文件夹"
+                >
+                  <FolderOpen className="h-4 w-4" />
                 </button>
                 <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100">
                   <Paperclip className="h-4 w-4" />
@@ -228,4 +438,13 @@ function PromptCard({ title, text, onClick }: { title: string; text: string; onC
 
 function titleFromMessage(message: string) {
   return message.length > 18 ? `${message.slice(0, 18)}...` : message
+}
+
+function errorMessage(err: unknown, fallback: string) {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
+function workspaceNameFromPath(value: string) {
+  const normalized = value.trim().replace(/[\\/]+$/, '')
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
 }

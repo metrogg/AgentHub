@@ -12,7 +12,8 @@ export type { LLMMessage }
 export async function* streamReply(
   messages: LLMMessage[],
   system?: string,
-  selectedModelId?: string
+  selectedModelId?: string,
+  signal?: AbortSignal
 ): AsyncGenerator<string, void, unknown> {
   const config = await resolveLlmRuntimeConfig(selectedModelId)
 
@@ -25,6 +26,7 @@ export async function* streamReply(
     const client = createLlmClient(config)
     yield* client.stream({
       messages,
+      signal,
       system: system ?? DEFAULT_AGENT_INSTRUCTIONS,
     })
   } catch (err: any) {

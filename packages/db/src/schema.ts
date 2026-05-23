@@ -33,6 +33,7 @@ export const workspaces = sqliteTable('workspaces', {
   ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   goal: text('goal').notNull().default(''),
+  projectPath: text('project_path'),
   createdAt: now(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })
@@ -42,8 +43,23 @@ export const workspaceAgents = sqliteTable('workspace_agents', {
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   role: text('role').notNull(),
+  description: text('description').notNull().default(''),
+  avatar: text('avatar'),
   systemPrompt: text('system_prompt').notNull().default(''),
   color: text('color').notNull().default('#6366f1'),
+  modelId: text('model_id'),
+  runtimeType: text('runtime_type', { enum: ['llm', 'code-agent', 'mcp', 'a2a'] }).notNull().default('llm'),
+  codeAgentType: text('code_agent_type', { enum: ['codex', 'claude-code', 'opencode'] }),
+  capabilityTags: text('capability_tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  toolPermissions: text('tool_permissions', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  sandboxPolicy: text('sandbox_policy', { enum: ['read-only', 'workspace-write', 'danger-full-access'] })
+    .notNull()
+    .default('workspace-write'),
+  contextPolicy: text('context_policy', { enum: ['recent-only', 'pinned-recent', 'workspace-aware'] })
+    .notNull()
+    .default('workspace-aware'),
+  autoInvoke: integer('auto_invoke', { mode: 'boolean' }).notNull().default(true),
+  approvalRequired: integer('approval_required', { mode: 'boolean' }).notNull().default(true),
   orderIdx: integer('order_idx').notNull().default(0),
   createdAt: now(),
 })
