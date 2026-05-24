@@ -4,6 +4,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useMessage,
   type EmptyMessagePartComponent,
 } from '@assistant-ui/react'
 import {
@@ -1035,6 +1036,7 @@ const AssistantMessage: FC = () => (
             Empty: AssistantThinking,
             data: {
               by_name: {
+                agent_avatar: AgentAvatarPart,
                 orchestrator_plan: OrchestratorPlanCard,
                 code_agent_run: CodeAgentRunCard,
                 agent_artifacts: AgentArtifactsCard,
@@ -1064,6 +1066,8 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
     </div>
   )
 }
+
+const AgentAvatarPart: FC<{ data: { runtime?: CodeAgentRunMetadata['runtime'] } }> = () => null
 
 const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data }) => {
   const items = Array.isArray(data.items) ? data.items : []
@@ -1216,9 +1220,7 @@ const CodeAgentFilesCard: FC<{ files: CodeAgentRunMetadata['files'] }> = ({ file
             <ChevronDown className={cn('h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180', !file.diff && 'opacity-0')} />
           </summary>
           {file.diff && (
-            <pre className="max-h-72 overflow-auto border-t border-neutral-200 bg-neutral-950 px-3 py-2 text-xs leading-5 text-neutral-100">
-              <code>{file.diff}</code>
-            </pre>
+            <DiffViewer diff={file.diff} maxHeightClassName="max-h-72" />
           )}
         </details>
       ))}
@@ -1342,10 +1344,45 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
         <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
-        <pre className="max-h-96 overflow-auto border-t border-neutral-200 bg-neutral-950 px-3 py-2 text-xs leading-5 text-neutral-100">
-          <code>{artifact.diff}</code>
-        </pre>
+        <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" />
       )}
+    </div>
+  )
+}
+
+const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({ diff, maxHeightClassName = 'max-h-96' }) => {
+  const rows = useMemo(() => parseDiffRows(diff), [diff])
+
+  return (
+    <div className={cn('overflow-auto border-t border-neutral-200 bg-white text-xs', maxHeightClassName)}>
+      <div className="min-w-max py-1 font-mono leading-6">
+        {rows.map((row, index) => (
+          <div
+            key={`${index}-${row.text}`}
+            className={cn(
+              'grid grid-cols-[3.25rem_3.25rem_minmax(32rem,1fr)] border-l-4 pr-4',
+              row.kind === 'add' && 'border-emerald-500 bg-emerald-50 text-emerald-950',
+              row.kind === 'del' && 'border-red-500 bg-red-50 text-red-950',
+              row.kind === 'hunk' && 'border-blue-300 bg-blue-50 text-blue-700',
+              row.kind === 'meta' && 'border-transparent bg-neutral-50 text-neutral-500',
+              row.kind === 'context' && 'border-transparent text-neutral-800'
+            )}
+          >
+            <span className={cn('select-none border-r border-neutral-100 px-2 text-right text-neutral-400', row.kind === 'add' && 'text-emerald-600', row.kind === 'del' && 'text-red-600')}>
+              {row.oldNumber ?? ''}
+            </span>
+            <span className={cn('select-none border-r border-neutral-100 px-2 text-right text-neutral-400', row.kind === 'add' && 'text-emerald-600', row.kind === 'del' && 'text-red-600')}>
+              {row.newNumber ?? ''}
+            </span>
+            <code className="whitespace-pre px-3">
+              <span className={cn('mr-2 inline-block w-3 select-none', row.kind === 'add' && 'text-emerald-600', row.kind === 'del' && 'text-red-600')}>
+                {row.marker}
+              </span>
+              {row.text}
+            </code>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1696,11 +1733,53 @@ const BranchPicker: FC = () => (
   </BranchPickerPrimitive.Root>
 )
 
-const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => (
-  <div className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-full', role === 'assistant' ? 'bg-[#eef8f6] text-[#87a9a4]' : 'bg-blue-500 text-white')}>
-    {role === 'assistant' ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
-  </div>
-)
+const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
+  const runtime = useMessage((message) => (role === 'assistant' ? codeAgentRuntimeFromParts(message.content) : null))
+
+  if (role === 'assistant' && runtime) {
+    return (
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-neutral-200 bg-white shadow-sm" title={codeAgentRuntimeLabel(runtime)}>
+        <img src={codeAgentLogoSrc(runtime)} alt={codeAgentRuntimeLabel(runtime)} className="h-5 w-5 object-contain" />
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-full', role === 'assistant' ? 'bg-[#eef8f6] text-[#87a9a4]' : 'bg-blue-500 text-white')}>
+      {role === 'assistant' ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
+    </div>
+  )
+}
+
+function codeAgentRuntimeFromParts(parts: unknown): CodeAgentRunMetadata['runtime'] | null {
+  if (!Array.isArray(parts)) return null
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue
+    const item = part as { data?: unknown; name?: unknown; type?: unknown }
+    if (item.type !== 'data') continue
+    if (item.name === 'agent_avatar') {
+      const runtime = (item.data as { runtime?: unknown } | null)?.runtime
+      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode') return runtime
+    }
+    if (item.name === 'code_agent_run') {
+      const runtime = (item.data as { runtime?: unknown } | null)?.runtime
+      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode') return runtime
+    }
+  }
+  return null
+}
+
+function codeAgentLogoSrc(runtime: CodeAgentRunMetadata['runtime']) {
+  if (runtime === 'claude-code') return '/claude-color.svg'
+  if (runtime === 'opencode') return '/opencode.svg'
+  return '/codex-color.svg'
+}
+
+function codeAgentRuntimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
+  if (runtime === 'claude-code') return 'Claude Code'
+  if (runtime === 'opencode') return 'OpenCode'
+  return 'Codex'
+}
 
 const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
   <button className={cn('grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700', className)} {...props} />

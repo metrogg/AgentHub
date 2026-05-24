@@ -47,6 +47,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const artifactPart = artifacts.length ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: artifacts } }] : []
   const attachments = readChatAttachments(message.metadata?.attachments)
   const attachmentPart = attachments.length ? [{ type: 'data' as const, name: 'chat_attachments', data: { items: attachments } }] : []
+  const avatarPart = readAgentAvatarPart(message.metadata, codeAgentRun)
 
   return {
     id: message.id,
@@ -55,12 +56,13 @@ function toThreadMessage(message: Message): ThreadMessageLike {
       ? [{ type: 'data', name: 'orchestrator_plan', data: plan }]
       : codeAgentRun
         ? [
+            ...avatarPart,
             { type: 'text', text },
             ...attachmentPart,
             { type: 'data', name: 'code_agent_run', data: codeAgentRun },
             ...artifactPart,
           ]
-        : [{ type: 'text', text }, ...attachmentPart, ...artifactPart],
+        : [...avatarPart, { type: 'text', text }, ...attachmentPart, ...artifactPart],
     createdAt: new Date(message.createdAt),
   }
 }
@@ -99,6 +101,13 @@ function readChatAttachments(value: unknown): ChatAttachment[] {
   })
 }
 
+function readAgentAvatarPart(metadata: Message['metadata'], codeAgentRun: CodeAgentRunMetadata | null) {
+  const runtime = codeAgentRun?.runtime ?? metadata?.codeAgentType
+  if (metadata?.runtimeType !== 'code-agent' && !codeAgentRun) return []
+  if (runtime !== 'codex' && runtime !== 'claude-code' && runtime !== 'opencode') return []
+  return [{ type: 'data' as const, name: 'agent_avatar', data: { runtime } }]
+}
+
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
   const messages = useChatStore((state) => state.messages)
   const streamingMessage = useChatStore((state) => state.streamingMessage)
@@ -112,11 +121,15 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
     const list = messages.map(toThreadMessage)
 
     if (streamingMessage) {
+      const streamingAvatarPart = streamingCodeAgentRun
+        ? [{ type: 'data' as const, name: 'agent_avatar', data: { runtime: streamingCodeAgentRun.runtime } }]
+        : []
       list.push({
         id: streamingMessage.id,
         role: 'assistant',
         content: streamingCodeAgentRun
           ? [
+              ...streamingAvatarPart,
               ...(streamingMessage.content.trim() ? [{ type: 'text' as const, text: streamingMessage.content }] : []),
               { type: 'data', name: 'code_agent_run', data: streamingCodeAgentRun },
               ...(streamingCodeAgentRun.artifacts?.length
