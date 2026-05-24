@@ -47,6 +47,18 @@ export interface Message {
   createdAt: string
 }
 
+export interface CodeAgentRunMetadata {
+  type: 'code-agent-run'
+  status: 'completed' | 'failed' | 'cancelled' | 'timed-out'
+  runtime: 'codex' | 'claude-code' | 'opencode'
+  command: string
+  durationMs: number
+  exitCode: number
+  commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
+  files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked' }>
+  diagnostics?: string
+}
+
 export interface ModelCatalogItem {
   id: string
   enabled: boolean
@@ -138,6 +150,14 @@ export interface CodexLoginPoll extends CodexAuthAction {
   cliAuthMessage?: string
   cliAuthSynced?: boolean
   interval?: number
+}
+
+export interface CodexConfigFile {
+  ok: boolean
+  exists: boolean
+  path: string
+  content: string
+  message: string
 }
 
 export interface Workspace {
@@ -335,6 +355,20 @@ export const api = {
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
   getOpencodeModels: () =>
     request<OpencodeModelsResponse>('/coding-tools/opencode/models'),
+  getCodexConfig: () =>
+    request<CodexConfigFile>('/coding-tools/codex/config'),
+  saveCodexConfig: (content: string) =>
+    request<CodexConfigFile>('/coding-tools/codex/config', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  getCodexAuthFile: () =>
+    request<CodexConfigFile>('/coding-tools/codex/auth-file'),
+  saveCodexAuthFile: (content: string) =>
+    request<CodexConfigFile>('/coding-tools/codex/auth-file', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
   getCodexAuthStatus: () => request<CodexAuthStatus>('/coding-tools/codex/auth/status'),
   startCodexChatGptLogin: () =>
     request<CodexLoginStart>('/coding-tools/codex/auth/start', { method: 'POST' }),

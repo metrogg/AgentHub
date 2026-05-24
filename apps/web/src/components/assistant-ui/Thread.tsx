@@ -34,6 +34,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock3,
   Copy,
   FileText,
   FolderOpen,
@@ -53,6 +54,7 @@ import {
   Search,
   Sheet,
   Square,
+  TerminalSquare,
   User,
   Users,
 } from 'lucide-react'
@@ -61,6 +63,7 @@ import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import {
   api,
+  type CodeAgentRunMetadata,
   type ModelCatalogItem,
   type OrchestratorDispatchResult,
   type OrchestratorPlan,
@@ -206,6 +209,42 @@ const GroupMemberPanel: FC = () => {
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const messages = useChatStore((state) => state.messages)
   const activeAgentIds = new Set(messages.filter((message) => message.senderType === 'agent').map((message) => message.senderId))
+  const [collapsed, setCollapsed] = useState(false)
+
+  if (collapsed) {
+    return (
+      <aside className="hidden w-12 shrink-0 border-l border-neutral-200 bg-[#fbfbf9] xl:block">
+        <div className="flex flex-col items-center gap-3 py-4">
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-100 hover:text-neutral-900"
+            title="展开成员栏"
+            aria-label="展开成员栏"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
+            <Users className="h-4 w-4" />
+          </div>
+          <div className="mt-2 flex flex-col items-center gap-2">
+            <div className="grid h-7 w-7 place-items-center rounded-full bg-blue-500 text-[10px] font-semibold text-white" title="You">Y</div>
+            <div className="grid h-7 w-7 place-items-center rounded-full bg-neutral-900 text-[10px] font-semibold text-white" title="Orchestrator">O</div>
+            {agents.map((agent) => (
+              <div
+                key={agent.id}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-semibold text-white"
+                style={{ background: agent.color ?? '#111827' }}
+                title={agent.name}
+              >
+                {agent.name.slice(0, 1).toUpperCase()}
+              </div>
+            ))}
+          </div>
+        </div>
+      </aside>
+    )
+  }
 
   return (
     <aside className="hidden w-72 shrink-0 border-l border-neutral-200 bg-[#fbfbf9] px-4 py-5 xl:block">
@@ -214,8 +253,19 @@ const GroupMemberPanel: FC = () => {
           <div className="text-sm font-semibold text-neutral-950">群聊成员</div>
           <div className="mt-1 truncate text-xs text-neutral-500">{workspace?.name ?? 'Agent Group'}</div>
         </div>
-        <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
-          <Users className="h-4 w-4" />
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-100 hover:text-neutral-900"
+            title="折叠成员栏"
+            aria-label="折叠成员栏"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
+            <Users className="h-4 w-4" />
+          </div>
         </div>
       </div>
 
@@ -911,7 +961,7 @@ const AssistantMessage: FC = () => (
           components={{
             Text: MarkdownText,
             Empty: AssistantThinking,
-            data: { by_name: { orchestrator_plan: OrchestratorPlanCard } },
+            data: { by_name: { orchestrator_plan: OrchestratorPlanCard, code_agent_run: CodeAgentRunCard } },
           }}
         />
       </div>
@@ -934,6 +984,127 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
       </span>
     </div>
   )
+}
+
+const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+  const [open, setOpen] = useState(false)
+  const changedFiles = data.files ?? []
+  const commands = data.commands ?? []
+  const createdCount = changedFiles.filter((file) => file.status === 'created').length
+  const fileSummary = changedFiles.length
+    ? createdCount === changedFiles.length
+      ? `已创建 ${createdCount} 个文件`
+      : `已变更 ${changedFiles.length} 个文件`
+    : '无文件变更'
+  const commandSummary = commands.length ? `已运行 ${commands.length} 条命令` : '未记录命令'
+  const statusTone =
+    data.status === 'completed'
+      ? 'text-neutral-500'
+      : data.status === 'timed-out'
+        ? 'text-amber-600'
+        : 'text-red-600'
+
+  return (
+    <div className="not-prose mt-3 overflow-hidden rounded-lg border border-neutral-200 bg-[#fbfbf9] text-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex h-11 w-full items-center justify-between gap-3 px-3 text-left transition hover:bg-white"
+      >
+        <span className={cn('inline-flex min-w-0 items-center gap-2', statusTone)}>
+          <Clock3 className="h-4 w-4 shrink-0" />
+          <span className="truncate">已处理 {formatRunDuration(data.durationMs)}</span>
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <div className="border-t border-neutral-200 bg-white px-3 py-2">
+          <div className="space-y-1.5">
+            <CodeAgentRunSection icon={<FileText className="h-4 w-4" />} title={fileSummary} disabled={!changedFiles.length}>
+              <div className="space-y-1">
+                {changedFiles.map((file) => (
+                  <div key={`${file.status}-${file.path}`} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 rounded-md bg-neutral-50 px-2 py-1.5">
+                    <span className="text-xs text-neutral-400">{fileStatusLabel(file.status)}</span>
+                    <span className="truncate font-mono text-xs text-neutral-600" title={file.path}>
+                      {file.path}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </CodeAgentRunSection>
+
+            <CodeAgentRunSection icon={<TerminalSquare className="h-4 w-4" />} title={commandSummary} disabled={!commands.length}>
+              <div className="space-y-1">
+                {commands.map((command) => (
+                  <div key={command.id} className="rounded-md bg-neutral-50 px-2 py-1.5">
+                    <div className="truncate font-mono text-xs text-neutral-600" title={command.command}>
+                      已运行 {command.command}
+                    </div>
+                    {command.cwd && <div className="mt-1 truncate font-mono text-[11px] text-neutral-400">{command.cwd}</div>}
+                  </div>
+                ))}
+              </div>
+            </CodeAgentRunSection>
+
+            {data.diagnostics && (
+              <CodeAgentRunSection icon={<AlertCircleIcon />} title="诊断输出">
+                <pre className="max-h-56 overflow-auto rounded-md bg-neutral-950 px-3 py-2 text-xs leading-5 text-neutral-100">
+                  {data.diagnostics}
+                </pre>
+              </CodeAgentRunSection>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const CodeAgentRunSection: FC<{ children: ReactNode; disabled?: boolean; icon: ReactNode; title: string }> = ({
+  children,
+  disabled,
+  icon,
+  title,
+}) => {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => !disabled && setOpen((value) => !value)}
+        disabled={disabled}
+        className="flex h-9 w-full items-center justify-between gap-3 rounded-md px-2 text-left text-neutral-500 transition hover:bg-neutral-50 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent"
+      >
+        <span className="inline-flex min-w-0 items-center gap-2">
+          <span className="text-neutral-400">{icon}</span>
+          <span className="truncate">{title}</span>
+        </span>
+        {!disabled && <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />}
+      </button>
+      {open && <div className="pb-2 pl-8 pr-1">{children}</div>}
+    </div>
+  )
+}
+
+const AlertCircleIcon: FC = () => <span className="grid h-4 w-4 place-items-center rounded-full border border-neutral-300 text-[10px]">!</span>
+
+function formatRunDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms <= 0) return '0s'
+  const totalSeconds = Math.max(1, Math.round(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes <= 0) return `${seconds}s`
+  return `${minutes}m ${seconds}s`
+}
+
+function fileStatusLabel(status: CodeAgentRunMetadata['files'][number]['status']) {
+  if (status === 'created') return '创建'
+  if (status === 'modified') return '修改'
+  if (status === 'deleted') return '删除'
+  if (status === 'renamed') return '重命名'
+  return '未跟踪'
 }
 
 const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {

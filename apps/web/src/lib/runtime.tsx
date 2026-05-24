@@ -6,7 +6,7 @@ import {
   type ThreadMessageLike,
 } from '@assistant-ui/react'
 import { useChatStore } from '../stores/chatStore'
-import type { Message } from './api'
+import type { CodeAgentRunMetadata, Message } from './api'
 
 function toThreadMessage(message: Message): ThreadMessageLike {
   const role: ThreadMessageLike['role'] =
@@ -34,15 +34,25 @@ function toThreadMessage(message: Message): ThreadMessageLike {
         : null
   const senderLabel = [agentName, runtimeLabel].filter(Boolean).join(' · ')
   const text = senderLabel ? `**${senderLabel}**\n\n${message.content}` : message.content
+  const codeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun) ? message.metadata.codeAgentRun : null
 
   return {
     id: message.id,
     role,
     content: plan
       ? [{ type: 'data', name: 'orchestrator_plan', data: plan }]
+      : codeAgentRun
+        ? [
+            { type: 'text', text },
+            { type: 'data', name: 'code_agent_run', data: codeAgentRun },
+          ]
       : [{ type: 'text', text }],
     createdAt: new Date(message.createdAt),
   }
+}
+
+function isCodeAgentRunMetadata(value: unknown): value is CodeAgentRunMetadata {
+  return Boolean(value && typeof value === 'object' && (value as { type?: unknown }).type === 'code-agent-run')
 }
 
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {

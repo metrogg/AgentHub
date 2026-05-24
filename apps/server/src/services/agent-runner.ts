@@ -1,6 +1,6 @@
 import { db, messages, eq, desc } from '@agenthub/db'
 import { streamReply } from './llm'
-import { isCodeAgentProfile, streamCodeAgentReply } from './code-agent-adapter'
+import { isCodeAgentProfile, streamCodeAgentReply, type CodeAgentMetadataChunk } from './code-agent-adapter'
 import { isNativeAgentProfile, streamNativeAgentReply } from './native-agent-loop'
 import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
@@ -144,6 +144,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   })
 
   let fullContent = ''
+  let codeAgentRun: CodeAgentMetadataChunk['metadata'] | null = null
   const selectedModelId =
     profile?.modelId ?? (typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined)
   const replyStream =
@@ -156,6 +157,10 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   try {
     for await (const delta of replyStream) {
       if (run.cancelled) break
+      if (typeof delta !== 'string') {
+        if (delta.kind === 'code-agent-metadata') codeAgentRun = delta.metadata
+        continue
+      }
       fullContent += delta
       broadcast(sessionId, {
         type: 'message:stream',
@@ -212,6 +217,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
             modelId: profile.modelId ?? null,
             sandboxPolicy: profile.sandboxPolicy ?? null,
             projectPath: profile.projectPath ?? null,
+            codeAgentRun,
           }
         : null,
     })

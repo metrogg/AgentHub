@@ -136,6 +136,16 @@ export default function CodingToolsPage() {
   const [opencodeDefaultModel, setOpencodeDefaultModel] = useState<string | null>(null)
   const [opencodeModelMessage, setOpencodeModelMessage] = useState('')
   const [opencodeModelBusy, setOpencodeModelBusy] = useState(false)
+  const [codexConfigPath, setCodexConfigPath] = useState('')
+  const [codexConfigContent, setCodexConfigContent] = useState('')
+  const [codexConfigBusy, setCodexConfigBusy] = useState(false)
+  const [codexConfigDirty, setCodexConfigDirty] = useState(false)
+  const [codexConfigMessage, setCodexConfigMessage] = useState('')
+  const [codexAuthFilePath, setCodexAuthFilePath] = useState('')
+  const [codexAuthFileContent, setCodexAuthFileContent] = useState('')
+  const [codexAuthFileBusy, setCodexAuthFileBusy] = useState(false)
+  const [codexAuthFileDirty, setCodexAuthFileDirty] = useState(false)
+  const [codexAuthFileMessage, setCodexAuthFileMessage] = useState('')
 
   useEffect(() => {
     api.getSettings().then((settings) => {
@@ -161,6 +171,8 @@ export default function CodingToolsPage() {
       if (settings.CODEX_CHATGPT_TRANSPORT === 'websocket') setCodexTransport('websocket')
       void refreshStatus(nextTools)
       void refreshCodexAuth()
+      void refreshCodexConfig()
+      void refreshCodexAuthFile()
       void refreshOpencodeModels()
     })
   }, [])
@@ -210,6 +222,36 @@ export default function CodingToolsPage() {
       setOpencodeModelMessage(error?.message || 'Failed to load local OpenCode models.')
     } finally {
       setOpencodeModelBusy(false)
+    }
+  }
+
+  async function refreshCodexConfig() {
+    setCodexConfigBusy(true)
+    try {
+      const result = await api.getCodexConfig()
+      setCodexConfigPath(result.path)
+      setCodexConfigContent(result.content)
+      setCodexConfigDirty(false)
+      setCodexConfigMessage(result.message)
+    } catch (error: any) {
+      setCodexConfigMessage(error?.message || '读取 Codex config.toml 失败')
+    } finally {
+      setCodexConfigBusy(false)
+    }
+  }
+
+  async function refreshCodexAuthFile() {
+    setCodexAuthFileBusy(true)
+    try {
+      const result = await api.getCodexAuthFile()
+      setCodexAuthFilePath(result.path)
+      setCodexAuthFileContent(result.content)
+      setCodexAuthFileDirty(false)
+      setCodexAuthFileMessage(result.message)
+    } catch (error: any) {
+      setCodexAuthFileMessage(error?.message || '读取 Codex auth.json 失败')
+    } finally {
+      setCodexAuthFileBusy(false)
     }
   }
 
@@ -341,6 +383,11 @@ export default function CodingToolsPage() {
   }
 
   async function save() {
+    if (activeTool.id === 'codex') {
+      const [authOk, configOk] = await Promise.all([saveCodexAuthFile(), saveCodexConfig()])
+      if (authOk && configOk) showSaved()
+      return
+    }
     await api.saveSettings({
       [storageKey]: JSON.stringify(tools),
       CODE_AGENT_ACTIVE_TOOL: activeTool.id,
@@ -353,6 +400,55 @@ export default function CodingToolsPage() {
       CODEX_CHATGPT_TRANSPORT: codexTransport,
     })
     showSaved()
+  }
+
+  async function saveCodexConfig() {
+    setCodexConfigBusy(true)
+    try {
+      const result = await api.saveCodexConfig(codexConfigContent)
+      if (!result.ok) {
+        setCodexConfigMessage(result.message)
+        return false
+      }
+      setCodexConfigPath(result.path)
+      setCodexConfigContent(result.content)
+      setCodexConfigDirty(false)
+      setCodexConfigMessage(result.message)
+      await api.saveSettings({
+        [storageKey]: JSON.stringify(tools),
+        CODE_AGENT_ACTIVE_TOOL: activeTool.id,
+        CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
+        CODEX_CHATGPT_TRANSPORT: codexTransport,
+      })
+      await refreshStatus()
+      return true
+    } catch (error: any) {
+      setCodexConfigMessage(error?.message || '保存 Codex config.toml 失败')
+      return false
+    } finally {
+      setCodexConfigBusy(false)
+    }
+  }
+
+  async function saveCodexAuthFile() {
+    setCodexAuthFileBusy(true)
+    try {
+      const result = await api.saveCodexAuthFile(codexAuthFileContent)
+      if (!result.ok) {
+        setCodexAuthFileMessage(result.message)
+        return false
+      }
+      setCodexAuthFilePath(result.path)
+      setCodexAuthFileContent(result.content)
+      setCodexAuthFileDirty(false)
+      setCodexAuthFileMessage(result.message)
+      return true
+    } catch (error: any) {
+      setCodexAuthFileMessage(error?.message || '保存 Codex auth.json 失败')
+      return false
+    } finally {
+      setCodexAuthFileBusy(false)
+    }
   }
 
   async function saveActiveToolConfig() {
@@ -519,7 +615,11 @@ export default function CodingToolsPage() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold">{activeTool.name}</h2>
-                  <p className="mt-1 text-sm text-neutral-500">配置会写入 AgentHub 设置，并作为 Code Agent 的默认运行参数。</p>
+                  <p className="mt-1 text-sm text-neutral-500">
+                    {activeTool.id === 'codex'
+                      ? 'Codex 使用本机 auth.json 与 config.toml；AgentHub 不再维护额外的 Codex 模型配置。'
+                      : '配置会写入 AgentHub 设置，并作为 Code Agent 的默认运行参数。'}
+                  </p>
                 </div>
                 <a
                   href={activeTool.docsUrl}
@@ -532,147 +632,179 @@ export default function CodingToolsPage() {
                 </a>
               </div>
 
-              <div className="mt-5 grid gap-4 md:grid-cols-2">
-                <Field label="命令" value={activeTool.command} onChange={(value) => patchTool(activeTool.id, { command: value })} />
-                {activeTool.id !== 'opencode' && (
-                  <>
-                    <Field label="Base URL" value={activeTool.baseUrl} onChange={(value) => patchTool(activeTool.id, { baseUrl: value })} />
-                    <Field label="API Key 环境变量" value={activeTool.apiKeyEnv} onChange={(value) => patchTool(activeTool.id, { apiKeyEnv: value })} />
-                    <Field label="API Key" type="password" value={activeApiKey} onChange={(value) => setApiKeyDrafts((current) => ({ ...current, [activeTool.modelId]: value }))} />
-                  </>
-                )}
-                <label className="block text-sm md:col-span-2">
-                  <span className="mb-2 flex items-center justify-between gap-3 text-neutral-600">
-                    <span>模型</span>
-                    {activeTool.id === 'opencode' && (
-                      <button
-                        type="button"
-                        onClick={refreshOpencodeModels}
-                        disabled={opencodeModelBusy}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2 text-xs text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
-                      >
-                        <RefreshCw className={cn('h-3.5 w-3.5', opencodeModelBusy && 'animate-spin')} />
-                        读取本机 OpenCode
-                      </button>
-                    )}
-                  </span>
-                  <div className="relative">
-                    {activeTool.id === 'opencode' ? (
-                      <select
-                        value={activeTool.modelId}
-                        onChange={(event) => patchTool(activeTool.id, { modelId: event.target.value })}
-                        className="h-10 w-full appearance-none rounded-md border border-neutral-200 bg-white px-3 pr-8 outline-none transition focus:border-teal-700"
-                      >
-                        {modelOptions.length === 0 && <option value={activeTool.modelId}>{activeTool.modelId || 'OpenCode local default'}</option>}
-                        {modelOptions.map((model) => (
-                          <option key={model.id} value={model.value}>
-                            {model.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
+              {activeTool.id === 'codex' ? (
+                <>
+                  <CodexConfigPanel
+                    title="auth.json"
+                    language="JSON"
+                    path={codexAuthFilePath}
+                    content={codexAuthFileContent}
+                    busy={codexAuthFileBusy}
+                    dirty={codexAuthFileDirty}
+                    message={codexAuthFileMessage}
+                    minHeight="10rem"
+                    placeholder={'{\n  "OPENAI_API_KEY": ""\n}'}
+                    onChange={(content) => {
+                      setCodexAuthFileContent(content)
+                      setCodexAuthFileDirty(true)
+                    }}
+                    onReload={refreshCodexAuthFile}
+                    onSave={async () => {
+                      if (await saveCodexAuthFile()) showSaved()
+                    }}
+                  />
+                  <CodexConfigPanel
+                    title="config.toml"
+                    language="TOML"
+                    path={codexConfigPath}
+                    content={codexConfigContent}
+                    busy={codexConfigBusy}
+                    dirty={codexConfigDirty}
+                    message={codexConfigMessage}
+                    minHeight="30rem"
+                    placeholder='model_provider = "openai"'
+                    onChange={(content) => {
+                      setCodexConfigContent(content)
+                      setCodexConfigDirty(true)
+                    }}
+                    onReload={refreshCodexConfig}
+                    onSave={async () => {
+                      if (await saveCodexConfig()) showSaved()
+                    }}
+                  />
+                  <CodexAuthPanel
+                    status={codexAuth}
+                    busy={authBusy}
+                    message={authMessage}
+                    session={authSession}
+                    transport={codexTransport}
+                    onLogin={startChatGptLogin}
+                    onLogout={logoutChatGpt}
+                    onRefresh={refreshCodexAuth}
+                    onRetry={retryChatGptAuth}
+                    onOpenAuthPage={openCodexAuthPage}
+                    onTransport={patchCodexTransport}
+                  />
+                </>
+              ) : (
+                <>
+                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    <Field label="命令" value={activeTool.command} onChange={(value) => patchTool(activeTool.id, { command: value })} />
+                    {activeTool.id !== 'opencode' && (
                       <>
-                        <input
-                          list="coding-tool-models"
-                          value={activeTool.modelId}
-                          onChange={(event) => patchTool(activeTool.id, { modelId: event.target.value })}
-                          className="h-10 w-full rounded-md border border-neutral-200 bg-white px-3 pr-8 outline-none transition focus:border-teal-700"
-                        />
-                        <datalist id="coding-tool-models">
-                          {modelOptions.map((model) => (
-                            <option key={model.id} value={model.value}>
-                              {model.label}
-                            </option>
-                          ))}
-                        </datalist>
+                        <Field label="Base URL" value={activeTool.baseUrl} onChange={(value) => patchTool(activeTool.id, { baseUrl: value })} />
+                        <Field label="API Key 环境变量" value={activeTool.apiKeyEnv} onChange={(value) => patchTool(activeTool.id, { apiKeyEnv: value })} />
+                        <Field label="API Key" type="password" value={activeApiKey} onChange={(value) => setApiKeyDrafts((current) => ({ ...current, [activeTool.modelId]: value }))} />
                       </>
                     )}
-                    {activeTool.id === 'opencode' && <ChevronDown className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-neutral-400" />}
+                    <label className="block text-sm md:col-span-2">
+                      <span className="mb-2 flex items-center justify-between gap-3 text-neutral-600">
+                        <span>模型</span>
+                        {activeTool.id === 'opencode' && (
+                          <button
+                            type="button"
+                            onClick={refreshOpencodeModels}
+                            disabled={opencodeModelBusy}
+                            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2 text-xs text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
+                          >
+                            <RefreshCw className={cn('h-3.5 w-3.5', opencodeModelBusy && 'animate-spin')} />
+                            读取本机 OpenCode
+                          </button>
+                        )}
+                      </span>
+                      <div className="relative">
+                        {activeTool.id === 'opencode' ? (
+                          <select
+                            value={activeTool.modelId}
+                            onChange={(event) => patchTool(activeTool.id, { modelId: event.target.value })}
+                            className="h-10 w-full appearance-none rounded-md border border-neutral-200 bg-white px-3 pr-8 outline-none transition focus:border-teal-700"
+                          >
+                            {modelOptions.length === 0 && <option value={activeTool.modelId}>{activeTool.modelId || 'OpenCode local default'}</option>}
+                            {modelOptions.map((model) => (
+                              <option key={model.id} value={model.value}>
+                                {model.label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            value={activeTool.modelId}
+                            onChange={(event) => patchTool(activeTool.id, { modelId: event.target.value })}
+                            className="h-10 w-full rounded-md border border-neutral-200 bg-white px-3 outline-none transition focus:border-teal-700"
+                          />
+                        )}
+                        {activeTool.id === 'opencode' && <ChevronDown className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-neutral-400" />}
+                      </div>
+                      {activeTool.id === 'opencode' && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                          {opencodeDefaultModel && <span>默认：{opencodeDefaultModel}</span>}
+                          {opencodeModels.length > 0 && <span>已读取 {opencodeModels.length} 个本机模型</span>}
+                          {opencodeModelMessage && <span className="text-neutral-400">{opencodeModelMessage}</span>}
+                        </div>
+                      )}
+                    </label>
                   </div>
-                  {activeTool.id === 'opencode' && (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                      {opencodeDefaultModel && <span>默认：{opencodeDefaultModel}</span>}
-                      {opencodeModels.length > 0 && <span>已读取 {opencodeModels.length} 个本机模型</span>}
-                      {opencodeModelMessage && <span className="text-neutral-400">{opencodeModelMessage}</span>}
+
+                  <div className="mt-5">
+                    <div className="mb-2 text-sm font-medium text-neutral-700">API 协议</div>
+                    <div className="grid gap-2 md:grid-cols-3">
+                      {(Object.keys(protocolCopy) as Protocol[]).map((protocol) => (
+                        <ChoiceButton
+                          key={protocol}
+                          active={activeTool.protocol === protocol}
+                          title={protocolCopy[protocol].label}
+                          meta={protocolCopy[protocol].endpoint}
+                          text={protocolCopy[protocol].note}
+                          onClick={() => patchTool(activeTool.id, { protocol })}
+                        />
+                      ))}
                     </div>
-                  )}
-                </label>
-              </div>
+                  </div>
 
-              <div className="mt-5">
-                <div className="mb-2 text-sm font-medium text-neutral-700">API 协议</div>
-                <div className="grid gap-2 md:grid-cols-3">
-                  {(Object.keys(protocolCopy) as Protocol[]).map((protocol) => (
-                    <ChoiceButton
-                      key={protocol}
-                      active={activeTool.protocol === protocol}
-                      title={protocolCopy[protocol].label}
-                      meta={protocolCopy[protocol].endpoint}
-                      text={protocolCopy[protocol].note}
-                      onClick={() => patchTool(activeTool.id, { protocol })}
-                    />
-                  ))}
-                </div>
-              </div>
+                  <div className="mt-5">
+                    <div className="mb-2 flex items-center gap-2 text-sm font-medium text-neutral-700">
+                      <Shield className="h-4 w-4 text-teal-700" />
+                      沙箱策略
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-3">
+                      {(Object.keys(sandboxCopy) as SandboxMode[]).map((sandbox) => (
+                        <ChoiceButton
+                          key={sandbox}
+                          active={activeTool.sandbox === sandbox}
+                          title={sandbox}
+                          text={sandboxCopy[sandbox]}
+                          onClick={() => patchTool(activeTool.id, { sandbox })}
+                        />
+                      ))}
+                    </div>
+                  </div>
 
-              <div className="mt-5">
-                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-neutral-700">
-                  <Shield className="h-4 w-4 text-teal-700" />
-                  沙箱策略
-                </div>
-                <div className="grid gap-2 md:grid-cols-3">
-                  {(Object.keys(sandboxCopy) as SandboxMode[]).map((sandbox) => (
-                    <ChoiceButton
-                      key={sandbox}
-                      active={activeTool.sandbox === sandbox}
-                      title={sandbox}
-                      text={sandboxCopy[sandbox]}
-                      onClick={() => patchTool(activeTool.id, { sandbox })}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              {activeTool.id === 'codex' && (
-                <CodexAuthPanel
-                  status={codexAuth}
-                  busy={authBusy}
-                  message={authMessage}
-                  session={authSession}
-                  transport={codexTransport}
-                  onLogin={startChatGptLogin}
-                  onLogout={logoutChatGpt}
-                  onRefresh={refreshCodexAuth}
-                  onRetry={retryChatGptAuth}
-                  onOpenAuthPage={openCodexAuthPage}
-                  onTransport={patchCodexTransport}
-                />
+                  <div className="mt-5 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={saveActiveToolConfig}
+                      className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-medium text-white hover:bg-teal-800"
+                    >
+                      <Save className="h-4 w-4" />
+                      同步到模型配置
+                    </button>
+                    <button
+                      type="button"
+                      onClick={testActiveToolConnection}
+                      disabled={toolTestBusy}
+                      className="inline-flex h-10 items-center gap-2 rounded-md border border-neutral-200 bg-white px-4 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                    >
+                      <PlayCircle className={cn('h-4 w-4', toolTestBusy && 'animate-pulse')} />
+                      测试连接
+                    </button>
+                    {toolTestMessage && (
+                      <span className={cn('text-sm', toolTestOk ? 'text-emerald-700' : toolTestOk === false ? 'text-red-600' : 'text-neutral-500')}>
+                        {toolTestMessage}
+                      </span>
+                    )}
+                  </div>
+                </>
               )}
-
-              <div className="mt-5 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={saveActiveToolConfig}
-                  className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-medium text-white hover:bg-teal-800"
-                >
-                  <Save className="h-4 w-4" />
-                  同步到模型配置
-                </button>
-                <button
-                  type="button"
-                  onClick={testActiveToolConnection}
-                  disabled={toolTestBusy}
-                  className="inline-flex h-10 items-center gap-2 rounded-md border border-neutral-200 bg-white px-4 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
-                >
-                  <PlayCircle className={cn('h-4 w-4', toolTestBusy && 'animate-pulse')} />
-                  测试连接
-                </button>
-                {toolTestMessage && (
-                  <span className={cn('text-sm', toolTestOk ? 'text-emerald-700' : toolTestOk === false ? 'text-red-600' : 'text-neutral-500')}>
-                    {toolTestMessage}
-                  </span>
-                )}
-              </div>
             </div>
 
             <aside className="space-y-4">
@@ -746,6 +878,81 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
       }
     )
   })
+}
+
+function CodexConfigPanel({
+  title,
+  language,
+  path,
+  content,
+  busy,
+  dirty,
+  message,
+  minHeight,
+  placeholder,
+  onChange,
+  onReload,
+  onSave,
+}: {
+  title: string
+  language: string
+  path: string
+  content: string
+  busy: boolean
+  dirty: boolean
+  message: string
+  minHeight: string
+  placeholder: string
+  onChange: (content: string) => void
+  onReload: () => void
+  onSave: () => void | Promise<void>
+}) {
+  return (
+    <div className="mt-5 rounded-lg border border-neutral-200 bg-white p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-semibold text-neutral-800">
+            <Terminal className="h-4 w-4 text-teal-700" />
+            {title} <span className="font-normal text-neutral-400">({language})</span>
+          </div>
+          <div className="mt-1 truncate font-mono text-xs text-neutral-400">{path || `~/.codex/${title}`}</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {dirty && <span className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700">未保存</span>}
+          <button
+            type="button"
+            onClick={onReload}
+            disabled={busy}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
+            重新读取
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={busy}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-teal-700 px-2.5 text-xs font-medium text-white hover:bg-teal-800 disabled:bg-neutral-300"
+          >
+            <Save className="h-3.5 w-3.5" />
+            保存
+          </button>
+        </div>
+      </div>
+      <textarea
+        value={content}
+        onChange={(event) => onChange(event.target.value)}
+        spellCheck={false}
+        className="mt-3 w-full resize-y rounded-md border border-neutral-200 bg-white px-4 py-3 font-mono text-xs leading-6 text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-teal-700"
+        style={{ minHeight }}
+        placeholder={placeholder}
+      />
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-500">
+        <span>{message || 'Codex CLI 会直接读取这个文件。'}</span>
+        <span>{content.length.toLocaleString()} chars</span>
+      </div>
+    </div>
+  )
 }
 
 function CodexAuthPanel({
@@ -915,6 +1122,9 @@ function ToolIcon({ toolId, name }: { toolId: string; name: string }) {
 }
 
 function buildEnvSnippet(tool: ToolConfig) {
+  if (tool.id === 'codex') {
+    return '# Codex reads local ~/.codex/config.toml\n# Edit model, provider, base_url, env_key, and wire_api in config.toml.'
+  }
   if (tool.id === 'opencode') {
     return `# OpenCode uses local config\nOPENCODE_MODEL=${tool.modelId || 'local default'}`
   }
@@ -924,7 +1134,7 @@ function buildEnvSnippet(tool: ToolConfig) {
 }
 
 function buildRunCommand(tool: ToolConfig) {
-  if (tool.id === 'codex') return `${tool.command} exec --model ${tool.modelId} --sandbox ${tool.sandbox} "<task>"`
+  if (tool.id === 'codex') return `${tool.command} exec "<task>"`
   if (tool.id === 'claude-code') return `${tool.command} --model ${tool.modelId}`
   if (tool.id === 'opencode') return tool.modelId ? `${tool.command} run --model ${tool.modelId} "<task>"` : `${tool.command} run "<task>"`
   return `${tool.command} --model ${tool.modelId} --provider ${inferProvider(tool)}`

@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
@@ -26,7 +26,27 @@ interface CodeAgentCommandResult {
   code: number
   output: string
   finalMessage?: string
+  metadata: CodeAgentRunMetadata
 }
+
+export interface CodeAgentRunMetadata {
+  type: 'code-agent-run'
+  status: 'completed' | 'failed' | 'cancelled' | 'timed-out'
+  runtime: CodeAgentType
+  command: string
+  durationMs: number
+  exitCode: number
+  commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
+  files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked' }>
+  diagnostics?: string
+}
+
+export interface CodeAgentMetadataChunk {
+  kind: 'code-agent-metadata'
+  metadata: CodeAgentRunMetadata
+}
+
+export type CodeAgentReplyChunk = string | CodeAgentMetadataChunk
 
 const serviceDir = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(serviceDir, '../../../..')
@@ -45,34 +65,15 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       const args = [
         'exec',
         '--skip-git-repo-check',
+        '--color',
+        'never',
         '--cd',
         options?.cwd ?? projectRoot,
         '--sandbox',
         toCodexSandbox(options?.sandboxPolicy),
         '-c',
         'approval_policy=never',
-        '-c',
-        'preferred_auth_method=apikey',
-        '-c',
-        'model_reasoning_effort=minimal',
       ]
-      const model = readEnv('OPENAI_MODEL') || readEnv('LLM_MODEL')
-      const baseUrl = readEnv('OPENAI_BASE_URL') || readEnv('LLM_BASE_URL')
-      if (model) args.push('--model', model)
-      if (baseUrl) {
-        args.push(
-          '-c',
-          'model_provider=agenthub-openai-compatible',
-          '-c',
-          'model_providers.agenthub-openai-compatible.name=AgentHub',
-          '-c',
-          `model_providers.agenthub-openai-compatible.base_url=${baseUrl}`,
-          '-c',
-          'model_providers.agenthub-openai-compatible.env_key=OPENAI_API_KEY',
-          '-c',
-          `model_providers.agenthub-openai-compatible.wire_api=${codexWireApiForBaseUrl(baseUrl)}`
-        )
-      }
       if (options?.outputPath) args.push('--output-last-message', options.outputPath)
       args.push('-')
       return args
@@ -83,8 +84,8 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     displayName: 'Claude Code',
     envKey: 'ANTHROPIC_API_KEY',
     docsHint: 'Claude Code 会使用本机 Anthropic 凭据，并优先读取项目上下文。',
-    promptMode: 'argument',
-    buildArgs: (prompt) => ['-p', prompt],
+    promptMode: 'stdin',
+    buildArgs: () => ['-p', '--no-session-persistence', '--permission-mode', 'bypassPermissions'],
   },
   opencode: {
     command: 'opencode',
@@ -105,7 +106,7 @@ export async function* streamCodeAgentReply(
   userMsg: MessageRow,
   history: Array<{ senderType: string; content: string }>,
   signal?: AbortSignal
-): AsyncGenerator<string, void, unknown> {
+): AsyncGenerator<CodeAgentReplyChunk, void, unknown> {
   const type = profile.codeAgentType
   if (!type) {
     yield '这个 Agent 配置为 Code Agent，但还没有绑定 CLI。'
@@ -121,11 +122,9 @@ export async function* streamCodeAgentReply(
   const cwdInfo = resolveExecutionCwd(profile.projectPath)
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label)
   const installed = await isCommandInstalled(adapter.command)
-  const configured = Boolean(readEnv(adapter.envKey)) || type === 'codex'
+  const configured = isRuntimeConfigured(type, adapter)
   const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION') === 'true'
   const canExecute = executionEnabled && installed && configured && profile.approvalRequired === false && cwdInfo.valid
-
-  yield `正在执行 ${profile.name || adapter.displayName}...\n\n`
 
   if (!canExecute) {
     yield [
@@ -140,7 +139,7 @@ export async function* streamCodeAgentReply(
       `- 执行开关：\`AGENTHUB_ENABLE_CODE_AGENT_EXECUTION=${executionEnabled ? 'true' : 'false'}\``,
       `- 高风险确认：${profile.approvalRequired === false ? '关闭' : '开启'}`,
       '',
-      '要让这个 Code Agent 自动运行，请确认本机 CLI 已安装、凭据已配置、执行开关已开启，并在该 Agent 配置中关闭“高风险操作需要确认”。',
+      codeAgentBlockerText({ configured, cwdValid: cwdInfo.valid, executionEnabled, installed, profile }),
       '',
       '命令预览：',
       '```bash',
@@ -156,28 +155,44 @@ export async function* streamCodeAgentReply(
   }
 
   const result = await runCodeAgentCommand(adapter, prompt, cwdInfo.cwd, profile.sandboxPolicy, profile.modelId, signal)
-  if (result.code === 0 && result.finalMessage?.trim()) {
-    yield stripReasoningTags(result.finalMessage).trim()
+  yield { kind: 'code-agent-metadata', metadata: result.metadata }
+
+  const finalMessage = stripReasoningTags(result.finalMessage?.trim() || '')
+  if (result.code === 0 && finalMessage) {
+    yield finalMessage
     return
   }
 
+  const cleanedOutput = stripReasoningTags(stripToolNoise(result.output))
   if (result.code === 0) {
-    yield limitOutput(stripReasoningTags(stripToolNoise(result.output)) || '(Code Agent 没有返回正文)', 16_000)
+    yield limitOutput(cleanedOutput || '(Code Agent 没有返回正文)', 16_000)
     return
   }
 
-  yield [
-    `**${adapter.displayName} 执行失败**`,
-    '',
-    friendlyCodeAgentError(result.output),
-    '',
-    '诊断输出：',
-    '```text',
-    limitOutput(stripLastMessageBlock(result.output) || '(no output)', 16_000),
-    '```',
-    '',
-    `Code Agent 退出码：${result.code}。`,
-  ].join('\n')
+  yield formatCodeAgentFailure(adapter, result)
+}
+
+function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
+  if (readEnv(adapter.envKey)) return true
+  return type === 'codex' || type === 'opencode' || type === 'claude-code'
+}
+
+function codeAgentBlockerText(options: {
+  configured: boolean
+  cwdValid: boolean
+  executionEnabled: boolean
+  installed: boolean
+  profile: AgentRunProfile
+}) {
+  const blockers = [
+    !options.installed ? '本机 CLI 未安装或不在 PATH' : '',
+    !options.configured ? '凭据未配置' : '',
+    !options.executionEnabled ? '执行开关未开启' : '',
+    options.profile.approvalRequired === false ? '' : '该 Agent 仍开启了“高风险操作需要确认”',
+    !options.cwdValid ? '项目目录不存在或不可访问' : '',
+  ].filter(Boolean)
+  if (!blockers.length) return '当前配置已满足自动执行条件。'
+  return `当前阻塞项：${blockers.join('、')}。`
 }
 
 function buildCodeAgentPrompt(
@@ -187,9 +202,13 @@ function buildCodeAgentPrompt(
   workspacePath: string
 ) {
   const recent = history
-    .slice(-8)
+    .slice(-12)
+    .map((message) => ({ senderType: message.senderType, content: sanitizeHistoryContent(message.content) }))
+    .filter((message) => message.content)
+    .slice(-6)
     .map((message) => `${message.senderType}: ${message.content}`)
     .join('\n\n')
+
   return [
     `You are ${profile.name}.`,
     profile.role ? `Role: ${profile.role}.` : '',
@@ -199,8 +218,9 @@ function buildCodeAgentPrompt(
     `Sandbox policy: ${profile.sandboxPolicy ?? 'workspace-write'}.`,
     `Allowed tool scopes: ${(profile.toolPermissions ?? ['chat']).join(', ')}.`,
     'Follow the project instructions and keep changes focused.',
+    'Use the actual project path above. Do not invent container paths such as /agent-workspace.',
     '',
-    'Recent group context:',
+    recent ? 'Recent group context:' : '',
     recent,
     '',
     'Current user request:',
@@ -208,6 +228,23 @@ function buildCodeAgentPrompt(
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+function sanitizeHistoryContent(content: string) {
+  const trimmed = content.trim()
+  if (!trimmed) return ''
+  if (/^\s*正在执行\b/.test(trimmed)) return ''
+  if (/\[Stopped by user\]/i.test(trimmed)) return ''
+  if (/Code Agent (执行失败|退出码|已启动)/.test(trimmed)) return ''
+  if (
+    /OpenAI Codex v\d|stream error|unexpected status|tool_call_id|mcp_connection_manager|new_stdio_client|Warning: no last agent message|\/agent-workspace/i.test(
+      trimmed
+    )
+  ) {
+    return ''
+  }
+  if (/诊断输出：|Error loading config\.toml|No such file or directory/i.test(trimmed)) return ''
+  return trimmed.length > 1200 ? `${trimmed.slice(0, 1200)}\n...` : trimmed
 }
 
 async function isCommandInstalled(command: string) {
@@ -235,9 +272,21 @@ async function runCodeAgentCommand(
   signal?: AbortSignal
 ): Promise<CodeAgentCommandResult> {
   const outputPath = adapter.command === 'codex' ? join(tmpdir(), `agenthub-code-agent-${Date.now()}-${Math.random().toString(36).slice(2)}.md`) : undefined
-  const args = adapter.buildArgs(prompt, { cwd, modelId, outputPath, sandboxPolicy })
+  const commandPrompt =
+    process.platform === 'win32' && (adapter.command === 'codex' || adapter.command === 'claude')
+      ? buildAsciiSafePrompt(prompt)
+      : prompt
+  const args = adapter.buildArgs(commandPrompt, { cwd, modelId, outputPath, sandboxPolicy })
 
-  if (signal?.aborted) return { code: 130, output: 'Code Agent execution cancelled.' }
+  if (signal?.aborted) {
+    return {
+      code: 130,
+      output: 'Code Agent execution cancelled.',
+      metadata: emptyCodeAgentRunMetadata(adapter, 'cancelled'),
+    }
+  }
+  const startedAt = Date.now()
+  const beforeFiles = await snapshotWorkspaceFiles(cwd)
   if (outputPath && existsSync(outputPath)) {
     try {
       unlinkSync(outputPath)
@@ -248,33 +297,28 @@ async function runCodeAgentCommand(
 
   const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
     cwd,
-    env: mergedEnv(),
+    env: mergedEnv(adapter.command),
     stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
     stdout: 'pipe',
     stderr: 'pipe',
   })
   if (adapter.promptMode === 'stdin') {
     try {
-      proc.stdin?.write(prompt)
+      proc.stdin?.write(commandPrompt)
       proc.stdin?.end()
     } catch {
       // The process may have exited before stdin was written.
     }
   }
 
+  let timedOut = false
+  const stopRun = () => killProcessTree(proc)
   const timer = setTimeout(() => {
-    try {
-      proc.kill()
-    } catch {
-      // Process may have exited.
-    }
+    timedOut = true
+    stopRun()
   }, Number(readEnv('AGENTHUB_CODE_AGENT_TIMEOUT_MS') ?? 120_000))
   const abortRun = () => {
-    try {
-      proc.kill()
-    } catch {
-      // Process may have exited.
-    }
+    stopRun()
   }
   signal?.addEventListener('abort', abortRun, { once: true })
   const [code, stdout, stderr] = await Promise.all([
@@ -284,8 +328,14 @@ async function runCodeAgentCommand(
   ])
   clearTimeout(timer)
   signal?.removeEventListener('abort', abortRun)
-  const output = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n')
-  const finalMessage = outputPath && existsSync(outputPath) ? readFileSync(outputPath, 'utf8').trim() : undefined
+  const output = [
+    stdout.trim(),
+    stderr.trim(),
+    timedOut ? `Code Agent timed out after ${readEnv('AGENTHUB_CODE_AGENT_TIMEOUT_MS') ?? 120_000}ms.` : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+  const outputFileMessage = outputPath && existsSync(outputPath) ? readFileSync(outputPath, 'utf8').trim() : undefined
   if (outputPath && existsSync(outputPath)) {
     try {
       unlinkSync(outputPath)
@@ -293,20 +343,201 @@ async function runCodeAgentCommand(
       // Best-effort cleanup.
     }
   }
-  return { ...withExtractedLastMessage({ code, output }), finalMessage }
+  const parsed = withExtractedLastMessage({ code, output })
+  const finalMessage = outputFileMessage || parsed.finalMessage || extractCodexAssistantMessage(parsed.output)
+  const effectiveCode = code === 0 && !finalMessage && isCodeAgentFailureOutput(output) ? 1 : code
+  const metadata = await buildCodeAgentRunMetadata({
+    adapter,
+    code: effectiveCode,
+    durationMs: Date.now() - startedAt,
+    output: parsed.output,
+    timedOut,
+    beforeFiles,
+    cwd,
+  })
+  return { ...parsed, code: effectiveCode, finalMessage, metadata }
+}
+
+function buildAsciiSafePrompt(prompt: string) {
+  return [
+    'The task payload below is an ASCII-only JSON string. It uses JSON Unicode escapes because this Windows host can corrupt non-ASCII CLI arguments.',
+    'Decode JSON_STRING first, then follow the decoded text as the complete instructions and conversation context.',
+    'Do not answer about this encoding wrapper.',
+    '',
+    'JSON_STRING:',
+    jsonStringifyAscii(prompt),
+  ].join('\n')
+}
+
+function jsonStringifyAscii(value: string) {
+  return JSON.stringify(value).replace(/[^\x00-\x7F]/g, (char) => {
+    return `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+  })
+}
+
+function killProcessTree(proc: ReturnType<typeof Bun.spawn>) {
+  try {
+    if (process.platform === 'win32' && proc.pid) {
+      Bun.spawn(['taskkill', '/pid', String(proc.pid), '/t', '/f'], {
+        stdout: 'ignore',
+        stderr: 'ignore',
+      })
+      return
+    }
+    proc.kill()
+  } catch {
+    try {
+      proc.kill()
+    } catch {
+      // Process may have exited.
+    }
+  }
+}
+
+async function buildCodeAgentRunMetadata(input: {
+  adapter: CodeAgentAdapter
+  beforeFiles: Map<string, string>
+  code: number
+  cwd?: string
+  durationMs: number
+  output: string
+  timedOut: boolean
+}): Promise<CodeAgentRunMetadata> {
+  const diagnostics = input.code === 0 && !input.timedOut ? '' : cleanDiagnosticOutput(input.output)
+  return {
+    type: 'code-agent-run',
+    status: input.timedOut ? 'timed-out' : input.code === 0 ? 'completed' : input.code === 130 ? 'cancelled' : 'failed',
+    runtime: runtimeTypeForAdapter(input.adapter),
+    command: input.adapter.command,
+    durationMs: input.durationMs,
+    exitCode: input.code,
+    commands: parseExecutedCommands(input.output),
+    files: await diffWorkspaceFiles(input.cwd, input.beforeFiles),
+    diagnostics: diagnostics || undefined,
+  }
+}
+
+function emptyCodeAgentRunMetadata(adapter: CodeAgentAdapter, status: CodeAgentRunMetadata['status']): CodeAgentRunMetadata {
+  return {
+    type: 'code-agent-run',
+    status,
+    runtime: runtimeTypeForAdapter(adapter),
+    command: adapter.command,
+    durationMs: 0,
+    exitCode: status === 'completed' ? 0 : 130,
+    commands: [],
+    files: [],
+  }
+}
+
+function runtimeTypeForAdapter(adapter: CodeAgentAdapter): CodeAgentType {
+  const entry = Object.entries(adapters).find(([, item]) => item === adapter)
+  return (entry?.[0] as CodeAgentType | undefined) ?? 'codex'
+}
+
+function parseExecutedCommands(output: string): CodeAgentRunMetadata['commands'] {
+  const commands: CodeAgentRunMetadata['commands'] = []
+  const seen = new Set<string>()
+  const lines = output.split(/\r?\n/)
+  for (const line of lines) {
+    const match = line.match(/^\[?[^\]]*\]?\s*exec\s+(.+?)(?:\s+in\s+(.+))?$/i)
+    if (!match) continue
+    const command = cleanCommandText(match[1] ?? '')
+    const cwd = match[2]?.trim()
+    const key = `${command}\n${cwd ?? ''}`
+    if (!command || seen.has(key)) continue
+    seen.add(key)
+    commands.push({
+      id: `cmd-${commands.length + 1}`,
+      command: limitOutput(command, 500),
+      cwd: cwd ? limitOutput(cwd, 260) : undefined,
+    })
+  }
+  return commands.slice(0, 60)
+}
+
+function cleanCommandText(value: string) {
+  const trimmed = value.trim()
+  if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+async function snapshotWorkspaceFiles(cwd?: string): Promise<Map<string, string>> {
+  if (!cwd) return new Map()
+  try {
+    const proc = Bun.spawn(['git', 'status', '--short', '--untracked-files=all'], {
+      cwd,
+      stdout: 'pipe',
+      stderr: 'ignore',
+    })
+    const [code, stdout] = await Promise.all([
+      Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 3000))]),
+      new Response(proc.stdout).text().catch(() => ''),
+    ])
+    if (code !== 0) return new Map()
+    return parseGitStatus(stdout)
+  } catch {
+    return new Map()
+  }
+}
+
+function parseGitStatus(output: string) {
+  const snapshot = new Map<string, string>()
+  for (const line of output.split(/\r?\n/)) {
+    if (line.length < 4) continue
+    const status = line.slice(0, 2)
+    const rawPath = line.slice(3).trim()
+    if (!rawPath) continue
+    const path = rawPath.includes(' -> ') ? rawPath.split(' -> ').pop()?.trim() || rawPath : rawPath
+    snapshot.set(path, status)
+  }
+  return snapshot
+}
+
+async function diffWorkspaceFiles(cwd: string | undefined, before: Map<string, string>): Promise<CodeAgentRunMetadata['files']> {
+  const after = await snapshotWorkspaceFiles(cwd)
+  const files: CodeAgentRunMetadata['files'] = []
+  for (const [path, status] of after) {
+    if (before.get(path) === status) continue
+    files.push({ path, status: fileStatusFromGitStatus(status) })
+  }
+  return files.slice(0, 80)
+}
+
+function fileStatusFromGitStatus(status: string): CodeAgentRunMetadata['files'][number]['status'] {
+  if (status.includes('??') || status.includes('A')) return 'created'
+  if (status.includes('D')) return 'deleted'
+  if (status.includes('R')) return 'renamed'
+  if (status.includes('M')) return 'modified'
+  return 'untracked'
 }
 
 function buildHostCommand(command: string, args: string[]) {
   if (process.platform !== 'win32') return [command, ...args]
+  if (command === 'codex') return [windowsCodexCommand(), ...args]
   return ['cmd.exe', '/d', '/c', [command, ...args.map(windowsShellArg)].join(' ')]
 }
 
-function readEnv(key: string) {
-  return (rootEnv()[key] ?? Bun.env[key])?.trim()
+function windowsCodexCommand() {
+  const npmShim = Bun.env.APPDATA ? resolve(Bun.env.APPDATA, 'npm', 'codex.cmd') : ''
+  return npmShim && existsSync(npmShim) ? npmShim : 'codex.cmd'
 }
 
-function mergedEnv() {
-  return { ...Bun.env, ...rootEnv() }
+function readEnv(key: string) {
+  return (Bun.env[key] ?? rootEnv()[key])?.trim()
+}
+
+function mergedEnv(command?: string) {
+  const base = { ...rootEnv(), ...Bun.env, ...codexAuthEnv() }
+  if (command !== 'codex') return base
+
+  const runtimeHome = prepareCodexRuntimeHome()
+  return {
+    ...base,
+    CODEX_HOME: runtimeHome,
+  }
 }
 
 function rootEnv() {
@@ -331,6 +562,52 @@ function rootEnv() {
   }
   rootEnvCache = values
   return values
+}
+
+function codexAuthEnv() {
+  const authPath = resolve(codexConfigHome(), 'auth.json')
+  const values: Record<string, string> = {}
+  try {
+    const parsed = JSON.parse(readFileSync(authPath, 'utf8')) as Record<string, unknown>
+    for (const [key, value] of Object.entries(parsed)) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof value === 'string' && value.trim()) {
+        values[key] = value.trim()
+      }
+    }
+  } catch {
+    // auth.json is optional; Codex may still use environment or ChatGPT auth.
+  }
+  return values
+}
+
+function codexConfigHome() {
+  return Bun.env.AGENTHUB_CODEX_CONFIG_HOME?.trim() || Bun.env.CODEX_HOME?.trim() || resolve(homedir(), '.codex')
+}
+
+function codexRuntimeHome() {
+  return (
+    Bun.env.AGENTHUB_CODEX_RUNTIME_HOME?.trim() ||
+    resolve(Bun.env.LOCALAPPDATA?.trim() || tmpdir(), 'AgentHub', 'codex-runtime')
+  )
+}
+
+function prepareCodexRuntimeHome() {
+  const sourceHome = codexConfigHome()
+  const runtimeHome = codexRuntimeHome()
+  mkdirSync(runtimeHome, { recursive: true })
+  syncCodexRuntimeFile(sourceHome, runtimeHome, 'config.toml')
+  syncCodexRuntimeFile(sourceHome, runtimeHome, 'auth.json')
+  return runtimeHome
+}
+
+function syncCodexRuntimeFile(sourceHome: string, runtimeHome: string, filename: string) {
+  const source = resolve(sourceHome, filename)
+  if (!existsSync(source)) return
+  try {
+    copyFileSync(source, resolve(runtimeHome, filename))
+  } catch {
+    // A missing or locked optional config file should not block Code Agent startup.
+  }
 }
 
 function resolveExecutionCwd(projectPath?: string | null) {
@@ -361,7 +638,12 @@ function resolveExecutionCwd(projectPath?: string | null) {
   }
 }
 
-function previewCommand(adapter: CodeAgentAdapter, cwd?: string, sandboxPolicy?: AgentRunProfile['sandboxPolicy'], modelId?: string | null) {
+function previewCommand(
+  adapter: CodeAgentAdapter,
+  cwd?: string,
+  sandboxPolicy?: AgentRunProfile['sandboxPolicy'],
+  modelId?: string | null
+) {
   return formatCommand(adapter.command, adapter.buildArgs('<task-prompt>', { cwd, modelId, sandboxPolicy }))
 }
 
@@ -380,17 +662,7 @@ function toCodexSandbox(sandboxPolicy?: AgentRunProfile['sandboxPolicy']) {
   return 'workspace-write'
 }
 
-function codexWireApiForBaseUrl(baseUrl: string) {
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase()
-    if (host === 'api.openai.com' || host.endsWith('.openai.com')) return 'responses'
-  } catch {
-    // Fall through to the broad OpenAI-compatible default.
-  }
-  return 'chat'
-}
-
-function withExtractedLastMessage(result: { code: number; output: string }): CodeAgentCommandResult {
+function withExtractedLastMessage(result: { code: number; output: string }): { code: number; output: string; finalMessage?: string } {
   const finalMessage = extractLastMessage(result.output)
   return {
     ...result,
@@ -409,29 +681,103 @@ function stripLastMessageBlock(output: string) {
   return output.replace(pattern, '\n').trim()
 }
 
+function extractCodexAssistantMessage(output: string) {
+  const matches = [...output.matchAll(/(?:^|\n)\[[^\]]+\]\s*codex\s*\n\n([\s\S]*?)(?=\n\[[^\]]+\]\s*(?:user|codex|exec)\b|\n\d{4}-\d{2}-\d{2}T|\nERROR:|\nWARN |\nWarning:|$)/gi)]
+  const message = matches
+    .map((match) => stripToolNoise(match[1] ?? '').trim())
+    .filter(Boolean)
+    .pop()
+  return message || undefined
+}
+
+function isCodeAgentFailureOutput(output: string) {
+  return /ERROR:|stream error|exceeded retry limit|unexpected status|Unauthorized|Missing bearer|invalid function arguments|Error loading config\.toml|No such file or directory/i.test(
+    output
+  )
+}
+
 function stripToolNoise(output: string) {
-  return stripLastMessageBlock(output)
+  const withoutBlocks = stripCodexPromptEcho(stripLastMessageBlock(output))
+  return withoutBlocks
     .split(/\r?\n/)
+    .map((line) => line.trimEnd())
     .filter((line) => {
       const trimmed = line.trim()
       if (!trimmed) return true
-      if (trimmed === 'Reading additional input from stdin...') return false
+      if (/^\[\d{4}-\d{2}-\d{2}T/.test(trimmed)) return false
+      if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) return false
       if (/^OpenAI Codex v/i.test(trimmed)) return false
+      if (/^User instructions:/i.test(trimmed)) return false
+      if (/^Current user request:/i.test(trimmed)) return false
+      if (/^Recent group context:/i.test(trimmed)) return false
+      if (/^(user|agent|assistant|system)\s*:/i.test(trimmed)) return false
+      if (/^Reading additional input from stdin\.\.\./i.test(trimmed)) return false
+      if (
+        /^(workdir|model|provider|approval|sandbox|reasoning effort|reasoning summaries|session id|Project workspace path|Allowed tool scopes|Capabilities|Sandbox policy):/i.test(
+          trimmed
+        )
+      ) {
+        return false
+      }
+      if (/^(Follow the project instructions|Use the actual project path)/i.test(trimmed)) return false
+      if (/^(stream error|ERROR:|WARN |Warning: no last agent message)/i.test(trimmed)) return false
+      if (/^(exec |mcp_connection_manager|new_stdio_client)/i.test(trimmed)) return false
+      if (/^(use_rmcp_client|startup_timeout|params: InitializeRequestParams)/i.test(trimmed)) return false
+      if (/codex_core::mcp_connection_manager|McpServerConfig|node_repl|InitializeRequestParams/i.test(trimmed)) return false
       if (/^-{4,}$/.test(trimmed)) return false
-      if (/^(workdir|model|provider|approval|sandbox|reasoning effort|reasoning summaries|session id):/.test(trimmed)) return false
       return true
     })
     .join('\n')
     .trim()
 }
 
+function stripCodexPromptEcho(output: string) {
+  return output
+    .replace(/User instructions:[\s\S]*?(?=\n(?:\[\d{4}-\d{2}-\d{2}T|OpenAI Codex v|ERROR:|WARN |Warning:|codex\n|$))/gi, '\n')
+    .replace(/Recent group context:[\s\S]*?(?=\nCurrent user request:|\n\[|\nERROR:|\nWARN |$)/gi, '\n')
+    .replace(/Current user request:[\s\S]*?(?=\n(?:\[\d{4}-\d{2}-\d{2}T|ERROR:|WARN |Warning:|codex\n|$))/gi, '\n')
+}
+
 function stripReasoningTags(output: string) {
   return output.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
 }
 
+function formatCodeAgentFailure(adapter: CodeAgentAdapter, result: CodeAgentCommandResult) {
+  const friendly = friendlyCodeAgentError(result.output)
+  return [`**${adapter.displayName} 执行失败**`, '', friendly, '', `退出码：${result.code}`].join('\n')
+}
+
+function cleanDiagnosticOutput(output: string) {
+  const cleanedLines = stripToolNoise(stripLastMessageBlock(output))
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^You are |^Role: |^System prompt: |^Project workspace path: |^Allowed tool scopes:|^Capabilities:|^Sandbox policy:|^Recent group context:|^Current user request:/i.test(line))
+    .filter((line) => !/^(user|agent|assistant|system)\s*:/i.test(line))
+    .filter((line) => !/^(Follow the project instructions|Use the actual project path)/i.test(line))
+    .filter((line) => !/codex_core::mcp_connection_manager|McpServerConfig|node_repl|InitializeRequestParams/i.test(line))
+  const diagnosticLines = cleanedLines.filter((line) =>
+    /error|failed|unexpected|unauthorized|not found|timed out|wire_api|missing bearer|invalid|No such file|status \d{3}|exited/i.test(line)
+  )
+  const cleaned = (diagnosticLines.length ? diagnosticLines : cleanedLines).join('\n')
+  return limitOutput(cleaned, 2000)
+}
+
 function friendlyCodeAgentError(output: string) {
+  if (/Code Agent timed out after/i.test(output)) {
+    return 'Code Agent 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。'
+  }
+  if (/invalid function arguments json|string, tool_call_id/i.test(output)) {
+    return [
+      'Codex CLI 已启动，但当前模型生成了无效的工具调用参数，供应商接口拒绝了这次请求。',
+      '这通常不是工作区路径问题。建议切换到更兼容 Codex 工具调用的模型，或把这个 Agent 临时改为 OpenCode / Claude Code 执行。',
+    ].join('\n')
+  }
   if (/401 Unauthorized|Missing bearer|basic authentication/i.test(output)) {
     return 'Codex CLI 已启动，但供应商鉴权失败。请检查本机 API Key、Base URL 和模型是否匹配。'
+  }
+  if (/wire_api = "chat" is no longer supported/i.test(output)) {
+    return '当前 Codex CLI 不支持这个 provider 配置里的 wire_api=chat。请使用已降级的 Codex CLI，或切换到支持 Responses 的 OpenAI 端点。'
   }
   if (/model.*not found|does not exist|404|unknown model/i.test(output)) {
     return 'Codex CLI 已启动，但当前模型或 Base URL 不可用。请检查模型名称和供应商地址。'
