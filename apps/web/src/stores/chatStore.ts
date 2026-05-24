@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, mentionsOrchestrator, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
+import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 let pendingStream: { messageId: string; delta: string } | null = null
@@ -15,6 +15,7 @@ interface ChatState {
   messages: Message[]
   streamingMessage: { id: string; content: string } | null
   streamingCodeAgentRun: CodeAgentRunMetadata | null
+  pendingAttachments: ChatAttachment[]
   selectedModelId: string | null
   loadingSessions: boolean
   loadingMessages: boolean
@@ -26,6 +27,9 @@ interface ChatState {
   deleteSession: (sessionId: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
   sendMessageToSession: (sessionId: string, content: string) => Promise<void>
+  addPendingAttachments: (attachments: ChatAttachment[]) => void
+  removePendingAttachment: (id: string) => void
+  clearPendingAttachments: () => void
   cancelRun: () => Promise<void>
   setSelectedModelId: (modelId: string | null) => void
   handleWSEvent: (e: WSEvent) => void
@@ -49,6 +53,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   streamingMessage: null,
   streamingCodeAgentRun: null,
+  pendingAttachments: [],
   selectedModelId: null,
   loadingSessions: false,
   loadingMessages: false,
@@ -87,6 +92,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: [],
       streamingMessage: null,
       streamingCodeAgentRun: null,
+      pendingAttachments: [],
       agentTyping: false,
     })
     wsClient.joinSession(sessionId)
@@ -134,20 +140,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async sendMessageToSession(sessionId, content) {
     cancelledSessions.delete(sessionId)
     set({ agentTyping: true })
+    const attachments = get().pendingAttachments
+    const contentForAgent = attachments.length ? appendAttachmentNote(content, attachments) : content
     const shouldCreatePlan = shouldRouteToOrchestratorPlan(
-      content,
+      contentForAgent,
       get().currentSession,
       get().currentWorkspaceAgents
     )
     try {
       const msg = await api.sendMessageWithModel(sessionId, {
-        content,
+        content: contentForAgent,
         modelId: get().selectedModelId ?? undefined,
         skipAgentReply: shouldCreatePlan,
+        attachments,
+        displayContent: attachments.length ? content : undefined,
       })
-      set((s) => ({ messages: [...s.messages, msg] }))
+      set((s) => ({ messages: [...s.messages, msg], pendingAttachments: [] }))
       if (shouldCreatePlan) {
-        const card = await api.createOrchestratorPlan(sessionId, content)
+        const card = await api.createOrchestratorPlan(sessionId, contentForAgent)
         set((s) => ({ messages: [...s.messages, card] }))
         const result = await api.dispatchOrchestratorPlan(sessionId, card.id)
         set((s) => ({
@@ -174,6 +184,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
       throw error
     }
+  },
+
+  addPendingAttachments(attachments) {
+    if (!attachments.length) return
+    set((s) => ({ pendingAttachments: [...s.pendingAttachments, ...attachments].slice(0, 6) }))
+  },
+
+  removePendingAttachment(id) {
+    set((s) => ({ pendingAttachments: s.pendingAttachments.filter((attachment) => attachment.id !== id) }))
+  },
+
+  clearPendingAttachments() {
+    set({ pendingAttachments: [] })
   },
 
   async cancelRun() {
@@ -279,6 +302,11 @@ function shouldRouteToOrchestratorPlan(content: string, session: Session | null,
   if (mentionsOrchestrator(content)) return true
   if (session?.type !== 'group' || !session.workspaceId) return false
   return !agents.some((agent) => mentionsAgent(content, agent))
+}
+
+function appendAttachmentNote(content: string, attachments: ChatAttachment[]) {
+  const note = attachments.map((attachment) => `- ${attachment.name} (${attachment.mimeType})`).join('\n')
+  return `${content.trim()}\n\n[已附加图片]\n${note}`.trim()
 }
 
 function mentionsAgent(content: string, agent: WorkspaceAgent) {

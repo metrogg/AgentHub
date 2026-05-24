@@ -6,7 +6,7 @@ import {
   type ThreadMessageLike,
 } from '@assistant-ui/react'
 import { useChatStore } from '../stores/chatStore'
-import type { AgentArtifact, CodeAgentRunMetadata, Message } from './api'
+import type { AgentArtifact, ChatAttachment, CodeAgentRunMetadata, Message } from './api'
 
 function toThreadMessage(message: Message): ThreadMessageLike {
   const role: ThreadMessageLike['role'] =
@@ -30,17 +30,23 @@ function toThreadMessage(message: Message): ThreadMessageLike {
       : null
   const runtimeLabel =
     message.senderType === 'agent' && message.metadata?.runtimeType === 'code-agent'
-      ? `Code Agent / ${String(message.metadata.codeAgentType ?? 'cli')}`
+      ? `代码 Agent / ${String(message.metadata.codeAgentType ?? 'cli')}`
       : message.senderType === 'agent' &&
           typeof message.metadata?.runtimeType === 'string' &&
           message.metadata.runtimeType !== 'llm'
         ? String(message.metadata.runtimeType).toUpperCase()
         : null
   const senderLabel = [agentName, runtimeLabel].filter(Boolean).join(' · ')
-  const text = senderLabel ? `**${senderLabel}**\n\n${message.content}` : message.content
+  const displayContent =
+    message.senderType === 'user' && typeof message.metadata?.displayContent === 'string'
+      ? message.metadata.displayContent
+      : message.content
+  const text = senderLabel ? `**${senderLabel}**\n\n${displayContent}` : displayContent
   const codeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun) ? message.metadata.codeAgentRun : null
   const artifacts = readArtifacts(message.metadata?.artifacts, codeAgentRun)
   const artifactPart = artifacts.length ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: artifacts } }] : []
+  const attachments = readChatAttachments(message.metadata?.attachments)
+  const attachmentPart = attachments.length ? [{ type: 'data' as const, name: 'chat_attachments', data: { items: attachments } }] : []
 
   return {
     id: message.id,
@@ -50,10 +56,11 @@ function toThreadMessage(message: Message): ThreadMessageLike {
       : codeAgentRun
         ? [
             { type: 'text', text },
+            ...attachmentPart,
             { type: 'data', name: 'code_agent_run', data: codeAgentRun },
             ...artifactPart,
           ]
-      : [{ type: 'text', text }, ...artifactPart],
+        : [{ type: 'text', text }, ...attachmentPart, ...artifactPart],
     createdAt: new Date(message.createdAt),
   }
 }
@@ -75,6 +82,23 @@ function readArtifacts(value: unknown, codeAgentRun: CodeAgentRunMetadata | null
   })
 }
 
+function readChatAttachments(value: unknown): ChatAttachment[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is ChatAttachment => {
+    if (!item || typeof item !== 'object') return false
+    const attachment = item as Partial<ChatAttachment>
+    return (
+      typeof attachment.id === 'string' &&
+      attachment.type === 'image' &&
+      typeof attachment.name === 'string' &&
+      typeof attachment.mimeType === 'string' &&
+      typeof attachment.size === 'number' &&
+      typeof attachment.dataUrl === 'string' &&
+      attachment.dataUrl.startsWith('data:image/')
+    )
+  })
+}
+
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
   const messages = useChatStore((state) => state.messages)
   const streamingMessage = useChatStore((state) => state.streamingMessage)
@@ -93,7 +117,7 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
         role: 'assistant',
         content: streamingCodeAgentRun
           ? [
-              { type: 'text', text: streamingMessage.content },
+              ...(streamingMessage.content.trim() ? [{ type: 'text' as const, text: streamingMessage.content }] : []),
               { type: 'data', name: 'code_agent_run', data: streamingCodeAgentRun },
               ...(streamingCodeAgentRun.artifacts?.length
                 ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: streamingCodeAgentRun.artifacts } }]

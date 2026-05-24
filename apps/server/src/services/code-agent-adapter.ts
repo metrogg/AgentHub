@@ -40,6 +40,7 @@ export interface CodeAgentRunMetadata {
   exitCode: number
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
   files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'; diff?: string }>
+  toolCalls?: Array<{ id: string; name: string; label: string; target?: string; detail?: string }>
   artifacts?: AgentArtifact[]
   logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
   diagnostics?: string
@@ -270,29 +271,37 @@ function buildCodeAgentPrompt(
     .map((message) => ({ senderType: message.senderType, content: sanitizeHistoryContent(message.content) }))
     .filter((message) => message.content)
     .slice(-6)
-    .map((message) => `${message.senderType}: ${message.content}`)
+    .map((message) => `${senderTypeLabel(message.senderType)}：${message.content}`)
     .join('\n\n')
 
   return [
-    `You are ${profile.name}.`,
-    profile.role ? `Role: ${profile.role}.` : '',
-    profile.description ? `Capabilities: ${profile.description}.` : '',
-    profile.systemPrompt ? `System prompt: ${profile.systemPrompt}` : '',
-    `Project workspace path: ${workspacePath}. Treat this as the repository root for code work.`,
-    `Sandbox policy: ${profile.sandboxPolicy ?? 'workspace-write'}.`,
-    `Allowed tool scopes: ${(profile.toolPermissions ?? ['chat']).join(', ')}.`,
-    'Follow the project instructions and keep changes focused.',
-    'Use the actual project path above. Do not invent container paths such as /agent-workspace.',
+    `你是 ${profile.name}。`,
+    profile.role ? `角色：${profile.role}。` : '',
+    profile.description ? `能力：${profile.description}。` : '',
+    profile.systemPrompt ? `系统提示：${profile.systemPrompt}` : '',
+    `项目工作区路径：${workspacePath}。请把它当作代码工作的仓库根目录。`,
+    `沙箱策略：${profile.sandboxPolicy ?? 'workspace-write'}。`,
+    `允许的工具范围：${(profile.toolPermissions ?? ['chat']).join('、')}。`,
+    '请遵循项目内已有约定，保持改动聚焦。',
+    '请使用上面的真实项目路径，不要编造 /agent-workspace 之类的容器路径。',
+    '所有面向用户的计划、状态、总结和错误说明都请使用中文。',
     skillContext,
     '',
-    recent ? 'Recent group context:' : '',
+    recent ? '最近群聊上下文：' : '',
     recent,
     '',
-    'Current user request:',
+    '当前用户请求：',
     userMsg.content,
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+function senderTypeLabel(senderType: string) {
+  if (senderType === 'user') return '用户'
+  if (senderType === 'agent') return 'Agent'
+  if (senderType === 'system') return '系统'
+  return senderType
 }
 
 function sanitizeHistoryContent(content: string) {
@@ -350,7 +359,7 @@ async function runCodeAgentCommand(
   if (signal?.aborted) {
     return {
       code: 130,
-      output: 'Code Agent execution cancelled.',
+      output: 'Code Agent 执行已取消。',
       metadata: emptyCodeAgentRunMetadata(adapter, 'cancelled'),
     }
   }
@@ -358,9 +367,11 @@ async function runCodeAgentCommand(
   const beforeFiles = await snapshotWorkspaceFiles(cwd)
   const liveCommands: CodeAgentRunMetadata['commands'] = []
   const liveFiles: CodeAgentRunMetadata['files'] = []
+  const liveToolCalls: NonNullable<CodeAgentRunMetadata['toolCalls']> = []
   const liveLogs: NonNullable<CodeAgentRunMetadata['logs']> = []
   const seenCommands = new Set<string>()
   const seenFiles = new Set<string>()
+  const seenToolCalls = new Set<string>()
   let lastMetadataAt = 0
   let claudeStdoutBuffer = ''
   let claudeFinalMessage = ''
@@ -377,6 +388,7 @@ async function runCodeAgentCommand(
       exitCode: 0,
       commands: liveCommands.slice(0, 80),
       files: liveFiles.slice(0, 80),
+      toolCalls: liveToolCalls.slice(0, 120),
       artifacts: buildArtifactsFromMetadata({
         cwd,
         files: liveFiles.slice(0, 80),
@@ -412,6 +424,22 @@ async function runCodeAgentCommand(
     liveFiles.push({ path: limitOutput(cleaned, 500), status })
     addLog('event', `${fileStatusLabelForLog(status)}：${cleaned}`)
   }
+  const addToolCall = (name: string, input?: Record<string, unknown>) => {
+    const summary = summarizeToolCall(name, input)
+    if (!summary) return
+    const key = `${summary.name}\n${summary.target ?? ''}\n${summary.detail ?? ''}`
+    if (seenToolCalls.has(key)) return
+    seenToolCalls.add(key)
+    liveToolCalls.push({
+      id: `tool-${liveToolCalls.length + 1}`,
+      name: summary.name,
+      label: summary.label,
+      target: summary.target ? limitOutput(summary.target, 500) : undefined,
+      detail: summary.detail ? limitOutput(summary.detail, 500) : undefined,
+    })
+    emitLiveMetadata()
+  }
+
   if (outputPath && existsSync(outputPath)) {
     try {
       unlinkSync(outputPath)
@@ -456,6 +484,7 @@ async function runCodeAgentCommand(
         claudeStdoutBuffer = consumeClaudeStreamJson(chunk, claudeStdoutBuffer, {
           addFile,
           addCommand,
+          addToolCall,
           addLog,
           onText: (text) => {
             claudeFinalMessage += text
@@ -477,7 +506,7 @@ async function runCodeAgentCommand(
   const output = [
     stdout.trim(),
     stderr.trim(),
-    timedOut ? `Code Agent timed out after ${readEnv('AGENTHUB_CODE_AGENT_TIMEOUT_MS') ?? 120_000}ms.` : '',
+    timedOut ? `Code Agent 超过 ${readEnv('AGENTHUB_CODE_AGENT_TIMEOUT_MS') ?? 120_000}ms 未返回，已自动停止。` : '',
   ]
     .filter(Boolean)
     .join('\n')
@@ -503,6 +532,7 @@ async function runCodeAgentCommand(
     cwd,
     liveCommands,
     liveFiles,
+    liveToolCalls,
     liveLogs,
   })
   return { ...parsed, code: effectiveCode, finalMessage, metadata }
@@ -510,9 +540,9 @@ async function runCodeAgentCommand(
 
 function buildAsciiSafePrompt(prompt: string) {
   return [
-    'The task payload below is an ASCII-only JSON string. It uses JSON Unicode escapes because this Windows host can corrupt non-ASCII CLI arguments.',
-    'Decode JSON_STRING first, then follow the decoded text as the complete instructions and conversation context.',
-    'Do not answer about this encoding wrapper.',
+    '下面的任务载荷是 ASCII-only JSON 字符串。由于 Windows 命令行可能损坏非 ASCII 参数，这里使用 JSON Unicode 转义。',
+    '请先解码 JSON_STRING，然后把解码后的文本作为完整任务说明和对话上下文执行。',
+    '不要向用户解释这个编码包装。',
     '',
     'JSON_STRING:',
     jsonStringifyAscii(prompt),
@@ -552,6 +582,7 @@ async function buildCodeAgentRunMetadata(input: {
   durationMs: number
   liveCommands?: CodeAgentRunMetadata['commands']
   liveFiles?: CodeAgentRunMetadata['files']
+  liveToolCalls?: NonNullable<CodeAgentRunMetadata['toolCalls']>
   liveLogs?: NonNullable<CodeAgentRunMetadata['logs']>
   output: string
   timedOut: boolean
@@ -570,6 +601,7 @@ async function buildCodeAgentRunMetadata(input: {
     exitCode: input.code,
     commands,
     files,
+    toolCalls: input.liveToolCalls?.slice(0, 120),
     artifacts,
     logs: input.liveLogs?.slice(-80),
     diagnostics: diagnostics || undefined,
@@ -586,6 +618,7 @@ function emptyCodeAgentRunMetadata(adapter: CodeAgentAdapter, status: CodeAgentR
     exitCode: status === 'completed' || status === 'running' ? 0 : 130,
     commands: [],
     files: [],
+    toolCalls: [],
     artifacts: [],
   }
 }
@@ -618,6 +651,7 @@ function consumeClaudeStreamJson(
   handlers: {
     addFile: (path: string, status: CodeAgentRunMetadata['files'][number]['status']) => void
     addCommand: (command: string, cwd?: string) => void
+    addToolCall: (name: string, input?: Record<string, unknown>) => void
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
     onText: (text: string) => void
   }
@@ -634,6 +668,7 @@ function parseClaudeJsonLine(
   handlers: {
     addFile: (path: string, status: CodeAgentRunMetadata['files'][number]['status']) => void
     addCommand: (command: string, cwd?: string) => void
+    addToolCall: (name: string, input?: Record<string, unknown>) => void
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
     onText: (text: string) => void
   }
@@ -679,11 +714,13 @@ function recordClaudeToolUse(
   handlers: {
     addFile: (path: string, status: CodeAgentRunMetadata['files'][number]['status']) => void
     addCommand: (command: string, cwd?: string) => void
+    addToolCall: (name: string, input?: Record<string, unknown>) => void
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
   }
 ) {
   const name = String(block.name ?? '')
-  const input = block.input && typeof block.input === 'object' ? block.input : {}
+  const input: Record<string, unknown> = block.input && typeof block.input === 'object' ? block.input : {}
+  if (name) handlers.addToolCall(name, input)
   if (name === 'Bash' && typeof input.command === 'string') {
     handlers.addCommand(input.command)
     return
@@ -701,6 +738,64 @@ function recordClaudeToolUse(
     return
   }
   if (name) handlers.addLog('event', `工具调用：${name}`)
+}
+
+function summarizeToolCall(name: string, input?: Record<string, unknown>) {
+  const cleanName = name.trim()
+  if (!cleanName) return null
+  const readString = (key: string) => {
+    const value = input?.[key]
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined
+  }
+  const readNumber = (key: string) => {
+    const value = input?.[key]
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  }
+  const joinDetails = (...items: Array<string | undefined>) => items.filter(Boolean).join(' · ') || undefined
+  const filePath = readString('file_path') ?? readString('notebook_path')
+  const path = readString('path')
+  const pattern = readString('pattern')
+  const command = readString('command')
+
+  if (cleanName === 'Bash') {
+    return { name: cleanName, label: '运行命令', target: command, detail: readString('description') }
+  }
+  if (cleanName === 'Read') {
+    const range = joinDetails(
+      readNumber('offset') !== undefined ? `从第 ${readNumber('offset')} 行` : undefined,
+      readNumber('limit') !== undefined ? `最多 ${readNumber('limit')} 行` : undefined
+    )
+    return { name: cleanName, label: '读取文件', target: filePath, detail: range }
+  }
+  if (cleanName === 'Write') {
+    return { name: cleanName, label: '写入文件', target: filePath }
+  }
+  if (cleanName === 'Edit' || cleanName === 'MultiEdit' || cleanName === 'NotebookEdit') {
+    return { name: cleanName, label: '编辑文件', target: filePath }
+  }
+  if (cleanName === 'Grep') {
+    return { name: cleanName, label: '搜索内容', target: pattern, detail: joinDetails(path, readString('glob'), readString('output_mode')) }
+  }
+  if (cleanName === 'Glob') {
+    return { name: cleanName, label: '匹配文件', target: pattern, detail: path }
+  }
+  if (cleanName === 'LS') {
+    return { name: cleanName, label: '列出目录', target: path }
+  }
+  if (cleanName === 'WebFetch') {
+    return { name: cleanName, label: '读取网页', target: readString('url'), detail: readString('prompt') }
+  }
+  if (cleanName === 'WebSearch') {
+    return { name: cleanName, label: '网页搜索', target: readString('query') }
+  }
+  if (cleanName === 'Task' || cleanName === 'Agent') {
+    return { name: cleanName, label: '调用子任务', target: readString('description') ?? readString('prompt') }
+  }
+  if (cleanName === 'TodoWrite') {
+    const todos = Array.isArray(input?.todos) ? input.todos.length : undefined
+    return { name: cleanName, label: '更新待办', detail: todos ? `${todos} 项` : undefined }
+  }
+  return { name: cleanName, label: '工具调用', target: filePath ?? path ?? pattern ?? command ?? readString('query') ?? readString('url') }
 }
 
 function parseExecutedCommands(output: string): CodeAgentRunMetadata['commands'] {
@@ -1306,5 +1401,5 @@ function quoteForSh(value: string) {
 
 function limitOutput(output: string, max: number) {
   if (output.length <= max) return output
-  return `${output.slice(0, max)}\n... output truncated ...`
+  return `${output.slice(0, max)}\n... 输出已截断 ...`
 }

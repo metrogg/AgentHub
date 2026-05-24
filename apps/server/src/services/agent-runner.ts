@@ -84,7 +84,7 @@ export function cancelAgentReply(sessionId: string) {
   const run = activeRuns.get(sessionId)
   if (!run) return false
   run.cancelled = true
-  run.controller.abort(new Error('Agent run cancelled by user'))
+  run.controller.abort(new Error('用户已停止 Agent 运行'))
   broadcast(sessionId, {
     type: 'message:cancelled',
     payload: { sessionId },
@@ -96,19 +96,19 @@ export function cancelAgentReply(sessionId: string) {
 function buildAgentSystem(profile?: AgentRunProfile) {
   if (!profile) return undefined
   return [
-    profile.systemPrompt || `You are ${profile.name}, a collaborative agent in AgentHub.`,
-    profile.role ? `Your role in this group chat is: ${profile.role}.` : '',
-    profile.description ? `Your capability summary: ${profile.description}.` : '',
-    profile.runtimeType ? `Runtime binding: ${profile.runtimeType}${profile.codeAgentType ? ` (${profile.codeAgentType})` : ''}.` : '',
-    profile.capabilityTags?.length ? `Capability tags: ${profile.capabilityTags.join(', ')}.` : '',
-    profile.toolPermissions?.length ? `Allowed tool scopes: ${profile.toolPermissions.join(', ')}.` : 'Allowed tool scopes: chat-only.',
-    profile.sandboxPolicy ? `Sandbox policy: ${profile.sandboxPolicy}.` : '',
-    profile.contextPolicy ? `Context policy: ${profile.contextPolicy}.` : '',
-    profile.projectPath ? `Project workspace path: ${profile.projectPath}.` : '',
+    profile.systemPrompt || `你是 ${profile.name}，AgentHub 中的协作智能体。`,
+    profile.role ? `你在群聊中的角色：${profile.role}。` : '',
+    profile.description ? `能力摘要：${profile.description}。` : '',
+    profile.runtimeType ? `运行时绑定：${profile.runtimeType}${profile.codeAgentType ? `（${profile.codeAgentType}）` : ''}。` : '',
+    profile.capabilityTags?.length ? `能力标签：${profile.capabilityTags.join('、')}。` : '',
+    profile.toolPermissions?.length ? `允许的工具范围：${profile.toolPermissions.join('、')}。` : '允许的工具范围：仅聊天。',
+    profile.sandboxPolicy ? `沙箱策略：${profile.sandboxPolicy}。` : '',
+    profile.contextPolicy ? `上下文策略：${profile.contextPolicy}。` : '',
+    profile.projectPath ? `项目工作区路径：${profile.projectPath}。` : '',
     profile.approvalRequired
-      ? 'If a requested action can modify files, run commands, use network, deploy, or touch secrets, ask for explicit user approval before performing or instructing the action.'
+      ? '如果用户请求可能修改文件、运行命令、访问网络、部署或接触密钥，请先请求用户明确确认，再执行或给出执行指令。'
       : '',
-    'You are replying inside a multi-agent group chat. Stay focused on your role, answer in the same language as the user, and mention handoff needs explicitly when another agent should continue.',
+    '你正在多 Agent 群聊中回复。请聚焦自己的角色，用中文给出清晰、可执行的回答；如需要其他 Agent 接续，请明确写出交接需求。',
   ]
     .filter(Boolean)
     .join('\n')
@@ -181,9 +181,9 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
     if (run.cancelled || isAbortError(error)) {
       run.cancelled = true
     } else {
-      const message = error?.message || 'Agent reply failed'
+      const message = error?.message || 'Agent 回复失败'
       logger.error({ err: message, sessionId, agentId }, 'Agent reply failed')
-      fullContent = `\n\n[Error: ${message}]`
+      fullContent = `\n\n[错误：${message}]`
     }
   }
 
@@ -197,11 +197,11 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
       })
       return
     }
-    fullContent = `${fullContent.trimEnd()}\n\n[Stopped by user]`
+    fullContent = `${fullContent.trimEnd()}\n\n[用户已停止]`
   }
 
   if (!fullContent.trim()) {
-    fullContent = '[Error: Model returned an empty response. Check the selected provider, model ID, base URL, and API key.]'
+    fullContent = '[错误：模型返回了空响应。请检查当前供应商、模型 ID、Base URL 和 API Key。]'
     broadcast(sessionId, {
       type: 'message:stream',
       payload: { sessionId, messageId: streamMsgId, delta: fullContent },

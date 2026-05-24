@@ -47,6 +47,15 @@ export interface Message {
   createdAt: string
 }
 
+export interface ChatAttachment {
+  id: string
+  type: 'image'
+  name: string
+  mimeType: string
+  size: number
+  dataUrl: string
+}
+
 export type AgentArtifact =
   | {
       id: string
@@ -104,6 +113,7 @@ export interface CodeAgentRunMetadata {
   exitCode: number
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
   files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'; diff?: string }>
+  toolCalls?: Array<{ id: string; name: string; label: string; target?: string; detail?: string }>
   artifacts?: AgentArtifact[]
   logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
   diagnostics?: string
@@ -370,7 +380,7 @@ export const api = {
 
   sendMessageWithModel: (
     sessionId: string,
-    data: { content: string; modelId?: string; type?: string; skipAgentReply?: boolean }
+    data: { content: string; modelId?: string; type?: string; skipAgentReply?: boolean; attachments?: ChatAttachment[]; displayContent?: string }
   ) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
@@ -380,6 +390,8 @@ export const api = {
         metadata: {
           ...(data.modelId ? { modelId: data.modelId } : {}),
           ...(data.skipAgentReply || mentionsOrchestrator(data.content) ? { skipAgentReply: true } : {}),
+          ...(data.attachments?.length ? { attachments: data.attachments } : {}),
+          ...(data.displayContent !== undefined ? { displayContent: data.displayContent } : {}),
         },
       }),
     }),

@@ -18,7 +18,7 @@ export async function* streamReply(
   const config = await resolveLlmRuntimeConfig(selectedModelId)
 
   if (!config.apiKey) {
-    yield 'API key is not configured. Set LLM_API_KEY or a provider-specific key such as OPENAI_API_KEY in the environment, then restart the server.'
+    yield 'API Key 未配置。请在环境变量中设置 LLM_API_KEY 或 OPENAI_API_KEY 等供应商专用 Key，然后重启服务。'
     return
   }
 
@@ -30,7 +30,7 @@ export async function* streamReply(
       system: system ?? DEFAULT_AGENT_INSTRUCTIONS,
     })
   } catch (err: any) {
-    const message = redactSensitive(err?.message || 'LLM call failed', [config.apiKey])
+    const message = redactSensitive(err?.message || 'LLM 调用失败', [config.apiKey])
     logger.error(
       {
         err: message,
@@ -40,6 +40,6 @@ export async function* streamReply(
       },
       'LLM stream error'
     )
-    yield `\n\n[Error: ${message}]`
+    yield `\n\n[错误：${message}]`
   }
 }

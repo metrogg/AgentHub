@@ -205,15 +205,14 @@ export default function SkillsMarketPage() {
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto bg-[#f7f5f1]">
-          <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 p-5">
-            <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <h1 className="text-xl font-semibold tracking-normal">Skills 广场</h1>
-                  <p className="mt-1 text-sm text-neutral-500">从 SkillHub 搜索技能，也可以粘贴 SKILL.md 或 GitHub 链接安装到本机。</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700">{skills.length} 个本机 Skill</span>
+          <div className="grid w-full items-start gap-4 p-5 xl:grid-cols-2">
+            <section className="min-w-0 space-y-4">
+              <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <h1 className="text-xl font-semibold tracking-normal">SkillHub 市场</h1>
+                    <p className="mt-1 text-sm text-neutral-500">左侧浏览和搜索 Skills，点击卡片后在右侧查看详情。</p>
+                  </div>
                   <a
                     href={defaultMarketUrl}
                     target="_blank"
@@ -224,92 +223,89 @@ export default function SkillsMarketPage() {
                     官网
                   </a>
                 </div>
-              </div>
 
-              <div className="mt-4 grid gap-3 lg:grid-cols-3">
-                {marketSources.map((source) => (
-                  <a
-                    key={source.id}
-                    href={source.url.startsWith('http') ? source.url : undefined}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-start gap-3 rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3 transition hover:border-neutral-300 hover:bg-white"
+                <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                  {marketSources.map((source) => (
+                    <a
+                      key={source.id}
+                      href={source.url.startsWith('http') ? source.url : undefined}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-start gap-3 rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3 transition hover:border-neutral-300 hover:bg-white"
+                    >
+                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white text-neutral-600 shadow-sm">{source.icon}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold">{source.name}</span>
+                        <span className="mt-1 line-clamp-2 block text-xs leading-5 text-neutral-500">{source.description}</span>
+                      </span>
+                    </a>
+                  ))}
+                </div>
+
+                <div className="mt-4 grid gap-2 lg:grid-cols-[10rem_minmax(16rem,1fr)_auto_auto]">
+                  <input
+                    value={sourceName}
+                    onChange={(event) => setSourceName(event.target.value)}
+                    placeholder="来源名称"
+                    className="h-10 rounded-md border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-emerald-700"
+                  />
+                  <div className="flex items-center gap-2 rounded-md border border-neutral-200 bg-white px-3">
+                    <LinkIcon className="h-4 w-4 text-neutral-400" />
+                    <input
+                      value={sourceUrl}
+                      onChange={(event) => setSourceUrl(event.target.value)}
+                      placeholder="粘贴 SKILL.md / GitHub 技能链接"
+                      className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addCustomSource}
+                    disabled={!sourceUrl.trim()}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm font-medium hover:bg-neutral-50 disabled:text-neutral-300"
                   >
-                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white text-neutral-600 shadow-sm">{source.icon}</span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-semibold">{source.name}</span>
-                      <span className="mt-1 line-clamp-2 block text-xs leading-5 text-neutral-500">{source.description}</span>
-                    </span>
-                  </a>
-                ))}
-              </div>
-
-              <div className="mt-4 grid gap-2 lg:grid-cols-[11rem_minmax(16rem,1fr)_auto_auto]">
-                <input
-                  value={sourceName}
-                  onChange={(event) => setSourceName(event.target.value)}
-                  placeholder="来源名称，可选"
-                  className="h-10 rounded-md border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-emerald-700"
-                />
-                <div className="flex items-center gap-2 rounded-md border border-neutral-200 bg-white px-3">
-                  <LinkIcon className="h-4 w-4 text-neutral-400" />
-                  <input
-                    value={sourceUrl}
-                    onChange={(event) => setSourceUrl(event.target.value)}
-                    placeholder="粘贴 SKILL.md / GitHub 技能链接"
-                    className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
-                  />
+                    <Plus className="h-4 w-4" />
+                    添加来源
+                  </button>
+                  <button
+                    type="button"
+                    onClick={installSkill}
+                    disabled={installing || !sourceUrl.trim()}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-neutral-950 px-4 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
+                  >
+                    {installing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    安装
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={addCustomSource}
-                  disabled={!sourceUrl.trim()}
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm font-medium hover:bg-neutral-50 disabled:text-neutral-300"
-                >
-                  <Plus className="h-4 w-4" />
-                  添加来源
-                </button>
-                <button
-                  type="button"
-                  onClick={installSkill}
-                  disabled={installing || !sourceUrl.trim()}
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-neutral-950 px-4 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
-                >
-                  {installing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                  安装
-                </button>
+                {message && <div className="mt-3 rounded-md bg-[#fbfbf8] px-3 py-2 text-xs leading-5 text-neutral-500">{message}</div>}
               </div>
-              {message && <div className="mt-3 rounded-md bg-[#fbfbf8] px-3 py-2 text-xs leading-5 text-neutral-500">{message}</div>}
-            </section>
 
-            <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
-              <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
-                <div className="flex min-w-0 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3">
-                  <Search className="h-4 w-4 text-neutral-400" />
-                  <input
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') void searchSkillhub()
-                    }}
-                    placeholder="搜索 SkillHub 技能，例如：代码审查、PPT、浏览器"
-                    className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none"
-                  />
+              <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
+                <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
+                  <div className="flex min-w-0 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3">
+                    <Search className="h-4 w-4 text-neutral-400" />
+                    <input
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void searchSkillhub()
+                      }}
+                      placeholder="搜索 SkillHub 技能，例如：代码审查、PPT、浏览器"
+                      className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void searchSkillhub()}
+                    disabled={searching || !query.trim()}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-neutral-950 px-4 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
+                  >
+                    {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                    搜索市场
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void searchSkillhub()}
-                  disabled={searching || !query.trim()}
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-neutral-950 px-4 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
-                >
-                  {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                  搜索市场
-                </button>
               </div>
-            </section>
 
-            <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_25rem]">
-              <section className="min-w-0 space-y-4">
                 <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
                   <div className="mb-4 flex items-center justify-between gap-4">
                     <div>
@@ -319,7 +315,7 @@ export default function SkillsMarketPage() {
                     <span className="rounded-full bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-600">{results.length} 个结果</span>
                   </div>
 
-                  <div className="grid gap-3 2xl:grid-cols-2">
+                  <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(17.5rem, 1fr))' }}>
                     {results.map((item) => (
                       <MarketSkillCard
                         key={item.slug}
@@ -349,31 +345,9 @@ export default function SkillsMarketPage() {
                     </div>
                   )}
                 </div>
+            </section>
 
-                <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-base font-semibold">已安装 Skills</h2>
-                    <span className="text-xs text-neutral-400">{skills.length}</span>
-                  </div>
-                  <div className="grid gap-2 lg:grid-cols-2 2xl:grid-cols-3">
-                    {skills.map((skill) => (
-                      <InstalledSkillCard
-                        key={`${skill.source}:${skill.id}`}
-                        skill={skill}
-                        active={selected?.type === 'installed' && selected.item.id === skill.id}
-                        onClick={() => void openInstalledDetail(skill)}
-                      />
-                    ))}
-                    {!skills.length && (
-                      <div className="rounded-lg border border-dashed border-neutral-200 px-4 py-8 text-center text-sm text-neutral-400">
-                        暂无本机 Skills
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </section>
-
-              <div className="sticky top-5 max-h-[calc(100vh-7.5rem)] min-h-0 overflow-y-auto">
+            <aside className="sticky top-5 max-h-[calc(100vh-7.5rem)] min-h-0 space-y-4 overflow-y-auto">
                 <SkillDetailPanel
                   selected={selected}
                   loadedSkill={loadedSkill}
@@ -382,8 +356,12 @@ export default function SkillsMarketPage() {
                   installing={selected?.type === 'market' ? installingSlug === selected.item.slug : false}
                   onInstall={selected?.type === 'market' ? () => void installFromSkillhub(selected.item.slug) : undefined}
                 />
-              </div>
-            </div>
+              <InstalledSkillsPanel
+                skills={skills}
+                selected={selected}
+                onOpenSkill={(skill) => void openInstalledDetail(skill)}
+              />
+            </aside>
           </div>
         </div>
       </main>
@@ -411,35 +389,37 @@ function MarketSkillCard({
   return (
     <article
       className={cn(
-        'rounded-lg border bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md',
+        'flex min-h-52 flex-col rounded-lg border bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md',
         active ? 'border-neutral-950' : 'border-neutral-200'
       )}
     >
-      <button type="button" onClick={onSelect} className="block w-full text-left">
-        <div className="flex items-start justify-between gap-3">
+      <button type="button" onClick={onSelect} className="block min-h-0 flex-1 text-left">
+        <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-neutral-950">{cleanText(item.title, item.slug)}</div>
+            <div className="line-clamp-2 text-sm font-semibold leading-5 text-neutral-950">{cleanText(item.title, item.slug)}</div>
             <div className="mt-1 truncate font-mono text-[11px] text-neutral-400">{item.slug}</div>
           </div>
           {item.version && <span className="shrink-0 rounded-md bg-neutral-50 px-2 py-1 text-xs text-neutral-500">v{item.version}</span>}
         </div>
-        <p className="mt-3 line-clamp-3 min-h-[3.75rem] text-xs leading-5 text-neutral-500">
+        <p className="mt-3 line-clamp-4 text-xs leading-5 text-neutral-500">
           {cleanText(item.description, '暂无描述，点击查看来源与安装信息。')}
         </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+      </button>
+      <div className="mt-4 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Badge icon={<Globe2 className="h-3.5 w-3.5" />}>{item.source || 'SkillHub'}</Badge>
           {installed && <Badge icon={<CheckCircle2 className="h-3.5 w-3.5" />}>已安装</Badge>}
         </div>
-      </button>
-      <button
-        type="button"
-        onClick={onInstall}
-        disabled={installed || disabled}
-        className="mt-4 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md bg-neutral-950 px-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200 disabled:text-neutral-500"
-      >
-        {installing ? <Loader2 className="h-4 w-4 animate-spin" /> : installed ? <PackageCheck className="h-4 w-4" /> : <Download className="h-4 w-4" />}
-        {installed ? '已安装' : installing ? '正在安装' : '安装 Skill'}
-      </button>
+        <button
+          type="button"
+          onClick={onInstall}
+          disabled={installed || disabled}
+          className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md bg-neutral-950 px-3 text-xs font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200 disabled:text-neutral-500"
+        >
+          {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : installed ? <PackageCheck className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
+          {installed ? '已装' : installing ? '安装中' : '安装'}
+        </button>
+      </div>
     </article>
   )
 }
@@ -471,6 +451,40 @@ function InstalledSkillCard({
       </div>
       <p className="mt-2 line-clamp-2 text-xs leading-5 text-neutral-500">{cleanText(skill.description, '暂无描述')}</p>
     </button>
+  )
+}
+
+function InstalledSkillsPanel({
+  onOpenSkill,
+  selected,
+  skills,
+}: {
+  onOpenSkill: (skill: SkillSummary) => void
+  selected: SelectedSkill | null
+  skills: SkillSummary[]
+}) {
+  return (
+    <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-base font-semibold">已安装 Skills</h2>
+        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">{skills.length}</span>
+      </div>
+      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(14rem, 1fr))' }}>
+        {skills.map((skill) => (
+          <InstalledSkillCard
+            key={`${skill.source}:${skill.id}`}
+            skill={skill}
+            active={selected?.type === 'installed' && selected.item.id === skill.id}
+            onClick={() => onOpenSkill(skill)}
+          />
+        ))}
+        {!skills.length && (
+          <div className="rounded-lg border border-dashed border-neutral-200 px-4 py-8 text-center text-sm text-neutral-400">
+            暂无本机 Skills
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 
