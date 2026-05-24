@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
   Bot,
+  Check,
   CheckCircle2,
   Circle,
   FolderOpen,
@@ -17,10 +18,12 @@ import {
   Sparkles,
   Trash2,
   Users,
+  Wand2,
   X,
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
-import { api, type ModelCatalogItem, type WorkspaceAgent, type WorkspaceTask, type TaskStatus, type AgentConfigInput } from '../lib/api'
+import { loadAgentLibrary, toAgentConfigInput, type SavedAgentConfig } from '../lib/agentLibrary'
+import { api, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type TaskStatus, type WorkspaceAgent, type WorkspaceTask } from '../lib/api'
 import { cn } from '../lib/utils'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
@@ -80,6 +83,8 @@ export default function AgentWorldPage() {
   const [newTask, setNewTask] = useState({ title: '', description: '', agentId: '' })
   const [workspaceDraft, setWorkspaceDraft] = useState({ name: '', goal: '', projectPath: '' })
   const [models, setModels] = useState<ModelCatalogItem[]>([])
+  const [skills, setSkills] = useState<SkillSummary[]>([])
+  const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [savingGoal, setSavingGoal] = useState(false)
   const [savingAgent, setSavingAgent] = useState(false)
   const [openingFolder, setOpeningFolder] = useState(false)
@@ -114,8 +119,23 @@ export default function AgentWorldPage() {
         setModels(parsed.filter((item) => item.enabled))
       })
       .catch(() => setModels([]))
+    api
+      .listSkills()
+      .then((result) => setSkills(result.items))
+      .catch(() => setSkills([]))
     return () => {
       cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    setLibraryAgents(loadAgentLibrary())
+    const sync = () => setLibraryAgents(loadAgentLibrary())
+    window.addEventListener('agenthub:agent-library-change', sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener('agenthub:agent-library-change', sync)
+      window.removeEventListener('storage', sync)
     }
   }, [])
 
@@ -330,6 +350,14 @@ export default function AgentWorldPage() {
               <MessageSquare className="h-4 w-4" />
               进入群聊
             </button>
+            <button
+              type="button"
+              onClick={() => navigate('/skills')}
+              className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm transition hover:bg-neutral-50"
+            >
+              <Wand2 className="h-4 w-4" />
+              Skills 广场
+            </button>
           </div>
         </header>
 
@@ -464,7 +492,11 @@ export default function AgentWorldPage() {
                       title="Agent 团队"
                       action={
                         <div className="flex flex-wrap items-center justify-end gap-2">
-                          <PresetButtons onPick={(preset) => openCreateAgent(preset)} />
+                          <PresetButtons
+                            libraryAgents={libraryAgents}
+                            onManage={() => navigate('/agent-config')}
+                            onPick={(preset) => openCreateAgent(preset)}
+                          />
                           <button
                             type="button"
                             onClick={() => openCreateAgent()}
@@ -604,8 +636,10 @@ export default function AgentWorldPage() {
         <AgentDialog
           mode={agentDialogMode}
           draft={agentDraft}
-          models={models}
-          saving={savingAgent}
+                models={models}
+                skills={skills}
+                libraryAgents={libraryAgents}
+                saving={savingAgent}
           onChange={(patch) => setAgentDraft((draft) => ({ ...draft, ...patch }))}
           onClose={closeAgentDialog}
           onSubmit={saveAgentFromDialog}
@@ -686,6 +720,8 @@ function agentToDraft(agent: WorkspaceAgent): AgentConfigInput {
 function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
   const runtimeType = draft.runtimeType ?? 'llm'
   const nativeReadOnly = runtimeType === 'mcp'
+  const capabilityTags = draft.capabilityTags ?? []
+  const hasSkillTags = capabilityTags.some((tag) => tag.startsWith('skill:'))
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -696,9 +732,11 @@ function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
     modelId: draft.modelId ?? null,
     runtimeType,
     codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
-    capabilityTags: draft.capabilityTags ?? [],
+    capabilityTags,
     toolPermissions: nativeReadOnly
       ? ['workspace:read', 'skills:read']
+      : hasSkillTags
+        ? Array.from(new Set([...(draft.toolPermissions?.length ? draft.toolPermissions : ['chat']), 'skills:read']))
       : draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
     sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
@@ -737,9 +775,30 @@ function Panel({ title, action, children }: { title: string; action?: ReactNode;
   )
 }
 
-function PresetButtons({ onPick }: { onPick: (preset: Partial<AgentConfigInput>) => void }) {
+function PresetButtons({
+  libraryAgents,
+  onManage,
+  onPick,
+}: {
+  libraryAgents: SavedAgentConfig[]
+  onManage: () => void
+  onPick: (preset: Partial<AgentConfigInput>) => void
+}) {
   return (
-    <div className="flex gap-2">
+    <div className="flex flex-wrap gap-2">
+      <select
+        value=""
+        onChange={(event) => {
+          const agent = libraryAgents.find((item) => item.id === event.target.value)
+          if (agent) onPick(toAgentConfigInput(agent))
+        }}
+        className="h-9 rounded-xl border border-neutral-200 bg-white px-2.5 text-xs text-neutral-600 outline-none transition hover:bg-neutral-50"
+      >
+        <option value="">从配置库套用</option>
+        {libraryAgents.map((agent) => (
+          <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
+        ))}
+      </select>
       {agentPresets.slice(0, 2).map((preset) => (
         <button
           key={preset.name}
@@ -751,6 +810,14 @@ function PresetButtons({ onPick }: { onPick: (preset: Partial<AgentConfigInput>)
           {preset.role}
         </button>
       ))}
+      <button
+        type="button"
+        onClick={onManage}
+        className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-neutral-200 bg-white px-2.5 text-xs text-neutral-500 transition hover:bg-neutral-50"
+      >
+        <Settings2 className="h-3.5 w-3.5" />
+        管理配置
+      </button>
     </div>
   )
 }
@@ -841,6 +908,8 @@ function AgentDialog({
   mode,
   draft,
   models,
+  skills,
+  libraryAgents,
   saving,
   onChange,
   onSubmit,
@@ -849,6 +918,8 @@ function AgentDialog({
   mode: 'create' | 'edit'
   draft: AgentConfigInput
   models: ModelCatalogItem[]
+  skills: SkillSummary[]
+  libraryAgents: SavedAgentConfig[]
   saving: boolean
   onChange: (patch: Partial<AgentConfigInput>) => void
   onSubmit: (event: FormEvent) => void
@@ -891,6 +962,26 @@ function AgentDialog({
         </div>
 
         <div className="grid gap-3 p-5 md:grid-cols-2">
+          {libraryAgents.length > 0 && (
+            <div className="md:col-span-2">
+              <label className="text-sm">
+                <span className="mb-2 block text-neutral-600">从全局配置库切换</span>
+                <select
+                  value=""
+                  onChange={(event) => {
+                    const agent = libraryAgents.find((item) => item.id === event.target.value)
+                    if (agent) onChange(toAgentConfigInput(agent))
+                  }}
+                  className="h-10 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400"
+                >
+                  <option value="">选择一个已保存 Agent 配置</option>
+                  {libraryAgents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
           <Field placeholder="名称，如 Designer" value={draft.name} onChange={(name) => onChange({ name })} />
           <Field placeholder="角色，如 设计" value={draft.role} onChange={(role) => onChange({ role })} />
           <textarea
@@ -951,6 +1042,7 @@ function AgentDialog({
           <Field placeholder="颜色，如 #111827" value={draft.color ?? '#111827'} onChange={(color) => onChange({ color })} />
           <Field placeholder="能力标签，逗号分隔" value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => onChange({ capabilityTags: splitList(value) })} />
           <Field placeholder="工具权限，逗号分隔" value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => onChange({ toolPermissions: splitList(value) })} />
+          <SkillPicker skills={skills} selected={draft.capabilityTags ?? []} onChange={(next) => onChange({ capabilityTags: next })} />
           <textarea
             value={draft.systemPrompt ?? ''}
             onChange={(event) => onChange({ systemPrompt: event.target.value })}
@@ -986,6 +1078,64 @@ function AgentDialog({
           </button>
         </div>
       </form>
+    </div>
+  )
+}
+
+function SkillPicker({
+  skills,
+  selected,
+  onChange,
+}: {
+  skills: SkillSummary[]
+  selected: string[]
+  onChange: (next: string[]) => void
+}) {
+  const selectedIds = new Set(selected.filter((tag) => tag.startsWith('skill:')).map((tag) => tag.slice(6)))
+
+  function toggle(skillId: string) {
+    const next = new Set(selected)
+    const tag = `skill:${skillId}`
+    if (next.has(tag)) next.delete(tag)
+    else next.add(tag)
+    onChange(Array.from(next))
+  }
+
+  return (
+    <div className="md:col-span-2">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-sm font-medium text-neutral-700">Skills</span>
+        <span className="text-xs text-neutral-400">{selectedIds.size} 已绑定</span>
+      </div>
+      <div className="max-h-48 overflow-auto rounded-xl border border-neutral-200 bg-white p-2">
+        {skills.length ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {skills.map((skill) => {
+              const active = selectedIds.has(skill.id)
+              return (
+                <button
+                  key={skill.id}
+                  type="button"
+                  onClick={() => toggle(skill.id)}
+                  className={cn(
+                    'rounded-lg border p-3 text-left transition',
+                    active ? 'border-emerald-300 bg-emerald-50' : 'border-neutral-200 bg-white hover:border-neutral-300'
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate text-sm font-medium text-neutral-900">{skill.name}</div>
+                    {active && <Check className="h-4 w-4 text-emerald-600" />}
+                  </div>
+                  <div className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">{skill.description || skill.id}</div>
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="px-3 py-8 text-center text-sm text-neutral-400">暂无可用 skills</div>
+        )}
+      </div>
+      <div className="mt-2 text-xs text-neutral-400">绑定后会写入 `skill:xxx` 标签，并自动参与上下文注入。</div>
     </div>
   )
 }

@@ -4,6 +4,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useMessage,
   type EmptyMessagePartComponent,
 } from '@assistant-ui/react'
 import {
@@ -34,7 +35,9 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock3,
   Copy,
+  ExternalLink,
   FileText,
   FolderOpen,
   FolderPlus,
@@ -47,29 +50,38 @@ import {
   MessageSquare,
   PanelLeft,
   Paperclip,
+  Pencil,
   Plus,
   Presentation,
   RefreshCw,
+  Rocket,
   Search,
   Sheet,
   Square,
+  TerminalSquare,
+  Trash2,
   User,
   Users,
 } from 'lucide-react'
-import { type ComponentPropsWithoutRef, type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type ClipboardEvent, type ComponentPropsWithoutRef, type FC, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import {
   api,
+  type AgentArtifact,
+  type ChatAttachment,
+  type CodeAgentRunMetadata,
   type ModelCatalogItem,
   type OrchestratorDispatchResult,
   type OrchestratorPlan,
+  type SkillSummary,
   type TaskStatus,
   type Workspace,
   type WorkspaceAgent,
 } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { useChatStore } from '../../stores/chatStore'
+import { TypewriterHeading } from '../chat/TypewriterHeading'
 
 const highlightLanguageMap = {
   bash,
@@ -109,6 +121,7 @@ const languageAliases: Record<string, string> = {
 
 const autoHighlightLanguages = Object.keys(highlightLanguageMap)
 type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
+const maxPastedImageBytes = 5 * 1024 * 1024
 
 export const Thread: FC<{
   sidebarCollapsed: boolean
@@ -206,56 +219,107 @@ const GroupMemberPanel: FC = () => {
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const messages = useChatStore((state) => state.messages)
   const activeAgentIds = new Set(messages.filter((message) => message.senderType === 'agent').map((message) => message.senderId))
+  const [collapsed, setCollapsed] = useState(false)
 
   return (
-    <aside className="hidden w-72 shrink-0 border-l border-neutral-200 bg-[#fbfbf9] px-4 py-5 xl:block">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-sm font-semibold text-neutral-950">群聊成员</div>
-          <div className="mt-1 truncate text-xs text-neutral-500">{workspace?.name ?? 'Agent Group'}</div>
-        </div>
-        <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
-          <Users className="h-4 w-4" />
-        </div>
-      </div>
-
-      <div className="mt-5 space-y-2">
-        <MemberRow name="You" role="发起人与决策者" active />
-        <MemberRow name="Orchestrator" role="拆解、协调、生成任务卡" active={activeAgentIds.has('orchestrator')} />
-        {agents.map((agent) => (
-          <MemberRow
-            key={agent.id}
-            name={agent.name}
-            role={`${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`}
-            color={agent.color}
-            active={activeAgentIds.has(agent.id)}
-          />
-        ))}
-      </div>
-
-      <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-        <div className="font-medium text-neutral-900">提及方式</div>
-        <div className="mt-1">输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Orchestrator 接管。</div>
-      </div>
-
-      {workspace?.projectPath && (
-        <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-          <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
-          <div className="min-w-0">
-            <div className="font-medium text-neutral-900">项目文件夹</div>
-            <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
+    <aside
+      className={cn(
+        'hidden shrink-0 border-l border-neutral-200 bg-[#fbfbf9] xl:block',
+        'transition-[width,padding] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]',
+        collapsed ? 'w-12 px-0 py-4' : 'w-72 px-4 py-5'
+      )}
+    >
+      {collapsed ? (
+        <div className="flex flex-col items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-100 hover:text-neutral-900"
+            title="展开成员栏"
+            aria-label="展开成员栏"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
+            <Users className="h-4 w-4" />
+          </div>
+          <div className="mt-2 flex flex-col items-center gap-2">
+            <div className="grid h-7 w-7 place-items-center rounded-full bg-blue-500 text-[10px] font-semibold text-white transition-transform duration-300" title="You">Y</div>
+            <div className="grid h-7 w-7 place-items-center rounded-full bg-neutral-900 text-[10px] font-semibold text-white transition-transform duration-300" title="Orchestrator">O</div>
+            {agents.map((agent) => (
+              <div
+                key={agent.id}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-semibold text-white transition-transform duration-300"
+                style={{ background: agent.color ?? '#111827' }}
+                title={agent.name}
+              >
+                {agent.name.slice(0, 1).toUpperCase()}
+              </div>
+            ))}
           </div>
         </div>
-      )}
+      ) : (
+        <div className="flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-neutral-950">群聊成员</div>
+              <div className="mt-1 truncate text-xs text-neutral-500">{workspace?.name ?? 'Agent Group'}</div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setCollapsed(true)}
+                className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-100 hover:text-neutral-900"
+                title="折叠成员栏"
+                aria-label="折叠成员栏"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+              <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
+                <Users className="h-4 w-4" />
+              </div>
+            </div>
+          </div>
 
-      {workspace && (
-        <button
-          type="button"
-          onClick={() => navigate('/agent-world', { state: { workspaceId: workspace.id } })}
-          className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
-        >
-          打开 Agent Group
-        </button>
+          <div className="mt-5 space-y-2">
+            <MemberRow name="You" role="发起人与决策者" active />
+            <MemberRow name="Orchestrator" role="拆解、协调、生成任务卡" active={activeAgentIds.has('orchestrator')} />
+            {agents.map((agent) => (
+              <MemberRow
+                key={agent.id}
+                name={agent.name}
+                role={`${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`}
+                color={agent.color}
+                active={activeAgentIds.has(agent.id)}
+              />
+            ))}
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+            <div className="font-medium text-neutral-900">提及方式</div>
+            <div className="mt-1">输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Orchestrator 接管。</div>
+          </div>
+
+          {workspace?.projectPath && (
+            <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+              <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
+              <div className="min-w-0">
+                <div className="font-medium text-neutral-900">项目文件夹</div>
+                <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
+              </div>
+            </div>
+          )}
+
+          {workspace && (
+            <button
+              type="button"
+              onClick={() => navigate('/agent-world', { state: { workspaceId: workspace.id } })}
+              className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
+            >
+              打开 Agent Group
+            </button>
+          )}
+        </div>
       )}
     </aside>
   )
@@ -281,12 +345,14 @@ const ThreadWelcome: FC = () => (
   <ThreadPrimitive.Empty>
     <div className="mx-auto flex min-h-[calc(100vh-15rem)] w-full max-w-[var(--thread-max-width)] flex-col justify-center py-10">
       <div className="mb-24">
-        <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">有什么可以帮忙的？</h2>
+        <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
+          <TypewriterHeading text="有什么可以帮忙的？" />
+        </h2>
         <p className="mt-2 text-base text-neutral-500">创建 Agent、拆解任务，或直接 @ 某个助手开始协作。</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <PromptCard title="创建 coder 代理" text="帮我单开一个跳跃小游戏" />
-        <PromptCard title="解释架构" text="这个项目如何接入 assistant-ui" />
+        <PromptCard title="解释架构" text="这个项目的具体技术栈" />
       </div>
     </div>
   </ThreadPrimitive.Empty>
@@ -308,12 +374,19 @@ const Composer: FC = () => {
   const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
   const selectSession = useChatStore((state) => state.selectSession)
+  const pendingAttachments = useChatStore((state) => state.pendingAttachments)
+  const addPendingAttachments = useChatStore((state) => state.addPendingAttachments)
+  const removePendingAttachment = useChatStore((state) => state.removePendingAttachment)
   const [models, setModels] = useState<ModelCatalogItem[]>([])
   const [menu, setMenu] = useState<'tools' | 'agents' | 'models' | 'workspace' | null>(null)
+  const [skills, setSkills] = useState<SkillSummary[]>([])
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillPanelOpen, setSkillPanelOpen] = useState(false)
+  const [skillQuery, setSkillQuery] = useState('')
+  const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
-  const [attachment, setAttachment] = useState<string | null>(null)
   const [hint, setHint] = useState<string | null>(null)
   const [planMode, setPlanMode] = useState(false)
   const [composerText, setComposerText] = useState('')
@@ -356,15 +429,52 @@ const Composer: FC = () => {
     }
   }, [menu])
 
+  useEffect(() => {
+    if (!skillPanelOpen || skills.length) return
+    let cancelled = false
+    setSkillsLoading(true)
+    api
+      .listSkills()
+      .then(({ items }) => {
+        if (!cancelled) setSkills(items)
+      })
+      .catch(() => {
+        if (!cancelled) setSkills([])
+      })
+      .finally(() => {
+        if (!cancelled) setSkillsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [skillPanelOpen, skills.length])
+
   function showHint(text: string) {
     setHint(text)
     window.setTimeout(() => setHint(null), 1800)
   }
 
-  function handleFiles(files: FileList | null) {
-    const file = files?.[0]
-    if (!file) return
-    setAttachment(file.name)
+  async function handleFiles(files: FileList | File[] | null) {
+    const list = Array.from(files ?? [])
+    const imageFiles = list.filter((file) => file.type.startsWith('image/'))
+    if (!imageFiles.length) {
+      if (list.length) showHint('当前只支持图片附件')
+      return
+    }
+    const accepted = imageFiles.filter((file) => file.size <= maxPastedImageBytes)
+    if (accepted.length !== imageFiles.length) showHint('已跳过超过 5MB 的图片')
+    if (!accepted.length) return
+    const attachments = await Promise.all(accepted.map(fileToChatAttachment))
+    addPendingAttachments(attachments)
+    showHint(`已添加 ${attachments.length} 张图片`)
+    if (!composerText.trim()) insertComposerText('请看这张图片')
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'))
+    if (!files.length) return
+    event.preventDefault()
+    void handleFiles(files)
   }
 
   function insertComposerText(value: string) {
@@ -382,6 +492,49 @@ const Composer: FC = () => {
       input.setRangeText(value, start, end, 'end')
       input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
     }
+  }
+
+  function handleComposerInput(event: FormEvent<HTMLTextAreaElement>) {
+    const input = event.currentTarget
+    const nextText = input.value
+    const cursor = input.selectionStart ?? nextText.length
+    const command = readSlashCommand(nextText, cursor)
+    setComposerText(nextText)
+    setComposerScrollTop(input.scrollTop)
+    if (command) {
+      setMenu(null)
+      setSkillQuery(command.query)
+      setSkillCommandRange({ start: command.start, end: command.end })
+      setSkillPanelOpen(true)
+    } else {
+      setSkillPanelOpen(false)
+      setSkillCommandRange(null)
+      setSkillQuery('')
+    }
+  }
+
+  function insertSkillReference(skill: SkillSummary) {
+    const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
+    const reference = `$${skill.id || skill.name} `
+    if (!input) {
+      void navigator.clipboard?.writeText(reference).catch(() => undefined)
+      return
+    }
+    const fallbackCursor = input.selectionStart ?? input.value.length
+    const liveCommand = readSlashCommand(input.value, fallbackCursor)
+    const range = liveCommand ?? skillCommandRange
+    const start = range?.start ?? fallbackCursor
+    const end = range?.end ?? fallbackCursor
+    input.focus()
+    input.setSelectionRange(start, end)
+    input.setRangeText(reference, start, end, 'end')
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: reference }))
+    setComposerText(input.value)
+    setComposerScrollTop(input.scrollTop)
+    setSkillPanelOpen(false)
+    setSkillCommandRange(null)
+    setSkillQuery('')
+    showHint(`已选择 Skill：${skill.name || skill.id}`)
   }
 
   async function openWorkspace(workspaceId: string) {
@@ -512,11 +665,6 @@ const Composer: FC = () => {
               selectedModelId={selectedModelId}
               workspaceBusy={workspaceBusy}
               planMode={planMode}
-              onAttach={() => {
-                fileInputRef.current?.click()
-                setMenu(null)
-              }}
-              onWorkspaceMenu={() => setMenu('workspace')}
               onOpenWorkspace={(workspaceId) => void openWorkspace(workspaceId)}
               onCreateBlankWorkspace={() => void createBlankWorkspace()}
               onOpenFolderWorkspace={() => void openFolderFromComposer()}
@@ -536,14 +684,38 @@ const Composer: FC = () => {
               onClose={() => setMenu(null)}
             />
           )}
+          {skillPanelOpen && (
+            <SkillCommandPanel
+              query={skillQuery}
+              skills={skills}
+              loading={skillsLoading}
+              onPick={insertSkillReference}
+              onClose={() => {
+                setSkillPanelOpen(false)
+                setSkillCommandRange(null)
+                setSkillQuery('')
+              }}
+            />
+          )}
           {hint && <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">{hint}</div>}
-          {attachment && (
-            <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-neutral-100 px-3 py-1 text-xs text-neutral-600">
-              <Paperclip className="h-3.5 w-3.5" />
-              {attachment}
-              <button type="button" onClick={() => setAttachment(null)} className="text-neutral-400 hover:text-neutral-900">
-                x
-              </button>
+          {pendingAttachments.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {pendingAttachments.map((attachment) => (
+                <div key={attachment.id} className="group relative h-16 w-16 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50">
+                  <img src={attachment.dataUrl} alt={attachment.name} className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => removePendingAttachment(attachment.id)}
+                    className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/70 text-[11px] text-white opacity-90 transition hover:bg-black"
+                    aria-label={`移除 ${attachment.name}`}
+                  >
+                    x
+                  </button>
+                  <div className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-[10px] text-white">
+                    {attachment.name}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
           <div className="relative min-h-12">
@@ -565,7 +737,16 @@ const Composer: FC = () => {
               data-agenthub-composer="true"
               placeholder="发消息给 AgentHub，@ 可提及 Agent"
               rows={1}
-              onInput={(event) => setComposerText(event.currentTarget.value)}
+              onPaste={handlePaste}
+              onInput={handleComposerInput}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && skillPanelOpen) {
+                  event.preventDefault()
+                  setSkillPanelOpen(false)
+                  setSkillCommandRange(null)
+                  setSkillQuery('')
+                }
+              }}
               onScroll={(event) => setComposerScrollTop(event.currentTarget.scrollTop)}
               className={cn(
                 'relative max-h-[180px] min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 outline-none placeholder:text-neutral-400',
@@ -589,7 +770,17 @@ const Composer: FC = () => {
               <ComposerToolButton aria-label="附件" onClick={() => fileInputRef.current?.click()}>
                 <Paperclip className="h-4 w-4" />
               </ComposerToolButton>
-              <input ref={fileInputRef} type="file" className="hidden" onChange={(event) => handleFiles(event.target.files)} />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  void handleFiles(event.target.files)
+                  event.currentTarget.value = ''
+                }}
+              />
               <ComposerToolButton aria-label="提及" onClick={() => setMenu(menu === 'agents' ? null : 'agents')}>
                 <AtSign className="h-4 w-4" />
               </ComposerToolButton>
@@ -615,6 +806,91 @@ const Composer: FC = () => {
   )
 }
 
+export const SkillCommandPanel: FC<{
+  query: string
+  skills: SkillSummary[]
+  loading: boolean
+  onPick: (skill: SkillSummary) => void
+  onClose: () => void
+}> = ({ query, skills, loading, onPick, onClose }) => {
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredSkills = useMemo(() => {
+    if (!normalizedQuery) return skills
+    return skills.filter((skill) =>
+      `${skill.name} ${skill.id} ${skill.description} ${skill.source}`.toLowerCase().includes(normalizedQuery)
+    )
+  }, [normalizedQuery, skills])
+  const visibleSkills = filteredSkills.slice(0, 8)
+
+  return (
+    <div
+      className="absolute bottom-[calc(100%+0.5rem)] left-3 right-3 z-30 overflow-hidden rounded-2xl border border-neutral-200 bg-white text-sm shadow-[0_18px_60px_rgba(15,23,42,0.16)] sm:right-auto sm:w-[26rem]"
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-neutral-950 text-xs font-semibold text-white">/</span>
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-neutral-950">选择 Skill</div>
+            <div className="truncate text-xs text-neutral-500">{normalizedQuery ? `筛选：${query}` : '已安装技能'}</div>
+          </div>
+        </div>
+        <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900">
+          关闭
+        </button>
+      </div>
+      <div className="max-h-72 overflow-y-auto p-1.5">
+        {loading && (
+          <div className="space-y-1.5 p-1">
+            {[0, 1, 2].map((item) => (
+              <div key={item} className="flex items-center gap-3 rounded-xl px-2 py-2">
+                <div className="h-8 w-8 animate-pulse rounded-lg bg-neutral-100" />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="h-3 w-28 animate-pulse rounded-full bg-neutral-100" />
+                  <div className="h-2.5 w-48 animate-pulse rounded-full bg-neutral-100" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!loading &&
+          visibleSkills.map((skill) => (
+            <button
+              key={skill.id}
+              type="button"
+              onClick={() => onPick(skill)}
+              className="flex w-full items-start gap-3 rounded-xl px-2.5 py-2.5 text-left transition hover:bg-neutral-50"
+            >
+              <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-600">
+                <Blocks className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <span className="truncate font-medium text-neutral-950">{skill.name || skill.id}</span>
+                  <span className="shrink-0 rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10px] uppercase tracking-normal text-neutral-500">
+                    {skill.source || 'local'}
+                  </span>
+                </span>
+                <span className="mt-0.5 block truncate text-xs text-neutral-500">{skill.description || skill.id}</span>
+                <span className="mt-1 block truncate font-mono text-[11px] text-neutral-400">${skill.id}</span>
+              </span>
+            </button>
+          ))}
+        {!loading && skills.length === 0 && (
+          <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-8 text-center text-xs text-neutral-400">
+            暂无已安装 Skills
+          </div>
+        )}
+        {!loading && skills.length > 0 && filteredSkills.length === 0 && (
+          <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-8 text-center text-xs text-neutral-400">
+            没有匹配的 Skill
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const ComposerMenu: FC<{
   type: 'tools' | 'agents' | 'models' | 'workspace'
   models: ModelCatalogItem[]
@@ -625,8 +901,6 @@ const ComposerMenu: FC<{
   selectedModelId: string | null
   workspaceBusy: boolean
   planMode: boolean
-  onAttach: () => void
-  onWorkspaceMenu: () => void
   onOpenWorkspace: (workspaceId: string) => void
   onCreateBlankWorkspace: () => void
   onOpenFolderWorkspace: () => void
@@ -645,8 +919,6 @@ const ComposerMenu: FC<{
   selectedModelId,
   workspaceBusy,
   planMode,
-  onAttach,
-  onWorkspaceMenu,
   onOpenWorkspace,
   onCreateBlankWorkspace,
   onOpenFolderWorkspace,
@@ -695,14 +967,6 @@ const ComposerMenu: FC<{
     >
       {type === 'tools' && (
         <div className="relative group/tools">
-          <button type="button" onClick={onAttach} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
-            <ImagePlus className="h-4 w-4 text-neutral-500" />
-            <span className="flex-1 text-neutral-900">添加照片和文件</span>
-          </button>
-          <button type="button" onClick={onWorkspaceMenu} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
-            <FolderOpen className="h-4 w-4 text-neutral-500" />
-            <span className="flex-1 text-neutral-900">打开项目文件夹</span>
-          </button>
           <button type="button" onClick={() => onPlanMode(!planMode)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
             <ListTodo className="h-4 w-4 text-neutral-500" />
             <span className="flex-1 text-neutral-900">计划模式</span>
@@ -862,9 +1126,41 @@ function errorMessage(err: unknown, fallback: string) {
   return err instanceof Error && err.message ? err.message : fallback
 }
 
+export function readSlashCommand(text: string, cursor: number) {
+  const before = text.slice(0, cursor)
+  const match = /(^|\s)\/([^\s/]*)$/.exec(before)
+  if (!match) return null
+  const suffix = /^[^\s]*/.exec(text.slice(cursor))?.[0] ?? ''
+  const start = match.index + match[1].length
+  const prefix = match[2] ?? ''
+  return {
+    start,
+    end: cursor + suffix.length,
+    query: `${prefix}${suffix}`,
+  }
+}
+
 function workspaceNameFromPath(value: string) {
   const normalized = value.trim().replace(/[\\/]+$/, '')
   return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
+}
+
+function fileToChatAttachment(file: File): Promise<ChatAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
+    reader.onload = () => {
+      resolve({
+        id: crypto.randomUUID(),
+        type: 'image',
+        name: file.name || `pasted-image-${Date.now()}.png`,
+        mimeType: file.type || 'image/png',
+        size: file.size,
+        dataUrl: String(reader.result ?? ''),
+      })
+    }
+    reader.readAsDataURL(file)
+  })
 }
 
 const MenuRow: FC<{ title: string; desc: string; onClick: () => void }> = ({ title, desc, onClick }) => (
@@ -893,14 +1189,111 @@ const ComposerAction: FC = () => (
   </>
 )
 
-const UserMessage: FC = () => (
-  <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] justify-end gap-3 py-4">
-    <div className="max-w-[78%] rounded-3xl bg-[#eef3ff] px-4 py-2.5 text-sm leading-6 text-neutral-950">
-      <MessagePrimitive.Parts />
-    </div>
-    <Avatar role="user" />
-  </MessagePrimitive.Root>
-)
+const UserMessage: FC = () => {
+  const messageId = useMessage((message) => message.id)
+  const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
+  const editMessage = useChatStore((state) => state.editMessage)
+  const withdrawMessage = useChatStore((state) => state.withdrawMessage)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState<'edit' | 'withdraw' | null>(null)
+  const canEdit = Boolean(sourceMessage?.senderType === 'user')
+  const text =
+    typeof sourceMessage?.metadata?.displayContent === 'string'
+      ? sourceMessage.metadata.displayContent
+      : sourceMessage?.content ?? ''
+
+  function startEdit() {
+    setDraft(text)
+    setEditing(true)
+  }
+
+  async function saveEdit() {
+    if (!sourceMessage || !draft.trim()) return
+    setBusy('edit')
+    try {
+      await editMessage(sourceMessage.id, draft.trim())
+      setEditing(false)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function withdraw() {
+    if (!sourceMessage) return
+    const ok = window.confirm('撤回这条消息？如果后续 Agent 产生了文件修改，将尝试一并回滚。')
+    if (!ok) return
+    setBusy('withdraw')
+    try {
+      const rollback = await withdrawMessage(sourceMessage.id)
+      if (rollback?.failed) {
+        window.alert(`消息已撤回，但有 ${rollback.failed} 个文件变更未能自动回滚，请检查 git diff。`)
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] justify-end py-3">
+      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'w-full' : 'max-w-[68%]')}>
+        <div
+          className={cn(
+            'w-full text-sm leading-6 text-neutral-900',
+            editing
+              ? 'min-h-36 rounded-[28px] bg-[#f4f4f4] px-4 pb-4 pt-3'
+              : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none'
+          )}
+        >
+          {editing ? (
+            <div className="flex min-h-32 flex-col">
+              <textarea
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="编辑消息"
+                className="min-h-20 flex-1 resize-none bg-transparent px-1 py-1 text-base leading-7 text-neutral-900 outline-none placeholder:text-neutral-300"
+                autoFocus
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditing(false)}
+                  className="h-10 rounded-[14px] border border-neutral-200 bg-white px-4 text-base font-medium text-neutral-900 shadow-sm transition hover:bg-neutral-50"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={saveEdit}
+                  disabled={busy === 'edit' || !draft.trim()}
+                  className="h-10 rounded-[14px] bg-neutral-950 px-4 text-base font-semibold text-white shadow-sm transition hover:bg-neutral-800 disabled:bg-neutral-300"
+                >
+                  {busy === 'edit' ? '发送中' : '发送'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <MessagePrimitive.Parts
+              components={{
+                data: { by_name: { chat_attachments: ChatAttachmentsPart } },
+              }}
+            />
+          )}
+        </div>
+        {canEdit && !editing && (
+          <div className="flex items-center gap-1 pr-1 text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">
+            <ToolButton type="button" aria-label="修改" title="修改" onClick={startEdit} disabled={Boolean(busy)}>
+              <Pencil className="h-3.5 w-3.5" />
+            </ToolButton>
+            <ToolButton type="button" aria-label="撤回" title="撤回并尝试回滚修改" onClick={withdraw} disabled={Boolean(busy)}>
+              {busy === 'withdraw' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            </ToolButton>
+          </div>
+        )}
+      </div>
+    </MessagePrimitive.Root>
+  )
+}
 
 const AssistantMessage: FC = () => (
   <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
@@ -911,7 +1304,15 @@ const AssistantMessage: FC = () => (
           components={{
             Text: MarkdownText,
             Empty: AssistantThinking,
-            data: { by_name: { orchestrator_plan: OrchestratorPlanCard } },
+            data: {
+              by_name: {
+                agent_avatar: AgentAvatarPart,
+                orchestrator_plan: OrchestratorPlanCard,
+                code_agent_run: CodeAgentRunCard,
+                agent_artifacts: AgentArtifactsCard,
+                chat_attachments: ChatAttachmentsPart,
+              },
+            },
           }}
         />
       </div>
@@ -936,6 +1337,508 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
   )
 }
 
+const AgentAvatarPart: FC<{ data: { runtime?: CodeAgentRunMetadata['runtime'] } }> = () => null
+
+const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data }) => {
+  const items = Array.isArray(data.items) ? data.items : []
+  if (!items.length) return null
+  return (
+    <div className="not-prose mt-3 grid gap-2 sm:grid-cols-2">
+      {items.map((item) => (
+        <a
+          key={item.id}
+          href={item.dataUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="group overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm"
+        >
+          <img src={item.dataUrl} alt={item.name} className="aspect-video w-full bg-neutral-100 object-cover transition group-hover:scale-[1.015]" />
+          <div className="flex items-center gap-2 px-3 py-2 text-xs text-neutral-500">
+            <ImagePlus className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{item.name}</span>
+          </div>
+        </a>
+      ))}
+    </div>
+  )
+}
+
+const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+  const changedFiles = data.files ?? []
+  const commands = data.commands ?? []
+  const toolCalls = data.toolCalls ?? []
+  const logs = data.logs ?? []
+
+  return (
+    <div className="not-prose mt-3 space-y-2 text-sm">
+      <CodeAgentStatusCard data={data} commandCount={commands.length} fileCount={changedFiles.length} toolCount={toolCalls.length} />
+      {toolCalls.length > 0 && <CodeAgentToolsCard items={toolCalls} running={data.status === 'running'} />}
+      {commands.length > 0 && <CodeAgentCommandsCard commands={commands} />}
+      {changedFiles.length > 0 && <CodeAgentFilesCard cwd={data.cwd ?? commands.find((command) => command.cwd)?.cwd} files={changedFiles} />}
+      {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
+      {logs.length > 0 && <CodeAgentLogsCard logs={logs} />}
+    </div>
+  )
+}
+
+const CodeAgentStatusCard: FC<{
+  commandCount: number
+  data: CodeAgentRunMetadata
+  fileCount: number
+  toolCount: number
+}> = ({ commandCount, data, fileCount, toolCount }) => {
+  const statusTone =
+    data.status === 'running'
+      ? 'text-blue-600'
+      : data.status === 'completed'
+        ? 'text-neutral-500'
+        : data.status === 'timed-out'
+          ? 'text-amber-600'
+          : 'text-red-600'
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
+        <div className={cn('inline-flex min-w-0 items-center gap-2', statusTone)}>
+          {data.status === 'running' ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : <Clock3 className="h-4 w-4 shrink-0" />}
+          <div className="min-w-0">
+            <div className="truncate font-medium">{codeAgentStatusLabel(data.status)} · {formatRunDuration(data.durationMs)}</div>
+            <div className="mt-0.5 truncate text-[11px] text-neutral-400">
+              {runtimeLabel(data.runtime)} · {data.command}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
+          <CodeAgentMiniStat icon={<Search className="h-3.5 w-3.5" />} label="工具" value={toolCount} />
+          <CodeAgentMiniStat icon={<TerminalSquare className="h-3.5 w-3.5" />} label="命令" value={commandCount} />
+          <CodeAgentMiniStat icon={<FileText className="h-3.5 w-3.5" />} label="文件" value={fileCount} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const CodeAgentMiniStat: FC<{ icon: ReactNode; label: string; value: number }> = ({ icon, label, value }) => (
+  <span className={cn('inline-flex h-7 items-center gap-1 rounded-md border px-2', value ? 'border-neutral-200 bg-neutral-50 text-neutral-700' : 'border-neutral-100 bg-white text-neutral-300')}>
+    {icon}
+    {label} {value}
+  </span>
+)
+
+const CodeAgentToolsCard: FC<{ items: NonNullable<CodeAgentRunMetadata['toolCalls']>; running: boolean }> = ({ items, running }) => (
+  <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+    <div className="flex h-10 items-center justify-between gap-3 border-b border-neutral-100 px-3">
+      <span className="inline-flex min-w-0 items-center gap-2 font-medium text-neutral-800">
+        <Search className="h-4 w-4 shrink-0 text-blue-500" />
+        工具调用 {items.length}
+      </span>
+      {running && <span className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.12)]" />}
+    </div>
+    <div className="grid gap-1.5 p-2">
+      {items.slice(-12).map((item) => (
+        <div key={item.id} className="grid grid-cols-[5.25rem_minmax(0,1fr)] gap-3 rounded-md bg-neutral-50 px-3 py-2.5 antialiased">
+          <span className="text-[13px] font-medium leading-6 text-neutral-500">{item.label}</span>
+          <span className="min-w-0">
+            <span className="block truncate text-[13px] leading-6 text-neutral-900" title={item.target ?? item.name}>
+              {item.target ?? item.name}
+            </span>
+            {item.detail && <span className="mt-0.5 block truncate text-xs leading-5 text-neutral-500" title={item.detail}>{item.detail}</span>}
+          </span>
+        </div>
+      ))}
+    </div>
+  </div>
+)
+
+const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> = ({ commands }) => (
+  <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+    <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
+      <TerminalSquare className="h-4 w-4 shrink-0 text-emerald-600" />
+      命令记录 {commands.length}
+    </div>
+    <div className="space-y-1.5 p-2">
+      {commands.map((command) => (
+        <details key={command.id} className="group rounded-md border border-neutral-200 bg-neutral-50 text-neutral-900">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
+            <span className="agenthub-readable-code truncate text-[13px] leading-6" title={command.command}>{command.command}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-400 transition group-open:rotate-180" />
+          </summary>
+          {(command.cwd || command.output) && (
+            <div className="border-t border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-700">
+              {command.cwd && <div className="agenthub-readable-code truncate text-neutral-500">cwd: {command.cwd}</div>}
+              {command.output && <pre className="agenthub-readable-code mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">{command.output}</pre>}
+            </div>
+          )}
+        </details>
+      ))}
+    </div>
+  </div>
+)
+
+const CodeAgentFilesCard: FC<{ cwd?: string; files: CodeAgentRunMetadata['files'] }> = ({ cwd, files }) => (
+  <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+    <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
+      <FileText className="h-4 w-4 shrink-0 text-amber-600" />
+      文件变更 {files.length}
+    </div>
+    <div className="space-y-1.5 p-2">
+      {files.map((file) => {
+        const vscodeHref = file.status === 'deleted' ? null : vscodeFileHref(file.path, cwd)
+        return (
+          <details key={`${file.status}-${file.path}`} className="group rounded-md bg-neutral-50">
+            <summary className="grid cursor-pointer list-none grid-cols-[4.75rem_minmax(0,1fr)_auto_1rem] items-center gap-2 px-3 py-2.5">
+              <span className="text-[13px] text-neutral-500">{fileStatusLabel(file.status)}</span>
+              <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>{file.path}</span>
+              {vscodeHref ? (
+                <a
+                  href={vscodeHref}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    window.location.href = vscodeHref
+                  }}
+                  className="inline-flex h-7 min-w-10 items-center justify-center gap-1 rounded-full border border-neutral-200 bg-white px-2 text-neutral-500 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+                  title="用 VS Code 打开"
+                  aria-label={`用 VS Code 打开 ${file.path}`}
+                >
+                  <img src="/vscode-color.svg" alt="" className="h-4 w-4" draggable={false} />
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : (
+                <span className="h-7 min-w-10" />
+              )}
+              <ChevronDown className={cn('h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180', !file.diff && 'opacity-0')} />
+            </summary>
+            {file.diff && (
+              <DiffViewer diff={file.diff} maxHeightClassName="max-h-72" />
+            )}
+          </details>
+        )
+      })}
+    </div>
+  </div>
+)
+
+const CodeAgentLogsCard: FC<{ logs: NonNullable<CodeAgentRunMetadata['logs']> }> = ({ logs }) => {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+      <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-neutral-800 hover:bg-neutral-50">
+        <span className="inline-flex min-w-0 items-center gap-2">
+          <ListTodo className="h-4 w-4 shrink-0 text-neutral-500" />
+          过程日志 {logs.length}
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="max-h-64 space-y-1.5 overflow-auto border-t border-neutral-100 bg-white p-2">
+          {logs.map((log) => (
+            <div key={log.id} className={cn('grid grid-cols-[4.25rem_minmax(0,1fr)] gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-6 antialiased', log.stream === 'stderr' ? 'border-red-100 bg-red-50/70' : log.stream === 'event' ? 'border-blue-100 bg-blue-50/60' : 'border-neutral-100 bg-neutral-50')}>
+              <span className={cn('inline-flex h-5 items-center justify-center rounded px-1.5 text-[11px] font-medium', log.stream === 'stderr' ? 'bg-red-100 text-red-700' : log.stream === 'event' ? 'bg-blue-100 text-blue-700' : 'bg-neutral-200 text-neutral-600')}>
+                {logStreamLabel(log.stream)}
+              </span>
+              <span className="whitespace-pre-wrap break-words text-neutral-800">{log.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const CodeAgentDiagnosticsCard: FC<{ diagnostics: string }> = ({ diagnostics }) => {
+  const [open, setOpen] = useState(true)
+  return (
+    <div className="overflow-hidden rounded-lg border border-red-200 bg-white">
+      <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-red-700 hover:bg-red-50">
+        <span className="inline-flex items-center gap-2">
+          <AlertCircleIcon />
+          诊断输出
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-red-300 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <pre className="max-h-56 overflow-auto border-t border-red-100 bg-neutral-950 px-3 py-2 text-xs leading-5 text-neutral-100">
+          {diagnostics}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+const AgentArtifactsCard: FC<{ data: { items?: AgentArtifact[] } }> = ({ data }) => {
+  const items = data.items ?? []
+  if (!items.length) return null
+  const diffCount = items.filter((item) => item.type === 'diff').length
+  const previewCount = items.filter((item) => item.type === 'preview').length
+  const deployCount = items.filter((item) => item.type === 'deploy').length
+
+  return (
+    <div className="not-prose mt-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+        <span className="inline-flex items-center gap-1 rounded-full border border-neutral-200 bg-white px-2.5 py-1">
+          <Blocks className="h-3.5 w-3.5" />
+          产物 {items.length}
+        </span>
+        {diffCount > 0 && <span>{diffCount} 个 Diff</span>}
+        {previewCount > 0 && <span>{previewCount} 个预览</span>}
+        {deployCount > 0 && <span>{deployCount} 个部署</span>}
+      </div>
+      <div className="space-y-2">
+        {items.map((item) => (
+          <ArtifactCard key={item.id} artifact={item} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
+  if (artifact.type === 'diff') return <DiffArtifactCard artifact={artifact} />
+  if (artifact.type === 'preview') return <PreviewArtifactCard artifact={artifact} />
+  if (artifact.type === 'deploy') return <DeployArtifactCard artifact={artifact} />
+  return <FileArtifactCard artifact={artifact} />
+}
+
+const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> }> = ({ artifact }) => (
+  <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2">
+    <div className="flex items-center gap-2">
+      <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] leading-6 text-neutral-800" title={artifact.path}>{artifact.path}</div>
+        <div className="mt-0.5 text-xs text-neutral-400">{artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}</div>
+      </div>
+    </div>
+  </div>
+)
+
+const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> }> = ({ artifact }) => {
+  const [open, setOpen] = useState(false)
+  const lines = artifact.diff.split(/\r?\n/)
+  const additions = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
+  const deletions = lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex h-11 w-full items-center justify-between gap-3 px-3 text-left hover:bg-neutral-50"
+      >
+        <span className="inline-flex min-w-0 items-center gap-2">
+          <GitBranch className="h-4 w-4 shrink-0 text-blue-500" />
+          <span className="min-w-0">
+            <span className="block truncate text-[13px] leading-6 text-neutral-900">{artifact.filePath}</span>
+            <span className="block text-xs text-neutral-400">+{additions} / -{deletions}</span>
+          </span>
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" />
+      )}
+    </div>
+  )
+}
+
+const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({ diff, maxHeightClassName = 'max-h-96' }) => {
+  const rows = useMemo(() => parseDiffRows(diff), [diff])
+
+  return (
+    <div className={cn('overflow-auto border-t border-neutral-200 bg-white text-[13px]', maxHeightClassName)}>
+      <div className="agenthub-readable-code min-w-max py-1 leading-7">
+        {rows.map((row, index) => (
+          <div
+            key={`${index}-${row.text}`}
+            className={cn(
+              'grid grid-cols-[3.25rem_3.25rem_minmax(32rem,1fr)] border-l-4 pr-4',
+              row.kind === 'add' && 'border-emerald-500 bg-emerald-50 text-emerald-950',
+              row.kind === 'del' && 'border-red-500 bg-red-50 text-red-950',
+              row.kind === 'hunk' && 'border-blue-300 bg-blue-50 text-blue-700',
+              row.kind === 'meta' && 'border-transparent bg-neutral-50 text-neutral-500',
+              row.kind === 'context' && 'border-transparent text-neutral-800'
+            )}
+          >
+            <span className={cn('select-none border-r border-neutral-100 px-2 text-right text-neutral-400', row.kind === 'add' && 'text-emerald-600', row.kind === 'del' && 'text-red-600')}>
+              {row.oldNumber ?? ''}
+            </span>
+            <span className={cn('select-none border-r border-neutral-100 px-2 text-right text-neutral-400', row.kind === 'add' && 'text-emerald-600', row.kind === 'del' && 'text-red-600')}>
+              {row.newNumber ?? ''}
+            </span>
+            <code className="whitespace-pre px-3">
+              <span className={cn('mr-2 inline-block w-3 select-none', row.kind === 'add' && 'text-emerald-600', row.kind === 'del' && 'text-red-600')}>
+                {row.marker}
+              </span>
+              {row.text}
+            </code>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'preview' }> }> = ({ artifact }) => {
+  const [open, setOpen] = useState(artifact.previewKind === 'static-html')
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+      <div className="flex h-11 items-center justify-between gap-3 px-3">
+        <button type="button" onClick={() => setOpen((value) => !value)} className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
+          <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
+          <span className="min-w-0">
+            <span className="block truncate text-xs font-medium text-neutral-900">{artifact.title}</span>
+            <span className="block truncate text-[11px] text-neutral-400">{artifact.url}</span>
+          </span>
+        </button>
+        <a
+          href={artifact.url}
+          target="_blank"
+          rel="noreferrer"
+          className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+          title="新窗口打开"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      </div>
+      {open && (
+        <div className="border-t border-neutral-200 bg-neutral-50 p-2">
+          <iframe title={artifact.title} src={artifact.url} className="h-80 w-full rounded-md border border-neutral-200 bg-white" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy' }> }> = ({ artifact }) => (
+  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+    <div className="flex items-center gap-2">
+      <Rocket className="h-4 w-4 shrink-0 text-emerald-700" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-semibold text-emerald-900">{artifact.title}</div>
+        <div className="mt-0.5 truncate text-[11px] text-emerald-700">
+          {artifact.provider} · {deployStatusLabel(artifact.status)}
+        </div>
+      </div>
+      {artifact.url && (
+        <a href={artifact.url} target="_blank" rel="noreferrer" className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100" title="打开部署">
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
+    </div>
+  </div>
+)
+
+function deployStatusLabel(status: Extract<AgentArtifact, { type: 'deploy' }>['status']) {
+  if (status === 'ready') return '已就绪'
+  if (status === 'running') return '部署中'
+  if (status === 'failed') return '失败'
+  return '待部署'
+}
+
+type DiffRow = {
+  kind: 'add' | 'context' | 'del' | 'hunk' | 'meta'
+  marker: string
+  newNumber?: number
+  oldNumber?: number
+  text: string
+}
+
+function parseDiffRows(diff: string): DiffRow[] {
+  const rows: DiffRow[] = []
+  let oldLine: number | undefined
+  let newLine: number | undefined
+
+  for (const rawLine of diff.split(/\r?\n/)) {
+    if (rawLine.startsWith('@@')) {
+      const match = rawLine.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)$/)
+      oldLine = match ? Number(match[1]) : undefined
+      newLine = match ? Number(match[2]) : undefined
+      rows.push({ kind: 'hunk', marker: '@@', text: rawLine })
+      continue
+    }
+
+    if (rawLine.startsWith('diff --git') || rawLine.startsWith('index ') || rawLine.startsWith('--- ') || rawLine.startsWith('+++ ')) {
+      rows.push({ kind: 'meta', marker: '', text: rawLine })
+      continue
+    }
+
+    if (rawLine.startsWith('+')) {
+      rows.push({ kind: 'add', marker: '+', newNumber: newLine, text: rawLine.slice(1) })
+      if (newLine !== undefined) newLine += 1
+      continue
+    }
+
+    if (rawLine.startsWith('-')) {
+      rows.push({ kind: 'del', marker: '-', oldNumber: oldLine, text: rawLine.slice(1) })
+      if (oldLine !== undefined) oldLine += 1
+      continue
+    }
+
+    const text = rawLine.startsWith(' ') ? rawLine.slice(1) : rawLine
+    rows.push({ kind: 'context', marker: '', oldNumber: oldLine, newNumber: newLine, text })
+    if (oldLine !== undefined) oldLine += 1
+    if (newLine !== undefined) newLine += 1
+  }
+
+  return rows
+}
+
+const AlertCircleIcon: FC = () => <span className="grid h-4 w-4 place-items-center rounded-full border border-neutral-300 text-[10px]">!</span>
+
+function formatRunDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms <= 0) return '0s'
+  const totalSeconds = Math.max(1, Math.round(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes <= 0) return `${seconds}s`
+  return `${minutes}m ${seconds}s`
+}
+
+function codeAgentStatusLabel(status: CodeAgentRunMetadata['status']) {
+  if (status === 'running') return '正在执行'
+  if (status === 'completed') return '执行完成'
+  if (status === 'cancelled') return '已停止'
+  if (status === 'timed-out') return '已超时'
+  return '执行失败'
+}
+
+function runtimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
+  if (runtime === 'claude-code') return 'Claude Code'
+  if (runtime === 'opencode') return 'OpenCode'
+  return 'Codex'
+}
+
+function logStreamLabel(stream: NonNullable<CodeAgentRunMetadata['logs']>[number]['stream']) {
+  if (stream === 'stderr') return '错误'
+  if (stream === 'event') return '事件'
+  return '输出'
+}
+
+function fileStatusLabel(status: CodeAgentRunMetadata['files'][number]['status']) {
+  if (status === 'created') return '创建'
+  if (status === 'modified') return '修改'
+  if (status === 'deleted') return '删除'
+  if (status === 'renamed') return '重命名'
+  return '未跟踪'
+}
+
+function vscodeFileHref(filePath: string, cwd?: string) {
+  const absolutePath = absoluteEditorPath(filePath, cwd)
+  if (!absolutePath) return null
+  const normalized = absolutePath.replace(/\\/g, '/')
+  return `vscode://file/${encodeURI(normalized).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
+}
+
+function absoluteEditorPath(filePath: string, cwd?: string) {
+  const trimmed = filePath.trim()
+  if (!trimmed) return null
+  if (/^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith('/')) return trimmed
+  const root = cwd?.trim()
+  if (!root || (!/^[a-zA-Z]:[\\/]/.test(root) && !root.startsWith('/'))) return null
+  return `${root.replace(/[\\/]+$/, '')}/${trimmed.replace(/^[\\/]+/, '')}`
+}
+
 const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
   const navigate = useNavigate()
   const currentSessionId = useChatStore((state) => state.currentSessionId)
@@ -943,11 +1846,12 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
   const [plan, setPlan] = useState(data)
   const [saving, setSaving] = useState(false)
   const [dispatching, setDispatching] = useState(false)
-  const [result, setResult] = useState<OrchestratorDispatchResult | null>(null)
+  const [result, setResult] = useState<OrchestratorDispatchResult | null>(data.dispatchResult ?? null)
   const [error, setError] = useState('')
 
   useEffect(() => {
     setPlan(data)
+    setResult(data.dispatchResult ?? null)
   }, [data])
 
   function patchTask(taskId: string, patch: Partial<{ agentKey: string; status: TaskStatus }>) {
@@ -1146,25 +2050,39 @@ const SystemMessage: FC = () => (
   </MessagePrimitive.Root>
 )
 
-const AssistantActionBar: FC = () => (
-  <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" autohideFloat="single-branch" className="mt-2 flex items-center gap-1 text-neutral-400">
-    <ActionBarPrimitive.Copy asChild>
-      <ToolButton aria-label="复制">
-        <MessagePrimitive.If copied>
-          <Check className="h-3.5 w-3.5" />
-        </MessagePrimitive.If>
-        <MessagePrimitive.If copied={false}>
-          <Copy className="h-3.5 w-3.5" />
-        </MessagePrimitive.If>
+const AssistantActionBar: FC = () => {
+  const messageId = useMessage((message) => message.id)
+  const regenerateMessage = useChatStore((state) => state.regenerateMessage)
+  const [regenerating, setRegenerating] = useState(false)
+
+  async function regenerate() {
+    if (messageId === 'agenthub-thinking' || regenerating) return
+    setRegenerating(true)
+    try {
+      await regenerateMessage(messageId)
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
+  return (
+    <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" autohideFloat="single-branch" className="mt-2 flex items-center gap-1 text-neutral-400">
+      <ActionBarPrimitive.Copy asChild>
+        <ToolButton aria-label="复制" title="复制">
+          <MessagePrimitive.If copied>
+            <Check className="h-3.5 w-3.5" />
+          </MessagePrimitive.If>
+          <MessagePrimitive.If copied={false}>
+            <Copy className="h-3.5 w-3.5" />
+          </MessagePrimitive.If>
+        </ToolButton>
+      </ActionBarPrimitive.Copy>
+      <ToolButton aria-label="重新生成" title="重新生成" onClick={regenerate} disabled={regenerating}>
+        <RefreshCw className={cn('h-3.5 w-3.5', regenerating && 'animate-spin')} />
       </ToolButton>
-    </ActionBarPrimitive.Copy>
-    <ActionBarPrimitive.Reload asChild>
-      <ToolButton aria-label="重新生成">
-        <RefreshCw className="h-3.5 w-3.5" />
-      </ToolButton>
-    </ActionBarPrimitive.Reload>
-  </ActionBarPrimitive.Root>
-)
+    </ActionBarPrimitive.Root>
+  )
+}
 
 const BranchPicker: FC = () => (
   <BranchPickerPrimitive.Root hideWhenSingleBranch className="mt-1 flex items-center gap-1 text-xs text-neutral-400">
@@ -1184,14 +2102,60 @@ const BranchPicker: FC = () => (
   </BranchPickerPrimitive.Root>
 )
 
-const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => (
-  <div className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-full', role === 'assistant' ? 'bg-[#eef8f6] text-[#87a9a4]' : 'bg-blue-500 text-white')}>
-    {role === 'assistant' ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
-  </div>
-)
+const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
+  const runtime = useMessage((message) => (role === 'assistant' ? codeAgentRuntimeFromParts(message.content) : null))
+
+  if (role === 'assistant' && runtime) {
+    return (
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-neutral-200 bg-white shadow-sm" title={codeAgentRuntimeLabel(runtime)}>
+        <img src={codeAgentLogoSrc(runtime)} alt={codeAgentRuntimeLabel(runtime)} className="h-5 w-5 object-contain" />
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-full', role === 'assistant' ? 'bg-[#eef8f6] text-[#87a9a4]' : 'bg-blue-500 text-white')}>
+      {role === 'assistant' ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
+    </div>
+  )
+}
+
+function codeAgentRuntimeFromParts(parts: unknown): CodeAgentRunMetadata['runtime'] | null {
+  if (!Array.isArray(parts)) return null
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue
+    const item = part as { data?: unknown; name?: unknown; type?: unknown }
+    if (item.type !== 'data') continue
+    if (item.name === 'agent_avatar') {
+      const runtime = (item.data as { runtime?: unknown } | null)?.runtime
+      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode') return runtime
+    }
+    if (item.name === 'code_agent_run') {
+      const runtime = (item.data as { runtime?: unknown } | null)?.runtime
+      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode') return runtime
+    }
+  }
+  return null
+}
+
+function codeAgentLogoSrc(runtime: CodeAgentRunMetadata['runtime']) {
+  if (runtime === 'claude-code') return '/claude-color.svg'
+  if (runtime === 'opencode') return '/opencode.svg'
+  return '/codex-color.svg'
+}
+
+function codeAgentRuntimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
+  if (runtime === 'claude-code') return 'Claude Code'
+  if (runtime === 'opencode') return 'OpenCode'
+  return 'Codex'
+}
 
 const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
-  <button className={cn('grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700', className)} {...props} />
+  <button
+    type="button"
+    className={cn('grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 disabled:pointer-events-none disabled:opacity-45', className)}
+    {...props}
+  />
 )
 
 function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {

@@ -1,9 +1,10 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, AtSign, ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, MessageSquare, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
+import { ArrowUp, AtSign, ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
-import { Thread } from '../components/assistant-ui/Thread'
-import { api, type Workspace } from '../lib/api'
+import { TypewriterHeading } from '../components/chat/TypewriterHeading'
+import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
+import { api, type SkillSummary, type Workspace } from '../lib/api'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { useChatStore } from '../stores/chatStore'
 
@@ -33,16 +34,20 @@ export default function ChatPage() {
     <div className="flex h-screen overflow-hidden bg-white text-neutral-950">
       <div
         aria-hidden={sidebarCollapsed}
-        className={[
-          'h-full shrink-0 overflow-hidden',
-          sidebarCollapsed ? 'w-0' : 'w-64',
-        ].join(' ')}
+        className="h-full shrink-0 overflow-hidden"
+        style={{
+          width: sidebarCollapsed ? 0 : 256,
+          transition: 'width 300ms cubic-bezier(0.4,0,0.2,1)',
+        }}
       >
         <div
           className={[
-            'h-full w-64 transform-gpu transition-[opacity,transform] duration-200 ease-out will-change-transform',
+            'h-full w-64 transform-gpu will-change-transform',
             sidebarCollapsed ? 'pointer-events-none -translate-x-full opacity-0' : 'translate-x-0 opacity-100',
           ].join(' ')}
+          style={{
+            transition: 'opacity 300ms cubic-bezier(0.4,0,0.2,1), transform 300ms cubic-bezier(0.4,0,0.2,1)',
+          }}
         >
           <SessionList />
         </div>
@@ -68,11 +73,17 @@ function Welcome({
   onToggleSidebar: () => void
 }) {
   const navigate = useNavigate()
+  const messageInputRef = useRef<HTMLTextAreaElement>(null)
   const createSession = useChatStore((state) => state.createSession)
   const selectSession = useChatStore((state) => state.selectSession)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
   const sendMessageToSession = useChatStore((state) => state.sendMessageToSession)
   const [message, setMessage] = useState('')
+  const [skills, setSkills] = useState<SkillSummary[]>([])
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillPanelOpen, setSkillPanelOpen] = useState(false)
+  const [skillQuery, setSkillQuery] = useState('')
+  const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
@@ -107,9 +118,68 @@ function Welcome({
     }
   }, [projectMenuOpen])
 
+  useEffect(() => {
+    if (!skillPanelOpen || skills.length) return
+    let cancelled = false
+    setSkillsLoading(true)
+    api
+      .listSkills()
+      .then(({ items }) => {
+        if (!cancelled) setSkills(items)
+      })
+      .catch(() => {
+        if (!cancelled) setSkills([])
+      })
+      .finally(() => {
+        if (!cancelled) setSkillsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [skillPanelOpen, skills.length])
+
   function showHint(text: string) {
     setHint(text)
     window.setTimeout(() => setHint(''), 1800)
+  }
+
+  function closeSkillPanel() {
+    setSkillPanelOpen(false)
+    setSkillCommandRange(null)
+    setSkillQuery('')
+  }
+
+  function handleMessageChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    const input = event.currentTarget
+    const nextMessage = input.value
+    const cursor = input.selectionStart ?? nextMessage.length
+    const command = readSlashCommand(nextMessage, cursor)
+    setMessage(nextMessage)
+    if (command) {
+      setProjectMenuOpen(false)
+      setSkillQuery(command.query)
+      setSkillCommandRange({ start: command.start, end: command.end })
+      setSkillPanelOpen(true)
+    } else {
+      closeSkillPanel()
+    }
+  }
+
+  function insertSkillReference(skill: SkillSummary) {
+    const input = messageInputRef.current
+    const reference = `$${skill.id || skill.name} `
+    const cursor = input?.selectionStart ?? message.length
+    const liveCommand = input ? readSlashCommand(input.value, cursor) : null
+    const range = liveCommand ?? skillCommandRange ?? { start: message.length, end: message.length }
+    const nextMessage = `${message.slice(0, range.start)}${reference}${message.slice(range.end)}`
+    setMessage(nextMessage)
+    closeSkillPanel()
+    showHint(`已选择 Skill：${skill.name || skill.id}`)
+    window.requestAnimationFrame(() => {
+      const nextCursor = range.start + reference.length
+      messageInputRef.current?.focus()
+      messageInputRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
   }
 
   async function startThread(content: string) {
@@ -131,12 +201,6 @@ function Welcome({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     await startThread(message)
-  }
-
-  async function createBlankThread() {
-    const session = await createSession('新会话')
-    await selectSession(session.id)
-    navigate(`/chat/${session.id}`)
   }
 
   async function openWorkspace(workspaceId: string) {
@@ -235,28 +299,12 @@ function Welcome({
             <span className="text-neutral-500">对话由 AI 生成</span>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={createBlankThread}
-            className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100"
-            aria-label="新建"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => void startThread('介绍一下 AgentHub 当前可以做什么')}
-            className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100"
-            aria-label="对话"
-          >
-            <MessageSquare className="h-4 w-4" />
-          </button>
-        </div>
       </header>
 
       <div className="flex flex-1 flex-col items-center px-8">
         <section className="mt-[18vh] w-full max-w-[704px]">
           <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
-            有什么可以帮忙的？
+            <TypewriterHeading text="有什么可以帮忙的？" />
           </h2>
           <p className="mt-3 text-base text-neutral-500">
             创建 Agent、拆解任务，或直接 @ 某个助手开始协作。
@@ -270,8 +318,8 @@ function Welcome({
             />
             <PromptCard
               title="解释架构"
-              text="这个项目如何接入 assistant-ui"
-              onClick={() => startThread('解释这个项目如何接入 assistant-ui，并指出后续可完善的地方')}
+              text="这个项目的具体技术栈"
+              onClick={() => startThread('解释这个项目的具体技术栈，并指出后续可完善的地方')}
             />
           </div>
         </section>
@@ -282,6 +330,15 @@ function Welcome({
             className="relative rounded-[22px] border border-neutral-200 bg-white p-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)]"
           >
             {hint && <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">{hint}</div>}
+            {skillPanelOpen && (
+              <SkillCommandPanel
+                query={skillQuery}
+                skills={skills}
+                loading={skillsLoading}
+                onPick={insertSkillReference}
+                onClose={closeSkillPanel}
+              />
+            )}
             {projectMenuOpen && (
               <div className="absolute bottom-[4.5rem] left-3 z-20 w-80 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl">
                 <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
@@ -367,9 +424,19 @@ function Welcome({
               </div>
             )}
             <textarea
+              ref={messageInputRef}
               value={message}
-              onChange={(event) => setMessage(event.target.value)}
+              onChange={handleMessageChange}
               onKeyDown={(event) => {
+                if (event.key === 'Escape' && skillPanelOpen) {
+                  event.preventDefault()
+                  closeSkillPanel()
+                  return
+                }
+                if (skillPanelOpen && event.key === 'Enter') {
+                  event.preventDefault()
+                  return
+                }
                 if (event.key === 'Enter' && !event.shiftKey) {
                   event.preventDefault()
                   void startThread(message)

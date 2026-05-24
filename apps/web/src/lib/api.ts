@@ -47,6 +47,79 @@ export interface Message {
   createdAt: string
 }
 
+export interface ChatAttachment {
+  id: string
+  type: 'image'
+  name: string
+  mimeType: string
+  size: number
+  dataUrl: string
+}
+
+export type AgentArtifact =
+  | {
+      id: string
+      type: 'diff'
+      title: string
+      description?: string
+      source?: string
+      createdAt?: string
+      filePath: string
+      status?: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+      language?: string
+      diff: string
+    }
+  | {
+      id: string
+      type: 'preview'
+      title: string
+      description?: string
+      source?: string
+      createdAt?: string
+      url: string
+      previewKind: 'dev-server' | 'static-html' | 'iframe'
+    }
+  | {
+      id: string
+      type: 'file'
+      title: string
+      description?: string
+      source?: string
+      createdAt?: string
+      path: string
+      status?: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+      mimeType?: string
+      size?: number
+    }
+  | {
+      id: string
+      type: 'deploy'
+      title: string
+      description?: string
+      source?: string
+      createdAt?: string
+      provider: 'vercel' | 'static' | 'unknown'
+      status: 'pending' | 'running' | 'ready' | 'failed'
+      url?: string
+      logs?: string
+    }
+
+export interface CodeAgentRunMetadata {
+  type: 'code-agent-run'
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
+  runtime: 'codex' | 'claude-code' | 'opencode'
+  command: string
+  cwd?: string
+  durationMs: number
+  exitCode: number
+  commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
+  files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'; diff?: string }>
+  toolCalls?: Array<{ id: string; name: string; label: string; target?: string; detail?: string }>
+  artifacts?: AgentArtifact[]
+  logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
+  diagnostics?: string
+}
+
 export interface ModelCatalogItem {
   id: string
   enabled: boolean
@@ -140,6 +213,14 @@ export interface CodexLoginPoll extends CodexAuthAction {
   interval?: number
 }
 
+export interface CodexConfigFile {
+  ok: boolean
+  exists: boolean
+  path: string
+  content: string
+  message: string
+}
+
 export interface Workspace {
   id: string
   ownerId: string
@@ -170,6 +251,39 @@ export interface WorkspaceAgent {
   approvalRequired: boolean
   orderIdx: number
   createdAt: string
+}
+
+export interface SkillSummary {
+  id: string
+  name: string
+  description: string
+  rootPath: string
+  skillPath: string
+  source: string
+}
+
+export interface LoadedSkill extends SkillSummary {
+  body: string
+}
+
+export interface SkillInstallResult {
+  ok: boolean
+  installed?: SkillSummary | null
+  message: string
+}
+
+export interface SkillhubSearchItem {
+  slug: string
+  title: string
+  description: string
+  version?: string
+  source: string
+}
+
+export interface SkillhubSearchResult {
+  ok: boolean
+  items: SkillhubSearchItem[]
+  message: string
 }
 
 export interface AgentConfigInput {
@@ -211,6 +325,11 @@ export interface WorkspaceFull {
   tasks: WorkspaceTask[]
 }
 
+export interface WorkspaceActiveRun {
+  agentId: string | null
+  sessionId: string
+}
+
 export type WorkspaceFolderOpenResult =
   | { cancelled: true; projectPath: null; workspace?: null }
   | { cancelled: false; projectPath: string; workspace?: Workspace | null }
@@ -239,6 +358,7 @@ export interface OrchestratorPlan {
   agents: OrchestratorPlanAgent[]
   tasks: OrchestratorPlanTask[]
   messageId?: string
+  dispatchResult?: OrchestratorDispatchResult
 }
 
 export interface OrchestratorDispatchResult {
@@ -251,7 +371,7 @@ export const api = {
   // Sessions
   listSessions: () => request<{ items: Session[] }>('/sessions'),
   getSession: (id: string) => request<Session>(`/sessions/${id}`),
-  createSession: (data: { title: string; type?: 'direct' | 'group' }) =>
+  createSession: (data: { title: string; type?: 'direct' | 'group'; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
     request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
 
@@ -266,7 +386,7 @@ export const api = {
 
   sendMessageWithModel: (
     sessionId: string,
-    data: { content: string; modelId?: string; type?: string; skipAgentReply?: boolean }
+    data: { content: string; modelId?: string; type?: string; skipAgentReply?: boolean; attachments?: ChatAttachment[]; displayContent?: string }
   ) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
@@ -276,11 +396,27 @@ export const api = {
         metadata: {
           ...(data.modelId ? { modelId: data.modelId } : {}),
           ...(data.skipAgentReply || mentionsOrchestrator(data.content) ? { skipAgentReply: true } : {}),
+          ...(data.attachments?.length ? { attachments: data.attachments } : {}),
+          ...(data.displayContent !== undefined ? { displayContent: data.displayContent } : {}),
         },
       }),
     }),
   cancelMessage: (sessionId: string) =>
     request<{ cancelled: boolean }>(`/messages/${sessionId}/cancel`, {
+      method: 'POST',
+    }),
+  updateMessage: (sessionId: string, messageId: string, data: { content: string }) =>
+    request<Message>(`/messages/${sessionId}/${messageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  withdrawMessage: (sessionId: string, messageId: string, data: { rollback?: boolean } = {}) =>
+    request<{ removedMessageIds: string[]; rollback: { reverted: number; failed: number } }>(
+      `/messages/${sessionId}/${messageId}${data.rollback === false ? '?rollback=false' : ''}`,
+      { method: 'DELETE' }
+    ),
+  regenerateMessage: (sessionId: string, messageId: string) =>
+    request<{ removedMessageId: string }>(`/messages/${sessionId}/${messageId}/regenerate`, {
       method: 'POST',
     }),
   createOrchestratorPlan: (sessionId: string, content: string) =>
@@ -335,6 +471,20 @@ export const api = {
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
   getOpencodeModels: () =>
     request<OpencodeModelsResponse>('/coding-tools/opencode/models'),
+  getCodexConfig: () =>
+    request<CodexConfigFile>('/coding-tools/codex/config'),
+  saveCodexConfig: (content: string) =>
+    request<CodexConfigFile>('/coding-tools/codex/config', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  getCodexAuthFile: () =>
+    request<CodexConfigFile>('/coding-tools/codex/auth-file'),
+  saveCodexAuthFile: (content: string) =>
+    request<CodexConfigFile>('/coding-tools/codex/auth-file', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
   getCodexAuthStatus: () => request<CodexAuthStatus>('/coding-tools/codex/auth/status'),
   startCodexChatGptLogin: () =>
     request<CodexLoginStart>('/coding-tools/codex/auth/start', { method: 'POST' }),
@@ -349,6 +499,22 @@ export const api = {
     request<CodexAuthAction>('/coding-tools/codex/auth/retry', { method: 'POST' }),
   logoutCodexChatGpt: () =>
     request<CodexAuthAction>('/coding-tools/codex/auth/logout', { method: 'POST' }),
+
+  // Skills
+  listSkills: () => request<{ items: SkillSummary[] }>('/skills'),
+  getSkill: (id: string) => request<LoadedSkill>(`/skills/${encodeURIComponent(id)}`),
+  installSkill: (data: { sourceUrl: string; id?: string }) =>
+    request<SkillInstallResult>('/skills/install', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  searchSkillhub: (q: string) =>
+    request<SkillhubSearchResult>(`/skills/skillhub/search?q=${encodeURIComponent(q)}`),
+  installSkillhub: (slug: string) =>
+    request<SkillInstallResult>('/skills/skillhub/install', {
+      method: 'POST',
+      body: JSON.stringify({ slug }),
+    }),
   // Workspaces (Agent Group)
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
   createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>
@@ -356,6 +522,7 @@ export const api = {
   openWorkspaceFolder: () =>
     request<WorkspaceFolderOpenResult>('/workspaces/open-folder', { method: 'POST' }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
+  getWorkspaceActiveRuns: (id: string) => request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
   updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>
     request<WorkspaceFull>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteWorkspace: (id: string) => request<void>(`/workspaces/${id}`, { method: 'DELETE' }),

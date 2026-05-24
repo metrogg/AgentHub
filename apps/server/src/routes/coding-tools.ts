@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -86,6 +86,32 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/opencode/models', async (c) => {
     return c.json(await getOpencodeModels(), 200)
+  })
+  .get('/codex/config', async (c) => {
+    return c.json(readCodexConfig(), 200)
+  })
+  .post('/codex/config', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { content?: unknown }
+    if (typeof body.content !== 'string') {
+      return c.json({ ok: false, message: 'content is required' }, 400)
+    }
+    if (body.content.length > 200_000) {
+      return c.json({ ok: false, message: 'config.toml is too large' }, 400)
+    }
+    return c.json(writeCodexConfig(body.content), 200)
+  })
+  .get('/codex/auth-file', async (c) => {
+    return c.json(readCodexAuthFile(), 200)
+  })
+  .post('/codex/auth-file', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { content?: unknown }
+    if (typeof body.content !== 'string') {
+      return c.json({ ok: false, message: 'content is required' }, 400)
+    }
+    if (body.content.length > 200_000) {
+      return c.json({ ok: false, message: 'auth.json is too large' }, 400)
+    }
+    return c.json(writeCodexAuthFile(body.content), 200)
   })
   .get('/codex/auth/status', async (c) => {
     if (!env.ENABLE_CODEX_CHATGPT_AUTH) return c.json(await getApiKeyAuthStatus())
@@ -175,6 +201,150 @@ async function getOpencodeModels() {
           ? `Loaded ${models.length} model${models.length === 1 ? '' : 's'} from OpenCode config.`
           : limitOutput(command.output || 'OpenCode model list is empty.', 800),
   }
+}
+
+function codexConfigPath() {
+  return resolve(Bun.env.CODEX_HOME?.trim() || resolve(homedir(), '.codex'), 'config.toml')
+}
+
+function codexAuthFilePath() {
+  return resolve(Bun.env.CODEX_HOME?.trim() || resolve(homedir(), '.codex'), 'auth.json')
+}
+
+function readCodexConfig() {
+  const path = codexConfigPath()
+  try {
+    const content = readFileSync(path, 'utf8')
+    return {
+      ok: true,
+      exists: true,
+      path,
+      content,
+      message: '已读取 Codex config.toml。',
+    }
+  } catch {
+    return {
+      ok: true,
+      exists: false,
+      path,
+      content: defaultCodexConfig(),
+      message: '未找到 config.toml，已生成默认模板。',
+    }
+  }
+}
+
+function readCodexAuthFile() {
+  const path = codexAuthFilePath()
+  try {
+    const content = readFileSync(path, 'utf8')
+    return {
+      ok: true,
+      exists: true,
+      path,
+      content,
+      message: '已读取 Codex auth.json。',
+    }
+  } catch {
+    return {
+      ok: true,
+      exists: false,
+      path,
+      content: defaultCodexAuthFile(),
+      message: '未找到 auth.json，已生成默认模板。',
+    }
+  }
+}
+
+function writeCodexConfig(content: string) {
+  const validationError = validateCodexConfig(content)
+  if (validationError) {
+    return {
+      ok: false,
+      exists: existsSync(codexConfigPath()),
+      path: codexConfigPath(),
+      content,
+      message: validationError,
+    }
+  }
+  const path = codexConfigPath()
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, content, 'utf8')
+  return {
+    ok: true,
+    exists: true,
+    path,
+    content,
+    message: 'Codex config.toml 已保存。',
+  }
+}
+
+function writeCodexAuthFile(content: string) {
+  const validationError = validateCodexAuthFile(content)
+  if (validationError) {
+    return {
+      ok: false,
+      exists: existsSync(codexAuthFilePath()),
+      path: codexAuthFilePath(),
+      content,
+      message: validationError,
+    }
+  }
+  const path = codexAuthFilePath()
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, content, 'utf8')
+  return {
+    ok: true,
+    exists: true,
+    path,
+    content,
+    message: 'Codex auth.json 已保存。',
+  }
+}
+
+function validateCodexConfig(content: string) {
+  if (/^\s*model_reasoning_effort\s*=/m.test(content)) {
+    return '当前 Codex CLI 不支持 model_reasoning_effort，请删除这一行后保存。'
+  }
+  const provider = content.match(/^\s*model_provider\s*=\s*"([^"]*)"/m)?.[1]?.trim()
+  if (provider === '') return 'model_provider 不能为空。'
+  if (!provider) return null
+  if (provider === 'openai') return null
+  const escaped = provider.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const tablePattern = new RegExp(`^\\s*\\[model_providers\\.${escaped}\\]\\s*$`, 'm')
+  if (!tablePattern.test(content)) {
+    return `model_provider "${provider}" 没有对应的 [model_providers.${provider}] 配置。`
+  }
+  return null
+}
+
+function validateCodexAuthFile(content: string) {
+  if (!content.trim()) return null
+  try {
+    JSON.parse(content)
+    return null
+  } catch (error: any) {
+    return `auth.json 不是有效 JSON：${error?.message || 'parse failed'}`
+  }
+}
+
+function defaultCodexAuthFile() {
+  return JSON.stringify({ OPENAI_API_KEY: '' }, null, 2)
+}
+
+function defaultCodexConfig() {
+  return [
+    'model_provider = "openai"',
+    'model = "gpt-5.5"',
+    '',
+    '# Example custom provider:',
+    '# model_provider = "agenthub-openai-compatible"',
+    '# [model_providers.agenthub-openai-compatible]',
+    '# name = "AgentHub"',
+    '# base_url = "https://api.openai.com/v1"',
+    '# env_key = "OPENAI_API_KEY"',
+    '# wire_api = "responses"',
+    '',
+  ].join('\n')
 }
 
 function readOpencodeConfig() {
@@ -463,6 +633,7 @@ function cleanEnvValue(value?: string) {
 
 async function isDirectToolConfigured(probe: ToolProbe, configEnv: string) {
   if (cleanEnvValue(readEnv(configEnv))) return true
+  if (probe.id === 'codex' && readCodexConfig().exists) return true
   if (probe.id === 'opencode') {
     const opencode = await getOpencodeModels()
     return Boolean(opencode.defaultModel || opencode.models.length > 0)

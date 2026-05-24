@@ -20,7 +20,7 @@ import {
   asc,
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
-import type { AgentRunProfile } from '../services/agent-runner'
+import { getActiveRunSessionIds, type AgentRunProfile } from '../services/agent-runner'
 
 const execFileAsync = promisify(execFile)
 
@@ -430,6 +430,23 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ session })
   })
 
+  .get('/:id/active-runs', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    await ensureWorkspace(id, user.sub)
+    const activeSessionIds = new Set(getActiveRunSessionIds())
+    if (!activeSessionIds.size) return c.json({ items: [] })
+    const workspaceSessions = await db.select().from(sessions).where(eq(sessions.workspaceId, id))
+    return c.json({
+      items: workspaceSessions
+        .filter((session) => activeSessionIds.has(session.id))
+        .map((session) => ({
+          agentId: session.workspaceAgentId,
+          sessionId: session.id,
+        })),
+    })
+  })
+
   // Delete
   .delete('/:id', async (c) => {
     const user = c.get('user')
@@ -616,7 +633,14 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     // Trigger agent reply asynchronously
     if (userMsg) {
       import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined).catch(() => {})
+        runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined)
+          .then(async () => {
+            await db
+              .update(workspaceTasks)
+              .set({ status: 'done', updatedAt: new Date() })
+              .where(eq(workspaceTasks.id, taskId))
+          })
+          .catch(() => {})
       })
     }
 

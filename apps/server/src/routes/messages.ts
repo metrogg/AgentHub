@@ -2,6 +2,10 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { unlink, writeFile } from 'node:fs/promises'
 import { sendMessageSchema } from '@agenthub/shared'
 import {
   db,
@@ -11,8 +15,10 @@ import {
   workspaceAgents,
   workspaces,
   workspaceTasks,
+  and,
   eq,
   asc,
+  desc,
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
@@ -30,6 +36,10 @@ const updateOrchestratorPlanSchema = z.object({
       status: z.enum(['pending', 'running', 'done']).optional(),
     })
   ),
+})
+
+const updateMessageSchema = z.object({
+  content: z.string().min(1).max(10000),
 })
 
 const PLAN_AGENTS = [
@@ -79,6 +89,12 @@ type PlanTask = {
   status?: 'pending' | 'running' | 'done'
 }
 
+type OrchestratorDispatchResult = {
+  workspaceId: string
+  groupSessionId?: string
+  tasks: Array<{ taskId: string; sessionId: string; title: string; agentName: string }>
+}
+
 type OrchestratorPlan = {
   kind: 'orchestrator_plan'
   title: string
@@ -86,7 +102,16 @@ type OrchestratorPlan = {
   summary: string
   agents: PlanAgent[]
   tasks: PlanTask[]
+  dispatchResult?: OrchestratorDispatchResult
 }
+
+type DispatchMonitor = {
+  dispatchId: string
+  groupSessionId?: string
+  taskIds: string[]
+}
+
+const summarizedDispatches = new Set<string>()
 
 export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -104,6 +129,95 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const { cancelAgentReply } = await import('../services/agent-runner')
     return c.json({ cancelled: cancelAgentReply(sessionId) })
   })
+  .patch('/:sessionId/:messageId', zValidator('json', updateMessageSchema), async (c) => {
+    const user = c.get('user')
+    const sessionId = c.req.param('sessionId')
+    const messageId = c.req.param('messageId')
+    const { content } = c.req.valid('json')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+
+    const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
+    if (!message || message.sessionId !== sessionId || message.senderType !== 'user' || message.senderId !== user.sub) {
+      throw new HTTPException(404, { message: 'Message not found' })
+    }
+
+    const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+    const [updated] = await db
+      .update(messages)
+      .set({
+        content,
+        metadata: {
+          ...metadata,
+          ...(typeof metadata.displayContent === 'string' ? { displayContent: content } : {}),
+          editedAt: new Date().toISOString(),
+        },
+      })
+      .where(eq(messages.id, messageId))
+      .returning()
+    if (!updated) throw new HTTPException(500, { message: 'Failed to update message' })
+    return c.json(updated)
+  })
+  .delete('/:sessionId/:messageId', async (c) => {
+    const user = c.get('user')
+    const sessionId = c.req.param('sessionId')
+    const messageId = c.req.param('messageId')
+    const rollback = c.req.query('rollback') !== 'false'
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+
+    const list = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, sessionId))
+      .orderBy(asc(messages.createdAt))
+    const targetIndex = list.findIndex((message) => message.id === messageId)
+    const target = targetIndex >= 0 ? list[targetIndex] : null
+    if (!target || target.senderType !== 'user' || target.senderId !== user.sub) {
+      throw new HTTPException(404, { message: 'Message not found' })
+    }
+
+    const affected = collectAffectedMessages(list, targetIndex)
+    const rollbackResult = rollback ? await rollbackCodeAgentChanges(session, affected) : { reverted: 0, failed: 0 }
+    const ids = [target.id, ...affected.map((message) => message.id)]
+    for (const id of ids) {
+      await db.delete(messages).where(eq(messages.id, id))
+    }
+    const { cancelAgentReply } = await import('../services/agent-runner')
+    cancelAgentReply(sessionId)
+    return c.json({ removedMessageIds: ids, rollback: rollbackResult })
+  })
+  .post('/:sessionId/:messageId/regenerate', async (c) => {
+    const user = c.get('user')
+    const sessionId = c.req.param('sessionId')
+    const messageId = c.req.param('messageId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+
+    const list = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, sessionId))
+      .orderBy(asc(messages.createdAt))
+    const messageIndex = list.findIndex((message) => message.id === messageId)
+    const message = messageIndex >= 0 ? list[messageIndex] : null
+    if (!message || message.senderType !== 'agent') throw new HTTPException(404, { message: 'Agent message not found' })
+    const previousUser = [...list.slice(0, messageIndex)].reverse().find((item) => item.senderType === 'user')
+    if (!previousUser) throw new HTTPException(400, { message: 'No user message to regenerate from' })
+
+    await db.delete(messages).where(eq(messages.id, message.id))
+    const { cancelAgentReply } = await import('../services/agent-runner')
+    cancelAgentReply(sessionId)
+    if (session.type === 'group' && session.workspaceId) {
+      runGroupReplies(session.workspaceId, sessionId, previousUser, previousUser.content).catch(() => {})
+    } else {
+      const profile = await profileForDirectSession(session)
+      import('../services/agent-runner').then(({ runAgentReply }) => {
+        runAgentReply(sessionId, previousUser, profile).catch(() => {})
+      })
+    }
+    return c.json({ removedMessageId: message.id })
+  })
   .post('/:sessionId', zValidator('json', sendMessageSchema), async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
@@ -116,6 +230,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (msg && !metadata?.skipAgentReply) {
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
       if (session?.type === 'group' && session.workspaceId) {
+        await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
         runGroupReplies(session.workspaceId, sessionId, msg, content).catch(() => {})
       } else {
         const profile = session ? await profileForDirectSession(session) : undefined
@@ -204,8 +319,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!parsed) throw new HTTPException(400, { message: 'Invalid plan metadata' })
 
     const [sourceSession] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    let result: OrchestratorDispatchResult
     if (sourceSession?.type === 'group' && sourceSession.workspaceId && sourceSession.ownerId === user.sub) {
-      return c.json(await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed))
+      result = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
+      await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result)
+      return c.json(result)
     }
 
     const [workspace] = await db
@@ -236,8 +354,9 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .returning()
 
     const agentByKey = new Map(parsed.agents.map((agent, index) => [agent.key, createdAgents[index]]))
-    const taskResults: Array<{ taskId: string; sessionId: string; title: string; agentName: string }> = []
+    const taskResults: OrchestratorDispatchResult['tasks'] = []
     const groupSession = await createWorkspaceGroupSession(workspace.id, workspace.name, user.sub, createdAgents)
+    const monitor: DispatchMonitor = { dispatchId: crypto.randomUUID(), groupSessionId: groupSession.id, taskIds: [] }
 
     for (const [index, task] of parsed.tasks.entries()) {
       const agent = agentByKey.get(task.agentKey)
@@ -253,18 +372,9 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         })
         .returning()
       if (!workspaceTask) continue
+      monitor.taskIds.push(workspaceTask.id)
 
-      const [childSession] = await db
-        .insert(sessions)
-        .values({
-          title: `${workspace.name} / ${agent?.role ?? '任务'} / ${task.title.slice(0, 24)}`,
-          type: 'direct',
-          ownerId: user.sub,
-          workspaceId: workspace.id,
-          workspaceAgentId: agent?.id ?? null,
-        })
-        .returning()
-      if (!childSession) continue
+      const childSession = await ensureAgentChildSession(workspace.id, workspace.name, user.sub, agent ?? null, task.title)
 
       await db
         .update(workspaceTasks)
@@ -285,7 +395,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       if (userMsg) {
         import('../services/agent-runner').then(({ runAgentReply }) => {
           runAgentReply(childSession.id, userMsg, agent ? toAgentProfile(agent, workspace.projectPath) : undefined)
-            .then(() => markWorkspaceTaskDone(workspaceTask.id))
+            .then(() => markWorkspaceTaskDone(workspaceTask.id, monitor))
             .catch(() => {})
         })
       }
@@ -298,7 +408,9 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       })
     }
 
-    return c.json({ workspaceId: workspace.id, groupSessionId: groupSession.id, tasks: taskResults })
+    result = { workspaceId: workspace.id, groupSessionId: groupSession.id, tasks: taskResults }
+    await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result)
+    return c.json(result)
   })
 
 async function buildDynamicOrchestratorPlan(
@@ -698,14 +810,69 @@ async function createWorkspaceGroupSession(
     ...agents.map((agent) => ({ sessionId: session.id, memberType: 'agent' as const, memberId: agent.id })),
   ])
 
+  for (const agent of agents) {
+    await ensureAgentChildSession(workspaceId, workspaceName, ownerId, agent)
+  }
+
   return session
+}
+
+async function ensureAgentChildSession(
+  workspaceId: string,
+  workspaceName: string,
+  ownerId: string,
+  agent: typeof workspaceAgents.$inferSelect | null,
+  taskTitle?: string
+) {
+  if (agent) {
+    const [existing] = await db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.ownerId, ownerId),
+          eq(sessions.type, 'direct'),
+          eq(sessions.workspaceId, workspaceId),
+          eq(sessions.workspaceAgentId, agent.id)
+        )
+      )
+      .orderBy(desc(sessions.updatedAt))
+      .limit(1)
+    if (existing) return existing
+  }
+
+  const [created] = await db
+    .insert(sessions)
+    .values({
+      title: agent ? `${workspaceName} / ${agent.name}` : `${workspaceName} / ${taskTitle?.slice(0, 24) || 'Agent'}`,
+      type: 'direct',
+      ownerId,
+      workspaceId,
+      workspaceAgentId: agent?.id ?? null,
+    })
+    .returning()
+  if (!created) throw new HTTPException(500, { message: 'Failed to create agent child session' })
+  return created
+}
+
+async function ensureWorkspaceAgentChildSessions(workspaceId: string, ownerId: string) {
+  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+  if (!workspace || workspace.ownerId !== ownerId) return
+  const agents = await db
+    .select()
+    .from(workspaceAgents)
+    .where(eq(workspaceAgents.workspaceId, workspaceId))
+    .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+  for (const agent of agents) {
+    await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent)
+  }
 }
 
 async function dispatchPlanToExistingGroup(
   session: typeof sessions.$inferSelect,
   ownerId: string,
   plan: OrchestratorPlan
-) {
+): Promise<OrchestratorDispatchResult> {
   if (!session.workspaceId) throw new HTTPException(400, { message: 'Session is not attached to a workspace' })
 
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
@@ -771,7 +938,8 @@ async function dispatchPlanToExistingGroup(
     )
   }
 
-  const taskResults: Array<{ taskId: string; sessionId: string; title: string; agentName: string }> = []
+  const taskResults: OrchestratorDispatchResult['tasks'] = []
+  const monitor: DispatchMonitor = { dispatchId: crypto.randomUUID(), groupSessionId: session.id, taskIds: [] }
 
   for (const [index, task] of plan.tasks.entries()) {
     const agent = agentsByKey.get(task.agentKey)
@@ -787,18 +955,9 @@ async function dispatchPlanToExistingGroup(
       })
       .returning()
     if (!workspaceTask) continue
+    monitor.taskIds.push(workspaceTask.id)
 
-    const [childSession] = await db
-      .insert(sessions)
-      .values({
-        title: `${workspace.name} / ${agent?.role ?? '任务'} / ${task.title.slice(0, 24)}`,
-        type: 'direct',
-        ownerId,
-        workspaceId: workspace.id,
-        workspaceAgentId: agent?.id ?? null,
-      })
-      .returning()
-    if (!childSession) continue
+    const childSession = await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent ?? null, task.title)
 
     await db
       .update(workspaceTasks)
@@ -819,7 +978,7 @@ async function dispatchPlanToExistingGroup(
     if (promptMsg) {
       import('../services/agent-runner').then(({ runAgentReply }) => {
         runAgentReply(childSession.id, promptMsg, agent ? toAgentProfile(agent, workspace.projectPath) : undefined)
-          .then(() => markWorkspaceTaskDone(workspaceTask.id))
+          .then(() => markWorkspaceTaskDone(workspaceTask.id, monitor))
           .catch(() => {})
       })
     }
@@ -835,9 +994,175 @@ async function dispatchPlanToExistingGroup(
   return { workspaceId: workspace.id, groupSessionId: session.id, tasks: taskResults }
 }
 
-async function markWorkspaceTaskDone(taskId: string) {
+async function updatePlanCardDispatchResult(
+  messageId: string,
+  previousMetadata: Record<string, unknown> | null,
+  plan: OrchestratorPlan,
+  dispatchResult: OrchestratorDispatchResult
+) {
+  const metadata = previousMetadata && typeof previousMetadata === 'object' ? previousMetadata : {}
+  const runningPlan: OrchestratorPlan = {
+    ...plan,
+    dispatchResult,
+    tasks: plan.tasks.map((task) => ({ ...task, status: task.status === 'done' ? 'done' : 'running' })),
+  }
+  await db
+    .update(messages)
+    .set({ content: runningPlan.summary, metadata: { ...metadata, plan: runningPlan, dispatchResult } })
+    .where(eq(messages.id, messageId))
+}
+
+async function markWorkspaceTaskDone(taskId: string, monitor?: DispatchMonitor) {
   await db
     .update(workspaceTasks)
     .set({ status: 'done', updatedAt: new Date() })
     .where(eq(workspaceTasks.id, taskId))
+  if (monitor) await maybeSummarizeDispatch(monitor)
+}
+
+async function maybeSummarizeDispatch(monitor: DispatchMonitor) {
+  if (!monitor.groupSessionId || summarizedDispatches.has(monitor.dispatchId) || monitor.taskIds.length === 0) return
+
+  const [currentTask] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, monitor.taskIds[0]!)).limit(1)
+  if (!currentTask) return
+
+  const allWorkspaceTasks = await db.select().from(workspaceTasks).where(eq(workspaceTasks.workspaceId, currentTask.workspaceId))
+  const taskIdSet = new Set(monitor.taskIds)
+  const tasks = allWorkspaceTasks
+    .filter((task) => taskIdSet.has(task.id))
+    .sort((a, b) => a.orderIdx - b.orderIdx)
+  if (tasks.length !== monitor.taskIds.length || tasks.some((task) => task.status !== 'done')) return
+
+  summarizedDispatches.add(monitor.dispatchId)
+  const childResults = await Promise.all(
+    tasks.map(async (task) => {
+      if (!task.sessionId) return { task, content: '未找到子会话输出。', agentName: 'Agent' }
+      const [agentMessage] = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.sessionId, task.sessionId))
+        .orderBy(desc(messages.createdAt))
+        .limit(1)
+      const metadata = agentMessage?.metadata as { agentName?: unknown } | null
+      return {
+        task,
+        content: agentMessage?.senderType === 'agent' ? agentMessage.content : '子会话尚未产出 Agent 回复。',
+        agentName: typeof metadata?.agentName === 'string' ? metadata.agentName : 'Agent',
+      }
+    })
+  )
+
+  const [summary] = await db
+    .insert(messages)
+    .values({
+      sessionId: monitor.groupSessionId,
+      senderId: 'orchestrator',
+      senderType: 'agent',
+      type: 'text',
+      content: buildDispatchSummary(childResults),
+      metadata: {
+        agentName: 'Orchestrator',
+        role: 'Coordinator',
+        runtimeType: 'llm',
+        orchestratorSummary: {
+          dispatchId: monitor.dispatchId,
+          taskIds: monitor.taskIds,
+          workspaceId: currentTask.workspaceId,
+        },
+      },
+    })
+    .returning()
+
+  if (summary) {
+    const { broadcastSessionEvent } = await import('../services/agent-runner')
+    broadcastSessionEvent(monitor.groupSessionId, {
+      type: 'message:completed',
+      payload: { sessionId: monitor.groupSessionId, message: summary },
+    })
+  }
+}
+
+function buildDispatchSummary(
+  results: Array<{ task: typeof workspaceTasks.$inferSelect; agentName: string; content: string }>
+) {
+  const sections = results.map(({ task, agentName, content }, index) => {
+    const compact = content.trim().replace(/\n{3,}/g, '\n\n').slice(0, 1400)
+    return [`${index + 1}. ${task.title} (${agentName})`, compact || '无输出。'].join('\n')
+  })
+  return [
+    '**Orchestrator 汇总**',
+    '',
+    `已监听到 ${results.length} 个子会话完成，下面是合并后的结果：`,
+    '',
+    ...sections.flatMap((section) => [section, '']),
+    '后续可以继续在群聊里 @具体 Agent 追问，或让 Orchestrator 继续拆下一轮任务。',
+  ].join('\n')
+}
+
+function collectAffectedMessages(list: Array<typeof messages.$inferSelect>, targetIndex: number) {
+  const affected: Array<typeof messages.$inferSelect> = []
+  for (const message of list.slice(targetIndex + 1)) {
+    if (message.senderType === 'user') break
+    affected.push(message)
+  }
+  return affected
+}
+
+async function rollbackCodeAgentChanges(
+  session: typeof sessions.$inferSelect,
+  affected: Array<typeof messages.$inferSelect>
+) {
+  const cwd = await rollbackCwd(session)
+  if (!cwd) return { reverted: 0, failed: 0 }
+  let reverted = 0
+  let failed = 0
+
+  for (const message of [...affected].reverse()) {
+    const run = readCodeAgentRun(message.metadata)
+    if (!run) continue
+    for (const file of [...(run.files ?? [])].reverse()) {
+      if (!file.diff || !file.diff.trim()) continue
+      const ok = await reverseApplyDiff(cwd, file.diff)
+      if (ok) reverted += 1
+      else failed += 1
+    }
+  }
+  return { reverted, failed }
+}
+
+async function rollbackCwd(session: typeof sessions.$inferSelect) {
+  if (!session.workspaceId) return null
+  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
+  return workspace?.projectPath?.trim() || null
+}
+
+function readCodeAgentRun(metadata: Record<string, unknown> | null) {
+  const value = metadata?.codeAgentRun
+  if (!value || typeof value !== 'object') return null
+  const run = value as { type?: unknown; files?: unknown }
+  if (run.type !== 'code-agent-run' || !Array.isArray(run.files)) return null
+  return run as { files: Array<{ diff?: string }> }
+}
+
+async function reverseApplyDiff(cwd: string, diff: string) {
+  const file = join(tmpdir(), `agenthub-revert-${randomUUID()}.patch`)
+  try {
+    await writeFile(file, diff, 'utf8')
+    const check = await runGit(cwd, ['apply', '--check', '-R', '--whitespace=nowarn', file])
+    if (check !== 0) return false
+    return (await runGit(cwd, ['apply', '-R', '--whitespace=nowarn', file])) === 0
+  } catch {
+    return false
+  } finally {
+    await unlink(file).catch(() => undefined)
+  }
+}
+
+async function runGit(cwd: string, args: string[]) {
+  const proc = Bun.spawn(['git', ...args], {
+    cwd,
+    stdout: 'ignore',
+    stderr: 'ignore',
+  })
+  return await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 5000))])
 }
