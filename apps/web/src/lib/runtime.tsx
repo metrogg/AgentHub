@@ -6,7 +6,7 @@ import {
   type ThreadMessageLike,
 } from '@assistant-ui/react'
 import { useChatStore } from '../stores/chatStore'
-import type { CodeAgentRunMetadata, Message } from './api'
+import type { AgentArtifact, CodeAgentRunMetadata, Message } from './api'
 
 function toThreadMessage(message: Message): ThreadMessageLike {
   const role: ThreadMessageLike['role'] =
@@ -18,7 +18,11 @@ function toThreadMessage(message: Message): ThreadMessageLike {
 
   const plan =
     message.type === 'task_card' && message.metadata && 'plan' in message.metadata
-      ? { ...(message.metadata.plan as Record<string, unknown>), messageId: message.id }
+      ? {
+          ...(message.metadata.plan as Record<string, unknown>),
+          messageId: message.id,
+          dispatchResult: (message.metadata as { dispatchResult?: unknown }).dispatchResult,
+        }
       : null
   const agentName =
     message.senderType === 'agent' && message.metadata && typeof message.metadata.agentName === 'string'
@@ -35,6 +39,8 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const senderLabel = [agentName, runtimeLabel].filter(Boolean).join(' · ')
   const text = senderLabel ? `**${senderLabel}**\n\n${message.content}` : message.content
   const codeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun) ? message.metadata.codeAgentRun : null
+  const artifacts = readArtifacts(message.metadata?.artifacts, codeAgentRun)
+  const artifactPart = artifacts.length ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: artifacts } }] : []
 
   return {
     id: message.id,
@@ -45,14 +51,28 @@ function toThreadMessage(message: Message): ThreadMessageLike {
         ? [
             { type: 'text', text },
             { type: 'data', name: 'code_agent_run', data: codeAgentRun },
+            ...artifactPart,
           ]
-      : [{ type: 'text', text }],
+      : [{ type: 'text', text }, ...artifactPart],
     createdAt: new Date(message.createdAt),
   }
 }
 
 function isCodeAgentRunMetadata(value: unknown): value is CodeAgentRunMetadata {
   return Boolean(value && typeof value === 'object' && (value as { type?: unknown }).type === 'code-agent-run')
+}
+
+function readArtifacts(value: unknown, codeAgentRun: CodeAgentRunMetadata | null): AgentArtifact[] {
+  const direct = Array.isArray(value) ? value : []
+  const fromRun = Array.isArray(codeAgentRun?.artifacts) ? codeAgentRun.artifacts : []
+  const seen = new Set<string>()
+  return [...direct, ...fromRun].filter((item): item is AgentArtifact => {
+    if (!item || typeof item !== 'object') return false
+    const artifact = item as { id?: unknown; type?: unknown }
+    if (typeof artifact.id !== 'string' || typeof artifact.type !== 'string' || seen.has(artifact.id)) return false
+    seen.add(artifact.id)
+    return ['diff', 'preview', 'file', 'deploy'].includes(artifact.type)
+  })
 }
 
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
@@ -75,6 +95,9 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
           ? [
               { type: 'text', text: streamingMessage.content },
               { type: 'data', name: 'code_agent_run', data: streamingCodeAgentRun },
+              ...(streamingCodeAgentRun.artifacts?.length
+                ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: streamingCodeAgentRun.artifacts } }]
+                : []),
             ]
           : [{ type: 'text', text: streamingMessage.content }],
         status: { type: 'running' },

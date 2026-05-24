@@ -21,7 +21,7 @@ interface ChatState {
   agentTyping: boolean
 
   fetchSessions: () => Promise<void>
-  createSession: (title?: string) => Promise<Session>
+  createSession: (title?: string, options?: { workspaceId?: string | null; workspaceAgentId?: string | null; type?: 'direct' | 'group' }) => Promise<Session>
   selectSession: (sessionId: string) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
@@ -64,8 +64,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  async createSession(title = '新会话') {
-    const session = await api.createSession({ title, type: 'direct' })
+  async createSession(title = '新会话', options = {}) {
+    const session = await api.createSession({
+      title,
+      type: options.type ?? 'direct',
+      workspaceId: options.workspaceId ?? null,
+      workspaceAgentId: options.workspaceAgentId ?? null,
+    })
     set((s) => ({ sessions: [session, ...s.sessions] }))
     return session
   },
@@ -144,6 +149,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (shouldCreatePlan) {
         const card = await api.createOrchestratorPlan(sessionId, content)
         set((s) => ({ messages: [...s.messages, card] }))
+        const result = await api.dispatchOrchestratorPlan(sessionId, card.id)
+        set((s) => ({
+          messages: s.messages.map((message) =>
+            message.id === card.id
+              ? {
+                  ...message,
+                  metadata: {
+                    ...(message.metadata ?? {}),
+                    dispatchResult: result,
+                    plan:
+                      message.metadata && typeof message.metadata.plan === 'object'
+                        ? { ...(message.metadata.plan as Record<string, unknown>), dispatchResult: result }
+                        : message.metadata?.plan,
+                  },
+                }
+              : message
+          ),
+        }))
+        await get().fetchSessions()
         set({ agentTyping: false })
       }
     } catch (error) {

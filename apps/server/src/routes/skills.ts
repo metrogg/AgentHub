@@ -16,16 +16,94 @@ const installSkillSchema = z.object({
   id: z.string().max(80).optional(),
 })
 
+const skillhubSearchSchema = z.object({
+  q: z.string().trim().min(1).max(120),
+})
+
+const skillhubInstallSchema = z.object({
+  slug: z.string().trim().min(1).max(120),
+})
+
 export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
   .get('/', async (c) => {
     return c.json({ items: await globalSkillRegistry.listSkills() })
+  })
+  .get('/skillhub/search', zValidator('query', skillhubSearchSchema), async (c) => {
+    const { q } = c.req.valid('query')
+    const result = await runSkillhub(['--skip-self-upgrade', '--dir', installedSkillsRoot, 'search', q])
+    if (result.code !== 0) {
+      return c.json({ ok: false, items: [], message: result.output || 'SkillHub 搜索失败' }, 500)
+    }
+    return c.json({ ok: true, items: parseSkillhubSearch(result.output), message: result.output })
   })
   .post('/install', zValidator('json', installSkillSchema), async (c) => {
     const { sourceUrl, id } = c.req.valid('json')
     const result = await installSkillFromUrl(sourceUrl, id)
     return c.json(result)
   })
+  .post('/skillhub/install', zValidator('json', skillhubInstallSchema), async (c) => {
+    const { slug } = c.req.valid('json')
+    const result = await runSkillhub(['--skip-self-upgrade', '--dir', installedSkillsRoot, 'install', slug])
+    if (result.code !== 0) {
+      return c.json({ ok: false, message: result.output || `SkillHub 安装失败：${slug}` }, 500)
+    }
+    const installed = await globalSkillRegistry.loadSkill(slug)
+    return c.json({
+      ok: true,
+      installed,
+      message: installed ? `已安装 skill:${installed.id}` : result.output || `已安装 ${slug}`,
+    })
+  })
+
+async function runSkillhub(args: string[]) {
+  try {
+    const proc = Bun.spawn(['skillhub', ...args], {
+      cwd: projectRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [code, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text().catch(() => ''),
+      new Response(proc.stderr).text().catch(() => ''),
+    ])
+    return { code, output: [stdout.trim(), stderr.trim()].filter(Boolean).join('\n') }
+  } catch (error: any) {
+    return { code: 1, output: error?.message || 'skillhub command not found' }
+  }
+}
+
+function parseSkillhubSearch(output: string) {
+  const items: Array<{ slug: string; title: string; description: string; version?: string }> = []
+  let current: { slug: string; title: string; description: string; version?: string } | null = null
+  for (const line of output.split(/\r?\n/)) {
+    const trimmedRight = line.trimEnd()
+    if (!trimmedRight.trim() || /^You can use/i.test(trimmedRight)) continue
+    const entry = /^([a-z0-9][a-z0-9_-]{1,120})\s{2,}(.+)$/.exec(trimmedRight)
+    if (entry?.[1]) {
+      if (current) items.push(current)
+      current = {
+        slug: entry[1],
+        title: entry[2]?.trim() || entry[1],
+        description: '',
+      }
+      continue
+    }
+    if (!current) continue
+    const version = /^\s*-\s*version:\s*(.+)$/i.exec(trimmedRight)
+    if (version?.[1]) {
+      current.version = version[1].trim()
+      continue
+    }
+    const description = /^\s*-\s*(.+)$/.exec(trimmedRight)
+    if (description?.[1] && !current.description) {
+      current.description = description[1].trim()
+    }
+  }
+  if (current) items.push(current)
+  return items.slice(0, 40)
+}
 
 async function installSkillFromUrl(sourceUrl: string, requestedId?: string) {
   const skillUrl = normalizeSkillUrl(sourceUrl)

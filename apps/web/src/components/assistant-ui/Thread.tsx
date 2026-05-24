@@ -36,6 +36,7 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  ExternalLink,
   FileText,
   FolderOpen,
   FolderPlus,
@@ -51,6 +52,7 @@ import {
   Plus,
   Presentation,
   RefreshCw,
+  Rocket,
   Search,
   Sheet,
   Square,
@@ -63,6 +65,7 @@ import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import {
   api,
+  type AgentArtifact,
   type CodeAgentRunMetadata,
   type ModelCatalogItem,
   type OrchestratorDispatchResult,
@@ -961,7 +964,7 @@ const AssistantMessage: FC = () => (
           components={{
             Text: MarkdownText,
             Empty: AssistantThinking,
-            data: { by_name: { orchestrator_plan: OrchestratorPlanCard, code_agent_run: CodeAgentRunCard } },
+            data: { by_name: { orchestrator_plan: OrchestratorPlanCard, code_agent_run: CodeAgentRunCard, agent_artifacts: AgentArtifactsCard } },
           }}
         />
       </div>
@@ -1032,6 +1035,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
                     <span className="truncate font-mono text-xs text-neutral-600" title={file.path}>
                       {file.path}
                     </span>
+                    {file.diff && <span className="col-start-2 text-[11px] text-blue-500">包含 git diff</span>}
                   </div>
                 ))}
               </div>
@@ -1080,6 +1084,141 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
       )}
     </div>
   )
+}
+
+const AgentArtifactsCard: FC<{ data: { items?: AgentArtifact[] } }> = ({ data }) => {
+  const items = data.items ?? []
+  if (!items.length) return null
+  const diffCount = items.filter((item) => item.type === 'diff').length
+  const previewCount = items.filter((item) => item.type === 'preview').length
+  const deployCount = items.filter((item) => item.type === 'deploy').length
+
+  return (
+    <div className="not-prose mt-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+        <span className="inline-flex items-center gap-1 rounded-full border border-neutral-200 bg-white px-2.5 py-1">
+          <Blocks className="h-3.5 w-3.5" />
+          产物 {items.length}
+        </span>
+        {diffCount > 0 && <span>{diffCount} 个 Diff</span>}
+        {previewCount > 0 && <span>{previewCount} 个预览</span>}
+        {deployCount > 0 && <span>{deployCount} 个部署</span>}
+      </div>
+      <div className="space-y-2">
+        {items.map((item) => (
+          <ArtifactCard key={item.id} artifact={item} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
+  if (artifact.type === 'diff') return <DiffArtifactCard artifact={artifact} />
+  if (artifact.type === 'preview') return <PreviewArtifactCard artifact={artifact} />
+  if (artifact.type === 'deploy') return <DeployArtifactCard artifact={artifact} />
+  return <FileArtifactCard artifact={artifact} />
+}
+
+const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> }> = ({ artifact }) => (
+  <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2">
+    <div className="flex items-center gap-2">
+      <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-mono text-xs text-neutral-800" title={artifact.path}>{artifact.path}</div>
+        <div className="mt-0.5 text-[11px] text-neutral-400">{artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}</div>
+      </div>
+    </div>
+  </div>
+)
+
+const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> }> = ({ artifact }) => {
+  const [open, setOpen] = useState(false)
+  const lines = artifact.diff.split(/\r?\n/)
+  const additions = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
+  const deletions = lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex h-11 w-full items-center justify-between gap-3 px-3 text-left hover:bg-neutral-50"
+      >
+        <span className="inline-flex min-w-0 items-center gap-2">
+          <GitBranch className="h-4 w-4 shrink-0 text-blue-500" />
+          <span className="min-w-0">
+            <span className="block truncate font-mono text-xs text-neutral-900">{artifact.filePath}</span>
+            <span className="block text-[11px] text-neutral-400">+{additions} / -{deletions}</span>
+          </span>
+        </span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <pre className="max-h-96 overflow-auto border-t border-neutral-200 bg-neutral-950 px-3 py-2 text-xs leading-5 text-neutral-100">
+          <code>{artifact.diff}</code>
+        </pre>
+      )}
+    </div>
+  )
+}
+
+const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'preview' }> }> = ({ artifact }) => {
+  const [open, setOpen] = useState(artifact.previewKind === 'static-html')
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+      <div className="flex h-11 items-center justify-between gap-3 px-3">
+        <button type="button" onClick={() => setOpen((value) => !value)} className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
+          <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
+          <span className="min-w-0">
+            <span className="block truncate text-xs font-medium text-neutral-900">{artifact.title}</span>
+            <span className="block truncate text-[11px] text-neutral-400">{artifact.url}</span>
+          </span>
+        </button>
+        <a
+          href={artifact.url}
+          target="_blank"
+          rel="noreferrer"
+          className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+          title="新窗口打开"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      </div>
+      {open && (
+        <div className="border-t border-neutral-200 bg-neutral-50 p-2">
+          <iframe title={artifact.title} src={artifact.url} className="h-80 w-full rounded-md border border-neutral-200 bg-white" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy' }> }> = ({ artifact }) => (
+  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+    <div className="flex items-center gap-2">
+      <Rocket className="h-4 w-4 shrink-0 text-emerald-700" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-semibold text-emerald-900">{artifact.title}</div>
+        <div className="mt-0.5 truncate text-[11px] text-emerald-700">
+          {artifact.provider} · {deployStatusLabel(artifact.status)}
+        </div>
+      </div>
+      {artifact.url && (
+        <a href={artifact.url} target="_blank" rel="noreferrer" className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100" title="打开部署">
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
+    </div>
+  </div>
+)
+
+function deployStatusLabel(status: Extract<AgentArtifact, { type: 'deploy' }>['status']) {
+  if (status === 'ready') return '已就绪'
+  if (status === 'running') return '部署中'
+  if (status === 'failed') return '失败'
+  return '待部署'
 }
 
 const CodeAgentRunSection: FC<{ children: ReactNode; disabled?: boolean; icon: ReactNode; title: string }> = ({
@@ -1135,11 +1274,12 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
   const [plan, setPlan] = useState(data)
   const [saving, setSaving] = useState(false)
   const [dispatching, setDispatching] = useState(false)
-  const [result, setResult] = useState<OrchestratorDispatchResult | null>(null)
+  const [result, setResult] = useState<OrchestratorDispatchResult | null>(data.dispatchResult ?? null)
   const [error, setError] = useState('')
 
   useEffect(() => {
     setPlan(data)
+    setResult(data.dispatchResult ?? null)
   }, [data])
 
   function patchTask(taskId: string, patch: Partial<{ agentKey: string; status: TaskStatus }>) {

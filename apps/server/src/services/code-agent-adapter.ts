@@ -1,7 +1,8 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { AgentArtifact } from '@agenthub/shared'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
 
@@ -38,7 +39,8 @@ export interface CodeAgentRunMetadata {
   durationMs: number
   exitCode: number
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
-  files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked' }>
+  files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'; diff?: string }>
+  artifacts?: AgentArtifact[]
   logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
   diagnostics?: string
 }
@@ -375,6 +377,11 @@ async function runCodeAgentCommand(
       exitCode: 0,
       commands: liveCommands.slice(0, 80),
       files: liveFiles.slice(0, 80),
+      artifacts: buildArtifactsFromMetadata({
+        cwd,
+        files: liveFiles.slice(0, 80),
+        output: liveLogs.map((log) => log.text).join('\n'),
+      }),
       logs: liveLogs.slice(-80),
     })
   }
@@ -552,7 +559,8 @@ async function buildCodeAgentRunMetadata(input: {
   const diagnostics = input.code === 0 && !input.timedOut ? '' : cleanDiagnosticOutput(input.output)
   const parsedCommands = parseExecutedCommands(input.output)
   const commands = mergeCommands([...(input.liveCommands ?? []), ...parsedCommands])
-  const files = mergeFiles([...(input.liveFiles ?? []), ...(await diffWorkspaceFiles(input.cwd, input.beforeFiles))])
+  const files = await enrichFileDiffs(input.cwd, mergeFiles([...(input.liveFiles ?? []), ...(await diffWorkspaceFiles(input.cwd, input.beforeFiles))]))
+  const artifacts = buildArtifactsFromMetadata({ cwd: input.cwd, files, output: input.output })
   return {
     type: 'code-agent-run',
     status: input.timedOut ? 'timed-out' : input.code === 0 ? 'completed' : input.code === 130 ? 'cancelled' : 'failed',
@@ -562,6 +570,7 @@ async function buildCodeAgentRunMetadata(input: {
     exitCode: input.code,
     commands,
     files,
+    artifacts,
     logs: input.liveLogs?.slice(-80),
     diagnostics: diagnostics || undefined,
   }
@@ -577,6 +586,7 @@ function emptyCodeAgentRunMetadata(adapter: CodeAgentAdapter, status: CodeAgentR
     exitCode: status === 'completed' || status === 'running' ? 0 : 130,
     commands: [],
     files: [],
+    artifacts: [],
   }
 }
 
@@ -806,9 +816,197 @@ async function diffWorkspaceFiles(cwd: string | undefined, before: Map<string, s
   const files: CodeAgentRunMetadata['files'] = []
   for (const [path, status] of after) {
     if (before.get(path) === status) continue
-    files.push({ path, status: fileStatusFromGitStatus(status) })
+    const fileStatus = fileStatusFromGitStatus(status)
+    files.push({ path, status: fileStatus, diff: await readGitDiffForFile(cwd, path, fileStatus) })
   }
   return files.slice(0, 80)
+}
+
+async function readGitDiffForFile(
+  cwd: string | undefined,
+  path: string,
+  status: CodeAgentRunMetadata['files'][number]['status']
+) {
+  if (!cwd) return undefined
+  const diff = await runGitDiff(cwd, ['diff', '--', path])
+  if (diff.trim()) return limitOutput(diff, 24_000)
+
+  const staged = await runGitDiff(cwd, ['diff', '--cached', '--', path])
+  if (staged.trim()) return limitOutput(staged, 24_000)
+
+  if (status === 'created' || status === 'untracked') {
+    return buildNewFileDiff(cwd, path)
+  }
+  return undefined
+}
+
+async function enrichFileDiffs(cwd: string | undefined, files: CodeAgentRunMetadata['files']) {
+  if (!cwd) return files
+  const enriched: CodeAgentRunMetadata['files'] = []
+  for (const file of files) {
+    if (file.diff) {
+      enriched.push(file)
+      continue
+    }
+    const gitPath = normalizeGitPath(cwd, file.path)
+    enriched.push({ ...file, diff: await readGitDiffForFile(cwd, gitPath, file.status) })
+  }
+  return enriched
+}
+
+function normalizeGitPath(cwd: string, path: string) {
+  if (!isAbsolute(path)) return path
+  const rel = relative(cwd, path)
+  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel.replace(/\\/g, '/') : path
+}
+
+async function runGitDiff(cwd: string, args: string[]) {
+  try {
+    const proc = Bun.spawn(['git', ...args], {
+      cwd,
+      stdout: 'pipe',
+      stderr: 'ignore',
+    })
+    const [code, stdout] = await Promise.all([
+      Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 3000))]),
+      new Response(proc.stdout).text().catch(() => ''),
+    ])
+    return code === 0 || code === 1 ? stdout : ''
+  } catch {
+    return ''
+  }
+}
+
+function buildNewFileDiff(cwd: string, path: string) {
+  try {
+    const absolutePath = resolve(cwd, path)
+    if (!existsSync(absolutePath) || statSync(absolutePath).isDirectory()) return undefined
+    const content = readFileSync(absolutePath, 'utf8')
+    const lines = content.split(/\r?\n/).slice(0, 300)
+    const body = lines.map((line) => `+${line}`).join('\n')
+    return limitOutput([`diff --git a/${path} b/${path}`, 'new file mode 100644', '--- /dev/null', `+++ b/${path}`, body].join('\n'), 24_000)
+  } catch {
+    return undefined
+  }
+}
+
+function buildArtifactsFromMetadata(input: {
+  cwd?: string
+  files: CodeAgentRunMetadata['files']
+  output: string
+}): AgentArtifact[] {
+  const artifacts: AgentArtifact[] = []
+  const createdAt = new Date().toISOString()
+  for (const file of input.files.slice(0, 40)) {
+    artifacts.push({
+      id: `file:${file.path}`,
+      type: 'file',
+      title: file.path,
+      path: file.path,
+      status: file.status,
+      source: 'code-agent',
+      createdAt,
+    })
+    if (file.diff) {
+      artifacts.push({
+        id: `diff:${file.path}`,
+        type: 'diff',
+        title: `Diff: ${file.path}`,
+        filePath: file.path,
+        status: file.status,
+        language: 'diff',
+        diff: file.diff,
+        source: 'git',
+        createdAt,
+      })
+    }
+    if (isHtmlFile(file.path)) {
+      const url = staticPreviewUrl(input.cwd, file.path)
+      if (url) {
+        artifacts.push({
+          id: `preview:${file.path}`,
+          type: 'preview',
+          title: `预览: ${file.path}`,
+          url,
+          previewKind: 'static-html',
+          source: 'file',
+          createdAt,
+        })
+        artifacts.push({
+          id: `deploy:static:${file.path}`,
+          type: 'deploy',
+          title: `静态发布: ${file.path}`,
+          provider: 'static',
+          status: 'ready',
+          url,
+          source: 'file',
+          createdAt,
+        })
+      }
+    }
+  }
+
+  for (const url of detectPreviewUrls(input.output)) {
+    artifacts.push({
+      id: `preview:${url}`,
+      type: 'preview',
+      title: '网页预览',
+      url,
+      previewKind: 'dev-server',
+      source: 'code-agent',
+      createdAt,
+    })
+  }
+
+  for (const url of detectDeployUrls(input.output)) {
+    artifacts.push({
+      id: `deploy:${url}`,
+      type: 'deploy',
+      title: '部署结果',
+      provider: url.includes('vercel.app') ? 'vercel' : 'unknown',
+      status: 'ready',
+      url,
+      source: 'code-agent',
+      createdAt,
+    })
+  }
+
+  return dedupeArtifacts(artifacts).slice(0, 80)
+}
+
+function isHtmlFile(path: string) {
+  return /\.html?$/i.test(path)
+}
+
+function staticPreviewUrl(cwd: string | undefined, path: string) {
+  if (!cwd) return null
+  const absolutePath = isAbsolute(path) ? path : resolve(cwd, path)
+  return `/api/artifacts/preview-file?path=${encodeURIComponent(absolutePath)}`
+}
+
+function detectPreviewUrls(output: string) {
+  const urls = new Set<string>()
+  const pattern = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?[^\s'"<>)]*/gi
+  for (const match of output.matchAll(pattern)) {
+    urls.add(match[0].replace('://0.0.0.0', '://localhost').replace('://[::1]', '://localhost'))
+  }
+  return [...urls]
+}
+
+function detectDeployUrls(output: string) {
+  const urls = new Set<string>()
+  const pattern = /https?:\/\/[^\s'"<>)]*(?:vercel\.app|netlify\.app|pages\.dev)[^\s'"<>)]*/gi
+  for (const match of output.matchAll(pattern)) urls.add(match[0])
+  return [...urls]
+}
+
+function dedupeArtifacts(artifacts: AgentArtifact[]) {
+  const seen = new Set<string>()
+  return artifacts.filter((artifact) => {
+    if (seen.has(artifact.id)) return false
+    seen.add(artifact.id)
+    return true
+  })
 }
 
 function fileStatusFromGitStatus(status: string): CodeAgentRunMetadata['files'][number]['status'] {

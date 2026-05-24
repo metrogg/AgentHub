@@ -47,6 +47,54 @@ export interface Message {
   createdAt: string
 }
 
+export type AgentArtifact =
+  | {
+      id: string
+      type: 'diff'
+      title: string
+      description?: string
+      source?: string
+      createdAt?: string
+      filePath: string
+      status?: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+      language?: string
+      diff: string
+    }
+  | {
+      id: string
+      type: 'preview'
+      title: string
+      description?: string
+      source?: string
+      createdAt?: string
+      url: string
+      previewKind: 'dev-server' | 'static-html' | 'iframe'
+    }
+  | {
+      id: string
+      type: 'file'
+      title: string
+      description?: string
+      source?: string
+      createdAt?: string
+      path: string
+      status?: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+      mimeType?: string
+      size?: number
+    }
+  | {
+      id: string
+      type: 'deploy'
+      title: string
+      description?: string
+      source?: string
+      createdAt?: string
+      provider: 'vercel' | 'static' | 'unknown'
+      status: 'pending' | 'running' | 'ready' | 'failed'
+      url?: string
+      logs?: string
+    }
+
 export interface CodeAgentRunMetadata {
   type: 'code-agent-run'
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
@@ -55,7 +103,8 @@ export interface CodeAgentRunMetadata {
   durationMs: number
   exitCode: number
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
-  files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked' }>
+  files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'; diff?: string }>
+  artifacts?: AgentArtifact[]
   logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
   diagnostics?: string
 }
@@ -204,7 +253,20 @@ export interface SkillSummary {
 
 export interface SkillInstallResult {
   ok: boolean
-  installed: SkillSummary
+  installed?: SkillSummary | null
+  message: string
+}
+
+export interface SkillhubSearchItem {
+  slug: string
+  title: string
+  description: string
+  version?: string
+}
+
+export interface SkillhubSearchResult {
+  ok: boolean
+  items: SkillhubSearchItem[]
   message: string
 }
 
@@ -275,6 +337,7 @@ export interface OrchestratorPlan {
   agents: OrchestratorPlanAgent[]
   tasks: OrchestratorPlanTask[]
   messageId?: string
+  dispatchResult?: OrchestratorDispatchResult
 }
 
 export interface OrchestratorDispatchResult {
@@ -287,7 +350,7 @@ export const api = {
   // Sessions
   listSessions: () => request<{ items: Session[] }>('/sessions'),
   getSession: (id: string) => request<Session>(`/sessions/${id}`),
-  createSession: (data: { title: string; type?: 'direct' | 'group' }) =>
+  createSession: (data: { title: string; type?: 'direct' | 'group'; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
     request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
 
@@ -406,6 +469,13 @@ export const api = {
     request<SkillInstallResult>('/skills/install', {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+  searchSkillhub: (q: string) =>
+    request<SkillhubSearchResult>(`/skills/skillhub/search?q=${encodeURIComponent(q)}`),
+  installSkillhub: (slug: string) =>
+    request<SkillInstallResult>('/skills/skillhub/install', {
+      method: 'POST',
+      body: JSON.stringify({ slug }),
     }),
   // Workspaces (Agent Group)
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),

@@ -291,4 +291,480 @@
   .agenthub-code .hljs-addition {
     color: #bef264;
   }
+
+  .office-scene {
+    background:
+      radial-gradient(circle at 20% 17%, rgba(255, 255, 255, 0.9), transparent 16rem),
+      radial-gradient(circle at 77% 21%, rgba(37, 99, 235, 0.06), transparent 14rem),
+      linear-gradient(180deg, #f6f6f0 0%, #eeefe9 55%, #f6f6f2 100%),
+      #f1f2ed;
+  }
+
+  .office-hud {
+    animation: office-panel-enter 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .office-live-dot span {
+    animation: office-live-pulse 1.25s ease-in-out infinite;
+  }
+
+  .office-progress {
+    animation: office-progress-sheen 1.8s linear infinite;
+    background-image: linear-gradient(90deg, #111827, #334155, #111827);
+    background-size: 200% 100%;
+  }
+
+  .office-data-lane {
+    background: linear-gradient(90deg, transparent, rgba(15, 23, 42, 0.16), transparent);
+    pointer-events: none;
+  }
+
+  .office-data-lane span {
+    position: absolute;
+    top: -0.3125rem;
+    display: block;
+    height: 0.625rem;
+    width: 1.75rem;
+    border-radius: 999px;
+    background: #ffffff;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08), 0 0 1.25rem rgba(37, 99, 235, 0.16);
+    animation: office-data-packet 3.1s linear infinite;
+  }
+
+  .office-data-lane span:nth-child(2) {
+    animation-delay: 900ms;
+  }
+
+  .office-data-lane span:nth-child(3) {
+    animation-delay: 1.8s;
+  }
+
+  .office-data-lane-slow span {
+    animation-duration: 4.2s;
+  }
+
+  .office-pantry,
+  .office-quiet-room {
+    animation: office-room-enter 620ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .office-token-cup {
+    animation: office-cup-bob 2.4s ease-in-out infinite;
+  }
+
+  .office-steam {
+    position: absolute;
+    top: 36%;
+    height: 1.25rem;
+    width: 0.375rem;
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(120, 113, 108, 0.22), transparent);
+    animation: office-steam-rise 2.2s ease-in-out infinite;
+  }
+
+  .office-seat {
+    animation: office-seat-enter 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both, office-seat-float 4.8s ease-in-out infinite;
+    transform-origin: center bottom;
+    will-change: transform;
+  }
+
+  .office-seat:nth-of-type(2n) {
+    animation-delay: 80ms, 400ms;
+  }
+
+  .office-seat:nth-of-type(3n) {
+    animation-delay: 140ms, 700ms;
+  }
+
+  .office-seat-running .office-desk {
+    box-shadow: 0 24px 42px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(37, 99, 235, 0.12);
+  }
+
+  .office-monitor-screen {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .office-monitor-screen::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent),
+      repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 4px);
+    opacity: 0.42;
+    animation: office-monitor-glow 2.6s ease-in-out infinite;
+  }
+
+  .office-monitor-scan {
+    position: absolute;
+    left: 0.375rem;
+    right: 0.375rem;
+    top: 0.35rem;
+    height: 0.125rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.55);
+    animation: office-monitor-scan 2.8s ease-in-out infinite;
+  }
+
+  .office-keyboard span {
+    position: absolute;
+    top: 0.1875rem;
+    height: 0.125rem;
+    width: 0.75rem;
+    border-radius: 999px;
+    background: #d4d4d8;
+    animation: office-key-flash 1.4s ease-in-out infinite;
+  }
+
+  .office-keyboard span:nth-child(1) {
+    left: 0.65rem;
+  }
+
+  .office-keyboard span:nth-child(2) {
+    left: 1.85rem;
+    animation-delay: 170ms;
+  }
+
+  .office-keyboard span:nth-child(3) {
+    left: 3.1rem;
+    animation-delay: 340ms;
+  }
+
+  .office-agent-body {
+    animation: office-agent-breathe 3.2s ease-in-out infinite;
+    will-change: transform;
+  }
+
+  .office-agent-working {
+    animation: office-agent-working 1.05s ease-in-out infinite;
+  }
+
+  .office-eye {
+    position: absolute;
+    top: 0.6rem;
+    height: 1rem;
+    width: 1rem;
+    border-radius: 999px;
+    background: #09090b;
+    animation: office-eye-blink 4.2s ease-in-out infinite;
+  }
+
+  .office-eye-left {
+    left: 0.75rem;
+  }
+
+  .office-eye-right {
+    right: 0.75rem;
+  }
+
+  .office-mouth {
+    position: absolute;
+    bottom: 0.75rem;
+    left: 0.75rem;
+    right: 0.75rem;
+    height: 0.42rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.82);
+    animation: office-mouth-think 2.8s ease-in-out infinite;
+  }
+
+  .office-hand {
+    position: absolute;
+    bottom: -0.15rem;
+    height: 0.55rem;
+    width: 1rem;
+    border-radius: 999px;
+    background: rgba(9, 9, 11, 0.88);
+  }
+
+  .office-hand-left {
+    left: 0.35rem;
+    transform: rotate(18deg);
+  }
+
+  .office-hand-right {
+    right: 0.35rem;
+    transform: rotate(-18deg);
+  }
+
+  .office-hand-left.office-hand-type {
+    animation: office-hand-left-type 360ms ease-in-out infinite;
+  }
+
+  .office-hand-right.office-hand-type {
+    animation: office-hand-right-type 420ms ease-in-out infinite;
+  }
+
+  .office-status-ring {
+    border: 1px solid color-mix(in srgb, var(--agent-color) 45%, transparent);
+    opacity: 0.48;
+    pointer-events: none;
+    animation: office-status-ring 2.4s ease-out infinite;
+  }
+
+  .office-seat-running .office-status-ring {
+    opacity: 0.75;
+    animation-duration: 1.15s;
+  }
+
+  .office-task-packet {
+    animation: office-task-packet 1.65s ease-in-out infinite;
+  }
+
+  .office-agent-card {
+    animation: office-agent-card-enter 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  @keyframes office-panel-enter {
+    from {
+      opacity: 0;
+      transform: translateY(-0.625rem) scale(0.98);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes office-live-pulse {
+    0%,
+    100% {
+      opacity: 0.45;
+      transform: scale(0.88);
+    }
+
+    50% {
+      opacity: 1;
+      transform: scale(1.25);
+    }
+  }
+
+  @keyframes office-progress-sheen {
+    to {
+      background-position: -200% 0;
+    }
+  }
+
+  @keyframes office-data-packet {
+    from {
+      left: -2rem;
+      opacity: 0;
+      transform: translateY(0);
+    }
+
+    12%,
+    86% {
+      opacity: 1;
+    }
+
+    to {
+      left: calc(100% + 1rem);
+      opacity: 0;
+      transform: translateY(-0.125rem);
+    }
+  }
+
+  @keyframes office-room-enter {
+    from {
+      opacity: 0;
+      transform: translateY(1rem);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes office-cup-bob {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+
+    50% {
+      transform: translateY(-0.25rem);
+    }
+  }
+
+  @keyframes office-steam-rise {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem) scaleY(0.5);
+    }
+
+    40% {
+      opacity: 0.7;
+    }
+
+    to {
+      opacity: 0;
+      transform: translateY(-1.5rem) scaleY(1.15);
+    }
+  }
+
+  @keyframes office-seat-enter {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -42%) scale(0.96);
+    }
+
+    to {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+  }
+
+  @keyframes office-seat-float {
+    0%,
+    100% {
+      filter: drop-shadow(0 0 0 rgba(15, 23, 42, 0));
+    }
+
+    50% {
+      filter: drop-shadow(0 0.65rem 0.9rem rgba(15, 23, 42, 0.04));
+    }
+  }
+
+  @keyframes office-monitor-glow {
+    0%,
+    100% {
+      opacity: 0.28;
+    }
+
+    50% {
+      opacity: 0.68;
+    }
+  }
+
+  @keyframes office-monitor-scan {
+    0%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.25;
+    }
+
+    50% {
+      transform: translateY(2.15rem);
+      opacity: 0.85;
+    }
+  }
+
+  @keyframes office-key-flash {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+
+    45% {
+      opacity: 1;
+    }
+  }
+
+  @keyframes office-agent-breathe {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+
+    50% {
+      transform: translateY(-0.16rem);
+    }
+  }
+
+  @keyframes office-agent-working {
+    0%,
+    100% {
+      transform: translateY(0) rotate(-1deg);
+    }
+
+    50% {
+      transform: translateY(-0.25rem) rotate(1deg);
+    }
+  }
+
+  @keyframes office-eye-blink {
+    0%,
+    46%,
+    52%,
+    100% {
+      transform: scaleY(1);
+    }
+
+    49% {
+      transform: scaleY(0.08);
+    }
+  }
+
+  @keyframes office-mouth-think {
+    0%,
+    100% {
+      transform: scaleX(1);
+    }
+
+    50% {
+      transform: scaleX(0.72);
+    }
+  }
+
+  @keyframes office-hand-left-type {
+    0%,
+    100% {
+      transform: translateY(0) rotate(18deg);
+    }
+
+    50% {
+      transform: translateY(0.25rem) rotate(7deg);
+    }
+  }
+
+  @keyframes office-hand-right-type {
+    0%,
+    100% {
+      transform: translateY(0.18rem) rotate(-18deg);
+    }
+
+    50% {
+      transform: translateY(-0.1rem) rotate(-7deg);
+    }
+  }
+
+  @keyframes office-status-ring {
+    from {
+      opacity: 0.58;
+      transform: scale(0.95);
+    }
+
+    to {
+      opacity: 0;
+      transform: scale(1.28);
+    }
+  }
+
+  @keyframes office-task-packet {
+    0%,
+    100% {
+      opacity: 0.52;
+      transform: translateX(0) translateY(0);
+    }
+
+    50% {
+      opacity: 1;
+      transform: translateX(1.15rem) translateY(-0.5rem);
+    }
+  }
+
+  @keyframes office-agent-card-enter {
+    from {
+      opacity: 0;
+      transform: translate(-50%, 0.5rem) scale(0.96);
+    }
+
+    to {
+      opacity: 1;
+      transform: translate(-50%, 0) scale(1);
+    }
+  }
 }

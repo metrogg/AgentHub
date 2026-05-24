@@ -76,6 +76,10 @@ function broadcast(sessionId: string, data: unknown) {
   }
 }
 
+export function broadcastSessionEvent(sessionId: string, data: unknown) {
+  broadcast(sessionId, data)
+}
+
 export function cancelAgentReply(sessionId: string) {
   const run = activeRuns.get(sessionId)
   if (!run) return false
@@ -224,6 +228,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
             sandboxPolicy: profile.sandboxPolicy ?? null,
             projectPath: profile.projectPath ?? null,
             codeAgentRun,
+            artifacts: codeAgentRun?.artifacts ?? [],
           }
         : null,
     })

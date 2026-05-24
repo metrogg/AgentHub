@@ -9,6 +9,7 @@ import { settingsRoutes } from './routes/settings'
 import { codingToolsRoutes } from './routes/coding-tools'
 import { skillRoutes } from './routes/skills'
 import { workspaceRoutes } from './routes/workspaces'
+import { artifactRoutes } from './routes/artifacts'
 
 const app = new Hono()
   .use('*', honoLogger())
@@ -29,6 +30,7 @@ const routes = app
   .route('/api/coding-tools', codingToolsRoutes)
   .route('/api/skills', skillRoutes)
   .route('/api/workspaces', workspaceRoutes)
+  .route('/api/artifacts', artifactRoutes)
 
 export { app }
 export type AppType = typeof routes
