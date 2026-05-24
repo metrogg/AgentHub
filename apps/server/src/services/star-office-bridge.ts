@@ -1,5 +1,7 @@
 import { logger } from '../lib/logger'
 import type { AgentRunProfile } from './agent-runner'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 
 type StarOfficeState = 'idle' | 'writing' | 'researching' | 'executing' | 'syncing' | 'error'
 
@@ -15,6 +17,10 @@ function officeUrl() {
 
 function joinKey() {
   return process.env.AGENTHUB_STAR_OFFICE_JOIN_KEY || process.env.STAR_OFFICE_JOIN_KEY || DEFAULT_JOIN_KEY
+}
+
+function localOfficeRoot() {
+  return resolve(process.env.AGENTHUB_STAR_OFFICE_ROOT || process.env.STAR_OFFICE_ROOT || 'storage/Star-Office-UI')
 }
 
 function enabled() {
@@ -75,6 +81,7 @@ async function ensureStarOfficeAgent(profile: AgentRunProfile) {
   const cached = joinedAgents.get(cacheKey)
   if (cached) return cached
 
+  await ensureLocalJoinKey()
   const response = await postJson('/join-agent', {
     name: officeAgentName(profile),
     joinKey: joinKey(),
@@ -85,6 +92,34 @@ async function ensureStarOfficeAgent(profile: AgentRunProfile) {
   const agentId = typeof response.agentId === 'string' ? response.agentId : null
   if (agentId) joinedAgents.set(cacheKey, agentId)
   return agentId
+}
+
+async function ensureLocalJoinKey() {
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(officeUrl())) return
+
+  const key = joinKey()
+  const file = join(localOfficeRoot(), 'join-keys.json')
+  let data: { keys?: Array<Record<string, unknown>> } = { keys: [] }
+  try {
+    data = JSON.parse(await readFile(file, 'utf8')) as { keys?: Array<Record<string, unknown>> }
+  } catch {
+    data = { keys: [] }
+  }
+
+  const keys = Array.isArray(data.keys) ? data.keys : []
+  if (keys.some((item) => item.key === key)) return
+
+  keys.push({
+    key,
+    used: false,
+    reusable: true,
+    maxConcurrent: 32,
+    usedBy: null,
+    usedByAgentId: null,
+    usedAt: null,
+  })
+  await mkdir(localOfficeRoot(), { recursive: true })
+  await writeFile(file, JSON.stringify({ keys }, null, 2), 'utf8')
 }
 
 async function postJson(path: string, body: Record<string, unknown>) {

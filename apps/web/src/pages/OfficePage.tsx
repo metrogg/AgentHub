@@ -56,7 +56,7 @@ export default function OfficePage() {
               </div>
               <div className="min-w-0">
                 <h1 className="truncate text-base font-semibold tracking-normal">办公室</h1>
-                <p className="truncate text-sm text-neutral-500">Star Office 监控面板</p>
+                <p className="truncate text-sm text-neutral-500">Agent Hub 监控面板</p>
               </div>
             </div>
           </div>
@@ -171,7 +171,7 @@ export default function OfficePage() {
                 <Sparkles className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-neutral-950">Star Office 工作区</div>
+                <div className="truncate text-sm font-semibold text-neutral-950">Agent Hub Office</div>
                 <div className="truncate text-sm text-neutral-500">
                   {currentWorkspace ? `已关联 ${currentWorkspace.name}` : '未关联 AgentHub 工作区'}
                 </div>

@@ -60,6 +60,18 @@ export default function SessionList() {
     })
   }, [activeSession?.id, activeSession?.type, activeSession?.workspaceAgentId, activeSession?.workspaceId])
 
+  useEffect(() => {
+    if (!activeSession?.workspaceId) return
+    const group = sessionTree.find((item) => item.parent.workspaceId === activeSession.workspaceId && item.children.length > 0)
+    if (!group) return
+    setExpandedWorkspaces((current) => {
+      if (current.has(activeSession.workspaceId!)) return current
+      const next = new Set(current)
+      next.add(activeSession.workspaceId!)
+      return next
+    })
+  }, [activeSession?.workspaceId, sessionTree])
+
   async function handleNew() {
     setNewDialogOpen(true)
     setLoadingChoices(true)
@@ -572,9 +584,10 @@ function buildSessionTree(sessions: Session[]): SessionGroup[] {
   return sessions
     .filter((session) => !childIds.has(session.id))
     .map((parent) => {
-      const children = parent.workspaceId
-        ? [...(childrenByWorkspace.get(parent.workspaceId) ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-        : []
+      const children =
+        parent.type === 'group' && parent.workspaceId
+          ? [...(childrenByWorkspace.get(parent.workspaceId) ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+          : []
       const latestUpdatedAt = [parent, ...children].reduce(
         (latest, session) => (Date.parse(session.updatedAt) > Date.parse(latest) ? session.updatedAt : latest),
         parent.updatedAt

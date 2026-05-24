@@ -50,6 +50,7 @@ import {
   MessageSquare,
   PanelLeft,
   Paperclip,
+  Pencil,
   Plus,
   Presentation,
   RefreshCw,
@@ -58,6 +59,7 @@ import {
   Sheet,
   Square,
   TerminalSquare,
+  Trash2,
   User,
   Users,
 } from 'lucide-react'
@@ -1184,18 +1186,111 @@ const ComposerAction: FC = () => (
   </>
 )
 
-const UserMessage: FC = () => (
-  <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] justify-end gap-3 py-4">
-    <div className="max-w-[78%] rounded-3xl bg-[#eef3ff] px-4 py-2.5 text-sm leading-6 text-neutral-950">
-      <MessagePrimitive.Parts
-        components={{
-          data: { by_name: { chat_attachments: ChatAttachmentsPart } },
-        }}
-      />
-    </div>
-    <Avatar role="user" />
-  </MessagePrimitive.Root>
-)
+const UserMessage: FC = () => {
+  const messageId = useMessage((message) => message.id)
+  const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
+  const editMessage = useChatStore((state) => state.editMessage)
+  const withdrawMessage = useChatStore((state) => state.withdrawMessage)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState<'edit' | 'withdraw' | null>(null)
+  const canEdit = Boolean(sourceMessage?.senderType === 'user')
+  const text =
+    typeof sourceMessage?.metadata?.displayContent === 'string'
+      ? sourceMessage.metadata.displayContent
+      : sourceMessage?.content ?? ''
+
+  function startEdit() {
+    setDraft(text)
+    setEditing(true)
+  }
+
+  async function saveEdit() {
+    if (!sourceMessage || !draft.trim()) return
+    setBusy('edit')
+    try {
+      await editMessage(sourceMessage.id, draft.trim())
+      setEditing(false)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function withdraw() {
+    if (!sourceMessage) return
+    const ok = window.confirm('撤回这条消息？如果后续 Agent 产生了文件修改，将尝试一并回滚。')
+    if (!ok) return
+    setBusy('withdraw')
+    try {
+      const rollback = await withdrawMessage(sourceMessage.id)
+      if (rollback?.failed) {
+        window.alert(`消息已撤回，但有 ${rollback.failed} 个文件变更未能自动回滚，请检查 git diff。`)
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] justify-end py-3">
+      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'w-full' : 'max-w-[68%]')}>
+        <div
+          className={cn(
+            'w-full text-sm leading-6 text-neutral-900',
+            editing
+              ? 'min-h-36 rounded-[28px] bg-[#f4f4f4] px-4 pb-4 pt-3'
+              : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none'
+          )}
+        >
+          {editing ? (
+            <div className="flex min-h-32 flex-col">
+              <textarea
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="编辑消息"
+                className="min-h-20 flex-1 resize-none bg-transparent px-1 py-1 text-base leading-7 text-neutral-900 outline-none placeholder:text-neutral-300"
+                autoFocus
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditing(false)}
+                  className="h-10 rounded-[14px] border border-neutral-200 bg-white px-4 text-base font-medium text-neutral-900 shadow-sm transition hover:bg-neutral-50"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={saveEdit}
+                  disabled={busy === 'edit' || !draft.trim()}
+                  className="h-10 rounded-[14px] bg-neutral-950 px-4 text-base font-semibold text-white shadow-sm transition hover:bg-neutral-800 disabled:bg-neutral-300"
+                >
+                  {busy === 'edit' ? '发送中' : '发送'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <MessagePrimitive.Parts
+              components={{
+                data: { by_name: { chat_attachments: ChatAttachmentsPart } },
+              }}
+            />
+          )}
+        </div>
+        {canEdit && !editing && (
+          <div className="flex items-center gap-1 pr-1 text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">
+            <ToolButton type="button" aria-label="修改" title="修改" onClick={startEdit} disabled={Boolean(busy)}>
+              <Pencil className="h-3.5 w-3.5" />
+            </ToolButton>
+            <ToolButton type="button" aria-label="撤回" title="撤回并尝试回滚修改" onClick={withdraw} disabled={Boolean(busy)}>
+              {busy === 'withdraw' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            </ToolButton>
+          </div>
+        )}
+      </div>
+    </MessagePrimitive.Root>
+  )
+}
 
 const AssistantMessage: FC = () => (
   <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
@@ -1915,25 +2010,39 @@ const SystemMessage: FC = () => (
   </MessagePrimitive.Root>
 )
 
-const AssistantActionBar: FC = () => (
-  <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" autohideFloat="single-branch" className="mt-2 flex items-center gap-1 text-neutral-400">
-    <ActionBarPrimitive.Copy asChild>
-      <ToolButton aria-label="复制">
-        <MessagePrimitive.If copied>
-          <Check className="h-3.5 w-3.5" />
-        </MessagePrimitive.If>
-        <MessagePrimitive.If copied={false}>
-          <Copy className="h-3.5 w-3.5" />
-        </MessagePrimitive.If>
+const AssistantActionBar: FC = () => {
+  const messageId = useMessage((message) => message.id)
+  const regenerateMessage = useChatStore((state) => state.regenerateMessage)
+  const [regenerating, setRegenerating] = useState(false)
+
+  async function regenerate() {
+    if (messageId === 'agenthub-thinking' || regenerating) return
+    setRegenerating(true)
+    try {
+      await regenerateMessage(messageId)
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
+  return (
+    <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" autohideFloat="single-branch" className="mt-2 flex items-center gap-1 text-neutral-400">
+      <ActionBarPrimitive.Copy asChild>
+        <ToolButton aria-label="复制" title="复制">
+          <MessagePrimitive.If copied>
+            <Check className="h-3.5 w-3.5" />
+          </MessagePrimitive.If>
+          <MessagePrimitive.If copied={false}>
+            <Copy className="h-3.5 w-3.5" />
+          </MessagePrimitive.If>
+        </ToolButton>
+      </ActionBarPrimitive.Copy>
+      <ToolButton aria-label="重新生成" title="重新生成" onClick={regenerate} disabled={regenerating}>
+        <RefreshCw className={cn('h-3.5 w-3.5', regenerating && 'animate-spin')} />
       </ToolButton>
-    </ActionBarPrimitive.Copy>
-    <ActionBarPrimitive.Reload asChild>
-      <ToolButton aria-label="重新生成">
-        <RefreshCw className="h-3.5 w-3.5" />
-      </ToolButton>
-    </ActionBarPrimitive.Reload>
-  </ActionBarPrimitive.Root>
-)
+    </ActionBarPrimitive.Root>
+  )
+}
 
 const BranchPicker: FC = () => (
   <BranchPickerPrimitive.Root hideWhenSingleBranch className="mt-1 flex items-center gap-1 text-xs text-neutral-400">
@@ -2002,7 +2111,11 @@ function codeAgentRuntimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
 }
 
 const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
-  <button className={cn('grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700', className)} {...props} />
+  <button
+    type="button"
+    className={cn('grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 disabled:pointer-events-none disabled:opacity-45', className)}
+    {...props}
+  />
 )
 
 function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {

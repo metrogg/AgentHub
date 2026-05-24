@@ -404,6 +404,20 @@ export const api = {
     request<{ cancelled: boolean }>(`/messages/${sessionId}/cancel`, {
       method: 'POST',
     }),
+  updateMessage: (sessionId: string, messageId: string, data: { content: string }) =>
+    request<Message>(`/messages/${sessionId}/${messageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  withdrawMessage: (sessionId: string, messageId: string, data: { rollback?: boolean } = {}) =>
+    request<{ removedMessageIds: string[]; rollback: { reverted: number; failed: number } }>(
+      `/messages/${sessionId}/${messageId}${data.rollback === false ? '?rollback=false' : ''}`,
+      { method: 'DELETE' }
+    ),
+  regenerateMessage: (sessionId: string, messageId: string) =>
+    request<{ removedMessageId: string }>(`/messages/${sessionId}/${messageId}/regenerate`, {
+      method: 'POST',
+    }),
   createOrchestratorPlan: (sessionId: string, content: string) =>
     request<Message>(`/messages/${sessionId}/orchestrator-plan`, {
       method: 'POST',

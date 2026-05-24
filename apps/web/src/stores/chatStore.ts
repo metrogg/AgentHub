@@ -27,6 +27,9 @@ interface ChatState {
   deleteSession: (sessionId: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
   sendMessageToSession: (sessionId: string, content: string) => Promise<void>
+  editMessage: (messageId: string, content: string) => Promise<void>
+  withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
+  regenerateMessage: (messageId: string) => Promise<void>
   addPendingAttachments: (attachments: ChatAttachment[]) => void
   removePendingAttachment: (id: string) => void
   clearPendingAttachments: () => void
@@ -179,11 +182,45 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }))
         await get().fetchSessions()
         set({ agentTyping: false })
+      } else {
+        await get().fetchSessions()
       }
     } catch (error) {
       set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
       throw error
     }
+  },
+
+  async editMessage(messageId, content) {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return
+    const updated = await api.updateMessage(sessionId, messageId, { content })
+    set((s) => ({
+      messages: s.messages.map((message) => (message.id === messageId ? updated : message)),
+    }))
+  },
+
+  async withdrawMessage(messageId) {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return null
+    cancelledSessions.add(sessionId)
+    clearPendingStream()
+    set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
+    await api.cancelMessage(sessionId).catch(() => undefined)
+    const result = await api.withdrawMessage(sessionId, messageId, { rollback: true })
+    const removed = new Set(result.removedMessageIds)
+    set((s) => ({ messages: s.messages.filter((message) => !removed.has(message.id)) }))
+    return result.rollback
+  },
+
+  async regenerateMessage(messageId) {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return
+    cancelledSessions.delete(sessionId)
+    clearPendingStream()
+    set({ agentTyping: true, streamingMessage: null, streamingCodeAgentRun: null })
+    const result = await api.regenerateMessage(sessionId, messageId)
+    set((s) => ({ messages: s.messages.filter((message) => message.id !== result.removedMessageId) }))
   },
 
   addPendingAttachments(attachments) {
