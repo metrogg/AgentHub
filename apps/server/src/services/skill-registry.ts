@@ -139,7 +139,7 @@ async function readSkillSummary(skillPath: string, rootPath: string): Promise<Sk
     description,
     rootPath,
     skillPath,
-    source: basename(rootPath) || rootPath,
+    source: sourceLabel(rootPath),
   }
 }
 
@@ -203,4 +203,14 @@ function normalizeToken(value: string) {
 function limitText(value: string, max: number) {
   if (value.length <= max) return value
   return `${value.slice(0, max)}\n... skill truncated ...`
+}
+
+function sourceLabel(rootPath: string) {
+  const normalized = rootPath.replace(/\\/g, '/').toLowerCase()
+  const projectSkills = resolve(projectRoot, 'skills').replace(/\\/g, '/').toLowerCase()
+  const storageSkills = resolve(projectRoot, 'storage', 'skills').replace(/\\/g, '/').toLowerCase()
+  if (normalized === projectSkills) return '项目内置'
+  if (normalized === storageSkills) return '本机安装'
+  if (env.CODEX_HOME && normalized === resolve(env.CODEX_HOME, 'skills').replace(/\\/g, '/').toLowerCase()) return 'Codex 本机'
+  return basename(rootPath) || rootPath
 }

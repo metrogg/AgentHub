@@ -55,6 +55,11 @@ export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
       message: installed ? `已安装 skill:${installed.id}` : result.output || `已安装 ${slug}`,
     })
   })
+  .get('/:id', async (c) => {
+    const skill = await globalSkillRegistry.loadSkill(c.req.param('id'))
+    if (!skill) return c.json({ message: 'Skill 不存在' }, 404)
+    return c.json(skill)
+  })
 
 async function runSkillhub(args: string[]) {
   try {
@@ -65,8 +70,8 @@ async function runSkillhub(args: string[]) {
     })
     const [code, stdout, stderr] = await Promise.all([
       proc.exited,
-      new Response(proc.stdout).text().catch(() => ''),
-      new Response(proc.stderr).text().catch(() => ''),
+      decodeProcessOutput(proc.stdout).catch(() => ''),
+      decodeProcessOutput(proc.stderr).catch(() => ''),
     ])
     return { code, output: [stdout.trim(), stderr.trim()].filter(Boolean).join('\n') }
   } catch (error: any) {
@@ -75,18 +80,29 @@ async function runSkillhub(args: string[]) {
 }
 
 function parseSkillhubSearch(output: string) {
-  const items: Array<{ slug: string; title: string; description: string; version?: string }> = []
-  let current: { slug: string; title: string; description: string; version?: string } | null = null
+  const items: Array<{ slug: string; title: string; description: string; version?: string; source: string }> = []
+  let current: { slug: string; title: string; descriptions: string[]; version?: string } | null = null
+  const pushCurrent = () => {
+    if (!current) return
+    const item: { slug: string; title: string; description: string; version?: string; source: string } = {
+      slug: current.slug,
+      title: cleanSkillhubText(current.title) || current.slug,
+      description: chooseDescription(current.descriptions),
+      source: 'SkillHub',
+    }
+    if (current.version) item.version = current.version
+    items.push(item)
+  }
   for (const line of output.split(/\r?\n/)) {
     const trimmedRight = line.trimEnd()
     if (!trimmedRight.trim() || /^You can use/i.test(trimmedRight)) continue
     const entry = /^([a-z0-9][a-z0-9_-]{1,120})\s{2,}(.+)$/.exec(trimmedRight)
     if (entry?.[1]) {
-      if (current) items.push(current)
+      pushCurrent()
       current = {
         slug: entry[1],
         title: entry[2]?.trim() || entry[1],
-        description: '',
+        descriptions: [],
       }
       continue
     }
@@ -96,13 +112,47 @@ function parseSkillhubSearch(output: string) {
       current.version = version[1].trim()
       continue
     }
-    const description = /^\s*-\s*(.+)$/.exec(trimmedRight)
-    if (description?.[1] && !current.description) {
-      current.description = description[1].trim()
+    const description = /^\s*-\s*(.+)$/.exec(trimmedRight) ?? /^\s{2,}(.+)$/.exec(trimmedRight)
+    if (description?.[1]) {
+      current.descriptions.push(description[1].trim())
     }
   }
-  if (current) items.push(current)
+  pushCurrent()
   return items.slice(0, 40)
+}
+
+async function decodeProcessOutput(stream: ReadableStream<Uint8Array> | null) {
+  if (!stream) return ''
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer())
+  const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+  const gb18030 = new TextDecoder('gb18030' as any, { fatal: false }).decode(bytes)
+  return scoreDecodedText(gb18030) > scoreDecodedText(utf8) ? gb18030 : utf8
+}
+
+function scoreDecodedText(value: string) {
+  const replacementPenalty = (value.match(/\uFFFD/g) ?? []).length * 20
+  const chineseBonus = (value.match(/[\u4e00-\u9fa5]/g) ?? []).length
+  const readableBonus = (value.match(/[a-z0-9]/gi) ?? []).length * 0.15
+  return chineseBonus + readableBonus - replacementPenalty
+}
+
+function chooseDescription(values: string[]) {
+  const cleaned = values.map(cleanSkillhubText).filter(Boolean)
+  if (!cleaned.length) return ''
+  return (
+    cleaned.find((item) => /[\u4e00-\u9fa5]/.test(item) && item.length >= 8) ??
+    cleaned.find((item) => item.length >= 8) ??
+    cleaned[0] ??
+    ''
+  )
+}
+
+function cleanSkillhubText(value: string) {
+  return value
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[�]{2,}/g, '')
+    .trim()
 }
 
 async function installSkillFromUrl(sourceUrl: string, requestedId?: string) {

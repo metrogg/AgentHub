@@ -251,6 +251,10 @@ export interface SkillSummary {
   source: string
 }
 
+export interface LoadedSkill extends SkillSummary {
+  body: string
+}
+
 export interface SkillInstallResult {
   ok: boolean
   installed?: SkillSummary | null
@@ -262,6 +266,7 @@ export interface SkillhubSearchItem {
   title: string
   description: string
   version?: string
+  source: string
 }
 
 export interface SkillhubSearchResult {
@@ -465,6 +470,7 @@ export const api = {
 
   // Skills
   listSkills: () => request<{ items: SkillSummary[] }>('/skills'),
+  getSkill: (id: string) => request<LoadedSkill>(`/skills/${encodeURIComponent(id)}`),
   installSkill: (data: { sourceUrl: string; id?: string }) =>
     request<SkillInstallResult>('/skills/install', {
       method: 'POST',
