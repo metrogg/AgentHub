@@ -688,7 +688,9 @@ function ModelManagement({
         </table>
       </div>
 
-      <p className="mt-4 text-xs text-neutral-400">提示：模型变更会自动保存并同步到聊天后端。不同 API 协议的 CLI 工具配置在“Code Agent”页面管理。</p>
+      <p className="mt-4 text-xs text-neutral-400">
+        提示：模型变更会自动保存并同步到聊天后端。当前是本地单用户 Demo 模式，API Key 会保存在本机 SQLite settings 中；不同 API 协议的 CLI 工具配置在“Code Agent”页面管理。
+      </p>
     </div>
   )
 }
@@ -880,6 +882,7 @@ function ModelEditor({
 }
 
 function Field({ label, value, onChange, placeholder, type = 'text', wide = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string; wide?: boolean }) {
+  if (label.toLowerCase().includes('api key')) type = 'password'
   return (
     <label className={cn('block', wide && 'md:col-span-2')}>
       <span className="mb-1.5 block text-xs font-medium text-neutral-500">{label}</span>

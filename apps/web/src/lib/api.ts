@@ -47,6 +47,51 @@ export interface Message {
   createdAt: string
 }
 
+export type AgentArtifact =
+  | {
+      id: string
+      kind: 'web_preview'
+      title: string
+      description?: string
+      url: string
+      framework?: string
+      status?: 'ready' | 'building' | 'failed'
+    }
+  | {
+      id: string
+      kind: 'diff'
+      title: string
+      description?: string
+      files: Array<{
+        path: string
+        additions: number
+        deletions: number
+        language?: string
+        patch: string
+      }>
+    }
+  | {
+      id: string
+      kind: 'file'
+      title: string
+      description?: string
+      fileName: string
+      mimeType: string
+      sizeLabel: string
+      url?: string
+    }
+  | {
+      id: string
+      kind: 'deploy'
+      title: string
+      description?: string
+      provider: string
+      environment: string
+      status: 'queued' | 'building' | 'ready' | 'failed'
+      previewUrl?: string
+      logs?: string[]
+    }
+
 export interface ModelCatalogItem {
   id: string
   enabled: boolean
@@ -80,6 +125,29 @@ export interface CodingToolStatusResponse {
   localCliProbesEnabled: boolean
   platform: string
   runtime?: 'local' | 'host'
+}
+
+export interface AgentAdapterCatalogItem {
+  id: 'codex' | 'claude-code' | 'opencode'
+  name: string
+  command: string
+  envKey: string
+  docsHint: string
+  installed: boolean
+  configured: boolean
+  version: string | null
+  configEnv: string
+  configMessage: string
+  executionEnabled: boolean
+  ready: boolean
+  readiness: string
+}
+
+export interface AgentAdapterCatalogResponse {
+  platform: string
+  localCliProbesEnabled: boolean
+  executionEnabled: boolean
+  items: AgentAdapterCatalogItem[]
 }
 
 export interface CliInstallAction {
@@ -190,7 +258,18 @@ export interface AgentConfigInput {
   approvalRequired?: boolean
 }
 
-export type TaskStatus = 'pending' | 'running' | 'done'
+export type AgentDraft = Required<Omit<AgentConfigInput, 'avatar' | 'modelId' | 'codeAgentType'>> & {
+  avatar?: string | null
+  modelId?: string | null
+  codeAgentType?: WorkspaceAgent['codeAgentType']
+}
+
+export interface AgentDraftConfirmResult {
+  agent: WorkspaceAgent
+  message: Message
+}
+
+export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
 
 export interface WorkspaceTask {
   id: string
@@ -302,6 +381,21 @@ export const api = {
       `/messages/${sessionId}/orchestrator-plan/${messageId}/dispatch`,
       { method: 'POST' }
     ),
+  createArtifactDemo: (sessionId: string, content: string) =>
+    request<Message>(`/messages/${sessionId}/artifact-demo`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  createAgentDraft: (sessionId: string, content: string) =>
+    request<Message>(`/messages/${sessionId}/agent-draft`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  confirmAgentDraft: (sessionId: string, messageId: string, draft: AgentDraft) =>
+    request<AgentDraftConfirmResult>(`/messages/${sessionId}/agent-draft/${messageId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ draft }),
+    }),
 
   // Settings (map-based)
   getSettings: () => request<Record<string, string>>('/settings'),
@@ -331,6 +425,8 @@ export const api = {
           body: JSON.stringify({ tools }),
         })
       : request<CodingToolStatusResponse>('/coding-tools/status'),
+  getAgentAdapters: () =>
+    request<AgentAdapterCatalogResponse>('/coding-tools/agent-adapters'),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
   getOpencodeModels: () =>
@@ -408,6 +504,8 @@ export const api = {
     request<{ sessionId: string }>(`/workspaces/${id}/summary`, { method: 'POST' }),
   openWorkspaceGroupSession: (id: string) =>
     request<{ session: Session }>(`/workspaces/${id}/group-session`, { method: 'POST' }),
+  openWorkspaceAgentSession: (id: string, agentId: string) =>
+    request<{ session: Session }>(`/workspaces/${id}/agents/${agentId}/session`, { method: 'POST' }),
 }
 
 export function mentionsOrchestrator(content: string) {

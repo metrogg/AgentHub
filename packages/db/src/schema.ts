@@ -70,7 +70,7 @@ export const workspaceTasks = sqliteTable('workspace_tasks', {
   agentId: text('agent_id'),
   title: text('title').notNull(),
   description: text('description').notNull().default(''),
-  status: text('status', { enum: ['pending', 'running', 'done'] }).notNull().default('pending'),
+  status: text('status', { enum: ['pending', 'running', 'done', 'failed'] }).notNull().default('pending'),
   sessionId: text('session_id'),
   orderIdx: integer('order_idx').notNull().default(0),
   createdAt: now(),

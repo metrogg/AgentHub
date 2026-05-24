@@ -34,6 +34,12 @@ export interface AgentRunProfile {
   projectPath?: string | null
 }
 
+export interface AgentRunResult {
+  ok: boolean
+  cancelled?: boolean
+  messageId?: string
+}
+
 // In-memory map: sessionId -> Set of connected websockets
 const sessionRooms = new Map<string, Set<ServerWebSocket<unknown>>>()
 const activeRuns = new Map<string, { cancelled: boolean; controller: AbortController }>()
@@ -110,7 +116,7 @@ function buildAgentSystem(profile?: AgentRunProfile) {
     .join('\n')
 }
 
-export async function runAgentReply(sessionId: string, userMsg: MessageRow, profile?: AgentRunProfile) {
+export async function runAgentReply(sessionId: string, userMsg: MessageRow, profile?: AgentRunProfile): Promise<AgentRunResult> {
   cancelAgentReply(sessionId)
   const run = { cancelled: false, controller: new AbortController() }
   activeRuns.set(sessionId, run)
@@ -144,6 +150,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   })
 
   let fullContent = ''
+  let failed = false
   const selectedModelId =
     profile?.modelId ?? (typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined)
   const replyStream =
@@ -169,10 +176,12 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
       const message = error?.message || 'Agent reply failed'
       logger.error({ err: message, sessionId, agentId }, 'Agent reply failed')
       fullContent = `\n\n[Error: ${message}]`
+      failed = true
     }
   }
 
   if (activeRuns.get(sessionId) === run) activeRuns.delete(sessionId)
+  if (looksLikeAgentFailure(fullContent)) failed = true
 
   if (run.cancelled) {
     if (!fullContent.trim()) {
@@ -180,13 +189,15 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
         type: 'message:cancelled',
         payload: { sessionId },
       })
-      return
+      return { ok: false, cancelled: true }
     }
     fullContent = `${fullContent.trimEnd()}\n\n[Stopped by user]`
+    failed = true
   }
 
   if (!fullContent.trim()) {
     fullContent = '[Error: Model returned an empty response. Check the selected provider, model ID, base URL, and API key.]'
+    failed = true
     broadcast(sessionId, {
       type: 'message:stream',
       payload: { sessionId, messageId: streamMsgId, delta: fullContent },
@@ -223,8 +234,18 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   })
 
   logger.info({ sessionId, msgId: agentMsg?.id, length: fullContent.length }, 'Agent reply completed')
+  return { ok: !failed, cancelled: run.cancelled, messageId: agentMsg?.id }
 }
 
 function isAbortError(error: any) {
   return error?.name === 'AbortError' || /abort|cancel/i.test(error?.message || '')
+}
+
+function looksLikeAgentFailure(content: string) {
+  return (
+    /^\s*\[Error:/i.test(content) ||
+    /\n\s*\[Error:/i.test(content) ||
+    /API key is not configured/i.test(content) ||
+    /Model returned an empty response/i.test(content)
+  )
 }

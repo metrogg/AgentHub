@@ -20,7 +20,7 @@ import {
   X,
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
-import { api, type ModelCatalogItem, type WorkspaceAgent, type WorkspaceTask, type TaskStatus, type AgentConfigInput } from '../lib/api'
+import { api, type AgentAdapterCatalogItem, type ModelCatalogItem, type WorkspaceAgent, type WorkspaceTask, type TaskStatus, type AgentConfigInput } from '../lib/api'
 import { cn } from '../lib/utils'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
@@ -30,6 +30,9 @@ const agentPresets = [
   { name: 'Researcher', role: '研究', color: '#f59e0b', systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点。给出参考来源。' },
   { name: 'Reviewer', role: '审查', color: '#ef4444', systemPrompt: '你是审查者。检查风险、交互漏洞和缺失的测试。直接、克制、不绕弯。' },
 ]
+
+const capabilityPresets = ['规划', '实现', '审查', '研究', '前端', '后端', '测试', '部署']
+const toolPermissionPresets = ['chat', 'workspace:read', 'workspace:write', 'shell:preview', 'deploy:preview', 'skills:read']
 
 const defaultAgentDraft: AgentConfigInput = {
   name: '',
@@ -80,6 +83,7 @@ export default function AgentWorldPage() {
   const [newTask, setNewTask] = useState({ title: '', description: '', agentId: '' })
   const [workspaceDraft, setWorkspaceDraft] = useState({ name: '', goal: '', projectPath: '' })
   const [models, setModels] = useState<ModelCatalogItem[]>([])
+  const [adapters, setAdapters] = useState<AgentAdapterCatalogItem[]>([])
   const [savingGoal, setSavingGoal] = useState(false)
   const [savingAgent, setSavingAgent] = useState(false)
   const [openingFolder, setOpeningFolder] = useState(false)
@@ -119,6 +123,19 @@ export default function AgentWorldPage() {
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getAgentAdapters()
+      .then((catalog) => {
+        if (!cancelled) setAdapters(catalog.items)
+      })
+      .catch(() => setAdapters([]))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === currentId) ?? null,
     [currentId, workspaces]
@@ -127,6 +144,7 @@ export default function AgentWorldPage() {
   const pendingCount = tasks.filter((task) => task.status === 'pending').length
   const runningCount = tasks.filter((task) => task.status === 'running').length
   const doneCount = tasks.filter((task) => task.status === 'done').length
+  const failedCount = tasks.filter((task) => task.status === 'failed').length
   const dispatchedCount = tasks.filter((task) => Boolean(task.sessionId)).length
 
   useEffect(() => {
@@ -455,6 +473,7 @@ export default function AgentWorldPage() {
                   <Stat value={agents.length} label="Agent 成员" />
                   <Stat value={tasks.length} label="任务总数" />
                   <Stat value={runningCount} label="进行中" />
+                  <Stat value={failedCount} label="失败" />
                   <Stat value={dispatchedCount} label="已开会话" />
                 </div>
 
@@ -542,6 +561,7 @@ export default function AgentWorldPage() {
                         <MiniStat value={pendingCount} label="待分派" />
                         <MiniStat value={runningCount} label="推进中" />
                         <MiniStat value={doneCount} label="完成" />
+                        <MiniStat value={failedCount} label="失败" />
                       </div>
                       <button
                         type="button"
@@ -605,6 +625,7 @@ export default function AgentWorldPage() {
           mode={agentDialogMode}
           draft={agentDraft}
           models={models}
+          adapters={adapters}
           saving={savingAgent}
           onChange={(patch) => setAgentDraft((draft) => ({ ...draft, ...patch }))}
           onClose={closeAgentDialog}
@@ -841,6 +862,7 @@ function AgentDialog({
   mode,
   draft,
   models,
+  adapters,
   saving,
   onChange,
   onSubmit,
@@ -849,12 +871,14 @@ function AgentDialog({
   mode: 'create' | 'edit'
   draft: AgentConfigInput
   models: ModelCatalogItem[]
+  adapters: AgentAdapterCatalogItem[]
   saving: boolean
   onChange: (patch: Partial<AgentConfigInput>) => void
   onSubmit: (event: FormEvent) => void
   onClose: () => void
 }) {
   const runtimeType = draft.runtimeType ?? 'llm'
+  const adapter = adapters.find((item) => item.id === draft.codeAgentType)
   const selectClass = 'h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300'
 
   return (
@@ -950,7 +974,38 @@ function AgentDialog({
           </select>
           <Field placeholder="颜色，如 #111827" value={draft.color ?? '#111827'} onChange={(color) => onChange({ color })} />
           <Field placeholder="能力标签，逗号分隔" value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => onChange({ capabilityTags: splitList(value) })} />
-          <Field placeholder="工具权限，逗号分隔" value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => onChange({ toolPermissions: splitList(value) })} />
+          <Field placeholder="自定义工具权限，逗号分隔" value={(draft.toolPermissions ?? []).filter((item) => !toolPermissionPresets.includes(item)).join(', ')} onChange={(value) => onChange({ toolPermissions: mergePresetList(draft.toolPermissions ?? [], splitList(value), toolPermissionPresets) })} />
+          <ChipPicker
+            className="md:col-span-2"
+            label="常用能力标签"
+            options={capabilityPresets}
+            selected={draft.capabilityTags ?? []}
+            onToggle={(value) => onChange({ capabilityTags: toggleListValue(draft.capabilityTags ?? [], value) })}
+          />
+          <ChipPicker
+            className="md:col-span-2"
+            label="工具集"
+            options={toolPermissionPresets}
+            selected={draft.toolPermissions ?? []}
+            onToggle={(value) => onChange({ toolPermissions: toggleListValue(draft.toolPermissions ?? [], value) })}
+          />
+          {runtimeType === 'code-agent' && adapter && (
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 text-xs leading-5 text-neutral-500 md:col-span-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-neutral-900">{adapter.name} readiness</span>
+                <span className={cn('rounded-full px-2 py-0.5 font-medium', adapter.ready ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+                  {adapter.readiness}
+                </span>
+              </div>
+              <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                <span>CLI: {adapter.installed ? `已安装 ${adapter.version ?? ''}` : '未安装'}</span>
+                <span>配置: {adapter.configured ? '已就绪' : adapter.configEnv}</span>
+                <span>执行开关: {adapter.executionEnabled ? '已开启' : '未开启'}</span>
+                <span>高风险确认: {draft.approvalRequired === false ? '已关闭' : '开启中'}</span>
+              </div>
+              <div className="mt-2">{adapter.docsHint}</div>
+            </div>
+          )}
           <textarea
             value={draft.systemPrompt ?? ''}
             onChange={(event) => onChange({ systemPrompt: event.target.value })}
@@ -1099,7 +1154,7 @@ function TaskRow({
             className="inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
           >
             {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            {task.sessionId ? '重新进入' : '分派'}
+            {task.status === 'failed' ? '重试' : task.sessionId ? '重新分派' : '分派'}
           </button>
           <button type="button" onClick={onDelete} className="grid h-9 w-9 place-items-center rounded-xl text-neutral-300 hover:bg-red-50 hover:text-red-500">
             <Trash2 className="h-4 w-4" />
@@ -1131,6 +1186,52 @@ function Field({
   )
 }
 
+function ChipPicker({
+  label,
+  options,
+  selected,
+  onToggle,
+  className,
+}: {
+  label: string
+  options: string[]
+  selected: string[]
+  onToggle: (value: string) => void
+  className?: string
+}) {
+  return (
+    <div className={className}>
+      <div className="mb-2 text-xs font-medium text-neutral-500">{label}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((option) => {
+          const active = selected.includes(option)
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onToggle(option)}
+              className={cn(
+                'h-7 rounded-full border px-2.5 text-xs transition',
+                active ? 'border-neutral-900 bg-neutral-950 text-white' : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300'
+              )}
+            >
+              {option}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function toggleListValue(values: string[], value: string) {
+  return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]
+}
+
+function mergePresetList(current: string[], custom: string[], presetValues: string[]) {
+  return [...current.filter((item) => presetValues.includes(item)), ...custom]
+}
+
 function Rule({ title, text }: { title: string; text: string }) {
   return (
     <div className="rounded-xl bg-neutral-50 p-3">
@@ -1143,17 +1244,20 @@ function Rule({ title, text }: { title: string; text: string }) {
 function nextStatus(status: TaskStatus): TaskStatus {
   if (status === 'pending') return 'running'
   if (status === 'running') return 'done'
+  if (status === 'done') return 'failed'
   return 'pending'
 }
 
 function statusLabel(status: TaskStatus) {
   if (status === 'pending') return '待分派'
   if (status === 'running') return '进行中'
+  if (status === 'failed') return '失败'
   return '已完成'
 }
 
 function statusDot(status: TaskStatus) {
   if (status === 'pending') return 'bg-neutral-300'
   if (status === 'running') return 'bg-blue-500'
+  if (status === 'failed') return 'bg-red-500'
   return 'bg-emerald-500'
 }

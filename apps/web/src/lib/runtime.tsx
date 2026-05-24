@@ -6,7 +6,17 @@ import {
   type ThreadMessageLike,
 } from '@assistant-ui/react'
 import { useChatStore } from '../stores/chatStore'
-import type { Message } from './api'
+import type { AgentArtifact, AgentDraft, Message } from './api'
+
+type ArtifactBundle = {
+  artifacts: AgentArtifact[]
+}
+
+type AgentDraftBundle = {
+  draft: AgentDraft
+  status?: string
+  messageId: string
+}
 
 function toThreadMessage(message: Message): ThreadMessageLike {
   const role: ThreadMessageLike['role'] =
@@ -34,6 +44,29 @@ function toThreadMessage(message: Message): ThreadMessageLike {
         : null
   const senderLabel = [agentName, runtimeLabel].filter(Boolean).join(' · ')
   const text = senderLabel ? `**${senderLabel}**\n\n${message.content}` : message.content
+  const artifacts = parseArtifacts(message.metadata)
+  const agentDraft = parseAgentDraft(message)
+
+  if (agentDraft) {
+    return {
+      id: message.id,
+      role,
+      content: [{ type: 'data', name: 'agent_draft', data: agentDraft }],
+      createdAt: new Date(message.createdAt),
+    }
+  }
+
+  if (artifacts.length) {
+    return {
+      id: message.id,
+      role,
+      content: [
+        { type: 'text', text },
+        { type: 'data', name: 'artifact_bundle', data: { artifacts } satisfies ArtifactBundle },
+      ],
+      createdAt: new Date(message.createdAt),
+    }
+  }
 
   return {
     id: message.id,
@@ -43,6 +76,29 @@ function toThreadMessage(message: Message): ThreadMessageLike {
       : [{ type: 'text', text }],
     createdAt: new Date(message.createdAt),
   }
+}
+
+function parseAgentDraft(message: Message): AgentDraftBundle | null {
+  const value = message.metadata?.agentDraft
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Partial<AgentDraft>
+  if (typeof candidate.name !== 'string' || typeof candidate.role !== 'string') return null
+  return {
+    draft: candidate as AgentDraft,
+    status: typeof message.metadata?.agentDraftStatus === 'string' ? message.metadata.agentDraftStatus : 'draft',
+    messageId: message.id,
+  }
+}
+
+function parseArtifacts(metadata: Record<string, unknown> | null): AgentArtifact[] {
+  const value = metadata?.artifacts
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is AgentArtifact => {
+    if (!item || typeof item !== 'object') return false
+    const kind = (item as { kind?: unknown }).kind
+    const title = (item as { title?: unknown }).title
+    return typeof kind === 'string' && typeof title === 'string'
+  })
 }
 
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {

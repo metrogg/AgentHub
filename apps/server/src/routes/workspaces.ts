@@ -69,7 +69,7 @@ const updateTaskSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(4000).optional(),
   agentId: z.string().nullable().optional(),
-  status: z.enum(['pending', 'running', 'done']).optional(),
+  status: z.enum(['pending', 'running', 'done', 'failed']).optional(),
 })
 
 // ---------- Helpers ----------
@@ -339,6 +339,13 @@ function workspaceAgentRunProfile(agent: typeof workspaceAgents.$inferSelect, pr
   }
 }
 
+async function markWorkspaceTaskAfterRun(taskId: string, ok: boolean) {
+  await db
+    .update(workspaceTasks)
+    .set({ status: ok ? 'done' : 'failed', updatedAt: new Date() })
+    .where(eq(workspaceTasks.id, taskId))
+}
+
 // ---------- Routes ----------
 
 export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -427,6 +434,46 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
   .post('/:id/group-session', async (c) => {
     const user = c.get('user')
     const session = await ensureGroupSession(c.req.param('id'), user.sub)
+    return c.json({ session })
+  })
+
+  .post('/:id/agents/:agentId/session', async (c) => {
+    const user = c.get('user')
+    const workspaceId = c.req.param('id')
+    const agentId = c.req.param('agentId')
+    const ws = await ensureWorkspace(workspaceId, user.sub)
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, workspaceId)))
+      .limit(1)
+    if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+
+    const [existing] = await db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.ownerId, user.sub),
+          eq(sessions.workspaceId, workspaceId),
+          eq(sessions.workspaceAgentId, agentId),
+          eq(sessions.type, 'direct')
+        )
+      )
+      .limit(1)
+    if (existing) return c.json({ session: existing })
+
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: `${ws.name} / ${agent.name}`,
+        type: 'direct',
+        ownerId: user.sub,
+        workspaceId,
+        workspaceAgentId: agent.id,
+      })
+      .returning()
+    if (!session) throw new HTTPException(500, { message: 'Failed to create agent session' })
     return c.json({ session })
   })
 
@@ -616,7 +663,9 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     // Trigger agent reply asynchronously
     if (userMsg) {
       import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined).catch(() => {})
+        runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined)
+          .then((result) => markWorkspaceTaskAfterRun(taskId, result.ok))
+          .catch(() => markWorkspaceTaskAfterRun(taskId, false))
       })
     }
 

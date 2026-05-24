@@ -61,6 +61,8 @@ import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import {
   api,
+  type AgentArtifact,
+  type AgentDraft,
   type ModelCatalogItem,
   type OrchestratorDispatchResult,
   type OrchestratorPlan,
@@ -911,7 +913,7 @@ const AssistantMessage: FC = () => (
           components={{
             Text: MarkdownText,
             Empty: AssistantThinking,
-            data: { by_name: { orchestrator_plan: OrchestratorPlanCard } },
+            data: { by_name: { orchestrator_plan: OrchestratorPlanCard, artifact_bundle: ArtifactBundleCard, agent_draft: AgentDraftCard } },
           }}
         />
       </div>
@@ -933,6 +935,352 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
         <i />
       </span>
     </div>
+  )
+}
+
+const toolPermissionOptions = ['chat', 'workspace:read', 'workspace:write', 'shell:preview', 'deploy:preview', 'skills:read']
+const capabilityTagOptions = ['规划', '实现', '审查', '研究', '前端', '后端', '测试', '部署']
+
+const AgentDraftCard: FC<{ data: { draft: AgentDraft; status?: string; messageId: string } }> = ({ data }) => {
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const selectSession = useChatStore((state) => state.selectSession)
+  const [draft, setDraft] = useState<AgentDraft>(data.draft)
+  const [status, setStatus] = useState(data.status ?? 'draft')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setDraft(data.draft)
+    setStatus(data.status ?? 'draft')
+  }, [data])
+
+  function patch(patch: Partial<AgentDraft>) {
+    setDraft((current) => normalizeDraftForRuntime({ ...current, ...patch }))
+  }
+
+  function toggleListValue(key: 'toolPermissions' | 'capabilityTags', value: string) {
+    setDraft((current) => {
+      const values = new Set(current[key] ?? [])
+      if (values.has(value)) values.delete(value)
+      else values.add(value)
+      return { ...current, [key]: [...values] }
+    })
+  }
+
+  async function confirm() {
+    if (!currentSessionId || saving || status === 'confirmed') return
+    setSaving(true)
+    setError('')
+    try {
+      await api.confirmAgentDraft(currentSessionId, data.messageId, draft)
+      setStatus('confirmed')
+      await selectSession(currentSessionId)
+    } catch (err) {
+      setError(errorMessage(err, '创建 Agent 失败'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="not-prose overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.08)]">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 bg-[#fbfbf8] px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white" style={{ background: draft.color }}>
+            <Bot className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-xs font-medium uppercase tracking-[0.08em] text-neutral-400">Agent Draft</div>
+            <div className="mt-1 truncate text-base font-semibold text-neutral-950">{draft.name || 'Unnamed Agent'}</div>
+          </div>
+        </div>
+        <span className={cn('rounded-full px-2.5 py-1 text-xs font-medium', status === 'confirmed' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700')}>
+          {status === 'confirmed' ? '已创建' : '待确认'}
+        </span>
+      </div>
+      <div className="grid gap-3 p-4 sm:grid-cols-2">
+        <DraftField label="名称" value={draft.name} onChange={(name) => patch({ name })} disabled={status === 'confirmed'} />
+        <DraftField label="角色" value={draft.role} onChange={(role) => patch({ role })} disabled={status === 'confirmed'} />
+        <textarea
+          value={draft.description}
+          onChange={(event) => patch({ description: event.target.value })}
+          disabled={status === 'confirmed'}
+          className="h-20 resize-none rounded-xl border border-neutral-200 px-3 py-2 text-sm leading-6 outline-none focus:border-neutral-400 disabled:bg-neutral-50 sm:col-span-2"
+          placeholder="能力说明"
+        />
+        <select
+          value={draft.runtimeType}
+          onChange={(event) => patch({ runtimeType: event.target.value as AgentDraft['runtimeType'] })}
+          disabled={status === 'confirmed'}
+          className="h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none disabled:bg-neutral-50"
+        >
+          <option value="llm">普通 LLM Agent</option>
+          <option value="code-agent">绑定 Code Agent</option>
+          <option value="mcp">Native Read-only Agent</option>
+          <option value="a2a">A2A Agent</option>
+        </select>
+        <select
+          value={draft.runtimeType === 'code-agent' ? draft.codeAgentType ?? 'codex' : ''}
+          onChange={(event) => patch({ codeAgentType: (event.target.value || null) as AgentDraft['codeAgentType'] })}
+          disabled={status === 'confirmed' || draft.runtimeType !== 'code-agent'}
+          className="h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none disabled:bg-neutral-50"
+        >
+          <option value="">不绑定 CLI</option>
+          <option value="codex">Codex CLI</option>
+          <option value="claude-code">Claude Code</option>
+          <option value="opencode">OpenCode</option>
+        </select>
+        <div className="sm:col-span-2">
+          <div className="mb-2 text-xs font-medium text-neutral-500">能力标签</div>
+          <ChipSet values={capabilityTagOptions} selected={draft.capabilityTags ?? []} disabled={status === 'confirmed'} onToggle={(value) => toggleListValue('capabilityTags', value)} />
+        </div>
+        <div className="sm:col-span-2">
+          <div className="mb-2 text-xs font-medium text-neutral-500">工具权限</div>
+          <ChipSet values={toolPermissionOptions} selected={draft.toolPermissions ?? []} disabled={status === 'confirmed'} onToggle={(value) => toggleListValue('toolPermissions', value)} />
+        </div>
+        <textarea
+          value={draft.systemPrompt}
+          onChange={(event) => patch({ systemPrompt: event.target.value })}
+          disabled={status === 'confirmed'}
+          className="h-24 resize-none rounded-xl border border-neutral-200 px-3 py-2 text-sm leading-6 outline-none focus:border-neutral-400 disabled:bg-neutral-50 sm:col-span-2"
+          placeholder="System Prompt"
+        />
+        {error && <div className="rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600 sm:col-span-2">{error}</div>}
+        <button
+          type="button"
+          onClick={confirm}
+          disabled={saving || status === 'confirmed' || !draft.name.trim() || !draft.role.trim()}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-200 sm:col-span-2"
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          {status === 'confirmed' ? '已加入 Agent Group' : saving ? '正在创建' : '确认创建 Agent'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+const DraftField: FC<{ label: string; value: string; disabled?: boolean; onChange: (value: string) => void }> = ({ label, value, disabled, onChange }) => (
+  <label className="grid gap-1.5 text-xs font-medium text-neutral-500">
+    {label}
+    <input
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+      className="h-10 rounded-xl border border-neutral-200 px-3 text-sm font-normal text-neutral-900 outline-none focus:border-neutral-400 disabled:bg-neutral-50"
+    />
+  </label>
+)
+
+const ChipSet: FC<{ values: string[]; selected: string[]; disabled?: boolean; onToggle: (value: string) => void }> = ({ values, selected, disabled, onToggle }) => (
+  <div className="flex flex-wrap gap-1.5">
+    {values.map((value) => {
+      const active = selected.includes(value)
+      return (
+        <button
+          key={value}
+          type="button"
+          disabled={disabled}
+          onClick={() => onToggle(value)}
+          className={cn(
+            'h-7 rounded-full border px-2.5 text-xs transition disabled:opacity-60',
+            active ? 'border-neutral-900 bg-neutral-950 text-white' : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300'
+          )}
+        >
+          {value}
+        </button>
+      )
+    })}
+  </div>
+)
+
+function normalizeDraftForRuntime(draft: AgentDraft): AgentDraft {
+  if (draft.runtimeType === 'code-agent') return { ...draft, codeAgentType: draft.codeAgentType ?? 'codex' }
+  if (draft.runtimeType === 'mcp') {
+    return {
+      ...draft,
+      codeAgentType: null,
+      sandboxPolicy: 'read-only',
+      approvalRequired: true,
+      toolPermissions: ['workspace:read', 'skills:read'],
+    }
+  }
+  return { ...draft, codeAgentType: null }
+}
+
+const ArtifactBundleCard: FC<{ data: { artifacts: AgentArtifact[] } }> = ({ data }) => {
+  const artifacts = Array.isArray(data.artifacts) ? data.artifacts : []
+  if (!artifacts.length) return null
+
+  return (
+    <div className="not-prose mt-3 space-y-3">
+      {artifacts.map((artifact) => (
+        <ArtifactCard key={artifact.id} artifact={artifact} />
+      ))}
+    </div>
+  )
+}
+
+const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
+  if (artifact.kind === 'web_preview') return <WebPreviewArtifact artifact={artifact} />
+  if (artifact.kind === 'diff') return <DiffArtifact artifact={artifact} />
+  if (artifact.kind === 'deploy') return <DeployArtifact artifact={artifact} />
+  return <FileArtifact artifact={artifact} />
+}
+
+const WebPreviewArtifact: FC<{ artifact: Extract<AgentArtifact, { kind: 'web_preview' }> }> = ({ artifact }) => (
+  <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_12px_34px_rgba(15,23,42,0.08)]">
+    <div className="flex items-center justify-between gap-3 border-b border-neutral-200 bg-[#fbfbf8] px-4 py-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-600">
+          <Globe2 className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-neutral-950">{artifact.title}</div>
+          <div className="mt-0.5 truncate text-xs text-neutral-500">{artifact.framework ?? 'Web preview'}</div>
+        </div>
+      </div>
+      <ArtifactStatus status={artifact.status ?? 'ready'} />
+    </div>
+    <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
+      <div className="min-w-0">
+        <p className="text-sm leading-6 text-neutral-600">{artifact.description}</p>
+        <div className="mt-3 truncate rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 font-mono text-xs text-neutral-500">
+          {artifact.url}
+        </div>
+      </div>
+      <div className="flex min-h-28 items-center justify-center rounded-xl border border-neutral-200 bg-[linear-gradient(135deg,#ffffff,#eef6ff)]">
+        <div className="w-24 rounded-lg border border-white/80 bg-white p-2 shadow-sm">
+          <div className="h-2 rounded-full bg-blue-500" />
+          <div className="mt-2 h-2 rounded-full bg-neutral-200" />
+          <div className="mt-1.5 h-2 w-2/3 rounded-full bg-neutral-200" />
+          <div className="mt-3 grid grid-cols-2 gap-1.5">
+            <span className="h-8 rounded bg-emerald-100" />
+            <span className="h-8 rounded bg-amber-100" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+)
+
+const DiffArtifact: FC<{ artifact: Extract<AgentArtifact, { kind: 'diff' }> }> = ({ artifact }) => {
+  const additions = artifact.files.reduce((sum, file) => sum + file.additions, 0)
+  const deletions = artifact.files.reduce((sum, file) => sum + file.deletions, 0)
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_12px_34px_rgba(15,23,42,0.08)]">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 bg-[#fbfbf8] px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-700">
+            <GitBranch className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-neutral-950">{artifact.title}</div>
+            <div className="mt-0.5 text-xs text-neutral-500">{artifact.files.length} files changed</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-xs font-medium">
+          <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">+{additions}</span>
+          <span className="rounded-full bg-red-50 px-2 py-1 text-red-600">-{deletions}</span>
+        </div>
+      </div>
+      <div className="p-4">
+        <p className="text-sm leading-6 text-neutral-600">{artifact.description}</p>
+        <div className="mt-3 space-y-3">
+          {artifact.files.map((file) => (
+            <div key={file.path} className="overflow-hidden rounded-xl border border-neutral-200">
+              <div className="flex items-center justify-between gap-3 bg-neutral-50 px-3 py-2">
+                <span className="min-w-0 truncate font-mono text-xs text-neutral-700">{file.path}</span>
+                <span className="shrink-0 text-xs text-neutral-400">{file.language ?? 'diff'}</span>
+              </div>
+              <pre className="max-h-56 overflow-auto bg-[#0b1020] px-3 py-3 text-xs leading-5 text-neutral-100">
+                <code>{file.patch}</code>
+              </pre>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" className="inline-flex h-8 items-center rounded-lg bg-neutral-950 px-3 text-xs font-medium text-white">
+            应用 Diff
+          </button>
+          <button type="button" className="inline-flex h-8 items-center rounded-lg border border-neutral-200 px-3 text-xs font-medium text-neutral-600">
+            展开预览
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const DeployArtifact: FC<{ artifact: Extract<AgentArtifact, { kind: 'deploy' }> }> = ({ artifact }) => (
+  <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_12px_34px_rgba(15,23,42,0.08)]">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 bg-[#fbfbf8] px-4 py-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-violet-50 text-violet-700">
+          <Blocks className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold text-neutral-950">{artifact.title}</div>
+          <div className="mt-0.5 truncate text-xs text-neutral-500">
+            {artifact.provider} / {artifact.environment}
+          </div>
+        </div>
+      </div>
+      <ArtifactStatus status={artifact.status} />
+    </div>
+    <div className="p-4">
+      <p className="text-sm leading-6 text-neutral-600">{artifact.description}</p>
+      {artifact.previewUrl && (
+        <div className="mt-3 flex min-w-0 items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2">
+          <Globe2 className="h-4 w-4 shrink-0 text-neutral-400" />
+          <span className="min-w-0 flex-1 truncate font-mono text-xs text-neutral-600">{artifact.previewUrl}</span>
+        </div>
+      )}
+      <div className="mt-3 grid gap-2">
+        {(artifact.logs ?? []).map((log, index) => (
+          <div key={`${log}-${index}`} className="flex items-center gap-2 text-xs text-neutral-500">
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+            {log}
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+)
+
+const FileArtifact: FC<{ artifact: Extract<AgentArtifact, { kind: 'file' }> }> = ({ artifact }) => (
+  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-neutral-200 bg-white px-4 py-3 shadow-[0_12px_34px_rgba(15,23,42,0.08)]">
+    <div className="flex min-w-0 items-center gap-3">
+      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-amber-50 text-amber-700">
+        <FileText className="h-4 w-4" />
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold text-neutral-950">{artifact.title}</div>
+        <div className="mt-0.5 truncate text-xs text-neutral-500">
+          {artifact.fileName} · {artifact.sizeLabel} · {artifact.mimeType}
+        </div>
+      </div>
+    </div>
+    <button type="button" className="inline-flex h-8 items-center rounded-lg border border-neutral-200 px-3 text-xs font-medium text-neutral-600">
+      打开附件
+    </button>
+  </div>
+)
+
+const ArtifactStatus: FC<{ status: 'queued' | 'building' | 'ready' | 'failed' }> = ({ status }) => {
+  const label = status === 'queued' ? '排队中' : status === 'building' ? '生成中' : status === 'failed' ? '失败' : '可预览'
+  const tone =
+    status === 'failed'
+      ? 'bg-red-50 text-red-600'
+      : status === 'ready'
+        ? 'bg-emerald-50 text-emerald-700'
+        : 'bg-blue-50 text-blue-700'
+  return (
+    <span className={cn('inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium', tone)}>
+      {status === 'building' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+      {label}
+    </span>
   )
 }
 

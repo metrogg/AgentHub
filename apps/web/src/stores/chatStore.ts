@@ -125,20 +125,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async sendMessageToSession(sessionId, content) {
     cancelledSessions.delete(sessionId)
     set({ agentTyping: true })
-    const shouldCreatePlan = shouldRouteToOrchestratorPlan(
+    const shouldCreateAgentDraft = shouldRouteToAgentDraft(content)
+    const shouldCreatePlan = !shouldCreateAgentDraft && shouldRouteToOrchestratorPlan(
       content,
       get().currentSession,
       get().currentWorkspaceAgents
     )
+    const shouldCreateArtifactDemo = !shouldCreatePlan && !shouldCreateAgentDraft && shouldRouteToArtifactDemo(content)
     try {
       const msg = await api.sendMessageWithModel(sessionId, {
         content,
         modelId: get().selectedModelId ?? undefined,
-        skipAgentReply: shouldCreatePlan,
+        skipAgentReply: shouldCreatePlan || shouldCreateAgentDraft || shouldCreateArtifactDemo,
       })
       set((s) => ({ messages: [...s.messages, msg] }))
       if (shouldCreatePlan) {
         const card = await api.createOrchestratorPlan(sessionId, content)
+        set((s) => ({ messages: [...s.messages, card] }))
+        set({ agentTyping: false })
+      } else if (shouldCreateAgentDraft) {
+        const card = await api.createAgentDraft(sessionId, content)
+        set((s) => ({ messages: [...s.messages, card] }))
+        set({ agentTyping: false })
+      } else if (shouldCreateArtifactDemo) {
+        const card = await api.createArtifactDemo(sessionId, content)
         set((s) => ({ messages: [...s.messages, card] }))
         set({ agentTyping: false })
       }
@@ -232,6 +242,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return wsClient.on((e) => get().handleWSEvent(e))
   },
 }))
+
+function shouldRouteToArtifactDemo(content: string) {
+  return /部署|发布|预览|preview|diff|补丁|变更|文件|附件|下载|打包/i.test(content)
+}
+
+function shouldRouteToAgentDraft(content: string) {
+  return /(?:创建|添加|新建).{0,24}(?:agent|代理|助手)|(?:agent|代理|助手).{0,24}(?:创建|添加|新建)/i.test(content)
+}
 
 function shouldRouteToOrchestratorPlan(content: string, session: Session | null, agents: WorkspaceAgent[]) {
   if (mentionsOrchestrator(content)) return true

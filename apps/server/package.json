@@ -15,7 +15,8 @@
     "dev": "NODE_NO_WARNINGS=1 bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "build": "bun build src/index.ts --target=bun --outdir=dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@agenthub/db": "workspace:*",
