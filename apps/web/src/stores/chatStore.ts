@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, mentionsOrchestrator, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
+import { api, mentionsOrchestrator, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 let pendingStream: { messageId: string; delta: string } | null = null
@@ -14,6 +14,7 @@ interface ChatState {
   currentSessionId: string | null
   messages: Message[]
   streamingMessage: { id: string; content: string } | null
+  streamingCodeAgentRun: CodeAgentRunMetadata | null
   selectedModelId: string | null
   loadingSessions: boolean
   loadingMessages: boolean
@@ -47,6 +48,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentSessionId: null,
   messages: [],
   streamingMessage: null,
+  streamingCodeAgentRun: null,
   selectedModelId: null,
   loadingSessions: false,
   loadingMessages: false,
@@ -79,6 +81,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       loadingMessages: true,
       messages: [],
       streamingMessage: null,
+      streamingCodeAgentRun: null,
       agentTyping: false,
     })
     wsClient.joinSession(sessionId)
@@ -112,6 +115,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentWorkspaceAgents: s.currentSessionId === sessionId ? [] : s.currentWorkspaceAgents,
       messages: s.currentSessionId === sessionId ? [] : s.messages,
       streamingMessage: s.currentSessionId === sessionId ? null : s.streamingMessage,
+      streamingCodeAgentRun: s.currentSessionId === sessionId ? null : s.streamingCodeAgentRun,
       agentTyping: s.currentSessionId === sessionId ? false : s.agentTyping,
     }))
   },
@@ -143,7 +147,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({ agentTyping: false })
       }
     } catch (error) {
-      set({ agentTyping: false, streamingMessage: null })
+      set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
       throw error
     }
   },
@@ -153,7 +157,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!sessionId) return
     cancelledSessions.add(sessionId)
     clearPendingStream()
-    set({ agentTyping: false, streamingMessage: null })
+    set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
     await api.cancelMessage(sessionId).catch(() => undefined)
   },
 
@@ -208,6 +212,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         break
       }
+      case 'message:metadata': {
+        if (cancelledSessions.has(sessionId)) break
+        const { messageId, codeAgentRun } = e.payload as { messageId: string; codeAgentRun: CodeAgentRunMetadata }
+        set((s) => {
+          const current = s.streamingMessage
+          return {
+            streamingMessage: current?.id === messageId ? current : { id: messageId, content: current?.content ?? '' },
+            streamingCodeAgentRun: codeAgentRun,
+            agentTyping: false,
+          }
+        })
+        break
+      }
       case 'message:completed': {
         const { message } = e.payload as { message: Message }
         cancelledSessions.delete(sessionId)
@@ -215,6 +232,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((s) => ({
           messages: [...s.messages, message],
           streamingMessage: null,
+          streamingCodeAgentRun: null,
           agentTyping: false,
         }))
         break
@@ -222,7 +240,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case 'message:cancelled':
         cancelledSessions.add(sessionId)
         clearPendingStream()
-        set({ streamingMessage: null, agentTyping: false })
+        set({ streamingMessage: null, streamingCodeAgentRun: null, agentTyping: false })
         break
     }
   },

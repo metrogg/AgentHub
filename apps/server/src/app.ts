@@ -7,6 +7,7 @@ import { sessionRoutes } from './routes/sessions'
 import { messageRoutes } from './routes/messages'
 import { settingsRoutes } from './routes/settings'
 import { codingToolsRoutes } from './routes/coding-tools'
+import { skillRoutes } from './routes/skills'
 import { workspaceRoutes } from './routes/workspaces'
 
 const app = new Hono()
@@ -26,6 +27,7 @@ const routes = app
   .route('/api/messages', messageRoutes)
   .route('/api/settings', settingsRoutes)
   .route('/api/coding-tools', codingToolsRoutes)
+  .route('/api/skills', skillRoutes)
   .route('/api/workspaces', workspaceRoutes)
 
 export { app }

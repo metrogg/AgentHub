@@ -58,6 +58,7 @@ function isCodeAgentRunMetadata(value: unknown): value is CodeAgentRunMetadata {
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
   const messages = useChatStore((state) => state.messages)
   const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const streamingCodeAgentRun = useChatStore((state) => state.streamingCodeAgentRun)
   const agentTyping = useChatStore((state) => state.agentTyping)
   const currentSessionId = useChatStore((state) => state.currentSessionId)
   const sendMessage = useChatStore((state) => state.sendMessage)
@@ -70,7 +71,12 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
       list.push({
         id: streamingMessage.id,
         role: 'assistant',
-        content: [{ type: 'text', text: streamingMessage.content }],
+        content: streamingCodeAgentRun
+          ? [
+              { type: 'text', text: streamingMessage.content },
+              { type: 'data', name: 'code_agent_run', data: streamingCodeAgentRun },
+            ]
+          : [{ type: 'text', text: streamingMessage.content }],
         status: { type: 'running' },
       })
     } else if (agentTyping) {
@@ -83,7 +89,7 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
     }
 
     return list
-  }, [agentTyping, messages, streamingMessage])
+  }, [agentTyping, messages, streamingCodeAgentRun, streamingMessage])
 
   const runtime = useExternalStoreRuntime({
     isRunning: agentTyping || streamingMessage !== null,

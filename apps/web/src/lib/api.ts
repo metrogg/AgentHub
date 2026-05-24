@@ -49,13 +49,14 @@ export interface Message {
 
 export interface CodeAgentRunMetadata {
   type: 'code-agent-run'
-  status: 'completed' | 'failed' | 'cancelled' | 'timed-out'
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
   runtime: 'codex' | 'claude-code' | 'opencode'
   command: string
   durationMs: number
   exitCode: number
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
   files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked' }>
+  logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
   diagnostics?: string
 }
 
@@ -190,6 +191,21 @@ export interface WorkspaceAgent {
   approvalRequired: boolean
   orderIdx: number
   createdAt: string
+}
+
+export interface SkillSummary {
+  id: string
+  name: string
+  description: string
+  rootPath: string
+  skillPath: string
+  source: string
+}
+
+export interface SkillInstallResult {
+  ok: boolean
+  installed: SkillSummary
+  message: string
 }
 
 export interface AgentConfigInput {
@@ -383,6 +399,14 @@ export const api = {
     request<CodexAuthAction>('/coding-tools/codex/auth/retry', { method: 'POST' }),
   logoutCodexChatGpt: () =>
     request<CodexAuthAction>('/coding-tools/codex/auth/logout', { method: 'POST' }),
+
+  // Skills
+  listSkills: () => request<{ items: SkillSummary[] }>('/skills'),
+  installSkill: (data: { sourceUrl: string; id?: string }) =>
+    request<SkillInstallResult>('/skills/install', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   // Workspaces (Agent Group)
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
   createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>

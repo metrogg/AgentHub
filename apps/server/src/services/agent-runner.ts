@@ -158,7 +158,13 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
     for await (const delta of replyStream) {
       if (run.cancelled) break
       if (typeof delta !== 'string') {
-        if (delta.kind === 'code-agent-metadata') codeAgentRun = delta.metadata
+        if (delta.kind === 'code-agent-metadata') {
+          codeAgentRun = delta.metadata
+          broadcast(sessionId, {
+            type: 'message:metadata',
+            payload: { sessionId, messageId: streamMsgId, codeAgentRun },
+          })
+        }
         continue
       }
       fullContent += delta

@@ -3,6 +3,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
+import { globalSkillRegistry } from './skill-registry'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -31,13 +32,14 @@ interface CodeAgentCommandResult {
 
 export interface CodeAgentRunMetadata {
   type: 'code-agent-run'
-  status: 'completed' | 'failed' | 'cancelled' | 'timed-out'
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
   runtime: CodeAgentType
   command: string
   durationMs: number
   exitCode: number
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
   files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked' }>
+  logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
   diagnostics?: string
 }
 
@@ -85,7 +87,16 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'ANTHROPIC_API_KEY',
     docsHint: 'Claude Code 会使用本机 Anthropic 凭据，并优先读取项目上下文。',
     promptMode: 'stdin',
-    buildArgs: () => ['-p', '--no-session-persistence', '--permission-mode', 'bypassPermissions'],
+    buildArgs: () => [
+      '-p',
+      '--no-session-persistence',
+      '--permission-mode',
+      'bypassPermissions',
+      '--output-format',
+      'stream-json',
+      '--include-partial-messages',
+      '--verbose',
+    ],
   },
   opencode: {
     command: 'opencode',
@@ -120,7 +131,11 @@ export async function* streamCodeAgentReply(
   }
 
   const cwdInfo = resolveExecutionCwd(profile.projectPath)
-  const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label)
+  const skillContext = await globalSkillRegistry.buildSkillContext(
+    [profile.systemPrompt, profile.description, userMsg.content].filter(Boolean).join('\n\n'),
+    { capabilityTags: profile.capabilityTags, limit: 3 }
+  )
+  const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
   const configured = isRuntimeConfigured(type, adapter)
   const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION') === 'true'
@@ -154,22 +169,68 @@ export async function* streamCodeAgentReply(
     return
   }
 
-  const result = await runCodeAgentCommand(adapter, prompt, cwdInfo.cwd, profile.sandboxPolicy, profile.modelId, signal)
-  yield { kind: 'code-agent-metadata', metadata: result.metadata }
+  const queue: CodeAgentReplyChunk[] = []
+  let wake: (() => void) | null = null
+  let settled = false
+  let streamedText = false
+  let result: CodeAgentCommandResult | null = null
+  const push = (chunk: CodeAgentReplyChunk) => {
+    if (typeof chunk === 'string') streamedText = true
+    queue.push(chunk)
+    wake?.()
+    wake = null
+  }
+  const runPromise = runCodeAgentCommand(
+    adapter,
+    prompt,
+    cwdInfo.cwd,
+    profile.sandboxPolicy,
+    profile.modelId,
+    signal,
+    {
+      onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
+      onText: (text) => push(text),
+    }
+  )
+    .then((value) => {
+      result = value
+    })
+    .finally(() => {
+      settled = true
+      wake?.()
+      wake = null
+    })
 
-  const finalMessage = stripReasoningTags(result.finalMessage?.trim() || '')
-  if (result.code === 0 && finalMessage) {
+  while (!settled || queue.length) {
+    const next = queue.shift()
+    if (next) {
+      yield next
+      continue
+    }
+    await new Promise<void>((resolve) => {
+      wake = resolve
+    })
+  }
+  await runPromise
+  const finalResult = result as CodeAgentCommandResult | null
+  if (!finalResult) return
+
+  yield { kind: 'code-agent-metadata', metadata: finalResult.metadata }
+
+  const finalMessage = stripReasoningTags(finalResult.finalMessage?.trim() || '')
+  if (finalResult.code === 0 && finalMessage && !streamedText) {
     yield finalMessage
     return
   }
 
-  const cleanedOutput = stripReasoningTags(stripToolNoise(result.output))
-  if (result.code === 0) {
+  const cleanedOutput = stripReasoningTags(stripToolNoise(finalResult.output))
+  if (finalResult.code === 0 && !streamedText) {
     yield limitOutput(cleanedOutput || '(Code Agent 没有返回正文)', 16_000)
     return
   }
+  if (finalResult.code === 0) return
 
-  yield formatCodeAgentFailure(adapter, result)
+  yield formatCodeAgentFailure(adapter, finalResult)
 }
 
 function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
@@ -199,7 +260,8 @@ function buildCodeAgentPrompt(
   profile: AgentRunProfile,
   userMsg: MessageRow,
   history: Array<{ senderType: string; content: string }>,
-  workspacePath: string
+  workspacePath: string,
+  skillContext = ''
 ) {
   const recent = history
     .slice(-12)
@@ -219,6 +281,7 @@ function buildCodeAgentPrompt(
     `Allowed tool scopes: ${(profile.toolPermissions ?? ['chat']).join(', ')}.`,
     'Follow the project instructions and keep changes focused.',
     'Use the actual project path above. Do not invent container paths such as /agent-workspace.',
+    skillContext,
     '',
     recent ? 'Recent group context:' : '',
     recent,
@@ -269,7 +332,11 @@ async function runCodeAgentCommand(
   cwd?: string,
   sandboxPolicy?: AgentRunProfile['sandboxPolicy'],
   modelId?: string | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  hooks: {
+    onMetadata?: (metadata: CodeAgentRunMetadata) => void
+    onText?: (text: string) => void
+  } = {}
 ): Promise<CodeAgentCommandResult> {
   const outputPath = adapter.command === 'codex' ? join(tmpdir(), `agenthub-code-agent-${Date.now()}-${Math.random().toString(36).slice(2)}.md`) : undefined
   const commandPrompt =
@@ -287,6 +354,57 @@ async function runCodeAgentCommand(
   }
   const startedAt = Date.now()
   const beforeFiles = await snapshotWorkspaceFiles(cwd)
+  const liveCommands: CodeAgentRunMetadata['commands'] = []
+  const liveFiles: CodeAgentRunMetadata['files'] = []
+  const liveLogs: NonNullable<CodeAgentRunMetadata['logs']> = []
+  const seenCommands = new Set<string>()
+  const seenFiles = new Set<string>()
+  let lastMetadataAt = 0
+  let claudeStdoutBuffer = ''
+  let claudeFinalMessage = ''
+  const emitLiveMetadata = (force = false) => {
+    const now = Date.now()
+    if (!force && now - lastMetadataAt < 250) return
+    lastMetadataAt = now
+    hooks.onMetadata?.({
+      type: 'code-agent-run',
+      status: 'running',
+      runtime: runtimeTypeForAdapter(adapter),
+      command: adapter.command,
+      durationMs: now - startedAt,
+      exitCode: 0,
+      commands: liveCommands.slice(0, 80),
+      files: liveFiles.slice(0, 80),
+      logs: liveLogs.slice(-80),
+    })
+  }
+  const addLog = (stream: 'stdout' | 'stderr' | 'event', text: string) => {
+    const cleaned = cleanRuntimeLog(text)
+    if (!cleaned) return
+    liveLogs.push({ id: `log-${liveLogs.length + 1}`, stream, text: limitOutput(cleaned, 1000) })
+    emitLiveMetadata()
+  }
+  const addCommand = (command: string, commandCwd?: string) => {
+    const cleaned = cleanCommandText(command)
+    const key = `${cleaned}\n${commandCwd ?? ''}`
+    if (!cleaned || seenCommands.has(key)) return
+    seenCommands.add(key)
+    liveCommands.push({
+      id: `cmd-${liveCommands.length + 1}`,
+      command: limitOutput(cleaned, 500),
+      cwd: commandCwd ? limitOutput(commandCwd, 260) : undefined,
+    })
+    addLog('event', `运行命令：${cleaned}`)
+  }
+  const addFile = (path: string, status: CodeAgentRunMetadata['files'][number]['status']) => {
+    const cleaned = path.trim()
+    if (!cleaned) return
+    const key = `${status}\n${cleaned}`
+    if (seenFiles.has(key)) return
+    seenFiles.add(key)
+    liveFiles.push({ path: limitOutput(cleaned, 500), status })
+    addLog('event', `${fileStatusLabelForLog(status)}：${cleaned}`)
+  }
   if (outputPath && existsSync(outputPath)) {
     try {
       unlinkSync(outputPath)
@@ -321,10 +439,31 @@ async function runCodeAgentCommand(
     stopRun()
   }
   signal?.addEventListener('abort', abortRun, { once: true })
-  const [code, stdout, stderr] = await Promise.all([
+  let stdout = ''
+  let stderr = ''
+  const [code] = await Promise.all([
     proc.exited,
-    new Response(proc.stdout).text().catch(() => ''),
-    new Response(proc.stderr).text().catch(() => ''),
+    readProcessStream(proc.stdout, (chunk) => {
+      stdout += chunk
+      if (adapter.command === 'claude') {
+        claudeStdoutBuffer = consumeClaudeStreamJson(chunk, claudeStdoutBuffer, {
+          addFile,
+          addCommand,
+          addLog,
+          onText: (text) => {
+            claudeFinalMessage += text
+            hooks.onText?.(text)
+          },
+        })
+      } else {
+        addLog('stdout', chunk)
+        for (const command of parseExecutedCommands(stdout)) addCommand(command.command, command.cwd)
+      }
+    }),
+    readProcessStream(proc.stderr, (chunk) => {
+      stderr += chunk
+      addLog('stderr', chunk)
+    }),
   ])
   clearTimeout(timer)
   signal?.removeEventListener('abort', abortRun)
@@ -344,7 +483,8 @@ async function runCodeAgentCommand(
     }
   }
   const parsed = withExtractedLastMessage({ code, output })
-  const finalMessage = outputFileMessage || parsed.finalMessage || extractCodexAssistantMessage(parsed.output)
+  const finalMessage =
+    outputFileMessage || claudeFinalMessage.trim() || parsed.finalMessage || extractCodexAssistantMessage(parsed.output)
   const effectiveCode = code === 0 && !finalMessage && isCodeAgentFailureOutput(output) ? 1 : code
   const metadata = await buildCodeAgentRunMetadata({
     adapter,
@@ -354,6 +494,9 @@ async function runCodeAgentCommand(
     timedOut,
     beforeFiles,
     cwd,
+    liveCommands,
+    liveFiles,
+    liveLogs,
   })
   return { ...parsed, code: effectiveCode, finalMessage, metadata }
 }
@@ -400,10 +543,16 @@ async function buildCodeAgentRunMetadata(input: {
   code: number
   cwd?: string
   durationMs: number
+  liveCommands?: CodeAgentRunMetadata['commands']
+  liveFiles?: CodeAgentRunMetadata['files']
+  liveLogs?: NonNullable<CodeAgentRunMetadata['logs']>
   output: string
   timedOut: boolean
 }): Promise<CodeAgentRunMetadata> {
   const diagnostics = input.code === 0 && !input.timedOut ? '' : cleanDiagnosticOutput(input.output)
+  const parsedCommands = parseExecutedCommands(input.output)
+  const commands = mergeCommands([...(input.liveCommands ?? []), ...parsedCommands])
+  const files = mergeFiles([...(input.liveFiles ?? []), ...(await diffWorkspaceFiles(input.cwd, input.beforeFiles))])
   return {
     type: 'code-agent-run',
     status: input.timedOut ? 'timed-out' : input.code === 0 ? 'completed' : input.code === 130 ? 'cancelled' : 'failed',
@@ -411,8 +560,9 @@ async function buildCodeAgentRunMetadata(input: {
     command: input.adapter.command,
     durationMs: input.durationMs,
     exitCode: input.code,
-    commands: parseExecutedCommands(input.output),
-    files: await diffWorkspaceFiles(input.cwd, input.beforeFiles),
+    commands,
+    files,
+    logs: input.liveLogs?.slice(-80),
     diagnostics: diagnostics || undefined,
   }
 }
@@ -424,7 +574,7 @@ function emptyCodeAgentRunMetadata(adapter: CodeAgentAdapter, status: CodeAgentR
     runtime: runtimeTypeForAdapter(adapter),
     command: adapter.command,
     durationMs: 0,
-    exitCode: status === 'completed' ? 0 : 130,
+    exitCode: status === 'completed' || status === 'running' ? 0 : 130,
     commands: [],
     files: [],
   }
@@ -433,6 +583,114 @@ function emptyCodeAgentRunMetadata(adapter: CodeAgentAdapter, status: CodeAgentR
 function runtimeTypeForAdapter(adapter: CodeAgentAdapter): CodeAgentType {
   const entry = Object.entries(adapters).find(([, item]) => item === adapter)
   return (entry?.[0] as CodeAgentType | undefined) ?? 'codex'
+}
+
+async function readProcessStream(stream: ReadableStream<Uint8Array>, onChunk: (chunk: string) => void) {
+  const reader = stream.getReader()
+  const decoder = new TextDecoder()
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      onChunk(decoder.decode(value, { stream: true }))
+    }
+    const tail = decoder.decode()
+    if (tail) onChunk(tail)
+  } catch {
+    // The process may have been killed while streams were still open.
+  }
+}
+
+function consumeClaudeStreamJson(
+  chunk: string,
+  previousBuffer: string,
+  handlers: {
+    addFile: (path: string, status: CodeAgentRunMetadata['files'][number]['status']) => void
+    addCommand: (command: string, cwd?: string) => void
+    addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
+    onText: (text: string) => void
+  }
+) {
+  const combined = previousBuffer + chunk
+  const lines = combined.split(/\r?\n/)
+  const nextBuffer = lines.pop() ?? ''
+  for (const line of lines) parseClaudeJsonLine(line, handlers)
+  return nextBuffer
+}
+
+function parseClaudeJsonLine(
+  line: string,
+  handlers: {
+    addFile: (path: string, status: CodeAgentRunMetadata['files'][number]['status']) => void
+    addCommand: (command: string, cwd?: string) => void
+    addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
+    onText: (text: string) => void
+  }
+) {
+  const trimmed = line.trim()
+  if (!trimmed) return
+  let payload: any
+  try {
+    payload = JSON.parse(trimmed)
+  } catch {
+    handlers.addLog('stdout', trimmed)
+    return
+  }
+
+  if (payload.type === 'system' && payload.subtype === 'init') {
+    handlers.addLog('event', `Claude Code 初始化：${payload.cwd || 'workspace'}`)
+    return
+  }
+
+  if (payload.type === 'stream_event') {
+    const event = payload.event
+    const block = event?.content_block
+    const delta = event?.delta
+    if (delta?.type === 'text_delta' && typeof delta.text === 'string') handlers.onText(delta.text)
+    if (block?.type === 'tool_use') recordClaudeToolUse(block, handlers)
+    return
+  }
+
+  if (payload.type === 'assistant') {
+    for (const block of payload.message?.content ?? []) {
+      if (block?.type === 'tool_use') recordClaudeToolUse(block, handlers)
+    }
+    return
+  }
+
+  if (payload.type === 'result' && payload.subtype) {
+    handlers.addLog(payload.is_error ? 'stderr' : 'event', payload.is_error ? payload.result || 'Claude Code 执行失败' : 'Claude Code 执行完成')
+  }
+}
+
+function recordClaudeToolUse(
+  block: any,
+  handlers: {
+    addFile: (path: string, status: CodeAgentRunMetadata['files'][number]['status']) => void
+    addCommand: (command: string, cwd?: string) => void
+    addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
+  }
+) {
+  const name = String(block.name ?? '')
+  const input = block.input && typeof block.input === 'object' ? block.input : {}
+  if (name === 'Bash' && typeof input.command === 'string') {
+    handlers.addCommand(input.command)
+    return
+  }
+  if ((name === 'Edit' || name === 'MultiEdit') && typeof input.file_path === 'string') {
+    handlers.addFile(input.file_path, 'modified')
+    return
+  }
+  if (name === 'Write' && typeof input.file_path === 'string') {
+    handlers.addFile(input.file_path, 'created')
+    return
+  }
+  if (name === 'Read' && typeof input.file_path === 'string') {
+    handlers.addLog('event', `${name}：${input.file_path}`)
+    return
+  }
+  if (name) handlers.addLog('event', `工具调用：${name}`)
 }
 
 function parseExecutedCommands(output: string): CodeAgentRunMetadata['commands'] {
@@ -454,6 +712,53 @@ function parseExecutedCommands(output: string): CodeAgentRunMetadata['commands']
     })
   }
   return commands.slice(0, 60)
+}
+
+function mergeCommands(commands: CodeAgentRunMetadata['commands']) {
+  const seen = new Set<string>()
+  const merged: CodeAgentRunMetadata['commands'] = []
+  for (const command of commands) {
+    const key = `${command.command}\n${command.cwd ?? ''}`
+    if (!command.command || seen.has(key)) continue
+    seen.add(key)
+    merged.push({ ...command, id: `cmd-${merged.length + 1}` })
+  }
+  return merged.slice(0, 80)
+}
+
+function mergeFiles(files: CodeAgentRunMetadata['files']) {
+  const rank: Record<CodeAgentRunMetadata['files'][number]['status'], number> = {
+    deleted: 5,
+    modified: 4,
+    created: 3,
+    renamed: 2,
+    untracked: 1,
+  }
+  const byPath = new Map<string, CodeAgentRunMetadata['files'][number]>()
+  for (const file of files) {
+    if (!file.path) continue
+    const previous = byPath.get(file.path)
+    if (!previous || rank[file.status] >= rank[previous.status]) byPath.set(file.path, file)
+  }
+  return Array.from(byPath.values()).slice(0, 80)
+}
+
+function fileStatusLabelForLog(status: CodeAgentRunMetadata['files'][number]['status']) {
+  if (status === 'created') return '创建文件'
+  if (status === 'modified') return '修改文件'
+  if (status === 'deleted') return '删除文件'
+  if (status === 'renamed') return '重命名文件'
+  return '发现文件'
+}
+
+function cleanRuntimeLog(value: string) {
+  return value
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/codex_core::mcp_connection_manager|McpServerConfig|InitializeRequestParams/i.test(line))
+    .join('\n')
 }
 
 function cleanCommandText(value: string) {

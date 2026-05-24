@@ -990,6 +990,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
   const [open, setOpen] = useState(false)
   const changedFiles = data.files ?? []
   const commands = data.commands ?? []
+  const logs = data.logs ?? []
   const createdCount = changedFiles.filter((file) => file.status === 'created').length
   const fileSummary = changedFiles.length
     ? createdCount === changedFiles.length
@@ -998,7 +999,9 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
     : '无文件变更'
   const commandSummary = commands.length ? `已运行 ${commands.length} 条命令` : '未记录命令'
   const statusTone =
-    data.status === 'completed'
+    data.status === 'running'
+      ? 'text-blue-600'
+      : data.status === 'completed'
       ? 'text-neutral-500'
       : data.status === 'timed-out'
         ? 'text-amber-600'
@@ -1012,8 +1015,8 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
         className="flex h-11 w-full items-center justify-between gap-3 px-3 text-left transition hover:bg-white"
       >
         <span className={cn('inline-flex min-w-0 items-center gap-2', statusTone)}>
-          <Clock3 className="h-4 w-4 shrink-0" />
-          <span className="truncate">已处理 {formatRunDuration(data.durationMs)}</span>
+          {data.status === 'running' ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : <Clock3 className="h-4 w-4 shrink-0" />}
+          <span className="truncate">{data.status === 'running' ? '正在执行' : '已处理'} {formatRunDuration(data.durationMs)}</span>
         </span>
         <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
       </button>
@@ -1042,6 +1045,24 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
                       已运行 {command.command}
                     </div>
                     {command.cwd && <div className="mt-1 truncate font-mono text-[11px] text-neutral-400">{command.cwd}</div>}
+                  </div>
+                ))}
+              </div>
+            </CodeAgentRunSection>
+
+            <CodeAgentRunSection icon={<ListTodo className="h-4 w-4" />} title={logs.length ? `过程日志 ${logs.length} 条` : '暂无过程日志'} disabled={!logs.length}>
+              <div className="max-h-56 space-y-1 overflow-auto rounded-md bg-neutral-950 p-2">
+                {logs.map((log) => (
+                  <div key={log.id} className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-2 font-mono text-[11px] leading-5">
+                    <span
+                      className={cn(
+                        'uppercase',
+                        log.stream === 'stderr' ? 'text-red-300' : log.stream === 'event' ? 'text-cyan-300' : 'text-neutral-500'
+                      )}
+                    >
+                      {log.stream}
+                    </span>
+                    <span className="whitespace-pre-wrap break-words text-neutral-100">{log.text}</span>
                   </div>
                 ))}
               </div>
