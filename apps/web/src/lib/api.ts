@@ -324,6 +324,11 @@ export interface WorkspaceFull {
   tasks: WorkspaceTask[]
 }
 
+export interface WorkspaceActiveRun {
+  agentId: string | null
+  sessionId: string
+}
+
 export type WorkspaceFolderOpenResult =
   | { cancelled: true; projectPath: null; workspace?: null }
   | { cancelled: false; projectPath: string; workspace?: Workspace | null }
@@ -502,6 +507,7 @@ export const api = {
   openWorkspaceFolder: () =>
     request<WorkspaceFolderOpenResult>('/workspaces/open-folder', { method: 'POST' }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
+  getWorkspaceActiveRuns: (id: string) => request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
   updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>
     request<WorkspaceFull>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteWorkspace: (id: string) => request<void>(`/workspaces/${id}`, { method: 'DELETE' }),

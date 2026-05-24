@@ -2,6 +2,7 @@ import { db, messages, eq, desc } from '@agenthub/db'
 import { streamReply } from './llm'
 import { isCodeAgentProfile, streamCodeAgentReply, type CodeAgentMetadataChunk } from './code-agent-adapter'
 import { isNativeAgentProfile, streamNativeAgentReply } from './native-agent-loop'
+import { pushStarOfficeAgentState, starOfficeStateForProfile } from './star-office-bridge'
 import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
 
@@ -93,6 +94,10 @@ export function cancelAgentReply(sessionId: string) {
   return true
 }
 
+export function getActiveRunSessionIds() {
+  return Array.from(activeRuns.keys())
+}
+
 function buildAgentSystem(profile?: AgentRunProfile) {
   if (!profile) return undefined
   return [
@@ -122,6 +127,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   const agentId = profile?.id ?? 'claude'
   const agentName = profile?.name ?? 'Claude'
   logger.info({ sessionId, msgId: userMsg.id, agentId }, 'Agent reply started')
+  void pushStarOfficeAgentState(profile, starOfficeStateForProfile(profile), `${agentName} 正在处理任务`)
 
   // Fetch recent message history as context
   const history = await db
@@ -183,6 +189,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
     } else {
       const message = error?.message || 'Agent 回复失败'
       logger.error({ err: message, sessionId, agentId }, 'Agent reply failed')
+      void pushStarOfficeAgentState(profile, 'error', `${agentName} 执行失败：${message}`)
       fullContent = `\n\n[错误：${message}]`
     }
   }
@@ -190,6 +197,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   if (activeRuns.get(sessionId) === run) activeRuns.delete(sessionId)
 
   if (run.cancelled) {
+    void pushStarOfficeAgentState(profile, 'idle', `${agentName} 已停止`)
     if (!fullContent.trim()) {
       broadcast(sessionId, {
         type: 'message:cancelled',
@@ -240,6 +248,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   })
 
   logger.info({ sessionId, msgId: agentMsg?.id, length: fullContent.length }, 'Agent reply completed')
+  void pushStarOfficeAgentState(profile, 'idle', `${agentName} 已完成任务`)
 }
 
 function isAbortError(error: any) {

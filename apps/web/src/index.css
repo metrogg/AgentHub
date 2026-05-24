@@ -28,6 +28,774 @@
   }
 }
 
+@layer components {
+  .office-canvas {
+    position: relative;
+    isolation: isolate;
+    background:
+      radial-gradient(circle at 78% 20%, rgba(59, 130, 246, 0.07), transparent 16rem),
+      radial-gradient(circle at 18% 28%, rgba(255, 255, 255, 0.95), transparent 18rem),
+      linear-gradient(180deg, #fbfbf8 0%, #f2f3ee 52%, #f8f8f5 100%);
+  }
+
+  .office-title {
+    position: absolute;
+    left: 50%;
+    top: 1.6rem;
+    z-index: 20;
+    transform: translateX(-50%);
+    text-align: center;
+  }
+
+  .office-title h1 {
+    font-size: 1.125rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    color: #111111;
+  }
+
+  .office-title p {
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #a3a3a3;
+  }
+
+  .office-controls,
+  .office-monitor-card,
+  .office-agent-overview,
+  .office-activity-panel {
+    animation: office-soft-enter 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .office-controls {
+    position: absolute;
+    left: 1.5rem;
+    top: 1.35rem;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.78);
+    padding: 0.45rem;
+    box-shadow: 0 1.5rem 4rem rgba(15, 23, 42, 0.08);
+    backdrop-filter: blur(1rem);
+  }
+
+  .office-controls select {
+    height: 2.25rem;
+    max-width: 13rem;
+    border: 0;
+    border-radius: 0.75rem;
+    background: rgba(244, 244, 245, 0.88);
+    padding: 0 2rem 0 0.75rem;
+    font-size: 0.8125rem;
+    color: #27272a;
+    outline: none;
+  }
+
+  .office-controls button {
+    display: inline-flex;
+    height: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    border-radius: 0.75rem;
+    padding: 0 0.7rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #525252;
+    transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+  }
+
+  .office-controls button:hover:not(:disabled) {
+    transform: translateY(-0.0625rem);
+    background: rgba(244, 244, 245, 0.95);
+    color: #111827;
+  }
+
+  .office-controls button:disabled {
+    opacity: 0.38;
+  }
+
+  .office-controls .office-controls-primary {
+    background: #111827;
+    color: #ffffff;
+  }
+
+  .office-controls .office-controls-primary:hover:not(:disabled) {
+    background: #27272a;
+    color: #ffffff;
+  }
+
+  .office-monitor-card {
+    position: absolute;
+    right: 1.75rem;
+    top: 1.35rem;
+    z-index: 30;
+    width: 18rem;
+    border: 1px solid rgba(255, 255, 255, 0.88);
+    border-radius: 1.5rem;
+    background: rgba(255, 255, 255, 0.82);
+    padding: 1rem;
+    text-align: left;
+    box-shadow: 0 1.5rem 4.5rem rgba(15, 23, 42, 0.1);
+    backdrop-filter: blur(1rem);
+  }
+
+  .office-live-dot span {
+    animation: office-live-pulse 1.25s ease-in-out infinite;
+  }
+
+  .office-progress {
+    background-image: linear-gradient(90deg, #111827, #334155, #111827);
+    background-size: 200% 100%;
+    animation: office-progress-sheen 1.8s linear infinite;
+  }
+
+  .office-floor {
+    position: absolute;
+    inset: 5.3rem 2.5rem 2.25rem;
+    display: grid;
+    grid-template-columns: minmax(19rem, 35%) minmax(0, 1fr);
+    gap: clamp(2.5rem, 5vw, 6rem);
+  }
+
+  .office-left-wing {
+    display: grid;
+    min-width: 0;
+    grid-template-rows: 0.95fr 0.8fr 1fr;
+    gap: clamp(1.5rem, 3.4vh, 2.35rem);
+  }
+
+  .office-amenity {
+    position: relative;
+    margin: 0;
+    min-height: 0;
+    animation: office-prop-enter 560ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .office-amenity:nth-child(2) {
+    animation-delay: 90ms;
+  }
+
+  .office-amenity:nth-child(3) {
+    animation-delay: 180ms;
+  }
+
+  .office-amenity img {
+    display: block;
+    height: 100%;
+    width: 100%;
+    object-fit: contain;
+    object-position: left center;
+    filter: drop-shadow(0 1.5rem 1.5rem rgba(15, 23, 42, 0.05));
+    user-select: none;
+  }
+
+  .office-amenity figcaption {
+    position: absolute;
+    left: 1.2rem;
+    top: 0.4rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.72);
+    padding: 0.28rem 0.7rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: rgba(82, 82, 82, 0.78);
+    box-shadow: 0 0.75rem 1.75rem rgba(15, 23, 42, 0.05);
+    backdrop-filter: blur(0.75rem);
+  }
+
+  .office-amenity-pantry img {
+    object-position: left top;
+  }
+
+  .office-amenity-gym img {
+    width: 93%;
+  }
+
+  .office-amenity-restroom img {
+    object-position: left bottom;
+  }
+
+  .office-desk-field {
+    position: relative;
+    box-sizing: border-box;
+    height: 100%;
+    min-width: 0;
+    padding: clamp(3.45rem, 5.8vh, 4.5rem) clamp(0.5rem, 1.6vw, 1.5rem) clamp(0.15rem, 0.8vh, 0.5rem);
+  }
+
+  .office-desk-grid {
+    position: relative;
+    z-index: 2;
+    display: grid;
+    height: 100%;
+    min-height: 0;
+    grid-template-columns: repeat(2, minmax(13.5rem, 1fr));
+    grid-template-rows: repeat(3, minmax(11rem, 1fr));
+    column-gap: clamp(2.25rem, 7vw, 7rem);
+    row-gap: clamp(0.55rem, 2.4vh, 1.75rem);
+    align-items: center;
+  }
+
+  .office-connection-line {
+    position: absolute;
+    left: 6%;
+    right: 6%;
+    z-index: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(15, 23, 42, 0.13), transparent);
+    pointer-events: none;
+  }
+
+  .office-connection-line-top {
+    top: 22.5%;
+  }
+
+  .office-connection-line-bottom {
+    top: 52.5%;
+  }
+
+  .office-connection-line span {
+    position: absolute;
+    top: -0.3rem;
+    display: block;
+    height: 0.62rem;
+    width: 1.9rem;
+    border-radius: 999px;
+    background: #ffffff;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08), 0 0.8rem 1.5rem rgba(37, 99, 235, 0.08);
+    animation: office-data-packet 3.5s linear infinite;
+  }
+
+  .office-connection-line span:nth-child(1) {
+    left: 16%;
+  }
+
+  .office-connection-line span:nth-child(2) {
+    left: 50%;
+    animation-delay: 1.1s;
+  }
+
+  .office-connection-line span:nth-child(3) {
+    left: 82%;
+    animation-delay: 2.2s;
+  }
+
+  .office-connection-line-bottom span {
+    animation-duration: 4.4s;
+  }
+
+  .office-station {
+    position: relative;
+    width: min(24vw, 17rem);
+    min-width: 13.5rem;
+    aspect-ratio: 512 / 417;
+    justify-self: center;
+    border: 0;
+    background: transparent;
+    text-align: center;
+    outline: none;
+    transform-origin: center bottom;
+    animation: office-station-enter 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation-delay: calc(var(--slot-index) * 70ms);
+    transition: transform 220ms ease, filter 220ms ease, opacity 220ms ease;
+  }
+
+  .office-station:hover:not(:disabled) {
+    transform: translateY(-0.35rem);
+    filter: drop-shadow(0 1.25rem 1.4rem rgba(15, 23, 42, 0.08));
+  }
+
+  .office-station-image {
+    display: block;
+    width: 100%;
+    user-select: none;
+    filter: drop-shadow(0 1.3rem 1.6rem rgba(15, 23, 42, 0.065));
+  }
+
+  .office-station-label {
+    position: absolute;
+    left: 50%;
+    top: -0.9rem;
+    z-index: 5;
+    width: 10rem;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+
+  .office-station-label strong,
+  .office-station-label span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .office-station-label strong {
+    font-size: 0.9rem;
+    line-height: 1.2rem;
+    font-weight: 700;
+    color: #111111;
+  }
+
+  .office-station-label span {
+    margin-top: 0.05rem;
+    font-size: 0.68rem;
+    color: #737373;
+  }
+
+  .office-monitor-overlay {
+    position: absolute;
+    left: 38.2%;
+    top: 6.8%;
+    z-index: 2;
+    height: 14.5%;
+    width: 25.4%;
+    border-radius: 0.08rem;
+    background: radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--agent-color) 42%, #111827), #111827 72%);
+    opacity: 0;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18), 0 0 1.5rem color-mix(in srgb, var(--agent-color) 35%, transparent);
+    transition: opacity 180ms ease;
+  }
+
+  .office-station-active .office-monitor-overlay,
+  .office-station-pending .office-monitor-overlay,
+  .office-station-done .office-monitor-overlay {
+    opacity: 0.92;
+  }
+
+  .office-station-active .office-monitor-overlay::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.32), transparent),
+      repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.09) 0 1px, transparent 1px 5px);
+    animation: office-monitor-sheen 1.8s ease-in-out infinite;
+  }
+
+  .office-agent-avatar {
+    --avatar-size: 4.6rem;
+    height: var(--avatar-size);
+    width: var(--avatar-size);
+    pointer-events: none;
+  }
+
+  .office-station .office-agent-avatar {
+    position: absolute;
+    left: 50%;
+    top: 25%;
+    z-index: 4;
+    transform: translateX(-50%);
+  }
+
+  .office-agent-avatar-active {
+    animation: office-agent-work 760ms ease-in-out infinite;
+  }
+
+  .office-agent-avatar-pending {
+    animation: office-agent-ready 1.4s ease-in-out infinite;
+  }
+
+  .office-avatar-head {
+    position: absolute;
+    left: 19%;
+    top: 0;
+    height: 48%;
+    width: 62%;
+    border-radius: 50% 50% 42% 42%;
+    background: #050505;
+  }
+
+  .office-avatar-head::before,
+  .office-avatar-head::after {
+    content: '';
+    position: absolute;
+    top: -0.32rem;
+    height: 1.25rem;
+    width: 0.65rem;
+    border-radius: 999px 999px 0 0;
+    background: #050505;
+  }
+
+  .office-avatar-head::before {
+    left: 0.55rem;
+    transform: rotate(24deg);
+  }
+
+  .office-avatar-head::after {
+    right: 0.55rem;
+    transform: rotate(-24deg);
+  }
+
+  .office-avatar-body {
+    position: absolute;
+    left: 10%;
+    bottom: 0.18rem;
+    height: 58%;
+    width: 80%;
+    border-radius: 44% 44% 18% 18%;
+    background: #050505;
+  }
+
+  .office-avatar-band {
+    position: absolute;
+    left: 14%;
+    bottom: 0.72rem;
+    height: 0.62rem;
+    width: 72%;
+    border-radius: 0.15rem;
+    background: var(--agent-color);
+    box-shadow: 0 0 1.4rem color-mix(in srgb, var(--agent-color) 40%, transparent);
+  }
+
+  .office-avatar-arm {
+    position: absolute;
+    top: 43%;
+    z-index: 1;
+    height: 2.2rem;
+    width: 0.55rem;
+    border-radius: 999px;
+    background: #050505;
+    transform-origin: top center;
+  }
+
+  .office-avatar-arm-left {
+    left: 0.35rem;
+    transform: rotate(24deg);
+  }
+
+  .office-avatar-arm-right {
+    right: 0.35rem;
+    transform: rotate(-24deg);
+  }
+
+  .office-agent-avatar-active .office-avatar-arm-left {
+    animation: office-arm-left-type 360ms ease-in-out infinite;
+  }
+
+  .office-agent-avatar-active .office-avatar-arm-right {
+    animation: office-arm-right-type 420ms ease-in-out infinite;
+  }
+
+  .office-status-chip {
+    position: absolute;
+    left: 10%;
+    bottom: 16%;
+    z-index: 6;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.86);
+    padding: 0.28rem 0.58rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: #737373;
+    box-shadow: 0 0.65rem 1.5rem rgba(15, 23, 42, 0.08);
+    backdrop-filter: blur(0.75rem);
+  }
+
+  .office-task-bubble {
+    position: absolute;
+    right: 13%;
+    top: 20%;
+    z-index: 6;
+    border-radius: 0.55rem;
+    background: #ffffff;
+    padding: 0.24rem 0.5rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #525252;
+    box-shadow: 0 0.65rem 1.6rem rgba(15, 23, 42, 0.1);
+    animation: office-task-bubble 1.5s ease-in-out infinite;
+  }
+
+  .office-empty-label {
+    position: absolute;
+    left: 50%;
+    top: 38%;
+    z-index: 5;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.74);
+    padding: 0.22rem 0.55rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: #a3a3a3;
+    box-shadow: 0 0.6rem 1.4rem rgba(15, 23, 42, 0.06);
+  }
+
+  .office-station-empty {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  .office-station-empty .office-station-label {
+    opacity: 0;
+  }
+
+  .office-agent-overview,
+  .office-activity-panel {
+    position: absolute;
+    right: 2rem;
+    z-index: 50;
+    width: min(23rem, calc(100vw - 2rem));
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    border-radius: 1.5rem;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1.6rem 5rem rgba(15, 23, 42, 0.14);
+    backdrop-filter: blur(1.1rem);
+  }
+
+  .office-agent-overview {
+    bottom: 1.75rem;
+    padding: 1.25rem;
+  }
+
+  .office-activity-panel {
+    top: 8.4rem;
+    max-height: calc(100vh - 10rem);
+    overflow-y: auto;
+    padding: 1rem;
+  }
+
+  .office-icon-close {
+    position: absolute;
+    right: 0.75rem;
+    top: 0.75rem;
+    display: grid;
+    height: 1.85rem;
+    width: 1.85rem;
+    place-items: center;
+    border-radius: 0.65rem;
+    color: #a3a3a3;
+    transition: background-color 160ms ease, color 160ms ease;
+  }
+
+  .office-icon-close:hover {
+    background: #f4f4f5;
+    color: #111827;
+  }
+
+  .office-overview-avatar {
+    position: relative;
+    display: grid;
+    height: 5.75rem;
+    width: 5.75rem;
+    flex-shrink: 0;
+    place-items: center;
+    border-radius: 999px;
+    background: #ffffff;
+    box-shadow: inset 0 0 0 1px #e5e7eb, 0 1rem 2rem rgba(15, 23, 42, 0.06);
+  }
+
+  .office-overview-avatar .office-agent-avatar {
+    position: relative;
+    left: auto;
+    top: auto;
+    transform: none;
+  }
+
+  @keyframes office-soft-enter {
+    from {
+      opacity: 0;
+      transform: translateY(-0.4rem) scale(0.98);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes office-prop-enter {
+    from {
+      opacity: 0;
+      transform: translateY(0.8rem) scale(0.98);
+      filter: blur(0.25rem);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: blur(0);
+    }
+  }
+
+  @keyframes office-station-enter {
+    from {
+      opacity: 0;
+      transform: translateY(0.8rem) scale(0.96);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes office-live-pulse {
+    0%,
+    100% {
+      opacity: 0.45;
+      transform: scale(0.88);
+    }
+
+    50% {
+      opacity: 1;
+      transform: scale(1.25);
+    }
+  }
+
+  @keyframes office-progress-sheen {
+    to {
+      background-position: -200% 0;
+    }
+  }
+
+  @keyframes office-data-packet {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+
+    50% {
+      transform: translateY(-0.18rem);
+    }
+  }
+
+  @keyframes office-monitor-sheen {
+    from {
+      transform: translateX(-80%);
+    }
+
+    to {
+      transform: translateX(80%);
+    }
+  }
+
+  @keyframes office-agent-work {
+    0%,
+    100% {
+      transform: translateX(-50%) translateY(0) rotate(-1deg);
+    }
+
+    50% {
+      transform: translateX(-50%) translateY(-0.22rem) rotate(1deg);
+    }
+  }
+
+  @keyframes office-agent-ready {
+    0%,
+    100% {
+      transform: translateX(-50%) scale(1);
+    }
+
+    50% {
+      transform: translateX(-50%) scale(1.04);
+    }
+  }
+
+  @keyframes office-arm-left-type {
+    0%,
+    100% {
+      transform: translateY(0) rotate(24deg);
+    }
+
+    50% {
+      transform: translateY(0.18rem) rotate(9deg);
+    }
+  }
+
+  @keyframes office-arm-right-type {
+    0%,
+    100% {
+      transform: translateY(0.18rem) rotate(-24deg);
+    }
+
+    50% {
+      transform: translateY(-0.1rem) rotate(-9deg);
+    }
+  }
+
+  @keyframes office-task-bubble {
+    0%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.68;
+    }
+
+    50% {
+      transform: translateY(-0.35rem);
+      opacity: 1;
+    }
+  }
+
+  @media (max-width: 1180px) {
+    .office-controls {
+      left: 1rem;
+    }
+
+    .office-monitor-card {
+      right: 1rem;
+      width: 16.5rem;
+    }
+
+    .office-floor {
+      inset: 5.1rem 1.25rem 1.65rem;
+      grid-template-columns: minmax(15rem, 34%) minmax(0, 1fr);
+      gap: 2rem;
+    }
+
+    .office-desk-grid {
+      column-gap: 1.25rem;
+      row-gap: 0.9rem;
+    }
+
+    .office-station {
+      width: min(27vw, 14.8rem);
+      min-width: 12rem;
+    }
+  }
+
+  @media (max-width: 920px) {
+    .office-canvas {
+      overflow: auto;
+    }
+
+    .office-title {
+      top: 5rem;
+    }
+
+    .office-monitor-card {
+      display: none;
+    }
+
+    .office-floor {
+      position: relative;
+      inset: auto;
+      min-height: 62rem;
+      padding: 7.5rem 1rem 1rem;
+      grid-template-columns: 1fr;
+    }
+
+    .office-left-wing {
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: none;
+    }
+
+    .office-desk-grid {
+      grid-template-columns: repeat(2, minmax(12rem, 1fr));
+    }
+  }
+}
+
 @layer utilities {
   .agenthub-surface {
     background: #ffffff;
@@ -41,6 +809,13 @@
   .agenthub-paper {
     background: #f4f4f5;
     color: #18181b;
+  }
+
+  .agenthub-readable-code {
+    font-family: 'Cascadia Mono', 'JetBrains Mono', 'SFMono-Regular', Consolas, ui-monospace, monospace;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: geometricPrecision;
   }
 }
 
@@ -343,9 +1118,55 @@
     animation-duration: 4.2s;
   }
 
-  .office-pantry,
-  .office-quiet-room {
+  .office-room,
+  .office-work-zone {
     animation: office-room-enter 620ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .office-room {
+    border-radius: 0.25rem;
+    overflow: hidden;
+  }
+
+  .office-room-label {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 24%;
+    z-index: 2;
+    text-align: center;
+    font-size: clamp(1.6rem, 2.5vw, 2.7rem);
+    font-weight: 600;
+    letter-spacing: 0;
+    color: rgba(239, 68, 68, 0.78);
+    pointer-events: none;
+  }
+
+  .office-gym .office-room-label {
+    top: 22%;
+  }
+
+  .office-restroom .office-room-label {
+    top: 45%;
+  }
+
+  .office-toilet::before {
+    content: '';
+    position: absolute;
+    left: 0.4rem;
+    right: 0.4rem;
+    top: -1.2rem;
+    height: 1rem;
+    border-radius: 0.2rem;
+    background: #f1f1f0;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.03);
+  }
+
+  .office-work-zone {
+    border: 1px solid rgba(15, 23, 42, 0.045);
+    background: rgba(255, 255, 255, 0.34);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34), 0 20px 42px rgba(15, 23, 42, 0.035);
+    pointer-events: none;
   }
 
   .office-token-cup {

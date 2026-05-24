@@ -61,7 +61,7 @@ import {
   User,
   Users,
 } from 'lucide-react'
-import { type ClipboardEvent, type ComponentPropsWithoutRef, type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type ClipboardEvent, type ComponentPropsWithoutRef, type FC, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import {
@@ -72,6 +72,7 @@ import {
   type ModelCatalogItem,
   type OrchestratorDispatchResult,
   type OrchestratorPlan,
+  type SkillSummary,
   type TaskStatus,
   type Workspace,
   type WorkspaceAgent,
@@ -373,6 +374,11 @@ const Composer: FC = () => {
   const removePendingAttachment = useChatStore((state) => state.removePendingAttachment)
   const [models, setModels] = useState<ModelCatalogItem[]>([])
   const [menu, setMenu] = useState<'tools' | 'agents' | 'models' | 'workspace' | null>(null)
+  const [skills, setSkills] = useState<SkillSummary[]>([])
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skillPanelOpen, setSkillPanelOpen] = useState(false)
+  const [skillQuery, setSkillQuery] = useState('')
+  const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
@@ -418,6 +424,26 @@ const Composer: FC = () => {
     }
   }, [menu])
 
+  useEffect(() => {
+    if (!skillPanelOpen || skills.length) return
+    let cancelled = false
+    setSkillsLoading(true)
+    api
+      .listSkills()
+      .then(({ items }) => {
+        if (!cancelled) setSkills(items)
+      })
+      .catch(() => {
+        if (!cancelled) setSkills([])
+      })
+      .finally(() => {
+        if (!cancelled) setSkillsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [skillPanelOpen, skills.length])
+
   function showHint(text: string) {
     setHint(text)
     window.setTimeout(() => setHint(null), 1800)
@@ -461,6 +487,49 @@ const Composer: FC = () => {
       input.setRangeText(value, start, end, 'end')
       input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
     }
+  }
+
+  function handleComposerInput(event: FormEvent<HTMLTextAreaElement>) {
+    const input = event.currentTarget
+    const nextText = input.value
+    const cursor = input.selectionStart ?? nextText.length
+    const command = readSlashCommand(nextText, cursor)
+    setComposerText(nextText)
+    setComposerScrollTop(input.scrollTop)
+    if (command) {
+      setMenu(null)
+      setSkillQuery(command.query)
+      setSkillCommandRange({ start: command.start, end: command.end })
+      setSkillPanelOpen(true)
+    } else {
+      setSkillPanelOpen(false)
+      setSkillCommandRange(null)
+      setSkillQuery('')
+    }
+  }
+
+  function insertSkillReference(skill: SkillSummary) {
+    const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
+    const reference = `$${skill.id || skill.name} `
+    if (!input) {
+      void navigator.clipboard?.writeText(reference).catch(() => undefined)
+      return
+    }
+    const fallbackCursor = input.selectionStart ?? input.value.length
+    const liveCommand = readSlashCommand(input.value, fallbackCursor)
+    const range = liveCommand ?? skillCommandRange
+    const start = range?.start ?? fallbackCursor
+    const end = range?.end ?? fallbackCursor
+    input.focus()
+    input.setSelectionRange(start, end)
+    input.setRangeText(reference, start, end, 'end')
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: reference }))
+    setComposerText(input.value)
+    setComposerScrollTop(input.scrollTop)
+    setSkillPanelOpen(false)
+    setSkillCommandRange(null)
+    setSkillQuery('')
+    showHint(`已选择 Skill：${skill.name || skill.id}`)
   }
 
   async function openWorkspace(workspaceId: string) {
@@ -591,11 +660,6 @@ const Composer: FC = () => {
               selectedModelId={selectedModelId}
               workspaceBusy={workspaceBusy}
               planMode={planMode}
-              onAttach={() => {
-                fileInputRef.current?.click()
-                setMenu(null)
-              }}
-              onWorkspaceMenu={() => setMenu('workspace')}
               onOpenWorkspace={(workspaceId) => void openWorkspace(workspaceId)}
               onCreateBlankWorkspace={() => void createBlankWorkspace()}
               onOpenFolderWorkspace={() => void openFolderFromComposer()}
@@ -613,6 +677,19 @@ const Composer: FC = () => {
                 showHint(`已复制 ${value}，可粘贴到输入框`)
               }}
               onClose={() => setMenu(null)}
+            />
+          )}
+          {skillPanelOpen && (
+            <SkillCommandPanel
+              query={skillQuery}
+              skills={skills}
+              loading={skillsLoading}
+              onPick={insertSkillReference}
+              onClose={() => {
+                setSkillPanelOpen(false)
+                setSkillCommandRange(null)
+                setSkillQuery('')
+              }}
             />
           )}
           {hint && <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">{hint}</div>}
@@ -656,7 +733,15 @@ const Composer: FC = () => {
               placeholder="发消息给 AgentHub，@ 可提及 Agent"
               rows={1}
               onPaste={handlePaste}
-              onInput={(event) => setComposerText(event.currentTarget.value)}
+              onInput={handleComposerInput}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && skillPanelOpen) {
+                  event.preventDefault()
+                  setSkillPanelOpen(false)
+                  setSkillCommandRange(null)
+                  setSkillQuery('')
+                }
+              }}
               onScroll={(event) => setComposerScrollTop(event.currentTarget.scrollTop)}
               className={cn(
                 'relative max-h-[180px] min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 outline-none placeholder:text-neutral-400',
@@ -716,6 +801,91 @@ const Composer: FC = () => {
   )
 }
 
+export const SkillCommandPanel: FC<{
+  query: string
+  skills: SkillSummary[]
+  loading: boolean
+  onPick: (skill: SkillSummary) => void
+  onClose: () => void
+}> = ({ query, skills, loading, onPick, onClose }) => {
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredSkills = useMemo(() => {
+    if (!normalizedQuery) return skills
+    return skills.filter((skill) =>
+      `${skill.name} ${skill.id} ${skill.description} ${skill.source}`.toLowerCase().includes(normalizedQuery)
+    )
+  }, [normalizedQuery, skills])
+  const visibleSkills = filteredSkills.slice(0, 8)
+
+  return (
+    <div
+      className="absolute bottom-[calc(100%+0.5rem)] left-3 right-3 z-30 overflow-hidden rounded-2xl border border-neutral-200 bg-white text-sm shadow-[0_18px_60px_rgba(15,23,42,0.16)] sm:right-auto sm:w-[26rem]"
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-neutral-950 text-xs font-semibold text-white">/</span>
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-neutral-950">选择 Skill</div>
+            <div className="truncate text-xs text-neutral-500">{normalizedQuery ? `筛选：${query}` : '已安装技能'}</div>
+          </div>
+        </div>
+        <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900">
+          关闭
+        </button>
+      </div>
+      <div className="max-h-72 overflow-y-auto p-1.5">
+        {loading && (
+          <div className="space-y-1.5 p-1">
+            {[0, 1, 2].map((item) => (
+              <div key={item} className="flex items-center gap-3 rounded-xl px-2 py-2">
+                <div className="h-8 w-8 animate-pulse rounded-lg bg-neutral-100" />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="h-3 w-28 animate-pulse rounded-full bg-neutral-100" />
+                  <div className="h-2.5 w-48 animate-pulse rounded-full bg-neutral-100" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!loading &&
+          visibleSkills.map((skill) => (
+            <button
+              key={skill.id}
+              type="button"
+              onClick={() => onPick(skill)}
+              className="flex w-full items-start gap-3 rounded-xl px-2.5 py-2.5 text-left transition hover:bg-neutral-50"
+            >
+              <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-600">
+                <Blocks className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <span className="truncate font-medium text-neutral-950">{skill.name || skill.id}</span>
+                  <span className="shrink-0 rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10px] uppercase tracking-normal text-neutral-500">
+                    {skill.source || 'local'}
+                  </span>
+                </span>
+                <span className="mt-0.5 block truncate text-xs text-neutral-500">{skill.description || skill.id}</span>
+                <span className="mt-1 block truncate font-mono text-[11px] text-neutral-400">${skill.id}</span>
+              </span>
+            </button>
+          ))}
+        {!loading && skills.length === 0 && (
+          <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-8 text-center text-xs text-neutral-400">
+            暂无已安装 Skills
+          </div>
+        )}
+        {!loading && skills.length > 0 && filteredSkills.length === 0 && (
+          <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-8 text-center text-xs text-neutral-400">
+            没有匹配的 Skill
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const ComposerMenu: FC<{
   type: 'tools' | 'agents' | 'models' | 'workspace'
   models: ModelCatalogItem[]
@@ -726,8 +896,6 @@ const ComposerMenu: FC<{
   selectedModelId: string | null
   workspaceBusy: boolean
   planMode: boolean
-  onAttach: () => void
-  onWorkspaceMenu: () => void
   onOpenWorkspace: (workspaceId: string) => void
   onCreateBlankWorkspace: () => void
   onOpenFolderWorkspace: () => void
@@ -746,8 +914,6 @@ const ComposerMenu: FC<{
   selectedModelId,
   workspaceBusy,
   planMode,
-  onAttach,
-  onWorkspaceMenu,
   onOpenWorkspace,
   onCreateBlankWorkspace,
   onOpenFolderWorkspace,
@@ -796,14 +962,6 @@ const ComposerMenu: FC<{
     >
       {type === 'tools' && (
         <div className="relative group/tools">
-          <button type="button" onClick={onAttach} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
-            <ImagePlus className="h-4 w-4 text-neutral-500" />
-            <span className="flex-1 text-neutral-900">添加照片和文件</span>
-          </button>
-          <button type="button" onClick={onWorkspaceMenu} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
-            <FolderOpen className="h-4 w-4 text-neutral-500" />
-            <span className="flex-1 text-neutral-900">打开项目文件夹</span>
-          </button>
           <button type="button" onClick={() => onPlanMode(!planMode)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
             <ListTodo className="h-4 w-4 text-neutral-500" />
             <span className="flex-1 text-neutral-900">计划模式</span>
@@ -961,6 +1119,20 @@ const ComposerMenu: FC<{
 
 function errorMessage(err: unknown, fallback: string) {
   return err instanceof Error && err.message ? err.message : fallback
+}
+
+export function readSlashCommand(text: string, cursor: number) {
+  const before = text.slice(0, cursor)
+  const match = /(^|\s)\/([^\s/]*)$/.exec(before)
+  if (!match) return null
+  const suffix = /^[^\s]*/.exec(text.slice(cursor))?.[0] ?? ''
+  const start = match.index + match[1].length
+  const prefix = match[2] ?? ''
+  return {
+    start,
+    end: cursor + suffix.length,
+    query: `${prefix}${suffix}`,
+  }
 }
 
 function workspaceNameFromPath(value: string) {
@@ -1166,13 +1338,13 @@ const CodeAgentToolsCard: FC<{ items: NonNullable<CodeAgentRunMetadata['toolCall
     </div>
     <div className="grid gap-1.5 p-2">
       {items.slice(-12).map((item) => (
-        <div key={item.id} className="grid grid-cols-[4.75rem_minmax(0,1fr)] gap-2 rounded-md bg-neutral-50 px-2.5 py-2">
-          <span className="text-xs font-medium text-neutral-500">{item.label}</span>
+        <div key={item.id} className="grid grid-cols-[5.25rem_minmax(0,1fr)] gap-3 rounded-md bg-neutral-50 px-3 py-2.5 antialiased">
+          <span className="text-[13px] font-medium leading-6 text-neutral-500">{item.label}</span>
           <span className="min-w-0">
-            <span className="block truncate font-mono text-xs text-neutral-800" title={item.target ?? item.name}>
+            <span className="block truncate text-[13px] leading-6 text-neutral-900" title={item.target ?? item.name}>
               {item.target ?? item.name}
             </span>
-            {item.detail && <span className="mt-0.5 block truncate text-[11px] text-neutral-400" title={item.detail}>{item.detail}</span>}
+            {item.detail && <span className="mt-0.5 block truncate text-xs leading-5 text-neutral-500" title={item.detail}>{item.detail}</span>}
           </span>
         </div>
       ))}
@@ -1188,15 +1360,15 @@ const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> 
     </div>
     <div className="space-y-1.5 p-2">
       {commands.map((command) => (
-        <details key={command.id} className="group rounded-md bg-neutral-950 text-neutral-100">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-2.5 py-2">
-            <span className="truncate font-mono text-xs" title={command.command}>{command.command}</span>
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-500 transition group-open:rotate-180" />
+        <details key={command.id} className="group rounded-md border border-neutral-200 bg-neutral-50 text-neutral-900">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
+            <span className="agenthub-readable-code truncate text-[13px] leading-6" title={command.command}>{command.command}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-400 transition group-open:rotate-180" />
           </summary>
           {(command.cwd || command.output) && (
-            <div className="border-t border-white/10 px-2.5 py-2 text-[11px] leading-5 text-neutral-300">
-              {command.cwd && <div className="truncate font-mono text-neutral-500">cwd: {command.cwd}</div>}
-              {command.output && <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">{command.output}</pre>}
+            <div className="border-t border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-700">
+              {command.cwd && <div className="agenthub-readable-code truncate text-neutral-500">cwd: {command.cwd}</div>}
+              {command.output && <pre className="agenthub-readable-code mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">{command.output}</pre>}
             </div>
           )}
         </details>
@@ -1214,9 +1386,9 @@ const CodeAgentFilesCard: FC<{ files: CodeAgentRunMetadata['files'] }> = ({ file
     <div className="space-y-1.5 p-2">
       {files.map((file) => (
         <details key={`${file.status}-${file.path}`} className="group rounded-md bg-neutral-50">
-          <summary className="grid cursor-pointer list-none grid-cols-[4.5rem_minmax(0,1fr)_1rem] items-center gap-2 px-2.5 py-2">
-            <span className="text-xs text-neutral-400">{fileStatusLabel(file.status)}</span>
-            <span className="truncate font-mono text-xs text-neutral-700" title={file.path}>{file.path}</span>
+          <summary className="grid cursor-pointer list-none grid-cols-[4.75rem_minmax(0,1fr)_1rem] items-center gap-2 px-3 py-2.5">
+            <span className="text-[13px] text-neutral-500">{fileStatusLabel(file.status)}</span>
+            <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>{file.path}</span>
             <ChevronDown className={cn('h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180', !file.diff && 'opacity-0')} />
           </summary>
           {file.diff && (
@@ -1240,13 +1412,13 @@ const CodeAgentLogsCard: FC<{ logs: NonNullable<CodeAgentRunMetadata['logs']> }>
         <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
-        <div className="max-h-64 space-y-1 overflow-auto border-t border-neutral-100 bg-neutral-950 p-2">
+        <div className="max-h-64 space-y-1.5 overflow-auto border-t border-neutral-100 bg-white p-2">
           {logs.map((log) => (
-            <div key={log.id} className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-2 font-mono text-[11px] leading-5">
-              <span className={cn(log.stream === 'stderr' ? 'text-red-300' : log.stream === 'event' ? 'text-cyan-300' : 'text-neutral-500')}>
+            <div key={log.id} className={cn('grid grid-cols-[4.25rem_minmax(0,1fr)] gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-6 antialiased', log.stream === 'stderr' ? 'border-red-100 bg-red-50/70' : log.stream === 'event' ? 'border-blue-100 bg-blue-50/60' : 'border-neutral-100 bg-neutral-50')}>
+              <span className={cn('inline-flex h-5 items-center justify-center rounded px-1.5 text-[11px] font-medium', log.stream === 'stderr' ? 'bg-red-100 text-red-700' : log.stream === 'event' ? 'bg-blue-100 text-blue-700' : 'bg-neutral-200 text-neutral-600')}>
                 {logStreamLabel(log.stream)}
               </span>
-              <span className="whitespace-pre-wrap break-words text-neutral-100">{log.text}</span>
+              <span className="whitespace-pre-wrap break-words text-neutral-800">{log.text}</span>
             </div>
           ))}
         </div>
@@ -1314,8 +1486,8 @@ const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> 
     <div className="flex items-center gap-2">
       <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
       <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-xs text-neutral-800" title={artifact.path}>{artifact.path}</div>
-        <div className="mt-0.5 text-[11px] text-neutral-400">{artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}</div>
+        <div className="truncate text-[13px] leading-6 text-neutral-800" title={artifact.path}>{artifact.path}</div>
+        <div className="mt-0.5 text-xs text-neutral-400">{artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}</div>
       </div>
     </div>
   </div>
@@ -1337,8 +1509,8 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
         <span className="inline-flex min-w-0 items-center gap-2">
           <GitBranch className="h-4 w-4 shrink-0 text-blue-500" />
           <span className="min-w-0">
-            <span className="block truncate font-mono text-xs text-neutral-900">{artifact.filePath}</span>
-            <span className="block text-[11px] text-neutral-400">+{additions} / -{deletions}</span>
+            <span className="block truncate text-[13px] leading-6 text-neutral-900">{artifact.filePath}</span>
+            <span className="block text-xs text-neutral-400">+{additions} / -{deletions}</span>
           </span>
         </span>
         <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
@@ -1354,8 +1526,8 @@ const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({ diff, m
   const rows = useMemo(() => parseDiffRows(diff), [diff])
 
   return (
-    <div className={cn('overflow-auto border-t border-neutral-200 bg-white text-xs', maxHeightClassName)}>
-      <div className="min-w-max py-1 font-mono leading-6">
+    <div className={cn('overflow-auto border-t border-neutral-200 bg-white text-[13px]', maxHeightClassName)}>
+      <div className="agenthub-readable-code min-w-max py-1 leading-7">
         {rows.map((row, index) => (
           <div
             key={`${index}-${row.text}`}
@@ -1443,6 +1615,54 @@ function deployStatusLabel(status: Extract<AgentArtifact, { type: 'deploy' }>['s
   if (status === 'running') return '部署中'
   if (status === 'failed') return '失败'
   return '待部署'
+}
+
+type DiffRow = {
+  kind: 'add' | 'context' | 'del' | 'hunk' | 'meta'
+  marker: string
+  newNumber?: number
+  oldNumber?: number
+  text: string
+}
+
+function parseDiffRows(diff: string): DiffRow[] {
+  const rows: DiffRow[] = []
+  let oldLine: number | undefined
+  let newLine: number | undefined
+
+  for (const rawLine of diff.split(/\r?\n/)) {
+    if (rawLine.startsWith('@@')) {
+      const match = rawLine.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)$/)
+      oldLine = match ? Number(match[1]) : undefined
+      newLine = match ? Number(match[2]) : undefined
+      rows.push({ kind: 'hunk', marker: '@@', text: rawLine })
+      continue
+    }
+
+    if (rawLine.startsWith('diff --git') || rawLine.startsWith('index ') || rawLine.startsWith('--- ') || rawLine.startsWith('+++ ')) {
+      rows.push({ kind: 'meta', marker: '', text: rawLine })
+      continue
+    }
+
+    if (rawLine.startsWith('+')) {
+      rows.push({ kind: 'add', marker: '+', newNumber: newLine, text: rawLine.slice(1) })
+      if (newLine !== undefined) newLine += 1
+      continue
+    }
+
+    if (rawLine.startsWith('-')) {
+      rows.push({ kind: 'del', marker: '-', oldNumber: oldLine, text: rawLine.slice(1) })
+      if (oldLine !== undefined) oldLine += 1
+      continue
+    }
+
+    const text = rawLine.startsWith(' ') ? rawLine.slice(1) : rawLine
+    rows.push({ kind: 'context', marker: '', oldNumber: oldLine, newNumber: newLine, text })
+    if (oldLine !== undefined) oldLine += 1
+    if (newLine !== undefined) newLine += 1
+  }
+
+  return rows
 }
 
 const AlertCircleIcon: FC = () => <span className="grid h-4 w-4 place-items-center rounded-full border border-neutral-300 text-[10px]">!</span>
