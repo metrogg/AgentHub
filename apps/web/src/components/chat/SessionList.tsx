@@ -187,7 +187,6 @@ export default function SessionList() {
           icon={MessageCircle}
           label="Agent Group"
           active={location.pathname === '/agent-world'}
-          strong
           onClick={() => navigate('/agent-world')}
         />
         <NavItem

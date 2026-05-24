@@ -905,8 +905,41 @@
     }
   }
 
+  .agenthub-typewriter {
+    display: inline-grid;
+    white-space: nowrap;
+  }
+
+  .agenthub-typewriter-caret {
+    display: inline-block;
+    margin-left: 0.125rem;
+    height: 0.9em;
+    width: 0.08em;
+    transform: translateY(0.1em);
+    border-radius: 999px;
+    background: currentColor;
+    animation: agenthub-typewriter-caret 0.85s steps(1, end) infinite;
+  }
+
+  .agenthub-typewriter-caret[data-done='true'] {
+    opacity: 0.55;
+  }
+
+  @keyframes agenthub-typewriter-caret {
+    0%,
+    45% {
+      opacity: 1;
+    }
+
+    46%,
+    100% {
+      opacity: 0;
+    }
+  }
+
   .agenthub-thinking {
     display: inline-flex;
+    margin-top: 0.25rem;
     min-height: 2rem;
     align-items: center;
     gap: 0.5rem;

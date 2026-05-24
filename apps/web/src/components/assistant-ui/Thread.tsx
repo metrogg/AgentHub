@@ -81,6 +81,7 @@ import {
 } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { useChatStore } from '../../stores/chatStore'
+import { TypewriterHeading } from '../chat/TypewriterHeading'
 
 const highlightLanguageMap = {
   bash,
@@ -344,12 +345,14 @@ const ThreadWelcome: FC = () => (
   <ThreadPrimitive.Empty>
     <div className="mx-auto flex min-h-[calc(100vh-15rem)] w-full max-w-[var(--thread-max-width)] flex-col justify-center py-10">
       <div className="mb-24">
-        <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">有什么可以帮忙的？</h2>
+        <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
+          <TypewriterHeading text="有什么可以帮忙的？" />
+        </h2>
         <p className="mt-2 text-base text-neutral-500">创建 Agent、拆解任务，或直接 @ 某个助手开始协作。</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <PromptCard title="创建 coder 代理" text="帮我单开一个跳跃小游戏" />
-        <PromptCard title="解释架构" text="这个项目如何接入 assistant-ui" />
+        <PromptCard title="解释架构" text="这个项目的具体技术栈" />
       </div>
     </div>
   </ThreadPrimitive.Empty>
@@ -1371,7 +1374,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
       <CodeAgentStatusCard data={data} commandCount={commands.length} fileCount={changedFiles.length} toolCount={toolCalls.length} />
       {toolCalls.length > 0 && <CodeAgentToolsCard items={toolCalls} running={data.status === 'running'} />}
       {commands.length > 0 && <CodeAgentCommandsCard commands={commands} />}
-      {changedFiles.length > 0 && <CodeAgentFilesCard files={changedFiles} />}
+      {changedFiles.length > 0 && <CodeAgentFilesCard cwd={data.cwd ?? commands.find((command) => command.cwd)?.cwd} files={changedFiles} />}
       {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
       {logs.length > 0 && <CodeAgentLogsCard logs={logs} />}
     </div>
@@ -1472,25 +1475,46 @@ const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> 
   </div>
 )
 
-const CodeAgentFilesCard: FC<{ files: CodeAgentRunMetadata['files'] }> = ({ files }) => (
+const CodeAgentFilesCard: FC<{ cwd?: string; files: CodeAgentRunMetadata['files'] }> = ({ cwd, files }) => (
   <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
     <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
       <FileText className="h-4 w-4 shrink-0 text-amber-600" />
       文件变更 {files.length}
     </div>
     <div className="space-y-1.5 p-2">
-      {files.map((file) => (
-        <details key={`${file.status}-${file.path}`} className="group rounded-md bg-neutral-50">
-          <summary className="grid cursor-pointer list-none grid-cols-[4.75rem_minmax(0,1fr)_1rem] items-center gap-2 px-3 py-2.5">
-            <span className="text-[13px] text-neutral-500">{fileStatusLabel(file.status)}</span>
-            <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>{file.path}</span>
-            <ChevronDown className={cn('h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180', !file.diff && 'opacity-0')} />
-          </summary>
-          {file.diff && (
-            <DiffViewer diff={file.diff} maxHeightClassName="max-h-72" />
-          )}
-        </details>
-      ))}
+      {files.map((file) => {
+        const vscodeHref = file.status === 'deleted' ? null : vscodeFileHref(file.path, cwd)
+        return (
+          <details key={`${file.status}-${file.path}`} className="group rounded-md bg-neutral-50">
+            <summary className="grid cursor-pointer list-none grid-cols-[4.75rem_minmax(0,1fr)_auto_1rem] items-center gap-2 px-3 py-2.5">
+              <span className="text-[13px] text-neutral-500">{fileStatusLabel(file.status)}</span>
+              <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>{file.path}</span>
+              {vscodeHref ? (
+                <a
+                  href={vscodeHref}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    window.location.href = vscodeHref
+                  }}
+                  className="inline-flex h-7 min-w-10 items-center justify-center gap-1 rounded-full border border-neutral-200 bg-white px-2 text-neutral-500 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+                  title="用 VS Code 打开"
+                  aria-label={`用 VS Code 打开 ${file.path}`}
+                >
+                  <img src="/vscode-color.svg" alt="" className="h-4 w-4" draggable={false} />
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              ) : (
+                <span className="h-7 min-w-10" />
+              )}
+              <ChevronDown className={cn('h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180', !file.diff && 'opacity-0')} />
+            </summary>
+            {file.diff && (
+              <DiffViewer diff={file.diff} maxHeightClassName="max-h-72" />
+            )}
+          </details>
+        )
+      })}
     </div>
   </div>
 )
@@ -1797,6 +1821,22 @@ function fileStatusLabel(status: CodeAgentRunMetadata['files'][number]['status']
   if (status === 'deleted') return '删除'
   if (status === 'renamed') return '重命名'
   return '未跟踪'
+}
+
+function vscodeFileHref(filePath: string, cwd?: string) {
+  const absolutePath = absoluteEditorPath(filePath, cwd)
+  if (!absolutePath) return null
+  const normalized = absolutePath.replace(/\\/g, '/')
+  return `vscode://file/${encodeURI(normalized).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
+}
+
+function absoluteEditorPath(filePath: string, cwd?: string) {
+  const trimmed = filePath.trim()
+  if (!trimmed) return null
+  if (/^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith('/')) return trimmed
+  const root = cwd?.trim()
+  if (!root || (!/^[a-zA-Z]:[\\/]/.test(root) && !root.startsWith('/'))) return null
+  return `${root.replace(/[\\/]+$/, '')}/${trimmed.replace(/^[\\/]+/, '')}`
 }
 
 const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {

@@ -109,6 +109,7 @@ export interface CodeAgentRunMetadata {
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
   runtime: 'codex' | 'claude-code' | 'opencode'
   command: string
+  cwd?: string
   durationMs: number
   exitCode: number
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>

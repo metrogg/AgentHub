@@ -36,6 +36,7 @@ export interface CodeAgentRunMetadata {
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
   runtime: CodeAgentType
   command: string
+  cwd?: string
   durationMs: number
   exitCode: number
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
@@ -597,6 +598,7 @@ async function buildCodeAgentRunMetadata(input: {
     status: input.timedOut ? 'timed-out' : input.code === 0 ? 'completed' : input.code === 130 ? 'cancelled' : 'failed',
     runtime: runtimeTypeForAdapter(input.adapter),
     command: input.adapter.command,
+    cwd: input.cwd,
     durationMs: input.durationMs,
     exitCode: input.code,
     commands,

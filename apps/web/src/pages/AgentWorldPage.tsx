@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
+import { loadAgentLibrary, toAgentConfigInput, type SavedAgentConfig } from '../lib/agentLibrary'
 import { api, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type TaskStatus, type WorkspaceAgent, type WorkspaceTask } from '../lib/api'
 import { cn } from '../lib/utils'
 import { useWorkspaceStore } from '../stores/workspaceStore'
@@ -83,6 +84,7 @@ export default function AgentWorldPage() {
   const [workspaceDraft, setWorkspaceDraft] = useState({ name: '', goal: '', projectPath: '' })
   const [models, setModels] = useState<ModelCatalogItem[]>([])
   const [skills, setSkills] = useState<SkillSummary[]>([])
+  const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [savingGoal, setSavingGoal] = useState(false)
   const [savingAgent, setSavingAgent] = useState(false)
   const [openingFolder, setOpeningFolder] = useState(false)
@@ -123,6 +125,17 @@ export default function AgentWorldPage() {
       .catch(() => setSkills([]))
     return () => {
       cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    setLibraryAgents(loadAgentLibrary())
+    const sync = () => setLibraryAgents(loadAgentLibrary())
+    window.addEventListener('agenthub:agent-library-change', sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener('agenthub:agent-library-change', sync)
+      window.removeEventListener('storage', sync)
     }
   }, [])
 
@@ -479,7 +492,11 @@ export default function AgentWorldPage() {
                       title="Agent 团队"
                       action={
                         <div className="flex flex-wrap items-center justify-end gap-2">
-                          <PresetButtons onPick={(preset) => openCreateAgent(preset)} />
+                          <PresetButtons
+                            libraryAgents={libraryAgents}
+                            onManage={() => navigate('/agent-config')}
+                            onPick={(preset) => openCreateAgent(preset)}
+                          />
                           <button
                             type="button"
                             onClick={() => openCreateAgent()}
@@ -619,9 +636,10 @@ export default function AgentWorldPage() {
         <AgentDialog
           mode={agentDialogMode}
           draft={agentDraft}
-          models={models}
-          skills={skills}
-          saving={savingAgent}
+                models={models}
+                skills={skills}
+                libraryAgents={libraryAgents}
+                saving={savingAgent}
           onChange={(patch) => setAgentDraft((draft) => ({ ...draft, ...patch }))}
           onClose={closeAgentDialog}
           onSubmit={saveAgentFromDialog}
@@ -757,9 +775,30 @@ function Panel({ title, action, children }: { title: string; action?: ReactNode;
   )
 }
 
-function PresetButtons({ onPick }: { onPick: (preset: Partial<AgentConfigInput>) => void }) {
+function PresetButtons({
+  libraryAgents,
+  onManage,
+  onPick,
+}: {
+  libraryAgents: SavedAgentConfig[]
+  onManage: () => void
+  onPick: (preset: Partial<AgentConfigInput>) => void
+}) {
   return (
-    <div className="flex gap-2">
+    <div className="flex flex-wrap gap-2">
+      <select
+        value=""
+        onChange={(event) => {
+          const agent = libraryAgents.find((item) => item.id === event.target.value)
+          if (agent) onPick(toAgentConfigInput(agent))
+        }}
+        className="h-9 rounded-xl border border-neutral-200 bg-white px-2.5 text-xs text-neutral-600 outline-none transition hover:bg-neutral-50"
+      >
+        <option value="">从配置库套用</option>
+        {libraryAgents.map((agent) => (
+          <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
+        ))}
+      </select>
       {agentPresets.slice(0, 2).map((preset) => (
         <button
           key={preset.name}
@@ -771,6 +810,14 @@ function PresetButtons({ onPick }: { onPick: (preset: Partial<AgentConfigInput>)
           {preset.role}
         </button>
       ))}
+      <button
+        type="button"
+        onClick={onManage}
+        className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-neutral-200 bg-white px-2.5 text-xs text-neutral-500 transition hover:bg-neutral-50"
+      >
+        <Settings2 className="h-3.5 w-3.5" />
+        管理配置
+      </button>
     </div>
   )
 }
@@ -862,6 +909,7 @@ function AgentDialog({
   draft,
   models,
   skills,
+  libraryAgents,
   saving,
   onChange,
   onSubmit,
@@ -871,6 +919,7 @@ function AgentDialog({
   draft: AgentConfigInput
   models: ModelCatalogItem[]
   skills: SkillSummary[]
+  libraryAgents: SavedAgentConfig[]
   saving: boolean
   onChange: (patch: Partial<AgentConfigInput>) => void
   onSubmit: (event: FormEvent) => void
@@ -913,6 +962,26 @@ function AgentDialog({
         </div>
 
         <div className="grid gap-3 p-5 md:grid-cols-2">
+          {libraryAgents.length > 0 && (
+            <div className="md:col-span-2">
+              <label className="text-sm">
+                <span className="mb-2 block text-neutral-600">从全局配置库切换</span>
+                <select
+                  value=""
+                  onChange={(event) => {
+                    const agent = libraryAgents.find((item) => item.id === event.target.value)
+                    if (agent) onChange(toAgentConfigInput(agent))
+                  }}
+                  className="h-10 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400"
+                >
+                  <option value="">选择一个已保存 Agent 配置</option>
+                  {libraryAgents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
           <Field placeholder="名称，如 Designer" value={draft.name} onChange={(name) => onChange({ name })} />
           <Field placeholder="角色，如 设计" value={draft.role} onChange={(role) => onChange({ role })} />
           <textarea

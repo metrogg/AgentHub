@@ -1,7 +1,8 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, AtSign, ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, MessageSquare, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
+import { ArrowUp, AtSign, ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
+import { TypewriterHeading } from '../components/chat/TypewriterHeading'
 import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
 import { api, type SkillSummary, type Workspace } from '../lib/api'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
@@ -202,12 +203,6 @@ function Welcome({
     await startThread(message)
   }
 
-  async function createBlankThread() {
-    const session = await createSession('新会话')
-    await selectSession(session.id)
-    navigate(`/chat/${session.id}`)
-  }
-
   async function openWorkspace(workspaceId: string) {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
@@ -304,28 +299,12 @@ function Welcome({
             <span className="text-neutral-500">对话由 AI 生成</span>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={createBlankThread}
-            className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100"
-            aria-label="新建"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => void startThread('介绍一下 AgentHub 当前可以做什么')}
-            className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100"
-            aria-label="对话"
-          >
-            <MessageSquare className="h-4 w-4" />
-          </button>
-        </div>
       </header>
 
       <div className="flex flex-1 flex-col items-center px-8">
         <section className="mt-[18vh] w-full max-w-[704px]">
           <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
-            有什么可以帮忙的？
+            <TypewriterHeading text="有什么可以帮忙的？" />
           </h2>
           <p className="mt-3 text-base text-neutral-500">
             创建 Agent、拆解任务，或直接 @ 某个助手开始协作。
@@ -339,8 +318,8 @@ function Welcome({
             />
             <PromptCard
               title="解释架构"
-              text="这个项目如何接入 assistant-ui"
-              onClick={() => startThread('解释这个项目如何接入 assistant-ui，并指出后续可完善的地方')}
+              text="这个项目的具体技术栈"
+              onClick={() => startThread('解释这个项目的具体技术栈，并指出后续可完善的地方')}
             />
           </div>
         </section>
