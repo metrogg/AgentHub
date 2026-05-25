@@ -10,7 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{
-    menu::{Menu, MenuItem, Submenu},
     utils::config::Color,
     Manager, RunEvent, UserAttentionType, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
@@ -143,7 +142,6 @@ pub fn run() {
             desktop_info,
             check_for_updates
         ])
-        .menu(build_menu)
         .setup(move |app| {
             let window = WebviewWindowBuilder::new(
                 app,
@@ -153,8 +151,9 @@ pub fn run() {
             .title("AgentHub")
             .inner_size(1280.0, 820.0)
             .min_inner_size(980.0, 680.0)
-            .transparent(true)
-            .background_color(Color(0, 0, 0, 0))
+            .decorations(true)
+            .transparent(false)
+            .background_color(Color(255, 255, 255, 255))
             .shadow(true)
             .center()
             .build()?;
@@ -167,7 +166,6 @@ pub fn run() {
 
             Ok(())
         })
-        .on_menu_event(handle_menu_event)
         .build(tauri::generate_context!())
         .expect("error while building AgentHub desktop shell");
 
@@ -176,58 +174,6 @@ pub fn run() {
             stop_server(app_handle.state::<DesktopState>().server.clone());
         }
     });
-}
-
-fn build_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let open_workspace = MenuItem::with_id(handle, "open_workspace", "打开工作区...", true, None::<&str>)?;
-    let agent_config = MenuItem::with_id(handle, "agent_config", "Agent 配置", true, None::<&str>)?;
-    let coding_tools = MenuItem::with_id(handle, "coding_tools", "Coding Tools", true, None::<&str>)?;
-    let reload = MenuItem::with_id(handle, "reload", "重新加载", true, Some("F5"))?;
-    let check_updates = MenuItem::with_id(handle, "check_updates", "检查更新", true, None::<&str>)?;
-    let quit = MenuItem::with_id(handle, "quit", "退出", true, Some("Ctrl+Q"))?;
-
-    Menu::with_items(
-        handle,
-        &[
-            &Submenu::with_items(handle, "文件", true, &[&open_workspace, &quit])?,
-            &Submenu::with_items(handle, "AgentHub", true, &[&agent_config, &coding_tools])?,
-            &Submenu::with_items(handle, "视图", true, &[&reload])?,
-            &Submenu::with_items(handle, "帮助", true, &[&check_updates])?,
-        ],
-    )
-}
-
-fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-
-    match event.id().as_ref() {
-        "open_workspace" => {
-            if let Ok(Some(path)) = pick_workspace_folder() {
-                let script = format!(
-                    "window.dispatchEvent(new CustomEvent('agenthub:native-workspace-picked', {{ detail: {} }}));",
-                    serde_json::json!({ "path": path })
-                );
-                let _ = window.eval(script);
-            }
-        }
-        "agent_config" => navigate_in_app(&window, "/agent-config"),
-        "coding_tools" => navigate_in_app(&window, "/coding-tools"),
-        "reload" => {
-            let _ = window.eval("window.location.reload()");
-        }
-        "check_updates" => {
-            let _ = notify_user(window, "AgentHub 更新".to_string(), Some("自动更新通道尚未配置。".to_string()));
-        }
-        "quit" => app.exit(0),
-        _ => {}
-    }
-}
-
-fn navigate_in_app(window: &WebviewWindow, path: &str) {
-    let script = format!("window.history.pushState(null, '', '{}'); window.dispatchEvent(new PopStateEvent('popstate'));", path);
-    let _ = window.eval(script);
 }
 
 fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_state: ServerProcess) {

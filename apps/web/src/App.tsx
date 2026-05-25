@@ -12,20 +12,24 @@ import { api } from './lib/api'
 import { useChatStore } from './stores/chatStore'
 
 export default function App() {
+  const routes = (
+    <Routes>
+      <Route path="/" element={<ChatPage />} />
+      <Route path="/chat/:sessionId" element={<ChatPage />} />
+      <Route path="/coding-tools" element={<CodingToolsPage />} />
+      <Route path="/agent-config" element={<AgentConfigPage />} />
+      <Route path="/agent-world" element={<AgentWorldPage />} />
+      <Route path="/office" element={<OfficePage />} />
+      <Route path="/skills" element={<SkillsMarketPage />} />
+      <Route path="/settings" element={<SettingsPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+
   return (
     <>
       <NativeDesktopBridge />
-      <Routes>
-        <Route path="/" element={<ChatPage />} />
-        <Route path="/chat/:sessionId" element={<ChatPage />} />
-        <Route path="/coding-tools" element={<CodingToolsPage />} />
-        <Route path="/agent-config" element={<AgentConfigPage />} />
-        <Route path="/agent-world" element={<AgentWorldPage />} />
-        <Route path="/office" element={<OfficePage />} />
-        <Route path="/skills" element={<SkillsMarketPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      {routes}
     </>
   )
 }
