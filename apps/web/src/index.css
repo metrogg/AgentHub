@@ -942,6 +942,34 @@
     background: var(--agenthub-app-bg, #ffffff);
   }
 
+  .agenthub-chat-shell .agenthub-welcome-root {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .agenthub-chat-shell .agenthub-welcome-root::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 0;
+    height: 11rem;
+    pointer-events: none;
+    background: linear-gradient(
+      to bottom,
+      transparent 0%,
+      color-mix(in srgb, var(--agenthub-app-bg, #ffffff) 42%, transparent) 34%,
+      color-mix(in srgb, var(--agenthub-app-bg, #ffffff) 88%, transparent) 68%,
+      var(--agenthub-app-bg, #ffffff) 100%
+    );
+    backdrop-filter: blur(10px);
+    mask-image: linear-gradient(to bottom, transparent 0%, black 32%, black 100%);
+    z-index: 0;
+  }
+
+  .agenthub-chat-shell .agenthub-welcome-root > * {
+    position: relative;
+    z-index: 1;
+  }
+
   .agenthub-chat-shell aside {
     background: var(--agenthub-app-sidebar, #f7f7f4);
     border-color: var(--agenthub-app-border, #e5e5e0);
@@ -951,6 +979,21 @@
   .agenthub-thread-root header {
     background: var(--agenthub-app-panel, #ffffff);
     border-color: var(--agenthub-app-border, #e5e5e0);
+  }
+
+  .agenthub-composer-dock {
+    position: relative;
+    background: linear-gradient(
+      to top,
+      var(--agenthub-app-bg, #ffffff) 0%,
+      color-mix(in srgb, var(--agenthub-app-bg, #ffffff) 92%, transparent) 54%,
+      transparent 100%
+    );
+    backdrop-filter: blur(10px);
+  }
+
+  .agenthub-welcome-composer-dock {
+    background: transparent;
   }
 
   .agenthub-chat-shell .bg-white,
@@ -981,7 +1024,7 @@
   .agenthub-chat-shell .text-\[\#87a9a4\],
   .agenthub-thread-root .text-\[\#8ba9a4\],
   .agenthub-thread-root .text-\[\#87a9a4\] {
-    color: var(--agenthub-accent, #171717);
+    color: var(--agenthub-accent-readable, var(--agenthub-accent, #171717));
   }
 
   .agenthub-chat-shell .bg-neutral-50,
@@ -1322,6 +1365,10 @@
     background: var(--settings-accent-soft);
     border-color: var(--settings-active-border);
     color: var(--settings-accent);
+  }
+
+  .settings-theme .settings-soft-button:disabled {
+    color: var(--settings-muted-text);
   }
 
   .settings-theme .settings-danger-button {

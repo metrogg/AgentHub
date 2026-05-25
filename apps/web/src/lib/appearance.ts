@@ -19,6 +19,7 @@ export function applyAppearanceSettings(settings: AppearanceSettings) {
   const accent = accentColor(settings.accent ?? '黑色')
   const isDark = theme === 'dark'
   const embeddedIsDark = embeddedTheme === 'dark'
+  const readableAccent = readableAccentColor(accent, isDark)
 
   root.dataset.agenthubTheme = theme
   root.dataset.agenthubEmbeddedTheme = embeddedTheme
@@ -28,7 +29,8 @@ export function applyAppearanceSettings(settings: AppearanceSettings) {
   root.style.setProperty('--agenthub-font-terminal', fontStack(settings.terminalFont ?? '默认', 'mono'))
   root.style.setProperty('--agenthub-font-size', `${settings.fontSize || '14'}px`)
   root.style.setProperty('--agenthub-accent', accent)
-  root.style.setProperty('--agenthub-accent-soft', hexToRgba(accent, isDark ? 0.2 : 0.12))
+  root.style.setProperty('--agenthub-accent-readable', readableAccent)
+  root.style.setProperty('--agenthub-accent-soft', hexToRgba(readableAccent, isDark ? 0.18 : 0.12))
   root.style.setProperty('--agenthub-app-bg', palette.bg)
   root.style.setProperty('--agenthub-app-sidebar', palette.chrome)
   root.style.setProperty('--agenthub-app-panel', palette.panel)
@@ -93,6 +95,10 @@ export function accentColor(value: string) {
     琥珀色: '#d97706',
   }
   return colors[value] ?? colors.黑色
+}
+
+export function readableAccentColor(accent: string, isDark: boolean) {
+  return isDark && accent.toLowerCase() === '#171717' ? '#f5f5f5' : accent
 }
 
 export function hexToRgba(hex: string, alpha: number) {

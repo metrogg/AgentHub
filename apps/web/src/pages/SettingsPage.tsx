@@ -31,7 +31,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { api, type Message, type Session, type SettingsGeneralInfo } from '../lib/api'
-import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, resolveTheme, themePalette } from '../lib/appearance'
+import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
 import { getDesktopInfo, isDesktopApp, openPath, pickWorkspaceFolder } from '../lib/native'
 import { loadSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent } from '../lib/sessionArchive'
@@ -109,7 +109,6 @@ interface AppSettings {
   pythonRuntime: string
   pythonPath: string
   mainWindowTheme: string
-  embeddedWindowTheme: string
   autoOpenTodo: boolean
   autoOpenFileChanges: boolean
   autoCloseFileChanges: boolean
@@ -191,7 +190,6 @@ const defaultAppSettings: AppSettings = {
   pythonRuntime: '托管 Python 3.13.12',
   pythonPath: 'F:\\Learning\\AgentHub\\managed-python\\windows-x64\\python.exe',
   mainWindowTheme: '跟随系统',
-  embeddedWindowTheme: '暗色',
   autoOpenTodo: true,
   autoOpenFileChanges: true,
   autoCloseFileChanges: true,
@@ -289,7 +287,6 @@ export default function SettingsPage() {
     appSettings.fontSize,
     appSettings.inlineCodeFont,
     appSettings.mainWindowTheme,
-    appSettings.embeddedWindowTheme,
     appSettings.terminalFont,
     appSettings.uiFont,
   ])
@@ -1589,7 +1586,6 @@ function SwitchList({ items }: { items: Array<[string, boolean, (value: boolean)
 function ThemeDisplayPanel({ settings, patchSettings }: { settings: AppSettings; patchSettings: (patch: Partial<AppSettings>) => void }) {
   const { t } = useI18n()
   const mainTheme = resolveTheme(settings.mainWindowTheme)
-  const embeddedTheme = resolveTheme(settings.embeddedWindowTheme)
   const accent = accentColor(settings.accent)
 
   return (
@@ -1606,21 +1602,6 @@ function ThemeDisplayPanel({ settings, patchSettings }: { settings: AppSettings;
                   active={settings.mainWindowTheme === mode}
                   accent={accent}
                   onClick={() => patchSettings({ mainWindowTheme: mode, theme: mode === '跟随系统' ? settings.theme : mode })}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('嵌入窗口')}</div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {themeModes.map((mode) => (
-                <ThemeOption
-                  key={`embed-${mode}`}
-                  mode={mode}
-                  active={settings.embeddedWindowTheme === mode}
-                  accent={accent}
-                  onClick={() => patchSettings({ embeddedWindowTheme: mode })}
                 />
               ))}
             </div>
@@ -1649,7 +1630,7 @@ function ThemeDisplayPanel({ settings, patchSettings }: { settings: AppSettings;
           </div>
         </div>
 
-        <ThemePreview mainTheme={mainTheme} embeddedTheme={embeddedTheme} accent={accent} />
+        <ThemePreview mainTheme={mainTheme} accent={accent} />
       </div>
     </InsetPanel>
   )
@@ -1685,10 +1666,9 @@ function ThemeOption({ mode, active, accent, onClick }: { mode: string; active: 
   )
 }
 
-function ThemePreview({ mainTheme, embeddedTheme, accent }: { mainTheme: 'light' | 'dark'; embeddedTheme: 'light' | 'dark'; accent: string }) {
+function ThemePreview({ mainTheme, accent }: { mainTheme: 'light' | 'dark'; accent: string }) {
   const { t } = useI18n()
   const main = themePalette(mainTheme)
-  const embedded = themePalette(embeddedTheme)
   return (
     <div className="rounded-2xl border p-3" style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}>
       <div className="mb-3 flex items-center justify-between">
@@ -1712,14 +1692,6 @@ function ThemePreview({ mainTheme, embeddedTheme, accent }: { mainTheme: 'light'
           <div className="rounded-lg p-3" style={{ background: main.panel }}>
             <div className="h-2 w-4/5 rounded-full" style={{ background: main.text }} />
             <div className="mt-2 h-2 w-2/3 rounded-full" style={{ background: main.muted }} />
-          </div>
-          <div className="rounded-lg border p-3" style={{ background: embedded.panel, borderColor: embedded.border }}>
-            <div className="mb-2 h-2 w-20 rounded-full" style={{ background: embedded.text }} />
-            <div className="grid grid-cols-3 gap-2">
-              <div className="h-10 rounded-md" style={{ background: embedded.chrome }} />
-              <div className="h-10 rounded-md" style={{ background: accent, opacity: 0.9 }} />
-              <div className="h-10 rounded-md" style={{ background: embedded.chrome }} />
-            </div>
           </div>
         </div>
       </div>
@@ -2371,6 +2343,7 @@ function createSettingsThemeStyle(settings: AppSettings): CSSProperties {
   const palette = themePalette(theme)
   const accent = accentColor(settings.accent)
   const isDark = theme === 'dark'
+  const readableAccent = readableAccentColor(accent, isDark)
 
   return {
     '--settings-bg': palette.bg,
@@ -2382,10 +2355,10 @@ function createSettingsThemeStyle(settings: AppSettings): CSSProperties {
     '--settings-text': palette.text,
     '--settings-muted': palette.muted,
     '--settings-muted-text': isDark ? '#a3a3a3' : '#666660',
-    '--settings-accent': accent,
-    '--settings-accent-soft': hexToRgba(accent, isDark ? 0.2 : 0.12),
-    '--settings-active-bg': hexToRgba(accent, isDark ? 0.18 : 0.1),
-    '--settings-active-border': hexToRgba(accent, isDark ? 0.55 : 0.32),
+    '--settings-accent': readableAccent,
+    '--settings-accent-soft': hexToRgba(readableAccent, isDark ? 0.18 : 0.12),
+    '--settings-active-bg': hexToRgba(readableAccent, isDark ? 0.16 : 0.1),
+    '--settings-active-border': hexToRgba(readableAccent, isDark ? 0.42 : 0.32),
     '--settings-danger-bg': isDark ? '#2a1717' : '#fff7f7',
   } as CSSProperties
 }

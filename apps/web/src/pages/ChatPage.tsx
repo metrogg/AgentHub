@@ -330,7 +330,7 @@ function Welcome({
           </div>
         </section>
 
-        <div className="mt-auto w-full max-w-[704px] pb-5">
+        <div className="agenthub-welcome-composer-dock mt-auto w-full max-w-[704px] pb-5">
           <form
             onSubmit={handleSubmit}
             className="relative rounded-[22px] border border-neutral-200 bg-white p-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)]"

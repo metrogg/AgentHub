@@ -693,7 +693,7 @@ const Composer: FC = () => {
   })
 
   return (
-    <div className="shrink-0 bg-gradient-to-t from-white via-white to-white/80 px-6 pb-6 pt-3">
+    <div className="agenthub-composer-dock shrink-0 px-6 pb-6 pt-3">
       <ComposerPrimitive.Root
         className="mx-auto w-full max-w-[var(--thread-max-width)]"
         onSubmitCapture={syncComposerTextAfterComposerAction}

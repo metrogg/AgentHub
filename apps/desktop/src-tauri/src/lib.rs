@@ -172,7 +172,7 @@ fn open_desktop_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(
 
     let new_window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
         .title("AgentHub")
-        .inner_size(1280.0, 820.0)
+        .inner_size(1570.0, 1013.0)
         .min_inner_size(980.0, 680.0)
         .decorations(true)
         .transparent(false)
@@ -219,7 +219,7 @@ pub fn run() {
                 WebviewUrl::App("desktop-startup.html".into()),
             )
             .title("AgentHub")
-            .inner_size(1280.0, 820.0)
+            .inner_size(1570.0, 1013.0)
             .min_inner_size(980.0, 680.0)
             .decorations(true)
             .transparent(false)
