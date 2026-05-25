@@ -528,6 +528,51 @@ export interface OrchestratorPlan {
   dispatchResult?: OrchestratorDispatchResult
 }
 
+export type OrchestratorRunStatus = 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
+
+export interface OrchestratorRunListItem {
+  id: string
+  workspaceId: string
+  groupSessionId: string
+  planMessageId: string | null
+  status: OrchestratorRunStatus
+  plan: unknown | null
+  summaryMessageId: string | null
+  conflictReport: unknown[] | null
+  createdAt: string
+  updatedAt: string
+  workspaceName: string
+  sessionTitle: string
+}
+
+export interface ExecutionLog {
+  id: string
+  runId: string
+  sessionId: string
+  agentId: string
+  taskId: string | null
+  type: 'llm_call' | 'tool_call' | 'blackboard_read' | 'blackboard_write' | 'error' | 'task_start' | 'task_end'
+  input: unknown | null
+  output: unknown | null
+  durationMs: number | null
+  tokenUsage: unknown | null
+  createdAt: string
+}
+
+export interface ConflictReportItem {
+  filePath: string
+  baseContent: string
+  variants: Array<{
+    agentId: string
+    agentName: string
+    diff: string
+    fullContent?: string
+  }>
+  resolution: 'auto-merged' | 'llm-resolved' | 'needs-human'
+  mergedContent?: string
+  notes?: string
+}
+
 export interface OrchestratorDispatchResult {
   workspaceId: string
   groupSessionId?: string
@@ -780,6 +825,12 @@ export const api = {
     request<{ session: Session }>(`/workspaces/${id}/group-session`, { method: 'POST' }),
   openWorkspaceAgentSession: (id: string, agentId: string) =>
     request<{ session: Session }>(`/workspaces/${id}/agents/${agentId}/session`, { method: 'POST' }),
+
+  // Orchestrator runs
+  listOrchestratorRuns: () => request<{ items: OrchestratorRunListItem[] }>('/orchestrator-runs'),
+  getOrchestratorRun: (id: string) => request<OrchestratorRunListItem>(`/orchestrator-runs/${id}`),
+  getOrchestratorRunLogs: (id: string) => request<{ items: ExecutionLog[] }>(`/orchestrator-runs/${id}/logs`),
+  getOrchestratorRunConflicts: (id: string) => request<{ items: ConflictReportItem[] }>(`/orchestrator-runs/${id}/conflicts`),
 }
 
 export function mentionsOrchestrator(content: string) {

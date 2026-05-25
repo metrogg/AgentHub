@@ -9,7 +9,9 @@ import {
   ChevronRight,
   Code2,
   Building2,
+  Clock,
   Folder,
+  GitBranch,
   History,
   Loader2,
   MessageCircle,
@@ -242,6 +244,18 @@ export default function SessionList() {
           label={t('办公室')}
           active={location.pathname === '/office'}
           onClick={() => navigate('/office')}
+        />
+        <NavItem
+          icon={GitBranch}
+          label="运行历史"
+          active={location.pathname === '/orchestrator-runs'}
+          onClick={() => navigate('/orchestrator-runs')}
+        />
+        <NavItem
+          icon={Clock}
+          label="执行日志"
+          active={location.pathname === '/execution-logs'}
+          onClick={() => navigate('/execution-logs')}
         />
       </nav>
 

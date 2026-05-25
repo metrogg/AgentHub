@@ -12,6 +12,7 @@ import { codingToolsRoutes } from './routes/coding-tools'
 import { skillRoutes } from './routes/skills'
 import { workspaceRoutes } from './routes/workspaces'
 import { artifactRoutes } from './routes/artifacts'
+import { orchestratorRunRoutes } from './routes/orchestrator-runs'
 
 const app = new Hono()
   .use('*', honoLogger())
@@ -33,6 +34,7 @@ const routes = app
   .route('/api/skills', skillRoutes)
   .route('/api/workspaces', workspaceRoutes)
   .route('/api/artifacts', artifactRoutes)
+  .route('/api/orchestrator-runs', orchestratorRunRoutes)
 
 installStaticRoutes(app)
 
