@@ -51,6 +51,7 @@ export async function openDesktopWindow() {
 }
 
 export async function setDesktopWindowTitle(title: string) {
+  document.title = title
   if (!isDesktopApp()) return false
   const { getCurrentWindow } = await import('@tauri-apps/api/window')
   await getCurrentWindow().setTitle(title)

@@ -1,4 +1,10 @@
 const API_BASE = '/api'
+const DEFAULT_TIMEOUT_MS = 30_000
+const MAX_RETRIES = 2
+
+interface RequestOptions extends RequestInit {
+  timeout?: number
+}
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -7,22 +13,88 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers as Record<string, string> | undefined),
-    },
-  })
+function isRetryableError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const msg = error.message.toLowerCase()
+  return (
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('abort') ||
+    msg.includes('timeout')
+  )
+}
 
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }))
-    throw new ApiError(res.status, body?.error ?? body?.message ?? `HTTP ${res.status}`)
+export function friendlyErrorMessage(error: unknown, context?: string): string {
+  const prefix = context ? `${context}：` : ''
+  if (error instanceof ApiError) return prefix + error.message
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase()
+    if (msg.includes('failed to fetch')) {
+      return prefix + '网络连接中断，请确认服务端已启动后重试'
+    }
+    if (msg.includes('abort')) {
+      return prefix + '请求超时，请稍后重试'
+    }
+    return prefix + error.message
+  }
+  return prefix + '请求失败'
+}
+
+async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt = 0): Promise<T> {
+  const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT_MS
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  // Merge caller's signal with our timeout controller
+  const callerSignal = init?.signal
+  const onCallerAbort = () => controller.abort()
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      controller.abort(callerSignal.reason)
+    } else {
+      callerSignal.addEventListener('abort', onCallerAbort, { once: true })
+    }
   }
 
-  if (res.status === 204) return undefined as T
-  return (await res.json()) as T
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers as Record<string, string> | undefined),
+      },
+    })
+    clearTimeout(timer)
+    callerSignal?.removeEventListener('abort', onCallerAbort)
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new ApiError(res.status, body?.error ?? body?.message ?? `HTTP ${res.status}`)
+    }
+
+    if (res.status === 204) return undefined as T
+    return (await res.json()) as T
+  } catch (error) {
+    clearTimeout(timer)
+    callerSignal?.removeEventListener('abort', onCallerAbort)
+
+    // Server errors (5xx) and network errors are retryable
+    const shouldRetry =
+      attempt < MAX_RETRIES &&
+      (isRetryableError(error) || (error instanceof ApiError && error.status >= 500))
+
+    if (shouldRetry) {
+      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)))
+      return requestWithRetry<T>(path, init, attempt + 1)
+    }
+
+    throw error
+  }
+}
+
+async function request<T>(path: string, init?: RequestOptions): Promise<T> {
+  return requestWithRetry<T>(path, init)
 }
 
 export interface Session {
@@ -186,6 +258,36 @@ export interface CliInstallAction {
   message: string
   runtime?: 'local' | 'host'
   status: 'completed' | 'failed'
+}
+
+export interface SettingsGeneralInfo {
+  debug: {
+    enabled: boolean
+    dir: string
+    logLevel: string
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+  }
+  storage: {
+    appDataDir: string
+    configDir: string
+    logDir: string
+    activeDataDir: string
+    dataPath: string
+    databasePath: string
+    migrationPending: boolean
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+    databaseSizeBytes: number
+    databaseSizeLabel: string
+    scannedFiles: number
+    truncated: boolean
+    message: string
+  }
+  git: { runtime: string; path: string; ok: boolean; message: string }
+  python: { runtime: string; path: string; ok: boolean; message: string }
 }
 
 export interface OpencodeModelItem {
@@ -554,7 +656,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-
   // Coding tools
   getCodingToolStatus: (tools?: CodingToolProbe[]) =>
     tools?.length
@@ -620,6 +721,7 @@ export const api = {
   openWorkspaceFolder: (projectPath?: string | null) =>
     request<WorkspaceFolderOpenResult>('/workspaces/open-folder', {
       method: 'POST',
+      timeout: 120_000,
       body: projectPath ? JSON.stringify({ projectPath }) : undefined,
     }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),

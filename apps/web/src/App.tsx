@@ -73,6 +73,7 @@ const defaultAppearanceSettings: AppearanceSettings = {
   fontSize: '14',
   inlineCodeFont: '默认',
   mainWindowTheme: '跟随系统',
+  embeddedWindowTheme: '暗色',
   terminalFont: '默认',
   uiFont: '默认',
 }
