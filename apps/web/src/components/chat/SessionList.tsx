@@ -24,7 +24,7 @@ import {
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import { api, type Session, type WorkspaceAgent, type WorkspaceFull } from '../../lib/api'
+import { api, type Session, type WorkspaceFull } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
 import { loadSessionListPrefs, normalizeSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent, type SessionListPrefs } from '../../lib/sessionArchive'
 
@@ -40,8 +40,6 @@ export default function SessionList() {
   const location = useLocation()
   const { sessionId } = useParams()
   const sessions = useChatStore((state) => state.sessions)
-  const currentWorkspace = useChatStore((state) => state.currentWorkspace)
-  const currentWorkspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
   const createSession = useChatStore((state) => state.createSession)
   const deleteSession = useChatStore((state) => state.deleteSession)
@@ -65,7 +63,6 @@ export default function SessionList() {
     [archivedIds, pinnedIds, query, sessions, showArchived]
   )
   const activeSession = sessions.find((session) => session.id === sessionId)
-  const agentContacts = useMemo(() => filterAgentContacts(currentWorkspaceAgents, query), [currentWorkspaceAgents, query])
 
   useEffect(() => {
     fetchSessions()
@@ -209,14 +206,6 @@ export default function SessionList() {
     setDeleteTarget(null)
   }
 
-  async function openAgentContact(agent: WorkspaceAgent) {
-    if (!currentWorkspace) return
-    const { session } = await api.openWorkspaceAgentSession(currentWorkspace.id, agent.id)
-    await fetchSessions()
-    await selectSession(session.id)
-    navigate(`/chat/${session.id}`)
-  }
-
   return (
     <aside className="flex h-full min-h-0 w-64 shrink-0 flex-col border-r border-neutral-200 bg-[#f7f7f4]">
       <div className="flex h-14 items-center justify-between px-4">
@@ -305,40 +294,6 @@ export default function SessionList() {
       </nav>
 
       <div className="my-3 border-t border-neutral-200" />
-
-      {currentWorkspace && (
-        <div className="px-2 pb-3">
-          <div className="mb-1 flex items-center justify-between px-2 text-xs text-neutral-400">
-            <span>{t('Agent 联系人')}</span>
-            <span>{agentContacts.length + 1}</span>
-          </div>
-          <div className="space-y-1">
-            <AgentContactRow
-              name="Orchestrator"
-              role={t('协调 / 拆解 / 汇总')}
-              color="#111827"
-              runtimeLabel="Coordinator"
-              tags={['规划', '调度']}
-            />
-            {agentContacts.map((agent) => (
-              <AgentContactRow
-                key={agent.id}
-                name={agent.name}
-                role={agent.role}
-                color={agent.color}
-                runtimeLabel={agent.codeAgentType ? codeAgentLabel(agent.codeAgentType) : runtimeLabel(agent.runtimeType)}
-                tags={agent.capabilityTags}
-                onClick={() => void openAgentContact(agent)}
-              />
-            ))}
-            {!agentContacts.length && (
-              <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-3 text-xs text-neutral-400">
-                {t('当前项目还没有匹配的 Agent')}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       <div className="flex-1 overflow-y-auto px-2">
         <div className="mb-1 px-2 text-xs text-neutral-400">{t('历史话题')}</div>
@@ -719,52 +674,6 @@ function DeleteSessionDialog({
   )
 }
 
-function AgentContactRow({
-  name,
-  role,
-  color,
-  runtimeLabel,
-  tags,
-  onClick,
-}: {
-  name: string
-  role: string
-  color: string
-  runtimeLabel: string
-  tags: string[]
-  onClick?: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition',
-        onClick ? 'hover:bg-white/80' : 'cursor-default'
-      )}
-    >
-      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-semibold text-white" style={{ background: color }}>
-        {name.slice(0, 1).toUpperCase()}
-      </div>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-neutral-900">{name}</span>
-        <span className="block truncate text-[11px] text-neutral-500">
-          {role} · {runtimeLabel}
-        </span>
-        {!!tags.length && (
-          <span className="mt-1 flex gap-1 overflow-hidden">
-            {tags.slice(0, 2).map((tag) => (
-              <span key={tag} className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-neutral-500 shadow-sm">
-                {tag}
-              </span>
-            ))}
-          </span>
-        )}
-      </span>
-    </button>
-  )
-}
-
 function NavItem({
   icon: Icon,
   label,
@@ -856,37 +765,6 @@ function sessionMatchesQuery(session: Session, query: string, parent?: Session) 
     .join(' ')
     .toLowerCase()
     .includes(query)
-}
-
-function filterAgentContacts(agents: WorkspaceAgent[], query: string) {
-  const normalized = query.trim().toLowerCase()
-  if (!normalized) return agents
-  return agents.filter((agent) =>
-    [agent.name, agent.role, agent.runtimeType, agent.codeAgentType ?? '', ...agent.capabilityTags]
-      .join(' ')
-      .toLowerCase()
-      .includes(normalized)
-  )
-}
-
-function runtimeLabel(value: WorkspaceAgent['runtimeType']) {
-  const map: Record<WorkspaceAgent['runtimeType'], string> = {
-    llm: 'LLM',
-    'code-agent': 'Code Agent',
-    mcp: 'Native',
-    a2a: 'A2A',
-  }
-  return map[value]
-}
-
-function codeAgentLabel(value: NonNullable<WorkspaceAgent['codeAgentType']>) {
-  const map: Record<NonNullable<WorkspaceAgent['codeAgentType']>, string> = {
-    codex: 'Codex',
-    'claude-code': 'Claude Code',
-    opencode: 'OpenCode',
-    gemini: 'Gemini',
-  }
-  return map[value]
 }
 
 function comparePinnedGroups(a: SessionGroup, b: SessionGroup, pinnedIds: Set<string>) {

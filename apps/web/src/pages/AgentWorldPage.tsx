@@ -24,6 +24,7 @@ import {
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import { loadAgentLibrary, toAgentConfigInput, type SavedAgentConfig } from '../lib/agentLibrary'
 import { api, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type TaskStatus, type WorkspaceAgent, type WorkspaceTask } from '../lib/api'
+import { useI18n } from '../lib/i18n'
 import { pickWorkspaceFolder } from '../lib/native'
 import { cn } from '../lib/utils'
 import { useWorkspaceStore } from '../stores/workspaceStore'
@@ -53,6 +54,7 @@ const defaultAgentDraft: AgentConfigInput = {
 }
 
 export default function AgentWorldPage() {
+  const { t } = useI18n()
   const navigate = useNavigate()
   const location = useLocation()
   const {
@@ -340,7 +342,7 @@ export default function AgentWorldPage() {
               className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm transition hover:bg-neutral-50"
             >
               <RefreshCw className={cn('h-4 w-4', loadingList && 'animate-spin')} />
-              刷新
+              {t('刷新')}
             </button>
             <button
               type="button"
@@ -349,7 +351,7 @@ export default function AgentWorldPage() {
               className="inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-200"
             >
               <GitBranch className="h-4 w-4" />
-              群聊汇总
+              {t('群聊汇总')}
             </button>
             <button
               type="button"
@@ -358,7 +360,7 @@ export default function AgentWorldPage() {
               className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm transition hover:bg-neutral-50 disabled:text-neutral-300"
             >
               <MessageSquare className="h-4 w-4" />
-              进入群聊
+              {t('进入群聊')}
             </button>
             <button
               type="button"
@@ -366,7 +368,7 @@ export default function AgentWorldPage() {
               className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm transition hover:bg-neutral-50"
             >
               <Wand2 className="h-4 w-4" />
-              Skills 广场
+              {t('Skills 广场')}
             </button>
           </div>
         </header>
@@ -374,18 +376,18 @@ export default function AgentWorldPage() {
         <div className="flex min-h-0 flex-1">
           <aside className="w-80 shrink-0 border-r border-neutral-200 bg-[#fbfbf9] p-4">
             <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
-              <label className="text-xs text-neutral-500">打开项目文件夹</label>
+              <label className="text-xs text-neutral-500">{t('打开项目文件夹')}</label>
               <div className="mt-2 flex items-center gap-2 rounded-xl border border-neutral-200 px-3">
                 <FolderOpen className="h-4 w-4 shrink-0 text-neutral-400" />
                 <div className="flex h-10 min-w-0 flex-1 items-center truncate text-sm text-neutral-500">
-                  {activeWorkspace?.projectPath || '选择本地项目文件夹'}
+                  {activeWorkspace?.projectPath || t('选择本地项目文件夹')}
                 </div>
               </div>
               <textarea
                 value={newGoal}
                 onChange={(event) => setNewGoal(event.target.value)}
                 className="mt-3 h-20 w-full resize-none rounded-xl border border-neutral-200 bg-transparent px-3 py-2 text-sm leading-6 outline-none placeholder:text-neutral-300"
-                placeholder="协作目标，可选"
+                placeholder={t('协作目标，可选')}
               />
               <button
                 type="button"
@@ -394,11 +396,11 @@ export default function AgentWorldPage() {
                 className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
               >
                 {openingFolder ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
-                {openingFolder ? '正在打开...' : '打开文件夹'}
+                {openingFolder ? t('正在打开...') : t('打开文件夹')}
               </button>
             </div>
 
-            <div className="mt-5 text-xs text-neutral-400">已打开文件夹</div>
+            <div className="mt-5 text-xs text-neutral-400">{t('已打开文件夹')}</div>
             <div className="mt-2 space-y-2">
               {workspaces.map((workspace) => (
                 <div
@@ -433,7 +435,7 @@ export default function AgentWorldPage() {
               ))}
               {!workspaces.length && (
                 <div className="rounded-xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-400">
-                  暂无项目文件夹，先打开一个本地项目。
+                  {t('暂无项目文件夹，先打开一个本地项目。')}
                 </div>
               )}
             </div>
@@ -446,7 +448,7 @@ export default function AgentWorldPage() {
                   <div>
                     <div className="inline-flex h-7 items-center gap-2 rounded-full border border-neutral-200 px-3 text-xs text-neutral-500">
                       <Users className="h-3.5 w-3.5" />
-                      多会话并行调度
+                      {t('多会话并行调度')}
                     </div>
                     <input
                       value={workspaceDraft.name}
@@ -464,7 +466,7 @@ export default function AgentWorldPage() {
                         value={workspaceDraft.projectPath}
                         onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, projectPath: event.target.value }))}
                         className="h-10 min-w-0 flex-1 bg-transparent outline-none placeholder:text-neutral-300"
-                        placeholder="项目文件夹路径，Agent 集群会在这里运行"
+                        placeholder={t('项目文件夹路径，Agent 集群会在这里运行')}
                       />
                     </label>
                   </div>
@@ -475,7 +477,7 @@ export default function AgentWorldPage() {
                       className="inline-flex h-10 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 text-sm font-medium shadow-sm transition hover:bg-neutral-50"
                     >
                       <Pencil className="h-4 w-4" />
-                      {savingGoal ? '保存中' : '保存'}
+                      {savingGoal ? t('保存中') : t('保存')}
                     </button>
                     <button
                       type="button"
@@ -484,7 +486,7 @@ export default function AgentWorldPage() {
                       className="inline-flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-200"
                     >
                       <Play className="h-4 w-4" />
-                      一键分派
+                      {t('一键分派')}
                     </button>
                   </div>
                 </div>
@@ -514,7 +516,7 @@ export default function AgentWorldPage() {
                             className="inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-3 text-sm font-medium text-white transition hover:bg-neutral-800"
                           >
                             <Plus className="h-4 w-4" />
-                            添加 Agent
+                            {t('添加 Agent')}
                           </button>
                         </div>
                       }
@@ -531,7 +533,7 @@ export default function AgentWorldPage() {
                         ))}
                         {!agents.length && (
                           <div className="rounded-2xl border border-dashed border-neutral-200 p-8 text-center text-sm text-neutral-400 md:col-span-2">
-                            还没有 Agent。添加成员后即可为任务指定分工。
+                            {t('还没有 Agent。添加成员后即可为任务指定分工。')}
                           </div>
                         )}
                       </div>
@@ -539,20 +541,20 @@ export default function AgentWorldPage() {
 
                     <Panel title="任务编排">
                       <form onSubmit={addTaskFromForm} className="grid gap-3 rounded-2xl border border-neutral-200 p-4 md:grid-cols-[minmax(0,1fr)_220px]">
-                        <Field placeholder="任务标题" value={newTask.title} onChange={(title) => setNewTask((v) => ({ ...v, title }))} />
+                        <Field placeholder={t('任务标题')} value={newTask.title} onChange={(title) => setNewTask((v) => ({ ...v, title }))} />
                         <select
                           value={newTask.agentId}
                           onChange={(event) => setNewTask((v) => ({ ...v, agentId: event.target.value }))}
                           className="h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-neutral-400"
                         >
-                          <option value="">未指定 Agent</option>
+                          <option value="">{t('未指定 Agent')}</option>
                           {agents.map((agent) => (
                             <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
                           ))}
                         </select>
-                        <Field className="md:col-span-2" placeholder="任务说明，可写交付物、约束、依赖" value={newTask.description} onChange={(description) => setNewTask((v) => ({ ...v, description }))} />
+                        <Field className="md:col-span-2" placeholder={t('任务说明，可写交付物、约束、依赖')} value={newTask.description} onChange={(description) => setNewTask((v) => ({ ...v, description }))} />
                         <button type="submit" className="h-10 rounded-xl bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 md:col-span-2">
-                          添加任务
+                          {t('添加任务')}
                         </button>
                       </form>
 
@@ -572,7 +574,7 @@ export default function AgentWorldPage() {
                         ))}
                         {!tasks.length && (
                           <div className="rounded-2xl border border-dashed border-neutral-200 p-8 text-center text-sm text-neutral-400">
-                            还没有任务。添加任务后即可为每个 Agent 创建独立会话。
+                            {t('还没有任务。添加任务后即可为每个 Agent 创建独立会话。')}
                           </div>
                         )}
                       </div>
@@ -594,7 +596,7 @@ export default function AgentWorldPage() {
                         className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
                       >
                         <MessageSquare className="h-4 w-4" />
-                        汇总所有会话
+                        {t('汇总所有会话')}
                       </button>
                     </Panel>
 
@@ -611,7 +613,7 @@ export default function AgentWorldPage() {
                             >
                               <span className="min-w-0">
                                 <span className="block truncate font-medium">{task.title}</span>
-                                <span className="block truncate text-xs text-neutral-400">{agent ? `${agent.name} / ${agent.role}` : '未指定 Agent'}</span>
+                                <span className="block truncate text-xs text-neutral-400">{agent ? `${agent.name} / ${agent.role}` : t('未指定 Agent')}</span>
                               </span>
                               <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
                             </button>
@@ -619,7 +621,7 @@ export default function AgentWorldPage() {
                         })}
                         {!tasks.some((task) => task.sessionId) && (
                           <div className="rounded-xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-400">
-                            分派任务后，这里会出现每个 Agent 的独立会话入口。
+                            {t('分派任务后，这里会出现每个 Agent 的独立会话入口。')}
                           </div>
                         )}
                       </div>
@@ -637,7 +639,7 @@ export default function AgentWorldPage() {
               </div>
             ) : (
               <div className="grid h-full place-items-center text-sm text-neutral-400">
-                {loadingDetail ? '正在加载协作组' : '创建一个协作组后开始多会话并行管理'}
+                {loadingDetail ? t('正在加载协作组') : t('创建一个协作组后开始多会话并行管理')}
               </div>
             )}
           </section>
@@ -758,28 +760,31 @@ function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
 }
 
 function Stat({ value, label }: { value: number; label: string }) {
+  const { t } = useI18n()
   return (
     <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-3">
       <div className="text-xl font-semibold">{value}</div>
-      <div className="mt-1 text-xs text-neutral-400">{label}</div>
+      <div className="mt-1 text-xs text-neutral-400">{t(label)}</div>
     </div>
   )
 }
 
 function MiniStat({ value, label }: { value: number; label: string }) {
+  const { t } = useI18n()
   return (
     <div className="rounded-xl bg-neutral-50 px-3 py-3">
       <div className="text-lg font-semibold">{value}</div>
-      <div className="mt-1 text-xs text-neutral-400">{label}</div>
+      <div className="mt-1 text-xs text-neutral-400">{t(label)}</div>
     </div>
   )
 }
 
 function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  const { t } = useI18n()
   return (
     <section className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 className="text-base font-semibold">{title}</h2>
+        <h2 className="text-base font-semibold">{t(title)}</h2>
         {action}
       </div>
       {children}
@@ -796,6 +801,7 @@ function PresetButtons({
   onManage: () => void
   onPick: (preset: Partial<AgentConfigInput>) => void
 }) {
+  const { t } = useI18n()
   return (
     <div className="flex flex-wrap gap-2">
       <select
@@ -806,7 +812,7 @@ function PresetButtons({
         }}
         className="h-9 rounded-xl border border-neutral-200 bg-white px-2.5 text-xs text-neutral-600 outline-none transition hover:bg-neutral-50"
       >
-        <option value="">从配置库套用</option>
+        <option value="">{t('从配置库套用')}</option>
         {libraryAgents.map((agent) => (
           <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
         ))}
@@ -819,7 +825,7 @@ function PresetButtons({
           className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-neutral-200 bg-white px-2.5 text-xs text-neutral-500 transition hover:bg-neutral-50"
         >
           <Sparkles className="h-3.5 w-3.5" />
-          {preset.role}
+          {t(preset.role)}
         </button>
       ))}
       <button
@@ -828,7 +834,7 @@ function PresetButtons({
         className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-neutral-200 bg-white px-2.5 text-xs text-neutral-500 transition hover:bg-neutral-50"
       >
         <Settings2 className="h-3.5 w-3.5" />
-        管理配置
+        {t('管理配置')}
       </button>
     </div>
   )
@@ -845,6 +851,7 @@ function AgentCard({
   onEdit: () => void
   onDelete: () => void
 }) {
+  const { t } = useI18n()
   const modelLabel = modelName(agent.modelId, models)
   const visibleTags = agent.capabilityTags.length ? agent.capabilityTags.slice(0, 3) : [runtimeLabel(agent.runtimeType)]
 
@@ -862,8 +869,8 @@ function AgentCard({
           <button
             type="button"
             onClick={onEdit}
-            title="设置 Agent"
-            aria-label={`${agent.name} 设置`}
+            title={t('设置 Agent')}
+            aria-label={`${agent.name} ${t('设置')}`}
             className="grid h-7 w-7 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900"
           >
             <Settings2 className="h-3.5 w-3.5" />
@@ -871,8 +878,8 @@ function AgentCard({
           <button
             type="button"
             onClick={onDelete}
-            title="删除 Agent"
-            aria-label={`删除 ${agent.name}`}
+            title={t('删除 Agent')}
+            aria-label={`${t('删除')} ${agent.name}`}
             className="grid h-7 w-7 place-items-center rounded-lg text-neutral-300 transition hover:bg-red-50 hover:text-red-500"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -881,13 +888,13 @@ function AgentCard({
       </div>
 
       <p className="mt-3 max-h-10 overflow-hidden text-xs leading-5 text-neutral-600">
-        {agent.description || '暂无能力说明'}
+        {agent.description || t('暂无能力说明')}
       </p>
 
       <div className="mt-3 flex flex-wrap gap-1.5">
-        <AgentPill>{modelLabel}</AgentPill>
+        <AgentPill>{t(modelLabel)}</AgentPill>
         <AgentPill>{agent.codeAgentType ? codeAgentLabel(agent.codeAgentType) : runtimeLabel(agent.runtimeType)}</AgentPill>
-        <AgentPill>{sandboxLabel(agent.sandboxPolicy)}</AgentPill>
+        <AgentPill>{t(sandboxLabel(agent.sandboxPolicy))}</AgentPill>
         {visibleTags.map((tag) => (
           <span key={tag} className="inline-flex h-6 items-center rounded-full bg-neutral-100 px-2 text-xs text-neutral-600">
             {tag}
@@ -895,12 +902,12 @@ function AgentCard({
         ))}
         {agent.autoInvoke && (
           <span className="inline-flex h-6 items-center rounded-full bg-emerald-50 px-2 text-xs text-emerald-700">
-            自动调用
+            {t('自动调用')}
           </span>
         )}
         {agent.approvalRequired && (
           <span className="inline-flex h-6 items-center rounded-full bg-amber-50 px-2 text-xs text-amber-700">
-            风险确认
+            {t('风险确认')}
           </span>
         )}
       </div>
@@ -937,6 +944,7 @@ function AgentDialog({
   onSubmit: (event: FormEvent) => void
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const runtimeType = draft.runtimeType ?? 'llm'
   const selectClass = 'h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300'
 
@@ -956,17 +964,17 @@ function AgentDialog({
         <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-neutral-100 bg-white px-5 py-4">
           <div>
             <h2 id="agent-dialog-title" className="text-base font-semibold">
-              {mode === 'create' ? '添加 Agent' : 'Agent 设置'}
+              {mode === 'create' ? t('添加 Agent') : t('Agent 设置')}
             </h2>
             <p className="mt-1 text-xs text-neutral-400">
-              {mode === 'create' ? '创建一个新的协作成员' : '调整这个成员的运行方式'}
+              {mode === 'create' ? t('创建一个新的协作成员') : t('调整这个成员的运行方式')}
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            title="关闭"
-            aria-label="关闭"
+            title={t('关闭')}
+            aria-label={t('关闭')}
             className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900"
           >
             <X className="h-4 w-4" />
@@ -977,7 +985,7 @@ function AgentDialog({
           {libraryAgents.length > 0 && (
             <div className="md:col-span-2">
               <label className="text-sm">
-                <span className="mb-2 block text-neutral-600">从全局配置库切换</span>
+                <span className="mb-2 block text-neutral-600">{t('从全局配置库切换')}</span>
                 <select
                   value=""
                   onChange={(event) => {
@@ -986,7 +994,7 @@ function AgentDialog({
                   }}
                   className="h-10 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400"
                 >
-                  <option value="">选择一个已保存 Agent 配置</option>
+                  <option value="">{t('选择一个已保存 Agent 配置')}</option>
                   {libraryAgents.map((agent) => (
                     <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
                   ))}
@@ -994,12 +1002,12 @@ function AgentDialog({
               </label>
             </div>
           )}
-          <Field placeholder="名称，如 Designer" value={draft.name} onChange={(name) => onChange({ name })} />
-          <Field placeholder="角色，如 设计" value={draft.role} onChange={(role) => onChange({ role })} />
+          <Field placeholder={t('名称，如 Designer')} value={draft.name} onChange={(name) => onChange({ name })} />
+          <Field placeholder={t('角色，如 设计')} value={draft.role} onChange={(role) => onChange({ role })} />
           <textarea
             value={draft.description ?? ''}
             onChange={(event) => onChange({ description: event.target.value })}
-            placeholder="能力说明，如 前端实现、接口联调、审查风险"
+            placeholder={t('能力说明，如 前端实现、接口联调、审查风险')}
             className="h-20 resize-none rounded-xl border border-neutral-200 px-3 py-2 text-sm leading-6 outline-none placeholder:text-neutral-300 focus:border-neutral-400 md:col-span-2"
           />
 
@@ -1021,8 +1029,8 @@ function AgentDialog({
             }}
             className={selectClass}
           >
-            <option value="llm">普通 LLM Agent</option>
-            <option value="code-agent">绑定 Coding Tools</option>
+            <option value="llm">{t('普通 LLM Agent')}</option>
+            <option value="code-agent">{t('绑定 Coding Tools')}</option>
             <option value="mcp">Native Read-only Agent</option>
             <option value="a2a">A2A Agent</option>
           </select>
@@ -1032,44 +1040,44 @@ function AgentDialog({
             disabled={runtimeType !== 'code-agent'}
             className={selectClass}
           >
-            <option value="">不绑定 CLI</option>
+            <option value="">{t('不绑定 CLI')}</option>
             <option value="codex">Codex CLI</option>
             <option value="claude-code">Claude Code</option>
             <option value="opencode">OpenCode</option>
             <option value="gemini">Gemini CLI</option>
           </select>
           <select value={draft.modelId ?? ''} onChange={(event) => onChange({ modelId: event.target.value || null })} className={selectClass}>
-            <option value="">自动模型</option>
+            <option value="">{t('自动模型')}</option>
             {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId}</option>)}
           </select>
           <select value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(event) => onChange({ sandboxPolicy: event.target.value as WorkspaceAgent['sandboxPolicy'] })} className={selectClass}>
-            <option value="read-only">只读权限</option>
-            <option value="workspace-write">工作区写入</option>
-            <option value="danger-full-access">完全访问</option>
+            <option value="read-only">{t('只读权限')}</option>
+            <option value="workspace-write">{t('工作区写入')}</option>
+            <option value="danger-full-access">{t('完全访问')}</option>
           </select>
           <select value={draft.contextPolicy ?? 'workspace-aware'} onChange={(event) => onChange({ contextPolicy: event.target.value as WorkspaceAgent['contextPolicy'] })} className={selectClass}>
-            <option value="recent-only">仅最近上下文</option>
-            <option value="pinned-recent">固定与最近上下文</option>
-            <option value="workspace-aware">工作区上下文</option>
+            <option value="recent-only">{t('仅最近上下文')}</option>
+            <option value="pinned-recent">{t('固定与最近上下文')}</option>
+            <option value="workspace-aware">{t('工作区上下文')}</option>
           </select>
-          <Field placeholder="颜色，如 #111827" value={draft.color ?? '#111827'} onChange={(color) => onChange({ color })} />
-          <Field placeholder="能力标签，逗号分隔" value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => onChange({ capabilityTags: splitList(value) })} />
-          <Field placeholder="工具权限，逗号分隔" value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => onChange({ toolPermissions: splitList(value) })} />
+          <Field placeholder={t('颜色，如 #111827')} value={draft.color ?? '#111827'} onChange={(color) => onChange({ color })} />
+          <Field placeholder={t('能力标签，逗号分隔')} value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => onChange({ capabilityTags: splitList(value) })} />
+          <Field placeholder={t('工具权限，逗号分隔')} value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => onChange({ toolPermissions: splitList(value) })} />
           <SkillPicker skills={skills} selected={draft.capabilityTags ?? []} onChange={(next) => onChange({ capabilityTags: next })} />
           <textarea
             value={draft.systemPrompt ?? ''}
             onChange={(event) => onChange({ systemPrompt: event.target.value })}
-            placeholder="系统提示词"
+            placeholder={t('系统提示词')}
             className="h-24 resize-none rounded-xl border border-neutral-200 px-3 py-2 text-sm leading-6 outline-none placeholder:text-neutral-300 focus:border-neutral-400 md:col-span-2"
           />
 
           <label className="flex h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
             <input type="checkbox" checked={draft.autoInvoke ?? true} onChange={(event) => onChange({ autoInvoke: event.target.checked })} />
-            允许 Orchestrator 自动调用
+            {t('允许 Orchestrator 自动调用')}
           </label>
           <label className="flex h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
             <input type="checkbox" checked={draft.approvalRequired ?? true} onChange={(event) => onChange({ approvalRequired: event.target.checked })} />
-            高风险操作需要确认
+            {t('高风险操作需要确认')}
           </label>
         </div>
 
@@ -1079,7 +1087,7 @@ function AgentDialog({
             onClick={onClose}
             className="inline-flex h-10 items-center justify-center rounded-xl border border-neutral-200 px-4 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50"
           >
-            取消
+            {t('取消')}
           </button>
           <button
             type="submit"
@@ -1087,7 +1095,7 @@ function AgentDialog({
             className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-200"
           >
             {saving && <RefreshCw className="h-4 w-4 animate-spin" />}
-            {mode === 'create' ? '添加 Agent' : '保存设置'}
+            {mode === 'create' ? t('添加 Agent') : t('保存设置')}
           </button>
         </div>
       </form>
@@ -1104,6 +1112,7 @@ function SkillPicker({
   selected: string[]
   onChange: (next: string[]) => void
 }) {
+  const { t } = useI18n()
   const selectedIds = new Set(selected.filter((tag) => tag.startsWith('skill:')).map((tag) => tag.slice(6)))
 
   function toggle(skillId: string) {
@@ -1118,7 +1127,7 @@ function SkillPicker({
     <div className="md:col-span-2">
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-sm font-medium text-neutral-700">Skills</span>
-        <span className="text-xs text-neutral-400">{selectedIds.size} 已绑定</span>
+        <span className="text-xs text-neutral-400">{selectedIds.size} {t('已绑定')}</span>
       </div>
       <div className="max-h-48 overflow-auto rounded-xl border border-neutral-200 bg-white p-2">
         {skills.length ? (
@@ -1145,10 +1154,10 @@ function SkillPicker({
             })}
           </div>
         ) : (
-          <div className="px-3 py-8 text-center text-sm text-neutral-400">暂无可用 skills</div>
+          <div className="px-3 py-8 text-center text-sm text-neutral-400">{t('暂无可用 skills')}</div>
         )}
       </div>
-      <div className="mt-2 text-xs text-neutral-400">绑定后会写入 `skill:xxx` 标签，并自动参与上下文注入。</div>
+      <div className="mt-2 text-xs text-neutral-400">{t('绑定后会写入 `skill:xxx` 标签，并自动参与上下文注入。')}</div>
     </div>
   )
 }
@@ -1207,6 +1216,7 @@ function TaskRow({
   onOpen: () => void
   onDelete: () => void
 }) {
+  const { t } = useI18n()
   return (
     <div className="rounded-2xl border border-neutral-200 p-4">
       <div className="flex flex-wrap items-start gap-3">
@@ -1214,7 +1224,7 @@ function TaskRow({
           type="button"
           onClick={() => onPatch({ status: nextStatus(task.status) })}
           className="mt-1 text-neutral-400 hover:text-neutral-900"
-          aria-label="切换任务状态"
+          aria-label={t('切换任务状态')}
         >
           {task.status === 'done' ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Circle className="h-5 w-5" />}
         </button>
@@ -1228,7 +1238,7 @@ function TaskRow({
             value={task.description}
             onChange={(event) => onPatch({ description: event.target.value })}
             className="mt-1 h-12 w-full resize-none bg-transparent text-xs leading-5 text-neutral-500 outline-none"
-            placeholder="任务说明"
+            placeholder={t('任务说明')}
           />
         </div>
         <select
@@ -1236,7 +1246,7 @@ function TaskRow({
           onChange={(event) => onPatch({ agentId: event.target.value || null })}
           className="h-9 rounded-xl border border-neutral-200 bg-white px-3 text-xs outline-none focus:border-neutral-400"
         >
-          <option value="">未指定</option>
+          <option value="">{t('未指定')}</option>
           {agents.map((item) => (
             <option key={item.id} value={item.id}>{item.name} / {item.role}</option>
           ))}
@@ -1245,15 +1255,15 @@ function TaskRow({
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3">
         <div className="flex items-center gap-2 text-xs text-neutral-400">
           <span className={cn('h-2 w-2 rounded-full', statusDot(task.status))} />
-          {statusLabel(task.status)}
+          {t(statusLabel(task.status))}
           <span>·</span>
-          <span>{agent ? `${agent.name} / ${agent.role}` : '未指定 Agent'}</span>
+          <span>{agent ? `${agent.name} / ${agent.role}` : t('未指定 Agent')}</span>
         </div>
         <div className="flex items-center gap-2">
           {task.sessionId && (
             <button type="button" onClick={onOpen} className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm hover:bg-neutral-50">
               <MessageSquare className="h-4 w-4" />
-              打开会话
+              {t('打开会话')}
             </button>
           )}
           <button
@@ -1263,7 +1273,7 @@ function TaskRow({
             className="inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
           >
             {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            {task.status === 'failed' ? '重试' : task.sessionId ? '重新分派' : '分派'}
+            {task.status === 'failed' ? t('重试') : task.sessionId ? t('重新分派') : t('分派')}
           </button>
           <button type="button" onClick={onDelete} className="grid h-9 w-9 place-items-center rounded-xl text-neutral-300 hover:bg-red-50 hover:text-red-500">
             <Trash2 className="h-4 w-4" />
@@ -1296,10 +1306,11 @@ function Field({
 }
 
 function Rule({ title, text }: { title: string; text: string }) {
+  const { t } = useI18n()
   return (
     <div className="rounded-xl bg-neutral-50 p-3">
-      <div className="font-semibold text-neutral-800">{title}</div>
-      <div className="mt-1">{text}</div>
+      <div className="font-semibold text-neutral-800">{t(title)}</div>
+      <div className="mt-1">{t(text)}</div>
     </div>
   )
 }

@@ -290,7 +290,7 @@ export default function CodingToolsPage() {
 
   async function installAllCliTools() {
     setCliBusy(true)
-    setCliMessage('正在本机安装 Codex、Claude Code、OpenCode...')
+    setCliMessage('正在检测本机 CLI，只安装缺失的 Codex、Claude Code、OpenCode、Gemini...')
     setCliOutput('')
     try {
       const result = await api.installAllCliTools()
@@ -580,7 +580,7 @@ export default function CodingToolsPage() {
             <IconButton label="检测" onClick={() => refreshStatus()} disabled={checking}>
               <RefreshCw className={cn('h-4 w-4', checking && 'animate-spin')} />
             </IconButton>
-            <IconButton label={cliBusy ? '安装中' : '安装 CLI'} onClick={installAllCliTools} disabled={cliBusy}>
+            <IconButton label={cliBusy ? '安装中' : '检测并安装缺失 CLI'} onClick={installAllCliTools} disabled={cliBusy}>
               <Download className={cn('h-4 w-4', cliBusy && 'animate-pulse')} />
             </IconButton>
             <button

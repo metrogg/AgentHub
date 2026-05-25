@@ -5,6 +5,7 @@ import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
 import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
 import { api, type SkillSummary, type Workspace } from '../lib/api'
+import { useI18n } from '../lib/i18n'
 import { pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { useChatStore } from '../stores/chatStore'
@@ -73,6 +74,7 @@ function Welcome({
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
 }) {
+  const { t } = useI18n()
   const navigate = useNavigate()
   const messageInputRef = useRef<HTMLTextAreaElement>(null)
   const createSession = useChatStore((state) => state.createSession)
@@ -290,15 +292,15 @@ function Welcome({
             type="button"
             onClick={onToggleSidebar}
             className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
-            aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
-            title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+            aria-label={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
+            title={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
           >
             <PanelLeft className={['h-4 w-4 transition-transform duration-300', sidebarCollapsed ? 'rotate-180' : 'rotate-0'].join(' ')} />
           </button>
           <div className="flex items-center gap-3 text-sm">
             <span className="font-semibold text-neutral-950">AgentHub</span>
             <span className="text-neutral-300">/</span>
-            <span className="text-neutral-500">对话由 AI 生成</span>
+            <span className="text-neutral-500">{t('对话由 AI 生成')}</span>
           </div>
         </div>
       </header>
@@ -306,21 +308,21 @@ function Welcome({
       <div className="flex flex-1 flex-col items-center px-8">
         <section className="mt-[18vh] w-full max-w-[704px]">
           <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
-            <TypewriterHeading text="有什么可以帮忙的？" />
+            <TypewriterHeading text={t('有什么可以帮忙的？')} />
           </h2>
           <p className="mt-3 text-base text-neutral-500">
-            创建 Agent、拆解任务，或直接 @ 某个助手开始协作。
+            {t('创建 Agent、拆解任务，或直接 @ 某个助手开始协作。')}
           </p>
 
           <div className="mt-24 grid gap-3 sm:grid-cols-2">
             <PromptCard
-              title="创建 coder 代理"
-              text="帮我单开一个跳跃小游戏"
+              title={t('创建 coder 代理')}
+              text={t('帮我单开一个跳跃小游戏')}
               onClick={() => startThread('创建一个 coder 代理，帮我简单开发一个跳跃小游戏')}
             />
             <PromptCard
-              title="解释架构"
-              text="这个项目的具体技术栈"
+              title={t('解释架构')}
+              text={t('这个项目的具体技术栈')}
               onClick={() => startThread('解释这个项目的具体技术栈，并指出后续可完善的地方')}
             />
           </div>
@@ -350,7 +352,7 @@ function Welcome({
                     onChange={(event) => setWorkspaceQuery(event.target.value)}
                     autoFocus
                     className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-                    placeholder="搜索项目"
+                    placeholder={t('搜索项目')}
                   />
                 </div>
                 <div className="max-h-44 space-y-1 overflow-y-auto py-1">
@@ -372,10 +374,10 @@ function Welcome({
                   ))}
                   {!workspaceBusy && filteredWorkspaces.length === 0 && (
                     <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
-                      没有匹配的项目
+                      {t('没有匹配的项目')}
                     </div>
                   )}
-                  {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理项目...</div>}
+                  {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">{t('正在处理项目...')}</div>}
                 </div>
                 <div className="mt-1 border-t border-neutral-200 pt-1.5">
                   <div className="relative group/new-project">
@@ -385,7 +387,7 @@ function Welcome({
                       className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50"
                     >
                       <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
-                      <span className="min-w-0 flex-1 truncate text-neutral-900">添加新项目</span>
+                      <span className="min-w-0 flex-1 truncate text-neutral-900">{t('添加新项目')}</span>
                       <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
                     </button>
                     <div
@@ -401,7 +403,7 @@ function Welcome({
                         className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-100 disabled:opacity-60"
                       >
                         <Plus className="h-4 w-4 shrink-0 text-neutral-600" />
-                        新建空白项目
+                        {t('新建空白项目')}
                       </button>
                       <button
                         type="button"
@@ -410,7 +412,7 @@ function Welcome({
                         className="flex h-9 w-full items-center gap-2.5 rounded-lg bg-neutral-100 px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-200 disabled:opacity-60"
                       >
                         <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                        使用现有文件夹
+                        {t('使用现有文件夹')}
                       </button>
                     </div>
                   </div>
@@ -420,7 +422,7 @@ function Welcome({
                     className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50"
                   >
                     <FolderX className="h-4 w-4 shrink-0 text-neutral-600" />
-                    不使用项目
+                    {t('不使用项目')}
                   </button>
                 </div>
               </div>
@@ -445,7 +447,7 @@ function Welcome({
                 }
               }}
               className="h-14 w-full resize-none bg-transparent px-2 py-2 text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-              placeholder="发消息给 AgentHub，@ 可提及 Agent"
+              placeholder={t('发消息给 AgentHub，@ 可提及 Agent')}
             />
             <div className="flex items-center justify-between pt-2">
               <div className="flex items-center gap-1">
@@ -456,8 +458,8 @@ function Welcome({
                   type="button"
                   onClick={() => setProjectMenuOpen((open) => !open)}
                   className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
-                  aria-label="打开项目文件夹"
-                  title="打开项目文件夹"
+                  aria-label={t('打开项目文件夹')}
+                  title={t('打开项目文件夹')}
                 >
                   <FolderOpen className="h-4 w-4" />
                 </button>
@@ -474,7 +476,7 @@ function Welcome({
               </div>
               <div className="flex items-center gap-2">
                 <button type="button" className="inline-flex h-8 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-600 hover:bg-neutral-50">
-                  自动
+                  {t('自动')}
                   <ChevronDown className="h-3.5 w-3.5" />
                 </button>
                 <button

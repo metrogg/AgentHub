@@ -394,7 +394,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           senderId: 'agent-builder',
           senderType: 'agent',
           type: 'text',
-          content: '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和群聊成员列表。',
+          content: '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和Agent 联系人列表。',
           metadata: { agentDraftStatus: 'requires_group' },
         })
         .returning()
