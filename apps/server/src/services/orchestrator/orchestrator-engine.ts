@@ -6,6 +6,7 @@ import { Planner } from './planner'
 import { TaskScheduler, type TaskExecutor } from './task-scheduler'
 import { Synthesizer } from './synthesizer'
 import { ConflictResolver } from './conflict-resolver'
+import { FallbackEngine } from './fallback-engine'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
@@ -21,6 +22,7 @@ export class OrchestratorEngine {
   private scheduler = new TaskScheduler()
   private synthesizer = new Synthesizer()
   private conflictResolver = new ConflictResolver()
+  private fallbackEngine = new FallbackEngine()
 
   async createPlan(goal: string, agents: ExecutionPlan['agents']): Promise<ExecutionPlan> {
     return this.planner.createPlan({ goal, agents })
@@ -41,7 +43,48 @@ export class OrchestratorEngine {
       .where(eq(orchestratorRuns.id, runId))
 
     const executor: TaskExecutor = async (task, signal) => {
-      return this.executeTask(task, plan, childSessions, runId, signal)
+      let currentTask = task
+      let currentAttempt = 0
+
+      while (true) {
+        const result = await this.executeTask(currentTask, plan, childSessions, runId, signal, currentAttempt)
+        if (result.status === 'done' || result.status === 'cancelled') {
+          return result
+        }
+
+        currentAttempt++
+        const fallback = this.fallbackEngine.handle(currentTask, new Error(result.error || 'Task failed'), currentAttempt)
+
+        if (fallback.action === 'retry') {
+          logger.info({ taskId: currentTask.id, attempt: currentAttempt, reason: fallback.reason }, 'Task retry scheduled')
+          const childInfo = childSessions.get(currentTask.id)
+          if (childInfo) {
+            await db.update(workspaceTasks).set({ status: 'pending', errorLog: fallback.reason }).where(eq(workspaceTasks.id, currentTask.id))
+            broadcastSessionEvent(childInfo.sessionId, {
+              type: 'task:update',
+              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt },
+            })
+          }
+          continue
+        }
+
+        if (fallback.action === 'fallback-agent' && fallback.updatedTask) {
+          logger.info({ taskId: currentTask.id, newAgentId: fallback.updatedTask.agentId, reason: fallback.reason }, 'Task fallback to new agent')
+          currentTask = fallback.updatedTask
+          currentAttempt = 0
+          const childInfo = childSessions.get(currentTask.id)
+          if (childInfo) {
+            await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: 'pending', attemptCount: 0, errorLog: fallback.reason }).where(eq(workspaceTasks.id, currentTask.id))
+            broadcastSessionEvent(childInfo.sessionId, {
+              type: 'task:update',
+              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId },
+            })
+          }
+          continue
+        }
+
+        return result
+      }
     }
 
     try {
@@ -76,6 +119,7 @@ export class OrchestratorEngine {
     childSessions: Map<string, ChildSessionInfo>,
     runId: string,
     signal: AbortSignal,
+    attemptCount = 0,
   ): Promise<TaskResult> {
     const agent = plan.agents.find((a) => a.id === task.agentId)
     if (!agent) {
@@ -160,7 +204,7 @@ export class OrchestratorEngine {
 
     await db
       .update(workspaceTasks)
-      .set({ status: 'running', startedAt: new Date() })
+      .set({ status: 'running', startedAt: new Date(), attemptCount })
       .where(eq(workspaceTasks.id, task.id))
 
     broadcastSessionEvent(childInfo.sessionId, {
