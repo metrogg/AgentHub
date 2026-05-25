@@ -5,6 +5,7 @@ export type AppearanceSettings = {
   fontSize?: string
   inlineCodeFont?: string
   mainWindowTheme?: string
+  embeddedWindowTheme?: string
   terminalFont?: string
   uiFont?: string
 }
@@ -12,11 +13,15 @@ export type AppearanceSettings = {
 export function applyAppearanceSettings(settings: AppearanceSettings) {
   const root = document.documentElement
   const theme = resolveTheme(settings.mainWindowTheme ?? '跟随系统')
+  const embeddedTheme = resolveTheme(settings.embeddedWindowTheme ?? settings.mainWindowTheme ?? '跟随系统')
   const palette = themePalette(theme)
+  const embeddedPalette = themePalette(embeddedTheme)
   const accent = accentColor(settings.accent ?? '黑色')
   const isDark = theme === 'dark'
+  const embeddedIsDark = embeddedTheme === 'dark'
 
   root.dataset.agenthubTheme = theme
+  root.dataset.agenthubEmbeddedTheme = embeddedTheme
   root.style.setProperty('--agenthub-font-body', fontStack(settings.bodyFont ?? '默认', 'body'))
   root.style.setProperty('--agenthub-font-ui', fontStack(settings.uiFont ?? '默认', 'ui'))
   root.style.setProperty('--agenthub-font-code', fontStack(settings.codeBlockFont ?? '默认', 'mono'))
@@ -40,6 +45,17 @@ export function applyAppearanceSettings(settings: AppearanceSettings) {
   root.style.setProperty('--agenthub-menu-border', palette.border)
   root.style.setProperty('--agenthub-menu-hover', isDark ? '#303030' : '#e9e9e4')
   root.style.setProperty('--agenthub-menu-muted', isDark ? '#a3a3a3' : '#737373')
+  root.style.setProperty('--agenthub-embedded-bg', embeddedPalette.bg)
+  root.style.setProperty('--agenthub-embedded-sidebar', embeddedPalette.chrome)
+  root.style.setProperty('--agenthub-embedded-panel', embeddedPalette.panel)
+  root.style.setProperty('--agenthub-embedded-panel-muted', embeddedIsDark ? '#1d1d1d' : '#f4f4ef')
+  root.style.setProperty('--agenthub-embedded-control', embeddedIsDark ? '#202020' : '#ffffff')
+  root.style.setProperty('--agenthub-embedded-border', embeddedPalette.border)
+  root.style.setProperty('--agenthub-embedded-text', embeddedPalette.text)
+  root.style.setProperty('--agenthub-embedded-muted', embeddedPalette.muted)
+  root.style.setProperty('--agenthub-embedded-muted-text', embeddedIsDark ? '#a3a3a3' : '#666660')
+  root.style.setProperty('--agenthub-embedded-hover', embeddedIsDark ? '#303030' : '#ecece7')
+  root.style.setProperty('--agenthub-embedded-accent-soft', hexToRgba(accent, embeddedIsDark ? 0.2 : 0.12))
 }
 
 export function resolveTheme(value: string): 'light' | 'dark' {

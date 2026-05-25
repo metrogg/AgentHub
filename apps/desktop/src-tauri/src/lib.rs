@@ -171,7 +171,7 @@ fn open_desktop_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(
     );
 
     let new_window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
-        .title("文件    编辑    窗口")
+        .title("AgentHub")
         .inner_size(1280.0, 820.0)
         .min_inner_size(980.0, 680.0)
         .decorations(true)
@@ -218,7 +218,7 @@ pub fn run() {
                 "main",
                 WebviewUrl::App("desktop-startup.html".into()),
             )
-            .title("文件    编辑    窗口")
+            .title("AgentHub")
             .inner_size(1280.0, 820.0)
             .min_inner_size(980.0, 680.0)
             .decorations(true)

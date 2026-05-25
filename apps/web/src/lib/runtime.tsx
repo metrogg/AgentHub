@@ -104,7 +104,7 @@ function readChatAttachments(value: unknown): ChatAttachment[] {
 function readAgentAvatarPart(metadata: Message['metadata'], codeAgentRun: CodeAgentRunMetadata | null) {
   const runtime = codeAgentRun?.runtime ?? metadata?.codeAgentType
   if (metadata?.runtimeType !== 'code-agent' && !codeAgentRun) return []
-  if (runtime !== 'codex' && runtime !== 'claude-code' && runtime !== 'opencode') return []
+  if (runtime !== 'codex' && runtime !== 'claude-code' && runtime !== 'opencode' && runtime !== 'gemini') return []
   return [{ type: 'data' as const, name: 'agent_avatar', data: { runtime } }]
 }
 

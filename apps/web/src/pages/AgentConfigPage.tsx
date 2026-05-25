@@ -23,6 +23,7 @@ import {
   type SavedAgentConfig,
 } from '../lib/agentLibrary'
 import { api, type AgentConfigInput, type ModelCatalogItem, type WorkspaceAgent } from '../lib/api'
+import { useI18n } from '../lib/i18n'
 import { cn } from '../lib/utils'
 
 const emptyDraft: AgentConfigInput = {
@@ -44,6 +45,7 @@ const emptyDraft: AgentConfigInput = {
 }
 
 export default function AgentConfigPage() {
+  const { t } = useI18n()
   const [agents, setAgents] = useState<SavedAgentConfig[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<AgentConfigInput>(emptyDraft)
@@ -179,14 +181,14 @@ export default function AgentConfigPage() {
               type="button"
               onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
               className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100"
-              aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
-              title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+              aria-label={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
+              title={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
             >
               <PanelLeft className={cn('h-4 w-4 transition-transform duration-300', sidebarCollapsed && 'rotate-180')} />
             </button>
             <span className="text-sm font-semibold">AgentHub</span>
             <span className="text-sm text-neutral-300">/</span>
-            <span className="truncate text-sm text-neutral-500">Agent 配置</span>
+            <span className="truncate text-sm text-neutral-500">{t('Agent 配置')}</span>
           </div>
           <button
             type="button"
@@ -194,7 +196,7 @@ export default function AgentConfigPage() {
             className="inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800"
           >
             <Plus className="h-4 w-4" />
-            新建 Agent
+            {t('新建 Agent')}
           </button>
         </header>
 
@@ -205,14 +207,14 @@ export default function AgentConfigPage() {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索 Agent、角色、标签"
+                placeholder={t('搜索 Agent、角色、标签')}
                 className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-300"
               />
             </div>
 
             <div className="mt-4 flex items-center justify-between text-xs text-neutral-400">
-              <span>Agent 库</span>
-              <span>{agents.length} 个配置</span>
+              <span>{t('Agent 库')}</span>
+              <span>{agents.length} {t('个配置')}</span>
             </div>
 
             <div className="mt-2 max-h-[calc(100vh-9rem)] space-y-2 overflow-y-auto pr-1">
@@ -231,8 +233,8 @@ export default function AgentConfigPage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold">{agent.name}</span>
-                    <span className={cn('mt-1 block truncate text-xs', selectedId === agent.id ? 'text-neutral-300' : 'text-neutral-500')}>{agent.role}</span>
-                    <span className={cn('mt-2 line-clamp-2 text-xs leading-5', selectedId === agent.id ? 'text-neutral-300' : 'text-neutral-400')}>
+                    <span className={cn('mt-1 block truncate text-xs', selectedId === agent.id ? 'text-white' : 'text-neutral-500')}>{agent.role}</span>
+                    <span className={cn('mt-2 line-clamp-2 text-xs leading-5', selectedId === agent.id ? 'text-white' : 'text-neutral-400')}>
                       {agent.description || runtimeLabel(agent.runtimeType ?? 'llm')}
                     </span>
                   </span>
@@ -240,7 +242,7 @@ export default function AgentConfigPage() {
               ))}
               {!filteredAgents.length && (
                 <div className="rounded-2xl border border-dashed border-neutral-200 p-6 text-center text-sm text-neutral-400">
-                  没有匹配的 Agent
+                  {t('没有匹配的 Agent')}
                 </div>
               )}
             </div>
@@ -252,21 +254,21 @@ export default function AgentConfigPage() {
                 <div>
                   <div className="inline-flex h-7 items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 text-xs text-neutral-500">
                     <Settings2 className="h-3.5 w-3.5" />
-                    全局 Agent 配置库
+                    {t('全局 Agent 配置库')}
                   </div>
-                  <h1 className="mt-4 text-3xl font-semibold tracking-normal">管理所有 Agent</h1>
+                  <h1 className="mt-4 text-3xl font-semibold tracking-normal">{t('管理所有 Agent')}</h1>
                   <p className="mt-2 max-w-2xl text-sm leading-7 text-neutral-500">
-                    这里保存的是可复用 Agent 模板。保存后可以在 Agent Group 里直接套用，也可以通过下方对话指令快速调整当前 Agent。
+                    {t('这里保存的是可复用 Agent 模板。保存后可以在 Agent Group 里直接套用，也可以通过下方对话指令快速调整当前 Agent。')}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={duplicateAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm hover:bg-neutral-50 disabled:text-neutral-300">
                     <Copy className="h-4 w-4" />
-                    复制
+                    {t('复制')}
                   </button>
                   <button type="button" onClick={deleteAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50 disabled:text-neutral-300">
                     <Trash2 className="h-4 w-4" />
-                    删除
+                    {t('删除')}
                   </button>
                 </div>
               </div>
@@ -279,16 +281,16 @@ export default function AgentConfigPage() {
                         <Bot className="h-7 w-7" />
                       </div>
                       <div className="grid min-w-0 flex-1 gap-3 md:grid-cols-2">
-                        <Field label="名称" value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
-                        <Field label="角色" value={draft.role} onChange={(role) => setDraft({ ...draft, role })} />
+                        <Field label={t('名称')} value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
+                        <Field label={t('角色')} value={draft.role} onChange={(role) => setDraft({ ...draft, role })} />
                       </div>
                     </div>
 
-                    <TextField label="简介" rows={3} value={draft.description ?? ''} onChange={(description) => setDraft({ ...draft, description })} />
-                    <TextField label="系统提示词" rows={6} value={draft.systemPrompt ?? ''} onChange={(systemPrompt) => setDraft({ ...draft, systemPrompt })} />
+                    <TextField label={t('简介')} rows={3} value={draft.description ?? ''} onChange={(description) => setDraft({ ...draft, description })} />
+                    <TextField label={t('系统提示词')} rows={6} value={draft.systemPrompt ?? ''} onChange={(systemPrompt) => setDraft({ ...draft, systemPrompt })} />
 
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      <SelectField label="运行时" value={runtimeType} onChange={(value) => {
+                      <SelectField label={t('运行时')} value={runtimeType} onChange={(value) => {
                         const nextRuntime = value as WorkspaceAgent['runtimeType']
                         setDraft({
                           ...draft,
@@ -296,78 +298,79 @@ export default function AgentConfigPage() {
                           codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
                         })
                       }}>
-                        <option value="llm">普通 LLM Agent</option>
+                        <option value="llm">{t('普通 LLM Agent')}</option>
                         <option value="code-agent">Coding Tools</option>
                         <option value="mcp">Native Read-only Agent</option>
                         <option value="a2a">A2A Agent</option>
                       </SelectField>
                       <SelectField label="Coding Tools" value={runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : ''} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
-                        <option value="">不绑定 CLI</option>
+                        <option value="">{t('不绑定 CLI')}</option>
                         <option value="codex">Codex CLI</option>
                         <option value="claude-code">Claude Code</option>
                         <option value="opencode">OpenCode</option>
+                        <option value="gemini">Gemini CLI</option>
                       </SelectField>
-                      <SelectField label="默认模型" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
-                        <option value="">自动模型</option>
+                      <SelectField label={t('默认模型')} value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
+                        <option value="">{t('自动模型')}</option>
                         {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId}</option>)}
                       </SelectField>
-                      <SelectField label="沙箱策略" value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
-                        <option value="read-only">只读</option>
-                        <option value="workspace-write">工作区写入</option>
-                        <option value="danger-full-access">完全访问</option>
+                      <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
+                        <option value="read-only">{t('只读')}</option>
+                        <option value="workspace-write">{t('工作区写入')}</option>
+                        <option value="danger-full-access">{t('完全访问')}</option>
                       </SelectField>
-                      <SelectField label="上下文策略" value={draft.contextPolicy ?? 'workspace-aware'} onChange={(value) => setDraft({ ...draft, contextPolicy: value as WorkspaceAgent['contextPolicy'] })}>
-                        <option value="recent-only">仅最近上下文</option>
-                        <option value="pinned-recent">固定与最近上下文</option>
-                        <option value="workspace-aware">工作区上下文</option>
+                      <SelectField label={t('上下文策略')} value={draft.contextPolicy ?? 'workspace-aware'} onChange={(value) => setDraft({ ...draft, contextPolicy: value as WorkspaceAgent['contextPolicy'] })}>
+                        <option value="recent-only">{t('仅最近上下文')}</option>
+                        <option value="pinned-recent">{t('固定与最近上下文')}</option>
+                        <option value="workspace-aware">{t('工作区上下文')}</option>
                       </SelectField>
-                      <Field label="颜色" value={draft.color ?? '#111827'} onChange={(color) => setDraft({ ...draft, color })} />
-                      <Field label="能力标签" value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, capabilityTags: splitList(value) })} />
-                      <Field label="工具权限" value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, toolPermissions: splitList(value) })} />
+                      <Field label={t('颜色')} value={draft.color ?? '#111827'} onChange={(color) => setDraft({ ...draft, color })} />
+                      <Field label={t('能力标签')} value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, capabilityTags: splitList(value) })} />
+                      <Field label={t('工具权限')} value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, toolPermissions: splitList(value) })} />
                     </div>
 
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       <label className="flex h-11 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
                         <input type="checkbox" checked={draft.autoInvoke ?? true} onChange={(event) => setDraft({ ...draft, autoInvoke: event.target.checked })} />
-                        允许 Orchestrator 自动调用
+                        {t('允许 Orchestrator 自动调用')}
                       </label>
                       <label className="flex h-11 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
                         <input type="checkbox" checked={draft.approvalRequired ?? true} onChange={(event) => setDraft({ ...draft, approvalRequired: event.target.checked })} />
-                        高风险操作需要确认
+                        {t('高风险操作需要确认')}
                       </label>
                     </div>
 
                     <div className="mt-5 flex justify-end">
                       <button type="submit" className="inline-flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-5 text-sm font-medium text-white hover:bg-neutral-800">
                         <Save className="h-4 w-4" />
-                        保存 Agent
+                        {t('保存 Agent')}
                       </button>
                     </div>
                   </form>
 
                   <aside className="space-y-4">
-                    <InfoPanel title="当前配置">
-                      <InfoRow label="运行时" value={runtimeLabel(runtimeType)} />
-                      <InfoRow label="模型" value={modelName(draft.modelId ?? null, models)} />
-                      <InfoRow label="权限" value={sandboxLabel(draft.sandboxPolicy ?? 'workspace-write')} />
-                      <InfoRow label="标签" value={(draft.capabilityTags ?? []).join(', ') || '未设置'} />
+                    <InfoPanel title={t('当前配置')}>
+                      <InfoRow label={t('运行时')} value={runtimeLabel(runtimeType)} />
+                      <InfoRow label={t('模型')} value={t(modelName(draft.modelId ?? null, models))} />
+                      <InfoRow label={t('权限')} value={t(sandboxLabel(draft.sandboxPolicy ?? 'workspace-write'))} />
+                      <InfoRow label={t('标签')} value={(draft.capabilityTags ?? []).join(', ') || t('未设置')} />
                     </InfoPanel>
 
-                    <InfoPanel title="对话式修改">
+                    <InfoPanel title={t('对话式修改')}>
                       <div className="rounded-2xl bg-neutral-50 p-3 text-sm leading-6 text-neutral-600">
                         <MessageSquareText className="mb-2 h-4 w-4 text-neutral-400" />
-                        {assistantReply}
+                        {t(assistantReply)}
                       </div>
                       <form onSubmit={applyAssistantPatch} className="mt-3 space-y-2">
                         <textarea
                           value={assistantText}
                           onChange={(event) => setAssistantText(event.target.value)}
-                          placeholder="例如：改成 Claude Code 审查员，沙箱只读，标签加 review、安全"
+                          placeholder={t('例如：改成 Claude Code 审查员，沙箱只读，标签加 review、安全')}
                           className="h-28 w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm leading-6 outline-none placeholder:text-neutral-300 focus:border-neutral-400"
                         />
                         <button type="submit" className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium shadow-sm hover:bg-neutral-50">
                           <Wand2 className="h-4 w-4" />
-                          应用并保存
+                          {t('应用并保存')}
                         </button>
                       </form>
                     </InfoPanel>
@@ -377,10 +380,10 @@ export default function AgentConfigPage() {
                 <div className="grid min-h-[420px] place-items-center rounded-2xl border border-dashed border-neutral-200 bg-white">
                   <div className="text-center">
                     <Bot className="mx-auto h-10 w-10 text-neutral-300" />
-                    <div className="mt-4 text-base font-semibold">还没有 Agent</div>
+                    <div className="mt-4 text-base font-semibold">{t('还没有 Agent')}</div>
                     <button type="button" onClick={createAgent} className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white">
                       <Plus className="h-4 w-4" />
-                      新建 Agent
+                      {t('新建 Agent')}
                     </button>
                   </div>
                 </div>
@@ -393,7 +396,7 @@ export default function AgentConfigPage() {
       {saved && (
         <div className="fixed bottom-5 left-1/2 z-50 inline-flex -translate-x-1/2 items-center gap-2 rounded-full bg-neutral-950 px-4 py-2 text-sm text-white shadow-xl">
           <Check className="h-4 w-4" />
-          已保存
+          {t('已保存')}
         </div>
       )}
     </div>
@@ -461,6 +464,10 @@ function patchFromInstruction(text: string, current: AgentConfigInput) {
     patch.runtimeType = 'code-agent'
     patch.codeAgentType = 'opencode'
     notes.push('运行时切换为 OpenCode')
+  } else if (lower.includes('gemini')) {
+    patch.runtimeType = 'code-agent'
+    patch.codeAgentType = 'gemini'
+    notes.push('运行时切换为 Gemini CLI')
   } else if (lower.includes('普通') || lower.includes('llm')) {
     patch.runtimeType = 'llm'
     patch.codeAgentType = null

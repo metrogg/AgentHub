@@ -3,6 +3,8 @@ import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Download,
   ExternalLink,
@@ -18,6 +20,7 @@ import {
 } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import { api, type CodexAuthStatus, type CodingToolStatus, type ModelCatalogItem, type OpencodeModelItem } from '../lib/api'
+import { useI18n } from '../lib/i18n'
 import { cn } from '../lib/utils'
 
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -44,6 +47,7 @@ const toolIcons: Record<string, string> = {
   codex: '/codex-color.svg',
   'claude-code': '/claude-color.svg',
   opencode: '/opencode.svg',
+  gemini: '/gemini-color.svg',
 }
 
 const defaults: ToolConfig[] = [
@@ -86,6 +90,19 @@ const defaults: ToolConfig[] = [
     baseUrl: 'https://api.deepseek.com',
     sandbox: 'workspace-write',
   },
+  {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    command: 'gemini',
+    description: 'Google Gemini 终端编程代理，适合使用 Gemini 模型进行仓库协作。',
+    installCommand: 'npm install -g @google/gemini-cli',
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    protocol: 'openai-compatible',
+    modelId: 'gemini-2.5-pro',
+    apiKeyEnv: 'GEMINI_API_KEY',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    sandbox: 'workspace-write',
+  },
 ]
 
 const protocolCopy: Record<Protocol, { label: string; note: string; endpoint: string }> = {
@@ -113,6 +130,7 @@ const sandboxCopy: Record<SandboxMode, string> = {
 }
 
 export default function CodingToolsPage() {
+  const { t } = useI18n()
   const [tools, setTools] = useState<ToolConfig[]>(defaults)
   const [statuses, setStatuses] = useState<Record<string, CodingToolStatus>>({})
   const [models, setModels] = useState<ModelCatalogItem[]>([])
@@ -147,6 +165,7 @@ export default function CodingToolsPage() {
   const [codexAuthFileDirty, setCodexAuthFileDirty] = useState(false)
   const [codexAuthFileMessage, setCodexAuthFileMessage] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [toolPage, setToolPage] = useState(0)
 
   useEffect(() => {
     api.getSettings().then((settings) => {
@@ -168,7 +187,11 @@ export default function CodingToolsPage() {
           setTools(defaults)
         }
       }
-      if (settings.CODE_AGENT_ACTIVE_TOOL) setActiveToolId(settings.CODE_AGENT_ACTIVE_TOOL)
+      if (settings.CODE_AGENT_ACTIVE_TOOL) {
+        setActiveToolId(settings.CODE_AGENT_ACTIVE_TOOL)
+        const activeIndex = nextTools.findIndex((tool) => tool.id === settings.CODE_AGENT_ACTIVE_TOOL)
+        if (activeIndex >= 0) setToolPage(Math.floor(activeIndex / 3))
+      }
       if (settings.CODEX_CHATGPT_TRANSPORT === 'websocket') setCodexTransport('websocket')
       void refreshStatus(nextTools)
       void refreshCodexAuth()
@@ -192,6 +215,15 @@ export default function CodingToolsPage() {
     () => tools.filter((tool) => statuses[tool.id]?.configured || hasSavedConfigForTool(models, tool)).length,
     [models, statuses, tools]
   )
+  const toolPageSize = 3
+  const toolPageCount = Math.max(1, Math.ceil(tools.length / toolPageSize))
+  const visibleTools = tools.slice(toolPage * toolPageSize, toolPage * toolPageSize + toolPageSize)
+  const canPageTools = tools.length > toolPageSize
+
+  useEffect(() => {
+    if (toolPage >= toolPageCount) setToolPage(toolPageCount - 1)
+  }, [toolPage, toolPageCount])
+
 
   async function refreshStatus(probeTools = tools) {
     setChecking(true)
@@ -258,7 +290,7 @@ export default function CodingToolsPage() {
 
   async function installAllCliTools() {
     setCliBusy(true)
-    setCliMessage('正在本机安装 Codex、Claude Code、OpenCode...')
+    setCliMessage('正在检测本机 CLI，只安装缺失的 Codex、Claude Code、OpenCode、Gemini...')
     setCliOutput('')
     try {
       const result = await api.installAllCliTools()
@@ -548,7 +580,7 @@ export default function CodingToolsPage() {
             <IconButton label="检测" onClick={() => refreshStatus()} disabled={checking}>
               <RefreshCw className={cn('h-4 w-4', checking && 'animate-spin')} />
             </IconButton>
-            <IconButton label={cliBusy ? '安装中' : '安装 CLI'} onClick={installAllCliTools} disabled={cliBusy}>
+            <IconButton label={cliBusy ? '安装中' : '检测并安装缺失 CLI'} onClick={installAllCliTools} disabled={cliBusy}>
               <Download className={cn('h-4 w-4', cliBusy && 'animate-pulse')} />
             </IconButton>
             <button
@@ -557,7 +589,7 @@ export default function CodingToolsPage() {
               className="inline-flex h-9 items-center gap-2 rounded-md bg-neutral-950 px-3 text-sm font-medium text-white transition hover:bg-neutral-800"
             >
               <Save className="h-4 w-4" />
-              保存
+              {t('保存')}
             </button>
           </div>
         </header>
@@ -567,11 +599,11 @@ export default function CodingToolsPage() {
             <div>
               <div className="inline-flex h-7 items-center gap-2 rounded-md border border-neutral-300 bg-white px-2.5 text-xs text-neutral-600">
                 <Terminal className="h-3.5 w-3.5 text-teal-700" />
-                本机 Coding Tools 工具台
+                {t('本机 Coding Tools 工具台')}
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">Coding Tools</h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-600">
-                直接检测和配置 Windows 本机 CLI，不再使用容器路径或远端工作区映射。
+                {t('直接检测和配置 Windows 本机 CLI，不再使用容器路径或远端工作区映射。')}
               </p>
             </div>
             <div className="grid w-full grid-cols-3 gap-2 sm:w-auto">
@@ -581,8 +613,9 @@ export default function CodingToolsPage() {
             </div>
           </section>
 
-          <section className="mt-5 grid gap-3 lg:grid-cols-3">
-            {tools.map((tool) => {
+          <section className="relative mt-5">
+            <div className="grid gap-3 lg:grid-cols-3">
+            {visibleTools.map((tool) => {
               const status = statuses[tool.id]
               const savedConfig = hasSavedConfigForTool(models, tool)
               const configured = Boolean(status?.configured || savedConfig)
@@ -608,13 +641,47 @@ export default function CodingToolsPage() {
                     </div>
                     <StatusBadge configured={configured} installed={Boolean(status?.installed)} savedOnly={savedConfig && !status?.configured} />
                   </div>
-                  <p className="mt-3 line-clamp-2 text-xs leading-5 text-neutral-600">{tool.description}</p>
+                  <p className="mt-3 line-clamp-2 text-xs leading-5 text-neutral-600">{t(tool.description)}</p>
                   <div className={cn('mt-3 truncate text-xs', configured ? 'text-emerald-700' : status?.installed ? 'text-amber-700' : 'text-neutral-400')}>
-                    {status?.configMessage || (savedConfig ? '配置已保存。' : '等待检测本机 CLI。')}
+                    {status?.configMessage ? t(status.configMessage) : savedConfig ? t('配置已保存。') : t('等待检测本机 CLI。')}
                   </div>
                 </button>
               )
             })}
+            </div>
+            {canPageTools && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setToolPage((page) => (page - 1 + toolPageCount) % toolPageCount)}
+                  className="absolute -left-3 top-1/2 hidden h-9 w-9 -translate-y-1/2 place-items-center rounded-full border border-neutral-200 bg-white text-neutral-600 shadow-lg transition hover:-translate-x-0.5 hover:border-neutral-300 hover:text-neutral-950 lg:grid"
+                  aria-label={t('上一组工具')}
+                  title={t('上一组工具')}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setToolPage((page) => (page + 1) % toolPageCount)}
+                  className="absolute -right-3 top-1/2 hidden h-9 w-9 -translate-y-1/2 place-items-center rounded-full border border-neutral-200 bg-white text-neutral-600 shadow-lg transition hover:translate-x-0.5 hover:border-neutral-300 hover:text-neutral-950 lg:grid"
+                  aria-label={t('下一组工具')}
+                  title={t('下一组工具')}
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+                <div className="mt-3 flex justify-center gap-1.5">
+                  {Array.from({ length: toolPageCount }).map((_, index) => (
+                    <button
+                      key={index}
+                      type="button"
+                      onClick={() => setToolPage(index)}
+                      className={cn('h-1.5 rounded-full transition-all', toolPage === index ? 'w-6 bg-neutral-950' : 'w-1.5 bg-neutral-300 hover:bg-neutral-400')}
+                      aria-label={`${t('切换到工具组')} ${index + 1}`}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </section>
 
           <section className="mt-5 grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -624,8 +691,8 @@ export default function CodingToolsPage() {
                   <h2 className="text-lg font-semibold">{activeTool.name}</h2>
                   <p className="mt-1 text-sm text-neutral-500">
                     {activeTool.id === 'codex'
-                      ? 'Codex 使用本机 auth.json 与 config.toml；AgentHub 不再维护额外的 Codex 模型配置。'
-                      : '配置会写入 AgentHub 设置，并作为 Coding Tools 的默认运行参数。'}
+                      ? t('Codex 使用本机 auth.json 与 config.toml；AgentHub 不再维护额外的 Codex 模型配置。')
+                      : t('配置会写入 AgentHub 设置，并作为 Coding Tools 的默认运行参数。')}
                   </p>
                 </div>
                 <a
@@ -634,7 +701,7 @@ export default function CodingToolsPage() {
                   rel="noreferrer"
                   className="inline-flex h-9 items-center gap-2 rounded-md border border-neutral-200 px-3 text-sm text-neutral-600 hover:bg-neutral-50"
                 >
-                  文档
+                  {t('文档')}
                   <ExternalLink className="h-4 w-4" />
                 </a>
               </div>
@@ -699,7 +766,7 @@ export default function CodingToolsPage() {
                     <Field label="命令" value={activeTool.command} onChange={(value) => patchTool(activeTool.id, { command: value })} />
                     {activeTool.id !== 'opencode' && (
                       <>
-                        <Field label="Base URL" value={activeTool.baseUrl} onChange={(value) => patchTool(activeTool.id, { baseUrl: value })} />
+                        {activeTool.id !== 'gemini' && <Field label="Base URL" value={activeTool.baseUrl} onChange={(value) => patchTool(activeTool.id, { baseUrl: value })} />}
                         <Field label="API Key 环境变量" value={activeTool.apiKeyEnv} onChange={(value) => patchTool(activeTool.id, { apiKeyEnv: value })} />
                         <Field label="API Key" type="password" value={activeApiKey} onChange={(value) => setApiKeyDrafts((current) => ({ ...current, [activeTool.modelId]: value }))} />
                       </>
@@ -715,7 +782,7 @@ export default function CodingToolsPage() {
                             className="inline-flex h-7 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2 text-xs text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
                           >
                             <RefreshCw className={cn('h-3.5 w-3.5', opencodeModelBusy && 'animate-spin')} />
-                            读取本机 OpenCode
+                            {t('读取本机 OpenCode')}
                           </button>
                         )}
                       </span>
@@ -744,34 +811,36 @@ export default function CodingToolsPage() {
                       </div>
                       {activeTool.id === 'opencode' && (
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                          {opencodeDefaultModel && <span>默认：{opencodeDefaultModel}</span>}
-                          {opencodeModels.length > 0 && <span>已读取 {opencodeModels.length} 个本机模型</span>}
+                          {opencodeDefaultModel && <span>{t('默认')}：{opencodeDefaultModel}</span>}
+                          {opencodeModels.length > 0 && <span>{t('已读取 {count} 个本机模型').replace('{count}', String(opencodeModels.length))}</span>}
                           {opencodeModelMessage && <span className="text-neutral-400">{opencodeModelMessage}</span>}
                         </div>
                       )}
                     </label>
                   </div>
 
-                  <div className="mt-5">
-                    <div className="mb-2 text-sm font-medium text-neutral-700">API 协议</div>
-                    <div className="grid gap-2 md:grid-cols-3">
-                      {(Object.keys(protocolCopy) as Protocol[]).map((protocol) => (
-                        <ChoiceButton
-                          key={protocol}
-                          active={activeTool.protocol === protocol}
-                          title={protocolCopy[protocol].label}
-                          meta={protocolCopy[protocol].endpoint}
-                          text={protocolCopy[protocol].note}
-                          onClick={() => patchTool(activeTool.id, { protocol })}
-                        />
-                      ))}
+                  {activeTool.id !== 'gemini' && (
+                    <div className="mt-5">
+                      <div className="mb-2 text-sm font-medium text-neutral-700">{t('API 协议')}</div>
+                      <div className="grid gap-2 md:grid-cols-3">
+                        {(Object.keys(protocolCopy) as Protocol[]).map((protocol) => (
+                          <ChoiceButton
+                            key={protocol}
+                            active={activeTool.protocol === protocol}
+                            title={protocolCopy[protocol].label}
+                            meta={protocolCopy[protocol].endpoint}
+                            text={protocolCopy[protocol].note}
+                            onClick={() => patchTool(activeTool.id, { protocol })}
+                          />
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div className="mt-5">
                     <div className="mb-2 flex items-center gap-2 text-sm font-medium text-neutral-700">
                       <Shield className="h-4 w-4 text-teal-700" />
-                      沙箱策略
+                      {t('沙箱策略')}
                     </div>
                     <div className="grid gap-2 md:grid-cols-3">
                       {(Object.keys(sandboxCopy) as SandboxMode[]).map((sandbox) => (
@@ -793,7 +862,7 @@ export default function CodingToolsPage() {
                       className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-medium text-white hover:bg-teal-800"
                     >
                       <Save className="h-4 w-4" />
-                      同步到模型配置
+                      {t('同步到模型配置')}
                     </button>
                     <button
                       type="button"
@@ -802,7 +871,7 @@ export default function CodingToolsPage() {
                       className="inline-flex h-10 items-center gap-2 rounded-md border border-neutral-200 bg-white px-4 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
                     >
                       <PlayCircle className={cn('h-4 w-4', toolTestBusy && 'animate-pulse')} />
-                      测试连接
+                      {t('测试连接')}
                     </button>
                     {toolTestMessage && (
                       <span className={cn('text-sm', toolTestOk ? 'text-emerald-700' : toolTestOk === false ? 'text-red-600' : 'text-neutral-500')}>
@@ -816,11 +885,11 @@ export default function CodingToolsPage() {
 
             <aside className="space-y-4">
               <div className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
-                <div className="text-sm font-semibold">本机运行预览</div>
+                <div className="text-sm font-semibold">{t('本机运行预览')}</div>
                 <p className="mt-2 text-xs leading-5 text-neutral-500">
-                  Agent 会在工作区真实路径下启动，不再转换为容器内路径。
+                  {t('Agent 会在工作区真实路径下启动，不再转换为容器内路径。')}
                 </p>
-                <div className="mt-4 text-xs font-medium text-neutral-600">环境变量</div>
+                <div className="mt-4 text-xs font-medium text-neutral-600">{t('环境变量')}</div>
                 <CodeBlock value={envSnippet} />
                 <button
                   type="button"
@@ -828,9 +897,9 @@ export default function CodingToolsPage() {
                   className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-neutral-200 text-sm hover:bg-neutral-50"
                 >
                   <Copy className="h-4 w-4" />
-                  复制环境变量
+                  {t('复制环境变量')}
                 </button>
-                <div className="mt-4 text-xs font-medium text-neutral-600">命令预览</div>
+                <div className="mt-4 text-xs font-medium text-neutral-600">{t('命令预览')}</div>
                 <CodeBlock value={runCommand} />
                 <button
                   type="button"
@@ -838,13 +907,13 @@ export default function CodingToolsPage() {
                   className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-neutral-200 text-sm hover:bg-neutral-50"
                 >
                   <Copy className="h-4 w-4" />
-                  复制命令
+                  {t('复制命令')}
                 </button>
               </div>
 
               {(cliMessage || cliOutput) && (
                 <div className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
-                  <div className="text-sm font-semibold">安装输出</div>
+                  <div className="text-sm font-semibold">{t('安装输出')}</div>
                   {cliMessage && <p className="mt-2 text-sm text-neutral-600">{cliMessage}</p>}
                   {cliOutput && <CodeBlock value={cliOutput} />}
                 </div>
@@ -856,7 +925,7 @@ export default function CodingToolsPage() {
 
       {(saved || copied) && (
         <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-md bg-neutral-950 px-4 py-2 text-sm text-white shadow-xl">
-          {copied ? `已复制 ${copied}` : '已保存配置'}
+          {copied ? t('已复制项目').replace('{item}', t(copied)) : t('已保存配置')}
         </div>
       )}
     </div>
@@ -914,6 +983,7 @@ function CodexConfigPanel({
   onReload: () => void
   onSave: () => void | Promise<void>
 }) {
+  const { t } = useI18n()
   return (
     <div className="mt-5 rounded-lg border border-neutral-200 bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -925,7 +995,7 @@ function CodexConfigPanel({
           <div className="mt-1 truncate font-mono text-xs text-neutral-400">{path || `~/.codex/${title}`}</div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {dirty && <span className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700">未保存</span>}
+          {dirty && <span className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700">{t('未保存')}</span>}
           <button
             type="button"
             onClick={onReload}
@@ -933,7 +1003,7 @@ function CodexConfigPanel({
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
-            重新读取
+            {t('重新读取')}
           </button>
           <button
             type="button"
@@ -942,7 +1012,7 @@ function CodexConfigPanel({
             className="inline-flex h-8 items-center gap-1.5 rounded-md bg-teal-700 px-2.5 text-xs font-medium text-white hover:bg-teal-800 disabled:bg-neutral-300"
           >
             <Save className="h-3.5 w-3.5" />
-            保存
+            {t('保存')}
           </button>
         </div>
       </div>
@@ -955,7 +1025,7 @@ function CodexConfigPanel({
         placeholder={placeholder}
       />
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-500">
-        <span>{message || 'Codex CLI 会直接读取这个文件。'}</span>
+        <span>{message || t('Codex CLI 会直接读取这个文件。')}</span>
         <span>{content.length.toLocaleString()} chars</span>
       </div>
     </div>
@@ -987,6 +1057,7 @@ function CodexAuthPanel({
   onOpenAuthPage: () => void
   onTransport: (transport: CodexTransport) => void
 }) {
+  const { t } = useI18n()
   const accountLoggedIn = status?.authMode === 'chatgpt'
   const apiKeyMode = status?.authMode === 'api-key'
   const deviceAuthEnabled = Boolean(status?.deviceAuthEnabled)
@@ -999,10 +1070,10 @@ function CodexAuthPanel({
         <div>
           <div className="flex items-center gap-2 text-sm font-semibold text-neutral-800">
             <KeyRound className="h-4 w-4 text-teal-700" />
-            OpenAI 运行认证
+            {t('OpenAI 运行认证')}
           </div>
           <p className="mt-1 text-xs leading-5 text-neutral-500">
-            推荐用 OPENAI_API_KEY；开启设备授权时也可以同步 ChatGPT 登录状态。
+            {t('推荐用 OPENAI_API_KEY；开启设备授权时也可以同步 ChatGPT 登录状态。')}
           </p>
           {status?.accountId && <p className="mt-1 font-mono text-xs text-neutral-400">{status.accountId}</p>}
         </div>
@@ -1012,7 +1083,7 @@ function CodexAuthPanel({
             accountLoggedIn ? 'bg-emerald-50 text-emerald-700' : apiKeyMode ? 'bg-sky-50 text-sky-700' : 'bg-neutral-100 text-neutral-600'
           )}
         >
-          {badgeLabel}
+          {t(badgeLabel)}
         </span>
       </div>
 
@@ -1026,7 +1097,7 @@ function CodexAuthPanel({
               className="inline-flex h-9 items-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-medium text-white hover:bg-teal-800 disabled:bg-neutral-300"
             >
               <KeyRound className={cn('h-4 w-4', busy && 'animate-pulse')} />
-              {busy ? '授权中' : '登录 ChatGPT'}
+              {busy ? t('授权中') : t('登录 ChatGPT')}
             </button>
           )}
           <button
@@ -1036,7 +1107,7 @@ function CodexAuthPanel({
             className="inline-flex h-9 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
           >
             <RefreshCw className="h-4 w-4" />
-            刷新
+            {t('刷新')}
           </button>
           {deviceAuthEnabled && accountLoggedIn && (
             <button
@@ -1046,7 +1117,7 @@ function CodexAuthPanel({
               className="inline-flex h-9 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
             >
               <RefreshCw className="h-4 w-4" />
-              重试验证
+              {t('重试验证')}
             </button>
           )}
           {deviceAuthEnabled && accountLoggedIn && (
@@ -1057,7 +1128,7 @@ function CodexAuthPanel({
               className="inline-flex h-9 items-center gap-2 rounded-md border border-red-100 bg-red-50 px-3 text-sm text-red-600 hover:bg-red-100 disabled:opacity-50"
             >
               <LogOut className="h-4 w-4" />
-              登出
+              {t('登出')}
             </button>
           )}
         </div>
@@ -1082,7 +1153,7 @@ function CodexAuthPanel({
         <div className="mt-3 rounded-md border border-teal-100 bg-teal-50 px-3 py-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-xs text-teal-700">授权验证码</div>
+              <div className="text-xs text-teal-700">{t('授权验证码')}</div>
               <div className="mt-1 font-mono text-lg font-semibold tracking-normal text-teal-950">{session.userCode}</div>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1092,7 +1163,7 @@ function CodexAuthPanel({
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-teal-200 bg-white px-3 text-sm font-medium text-teal-800 hover:bg-teal-50"
               >
                 <Copy className="h-4 w-4" />
-                复制验证码
+                {t('复制验证码')}
               </button>
               {session.verificationUrl && (
                 <button
@@ -1100,7 +1171,7 @@ function CodexAuthPanel({
                   onClick={onOpenAuthPage}
                   className="inline-flex h-9 items-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-medium text-white hover:bg-teal-800"
                 >
-                  打开授权页
+                  {t('打开授权页')}
                   <ExternalLink className="h-4 w-4" />
                 </button>
               )}
@@ -1135,6 +1206,9 @@ function buildEnvSnippet(tool: ToolConfig) {
   if (tool.id === 'opencode') {
     return `# OpenCode uses local config\nOPENCODE_MODEL=${tool.modelId || 'local default'}`
   }
+  if (tool.id === 'gemini') {
+    return `${tool.apiKeyEnv}=your_gemini_api_key_here\nGEMINI_MODEL=${tool.modelId}`
+  }
   const baseKey = `${tool.id.replace(/-/g, '_').toUpperCase()}_BASE_URL`
   const modelKey = `${tool.id.replace(/-/g, '_').toUpperCase()}_MODEL`
   return `${tool.apiKeyEnv}=your_api_key_here\n${baseKey}=${tool.baseUrl}\n${modelKey}=${tool.modelId}`
@@ -1144,11 +1218,13 @@ function buildRunCommand(tool: ToolConfig) {
   if (tool.id === 'codex') return `${tool.command} exec "<task>"`
   if (tool.id === 'claude-code') return `${tool.command} --model ${tool.modelId}`
   if (tool.id === 'opencode') return tool.modelId ? `${tool.command} run --model ${tool.modelId} "<task>"` : `${tool.command} run "<task>"`
+  if (tool.id === 'gemini') return tool.modelId ? `${tool.command} --model ${tool.modelId} -p "<task>"` : `${tool.command} -p "<task>"`
   return `${tool.command} --model ${tool.modelId} --provider ${inferProvider(tool)}`
 }
 
 function inferProvider(tool: ToolConfig) {
   if (tool.protocol === 'anthropic-messages') return 'anthropic'
+  if (tool.id === 'gemini' || tool.baseUrl.includes('generativelanguage.googleapis.com')) return 'gemini'
   if (tool.protocol === 'openai-responses') return 'openai'
   if (tool.baseUrl.includes('deepseek')) return 'deepseek'
   if (tool.baseUrl.includes('dashscope') || tool.baseUrl.includes('aliyuncs')) return 'dashscope'
@@ -1187,6 +1263,7 @@ function hasSavedConfigForTool(models: ModelCatalogItem[], tool: ToolConfig) {
 }
 
 function IconButton({ children, disabled, label, onClick }: { children: ReactNode; disabled?: boolean; label: string; onClick: () => void }) {
+  const { t } = useI18n()
   return (
     <button
       type="button"
@@ -1195,21 +1272,23 @@ function IconButton({ children, disabled, label, onClick }: { children: ReactNod
       className="inline-flex h-9 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm transition hover:bg-neutral-50 disabled:opacity-50"
     >
       {children}
-      {label}
+      {t(label)}
     </button>
   )
 }
 
 function Stat({ value, label }: { value: number; label: string }) {
+  const { t } = useI18n()
   return (
     <div className="rounded-lg border border-neutral-200 bg-white px-4 py-3 shadow-sm">
       <div className="text-lg font-semibold">{value}</div>
-      <div className="mt-1 text-xs text-neutral-400">{label}</div>
+      <div className="mt-1 text-xs text-neutral-400">{t(label)}</div>
     </div>
   )
 }
 
 function StatusBadge({ configured, installed, savedOnly = false }: { configured: boolean; installed: boolean; savedOnly?: boolean }) {
+  const { t } = useI18n()
   const ready = installed && configured
   return (
     <span
@@ -1219,7 +1298,7 @@ function StatusBadge({ configured, installed, savedOnly = false }: { configured:
       )}
     >
       {ready ? <CheckCircle2 className="h-3 w-3" /> : installed ? <AlertCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-      {ready ? (savedOnly ? '已保存' : '可运行') : installed ? '未配置' : '未安装'}
+      {ready ? (savedOnly ? t('已保存') : t('可运行')) : installed ? t('未配置') : t('未安装')}
     </span>
   )
 }
@@ -1235,9 +1314,10 @@ function Field({
   value: string
   onChange: (value: string) => void
 }) {
+  const { t } = useI18n()
   return (
     <label className="block text-sm">
-      <span className="mb-2 block text-neutral-600">{label}</span>
+      <span className="mb-2 block text-neutral-600">{t(label)}</span>
       <input
         type={type}
         value={value}
@@ -1261,15 +1341,16 @@ function ChoiceButton({
   title: string
   onClick: () => void
 }) {
+  const { t } = useI18n()
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn('rounded-md border p-3 text-left transition hover:border-neutral-400', active ? 'border-teal-700 bg-teal-50/60' : 'border-neutral-200 bg-white')}
     >
-      <div className="text-sm font-medium">{title}</div>
+      <div className="text-sm font-medium">{t(title)}</div>
       {meta && <div className="mt-1 font-mono text-xs text-neutral-400">{meta}</div>}
-      <div className="mt-2 text-xs leading-5 text-neutral-500">{text}</div>
+      <div className="mt-2 text-xs leading-5 text-neutral-500">{t(text)}</div>
     </button>
   )
 }

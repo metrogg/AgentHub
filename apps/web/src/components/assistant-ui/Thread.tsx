@@ -82,6 +82,7 @@ import {
 } from '../../lib/api'
 import { pickWorkspaceFolder } from '../../lib/native'
 import { cn } from '../../lib/utils'
+import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
 
@@ -124,6 +125,7 @@ const languageAliases: Record<string, string> = {
 const autoHighlightLanguages = Object.keys(highlightLanguageMap)
 type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
 const maxPastedImageBytes = 5 * 1024 * 1024
+const composerSyncEvent = 'agenthub:composer-sync'
 
 export const Thread: FC<{
   sidebarCollapsed: boolean
@@ -138,7 +140,7 @@ export const Thread: FC<{
 
   return (
     <ThreadPrimitive.Root
-      className="relative flex h-full flex-col overflow-hidden bg-white"
+      className="agenthub-thread-root relative flex h-full flex-col overflow-hidden bg-white"
       style={{ ['--thread-max-width' as string]: '44rem' }}
     >
       <ThreadHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} />
@@ -188,32 +190,35 @@ const WorkspaceChildSessionRail: FC = () => {
 const ThreadHeader: FC<{
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
-}> = ({ sidebarCollapsed, onToggleSidebar }) => (
-  <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-5">
-    <div className="flex min-w-0 items-center gap-3">
-      <button
-        type="button"
-        onClick={onToggleSidebar}
-        className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
-        aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
-        title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
-      >
-        <PanelLeft className={cn('h-4 w-4 transition-transform duration-300', sidebarCollapsed && 'rotate-180')} />
-      </button>
-      <div className="truncate text-sm font-medium text-neutral-950">AgentHub</div>
-      <span className="text-sm text-neutral-300">/</span>
-      <span className="truncate text-sm text-neutral-500">对话由 AI 生成</span>
-    </div>
-    <div className="flex items-center gap-1">
-      <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" aria-label="新建">
-        <Plus className="h-4 w-4" />
-      </button>
-      <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" aria-label="对话">
-        <MessageSquare className="h-4 w-4" />
-      </button>
-    </div>
-  </header>
-)
+}> = ({ sidebarCollapsed, onToggleSidebar }) => {
+  const { t } = useI18n()
+  return (
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-5">
+      <div className="flex min-w-0 items-center gap-3">
+        <button
+          type="button"
+          onClick={onToggleSidebar}
+          className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
+          aria-label={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
+          title={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
+        >
+          <PanelLeft className={cn('h-4 w-4 transition-transform duration-300', sidebarCollapsed && 'rotate-180')} />
+        </button>
+        <div className="truncate text-sm font-medium text-neutral-950">AgentHub</div>
+        <span className="text-sm text-neutral-300">/</span>
+        <span className="truncate text-sm text-neutral-500">{t('对话由 AI 生成')}</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" aria-label={t('新建')}>
+          <Plus className="h-4 w-4" />
+        </button>
+        <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" aria-label={t('对话')}>
+          <MessageSquare className="h-4 w-4" />
+        </button>
+      </div>
+    </header>
+  )
+}
 
 const GroupMemberPanel: FC = () => {
   const navigate = useNavigate()
@@ -285,7 +290,7 @@ const GroupMemberPanel: FC = () => {
 
           <div className="mt-5 space-y-2">
             <MemberRow name="You" role="发起人与决策者" active />
-            <MemberRow name="Orchestrator" role="拆解、协调、生成任务卡" active={activeAgentIds.has('orchestrator')} />
+            <MemberRow name="Orchestrator" role="拆解、协调、生成任务卡" active={activeAgentIds.has('orchestrator')} mentionName="orchestrator" />
             {agents.map((agent) => (
               <MemberRow
                 key={agent.id}
@@ -293,6 +298,7 @@ const GroupMemberPanel: FC = () => {
                 role={`${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`}
                 color={agent.color}
                 active={activeAgentIds.has(agent.id)}
+                mentionName={agent.name}
               />
             ))}
           </div>
@@ -327,8 +333,8 @@ const GroupMemberPanel: FC = () => {
   )
 }
 
-const MemberRow: FC<{ name: string; role: string; color?: string; active?: boolean }> = ({ name, role, color, active }) => (
-  <div className="flex items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
+const MemberRow: FC<{ name: string; role: string; color?: string; active?: boolean; mentionName?: string }> = ({ name, role, color, active, mentionName }) => (
+  <div className="group flex items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
     <div
       className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
       style={{ background: color ?? (name === 'You' ? '#2563eb' : '#111827') }}
@@ -339,26 +345,76 @@ const MemberRow: FC<{ name: string; role: string; color?: string; active?: boole
       <div className="truncate text-sm font-medium text-neutral-950">{name}</div>
       <div className="truncate text-xs text-neutral-500">{role}</div>
     </div>
+    {mentionName && (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          insertComposerMention(mentionName)
+        }}
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 opacity-70 transition hover:bg-neutral-100 hover:text-blue-600 group-hover:opacity-100"
+        title={`提及 ${name}`}
+        aria-label={`提及 ${name}`}
+      >
+        <AtSign className="h-3.5 w-3.5" />
+      </button>
+    )}
     <span className={cn('h-2 w-2 rounded-full', active ? 'bg-emerald-500' : 'bg-neutral-300')} />
   </div>
 )
 
+function insertComposerMention(name: string) {
+  const value = `@${name} `
+  insertTextIntoComposer(value)
+}
+
+function insertTextIntoComposer(value: string, inputType = 'insertText') {
+  const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
+  if (!input) {
+    void navigator.clipboard?.writeText(value).catch(() => undefined)
+    return null
+  }
+  const start = input.selectionStart ?? input.value.length
+  const end = input.selectionEnd ?? input.value.length
+  input.focus()
+  input.setSelectionRange(start, end)
+  input.setRangeText(value, start, end, 'end')
+  dispatchComposerInput(input, value, inputType)
+  return input
+}
+
+function dispatchComposerInput(input: HTMLTextAreaElement, data: string, inputType = 'insertText') {
+  try {
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType, data }))
+  } catch {
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  window.dispatchEvent(new CustomEvent(composerSyncEvent, { detail: { value: input.value, scrollTop: input.scrollTop } }))
+}
+
 const ThreadWelcome: FC = () => (
   <ThreadPrimitive.Empty>
+    <ThreadWelcomeContent />
+  </ThreadPrimitive.Empty>
+)
+
+const ThreadWelcomeContent: FC = () => {
+  const { t } = useI18n()
+  return (
     <div className="mx-auto flex min-h-[calc(100vh-15rem)] w-full max-w-[var(--thread-max-width)] flex-col justify-center py-10">
       <div className="mb-24">
         <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
-          <TypewriterHeading text="有什么可以帮忙的？" />
+          <TypewriterHeading text={t('有什么可以帮忙的？')} />
         </h2>
-        <p className="mt-2 text-base text-neutral-500">创建 Agent、拆解任务，或直接 @ 某个助手开始协作。</p>
+        <p className="mt-2 text-base text-neutral-500">{t('创建 Agent、拆解任务，或直接 @ 某个助手开始协作。')}</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <PromptCard title="创建 coder 代理" text="帮我单开一个跳跃小游戏" />
-        <PromptCard title="解释架构" text="这个项目的具体技术栈" />
+        <PromptCard title={t('创建 coder 代理')} text={t('帮我单开一个跳跃小游戏')} />
+        <PromptCard title={t('解释架构')} text={t('这个项目的具体技术栈')} />
       </div>
     </div>
-  </ThreadPrimitive.Empty>
-)
+  )
+}
 
 const PromptCard: FC<{ title: string; text: string }> = ({ title, text }) => (
   <div className="rounded-3xl border border-neutral-200 bg-white px-5 py-4 shadow-sm">
@@ -368,6 +424,7 @@ const PromptCard: FC<{ title: string; text: string }> = ({ title, text }) => (
 )
 
 const Composer: FC = () => {
+  const { t } = useI18n()
   const navigate = useNavigate()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const selectedModelId = useChatStore((state) => state.selectedModelId)
@@ -394,7 +451,7 @@ const Composer: FC = () => {
   const [composerText, setComposerText] = useState('')
   const [composerScrollTop, setComposerScrollTop] = useState(0)
   const selectedModel = models.find((item) => item.id === selectedModelId)
-  const modelLabel = selectedModel?.modelId ?? '自动'
+  const modelLabel = selectedModel?.modelId ?? t('自动')
 
   useEffect(() => {
     let cancelled = false
@@ -480,19 +537,10 @@ const Composer: FC = () => {
   }
 
   function insertComposerText(value: string) {
-    const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
-    if (!input) {
-      void navigator.clipboard?.writeText(value).catch(() => undefined)
-      return
-    }
-    const start = input.selectionStart ?? input.value.length
-    const end = input.selectionEnd ?? input.value.length
-    input.focus()
-    input.setSelectionRange(start, end)
-    const inserted = document.execCommand?.('insertText', false, value)
-    if (!inserted) {
-      input.setRangeText(value, start, end, 'end')
-      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
+    const input = insertTextIntoComposer(value)
+    if (input) {
+      setComposerText(input.value)
+      setComposerScrollTop(input.scrollTop)
     }
   }
 
@@ -639,6 +687,11 @@ const Composer: FC = () => {
     window.setTimeout(syncComposerTextFromInput, 300)
   }
 
+  useEffect(() => {
+    window.addEventListener(composerSyncEvent, syncComposerTextFromInput)
+    return () => window.removeEventListener(composerSyncEvent, syncComposerTextFromInput)
+  })
+
   return (
     <div className="shrink-0 bg-gradient-to-t from-white via-white to-white/80 px-6 pb-6 pt-3">
       <ComposerPrimitive.Root
@@ -682,7 +735,7 @@ const Composer: FC = () => {
               }}
               onPick={(value) => {
                 insertComposerText(`${value} `)
-                showHint(`已复制 ${value}，可粘贴到输入框`)
+                showHint(`已插入 ${value}`)
               }}
               onClose={() => setMenu(null)}
             />
@@ -738,7 +791,7 @@ const Composer: FC = () => {
             <ComposerPrimitive.Input
               autoFocus
               data-agenthub-composer="true"
-              placeholder="发消息给 AgentHub，@ 可提及 Agent"
+              placeholder={t('发消息给 AgentHub，@ 可提及 Agent')}
               rows={1}
               onPaste={handlePaste}
               onInput={handleComposerInput}
@@ -931,6 +984,7 @@ const ComposerMenu: FC<{
   onPick,
   onClose,
 }) => {
+  const { t } = useI18n()
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [addProjectOpen, setAddProjectOpen] = useState(false)
   const legacyAgents = [
@@ -1013,8 +1067,8 @@ const ComposerMenu: FC<{
             onClick={() => { onModel(null); onClose() }}
             className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-neutral-50', !selectedModelId && 'bg-neutral-100')}
           >
-            <span>自动</span>
-            <span className="text-xs text-neutral-400">随机可用模型</span>
+            <span>{t('自动')}</span>
+            <span className="text-xs text-neutral-400">{t('随机可用模型')}</span>
           </button>
           {models.map((item) => (
             <button
@@ -1681,7 +1735,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
   const [open, setOpen] = useState(artifact.previewKind === 'static-html')
 
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+    <div className="agenthub-embedded-window overflow-hidden rounded-lg border border-neutral-200 bg-white">
       <div className="flex h-11 items-center justify-between gap-3 px-3">
         <button type="button" onClick={() => setOpen((value) => !value)} className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
           <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
@@ -1701,7 +1755,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
         </a>
       </div>
       {open && (
-        <div className="border-t border-neutral-200 bg-neutral-50 p-2">
+        <div className="agenthub-embedded-window-body border-t border-neutral-200 bg-neutral-50 p-2">
           <iframe title={artifact.title} src={artifact.url} className="h-80 w-full rounded-md border border-neutral-200 bg-white" />
         </div>
       )}
@@ -1805,6 +1859,7 @@ function codeAgentStatusLabel(status: CodeAgentRunMetadata['status']) {
 function runtimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
   if (runtime === 'claude-code') return 'Claude Code'
   if (runtime === 'opencode') return 'OpenCode'
+  if (runtime === 'gemini') return 'Gemini CLI'
   return 'Codex'
 }
 
@@ -2127,11 +2182,11 @@ function codeAgentRuntimeFromParts(parts: unknown): CodeAgentRunMetadata['runtim
     if (item.type !== 'data') continue
     if (item.name === 'agent_avatar') {
       const runtime = (item.data as { runtime?: unknown } | null)?.runtime
-      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode') return runtime
+      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode' || runtime === 'gemini') return runtime
     }
     if (item.name === 'code_agent_run') {
       const runtime = (item.data as { runtime?: unknown } | null)?.runtime
-      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode') return runtime
+      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode' || runtime === 'gemini') return runtime
     }
   }
   return null
@@ -2140,12 +2195,14 @@ function codeAgentRuntimeFromParts(parts: unknown): CodeAgentRunMetadata['runtim
 function codeAgentLogoSrc(runtime: CodeAgentRunMetadata['runtime']) {
   if (runtime === 'claude-code') return '/claude-color.svg'
   if (runtime === 'opencode') return '/opencode.svg'
+  if (runtime === 'gemini') return '/gemini-color.svg'
   return '/codex-color.svg'
 }
 
 function codeAgentRuntimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
   if (runtime === 'claude-code') return 'Claude Code'
   if (runtime === 'opencode') return 'OpenCode'
+  if (runtime === 'gemini') return 'Gemini CLI'
   return 'Codex'
 }
 

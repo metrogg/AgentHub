@@ -50,7 +50,7 @@ const confirmAgentDraftSchema = z.object({
       color: z.string().max(20).default('#111827'),
       modelId: z.string().max(120).nullable().optional(),
       runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']).default('llm'),
-      codeAgentType: z.enum(['codex', 'claude-code', 'opencode']).nullable().optional(),
+      codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
       capabilityTags: z.array(z.string().max(40)).max(12).default([]),
       toolPermissions: z.array(z.string().max(80)).max(30).default(['chat']),
       sandboxPolicy: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('workspace-write'),
@@ -108,7 +108,7 @@ type PlanAgent = {
   description?: string
   modelId?: string | null
   runtimeType?: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | null
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags?: string[]
   toolPermissions?: string[]
   sandboxPolicy?: 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -394,7 +394,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           senderId: 'agent-builder',
           senderType: 'agent',
           type: 'text',
-          content: '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和群聊成员列表。',
+          content: '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和Agent 联系人列表。',
           metadata: { agentDraftStatus: 'requires_group' },
         })
         .returning()
@@ -797,6 +797,7 @@ function inferCodeAgentType(content: string): AgentDraft['codeAgentType'] {
   const lower = content.toLowerCase()
   if (lower.includes('claude')) return 'claude-code'
   if (lower.includes('opencode') || lower.includes('open code')) return 'opencode'
+  if (lower.includes('gemini')) return 'gemini'
   if (lower.includes('codex')) return 'codex'
   return null
 }
@@ -815,7 +816,7 @@ function inferAgentRole(content: string) {
 function inferAgentName(content: string, role: string, codeAgentType: AgentDraft['codeAgentType']) {
   const explicit = /(?:创建|添加|新建)\s*(?:一个)?\s*([A-Za-z][A-Za-z0-9_-]{1,24})\s*(?:Agent|代理|助手)/i.exec(content)?.[1]
   if (explicit && !['agent', 'coder', 'code'].includes(explicit.toLowerCase())) return explicit
-  const prefix = codeAgentType === 'claude-code' ? 'Claude' : codeAgentType === 'opencode' ? 'OpenCode' : codeAgentType === 'codex' ? 'Codex' : ''
+  const prefix = codeAgentType === 'claude-code' ? 'Claude' : codeAgentType === 'opencode' ? 'OpenCode' : codeAgentType === 'gemini' ? 'Gemini' : codeAgentType === 'codex' ? 'Codex' : ''
   const suffix = role.includes('前端') ? 'Frontend' : role.includes('后端') ? 'Backend' : role.includes('审查') ? 'Reviewer' : role.includes('部署') ? 'Deploy' : 'Coder'
   return [prefix, suffix].filter(Boolean).join(' ') || 'Custom Agent'
 }
