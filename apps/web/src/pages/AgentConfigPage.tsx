@@ -170,7 +170,7 @@ export default function AgentConfigPage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#fbfbf9] text-neutral-950">
+    <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#fbfbf9] text-neutral-950">
       <CollapsibleSessionSidebar collapsed={sidebarCollapsed} />
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-6">

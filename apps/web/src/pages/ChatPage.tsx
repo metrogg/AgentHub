@@ -32,7 +32,7 @@ export default function ChatPage() {
   }, [sessionId, currentSessionId, selectSession])
 
   return (
-    <div className="flex h-screen overflow-hidden bg-white text-neutral-950">
+    <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-white text-neutral-950">
       <div
         aria-hidden={sidebarCollapsed}
         className="h-full shrink-0 overflow-hidden"
@@ -283,7 +283,7 @@ function Welcome({
   }
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="agenthub-welcome-root flex h-full flex-col bg-white">
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 px-7">
         <div className="flex items-center gap-4">
           <button

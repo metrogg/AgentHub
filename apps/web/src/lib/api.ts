@@ -257,11 +257,15 @@ export interface SettingsGeneralInfo {
     appDataDir: string
     configDir: string
     logDir: string
+    activeDataDir: string
     dataPath: string
     databasePath: string
+    migrationPending: boolean
     exists: boolean
     sizeBytes: number
     sizeLabel: string
+    databaseSizeBytes: number
+    databaseSizeLabel: string
     scannedFiles: number
     truncated: boolean
     message: string
@@ -528,6 +532,16 @@ export const api = {
       python: { runtime: string; path: string; ok: boolean; message: string }
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
+  ensureStorageDirectory: (path: string) =>
+    request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>('/settings/storage/ensure', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  openLocalPath: (path: string) =>
+    request<{ ok: boolean; message: string }>('/settings/storage/open-path', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
   testModel: (data: {
     provider: string
     apiEndpoint: string

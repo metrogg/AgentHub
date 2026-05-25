@@ -137,7 +137,7 @@ export const Thread: FC<{
 
   return (
     <ThreadPrimitive.Root
-      className="relative flex h-full flex-col overflow-hidden bg-white"
+      className="agenthub-thread-root relative flex h-full flex-col overflow-hidden bg-white"
       style={{ ['--thread-max-width' as string]: '44rem' }}
     >
       <ThreadHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} />

@@ -9,15 +9,17 @@
   body {
     @apply bg-bg text-neutral-950 antialiased font-sans;
     font-feature-settings: 'cv11', 'ss01';
+    font-family: var(--agenthub-font-body, "Aptos", "IBM Plex Sans", "Noto Sans SC", ui-sans-serif, sans-serif);
+    font-size: var(--agenthub-font-size, 14px);
   }
   .agenthub-desktop-shell,
   .agenthub-desktop-shell body {
     overflow: hidden;
-    background: #ffffff;
+    background: var(--agenthub-app-bg, #ffffff);
   }
   .agenthub-desktop-shell #root {
     overflow: hidden;
-    background: #ffffff;
+    background: var(--agenthub-app-bg, #ffffff);
   }
   .agenthub-desktop-shell .h-screen {
     height: 100% !important;
@@ -835,9 +837,9 @@
     z-index: 1000;
     height: 1.75rem;
     flex-shrink: 0;
-    border-bottom: 1px solid #e7e5df;
-    background: #f7f7f4;
-    color: #111111;
+    border-bottom: 1px solid var(--agenthub-menu-border, #e7e5df);
+    background: var(--agenthub-menu-bg, #f7f7f4);
+    color: var(--agenthub-app-text, #111111);
     font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
     font-size: 0.8125rem;
     -webkit-font-smoothing: antialiased;
@@ -859,13 +861,13 @@
     border-radius: 0.125rem;
     padding: 0 0.45rem;
     line-height: 1;
-    color: #111111;
+    color: var(--agenthub-app-text, #111111);
     transition: background-color 120ms ease;
   }
 
   .agenthub-desktop-menu-button:hover,
   .agenthub-desktop-menu-button[aria-pressed='true'] {
-    background: #e9e9e4;
+    background: var(--agenthub-menu-hover, #e9e9e4);
   }
 
   .agenthub-desktop-menu-panel {
@@ -874,8 +876,8 @@
     top: calc(100% + 0.125rem);
     z-index: 1001;
     min-width: 18rem;
-    border: 1px solid #d8d8d2;
-    background: #ffffff;
+    border: 1px solid var(--agenthub-menu-border, #d8d8d2);
+    background: var(--agenthub-menu-panel, #ffffff);
     padding: 0.375rem 0;
     box-shadow: 0 1rem 2.5rem rgba(15, 23, 42, 0.14), 0 0.25rem 0.75rem rgba(15, 23, 42, 0.08);
     animation: agenthub-desktop-menu-in 120ms ease-out both;
@@ -893,7 +895,7 @@
     gap: 1.75rem;
     padding: 0.48rem 1.1rem;
     text-align: left;
-    color: #111111;
+    color: var(--agenthub-app-text, #111111);
     font-size: 1.0625rem;
     line-height: 1.2;
     transition: background-color 100ms ease;
@@ -901,7 +903,7 @@
 
   .agenthub-desktop-menu-item:hover:not(:disabled),
   .agenthub-desktop-menu-item:focus-visible {
-    background: #f1f1ec;
+    background: var(--agenthub-menu-hover, #f1f1ec);
     outline: none;
   }
 
@@ -912,12 +914,287 @@
   .agenthub-desktop-menu-item kbd {
     font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
     font-size: 1rem;
-    color: #1f2937;
+    color: var(--agenthub-app-text, #1f2937);
   }
 
   .agenthub-desktop-menu-empty {
     padding: 0.65rem 1rem;
-    color: #737373;
+    color: var(--agenthub-menu-muted, #737373);
+  }
+
+  .agenthub-app-theme,
+  .agenthub-chat-shell,
+  .agenthub-thread-root {
+    background: var(--agenthub-app-bg, #ffffff);
+    color: var(--agenthub-app-text, #111111);
+  }
+
+  .agenthub-chat-shell main,
+  .agenthub-chat-shell .agenthub-thread-root,
+  .agenthub-chat-shell .agenthub-welcome-root {
+    background: var(--agenthub-app-bg, #ffffff);
+  }
+
+  .agenthub-chat-shell aside {
+    background: var(--agenthub-app-sidebar, #f7f7f4);
+    border-color: var(--agenthub-app-border, #e5e5e0);
+  }
+
+  .agenthub-chat-shell header,
+  .agenthub-thread-root header {
+    background: var(--agenthub-app-panel, #ffffff);
+    border-color: var(--agenthub-app-border, #e5e5e0);
+  }
+
+  .agenthub-chat-shell .bg-white,
+  .agenthub-thread-root .bg-white {
+    background-color: var(--agenthub-app-panel, #ffffff);
+  }
+
+  .agenthub-chat-shell .bg-\[\#f7f7f4\],
+  .agenthub-chat-shell .bg-\[\#fbfbf8\],
+  .agenthub-chat-shell .bg-\[\#fbfbf9\],
+  .agenthub-chat-shell .bg-\[\#f4f4f4\],
+  .agenthub-chat-shell .bg-\[\#f1f1f1\],
+  .agenthub-thread-root .bg-\[\#fbfbf8\],
+  .agenthub-thread-root .bg-\[\#fbfbf9\],
+  .agenthub-thread-root .bg-\[\#f4f4f4\],
+  .agenthub-thread-root .bg-\[\#f1f1f1\] {
+    background-color: var(--agenthub-app-sidebar, #f7f7f4);
+  }
+
+  .agenthub-chat-shell .bg-\[\#edf7f3\],
+  .agenthub-chat-shell .bg-\[\#eef8f6\],
+  .agenthub-thread-root .bg-\[\#edf7f3\],
+  .agenthub-thread-root .bg-\[\#eef8f6\] {
+    background-color: var(--agenthub-accent-soft, #eef8f6);
+  }
+
+  .agenthub-chat-shell .text-\[\#8ba9a4\],
+  .agenthub-chat-shell .text-\[\#87a9a4\],
+  .agenthub-thread-root .text-\[\#8ba9a4\],
+  .agenthub-thread-root .text-\[\#87a9a4\] {
+    color: var(--agenthub-accent, #171717);
+  }
+
+  .agenthub-chat-shell .bg-neutral-50,
+  .agenthub-chat-shell .bg-neutral-100,
+  .agenthub-thread-root .bg-neutral-50,
+  .agenthub-thread-root .bg-neutral-100 {
+    background-color: var(--agenthub-app-panel-muted, #f4f4ef);
+  }
+
+  .agenthub-chat-shell .bg-neutral-950,
+  .agenthub-thread-root .bg-neutral-950 {
+    background-color: var(--agenthub-accent, #171717);
+  }
+
+  .agenthub-chat-shell .text-neutral-950,
+  .agenthub-chat-shell .text-neutral-900,
+  .agenthub-chat-shell .text-neutral-800,
+  .agenthub-chat-shell .text-neutral-700,
+  .agenthub-thread-root .text-neutral-950,
+  .agenthub-thread-root .text-neutral-900,
+  .agenthub-thread-root .text-neutral-800,
+  .agenthub-thread-root .text-neutral-700 {
+    color: var(--agenthub-app-text, #171717);
+  }
+
+  .agenthub-chat-shell .text-neutral-600,
+  .agenthub-chat-shell .text-neutral-500,
+  .agenthub-chat-shell .text-neutral-400,
+  .agenthub-chat-shell .text-neutral-300,
+  .agenthub-thread-root .text-neutral-600,
+  .agenthub-thread-root .text-neutral-500,
+  .agenthub-thread-root .text-neutral-400,
+  .agenthub-thread-root .text-neutral-300 {
+    color: var(--agenthub-app-muted-text, #666660);
+  }
+
+  .agenthub-chat-shell .border-neutral-100,
+  .agenthub-chat-shell .border-neutral-200,
+  .agenthub-chat-shell .border-neutral-300,
+  .agenthub-thread-root .border-neutral-100,
+  .agenthub-thread-root .border-neutral-200,
+  .agenthub-thread-root .border-neutral-300 {
+    border-color: var(--agenthub-app-border, #e5e5e0);
+  }
+
+  .agenthub-chat-shell input,
+  .agenthub-chat-shell textarea,
+  .agenthub-thread-root input,
+  .agenthub-thread-root textarea {
+    color: var(--agenthub-app-text, #171717);
+  }
+
+  .agenthub-chat-shell input::placeholder,
+  .agenthub-chat-shell textarea::placeholder,
+  .agenthub-thread-root input::placeholder,
+  .agenthub-thread-root textarea::placeholder {
+    color: var(--agenthub-app-muted-text, #737373);
+  }
+
+  .agenthub-chat-shell .hover\:bg-neutral-50:hover,
+  .agenthub-chat-shell .hover\:bg-neutral-100:hover,
+  .agenthub-chat-shell .hover\:bg-white\/70:hover,
+  .agenthub-thread-root .hover\:bg-neutral-50:hover,
+  .agenthub-thread-root .hover\:bg-neutral-100:hover,
+  .agenthub-thread-root .hover\:bg-white\/70:hover {
+    background-color: var(--agenthub-app-hover, #ecece7);
+  }
+
+  .agenthub-chat-shell .shadow-sm,
+  .agenthub-chat-shell .shadow-xl,
+  .agenthub-thread-root .shadow-sm,
+  .agenthub-thread-root .shadow-xl {
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  }
+
+  .agenthub-themed-page,
+  .agenthub-portal-theme {
+    background: var(--agenthub-app-bg, #ffffff);
+    color: var(--agenthub-app-text, #111111);
+  }
+
+  .agenthub-themed-page main,
+  .agenthub-themed-page section,
+  .agenthub-themed-page aside {
+    border-color: var(--agenthub-app-border, #e5e5e0);
+  }
+
+  .agenthub-themed-page .bg-white,
+  .agenthub-portal-theme .bg-white {
+    background-color: var(--agenthub-app-panel, #ffffff);
+  }
+
+  .agenthub-themed-page .bg-white\/70,
+  .agenthub-themed-page .bg-white\/80,
+  .agenthub-themed-page .bg-white\/90,
+  .agenthub-portal-theme .bg-white\/70,
+  .agenthub-portal-theme .bg-white\/80,
+  .agenthub-portal-theme .bg-white\/90 {
+    background-color: color-mix(in srgb, var(--agenthub-app-panel, #ffffff) 88%, transparent);
+  }
+
+  .agenthub-themed-page .bg-\[\#f7f5f1\],
+  .agenthub-themed-page .bg-\[\#f7f7f4\],
+  .agenthub-themed-page .bg-\[\#f5f4ef\],
+  .agenthub-themed-page .bg-\[\#fbfbf8\],
+  .agenthub-themed-page .bg-\[\#fbfbf9\],
+  .agenthub-themed-page .bg-\[\#fafaf7\],
+  .agenthub-portal-theme .bg-\[\#f7f7f4\],
+  .agenthub-portal-theme .bg-\[\#fbfbf8\],
+  .agenthub-portal-theme .bg-\[\#fbfbf9\],
+  .agenthub-portal-theme .bg-\[\#fafaf7\] {
+    background-color: var(--agenthub-app-sidebar, #f7f7f4);
+  }
+
+  .agenthub-themed-page .bg-\[\#edf7f3\],
+  .agenthub-themed-page .bg-\[\#eef8f6\],
+  .agenthub-themed-page .hover\:bg-\[\#e3f2ef\]:hover,
+  .agenthub-portal-theme .bg-\[\#edf7f3\],
+  .agenthub-portal-theme .bg-\[\#eef8f6\],
+  .agenthub-portal-theme .hover\:bg-\[\#e3f2ef\]:hover {
+    background-color: var(--agenthub-accent-soft, #eef8f6);
+  }
+
+  .agenthub-themed-page .text-\[\#8ba9a4\],
+  .agenthub-themed-page .text-\[\#87a9a4\],
+  .agenthub-portal-theme .text-\[\#8ba9a4\],
+  .agenthub-portal-theme .text-\[\#87a9a4\] {
+    color: var(--agenthub-accent, #171717);
+  }
+
+  .agenthub-themed-page .bg-neutral-50,
+  .agenthub-themed-page .bg-neutral-100,
+  .agenthub-themed-page .bg-neutral-200,
+  .agenthub-portal-theme .bg-neutral-50,
+  .agenthub-portal-theme .bg-neutral-100,
+  .agenthub-portal-theme .bg-neutral-200 {
+    background-color: var(--agenthub-app-panel-muted, #f4f4ef);
+  }
+
+  .agenthub-themed-page .bg-neutral-900,
+  .agenthub-themed-page .bg-neutral-950,
+  .agenthub-portal-theme .bg-neutral-900,
+  .agenthub-portal-theme .bg-neutral-950 {
+    background-color: var(--agenthub-accent, #171717);
+  }
+
+  .agenthub-themed-page .border-neutral-100,
+  .agenthub-themed-page .border-neutral-200,
+  .agenthub-themed-page .border-neutral-300,
+  .agenthub-portal-theme .border-neutral-100,
+  .agenthub-portal-theme .border-neutral-200,
+  .agenthub-portal-theme .border-neutral-300 {
+    border-color: var(--agenthub-app-border, #e5e5e0);
+  }
+
+  .agenthub-themed-page .text-neutral-950,
+  .agenthub-themed-page .text-neutral-900,
+  .agenthub-themed-page .text-neutral-800,
+  .agenthub-themed-page .text-neutral-700,
+  .agenthub-portal-theme .text-neutral-950,
+  .agenthub-portal-theme .text-neutral-900,
+  .agenthub-portal-theme .text-neutral-800,
+  .agenthub-portal-theme .text-neutral-700 {
+    color: var(--agenthub-app-text, #171717);
+  }
+
+  .agenthub-themed-page .text-neutral-600,
+  .agenthub-themed-page .text-neutral-500,
+  .agenthub-themed-page .text-neutral-400,
+  .agenthub-themed-page .text-neutral-300,
+  .agenthub-portal-theme .text-neutral-600,
+  .agenthub-portal-theme .text-neutral-500,
+  .agenthub-portal-theme .text-neutral-400,
+  .agenthub-portal-theme .text-neutral-300 {
+    color: var(--agenthub-app-muted-text, #666660);
+  }
+
+  .agenthub-themed-page :where(input, textarea, select),
+  .agenthub-portal-theme :where(input, textarea, select) {
+    color: var(--agenthub-app-text, #171717);
+  }
+
+  .agenthub-themed-page :where(input, textarea, select)[class*='border'],
+  .agenthub-portal-theme :where(input, textarea, select)[class*='border'] {
+    background-color: var(--agenthub-app-control, #ffffff);
+    border-color: var(--agenthub-app-border, #e5e5e0);
+  }
+
+  .agenthub-themed-page :where(input, textarea)::placeholder,
+  .agenthub-portal-theme :where(input, textarea)::placeholder {
+    color: var(--agenthub-app-muted-text, #737373);
+  }
+
+  .agenthub-themed-page .hover\:bg-neutral-50:hover,
+  .agenthub-themed-page .hover\:bg-neutral-100:hover,
+  .agenthub-themed-page .hover\:bg-neutral-200:hover,
+  .agenthub-themed-page .hover\:bg-white\/70:hover,
+  .agenthub-themed-page .hover\:bg-white\/80:hover,
+  .agenthub-portal-theme .hover\:bg-neutral-50:hover,
+  .agenthub-portal-theme .hover\:bg-neutral-100:hover,
+  .agenthub-portal-theme .hover\:bg-neutral-200:hover,
+  .agenthub-portal-theme .hover\:bg-white\/70:hover,
+  .agenthub-portal-theme .hover\:bg-white\/80:hover {
+    background-color: var(--agenthub-app-hover, #ecece7);
+  }
+
+  .agenthub-themed-page .hover\:border-neutral-300:hover,
+  .agenthub-themed-page .hover\:border-neutral-400:hover,
+  .agenthub-portal-theme .hover\:border-neutral-300:hover,
+  .agenthub-portal-theme .hover\:border-neutral-400:hover {
+    border-color: var(--agenthub-app-muted, #c7c7c0);
+  }
+
+  .agenthub-themed-page .shadow-sm,
+  .agenthub-themed-page .shadow-xl,
+  .agenthub-themed-page .shadow-2xl,
+  .agenthub-portal-theme .shadow-sm,
+  .agenthub-portal-theme .shadow-xl,
+  .agenthub-portal-theme .shadow-2xl {
+    box-shadow: 0 16px 38px rgba(15, 23, 42, 0.1);
   }
 
   @keyframes agenthub-desktop-menu-in {
@@ -956,6 +1233,62 @@
 
   .settings-danger-button {
     @apply inline-flex h-9 items-center justify-center rounded-md border border-red-200 bg-white px-4 text-sm font-semibold text-red-600 transition hover:bg-red-50;
+  }
+
+  .settings-theme .settings-input {
+    background: var(--settings-control-bg);
+    border-color: var(--settings-border);
+    color: var(--settings-text);
+  }
+
+  .settings-theme .settings-input::placeholder {
+    color: var(--settings-muted-text);
+  }
+
+  .settings-theme .settings-soft-button {
+    background: var(--settings-control-bg);
+    border-color: var(--settings-border);
+    color: var(--settings-text);
+  }
+
+  .settings-theme .settings-soft-button:hover:not(:disabled) {
+    background: var(--settings-accent-soft);
+    border-color: var(--settings-active-border);
+    color: var(--settings-accent);
+  }
+
+  .settings-theme .settings-danger-button {
+    background: var(--settings-danger-bg);
+    border-color: rgba(239, 68, 68, 0.28);
+  }
+
+  .settings-theme .bg-white {
+    background-color: var(--settings-panel);
+  }
+
+  .settings-theme .bg-neutral-50,
+  .settings-theme .bg-neutral-100 {
+    background-color: var(--settings-panel-muted);
+  }
+
+  .settings-theme .border-neutral-100,
+  .settings-theme .border-neutral-200,
+  .settings-theme .border-neutral-300 {
+    border-color: var(--settings-border);
+  }
+
+  .settings-theme .text-neutral-950,
+  .settings-theme .text-neutral-900,
+  .settings-theme .text-neutral-800,
+  .settings-theme .text-neutral-700 {
+    color: var(--settings-text);
+  }
+
+  .settings-theme .text-neutral-600,
+  .settings-theme .text-neutral-500,
+  .settings-theme .text-neutral-400,
+  .settings-theme .text-neutral-300 {
+    color: var(--settings-muted-text);
   }
 
   .agenthub-markdown {

@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdir, readdir, stat } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { db, eq, settings } from '@agenthub/db'
 import { env } from '../env'
@@ -44,13 +44,16 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
     const appDataDir = resolve(env.AGENTHUB_APP_DATA_DIR?.trim() || process.cwd())
     const configDir = env.AGENTHUB_CONFIG_DIR?.trim() || appDataDir
     const logDir = env.AGENTHUB_LOG_DIR?.trim() || join(appDataDir, 'logs')
-    const dataPath = appSettings.dataPath?.trim() || appDataDir
+    const databasePath = resolve(env.DATABASE_URL)
+    const activeDataDir = dirname(databasePath)
+    const dataPath = appSettings.dataPath?.trim() || activeDataDir
     const debugDir = join(appDataDir, 'debug', 'llm')
-    const [git, python, dataUsage, debugUsage] = await Promise.all([
+    const [git, python, dataUsage, debugUsage, databaseUsage] = await Promise.all([
       detectRuntime('git', ['--version']),
       detectPythonRuntime(),
       describePathUsage(dataPath),
       describePathUsage(debugDir),
+      describeFileUsage(databasePath),
     ])
 
     return c.json({
@@ -66,11 +69,15 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
         appDataDir,
         configDir,
         logDir,
+        activeDataDir,
         dataPath,
-        databasePath: resolve(env.DATABASE_URL),
+        databasePath,
+        migrationPending: normalizePath(dataPath) !== normalizePath(activeDataDir),
         exists: dataUsage.exists,
         sizeBytes: dataUsage.sizeBytes,
         sizeLabel: formatBytes(dataUsage.sizeBytes),
+        databaseSizeBytes: databaseUsage.sizeBytes,
+        databaseSizeLabel: formatBytes(databaseUsage.sizeBytes),
         scannedFiles: dataUsage.scannedFiles,
         truncated: dataUsage.truncated,
         message: dataUsage.message,
@@ -78,6 +85,29 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       git,
       python,
     })
+  })
+  .post('/storage/ensure', async (c) => {
+    const input: { path?: string } = await c.req.json<{ path?: string }>().catch(() => ({}))
+    const target = input.path?.trim()
+    if (!target) return c.json({ ok: false, message: '目录路径不能为空' }, 400)
+    await mkdir(target, { recursive: true })
+    const usage = await describePathUsage(target)
+    return c.json({
+      ok: true,
+      path: resolve(target),
+      sizeBytes: usage.sizeBytes,
+      sizeLabel: formatBytes(usage.sizeBytes),
+      message: '目录已创建',
+    })
+  })
+  .post('/storage/open-path', async (c) => {
+    const input: { path?: string } = await c.req.json<{ path?: string }>().catch(() => ({}))
+    const target = input.path?.trim()
+    if (!target) return c.json({ ok: false, message: '路径不能为空' }, 400)
+    if (!existsSync(target)) return c.json({ ok: false, message: '路径不存在' }, 404)
+    const opened = await openSystemPath(target)
+    if (!opened.ok) return c.json(opened, 500)
+    return c.json({ ok: true, message: '已打开路径' })
   })
   .post('/test-model', async (c) => {
     const input = await c.req.json<{
@@ -137,6 +167,15 @@ async function describePathUsage(path: string) {
       truncated: false,
       message: error?.message || String(error),
     }
+  }
+}
+
+async function describeFileUsage(path: string) {
+  try {
+    const item = await stat(path)
+    return { exists: item.isFile(), sizeBytes: item.isFile() ? item.size : 0 }
+  } catch {
+    return { exists: false, sizeBytes: 0 }
   }
 }
 
@@ -212,6 +251,21 @@ async function runCommand(command: string, args: string[]) {
   }
 }
 
+async function openSystemPath(path: string) {
+  const command =
+    process.platform === 'win32'
+      ? { file: 'cmd', args: ['/C', 'start', '', path] }
+      : process.platform === 'darwin'
+        ? { file: 'open', args: [path] }
+        : { file: 'xdg-open', args: [path] }
+  try {
+    await execFileAsync(command.file, command.args, { timeout: 5000, windowsHide: true })
+    return { ok: true, message: '' }
+  } catch (error: any) {
+    return { ok: false, message: error?.message || String(error) }
+  }
+}
+
 async function locateCommand(command: string) {
   const locator = process.platform === 'win32' ? 'where' : 'which'
   return runCommand(locator, [command])
@@ -219,4 +273,8 @@ async function locateCommand(command: string) {
 
 function firstLine(value: string) {
   return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0] ?? ''
+}
+
+function normalizePath(value: string) {
+  return resolve(value).replace(/[\\/]+$/, '').toLowerCase()
 }

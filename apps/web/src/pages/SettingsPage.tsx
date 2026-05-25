@@ -1,24 +1,34 @@
-import { useEffect, useState } from 'react'
+import { type CSSProperties, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Archive,
+  ArchiveRestore,
   CheckCircle2,
   Blocks,
+  Clock3,
+  ExternalLink,
+  FileText,
   Info,
   Keyboard,
   LockKeyhole,
   Loader2,
+  MessageSquare,
   Monitor,
   Plus,
+  RefreshCw,
+  Search,
   Settings,
   Shield,
   TerminalSquare,
+  Trash2,
   X,
 } from 'lucide-react'
-import { api, type SettingsGeneralInfo } from '../lib/api'
+import { api, type Message, type Session, type SettingsGeneralInfo } from '../lib/api'
+import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, resolveTheme, themePalette } from '../lib/appearance'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
-import { getDesktopInfo, openPath, pickWorkspaceFolder } from '../lib/native'
-import { cn } from '../lib/utils'
+import { getDesktopInfo, isDesktopApp, openPath, pickWorkspaceFolder } from '../lib/native'
+import { loadSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent } from '../lib/sessionArchive'
+import { cn, relativeTime } from '../lib/utils'
 
 type SectionKey =
   | '通用'
@@ -244,6 +254,12 @@ function model(
 
 const emptyDraft = model('', '', '', '', '', '', '')
 
+const themeModes = ['跟随系统', '亮色', '暗色']
+const accentOptions = ['黑色', '蓝色', '绿色', '琥珀色']
+const fontOptions = ['默认', 'Aptos', 'Microsoft YaHei UI', 'Noto Sans SC', 'LXGW WenKai', 'JetBrains Mono', 'Cascadia Mono']
+const fontSizeOptions = ['13', '14', '15', '16', '18']
+const messageStyleOptions = ['紧凑', '简洁', '气泡']
+
 export default function SettingsPage() {
   const navigate = useNavigate()
   const { setLanguage, t } = useI18n()
@@ -258,6 +274,19 @@ export default function SettingsPage() {
   const [showEditor, setShowEditor] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [testMessages, setTestMessages] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    applyAppearanceSettings(appSettings)
+  }, [
+    appSettings.accent,
+    appSettings.bodyFont,
+    appSettings.codeBlockFont,
+    appSettings.fontSize,
+    appSettings.inlineCodeFont,
+    appSettings.mainWindowTheme,
+    appSettings.terminalFont,
+    appSettings.uiFont,
+  ])
 
   useEffect(() => {
     api
@@ -360,6 +389,8 @@ export default function SettingsPage() {
     })
   }
 
+  const settingsThemeStyle = createSettingsThemeStyle(appSettings)
+
   async function testModel(item: ModelConfig) {
     setTestingId(item.id)
     setTestMessages((current) => ({ ...current, [item.id]: '' }))
@@ -383,25 +414,25 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden bg-[#f7f7f4] text-neutral-950">
+    <div className="settings-theme flex h-full min-h-0 overflow-hidden" style={settingsThemeStyle}>
       <SettingsSidebar
         activeSection={activeSection}
         setActiveSection={setActiveSection}
         navigateBack={() => navigate(-1)}
       />
 
-      <main className="min-h-0 flex-1 overflow-y-auto bg-[#f7f7f4] px-10 py-9">
+      <main className="min-h-0 flex-1 overflow-y-auto px-10 py-9" style={{ background: 'var(--settings-bg)', color: 'var(--settings-text)' }}>
         <div className="max-w-6xl">
           <div className="mb-8 flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold tracking-normal">{t(activeSection)}</h1>
-              <p className="mt-1 text-sm text-neutral-500">{t(sectionDescription(activeSection))}</p>
+              <h1 className="text-2xl font-semibold tracking-normal" style={{ color: 'var(--settings-text)' }}>{t(activeSection)}</h1>
+              <p className="mt-1 text-sm" style={{ color: 'var(--settings-muted-text)' }}>{t(sectionDescription(activeSection))}</p>
             </div>
             <AutoSaveStatus state={saveState} />
           </div>
 
           {loading ? (
-            <div className="flex items-center gap-2 text-sm text-neutral-500">
+            <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--settings-muted-text)' }}>
               <Loader2 className="h-4 w-4 animate-spin" />
               {t('加载中...')}
             </div>
@@ -453,13 +484,14 @@ function SettingsSidebar({
 }) {
   const { t } = useI18n()
   return (
-    <aside className="h-full w-[260px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#f7f7f4] px-5 py-5">
+    <aside className="h-full w-[260px] shrink-0 overflow-hidden border-r px-5 py-5" style={{ background: 'var(--settings-sidebar)', borderColor: 'var(--settings-border)' }}>
       <div className="mb-7 flex items-center justify-between px-1">
-        <div className="text-sm font-semibold text-neutral-800">{t('设置')}</div>
+        <div className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t('设置')}</div>
         <button
           type="button"
           onClick={navigateBack}
-          className="grid h-6 w-6 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-200/70 hover:text-neutral-900"
+          className="grid h-6 w-6 place-items-center rounded-md transition hover:brightness-95"
+          style={{ color: 'var(--settings-muted-text)' }}
           aria-label={t('关闭设置')}
           title={t('关闭设置')}
         >
@@ -472,11 +504,16 @@ function SettingsSidebar({
             key={section.label}
             onClick={() => setActiveSection(section.label)}
             className={cn(
-              'flex h-6 w-full items-center gap-3 rounded-md px-1 text-sm font-medium text-neutral-600 transition hover:text-neutral-900',
-              activeSection === section.label && 'text-neutral-950'
+              'flex h-9 w-full items-center gap-3 rounded-lg border px-2.5 text-sm font-medium transition hover:-translate-y-px',
+              activeSection === section.label ? 'shadow-sm' : 'border-transparent'
             )}
+            style={{
+              background: activeSection === section.label ? 'var(--settings-active-bg)' : 'transparent',
+              borderColor: activeSection === section.label ? 'var(--settings-active-border)' : 'transparent',
+              color: activeSection === section.label ? 'var(--settings-accent)' : 'var(--settings-muted-text)',
+            }}
           >
-            <section.icon className={cn('h-4 w-4 text-neutral-400', activeSection === section.label && 'text-neutral-950')} />
+            <section.icon className="h-4 w-4" style={{ color: activeSection === section.label ? 'var(--settings-accent)' : 'var(--settings-muted)' }} />
             {t(section.label)}
           </button>
         ))}
@@ -586,27 +623,53 @@ function SettingsContent({
   }
 
   async function openDataDirectory() {
-    const opened = await openPath(settings.dataPath)
-    if (!opened) throw new Error(t('当前环境不支持直接打开目录'))
+    await openPathWithFallback(settings.dataPath)
     showActionMessage(t('已打开数据目录'))
+  }
+
+  async function openConfiguredPath(path: string | undefined, successMessage: string) {
+    if (!path) throw new Error(t('路径尚未就绪'))
+    await openPathWithFallback(path)
+    showActionMessage(t(successMessage))
+  }
+
+  async function openPathWithFallback(path: string) {
+    const opened = await openPath(path)
+    if (opened) return
+    await api.openLocalPath(path)
   }
 
   async function openDebugDirectory() {
     const target = generalInfo?.debug.dir
     if (!target) throw new Error(t('调试目录尚未生成'))
-    const opened = await openPath(target)
-    if (!opened) throw new Error(t('当前环境不支持直接打开目录'))
+    await openPathWithFallback(target)
     showActionMessage(t('已打开调试目录'))
   }
 
   async function changeDataDirectory() {
-    const path = await pickWorkspaceFolder()
+    const path = isDesktopApp()
+      ? await pickWorkspaceFolder()
+      : window.prompt(t('请输入本机数据目录路径'), settings.dataPath)
     if (!path) {
       showActionMessage(t('已取消选择'))
       return
     }
     patchSettings({ dataPath: path })
     showActionMessage(t('数据目录已更新，重启后生效'))
+  }
+
+  async function createDataDirectory() {
+    const result = await api.ensureStorageDirectory(settings.dataPath)
+    patchSettings({ dataPath: result.path, dataUsed: result.sizeLabel })
+    await refreshGeneralInfo()
+    showActionMessage(t('目录已创建'))
+  }
+
+  function restoreActiveDataDirectory() {
+    const activeDataDir = generalInfo?.storage.activeDataDir
+    if (!activeDataDir) return
+    patchSettings({ dataPath: activeDataDir })
+    showActionMessage(t('已恢复为当前生效目录'))
   }
 
   function patchDebugMode(debugMode: boolean) {
@@ -651,17 +714,40 @@ function SettingsContent({
             desc="会话与记忆文件存放在这里；Knowledge 保留在项目目录中。可打开当前目录或迁移到新位置，迁移会在重启后完成。"
           >
             <InsetPanel>
-              <InfoRow label="当前位置" value={settings.dataPath} />
-              <InfoRow label="已用空间" value={settings.dataUsed} />
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap gap-2">
+                  <StatusPill ok={generalInfo?.storage.exists ?? Boolean(settings.dataPath)} label={(generalInfo?.storage.exists ?? Boolean(settings.dataPath)) ? '目录可用' : '目录不可用'} />
+                  {generalInfo?.storage.migrationPending && <StatusPill ok={false} label="重启后迁移" />}
+                </div>
+                <button type="button" disabled={busyAction === 'general-info'} onClick={() => void runAction('general-info', refreshGeneralInfo)} className="settings-soft-button">{busyAction === 'general-info' ? t('刷新中') : t('重新计算占用')}</button>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <StorageMetric label="已用空间" value={settings.dataUsed} />
+                <StorageMetric label="数据库大小" value={generalInfo?.storage.databaseSizeLabel ?? '0 B'} />
+                <StorageMetric label="扫描文件" value={generalInfo?.storage.scannedFiles !== undefined ? String(generalInfo.storage.scannedFiles) : t('等待刷新')} />
+              </div>
+
+              <InfoRow label="选择的数据目录" value={settings.dataPath} />
+              <InfoRow label="当前生效目录" value={generalInfo?.storage.activeDataDir ?? t('等待刷新')} />
               <InfoRow label="App Data" value={generalInfo?.storage.appDataDir ?? t('等待刷新')} />
+              <InfoRow label="配置目录" value={generalInfo?.storage.configDir ?? t('等待刷新')} />
               <InfoRow label="日志目录" value={generalInfo?.storage.logDir ?? t('等待刷新')} />
               <InfoRow label="数据库文件" value={generalInfo?.storage.databasePath ?? t('等待刷新')} />
+              {generalInfo?.storage.migrationPending && (
+                <Notice tone="warning">{t('已选择新的数据目录。当前运行中的服务仍使用当前生效目录，重启客户端后会切换。')}</Notice>
+              )}
               {generalInfo?.storage.message && <Notice tone="warning">{generalInfo.storage.message}</Notice>}
               {generalInfo?.storage.truncated && <Notice tone="warning">{t('目录较大，已展示扫描上限内的估算体积')}</Notice>}
               <div className="flex flex-wrap gap-2">
                 <button type="button" disabled={busyAction === 'open-data'} onClick={() => void runAction('open-data', openDataDirectory)} className="settings-soft-button">{t('打开目录')}</button>
                 <button type="button" disabled={busyAction === 'change-data'} onClick={() => void runAction('change-data', changeDataDirectory)} className="settings-soft-button">{t('更改位置')}</button>
-                <button type="button" disabled={busyAction === 'general-info'} onClick={() => void runAction('general-info', refreshGeneralInfo)} className="settings-soft-button">{t('重新计算占用')}</button>
+                {generalInfo?.storage.exists === false && <button type="button" disabled={busyAction === 'create-data'} onClick={() => void runAction('create-data', createDataDirectory)} className="settings-soft-button">{t('创建目录')}</button>}
+                <button type="button" disabled={!generalInfo?.storage.activeDataDir || busyAction === 'open-active-data'} onClick={() => void runAction('open-active-data', () => openConfiguredPath(generalInfo?.storage.activeDataDir, '已打开当前生效目录'))} className="settings-soft-button">{t('打开生效目录')}</button>
+                <button type="button" disabled={!generalInfo?.storage.configDir || busyAction === 'open-config'} onClick={() => void runAction('open-config', () => openConfiguredPath(generalInfo?.storage.configDir, '已打开配置目录'))} className="settings-soft-button">{t('打开配置目录')}</button>
+                <button type="button" disabled={!generalInfo?.storage.logDir || busyAction === 'open-log'} onClick={() => void runAction('open-log', () => openConfiguredPath(generalInfo?.storage.logDir, '已打开日志目录'))} className="settings-soft-button">{t('打开日志目录')}</button>
+                <button type="button" disabled={!generalInfo?.storage.databasePath || busyAction === 'open-db'} onClick={() => void runAction('open-db', () => openConfiguredPath(parentDirectory(generalInfo?.storage.databasePath), '已打开数据库所在目录'))} className="settings-soft-button">{t('打开数据库目录')}</button>
+                {generalInfo?.storage.migrationPending && <button type="button" onClick={restoreActiveDataDirectory} className="settings-soft-button">{t('恢复当前生效目录')}</button>}
               </div>
             </InsetPanel>
           </SettingsSection>
@@ -695,24 +781,10 @@ function SettingsContent({
     case '显示':
       return (
         <SettingsStack>
-          <SettingsSection title="主题" desc="分别选择主窗口和嵌入窗口的颜色风格">
-            <OptionRow label="主窗口">
-              <SegmentedControl value={settings.mainWindowTheme} options={['跟随系统', '亮色', '暗色']} onChange={(mainWindowTheme) => patchSettings({ mainWindowTheme })} />
-            </OptionRow>
-            <OptionRow label="嵌入窗口">
-              <SegmentedControl value={settings.embeddedWindowTheme} options={['跟随系统', '亮色', '暗色']} onChange={(embeddedWindowTheme) => patchSettings({ embeddedWindowTheme })} />
-            </OptionRow>
-          </SettingsSection>
-          <SettingsSection title="面板行为" desc="控制 TODO 和文件修改面板的自动打开/关闭行为">
-            <SwitchList
-              items={[
-                ['收到 TODO 时自动打开 TODO 面板', settings.autoOpenTodo, (value) => patchSettings({ autoOpenTodo: value })],
-                ['产生文件修改时自动打开文件修改面板', settings.autoOpenFileChanges, (value) => patchSettings({ autoOpenFileChanges: value })],
-                ['发送新消息时自动关闭文件修改面板', settings.autoCloseFileChanges, (value) => patchSettings({ autoCloseFileChanges: value })],
-                ['会话窗口中将用户消息右对齐', settings.userMessagesRight, (value) => patchSettings({ userMessagesRight: value })],
-                ['折叠已完成的工具调用', settings.collapseCompletedTools, (value) => patchSettings({ collapseCompletedTools: value })],
-                ['隐藏已完成思考块', settings.hideCompletedThoughts, (value) => patchSettings({ hideCompletedThoughts: value })],
-              ]}
+          <SettingsSection title="主题显示" desc="选择窗口颜色、强调色，并预览聊天与工具面板的显示效果。">
+            <ThemeDisplayPanel
+              settings={settings}
+              patchSettings={patchSettings}
             />
           </SettingsSection>
           <SettingsSection title="GIT 视图">
@@ -734,12 +806,11 @@ function SettingsContent({
               ]}
             />
           </SettingsSection>
-          <SettingsSection title="字体" desc="自定义各区域使用的字体，留空则使用默认字体栈">
-            <SelectLine label="界面" value={settings.uiFont} onChange={(uiFont) => patchSettings({ uiFont })} />
-            <SelectLine label="正文" value={settings.bodyFont} onChange={(bodyFont) => patchSettings({ bodyFont })} />
-            <SelectLine label="行内代码" value={settings.inlineCodeFont} onChange={(inlineCodeFont) => patchSettings({ inlineCodeFont })} />
-            <SelectLine label="代码块" value={settings.codeBlockFont} onChange={(codeBlockFont) => patchSettings({ codeBlockFont })} />
-            <SelectLine label="编辑器 / 终端" value={settings.terminalFont} onChange={(terminalFont) => patchSettings({ terminalFont })} />
+          <SettingsSection title="字体显示" desc="设置界面、正文、代码和终端字体，并立即预览实际排版。">
+            <FontDisplayPanel
+              settings={settings}
+              patchSettings={patchSettings}
+            />
           </SettingsSection>
         </SettingsStack>
       )
@@ -784,24 +855,7 @@ function SettingsContent({
       return (
         <SettingsStack>
           <SettingsSection title="归档会话" desc="查看已归档的会话记录。归档后不会出现在会话列表中，但仍可在这里打开查看内容。">
-            <div className="grid min-h-[680px] grid-cols-[280px_minmax(0,1fr)] overflow-hidden rounded-xl border border-neutral-200 bg-white">
-              <div className="flex flex-col border-r border-neutral-200 bg-neutral-50">
-                <div className="flex h-10 items-center justify-between border-b border-neutral-200 px-3">
-                  <span className="text-sm font-semibold">{t('会话列表')}</span>
-                  <button type="button" className="settings-soft-button h-7 px-3">{t('刷新')}</button>
-                </div>
-                <div className="grid flex-1 place-items-center px-6 text-center">
-                  <div>
-                    <div className="text-sm font-semibold text-neutral-900">{t('暂无归档会话')}</div>
-                    <div className="mt-2 text-xs text-neutral-500">{t('归档后的会话会显示在这里。')}</div>
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-col">
-                <div className="flex h-10 items-center border-b border-neutral-200 px-3 text-sm font-semibold">{t('会话内容')}</div>
-                <div className="grid flex-1 place-items-center text-sm text-neutral-500">{t('选择左侧会话后，在这里查看归档内容。')}</div>
-              </div>
-            </div>
+            <ArchivedSessionsPanel retention={settings.archivedRetention} onRetentionChange={(archivedRetention) => patchSettings({ archivedRetention })} />
           </SettingsSection>
         </SettingsStack>
       )
@@ -837,6 +891,426 @@ function SettingsContent({
     default:
       return null
   }
+}
+
+function ArchivedSessionsPanel({
+  retention,
+  onRetentionChange,
+}: {
+  retention: string
+  onRetentionChange: (value: string) => void
+}) {
+  const navigate = useNavigate()
+  const { t } = useI18n()
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [archivedIds, setArchivedIds] = useState<string[]>(() => loadSessionListPrefs().archived)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [loadingMessages, setLoadingMessages] = useState(false)
+  const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [notice, setNotice] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<Session | null>(null)
+  const archivedIdSet = new Set(archivedIds)
+  const archivedSessions = sessions.filter((session) => archivedIdSet.has(session.id))
+  const filteredSessions = archivedSessions.filter((session) => {
+    const keyword = query.trim().toLowerCase()
+    if (!keyword) return true
+    return [session.title, session.type, session.workspaceId ?? '', session.workspaceAgentId ?? ''].join(' ').toLowerCase().includes(keyword)
+  })
+  const selectedSession = filteredSessions.find((session) => session.id === selectedId) ?? archivedSessions.find((session) => session.id === selectedId) ?? filteredSessions[0] ?? null
+  const staleSessions = archivedSessions.filter((session) => isPastRetention(session.updatedAt, retention))
+
+  useEffect(() => {
+    void refresh()
+  }, [])
+
+  useEffect(() => {
+    const sync = () => setArchivedIds(loadSessionListPrefs().archived)
+    window.addEventListener('storage', sync)
+    window.addEventListener(sessionArchiveChangeEvent, sync)
+    return () => {
+      window.removeEventListener('storage', sync)
+      window.removeEventListener(sessionArchiveChangeEvent, sync)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selectedSession) {
+      setSelectedId(null)
+      setMessages([])
+      return
+    }
+    if (selectedId !== selectedSession.id) setSelectedId(selectedSession.id)
+    let cancelled = false
+    setLoadingMessages(true)
+    api
+      .listMessages(selectedSession.id)
+      .then(({ items }) => {
+        if (!cancelled) setMessages(items)
+      })
+      .catch(() => {
+        if (!cancelled) setMessages([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingMessages(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedSession?.id])
+
+  function showNotice(message: string) {
+    setNotice(message)
+    window.setTimeout(() => setNotice(''), 2200)
+  }
+
+  async function refresh() {
+    setLoading(true)
+    try {
+      const [{ items }, prefs] = await Promise.all([api.listSessions(), Promise.resolve(loadSessionListPrefs())])
+      setSessions(items)
+      const existingIds = new Set(items.map((session) => session.id))
+      const nextArchived = prefs.archived.filter((id) => existingIds.has(id))
+      if (nextArchived.length !== prefs.archived.length) {
+        saveSessionListPrefs({ ...prefs, archived: nextArchived })
+      }
+      setArchivedIds(nextArchived)
+      if (selectedId && !nextArchived.includes(selectedId)) setSelectedId(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function restoreSession(sessionId: string) {
+    const prefs = loadSessionListPrefs()
+    const nextArchived = prefs.archived.filter((id) => id !== sessionId)
+    saveSessionListPrefs({ ...prefs, archived: nextArchived })
+    setArchivedIds(nextArchived)
+    if (selectedId === sessionId) setSelectedId(null)
+    showNotice(t('会话已恢复到左侧列表'))
+  }
+
+  function restoreAll() {
+    const prefs = loadSessionListPrefs()
+    saveSessionListPrefs({ ...prefs, archived: [] })
+    setArchivedIds([])
+    setSelectedId(null)
+    showNotice(t('所有归档会话已恢复'))
+  }
+
+  async function deleteSession(session: Session) {
+    setBusyAction(`delete:${session.id}`)
+    try {
+      await api.deleteSession(session.id)
+      const prefs = loadSessionListPrefs()
+      const nextArchived = prefs.archived.filter((id) => id !== session.id)
+      saveSessionListPrefs({ ...prefs, archived: nextArchived, pinned: prefs.pinned.filter((id) => id !== session.id) })
+      setSessions((items) => items.filter((item) => item.id !== session.id))
+      setArchivedIds(nextArchived)
+      if (selectedId === session.id) setSelectedId(null)
+      setDeleteTarget(null)
+      showNotice(t('会话已删除'))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function cleanupExpired() {
+    if (!staleSessions.length) {
+      showNotice(t('没有超过保留期的归档会话'))
+      return
+    }
+    setBusyAction('cleanup')
+    try {
+      for (const session of staleSessions) {
+        await api.deleteSession(session.id)
+      }
+      const removed = new Set(staleSessions.map((session) => session.id))
+      const prefs = loadSessionListPrefs()
+      const nextArchived = prefs.archived.filter((id) => !removed.has(id))
+      saveSessionListPrefs({ ...prefs, archived: nextArchived, pinned: prefs.pinned.filter((id) => !removed.has(id)) })
+      setSessions((items) => items.filter((session) => !removed.has(session.id)))
+      setArchivedIds(nextArchived)
+      if (selectedId && removed.has(selectedId)) setSelectedId(null)
+      showNotice(t('已清理超过保留期的会话'))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  function openSession(sessionId: string) {
+    navigate(`/chat/${sessionId}`)
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--settings-border)', background: 'var(--settings-panel-muted)' }}>
+        <div className="flex flex-wrap items-center gap-2">
+          <Archive className="h-4 w-4" style={{ color: 'var(--settings-accent)' }} />
+          <span className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t('归档会话')}</span>
+          <span className="rounded-full px-2 py-0.5 text-xs" style={{ background: 'var(--settings-accent-soft)', color: 'var(--settings-accent)' }}>
+            {archivedSessions.length}
+          </span>
+          <span className="text-xs" style={{ color: 'var(--settings-muted-text)' }}>
+            {staleSessions.length ? t('有会话超过保留期') : t('保留状态正常')}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={retention}
+            onChange={(event) => onRetentionChange(event.target.value)}
+            className="h-8 rounded-lg border px-2 text-xs outline-none"
+            style={{ background: 'var(--settings-control-bg)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}
+          >
+            {['30 天', '90 天', '180 天', '永久保留'].map((option) => <option key={option} value={option}>{t(option)}</option>)}
+          </select>
+          <button type="button" onClick={() => void refresh()} disabled={loading} className="settings-soft-button h-8">
+            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+            {t('刷新')}
+          </button>
+          <button type="button" onClick={restoreAll} disabled={!archivedSessions.length} className="settings-soft-button h-8">
+            <ArchiveRestore className="h-3.5 w-3.5" />
+            {t('恢复全部')}
+          </button>
+          <button type="button" onClick={() => void cleanupExpired()} disabled={!staleSessions.length || busyAction === 'cleanup'} className="settings-danger-button h-8 px-3">
+            {busyAction === 'cleanup' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            {t('清理过期')}
+          </button>
+        </div>
+      </div>
+
+      {notice && (
+        <div className="border-b px-4 py-2 text-sm" style={{ borderColor: 'var(--settings-border)', color: 'var(--settings-accent)', background: 'var(--settings-accent-soft)' }}>
+          {notice}
+        </div>
+      )}
+
+      <div className="grid min-h-[680px] grid-cols-[320px_minmax(0,1fr)]">
+        <div className="flex min-h-0 flex-col border-r" style={{ borderColor: 'var(--settings-border)', background: 'var(--settings-sidebar)' }}>
+          <div className="border-b p-3" style={{ borderColor: 'var(--settings-border)' }}>
+            <div className="flex h-9 items-center gap-2 rounded-xl border px-3" style={{ background: 'var(--settings-control-bg)', borderColor: 'var(--settings-border)' }}>
+              <Search className="h-4 w-4" style={{ color: 'var(--settings-muted-text)' }} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t('搜索归档会话')}
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+                style={{ color: 'var(--settings-text)' }}
+              />
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            {loading ? (
+              <div className="grid h-full place-items-center text-sm" style={{ color: 'var(--settings-muted-text)' }}>
+                <Loader2 className="mb-2 h-5 w-5 animate-spin" />
+                {t('正在读取归档')}
+              </div>
+            ) : filteredSessions.length ? (
+              <div className="space-y-1">
+                {filteredSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    onClick={() => setSelectedId(session.id)}
+                    className="w-full rounded-xl border px-3 py-2.5 text-left transition hover:-translate-y-px"
+                    style={{
+                      background: selectedSession?.id === session.id ? 'var(--settings-active-bg)' : 'transparent',
+                      borderColor: selectedSession?.id === session.id ? 'var(--settings-active-border)' : 'transparent',
+                      color: 'var(--settings-text)',
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-sm font-semibold">{session.title || t('未命名会话')}</span>
+                      <span className="shrink-0 text-[11px]" style={{ color: 'var(--settings-muted-text)' }}>{sessionTypeLabel(session)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-xs" style={{ color: 'var(--settings-muted-text)' }}>
+                      <Clock3 className="h-3.5 w-3.5" />
+                      {relativeTime(session.updatedAt)}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="grid h-full place-items-center px-6 text-center">
+                <div>
+                  <Archive className="mx-auto mb-3 h-8 w-8" style={{ color: 'var(--settings-muted)' }} />
+                  <div className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t('暂无归档会话')}</div>
+                  <div className="mt-2 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                    {query.trim() ? t('没有匹配的归档会话') : t('归档后的会话会显示在这里。')}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-col">
+          {selectedSession ? (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--settings-border)' }}>
+                <div className="min-w-0">
+                  <div className="truncate text-base font-semibold" style={{ color: 'var(--settings-text)' }}>{selectedSession.title || t('未命名会话')}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs" style={{ color: 'var(--settings-muted-text)' }}>
+                    <span>{sessionTypeLabel(selectedSession)}</span>
+                    <span>·</span>
+                    <span>{t('更新于')} {formatArchiveDate(selectedSession.updatedAt)}</span>
+                    {isPastRetention(selectedSession.updatedAt, retention) && <span style={{ color: '#dc2626' }}>{t('超过保留期')}</span>}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => openSession(selectedSession.id)} className="settings-soft-button">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    {t('打开会话')}
+                  </button>
+                  <button type="button" onClick={() => restoreSession(selectedSession.id)} className="settings-soft-button">
+                    <ArchiveRestore className="h-3.5 w-3.5" />
+                    {t('恢复')}
+                  </button>
+                  <button type="button" onClick={() => setDeleteTarget(selectedSession)} className="settings-danger-button">
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {t('删除')}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid gap-3 border-b p-4 sm:grid-cols-3" style={{ borderColor: 'var(--settings-border)' }}>
+                <ArchiveMetric icon={<MessageSquare className="h-4 w-4" />} label="消息数量" value={loadingMessages ? t('读取中') : String(messages.length)} />
+                <ArchiveMetric icon={<Clock3 className="h-4 w-4" />} label="最后更新" value={relativeTime(selectedSession.updatedAt)} />
+                <ArchiveMetric icon={<FileText className="h-4 w-4" />} label="保留策略" value={retention} />
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                {loadingMessages ? (
+                  <div className="grid h-full place-items-center text-sm" style={{ color: 'var(--settings-muted-text)' }}>
+                    <Loader2 className="mb-2 h-5 w-5 animate-spin" />
+                    {t('正在读取会话内容')}
+                  </div>
+                ) : messages.length ? (
+                  <div className="space-y-3">
+                    {messages.map((message) => (
+                      <ArchivedMessageBubble key={message.id} message={message} />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="grid h-full place-items-center text-center text-sm" style={{ color: 'var(--settings-muted-text)' }}>
+                    {t('这个归档会话还没有消息。')}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="grid flex-1 place-items-center px-8 text-center">
+              <div>
+                <MessageSquare className="mx-auto mb-3 h-9 w-9" style={{ color: 'var(--settings-muted)' }} />
+                <div className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t('选择一个归档会话')}</div>
+                <div className="mt-2 max-w-sm text-sm leading-6" style={{ color: 'var(--settings-muted-text)' }}>
+                  {t('选择左侧会话后，在这里查看归档内容。')}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {deleteTarget && (
+        <div className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" onMouseDown={() => setDeleteTarget(null)}>
+          <div className="w-full max-w-sm rounded-2xl border p-4 shadow-2xl" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-red-50 text-red-500">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t('删除归档会话')}</div>
+                <p className="mt-1 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                  {t('这个会话和其中的消息会被永久删除，无法恢复。')}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 rounded-xl border px-3 py-2" style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}>
+              <div className="truncate text-sm font-medium" style={{ color: 'var(--settings-text)' }}>{deleteTarget.title || t('未命名会话')}</div>
+              <div className="mt-0.5 text-xs" style={{ color: 'var(--settings-muted-text)' }}>{relativeTime(deleteTarget.updatedAt)}</div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => setDeleteTarget(null)} disabled={Boolean(busyAction)} className="settings-soft-button h-10">
+                {t('取消')}
+              </button>
+              <button type="button" onClick={() => void deleteSession(deleteTarget)} disabled={Boolean(busyAction)} className="settings-danger-button h-10">
+                {busyAction === `delete:${deleteTarget.id}` && <Loader2 className="h-4 w-4 animate-spin" />}
+                {t('删除')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ArchiveMetric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  const { t } = useI18n()
+  return (
+    <div className="rounded-xl border px-3 py-3" style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}>
+      <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--settings-muted-text)' }}>
+        {icon}
+        {t(label)}
+      </div>
+      <div className="mt-1 truncate text-sm font-semibold" style={{ color: 'var(--settings-text)' }} title={value}>{value}</div>
+    </div>
+  )
+}
+
+function ArchivedMessageBubble({ message }: { message: Message }) {
+  const sender = archivedSenderLabel(message)
+  const displayContent = typeof message.metadata?.displayContent === 'string' ? message.metadata.displayContent : message.content
+  return (
+    <div className={cn('max-w-[84%] rounded-2xl border px-4 py-3', message.senderType === 'user' && 'ml-auto')} style={{
+      background: message.senderType === 'user' ? 'var(--settings-active-bg)' : 'var(--settings-control-bg)',
+      borderColor: message.senderType === 'user' ? 'var(--settings-active-border)' : 'var(--settings-border)',
+    }}>
+      <div className="mb-1 flex items-center justify-between gap-3 text-xs" style={{ color: 'var(--settings-muted-text)' }}>
+        <span className="font-medium">{sender}</span>
+        <span>{formatArchiveDate(message.createdAt)}</span>
+      </div>
+      <div className="whitespace-pre-wrap break-words text-sm leading-6" style={{ color: 'var(--settings-text)' }}>
+        {displayContent || ' '}
+      </div>
+    </div>
+  )
+}
+
+function archivedSenderLabel(message: Message) {
+  if (message.senderType === 'user') return 'User'
+  if (message.senderType === 'system') return 'System'
+  return message.senderId || 'Agent'
+}
+
+function sessionTypeLabel(session: Session) {
+  if (session.type === 'group') return '群聊'
+  if (session.workspaceAgentId) return 'Agent 子会话'
+  return '普通会话'
+}
+
+function formatArchiveDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function isPastRetention(updatedAt: string, retention: string) {
+  const days = retentionDays(retention)
+  if (!days) return false
+  const updated = new Date(updatedAt).getTime()
+  if (Number.isNaN(updated)) return false
+  return Date.now() - updated > days * 24 * 60 * 60 * 1000
+}
+
+function retentionDays(retention: string) {
+  if (retention.includes('30')) return 30
+  if (retention.includes('90')) return 90
+  if (retention.includes('180')) return 180
+  return null
 }
 
 function ModelManagement({
@@ -991,8 +1465,8 @@ function SettingsSection({ title, desc, children }: { title: string; desc?: stri
   return (
     <section className="space-y-4">
       <div>
-        <h2 className="text-sm font-semibold text-slate-800">{t(title)}</h2>
-        {desc && <p className="mt-2 text-sm leading-6 text-slate-600">{t(desc)}</p>}
+        <h2 className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t(title)}</h2>
+        {desc && <p className="mt-2 text-sm leading-6" style={{ color: 'var(--settings-muted-text)' }}>{t(desc)}</p>}
       </div>
       <div className="space-y-3">{children}</div>
     </section>
@@ -1000,7 +1474,17 @@ function SettingsSection({ title, desc, children }: { title: string; desc?: stri
 }
 
 function InsetPanel({ children }: { children: React.ReactNode }) {
-  return <div className="space-y-4 rounded-xl border border-neutral-200 bg-white p-4">{children}</div>
+  return <div className="space-y-4 rounded-xl border p-4 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>{children}</div>
+}
+
+function StorageMetric({ label, value }: { label: string; value: string }) {
+  const { t } = useI18n()
+  return (
+    <div className="rounded-xl border px-3 py-3" style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}>
+      <div className="text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>{t(label)}</div>
+      <div className="mt-1 truncate text-lg font-semibold" style={{ color: 'var(--settings-text)' }} title={value}>{value}</div>
+    </div>
+  )
 }
 
 function StatusPill({ ok, label }: { ok: boolean; label: string }) {
@@ -1036,7 +1520,7 @@ function InlineSwitch({ checked, onChange, label }: { checked: boolean; onChange
   return (
     <div className="flex items-center gap-3">
       <SmallToggle checked={checked} onChange={onChange} />
-      <span className="text-sm font-medium text-neutral-800">{t(label)}</span>
+      <span className="text-sm font-medium" style={{ color: 'var(--settings-text)' }}>{t(label)}</span>
     </div>
   )
 }
@@ -1044,30 +1528,23 @@ function InlineSwitch({ checked, onChange, label }: { checked: boolean; onChange
 function SegmentedControl({ value, options, onChange }: { value: string; options: string[]; onChange: (value: string) => void }) {
   const { t } = useI18n()
   return (
-    <div className="inline-flex overflow-hidden rounded-lg border border-neutral-200 bg-white p-0.5">
+    <div className="inline-flex overflow-hidden rounded-lg border p-0.5" style={{ background: 'var(--settings-control-bg)', borderColor: 'var(--settings-border)' }}>
       {options.map((option) => (
         <button
           key={option}
           type="button"
           onClick={() => onChange(option)}
           className={cn(
-            'h-7 min-w-14 px-3 text-sm transition',
-            value === option ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-neutral-50'
+            'h-7 min-w-14 rounded-md px-3 text-sm transition hover:brightness-95'
           )}
+          style={{
+            background: value === option ? 'var(--settings-accent-soft)' : 'transparent',
+            color: value === option ? 'var(--settings-accent)' : 'var(--settings-muted-text)',
+          }}
         >
           {t(option)}
         </button>
       ))}
-    </div>
-  )
-}
-
-function OptionRow({ label, children }: { label: string; children: React.ReactNode }) {
-  const { t } = useI18n()
-  return (
-    <div className="flex items-center gap-5">
-      <span className="w-24 text-sm text-slate-600">{t(label)}</span>
-      {children}
     </div>
   )
 }
@@ -1082,14 +1559,230 @@ function SwitchList({ items }: { items: Array<[string, boolean, (value: boolean)
   )
 }
 
-function SelectLine({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function ThemeDisplayPanel({ settings, patchSettings }: { settings: AppSettings; patchSettings: (patch: Partial<AppSettings>) => void }) {
+  const { t } = useI18n()
+  const mainTheme = resolveTheme(settings.mainWindowTheme)
+  const embeddedTheme = resolveTheme(settings.embeddedWindowTheme)
+  const accent = accentColor(settings.accent)
+
+  return (
+    <InsetPanel>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className="space-y-5">
+          <div>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('主窗口')}</div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {themeModes.map((mode) => (
+                <ThemeOption
+                  key={`main-${mode}`}
+                  mode={mode}
+                  active={settings.mainWindowTheme === mode}
+                  accent={accent}
+                  onClick={() => patchSettings({ mainWindowTheme: mode, theme: mode === '跟随系统' ? settings.theme : mode })}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('嵌入窗口')}</div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {themeModes.map((mode) => (
+                <ThemeOption
+                  key={`embed-${mode}`}
+                  mode={mode}
+                  active={settings.embeddedWindowTheme === mode}
+                  accent={accent}
+                  onClick={() => patchSettings({ embeddedWindowTheme: mode })}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('强调色')}</div>
+            <div className="flex flex-wrap gap-2">
+              {accentOptions.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => patchSettings({ accent: option })}
+                  className="flex h-9 items-center gap-2 rounded-lg border px-3 text-sm font-medium transition hover:-translate-y-px"
+                  style={{
+                    background: settings.accent === option ? accent : 'var(--settings-control-bg)',
+                    borderColor: settings.accent === option ? accent : 'var(--settings-border)',
+                    color: settings.accent === option ? '#ffffff' : 'var(--settings-text)',
+                  }}
+                >
+                  <span className="h-3.5 w-3.5 rounded-full" style={{ background: accentColor(option) }} />
+                  {t(option)}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <ThemePreview mainTheme={mainTheme} embeddedTheme={embeddedTheme} accent={accent} />
+      </div>
+    </InsetPanel>
+  )
+}
+
+function ThemeOption({ mode, active, accent, onClick }: { mode: string; active: boolean; accent: string; onClick: () => void }) {
+  const { t } = useI18n()
+  const palette = themePalette(resolveTheme(mode))
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-xl border p-3 text-left transition hover:-translate-y-0.5 hover:shadow-sm"
+      style={{
+        background: active ? 'var(--settings-active-bg)' : 'var(--settings-control-bg)',
+        borderColor: active ? accent : 'var(--settings-border)',
+        boxShadow: active ? `0 0 0 1px ${accent}22, 0 10px 24px rgba(15, 23, 42, 0.08)` : undefined,
+      }}
+    >
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t(mode)}</span>
+        <span className="h-2.5 w-2.5 rounded-full" style={{ background: active ? accent : 'var(--settings-muted)' }} />
+      </div>
+      <div className="overflow-hidden rounded-lg border" style={{ background: palette.bg, borderColor: palette.border }}>
+        <div className="h-5" style={{ background: palette.chrome }} />
+        <div className="space-y-1.5 p-2">
+          <div className="h-2 w-2/3 rounded-full" style={{ background: palette.muted }} />
+          <div className="h-5 rounded-md" style={{ background: palette.panel }} />
+          <div className="h-1.5 w-10 rounded-full" style={{ background: accent }} />
+        </div>
+      </div>
+    </button>
+  )
+}
+
+function ThemePreview({ mainTheme, embeddedTheme, accent }: { mainTheme: 'light' | 'dark'; embeddedTheme: 'light' | 'dark'; accent: string }) {
+  const { t } = useI18n()
+  const main = themePalette(mainTheme)
+  const embedded = themePalette(embeddedTheme)
+  return (
+    <div className="rounded-2xl border p-3" style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}>
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--settings-muted-text)' }}>{t('显示预览')}</span>
+        <span className="h-2.5 w-2.5 rounded-full" style={{ background: accent }} />
+      </div>
+      <div className="overflow-hidden rounded-xl border shadow-sm" style={{ background: main.bg, borderColor: main.border }}>
+        <div className="flex h-8 items-center gap-1.5 px-3" style={{ background: main.chrome }}>
+          <span className="h-2 w-2 rounded-full bg-red-300" />
+          <span className="h-2 w-2 rounded-full bg-amber-300" />
+          <span className="h-2 w-2 rounded-full bg-emerald-300" />
+        </div>
+        <div className="space-y-3 p-4">
+          <div className="flex items-center gap-2">
+            <div className="h-8 w-8 rounded-lg" style={{ background: accent }} />
+            <div>
+              <div className="h-2.5 w-24 rounded-full" style={{ background: main.text }} />
+              <div className="mt-1.5 h-2 w-16 rounded-full" style={{ background: main.muted }} />
+            </div>
+          </div>
+          <div className="rounded-lg p-3" style={{ background: main.panel }}>
+            <div className="h-2 w-4/5 rounded-full" style={{ background: main.text }} />
+            <div className="mt-2 h-2 w-2/3 rounded-full" style={{ background: main.muted }} />
+          </div>
+          <div className="rounded-lg border p-3" style={{ background: embedded.panel, borderColor: embedded.border }}>
+            <div className="mb-2 h-2 w-20 rounded-full" style={{ background: embedded.text }} />
+            <div className="grid grid-cols-3 gap-2">
+              <div className="h-10 rounded-md" style={{ background: embedded.chrome }} />
+              <div className="h-10 rounded-md" style={{ background: accent, opacity: 0.9 }} />
+              <div className="h-10 rounded-md" style={{ background: embedded.chrome }} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FontDisplayPanel({ settings, patchSettings }: { settings: AppSettings; patchSettings: (patch: Partial<AppSettings>) => void }) {
   const { t } = useI18n()
   return (
-    <div className="flex max-w-[470px] items-center gap-4">
-      <span className="w-24 text-right text-sm text-slate-600">{t(label)}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 min-w-0 flex-1 rounded-md border border-neutral-200 bg-white px-3 text-sm font-medium outline-none">
-        {['默认', 'Inter', 'Microsoft YaHei UI', 'JetBrains Mono', 'Cascadia Mono'].map((option) => <option key={option} value={option}>{t(option)}</option>)}
+    <InsetPanel>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <FontSelect label="界面" value={settings.uiFont} onChange={(uiFont) => patchSettings({ uiFont })} />
+            <FontSelect label="正文" value={settings.bodyFont} onChange={(bodyFont) => patchSettings({ bodyFont })} />
+            <FontSelect label="行内代码" value={settings.inlineCodeFont} onChange={(inlineCodeFont) => patchSettings({ inlineCodeFont })} />
+            <FontSelect label="代码块" value={settings.codeBlockFont} onChange={(codeBlockFont) => patchSettings({ codeBlockFont })} />
+            <FontSelect label="编辑器 / 终端" value={settings.terminalFont} onChange={(terminalFont) => patchSettings({ terminalFont })} />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('字体大小')}</div>
+              <SegmentedControl value={settings.fontSize} options={fontSizeOptions} onChange={(fontSize) => patchSettings({ fontSize })} />
+            </div>
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('消息样式')}</div>
+              <SegmentedControl value={settings.bubbleStyle} options={messageStyleOptions} onChange={(bubbleStyle) => patchSettings({ bubbleStyle })} />
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="settings-soft-button"
+            onClick={() =>
+              patchSettings({
+                bodyFont: '默认',
+                codeBlockFont: '默认',
+                fontSize: '14',
+                inlineCodeFont: '默认',
+                terminalFont: '默认',
+                uiFont: '默认',
+              })
+            }
+          >
+            {t('恢复默认字体')}
+          </button>
+        </div>
+
+        <FontPreview settings={settings} />
+      </div>
+    </InsetPanel>
+  )
+}
+
+function FontSelect({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const { t } = useI18n()
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-medium text-neutral-500">{t(label)}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="h-10 w-full rounded-lg border px-3 text-sm font-medium outline-none transition focus:brightness-95" style={{ background: 'var(--settings-control-bg)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}>
+        {fontOptions.map((option) => <option key={option} value={option}>{t(option)}</option>)}
       </select>
+    </label>
+  )
+}
+
+function FontPreview({ settings }: { settings: AppSettings }) {
+  const { t } = useI18n()
+  const uiFont = fontStack(settings.uiFont, 'ui')
+  const bodyFont = fontStack(settings.bodyFont, 'body')
+  const codeFont = fontStack(settings.codeBlockFont, 'mono')
+  const size = `${settings.fontSize}px`
+  return (
+    <div className="rounded-2xl border p-4" style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}>
+      <div className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--settings-muted-text)' }}>{t('字体预览')}</div>
+      <div className="rounded-xl border p-4" style={{ background: 'var(--settings-control-bg)', borderColor: 'var(--settings-border)' }}>
+        <div style={{ fontFamily: uiFont, color: 'var(--settings-text)' }} className="text-sm font-semibold">{t('AgentHub 显示效果')}</div>
+        <p style={{ fontFamily: bodyFont, fontSize: size, color: 'var(--settings-muted-text)' }} className="mt-3 leading-7">
+          {t('这是一段聊天正文预览，用于检查字号、字重和中英文混排。')}
+        </p>
+        <div style={{ fontFamily: codeFont }} className="mt-3 rounded-lg bg-neutral-950 px-3 py-2 text-[13px] leading-6 text-neutral-100">
+          <div>const agent = "AgentHub"</div>
+          <div>run(agent, workspace)</div>
+        </div>
+        <div className={cn('mt-3 max-w-[85%] rounded-xl px-3 py-2 text-sm text-white', settings.bubbleStyle === '紧凑' ? 'rounded-md py-1.5' : settings.bubbleStyle === '气泡' ? 'rounded-2xl' : '')} style={{ background: accentColor(settings.accent), fontFamily: bodyFont }}>
+          {t('消息气泡预览')}
+        </div>
+      </div>
     </div>
   )
 }
@@ -1108,10 +1801,10 @@ function RuntimeRow({ label, value, action, busy, onAction }: { label: string; v
 function ShortcutRow({ title, desc, children }: { title: string; desc: string; children: React.ReactNode }) {
   const { t } = useI18n()
   return (
-    <div className="flex min-h-16 items-center justify-between gap-6 rounded-xl border border-neutral-200 px-4 py-3">
+    <div className="flex min-h-16 items-center justify-between gap-6 rounded-xl border px-4 py-3" style={{ borderColor: 'var(--settings-border)', background: 'var(--settings-control-bg)' }}>
       <div>
-        <div className="text-sm font-semibold text-neutral-950">{t(title)}</div>
-        <div className="mt-1 text-sm text-neutral-500">{t(desc)}</div>
+        <div className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t(title)}</div>
+        <div className="mt-1 text-sm" style={{ color: 'var(--settings-muted-text)' }}>{t(desc)}</div>
       </div>
       {children}
     </div>
@@ -1121,14 +1814,14 @@ function ShortcutRow({ title, desc, children }: { title: string; desc: string; c
 function SelectPill({ value, options, onChange }: { value: string; options: string[]; onChange: (value: string) => void }) {
   const { t } = useI18n()
   return (
-    <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-80 rounded-md border border-neutral-200 bg-white px-3 text-center text-sm font-medium outline-none">
+    <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-80 rounded-md border px-3 text-center text-sm font-medium outline-none" style={{ background: 'var(--settings-control-bg)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}>
       {options.map((option) => <option key={option} value={option}>{t(option)}</option>)}
     </select>
   )
 }
 
 function Keycap({ children }: { children: React.ReactNode }) {
-  return <span className="rounded-md border border-neutral-200 bg-white px-3 py-1 text-sm font-semibold shadow-sm">{children}</span>
+  return <span className="rounded-md border px-3 py-1 text-sm font-semibold shadow-sm" style={{ background: 'var(--settings-control-bg)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}>{children}</span>
 }
 
 const toolRows = [
@@ -1213,7 +1906,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
 
 function SmallToggle({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
   return (
-    <button type="button" onClick={() => onChange(!checked)} className={cn('relative h-6 w-10 rounded-full transition', checked ? 'bg-indigo-500' : 'bg-neutral-300')}>
+    <button type="button" onClick={() => onChange(!checked)} className="relative h-6 w-10 rounded-full transition" style={{ background: checked ? 'var(--settings-accent)' : 'var(--settings-muted)' }}>
       <span className={cn('absolute top-1 h-4 w-4 rounded-full bg-white transition', checked ? 'left-5' : 'left-1')} />
     </button>
   )
@@ -1222,11 +1915,18 @@ function SmallToggle({ checked, onChange }: { checked: boolean; onChange: (value
 function InfoRow({ label, value }: { label: string; value: string }) {
   const { t } = useI18n()
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl bg-neutral-50 px-3 py-2">
-      <span className="text-sm text-neutral-500">{t(label)}</span>
-      <span className="text-sm font-medium text-neutral-900">{value}</span>
+    <div className="flex items-center justify-between gap-4 rounded-xl px-3 py-2" style={{ background: 'var(--settings-panel-muted)' }}>
+      <span className="text-sm" style={{ color: 'var(--settings-muted-text)' }}>{t(label)}</span>
+      <span className="text-sm font-medium" style={{ color: 'var(--settings-text)' }}>{value}</span>
     </div>
   )
+}
+
+function parentDirectory(path: string | undefined) {
+  if (!path) return undefined
+  const normalized = path.replace(/[\\/]+$/, '')
+  const index = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'))
+  return index > 0 ? normalized.slice(0, index) : normalized
 }
 
 function Stat({ value, label }: { value: number; label: string }) {
@@ -1316,4 +2016,28 @@ function sectionDescription(section: SectionKey) {
     关于: '查看 AgentHub 客户端和本机运行信息。',
   }
   return descriptions[section]
+}
+
+function createSettingsThemeStyle(settings: AppSettings): CSSProperties {
+  const theme = resolveTheme(settings.mainWindowTheme)
+  const palette = themePalette(theme)
+  const accent = accentColor(settings.accent)
+  const isDark = theme === 'dark'
+
+  return {
+    '--settings-bg': palette.bg,
+    '--settings-sidebar': palette.chrome,
+    '--settings-panel': palette.panel,
+    '--settings-panel-muted': isDark ? '#1d1d1d' : '#f4f4ef',
+    '--settings-control-bg': isDark ? '#202020' : '#ffffff',
+    '--settings-border': palette.border,
+    '--settings-text': palette.text,
+    '--settings-muted': palette.muted,
+    '--settings-muted-text': isDark ? '#a3a3a3' : '#666660',
+    '--settings-accent': accent,
+    '--settings-accent-soft': hexToRgba(accent, isDark ? 0.2 : 0.12),
+    '--settings-active-bg': hexToRgba(accent, isDark ? 0.18 : 0.1),
+    '--settings-active-border': hexToRgba(accent, isDark ? 0.55 : 0.32),
+    '--settings-danger-bg': isDark ? '#2a1717' : '#fff7f7',
+  } as CSSProperties
 }

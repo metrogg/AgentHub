@@ -26,19 +26,13 @@ import {
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
 import { api, type Session, type WorkspaceAgent, type WorkspaceFull } from '../../lib/api'
+import { loadSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent, type SessionListPrefs } from '../../lib/sessionArchive'
 
 type SessionGroup = {
   parent: Session
   children: Session[]
   latestUpdatedAt: string
 }
-
-type SessionListPrefs = {
-  pinned: string[]
-  archived: string[]
-}
-
-const sessionListPrefsKey = 'agenthub:session-list-prefs'
 
 export default function SessionList() {
   const navigate = useNavigate()
@@ -73,6 +67,16 @@ export default function SessionList() {
   useEffect(() => {
     fetchSessions()
   }, [fetchSessions])
+
+  useEffect(() => {
+    const syncPrefs = () => setPrefs(loadSessionListPrefs())
+    window.addEventListener('storage', syncPrefs)
+    window.addEventListener(sessionArchiveChangeEvent, syncPrefs)
+    return () => {
+      window.removeEventListener('storage', syncPrefs)
+      window.removeEventListener(sessionArchiveChangeEvent, syncPrefs)
+    }
+  }, [])
 
   useEffect(() => {
     if (!activeSession?.workspaceId || activeSession.type !== 'direct' || !activeSession.workspaceAgentId) return
@@ -529,7 +533,7 @@ function NewSessionDialog({
     .filter((workspace) => workspace.agents.length > 0)
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" onMouseDown={onClose}>
+    <div className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" onMouseDown={onClose}>
       <div className="max-h-[82vh] w-full max-w-xl overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 border-b border-neutral-100 px-5 py-4">
           <div>
@@ -651,7 +655,7 @@ function DeleteSessionDialog({
 }) {
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30 px-4 backdrop-blur-sm"
+      className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30 px-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="delete-session-title"
@@ -877,30 +881,4 @@ function comparePinnedGroups(a: SessionGroup, b: SessionGroup, pinnedIds: Set<st
   const bPinned = pinnedIds.has(b.parent.id)
   if (aPinned !== bPinned) return aPinned ? -1 : 1
   return Date.parse(b.latestUpdatedAt) - Date.parse(a.latestUpdatedAt)
-}
-
-function loadSessionListPrefs(): SessionListPrefs {
-  if (typeof window === 'undefined') return { pinned: [], archived: [] }
-  try {
-    return normalizeSessionListPrefs(JSON.parse(window.localStorage.getItem(sessionListPrefsKey) ?? '{}'))
-  } catch {
-    return { pinned: [], archived: [] }
-  }
-}
-
-function saveSessionListPrefs(prefs: SessionListPrefs) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(sessionListPrefsKey, JSON.stringify(prefs))
-}
-
-function normalizeSessionListPrefs(value: unknown): SessionListPrefs {
-  const candidate = value as Partial<SessionListPrefs> | null
-  return {
-    pinned: uniqueStrings(candidate?.pinned),
-    archived: uniqueStrings(candidate?.archived),
-  }
-}
-
-function uniqueStrings(value: unknown) {
-  return Array.from(new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []))
 }
