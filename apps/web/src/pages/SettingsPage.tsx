@@ -35,6 +35,14 @@ import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAcc
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
 import { getDesktopInfo, isDesktopApp, openPath, pickWorkspaceFolder } from '../lib/native'
 import { loadSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent } from '../lib/sessionArchive'
+import {
+  defaultShortcutBindings,
+  normalizeShortcutBindings,
+  settingsUpdatedEvent,
+  shortcutConflict,
+  shortcutFromRecordingEvent,
+  type ShortcutActionId,
+} from '../lib/shortcuts'
 import { cn, relativeTime } from '../lib/utils'
 
 type SectionKey =
@@ -312,6 +320,7 @@ export default function SettingsPage() {
               ...defaultAppSettings,
               ...parsed,
               language: languageToSettingValue(normalizedLanguage),
+              shortcuts: normalizeShortcutBindings(parsed.shortcuts),
             })
           } catch {
             setAppSettings(defaultAppSettings)
@@ -362,6 +371,7 @@ export default function SettingsPage() {
         TOOL_PERMISSION_RULES: JSON.stringify(appSettings.toolPermissions),
       })
         .then(() => {
+          window.dispatchEvent(new Event(settingsUpdatedEvent))
           setSaveState('saved')
           window.setTimeout(() => setSaveState('idle'), 2500)
         })
@@ -839,20 +849,7 @@ function SettingsContent({
       return (
         <SettingsStack>
           <SettingsSection title="快捷键" desc="配置常用操作的键盘组合。">
-            <InsetPanel>
-              <ShortcutRow title="发送方式" desc="设置会话输入框里 Enter 与 Ctrl+Enter 的发送和换行行为。">
-                <SelectPill value={settings.sendMode} options={['Enter 发送', 'Ctrl+Enter 发送']} onChange={(sendMode) => patchSettings({ sendMode })} />
-              </ShortcutRow>
-              <ShortcutRow title="新建会话" desc="在会话页立即开始一个新会话。">
-                <div className="flex items-center gap-2">
-                  <Keycap>Ctrl</Keycap>
-                  <Keycap>N</Keycap>
-                  <button type="button" className="settings-soft-button">{t('录制')}</button>
-                  <button type="button" className="settings-soft-button">{t('恢复默认')}</button>
-                </div>
-              </ShortcutRow>
-            </InsetPanel>
-            <p className="text-xs text-neutral-500">{t('点击“录制”后按下组合键。至少包含 Ctrl、Alt、Shift 或 Cmd，按 Esc 取消。')}</p>
+            <ShortcutSettingsPanel settings={settings} patchSettings={patchSettings} />
           </SettingsSection>
         </SettingsStack>
       )
@@ -914,6 +911,124 @@ function SettingsContent({
     default:
       return null
   }
+}
+
+const shortcutActionLabels: Record<ShortcutActionId, { title: string; desc: string }> = {
+  'new-chat': { title: '新建会话', desc: '在会话页打开新建会话弹窗。' },
+  'quick-chat': { title: '快速对话', desc: '立即创建一个空白直接对话。' },
+  'open-folder': { title: '打开文件夹', desc: '选择本地项目文件夹并进入 Agent Group。' },
+  settings: { title: '打开设置', desc: '从任意页面进入设置中心。' },
+  'new-window': { title: '新建窗口', desc: '桌面端打开一个新的 AgentHub 窗口。' },
+  'close-window': { title: '关闭窗口', desc: '关闭当前桌面窗口。' },
+  reload: { title: '重新加载', desc: '刷新当前 AgentHub 页面。' },
+  minimize: { title: '最小化', desc: '最小化当前桌面窗口。' },
+  'toggle-maximize': { title: '最大化 / 还原', desc: '切换当前桌面窗口的最大化状态。' },
+  'toggle-fullscreen': { title: '切换全屏', desc: '进入或退出全屏模式。' },
+}
+
+function ShortcutSettingsPanel({
+  settings,
+  patchSettings,
+}: {
+  settings: AppSettings
+  patchSettings: (patch: Partial<AppSettings>) => void
+}) {
+  const { t } = useI18n()
+  const [recording, setRecording] = useState<ShortcutActionId | null>(null)
+  const [notice, setNotice] = useState('')
+  const bindings = normalizeShortcutBindings(settings.shortcuts)
+
+  useEffect(() => {
+    if (!recording) return
+
+    function handleKeyDown(event: KeyboardEvent) {
+      event.preventDefault()
+      event.stopPropagation()
+      const next = shortcutFromRecordingEvent(event)
+      if (next === 'Escape') {
+        setRecording(null)
+        setNotice(t('已取消录制'))
+        return
+      }
+      if (!next) {
+        setNotice(t('请按包含 Ctrl、Alt、Shift、Cmd 或功能键的组合'))
+        return
+      }
+
+      const activeRecording = recording
+      if (!activeRecording) return
+      const conflict = shortcutConflict(bindings, activeRecording, next)
+      const nextBindings = bindings.map((item) => {
+        if (item.action === activeRecording) return { ...item, keys: next }
+        if (conflict && item.action === conflict.action) return { ...item, keys: '' }
+        return item
+      })
+      patchSettings({ shortcuts: nextBindings })
+      setNotice(conflict ? `${t('已替换冲突快捷键')}：${t(shortcutActionLabels[conflict.action].title)}` : t('快捷键已更新'))
+      setRecording(null)
+    }
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [bindings, patchSettings, recording, t])
+
+  function restoreShortcut(action: ShortcutActionId) {
+    const defaults = new Map(defaultShortcutBindings.map((item) => [item.action, item.keys]))
+    patchSettings({
+      shortcuts: bindings.map((item) => (item.action === action ? { ...item, keys: defaults.get(action) ?? '' } : item)),
+    })
+    setNotice(t('已恢复默认快捷键'))
+  }
+
+  function restoreAllShortcuts() {
+    patchSettings({ shortcuts: defaultShortcutBindings })
+    setNotice(t('已恢复全部默认快捷键'))
+  }
+
+  function renderKeys(keys: string) {
+    if (!keys) return <span className="text-xs text-neutral-400">{t('未设置')}</span>
+    return keys.split('+').map((key) => <Keycap key={key}>{key}</Keycap>)
+  }
+
+  return (
+    <>
+      <InsetPanel>
+        <ShortcutRow title="发送方式" desc="设置会话输入框里 Enter 与 Ctrl+Enter 的发送和换行行为。">
+          <SelectPill value={settings.sendMode} options={['Enter 发送', 'Ctrl+Enter 发送']} onChange={(sendMode) => patchSettings({ sendMode })} />
+        </ShortcutRow>
+        {bindings.map((binding) => {
+          const copy = shortcutActionLabels[binding.action]
+          return (
+            <ShortcutRow key={binding.action} title={copy.title} desc={copy.desc}>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="flex min-w-[9rem] justify-end gap-1.5">{renderKeys(binding.keys)}</div>
+                <button
+                  type="button"
+                  className={cn('settings-soft-button', recording === binding.action && 'settings-shortcut-recording')}
+                  onClick={() => {
+                    setRecording(binding.action)
+                    setNotice(t('请按下新的快捷键组合，按 Esc 取消'))
+                  }}
+                >
+                  {recording === binding.action ? t('录制中') : t('录制')}
+                </button>
+                <button type="button" className="settings-soft-button" onClick={() => restoreShortcut(binding.action)}>
+                  {t('恢复默认')}
+                </button>
+              </div>
+            </ShortcutRow>
+          )
+        })}
+      </InsetPanel>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-neutral-500">{t('点击“录制”后按下组合键。至少包含 Ctrl、Alt、Shift 或 Cmd，按 Esc 取消。')}</p>
+        <button type="button" className="settings-soft-button" onClick={restoreAllShortcuts}>
+          {t('恢复全部默认')}
+        </button>
+      </div>
+      {notice && <p className="text-xs" style={{ color: 'var(--settings-accent)' }}>{notice}</p>}
+    </>
+  )
 }
 
 function ArchivedSessionsPanel({
@@ -1238,7 +1353,7 @@ function ArchivedSessionsPanel({
       </div>
 
       {deleteTarget && (
-        <div className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-transparent px-4" role="dialog" aria-modal="true" onMouseDown={() => setDeleteTarget(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/30 px-4 backdrop-blur-md" role="dialog" aria-modal="true" onMouseDown={() => setDeleteTarget(null)}>
           <div className="w-full max-w-[382px] rounded-2xl border p-4 shadow-[0_24px_80px_rgba(15,23,42,0.16)]" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }} onMouseDown={(event) => event.stopPropagation()}>
             <div className="flex items-start gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-red-50 text-red-500">
@@ -2326,8 +2441,9 @@ function Field({ label, value, onChange, placeholder, type = 'text', wide = fals
 
 function sectionDescription(section: SectionKey) {
   const descriptions: Record<SectionKey, string> = {
+    显示: '选择窗口颜色、强调色，并预览聊天与工具面板的显示效果。',
     通用: '配置启动行为、语言、保存策略和基础交互习惯。',
-    显示: '调整主题、强调色、字体尺寸和聊天阅读密度。',
+
     快捷键: '管理高频操作快捷键，提升聊天和编程效率。',
     模型管理: '管理可用模型、API 端点、密钥变量和连接测试状态。',
     工具权限: '配置 Agent 可调用的工具、MCP 服务、自动化钩子和敏感操作确认。',

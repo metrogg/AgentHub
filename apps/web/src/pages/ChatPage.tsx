@@ -9,6 +9,7 @@ import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '..
 import { useI18n } from '../lib/i18n'
 import { pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
+import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { useChatStore } from '../stores/chatStore'
 
 export default function ChatPage() {
@@ -77,6 +78,7 @@ function Welcome({
   onToggleSidebar: () => void
 }) {
   const { t } = useI18n()
+  const { sendMode } = useShortcutSettings()
   const navigate = useNavigate()
   const messageInputRef = useRef<HTMLTextAreaElement>(null)
   const createSession = useChatStore((state) => state.createSession)
@@ -443,7 +445,7 @@ function Welcome({
                   event.preventDefault()
                   return
                 }
-                if (event.key === 'Enter' && !event.shiftKey) {
+                if (sendModeShouldSubmit(sendMode, event)) {
                   event.preventDefault()
                   void startThread(message)
                 }

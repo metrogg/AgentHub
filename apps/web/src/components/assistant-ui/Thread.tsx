@@ -81,6 +81,7 @@ import {
   type WorkspaceAgent,
 } from '../../lib/api'
 import { pickWorkspaceFolder } from '../../lib/native'
+import { sendModeShouldSubmit, shouldInsertNewline, useShortcutSettings } from '../../lib/shortcuts'
 import { cn } from '../../lib/utils'
 import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
@@ -424,6 +425,7 @@ const PromptCard: FC<{ title: string; text: string }> = ({ title, text }) => (
 )
 
 const Composer: FC = () => {
+  const { sendMode } = useShortcutSettings()
   const { t } = useI18n()
   const navigate = useNavigate()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -703,8 +705,10 @@ const Composer: FC = () => {
           }
         }}
         onKeyDownCapture={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
+          if (sendModeShouldSubmit(sendMode, event)) {
             syncComposerTextAfterComposerAction()
+          } else if (shouldInsertNewline(sendMode, event)) {
+            event.stopPropagation()
           }
         }}
       >

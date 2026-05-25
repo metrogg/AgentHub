@@ -50,6 +50,28 @@ export async function openDesktopWindow() {
   return true
 }
 
+export async function minimizeDesktopWindow() {
+  if (!isDesktopApp()) return false
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().minimize()
+  return true
+}
+
+export async function toggleMaximizeDesktopWindow() {
+  if (!isDesktopApp()) return false
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().toggleMaximize()
+  return true
+}
+
+export async function toggleFullscreenDesktopWindow() {
+  if (!isDesktopApp()) return false
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  const currentWindow = getCurrentWindow()
+  await currentWindow.setFullscreen(!(await currentWindow.isFullscreen()))
+  return true
+}
+
 export async function setDesktopWindowTitle(title: string) {
   document.title = title
   if (!isDesktopApp()) return false
