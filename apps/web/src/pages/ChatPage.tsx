@@ -2,6 +2,7 @@ import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'r
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowUp, AtSign, ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
+import { GlobalNewSessionDialog } from '../components/chat/GlobalNewSessionDialog'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
 import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
 import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '../lib/api'
@@ -34,6 +35,7 @@ export default function ChatPage() {
 
   return (
     <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-white text-neutral-950">
+      <GlobalNewSessionDialog />
       <div
         aria-hidden={sidebarCollapsed}
         className="h-full shrink-0 overflow-hidden"

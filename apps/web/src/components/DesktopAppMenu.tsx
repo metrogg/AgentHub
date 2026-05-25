@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { requestNewSessionDialog } from './chat/GlobalNewSessionDialog'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { closeDesktopWindow, isDesktopApp, openDesktopWindow, pickWorkspaceFolder } from '../lib/native'
@@ -18,6 +19,7 @@ type MenuId = 'file' | 'edit' | 'window'
 
 export function DesktopAppMenu() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { t } = useI18n()
   const createSession = useChatStore((state) => state.createSession)
   const selectSession = useChatStore((state) => state.selectSession)
@@ -86,8 +88,14 @@ export function DesktopAppMenu() {
         await closeDesktopWindow()
       } else if (id === 'new-window') {
         await openDesktopWindow()
-      } else if (id === 'new-chat' || id === 'quick-chat') {
-        const session = await createSession(id === 'quick-chat' ? t('快速对话') : t('新会话'))
+      } else if (id === 'new-chat') {
+        if (location.pathname === '/' || location.pathname.startsWith('/chat/')) {
+          requestNewSessionDialog()
+        } else {
+          navigate('/', { state: { openNewSessionDialog: true } })
+        }
+      } else if (id === 'quick-chat') {
+        const session = await createSession(t('快速对话'))
         await selectSession(session.id)
         navigate(`/chat/${session.id}`)
       } else if (id === 'open-folder') {
