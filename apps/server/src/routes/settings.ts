@@ -30,6 +30,7 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       anthropicEndpoint?: string
       apiKey?: string
       apiKeyEnv?: string
+      modelId?: string
     }>()
 
     return c.json(await testLlmConnection(input), 200)
