@@ -15,14 +15,17 @@ import {
   History,
   Loader2,
   MessageCircle,
+  Pin,
+  PinOff,
   Plus,
+  Search,
   Settings2,
   Trash2,
   X,
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import { api, type Session, type WorkspaceFull } from '../../lib/api'
+import { api, type Session, type WorkspaceAgent, type WorkspaceFull } from '../../lib/api'
 
 type SessionGroup = {
   parent: Session
@@ -52,6 +55,13 @@ export default function SessionList() {
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
+  const [prefs, setPrefs] = useState<SessionListPrefs>(loadSessionListPrefs)
+  const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
+  const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
+  const archivedSessionCount = useMemo(() => prefs.archived.length, [prefs.archived])
+  const activeSessionCount = useMemo(() => sessions.length - prefs.archived.length, [sessions.length, prefs.archived])
   const [newDialogOpen, setNewDialogOpen] = useState(false)
   const [workspaceChoices, setWorkspaceChoices] = useState<WorkspaceFull[]>([])
   const [loadingChoices, setLoadingChoices] = useState(false)
@@ -815,45 +825,6 @@ function childSessionTitle(session: Session, parent: Session) {
   return parts.length ? parts.join(' / ') : session.title
 }
 
-function filterSessionTree(
-  groups: SessionGroup[],
-  query: string,
-  archivedIds: Set<string>,
-  showArchived: boolean,
-  pinnedIds: Set<string>
-) {
-  const normalizedQuery = query.trim().toLowerCase()
-  const matches = (session: Session) => {
-    if (!normalizedQuery) return true
-    return [session.title, session.type, session.workspaceId ?? '', session.workspaceAgentId ?? '']
-      .join(' ')
-      .toLowerCase()
-      .includes(normalizedQuery)
-  }
-
-  return groups
-    .map((group) => {
-      const parentArchived = archivedIds.has(group.parent.id)
-      const modeChildren = group.children
-        .filter((child) => archivedIds.has(child.id) === showArchived)
-        .sort((a, b) => comparePinnedAndRecent(a, b, pinnedIds))
-      const matchingChildren = modeChildren.filter(matches)
-      const parentVisibleInCurrentMode = parentArchived === showArchived
-      const parentMatches = matches(group.parent)
-      const children = normalizedQuery && !parentMatches ? matchingChildren : modeChildren
-
-      if (!parentVisibleInCurrentMode && matchingChildren.length === 0) return null
-      if (normalizedQuery && !parentMatches && matchingChildren.length === 0) return null
-
-      return {
-        ...group,
-        children,
-      }
-    })
-    .filter((group): group is SessionGroup => Boolean(group))
-    .sort((a, b) => comparePinnedGroups(a, b, pinnedIds))
-}
-
 function filterAgentContacts(agents: WorkspaceAgent[], query: string) {
   const normalized = query.trim().toLowerCase()
   if (!normalized) return agents
@@ -906,13 +877,6 @@ function comparePinnedGroups(a: SessionGroup, b: SessionGroup, pinnedIds: Set<st
   const bPinned = pinnedIds.has(b.parent.id)
   if (aPinned !== bPinned) return aPinned ? -1 : 1
   return Date.parse(b.latestUpdatedAt) - Date.parse(a.latestUpdatedAt)
-}
-
-function comparePinnedAndRecent(a: Session, b: Session, pinnedIds: Set<string>) {
-  const aPinned = pinnedIds.has(a.id)
-  const bPinned = pinnedIds.has(b.id)
-  if (aPinned !== bPinned) return aPinned ? -1 : 1
-  return Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
 }
 
 function loadSessionListPrefs(): SessionListPrefs {

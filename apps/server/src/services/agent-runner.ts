@@ -160,6 +160,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   })
 
   let fullContent = ''
+  let failed = false
   let codeAgentRun: CodeAgentMetadataChunk['metadata'] | null = null
   const selectedModelId =
     profile?.modelId ?? (typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined)
@@ -256,6 +257,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
 
   logger.info({ sessionId, msgId: agentMsg?.id, length: fullContent.length }, 'Agent reply completed')
   void pushStarOfficeAgentState(profile, 'idle', `${agentName} 已完成任务`)
+  return { ok: !failed, cancelled: false, messageId: agentMsg?.id }
 }
 
 function isAbortError(error: any) {
@@ -266,7 +268,11 @@ function looksLikeAgentFailure(content: string) {
   return (
     /^\s*\[Error:/i.test(content) ||
     /\n\s*\[Error:/i.test(content) ||
+    /^\s*\[错误[：:]/i.test(content) ||
+    /\n\s*\[错误[：:]/i.test(content) ||
     /API key is not configured/i.test(content) ||
-    /Model returned an empty response/i.test(content)
+    /API Key 未配置/.test(content) ||
+    /Model returned an empty response/i.test(content) ||
+    /模型返回了空响应/.test(content)
   )
 }

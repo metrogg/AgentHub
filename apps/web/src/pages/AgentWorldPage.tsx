@@ -34,9 +34,6 @@ const agentPresets = [
   { name: 'Reviewer', role: '审查', color: '#ef4444', systemPrompt: '你是审查者。检查风险、交互漏洞和缺失的测试。直接、克制、不绕弯。' },
 ]
 
-const capabilityPresets = ['规划', '实现', '审查', '研究', '前端', '后端', '测试', '部署']
-const toolPermissionPresets = ['chat', 'workspace:read', 'workspace:write', 'shell:preview', 'deploy:preview', 'skills:read']
-
 const defaultAgentDraft: AgentConfigInput = {
   name: '',
   role: '',
@@ -932,7 +929,6 @@ function AgentDialog({
   onClose: () => void
 }) {
   const runtimeType = draft.runtimeType ?? 'llm'
-  const adapter = adapters.find((item) => item.id === draft.codeAgentType)
   const selectClass = 'h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300'
 
   return (
@@ -1286,52 +1282,6 @@ function Field({
       className={cn('h-10 rounded-xl border border-neutral-200 px-3 text-sm outline-none placeholder:text-neutral-300 focus:border-neutral-400', className)}
     />
   )
-}
-
-function ChipPicker({
-  label,
-  options,
-  selected,
-  onToggle,
-  className,
-}: {
-  label: string
-  options: string[]
-  selected: string[]
-  onToggle: (value: string) => void
-  className?: string
-}) {
-  return (
-    <div className={className}>
-      <div className="mb-2 text-xs font-medium text-neutral-500">{label}</div>
-      <div className="flex flex-wrap gap-1.5">
-        {options.map((option) => {
-          const active = selected.includes(option)
-          return (
-            <button
-              key={option}
-              type="button"
-              onClick={() => onToggle(option)}
-              className={cn(
-                'h-7 rounded-full border px-2.5 text-xs transition',
-                active ? 'border-neutral-900 bg-neutral-950 text-white' : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300'
-              )}
-            >
-              {option}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function toggleListValue(values: string[], value: string) {
-  return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]
-}
-
-function mergePresetList(current: string[], custom: string[], presetValues: string[]) {
-  return [...current.filter((item) => presetValues.includes(item)), ...custom]
 }
 
 function Rule({ title, text }: { title: string; text: string }) {

@@ -1126,7 +1126,7 @@ function windowsCodexCommand() {
 }
 
 function readEnv(key: string) {
-  return (Bun.env[key] ?? rootEnv()[key])?.trim()
+  return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
 function mergedEnv(command?: string) {

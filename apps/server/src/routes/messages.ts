@@ -17,7 +17,6 @@ import {
   workspaceTasks,
   and,
   eq,
-  and,
   asc,
   desc,
 } from '@agenthub/db'
@@ -135,6 +134,53 @@ type OrchestratorPlan = {
   tasks: PlanTask[]
   dispatchResult?: OrchestratorDispatchResult
 }
+
+type AgentDraft = NonNullable<z.infer<typeof confirmAgentDraftSchema>['draft']>
+
+type DemoArtifact =
+  | {
+      id: string
+      kind: 'web_preview'
+      title: string
+      description: string
+      url: string
+      framework: string
+      status: 'ready' | 'building' | 'failed'
+    }
+  | {
+      id: string
+      kind: 'diff'
+      title: string
+      description: string
+      files: Array<{
+        path: string
+        additions: number
+        deletions: number
+        language: string
+        patch: string
+      }>
+    }
+  | {
+      id: string
+      kind: 'file'
+      title: string
+      description: string
+      fileName: string
+      mimeType: string
+      sizeLabel: string
+      url: string
+    }
+  | {
+      id: string
+      kind: 'deploy'
+      title: string
+      description: string
+      provider: string
+      environment: string
+      status: 'queued' | 'building' | 'ready' | 'failed'
+      previewUrl: string
+      logs: string[]
+    }
 
 type DispatchMonitor = {
   dispatchId: string
@@ -555,7 +601,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       if (userMsg) {
         import('../services/agent-runner').then(({ runAgentReply }) => {
           runAgentReply(childSession.id, userMsg, agent ? toAgentProfile(agent, workspace.projectPath) : undefined)
-            .then(() => markWorkspaceTaskDone(workspaceTask.id, monitor))
+            .then((result) => markWorkspaceTaskDone(workspaceTask.id, result?.ok ?? true, monitor))
             .catch(() => {})
         })
       }
@@ -1357,7 +1403,7 @@ async function dispatchPlanToExistingGroup(
     if (promptMsg) {
       import('../services/agent-runner').then(({ runAgentReply }) => {
         runAgentReply(childSession.id, promptMsg, agent ? toAgentProfile(agent, workspace.projectPath) : undefined)
-          .then(() => markWorkspaceTaskDone(workspaceTask.id, monitor))
+          .then((result) => markWorkspaceTaskDone(workspaceTask.id, result?.ok ?? true, monitor))
           .catch(() => {})
       })
     }
@@ -1391,7 +1437,7 @@ async function updatePlanCardDispatchResult(
     .where(eq(messages.id, messageId))
 }
 
-async function markWorkspaceTaskDone(taskId: string, monitor?: DispatchMonitor) {
+async function markWorkspaceTaskDone(taskId: string, ok: boolean, monitor?: DispatchMonitor) {
   await db
     .update(workspaceTasks)
     .set({ status: ok ? 'done' : 'failed', updatedAt: new Date() })
@@ -1402,6 +1448,8 @@ async function markWorkspaceTaskDone(taskId: string, monitor?: DispatchMonitor) 
 async function maybeSummarizeDispatch(monitor: DispatchMonitor) {
   if (!monitor.groupSessionId || summarizedDispatches.has(monitor.dispatchId) || monitor.taskIds.length === 0) return
 
+  summarizedDispatches.add(monitor.dispatchId)
+
   const [currentTask] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, monitor.taskIds[0]!)).limit(1)
   if (!currentTask) return
 
@@ -1411,8 +1459,6 @@ async function maybeSummarizeDispatch(monitor: DispatchMonitor) {
     .filter((task) => taskIdSet.has(task.id))
     .sort((a, b) => a.orderIdx - b.orderIdx)
   if (tasks.length !== monitor.taskIds.length || tasks.some((task) => task.status !== 'done')) return
-
-  summarizedDispatches.add(monitor.dispatchId)
   const childResults = await Promise.all(
     tasks.map(async (task) => {
       if (!task.sessionId) return { task, content: '未找到子会话输出。', agentName: 'Agent' }

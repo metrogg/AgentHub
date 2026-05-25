@@ -150,7 +150,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       get().currentSession,
       get().currentWorkspaceAgents
     )
-    const shouldCreateArtifactDemo = !shouldCreatePlan && !shouldCreateAgentDraft && shouldRouteToArtifactDemo(content)
     try {
       const msg = await api.sendMessageWithModel(sessionId, {
         content: contentForAgent,
@@ -335,14 +334,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return wsClient.on((e) => get().handleWSEvent(e))
   },
 }))
-
-function shouldRouteToArtifactDemo(content: string) {
-  return /部署|发布|预览|preview|diff|补丁|变更|文件|附件|下载|打包/i.test(content)
-}
-
-function shouldRouteToAgentDraft(content: string) {
-  return /(?:创建|添加|新建).{0,24}(?:agent|代理|助手)|(?:agent|代理|助手).{0,24}(?:创建|添加|新建)/i.test(content)
-}
 
 function shouldRouteToOrchestratorPlan(content: string, session: Session | null, agents: WorkspaceAgent[]) {
   if (mentionsOrchestrator(content)) return true
