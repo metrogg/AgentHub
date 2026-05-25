@@ -15,6 +15,7 @@
     "dev": "NODE_NO_WARNINGS=1 bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "build": "bun build src/index.ts --target=bun --outdir=dist",
+    "build:exe": "bun build --compile --target=bun --windows-hide-console --windows-title=AgentHub --windows-description=\"AgentHub local server\" --outfile dist/agenthub-server.exe src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit"
   },

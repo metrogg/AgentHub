@@ -1,0 +1,410 @@
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { api } from './api'
+
+export type LanguageCode = 'zh' | 'en'
+
+type I18nContextValue = {
+  language: LanguageCode
+  setLanguage: (language: LanguageCode) => void
+  t: (text: string) => string
+}
+
+const STORAGE_KEY = 'agenthub.language'
+
+const zhToEn: Record<string, string> = {
+  设置: 'Settings',
+  关闭设置: 'Close settings',
+  通用: 'General',
+  显示: 'Display',
+  快捷键: 'Shortcuts',
+  模型管理: 'Model Management',
+  默认模型: 'Default Model',
+  工具权限: 'Tool Permissions',
+  归档会话: 'Archived Conversations',
+  控制台: 'Console',
+  关于: 'About',
+  界面语言: 'Interface Language',
+  切换界面显示语言: 'Switch the interface display language.',
+  调试模式: 'Debug Mode',
+  '开启后，每次模型 HTTP 请求会被保存到调试目录。Authorization 等敏感请求头会自动脱敏。':
+    'When enabled, every model HTTP request is saved to the debug directory. Sensitive request headers such as Authorization are automatically redacted.',
+  '开启后，每次大模型 HTTP 请求会被保存到调试目录。开发时使用 debug/llm/，发布时使用 data/debug/llm/。Authorization 等敏感请求头会被自动脱敏。':
+    'When enabled, every model HTTP request is saved to the debug directory. Development uses debug/llm/; production uses data/debug/llm/. Sensitive headers such as Authorization are automatically redacted.',
+  已关闭: 'Off',
+  已开启: 'On',
+  本地数据存储: 'Local Data Storage',
+  '会话与记忆文件存放在这里；Knowledge 保留在项目目录中。可打开当前目录或迁移到新位置，迁移会在重启后完成。':
+    'Session and memory files are stored here; Knowledge stays in the project directory. You can open the current folder or move to a new one. Migration completes after restart.',
+  当前位置: 'Current Location',
+  已用空间: 'Used Space',
+  打开目录: 'Open Folder',
+  更改位置: 'Change Location',
+  'GIT 运行时': 'Git Runtime',
+  'AgentHub 使用这个 Git 执行版本控制、撤销和变更分析。': 'AgentHub uses this Git for version control, undo, and change analysis.',
+  当前使用: 'Current',
+  当前选择: 'Selected',
+  刷新: 'Refresh',
+  'Git 路径': 'Git Path',
+  'PYTHON 运行时': 'Python Runtime',
+  'bash 工具调用 python 或 python3 时使用这里选择的解释器。': 'The bash tool uses the selected interpreter when invoking python or python3.',
+  解释器路径: 'Interpreter Path',
+  重置所有设置: 'Reset All Settings',
+  '清除当前配置并重新进入初始引导': 'Clear the current configuration and return to the initial setup.',
+  '界面': 'UI',
+  正文: 'Body',
+  '行内代码': 'Inline Code',
+  '代码块': 'Code Block',
+  '编辑器 / 终端': 'Editor / Terminal',
+  主题: 'Theme',
+  '分别选择主窗口和 Unity 嵌入窗口的颜色风格': 'Choose color styles separately for the main window and the Unity embedded window.',
+  '分别选择主窗口和嵌入窗口的颜色风格': 'Choose color styles separately for the main window and embedded windows.',
+  主窗口: 'Main Window',
+  'Unity 嵌入窗口': 'Unity Embedded Window',
+  嵌入窗口: 'Embedded Window',
+  'GIT 视图': 'Git View',
+  '层级视图用彩色图标显示修改状态': 'Use colored icons to show modification status in the tree view',
+  '隐藏 Git 候选项': 'Hide Git candidates',
+  系统通知: 'System Notifications',
+  '当窗口未聚焦时，为关键对话事件发送系统通知': 'Send system notifications for key conversation events when the window is unfocused',
+  '启用后台系统通知': 'Enable background system notifications',
+  '对话完成时通知': 'Notify when the conversation completes',
+  '需要输入时通知': 'Notify when input is required',
+  '对话出错时通知': 'Notify when the conversation fails',
+  '需要确认时通知': 'Notify when confirmation is required',
+  字体: 'Fonts',
+  '自定义各区域使用的字体，留空则使用默认字体栈': 'Customize the fonts used in each area. Leave empty to use the default stack.',
+  主题显示: 'Theme Display',
+  '选择窗口颜色、强调色，并预览聊天与工具面板的显示效果。': 'Choose window colors and accent color, then preview chat and tool panels.',
+  字体显示: 'Font Display',
+  '设置界面、正文、代码和终端字体，并立即预览实际排版。': 'Set UI, body, code, and terminal fonts with an instant typography preview.',
+  显示预览: 'Display Preview',
+  字体预览: 'Font Preview',
+  'AgentHub 显示效果': 'AgentHub Display Preview',
+  '这是一段聊天正文预览，用于检查字号、字重和中英文混排。': 'This is a chat text preview for checking size, weight, and mixed-language layout.',
+  消息气泡预览: 'Message bubble preview',
+  恢复默认字体: 'Restore Default Fonts',
+  '发送方式': 'Send Mode',
+  '设置会话输入框里 Enter 与 Ctrl+Enter 的发送和换行行为。': 'Choose how Enter and Ctrl+Enter behave in the chat input.',
+  '配置常用操作的键盘组合。': 'Configure keyboard shortcuts for common actions.',
+  '新建会话': 'New Chat',
+  '在会话页立即开始一个新会话。': 'Start a new chat immediately on the chat page.',
+  录制: 'Record',
+  '恢复默认': 'Restore Default',
+  '点击“录制”后按下组合键。至少包含 Ctrl、Alt、Shift 或 Cmd，按 Esc 取消。':
+    'Click Record and then press the shortcut. It must include Ctrl, Alt, Shift, or Cmd. Press Esc to cancel.',
+  工具执行模式: 'Tool Execution Mode',
+  'Auto 自动执行所有工具；Ask 按下方规则确认。': 'Auto runs all tools automatically; Ask confirms according to the rules below.',
+  工具: 'Tool',
+  '执行方式': 'Mode',
+  '加载中...': 'Loading...',
+  操作失败: 'Operation failed',
+  运行时信息已刷新: 'Runtime information refreshed',
+  诊断信息已刷新: 'Diagnostics refreshed',
+  当前环境不支持直接打开目录: 'The current environment cannot open this folder directly',
+  请输入本机数据目录路径: 'Enter the local data folder path',
+  路径不存在: 'Path does not exist',
+  已打开路径: 'Path opened',
+  已打开数据目录: 'Data folder opened',
+  已打开调试目录: 'Debug folder opened',
+  已取消选择: 'Selection cancelled',
+  '数据目录已更新，重启后生效': 'Data folder updated and will take effect after restart',
+  已恢复默认设置: 'Default settings restored',
+  正在记录调试信息: 'Recording debug information',
+  不会记录模型请求: 'Model requests are not recorded',
+  调试目录: 'Debug Folder',
+  日志级别: 'Log Level',
+  调试文件大小: 'Debug File Size',
+  打开调试目录: 'Open Debug Folder',
+  刷新状态: 'Refresh Status',
+  'App Data': 'App Data',
+  日志目录: 'Log Folder',
+  数据库文件: 'Database File',
+  等待刷新: 'Waiting for refresh',
+  '目录较大，已展示扫描上限内的估算体积': 'This folder is large; showing estimated size within the scan limit',
+  重新计算占用: 'Recalculate Usage',
+  可用: 'Available',
+  不可用: 'Unavailable',
+  目录不存在: 'Folder does not exist',
+  调试目录尚未生成: 'Debug folder has not been generated yet',
+  路径尚未就绪: 'Path is not ready yet',
+  目录可用: 'Folder available',
+  目录不可用: 'Folder unavailable',
+  重启后迁移: 'Migration after restart',
+  数据库大小: 'Database Size',
+  扫描文件: 'Scanned Files',
+  选择的数据目录: 'Selected Data Folder',
+  当前生效目录: 'Active Data Folder',
+  配置目录: 'Config Folder',
+  '已选择新的数据目录。当前运行中的服务仍使用当前生效目录，重启客户端后会切换。':
+    'A new data folder has been selected. The running service still uses the active folder and will switch after the desktop client restarts.',
+  打开生效目录: 'Open Active Folder',
+  打开配置目录: 'Open Config Folder',
+  打开日志目录: 'Open Log Folder',
+  打开数据库目录: 'Open Database Folder',
+  恢复当前生效目录: 'Restore Active Folder',
+  已打开当前生效目录: 'Active folder opened',
+  已打开配置目录: 'Config folder opened',
+  已打开日志目录: 'Log folder opened',
+  已打开数据库所在目录: 'Database folder opened',
+  已恢复为当前生效目录: 'Restored to the active folder',
+  创建目录: 'Create Folder',
+  目录已创建: 'Folder created',
+  读取文件: 'Read file',
+  '搜索文件内容': 'Search file contents',
+  '列出目录内容': 'List directory contents',
+  '委托子 Agent': 'Delegate to sub-agent',
+  '管理待办事项': 'Manage TODO items',
+  '向用户询问': 'Ask the user',
+  '搜索 Unity YAML 层级': 'Search Unity YAML hierarchy',
+  '读取 Unity YAML 详情': 'Read Unity YAML details',
+  '列出知识文档': 'List knowledge docs',
+  '搜索知识文档': 'Search knowledge docs',
+  '读取知识条目': 'Read knowledge entry',
+  '创建知识条目': 'Create knowledge entry',
+  '删除知识条目': 'Delete knowledge entry',
+  '移动知识条目': 'Move knowledge entry',
+  '编辑知识条目': 'Edit knowledge entry',
+  '查看已归档的会话记录。归档后不会出现在会话列表中，但仍可在这里打开查看内容。':
+    'View archived conversation records. Archived chats disappear from the conversation list, but you can still open them here.',
+  会话列表: 'Conversation List',
+  会话内容: 'Conversation Content',
+  '暂无归档会话': 'No archived chats',
+  '归档后的会话会显示在这里。': 'Archived chats will appear here.',
+  '选择左侧会话后，在这里查看归档内容。': 'Select a chat on the left to view its archived content here.',
+  '查看前端与后端的统一调试输出。后端 debug 与 trace 级别日志受“通用 > 调试模式”控制。':
+    'View the unified debug output from the frontend and backend. Backend debug and trace logs are controlled by General > Debug Mode.',
+  '全部级别': 'All Levels',
+  全部来源: 'All Sources',
+  后端: 'Backend',
+  前端: 'Frontend',
+  自动滚动: 'Auto Scroll',
+  '按模块名或日志内容筛选': 'Filter by module name or log content',
+  清空日志: 'Clear Logs',
+  '条记录': 'entries',
+  '804 条记录': '804 entries',
+  '调试模式已开启': 'Debug mode enabled',
+  '调试模式已关闭': 'Debug mode disabled',
+  时间: 'Time',
+  来源: 'Source',
+  模块: 'Module',
+  内容: 'Content',
+  '查看当前产品信息与联系方式。': 'View current product information and contact details.',
+  应用: 'App',
+  版本: 'Version',
+  开发组织: 'Organization',
+  联系邮箱: 'Contact Email',
+  版本来源: 'Build Source',
+  本地开发版: 'Local development build',
+  上次检查: 'Last Checked',
+  检查更新: 'Check Updates',
+  '本地多 Agent 协作工作台。': 'A local multi-agent collaboration workspace.',
+  '启动与语言': 'Startup & Language',
+  '控制 AgentHub 打开时的默认位置和语言。': 'Choose the default landing page and language when AgentHub opens.',
+  '启动页面': 'Startup Page',
+  '基础行为': 'Basic Behavior',
+  '让聊天记录和输入体验保持稳定。': 'Keep chat history and input behavior stable.',
+  '自动保存设置和草稿': 'Auto-save settings and drafts',
+  紧凑模式: 'Compact mode',
+  颜色模式: 'Color mode',
+  强调色: 'Accent color',
+  '阅读密度': 'Reading Density',
+  '调整聊天消息和面板的视觉密度。': 'Adjust the visual density of chat messages and panels.',
+  '字体大小': 'Font size',
+  '消息样式': 'Message style',
+  'Agent 个性': 'Agent Personality',
+  '影响默认 Assistant 的回答语气。': 'Influences the tone of the default assistant.',
+  '默认风格': 'Default style',
+  '回答深度': 'Response depth',
+  '行动前先规划': 'Plan before acting',
+  动作: 'Action',
+  按键: 'Keys',
+  '设置工具整体执行方式，并在 Ask 模式下为单个工具指定确认规则。':
+    'Set the overall tool execution mode and define confirmation rules for individual tools in Ask mode.',
+  '归档策略': 'Archive Policy',
+  '管理历史会话保留时间和恢复策略。': 'Manage retention and recovery for archived chats.',
+  '外部连接': 'External Connections',
+  服务: 'Service',
+  地址: 'URL',
+  状态: 'Status',
+  'Git 身份': 'Git Identity',
+  '用于 Agent 生成提交信息、PR 描述和审查记录。': 'Used for agent-generated commit messages, PR descriptions, and review logs.',
+  '自动检测仓库 Git 配置': 'Auto-detect repository Git config',
+  作者名: 'Author name',
+  邮箱: 'Email',
+  '隔离工作树': 'Worktree Isolation',
+  '为 Codex、Claude Code、OpenCode 等 CLI Agent 分配独立工作区。':
+    'Assign isolated worktrees for CLI agents such as Codex, Claude Code, and OpenCode.',
+  '工作树根目录': 'Worktree root',
+  '每个 Agent 使用独立 worktree': 'Use a separate worktree for each agent',
+  '浏览器预览': 'Browser Preview',
+  '配置 Agent 打开网页、截图和验证 UI 时使用的浏览器环境。':
+    'Configure the browser environment used for opening pages, taking screenshots, and verifying UI.',
+  浏览器: 'Browser',
+  '默认视口': 'Default viewport',
+  '环境变量': 'Environment Variables',
+  '变量名': 'Name',
+  值: 'Value',
+  'AgentHub 设置，并作为 Coding Tools 的默认运行参数。': 'AgentHub settings, used as the default runtime parameters for Coding Tools.',
+  重置: 'Reset',
+  保存设置: 'Save settings',
+  上次会话: 'Last chat',
+  浅色: 'Light',
+  亮色: 'Light',
+  暗色: 'Dark',
+  默认: 'Default',
+  黑色: 'Black',
+  蓝色: 'Blue',
+  绿色: 'Green',
+  琥珀色: 'Amber',
+  简洁: 'Simple',
+  紧凑: 'Compact',
+  气泡: 'Bubble',
+  温和理性: 'Warm and rational',
+  自动: 'Auto',
+  发送消息: 'Send message',
+  换行: 'New line',
+  打开命令菜单: 'Open command menu',
+  工具调用前: 'Before tool call',
+  消息完成后: 'After message completes',
+  未连接: 'Not connected',
+  内置浏览器: 'Built-in browser',
+  '90 天': '90 days',
+  '托管 Python 3.13.12': 'Managed Python 3.13.12',
+  跟随系统: 'Follow System',
+  'Enter 发送': 'Enter to send',
+  'Ctrl+Enter 发送': 'Ctrl+Enter to send',
+  连接成功: 'Connection successful',
+  连接失败: 'Connection failed',
+  模型总数: 'Models',
+  已启用: 'Enabled',
+  'API Key 已配置': 'API Keys Configured',
+  已测试连接: 'Tested Connections',
+  启用: 'Enabled',
+  名称: 'Name',
+  提供商: 'Provider',
+  '模型 ID': 'Model ID',
+  'API 端点': 'API Endpoint',
+  连接: 'Connection',
+  操作: 'Actions',
+  自动生成: 'Auto generated',
+  已设置: 'Configured',
+  测试中: 'Testing',
+  测试: 'Test',
+  编辑: 'Edit',
+  删除: 'Delete',
+  添加模型: 'Add Model',
+  编辑模型: 'Edit Model',
+  '提示：模型变更会自动保存并同步到聊天后端。不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。':
+    'Tip: model changes are auto-saved and synced to the chat backend. CLI tool configs with different API protocols are managed on the Coding Tools page.',
+  '提示：模型变更会自动保存并同步到聊天后端。当前是本地单用户 Demo 模式，API Key 会保存在本机 SQLite settings 中；不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。':
+    'Tip: model changes are auto-saved and synced to the chat backend. This is a local single-user demo mode, so API keys are stored in the local SQLite settings table. CLI tool configs with different API protocols are managed on the Coding Tools page.',
+  自动保存中: 'Auto-saving',
+  已自动保存: 'Auto-saved',
+  自动保存失败: 'Auto-save failed',
+  自动保存已开启: 'Auto-save enabled',
+  刷新中: 'Refreshing',
+  全部: 'All',
+  名称唯一标识: 'Unique name',
+  '名称（唯一标识）*': 'Name (unique ID) *',
+  '例如：qwen-max': 'e.g. qwen-max',
+  '提供商 *': 'Provider *',
+  '例如：dashscope / openai / deepseek': 'e.g. dashscope / openai / deepseek',
+  '模型 ID *': 'Model ID *',
+  '例如：qwen-max-2026-04-01': 'e.g. qwen-max-2026-04-01',
+  'API Key 环境变量名': 'API Key Environment Variable',
+  留空自动生成: 'Leave empty to auto-generate',
+  'API 端点（OpenAI 兼容）*': 'API Endpoint (OpenAI-compatible) *',
+  'Anthropic 端点（Claude Code 使用，可选）': 'Anthropic Endpoint (used by Claude Code, optional)',
+  '例如：https://api.deepseek.com/anthropic': 'e.g. https://api.deepseek.com/anthropic',
+  'API Key（同步到本地设置）': 'API Key (synced to local settings)',
+  '输入 API Key': 'Enter API Key',
+  启用此模型: 'Enable this model',
+  取消: 'Cancel',
+  保存: 'Save',
+  添加: 'Add',
+  '配置启动行为、语言、保存策略和基础交互习惯。': 'Configure startup behavior, language, save policy, and basic interaction habits.',
+  '调整主题、强调色、字体尺寸和聊天阅读密度。': 'Adjust theme, accent color, font size, and chat reading density.',
+  '管理高频操作快捷键，提升聊天和编程效率。': 'Manage frequent shortcuts to improve chat and coding efficiency.',
+  '管理可用模型、API 端点、密钥变量和连接测试状态。': 'Manage available models, API endpoints, key variables, and connection test status.',
+  '选择默认模型，并让聊天后端同步使用当前模型配置。': 'Choose the default model and sync it to the chat backend.',
+  '配置 Agent 可调用的工具、MCP 服务、自动化钩子和敏感操作确认。': 'Configure agent tools, MCP services, automation hooks, and sensitive operation confirmations.',
+  '管理归档会话的保留、恢复和清理策略。': 'Manage retention, recovery, and cleanup policies for archived chats.',
+  '管理外部连接、Git、本地环境、工作树和浏览器预览环境。': 'Manage external connections, Git, local environment, worktrees, and browser preview settings.',
+  '查看 AgentHub 客户端和本机运行信息。': 'View AgentHub client and local runtime information.',
+  'Settings': 'Settings',
+  'Close settings': 'Close settings',
+  中文: 'Chinese',
+  English: 'English',
+}
+
+export function normalizeLanguage(value: string | undefined): LanguageCode {
+  const lower = (value ?? '').toLowerCase()
+  if (lower.includes('en')) return 'en'
+  return 'zh'
+}
+
+export function languageToSettingValue(language: LanguageCode) {
+  return language === 'en' ? 'English' : '中文'
+}
+
+function detectSavedLanguage(): LanguageCode {
+  if (typeof window !== 'undefined') {
+    const local = window.localStorage.getItem(STORAGE_KEY)
+    if (local === 'en' || local === 'zh') return local
+  }
+  return 'zh'
+}
+
+const I18nContext = createContext<I18nContextValue | null>(null)
+
+export function I18nProvider({ children }: { children: ReactNode }) {
+  const [language, setLanguageState] = useState<LanguageCode>(detectSavedLanguage())
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getSettings()
+      .then((settings) => {
+        if (cancelled) return
+        const raw = settings.APP_SETTINGS
+        if (!raw) return
+        try {
+          const parsed = JSON.parse(raw) as { language?: string }
+          const next = normalizeLanguage(parsed.language)
+          setLanguageState(next)
+        } catch {
+          // Ignore malformed payloads and keep the existing language.
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN'
+    }
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(STORAGE_KEY, language)
+    }
+  }, [language])
+
+  const value = useMemo<I18nContextValue>(
+    () => ({
+      language,
+      setLanguage: setLanguageState,
+      t: (text: string) => (language === 'en' ? zhToEn[text] ?? text : text),
+    }),
+    [language]
+  )
+
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
+}
+
+export function useI18n() {
+  const value = useContext(I18nContext)
+  if (!value) throw new Error('useI18n must be used within I18nProvider')
+  return value
+}

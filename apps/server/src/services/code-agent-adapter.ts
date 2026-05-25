@@ -124,13 +124,13 @@ export async function* streamCodeAgentReply(
 ): AsyncGenerator<CodeAgentReplyChunk, void, unknown> {
   const type = profile.codeAgentType
   if (!type) {
-    yield '这个 Agent 配置为 Code Agent，但还没有绑定 CLI。'
+    yield '这个 Agent 配置为 Coding Tools，但还没有绑定 CLI。'
     return
   }
 
   const adapter = adapters[type]
   if (!adapter) {
-    yield `不支持的 Code Agent 绑定：${type}。`
+    yield `不支持的 Coding Tools 绑定：${type}。`
     return
   }
 
@@ -229,7 +229,7 @@ export async function* streamCodeAgentReply(
 
   const cleanedOutput = stripReasoningTags(stripToolNoise(finalResult.output))
   if (finalResult.code === 0 && !streamedText) {
-    yield limitOutput(cleanedOutput || '(Code Agent 没有返回正文)', 16_000)
+    yield limitOutput(cleanedOutput || '(Coding Tools 没有返回正文)', 16_000)
     return
   }
   if (finalResult.code === 0) return
@@ -310,7 +310,7 @@ function sanitizeHistoryContent(content: string) {
   if (!trimmed) return ''
   if (/^\s*正在执行\b/.test(trimmed)) return ''
   if (/\[Stopped by user\]/i.test(trimmed)) return ''
-  if (/Code Agent (执行失败|退出码|已启动)/.test(trimmed)) return ''
+  if (/Coding Tools (执行失败|退出码|已启动)/.test(trimmed)) return ''
   if (
     /OpenAI Codex v\d|stream error|unexpected status|tool_call_id|mcp_connection_manager|new_stdio_client|Warning: no last agent message|\/agent-workspace/i.test(
       trimmed
@@ -360,7 +360,7 @@ async function runCodeAgentCommand(
   if (signal?.aborted) {
     return {
       code: 130,
-      output: 'Code Agent 执行已取消。',
+      output: 'Coding Tools 执行已取消。',
       metadata: emptyCodeAgentRunMetadata(adapter, 'cancelled'),
     }
   }
@@ -507,7 +507,7 @@ async function runCodeAgentCommand(
   const output = [
     stdout.trim(),
     stderr.trim(),
-    timedOut ? `Code Agent 超过 ${readEnv('AGENTHUB_CODE_AGENT_TIMEOUT_MS') ?? 120_000}ms 未返回，已自动停止。` : '',
+    timedOut ? `Coding Tools 超过 ${readEnv('AGENTHUB_CODE_AGENT_TIMEOUT_MS') ?? 120_000}ms 未返回，已自动停止。` : '',
   ]
     .filter(Boolean)
     .join('\n')
@@ -1206,7 +1206,7 @@ function syncCodexRuntimeFile(sourceHome: string, runtimeHome: string, filename:
   try {
     copyFileSync(source, resolve(runtimeHome, filename))
   } catch {
-    // A missing or locked optional config file should not block Code Agent startup.
+    // A missing or locked optional config file should not block Coding Tools startup.
   }
 }
 
@@ -1364,8 +1364,8 @@ function cleanDiagnosticOutput(output: string) {
 }
 
 function friendlyCodeAgentError(output: string) {
-  if (/Code Agent timed out after/i.test(output)) {
-    return 'Code Agent 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。'
+  if (/Coding Tools timed out after/i.test(output)) {
+    return 'Coding Tools 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。'
   }
   if (/invalid function arguments json|string, tool_call_id/i.test(output)) {
     return [
@@ -1383,9 +1383,9 @@ function friendlyCodeAgentError(output: string) {
     return 'Codex CLI 已启动，但当前模型或 Base URL 不可用。请检查模型名称和供应商地址。'
   }
   if (/No such file or directory|cannot find the path|系统找不到指定的路径/i.test(output)) {
-    return 'Code Agent 已启动，但项目目录不存在。请重新打开或选择正确的工作区文件夹。'
+    return 'Coding Tools 已启动，但项目目录不存在。请重新打开或选择正确的工作区文件夹。'
   }
-  return 'Code Agent 已启动，但 CLI 执行过程返回了错误。'
+  return 'Coding Tools 已启动，但 CLI 执行过程返回了错误。'
 }
 
 function quoteForCmd(value: string) {

@@ -260,6 +260,36 @@ export interface CliInstallAction {
   status: 'completed' | 'failed'
 }
 
+export interface SettingsGeneralInfo {
+  debug: {
+    enabled: boolean
+    dir: string
+    logLevel: string
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+  }
+  storage: {
+    appDataDir: string
+    configDir: string
+    logDir: string
+    activeDataDir: string
+    dataPath: string
+    databasePath: string
+    migrationPending: boolean
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+    databaseSizeBytes: number
+    databaseSizeLabel: string
+    scannedFiles: number
+    truncated: boolean
+    message: string
+  }
+  git: { runtime: string; path: string; ok: boolean; message: string }
+  python: { runtime: string; path: string; ok: boolean; message: string }
+}
+
 export interface OpencodeModelItem {
   id: string
   provider: string
@@ -579,6 +609,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  getSettingsRuntimeInfo: () =>
+    request<{
+      git: { runtime: string; path: string; ok: boolean; message: string }
+      python: { runtime: string; path: string; ok: boolean; message: string }
+    }>('/settings/runtime-info'),
+  getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
+  ensureStorageDirectory: (path: string) =>
+    request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>('/settings/storage/ensure', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  openLocalPath: (path: string) =>
+    request<{ ok: boolean; message: string }>('/settings/storage/open-path', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
 
   // Coding tools
   getCodingToolStatus: (tools?: CodingToolProbe[]) =>
@@ -642,8 +688,12 @@ export const api = {
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
   createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>
     request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
-  openWorkspaceFolder: () =>
-    request<WorkspaceFolderOpenResult>('/workspaces/open-folder', { method: 'POST', timeout: 120_000 }),
+  openWorkspaceFolder: (projectPath?: string | null) =>
+    request<WorkspaceFolderOpenResult>('/workspaces/open-folder', {
+      method: 'POST',
+      timeout: 120_000,
+      body: projectPath ? JSON.stringify({ projectPath }) : undefined,
+    }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
   getWorkspaceActiveRuns: (id: string) => request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
   updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>

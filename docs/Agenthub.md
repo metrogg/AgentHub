@@ -282,7 +282,7 @@ Dify 的定位是开源 LLM 应用开发平台,其 1.14.0-rc1 版本标志着从
 
 ##### 痛点一:Token 消耗与运行成本失控
 
-Claude Code Agent Teams 的 Token 消耗约为单 Agent 模式的 7 倍,这意味着一个中等规模的开发团队在日均 50 次多 Agent 协作场景下,月度 API 调用成本可能超过数千美元。Cursor 的 Composer 模型虽然通过自研优化降低了单次延迟,但多 Agent 并行运行时的总 Token 消耗仍呈线性增长。**现有产品普遍缺乏 Semantic Cache 或 Prompt Caching 机制**来减少重复计算的成本开销。
+Claude Coding Tools Teams 的 Token 消耗约为单 Agent 模式的 7 倍,这意味着一个中等规模的开发团队在日均 50 次多 Agent 协作场景下,月度 API 调用成本可能超过数千美元。Cursor 的 Composer 模型虽然通过自研优化降低了单次延迟,但多 Agent 并行运行时的总 Token 消耗仍呈线性增长。**现有产品普遍缺乏 Semantic Cache 或 Prompt Caching 机制**来减少重复计算的成本开销。
 
 ##### 痛点二:缺乏 IM 式群聊协作体验
 
@@ -343,7 +343,7 @@ AgentHub 的差异化策略不是在某一个维度上超越竞品,而是在 **"
 |---|---|---|---|
 | 2024 | $0.45 | — | Gartner 预测 2026 年 40% 企业应用集成 Agentic AI |
 | 2025 | $0.78 | 73.3% | MCP 月 SDK 下载量超 9,700 万;A2A 协议捐赠 Linux Foundation |
-| 2026 | $1.35 | 73.1% | Claude Code Agent Teams GA;Cursor 3.0 发布;MAF v1.0 GA |
+| 2026 | $1.35 | 73.1% | Claude Coding Tools Teams GA;Cursor 3.0 发布;MAF v1.0 GA |
 | 2027 | $2.25 | 66.7% | 预计 40%+ Agentic 项目面临取消风险;协议标准化基本完成 |
 | 2028 | $3.60 | 60.0% | 企业级多 Agent 部署进入主流;动态 Agent 生成技术成熟 |
 | 2029 | $5.50 | 52.8% | 多 Agent 协作成为 AI 编程工具标配功能 |
@@ -379,7 +379,7 @@ AgentHub 的差异化策略不是在某一个维度上超越竞品,而是在 **"
 | 2025.07 | TRAE SOLO 模式发布 | 高 —— 端到端自主编程范式确立 |
 | 2025.10 | Cursor 2.0 多 Agent 发布;MAF 合并完成 | 高 —— IDE 多 Agent 与框架整合双突破 |
 | 2025.12 | MCP 捐赠 Agentic AI Foundation | 高 —— 工具协议标准化里程碑 |
-| 2026.02 | Claude Code Agent Teams 实验版发布 | 高 —— 对等协作架构验证 |
+| 2026.02 | Claude Coding Tools Teams 实验版发布 | 高 —— 对等协作架构验证 |
 | 2026.03 | Replit Agent 4 并行多 Agent 发布 | 中 —— 浏览器端多 Agent 成熟 |
 | 2026.04 | Cursor 3.0 `/multitask` + Agents Window | 高 —— 跨仓库多 Agent 管理创新 |
 | 2026.04 | MAF v1.0 GA | 高 —— 微软统一 Agent 框架商用 |
@@ -688,7 +688,7 @@ Thread 功能允许用户围绕特定消息创建子对话,避免主聊天流被
 
 #### 4.1.3 多 Agent 协作模块详细需求
 
-多 Agent 协作模块是 AgentHub 的技术核心,其设计参考了 **Claude Code Agent Teams 的对等协作模式**和 **Augment Intent 的 CIV(Coordinator-Implementor-Verifier)架构**。
+多 Agent 协作模块是 AgentHub 的技术核心,其设计参考了 **Claude Coding Tools Teams 的对等协作模式**和 **Augment Intent 的 CIV(Coordinator-Implementor-Verifier)架构**。
 
 ##### Agent 注册发现
 
@@ -721,7 +721,7 @@ Orchestrator 编排器负责将用户请求拆解为可并行执行的子任务�
 - **Max-Utility** —— 广播到所有 Agent,收集可用资源信息后分配给效用最大者
 - **SPSA-based Consensus** —— 自适应学习能力的控制器,相比 Round Robin 平均 MSE 降低 46.08%,CPU 使用降低 14.96%,内存消耗降低 11.96%
 
-Claude Code Agent Teams 的实践表明,**2-4 个 subagents(子 Agent)是最佳平衡点**,超过后协调开销和 git worktree 管理复杂度超过并行收益。
+Claude Coding Tools Teams 的实践表明,**2-4 个 subagents(子 Agent)是最佳平衡点**,超过后协调开销和 git worktree 管理复杂度超过并行收益。
 
 ##### Agent 状态显示与人机协作边界
 
@@ -811,7 +811,7 @@ Checkpoint 系统参考 Claude Code 的行业标杆实现:每次用户 prompt �
 性能需求表设定了 8 项关键指标:
 
 - **消息延迟**:生产级聊天系统的 Presence update latency 目标为 < 100ms,支持 10,000+ 并发用户
-- **并发能力**:Claude Code Agent Teams 支持最多 15 个队友,Cursor Background Agents 支持最多 8 个,Warp Oz Max 版支持 40 个并发 Agent(每个 8 vCPU + 16 GiB RAM),AgentHub 的 100+ 并发会话目标定位在企业级场景
+- **并发能力**:Claude Coding Tools Teams 支持最多 15 个队友,Cursor Background Agents 支持最多 8 个,Warp Oz Max 版支持 40 个并发 Agent(每个 8 vCPU + 16 GiB RAM),AgentHub 的 100+ 并发会话目标定位在企业级场景
 - **Diff 渲染性能**:10k 行文件的基准测试中,react-diff-viewer-continued 初始渲染约 1,304ms、内存约 64.8MB,AgentHub 通过 @git-diff-view/react 的 Web Worker 支持将目标压缩至 1.5s 以内
 
 #### 4.2.2 安全需求
@@ -1454,7 +1454,7 @@ AgentHub 的差异化竞争力源于**四项架构级创新**,每一项均对应
 |---|---|---|---|---|
 | 1 | **IM 群聊式多 Agent 协作** | 将 Agent 协作从"编辑器中心"转变为"对话中心" | Cursor/Windsurf 均为单 Agent 对话,无群聊协作能力 | assistant-ui + AI SDK v5 SSE 流式渲染;NATS sub-ms 消息总线 |
 | 2 | **@指令 Agent 发现与调度** | 类似 Discord 的 @bot 体验,零配置 Agent 发现 | CrewAI 无 GUI,LangGraph 学习曲线陡峭 | Agent Registry + Dispatcher 模式;A2A Agent Card 能力描述 |
-| 3 | **Orchestrator 智能编排** | 简化 Hierarchical 编排 + 顺序 Agent 调度 + 基础容错 | Claude Code Agent Teams 为实验性功能,Token 消耗为单 Agent 7 倍 | 自研 TypeScript 编排器(3 周内实现顺序调度) |
+| 3 | **Orchestrator 智能编排** | 简化 Hierarchical 编排 + 顺序 Agent 调度 + 基础容错 | Claude Coding Tools Teams 为实验性功能,Token 消耗为单 Agent 7 倍 | 自研 TypeScript 编排器(3 周内实现顺序调度) |
 | 4 | **Context Engineering 范式** | 从 Prompt Engineering 升级到上下文工程 | 现有工具聚焦 Prompt 优化,缺乏上下文架构设计能力 | MAC 框架 Schema 驱动三件套;Semantic Cache 41-80% 成本节省 |
 
 四项创新构成**自洽的技术体系**:
