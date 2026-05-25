@@ -47,7 +47,7 @@ import {
   ImagePlus,
   ListTodo,
   Loader2,
-  MessageSquare,
+
   PanelLeft,
   Paperclip,
   Pencil,
@@ -83,6 +83,7 @@ import {
 import { pickWorkspaceFolder } from '../../lib/native'
 import { cn } from '../../lib/utils'
 import { useI18n } from '../../lib/i18n'
+import { requestNewSessionDialog } from '../chat/GlobalNewSessionDialog'
 import { useChatStore } from '../../stores/chatStore'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
 
@@ -209,11 +210,13 @@ const ThreadHeader: FC<{
         <span className="truncate text-sm text-neutral-500">{t('对话由 AI 生成')}</span>
       </div>
       <div className="flex items-center gap-1">
-        <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" aria-label={t('新建')}>
+        <button
+          type="button"
+          onClick={() => requestNewSessionDialog()}
+          className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+          aria-label={t('新建')}
+        >
           <Plus className="h-4 w-4" />
-        </button>
-        <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" aria-label={t('对话')}>
-          <MessageSquare className="h-4 w-4" />
         </button>
       </div>
     </header>
@@ -447,7 +450,6 @@ const Composer: FC = () => {
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
   const [hint, setHint] = useState<string | null>(null)
-  const [planMode, setPlanMode] = useState(false)
   const [composerText, setComposerText] = useState('')
   const [composerScrollTop, setComposerScrollTop] = useState(0)
   const selectedModel = models.find((item) => item.id === selectedModelId)
@@ -720,15 +722,10 @@ const Composer: FC = () => {
               openingWorkspaceId={openingWorkspaceId}
               selectedModelId={selectedModelId}
               workspaceBusy={workspaceBusy}
-              planMode={planMode}
               onOpenWorkspace={(workspaceId) => void openWorkspace(workspaceId)}
               onCreateBlankWorkspace={() => void createBlankWorkspace()}
               onOpenFolderWorkspace={() => void openFolderFromComposer()}
               onClearWorkspace={clearWorkspaceContext}
-              onPlanMode={(next) => {
-                setPlanMode(next)
-                showHint(next ? '已开启计划模式' : '已关闭计划模式')
-              }}
               onModel={(modelId) => {
                 setSelectedModelId(modelId)
                 showHint(modelId ? `已切换到 ${models.find((item) => item.id === modelId)?.modelId ?? modelId}` : '已切换到自动选择')
@@ -956,12 +953,10 @@ const ComposerMenu: FC<{
   openingWorkspaceId: string | null
   selectedModelId: string | null
   workspaceBusy: boolean
-  planMode: boolean
   onOpenWorkspace: (workspaceId: string) => void
   onCreateBlankWorkspace: () => void
   onOpenFolderWorkspace: () => void
   onClearWorkspace: () => void
-  onPlanMode: (enabled: boolean) => void
   onModel: (modelId: string | null) => void
   onPick: (value: string) => void
   onClose: () => void
@@ -974,12 +969,10 @@ const ComposerMenu: FC<{
   openingWorkspaceId,
   selectedModelId,
   workspaceBusy,
-  planMode,
   onOpenWorkspace,
   onCreateBlankWorkspace,
   onOpenFolderWorkspace,
   onClearWorkspace,
-  onPlanMode,
   onModel,
   onPick,
   onClose,
@@ -1024,13 +1017,6 @@ const ComposerMenu: FC<{
     >
       {type === 'tools' && (
         <div className="relative group/tools">
-          <button type="button" onClick={() => onPlanMode(!planMode)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
-            <ListTodo className="h-4 w-4 text-neutral-500" />
-            <span className="flex-1 text-neutral-900">计划模式</span>
-            <span className={cn('relative h-4 w-8 rounded-full transition', planMode ? 'bg-neutral-900' : 'bg-neutral-200')}>
-              <span className={cn('absolute top-0.5 h-3 w-3 rounded-full bg-white transition', planMode ? 'left-4' : 'left-0.5')} />
-            </span>
-          </button>
           <div className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
             <Blocks className="h-4 w-4 text-neutral-500" />
             <span className="flex-1 text-neutral-900">插件</span>
@@ -2004,17 +1990,23 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                   </div>
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">{task.description}</p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
-                    {(['pending', 'running', 'done'] as TaskStatus[]).map((item) => (
+                    {(['pending', 'running', 'done', 'failed'] as TaskStatus[]).map((item) => (
                       <button
                         key={item}
                         type="button"
                         disabled={Boolean(result)}
                         onClick={() => patchTask(task.id, { status: item })}
                         className={cn(
-                          'h-7 rounded-full border px-2.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-60',
-                          status === item
-                            ? 'border-neutral-900 bg-neutral-950 text-white'
-                            : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-900'
+                          'h-7 rounded-full border px-2.5 text-xs transition disabled:cursor-default',
+                          status === item && item === 'running'
+                            ? 'border-amber-300 bg-amber-50 text-amber-700'
+                            : status === item && item === 'done'
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                              : status === item && item === 'failed'
+                                ? 'border-red-300 bg-red-50 text-red-700'
+                                : status === item
+                                  ? 'border-neutral-900 bg-neutral-950 text-white'
+                                  : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-900'
                         )}
                       >
                         {taskStatusLabel(item)}
@@ -2093,6 +2085,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
 function taskStatusLabel(status: TaskStatus) {
   if (status === 'running') return '进行中'
   if (status === 'done') return '已完成'
+  if (status === 'failed') return '失败'
   return '待处理'
 }
 

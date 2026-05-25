@@ -1,4 +1,4 @@
-import { db, messages, workspaceTasks, orchestratorRuns, sessions, eq, desc } from '@agenthub/db'
+import { db, messages, workspaceTasks, orchestratorRuns, sessions, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
@@ -44,6 +44,9 @@ export class OrchestratorEngine {
       .set({ status: 'running', plan: plan as unknown as Record<string, unknown> })
       .where(eq(orchestratorRuns.id, runId))
 
+    const [groupSessionRecord] = await db.select().from(sessions).where(eq(sessions.id, groupSessionId)).limit(1)
+    const ownerId = groupSessionRecord?.ownerId ?? 'user'
+
     const executor: TaskExecutor = async (task, signal) => {
       let currentTask = task
       let currentAttempt = 0
@@ -65,9 +68,9 @@ export class OrchestratorEngine {
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
             await db.update(workspaceTasks).set({ status: 'pending', errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
-            broadcastSessionEvent(childInfo.sessionId, {
+            broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt, strategy: 'retry' },
+              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt, strategy: 'retry', sessionId: childInfo.sessionId },
             })
           }
           continue
@@ -79,9 +82,9 @@ export class OrchestratorEngine {
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
             await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
-            broadcastSessionEvent(childInfo.sessionId, {
+            broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId, strategy: 'agent_substitution' },
+              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId, strategy: 'agent_substitution', sessionId: childInfo.sessionId },
             })
           }
           continue
@@ -93,16 +96,73 @@ export class OrchestratorEngine {
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
             await db.update(workspaceTasks).set({ status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
-            broadcastSessionEvent(childInfo.sessionId, {
+            broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', strategy: 'local_replan' },
+              payload: { taskId: currentTask.id, status: 'pending', strategy: 'local_replan', sessionId: childInfo.sessionId },
             })
           }
           continue
         }
 
+        if (replan.strategy === 'task_split' && replan.newTasks && replan.newTasks.length > 0) {
+          for (const newTask of replan.newTasks) {
+            const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
+            const childSession = await ensureChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+            await db.insert(workspaceTasks).values({
+              id: newTask.id,
+              workspaceId,
+              agentId: newTask.agentId,
+              title: newTask.title,
+              description: newTask.description,
+              status: 'pending',
+              orderIdx: plan.tasks.length,
+              runId,
+              dependencies: newTask.dependencies ?? [],
+              parallelGroup: newTask.parallelGroup,
+              maxRetries: newTask.maxRetries ?? 2,
+            })
+            childSessions.set(newTask.id, { sessionId: childSession.id, workspaceId, projectPath: childSessions.get(currentTask.id)?.projectPath })
+          }
+          this.scheduler.addTasksToRun(runId, replan.newTasks)
+          logger.info({ taskId: currentTask.id, newTaskCount: replan.newTasks.length }, 'Task split into subtasks')
+          return { ...result, status: 'failed' as const, error: `任务已拆分为子任务: ${replan.reason}` }
+        }
+
+        if (replan.strategy === 'global_replan') {
+          try {
+            const newPlan = await this.planner.createPlan({ goal: plan.goal, agents: plan.agents })
+            const existingIds = new Set(plan.tasks.map((t) => t.id))
+            const tasksToAdd = newPlan.tasks.filter((t) => !existingIds.has(t.id))
+            if (tasksToAdd.length > 0) {
+              for (const newTask of tasksToAdd) {
+                const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
+                const childSession = await ensureChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+                await db.insert(workspaceTasks).values({
+                  id: newTask.id,
+                  workspaceId,
+                  agentId: newTask.agentId,
+                  title: newTask.title,
+                  description: newTask.description,
+                  status: 'pending',
+                  orderIdx: plan.tasks.length,
+                  runId,
+                  dependencies: newTask.dependencies ?? [],
+                  parallelGroup: newTask.parallelGroup,
+                  maxRetries: newTask.maxRetries ?? 2,
+                })
+                childSessions.set(newTask.id, { sessionId: childSession.id, workspaceId, projectPath: childSessions.get(currentTask.id)?.projectPath })
+              }
+              this.scheduler.addTasksToRun(runId, tasksToAdd)
+              logger.info({ taskId: currentTask.id, addedCount: tasksToAdd.length }, 'Global replan added new tasks')
+              continue
+            }
+          } catch (err: any) {
+            logger.error({ err: err?.message, taskId: currentTask.id }, 'Global replan failed')
+          }
+          return { ...result, error: replan.reason }
+        }
+
         if (replan.strategy === 'escalate_to_user') {
-          // 将错误信息写入黑板，供用户查看
           const bbNamespace = Blackboard.namespace(workspaceId, runId)
           await blackboard.write({
             namespace: bbNamespace,
@@ -114,7 +174,10 @@ export class OrchestratorEngine {
           })
         }
 
-        // fail / task_split(暂不实现) / escalate_to_user 都返回结果
+        if (replan.strategy === 'fail') {
+          return { ...result, error: replan.reason }
+        }
+
         return { ...result, error: replan.reason }
       }
     }
@@ -211,7 +274,7 @@ export class OrchestratorEngine {
       sandboxPolicy: agent.sandboxPolicy,
       contextPolicy: 'workspace-aware' as const,
       approvalRequired: true,
-      projectPath: childInfo.projectPath ?? null,
+      projectPath: branchCtx?.worktreePath ?? childInfo.projectPath ?? null,
     }
 
     const bbNamespace = Blackboard.namespace(workspaceId, runId)
@@ -255,9 +318,9 @@ export class OrchestratorEngine {
       .set({ status: 'running', startedAt: new Date(), retryCount: attemptCount })
       .where(eq(workspaceTasks.id, task.id))
 
-    broadcastSessionEvent(childInfo.sessionId, {
+    broadcastSessionEvent(groupSessionId, {
       type: 'task:update',
-      payload: { taskId: task.id, status: 'running' },
+      payload: { taskId: task.id, status: 'running', sessionId: childInfo.sessionId },
     })
 
     const taskStartTime = Date.now()
@@ -301,7 +364,7 @@ export class OrchestratorEngine {
               const status = await gitBranchManager.getFileStatus(branchCtx.projectPath, filePath, branchCtx.branch)
               artifacts.push({
                 id: `diff-${filePath.replace(/[^a-z0-9]/gi, '-')}`,
-                kind: 'diff',
+                type: 'diff',
                 title: `${agent.name} 修改了 ${filePath}`,
                 filePath,
                 status,
@@ -328,8 +391,7 @@ export class OrchestratorEngine {
         agentId: agent.id,
         taskId: task.id,
         type: 'task_end',
-        output: { status: 'done', outputLength: output.length },
-        durationMs: taskDuration,
+        output: { status: 'done', outputLength: output.length, durationMs: taskDuration },
       })
 
       // 写入黑板：任务产出
@@ -366,6 +428,11 @@ export class OrchestratorEngine {
         })
         .where(eq(workspaceTasks.id, task.id))
 
+      broadcastSessionEvent(groupSessionId, {
+        type: 'task:update',
+        payload: { taskId: task.id, status: 'done', sessionId: childInfo.sessionId, agentId: agent.id, agentName: agent.name },
+      })
+
       if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
 
       return {
@@ -384,14 +451,18 @@ export class OrchestratorEngine {
         agentId: agent.id,
         taskId: task.id,
         type: 'error',
-        input: { taskTitle: task.title },
-        output: { error: error?.message },
-        durationMs: Date.now() - taskStartTime,
+        output: { taskTitle: task.title, error: error?.message, durationMs: Date.now() - taskStartTime },
       })
       await db
         .update(workspaceTasks)
         .set({ status: 'failed', completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
         .where(eq(workspaceTasks.id, task.id))
+
+      broadcastSessionEvent(groupSessionId, {
+        type: 'task:update',
+        payload: { taskId: task.id, status: 'failed', sessionId: childInfo.sessionId, agentId: agent.id, agentName: agent.name, error: error?.message || 'Unknown error' },
+      })
+
       if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
       return {
         taskId: task.id,
@@ -462,6 +533,44 @@ export class OrchestratorEngine {
   }
 }
 
+async function ensureChildSession(
+  workspaceId: string,
+  workspaceName: string,
+  ownerId: string,
+  agent: { id: string; name: string } | null,
+  taskTitle?: string
+) {
+  if (agent) {
+    const [existing] = await db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.ownerId, ownerId),
+          eq(sessions.type, 'direct'),
+          eq(sessions.workspaceId, workspaceId),
+          eq(sessions.workspaceAgentId, agent.id)
+        )
+      )
+      .orderBy(desc(sessions.updatedAt))
+      .limit(1)
+    if (existing) return existing
+  }
+
+  const [created] = await db
+    .insert(sessions)
+    .values({
+      title: agent ? `${workspaceName} / ${agent.name}` : `${workspaceName} / ${taskTitle?.slice(0, 24) || 'Agent'}`,
+      type: 'direct',
+      ownerId,
+      workspaceId,
+      workspaceAgentId: agent?.id ?? null,
+    })
+    .returning()
+  if (!created) throw new Error('Failed to create agent child session')
+  return created
+}
+
 async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNamespace: string): Promise<string> {
   const agent = plan.agents.find((a) => a.id === task.agentId)
 
@@ -482,8 +591,25 @@ async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNames
         '\n\n【前置依赖产出】\n' +
         relevant
           .map((e) => {
-            const val = e.value as { output: string; agentName: string; taskTitle: string }
-            return `--- 来自 ${val.agentName}（${val.taskTitle}）---\n${(val.output || '').slice(0, 2000)}`
+            const val = e.value as {
+              output: string
+              agentName: string
+              taskTitle: string
+              artifacts?: Array<{ type?: string; diff?: string; filePath?: string; path?: string }>
+            }
+            let text = `--- 来自 ${val.agentName}（${val.taskTitle}）---\n${(val.output || '').slice(0, 2000)}`
+            const codeArtifacts = val.artifacts?.filter((a) => a.type === 'diff' || a.type === 'file') ?? []
+            if (codeArtifacts.length > 0) {
+              text +=
+                '\n\n[代码变更]\n' +
+                codeArtifacts
+                  .map((a) => {
+                    if (a.type === 'diff' && a.diff) return `\`\`\`diff\n// ${a.filePath || 'unknown'}\n${a.diff.slice(0, 3000)}\n\`\`\``
+                    return `// ${a.path || a.filePath || 'unknown'}`
+                  })
+                  .join('\n\n')
+            }
+            return text
           })
           .join('\n\n') +
         '\n【前置依赖结束】\n'

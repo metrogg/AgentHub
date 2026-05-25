@@ -155,6 +155,8 @@ export async function* streamCodeAgentReply(
 
   if (!canExecute) {
     yield [
+      `[错误：${adapter.displayName} 无法执行]`,
+      '',
       `**${adapter.displayName} 暂未直接执行**`,
       '',
       `- 运行时：${type}`,

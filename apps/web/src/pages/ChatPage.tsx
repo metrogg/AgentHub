@@ -196,7 +196,10 @@ function Welcome({
       const session = await createSession(titleFromMessage(trimmed))
       await selectSession(session.id)
       navigate(`/chat/${session.id}`)
-      await sendMessageToSession(session.id, trimmed)
+      const result = await sendMessageToSession(session.id, trimmed)
+      if (result?.groupSessionId) {
+        navigate(`/chat/${result.groupSessionId}`)
+      }
       setMessage('')
     } finally {
       setSubmitting(false)
@@ -318,9 +321,9 @@ function Welcome({
 
           <div className="mt-24 grid gap-3 sm:grid-cols-2">
             <PromptCard
-              title={t('创建 coder 代理')}
-              text={t('帮我单开一个跳跃小游戏')}
-              onClick={() => startThread('创建一个 coder 代理，帮我简单开发一个跳跃小游戏')}
+              title={t('开发小游戏')}
+              text={t('帮我简单开发一个跳跃小游戏')}
+              onClick={() => startThread('帮我简单开发一个跳跃小游戏')}
             />
             <PromptCard
               title={t('解释架构')}

@@ -183,6 +183,53 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ session })
   })
 
+  // Agent child session
+  .post('/:id/agents/:agentId/session', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const agentId = c.req.param('agentId')
+    await ensureWorkspace(id, user.sub)
+
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id)))
+      .limit(1)
+    if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1)
+
+    const [existing] = await db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.ownerId, user.sub),
+          eq(sessions.type, 'direct'),
+          eq(sessions.workspaceId, id),
+          eq(sessions.workspaceAgentId, agentId)
+        )
+      )
+      .orderBy(desc(sessions.updatedAt))
+      .limit(1)
+
+    if (existing) return c.json({ session: existing })
+
+    const [created] = await db
+      .insert(sessions)
+      .values({
+        title: `${workspace?.name || 'Workspace'} / ${agent.name}`,
+        type: 'direct',
+        ownerId: user.sub,
+        workspaceId: id,
+        workspaceAgentId: agentId,
+      })
+      .returning()
+
+    if (!created) throw new HTTPException(500, { message: 'Failed to create session' })
+    return c.json({ session: created })
+  })
+
   // Active runs
   .get('/:id/active-runs', async (c) => {
     const user = c.get('user')

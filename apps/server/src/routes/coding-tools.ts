@@ -192,14 +192,6 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ ok: false, status: 'failed', message: sanitizeAuthOutput(error?.message || 'Login failed') }, 200)
     }
   })
-  .post('/codex/auth/login', async (c) => {
-    if (!env.ENABLE_CODEX_CHATGPT_AUTH) return c.json(disabledAuthAction('failed'), 200)
-    try {
-      return c.json(await startCodexLogin())
-    } catch (error: any) {
-      return c.json({ ok: false, status: 'failed', message: sanitizeAuthOutput(error?.message || 'Login failed') }, 200)
-    }
-  })
   .post('/codex/auth/open-device', async (c) => {
     if (!env.ENABLE_CODEX_CHATGPT_AUTH) return c.json(disabledAuthAction(), 200)
     try {

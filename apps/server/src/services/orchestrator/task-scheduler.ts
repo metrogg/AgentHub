@@ -8,6 +8,8 @@ export type TaskExecutor = (task: ExecutionTask, signal: AbortSignal) => Promise
 export class TaskScheduler {
   private semaphore = new Semaphore(3)
   private activeControllers = new Map<string, AbortController>()
+  private activeGraphs = new Map<string, TaskGraph>()
+  private activePlans = new Map<string, ExecutionPlan>()
 
   setConcurrency(n: number) {
     this.semaphore = new Semaphore(Math.max(1, Math.min(n, 10)))
@@ -15,8 +17,12 @@ export class TaskScheduler {
 
   async executePlan(plan: ExecutionPlan, executor: TaskExecutor): Promise<TaskResult[]> {
     const graph = new TaskGraph(plan.tasks)
+    this.activeGraphs.set(plan.runId, graph)
+    this.activePlans.set(plan.runId, plan)
 
     if (graph.detectCycles()) {
+      this.activeGraphs.delete(plan.runId)
+      this.activePlans.delete(plan.runId)
       throw new Error('Execution plan contains circular dependencies')
     }
 
@@ -42,9 +48,24 @@ export class TaskScheduler {
       }
     } finally {
       this.activeControllers.delete(plan.runId)
+      this.activeGraphs.delete(plan.runId)
+      this.activePlans.delete(plan.runId)
     }
 
     return plan.tasks.map((task) => results.get(task.id)!).filter(Boolean)
+  }
+
+  addTasksToRun(runId: string, tasks: import('./types').ExecutionTask[]) {
+    const graph = this.activeGraphs.get(runId)
+    const plan = this.activePlans.get(runId)
+    if (graph && plan) {
+      graph.addTasks(tasks)
+      for (const task of tasks) {
+        if (!plan.tasks.find((t) => t.id === task.id)) {
+          plan.tasks.push(task)
+        }
+      }
+    }
   }
 
   cancelRun(runId: string) {
