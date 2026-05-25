@@ -300,6 +300,7 @@ export default function SettingsPage() {
         anthropicEndpoint: item.anthropicEndpoint,
         apiKey: item.apiKey,
         apiKeyEnv: item.apiKeyEnv,
+        modelId: item.modelId,
       })
       updateModel(item.id, { tested: result.ok })
       setTestMessages((current) => ({ ...current, [item.id]: result.ok ? '连接成功' : result.message }))
