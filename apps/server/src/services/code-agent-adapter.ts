@@ -340,7 +340,7 @@ async function isCommandInstalled(command: string) {
     ? ['/d', '/s', '/c', `where ${command} >nul 2>nul`]
     : ['-lc', `command -v ${quoteForSh(command)} >/dev/null 2>&1`]
   try {
-    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe' })
+    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
     const code = await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 2000))])
     return code === 0
   } catch {
@@ -893,6 +893,7 @@ async function snapshotWorkspaceFiles(cwd?: string): Promise<Map<string, string>
       cwd,
       stdout: 'pipe',
       stderr: 'ignore',
+      env: process.env,
     })
     const [code, stdout] = await Promise.all([
       Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 3000))]),
@@ -973,6 +974,7 @@ async function runGitDiff(cwd: string, args: string[]) {
       cwd,
       stdout: 'pipe',
       stderr: 'ignore',
+      env: process.env,
     })
     const [code, stdout] = await Promise.all([
       Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 3000))]),

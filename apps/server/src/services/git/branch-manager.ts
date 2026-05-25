@@ -258,6 +258,7 @@ export class GitBranchManager {
       cwd: projectPath,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const stdout = await new Response(proc.stdout).text()
     const stderr = await new Response(proc.stderr).text()

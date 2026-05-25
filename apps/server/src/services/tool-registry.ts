@@ -311,6 +311,7 @@ async function runRipgrep(
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const timer = setTimeout(() => {
       try {

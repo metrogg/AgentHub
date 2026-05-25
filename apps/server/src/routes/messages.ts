@@ -1522,6 +1522,7 @@ async function runGit(cwd: string, args: string[]) {
     cwd,
     stdout: 'ignore',
     stderr: 'ignore',
+    env: process.env,
   })
   return await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 5000))])
 }

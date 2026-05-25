@@ -589,6 +589,7 @@ async function runVersionProbe(command: string): Promise<string | null> {
     const proc = Bun.spawn([shell, ...args], {
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const timed = await Promise.race([
       proc.exited,
@@ -613,6 +614,7 @@ async function runFixedCommand(
       cwd: options.cwd,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const timer = setTimeout(() => {
       try {
@@ -644,6 +646,7 @@ async function runHostCliCommand(
       cwd: options.cwd,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const timer = setTimeout(() => {
       try {

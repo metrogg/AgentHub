@@ -68,6 +68,7 @@ async function runSkillhub(args: string[]) {
       cwd: projectRoot,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const [code, stdout, stderr] = await Promise.all([
       proc.exited,
