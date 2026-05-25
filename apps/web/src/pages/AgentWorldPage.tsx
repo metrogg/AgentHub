@@ -1036,6 +1036,7 @@ function AgentDialog({
             <option value="codex">Codex CLI</option>
             <option value="claude-code">Claude Code</option>
             <option value="opencode">OpenCode</option>
+            <option value="gemini">Gemini CLI</option>
           </select>
           <select value={draft.modelId ?? ''} onChange={(event) => onChange({ modelId: event.target.value || null })} className={selectClass}>
             <option value="">自动模型</option>
@@ -1173,6 +1174,7 @@ function codeAgentLabel(value: NonNullable<WorkspaceAgent['codeAgentType']>) {
     codex: 'Codex CLI',
     'claude-code': 'Claude Code',
     opencode: 'OpenCode',
+    gemini: 'Gemini CLI',
   }
   return map[value]
 }

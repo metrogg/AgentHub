@@ -11,12 +11,21 @@ import SettingsPage from './pages/SettingsPage'
 import SkillsMarketPage from './pages/SkillsMarketPage'
 import { api } from './lib/api'
 import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
-import { I18nProvider } from './lib/i18n'
-import { isDesktopApp } from './lib/native'
+import { I18nProvider, useI18n } from './lib/i18n'
+import { isDesktopApp, setDesktopWindowTitle } from './lib/native'
 import { useChatStore } from './stores/chatStore'
 
 export default function App() {
+  return (
+    <I18nProvider>
+      <AppShell />
+    </I18nProvider>
+  )
+}
+
+function AppShell() {
   const desktop = isDesktopApp()
+  const { language } = useI18n()
 
   useEffect(() => {
     applyAppearanceSettings(defaultAppearanceSettings)
@@ -28,6 +37,11 @@ export default function App() {
       })
       .catch(() => undefined)
   }, [])
+
+  useEffect(() => {
+    if (!desktop) return
+    void setDesktopWindowTitle(language === 'en' ? 'File    Edit    Window' : '文件    编辑    窗口')
+  }, [desktop, language])
 
   const routes = (
     <Routes>
@@ -44,13 +58,11 @@ export default function App() {
   )
 
   return (
-    <I18nProvider>
-      <div className={desktop ? 'agenthub-app-theme flex h-full flex-col' : 'agenthub-app-theme contents'}>
-        <NativeDesktopBridge />
-        {desktop && <DesktopAppMenu />}
-        <div className={desktop ? 'min-h-0 flex-1' : 'contents'}>{routes}</div>
-      </div>
-    </I18nProvider>
+    <div className={desktop ? 'agenthub-app-theme flex h-full flex-col' : 'agenthub-app-theme contents'}>
+      <NativeDesktopBridge />
+      {desktop && <DesktopAppMenu />}
+      <div className={desktop ? 'min-h-0 flex-1' : 'contents'}>{routes}</div>
+    </div>
   )
 }
 

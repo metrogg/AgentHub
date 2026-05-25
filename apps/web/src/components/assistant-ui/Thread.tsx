@@ -284,7 +284,7 @@ const GroupMemberPanel: FC = () => {
 
           <div className="mt-5 space-y-2">
             <MemberRow name="You" role="发起人与决策者" active />
-            <MemberRow name="Orchestrator" role="拆解、协调、生成任务卡" active={activeAgentIds.has('orchestrator')} />
+            <MemberRow name="Orchestrator" role="拆解、协调、生成任务卡" active={activeAgentIds.has('orchestrator')} mentionName="orchestrator" />
             {agents.map((agent) => (
               <MemberRow
                 key={agent.id}
@@ -292,6 +292,7 @@ const GroupMemberPanel: FC = () => {
                 role={`${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`}
                 color={agent.color}
                 active={activeAgentIds.has(agent.id)}
+                mentionName={agent.name}
               />
             ))}
           </div>
@@ -326,8 +327,8 @@ const GroupMemberPanel: FC = () => {
   )
 }
 
-const MemberRow: FC<{ name: string; role: string; color?: string; active?: boolean }> = ({ name, role, color, active }) => (
-  <div className="flex items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
+const MemberRow: FC<{ name: string; role: string; color?: string; active?: boolean; mentionName?: string }> = ({ name, role, color, active, mentionName }) => (
+  <div className="group flex items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
     <div
       className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
       style={{ background: color ?? (name === 'You' ? '#2563eb' : '#111827') }}
@@ -338,9 +339,40 @@ const MemberRow: FC<{ name: string; role: string; color?: string; active?: boole
       <div className="truncate text-sm font-medium text-neutral-950">{name}</div>
       <div className="truncate text-xs text-neutral-500">{role}</div>
     </div>
+    {mentionName && (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          insertComposerMention(mentionName)
+        }}
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 opacity-70 transition hover:bg-neutral-100 hover:text-blue-600 group-hover:opacity-100"
+        title={`提及 ${name}`}
+        aria-label={`提及 ${name}`}
+      >
+        <AtSign className="h-3.5 w-3.5" />
+      </button>
+    )}
     <span className={cn('h-2 w-2 rounded-full', active ? 'bg-emerald-500' : 'bg-neutral-300')} />
   </div>
 )
+
+function insertComposerMention(name: string) {
+  const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
+  const value = `@${name} `
+  if (!input) {
+    void navigator.clipboard?.writeText(value).catch(() => undefined)
+    return
+  }
+  input.focus()
+  const start = input.selectionStart ?? input.value.length
+  const end = input.selectionEnd ?? input.value.length
+  const inserted = document.execCommand?.('insertText', false, value)
+  if (!inserted) {
+    input.setRangeText(value, start, end, 'end')
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
+  }
+}
 
 const ThreadWelcome: FC = () => (
   <ThreadPrimitive.Empty>
@@ -1808,6 +1840,7 @@ function codeAgentStatusLabel(status: CodeAgentRunMetadata['status']) {
 function runtimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
   if (runtime === 'claude-code') return 'Claude Code'
   if (runtime === 'opencode') return 'OpenCode'
+  if (runtime === 'gemini') return 'Gemini CLI'
   return 'Codex'
 }
 
@@ -2130,11 +2163,11 @@ function codeAgentRuntimeFromParts(parts: unknown): CodeAgentRunMetadata['runtim
     if (item.type !== 'data') continue
     if (item.name === 'agent_avatar') {
       const runtime = (item.data as { runtime?: unknown } | null)?.runtime
-      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode') return runtime
+      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode' || runtime === 'gemini') return runtime
     }
     if (item.name === 'code_agent_run') {
       const runtime = (item.data as { runtime?: unknown } | null)?.runtime
-      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode') return runtime
+      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode' || runtime === 'gemini') return runtime
     }
   }
   return null
@@ -2143,12 +2176,14 @@ function codeAgentRuntimeFromParts(parts: unknown): CodeAgentRunMetadata['runtim
 function codeAgentLogoSrc(runtime: CodeAgentRunMetadata['runtime']) {
   if (runtime === 'claude-code') return '/claude-color.svg'
   if (runtime === 'opencode') return '/opencode.svg'
+  if (runtime === 'gemini') return '/gemini-color.svg'
   return '/codex-color.svg'
 }
 
 function codeAgentRuntimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
   if (runtime === 'claude-code') return 'Claude Code'
   if (runtime === 'opencode') return 'OpenCode'
+  if (runtime === 'gemini') return 'Gemini CLI'
   return 'Codex'
 }
 

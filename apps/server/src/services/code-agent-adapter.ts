@@ -110,6 +110,14 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     promptMode: 'argument',
     buildArgs: (prompt, options) => ['run', ...(options?.modelId ? ['--model', options.modelId] : []), prompt],
   },
+  gemini: {
+    command: 'gemini',
+    displayName: 'Gemini CLI',
+    envKey: 'GEMINI_API_KEY',
+    docsHint: 'Gemini CLI 会使用本机 Google Gemini 凭据，并在当前项目目录中执行代码任务。',
+    promptMode: 'argument',
+    buildArgs: (prompt, options) => [...(options?.modelId ? ['--model', options.modelId] : []), '-p', prompt],
+  },
 }
 
 export function isCodeAgentProfile(profile?: AgentRunProfile) {
@@ -239,7 +247,7 @@ export async function* streamCodeAgentReply(
 
 function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
   if (readEnv(adapter.envKey)) return true
-  return type === 'codex' || type === 'opencode' || type === 'claude-code'
+  return type === 'codex' || type === 'opencode' || type === 'claude-code' || type === 'gemini'
 }
 
 function codeAgentBlockerText(options: {

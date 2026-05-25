@@ -306,6 +306,7 @@ export default function AgentConfigPage() {
                         <option value="codex">Codex CLI</option>
                         <option value="claude-code">Claude Code</option>
                         <option value="opencode">OpenCode</option>
+                        <option value="gemini">Gemini CLI</option>
                       </SelectField>
                       <SelectField label="默认模型" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
                         <option value="">自动模型</option>
@@ -461,6 +462,10 @@ function patchFromInstruction(text: string, current: AgentConfigInput) {
     patch.runtimeType = 'code-agent'
     patch.codeAgentType = 'opencode'
     notes.push('运行时切换为 OpenCode')
+  } else if (lower.includes('gemini')) {
+    patch.runtimeType = 'code-agent'
+    patch.codeAgentType = 'gemini'
+    notes.push('运行时切换为 Gemini CLI')
   } else if (lower.includes('普通') || lower.includes('llm')) {
     patch.runtimeType = 'llm'
     patch.codeAgentType = null

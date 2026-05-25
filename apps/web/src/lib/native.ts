@@ -49,3 +49,10 @@ export async function openDesktopWindow() {
   await invokeNative('open_desktop_window')
   return true
 }
+
+export async function setDesktopWindowTitle(title: string) {
+  if (!isDesktopApp()) return false
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().setTitle(title)
+  return true
+}

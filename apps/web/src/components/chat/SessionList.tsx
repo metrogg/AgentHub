@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   AlertTriangle,
-  AtSign,
   Archive,
   ArchiveRestore,
   Bot,
@@ -26,6 +25,7 @@ import {
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
 import { api, type Session, type WorkspaceAgent, type WorkspaceFull } from '../../lib/api'
+import { useI18n } from '../../lib/i18n'
 import { loadSessionListPrefs, normalizeSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent, type SessionListPrefs } from '../../lib/sessionArchive'
 
 type SessionGroup = {
@@ -36,10 +36,10 @@ type SessionGroup = {
 
 export default function SessionList() {
   const navigate = useNavigate()
+  const { t } = useI18n()
   const location = useLocation()
   const { sessionId } = useParams()
   const sessions = useChatStore((state) => state.sessions)
-  const currentSession = useChatStore((state) => state.currentSession)
   const currentWorkspace = useChatStore((state) => state.currentWorkspace)
   const currentWorkspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
@@ -118,7 +118,7 @@ export default function SessionList() {
   async function createPlainSession() {
     setCreatingChoice('plain')
     try {
-      const session = await createSession('新会话')
+      const session = await createSession(t('新会话'))
       await selectSession(session.id)
       setNewDialogOpen(false)
       navigate(`/chat/${session.id}`)
@@ -211,10 +211,6 @@ export default function SessionList() {
 
   async function openAgentContact(agent: WorkspaceAgent) {
     if (!currentWorkspace) return
-    if (currentSession?.type === 'group') {
-      insertComposerMention(agent.name)
-      return
-    }
     const { session } = await api.openWorkspaceAgentSession(currentWorkspace.id, agent.id)
     await fetchSessions()
     await selectSession(session.id)
@@ -238,15 +234,15 @@ export default function SessionList() {
             type="button"
             onClick={handleNew}
             className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#eef8f6] text-[#8ba9a4] transition hover:bg-[#e3f2ef]"
-            aria-label="新建会话"
+            aria-label={t('新建会话')}
           >
             <Bot className="h-5 w-5" />
           </button>
           <button type="button" onClick={handleNew} className="min-w-0 flex-1 text-left">
-            <div className="truncate text-sm font-medium text-neutral-950">新建会话</div>
+            <div className="truncate text-sm font-medium text-neutral-950">{t('新建会话')}</div>
             <div className="mt-0.5 flex items-center gap-1 text-xs text-neutral-500">
               <span className="h-2 w-2 rounded-full bg-blue-500" />
-              空闲中
+              {t('空闲中')}
             </div>
           </button>
           <button
@@ -266,7 +262,7 @@ export default function SessionList() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-            placeholder="搜索会话"
+            placeholder={t('搜索会话')}
           />
         </div>
         <button
@@ -279,7 +275,7 @@ export default function SessionList() {
         >
           <span className="inline-flex items-center gap-2">
             {showArchived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
-            {showArchived ? '查看归档' : '当前会话'}
+            {showArchived ? t('查看归档') : t('当前会话')}
           </span>
           <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">
             {showArchived ? archivedSessionCount : activeSessionCount}
@@ -302,7 +298,7 @@ export default function SessionList() {
         />
         <NavItem
           icon={Building2}
-          label="办公室"
+          label={t('办公室')}
           active={location.pathname === '/office'}
           onClick={() => navigate('/office')}
         />
@@ -313,17 +309,16 @@ export default function SessionList() {
       {currentWorkspace && (
         <div className="px-2 pb-3">
           <div className="mb-1 flex items-center justify-between px-2 text-xs text-neutral-400">
-            <span>Agent 联系人</span>
+            <span>{t('Agent 联系人')}</span>
             <span>{agentContacts.length + 1}</span>
           </div>
           <div className="space-y-1">
             <AgentContactRow
               name="Orchestrator"
-              role="协调 / 拆解 / 汇总"
+              role={t('协调 / 拆解 / 汇总')}
               color="#111827"
               runtimeLabel="Coordinator"
               tags={['规划', '调度']}
-              onClick={() => insertComposerMention('orchestrator')}
             />
             {agentContacts.map((agent) => (
               <AgentContactRow
@@ -338,7 +333,7 @@ export default function SessionList() {
             ))}
             {!agentContacts.length && (
               <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-3 text-xs text-neutral-400">
-                当前项目还没有匹配的 Agent
+                {t('当前项目还没有匹配的 Agent')}
               </div>
             )}
           </div>
@@ -346,10 +341,10 @@ export default function SessionList() {
       )}
 
       <div className="flex-1 overflow-y-auto px-2">
-        <div className="mb-1 px-2 text-xs text-neutral-400">历史话题</div>
+        <div className="mb-1 px-2 text-xs text-neutral-400">{t('历史话题')}</div>
         {sessionTree.length === 0 ? (
           <div className="px-2 py-4 text-xs text-neutral-400">
-            {query.trim() ? '没有匹配的会话' : showArchived ? '还没有归档会话' : '还没有会话'}
+            {query.trim() ? t('没有匹配的会话') : showArchived ? t('还没有归档会话') : t('还没有会话')}
           </div>
         ) : (
           <ul className="space-y-1">
@@ -476,7 +471,7 @@ export default function SessionList() {
           className="flex h-10 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-white/70"
         >
           <Settings2 className="h-4 w-4 text-neutral-500" />
-          设置
+          {t('设置')}
         </button>
       </div>
 
@@ -523,7 +518,8 @@ function NewSessionDialog({
   onCreateAgent: (workspace: WorkspaceFull, agentId: string) => void
   onOpenAgentWorld: () => void
 }) {
-  const [runtimeFilter, setRuntimeFilter] = useState<'all' | 'llm' | 'codex' | 'claude-code' | 'opencode'>('all')
+  const { t } = useI18n()
+  const [runtimeFilter, setRuntimeFilter] = useState<'all' | 'llm' | 'codex' | 'claude-code' | 'opencode' | 'gemini'>('all')
   const filteredWorkspaces = workspaces
     .map((workspace) => ({
       ...workspace,
@@ -540,8 +536,8 @@ function NewSessionDialog({
       <div className="max-h-[82vh] w-full max-w-xl overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 border-b border-neutral-100 px-5 py-4">
           <div>
-            <h2 className="text-sm font-semibold text-neutral-950">新建对话</h2>
-            <p className="mt-1 text-xs text-neutral-500">选择一个聊天对象，或开启普通会话。</p>
+            <h2 className="text-sm font-semibold text-neutral-950">{t('新建对话')}</h2>
+            <p className="mt-1 text-xs text-neutral-500">{t('选择一个聊天对象，或开启普通会话。')}</p>
           </div>
           <button type="button" onClick={onClose} disabled={Boolean(creatingChoice)} className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-40">
             <X className="h-4 w-4" />
@@ -559,25 +555,26 @@ function NewSessionDialog({
               {creatingChoice === 'plain' ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold text-neutral-950">普通对话</div>
-              <div className="mt-1 text-xs text-neutral-500">不绑定特定 Agent，使用默认模型回复。</div>
+              <div className="text-sm font-semibold text-neutral-950">{t('普通对话')}</div>
+              <div className="mt-1 text-xs text-neutral-500">{t('不绑定特定 Agent，使用默认模型回复。')}</div>
             </div>
           </button>
 
           <div className="mt-4 flex items-center justify-between">
-            <div className="text-xs font-medium text-neutral-400">工作区 Agent</div>
+            <div className="text-xs font-medium text-neutral-400">{t('工作区 Agent')}</div>
             <button type="button" onClick={onOpenAgentWorld} className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-neutral-200 px-2 text-xs text-neutral-600 hover:bg-neutral-50">
               <Plus className="h-3.5 w-3.5" />
-              管理 Agent
+              {t('管理 Agent')}
             </button>
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {[
-              ['all', '全部'],
+              ['all', t('全部')],
               ['llm', 'LLM'],
               ['codex', 'Codex'],
               ['claude-code', 'Claude Code'],
               ['opencode', 'OpenCode'],
+              ['gemini', 'Gemini'],
             ].map(([value, label]) => (
               <button
                 key={value}
@@ -598,7 +595,7 @@ function NewSessionDialog({
           {loading ? (
             <div className="grid h-32 place-items-center text-sm text-neutral-400">
               <Loader2 className="mb-2 h-5 w-5 animate-spin" />
-              正在读取工作区
+              {t('正在读取工作区')}
             </div>
           ) : filteredWorkspaces.length ? (
             <div className="mt-2 space-y-3">
@@ -628,14 +625,14 @@ function NewSessionDialog({
                         </div>
                       </button>
                     ))}
-                    {!workspace.agents.length && <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-4 text-xs text-neutral-400">暂无 Agent</div>}
+                    {!workspace.agents.length && <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-4 text-xs text-neutral-400">{t('暂无 Agent')}</div>}
                   </div>
                 </section>
               ))}
             </div>
           ) : (
             <div className="mt-2 rounded-xl border border-dashed border-neutral-200 px-4 py-8 text-center text-sm text-neutral-400">
-              还没有工作区 Agent
+              {t('还没有工作区 Agent')}
             </div>
           )}
         </div>
@@ -735,13 +732,16 @@ function AgentContactRow({
   color: string
   runtimeLabel: string
   tags: string[]
-  onClick: () => void
+  onClick?: () => void
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition hover:bg-white/80"
+      className={cn(
+        'group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition',
+        onClick ? 'hover:bg-white/80' : 'cursor-default'
+      )}
     >
       <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-semibold text-white" style={{ background: color }}>
         {name.slice(0, 1).toUpperCase()}
@@ -761,7 +761,6 @@ function AgentContactRow({
           </span>
         )}
       </span>
-      <AtSign className="h-3.5 w-3.5 shrink-0 text-neutral-300 transition group-hover:text-neutral-700" />
     </button>
   )
 }
@@ -870,23 +869,6 @@ function filterAgentContacts(agents: WorkspaceAgent[], query: string) {
   )
 }
 
-function insertComposerMention(name: string) {
-  const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
-  const value = `@${name} `
-  if (!input) {
-    void navigator.clipboard?.writeText(value).catch(() => undefined)
-    return
-  }
-  input.focus()
-  const start = input.selectionStart ?? input.value.length
-  const end = input.selectionEnd ?? input.value.length
-  const inserted = document.execCommand?.('insertText', false, value)
-  if (!inserted) {
-    input.setRangeText(value, start, end, 'end')
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }))
-  }
-}
-
 function runtimeLabel(value: WorkspaceAgent['runtimeType']) {
   const map: Record<WorkspaceAgent['runtimeType'], string> = {
     llm: 'LLM',
@@ -902,6 +884,7 @@ function codeAgentLabel(value: NonNullable<WorkspaceAgent['codeAgentType']>) {
     codex: 'Codex',
     'claude-code': 'Claude Code',
     opencode: 'OpenCode',
+    gemini: 'Gemini',
   }
   return map[value]
 }

@@ -34,6 +34,7 @@ const probes: ToolProbe[] = [
   { id: 'codex', command: 'codex' },
   { id: 'claude-code', command: 'claude' },
   { id: 'opencode', command: 'opencode' },
+  { id: 'gemini', command: 'gemini' },
 ]
 
 const agentAdapters = [
@@ -58,12 +59,20 @@ const agentAdapters = [
     envKey: 'DEEPSEEK_API_KEY',
     docsHint: 'OpenCode 会使用本机配置；如果 Agent 绑定了 provider/model，会通过 --model 传给 OpenCode。',
   },
+  {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    command: 'gemini',
+    envKey: 'GEMINI_API_KEY',
+    docsHint: 'Gemini CLI 会使用本机 Google Gemini 凭据，并在当前项目目录中执行代码任务。',
+  },
 ] as const
 
 const cliPackages = [
   '@openai/codex@0.42.0',
   '@anthropic-ai/claude-code@2.1.146',
   'opencode-ai@1.15.7',
+  '@google/gemini-cli',
 ]
 
 const chatGptAuthDisabledMessage =
@@ -668,6 +677,7 @@ function isSafeEnvName(name?: string) {
 function defaultApiKeyEnv(id: string) {
   if (id === 'claude-code') return 'ANTHROPIC_API_KEY'
   if (id === 'opencode') return 'DEEPSEEK_API_KEY'
+  if (id === 'gemini') return 'GEMINI_API_KEY'
   return 'OPENAI_API_KEY'
 }
 

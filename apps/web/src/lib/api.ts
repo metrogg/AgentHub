@@ -107,7 +107,7 @@ export type AgentArtifact =
 export interface CodeAgentRunMetadata {
   type: 'code-agent-run'
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
-  runtime: 'codex' | 'claude-code' | 'opencode'
+  runtime: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   command: string
   cwd?: string
   durationMs: number
@@ -156,7 +156,7 @@ export interface CodingToolStatusResponse {
 }
 
 export interface AgentAdapterCatalogItem {
-  id: 'codex' | 'claude-code' | 'opencode'
+  id: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   name: string
   command: string
   envKey: string
@@ -296,7 +296,7 @@ export interface WorkspaceAgent {
   color: string
   modelId: string | null
   runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType: 'codex' | 'claude-code' | 'opencode' | null
+  codeAgentType: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   toolPermissions: string[]
   sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
