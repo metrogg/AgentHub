@@ -24,6 +24,7 @@ import {
 import SessionList from '../components/chat/SessionList'
 import { loadAgentLibrary, toAgentConfigInput, type SavedAgentConfig } from '../lib/agentLibrary'
 import { api, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type TaskStatus, type WorkspaceAgent, type WorkspaceTask } from '../lib/api'
+import { pickWorkspaceFolder } from '../lib/native'
 import { cn } from '../lib/utils'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
@@ -164,7 +165,8 @@ export default function AgentWorldPage() {
     setOpeningFolder(true)
     toast('正在打开文件夹选择器...')
     try {
-      const result = await api.openWorkspaceFolder()
+      const nativePath = await pickWorkspaceFolder().catch(() => null)
+      const result = await api.openWorkspaceFolder(nativePath)
       if (result.cancelled || !result.projectPath) {
         toast('已取消选择文件夹')
         return

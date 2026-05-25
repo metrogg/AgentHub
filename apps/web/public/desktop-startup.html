@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentHub 启动中</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter, "SF Pro Display", "Segoe UI", "Microsoft YaHei", system-ui,
+          sans-serif;
+        background: #f6f7f9;
+        color: #171717;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 18% 20%, rgba(20, 184, 166, 0.12), transparent 28rem),
+          radial-gradient(circle at 78% 15%, rgba(99, 102, 241, 0.11), transparent 24rem),
+          #f6f7f9;
+      }
+
+      main {
+        width: min(520px, calc(100vw - 48px));
+        border: 1px solid rgba(23, 23, 23, 0.08);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.12);
+        padding: 30px;
+      }
+
+      .mark {
+        width: 48px;
+        height: 48px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: #111827;
+        color: #fff;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        margin: 22px 0 8px;
+        font-size: 24px;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 0;
+        color: #525252;
+        font-size: 14px;
+        line-height: 1.7;
+        white-space: pre-wrap;
+      }
+
+      .status {
+        margin-top: 24px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: #2563eb;
+        font-size: 14px;
+      }
+
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 2px solid rgba(37, 99, 235, 0.18);
+        border-top-color: #2563eb;
+        animation: spin 0.9s linear infinite;
+      }
+
+      main.failed .spinner {
+        animation: none;
+        border-color: #ef4444;
+        background: #ef4444;
+      }
+
+      main.ready .spinner {
+        animation: none;
+        border-color: #16a34a;
+        background: #16a34a;
+      }
+
+      main.failed .status {
+        color: #b91c1c;
+      }
+
+      main.ready .status {
+        color: #15803d;
+      }
+
+      pre {
+        margin: 18px 0 0;
+        max-height: 180px;
+        overflow: auto;
+        border-radius: 12px;
+        background: #f4f4f5;
+        color: #27272a;
+        padding: 14px;
+        font-size: 13px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="panel">
+      <div class="mark">AH</div>
+      <h1 id="title">正在启动 AgentHub</h1>
+      <p id="detail">正在准备桌面运行环境...</p>
+      <div class="status">
+        <span class="spinner"></span>
+        <span id="stateText">启动服务中</span>
+      </div>
+      <pre id="diagnostics" hidden></pre>
+    </main>
+
+    <script>
+      const panel = document.getElementById("panel");
+      const title = document.getElementById("title");
+      const detail = document.getElementById("detail");
+      const stateText = document.getElementById("stateText");
+      const diagnostics = document.getElementById("diagnostics");
+
+      window.AgentHubDesktopStartup = {
+        setStatus(payload) {
+          panel.classList.remove("failed", "ready");
+          if (payload.state === "failed") panel.classList.add("failed");
+          if (payload.state === "ready") panel.classList.add("ready");
+
+          title.textContent = payload.title || "正在启动 AgentHub";
+          detail.textContent = payload.detail || "";
+          stateText.textContent =
+            payload.state === "failed"
+              ? "启动失败"
+              : payload.state === "ready"
+                ? "即将进入"
+                : "启动服务中";
+
+          diagnostics.hidden = payload.state !== "failed";
+          diagnostics.textContent = payload.state === "failed" ? payload.detail || "" : "";
+        },
+      };
+    </script>
+  </body>
+</html>

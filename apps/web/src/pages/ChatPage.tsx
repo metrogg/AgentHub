@@ -5,6 +5,7 @@ import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
 import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
 import { api, type SkillSummary, type Workspace } from '../lib/api'
+import { pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { useChatStore } from '../stores/chatStore'
 
@@ -248,7 +249,8 @@ function Welcome({
     setWorkspaceBusy(true)
     showHint('正在打开文件夹选择器...')
     try {
-      const result = await api.openWorkspaceFolder()
+      const nativePath = await pickWorkspaceFolder().catch(() => null)
+      const result = await api.openWorkspaceFolder(nativePath)
       if (result.cancelled || !result.projectPath) {
         showHint('已取消选择文件夹')
         return

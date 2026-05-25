@@ -519,8 +519,11 @@ export const api = {
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
   createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>
     request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
-  openWorkspaceFolder: () =>
-    request<WorkspaceFolderOpenResult>('/workspaces/open-folder', { method: 'POST' }),
+  openWorkspaceFolder: (projectPath?: string | null) =>
+    request<WorkspaceFolderOpenResult>('/workspaces/open-folder', {
+      method: 'POST',
+      body: projectPath ? JSON.stringify({ projectPath }) : undefined,
+    }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
   getWorkspaceActiveRuns: (id: string) => request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
   updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>

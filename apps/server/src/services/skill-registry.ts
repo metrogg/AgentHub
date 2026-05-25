@@ -100,7 +100,8 @@ export class SkillRegistry {
 export const globalSkillRegistry = new SkillRegistry()
 
 function defaultSkillRoots() {
-  const configured = env.AGENTHUB_SKILLS_ROOT
+  const configuredValue = env.AGENTHUB_SKILLS_ROOT ?? (env.AGENTHUB_APP_DATA_DIR ? resolve(env.AGENTHUB_APP_DATA_DIR, 'skills') : undefined)
+  const configured = configuredValue
     ?.split(delimiter)
     .map((item) => item.trim())
     .filter(Boolean)

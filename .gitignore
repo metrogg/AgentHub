@@ -30,6 +30,9 @@ build/
 .turbo/
 apps/*/dist/
 packages/*/dist/
+apps/*/src-tauri/gen/
+apps/*/src-tauri/resources/
+apps/*/src-tauri/target/
 .vite/
 
 # Drizzle / DB
