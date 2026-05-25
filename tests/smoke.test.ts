@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -208,5 +208,110 @@ describe('AgentHub smoke tests', () => {
     expect(prompt.content).toContain('Agent Group')
     expect(prompt.metadata.agentDraftStatus).toBe('requires_group')
     expect(prompt.metadata.agentDraft).toBeUndefined()
+  })
+
+  test('TaskGraph topological sort and cycle detection', async () => {
+    const { TaskGraph } = await import('../apps/server/src/services/orchestrator/task-graph')
+    const tasks = [
+      { id: 'a', title: 'A', description: '', agentId: '1', dependencies: [], maxRetries: 2 },
+      { id: 'b', title: 'B', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
+      { id: 'c', title: 'C', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
+      { id: 'd', title: 'D', description: '', agentId: '1', dependencies: ['b', 'c'], maxRetries: 2 },
+    ]
+    const graph = new TaskGraph(tasks)
+
+    expect(graph.detectCycles()).toBe(false)
+    const order = graph.getExecutionOrder()
+    expect(order.indexOf('a')).toBeLessThan(order.indexOf('b'))
+    expect(order.indexOf('a')).toBeLessThan(order.indexOf('c'))
+    expect(order.indexOf('b')).toBeLessThan(order.indexOf('d'))
+    expect(order.indexOf('c')).toBeLessThan(order.indexOf('d'))
+
+    graph.setStatus('a', 'done')
+    graph.setStatus('b', 'running')
+    expect(graph.getReadyTasks().map((t) => t.id)).toContain('c')
+    expect(graph.getReadyTasks().map((t) => t.id)).not.toContain('b')
+    expect(graph.getReadyTasks().map((t) => t.id)).not.toContain('d')
+  })
+
+  test('TaskGraph detects circular dependencies', async () => {
+    const { TaskGraph } = await import('../apps/server/src/services/orchestrator/task-graph')
+    const tasks = [
+      { id: 'a', title: 'A', description: '', agentId: '1', dependencies: ['c'], maxRetries: 2 },
+      { id: 'b', title: 'B', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
+      { id: 'c', title: 'C', description: '', agentId: '1', dependencies: ['b'], maxRetries: 2 },
+    ]
+    const graph = new TaskGraph(tasks)
+    expect(graph.detectCycles()).toBe(true)
+  })
+
+  test('ConflictResolver detects file conflicts across agents', async () => {
+    const { ConflictResolver } = await import('../apps/server/src/services/orchestrator/conflict-resolver')
+    const resolver = new ConflictResolver()
+    const results = [
+      {
+        agentId: 'agent-1',
+        agentName: 'Coder A',
+        artifacts: [
+          { kind: 'diff', filePath: 'src/app.ts', diff: '+line A', fullContent: 'line A' },
+        ],
+      },
+      {
+        agentId: 'agent-2',
+        agentName: 'Coder B',
+        artifacts: [
+          { kind: 'diff', filePath: 'src/app.ts', diff: '+line B', fullContent: 'line B' },
+        ],
+      },
+    ]
+
+    const reports = await resolver.detectAndResolve(results)
+    expect(reports.length).toBe(1)
+    expect(reports[0]!.filePath).toBe('src/app.ts')
+    expect(reports[0]!.variants.length).toBe(2)
+    expect(reports[0]!.resolution).toBe('needs-human')
+  })
+
+  test('GitBranchManager prepares and cleans up agent branches', async () => {
+    const { GitBranchManager } = await import('../apps/server/src/services/git/branch-manager')
+    const gitDir = mkdtempSync(join(tmpdir(), 'agenthub-git-'))
+
+    // 初始化 git 仓库
+    const exec = (args: string[]) => {
+      const proc = Bun.spawn(['git', ...args], { cwd: gitDir, stdout: 'pipe', stderr: 'pipe' })
+      return proc.exited
+    }
+    await exec(['init'])
+    await exec(['config', 'user.email', 'test@agenthub.local'])
+    await exec(['config', 'user.name', 'Test'])
+    writeFileSync(join(gitDir, 'README.md'), '# Hello')
+    await exec(['add', '.'])
+    await exec(['commit', '-m', 'initial'])
+
+    const manager = new GitBranchManager()
+    const branchCtx = await manager.prepareBranch(gitDir, 'run-1', 'coder', 'task-1')
+
+    expect(branchCtx.branch).toBe('agenthub/run-1/coder/task-1')
+    expect(branchCtx.originalBranch).toBe('master')
+    expect(branchCtx.projectPath).toBe(gitDir)
+
+    // 在分支上创建变更
+    writeFileSync(join(gitDir, 'new-file.ts'), 'export const x = 1')
+    await exec(['add', '.'])
+    await exec(['commit', '-m', 'agent change'])
+
+    const diff = await manager.collectDiff(gitDir, branchCtx.branch)
+    expect(diff).toContain('new-file.ts')
+
+    const files = await manager.collectChangedFiles(gitDir, branchCtx.branch)
+    expect(files).toContain('new-file.ts')
+
+    const status = await manager.getFileStatus(gitDir, 'new-file.ts', branchCtx.branch)
+    expect(status).toBe('created')
+
+    // 清理分支
+    await manager.cleanupBranch(branchCtx)
+    const afterCleanup = await exec(['show-ref', '--verify', `refs/heads/${branchCtx.branch}`])
+    expect(afterCleanup).not.toBe(0)
   })
 })

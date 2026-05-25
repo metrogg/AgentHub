@@ -9,7 +9,7 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 核心交互范式：
 - **单聊（Direct）**：用户与一个 Agent 一对一对话。
 - **群聊（Group）**：Workspace 级别的 Agent Group，支持 `@Agent名` 指定回复对象。
-- **协调器（Orchestrator）**：通过 `@orchestrator` 触发任务拆解，自动创建 Workspace、分配 Agent、分发子任务。
+- **协调器（Orchestrator）**：通过 `@orchestrator` 触发任务拆解，自动创建 Workspace、分配 Agent、分发子任务，支持 DAG 依赖调度、并发执行、失败降级和代码冲突处理。
 
 ## 技术栈
 
@@ -22,7 +22,7 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 | UI / CSS | Tailwind CSS + Radix UI primitives + `@assistant-ui/react` |
 | 状态管理 | Zustand |
 | 数据库 | SQLite (`bun:sqlite`) + Drizzle ORM（WAL 模式） |
-| LLM 接入 | 自研流式客户端（OpenAI-compatible + Anthropic）+ Mastra (`@mastra/core`) |
+| LLM 接入 | 自研流式客户端（OpenAI-compatible + Anthropic） |
 | 共享契约 | Zod schemas + 常量（`packages/shared`） |
 | 包管理器 | Bun（`bun.lock`） |
 
@@ -47,9 +47,27 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 │   │   │   └── services/          # 业务逻辑层
 │   │   │       ├── agent-runner.ts        # WebSocket 房间管理 + Agent 回复流
 │   │   │       ├── llm-client.ts          # 多供应商 LLM 流式客户端
-│   │   │       ├── llm.ts                 # 薄封装（被 agent-runner 调用）
-│   │   │       ├── code-agent-adapter.ts  # 代码 Agent（codex/claude-code/opencode）
-│   │   │       ├── native-agent-loop.ts   # 原生 Agent 循环（mcp / a2a）
+│   │   │       ├── llm.ts                 # 薄封装
+│   │   │       ├── runtime/               # Agent Runtime 统一适配层（新）
+│   │   │       │   ├── agent-runtime.ts   # 统一接口定义
+│   │   │       │   ├── runtime-registry.ts# Runtime 注册中心
+│   │   │       │   ├── llm-runtime.ts     # LLM 对话 Runtime
+│   │   │       │   ├── native-tool-runtime.ts # 原生只读工具 Runtime
+│   │   │       │   ├── code-agent-runtime.ts  # Code Agent Runtime
+│   │   │       │   └── index.ts
+│   │   │       ├── orchestrator/          # Orchestrator 引擎（新）
+│   │   │       │   ├── orchestrator-engine.ts # 总控引擎
+│   │   │       │   ├── planner.ts         # Task DAG 生成器
+│   │   │       │   ├── task-scheduler.ts  # 并发调度引擎
+│   │   │       │   ├── task-graph.ts      # DAG 工具类
+│   │   │       │   ├── synthesizer.ts     # LLM 智能聚合
+│   │   │       │   ├── conflict-resolver.ts # 代码冲突检测与解决
+│   │   │       │   ├── fallback-engine.ts # 失败降级引擎
+│   │   │       │   ├── types.ts           # 共享类型定义
+│   │   │       │   └── index.ts
+│   │   │       ├── git/                   # Git 分支隔离（新）
+│   │   │       │   └── branch-manager.ts  # 分支生命周期管理
+│   │   │       ├── code-agent-adapter.ts  # 代码 Agent CLI 适配（保留，被 CodeAgentRuntime 引用）
 │   │   │       ├── tool-registry.ts
 │   │   │       ├── skill-registry.ts
 │   │   │       └── codex-auth.ts
@@ -72,6 +90,8 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 │   │   ├── src/
 │   │   │   ├── index.ts           # SQLite 连接（WAL + foreign_keys）
 │   │   │   ├── schema.ts          # 全量表定义（users/sessions/messages/workspaces/...）
+│   │   │   │                       # workspace_tasks 已扩展 DAG 字段
+│   │   │   │                       # 新增 orchestrator_runs 表
 │   │   │   └── migrate.ts         # 迁移执行脚本
 │   │   └── drizzle.config.ts
 │   └── shared/          # 前后端共享的 Zod schemas 与常量
@@ -143,7 +163,11 @@ bun --filter @agenthub/web typecheck
 - **关键表**：
   - `users` / `sessions`（`direct` | `group`）/ `messages`
   - `workspaces` / `workspace_agents` / `workspace_tasks`
-  - `session_members` / `settings` / `tasks` / `agents`
+  - `session_members` / `settings`
+  - `orchestrator_runs`（新增：记录 Orchestrator 调度生命周期）
+- **workspace_tasks 扩展字段**（支持 DAG 调度）：
+  - `run_id`, `dependencies` (JSON), `parallel_group`, `max_retries`, `attempt_count`
+  - `fallback_agent_id`, `artifacts` (JSON), `started_at`, `completed_at`, `error_log`
 - **特性**：启用 `PRAGMA journal_mode = WAL;` 与 `PRAGMA foreign_keys = ON;`。
 - **连接逻辑**：`packages/db/src/index.ts` 会根据 `PROJECT_ROOT` 锚定数据库文件位置，确保在 monorepo 任意目录启动都能找到同一数据库。
 
@@ -162,7 +186,7 @@ bun --filter @agenthub/web typecheck
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI 专用 |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Anthropic 专用 |
 | `ENABLE_LOCAL_CLI_PROBES` | 是否探测本机 CLI 工具（codex/claude/opencode），默认 `true` |
-| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | 是否启用代码 Agent 实际执行，默认 `false` |
+| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | 代码 Agent 执行总开关，默认 `true`；实际限制由 Agent 的 `sandboxPolicy` 控制 |
 | `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | 代码 Agent 超时，默认 `120000` |
 
 服务端优先从数据库 `settings` 表读取模型配置，其次回退到环境变量。
@@ -175,7 +199,7 @@ bun --filter @agenthub/web typecheck
   - 使用临时目录创建独立 SQLite 数据库，避免污染开发数据。
   - 默认用户通过 `beforeAll` 种子写入。
   - 外部 LLM 调用通过 `globalThis.fetch` mock 拦截。
-  - 覆盖场景：健康检查、会话/消息 CRUD、模型连接测试、Workspace 任务派发、Artifact Demo、Agent 草案确认等。
+  - 覆盖场景：健康检查、会话/消息 CRUD、模型连接测试、Workspace 任务派发、Artifact Demo、Agent 草案确认、任务失败降级等。
 - **运行**：`bun test`。
 
 ## 安全与运行策略
@@ -183,10 +207,58 @@ bun --filter @agenthub/web typecheck
 - **鉴权**：当前为单用户模式（`src/middleware/auth.ts`），所有请求注入 `DEFAULT_USER`，无真实登录流程。
 - **API Key 保护**：`llm-client.ts` 中 `redactSensitive` 会脱敏日志中的 Bearer Token、`sk-*`、`sess-*` 等。
 - **代码 Agent 沙箱**：
-  - 默认关闭实际执行（`AGENTHUB_ENABLE_CODE_AGENT_EXECUTION=false`）。
   - Agent 具备三级沙箱策略：`read-only` / `workspace-write` / `danger-full-access`。
+  - `read-only`：不切 Git 分支，Agent 只读取文件。
+  - `workspace-write`：为每个 Agent 任务创建独立 Git 分支 `agenthub/{runId}/{agentKey}/{taskId}`，Agent 在分支上自由 commit，执行完毕后提取 diff。
+  - `danger-full-access`：同样走分支隔离，但允许更多操作（如修改 `.gitignore`、删除文件等）。
   - `mcp` 运行时强制只读。
+- **隔离架构**：策略层（sandboxPolicy）→ Git 分支层（Branch-per-Agent）→ OS 层（Codex/Claude Code 自带 Seatbelt/seccomp/Landlock）。
 - **CORS**：动态解析允许来源，开发环境自动放行 `localhost:5173`。
+
+## 核心架构说明
+
+### Agent Runtime 统一适配层
+
+所有 Agent 执行通过 `AgentRuntime` 接口统一：
+
+```typescript
+interface AgentRuntime {
+  readonly runtimeType: string
+  execute(ctx: ExecutionContext): AsyncGenerator<AgentOutputChunk>
+}
+```
+
+- `LlmRuntime`：直接 LLM 对话
+- `CodeAgentRuntime`：调用 Codex / Claude Code / OpenCode CLI
+- `NativeToolRuntime`：LLM + 只读工具循环（OpenAI function calling / Anthropic tool_use）
+
+注册中心 `RuntimeRegistry` 根据 `profile.runtimeType` 自动路由。
+
+### Orchestrator Engine
+
+```
+IntentClassifier（可选）→ Planner → TaskScheduler → Synthesizer
+                                    ↓
+                              FallbackEngine
+                                    ↓
+                              ConflictResolver
+```
+
+- **Planner**：调用 LLM 生成 Task DAG（带依赖关系），失败则回退到固定模板（Architect → Coder → Reviewer）。
+- **TaskScheduler**：DAG 分层执行，同层任务并发（默认 max 3），支持超时检测。
+- **Synthesizer**：LLM 智能聚合各 Agent 产出，消除重复、标注贡献者、指出风险。
+- **ConflictResolver**：收集各 Agent 分支的 diff，尝试自动合并；冲突时调用 LLM 做 3-way merge。
+- **FallbackEngine**：任务失败时支持重试、降级到 fallback Agent、Orchestrator 接管。
+
+### Git 分支隔离
+
+每个非 read-only Agent 任务执行前：
+1. `git stash` 保护用户当前工作区
+2. `git checkout -b agenthub/{runId}/{agentKey}/{taskId} main`
+3. Agent 在分支上执行代码变更（Claude Code / Codex 会自动 commit）
+4. 执行完毕后 `git diff main...branch` 提取变更作为 artifact
+5. 冲突检测：`git merge` 多个 Agent 分支到临时分支
+6. 用户确认后 `git merge --squash` 合并到 main，或丢弃分支
 
 ## 开发约定
 
@@ -194,5 +266,5 @@ bun --filter @agenthub/web typecheck
 - **新增数据库表**：在 `packages/db/src/schema.ts` 中定义，使用 `sqliteTable` + `relations`，然后执行 `bun run db:generate`。
 - **前后端共享类型**：在 `packages/shared/src/schemas/` 中新增 Zod schema，并在 `packages/shared/src/index.ts` 导出。
 - **前端新增页面**：在 `apps/web/src/pages/` 创建组件，在 `apps/web/src/App.tsx` 中添加 `<Route>`。
-- **WebSocket 事件**：服务端通过 `broadcastSessionEvent` 发送，前端在 `chatStore.handleWSEvent` 中消费。常用事件类型定义于 `packages/shared/src/constants.ts` 的 `WsEvent`。
+- **WebSocket 事件**：服务端通过 `broadcastSessionEvent` 发送，前端在 `chatStore.handleWSEvent` 中消费。常用事件类型定义于 `packages/shared/src/constants.ts` 的 `WsEvent`。新增事件：`task:update`。
 - **Agent 回复流**：服务端 `agent-runner.ts` 中的 `runAgentReply` 负责调度；LLM 流式输出通过 `message:stream` 事件推送到前端，完成后写入数据库并发送 `message:completed`。

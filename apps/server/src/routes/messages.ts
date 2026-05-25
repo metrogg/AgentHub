@@ -15,6 +15,7 @@ import {
   workspaceAgents,
   workspaces,
   workspaceTasks,
+  orchestratorRuns,
   and,
   eq,
   asc,
@@ -23,6 +24,8 @@ import {
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 import { streamReply } from '../services/llm'
+import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
+import type { ExecutionPlan } from '../services/orchestrator/types'
 
 const orchestratorPlanSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -117,6 +120,10 @@ type PlanTask = {
   description: string
   agentKey: string
   status?: 'pending' | 'running' | 'done' | 'failed'
+  dependencies?: string[]
+  parallelGroup?: string
+  maxRetries?: number
+  fallbackAgentId?: string
 }
 
 type OrchestratorDispatchResult = {
@@ -188,7 +195,6 @@ type DispatchMonitor = {
   taskIds: string[]
 }
 
-const summarizedDispatches = new Set<string>()
 
 export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -525,96 +531,151 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!parsed) throw new HTTPException(400, { message: 'Invalid plan metadata' })
 
     const [sourceSession] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    let result: OrchestratorDispatchResult
+
+    let workspaceId: string
+    let groupSessionId: string
+    let createdAgents: Array<typeof workspaceAgents.$inferSelect>
+
     if (sourceSession?.type === 'group' && sourceSession.workspaceId && sourceSession.ownerId === user.sub) {
-      result = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
-      await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result)
-      return c.json(result)
+      // 复用已有 workspace
+      const existing = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
+      workspaceId = existing.workspaceId
+      groupSessionId = existing.groupSessionId ?? sessionId
+      createdAgents = existing.createdAgents ?? []
+    } else {
+      // 新建 workspace
+      const [workspace] = await db
+        .insert(workspaces)
+        .values({ ownerId: user.sub, name: parsed.title, goal: parsed.goal })
+        .returning()
+      if (!workspace) throw new HTTPException(500, { message: 'Failed to create workspace' })
+      workspaceId = workspace.id
+
+      createdAgents = await db
+        .insert(workspaceAgents)
+        .values(
+          parsed.agents.map((agent, index) => ({
+            workspaceId: workspace.id,
+            name: agent.name,
+            role: agent.role,
+            description: agent.description ?? '',
+            systemPrompt: agent.systemPrompt,
+            color: agent.color,
+            modelId: agent.modelId ?? null,
+            runtimeType: agent.runtimeType ?? 'llm',
+            codeAgentType: agent.codeAgentType ?? null,
+            capabilityTags: agent.capabilityTags ?? [],
+            toolPermissions: agent.toolPermissions ?? [],
+            sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
+            orderIdx: index,
+          }))
+        )
+        .returning()
+
+      const groupSession = await createWorkspaceGroupSession(workspace.id, workspace.name, user.sub, createdAgents)
+      groupSessionId = groupSession.id
     }
 
-    const [workspace] = await db
-      .insert(workspaces)
-      .values({ ownerId: user.sub, name: parsed.title, goal: parsed.goal })
-      .returning()
-    if (!workspace) throw new HTTPException(500, { message: 'Failed to create workspace' })
-
-    const createdAgents = await db
-      .insert(workspaceAgents)
-      .values(
-        parsed.agents.map((agent, index) => ({
-          workspaceId: workspace.id,
-          name: agent.name,
-          role: agent.role,
-          description: agent.description ?? '',
-          systemPrompt: agent.systemPrompt,
-          color: agent.color,
-          modelId: agent.modelId ?? null,
-          runtimeType: agent.runtimeType ?? 'llm',
-          codeAgentType: agent.codeAgentType ?? null,
-          capabilityTags: agent.capabilityTags ?? [],
-          toolPermissions: agent.toolPermissions ?? [],
-          sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
-          orderIdx: index,
-        }))
-      )
-      .returning()
-
     const agentByKey = new Map(parsed.agents.map((agent, index) => [agent.key, createdAgents[index]]))
+    const childSessions = new Map<string, { sessionId: string; workspaceId: string; projectPath?: string | null }>()
     const taskResults: OrchestratorDispatchResult['tasks'] = []
-    const groupSession = await createWorkspaceGroupSession(workspace.id, workspace.name, user.sub, createdAgents)
-    const monitor: DispatchMonitor = { dispatchId: crypto.randomUUID(), groupSessionId: groupSession.id, taskIds: [] }
 
+    // 查询 workspace 获取 projectPath（用于 Git 分支隔离）
+    const [workspaceRecord] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1)
+    const projectPath = workspaceRecord?.projectPath ?? null
+
+    // 统一 runId：orchestratorRuns.id 和 ExecutionPlan.runId 使用同一个 UUID
+    const runId = crypto.randomUUID()
+
+    // 创建 workspaceTasks 和 child sessions
     for (const [index, task] of parsed.tasks.entries()) {
       const agent = agentByKey.get(task.agentKey)
       const [workspaceTask] = await db
         .insert(workspaceTasks)
         .values({
-          workspaceId: workspace.id,
+          id: task.id,
+          workspaceId,
           agentId: agent?.id ?? null,
           title: task.title,
           description: task.description,
-          status: 'running',
+          status: 'pending',
           orderIdx: index,
-        })
-        .returning()
-      if (!workspaceTask) continue
-      monitor.taskIds.push(workspaceTask.id)
-
-      const childSession = await ensureAgentChildSession(workspace.id, workspace.name, user.sub, agent ?? null, task.title)
-
-      await db
-        .update(workspaceTasks)
-        .set({ sessionId: childSession.id, updatedAt: new Date() })
-        .where(eq(workspaceTasks.id, workspaceTask.id))
-
-      const [userMsg] = await db
-        .insert(messages)
-        .values({
-          sessionId: childSession.id,
-          senderId: user.sub,
-          senderType: 'user',
-          type: 'text',
-          content: buildDispatchPrompt(parsed, task, agent),
+          runId,
+          dependencies: task.dependencies ?? [],
+          parallelGroup: task.parallelGroup,
+          maxRetries: task.maxRetries ?? 2,
         })
         .returning()
 
-      if (userMsg) {
-        import('../services/agent-runner').then(({ runAgentReply }) => {
-          runAgentReply(childSession.id, userMsg, agent ? toAgentProfile(agent, workspace.projectPath) : undefined)
-            .then((result) => markWorkspaceTaskDone(workspaceTask.id, result?.ok ?? true, monitor))
-            .catch(() => {})
-        })
+      const childSession = await ensureAgentChildSession(workspaceId, parsed.title, user.sub, agent ?? null, task.title)
+      if (workspaceTask) {
+        await db
+          .update(workspaceTasks)
+          .set({ sessionId: childSession.id })
+          .where(eq(workspaceTasks.id, workspaceTask.id))
       }
 
+      childSessions.set(task.id, { sessionId: childSession.id, workspaceId, projectPath })
       taskResults.push({
-        taskId: workspaceTask.id,
+        taskId: workspaceTask?.id ?? task.id,
         sessionId: childSession.id,
         title: task.title,
         agentName: agent?.name ?? 'Agent',
       })
     }
 
-    result = { workspaceId: workspace.id, groupSessionId: groupSession.id, tasks: taskResults }
+    // 构建 ExecutionPlan 并启动 OrchestratorEngine
+    const executionPlan: ExecutionPlan = {
+      runId,
+      title: parsed.title,
+      goal: parsed.goal,
+      agents: parsed.agents.map((a) => {
+        const dbAgent = agentByKey.get(a.key)
+        return {
+          id: dbAgent?.id ?? a.key,
+          key: a.key,
+          name: a.name,
+          role: a.role,
+          description: a.description,
+          color: a.color,
+          systemPrompt: a.systemPrompt,
+          modelId: a.modelId,
+          runtimeType: a.runtimeType ?? 'llm',
+          codeAgentType: a.codeAgentType ?? undefined,
+          capabilityTags: a.capabilityTags ?? [],
+          toolPermissions: a.toolPermissions ?? [],
+          sandboxPolicy: a.sandboxPolicy ?? 'workspace-write',
+        }
+      }),
+      tasks: parsed.tasks.map((t) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        agentId: agentByKey.get(t.agentKey)?.id ?? t.agentKey,
+        dependencies: t.dependencies ?? [],
+        parallelGroup: t.parallelGroup,
+        maxRetries: t.maxRetries ?? 2,
+        fallbackAgentId: t.fallbackAgentId,
+      })),
+    }
+
+    await db.insert(orchestratorRuns).values({
+      id: runId,
+      workspaceId,
+      groupSessionId,
+      planMessageId: messageId,
+      status: 'running',
+      plan: executionPlan as unknown as Record<string, unknown>,
+    })
+
+    const engine = new OrchestratorEngine()
+    engine.startRun({ runId, groupSessionId, workspaceId, plan: executionPlan, childSessions }).catch(() => {})
+
+    const result: OrchestratorDispatchResult = { workspaceId, groupSessionId, tasks: taskResults }
     await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result)
     return c.json(result)
   })
@@ -927,7 +988,7 @@ function planAgentFromWorkspaceAgent(agent: typeof workspaceAgents.$inferSelect)
     systemPrompt: agent.systemPrompt,
     modelId: agent.modelId,
     runtimeType: agent.runtimeType,
-    codeAgentType: agent.codeAgentType,
+    codeAgentType: agent.codeAgentType ?? undefined,
     capabilityTags: agent.capabilityTags,
     toolPermissions: agent.toolPermissions,
     sandboxPolicy: agent.sandboxPolicy,
@@ -1092,6 +1153,12 @@ const ORCHESTRATOR_PROFILE: AgentRunProfile = {
   color: '#111827',
   systemPrompt:
     'You are the AgentHub coordinator. Read the group chat context, clarify the goal, split work between agents, and keep the team aligned. Reply with concise next actions.',
+  runtimeType: 'llm',
+  capabilityTags: [],
+  toolPermissions: [],
+  sandboxPolicy: 'workspace-write',
+  contextPolicy: 'workspace-aware',
+  approvalRequired: true,
 }
 
 function withWorkspacePath(profile: AgentRunProfile, projectPath?: string | null): AgentRunProfile {
@@ -1108,7 +1175,7 @@ function toAgentProfile(agent: typeof workspaceAgents.$inferSelect, projectPath?
     color: agent.color,
     modelId: agent.modelId,
     runtimeType: agent.runtimeType,
-    codeAgentType: agent.codeAgentType,
+    codeAgentType: agent.codeAgentType ?? undefined,
     capabilityTags: agent.capabilityTags,
     toolPermissions: agent.toolPermissions,
     sandboxPolicy: agent.sandboxPolicy,
@@ -1297,7 +1364,7 @@ async function dispatchPlanToExistingGroup(
   session: typeof sessions.$inferSelect,
   ownerId: string,
   plan: OrchestratorPlan
-): Promise<OrchestratorDispatchResult> {
+): Promise<OrchestratorDispatchResult & { createdAgents?: Array<typeof workspaceAgents.$inferSelect> }> {
   if (!session.workspaceId) throw new HTTPException(400, { message: 'Session is not attached to a workspace' })
 
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
@@ -1403,7 +1470,12 @@ async function dispatchPlanToExistingGroup(
     if (promptMsg) {
       import('../services/agent-runner').then(({ runAgentReply }) => {
         runAgentReply(childSession.id, promptMsg, agent ? toAgentProfile(agent, workspace.projectPath) : undefined)
-          .then((result) => markWorkspaceTaskDone(workspaceTask.id, result?.ok ?? true, monitor))
+          .then(async (result) => {
+            await db
+              .update(workspaceTasks)
+              .set({ status: result?.ok ? 'done' : 'failed', updatedAt: new Date() })
+              .where(eq(workspaceTasks.id, workspaceTask.id))
+          })
           .catch(() => {})
       })
     }
@@ -1416,7 +1488,7 @@ async function dispatchPlanToExistingGroup(
     })
   }
 
-  return { workspaceId: workspace.id, groupSessionId: session.id, tasks: taskResults }
+  return { workspaceId: workspace.id, groupSessionId: session.id, tasks: taskResults, createdAgents: [...existingAgents, ...createdAgents] }
 }
 
 async function updatePlanCardDispatchResult(
@@ -1435,93 +1507,6 @@ async function updatePlanCardDispatchResult(
     .update(messages)
     .set({ content: runningPlan.summary, metadata: { ...metadata, plan: runningPlan, dispatchResult } })
     .where(eq(messages.id, messageId))
-}
-
-async function markWorkspaceTaskDone(taskId: string, ok: boolean, monitor?: DispatchMonitor) {
-  await db
-    .update(workspaceTasks)
-    .set({ status: ok ? 'done' : 'failed', updatedAt: new Date() })
-    .where(eq(workspaceTasks.id, taskId))
-  if (monitor) await maybeSummarizeDispatch(monitor)
-}
-
-async function maybeSummarizeDispatch(monitor: DispatchMonitor) {
-  if (!monitor.groupSessionId || summarizedDispatches.has(monitor.dispatchId) || monitor.taskIds.length === 0) return
-
-  summarizedDispatches.add(monitor.dispatchId)
-
-  const [currentTask] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, monitor.taskIds[0]!)).limit(1)
-  if (!currentTask) return
-
-  const allWorkspaceTasks = await db.select().from(workspaceTasks).where(eq(workspaceTasks.workspaceId, currentTask.workspaceId))
-  const taskIdSet = new Set(monitor.taskIds)
-  const tasks = allWorkspaceTasks
-    .filter((task) => taskIdSet.has(task.id))
-    .sort((a, b) => a.orderIdx - b.orderIdx)
-  if (tasks.length !== monitor.taskIds.length || tasks.some((task) => task.status !== 'done')) return
-  const childResults = await Promise.all(
-    tasks.map(async (task) => {
-      if (!task.sessionId) return { task, content: '未找到子会话输出。', agentName: 'Agent' }
-      const [agentMessage] = await db
-        .select()
-        .from(messages)
-        .where(eq(messages.sessionId, task.sessionId))
-        .orderBy(desc(messages.createdAt))
-        .limit(1)
-      const metadata = agentMessage?.metadata as { agentName?: unknown } | null
-      return {
-        task,
-        content: agentMessage?.senderType === 'agent' ? agentMessage.content : '子会话尚未产出 Agent 回复。',
-        agentName: typeof metadata?.agentName === 'string' ? metadata.agentName : 'Agent',
-      }
-    })
-  )
-
-  const [summary] = await db
-    .insert(messages)
-    .values({
-      sessionId: monitor.groupSessionId,
-      senderId: 'orchestrator',
-      senderType: 'agent',
-      type: 'text',
-      content: buildDispatchSummary(childResults),
-      metadata: {
-        agentName: 'Orchestrator',
-        role: 'Coordinator',
-        runtimeType: 'llm',
-        orchestratorSummary: {
-          dispatchId: monitor.dispatchId,
-          taskIds: monitor.taskIds,
-          workspaceId: currentTask.workspaceId,
-        },
-      },
-    })
-    .returning()
-
-  if (summary) {
-    const { broadcastSessionEvent } = await import('../services/agent-runner')
-    broadcastSessionEvent(monitor.groupSessionId, {
-      type: 'message:completed',
-      payload: { sessionId: monitor.groupSessionId, message: summary },
-    })
-  }
-}
-
-function buildDispatchSummary(
-  results: Array<{ task: typeof workspaceTasks.$inferSelect; agentName: string; content: string }>
-) {
-  const sections = results.map(({ task, agentName, content }, index) => {
-    const compact = content.trim().replace(/\n{3,}/g, '\n\n').slice(0, 1400)
-    return [`${index + 1}. ${task.title} (${agentName})`, compact || '无输出。'].join('\n')
-  })
-  return [
-    '**Orchestrator 汇总**',
-    '',
-    `已监听到 ${results.length} 个子会话完成，下面是合并后的结果：`,
-    '',
-    ...sections.flatMap((section) => [section, '']),
-    '后续可以继续在群聊里 @具体 Agent 追问，或让 Orchestrator 继续拆下一轮任务。',
-  ].join('\n')
 }
 
 function collectAffectedMessages(list: Array<typeof messages.$inferSelect>, targetIndex: number) {

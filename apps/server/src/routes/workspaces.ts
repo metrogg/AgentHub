@@ -329,7 +329,7 @@ function workspaceAgentRunProfile(agent: typeof workspaceAgents.$inferSelect, pr
     color: agent.color,
     modelId: agent.modelId,
     runtimeType: agent.runtimeType,
-    codeAgentType: agent.codeAgentType,
+    codeAgentType: agent.codeAgentType ?? undefined,
     capabilityTags: agent.capabilityTags,
     toolPermissions: agent.toolPermissions,
     sandboxPolicy: agent.sandboxPolicy,
@@ -641,13 +641,18 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     if (userMsg) {
       import('../services/agent-runner').then(({ runAgentReply }) => {
         runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined)
-          .then(async () => {
+          .then(async (result) => {
             await db
               .update(workspaceTasks)
-              .set({ status: 'done', updatedAt: new Date() })
+              .set({ status: result.ok ? 'done' : 'failed', updatedAt: new Date() })
               .where(eq(workspaceTasks.id, taskId))
           })
-          .catch(() => {})
+          .catch(async (err) => {
+            await db
+              .update(workspaceTasks)
+              .set({ status: 'failed', updatedAt: new Date(), errorLog: err?.message || 'Agent execution failed' })
+              .where(eq(workspaceTasks.id, taskId))
+          })
       })
     }
 
