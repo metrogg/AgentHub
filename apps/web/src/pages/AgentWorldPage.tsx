@@ -23,7 +23,7 @@ import {
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { loadAgentLibrary, toAgentConfigInput, type SavedAgentConfig } from '../lib/agentLibrary'
-import { api, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type TaskStatus, type WorkspaceAgent, type WorkspaceTask } from '../lib/api'
+import { api, friendlyErrorMessage, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type TaskStatus, type WorkspaceAgent, type WorkspaceTask } from '../lib/api'
 import { cn } from '../lib/utils'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
@@ -195,7 +195,7 @@ export default function AgentWorldPage() {
       setNewGoal('')
       toast('已打开项目文件夹')
     } catch (err) {
-      toast(errorMessage(err, '项目文件夹打开失败'))
+      toast(friendlyErrorMessage(err, '保存 Agent 失败'))
     } finally {
       setOpeningFolder(false)
     }
@@ -212,7 +212,7 @@ export default function AgentWorldPage() {
       })
       toast('项目文件夹已保存')
     } catch (err) {
-      toast(errorMessage(err, '保存失败'))
+      toast(friendlyErrorMessage(err, '项目文件夹打开失败'))
     } finally {
       setSavingGoal(false)
     }
@@ -255,7 +255,7 @@ export default function AgentWorldPage() {
       setEditingAgentId(null)
       setAgentDraft(freshAgentDraft())
     } catch (err) {
-      toast(errorMessage(err, '保存 Agent 失败'))
+      toast(friendlyErrorMessage(err, '项目文件夹打开失败'))
     } finally {
       setSavingAgent(false)
     }
@@ -662,10 +662,6 @@ function workspaceNameFromPath(value: string) {
   const normalized = value.trim().replace(/[\\/]+$/, '')
   const last = normalized.split(/[\\/]/).filter(Boolean).pop()
   return last ?? ''
-}
-
-function errorMessage(err: unknown, fallback: string) {
-  return err instanceof Error && err.message ? err.message : fallback
 }
 
 function starterTaskTitle(role: string) {
