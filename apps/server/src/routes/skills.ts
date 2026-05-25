@@ -1,15 +1,16 @@
 import { mkdir, writeFile } from 'node:fs/promises'
-import { basename, dirname, resolve } from 'node:path'
+import { basename, delimiter, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import { env } from '../env'
 import { globalSkillRegistry } from '../services/skill-registry'
 
 const routeDir = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(routeDir, '../../../..')
-const installedSkillsRoot = resolve(projectRoot, 'storage', 'skills')
+const installedSkillsRoot = env.AGENTHUB_SKILLS_ROOT?.split(delimiter)[0] || (env.AGENTHUB_APP_DATA_DIR ? resolve(env.AGENTHUB_APP_DATA_DIR, 'skills') : resolve(projectRoot, 'storage', 'skills'))
 
 const installSkillSchema = z.object({
   sourceUrl: z.string().url(),

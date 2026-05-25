@@ -39,6 +39,10 @@ const updateWorkspaceSchema = z.object({
   projectPath: z.string().max(1000).nullable().optional(),
 })
 
+const openWorkspaceFolderSchema = z.object({
+  projectPath: z.string().max(1000).nullable().optional(),
+})
+
 const createAgentSchema = z.object({
   name: z.string().min(1).max(60),
   role: z.string().min(1).max(60),
@@ -375,9 +379,11 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
   // Open a native folder picker and bind/create the matching project workspace.
   .post('/open-folder', async (c) => {
     const user = c.get('user')
-    let selectedPath: string | null = null
+    const body = await c.req.json().catch(() => ({}))
+    const input = openWorkspaceFolderSchema.parse(body)
+    let selectedPath: string | null = input.projectPath?.trim() || null
     try {
-      selectedPath = await pickNativeFolder()
+      selectedPath = selectedPath || (await pickNativeFolder())
     } catch (err) {
       if (err instanceof HTTPException) throw err
       throw new HTTPException(500, { message: '打开文件夹选择器失败' })

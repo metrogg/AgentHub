@@ -4,24 +4,13 @@
   "version": "0.1.0",
   "identifier": "com.agenthub.desktop",
   "build": {
-    "beforeDevCommand": "bun --filter @agenthub/web dev --host 127.0.0.1",
+    "beforeDevCommand": "bun --filter @agenthub/desktop prepare:sidecar && bun --filter @agenthub/web dev --host 127.0.0.1",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "bun --filter @agenthub/web build",
-    "frontendDist": "../../web/dist"
+    "beforeBuildCommand": "bun --filter @agenthub/desktop prepare:sidecar",
+    "frontendDist": "resources/web-dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "AgentHub",
-        "width": 1280,
-        "height": 860,
-        "minWidth": 960,
-        "minHeight": 680,
-        "resizable": true,
-        "fullscreen": false,
-        "center": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
@@ -35,6 +24,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/web-dist",
+      "resources/binaries/agenthub-server.exe"
     ]
   }
 }

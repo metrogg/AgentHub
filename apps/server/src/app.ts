@@ -2,6 +2,8 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger as honoLogger } from 'hono/logger'
 import { HTTPException } from 'hono/http-exception'
+import { existsSync, statSync } from 'node:fs'
+import { extname, join, normalize, resolve, sep } from 'node:path'
 import { env } from './env'
 import { sessionRoutes } from './routes/sessions'
 import { messageRoutes } from './routes/messages'
@@ -32,6 +34,8 @@ const routes = app
   .route('/api/workspaces', workspaceRoutes)
   .route('/api/artifacts', artifactRoutes)
 
+installStaticRoutes(app)
+
 export { app }
 export type AppType = typeof routes
 
@@ -41,4 +45,43 @@ function resolveCorsOrigin(origin: string | undefined) {
   if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return origin
   if (/^http:\/\/(localhost|127\.0\.0\.1):517\d$/.test(origin)) return origin
   return allowedOrigins[0] ?? env.CORS_ORIGIN
+}
+
+function installStaticRoutes(app: Hono) {
+  const webDist = env.AGENTHUB_WEB_DIST?.trim()
+  if (!webDist) return
+  const root = resolve(webDist)
+  if (!existsSync(root)) return
+
+  app.get('/assets/*', (c) => serveStaticPath(root, c.req.path))
+  app.get('/favicon.svg', () => serveStaticPath(root, '/favicon.svg'))
+  app.get('*', (c) => {
+    if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/ws')) return c.notFound()
+    return serveStaticPath(root, c.req.path)
+  })
+}
+
+function serveStaticPath(root: string, requestPath: string) {
+  const relativePath = decodeURIComponent(requestPath.replace(/^\/+/, '')) || 'index.html'
+  const candidate = resolve(root, normalize(relativePath))
+  const rootWithSep = root.endsWith(sep) ? root : `${root}${sep}`
+  const filePath = candidate === root || !candidate.startsWith(rootWithSep) ? join(root, 'index.html') : candidate
+  const finalPath = existsSync(filePath) && statSync(filePath).isFile() ? filePath : join(root, 'index.html')
+  return new Response(Bun.file(finalPath), {
+    headers: {
+      'Content-Type': contentType(finalPath),
+    },
+  })
+}
+
+function contentType(filePath: string) {
+  const ext = extname(filePath).toLowerCase()
+  if (ext === '.html') return 'text/html; charset=utf-8'
+  if (ext === '.js') return 'text/javascript; charset=utf-8'
+  if (ext === '.css') return 'text/css; charset=utf-8'
+  if (ext === '.svg') return 'image/svg+xml'
+  if (ext === '.png') return 'image/png'
+  if (ext === '.ico') return 'image/x-icon'
+  if (ext === '.json') return 'application/json; charset=utf-8'
+  return 'application/octet-stream'
 }
