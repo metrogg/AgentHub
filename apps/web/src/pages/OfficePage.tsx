@@ -165,7 +165,7 @@ export default function OfficePage() {
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col bg-[#f5f4ef] p-4">
+        <section className="agenthub-embedded-window flex min-w-0 flex-1 flex-col bg-[#f5f4ef] p-4">
           <header className="mb-3 flex h-12 shrink-0 items-center justify-between rounded-lg border border-neutral-200 bg-white px-4 shadow-sm">
             <div className="flex min-w-0 items-center gap-3">
               <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#edf7f3] text-emerald-700">
@@ -184,9 +184,9 @@ export default function OfficePage() {
             </div>
           </header>
 
-          <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
+          <div className="agenthub-embedded-frame relative min-h-0 flex-1 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
             {!loaded && (
-              <div className="absolute inset-0 z-10 grid place-items-center bg-white/90 backdrop-blur-sm">
+              <div className="agenthub-embedded-loading absolute inset-0 z-10 grid place-items-center bg-white/90 backdrop-blur-sm">
                 <div className="w-[22rem] rounded-lg border border-neutral-200 bg-white p-6 text-center shadow-xl">
                   <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-neutral-950 text-white">
                     <Sparkles className="h-5 w-5" />
@@ -204,7 +204,7 @@ export default function OfficePage() {
               title="Star Office UI"
               src={STAR_OFFICE_URL}
               onLoad={() => setLoaded(true)}
-              className="h-full w-full border-0 bg-white"
+              className="agenthub-embedded-iframe h-full w-full border-0 bg-white"
               allow="clipboard-read; clipboard-write"
             />
           </div>

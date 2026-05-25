@@ -36,7 +36,7 @@ type SessionGroup = {
 
 export default function SessionList() {
   const navigate = useNavigate()
-  const { t } = useI18n()
+  const { t, language } = useI18n()
   const location = useLocation()
   const { sessionId } = useParams()
   const sessions = useChatStore((state) => state.sessions)
@@ -338,30 +338,32 @@ export default function SessionList() {
                         <History className="h-4 w-4 shrink-0 text-neutral-400" />
                       )}
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate">{item.parent.title}</span>
+                        <span className="block truncate">{sessionDisplayTitle(item.parent.title, t)}</span>
                         <span className="block truncate text-[11px] text-neutral-400">
-                          {hasChildren ? `${item.children.length} 个子话题 · ${relativeTime(item.latestUpdatedAt)}` : relativeTime(item.latestUpdatedAt)}
+                          {hasChildren
+                            ? `${formatSubtopicCount(item.children.length, language, t)} · ${relativeTime(item.latestUpdatedAt, language)}`
+                            : relativeTime(item.latestUpdatedAt, language)}
                         </span>
                       </span>
                     </button>
                     <button
                       onClick={(event) => togglePin(event, item.parent)}
                       className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 opacity-0 hover:bg-neutral-100 hover:text-neutral-900 group-hover:opacity-100"
-                      title={pinned ? '取消置顶' : '置顶'}
+                      title={pinned ? t('取消置顶') : t('置顶')}
                     >
                       {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
                     </button>
                     <button
                       onClick={(event) => toggleArchive(event, item.parent, item.children.map((child) => child.id))}
                       className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 opacity-0 hover:bg-neutral-100 hover:text-neutral-900 group-hover:opacity-100"
-                      title={archived ? '移出归档' : '归档'}
+                      title={archived ? t('移出归档') : t('归档')}
                     >
                       {archived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
                     </button>
                     <button
                       onClick={(event) => requestDelete(event, item.parent)}
                       className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
-                      title="删除"
+                      title={t('删除')}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -384,28 +386,28 @@ export default function SessionList() {
                               <History className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
                             )}
                             <span className="min-w-0 flex-1">
-                              <span className="block truncate">{childSessionTitle(child, item.parent)}</span>
-                              <span className="block truncate text-[10px] text-neutral-400">{relativeTime(child.updatedAt)}</span>
+                              <span className="block truncate">{sessionDisplayTitle(childSessionTitle(child, item.parent), t)}</span>
+                              <span className="block truncate text-[10px] text-neutral-400">{relativeTime(child.updatedAt, language)}</span>
                             </span>
                           </button>
                           <button
                             onClick={(event) => togglePin(event, child)}
                             className="grid h-6 w-6 place-items-center rounded-md text-neutral-400 opacity-0 hover:bg-neutral-100 hover:text-neutral-900 group-hover/child:opacity-100"
-                            title={pinnedIds.has(child.id) ? '取消置顶' : '置顶'}
+                            title={pinnedIds.has(child.id) ? t('取消置顶') : t('置顶')}
                           >
                             {pinnedIds.has(child.id) ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
                           </button>
                           <button
                             onClick={(event) => toggleArchive(event, child)}
                             className="grid h-6 w-6 place-items-center rounded-md text-neutral-400 opacity-0 hover:bg-neutral-100 hover:text-neutral-900 group-hover/child:opacity-100"
-                            title={archivedIds.has(child.id) ? '移出归档' : '归档'}
+                            title={archivedIds.has(child.id) ? t('移出归档') : t('归档')}
                           >
                             {archivedIds.has(child.id) ? <ArchiveRestore className="h-3 w-3" /> : <Archive className="h-3 w-3" />}
                           </button>
                           <button
                             onClick={(event) => requestDelete(event, child)}
                             className="grid h-6 w-6 place-items-center rounded-md text-neutral-400 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover/child:opacity-100"
-                            title="删除"
+                            title={t('删除')}
                           >
                             <Trash2 className="h-3 w-3" />
                           </button>
@@ -487,8 +489,8 @@ function NewSessionDialog({
     .filter((workspace) => workspace.agents.length > 0)
 
   return createPortal(
-    <div className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" onMouseDown={onClose}>
-      <div className="max-h-[82vh] w-full max-w-xl overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="agenthub-portal-theme fixed inset-0 z-50 flex items-start justify-center bg-transparent px-4 py-14" role="dialog" aria-modal="true" onMouseDown={onClose}>
+      <div className="max-h-[78vh] w-full max-w-lg overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 border-b border-neutral-100 px-5 py-4">
           <div>
             <h2 className="text-sm font-semibold text-neutral-950">{t('新建对话')}</h2>
@@ -499,7 +501,7 @@ function NewSessionDialog({
           </button>
         </div>
 
-        <div className="max-h-[calc(82vh-8rem)] overflow-y-auto p-4">
+        <div className="max-h-[calc(78vh-8rem)] overflow-y-auto p-4">
           <button
             type="button"
             onClick={onCreatePlain}
@@ -608,16 +610,18 @@ function DeleteSessionDialog({
   onClose: () => void
   onConfirm: () => void
 }) {
+  const { t, language } = useI18n()
+
   return createPortal(
     <div
-      className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30 px-4 backdrop-blur-sm"
+      className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-transparent px-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="delete-session-title"
       onMouseDown={onClose}
     >
       <div
-        className="w-full max-w-sm rounded-2xl border border-neutral-200 bg-white p-4 shadow-2xl"
+        className="w-full max-w-[382px] rounded-2xl border border-neutral-200 bg-white p-4 shadow-[0_24px_80px_rgba(15,23,42,0.16)]"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-start gap-3">
@@ -626,10 +630,10 @@ function DeleteSessionDialog({
           </div>
           <div className="min-w-0 flex-1">
             <h2 id="delete-session-title" className="text-sm font-semibold text-neutral-950">
-              删除会话
+              {t('删除会话')}
             </h2>
             <p className="mt-1 text-xs leading-5 text-neutral-500">
-              这个会话和其中的消息会被移除，此操作不可撤销。
+              {t('这个会话和其中的消息会被移除，此操作不可撤销。')}
             </p>
           </div>
           <button
@@ -637,16 +641,16 @@ function DeleteSessionDialog({
             onClick={onClose}
             disabled={deleting}
             className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-40"
-            aria-label="关闭"
-            title="关闭"
+            aria-label={t('关闭')}
+            title={t('关闭')}
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="mt-4 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2">
-          <div className="truncate text-sm font-medium text-neutral-900">{session.title || '未命名会话'}</div>
-          <div className="mt-0.5 text-xs text-neutral-400">{relativeTime(session.updatedAt)}</div>
+        <div className="mt-4 rounded-xl border border-neutral-200 bg-[#f7f7f4] px-3 py-2">
+          <div className="truncate text-sm font-medium text-neutral-900">{sessionDisplayTitle(session.title, t) || t('未命名会话')}</div>
+          <div className="mt-0.5 text-xs text-neutral-500">{relativeTime(session.updatedAt, language)}</div>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-2">
@@ -656,7 +660,7 @@ function DeleteSessionDialog({
             disabled={deleting}
             className="inline-flex h-10 items-center justify-center rounded-xl border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-50"
           >
-            取消
+            {t('取消')}
           </button>
           <button
             type="button"
@@ -665,7 +669,7 @@ function DeleteSessionDialog({
             className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-red-600 text-sm font-medium text-white transition hover:bg-red-500 disabled:bg-red-200"
           >
             {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
-            删除
+            {t('删除')}
           </button>
         </div>
       </div>
@@ -738,6 +742,18 @@ function childSessionTitle(session: Session, parent: Session) {
     .map((part) => part.trim())
     .filter(Boolean)
   return parts.length ? parts.join(' / ') : session.title
+}
+
+function sessionDisplayTitle(title: string | undefined, t: (text: string) => string) {
+  const normalized = title?.trim() ?? ''
+  if (normalized === '新会话' || normalized === 'New Chat') return t('新会话')
+  if (normalized === '快速对话' || normalized === 'Quick Chat') return t('快速对话')
+  return normalized
+}
+
+function formatSubtopicCount(count: number, language: 'zh' | 'en', t: (text: string) => string) {
+  if (language === 'en') return `${count} ${count === 1 ? 'subtopic' : 'subtopics'}`
+  return `${count} 个${t('子话题')}`
 }
 
 function filterSessionTree(groups: SessionGroup[], query: string, showArchived: boolean, archivedIds: Set<string>) {

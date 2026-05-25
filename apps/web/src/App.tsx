@@ -40,7 +40,7 @@ function AppShell() {
 
   useEffect(() => {
     if (!desktop) return
-    void setDesktopWindowTitle(language === 'en' ? 'File    Edit    Window' : '文件    编辑    窗口')
+    void setDesktopWindowTitle('AgentHub')
   }, [desktop, language])
 
   const routes = (

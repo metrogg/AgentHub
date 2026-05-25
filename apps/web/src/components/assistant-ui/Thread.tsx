@@ -1735,7 +1735,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
   const [open, setOpen] = useState(artifact.previewKind === 'static-html')
 
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+    <div className="agenthub-embedded-window overflow-hidden rounded-lg border border-neutral-200 bg-white">
       <div className="flex h-11 items-center justify-between gap-3 px-3">
         <button type="button" onClick={() => setOpen((value) => !value)} className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
           <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
@@ -1755,7 +1755,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
         </a>
       </div>
       {open && (
-        <div className="border-t border-neutral-200 bg-neutral-50 p-2">
+        <div className="agenthub-embedded-window-body border-t border-neutral-200 bg-neutral-50 p-2">
           <iframe title={artifact.title} src={artifact.url} className="h-80 w-full rounded-md border border-neutral-200 bg-white" />
         </div>
       )}
