@@ -1,0 +1,17 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>AgentHub</title>
+  <rect width="64" height="64" rx="16" fill="#050505"/>
+  <path
+    d="M20.5 31.5C20.5 25.425 25.425 20.5 31.5 20.5H32.5C38.575 20.5 43.5 25.425 43.5 31.5C43.5 37.575 38.575 42.5 32.5 42.5H28.75L21.25 46.5L23.15 39.9C21.495 37.935 20.5 35.375 20.5 32.5V31.5Z"
+    stroke="white"
+    stroke-width="3.25"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M28 31.75H36M28 36H32.75"
+    stroke="white"
+    stroke-width="2.75"
+    stroke-linecap="round"
+  />
+</svg>

@@ -24,6 +24,19 @@
   .agenthub-desktop-shell .h-screen {
     height: 100% !important;
   }
+  .agenthub-desktop-shell,
+  .agenthub-desktop-shell body {
+    overflow: hidden;
+    background: transparent;
+  }
+  .agenthub-desktop-shell #root {
+    overflow: hidden;
+    border-radius: 32px;
+    background: #ffffff;
+    box-shadow:
+      inset 0 0 0 1px rgba(15, 23, 42, 0.08),
+      0 24px 80px rgba(15, 23, 42, 0.24);
+  }
   ::selection {
     @apply bg-neutral-900 text-white;
   }
