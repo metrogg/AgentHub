@@ -21,7 +21,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
-import SessionList from '../components/chat/SessionList'
+import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import { loadAgentLibrary, toAgentConfigInput, type SavedAgentConfig } from '../lib/agentLibrary'
 import { api, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type TaskStatus, type WorkspaceAgent, type WorkspaceTask } from '../lib/api'
 import { pickWorkspaceFolder } from '../lib/native'
@@ -91,6 +91,7 @@ export default function AgentWorldPage() {
   const [openingFolder, setOpeningFolder] = useState(false)
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   useEffect(() => {
     fetchList().then(() => {
@@ -314,12 +315,18 @@ export default function AgentWorldPage() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-white text-neutral-950">
-      <SessionList />
+      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} />
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 px-6">
           <div className="flex min-w-0 items-center gap-3">
-            <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100" aria-label="侧栏">
-              <PanelLeft className="h-4 w-4" />
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100"
+              aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+              title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+            >
+              <PanelLeft className={cn('h-4 w-4 transition-transform duration-300', sidebarCollapsed && 'rotate-180')} />
             </button>
             <span className="text-sm font-semibold">AgentHub</span>
             <span className="text-sm text-neutral-300">/</span>
@@ -1012,7 +1019,7 @@ function AgentDialog({
             className={selectClass}
           >
             <option value="llm">普通 LLM Agent</option>
-            <option value="code-agent">绑定 Code Agent</option>
+            <option value="code-agent">绑定 Coding Tools</option>
             <option value="mcp">Native Read-only Agent</option>
             <option value="a2a">A2A Agent</option>
           </select>
@@ -1151,7 +1158,7 @@ function modelName(modelId: string | null, models: ModelCatalogItem[]) {
 function runtimeLabel(value: WorkspaceAgent['runtimeType']) {
   const map: Record<WorkspaceAgent['runtimeType'], string> = {
     llm: 'LLM Agent',
-    'code-agent': 'Code Agent',
+    'code-agent': 'Coding Tools',
     mcp: 'Native Read-only',
     a2a: 'A2A Agent',
   }

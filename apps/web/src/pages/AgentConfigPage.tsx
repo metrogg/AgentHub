@@ -13,7 +13,7 @@ import {
   Trash2,
   Wand2,
 } from 'lucide-react'
-import SessionList from '../components/chat/SessionList'
+import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import {
   createSavedAgent,
   loadAgentLibrary,
@@ -52,6 +52,7 @@ export default function AgentConfigPage() {
   const [assistantText, setAssistantText] = useState('')
   const [assistantReply, setAssistantReply] = useState('可以直接说：把当前 Agent 改成 Codex 实现者，关闭风险确认，标签加 frontend。')
   const [saved, setSaved] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   useEffect(() => {
     const loaded = loadAgentLibrary()
@@ -170,12 +171,18 @@ export default function AgentConfigPage() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#fbfbf9] text-neutral-950">
-      <SessionList />
+      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} />
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-6">
           <div className="flex min-w-0 items-center gap-3">
-            <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100" aria-label="菜单栏">
-              <PanelLeft className="h-4 w-4" />
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100"
+              aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+              title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+            >
+              <PanelLeft className={cn('h-4 w-4 transition-transform duration-300', sidebarCollapsed && 'rotate-180')} />
             </button>
             <span className="text-sm font-semibold">AgentHub</span>
             <span className="text-sm text-neutral-300">/</span>
@@ -290,11 +297,11 @@ export default function AgentConfigPage() {
                         })
                       }}>
                         <option value="llm">普通 LLM Agent</option>
-                        <option value="code-agent">Code Agent</option>
+                        <option value="code-agent">Coding Tools</option>
                         <option value="mcp">Native Read-only Agent</option>
                         <option value="a2a">A2A Agent</option>
                       </SelectField>
-                      <SelectField label="Code Agent" value={runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : ''} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
+                      <SelectField label="Coding Tools" value={runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : ''} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
                         <option value="">不绑定 CLI</option>
                         <option value="codex">Codex CLI</option>
                         <option value="claude-code">Claude Code</option>
@@ -528,7 +535,7 @@ function splitList(value: string) {
 }
 
 function runtimeLabel(value: WorkspaceAgent['runtimeType']) {
-  if (value === 'code-agent') return 'Code Agent'
+  if (value === 'code-agent') return 'Coding Tools'
   if (value === 'mcp') return 'Native Read-only'
   if (value === 'a2a') return 'A2A Agent'
   return 'LLM Agent'

@@ -179,7 +179,7 @@ export default function SessionList() {
       <nav className="space-y-1 px-3">
         <NavItem
           icon={Code2}
-          label="Code Agent"
+          label="Coding Tools"
           active={location.pathname === '/coding-tools'}
           onClick={() => navigate('/coding-tools')}
         />

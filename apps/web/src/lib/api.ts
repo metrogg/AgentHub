@@ -221,6 +221,33 @@ export interface CodexConfigFile {
   message: string
 }
 
+export interface SettingsGeneralInfo {
+  debug: {
+    enabled: boolean
+    dir: string
+    logLevel: string
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+  }
+  storage: {
+    appDataDir: string
+    configDir: string
+    logDir: string
+    dataPath: string
+    databasePath: string
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+    scannedFiles: number
+    truncated: boolean
+    message: string
+  }
+  git: { runtime: string; path: string; ok: boolean; message: string }
+  python: { runtime: string; path: string; ok: boolean; message: string }
+}
+
+
 export interface Workspace {
   id: string
   ownerId: string
@@ -446,6 +473,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  getRuntimeInfo: () =>
+    request<{
+      git: { runtime: string; path: string; ok: boolean; message: string }
+      python: { runtime: string; path: string; ok: boolean; message: string }
+    }>('/settings/runtime-info'),
+  getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
   testModel: (data: {
     provider: string
     apiEndpoint: string

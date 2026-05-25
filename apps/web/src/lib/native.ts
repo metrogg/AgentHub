@@ -1,5 +1,9 @@
 export function isDesktopApp() {
-  return Boolean('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
+  return Boolean(
+    '__TAURI_INTERNALS__' in window ||
+      '__TAURI__' in window ||
+      document.documentElement.classList.contains('agenthub-desktop-shell')
+  )
 }
 
 async function invokeNative<T>(command: string, args?: Record<string, unknown>) {
@@ -18,8 +22,30 @@ export async function openInEditor(path: string, line?: number) {
   return true
 }
 
+export async function openPath(path: string) {
+  if (!isDesktopApp()) return false
+  await invokeNative('open_path', { path })
+  return true
+}
+
+export async function getDesktopInfo() {
+  return invokeNative<{ app_data_dir: string; config_dir: string; log_dir: string }>('desktop_info')
+}
+
 export async function notifyUser(title: string, body?: string) {
   if (!isDesktopApp()) return false
   await invokeNative('notify_user', { title, body })
+  return true
+}
+
+export async function closeDesktopWindow() {
+  if (!isDesktopApp()) return false
+  await invokeNative('close_desktop_window')
+  return true
+}
+
+export async function openDesktopWindow() {
+  if (!isDesktopApp()) return false
+  await invokeNative('open_desktop_window')
   return true
 }

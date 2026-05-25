@@ -156,7 +156,7 @@ Dify开源 47
 2.3 竞品痛点与差异化机会
 2.3.1 五大痛点分析
 通过对核心竞品的深度分析和用户反馈的交叉验证，当前多Agent协作领域存在五个尚未被充分解决的结构性痛点。
-痛点一：Token消耗与运行成本失控。 Claude Code Agent Teams的Token消耗约为单Agent模式的7倍 20，这意味着一个中等规模的开发团队在日均50次多Agent协作场景下，月度API调用成本可能超过数千美元。Cursor的Composer模型虽然通过自研优化降低了单次延迟，但多Agent并行运行时的总Token消耗仍呈线性增长。现有产品普遍缺乏Semantic Cache（语义缓存）或Prompt Caching（提示缓存）机制来减少重复计算的成本开销。
+痛点一：Token消耗与运行成本失控。 Claude Coding Tools Teams的Token消耗约为单Agent模式的7倍 20，这意味着一个中等规模的开发团队在日均50次多Agent协作场景下，月度API调用成本可能超过数千美元。Cursor的Composer模型虽然通过自研优化降低了单次延迟，但多Agent并行运行时的总Token消耗仍呈线性增长。现有产品普遍缺乏Semantic Cache（语义缓存）或Prompt Caching（提示缓存）机制来减少重复计算的成本开销。
 痛点二：缺乏IM式群聊协作体验。 当前所有主流AI编程工具的多Agent交互均采用”命令行+任务列表”或”IDE标签页”的范式。Claude Code通过Mailbox实现Agent间通信，但用户仍以观察者角色与单个Team Lead交互 40。Cursor的Agent Tabs是并排编辑器窗口，Agent间无自然对话流 18。开发者无法在类似Slack或飞书的群聊环境中，通过@前端Agent、@测试Agent的直觉化指令驱动多Agent协作。研究表明，IM聊天式界面已被数亿用户验证为直觉性设计，但在多Agent编程工具中仍属市场空白  。
 痛点三：学习曲线陡峭与编排器不可见。 LangGraph的图状态机模式提供精确控制，但要求开发者理解有向图、Reducer函数和Checkpoint机制 10；CrewAI的角色编排虽然降低了概念门槛，但Flow API的事件驱动编程仍需Python代码配置 53。更重要的是，主流产品的编排器（Orchestrator）对用户不可见——编排状态、分支、重试和确定性控制平面隐藏在后台，调试变成猜测，信任被侵蚀 29。Gartner预测2027年底超40%的Agentic AI项目将被取消，主要原因之一便是成本膨胀和风险管理不足  。
 痛点四：代码隔离与冲突管理不完善。 尽管git worktree已成为多Agent隔离的行业共识原语  ，但worktree仅解决文件级冲突，无法处理运行时冲突——两个worktree中的Agent仍会竞争端口、数据库连接和缓存等共享资源  。当多个Agent修改同一文件时，语义冲突（两个Agent以不同方式解决同一问题）无法被Git自动检测  。Replit Agent 4虽引入了专门子Agent解决冲突 71，但方案尚不成熟。Windsurf的多实例编辑相同文件会产生竞态条件 25。
@@ -210,7 +210,7 @@ Plan开关 17
 
 2025	$0.78	73.3%	MCP月SDK下载量超9{,}700万  ；A2A协议捐赠Linux Foundation 70
 
-2026	$1.35	73.1%	Claude Code Agent Teams GA；Cursor 3.0发布；MAF v1.0 GA 18
+2026	$1.35	73.1%	Claude Coding Tools Teams GA；Cursor 3.0发布；MAF v1.0 GA 18
 
 2027	$2.25	66.7%	预计40%+ Agentic项目面临取消风险 70；协议标准化基本完成
 2028	$3.60	60.0%	企业级多Agent部署进入主流；动态Agent生成技术成熟  
@@ -240,7 +240,7 @@ Plan开关 17
 高——IDE多Agent与框架整合双突破
 2025.12	MCP捐赠Agentic AI Foundation 76
 高——工具协议标准化里程碑
-2026.02	Claude Code Agent Teams实验版发布 7
+2026.02	Claude Coding Tools Teams实验版发布 7
 高——对等协作架构验证
 2026.03	Replit Agent 4并行多Agent发布 49
 中——浏览器端多Agent成熟
@@ -372,10 +372,10 @@ IM聊天模块是AgentHub的用户交互入口，其设计质量直接影响用�
 消息线程（Thread）机制。Thread功能允许用户围绕特定消息创建子对话，避免主聊天流被长讨论淹没。每条Thread需维护独立的对话上下文，Thread内的消息不干扰主会话的上下文窗口。Slack的Thread设计表明，busy channels（活跃频道）中Thread特别有用，支持fully branched discussions（完全分支讨论）109。AgentHub的Thread实现需考虑：Thread的创建/关闭生命周期、Thread内消息的上下文隔离策略、Thread消息回主会话的聚合展示。
 富文本渲染与文件附件。富文本渲染基于react-markdown + remark-gfm技术栈，支持GFM（GitHub Flavored Markdown）特性包括代码块、表格、任务列表和删除线。代码块渲染采用Shiki引擎，基于TextMate语法提供VS Code级别的精确高亮109。文件附件处理需支持：先上传再发送模式、上传进度回调（onUploadProgress）、多种附件类型的混合消息、附件预览（图片/Code/SVG/Markdown）。
 4.1.3 多Agent协作模块详细需求
-多Agent协作模块是AgentHub的技术核心，其设计参考了Claude Code Agent Teams的对等协作模式7 63和Augment Intent的CIV（Coordinator-Implementor-Verifier）架构68 139。
+多Agent协作模块是AgentHub的技术核心，其设计参考了Claude Coding Tools Teams的对等协作模式7 63和Augment Intent的CIV（Coordinator-Implementor-Verifier）架构68 139。
 Agent注册发现。Agent Registry采用混合注册模式，支持Agent-Initiated Self Register（Agent通过API端点自行注册）和Registry-Initiated Discovery（Registry主动向目标Agent请求信息）两种方式137。每个Agent的注册信息遵循A2A（Agent-to-Agent）协议的Agent Card格式，包含名称、能力描述、端点地址、可用工具列表和版本信息   。Registry需实现缓存策略（高频访问Agent信息TTL过期）、发现成功率监控（p50/p95/p99延迟）和负载均衡（基于健康状态的选择）138。
 群聊会话管理。群聊是AgentHub的核心差异化场景，每个群聊对应一个动态编排图——加入的Agent是节点，消息是事件流，@提及是任务路由29。会话管理需实现：会话状态机（Uninitialized → Active → TaskAssigned → Processing → Completed → Aggregated → Delivered） 、消息顺序保障（consistent routing确保同一群的消息路由到同一节点） 、Fan-out服务（消息存储一次，异步fan-out到delivery表）148。生产级聊天系统的Write amplification（写放大）是一个核心挑战：1条消息乘以1,024成员等于1,024个投递任务，50个群同时发送可达39,950个投递任务（156倍于基线）148。
-任务拆解与分配。Orchestrator编排器负责将用户请求拆解为可并行执行的子任务。任务分配策略包括：Round Robin（轮询分配，简单但不考虑负载） 、Max-Utility（广播到所有Agent，收集可用资源信息后分配给效用最大者）153、SPSA-based Consensus（自适应学习能力的控制器，相比Round Robin平均MSE降低46.08%，CPU使用降低14.96%，内存消耗降低11.96%） 。Claude Code Agent Teams的实践表明，2-4个subagents（子Agent）是最佳平衡点，超过后协调开销和git worktree管理复杂度超过并行收益14。
+任务拆解与分配。Orchestrator编排器负责将用户请求拆解为可并行执行的子任务。任务分配策略包括：Round Robin（轮询分配，简单但不考虑负载） 、Max-Utility（广播到所有Agent，收集可用资源信息后分配给效用最大者）153、SPSA-based Consensus（自适应学习能力的控制器，相比Round Robin平均MSE降低46.08%，CPU使用降低14.96%，内存消耗降低11.96%） 。Claude Coding Tools Teams的实践表明，2-4个subagents（子Agent）是最佳平衡点，超过后协调开销和git worktree管理复杂度超过并行收益14。
 Agent状态显示与人机协作边界。Agent状态系统基于WebSocket的实时更新，支持Online（绿色）、Away（黄色，约5分钟无活动）、Busy（红色，用户手动设置不可用）和Offline（无标记）四种状态 。Typing Indicator通过channel:typing和channel:stop_typing事件实现，debounced typing events（防抖输入事件，通常3秒超时自动停止） 。人机协作采用分层干预策略：自动执行（高置信度+低风险，无需干预）、通知后执行（中置信度，推送通知）、批准后执行（低置信度+高风险，弹窗确认）和人工接管（系统异常，完全暂停Agent） 。
 4.1.4 代码工具链模块详细需求
 代码工具链模块将Agent的代码生成能力转化为可审查、可回滚、可部署的工程实践。
@@ -398,7 +398,7 @@ Agent状态更新延迟	< 100ms	Presence update从服务端到所有客户端	SS
 
 沙箱启动时间	iframe < 1s / WebContainer < 5s	从代码提交到预览可用的首屏时间	Sandpack iframe启动快，WebContainer需WASM初始化
 会话恢复时间	< 3s	从用户重新打开到可交互的时间	包含对话历史加载+Agent状态恢复+上下文重建
-性能需求表设定了8项关键指标。消息延迟方面，生产级聊天系统的Presence update latency（状态更新延迟）目标为 < 100ms，支持10,000+并发用户101。并发能力方面，Claude Code Agent Teams支持最多15个队友7，Cursor Background Agents支持最多8个61，Warp Oz Max版支持40个并发Agent（每个8 vCPU + 16 GiB RAM） ，AgentHub的100+并发会话目标定位在企业级场景。Diff渲染性能方面，10k行文件的基准测试中，react-diff-viewer-continued初始渲染约1,304ms、内存约64.8MB107，AgentHub通过@git-diff-view/react的Web Worker支持将目标压缩至1.5s以内。
+性能需求表设定了8项关键指标。消息延迟方面，生产级聊天系统的Presence update latency（状态更新延迟）目标为 < 100ms，支持10,000+并发用户101。并发能力方面，Claude Coding Tools Teams支持最多15个队友7，Cursor Background Agents支持最多8个61，Warp Oz Max版支持40个并发Agent（每个8 vCPU + 16 GiB RAM） ，AgentHub的100+并发会话目标定位在企业级场景。Diff渲染性能方面，10k行文件的基准测试中，react-diff-viewer-continued初始渲染约1,304ms、内存约64.8MB107，AgentHub通过@git-diff-view/react的Web Worker支持将目标压缩至1.5s以内。
 4.2.2 安全需求
 AgentHub的安全需求覆盖Agent权限控制、代码沙箱隔离、Prompt注入防御和数据加密四个层面。
 Agent权限控制。采用RBAC（Role-Based Access Control，基于角色的访问控制）模型，通过@PreAuthorize等注解声明式定义访问规则 。权限粒度包括：Agent级（哪些Agent可以执行哪些工具）、群聊级（Agent在特定群聊中的角色和权限）、操作级（代码执行/文件修改/部署等敏感操作的审批要求）。生产级系统需实现Zero Trust Registry-Based Approach：admin-controlled注册、centralized discovery、fine-grained access policies、dynamic trust scoring和just-in-time credential provisioning   。
@@ -786,7 +786,7 @@ assistant-ui + AI SDK v5 SSE流式渲染；NATS sub-ms消息总线
 2	@指令Agent发现与调度	类似Discord的@bot体验，零配置Agent发现	CrewAI无GUI，LangGraph学习曲线陡峭 8
 Agent Registry + Dispatcher模式；A2A Agent Card能力描述 181
 
-3	Orchestrator智能编排	简化Hierarchical编排 + 顺序Agent调度 + 基础容错	Claude Code Agent Teams为实验性功能，Token消耗为单Agent 7倍 20
+3	Orchestrator智能编排	简化Hierarchical编排 + 顺序Agent调度 + 基础容错	Claude Coding Tools Teams为实验性功能，Token消耗为单Agent 7倍 20
 自研TypeScript编排器（3周内实现顺序调度）
 4	Context Engineering范式	从Prompt Engineering升级到上下文工程	现有工具聚焦Prompt优化，缺乏上下文架构设计能力 19
 MAC框架Schema驱动三件套；Semantic Cache 41-80%成本节省 176

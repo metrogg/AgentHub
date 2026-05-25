@@ -7,11 +7,11 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    utils::config::Color,
-    Manager, RunEvent, UserAttentionType, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    utils::config::Color, Manager, RunEvent, UserAttentionType, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
 };
 
 type ServerProcess = Arc<Mutex<Option<Child>>>;
@@ -89,6 +89,39 @@ fn open_in_editor(path: String, line: Option<u32>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", &path])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| format!("无法打开路径: {err}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|err| format!("无法打开路径: {err}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|err| format!("无法打开路径: {err}"))?;
+        Ok(())
+    }
+}
+
+#[tauri::command]
 fn notify_user(window: WebviewWindow, title: String, body: Option<String>) -> Result<(), String> {
     let message = body.unwrap_or_default();
     let script = format!(
@@ -119,6 +152,40 @@ fn check_for_updates() -> Result<serde_json::Value, String> {
     }))
 }
 
+#[tauri::command]
+fn close_desktop_window(window: WebviewWindow) -> Result<(), String> {
+    window.close().map_err(|err| format!("无法关闭窗口: {err}"))
+}
+
+#[tauri::command]
+fn open_desktop_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
+    let url = window
+        .url()
+        .map_err(|err| format!("无法读取当前窗口地址: {err}"))?;
+    let label = format!(
+        "main-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default()
+    );
+
+    let new_window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+        .title("文件    编辑    窗口")
+        .inner_size(1280.0, 820.0)
+        .min_inner_size(980.0, 680.0)
+        .decorations(true)
+        .transparent(false)
+        .background_color(Color(255, 255, 255, 255))
+        .shadow(true)
+        .center()
+        .build()
+        .map_err(|err| format!("无法打开新窗口: {err}"))?;
+
+    apply_window_chrome_style(&new_window);
+    Ok(())
+}
+
 #[derive(Clone)]
 struct DesktopPaths {
     app_data_dir: PathBuf,
@@ -138,9 +205,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             pick_workspace_folder,
             open_in_editor,
+            open_path,
             notify_user,
             desktop_info,
-            check_for_updates
+            check_for_updates,
+            close_desktop_window,
+            open_desktop_window
         ])
         .setup(move |app| {
             let window = WebviewWindowBuilder::new(
@@ -148,7 +218,7 @@ pub fn run() {
                 "main",
                 WebviewUrl::App("desktop-startup.html".into()),
             )
-            .title("AgentHub")
+            .title("文件    编辑    窗口")
             .inner_size(1280.0, 820.0)
             .min_inner_size(980.0, 680.0)
             .decorations(true)
@@ -157,6 +227,8 @@ pub fn run() {
             .shadow(true)
             .center()
             .build()?;
+
+            apply_window_chrome_style(&window);
 
             let app_handle = app.handle().clone();
             let server_state = state.server.clone();
@@ -176,8 +248,55 @@ pub fn run() {
     });
 }
 
+#[cfg(windows)]
+fn apply_window_chrome_style(window: &WebviewWindow) {
+    use std::{ffi::c_void, mem::size_of};
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
+    };
+
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+
+    // COLORREF is 0x00BBGGRR. #F7F7F4 becomes 0x00F4F7F7.
+    let caption_color: u32 = 0x00F4F7F7;
+    let border_color: u32 = 0x00F4F7F7;
+    let text_color: u32 = 0x00232323;
+
+    unsafe {
+        let hwnd = hwnd.0;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR as u32,
+            &caption_color as *const _ as *const c_void,
+            size_of::<u32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR as u32,
+            &border_color as *const _ as *const c_void,
+            size_of::<u32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TEXT_COLOR as u32,
+            &text_color as *const _ as *const c_void,
+            size_of::<u32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn apply_window_chrome_style(_window: &WebviewWindow) {}
+
 fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_state: ServerProcess) {
-    set_startup_status(&window, "starting", "正在准备本机数据目录", "AgentHub 会把数据库、配置和日志放到系统 App Data。");
+    set_startup_status(
+        &window,
+        "starting",
+        "正在准备本机数据目录",
+        "AgentHub 会把数据库、配置和日志放到系统 App Data。",
+    );
 
     let paths = match desktop_paths(&app) {
         Ok(paths) => paths,
@@ -187,18 +306,38 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         }
     };
 
-    for path in [&paths.app_data_dir, &paths.config_dir, &paths.log_dir, &paths.data_dir] {
+    for path in [
+        &paths.app_data_dir,
+        &paths.config_dir,
+        &paths.log_dir,
+        &paths.data_dir,
+    ] {
         if let Err(err) = fs::create_dir_all(path) {
-            set_startup_status(&window, "failed", "无法创建本机目录", &format!("{}: {err}", path.display()));
+            set_startup_status(
+                &window,
+                "failed",
+                "无法创建本机目录",
+                &format!("{}: {err}", path.display()),
+            );
             return;
         }
     }
 
-    set_startup_status(&window, "starting", "正在检查端口", "如果默认端口被占用，会自动切换到下一个可用端口。");
+    set_startup_status(
+        &window,
+        "starting",
+        "正在检查端口",
+        "如果默认端口被占用，会自动切换到下一个可用端口。",
+    );
     let port = match find_available_port(8000, 80) {
         Some(port) => port,
         None => {
-            set_startup_status(&window, "failed", "没有可用端口", "8000-8079 都已被占用，请关闭占用端口的程序后重试。");
+            set_startup_status(
+                &window,
+                "failed",
+                "没有可用端口",
+                "8000-8079 都已被占用，请关闭占用端口的程序后重试。",
+            );
             return;
         }
     };
@@ -226,18 +365,33 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
     let web_dist = match resolve_resource(&app, &["resources/web-dist", "web-dist"]) {
         Some(path) => path,
         None => {
-            set_startup_status(&window, "failed", "找不到 Web 构建产物", "请先构建 apps/web/dist 并复制到桌面端 resources/web-dist。");
+            set_startup_status(
+                &window,
+                "failed",
+                "找不到 Web 构建产物",
+                "请先构建 apps/web/dist 并复制到桌面端 resources/web-dist。",
+            );
             return;
         }
     };
 
-    set_startup_status(&window, "starting", "正在启动 AgentHub 服务", &format!("端口: {port}\n日志: {}", paths.log_dir.display()));
+    set_startup_status(
+        &window,
+        "starting",
+        "正在启动 AgentHub 服务",
+        &format!("端口: {port}\n日志: {}", paths.log_dir.display()),
+    );
 
     let log_path = paths.log_dir.join("agenthub-sidecar.log");
     let log_file = match OpenOptions::new().create(true).append(true).open(&log_path) {
         Ok(file) => file,
         Err(err) => {
-            set_startup_status(&window, "failed", "无法写入日志文件", &format!("{}: {err}", log_path.display()));
+            set_startup_status(
+                &window,
+                "failed",
+                "无法写入日志文件",
+                &format!("{}: {err}", log_path.display()),
+            );
             return;
         }
     };
@@ -267,7 +421,12 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
     let child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
-            set_startup_status(&window, "failed", "服务启动失败", &format!("{}: {err}", server_bin.display()));
+            set_startup_status(
+                &window,
+                "failed",
+                "服务启动失败",
+                &format!("{}: {err}", server_bin.display()),
+            );
             return;
         }
     };
@@ -326,7 +485,8 @@ fn resolve_resource(app: &tauri::AppHandle, candidates: &[&str]) -> Option<PathB
 }
 
 fn find_available_port(start: u16, count: u16) -> Option<u16> {
-    (start..start.saturating_add(count)).find(|port| TcpListener::bind(("127.0.0.1", *port)).is_ok())
+    (start..start.saturating_add(count))
+        .find(|port| TcpListener::bind(("127.0.0.1", *port)).is_ok())
 }
 
 fn wait_for_health(port: u16, timeout: Duration) -> bool {
@@ -345,7 +505,8 @@ fn health_check(port: u16) -> bool {
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else {
         return false;
     };
-    let request = format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let request =
+        format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
@@ -359,7 +520,9 @@ fn set_startup_status(window: &WebviewWindow, state: &str, title: &str, detail: 
         "title": title,
         "detail": detail,
     });
-    let _ = window.eval(format!("window.AgentHubDesktopStartup?.setStatus({payload});"));
+    let _ = window.eval(format!(
+        "window.AgentHubDesktopStartup?.setStatus({payload});"
+    ));
 }
 
 fn read_log_tail(path: &Path) -> String {

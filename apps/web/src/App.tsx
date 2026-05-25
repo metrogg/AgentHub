@@ -5,13 +5,17 @@ import AgentConfigPage from './pages/AgentConfigPage'
 import AgentWorldPage from './pages/AgentWorldPage'
 import ChatPage from './pages/ChatPage'
 import CodingToolsPage from './pages/CodingToolsPage'
+import { DesktopAppMenu } from './components/DesktopAppMenu'
 import OfficePage from './pages/OfficePage'
 import SettingsPage from './pages/SettingsPage'
 import SkillsMarketPage from './pages/SkillsMarketPage'
 import { api } from './lib/api'
+import { I18nProvider } from './lib/i18n'
+import { isDesktopApp } from './lib/native'
 import { useChatStore } from './stores/chatStore'
 
 export default function App() {
+  const desktop = isDesktopApp()
   const routes = (
     <Routes>
       <Route path="/" element={<ChatPage />} />
@@ -27,10 +31,13 @@ export default function App() {
   )
 
   return (
-    <>
-      <NativeDesktopBridge />
-      {routes}
-    </>
+    <I18nProvider>
+      <div className={desktop ? 'flex h-full flex-col bg-white' : 'contents'}>
+        <NativeDesktopBridge />
+        {desktop && <DesktopAppMenu />}
+        <div className={desktop ? 'min-h-0 flex-1' : 'contents'}>{routes}</div>
+      </div>
+    </I18nProvider>
   )
 }
 

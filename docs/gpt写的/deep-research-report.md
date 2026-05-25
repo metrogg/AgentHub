@@ -537,7 +537,7 @@ MCP 官方安全文档已经明确把授权边界、风险向量与最佳实践�
 | 建议截图 | 官方来源 | 截图内容 | 作用 |
 |---|---|---|---|
 | GitHub Agent HQ 统一会话图 | [GitHub Agent HQ 官方博文](https://github.blog/news-insights/company-news/pick-your-agent-use-claude-and-codex-on-agent-hq/) | 多 Agent session、`@Claude/@Codex`、可审查产物 | 说明行业趋势不是单 Agent，而是多 Agent 控制平面。citeturn19view0 |
-| VS Code Agent Sessions 视图 | [VS Code 官方博文](https://code.visualstudio.com/blogs/2026/02/05/multi-agent-development) | local/background/cloud 与 parallel subagents | 说明并行会话与子 Agent 是主流模式。citeturn19view3 |
+| VS Coding Tools Sessions 视图 | [VS Code 官方博文](https://code.visualstudio.com/blogs/2026/02/05/multi-agent-development) | local/background/cloud 与 parallel subagents | 说明并行会话与子 Agent 是主流模式。citeturn19view3 |
 | TRAE SOLO 首页或 Todo/上下文说明 | [TRAE 官方页面](https://www.trae.cn/solo) / [TRAE 文档搜索页](https://docs.trae.cn/) | Todo、上下文、并行任务、工具面板/部署入口 | 说明与 TRAE 的互补关系。citeturn13view0turn28search1 |
 | Dify 工作流界面 | [Dify 官方站](https://dify.ai/zh) | 工作流/RAG/可观测性界面 | 说明 AgentHub 不走画布优先路线。citeturn10search0 |
 | OpenHands GUI/CLI 介绍 | [OpenHands 官方仓库](https://github.com/OpenHands/OpenHands) | CLI、Local GUI、Cloud 形态 | 对比“单 Agent 深度执行”和“多 Agent IM 协作”。citeturn16view3 |
