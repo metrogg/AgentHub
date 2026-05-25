@@ -11,6 +11,7 @@ use std::{
 };
 use tauri::{
     menu::{Menu, MenuItem, Submenu},
+    utils::config::Color,
     Manager, RunEvent, UserAttentionType, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
@@ -152,6 +153,9 @@ pub fn run() {
             .title("AgentHub")
             .inner_size(1280.0, 820.0)
             .min_inner_size(980.0, 680.0)
+            .transparent(true)
+            .background_color(Color(0, 0, 0, 0))
+            .shadow(true)
             .center()
             .build()?;
 
@@ -309,6 +313,7 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         .env("AGENTHUB_CONFIG_DIR", &paths.config_dir)
         .env("AGENTHUB_LOG_DIR", &paths.log_dir)
         .env("AGENTHUB_WEB_DIST", &web_dist)
+        .env("DATABASE_URL", paths.data_dir.join("agenthub.db"))
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file_err));
