@@ -3,7 +3,7 @@ import { env } from '../env'
 import { logger } from '../lib/logger'
 
 export const DEFAULT_AGENT_INSTRUCTIONS =
-  'You are AgentHub Assistant, a helpful AI collaborator inside a multi-agent collaboration platform. Reply clearly, keep context from the conversation, and surface practical next steps when useful.'
+  '你是 AgentHub Assistant，运行在多 Agent 协作平台中的 AI 协作者。请始终使用中文回复，结合当前对话上下文，给出清晰、实用的下一步。'
 
 export interface LLMMessage {
   role: 'user' | 'assistant'
@@ -272,13 +272,13 @@ export async function testLlmConnection(input: TestConnectionInput) {
       return {
         ok: false,
         status: res.status,
-        message: await formatHttpError('connection test', res, config),
+        message: await formatHttpError('连接测试', res, config),
       }
     }
 
-    return { ok: true, status: res.status, message: 'Connection successful.' }
+    return { ok: true, status: res.status, message: '连接成功。' }
   } catch (error: any) {
-    return { ok: false, message: redactSensitive(error?.message || 'Connection failed.', [apiKey]) }
+    return { ok: false, message: redactSensitive(error?.message || '连接失败。', [apiKey]) }
   }
 }
 
@@ -291,12 +291,12 @@ async function testAnthropicMessage(config: LlmRuntimeConfig) {
       body: JSON.stringify({
         model: config.model,
         max_tokens: 8,
-        messages: [{ role: 'user', content: 'Reply OK only.' }],
+        messages: [{ role: 'user', content: '只回复 OK。' }],
         stream: false,
       }),
     },
     { ...config, maxRetries: 0 },
-    'anthropic message test'
+    'Anthropic 消息测试'
   )
 }
 
@@ -308,13 +308,13 @@ async function testOpenAICompatibleMessage(config: LlmRuntimeConfig) {
       headers: buildHeaders(config),
       body: JSON.stringify({
         model: config.model,
-        messages: [{ role: 'user', content: 'Reply OK only.' }],
+        messages: [{ role: 'user', content: '只回复 OK。' }],
         max_tokens: 8,
         stream: false,
       }),
     },
     { ...config, maxRetries: 0 },
-    'chat completion test'
+    '聊天补全测试'
   )
 }
 
@@ -339,11 +339,11 @@ async function* streamOpenAICompatible(
       signal: options.signal,
     },
     config,
-    'chat completion'
+    '聊天补全'
   )
 
   if (!res.ok || !res.body) {
-    throw new Error(await formatHttpError('chat completion', res, config))
+    throw new Error(await formatHttpError('聊天补全', res, config))
   }
 
   for await (const data of iterateSseData(res.body)) {
@@ -378,11 +378,11 @@ async function* streamAnthropic(
       signal: options.signal,
     },
     config,
-    'anthropic message'
+    'Anthropic 消息'
   )
 
   if (!res.ok || !res.body) {
-    throw new Error(await formatHttpError('anthropic message', res, config))
+    throw new Error(await formatHttpError('Anthropic 消息', res, config))
   }
 
   for await (const data of iterateSseData(res.body)) {
@@ -413,7 +413,7 @@ function buildHeaders(config: LlmRuntimeConfig): Record<string, string> {
 
 function assertApiKey(config: LlmRuntimeConfig) {
   if (!config.apiKey) {
-    throw new Error('API key is not configured. Set LLM_API_KEY or the provider-specific API key environment variable.')
+    throw new Error('API Key 未配置。请设置 LLM_API_KEY 或供应商专用 API Key 环境变量。')
   }
 }
 
@@ -427,8 +427,8 @@ async function fetchWithRetry(
 
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new Error(`${label} timed out`)), config.timeoutMs)
-    const abortFromInput = () => controller.abort(init.signal?.reason ?? new Error(`${label} aborted`))
+    const timer = setTimeout(() => controller.abort(new Error(`${label}超时`)), config.timeoutMs)
+    const abortFromInput = () => controller.abort(init.signal?.reason ?? new Error(`${label}已中止`))
     if (init.signal?.aborted) abortFromInput()
     else init.signal?.addEventListener('abort', abortFromInput, { once: true })
 
@@ -456,7 +456,7 @@ async function fetchWithRetry(
     }
   }
 
-  const message = lastError instanceof Error ? lastError.message : `${label} request failed`
+  const message = lastError instanceof Error ? lastError.message : `${label}请求失败`
   throw new Error(redactSensitive(message, [config.apiKey]))
 }
 
@@ -476,7 +476,7 @@ async function formatHttpError(label: string, res: Response, config: LlmRuntimeC
   const body = await res.text().catch(() => '')
   const providerMessage = extractProviderErrorMessage(body)
   const details = providerMessage || body || `HTTP ${res.status}`
-  return `${label} failed with status ${res.status}: ${redactSensitive(details.slice(0, 500), [config.apiKey])}`
+  return `${label}失败，状态码 ${res.status}：${redactSensitive(details.slice(0, 500), [config.apiKey])}`
 }
 
 function extractProviderErrorMessage(body: string): string | null {

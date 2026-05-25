@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, mentionsOrchestrator, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
+import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 let pendingStream: { messageId: string; delta: string } | null = null
@@ -14,17 +14,25 @@ interface ChatState {
   currentSessionId: string | null
   messages: Message[]
   streamingMessage: { id: string; content: string } | null
+  streamingCodeAgentRun: CodeAgentRunMetadata | null
+  pendingAttachments: ChatAttachment[]
   selectedModelId: string | null
   loadingSessions: boolean
   loadingMessages: boolean
   agentTyping: boolean
 
   fetchSessions: () => Promise<void>
-  createSession: (title?: string) => Promise<Session>
+  createSession: (title?: string, options?: { workspaceId?: string | null; workspaceAgentId?: string | null; type?: 'direct' | 'group' }) => Promise<Session>
   selectSession: (sessionId: string) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
   sendMessageToSession: (sessionId: string, content: string) => Promise<void>
+  editMessage: (messageId: string, content: string) => Promise<void>
+  withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
+  regenerateMessage: (messageId: string) => Promise<void>
+  addPendingAttachments: (attachments: ChatAttachment[]) => void
+  removePendingAttachment: (id: string) => void
+  clearPendingAttachments: () => void
   cancelRun: () => Promise<void>
   setSelectedModelId: (modelId: string | null) => void
   handleWSEvent: (e: WSEvent) => void
@@ -47,6 +55,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentSessionId: null,
   messages: [],
   streamingMessage: null,
+  streamingCodeAgentRun: null,
+  pendingAttachments: [],
   selectedModelId: null,
   loadingSessions: false,
   loadingMessages: false,
@@ -62,8 +72,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  async createSession(title = '新会话') {
-    const session = await api.createSession({ title, type: 'direct' })
+  async createSession(title = '新会话', options = {}) {
+    const session = await api.createSession({
+      title,
+      type: options.type ?? 'direct',
+      workspaceId: options.workspaceId ?? null,
+      workspaceAgentId: options.workspaceAgentId ?? null,
+    })
     set((s) => ({ sessions: [session, ...s.sessions] }))
     return session
   },
@@ -79,6 +94,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       loadingMessages: true,
       messages: [],
       streamingMessage: null,
+      streamingCodeAgentRun: null,
+      pendingAttachments: [],
       agentTyping: false,
     })
     wsClient.joinSession(sessionId)
@@ -112,6 +129,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentWorkspaceAgents: s.currentSessionId === sessionId ? [] : s.currentWorkspaceAgents,
       messages: s.currentSessionId === sessionId ? [] : s.messages,
       streamingMessage: s.currentSessionId === sessionId ? null : s.streamingMessage,
+      streamingCodeAgentRun: s.currentSessionId === sessionId ? null : s.streamingCodeAgentRun,
       agentTyping: s.currentSessionId === sessionId ? false : s.agentTyping,
     }))
   },
@@ -125,37 +143,98 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async sendMessageToSession(sessionId, content) {
     cancelledSessions.delete(sessionId)
     set({ agentTyping: true })
-    const shouldCreateAgentDraft = shouldRouteToAgentDraft(content)
-    const shouldCreatePlan = !shouldCreateAgentDraft && shouldRouteToOrchestratorPlan(
-      content,
+    const attachments = get().pendingAttachments
+    const contentForAgent = attachments.length ? appendAttachmentNote(content, attachments) : content
+    const shouldCreatePlan = shouldRouteToOrchestratorPlan(
+      contentForAgent,
       get().currentSession,
       get().currentWorkspaceAgents
     )
     const shouldCreateArtifactDemo = !shouldCreatePlan && !shouldCreateAgentDraft && shouldRouteToArtifactDemo(content)
     try {
       const msg = await api.sendMessageWithModel(sessionId, {
-        content,
+        content: contentForAgent,
         modelId: get().selectedModelId ?? undefined,
-        skipAgentReply: shouldCreatePlan || shouldCreateAgentDraft || shouldCreateArtifactDemo,
+        skipAgentReply: shouldCreatePlan,
+        attachments,
+        displayContent: attachments.length ? content : undefined,
       })
-      set((s) => ({ messages: [...s.messages, msg] }))
+      set((s) => ({ messages: [...s.messages, msg], pendingAttachments: [] }))
       if (shouldCreatePlan) {
-        const card = await api.createOrchestratorPlan(sessionId, content)
+        const card = await api.createOrchestratorPlan(sessionId, contentForAgent)
         set((s) => ({ messages: [...s.messages, card] }))
+        const result = await api.dispatchOrchestratorPlan(sessionId, card.id)
+        set((s) => ({
+          messages: s.messages.map((message) =>
+            message.id === card.id
+              ? {
+                  ...message,
+                  metadata: {
+                    ...(message.metadata ?? {}),
+                    dispatchResult: result,
+                    plan:
+                      message.metadata && typeof message.metadata.plan === 'object'
+                        ? { ...(message.metadata.plan as Record<string, unknown>), dispatchResult: result }
+                        : message.metadata?.plan,
+                  },
+                }
+              : message
+          ),
+        }))
+        await get().fetchSessions()
         set({ agentTyping: false })
-      } else if (shouldCreateAgentDraft) {
-        const card = await api.createAgentDraft(sessionId, content)
-        set((s) => ({ messages: [...s.messages, card] }))
-        set({ agentTyping: false })
-      } else if (shouldCreateArtifactDemo) {
-        const card = await api.createArtifactDemo(sessionId, content)
-        set((s) => ({ messages: [...s.messages, card] }))
-        set({ agentTyping: false })
+      } else {
+        await get().fetchSessions()
       }
     } catch (error) {
-      set({ agentTyping: false, streamingMessage: null })
+      set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
       throw error
     }
+  },
+
+  async editMessage(messageId, content) {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return
+    const updated = await api.updateMessage(sessionId, messageId, { content })
+    set((s) => ({
+      messages: s.messages.map((message) => (message.id === messageId ? updated : message)),
+    }))
+  },
+
+  async withdrawMessage(messageId) {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return null
+    cancelledSessions.add(sessionId)
+    clearPendingStream()
+    set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
+    await api.cancelMessage(sessionId).catch(() => undefined)
+    const result = await api.withdrawMessage(sessionId, messageId, { rollback: true })
+    const removed = new Set(result.removedMessageIds)
+    set((s) => ({ messages: s.messages.filter((message) => !removed.has(message.id)) }))
+    return result.rollback
+  },
+
+  async regenerateMessage(messageId) {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return
+    cancelledSessions.delete(sessionId)
+    clearPendingStream()
+    set({ agentTyping: true, streamingMessage: null, streamingCodeAgentRun: null })
+    const result = await api.regenerateMessage(sessionId, messageId)
+    set((s) => ({ messages: s.messages.filter((message) => message.id !== result.removedMessageId) }))
+  },
+
+  addPendingAttachments(attachments) {
+    if (!attachments.length) return
+    set((s) => ({ pendingAttachments: [...s.pendingAttachments, ...attachments].slice(0, 6) }))
+  },
+
+  removePendingAttachment(id) {
+    set((s) => ({ pendingAttachments: s.pendingAttachments.filter((attachment) => attachment.id !== id) }))
+  },
+
+  clearPendingAttachments() {
+    set({ pendingAttachments: [] })
   },
 
   async cancelRun() {
@@ -163,7 +242,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!sessionId) return
     cancelledSessions.add(sessionId)
     clearPendingStream()
-    set({ agentTyping: false, streamingMessage: null })
+    set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
     await api.cancelMessage(sessionId).catch(() => undefined)
   },
 
@@ -218,6 +297,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         break
       }
+      case 'message:metadata': {
+        if (cancelledSessions.has(sessionId)) break
+        const { messageId, codeAgentRun } = e.payload as { messageId: string; codeAgentRun: CodeAgentRunMetadata }
+        set((s) => {
+          const current = s.streamingMessage
+          return {
+            streamingMessage: current?.id === messageId ? current : { id: messageId, content: current?.content ?? '' },
+            streamingCodeAgentRun: codeAgentRun,
+            agentTyping: false,
+          }
+        })
+        break
+      }
       case 'message:completed': {
         const { message } = e.payload as { message: Message }
         cancelledSessions.delete(sessionId)
@@ -225,6 +317,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((s) => ({
           messages: [...s.messages, message],
           streamingMessage: null,
+          streamingCodeAgentRun: null,
           agentTyping: false,
         }))
         break
@@ -232,7 +325,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case 'message:cancelled':
         cancelledSessions.add(sessionId)
         clearPendingStream()
-        set({ streamingMessage: null, agentTyping: false })
+        set({ streamingMessage: null, streamingCodeAgentRun: null, agentTyping: false })
         break
     }
   },
@@ -255,6 +348,11 @@ function shouldRouteToOrchestratorPlan(content: string, session: Session | null,
   if (mentionsOrchestrator(content)) return true
   if (session?.type !== 'group' || !session.workspaceId) return false
   return !agents.some((agent) => mentionsAgent(content, agent))
+}
+
+function appendAttachmentNote(content: string, attachments: ChatAttachment[]) {
+  const note = attachments.map((attachment) => `- ${attachment.name} (${attachment.mimeType})`).join('\n')
+  return `${content.trim()}\n\n[已附加图片]\n${note}`.trim()
 }
 
 function mentionsAgent(content: string, agent: WorkspaceAgent) {

@@ -20,7 +20,7 @@ import {
   asc,
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
-import type { AgentRunProfile } from '../services/agent-runner'
+import { getActiveRunSessionIds, type AgentRunProfile } from '../services/agent-runner'
 
 const execFileAsync = promisify(execFile)
 
@@ -437,44 +437,21 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ session })
   })
 
-  .post('/:id/agents/:agentId/session', async (c) => {
+  .get('/:id/active-runs', async (c) => {
     const user = c.get('user')
-    const workspaceId = c.req.param('id')
-    const agentId = c.req.param('agentId')
-    const ws = await ensureWorkspace(workspaceId, user.sub)
-    const [agent] = await db
-      .select()
-      .from(workspaceAgents)
-      .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, workspaceId)))
-      .limit(1)
-    if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
-
-    const [existing] = await db
-      .select()
-      .from(sessions)
-      .where(
-        and(
-          eq(sessions.ownerId, user.sub),
-          eq(sessions.workspaceId, workspaceId),
-          eq(sessions.workspaceAgentId, agentId),
-          eq(sessions.type, 'direct')
-        )
-      )
-      .limit(1)
-    if (existing) return c.json({ session: existing })
-
-    const [session] = await db
-      .insert(sessions)
-      .values({
-        title: `${ws.name} / ${agent.name}`,
-        type: 'direct',
-        ownerId: user.sub,
-        workspaceId,
-        workspaceAgentId: agent.id,
-      })
-      .returning()
-    if (!session) throw new HTTPException(500, { message: 'Failed to create agent session' })
-    return c.json({ session })
+    const id = c.req.param('id')
+    await ensureWorkspace(id, user.sub)
+    const activeSessionIds = new Set(getActiveRunSessionIds())
+    if (!activeSessionIds.size) return c.json({ items: [] })
+    const workspaceSessions = await db.select().from(sessions).where(eq(sessions.workspaceId, id))
+    return c.json({
+      items: workspaceSessions
+        .filter((session) => activeSessionIds.has(session.id))
+        .map((session) => ({
+          agentId: session.workspaceAgentId,
+          sessionId: session.id,
+        })),
+    })
   })
 
   // Delete
@@ -664,8 +641,13 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     if (userMsg) {
       import('../services/agent-runner').then(({ runAgentReply }) => {
         runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined)
-          .then((result) => markWorkspaceTaskAfterRun(taskId, result.ok))
-          .catch(() => markWorkspaceTaskAfterRun(taskId, false))
+          .then(async () => {
+            await db
+              .update(workspaceTasks)
+              .set({ status: 'done', updatedAt: new Date() })
+              .where(eq(workspaceTasks.id, taskId))
+          })
+          .catch(() => {})
       })
     }
 

@@ -56,13 +56,13 @@ export async function* streamNativeAgentReply(
 ): AsyncGenerator<string, void, unknown> {
   const cwdInfo = resolveExecutionCwd(profile.projectPath)
   if (!cwdInfo.valid || !cwdInfo.cwd) {
-    yield `Native read-only agent cannot start because the project directory is invalid: ${cwdInfo.label}`
+    yield `原生只读 Agent 无法启动：项目目录无效（${cwdInfo.label}）。`
     return
   }
 
   const config = await resolveLlmRuntimeConfig(profile.modelId ?? undefined)
   if (!config.apiKey) {
-    yield 'API key is not configured. Set LLM_API_KEY or a provider-specific key such as OPENAI_API_KEY in the environment, then restart the server.'
+    yield 'API Key 未配置。请在环境变量中设置 LLM_API_KEY 或 OPENAI_API_KEY 等供应商专用 Key，然后重启服务。'
     return
   }
 
@@ -87,11 +87,11 @@ export async function* streamNativeAgentReply(
     const output = isAnthropicProvider(config)
       ? await runAnthropicNativeLoop(config, system, messages, allowedTools, cwdInfo.cwd, signal)
       : await runOpenAINativeLoop(config, system, messages, allowedTools, cwdInfo.cwd, signal)
-    yield output.trim() || '(Native agent finished without a text response.)'
+    yield output.trim() || '（原生 Agent 已完成，但没有返回文本内容。）'
   } catch (error: any) {
-    const message = redactSensitive(error?.message || 'Native agent loop failed', [config.apiKey])
+    const message = redactSensitive(error?.message || '原生 Agent 循环失败', [config.apiKey])
     logger.error({ err: message, provider: config.provider, model: config.model }, 'Native agent loop error')
-    yield `\n\n[Native agent error: ${message}]`
+    yield `\n\n[原生 Agent 错误：${message}]`
   }
 }
 
@@ -142,7 +142,7 @@ async function runOpenAINativeLoop(
     }
   }
 
-  return `${finalText}\n\n[Native harness stopped after ${env.AGENTHUB_NATIVE_MAX_TOOL_ROUNDS} tool rounds.]`
+  return `${finalText}\n\n[原生工具循环已在 ${env.AGENTHUB_NATIVE_MAX_TOOL_ROUNDS} 轮后停止。]`
 }
 
 async function runAnthropicNativeLoop(
@@ -187,32 +187,32 @@ async function runAnthropicNativeLoop(
     messages.push({ role: 'user', content: toolResults })
   }
 
-  return `${finalText}\n\n[Native harness stopped after ${env.AGENTHUB_NATIVE_MAX_TOOL_ROUNDS} tool rounds.]`
+  return `${finalText}\n\n[原生工具循环已在 ${env.AGENTHUB_NATIVE_MAX_TOOL_ROUNDS} 轮后停止。]`
 }
 
 async function executeToolCall(name: string, input: JsonObject, allowedTools: ToolDefinition[], cwd: string) {
   const allowed = new Set(allowedTools.map((tool) => tool.name))
-  if (!allowed.has(name)) return `Tool "${name}" is not allowed in this read-only harness.`
+  if (!allowed.has(name)) return `工具「${name}」不在当前只读执行环境的允许范围内。`
   try {
     const result = await readOnlyToolRegistry.execute(name, input, createToolExecutionContext(cwd))
     return limitText(result.content, 18_000)
   } catch (error: any) {
-    return `Tool "${name}" failed: ${error?.message || 'unknown error'}`
+    return `工具「${name}」执行失败：${error?.message || '未知错误'}`
   }
 }
 
 function buildNativeSystemPrompt(profile: AgentRunProfile, cwd: string, tools: ToolDefinition[], skillContext: string) {
   return [
-    profile.systemPrompt || `You are ${profile.name}, a collaborative agent in AgentHub.`,
-    profile.role ? `Role: ${profile.role}.` : '',
-    profile.description ? `Capability summary: ${profile.description}.` : '',
-    `Project workspace: ${cwd}.`,
-    'You are running inside AgentHub native read-only harness.',
-    'You may inspect workspace files and skills through the provided read-only tools.',
-    'Do not claim to have modified files, run shell commands, applied patches, installed packages, deployed, or accessed secrets. If the user asks for changes, explain what should be changed and note that write tools require the future approval flow.',
-    tools.length ? `Available read-only tools: ${tools.map((tool) => tool.name).join(', ')}.` : 'No read-only tools are currently enabled.',
+    profile.systemPrompt || `你是 ${profile.name}，AgentHub 中的协作智能体。`,
+    profile.role ? `角色：${profile.role}。` : '',
+    profile.description ? `能力摘要：${profile.description}。` : '',
+    `项目工作区：${cwd}。`,
+    '你正在 AgentHub 原生只读执行环境中运行。',
+    '你可以通过提供的只读工具检查工作区文件和 Skills。',
+    '不要声称已经修改文件、运行 shell 命令、应用补丁、安装包、部署或访问密钥。如果用户要求改动，请说明应如何改，并标注写入工具需要后续审批流程。',
+    tools.length ? `可用只读工具：${tools.map((tool) => tool.name).join('、')}。` : '当前没有启用只读工具。',
     skillContext,
-    'Reply in the same language as the user unless the task requires otherwise. Keep answers practical and grounded in inspected files.',
+    '除非任务明确要求其他语言，否则请使用中文回复。回答要实用，并基于已检查的文件。',
   ].filter(Boolean).join('\n\n')
 }
 
@@ -249,8 +249,8 @@ async function postJson(
   signal?: AbortSignal
 ): Promise<JsonObject> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(new Error('native agent request timed out')), timeoutMs)
-  const abortFromInput = () => controller.abort(signal?.reason ?? new Error('native agent request aborted'))
+  const timer = setTimeout(() => controller.abort(new Error('原生 Agent 请求超时')), timeoutMs)
+  const abortFromInput = () => controller.abort(signal?.reason ?? new Error('原生 Agent 请求已中止'))
   if (signal?.aborted) abortFromInput()
   else signal?.addEventListener('abort', abortFromInput, { once: true })
   try {
@@ -262,7 +262,7 @@ async function postJson(
     })
     const text = await res.text()
     if (!res.ok) {
-      throw new Error(`model request failed with status ${res.status}: ${text.slice(0, 500)}`)
+      throw new Error(`模型请求失败，状态码 ${res.status}：${text.slice(0, 500)}`)
     }
     return JSON.parse(text) as JsonObject
   } finally {
@@ -272,7 +272,7 @@ async function postJson(
 }
 
 function throwIfAborted(signal?: AbortSignal) {
-  if (signal?.aborted) throw signal.reason ?? new Error('native agent request aborted')
+  if (signal?.aborted) throw signal.reason ?? new Error('原生 Agent 请求已中止')
 }
 
 function buildHeaders(config: LlmRuntimeConfig): Record<string, string> {
@@ -314,7 +314,7 @@ function resolveExecutionCwd(projectPath?: string | null) {
   if (!trimmed) {
     return {
       cwd: fallback,
-      label: fallback ?? '(default workspace)',
+      label: fallback ?? '（默认工作区）',
       valid: Boolean(fallback),
     }
   }
@@ -338,5 +338,5 @@ function resolveExecutionCwd(projectPath?: string | null) {
 
 function limitText(value: string, max: number) {
   if (value.length <= max) return value
-  return `${value.slice(0, max)}\n... output truncated ...`
+  return `${value.slice(0, max)}\n... 输出已截断 ...`
 }
