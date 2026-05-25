@@ -46,7 +46,7 @@ const defaultAgentDraft: AgentConfigInput = {
   runtimeType: 'llm',
   codeAgentType: null,
   capabilityTags: [],
-  toolPermissions: ['chat'],
+  toolPermissions: [],
   sandboxPolicy: 'workspace-write',
   contextPolicy: 'workspace-aware',
   autoInvoke: true,
@@ -217,7 +217,7 @@ export default function AgentWorldPage() {
       })
       toast('项目文件夹已保存')
     } catch (err) {
-      toast(friendlyErrorMessage(err, '项目文件夹打开失败'))
+      toast(friendlyErrorMessage(err, '保存协作组失败'))
     } finally {
       setSavingGoal(false)
     }
@@ -260,7 +260,7 @@ export default function AgentWorldPage() {
       setEditingAgentId(null)
       setAgentDraft(freshAgentDraft())
     } catch (err) {
-      toast(friendlyErrorMessage(err, '项目文件夹打开失败'))
+      toast(friendlyErrorMessage(err, '保存 Agent 失败'))
     } finally {
       setSavingAgent(false)
     }
@@ -268,14 +268,21 @@ export default function AgentWorldPage() {
 
   async function addTaskFromForm(event: FormEvent) {
     event.preventDefault()
-    if (!newTask.title.trim()) return
-    await addTask({
-      title: newTask.title.trim(),
-      description: newTask.description.trim(),
-      agentId: newTask.agentId || null,
-    })
-    setNewTask({ title: '', description: '', agentId: '' })
-    toast('已添加任务')
+    if (!newTask.title.trim()) {
+      toast('请输入任务标题')
+      return
+    }
+    try {
+      await addTask({
+        title: newTask.title.trim(),
+        description: newTask.description.trim(),
+        agentId: newTask.agentId || null,
+      })
+      setNewTask({ title: '', description: '', agentId: '' })
+      toast('已添加任务')
+    } catch (err) {
+      toast(friendlyErrorMessage(err, '添加任务失败'))
+    }
   }
 
   async function dispatch(task: WorkspaceTask, openAfterDispatch = true) {
@@ -425,7 +432,11 @@ export default function AgentWorldPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => deleteWorkspace(workspace.id)}
+                    onClick={() => {
+                      if (window.confirm(`删除协作组「${workspace.name}」？其中的 Agent、任务和会话都会被移除。`)) {
+                        deleteWorkspace(workspace.id)
+                      }
+                    }}
                     className="grid h-7 w-7 place-items-center rounded-md text-neutral-300 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
                     aria-label="删除协作组"
                   >
@@ -528,7 +539,11 @@ export default function AgentWorldPage() {
                             agent={agent}
                             models={models}
                             onEdit={() => openEditAgent(agent)}
-                            onDelete={() => deleteAgent(agent.id)}
+                            onDelete={() => {
+                          if (window.confirm(`删除 Agent「${agent.name}」？已分派的任务将变为未指派。`)) {
+                            deleteAgent(agent.id)
+                          }
+                        }}
                           />
                         ))}
                         {!agents.length && (
@@ -569,7 +584,11 @@ export default function AgentWorldPage() {
                             onPatch={(patch) => updateTask(task.id, patch)}
                             onDispatch={() => dispatch(task)}
                             onOpen={() => openTaskSession(task)}
-                            onDelete={() => deleteTask(task.id)}
+                            onDelete={() => {
+                              if (window.confirm('删除这个任务？')) {
+                                deleteTask(task.id)
+                              }
+                            }}
                           />
                         ))}
                         {!tasks.length && (
@@ -813,7 +832,7 @@ function PresetButtons({
           <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
         ))}
       </select>
-      {agentPresets.slice(0, 2).map((preset) => (
+      {agentPresets.map((preset) => (
         <button
           key={preset.name}
           type="button"
@@ -1227,12 +1246,16 @@ function TaskRow({
         <div className="min-w-0 flex-1">
           <input
             value={task.title}
-            onChange={(event) => onPatch({ title: event.target.value })}
+            onBlur={(event) => {
+              if (event.target.value.trim() !== task.title) onPatch({ title: event.target.value.trim() })
+            }}
             className="w-full bg-transparent text-sm font-semibold outline-none"
           />
           <textarea
             value={task.description}
-            onChange={(event) => onPatch({ description: event.target.value })}
+            onBlur={(event) => {
+              if (event.target.value.trim() !== task.description) onPatch({ description: event.target.value.trim() })
+            }}
             className="mt-1 h-12 w-full resize-none bg-transparent text-xs leading-5 text-neutral-500 outline-none"
             placeholder={t('任务说明')}
           />

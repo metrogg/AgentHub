@@ -1902,7 +1902,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
   }
 
   async function savePlan() {
-    if (!currentSessionId || !data.messageId) return plan
+    if (!currentSessionId || !data.messageId) return null
     setSaving(true)
     setError('')
     try {

@@ -37,7 +37,7 @@ const emptyDraft: AgentConfigInput = {
   runtimeType: 'llm',
   codeAgentType: null,
   capabilityTags: [],
-  toolPermissions: ['chat'],
+  toolPermissions: [],
   sandboxPolicy: 'workspace-write',
   contextPolicy: 'workspace-aware',
   autoInvoke: true,
@@ -54,6 +54,7 @@ export default function AgentConfigPage() {
   const [assistantText, setAssistantText] = useState('')
   const [assistantReply, setAssistantReply] = useState('可以直接说：把当前 Agent 改成 Codex 实现者，关闭风险确认，标签加 frontend。')
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   useEffect(() => {
@@ -124,8 +125,12 @@ export default function AgentConfigPage() {
 
   function saveDraft(event?: FormEvent) {
     event?.preventDefault()
+    setSaveError('')
     const normalized = normalizeDraft(draft)
-    if (!normalized.name || !normalized.role) return
+    if (!normalized.name.trim() || !normalized.role.trim()) {
+      setSaveError('名称和角色不能为空')
+      return
+    }
     const updated = saveAgentToLibrary(agents, normalized, selectedId ?? undefined)
     setAgents(updated)
     const current = selectedId ? updated.find((agent) => agent.id === selectedId) : updated[0]
@@ -285,6 +290,7 @@ export default function AgentConfigPage() {
                         <Field label={t('角色')} value={draft.role} onChange={(role) => setDraft({ ...draft, role })} />
                       </div>
                     </div>
+                    <Field label={t('头像 URL')} value={draft.avatar ?? ''} onChange={(avatar) => setDraft({ ...draft, avatar: avatar.trim() || null })} />
 
                     <TextField label={t('简介')} rows={3} value={draft.description ?? ''} onChange={(description) => setDraft({ ...draft, description })} />
                     <TextField label={t('系统提示词')} rows={6} value={draft.systemPrompt ?? ''} onChange={(systemPrompt) => setDraft({ ...draft, systemPrompt })} />
@@ -292,10 +298,12 @@ export default function AgentConfigPage() {
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       <SelectField label={t('运行时')} value={runtimeType} onChange={(value) => {
                         const nextRuntime = value as WorkspaceAgent['runtimeType']
+                        const isMcp = nextRuntime === 'mcp'
                         setDraft({
                           ...draft,
                           runtimeType: nextRuntime,
                           codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+                          ...(isMcp ? { sandboxPolicy: 'read-only' as const, toolPermissions: ['workspace:read', 'skills:read'], approvalRequired: true } : {}),
                         })
                       }}>
                         <option value="llm">{t('普通 LLM Agent')}</option>
@@ -314,7 +322,7 @@ export default function AgentConfigPage() {
                         <option value="">{t('自动模型')}</option>
                         {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId}</option>)}
                       </SelectField>
-                      <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
+                      <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} disabled={runtimeType === 'mcp'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
                         <option value="read-only">{t('只读')}</option>
                         <option value="workspace-write">{t('工作区写入')}</option>
                         <option value="danger-full-access">{t('完全访问')}</option>
@@ -326,7 +334,7 @@ export default function AgentConfigPage() {
                       </SelectField>
                       <Field label={t('颜色')} value={draft.color ?? '#111827'} onChange={(color) => setDraft({ ...draft, color })} />
                       <Field label={t('能力标签')} value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, capabilityTags: splitList(value) })} />
-                      <Field label={t('工具权限')} value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, toolPermissions: splitList(value) })} />
+                      <Field label={t('工具权限')} value={(draft.toolPermissions ?? []).join(', ')} disabled={runtimeType === 'mcp'} onChange={(value) => setDraft({ ...draft, toolPermissions: splitList(value) })} />
                     </div>
 
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -334,11 +342,17 @@ export default function AgentConfigPage() {
                         <input type="checkbox" checked={draft.autoInvoke ?? true} onChange={(event) => setDraft({ ...draft, autoInvoke: event.target.checked })} />
                         {t('允许 Orchestrator 自动调用')}
                       </label>
-                      <label className="flex h-11 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
-                        <input type="checkbox" checked={draft.approvalRequired ?? true} onChange={(event) => setDraft({ ...draft, approvalRequired: event.target.checked })} />
+                      <label className={cn('flex h-11 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600', runtimeType === 'mcp' && 'opacity-50')}>
+                        <input type="checkbox" disabled={runtimeType === 'mcp'} checked={draft.approvalRequired ?? true} onChange={(event) => setDraft({ ...draft, approvalRequired: event.target.checked })} />
                         {t('高风险操作需要确认')}
                       </label>
                     </div>
+
+                    {saveError && (
+                      <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-600">
+                        {saveError}
+                      </div>
+                    )}
 
                     <div className="mt-5 flex justify-end">
                       <button type="submit" className="inline-flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-5 text-sm font-medium text-white hover:bg-neutral-800">
@@ -560,11 +574,11 @@ function modelName(modelId: string | null, models: ModelCatalogItem[]) {
   return model?.name || model?.modelId || modelId
 }
 
-function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function Field({ label, value, disabled, onChange }: { label: string; value: string; disabled?: boolean; onChange: (value: string) => void }) {
   return (
-    <label className="block text-sm">
+    <label className={cn('block text-sm', disabled && 'opacity-50')}>
       <span className="mb-2 block text-neutral-600">{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} className="h-10 w-full rounded-xl border border-neutral-200 px-3 outline-none focus:border-neutral-400" />
+      <input value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="h-10 w-full rounded-xl border border-neutral-200 px-3 outline-none focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-400" />
     </label>
   )
 }

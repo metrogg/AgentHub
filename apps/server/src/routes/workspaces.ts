@@ -101,7 +101,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
   // Create
   .post('/', zValidator('json', createWorkspaceSchema), async (c) => {
     const user = c.get('user')
-    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
+    const input = c.req.valid('json')
     const projectPath = ensureProjectDirectory(input.projectPath)
     const [ws] = await db
       .insert(workspaces)
@@ -166,7 +166,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
+    const input = c.req.valid('json')
     const patch = {
       ...input,
       ...(input.projectPath !== undefined ? { projectPath: ensureProjectDirectory(input.projectPath) } : {}),
@@ -262,7 +262,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
-    const input = c.req.valid('json')
+    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
     const existing = await db.select({ id: workspaceAgents.id }).from(workspaceAgents).where(eq(workspaceAgents.workspaceId, id))
     const [agent] = await db
       .insert(workspaceAgents)
@@ -277,7 +277,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
-    const input = c.req.valid('json')
+    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
     const [agent] = await db
       .update(workspaceAgents)
       .set(input)

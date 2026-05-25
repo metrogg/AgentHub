@@ -850,8 +850,8 @@ function SettingsContent({
                 <div className="flex items-center gap-2">
                   <Keycap>Ctrl</Keycap>
                   <Keycap>N</Keycap>
-                  <button type="button" className="settings-soft-button">{t('录制')}</button>
-                  <button type="button" className="settings-soft-button">{t('恢复默认')}</button>
+                  <button type="button" disabled className="settings-soft-button opacity-50">{t('录制')}</button>
+                  <button type="button" disabled className="settings-soft-button opacity-50">{t('恢复默认')}</button>
                 </div>
               </ShortcutRow>
             </InsetPanel>
@@ -908,7 +908,7 @@ function SettingsContent({
                 <span className="text-neutral-500">{t('开发组织')}</span><span className="font-medium">AgentHub</span>
                 <span className="text-neutral-500">{t('联系邮箱')}</span><span className="font-medium">771473941@qq.com</span>
                 <span className="text-neutral-500">{t('版本来源')}</span><span className="font-medium">{t('本地开发版')}</span>
-                <span className="text-neutral-500">{t('上次检查')}</span><span><button type="button" className="settings-soft-button">{t('检查更新')}</button></span>
+                <span className="text-neutral-500">{t('上次检查')}</span><span><button type="button" disabled className="settings-soft-button opacity-50">{t('检查更新')}</button></span>
               </div>
             </div>
           </SettingsSection>

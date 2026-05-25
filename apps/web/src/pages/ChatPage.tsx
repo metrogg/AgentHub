@@ -456,7 +456,7 @@ function Welcome({
             />
             <div className="flex items-center justify-between pt-2">
               <div className="flex items-center gap-1">
-                <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100">
+                <button type="button" disabled title="暂未实现" className="grid h-8 w-8 place-items-center rounded-full text-neutral-300">
                   <Plus className="h-4 w-4" />
                 </button>
                 <button
@@ -468,7 +468,7 @@ function Welcome({
                 >
                   <FolderOpen className="h-4 w-4" />
                 </button>
-                <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100">
+                <button type="button" disabled title="暂未实现" className="grid h-8 w-8 place-items-center rounded-full text-neutral-300">
                   <Paperclip className="h-4 w-4" />
                 </button>
                 <button
@@ -480,7 +480,7 @@ function Welcome({
                 </button>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" className="inline-flex h-8 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-600 hover:bg-neutral-50">
+                <button type="button" disabled title="暂未实现" className="inline-flex h-8 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-300">
                   {t('自动')}
                   <ChevronDown className="h-3.5 w-3.5" />
                 </button>
