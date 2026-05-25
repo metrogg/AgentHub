@@ -4,7 +4,7 @@ import { ArrowUp, AtSign, ChevronDown, ChevronRight, FolderOpen, FolderPlus, Fol
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
 import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
-import { api, type SkillSummary, type Workspace } from '../lib/api'
+import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '../lib/api'
 import { pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { useChatStore } from '../stores/chatStore'
@@ -216,7 +216,7 @@ function Welcome({
       setProjectMenuOpen(false)
       navigate(`/chat/${session.id}`)
     } catch (err) {
-      showHint(errorMessage(err, '打开项目失败'))
+      showHint(friendlyErrorMessage(err, '打开项目失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -237,7 +237,7 @@ function Welcome({
       setProjectMenuOpen(false)
       navigate(`/chat/${session.id}`)
     } catch (err) {
-      showHint(errorMessage(err, '创建空白项目失败'))
+      showHint(friendlyErrorMessage(err, '创建空白项目失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -275,7 +275,7 @@ function Welcome({
       setProjectMenuOpen(false)
       navigate(`/chat/${session.id}`)
     } catch (err) {
-      showHint(errorMessage(err, '打开文件夹失败'))
+      showHint(friendlyErrorMessage(err, '打开文件夹失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -507,10 +507,6 @@ function PromptCard({ title, text, onClick }: { title: string; text: string; onC
 
 function titleFromMessage(message: string) {
   return message.length > 18 ? `${message.slice(0, 18)}...` : message
-}
-
-function errorMessage(err: unknown, fallback: string) {
-  return err instanceof Error && err.message ? err.message : fallback
 }
 
 function workspaceNameFromPath(value: string) {

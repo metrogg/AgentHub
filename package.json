@@ -14,6 +14,7 @@
     "dev:desktop": "bun --filter @agenthub/desktop tauri:dev",
     "build": "bun run --filter '*' build",
     "build:desktop": "bun --filter @agenthub/desktop tauri:build",
+    "test": "bun test",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "bun run --filter '*' lint",
     "db:generate": "bun --filter @agenthub/db generate",

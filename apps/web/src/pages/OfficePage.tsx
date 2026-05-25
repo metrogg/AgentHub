@@ -44,7 +44,7 @@ export default function OfficePage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f5f4ef] text-neutral-950">
+    <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#f5f4ef] text-neutral-950">
       <SessionList />
 
       <main className="flex min-w-0 flex-1 overflow-hidden">

@@ -5,29 +5,64 @@ import AgentConfigPage from './pages/AgentConfigPage'
 import AgentWorldPage from './pages/AgentWorldPage'
 import ChatPage from './pages/ChatPage'
 import CodingToolsPage from './pages/CodingToolsPage'
+import { DesktopAppMenu } from './components/DesktopAppMenu'
 import OfficePage from './pages/OfficePage'
 import SettingsPage from './pages/SettingsPage'
 import SkillsMarketPage from './pages/SkillsMarketPage'
 import { api } from './lib/api'
+import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
+import { I18nProvider } from './lib/i18n'
+import { isDesktopApp } from './lib/native'
 import { useChatStore } from './stores/chatStore'
 
 export default function App() {
-  return (
-    <>
-      <NativeDesktopBridge />
-      <Routes>
-        <Route path="/" element={<ChatPage />} />
-        <Route path="/chat/:sessionId" element={<ChatPage />} />
-        <Route path="/coding-tools" element={<CodingToolsPage />} />
-        <Route path="/agent-config" element={<AgentConfigPage />} />
-        <Route path="/agent-world" element={<AgentWorldPage />} />
-        <Route path="/office" element={<OfficePage />} />
-        <Route path="/skills" element={<SkillsMarketPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </>
+  const desktop = isDesktopApp()
+
+  useEffect(() => {
+    applyAppearanceSettings(defaultAppearanceSettings)
+    api
+      .getSettings()
+      .then((settings) => {
+        if (!settings.APP_SETTINGS) return
+        applyAppearanceSettings({ ...defaultAppearanceSettings, ...JSON.parse(settings.APP_SETTINGS) })
+      })
+      .catch(() => undefined)
+  }, [])
+
+  const routes = (
+    <Routes>
+      <Route path="/" element={<ChatPage />} />
+      <Route path="/chat/:sessionId" element={<ChatPage />} />
+      <Route path="/coding-tools" element={<CodingToolsPage />} />
+      <Route path="/agent-config" element={<AgentConfigPage />} />
+      <Route path="/agent-world" element={<AgentWorldPage />} />
+      <Route path="/office" element={<OfficePage />} />
+      <Route path="/skills" element={<SkillsMarketPage />} />
+      <Route path="/settings" element={<SettingsPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
+
+  return (
+    <I18nProvider>
+      <div className={desktop ? 'agenthub-app-theme flex h-full flex-col' : 'agenthub-app-theme contents'}>
+        <NativeDesktopBridge />
+        {desktop && <DesktopAppMenu />}
+        <div className={desktop ? 'min-h-0 flex-1' : 'contents'}>{routes}</div>
+      </div>
+    </I18nProvider>
+  )
+}
+
+const defaultAppearanceSettings: AppearanceSettings = {
+  accent: '黑色',
+  bodyFont: '默认',
+  codeBlockFont: '默认',
+  fontSize: '14',
+  inlineCodeFont: '默认',
+  mainWindowTheme: '跟随系统',
+  terminalFont: '默认',
+  uiFont: '默认',
 }
 
 function NativeDesktopBridge() {

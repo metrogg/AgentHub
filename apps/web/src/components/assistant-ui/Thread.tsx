@@ -68,6 +68,7 @@ import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import {
   api,
+  friendlyErrorMessage,
   type AgentArtifact,
   type ChatAttachment,
   type CodeAgentRunMetadata,
@@ -550,7 +551,7 @@ const Composer: FC = () => {
       setMenu(null)
       navigate(`/chat/${session.id}`)
     } catch (err) {
-      showHint(errorMessage(err, '打开项目失败'))
+      showHint(friendlyErrorMessage(err, '打开项目失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -576,7 +577,7 @@ const Composer: FC = () => {
       setMenu(null)
       navigate(`/chat/${session.id}`)
     } catch (err) {
-      showHint(errorMessage(err, '创建空白项目失败'))
+      showHint(friendlyErrorMessage(err, '打开文件夹失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -614,7 +615,7 @@ const Composer: FC = () => {
       setMenu(null)
       navigate(`/chat/${session.id}`)
     } catch (err) {
-      showHint(errorMessage(err, '打开文件夹失败'))
+      showHint(friendlyErrorMessage(err, '打开文件夹失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -1122,10 +1123,6 @@ const ComposerMenu: FC<{
       )}
     </div>
   )
-}
-
-function errorMessage(err: unknown, fallback: string) {
-  return err instanceof Error && err.message ? err.message : fallback
 }
 
 export function readSlashCommand(text: string, cursor: number) {

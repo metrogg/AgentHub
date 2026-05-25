@@ -1,4 +1,6 @@
 import { db, settings } from '@agenthub/db'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { env } from '../env'
 import { logger } from '../lib/logger'
 
@@ -30,6 +32,10 @@ export interface LlmRuntimeConfig {
   provider: string
   source: 'settings' | 'env'
   timeoutMs: number
+  debug: {
+    enabled: boolean
+    dir: string
+  }
 }
 
 interface ProviderCandidate {
@@ -68,6 +74,20 @@ function parseCatalog(value?: string): ModelCatalogItem[] {
   } catch {
     return []
   }
+}
+
+function parseAppSettings(value?: string): { debugMode?: boolean } {
+  if (!value) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return { debugMode: Boolean(parsed?.debugMode) }
+  } catch {
+    return {}
+  }
+}
+
+function defaultDebugDir() {
+  return join(env.AGENTHUB_APP_DATA_DIR?.trim() || process.cwd(), 'debug', 'llm')
 }
 
 function clean(value?: string | null): string | undefined {
@@ -140,6 +160,21 @@ function normalizeConfig(candidate: ProviderCandidate, source: 'settings' | 'env
     provider,
     source,
     timeoutMs: env.LLM_TIMEOUT_MS,
+    debug: {
+      enabled: false,
+      dir: defaultDebugDir(),
+    },
+  }
+}
+
+function withDebugSettings(config: LlmRuntimeConfig, map: Record<string, string>): LlmRuntimeConfig {
+  const appSettings = parseAppSettings(map.APP_SETTINGS)
+  return {
+    ...config,
+    debug: {
+      enabled: Boolean(appSettings.debugMode),
+      dir: defaultDebugDir(),
+    },
   }
 }
 
@@ -193,14 +228,15 @@ function pickSettingsCandidate(map: Record<string, string>, selectedModelId?: st
 
 export async function resolveLlmRuntimeConfig(selectedModelId?: string): Promise<LlmRuntimeConfig> {
   try {
-    const candidate = pickSettingsCandidate(await getSettingsMap(), selectedModelId)
-    if (candidate) return normalizeConfig(candidate, 'settings')
+    const map = await getSettingsMap()
+    const candidate = pickSettingsCandidate(map, selectedModelId)
+    if (candidate) return withDebugSettings(normalizeConfig(candidate, 'settings'), map)
   } catch (error: any) {
     logger.warn({ err: redactSensitive(error?.message || String(error)) }, 'Failed to load model settings')
   }
 
   const provider = normalizeProvider(env.LLM_PROVIDER)
-  return normalizeConfig(
+  return withDebugSettings(normalizeConfig(
     {
       apiKey: clean(env.LLM_API_KEY),
       apiKeySource: clean(env.LLM_API_KEY) ? 'LLM_API_KEY' : undefined,
@@ -209,7 +245,7 @@ export async function resolveLlmRuntimeConfig(selectedModelId?: string): Promise
       provider,
     },
     'env'
-  )
+  ), {})
 }
 
 export async function getLlmRuntimeStatus(selectedModelId?: string) {
@@ -264,15 +300,22 @@ export async function testLlmConnection(input: TestConnectionInput) {
     'settings'
   )
 
+  // 如果 model 是默认值，提示用户确认模型 ID 是否正确
+  const isDefaultModel = !clean(input.modelId)
+
   try {
     const res = isAnthropicProvider(config.provider, config.baseUrl)
       ? await testAnthropicMessage(config)
       : await testOpenAICompatibleMessage(config)
     if (!res.ok) {
+      let message = await formatHttpError('连接测试', res, config)
+      if (res.status === 400 && isDefaultModel) {
+        message += `（提示：未提供 modelId，使用了默认模型 "${config.model}"。如果使用的是第三方兼容 API，请在模型配置中填写正确的模型 ID。）`
+      }
       return {
         ok: false,
         status: res.status,
-        message: await formatHttpError('连接测试', res, config),
+        message,
       }
     }
 
@@ -439,6 +482,12 @@ async function fetchWithRetry(
       })
       clearTimeout(timer)
       init.signal?.removeEventListener('abort', abortFromInput)
+      await writeLlmDebugLog(config, label, url, init, {
+        attempt,
+        status: res.status,
+        ok: res.ok,
+        retryable: isRetryableStatus(res.status) && attempt < config.maxRetries,
+      })
 
       if (isRetryableStatus(res.status) && attempt < config.maxRetries) {
         await res.arrayBuffer().catch(() => undefined)
@@ -451,6 +500,10 @@ async function fetchWithRetry(
       clearTimeout(timer)
       init.signal?.removeEventListener('abort', abortFromInput)
       lastError = error
+      await writeLlmDebugLog(config, label, url, init, {
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      })
       if (attempt >= config.maxRetries) break
       await delay(backoffMs(attempt))
     }
@@ -458,6 +511,78 @@ async function fetchWithRetry(
 
   const message = lastError instanceof Error ? lastError.message : `${label}请求失败`
   throw new Error(redactSensitive(message, [config.apiKey]))
+}
+
+async function writeLlmDebugLog(
+  config: LlmRuntimeConfig,
+  label: string,
+  url: string,
+  init: RequestInit,
+  result: Record<string, unknown>
+) {
+  if (!config.debug.enabled) return
+  try {
+    await mkdir(config.debug.dir, { recursive: true })
+    const timestamp = new Date().toISOString()
+    const fileName = `${timestamp.replace(/[:.]/g, '-')}-${safeFilePart(label)}.json`
+    const payload = {
+      timestamp,
+      label,
+      provider: config.provider,
+      model: config.model,
+      source: config.source,
+      request: {
+        method: init.method ?? 'GET',
+        url: redactSensitive(url, [config.apiKey]),
+        headers: redactHeaders(init.headers),
+        body: redactRequestBody(init.body, config.apiKey),
+      },
+      result: redactJson(result, config.apiKey),
+    }
+    await writeFile(join(config.debug.dir, fileName), JSON.stringify(payload, null, 2), 'utf8')
+  } catch (error: any) {
+    logger.debug({ err: error?.message || String(error) }, 'Failed to write LLM debug log')
+  }
+}
+
+function redactHeaders(headers: RequestInit['headers'] | undefined) {
+  const output: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headersToRecord(headers))) {
+    output[key] = /authorization|api[-_]?key|x-api-key/i.test(key) ? '***' : redactSensitive(String(value))
+  }
+  return output
+}
+
+function headersToRecord(headers: RequestInit['headers'] | undefined) {
+  if (!headers) return {}
+  if (headers instanceof Headers) return Object.fromEntries(headers.entries())
+  if (Array.isArray(headers)) return Object.fromEntries(headers)
+  return headers as Record<string, string>
+}
+
+function redactRequestBody(body: RequestInit['body'] | null | undefined, apiKey: string | null) {
+  if (typeof body !== 'string') return body ? '[non-string body]' : undefined
+  try {
+    return redactJson(JSON.parse(body), apiKey)
+  } catch {
+    return redactSensitive(body, [apiKey])
+  }
+}
+
+function redactJson(value: unknown, apiKey?: string | null): unknown {
+  if (typeof value === 'string') return redactSensitive(value, [apiKey])
+  if (!value || typeof value !== 'object') return value
+  if (Array.isArray(value)) return value.map((item) => redactJson(item, apiKey))
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      /authorization|api[-_]?key|x-api-key/i.test(key) ? '***' : redactJson(item, apiKey),
+    ])
+  )
+}
+
+function safeFilePart(value: string) {
+  return value.replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'request'
 }
 
 function isRetryableStatus(status: number): boolean {

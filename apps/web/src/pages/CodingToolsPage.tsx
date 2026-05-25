@@ -16,7 +16,7 @@ import {
   Terminal,
   XCircle,
 } from 'lucide-react'
-import SessionList from '../components/chat/SessionList'
+import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import { api, type CodexAuthStatus, type CodingToolStatus, type ModelCatalogItem, type OpencodeModelItem } from '../lib/api'
 import { cn } from '../lib/utils'
 
@@ -146,6 +146,7 @@ export default function CodingToolsPage() {
   const [codexAuthFileBusy, setCodexAuthFileBusy] = useState(false)
   const [codexAuthFileDirty, setCodexAuthFileDirty] = useState(false)
   const [codexAuthFileMessage, setCodexAuthFileMessage] = useState('')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   useEffect(() => {
     api.getSettings().then((settings) => {
@@ -525,13 +526,19 @@ export default function CodingToolsPage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f7f5f1] text-neutral-950">
-      <SessionList />
+    <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#f7f5f1] text-neutral-950">
+      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} />
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-5">
           <div className="flex min-w-0 items-center gap-3">
-            <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100" aria-label="侧栏">
-              <PanelLeft className="h-4 w-4" />
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100"
+              aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+              title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+            >
+              <PanelLeft className={cn('h-4 w-4 transition-transform duration-300', sidebarCollapsed && 'rotate-180')} />
             </button>
             <span className="text-sm font-semibold">AgentHub</span>
             <span className="text-sm text-neutral-300">/</span>
@@ -560,7 +567,7 @@ export default function CodingToolsPage() {
             <div>
               <div className="inline-flex h-7 items-center gap-2 rounded-md border border-neutral-300 bg-white px-2.5 text-xs text-neutral-600">
                 <Terminal className="h-3.5 w-3.5 text-teal-700" />
-                本机 Code Agent 工具台
+                本机 Coding Tools 工具台
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">Coding Tools</h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-600">
@@ -618,7 +625,7 @@ export default function CodingToolsPage() {
                   <p className="mt-1 text-sm text-neutral-500">
                     {activeTool.id === 'codex'
                       ? 'Codex 使用本机 auth.json 与 config.toml；AgentHub 不再维护额外的 Codex 模型配置。'
-                      : '配置会写入 AgentHub 设置，并作为 Code Agent 的默认运行参数。'}
+                      : '配置会写入 AgentHub 设置，并作为 Coding Tools 的默认运行参数。'}
                   </p>
                 </div>
                 <a
