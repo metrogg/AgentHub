@@ -26,7 +26,7 @@ import {
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
 import { api, type Session, type WorkspaceAgent, type WorkspaceFull } from '../../lib/api'
-import { loadSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent, type SessionListPrefs } from '../../lib/sessionArchive'
+import { loadSessionListPrefs, normalizeSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent, type SessionListPrefs } from '../../lib/sessionArchive'
 
 type SessionGroup = {
   parent: Session
@@ -60,7 +60,10 @@ export default function SessionList() {
   const [workspaceChoices, setWorkspaceChoices] = useState<WorkspaceFull[]>([])
   const [loadingChoices, setLoadingChoices] = useState(false)
   const [creatingChoice, setCreatingChoice] = useState<string | null>(null)
-  const sessionTree = useMemo(() => buildSessionTree(sessions), [sessions])
+  const sessionTree = useMemo(
+    () => filterSessionTree(buildSessionTree(sessions, pinnedIds), query, showArchived, archivedIds),
+    [archivedIds, pinnedIds, query, sessions, showArchived]
+  )
   const activeSession = sessions.find((session) => session.id === sessionId)
   const agentContacts = useMemo(() => filterAgentContacts(currentWorkspaceAgents, query), [currentWorkspaceAgents, query])
 
@@ -827,6 +830,33 @@ function childSessionTitle(session: Session, parent: Session) {
     .map((part) => part.trim())
     .filter(Boolean)
   return parts.length ? parts.join(' / ') : session.title
+}
+
+function filterSessionTree(groups: SessionGroup[], query: string, showArchived: boolean, archivedIds: Set<string>) {
+  const keyword = query.trim().toLowerCase()
+  return groups
+    .map((group) => {
+      const parentArchived = archivedIds.has(group.parent.id)
+      const children = group.children.filter((child) => archivedIds.has(child.id) === showArchived && sessionMatchesQuery(child, keyword, group.parent))
+      const parentVisible = parentArchived === showArchived && sessionMatchesQuery(group.parent, keyword)
+      if (!parentVisible && !children.length) return null
+      return {
+        ...group,
+        children,
+        latestUpdatedAt: [parentVisible ? group.parent : null, ...children]
+          .filter((item): item is Session => Boolean(item))
+          .reduce((latest, session) => (Date.parse(session.updatedAt) > Date.parse(latest) ? session.updatedAt : latest), group.latestUpdatedAt),
+      }
+    })
+    .filter((group): group is SessionGroup => Boolean(group))
+}
+
+function sessionMatchesQuery(session: Session, query: string, parent?: Session) {
+  if (!query) return true
+  return [session.title, session.type, session.workspaceId ?? '', session.workspaceAgentId ?? '', parent?.title ?? '']
+    .join(' ')
+    .toLowerCase()
+    .includes(query)
 }
 
 function filterAgentContacts(agents: WorkspaceAgent[], query: string) {

@@ -1,13 +1,18 @@
-import { type CSSProperties, useEffect, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  Activity,
+  AlertTriangle,
   Archive,
   ArchiveRestore,
   CheckCircle2,
-  Blocks,
   Clock3,
+  Copy,
+  Database,
+  Download,
   ExternalLink,
   FileText,
+  GitBranch,
   Info,
   Keyboard,
   LockKeyhole,
@@ -17,11 +22,13 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Server,
   Settings,
   Shield,
   TerminalSquare,
   Trash2,
   X,
+  type LucideIcon,
 } from 'lucide-react'
 import { api, type Message, type Session, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, resolveTheme, themePalette } from '../lib/appearance'
@@ -35,7 +42,6 @@ type SectionKey =
   | '显示'
   | '快捷键'
   | '模型管理'
-  | '默认模型'
   | '工具权限'
   | '归档会话'
   | '控制台'
@@ -46,7 +52,6 @@ const sections: Array<{ icon: typeof Settings; label: SectionKey }> = [
   { icon: Monitor, label: '显示' },
   { icon: Keyboard, label: '快捷键' },
   { icon: Shield, label: '模型管理' },
-  { icon: Blocks, label: '默认模型' },
   { icon: LockKeyhole, label: '工具权限' },
   { icon: Archive, label: '归档会话' },
   { icon: TerminalSquare, label: '控制台' },
@@ -166,7 +171,7 @@ const defaultAppSettings: AppSettings = {
   ],
   gitAutoDetect: true,
   gitAuthor: 'AgentHub',
-  gitEmail: 'agenthub@example.com',
+  gitEmail: '771473941@qq.com',
   envVars: [
     { id: 'openai', key: 'OPENAI_API_KEY', value: '' },
     { id: 'anthropic', key: 'ANTHROPIC_API_KEY', value: '' },
@@ -315,6 +320,22 @@ export default function SettingsPage() {
           }
         }
         setActiveModelId(settings.ACTIVE_MODEL_ID ?? settings.MODEL_PROVIDER ?? defaultModels[0].id)
+        if (settings.TOOL_PERMISSION_MODE || settings.TOOL_PERMISSION_RULES) {
+          let parsedPermissions: Record<string, string> | null = null
+          if (settings.TOOL_PERMISSION_RULES) {
+            try {
+              const parsed = JSON.parse(settings.TOOL_PERMISSION_RULES) as Record<string, string>
+              if (parsed && typeof parsed === 'object') parsedPermissions = parsed
+            } catch {
+              parsedPermissions = null
+            }
+          }
+          setAppSettings((current) => ({
+            ...current,
+            ...(settings.TOOL_PERMISSION_MODE ? { toolPermissionMode: settings.TOOL_PERMISSION_MODE } : {}),
+            ...(parsedPermissions ? { toolPermissions: { ...current.toolPermissions, ...parsedPermissions } } : {}),
+          }))
+        }
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -339,6 +360,8 @@ export default function SettingsPage() {
         ACTIVE_MODEL: selected?.modelId ?? '',
         ANTHROPIC_API_KEY: selected?.provider === 'anthropic' ? selected.apiKey : '',
         ANTHROPIC_MODEL: selected?.provider === 'anthropic' ? selected.modelId : 'claude-sonnet-4-6',
+        TOOL_PERMISSION_MODE: appSettings.toolPermissionMode,
+        TOOL_PERMISSION_RULES: JSON.stringify(appSettings.toolPermissions),
       })
         .then(() => {
           setSaveState('saved')
@@ -436,7 +459,7 @@ export default function SettingsPage() {
               <Loader2 className="h-4 w-4 animate-spin" />
               {t('加载中...')}
             </div>
-          ) : activeSection === '模型管理' || activeSection === '默认模型' ? (
+          ) : activeSection === '模型管理' ? (
             <ModelManagement
               models={models}
               activeModelId={activeModelId}
@@ -838,13 +861,17 @@ function SettingsContent({
     case '工具权限':
       return (
         <SettingsStack>
-          <SettingsSection title="工具权限" desc="设置工具整体执行方式，并在 Ask 模式下为单个工具指定确认规则。">
+          <SettingsSection title="工具权限" desc="设置工具整体执行方式。Auto 会直接按系统策略执行；Ask 会按下方每个工具的规则决定是否确认。">
             <InsetPanel>
-              <ShortcutRow title="工具执行模式" desc="Auto 自动执行所有工具；Ask 按下方规则确认。">
+              <ShortcutRow
+                title="工具执行模式"
+                desc={settings.toolPermissionMode === 'Auto' ? '当前所有工具按自动执行处理；切换到 Ask 后会启用下方逐项规则。' : '当前会读取下方逐项规则；标为 Ask 的工具在执行前需要确认。'}
+              >
                 <SegmentedControl value={settings.toolPermissionMode} options={['Auto', 'Ask']} onChange={(toolPermissionMode) => patchSettings({ toolPermissionMode })} />
               </ShortcutRow>
             </InsetPanel>
             <ToolPermissionTable
+              mode={settings.toolPermissionMode}
               permissions={settings.toolPermissions}
               onChange={(name, value) => patchSettings({ toolPermissions: { ...settings.toolPermissions, [name]: value } })}
             />
@@ -862,9 +889,7 @@ function SettingsContent({
     case '控制台':
       return (
         <SettingsStack>
-          <SettingsSection title="控制台" desc="查看前端与后端的统一调试输出。后端 debug 与 trace 级别日志受“通用 > 调试模式”控制。">
-            <ConsolePanel debugEnabled={settings.debugMode} />
-          </SettingsSection>
+          <ConsolePanel debugEnabled={settings.debugMode} />
         </SettingsStack>
       )
     case '关于':
@@ -880,7 +905,7 @@ function SettingsContent({
                 <span className="text-neutral-500">{t('应用')}</span><span className="font-medium">AgentHub</span>
                 <span className="text-neutral-500">{t('版本')}</span><span className="font-medium">0.1.0</span>
                 <span className="text-neutral-500">{t('开发组织')}</span><span className="font-medium">AgentHub</span>
-                <span className="text-neutral-500">{t('联系邮箱')}</span><span className="font-medium">agenthub@example.com</span>
+                <span className="text-neutral-500">{t('联系邮箱')}</span><span className="font-medium">771473941@qq.com</span>
                 <span className="text-neutral-500">{t('版本来源')}</span><span className="font-medium">{t('本地开发版')}</span>
                 <span className="text-neutral-500">{t('上次检查')}</span><span><button type="button" className="settings-soft-button">{t('检查更新')}</button></span>
               </div>
@@ -1525,17 +1550,18 @@ function InlineSwitch({ checked, onChange, label }: { checked: boolean; onChange
   )
 }
 
-function SegmentedControl({ value, options, onChange }: { value: string; options: string[]; onChange: (value: string) => void }) {
+function SegmentedControl({ value, options, onChange, disabled = false }: { value: string; options: string[]; onChange: (value: string) => void; disabled?: boolean }) {
   const { t } = useI18n()
   return (
-    <div className="inline-flex overflow-hidden rounded-lg border p-0.5" style={{ background: 'var(--settings-control-bg)', borderColor: 'var(--settings-border)' }}>
+    <div className={cn('inline-flex overflow-hidden rounded-lg border p-0.5', disabled && 'opacity-60')} style={{ background: 'var(--settings-control-bg)', borderColor: 'var(--settings-border)' }}>
       {options.map((option) => (
         <button
           key={option}
           type="button"
+          disabled={disabled}
           onClick={() => onChange(option)}
           className={cn(
-            'h-7 min-w-14 rounded-md px-3 text-sm transition hover:brightness-95'
+            'h-7 min-w-14 rounded-md px-3 text-sm transition hover:brightness-95 disabled:cursor-not-allowed'
           )}
           style={{
             background: value === option ? 'var(--settings-accent-soft)' : 'transparent',
@@ -1825,83 +1851,405 @@ function Keycap({ children }: { children: React.ReactNode }) {
 }
 
 const toolRows = [
-  ['read', '读取文件'],
-  ['grep', '搜索文件内容'],
-  ['list', '列出目录内容'],
-  ['task', '委托子 Agent'],
-  ['todowrite', '管理待办事项'],
-  ['ask_user_question', '向用户询问'],
-  ['unity_yaml_search', '搜索 Unity YAML 层级'],
-  ['unity_yaml_read', '读取 Unity YAML 详情'],
-  ['knowledge_list', '列出知识文档'],
-  ['knowledge_query', '搜索知识文档'],
-  ['knowledge_read', '读取知识条目'],
-  ['knowledge_create', '创建知识条目'],
-  ['knowledge_delete', '删除知识条目'],
-  ['knowledge_move', '移动知识条目'],
-  ['knowledge_edit', '编辑知识条目'],
-]
+  ['read', '读取文件', '只读'],
+  ['grep', '搜索文件内容', '只读'],
+  ['list', '列出目录内容', '只读'],
+  ['task', '委托子 Agent', '协作'],
+  ['todowrite', '管理待办事项', '协作'],
+  ['ask_user_question', '向用户询问', '协作'],
+  ['unity_yaml_search', '搜索 Unity YAML 层级', '只读'],
+  ['unity_yaml_read', '读取 Unity YAML 详情', '只读'],
+  ['knowledge_list', '列出知识文档', '知识库'],
+  ['knowledge_query', '搜索知识文档', '知识库'],
+  ['knowledge_read', '读取知识条目', '知识库'],
+  ['knowledge_create', '创建知识条目', '写入'],
+  ['knowledge_delete', '删除知识条目', '高风险'],
+  ['knowledge_move', '移动知识条目', '写入'],
+  ['knowledge_edit', '编辑知识条目', '高风险'],
+] as const
 
-function ToolPermissionTable({ permissions, onChange }: { permissions: Record<string, string>; onChange: (name: string, value: string) => void }) {
+function ToolPermissionTable({
+  mode,
+  permissions,
+  onChange,
+}: {
+  mode: string
+  permissions: Record<string, string>
+  onChange: (name: string, value: string) => void
+}) {
   const { t } = useI18n()
+  const globalAuto = mode === 'Auto'
+  const askCount = toolRows.filter(([name]) => (permissions[name] ?? defaultAppSettings.toolPermissions[name] ?? 'Auto') === 'Ask').length
   return (
     <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
-      <div className="grid grid-cols-[1fr_auto] border-b border-neutral-200 bg-neutral-50 px-4 py-3 text-xs font-semibold text-slate-600">
+      <div className="grid grid-cols-[1fr_7rem_auto] border-b border-neutral-200 bg-neutral-50 px-4 py-3 text-xs font-semibold text-slate-600">
         <span>{t('工具')}</span>
-        <span>{t('执行方式')}</span>
+        <span>{t('类型')}</span>
+        <span>{globalAuto ? t('全局自动执行') : `${askCount} ${t('项需要确认')}`}</span>
       </div>
-      {toolRows.map(([name, desc]) => (
-        <div key={name} className="grid grid-cols-[1fr_auto] items-center border-b border-neutral-200 px-4 py-3 last:border-b-0">
+      {toolRows.map(([name, desc, scope]) => {
+        const savedValue = permissions[name] ?? defaultAppSettings.toolPermissions[name] ?? 'Auto'
+        const effectiveValue = globalAuto ? 'Auto' : savedValue
+        return (
+        <div key={name} className={cn('grid grid-cols-[1fr_7rem_auto] items-center border-b border-neutral-200 px-4 py-3 last:border-b-0', globalAuto && 'opacity-75')}>
           <div>
             <div className="font-mono text-sm font-semibold text-neutral-950">{name}</div>
             <div className="mt-1 text-xs text-slate-600">{t(desc)}</div>
           </div>
-          <SegmentedControl value={permissions[name] ?? 'Auto'} options={['Auto', 'Ask']} onChange={(value) => onChange(name, value)} />
+          <span className="text-xs font-medium text-neutral-500">{t(scope)}</span>
+          <div className="flex items-center justify-end gap-2">
+            <span className="hidden text-xs text-neutral-400 xl:inline">
+              {globalAuto ? t('继承全局') : effectiveValue === 'Ask' ? t('执行前确认') : t('自动执行')}
+            </span>
+            <SegmentedControl value={effectiveValue} options={['Auto', 'Ask']} disabled={globalAuto} onChange={(value) => onChange(name, value)} />
+          </div>
         </div>
-      ))}
+      )})}
     </div>
   )
 }
 
-const consoleRows = [
-  ['13:04:01', '后端', 'asset_db::watcher', '- Assets/AgentHub/workspace/ReadMe & Inspector Info/Icons [new-meta]'],
-  ['13:04:01', '后端', 'AssetDb Watcher', 'queue summary: pending=0, current=-, recent=1 in 8s, reasons=[new-meta=1]'],
-  ['13:03:59', '后端', 'AssetDb Watcher', 'worker 1 error processing workspace icons: No GUID in generated file metadata'],
-  ['12:53:45', '前端', 'settings', 'settings panel rendered and preferences persisted'],
-  ['12:43:29', '后端', 'agent-runtime', 'code agent stream connected, waiting for output chunks'],
-]
+type ConsoleLogLevel = 'Trace' | 'Debug' | 'Info' | 'Warn' | 'Error'
+type ConsoleLogSource = '后端' | '前端' | 'Agent' | '桌面端'
+
+interface ConsoleLogRow {
+  id: string
+  time: string
+  level: ConsoleLogLevel
+  source: ConsoleLogSource
+  module: string
+  content: string
+}
+
+const consoleLevelOptions = ['全部级别', 'Trace', 'Debug', 'Info', 'Warn', 'Error']
+const consoleSourceOptions = ['全部来源', '后端', '前端', 'Agent', '桌面端']
+
+function createConsoleSeedRows(): ConsoleLogRow[] {
+  const now = new Date()
+  const at = (minutesAgo: number) => new Date(now.getTime() - minutesAgo * 60 * 1000).toLocaleTimeString('zh-CN', { hour12: false })
+  return [
+    { id: 'log-1', time: at(0), level: 'Info', source: '后端', module: 'settings', content: '控制台已连接本地服务，等待诊断输出' },
+    { id: 'log-2', time: at(1), level: 'Debug', source: 'Agent', module: 'agent-runtime', content: 'code agent stream connected, waiting for output chunks' },
+    { id: 'log-3', time: at(3), level: 'Info', source: '前端', module: 'settings', content: 'settings panel rendered and preferences persisted' },
+    { id: 'log-4', time: at(5), level: 'Warn', source: '后端', module: 'workspace', content: 'dev server preview is not attached to a workspace session' },
+    { id: 'log-5', time: at(8), level: 'Error', source: '后端', module: 'asset_db::watcher', content: 'worker 1 error processing workspace icons: No GUID in generated file metadata' },
+    { id: 'log-6', time: at(10), level: 'Trace', source: '桌面端', module: 'sidecar', content: 'sidecar heartbeat received; service window is healthy' },
+  ]
+}
 
 function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const { t } = useI18n()
+  const [logs, setLogs] = useState<ConsoleLogRow[]>(() => createConsoleSeedRows())
+  const [level, setLevel] = useState('全部级别')
+  const [source, setSource] = useState('全部来源')
+  const [query, setQuery] = useState('')
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [generalInfo, setGeneralInfo] = useState<SettingsGeneralInfo | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [notice, setNotice] = useState('')
+  const tableRef = useRef<HTMLDivElement | null>(null)
+  const filteredLogs = useMemo(() => {
+    const keyword = query.trim().toLowerCase()
+    return logs.filter((row) => {
+      if (level !== '全部级别' && row.level !== level) return false
+      if (source !== '全部来源' && row.source !== source) return false
+      if (!keyword) return true
+      return [row.module, row.content, row.source, row.level].join(' ').toLowerCase().includes(keyword)
+    })
+  }, [level, logs, query, source])
+  const errorCount = logs.filter((row) => row.level === 'Error').length
+  const warningCount = logs.filter((row) => row.level === 'Warn').length
+  const agentCount = logs.filter((row) => row.source === 'Agent').length
+  const backendCount = logs.filter((row) => row.source === '后端').length
+
+  useEffect(() => {
+    void refreshDiagnostics(false)
+  }, [])
+
+  useEffect(() => {
+    if (!autoScroll) return
+    tableRef.current?.scrollTo({ top: tableRef.current.scrollHeight, behavior: 'smooth' })
+  }, [autoScroll, filteredLogs.length])
+
+  function appendLog(row: Omit<ConsoleLogRow, 'id' | 'time'>) {
+    setLogs((current) => [
+      ...current,
+      {
+        ...row,
+        id: `log-${Date.now()}-${current.length}`,
+        time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      },
+    ])
+  }
+
+  function showNotice(message: string) {
+    setNotice(message)
+    window.setTimeout(() => setNotice(''), 2200)
+  }
+
+  async function refreshDiagnostics(visible = true) {
+    setBusy('refresh')
+    try {
+      const info = await api.getSettingsGeneralInfo()
+      setGeneralInfo(info)
+      appendLog({
+        level: 'Info',
+        source: '后端',
+        module: 'settings/general-info',
+        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}`,
+      })
+      if (visible) showNotice(t('诊断信息已刷新'))
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '前端',
+        module: 'settings/general-info',
+        content: error?.message || '刷新诊断信息失败',
+      })
+      if (visible) showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function openPathWithFallback(path: string | undefined, label: string) {
+    if (!path) {
+      showNotice(t('路径尚未就绪'))
+      return
+    }
+    setBusy(label)
+    try {
+      const opened = await openPath(path)
+      if (!opened) await api.openLocalPath(path)
+      appendLog({ level: 'Info', source: '桌面端', module: 'open-path', content: `${label}: ${path}` })
+      showNotice(t('已打开目录'))
+    } catch (error: any) {
+      appendLog({ level: 'Error', source: '桌面端', module: 'open-path', content: error?.message || '打开目录失败' })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function copyLogs() {
+    const text = formatConsoleLogs(filteredLogs)
+    try {
+      await navigator.clipboard.writeText(text)
+      showNotice(t('已复制日志'))
+    } catch {
+      showNotice(t('复制失败'))
+    }
+  }
+
+  function exportLogs() {
+    const blob = new Blob([formatConsoleLogs(filteredLogs)], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `agenthub-console-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.log`
+    link.click()
+    URL.revokeObjectURL(url)
+    showNotice(t('已导出日志'))
+  }
+
+  function clearLogs() {
+    setLogs([])
+    showNotice(t('日志已清空'))
+  }
+
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-4">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <SegmentedControl value="全部级别" options={['全部级别', 'Trace', 'Debug', 'Info', 'Warn', 'Error']} onChange={() => undefined} />
-        <SegmentedControl value="全部来源" options={['全部来源', '后端', '前端']} onChange={() => undefined} />
-        <InlineSwitch checked onChange={() => undefined} label="自动滚动" />
-        <input className="h-8 min-w-64 flex-1 rounded-md border border-neutral-200 px-3 text-sm outline-none" placeholder={t('按模块名或日志内容筛选')} />
-        <button type="button" className="settings-soft-button">{t('刷新')}</button>
-        <button type="button" className="settings-soft-button">{t('清空日志')}</button>
-      </div>
-      <div className="mb-3 flex items-center justify-between text-sm text-slate-600">
-        <span>{t('804 条记录')}</span>
-        <span>{debugEnabled ? t('调试模式已开启') : t('调试模式已关闭')}</span>
-      </div>
-      <div className="overflow-hidden rounded-lg border border-neutral-200">
-        <div className="grid grid-cols-[6rem_5rem_14rem_1fr] bg-neutral-50 px-3 py-2 text-xs font-medium text-slate-600">
-          <span>{t('时间')}</span><span>{t('来源')}</span><span>{t('模块')}</span><span>{t('内容')}</span>
+    <div className="space-y-4">
+      {notice && (
+        <div className="rounded-xl border px-3 py-2 text-sm shadow-sm" style={{ background: 'var(--settings-accent-soft)', borderColor: 'var(--settings-active-border)', color: 'var(--settings-accent)' }}>
+          {notice}
         </div>
-        {consoleRows.map((row, index) => (
-          <div key={`${row[0]}-${index}`} className={cn('grid grid-cols-[6rem_5rem_14rem_1fr] border-t border-neutral-200 px-3 py-3 text-xs', row[3].includes('error') && 'bg-red-50/60')}>
-            <span className="font-mono">{row[0]}</span>
-            <span>{t(row[1])}</span>
-            <span className="font-mono font-semibold">{row[2]}</span>
-            <span className="font-mono leading-5">{row[3]}</span>
+      )}
+
+      <div className="grid gap-3 xl:grid-cols-4">
+        <ConsoleMetric icon={Server} label="后端日志" value={backendCount} detail={generalInfo?.storage.logDir ?? '等待刷新'} ok />
+        <ConsoleMetric icon={Activity} label="Agent 事件" value={agentCount} detail="流式输出、命令和文件变更会进入这里" ok />
+        <ConsoleMetric icon={AlertTriangle} label="警告 / 错误" value={warningCount + errorCount} detail={errorCount ? `${errorCount} 个错误需要处理` : '暂无阻塞错误'} ok={errorCount === 0} />
+        <ConsoleMetric icon={Database} label="数据与调试" value={generalInfo?.debug.sizeLabel ?? '0 B'} detail={debugEnabled ? '调试模式已开启' : '调试模式已关闭'} ok={debugEnabled} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
+        <div className="rounded-2xl border p-4 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <SegmentedControl value={level} options={consoleLevelOptions} onChange={setLevel} />
+            <SegmentedControl value={source} options={consoleSourceOptions} onChange={setSource} />
+            <InlineSwitch checked={autoScroll} onChange={setAutoScroll} label="自动滚动" />
+            <div className="relative min-w-64 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: 'var(--settings-muted-text)' }} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                className="settings-input h-9 pl-9"
+                placeholder={t('按模块名或日志内容筛选')}
+              />
+            </div>
+            <button type="button" disabled={busy === 'refresh'} onClick={() => void refreshDiagnostics()} className="settings-soft-button">
+              <RefreshCw className={cn('h-3.5 w-3.5', busy === 'refresh' && 'animate-spin')} />
+              {t('刷新')}
+            </button>
+            <button type="button" onClick={() => void copyLogs()} className="settings-soft-button">
+              <Copy className="h-3.5 w-3.5" />
+              {t('复制')}
+            </button>
+            <button type="button" onClick={exportLogs} className="settings-soft-button">
+              <Download className="h-3.5 w-3.5" />
+              {t('导出')}
+            </button>
+            <button type="button" onClick={clearLogs} className="settings-soft-button">{t('清空日志')}</button>
           </div>
-        ))}
+
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm" style={{ color: 'var(--settings-muted-text)' }}>
+            <span>{filteredLogs.length} / {logs.length} {t('条记录')}</span>
+            <span>{debugEnabled ? t('调试模式已开启') : t('调试模式已关闭')}</span>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border" style={{ borderColor: 'var(--settings-border)' }}>
+            <div className="grid grid-cols-[6rem_5rem_5rem_13rem_1fr] px-3 py-2 text-xs font-semibold" style={{ background: 'var(--settings-panel-muted)', color: 'var(--settings-muted-text)' }}>
+              <span>{t('时间')}</span><span>{t('级别')}</span><span>{t('来源')}</span><span>{t('模块')}</span><span>{t('内容')}</span>
+            </div>
+            <div ref={tableRef} className="max-h-[430px] overflow-auto">
+              {filteredLogs.length === 0 ? (
+                <div className="px-3 py-10 text-center text-sm" style={{ color: 'var(--settings-muted-text)' }}>
+                  {logs.length ? t('没有匹配的日志') : t('日志已清空，刷新后会重新写入诊断记录')}
+                </div>
+              ) : (
+                filteredLogs.map((row) => (
+                  <div
+                    key={row.id}
+                    className="grid grid-cols-[6rem_5rem_5rem_13rem_1fr] border-t px-3 py-3 text-sm"
+                    style={{
+                      borderColor: 'var(--settings-border)',
+                      background: row.level === 'Error' ? 'var(--settings-danger-bg)' : row.level === 'Warn' ? 'rgba(245, 158, 11, 0.08)' : 'transparent',
+                    }}
+                  >
+                    <span className="font-mono text-xs" style={{ color: 'var(--settings-muted-text)' }}>{row.time}</span>
+                    <span><ConsoleLevelPill level={row.level} /></span>
+                    <span className="font-medium" style={{ color: 'var(--settings-text)' }}>{t(row.source)}</span>
+                    <span className="truncate font-mono text-xs font-semibold" style={{ color: 'var(--settings-text)' }} title={row.module}>{row.module}</span>
+                    <span className="font-mono text-xs leading-5" style={{ color: 'var(--settings-text)' }}>{row.content}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <ConsoleDiagnosticCard
+            icon={Database}
+            title="本地数据"
+            status={generalInfo?.storage.exists ? '目录可用' : '等待刷新'}
+            detail={generalInfo?.storage.activeDataDir ?? '会话、配置、日志会写入 App Data'}
+            action="打开日志目录"
+            busy={busy === 'log'}
+            onAction={() => void openPathWithFallback(generalInfo?.storage.logDir, 'log')}
+          />
+          <ConsoleDiagnosticCard
+            icon={TerminalSquare}
+            title="调试输出"
+            status={debugEnabled ? '正在记录' : '未开启'}
+            detail={generalInfo?.debug.dir ?? '可在通用设置中开启调试模式'}
+            action="打开调试目录"
+            busy={busy === 'debug'}
+            onAction={() => void openPathWithFallback(generalInfo?.debug.dir, 'debug')}
+          />
+          <ConsoleDiagnosticCard
+            icon={GitBranch}
+            title="Git 运行时"
+            status={generalInfo?.git.ok ? '可用' : '未检测到'}
+            detail={generalInfo?.git.runtime ?? '用于 diff、撤回和文件变更分析'}
+          />
+          <ConsoleDiagnosticCard
+            icon={FileText}
+            title="Python 运行时"
+            status={generalInfo?.python.ok ? '可用' : '未检测到'}
+            detail={generalInfo?.python.runtime ?? '用于脚本工具和文档处理'}
+          />
+        </div>
       </div>
     </div>
   )
+}
+
+function ConsoleMetric({ icon: Icon, label, value, detail, ok }: { icon: LucideIcon; label: string; value: number | string; detail: string; ok: boolean }) {
+  const { t } = useI18n()
+  return (
+    <div className="rounded-2xl border p-4 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
+      <div className="mb-4 flex items-center justify-between">
+        <span className="grid h-9 w-9 place-items-center rounded-xl" style={{ background: 'var(--settings-accent-soft)', color: 'var(--settings-accent)' }}>
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className={cn('h-2.5 w-2.5 rounded-full', ok ? 'bg-emerald-500' : 'bg-amber-500')} />
+      </div>
+      <div className="text-2xl font-semibold" style={{ color: 'var(--settings-text)' }}>{value}</div>
+      <div className="mt-1 text-sm font-medium" style={{ color: 'var(--settings-text)' }}>{t(label)}</div>
+      <div className="mt-2 truncate text-xs" style={{ color: 'var(--settings-muted-text)' }} title={detail}>{t(detail)}</div>
+    </div>
+  )
+}
+
+function ConsoleLevelPill({ level }: { level: ConsoleLogLevel }) {
+  const color =
+    level === 'Error'
+      ? 'text-red-600 bg-red-50 border-red-200'
+      : level === 'Warn'
+        ? 'text-amber-700 bg-amber-50 border-amber-200'
+        : level === 'Info'
+          ? 'text-sky-700 bg-sky-50 border-sky-200'
+          : level === 'Debug'
+            ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+            : 'text-neutral-600 bg-neutral-50 border-neutral-200'
+  return <span className={cn('inline-flex h-6 items-center rounded-full border px-2 text-xs font-semibold', color)}>{level}</span>
+}
+
+function ConsoleDiagnosticCard({
+  icon: Icon,
+  title,
+  status,
+  detail,
+  action,
+  busy,
+  onAction,
+}: {
+  icon: LucideIcon
+  title: string
+  status: string
+  detail: string
+  action?: string
+  busy?: boolean
+  onAction?: () => void
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="rounded-2xl border p-4 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
+      <div className="flex items-start gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl" style={{ background: 'var(--settings-panel-muted)', color: 'var(--settings-accent)' }}>
+          <Icon className="h-4 w-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t(title)}</div>
+            <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ background: 'var(--settings-accent-soft)', color: 'var(--settings-accent)' }}>{t(status)}</span>
+          </div>
+          <div className="mt-2 break-all text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>{t(detail)}</div>
+          {onAction && action && (
+            <button type="button" disabled={busy} onClick={onAction} className="settings-soft-button mt-3">
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+              {t(action)}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function formatConsoleLogs(rows: ConsoleLogRow[]) {
+  return rows.map((row) => `[${row.time}] ${row.level.padEnd(5)} ${row.source} ${row.module} - ${row.content}`).join('\n')
 }
 
 function SmallToggle({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
@@ -2009,7 +2357,6 @@ function sectionDescription(section: SectionKey) {
     显示: '调整主题、强调色、字体尺寸和聊天阅读密度。',
     快捷键: '管理高频操作快捷键，提升聊天和编程效率。',
     模型管理: '管理可用模型、API 端点、密钥变量和连接测试状态。',
-    默认模型: '选择默认模型，并让聊天后端同步使用当前模型配置。',
     工具权限: '配置 Agent 可调用的工具、MCP 服务、自动化钩子和敏感操作确认。',
     归档会话: '管理归档会话的保留、恢复和清理策略。',
     控制台: '管理外部连接、Git、本地环境、工作树和浏览器预览环境。',
