@@ -19,7 +19,8 @@
     "generate": "drizzle-kit generate",
     "migrate": "bun run src/migrate.ts",
     "studio": "drizzle-kit studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "drizzle-orm": "^0.36.0"

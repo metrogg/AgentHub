@@ -36,6 +36,30 @@ const probes: ToolProbe[] = [
   { id: 'opencode', command: 'opencode' },
 ]
 
+const agentAdapters = [
+  {
+    id: 'codex',
+    name: 'Codex CLI',
+    command: 'codex',
+    envKey: 'OPENAI_API_KEY',
+    docsHint: 'Codex 会使用本机安装的 CLI，并在当前项目目录中执行代码任务。',
+  },
+  {
+    id: 'claude-code',
+    name: 'Claude Code',
+    command: 'claude',
+    envKey: 'ANTHROPIC_API_KEY',
+    docsHint: 'Claude Code 会使用本机 Anthropic 凭据，并优先读取项目上下文。',
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    command: 'opencode',
+    envKey: 'DEEPSEEK_API_KEY',
+    docsHint: 'OpenCode 会使用本机配置；如果 Agent 绑定了 provider/model，会通过 --model 传给 OpenCode。',
+  },
+] as const
+
 const cliPackages = [
   '@openai/codex@0.42.0',
   '@anthropic-ai/claude-code@2.1.146',
@@ -53,6 +77,31 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   .get('/status', async (c) => {
     const items = await probeTools(probes)
     return c.json({ platform: process.platform, localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES, items })
+  })
+  .get('/agent-adapters', async (c) => {
+    const statuses = new Map((await probeTools(probes)).map((item) => [item.id, item]))
+    const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION')?.trim() === 'true'
+    return c.json({
+      platform: process.platform,
+      localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES,
+      executionEnabled,
+      items: agentAdapters.map((adapter) => {
+        const status = statuses.get(adapter.id)
+        const installed = Boolean(status?.installed)
+        const configured = Boolean(status?.configured)
+        return {
+          ...adapter,
+          installed,
+          configured,
+          version: status?.version ?? null,
+          configEnv: status?.configEnv ?? adapter.envKey,
+          configMessage: status?.configMessage ?? 'CLI 探测状态不可用。',
+          executionEnabled,
+          ready: installed && configured && executionEnabled,
+          readiness: adapterReadiness({ installed, configured, executionEnabled }),
+        }
+      }),
+    })
   })
   .get('/native/status', async (c) => {
     const skills = await globalSkillRegistry.listSkills()
@@ -686,6 +735,13 @@ function configMessage(options: {
   if (options.configured) return `${options.runtime}已检测到运行配置。`
   if (options.toolId === 'codex') return `${options.runtime}缺少 ${options.configEnv} 或 ChatGPT 登录状态。`
   return `${options.runtime}缺少 ${options.configEnv}。`
+}
+
+function adapterReadiness(options: { installed: boolean; configured: boolean; executionEnabled: boolean }) {
+  if (!options.installed) return 'CLI 未安装'
+  if (!options.configured) return '凭据或本机配置未就绪'
+  if (!options.executionEnabled) return '自动执行开关未开启'
+  return '可执行'
 }
 
 function quoteForCmd(value: string) {

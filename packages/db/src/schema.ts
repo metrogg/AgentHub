@@ -64,15 +64,52 @@ export const workspaceAgents = sqliteTable('workspace_agents', {
   createdAt: now(),
 })
 
+export interface AgentArtifact {
+  id: string
+  kind: 'diff' | 'file' | 'preview' | 'deploy' | 'log'
+  title: string
+  description?: string
+  source?: string
+  createdAt?: string
+  // diff
+  filePath?: string
+  status?: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+  language?: string
+  diff?: string
+  // preview
+  url?: string
+  previewKind?: 'dev-server' | 'static-html' | 'iframe'
+  // file
+  path?: string
+  mimeType?: string
+  size?: number
+  // deploy
+  provider?: 'vercel' | 'static' | 'unknown'
+  logs?: string[]
+}
+
 export const workspaceTasks = sqliteTable('workspace_tasks', {
   id: id(),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   agentId: text('agent_id'),
   title: text('title').notNull(),
   description: text('description').notNull().default(''),
-  status: text('status', { enum: ['pending', 'running', 'done'] }).notNull().default('pending'),
+  status: text('status', { enum: ['pending', 'running', 'done', 'failed', 'cancelled'] }).notNull().default('pending'),
   sessionId: text('session_id'),
   orderIdx: integer('order_idx').notNull().default(0),
+
+  // === 新增字段：DAG 调度支持 ===
+  runId: text('run_id'),
+  dependencies: text('dependencies', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  parallelGroup: text('parallel_group'),
+  maxRetries: integer('max_retries').notNull().default(2),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  fallbackAgentId: text('fallback_agent_id'),
+  artifacts: text('artifacts', { mode: 'json' }).$type<AgentArtifact[]>().notNull().default([]),
+  startedAt: ts('started_at'),
+  completedAt: ts('completed_at'),
+  errorLog: text('error_log'),
+
   createdAt: now(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })
@@ -94,6 +131,35 @@ export const messages = sqliteTable('messages', {
   content: text('content').notNull(),
   metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
   createdAt: now(),
+})
+
+export interface ConflictReport {
+  filePath: string
+  baseContent: string
+  variants: Array<{
+    agentId: string
+    agentName: string
+    diff: string
+    fullContent?: string
+  }>
+  resolution: 'auto-merged' | 'llm-resolved' | 'needs-human'
+  mergedContent?: string
+  notes?: string
+}
+
+export const orchestratorRuns = sqliteTable('orchestrator_runs', {
+  id: id(),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  groupSessionId: text('group_session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  planMessageId: text('plan_message_id').references(() => messages.id),
+  status: text('status', {
+    enum: ['planning', 'running', 'synthesizing', 'completed', 'failed', 'cancelled'],
+  }).notNull().default('planning'),
+  plan: text('plan', { mode: 'json' }),
+  summaryMessageId: text('summary_message_id').references(() => messages.id),
+  conflictReport: text('conflict_report', { mode: 'json' }).$type<ConflictReport[]>(),
+  createdAt: now(),
+  updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })
 
 export const agents = sqliteTable('agents', {

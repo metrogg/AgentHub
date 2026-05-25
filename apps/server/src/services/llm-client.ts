@@ -300,15 +300,22 @@ export async function testLlmConnection(input: TestConnectionInput) {
     'settings'
   )
 
+  // 如果 model 是默认值，提示用户确认模型 ID 是否正确
+  const isDefaultModel = !clean(input.modelId)
+
   try {
     const res = isAnthropicProvider(config.provider, config.baseUrl)
       ? await testAnthropicMessage(config)
       : await testOpenAICompatibleMessage(config)
     if (!res.ok) {
+      let message = await formatHttpError('连接测试', res, config)
+      if (res.status === 400 && isDefaultModel) {
+        message += `（提示：未提供 modelId，使用了默认模型 "${config.model}"。如果使用的是第三方兼容 API，请在模型配置中填写正确的模型 ID。）`
+      }
       return {
         ok: false,
         status: res.status,
-        message: await formatHttpError('连接测试', res, config),
+        message,
       }
     }
 

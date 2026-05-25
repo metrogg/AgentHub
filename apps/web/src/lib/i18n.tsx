@@ -264,6 +264,8 @@ const zhToEn: Record<string, string> = {
   编辑模型: 'Edit Model',
   '提示：模型变更会自动保存并同步到聊天后端。不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。':
     'Tip: model changes are auto-saved and synced to the chat backend. CLI tool configs with different API protocols are managed on the Coding Tools page.',
+  '提示：模型变更会自动保存并同步到聊天后端。当前是本地单用户 Demo 模式，API Key 会保存在本机 SQLite settings 中；不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。':
+    'Tip: model changes are auto-saved and synced to the chat backend. This is a local single-user demo mode, so API keys are stored in the local SQLite settings table. CLI tool configs with different API protocols are managed on the Coding Tools page.',
   自动保存中: 'Auto-saving',
   已自动保存: 'Auto-saved',
   自动保存失败: 'Auto-save failed',

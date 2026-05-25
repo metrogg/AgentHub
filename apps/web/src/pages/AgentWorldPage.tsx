@@ -149,6 +149,7 @@ export default function AgentWorldPage() {
   const pendingCount = tasks.filter((task) => task.status === 'pending').length
   const runningCount = tasks.filter((task) => task.status === 'running').length
   const doneCount = tasks.filter((task) => task.status === 'done').length
+  const failedCount = tasks.filter((task) => task.status === 'failed').length
   const dispatchedCount = tasks.filter((task) => Boolean(task.sessionId)).length
 
   useEffect(() => {
@@ -492,6 +493,7 @@ export default function AgentWorldPage() {
                   <Stat value={agents.length} label="Agent 成员" />
                   <Stat value={tasks.length} label="任务总数" />
                   <Stat value={runningCount} label="进行中" />
+                  <Stat value={failedCount} label="失败" />
                   <Stat value={dispatchedCount} label="已开会话" />
                 </div>
 
@@ -583,6 +585,7 @@ export default function AgentWorldPage() {
                         <MiniStat value={pendingCount} label="待分派" />
                         <MiniStat value={runningCount} label="推进中" />
                         <MiniStat value={doneCount} label="完成" />
+                        <MiniStat value={failedCount} label="失败" />
                       </div>
                       <button
                         type="button"
@@ -1258,7 +1261,7 @@ function TaskRow({
             className="inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
           >
             {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            {task.sessionId ? '重新进入' : '分派'}
+            {task.status === 'failed' ? '重试' : task.sessionId ? '重新分派' : '分派'}
           </button>
           <button type="button" onClick={onDelete} className="grid h-9 w-9 place-items-center rounded-xl text-neutral-300 hover:bg-red-50 hover:text-red-500">
             <Trash2 className="h-4 w-4" />
@@ -1302,17 +1305,20 @@ function Rule({ title, text }: { title: string; text: string }) {
 function nextStatus(status: TaskStatus): TaskStatus {
   if (status === 'pending') return 'running'
   if (status === 'running') return 'done'
+  if (status === 'done') return 'failed'
   return 'pending'
 }
 
 function statusLabel(status: TaskStatus) {
   if (status === 'pending') return '待分派'
   if (status === 'running') return '进行中'
+  if (status === 'failed') return '失败'
   return '已完成'
 }
 
 function statusDot(status: TaskStatus) {
   if (status === 'pending') return 'bg-neutral-300'
   if (status === 'running') return 'bg-blue-500'
+  if (status === 'failed') return 'bg-red-500'
   return 'bg-emerald-500'
 }

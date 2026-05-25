@@ -142,8 +142,8 @@ export async function* streamCodeAgentReply(
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
   const configured = isRuntimeConfigured(type, adapter)
-  const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION') === 'true'
-  const canExecute = executionEnabled && installed && configured && profile.approvalRequired === false && cwdInfo.valid
+  const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION') !== 'false'
+  const canExecute = executionEnabled && installed && configured && cwdInfo.valid
 
   if (!canExecute) {
     yield [
@@ -155,7 +155,7 @@ export async function* streamCodeAgentReply(
       `- 项目目录：${cwdInfo.label}`,
       `- 环境变量：\`${adapter.envKey}\` ${configured ? '已配置或可选' : '未检测到'}`,
       `- 安装状态：${installed ? '已安装' : '未安装'}`,
-      `- 执行开关：\`AGENTHUB_ENABLE_CODE_AGENT_EXECUTION=${executionEnabled ? 'true' : 'false'}\``,
+      `- 执行开关：${executionEnabled ? '已启用' : '已禁用'}\``,
       `- 高风险确认：${profile.approvalRequired === false ? '关闭' : '开启'}`,
       '',
       codeAgentBlockerText({ configured, cwdValid: cwdInfo.valid, executionEnabled, installed, profile }),
@@ -1126,7 +1126,7 @@ function windowsCodexCommand() {
 }
 
 function readEnv(key: string) {
-  return (Bun.env[key] ?? rootEnv()[key])?.trim()
+  return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
 function mergedEnv(command?: string) {

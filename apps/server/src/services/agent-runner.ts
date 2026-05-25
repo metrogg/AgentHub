@@ -1,10 +1,8 @@
 import { db, messages, eq, desc } from '@agenthub/db'
-import { streamReply } from './llm'
-import { isCodeAgentProfile, streamCodeAgentReply, type CodeAgentMetadataChunk } from './code-agent-adapter'
-import { isNativeAgentProfile, streamNativeAgentReply } from './native-agent-loop'
-import { pushStarOfficeAgentState, starOfficeStateForProfile } from './star-office-bridge'
 import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
+import { runtimeRegistry } from './runtime'
+import type { AgentProfile, AgentOutputChunk } from './runtime'
 
 export interface MessageRow {
   id: string
@@ -17,25 +15,15 @@ export interface MessageRow {
   createdAt: Date
 }
 
-export interface AgentRunProfile {
-  id: string
-  name: string
-  role?: string
-  description?: string
-  systemPrompt?: string
-  color?: string
-  modelId?: string | null
-  runtimeType?: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | null
-  capabilityTags?: string[]
-  toolPermissions?: string[]
-  sandboxPolicy?: 'read-only' | 'workspace-write' | 'danger-full-access'
-  contextPolicy?: 'recent-only' | 'pinned-recent' | 'workspace-aware'
-  approvalRequired?: boolean
-  projectPath?: string | null
+// 保持向后兼容：AgentRunProfile 是 AgentProfile 的别名
+export type AgentRunProfile = AgentProfile
+
+export interface AgentRunResult {
+  ok: boolean
+  cancelled?: boolean
+  messageId?: string
 }
 
-// In-memory map: sessionId -> Set of connected websockets
 const sessionRooms = new Map<string, Set<ServerWebSocket<unknown>>>()
 const activeRuns = new Map<string, { cancelled: boolean; controller: AbortController }>()
 
@@ -98,28 +86,11 @@ export function getActiveRunSessionIds() {
   return Array.from(activeRuns.keys())
 }
 
-function buildAgentSystem(profile?: AgentRunProfile) {
-  if (!profile) return undefined
-  return [
-    profile.systemPrompt || `你是 ${profile.name}，AgentHub 中的协作智能体。`,
-    profile.role ? `你在群聊中的角色：${profile.role}。` : '',
-    profile.description ? `能力摘要：${profile.description}。` : '',
-    profile.runtimeType ? `运行时绑定：${profile.runtimeType}${profile.codeAgentType ? `（${profile.codeAgentType}）` : ''}。` : '',
-    profile.capabilityTags?.length ? `能力标签：${profile.capabilityTags.join('、')}。` : '',
-    profile.toolPermissions?.length ? `允许的工具范围：${profile.toolPermissions.join('、')}。` : '允许的工具范围：仅聊天。',
-    profile.sandboxPolicy ? `沙箱策略：${profile.sandboxPolicy}。` : '',
-    profile.contextPolicy ? `上下文策略：${profile.contextPolicy}。` : '',
-    profile.projectPath ? `项目工作区路径：${profile.projectPath}。` : '',
-    profile.approvalRequired
-      ? '如果用户请求可能修改文件、运行命令、访问网络、部署或接触密钥，请先请求用户明确确认，再执行或给出执行指令。'
-      : '',
-    '你正在多 Agent 群聊中回复。请聚焦自己的角色，用中文给出清晰、可执行的回答；如需要其他 Agent 接续，请明确写出交接需求。',
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-export async function runAgentReply(sessionId: string, userMsg: MessageRow, profile?: AgentRunProfile) {
+export async function runAgentReply(
+  sessionId: string,
+  userMsg: MessageRow,
+  profile?: AgentProfile,
+): Promise<AgentRunResult> {
   cancelAgentReply(sessionId)
   const run = { cancelled: false, controller: new AbortController() }
   activeRuns.set(sessionId, run)
@@ -127,9 +98,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   const agentId = profile?.id ?? 'claude'
   const agentName = profile?.name ?? 'Claude'
   logger.info({ sessionId, msgId: userMsg.id, agentId }, 'Agent reply started')
-  void pushStarOfficeAgentState(profile, starOfficeStateForProfile(profile), `${agentName} 正在处理任务`)
 
-  // Fetch recent message history as context
   const history = await db
     .select()
     .from(messages)
@@ -139,49 +108,69 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
 
   const historyAsc = history.slice().reverse()
 
-  const llmMessages = historyAsc.map((m) => ({
-    role: (m.senderType === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-    content: m.content,
-  }))
-
-  // Generate a temporary streaming message ID
   const streamMsgId = crypto.randomUUID()
 
-  // Notify frontend that agent is typing
   broadcast(sessionId, {
     type: 'agent:typing',
     payload: { sessionId, agentId, agentName },
   })
 
   let fullContent = ''
-  let codeAgentRun: CodeAgentMetadataChunk['metadata'] | null = null
-  const selectedModelId =
-    profile?.modelId ?? (typeof userMsg.metadata?.modelId === 'string' ? userMsg.metadata.modelId : undefined)
-  const replyStream =
-    profile && isCodeAgentProfile(profile)
-      ? streamCodeAgentReply(profile, userMsg, historyAsc, run.controller.signal)
-      : profile && isNativeAgentProfile(profile)
-      ? streamNativeAgentReply(profile, userMsg, historyAsc, run.controller.signal)
-      : streamReply(llmMessages, buildAgentSystem(profile), selectedModelId, run.controller.signal)
+  let failed = false
+  let codeAgentRun: Record<string, unknown> | null = null
+  const artifacts: Array<Record<string, unknown>> = []
 
   try {
-    for await (const delta of replyStream) {
-      if (run.cancelled) break
-      if (typeof delta !== 'string') {
-        if (delta.kind === 'code-agent-metadata') {
-          codeAgentRun = delta.metadata
-          broadcast(sessionId, {
-            type: 'message:metadata',
-            payload: { sessionId, messageId: streamMsgId, codeAgentRun },
-          })
-        }
-        continue
+    if (profile) {
+      const runtime = runtimeRegistry.resolveForProfile(profile)
+      const ctx = {
+        sessionId,
+        prompt: userMsg.content,
+        history: historyAsc.map((m) => ({ senderType: m.senderType, content: m.content })),
+        profile,
+        signal: run.controller.signal,
+        workspacePath: profile.projectPath ?? null,
       }
-      fullContent += delta
-      broadcast(sessionId, {
-        type: 'message:stream',
-        payload: { sessionId, messageId: streamMsgId, delta },
-      })
+
+      for await (const chunk of runtime.execute(ctx)) {
+        if (run.cancelled) break
+        switch (chunk.kind) {
+          case 'text':
+            fullContent += chunk.text
+            broadcast(sessionId, {
+              type: 'message:stream',
+              payload: { sessionId, messageId: streamMsgId, delta: chunk.text },
+            })
+            break
+          case 'metadata':
+            if (chunk.metadata && typeof chunk.metadata === 'object') {
+              codeAgentRun = chunk.metadata as Record<string, unknown>
+              broadcast(sessionId, {
+                type: 'message:metadata',
+                payload: { sessionId, messageId: streamMsgId, codeAgentRun: chunk.metadata },
+              })
+            }
+            break
+          case 'artifact':
+            artifacts.push(chunk.artifact as unknown as Record<string, unknown>)
+            break
+        }
+      }
+    } else {
+      // 无 profile 时回退到默认 LLM
+      const { streamReply } = await import('./llm')
+      const llmMessages = historyAsc.map((m) => ({
+        role: (m.senderType === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: m.content,
+      }))
+      for await (const delta of streamReply(llmMessages, undefined, undefined, run.controller.signal)) {
+        if (run.cancelled) break
+        fullContent += delta
+        broadcast(sessionId, {
+          type: 'message:stream',
+          payload: { sessionId, messageId: streamMsgId, delta },
+        })
+      }
     }
   } catch (error: any) {
     if (run.cancelled || isAbortError(error)) {
@@ -189,21 +178,20 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
     } else {
       const message = error?.message || 'Agent 回复失败'
       logger.error({ err: message, sessionId, agentId }, 'Agent reply failed')
-      void pushStarOfficeAgentState(profile, 'error', `${agentName} 执行失败：${message}`)
       fullContent = `\n\n[错误：${message}]`
     }
   }
 
   if (activeRuns.get(sessionId) === run) activeRuns.delete(sessionId)
+  if (looksLikeAgentFailure(fullContent)) failed = true
 
   if (run.cancelled) {
-    void pushStarOfficeAgentState(profile, 'idle', `${agentName} 已停止`)
     if (!fullContent.trim()) {
       broadcast(sessionId, {
         type: 'message:cancelled',
         payload: { sessionId },
       })
-      return
+      return { ok: false, cancelled: true }
     }
     fullContent = `${fullContent.trimEnd()}\n\n[用户已停止]`
   }
@@ -216,7 +204,6 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
     })
   }
 
-  // Save the final agent message to DB
   const [agentMsg] = await db
     .insert(messages)
     .values({
@@ -236,7 +223,7 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
             sandboxPolicy: profile.sandboxPolicy ?? null,
             projectPath: profile.projectPath ?? null,
             codeAgentRun,
-            artifacts: codeAgentRun?.artifacts ?? [],
+            artifacts: codeAgentRun?.artifacts ?? artifacts,
           }
         : null,
     })
@@ -248,9 +235,22 @@ export async function runAgentReply(sessionId: string, userMsg: MessageRow, prof
   })
 
   logger.info({ sessionId, msgId: agentMsg?.id, length: fullContent.length }, 'Agent reply completed')
-  void pushStarOfficeAgentState(profile, 'idle', `${agentName} 已完成任务`)
+  return { ok: !failed, cancelled: false, messageId: agentMsg?.id }
 }
 
 function isAbortError(error: any) {
   return error?.name === 'AbortError' || /abort|cancel/i.test(error?.message || '')
+}
+
+function looksLikeAgentFailure(content: string) {
+  return (
+    /^\s*\[Error:/i.test(content) ||
+    /\n\s*\[Error:/i.test(content) ||
+    /^\s*\[错误[：:]/i.test(content) ||
+    /\n\s*\[错误[：:]/i.test(content) ||
+    /API key is not configured/i.test(content) ||
+    /API Key 未配置/.test(content) ||
+    /Model returned an empty response/i.test(content) ||
+    /模型返回了空响应/.test(content)
+  )
 }

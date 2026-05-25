@@ -73,7 +73,7 @@ const updateTaskSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(4000).optional(),
   agentId: z.string().nullable().optional(),
-  status: z.enum(['pending', 'running', 'done']).optional(),
+  status: z.enum(['pending', 'running', 'done', 'failed']).optional(),
 })
 
 // ---------- Helpers ----------
@@ -333,7 +333,7 @@ function workspaceAgentRunProfile(agent: typeof workspaceAgents.$inferSelect, pr
     color: agent.color,
     modelId: agent.modelId,
     runtimeType: agent.runtimeType,
-    codeAgentType: agent.codeAgentType,
+    codeAgentType: agent.codeAgentType ?? undefined,
     capabilityTags: agent.capabilityTags,
     toolPermissions: agent.toolPermissions,
     sandboxPolicy: agent.sandboxPolicy,
@@ -341,6 +341,13 @@ function workspaceAgentRunProfile(agent: typeof workspaceAgents.$inferSelect, pr
     approvalRequired: agent.approvalRequired,
     projectPath: cleanProjectPath(projectPath),
   }
+}
+
+async function markWorkspaceTaskAfterRun(taskId: string, ok: boolean) {
+  await db
+    .update(workspaceTasks)
+    .set({ status: ok ? 'done' : 'failed', updatedAt: new Date() })
+    .where(eq(workspaceTasks.id, taskId))
 }
 
 // ---------- Routes ----------
@@ -640,13 +647,18 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     if (userMsg) {
       import('../services/agent-runner').then(({ runAgentReply }) => {
         runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined)
-          .then(async () => {
+          .then(async (result) => {
             await db
               .update(workspaceTasks)
-              .set({ status: 'done', updatedAt: new Date() })
+              .set({ status: result.ok ? 'done' : 'failed', updatedAt: new Date() })
               .where(eq(workspaceTasks.id, taskId))
           })
-          .catch(() => {})
+          .catch(async (err) => {
+            await db
+              .update(workspaceTasks)
+              .set({ status: 'failed', updatedAt: new Date(), errorLog: err?.message || 'Agent execution failed' })
+              .where(eq(workspaceTasks.id, taskId))
+          })
       })
     }
 

@@ -155,6 +155,29 @@ export interface CodingToolStatusResponse {
   runtime?: 'local' | 'host'
 }
 
+export interface AgentAdapterCatalogItem {
+  id: 'codex' | 'claude-code' | 'opencode'
+  name: string
+  command: string
+  envKey: string
+  docsHint: string
+  installed: boolean
+  configured: boolean
+  version: string | null
+  configEnv: string
+  configMessage: string
+  executionEnabled: boolean
+  ready: boolean
+  readiness: string
+}
+
+export interface AgentAdapterCatalogResponse {
+  platform: string
+  localCliProbesEnabled: boolean
+  executionEnabled: boolean
+  items: AgentAdapterCatalogItem[]
+}
+
 export interface CliInstallAction {
   code?: number
   items?: CodingToolStatus[]
@@ -331,7 +354,18 @@ export interface AgentConfigInput {
   approvalRequired?: boolean
 }
 
-export type TaskStatus = 'pending' | 'running' | 'done'
+export type AgentDraft = Required<Omit<AgentConfigInput, 'avatar' | 'modelId' | 'codeAgentType'>> & {
+  avatar?: string | null
+  modelId?: string | null
+  codeAgentType?: WorkspaceAgent['codeAgentType']
+}
+
+export interface AgentDraftConfirmResult {
+  agent: WorkspaceAgent
+  message: Message
+}
+
+export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
 
 export interface WorkspaceTask {
   id: string
@@ -465,6 +499,21 @@ export const api = {
       `/messages/${sessionId}/orchestrator-plan/${messageId}/dispatch`,
       { method: 'POST' }
     ),
+  createArtifactDemo: (sessionId: string, content: string) =>
+    request<Message>(`/messages/${sessionId}/artifact-demo`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  createAgentDraft: (sessionId: string, content: string) =>
+    request<Message>(`/messages/${sessionId}/agent-draft`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+  confirmAgentDraft: (sessionId: string, messageId: string, draft: AgentDraft) =>
+    request<AgentDraftConfirmResult>(`/messages/${sessionId}/agent-draft/${messageId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ draft }),
+    }),
 
   // Settings (map-based)
   getSettings: () => request<Record<string, string>>('/settings'),
@@ -500,6 +549,8 @@ export const api = {
           body: JSON.stringify({ tools }),
         })
       : request<CodingToolStatusResponse>('/coding-tools/status'),
+  getAgentAdapters: () =>
+    request<AgentAdapterCatalogResponse>('/coding-tools/agent-adapters'),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
   getOpencodeModels: () =>
@@ -611,6 +662,8 @@ export const api = {
     request<{ sessionId: string }>(`/workspaces/${id}/summary`, { method: 'POST' }),
   openWorkspaceGroupSession: (id: string) =>
     request<{ session: Session }>(`/workspaces/${id}/group-session`, { method: 'POST' }),
+  openWorkspaceAgentSession: (id: string, agentId: string) =>
+    request<{ session: Session }>(`/workspaces/${id}/agents/${agentId}/session`, { method: 'POST' }),
 }
 
 export function mentionsOrchestrator(content: string) {

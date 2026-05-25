@@ -1,8 +1,10 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { extname, resolve } from 'node:path'
+import { extname, resolve, relative, isAbsolute } from 'node:path'
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+
+const WORKSPACE_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 
 export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -15,6 +17,12 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     if (ext !== '.html' && ext !== '.htm') {
       throw new HTTPException(400, { message: 'Only HTML files can be previewed' })
     }
+
+    const rel = relative(WORKSPACE_ROOT, filePath)
+    if (rel.startsWith('..') || isAbsolute(rel)) {
+      throw new HTTPException(403, { message: 'Access denied: path outside workspace' })
+    }
+
     if (!existsSync(filePath) || !statSync(filePath).isFile()) {
       throw new HTTPException(404, { message: 'Preview file not found' })
     }
