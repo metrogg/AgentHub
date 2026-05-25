@@ -1,3 +1,4 @@
+import type { BlackboardRef } from '../blackboard'
 import type { AgentProfile } from '../runtime'
 
 export interface ExecutionPlan {
@@ -32,6 +33,8 @@ export interface ExecutionTask {
   dependencies: string[]
   parallelGroup?: string
   maxRetries: number
+  retryCount?: number
+  timeout?: number
   fallbackAgentId?: string
 }
 
@@ -42,6 +45,7 @@ export interface TaskResult {
   status: 'done' | 'failed' | 'cancelled'
   output: string
   artifacts: Array<Record<string, unknown>>
+  outputRef?: BlackboardRef
   startedAt?: Date
   completedAt?: Date
   error?: string
