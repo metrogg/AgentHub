@@ -214,14 +214,28 @@ export const messagesRelations = relations(messages, ({ one }) => ({
 
 export const blackboardEntries = sqliteTable('blackboard_entries', {
   id: id(),
-  namespace: text('namespace').notNull(), // e.g. "workspace/{id}/run/{runId}"
+  namespace: text('namespace').notNull(),
   key: text('key').notNull(),
   value: text('value', { mode: 'json' }).notNull(),
   schemaVersion: integer('schema_version').notNull().default(1),
-  agentId: text('agent_id'), // 写入者
-  taskId: text('task_id'), // 关联任务
+  agentId: text('agent_id'),
+  taskId: text('task_id'),
   version: integer('version').notNull().default(1),
   tags: text('tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  createdAt: now(),
+})
+
+export const executionLogs = sqliteTable('execution_logs', {
+  id: id(),
+  runId: text('run_id').notNull(),
+  sessionId: text('session_id').notNull(),
+  agentId: text('agent_id').notNull(),
+  taskId: text('task_id'),
+  type: text('type', { enum: ['llm_call', 'tool_call', 'blackboard_read', 'blackboard_write', 'error', 'task_start', 'task_end'] }).notNull(),
+  input: text('input', { mode: 'json' }),
+  output: text('output', { mode: 'json' }),
+  durationMs: integer('duration_ms'),
+  tokenUsage: text('token_usage', { mode: 'json' }),
   createdAt: now(),
 })
 

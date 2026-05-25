@@ -3,6 +3,7 @@ import { logger } from '../../lib/logger'
 import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
 import { blackboard, Blackboard, type BlackboardRef } from '../blackboard'
+import { executionTracer } from '../execution-tracer'
 import { Planner } from './planner'
 import { TaskScheduler, type TaskExecutor } from './task-scheduler'
 import { Synthesizer } from './synthesizer'
@@ -214,6 +215,16 @@ export class OrchestratorEngine {
     }
 
     const bbNamespace = Blackboard.namespace(workspaceId, runId)
+
+    await executionTracer.log({
+      runId,
+      sessionId: childInfo.sessionId,
+      agentId: agent.id,
+      taskId: task.id,
+      type: 'task_start',
+      input: { taskTitle: task.title, attemptCount },
+    })
+
     const prompt = await buildTaskPrompt(task, plan, bbNamespace)
 
     const [userMsg] = await db
@@ -249,6 +260,7 @@ export class OrchestratorEngine {
       payload: { taskId: task.id, status: 'running' },
     })
 
+    const taskStartTime = Date.now()
     try {
       const result = await runAgentReply(childInfo.sessionId, userMsg, profile)
 
@@ -309,6 +321,17 @@ export class OrchestratorEngine {
         artifacts.push(...msgArtifacts)
       }
 
+      const taskDuration = Date.now() - taskStartTime
+      await executionTracer.log({
+        runId,
+        sessionId: childInfo.sessionId,
+        agentId: agent.id,
+        taskId: task.id,
+        type: 'task_end',
+        output: { status: 'done', outputLength: output.length },
+        durationMs: taskDuration,
+      })
+
       // 写入黑板：任务产出
       const outputRef = await blackboard.write({
         namespace: bbNamespace,
@@ -355,6 +378,16 @@ export class OrchestratorEngine {
         outputRef,
       }
     } catch (error: any) {
+      await executionTracer.log({
+        runId,
+        sessionId: childInfo.sessionId,
+        agentId: agent.id,
+        taskId: task.id,
+        type: 'error',
+        input: { taskTitle: task.title },
+        output: { error: error?.message },
+        durationMs: Date.now() - taskStartTime,
+      })
       await db
         .update(workspaceTasks)
         .set({ status: 'failed', completedAt: new Date(), errorLog: error?.message || 'Unknown error' })

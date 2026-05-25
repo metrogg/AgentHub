@@ -20,3 +20,17 @@ ALTER TABLE `workspace_tasks` ADD COLUMN `output_key` text;
 ALTER TABLE `workspace_tasks` ADD COLUMN `retry_count` integer DEFAULT 0 NOT NULL;
 --> statement-breakpoint
 ALTER TABLE `workspace_tasks` ADD COLUMN `timeout` integer DEFAULT 300000 NOT NULL;
+--> statement-breakpoint
+CREATE TABLE `execution_logs` (
+	`id` text PRIMARY KEY NOT NULL,
+	`run_id` text NOT NULL,
+	`session_id` text NOT NULL,
+	`agent_id` text NOT NULL,
+	`task_id` text,
+	`type` text NOT NULL,
+	`input` text,
+	`output` text,
+	`duration_ms` integer,
+	`token_usage` text,
+	`created_at` integer NOT NULL
+);
