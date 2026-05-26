@@ -89,7 +89,7 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/agent-adapters', async (c) => {
     const statuses = new Map((await probeTools(probes)).map((item) => [item.id, item]))
-    const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION')?.trim() === 'true'
+    const executionEnabled = env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION
     return c.json({
       platform: process.platform,
       localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES,
