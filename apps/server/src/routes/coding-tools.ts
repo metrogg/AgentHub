@@ -582,7 +582,10 @@ async function runVersionProbe(command: string): Promise<string | null> {
     const result = await tryVersionProbe(command, flag)
     if (result != null) return result
   }
-  return null
+
+  // 若所有 version flag 均失败，回退到仅检查命令是否在 PATH 中
+  const reachable = await isCommandReachable(command)
+  return reachable ? 'installed' : null
 }
 
 async function tryVersionProbe(command: string, flag: string): Promise<string | null> {
@@ -603,12 +606,45 @@ async function tryVersionProbe(command: string, flag: string): Promise<string | 
       proc.exited,
       new Promise<number>((resolve) => setTimeout(() => resolve(124), 2500)),
     ])
-    if (timed !== 0) return null
 
-    const output = await new Response(proc.stdout).text()
-    return versionLine(output) ?? 'installed'
-  } catch {
+    const stdout = await new Response(proc.stdout).text().catch(() => '')
+    const stderr = await new Response(proc.stderr).text().catch(() => '')
+    const combined = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n')
+
+    if (timed === 124) {
+      console.error(`[probe timeout] ${command} ${flag} (exited=${timed}) stdout=${JSON.stringify(stdout.slice(0, 200))} stderr=${JSON.stringify(stderr.slice(0, 200))}`)
+      return null
+    }
+    if (timed !== 0) {
+      console.error(`[probe exit] ${command} ${flag} code=${timed} stdout=${JSON.stringify(stdout.slice(0, 200))} stderr=${JSON.stringify(stderr.slice(0, 200))}`)
+      return null
+    }
+
+    const parsed = versionLine(combined)
+    if (!parsed) {
+      console.error(`[probe parse] ${command} ${flag}: no version line in output=${JSON.stringify(combined.slice(0, 200))}`)
+    }
+    return parsed ?? 'installed'
+  } catch (err: any) {
+    console.error(`[probe exception] ${command} ${flag}: ${err?.message || String(err)}`)
     return null
+  }
+}
+
+async function isCommandReachable(command: string): Promise<boolean> {
+  if (!isSafeCommand(command)) return false
+  const isWindows = process.platform === 'win32'
+  const shell = isWindows ? 'cmd.exe' : 'sh'
+  const commandLine = isWindows
+    ? `where ${command} >nul 2>nul`
+    : `command -v ${quoteForSh(command)} >/dev/null 2>&1`
+  const args = isWindows ? ['/d', '/s', '/c', commandLine] : ['-lc', commandLine]
+  try {
+    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
+    const code = await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 2500))])
+    return code === 0
+  } catch {
+    return false
   }
 }
 
