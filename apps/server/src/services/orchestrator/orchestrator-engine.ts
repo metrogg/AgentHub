@@ -2,11 +2,13 @@ import { db, messages, workspaceTasks, orchestratorRuns, sessions, eq, desc } fr
 import { logger } from '../../lib/logger'
 import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
+import { blackboard, Blackboard, type BlackboardRef } from '../blackboard'
+import { executionTracer } from '../execution-tracer'
 import { Planner } from './planner'
 import { TaskScheduler, type TaskExecutor } from './task-scheduler'
 import { Synthesizer } from './synthesizer'
 import { ConflictResolver } from './conflict-resolver'
-import { FallbackEngine } from './fallback-engine'
+import { ReplanningEngine } from './replanning-engine'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
@@ -22,7 +24,7 @@ export class OrchestratorEngine {
   private scheduler = new TaskScheduler()
   private synthesizer = new Synthesizer()
   private conflictResolver = new ConflictResolver()
-  private fallbackEngine = new FallbackEngine()
+  private replanningEngine = new ReplanningEngine()
 
   async createPlan(goal: string, agents: ExecutionPlan['agents']): Promise<ExecutionPlan> {
     return this.planner.createPlan({ goal, agents })
@@ -47,43 +49,73 @@ export class OrchestratorEngine {
       let currentAttempt = 0
 
       while (true) {
-        const result = await this.executeTask(currentTask, plan, childSessions, runId, signal, currentAttempt)
+        const result = await this.executeTask(currentTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, currentAttempt)
         if (result.status === 'done' || result.status === 'cancelled') {
           return result
         }
 
         currentAttempt++
-        const fallback = this.fallbackEngine.handle(currentTask, new Error(result.error || 'Task failed'), currentAttempt)
+        const replan = this.replanningEngine.handle(currentTask, new Error(result.error || 'Task failed'), currentAttempt, plan)
 
-        if (fallback.action === 'retry') {
-          logger.info({ taskId: currentTask.id, attempt: currentAttempt, reason: fallback.reason }, 'Task retry scheduled')
+        logger.info({ taskId: currentTask.id, strategy: replan.strategy, reason: replan.reason }, 'Replanning triggered')
+
+        if (replan.strategy === 'retry_with_backoff') {
+          const delayMs = replan.delayMs ?? 1000
+          await new Promise((r) => setTimeout(r, delayMs))
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
-            await db.update(workspaceTasks).set({ status: 'pending', errorLog: fallback.reason }).where(eq(workspaceTasks.id, currentTask.id))
+            await db.update(workspaceTasks).set({ status: 'pending', errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
             broadcastSessionEvent(childInfo.sessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt },
+              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt, strategy: 'retry' },
             })
           }
           continue
         }
 
-        if (fallback.action === 'fallback-agent' && fallback.updatedTask) {
-          logger.info({ taskId: currentTask.id, newAgentId: fallback.updatedTask.agentId, reason: fallback.reason }, 'Task fallback to new agent')
-          currentTask = fallback.updatedTask
+        if (replan.strategy === 'agent_substitution' && replan.updatedTask) {
+          currentTask = replan.updatedTask
           currentAttempt = 0
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
-            await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: 'pending', attemptCount: 0, errorLog: fallback.reason }).where(eq(workspaceTasks.id, currentTask.id))
+            await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
             broadcastSessionEvent(childInfo.sessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId },
+              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId, strategy: 'agent_substitution' },
             })
           }
           continue
         }
 
-        return result
+        if (replan.strategy === 'local_replan' && replan.updatedTask) {
+          currentTask = replan.updatedTask
+          currentAttempt = 0
+          const childInfo = childSessions.get(currentTask.id)
+          if (childInfo) {
+            await db.update(workspaceTasks).set({ status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
+            broadcastSessionEvent(childInfo.sessionId, {
+              type: 'task:update',
+              payload: { taskId: currentTask.id, status: 'pending', strategy: 'local_replan' },
+            })
+          }
+          continue
+        }
+
+        if (replan.strategy === 'escalate_to_user') {
+          // 将错误信息写入黑板，供用户查看
+          const bbNamespace = Blackboard.namespace(workspaceId, runId)
+          await blackboard.write({
+            namespace: bbNamespace,
+            key: `task_${currentTask.id}_escalation`,
+            value: { reason: replan.reason, taskId: currentTask.id, agentId: currentTask.agentId },
+            agentId: 'orchestrator',
+            taskId: currentTask.id,
+            tags: ['escalation', 'needs_user_action'],
+          })
+        }
+
+        // fail / task_split(暂不实现) / escalate_to_user 都返回结果
+        return { ...result, error: replan.reason }
       }
     }
 
@@ -110,6 +142,9 @@ export class OrchestratorEngine {
     } catch (error: any) {
       logger.error({ err: error?.message, runId }, 'Scheduler execution failed')
       await db.update(orchestratorRuns).set({ status: 'failed' }).where(eq(orchestratorRuns.id, runId))
+    } finally {
+      // Run 结束，清理黑板内存缓存
+      blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
     }
   }
 
@@ -118,6 +153,8 @@ export class OrchestratorEngine {
     plan: ExecutionPlan,
     childSessions: Map<string, ChildSessionInfo>,
     runId: string,
+    groupSessionId: string,
+    workspaceId: string,
     signal: AbortSignal,
     attemptCount = 0,
   ): Promise<TaskResult> {
@@ -177,7 +214,18 @@ export class OrchestratorEngine {
       projectPath: childInfo.projectPath ?? null,
     }
 
-    const prompt = buildTaskPrompt(task, plan)
+    const bbNamespace = Blackboard.namespace(workspaceId, runId)
+
+    await executionTracer.log({
+      runId,
+      sessionId: childInfo.sessionId,
+      agentId: agent.id,
+      taskId: task.id,
+      type: 'task_start',
+      input: { taskTitle: task.title, attemptCount },
+    })
+
+    const prompt = await buildTaskPrompt(task, plan, bbNamespace)
 
     const [userMsg] = await db
       .insert(messages)
@@ -204,7 +252,7 @@ export class OrchestratorEngine {
 
     await db
       .update(workspaceTasks)
-      .set({ status: 'running', startedAt: new Date(), attemptCount })
+      .set({ status: 'running', startedAt: new Date(), retryCount: attemptCount })
       .where(eq(workspaceTasks.id, task.id))
 
     broadcastSessionEvent(childInfo.sessionId, {
@@ -212,6 +260,7 @@ export class OrchestratorEngine {
       payload: { taskId: task.id, status: 'running' },
     })
 
+    const taskStartTime = Date.now()
     try {
       const result = await runAgentReply(childInfo.sessionId, userMsg, profile)
 
@@ -272,6 +321,42 @@ export class OrchestratorEngine {
         artifacts.push(...msgArtifacts)
       }
 
+      const taskDuration = Date.now() - taskStartTime
+      await executionTracer.log({
+        runId,
+        sessionId: childInfo.sessionId,
+        agentId: agent.id,
+        taskId: task.id,
+        type: 'task_end',
+        output: { status: 'done', outputLength: output.length },
+        durationMs: taskDuration,
+      })
+
+      // 写入黑板：任务产出
+      const outputRef = await blackboard.write({
+        namespace: bbNamespace,
+        key: `task_${task.id}_output`,
+        value: { output, artifacts, agentId: agent.id, agentName: agent.name, taskTitle: task.title },
+        agentId: agent.id,
+        taskId: task.id,
+        tags: ['task_output', `agent_${agent.id}`],
+      })
+
+      // 广播黑板更新到群聊会话
+      broadcastSessionEvent(groupSessionId, {
+        type: 'blackboard:update',
+        payload: {
+          namespace: bbNamespace,
+          key: `task_${task.id}_output`,
+          version: outputRef.version,
+          agentId: agent.id,
+          agentName: agent.name,
+          taskId: task.id,
+          taskTitle: task.title,
+          summary: output.slice(0, 200),
+        },
+      })
+
       await db
         .update(workspaceTasks)
         .set({
@@ -290,8 +375,19 @@ export class OrchestratorEngine {
         status: 'done',
         output,
         artifacts,
+        outputRef,
       }
     } catch (error: any) {
+      await executionTracer.log({
+        runId,
+        sessionId: childInfo.sessionId,
+        agentId: agent.id,
+        taskId: task.id,
+        type: 'error',
+        input: { taskTitle: task.title },
+        output: { error: error?.message },
+        durationMs: Date.now() - taskStartTime,
+      })
       await db
         .update(workspaceTasks)
         .set({ status: 'failed', completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
@@ -319,7 +415,19 @@ export class OrchestratorEngine {
   ) {
     await db.update(orchestratorRuns).set({ status: 'synthesizing' }).where(eq(orchestratorRuns.id, runId))
 
-    const summary = await this.synthesizer.synthesize(plan, results, conflictReports)
+    // 从黑板读取所有产物，供 Synthesizer 使用（替代直接从 results 读取）
+    const bbNamespace = Blackboard.namespace(workspaceId, runId)
+    const bbResults = await blackboard.query({ namespace: bbNamespace, keyPattern: 'task_%_output' })
+    const enrichedResults: TaskResult[] = results.map((r) => {
+      const bbEntry = bbResults.find((e) => e.key === `task_${r.taskId}_output`)
+      if (bbEntry) {
+        const val = bbEntry.value as { output: string; artifacts: Array<Record<string, unknown>> }
+        return { ...r, output: val.output, artifacts: val.artifacts, outputRef: { namespace: bbNamespace, key: bbEntry.key, version: bbEntry.version } }
+      }
+      return r
+    })
+
+    const summary = await this.synthesizer.synthesize(plan, enrichedResults, conflictReports)
 
     const [summaryMsg] = await db
       .insert(messages)
@@ -354,14 +462,41 @@ export class OrchestratorEngine {
   }
 }
 
-function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan): string {
+async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNamespace: string): Promise<string> {
   const agent = plan.agents.find((a) => a.id === task.agentId)
+
+  // 从黑板读取上游任务的产出，作为上下文注入
+  let upstreamContext = ''
+  if (task.dependencies.length > 0) {
+    const upstreamEntries = await blackboard.query({
+      namespace: bbNamespace,
+      keyPattern: 'task_%_output',
+    })
+    const relevant = upstreamEntries.filter((e) => {
+      const depId = e.key.replace('task_', '').replace('_output', '')
+      return task.dependencies.includes(depId)
+    })
+
+    if (relevant.length > 0) {
+      upstreamContext =
+        '\n\n【前置依赖产出】\n' +
+        relevant
+          .map((e) => {
+            const val = e.value as { output: string; agentName: string; taskTitle: string }
+            return `--- 来自 ${val.agentName}（${val.taskTitle}）---\n${(val.output || '').slice(0, 2000)}`
+          })
+          .join('\n\n') +
+        '\n【前置依赖结束】\n'
+    }
+  }
+
   return [
     agent ? `你是 ${agent.name}(${agent.role})。${agent.systemPrompt || ''}` : '你是 AgentHub 协作 Agent。',
     `\n协作目标: ${plan.goal}`,
     `\n当前子任务: ${task.title}`,
     `\n任务说明: ${task.description}`,
     task.dependencies.length ? `\n前置依赖任务: ${task.dependencies.join(', ')}` : '',
+    upstreamContext,
     '\n请先给出简短工作计划，再产出结果。遇到需要其他 Agent 配合的内容，请在结尾用「需协作:」列出。',
   ]
     .filter(Boolean)

@@ -100,10 +100,14 @@ export const workspaceTasks = sqliteTable('workspace_tasks', {
 
   // === 新增字段：DAG 调度支持 ===
   runId: text('run_id'),
+  phaseId: text('phase_id'), // 所属阶段（粗粒度规划）
   dependencies: text('dependencies', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  inputRefs: text('input_refs', { mode: 'json' }).$type<Array<{ namespace: string; key: string; version: number }>>().notNull().default([]),
+  outputKey: text('output_key'), // 产出写入黑板的键名
   parallelGroup: text('parallel_group'),
-  maxRetries: integer('max_retries').notNull().default(2),
-  attemptCount: integer('attempt_count').notNull().default(0),
+  maxRetries: integer('max_retries').notNull().default(3),
+  retryCount: integer('retry_count').notNull().default(0),
+  timeout: integer('timeout').notNull().default(300000), // 5分钟
   fallbackAgentId: text('fallback_agent_id'),
   artifacts: text('artifacts', { mode: 'json' }).$type<AgentArtifact[]>().notNull().default([]),
   startedAt: ts('started_at'),
@@ -207,6 +211,33 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
 export const messagesRelations = relations(messages, ({ one }) => ({
   session: one(sessions, { fields: [messages.sessionId], references: [sessions.id] }),
 }))
+
+export const blackboardEntries = sqliteTable('blackboard_entries', {
+  id: id(),
+  namespace: text('namespace').notNull(),
+  key: text('key').notNull(),
+  value: text('value', { mode: 'json' }).notNull(),
+  schemaVersion: integer('schema_version').notNull().default(1),
+  agentId: text('agent_id'),
+  taskId: text('task_id'),
+  version: integer('version').notNull().default(1),
+  tags: text('tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  createdAt: now(),
+})
+
+export const executionLogs = sqliteTable('execution_logs', {
+  id: id(),
+  runId: text('run_id').notNull(),
+  sessionId: text('session_id').notNull(),
+  agentId: text('agent_id').notNull(),
+  taskId: text('task_id'),
+  type: text('type', { enum: ['llm_call', 'tool_call', 'blackboard_read', 'blackboard_write', 'error', 'task_start', 'task_end'] }).notNull(),
+  input: text('input', { mode: 'json' }),
+  output: text('output', { mode: 'json' }),
+  durationMs: integer('duration_ms'),
+  tokenUsage: text('token_usage', { mode: 'json' }),
+  createdAt: now(),
+})
 
 export const tasksRelations = relations(tasks, ({ one, many }) => ({
   session: one(sessions, { fields: [tasks.sessionId], references: [sessions.id] }),

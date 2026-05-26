@@ -1,15 +1,16 @@
 import { logger } from '../../lib/logger'
+import { Semaphore } from '../concurrency'
 import { TaskGraph } from './task-graph'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 
 export type TaskExecutor = (task: ExecutionTask, signal: AbortSignal) => Promise<TaskResult>
 
 export class TaskScheduler {
-  private concurrency = 3
+  private semaphore = new Semaphore(3)
   private activeControllers = new Map<string, AbortController>()
 
   setConcurrency(n: number) {
-    this.concurrency = Math.max(1, Math.min(n, 10))
+    this.semaphore = new Semaphore(Math.max(1, Math.min(n, 10)))
   }
 
   async executePlan(plan: ExecutionPlan, executor: TaskExecutor): Promise<TaskResult[]> {
@@ -27,10 +28,8 @@ export class TaskScheduler {
       while (!graph.allDone() && !runController.signal.aborted) {
         const readyTasks = graph.getReadyTasks()
         const runningCount = graph.getRunningTasks().length
-        const slots = this.concurrency - runningCount
-
-        if (slots > 0 && readyTasks.length > 0) {
-          const toRun = readyTasks.slice(0, slots)
+        if (runningCount < readyTasks.length) {
+          const toRun = readyTasks.filter((t) => graph.getStatus(t.id) === 'pending').slice(0, readyTasks.length - runningCount)
           for (const task of toRun) {
             graph.setStatus(task.id, 'running')
             this.runTask(task, graph, results, executor, runController.signal).catch((err) => {
@@ -39,7 +38,7 @@ export class TaskScheduler {
           }
         }
 
-        await sleep(500)
+        await sleep(200)
       }
     } finally {
       this.activeControllers.delete(plan.runId)
@@ -63,6 +62,7 @@ export class TaskScheduler {
     executor: TaskExecutor,
     runSignal: AbortSignal,
   ) {
+    const release = await this.semaphore.acquire(60000)
     const taskController = new AbortController()
     const combinedSignal = combineAbortSignals(runSignal, taskController.signal)
 
@@ -88,6 +88,8 @@ export class TaskScheduler {
         artifacts: [],
         error: error?.message || 'Unknown error',
       })
+    } finally {
+      release()
     }
   }
 }
