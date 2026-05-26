@@ -7,7 +7,7 @@ import { TypewriterHeading } from '../components/chat/TypewriterHeading'
 import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
 import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '../lib/api'
 import { useI18n } from '../lib/i18n'
-import { pickWorkspaceFolder } from '../lib/native'
+import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { useChatStore } from '../stores/chatStore'
@@ -18,6 +18,7 @@ export default function ChatPage() {
   const selectSession = useChatStore((state) => state.selectSession)
   const initWebSocket = useChatStore((state) => state.initWebSocket)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const desktop = isDesktopApp()
 
   function toggleSidebar() {
     setSidebarCollapsed((current) => !current)
@@ -54,19 +55,19 @@ export default function ChatPage() {
             transition: 'opacity 300ms cubic-bezier(0.4,0,0.2,1), transform 300ms cubic-bezier(0.4,0,0.2,1)',
           }}
         >
-          <SessionList onCollapse={toggleSidebar} />
+          <SessionList onCollapse={desktop ? undefined : toggleSidebar} />
         </div>
       </div>
       <main className="relative min-w-0 flex-1">
-        {sidebarCollapsed && (
+        {(desktop || sidebarCollapsed) && (
           <button
             type="button"
             onClick={toggleSidebar}
-            className="absolute left-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900"
-            aria-label="展开侧栏"
-            title="展开侧栏"
+            className="absolute left-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-md border border-neutral-200 bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-50 hover:text-neutral-900"
+            aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+            title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
           >
-            <PanelLeft className="h-4 w-4 rotate-180" />
+            <PanelLeft className={['h-4 w-4 transition-transform', sidebarCollapsed ? 'rotate-180' : ''].join(' ')} />
           </button>
         )}
         {sessionId ? (

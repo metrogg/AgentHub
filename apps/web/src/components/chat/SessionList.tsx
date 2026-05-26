@@ -267,8 +267,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col bg-[#f7f7f4]">
-      <div className="flex h-14 items-center justify-between px-4">
-        <div className="flex items-center gap-2">
+      <div className="agenthub-session-panel-header flex h-14 items-center justify-between px-4">
+        <div className="agenthub-session-panel-brand flex items-center gap-2">
           <div className="grid h-7 w-7 place-items-center rounded-lg bg-neutral-950 text-white">
             <MessageCircle className="h-4 w-4" />
           </div>

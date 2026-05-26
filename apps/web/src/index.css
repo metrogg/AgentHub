@@ -24,6 +24,20 @@
   .agenthub-desktop-shell .h-screen {
     height: 100% !important;
   }
+  .agenthub-desktop-shell .agenthub-session-panel-header {
+    height: 0;
+    justify-content: flex-end;
+    padding-inline: 0;
+  }
+  .agenthub-desktop-shell .agenthub-session-panel-brand {
+    display: none;
+  }
+  .agenthub-desktop-shell .agenthub-session-panel-header > button {
+    display: none;
+  }
+  .agenthub-desktop-shell .agenthub-session-panel-header + div {
+    padding-top: 0.75rem;
+  }
   ::selection {
     @apply bg-neutral-900 text-white;
   }
