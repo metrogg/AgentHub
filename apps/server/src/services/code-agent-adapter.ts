@@ -3,6 +3,8 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentArtifact } from '@agenthub/shared'
+import { db, settings } from '@agenthub/db'
+import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
 
@@ -22,6 +24,7 @@ interface CodeAgentRunOptions {
   modelId?: string | null
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
+  toolConfig?: Record<string, unknown>
 }
 
 interface CodeAgentCommandResult {
@@ -67,8 +70,9 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'OPENAI_API_KEY',
     docsHint: 'Codex 会使用本机安装的 CLI，并在当前项目目录中执行代码任务。',
     promptMode: 'stdin',
-    buildArgs: (_prompt, options) => {
-      const args = [
+    buildArgs: (prompt, options) => {
+      const cfg = options?.toolConfig ?? {}
+      const args: string[] = [
         'exec',
         '--skip-git-repo-check',
         '--color',
@@ -76,10 +80,19 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         '--cd',
         options?.cwd ?? projectRoot,
         '--sandbox',
-        toCodexSandbox(options?.sandboxPolicy),
-        '-c',
-        'approval_policy=never',
+        String(cfg['sandbox'] ?? toCodexSandbox(options?.sandboxPolicy)),
+        '--ask-for-approval',
+        String(cfg['approvalPolicy'] ?? 'never'),
       ]
+      if (cfg['profile']) {
+        args.push('--profile', String(cfg['profile']))
+      }
+      if (cfg['searchEnabled']) {
+        args.push('--search')
+      }
+      if (cfg['jsonOutput']) {
+        args.push('--json')
+      }
       if (options?.outputPath) args.push('--output-last-message', options.outputPath)
       args.push('-')
       return args
@@ -91,16 +104,23 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'ANTHROPIC_API_KEY',
     docsHint: 'Claude Code 会使用本机 Anthropic 凭据，并优先读取项目上下文。',
     promptMode: 'stdin',
-    buildArgs: () => [
-      '-p',
-      '--no-session-persistence',
-      '--permission-mode',
-      'bypassPermissions',
-      '--output-format',
-      'stream-json',
-      '--include-partial-messages',
-      '--verbose',
-    ],
+    buildArgs: (prompt, options) => {
+      const cfg = options?.toolConfig ?? {}
+      const args: string[] = [
+        '-p',
+        '--no-session-persistence',
+        '--permission-mode',
+        String(cfg['permissionMode'] ?? 'bypassPermissions'),
+        '--output-format',
+        String(cfg['outputFormat'] ?? 'stream-json'),
+        '--include-partial-messages',
+        '--verbose',
+      ]
+      if (cfg['maxTurns']) {
+        args.push('--max-turns', String(cfg['maxTurns']))
+      }
+      return args
+    },
   },
   opencode: {
     command: 'opencode',
@@ -108,7 +128,14 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'DEEPSEEK_API_KEY',
     docsHint: 'OpenCode 会使用本机配置；如果 Agent 绑定了 provider/model，会通过 --model 传给 OpenCode。',
     promptMode: 'argument',
-    buildArgs: (prompt, options) => ['run', ...(options?.modelId ? ['--model', options.modelId] : []), prompt],
+    buildArgs: (prompt, options) => {
+      const cfg = options?.toolConfig ?? {}
+      const args = ['run']
+      if (options?.modelId) args.push('--model', options.modelId)
+      if (cfg['agent']) args.push('--agent', String(cfg['agent']))
+      args.push(prompt)
+      return args
+    },
   },
   gemini: {
     command: 'gemini',
@@ -116,7 +143,12 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'GEMINI_API_KEY',
     docsHint: 'Gemini CLI 会使用本机 Google Gemini 凭据，并在当前项目目录中执行代码任务。',
     promptMode: 'argument',
-    buildArgs: (prompt, options) => [...(options?.modelId ? ['--model', options.modelId] : []), '-p', prompt],
+    buildArgs: (prompt, options) => {
+      const args: string[] = []
+      if (options?.modelId) args.push('--model', options.modelId)
+      args.push('-p', prompt)
+      return args
+    },
   },
 }
 
@@ -194,6 +226,7 @@ export async function* streamCodeAgentReply(
     wake?.()
     wake = null
   }
+  const toolConfig = await resolveToolConfig(type)
   const runPromise = runCodeAgentCommand(
     adapter,
     prompt,
@@ -201,6 +234,7 @@ export async function* streamCodeAgentReply(
     profile.sandboxPolicy,
     profile.modelId,
     signal,
+    toolConfig,
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
       onText: (text) => push(text),
@@ -355,6 +389,7 @@ async function runCodeAgentCommand(
   sandboxPolicy?: AgentRunProfile['sandboxPolicy'],
   modelId?: string | null,
   signal?: AbortSignal,
+  toolConfig?: Record<string, unknown>,
   hooks: {
     onMetadata?: (metadata: CodeAgentRunMetadata) => void
     onText?: (text: string) => void
@@ -365,7 +400,7 @@ async function runCodeAgentCommand(
     process.platform === 'win32' && (adapter.command === 'codex' || adapter.command === 'claude')
       ? buildAsciiSafePrompt(prompt)
       : prompt
-  const args = adapter.buildArgs(commandPrompt, { cwd, modelId, outputPath, sandboxPolicy })
+  const args = adapter.buildArgs(commandPrompt, { cwd, modelId, outputPath, sandboxPolicy, toolConfig })
 
   if (signal?.aborted) {
     return {
@@ -1135,6 +1170,19 @@ function buildHostCommand(command: string, args: string[]) {
 function windowsCodexCommand() {
   const npmShim = Bun.env.APPDATA ? resolve(Bun.env.APPDATA, 'npm', 'codex.cmd') : ''
   return npmShim && existsSync(npmShim) ? npmShim : 'codex.cmd'
+}
+
+async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, unknown>> {
+  try {
+    const rows = await db.select().from(settings).where(eq(settings.key, 'CODING_TOOLS_CONFIG')).limit(1)
+    const raw = rows[0]?.value
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Array<{ id: string; config?: Record<string, unknown> }>
+    const tool = parsed.find((t) => t.id === toolId)
+    return tool?.config ?? {}
+  } catch {
+    return {}
+  }
 }
 
 function readEnv(key: string) {
