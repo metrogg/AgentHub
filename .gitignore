@@ -26,6 +26,9 @@ Thumbs.db
 # Build output
 dist/
 build/
+.gradle/
+.cxx/
+.externalNativeBuild/
 .next/
 .turbo/
 apps/*/dist/
@@ -43,3 +46,7 @@ storage/
 # Logs
 *.log
 npm-debug.log*
+
+# Android
+local.properties
+captures/

@@ -40,13 +40,49 @@ export async function notifyUser(title: string, body?: string) {
 
 export async function closeDesktopWindow() {
   if (!isDesktopApp()) return false
-  await invokeNative('close_desktop_window')
-  return true
+  if (await tryWindowApi(async (window) => window.close())) return true
+  return invokeDesktopCommand('close_desktop_window')
 }
 
 export async function openDesktopWindow() {
   if (!isDesktopApp()) return false
   await invokeNative('open_desktop_window')
+  return true
+}
+
+export async function minimizeDesktopWindow() {
+  if (!isDesktopApp()) return false
+  if (await tryWindowApi(async (window) => window.minimize())) return true
+  return invokeDesktopCommand('minimize_desktop_window')
+}
+
+export async function startDesktopWindowDrag() {
+  if (!isDesktopApp()) return false
+  if (await tryWindowApi(async (window) => window.startDragging())) return true
+  return invokeDesktopCommand('start_desktop_window_drag')
+}
+
+export async function toggleMaximizeDesktopWindow() {
+  if (!isDesktopApp()) return false
+  if (
+    await tryWindowApi(async (window) => {
+      if (await window.isMaximized()) {
+        await window.unmaximize()
+      } else {
+        await window.maximize()
+      }
+    })
+  ) {
+    return true
+  }
+  return invokeDesktopCommand('toggle_maximize_desktop_window')
+}
+
+export async function toggleFullscreenDesktopWindow() {
+  if (!isDesktopApp()) return false
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  const currentWindow = getCurrentWindow()
+  await currentWindow.setFullscreen(!(await currentWindow.isFullscreen()))
   return true
 }
 
@@ -56,4 +92,26 @@ export async function setDesktopWindowTitle(title: string) {
   const { getCurrentWindow } = await import('@tauri-apps/api/window')
   await getCurrentWindow().setTitle(title)
   return true
+}
+
+async function tryWindowApi(action: (window: any) => Promise<void>) {
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    const window = getCurrentWindow()
+    await action(window)
+    return true
+  } catch (error) {
+    console.warn('[AgentHub] Tauri window API failed, falling back to native command:', error)
+    return false
+  }
+}
+
+async function invokeDesktopCommand(command: string) {
+  try {
+    await invokeNative(command)
+    return true
+  } catch (error) {
+    console.error(`[AgentHub] Native command failed: ${command}`, error)
+    return false
+  }
 }

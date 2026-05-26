@@ -116,6 +116,8 @@ export interface Message {
   type: string
   content: string
   metadata: Record<string, unknown> | null
+  isPinned?: boolean
+  replyToMessageId?: string | null
   createdAt: string
 }
 
@@ -175,6 +177,23 @@ export type AgentArtifact =
       url?: string
       logs?: string
     }
+  | {
+      id: string
+      type: 'workflow'
+      title: string
+      description?: string
+      source?: string
+      createdAt?: string
+      nodes: Array<{
+        id: string
+        label: string
+        type: 'agent' | 'tool' | 'input' | 'output'
+        agentKey?: string
+        agentName?: string
+        agentColor?: string
+      }>
+      edges: Array<{ from: string; to: string; label?: string }>
+    }
 
 export interface CodeAgentRunMetadata {
   type: 'code-agent-run'
@@ -212,6 +231,7 @@ export interface CodingToolStatus {
   command: string
   installed: boolean
   version: string | null
+  diagnostics?: string
 }
 
 export interface CodingToolProbe {
@@ -344,6 +364,17 @@ export interface CodexConfigFile {
   path: string
   content: string
   message: string
+}
+
+export interface MobilePairStartResult {
+  version: number
+  baseUrl: string
+  webUrl: string
+  pairingCode: string
+  expiresAt: string
+  ttlSeconds: number
+  qrPayload: string
+  localAddresses: string[]
 }
 
 export interface SettingsGeneralInfo {
@@ -598,7 +629,7 @@ export const api = {
 
   sendMessageWithModel: (
     sessionId: string,
-    data: { content: string; modelId?: string; type?: string; skipAgentReply?: boolean; attachments?: ChatAttachment[]; displayContent?: string }
+    data: { content: string; modelId?: string; type?: string; skipAgentReply?: boolean; attachments?: ChatAttachment[]; displayContent?: string; replyToMessageId?: string | null }
   ) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
@@ -610,6 +641,7 @@ export const api = {
           ...(data.skipAgentReply || mentionsOrchestrator(data.content) ? { skipAgentReply: true } : {}),
           ...(data.attachments?.length ? { attachments: data.attachments } : {}),
           ...(data.displayContent !== undefined ? { displayContent: data.displayContent } : {}),
+          ...(data.replyToMessageId ? { replyToMessageId: data.replyToMessageId } : {}),
         },
       }),
     }),
@@ -631,6 +663,10 @@ export const api = {
     request<{ removedMessageId: string }>(`/messages/${sessionId}/${messageId}/regenerate`, {
       method: 'POST',
     }),
+  pinMessage: (sessionId: string, messageId: string) =>
+    request<Message>(`/messages/${sessionId}/${messageId}/pin`, { method: 'PATCH' }),
+  unpinMessage: (sessionId: string, messageId: string) =>
+    request<Message>(`/messages/${sessionId}/${messageId}/unpin`, { method: 'PATCH' }),
   createOrchestratorPlan: (sessionId: string, content: string) =>
     request<Message>(`/messages/${sessionId}/orchestrator-plan`, {
       method: 'POST',
@@ -679,6 +715,7 @@ export const api = {
       python: { runtime: string; path: string; ok: boolean; message: string }
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
+  startMobilePairing: () => request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
   ensureStorageDirectory: (path: string) =>
     request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>('/settings/storage/ensure', {
       method: 'POST',
@@ -825,6 +862,28 @@ export const api = {
     request<{ session: Session }>(`/workspaces/${id}/group-session`, { method: 'POST' }),
   openWorkspaceAgentSession: (id: string, agentId: string) =>
     request<{ session: Session }>(`/workspaces/${id}/agents/${agentId}/session`, { method: 'POST' }),
+
+  // Artifacts
+  deployStatic: (workspaceId: string) =>
+    request<{ deployId: string; url: string; status: 'ready' }>('/artifacts/deploy-static', {
+      method: 'POST',
+      body: JSON.stringify({ workspaceId }),
+    }),
+  applyDiff: (projectPath: string, diff: string) =>
+    request<{ success: boolean; message: string }>('/artifacts/apply-diff', {
+      method: 'POST',
+      body: JSON.stringify({ projectPath, diff }),
+    }),
+  downloadZip: async (workspaceId: string) => {
+    const res = await fetch(`${API_BASE}/artifacts/zip-download?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new ApiError(res.status, body?.error ?? body?.message ?? `HTTP ${res.status}`)
+    }
+    return res.blob()
+  },
 
   // Orchestrator runs
   listOrchestratorRuns: () => request<{ items: OrchestratorRunListItem[] }>('/orchestrator-runs'),

@@ -1,8 +1,15 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { extname, resolve, relative, isAbsolute } from 'node:path'
+import { tmpdir } from 'node:os'
+import { writeFile, unlink } from 'node:fs/promises'
+import { extname, resolve, relative, isAbsolute, join, normalize, sep } from 'node:path'
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
+import { zValidator } from '@hono/zod-validator'
+import { z } from 'zod'
+import AdmZip from 'adm-zip'
+import { db, workspaces, eq } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import { logger } from '../lib/logger'
 
 const WORKSPACE_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
 
@@ -34,3 +41,124 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       },
     })
   })
+  .post('/deploy-static', zValidator('json', z.object({ workspaceId: z.string() })), async (c) => {
+    const user = c.get('user')
+    const { workspaceId } = c.req.valid('json')
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    if (!ws || ws.ownerId !== user.sub) throw new HTTPException(404, { message: 'Workspace not found' })
+    if (!ws.projectPath) throw new HTTPException(400, { message: 'Workspace has no project path' })
+    if (!existsSync(ws.projectPath)) throw new HTTPException(400, { message: 'Project path does not exist' })
+
+    const deployUrl = `${new URL(c.req.url).origin}/deploy/${workspaceId}/`
+    logger.info({ workspaceId, projectPath: ws.projectPath, deployUrl }, 'Static deployment created')
+    return c.json({ deployId: workspaceId, url: deployUrl, status: 'ready' as const })
+  })
+  .post('/apply-diff', zValidator('json', z.object({ projectPath: z.string(), diff: z.string() })), async (c) => {
+    const { projectPath, diff } = c.req.valid('json')
+    if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+      throw new HTTPException(400, { message: 'Project path does not exist' })
+    }
+    const tmpFile = join(tmpdir(), `agenthub-diff-${Date.now()}.patch`)
+    try {
+      await writeFile(tmpFile, diff, 'utf8')
+      // Validate first
+      const check = Bun.spawn(['git', 'apply', '--check', tmpFile], {
+        cwd: projectPath,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: process.env,
+      })
+      const checkCode = await check.exited
+      if (checkCode !== 0) {
+        const stderr = await new Response(check.stderr).text()
+        throw new HTTPException(400, { message: `Diff validation failed: ${stderr.trim()}` })
+      }
+      // Apply
+      const apply = Bun.spawn(['git', 'apply', tmpFile], {
+        cwd: projectPath,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: process.env,
+      })
+      const applyCode = await apply.exited
+      if (applyCode !== 0) {
+        const stderr = await new Response(apply.stderr).text()
+        throw new HTTPException(500, { message: `Diff apply failed: ${stderr.trim()}` })
+      }
+      logger.info({ projectPath }, 'Diff applied successfully')
+      return c.json({ success: true, message: 'Diff applied successfully' })
+    } catch (err: any) {
+      if (err instanceof HTTPException) throw err
+      logger.error({ err: err?.message, projectPath }, 'Diff apply error')
+      throw new HTTPException(500, { message: err?.message || 'Failed to apply diff' })
+    } finally {
+      try { await unlink(tmpFile) } catch {}
+    }
+  })
+  .get('/zip-download', async (c) => {
+    const user = c.get('user')
+    const workspaceId = c.req.query('workspaceId')?.trim()
+    if (!workspaceId) throw new HTTPException(400, { message: 'Missing workspaceId' })
+
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    if (!ws || ws.ownerId !== user.sub) throw new HTTPException(404, { message: 'Workspace not found' })
+    if (!ws.projectPath) throw new HTTPException(400, { message: 'Workspace has no project path' })
+    if (!existsSync(ws.projectPath) || !statSync(ws.projectPath).isDirectory()) {
+      throw new HTTPException(400, { message: 'Project path does not exist' })
+    }
+
+    try {
+      const zip = new AdmZip()
+      zip.addLocalFolder(ws.projectPath)
+      const buffer = zip.toBuffer()
+      return new Response(buffer, {
+        headers: {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="${encodeURIComponent(ws.name || 'project')}.zip"`,
+        },
+      })
+    } catch (err: any) {
+      logger.error({ err: err?.message, workspaceId }, 'Failed to create zip')
+      throw new HTTPException(500, { message: 'Failed to create zip archive' })
+    }
+  })
+
+export async function serveDeployStatic(workspaceId: string, subPath: string): Promise<Response | null> {
+  const rows = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+  const ws = rows[0]
+  if (!ws || !ws.projectPath) return null
+
+  const projectPath = ws.projectPath
+  const safePath = decodeURIComponent(subPath).replace(/^\/+/, '') || 'index.html'
+  const candidate = resolve(projectPath, normalize(safePath))
+  const rootWithSep = projectPath.endsWith(sep) ? projectPath : `${projectPath}${sep}`
+  if (candidate !== projectPath && !candidate.startsWith(rootWithSep)) {
+    return new Response('Forbidden', { status: 403 })
+  }
+
+  const filePath = existsSync(candidate) && statSync(candidate).isFile() ? candidate : join(projectPath, 'index.html')
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    return new Response('Not found', { status: 404 })
+  }
+
+  return new Response(Bun.file(filePath), {
+    headers: { 'Content-Type': contentType(filePath) },
+  })
+}
+
+function contentType(filePath: string) {
+  const ext = extname(filePath).toLowerCase()
+  if (ext === '.html' || ext === '.htm') return 'text/html; charset=utf-8'
+  if (ext === '.js' || ext === '.mjs') return 'text/javascript; charset=utf-8'
+  if (ext === '.css') return 'text/css; charset=utf-8'
+  if (ext === '.svg') return 'image/svg+xml'
+  if (ext === '.png') return 'image/png'
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.gif') return 'image/gif'
+  if (ext === '.ico') return 'image/x-icon'
+  if (ext === '.json') return 'application/json; charset=utf-8'
+  if (ext === '.woff2') return 'font/woff2'
+  if (ext === '.woff') return 'font/woff'
+  if (ext === '.ttf') return 'font/ttf'
+  return 'application/octet-stream'
+}

@@ -34,12 +34,14 @@ export class LlmRuntime implements AgentRuntime {
 
 async function buildAgentSystem(profile: AgentProfile, workspacePath?: string | null): Promise<string> {
   // 如果工作区有 .agenthub/ 目录，使用 Harness 组装系统提示
-  if (workspacePath) {
+  // 优先用 workspacePath（可能是 git worktree），其次用 originalProjectPath
+  const harnessPaths = [workspacePath, profile.originalProjectPath].filter(Boolean) as string[]
+  for (const path of harnessPaths) {
     try {
-      await harnessManager.loadFromWorkspace(workspacePath)
-      return harnessManager.buildSystemPrompt({ agent: profile, workspacePath })
+      await harnessManager.loadFromWorkspace(path)
+      return harnessManager.buildSystemPrompt({ agent: profile, workspacePath: path })
     } catch (err) {
-      logger.error({ err, workspacePath }, 'Harness buildSystemPrompt failed, falling back to default')
+      logger.error({ err, path }, 'Harness buildSystemPrompt failed, trying fallback')
     }
   }
 

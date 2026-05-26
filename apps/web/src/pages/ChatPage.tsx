@@ -9,6 +9,7 @@ import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '..
 import { useI18n } from '../lib/i18n'
 import { pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
+import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { useChatStore } from '../stores/chatStore'
 
 export default function ChatPage() {
@@ -40,43 +41,49 @@ export default function ChatPage() {
         aria-hidden={sidebarCollapsed}
         className="h-full shrink-0 overflow-hidden"
         style={{
-          width: sidebarCollapsed ? 0 : 256,
+          width: sidebarCollapsed ? 0 : 340,
           transition: 'width 300ms cubic-bezier(0.4,0,0.2,1)',
         }}
       >
         <div
           className={[
-            'h-full w-64 transform-gpu will-change-transform',
+            'h-full w-[340px] transform-gpu will-change-transform',
             sidebarCollapsed ? 'pointer-events-none -translate-x-full opacity-0' : 'translate-x-0 opacity-100',
           ].join(' ')}
           style={{
             transition: 'opacity 300ms cubic-bezier(0.4,0,0.2,1), transform 300ms cubic-bezier(0.4,0,0.2,1)',
           }}
         >
-          <SessionList />
+          <SessionList onCollapse={toggleSidebar} />
         </div>
       </div>
-      <main className="min-w-0 flex-1">
+      <main className="relative min-w-0 flex-1">
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className="absolute left-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900"
+            aria-label="展开侧栏"
+            title="展开侧栏"
+          >
+            <PanelLeft className="h-4 w-4 rotate-180" />
+          </button>
+        )}
         {sessionId ? (
           <AgentHubRuntimeProvider>
-            <Thread sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} />
+            <Thread />
           </AgentHubRuntimeProvider>
         ) : (
-          <Welcome sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} />
+          <Welcome />
         )}
       </main>
     </div>
   )
 }
 
-function Welcome({
-  sidebarCollapsed,
-  onToggleSidebar,
-}: {
-  sidebarCollapsed: boolean
-  onToggleSidebar: () => void
-}) {
+function Welcome() {
   const { t } = useI18n()
+  const { sendMode } = useShortcutSettings()
   const navigate = useNavigate()
   const messageInputRef = useRef<HTMLTextAreaElement>(null)
   const createSession = useChatStore((state) => state.createSession)
@@ -291,25 +298,6 @@ function Welcome({
 
   return (
     <div className="agenthub-welcome-root flex h-full flex-col bg-white">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 px-7">
-        <div className="flex items-center gap-4">
-          <button
-            type="button"
-            onClick={onToggleSidebar}
-            className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
-            aria-label={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
-            title={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
-          >
-            <PanelLeft className={['h-4 w-4 transition-transform duration-300', sidebarCollapsed ? 'rotate-180' : 'rotate-0'].join(' ')} />
-          </button>
-          <div className="flex items-center gap-3 text-sm">
-            <span className="font-semibold text-neutral-950">AgentHub</span>
-            <span className="text-neutral-300">/</span>
-            <span className="text-neutral-500">{t('对话由 AI 生成')}</span>
-          </div>
-        </div>
-      </header>
-
       <div className="flex flex-1 flex-col items-center px-8">
         <section className="mt-[18vh] w-full max-w-[704px]">
           <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
@@ -333,7 +321,7 @@ function Welcome({
           </div>
         </section>
 
-        <div className="mt-auto w-full max-w-[704px] pb-5">
+        <div className="agenthub-welcome-composer-dock mt-auto w-full max-w-[704px] pb-5">
           <form
             onSubmit={handleSubmit}
             className="relative rounded-[22px] border border-neutral-200 bg-white p-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)]"
@@ -446,7 +434,7 @@ function Welcome({
                   event.preventDefault()
                   return
                 }
-                if (event.key === 'Enter' && !event.shiftKey) {
+                if (sendModeShouldSubmit(sendMode, event)) {
                   event.preventDefault()
                   void startThread(message)
                 }

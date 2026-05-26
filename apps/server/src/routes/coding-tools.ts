@@ -450,7 +450,11 @@ function uniqueOpencodeModels(models: OpencodeModelItem[]) {
 }
 
 async function probeTools(items: ToolProbe[]) {
-  return Promise.all(items.map(probeTool))
+  const results = []
+  for (const item of items) {
+    results.push(await probeTool(item))
+  }
+  return results
 }
 
 async function probeTool(probe: ToolProbe) {
@@ -471,11 +475,15 @@ async function probeTool(probe: ToolProbe) {
 }
 
 async function probeToolDirect(probe: ToolProbe) {
+  console.log(`[probe] start ${probe.id}: command=${probe.command}`)
   const version = await runVersionProbe(probe.command)
+  console.log(`[probe] version ${probe.id}: ${version ?? 'null'}`)
   const configEnv = configEnvName(probe)
   const configured = await isDirectToolConfigured(probe, configEnv)
+  console.log(`[probe] configured ${probe.id}: ${configured}`)
   const installed = Boolean(version)
-  return {
+  const reachable = await isCommandReachable(probe.command)
+  const result = {
     id: probe.id,
     command: probe.command,
     installed,
@@ -483,7 +491,10 @@ async function probeToolDirect(probe: ToolProbe) {
     configured,
     configEnv,
     configMessage: configMessage({ configEnv, configured, installed, runtime: '本机环境', toolId: probe.id }),
+    diagnostics: `reachable=${reachable} version=${version ?? 'null'} env=${configEnv} envValue=${readEnv(configEnv) ? 'set' : 'unset'}`,
   }
+  console.log(`[probe] result ${probe.id}: installed=${installed} configured=${configured} diagnostics=${result.diagnostics}`)
+  return result
 }
 
 async function installAllCliTools() {
@@ -578,11 +589,22 @@ async function getApiKeyAuthStatus() {
 async function runVersionProbe(command: string): Promise<string | null> {
   if (!isSafeCommand(command)) return null
 
+  for (const flag of ['--version', '-v', '-V']) {
+    const result = await tryVersionProbe(command, flag)
+    if (result != null) return result
+  }
+
+  // 若所有 version flag 均失败，回退到仅检查命令是否在 PATH 中
+  const reachable = await isCommandReachable(command)
+  return reachable ? 'installed' : null
+}
+
+async function tryVersionProbe(command: string, flag: string): Promise<string | null> {
   const isWindows = process.platform === 'win32'
   const shell = isWindows ? 'cmd.exe' : 'sh'
   const commandLine = isWindows
-    ? `where ${command} >nul 2>nul && ${command} --version`
-    : `command -v ${quoteForSh(command)} >/dev/null 2>&1 && ${quoteForSh(command)} --version`
+    ? `where ${command} >nul 2>nul && ${command} ${flag}`
+    : `command -v ${quoteForSh(command)} >/dev/null 2>&1 && ${quoteForSh(command)} ${flag}`
   const args = isWindows ? ['/d', '/s', '/c', commandLine] : ['-lc', commandLine]
 
   try {
@@ -593,14 +615,56 @@ async function runVersionProbe(command: string): Promise<string | null> {
     })
     const timed = await Promise.race([
       proc.exited,
-      new Promise<number>((resolve) => setTimeout(() => resolve(124), 2500)),
+      new Promise<number>((resolve) => setTimeout(() => {
+        try { proc.kill() } catch {}
+        resolve(124)
+      }, 8000)),
     ])
-    if (timed !== 0) return null
 
-    const output = await new Response(proc.stdout).text()
-    return versionLine(output) ?? 'installed'
-  } catch {
+    const stdout = await new Response(proc.stdout).text().catch(() => '')
+    const stderr = await new Response(proc.stderr).text().catch(() => '')
+    const combined = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n')
+
+    if (timed === 124) {
+      console.error(`[probe timeout] ${command} ${flag} (exited=${timed}) stdout=${JSON.stringify(stdout.slice(0, 200))} stderr=${JSON.stringify(stderr.slice(0, 200))}`)
+      return null
+    }
+    if (timed !== 0) {
+      console.error(`[probe exit] ${command} ${flag} code=${timed} stdout=${JSON.stringify(stdout.slice(0, 200))} stderr=${JSON.stringify(stderr.slice(0, 200))}`)
+      return null
+    }
+
+    const parsed = versionLine(combined)
+    if (!parsed) {
+      console.error(`[probe parse] ${command} ${flag}: no version line in output=${JSON.stringify(combined.slice(0, 200))}`)
+    }
+    return parsed ?? 'installed'
+  } catch (err: any) {
+    console.error(`[probe exception] ${command} ${flag}: ${err?.message || String(err)}`)
     return null
+  }
+}
+
+async function isCommandReachable(command: string): Promise<boolean> {
+  if (!isSafeCommand(command)) return false
+  const isWindows = process.platform === 'win32'
+  const shell = isWindows ? 'cmd.exe' : 'sh'
+  const commandLine = isWindows
+    ? `where ${command} >nul 2>nul`
+    : `command -v ${quoteForSh(command)} >/dev/null 2>&1`
+  const args = isWindows ? ['/d', '/s', '/c', commandLine] : ['-lc', commandLine]
+  try {
+    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
+    const code = await Promise.race([proc.exited, new Promise<number>((resolve) => {
+      const timer = setTimeout(() => {
+        try { proc.kill() } catch {}
+        resolve(124)
+      }, 8000)
+      return () => clearTimeout(timer)
+    })])
+    return code === 0
+  } catch {
+    return false
   }
 }
 
@@ -738,6 +802,30 @@ async function isDirectToolConfigured(probe: ToolProbe, configEnv: string) {
     const opencode = await getOpencodeModels()
     return Boolean(opencode.defaultModel || opencode.models.length > 0)
   }
+
+  // 若主模型配置中已存在对应 provider 的 API Key，也视为已配置
+  try {
+    const llmStatus = await getLlmRuntimeStatus()
+    if (llmStatus.apiKeyConfigured) {
+      if (probe.id === 'claude-code') {
+        if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com')) return true
+        if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
+      }
+      if (probe.id === 'codex') {
+        if (llmStatus.provider === 'openai' || llmStatus.baseUrl?.includes('openai.com')) return true
+        if (llmStatus.apiKeySource === 'OPENAI_API_KEY') return true
+      }
+      if (probe.id === 'gemini') {
+        if (llmStatus.provider === 'gemini' || llmStatus.provider === 'google') return true
+        if (llmStatus.apiKeySource === 'GEMINI_API_KEY') return true
+      }
+      // OpenCode 支持任意 OpenAI-compatible provider；只要主模型有 key 即可视为已配置
+      if (probe.id === 'opencode') return true
+    }
+  } catch (err: any) {
+    console.error(`[isDirectToolConfigured] getLlmRuntimeStatus failed for ${probe.id}:`, err?.message || String(err))
+  }
+
   if (probe.id !== 'codex' || !env.ENABLE_CODEX_CHATGPT_AUTH) return false
 
   try {

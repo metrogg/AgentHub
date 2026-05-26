@@ -1,0 +1,31 @@
+rules:
+  id: code-quality
+  name: 代码质量规范
+  version: 1.0.0
+
+  constraints:
+    - "所有函数必须有明确的返回类型"
+    - "不使用 any，使用 unknown + 类型守卫"
+    - "优先使用 const/let，避免 var"
+    - "错误处理必须显式，不吞异常"
+    - "所有外部输入必须校验（Zod / 手动）"
+
+  naming:
+    functions: camelCase
+    classes: PascalCase
+    interfaces: PascalCase
+    types: PascalCase
+    enums: PascalCase
+    constants: UPPER_SNAKE_CASE
+    files: kebab-case
+
+  forbidden:
+    - "console.log 提交到生产代码"
+    - "硬编码密钥或配置"
+    - "裸奔的 SQL 拼接（使用参数化查询）"
+    - "循环中 await（使用 Promise.all）"
+
+  formatting:
+    semicolons: false
+    singleQuote: true
+    trailingComma: all

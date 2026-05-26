@@ -1,5 +1,6 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import QRCode from 'qrcode'
 import {
   Activity,
   AlertTriangle,
@@ -20,21 +21,31 @@ import {
   MessageSquare,
   Monitor,
   Plus,
+  QrCode,
   RefreshCw,
   Search,
   Server,
   Settings,
   Shield,
+  Smartphone,
   TerminalSquare,
   Trash2,
   X,
   type LucideIcon,
 } from 'lucide-react'
 import { api, type Message, type Session, type SettingsGeneralInfo } from '../lib/api'
-import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, resolveTheme, themePalette } from '../lib/appearance'
+import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
 import { getDesktopInfo, isDesktopApp, openPath, pickWorkspaceFolder } from '../lib/native'
 import { loadSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent } from '../lib/sessionArchive'
+import {
+  defaultShortcutBindings,
+  normalizeShortcutBindings,
+  settingsUpdatedEvent,
+  shortcutConflict,
+  shortcutFromRecordingEvent,
+  type ShortcutActionId,
+} from '../lib/shortcuts'
 import { cn, relativeTime } from '../lib/utils'
 
 type SectionKey =
@@ -109,7 +120,6 @@ interface AppSettings {
   pythonRuntime: string
   pythonPath: string
   mainWindowTheme: string
-  embeddedWindowTheme: string
   autoOpenTodo: boolean
   autoOpenFileChanges: boolean
   autoCloseFileChanges: boolean
@@ -131,6 +141,8 @@ interface AppSettings {
   sendMode: string
   toolPermissionMode: string
   toolPermissions: Record<string, string>
+  accountName: string
+  accountAvatar: string
 }
 
 const defaultModels: ModelConfig[] = [
@@ -191,7 +203,6 @@ const defaultAppSettings: AppSettings = {
   pythonRuntime: '托管 Python 3.13.12',
   pythonPath: 'F:\\Learning\\AgentHub\\managed-python\\windows-x64\\python.exe',
   mainWindowTheme: '跟随系统',
-  embeddedWindowTheme: '暗色',
   autoOpenTodo: true,
   autoOpenFileChanges: true,
   autoCloseFileChanges: true,
@@ -229,6 +240,8 @@ const defaultAppSettings: AppSettings = {
     knowledge_move: 'Auto',
     knowledge_edit: 'Ask',
   },
+  accountName: 'You',
+  accountAvatar: '',
 }
 
 function model(
@@ -289,7 +302,6 @@ export default function SettingsPage() {
     appSettings.fontSize,
     appSettings.inlineCodeFont,
     appSettings.mainWindowTheme,
-    appSettings.embeddedWindowTheme,
     appSettings.terminalFont,
     appSettings.uiFont,
   ])
@@ -315,6 +327,7 @@ export default function SettingsPage() {
               ...defaultAppSettings,
               ...parsed,
               language: languageToSettingValue(normalizedLanguage),
+              shortcuts: normalizeShortcutBindings(parsed.shortcuts),
             })
           } catch {
             setAppSettings(defaultAppSettings)
@@ -365,6 +378,7 @@ export default function SettingsPage() {
         TOOL_PERMISSION_RULES: JSON.stringify(appSettings.toolPermissions),
       })
         .then(() => {
+          window.dispatchEvent(new Event(settingsUpdatedEvent))
           setSaveState('saved')
           window.setTimeout(() => setSaveState('idle'), 2500)
         })
@@ -701,6 +715,25 @@ function SettingsContent({
     setGeneralInfo((current) => current ? { ...current, debug: { ...current.debug, enabled: debugMode } } : current)
   }
 
+  function updateAccountAvatar(file: File | null) {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      showActionMessage('请选择图片文件')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      showActionMessage('头像图片不能超过 2 MB')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      patchSettings({ accountAvatar: String(reader.result || '') })
+      showActionMessage('头像已更新')
+    }
+    reader.onerror = () => showActionMessage('读取头像失败')
+    reader.readAsDataURL(file)
+  }
+
   function resetAllSettings() {
     patchSettings(defaultAppSettings)
     setLanguage('zh')
@@ -712,8 +745,47 @@ function SettingsContent({
       return (
         <SettingsStack>
           {actionMessage && <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-600 shadow-sm">{actionMessage}</div>}
+          <SettingsSection title="账号资料" desc="配置本机账号在 Web、桌面端左侧导航和“我的”页面中显示的名称与头像。">
+            <InsetPanel>
+              <div className="flex flex-wrap items-center gap-4">
+                <AccountAvatarPreview name={settings.accountName} avatar={settings.accountAvatar} size="large" />
+                <div className="min-w-0 flex-1 space-y-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>显示名称</span>
+                    <input
+                      value={settings.accountName}
+                      onChange={(event) => patchSettings({ accountName: event.target.value })}
+                      className="settings-input"
+                      maxLength={32}
+                      placeholder="You"
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <label className="settings-soft-button cursor-pointer">
+                      上传头像
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(event) => {
+                          updateAccountAvatar(event.currentTarget.files?.[0] ?? null)
+                          event.currentTarget.value = ''
+                        }}
+                      />
+                    </label>
+                    <button type="button" className="settings-soft-button" onClick={() => patchSettings({ accountAvatar: '' })}>
+                      移除头像
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </InsetPanel>
+          </SettingsSection>
           <SettingsSection title="界面语言" desc="切换界面显示语言">
             <SegmentedControl value={languageToSettingValue(normalizeLanguage(settings.language))} options={['中文', 'English']} onChange={patchLanguage} />
+          </SettingsSection>
+          <SettingsSection title="移动端扫码连接" desc="让手机在同一局域网内扫码连接这台电脑的 AgentHub。二维码 2 分钟有效，用后即失效。">
+            <MobilePairingPanel />
           </SettingsSection>
           <SettingsSection
             title="调试模式"
@@ -842,20 +914,7 @@ function SettingsContent({
       return (
         <SettingsStack>
           <SettingsSection title="快捷键" desc="配置常用操作的键盘组合。">
-            <InsetPanel>
-              <ShortcutRow title="发送方式" desc="设置会话输入框里 Enter 与 Ctrl+Enter 的发送和换行行为。">
-                <SelectPill value={settings.sendMode} options={['Enter 发送', 'Ctrl+Enter 发送']} onChange={(sendMode) => patchSettings({ sendMode })} />
-              </ShortcutRow>
-              <ShortcutRow title="新建会话" desc="在会话页立即开始一个新会话。">
-                <div className="flex items-center gap-2">
-                  <Keycap>Ctrl</Keycap>
-                  <Keycap>N</Keycap>
-                  <button type="button" disabled className="settings-soft-button opacity-50">{t('录制')}</button>
-                  <button type="button" disabled className="settings-soft-button opacity-50">{t('恢复默认')}</button>
-                </div>
-              </ShortcutRow>
-            </InsetPanel>
-            <p className="text-xs text-neutral-500">{t('点击“录制”后按下组合键。至少包含 Ctrl、Alt、Shift 或 Cmd，按 Esc 取消。')}</p>
+            <ShortcutSettingsPanel settings={settings} patchSettings={patchSettings} />
           </SettingsSection>
         </SettingsStack>
       )
@@ -917,6 +976,198 @@ function SettingsContent({
     default:
       return null
   }
+}
+
+function MobilePairingPanel() {
+  const { t } = useI18n()
+  const [qrDataUrl, setQrDataUrl] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [webUrl, setWebUrl] = useState('')
+  const [expiresAt, setExpiresAt] = useState('')
+  const [pairingCode, setPairingCode] = useState('')
+  const [message, setMessage] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function createPairingCode() {
+    if (loading) return
+    setLoading(true)
+    setMessage('')
+    try {
+      const result = await api.startMobilePairing()
+      const dataUrl = await QRCode.toDataURL(result.qrPayload, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        scale: 7,
+        color: {
+          dark: '#171717',
+          light: '#ffffff',
+        },
+      })
+      setQrDataUrl(dataUrl)
+      setBaseUrl(result.baseUrl)
+      setWebUrl(result.webUrl)
+      setExpiresAt(result.expiresAt)
+      setPairingCode(result.pairingCode)
+      setMessage(t('请用 Android 客户端点击“扫码连接”扫描二维码'))
+    } catch (error: any) {
+      setMessage(error?.message || t('生成二维码失败'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <InsetPanel>
+      <div className="grid gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
+        <div className="grid min-h-64 place-items-center rounded-xl border border-neutral-200 bg-white p-4">
+          {qrDataUrl ? (
+            <img src={qrDataUrl} alt={t('移动端配对二维码')} className="h-52 w-52 rounded-lg" />
+          ) : (
+            <div className="grid h-52 w-52 place-items-center rounded-xl border border-dashed border-neutral-200 bg-neutral-50 text-neutral-400">
+              <QrCode className="h-10 w-10" />
+            </div>
+          )}
+        </div>
+        <div className="min-w-0 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900">
+              <Smartphone className="h-4 w-4" />
+              {t('局域网移动端配对')}
+            </div>
+            <button type="button" className="settings-soft-button" disabled={loading} onClick={() => void createPairingCode()}>
+              {loading ? t('生成中') : qrDataUrl ? t('刷新二维码') : t('生成二维码')}
+            </button>
+          </div>
+          <InfoRow label="Server" value={baseUrl || t('等待生成')} />
+          <InfoRow label="Web" value={webUrl || t('等待生成')} />
+          <InfoRow label="配对码" value={pairingCode || t('等待生成')} />
+          <InfoRow label="过期时间" value={expiresAt ? new Date(expiresAt).toLocaleString() : t('等待生成')} />
+          {message && <Notice tone={qrDataUrl ? 'neutral' : 'warning'}>{message}</Notice>}
+          <Notice>
+            {t('手机和电脑需要在同一 Wi-Fi 或局域网内。若扫码后无法连接，请确认 Windows 防火墙已放行服务端端口 8000。')}
+          </Notice>
+        </div>
+      </div>
+    </InsetPanel>
+  )
+}
+
+const shortcutActionLabels: Record<ShortcutActionId, { title: string; desc: string }> = {
+  'new-chat': { title: '新建会话', desc: '在会话页打开新建会话弹窗。' },
+  'quick-chat': { title: '快速对话', desc: '立即创建一个空白直接对话。' },
+  'open-folder': { title: '打开项目文件夹', desc: '选择本地项目文件夹并进入 Agent Group。' },
+  settings: { title: '打开设置', desc: '从任意页面进入设置中心。' },
+  'new-window': { title: '新建窗口', desc: '桌面端打开一个新的 AgentHub 窗口。' },
+  'close-window': { title: '关闭窗口', desc: '关闭当前桌面窗口。' },
+  reload: { title: '重新加载', desc: '刷新当前 AgentHub 页面。' },
+  minimize: { title: '最小化', desc: '最小化当前桌面窗口。' },
+  'toggle-maximize': { title: '最大化 / 还原', desc: '切换当前桌面窗口的最大化状态。' },
+  'toggle-fullscreen': { title: '切换全屏', desc: '进入或退出全屏模式。' },
+}
+
+function ShortcutSettingsPanel({
+  settings,
+  patchSettings,
+}: {
+  settings: AppSettings
+  patchSettings: (patch: Partial<AppSettings>) => void
+}) {
+  const { t } = useI18n()
+  const [recording, setRecording] = useState<ShortcutActionId | null>(null)
+  const [notice, setNotice] = useState('')
+  const bindings = normalizeShortcutBindings(settings.shortcuts)
+
+  useEffect(() => {
+    if (!recording) return
+
+    function handleKeyDown(event: KeyboardEvent) {
+      event.preventDefault()
+      event.stopPropagation()
+      const next = shortcutFromRecordingEvent(event)
+      if (next === 'Escape') {
+        setRecording(null)
+        setNotice(t('已取消录制'))
+        return
+      }
+      if (!next) {
+        setNotice(t('请按包含 Ctrl、Alt、Shift、Cmd 或功能键的组合'))
+        return
+      }
+
+      const activeRecording = recording
+      if (!activeRecording) return
+      const conflict = shortcutConflict(bindings, activeRecording, next)
+      const nextBindings = bindings.map((item) => {
+        if (item.action === activeRecording) return { ...item, keys: next }
+        if (conflict && item.action === conflict.action) return { ...item, keys: '' }
+        return item
+      })
+      patchSettings({ shortcuts: nextBindings })
+      setNotice(conflict ? `${t('已替换冲突快捷键')}：${t(shortcutActionLabels[conflict.action].title)}` : t('快捷键已更新'))
+      setRecording(null)
+    }
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [bindings, patchSettings, recording, t])
+
+  function restoreShortcut(action: ShortcutActionId) {
+    const defaults = new Map(defaultShortcutBindings.map((item) => [item.action, item.keys]))
+    patchSettings({
+      shortcuts: bindings.map((item) => (item.action === action ? { ...item, keys: defaults.get(action) ?? '' } : item)),
+    })
+    setNotice(t('已恢复默认快捷键'))
+  }
+
+  function restoreAllShortcuts() {
+    patchSettings({ shortcuts: defaultShortcutBindings })
+    setNotice(t('已恢复全部默认快捷键'))
+  }
+
+  function renderKeys(keys: string) {
+    if (!keys) return <span className="text-xs text-neutral-400">{t('未设置')}</span>
+    return keys.split('+').map((key) => <Keycap key={key}>{key}</Keycap>)
+  }
+
+  return (
+    <>
+      <InsetPanel>
+        <ShortcutRow title="发送方式" desc="设置会话输入框里 Enter 与 Ctrl+Enter 的发送和换行行为。">
+          <SelectPill value={settings.sendMode} options={['Enter 发送', 'Ctrl+Enter 发送']} onChange={(sendMode) => patchSettings({ sendMode })} />
+        </ShortcutRow>
+        {bindings.map((binding) => {
+          const copy = shortcutActionLabels[binding.action]
+          return (
+            <ShortcutRow key={binding.action} title={copy.title} desc={copy.desc}>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="flex min-w-[9rem] justify-end gap-1.5">{renderKeys(binding.keys)}</div>
+                <button
+                  type="button"
+                  className={cn('settings-soft-button', recording === binding.action && 'settings-shortcut-recording')}
+                  onClick={() => {
+                    setRecording(binding.action)
+                    setNotice(t('请按下新的快捷键组合，按 Esc 取消'))
+                  }}
+                >
+                  {recording === binding.action ? t('录制中') : t('录制')}
+                </button>
+                <button type="button" className="settings-soft-button" onClick={() => restoreShortcut(binding.action)}>
+                  {t('恢复默认')}
+                </button>
+              </div>
+            </ShortcutRow>
+          )
+        })}
+      </InsetPanel>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-neutral-500">{t('点击“录制”后按下组合键。至少包含 Ctrl、Alt、Shift 或 Cmd，按 Esc 取消。')}</p>
+        <button type="button" className="settings-soft-button" onClick={restoreAllShortcuts}>
+          {t('恢复全部默认')}
+        </button>
+      </div>
+      {notice && <p className="text-xs" style={{ color: 'var(--settings-accent)' }}>{notice}</p>}
+    </>
+  )
 }
 
 function ArchivedSessionsPanel({
@@ -1241,7 +1492,7 @@ function ArchivedSessionsPanel({
       </div>
 
       {deleteTarget && (
-        <div className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-transparent px-4" role="dialog" aria-modal="true" onMouseDown={() => setDeleteTarget(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/30 px-4 backdrop-blur-md" role="dialog" aria-modal="true" onMouseDown={() => setDeleteTarget(null)}>
           <div className="w-full max-w-[382px] rounded-2xl border p-4 shadow-[0_24px_80px_rgba(15,23,42,0.16)]" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }} onMouseDown={(event) => event.stopPropagation()}>
             <div className="flex items-start gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-red-50 text-red-500">
@@ -1503,6 +1754,28 @@ function InsetPanel({ children }: { children: React.ReactNode }) {
   return <div className="space-y-4 rounded-xl border p-4 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>{children}</div>
 }
 
+function AccountAvatarPreview({
+  name,
+  avatar,
+  size = 'small',
+}: {
+  name: string
+  avatar: string
+  size?: 'small' | 'large'
+}) {
+  const dimension = size === 'large' ? 'h-16 w-16 text-2xl' : 'h-10 w-10 text-sm'
+  const fallback = (name.trim().slice(0, 1) || 'Y').toUpperCase()
+  return (
+    <div className={cn('grid shrink-0 place-items-center overflow-hidden rounded-2xl border bg-white shadow-sm', dimension)} style={{ borderColor: 'var(--settings-border)' }}>
+      {avatar ? (
+        <img src={avatar} alt={name || 'Account avatar'} className="h-full w-full object-cover" />
+      ) : (
+        <span className="font-semibold" style={{ color: 'var(--settings-accent)' }}>{fallback}</span>
+      )}
+    </div>
+  )
+}
+
 function StorageMetric({ label, value }: { label: string; value: string }) {
   const { t } = useI18n()
   return (
@@ -1589,7 +1862,6 @@ function SwitchList({ items }: { items: Array<[string, boolean, (value: boolean)
 function ThemeDisplayPanel({ settings, patchSettings }: { settings: AppSettings; patchSettings: (patch: Partial<AppSettings>) => void }) {
   const { t } = useI18n()
   const mainTheme = resolveTheme(settings.mainWindowTheme)
-  const embeddedTheme = resolveTheme(settings.embeddedWindowTheme)
   const accent = accentColor(settings.accent)
 
   return (
@@ -1606,21 +1878,6 @@ function ThemeDisplayPanel({ settings, patchSettings }: { settings: AppSettings;
                   active={settings.mainWindowTheme === mode}
                   accent={accent}
                   onClick={() => patchSettings({ mainWindowTheme: mode, theme: mode === '跟随系统' ? settings.theme : mode })}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('嵌入窗口')}</div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {themeModes.map((mode) => (
-                <ThemeOption
-                  key={`embed-${mode}`}
-                  mode={mode}
-                  active={settings.embeddedWindowTheme === mode}
-                  accent={accent}
-                  onClick={() => patchSettings({ embeddedWindowTheme: mode })}
                 />
               ))}
             </div>
@@ -1649,7 +1906,7 @@ function ThemeDisplayPanel({ settings, patchSettings }: { settings: AppSettings;
           </div>
         </div>
 
-        <ThemePreview mainTheme={mainTheme} embeddedTheme={embeddedTheme} accent={accent} />
+        <ThemePreview mainTheme={mainTheme} accent={accent} />
       </div>
     </InsetPanel>
   )
@@ -1685,10 +1942,9 @@ function ThemeOption({ mode, active, accent, onClick }: { mode: string; active: 
   )
 }
 
-function ThemePreview({ mainTheme, embeddedTheme, accent }: { mainTheme: 'light' | 'dark'; embeddedTheme: 'light' | 'dark'; accent: string }) {
+function ThemePreview({ mainTheme, accent }: { mainTheme: 'light' | 'dark'; accent: string }) {
   const { t } = useI18n()
   const main = themePalette(mainTheme)
-  const embedded = themePalette(embeddedTheme)
   return (
     <div className="rounded-2xl border p-3" style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}>
       <div className="mb-3 flex items-center justify-between">
@@ -1712,14 +1968,6 @@ function ThemePreview({ mainTheme, embeddedTheme, accent }: { mainTheme: 'light'
           <div className="rounded-lg p-3" style={{ background: main.panel }}>
             <div className="h-2 w-4/5 rounded-full" style={{ background: main.text }} />
             <div className="mt-2 h-2 w-2/3 rounded-full" style={{ background: main.muted }} />
-          </div>
-          <div className="rounded-lg border p-3" style={{ background: embedded.panel, borderColor: embedded.border }}>
-            <div className="mb-2 h-2 w-20 rounded-full" style={{ background: embedded.text }} />
-            <div className="grid grid-cols-3 gap-2">
-              <div className="h-10 rounded-md" style={{ background: embedded.chrome }} />
-              <div className="h-10 rounded-md" style={{ background: accent, opacity: 0.9 }} />
-              <div className="h-10 rounded-md" style={{ background: embedded.chrome }} />
-            </div>
           </div>
         </div>
       </div>
@@ -2354,8 +2602,9 @@ function Field({ label, value, onChange, placeholder, type = 'text', wide = fals
 
 function sectionDescription(section: SectionKey) {
   const descriptions: Record<SectionKey, string> = {
+    显示: '选择窗口颜色、强调色，并预览聊天与工具面板的显示效果。',
     通用: '配置启动行为、语言、保存策略和基础交互习惯。',
-    显示: '调整主题、强调色、字体尺寸和聊天阅读密度。',
+
     快捷键: '管理高频操作快捷键，提升聊天和编程效率。',
     模型管理: '管理可用模型、API 端点、密钥变量和连接测试状态。',
     工具权限: '配置 Agent 可调用的工具、MCP 服务、自动化钩子和敏感操作确认。',
@@ -2371,6 +2620,7 @@ function createSettingsThemeStyle(settings: AppSettings): CSSProperties {
   const palette = themePalette(theme)
   const accent = accentColor(settings.accent)
   const isDark = theme === 'dark'
+  const readableAccent = readableAccentColor(accent, isDark)
 
   return {
     '--settings-bg': palette.bg,
@@ -2382,10 +2632,10 @@ function createSettingsThemeStyle(settings: AppSettings): CSSProperties {
     '--settings-text': palette.text,
     '--settings-muted': palette.muted,
     '--settings-muted-text': isDark ? '#a3a3a3' : '#666660',
-    '--settings-accent': accent,
-    '--settings-accent-soft': hexToRgba(accent, isDark ? 0.2 : 0.12),
-    '--settings-active-bg': hexToRgba(accent, isDark ? 0.18 : 0.1),
-    '--settings-active-border': hexToRgba(accent, isDark ? 0.55 : 0.32),
+    '--settings-accent': readableAccent,
+    '--settings-accent-soft': hexToRgba(readableAccent, isDark ? 0.18 : 0.12),
+    '--settings-active-bg': hexToRgba(readableAccent, isDark ? 0.16 : 0.1),
+    '--settings-active-border': hexToRgba(readableAccent, isDark ? 0.42 : 0.32),
     '--settings-danger-bg': isDark ? '#2a1717' : '#fff7f7',
   } as CSSProperties
 }

@@ -22,14 +22,16 @@
     "db:studio": "bun --filter @agenthub/db studio"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/bun": "latest",
-    "typescript": "^5.5.4",
-    "prettier": "^3.3.3"
+    "prettier": "^3.3.3",
+    "typescript": "^5.5.4"
   },
   "engines": {
     "bun": ">=1.1.0"
   },
   "dependencies": {
+    "adm-zip": "^0.5.17",
     "drizzle-orm": "0.36.0"
   }
 }

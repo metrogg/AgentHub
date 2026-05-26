@@ -1,4 +1,4 @@
-import { db, messages, eq, desc } from '@agenthub/db'
+import { db, messages, eq, and, desc, asc } from '@agenthub/db'
 import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
 import { runtimeRegistry } from './runtime'
@@ -12,6 +12,8 @@ export interface MessageRow {
   type: string
   content: string
   metadata: Record<string, unknown> | null
+  isPinned?: boolean
+  replyToMessageId?: string | null
   createdAt: Date
 }
 
@@ -99,14 +101,33 @@ export async function runAgentReply(
   const agentName = profile?.name ?? 'Claude'
   logger.info({ sessionId, msgId: userMsg.id, agentId }, 'Agent reply started')
 
-  const history = await db
+  const pinned = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.isPinned, true)))
+    .orderBy(asc(messages.createdAt))
+
+  const recent = await db
     .select()
     .from(messages)
     .where(eq(messages.sessionId, sessionId))
     .orderBy(desc(messages.createdAt))
     .limit(20)
 
-  const historyAsc = history.slice().reverse()
+  const seen = new Set<string>()
+  const historyAsc: typeof pinned = []
+  for (const m of pinned) {
+    if (!seen.has(m.id)) {
+      seen.add(m.id)
+      historyAsc.push(m)
+    }
+  }
+  for (const m of recent.slice().reverse()) {
+    if (!seen.has(m.id)) {
+      seen.add(m.id)
+      historyAsc.push(m)
+    }
+  }
 
   const streamMsgId = crypto.randomUUID()
 
@@ -123,10 +144,27 @@ export async function runAgentReply(
   try {
     if (profile) {
       const runtime = runtimeRegistry.resolveForProfile(profile)
+      const promptWithReply = (() => {
+        if (!userMsg.replyToMessageId) return userMsg.content
+        const repliedTo = historyAsc.find((m) => m.id === userMsg.replyToMessageId)
+        if (!repliedTo) return userMsg.content
+        const preview = repliedTo.content.slice(0, 200)
+        return `[回复 ${repliedTo.senderType === 'user' ? '用户' : 'Agent'}: ${preview}${repliedTo.content.length > 200 ? '...' : ''}]\n${userMsg.content}`
+      })()
+      const historyWithReply = historyAsc.map((m) => {
+        if (!m.replyToMessageId) return { senderType: m.senderType, content: m.content }
+        const repliedTo = historyAsc.find((x) => x.id === m.replyToMessageId)
+        if (!repliedTo) return { senderType: m.senderType, content: m.content }
+        const preview = repliedTo.content.slice(0, 200)
+        return {
+          senderType: m.senderType,
+          content: `[回复 ${repliedTo.senderType === 'user' ? '用户' : 'Agent'}: ${preview}${repliedTo.content.length > 200 ? '...' : ''}]\n${m.content}`,
+        }
+      })
       const ctx = {
         sessionId,
-        prompt: userMsg.content,
-        history: historyAsc.map((m) => ({ senderType: m.senderType, content: m.content })),
+        prompt: promptWithReply,
+        history: historyWithReply,
         profile,
         signal: run.controller.signal,
         workspacePath: profile.projectPath ?? null,
@@ -159,10 +197,20 @@ export async function runAgentReply(
     } else {
       // 无 profile 时回退到默认 LLM
       const { streamReply } = await import('./llm')
-      const llmMessages = historyAsc.map((m) => ({
-        role: (m.senderType === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-        content: m.content,
-      }))
+      const llmMessages = historyAsc.map((m) => {
+        let content = m.content
+        if (m.replyToMessageId) {
+          const repliedTo = historyAsc.find((x) => x.id === m.replyToMessageId)
+          if (repliedTo) {
+            const preview = repliedTo.content.slice(0, 200)
+            content = `[回复 ${repliedTo.senderType === 'user' ? '用户' : 'Agent'}: ${preview}${repliedTo.content.length > 200 ? '...' : ''}]\n${m.content}`
+          }
+        }
+        return {
+          role: (m.senderType === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+          content,
+        }
+      })
       for await (const delta of streamReply(llmMessages, undefined, undefined, run.controller.signal)) {
         if (run.cancelled) break
         fullContent += delta

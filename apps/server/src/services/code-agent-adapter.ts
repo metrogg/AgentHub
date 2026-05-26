@@ -7,6 +7,7 @@ import { db, settings } from '@agenthub/db'
 import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
+import { getLlmRuntimeStatus, resolveLlmRuntimeConfig } from './llm-client'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -181,7 +182,7 @@ export async function* streamCodeAgentReply(
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
-  const configured = isRuntimeConfigured(type, adapter)
+  const configured = await isRuntimeConfigured(type, adapter)
   const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION') !== 'false'
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
 
@@ -281,9 +282,27 @@ export async function* streamCodeAgentReply(
   yield formatCodeAgentFailure(adapter, finalResult)
 }
 
-function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
+async function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
   if (readEnv(adapter.envKey)) return true
-  return type === 'codex' || type === 'opencode' || type === 'claude-code' || type === 'gemini'
+  if (type === 'codex') return true
+
+  try {
+    const llmStatus = await getLlmRuntimeStatus()
+    if (!llmStatus.apiKeyConfigured) return false
+    if (type === 'claude-code') {
+      if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com')) return true
+      if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
+    }
+    if (type === 'gemini') {
+      if (llmStatus.provider === 'gemini' || llmStatus.provider === 'google') return true
+      if (llmStatus.apiKeySource === 'GEMINI_API_KEY') return true
+    }
+    if (type === 'opencode') return true
+  } catch (err: any) {
+    console.error(`[isRuntimeConfigured] getLlmRuntimeStatus failed for ${type}:`, err?.message || String(err))
+  }
+
+  return false
 }
 
 function codeAgentBlockerText(options: {
@@ -496,7 +515,7 @@ async function runCodeAgentCommand(
 
   const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
     cwd,
-    env: mergedEnv(adapter.command),
+    env: await mergedEnv(adapter),
     stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -1189,15 +1208,59 @@ function readEnv(key: string) {
   return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
-function mergedEnv(command?: string) {
+async function mergedEnv(adapter?: CodeAgentAdapter) {
   const base = { ...rootEnv(), ...Bun.env, ...codexAuthEnv() }
-  if (command !== 'codex') return base
+
+  // 若 CLI 需要特定 API Key，优先从 Coding Tools 设置、再自动注入模型配置中的 key
+  if (adapter?.envKey) {
+    const directValue = readEnv(adapter.envKey)
+    if (!directValue) {
+      // 1) 尝试读取前端保存的 CODE_AGENT_ACTIVE_API_KEY
+      try {
+        const rows = await db.select().from(settings).where(eq(settings.key, 'CODE_AGENT_ACTIVE_API_KEY')).limit(1)
+        const savedKey = rows[0]?.value?.trim()
+        if (savedKey) {
+          base[adapter.envKey] = savedKey
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2) 若仍无，尝试从主模型配置解析对应 provider 的 API Key
+      if (!base[adapter.envKey]) {
+        try {
+          const llmConfig = await resolveLlmRuntimeConfig()
+          if (llmConfig.apiKey && isProviderMatching(adapter.envKey, llmConfig.provider, llmConfig.baseUrl)) {
+            base[adapter.envKey] = llmConfig.apiKey
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  if (adapter?.command !== 'codex') return base
 
   const runtimeHome = prepareCodexRuntimeHome()
   return {
     ...base,
     CODEX_HOME: runtimeHome,
   }
+}
+
+function isProviderMatching(envKey: string, provider?: string, baseUrl?: string) {
+  if (envKey === 'ANTHROPIC_API_KEY') {
+    return provider === 'anthropic' || baseUrl?.includes('anthropic.com')
+  }
+  if (envKey === 'OPENAI_API_KEY') {
+    return provider === 'openai' || baseUrl?.includes('openai.com')
+  }
+  if (envKey === 'GEMINI_API_KEY') {
+    return provider === 'gemini' || provider === 'google'
+  }
+  // OpenCode / others: any provider is fine
+  return true
 }
 
 function rootEnv() {

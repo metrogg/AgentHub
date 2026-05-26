@@ -24,6 +24,7 @@ export const sessions = sqliteTable('sessions', {
   ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   workspaceId: text('workspace_id'),
   workspaceAgentId: text('workspace_agent_id'),
+  metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
   createdAt: now(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })
@@ -66,7 +67,7 @@ export const workspaceAgents = sqliteTable('workspace_agents', {
 
 export interface AgentArtifact {
   id: string
-  kind: 'diff' | 'file' | 'preview' | 'deploy' | 'log'
+  kind: 'diff' | 'file' | 'preview' | 'deploy' | 'log' | 'workflow'
   title: string
   description?: string
   source?: string
@@ -134,6 +135,8 @@ export const messages = sqliteTable('messages', {
   type: text('type').notNull().default('text'),
   content: text('content').notNull(),
   metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
+  isPinned: integer('is_pinned', { mode: 'boolean' }).notNull().default(false),
+  replyToMessageId: text('reply_to_message_id'),
   createdAt: now(),
 })
 
