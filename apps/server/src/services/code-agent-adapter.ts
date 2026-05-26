@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
 import { getLlmRuntimeStatus, resolveLlmRuntimeConfig } from './llm-client'
+import { env } from '../env'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -183,7 +184,7 @@ export async function* streamCodeAgentReply(
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
   const configured = await isRuntimeConfigured(type, adapter)
-  const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION') !== 'false'
+  const executionEnabled = env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
 
   if (!canExecute) {
