@@ -9,6 +9,21 @@ export interface PlannerInput {
   workspacePath?: string | null
 }
 
+interface SpecModule {
+  name: string
+  responsibility: string
+  interfaces: string[]
+  dependsOn: string[]
+}
+
+interface ProjectSpec {
+  goal: string
+  modules: SpecModule[]
+  dataFlow: string
+  techStack: string
+  fileLayout: string[]
+}
+
 export class Planner {
   async createPlan(input: PlannerInput): Promise<ExecutionPlan> {
     const { goal, agents, workspacePath } = input
@@ -28,15 +43,24 @@ export class Planner {
       }
     }
 
+    // Spec-first：先让 LLM 输出架构规格，再基于规格生成任务计划
+    let spec: ProjectSpec | undefined
     try {
-      const generated = await this.generateWithLlm(goal, agents, specPhases)
+      spec = await this.generateSpec(goal, agents, workspacePath)
+      logger.info({ goal, moduleCount: spec.modules.length }, 'Planner generated spec')
+    } catch (err: any) {
+      logger.warn({ err: err?.message }, 'Planner spec generation failed, falling back to direct plan')
+    }
+
+    try {
+      const generated = await this.generateWithLlm(goal, agents, spec, specPhases)
       const normalized = this.normalizeGeneratedPlan(runId, goal, generated, agents)
       if (normalized) return normalized
     } catch (error: any) {
       logger.warn({ err: error?.message }, 'Planner LLM generation failed, using fallback')
     }
 
-    return this.buildFallbackPlan(runId, goal, agents)
+    return this.buildFallbackPlan(runId, goal, agents, spec)
   }
 
   private formatSpecPhases(spec: import('../harness').HarnessSpec): string {
@@ -54,7 +78,52 @@ export class Planner {
     return lines.join('\n')
   }
 
-  private async generateWithLlm(goal: string, agents: ExecutionAgent[], specPhases?: string): Promise<unknown> {
+  private async generateSpec(goal: string, agents: ExecutionAgent[], workspacePath?: string | null): Promise<ProjectSpec> {
+    const prompt = `请为以下项目生成一份架构规格说明（Spec）。
+
+目标：${goal}
+
+可用 Agent 团队：
+${agents.map((a) => `- ${a.name}（${a.role}）：${a.description || '无描述'}`).join('\n')}
+
+请返回 JSON（不要 Markdown 代码块）：
+{
+  "goal": "项目目标重述",
+  "modules": [
+    {
+      "name": "模块名",
+      "responsibility": "该模块的职责描述",
+      "interfaces": ["对外暴露的接口/函数/类名"],
+      "dependsOn": ["依赖的其他模块名"]
+    }
+  ],
+  "dataFlow": "模块间数据流描述（200字以内）",
+  "techStack": "建议技术栈",
+  "fileLayout": ["建议的文件结构，如 src/engine.ts"]
+}`
+    let output = ''
+    for await (const delta of streamReply([{ role: 'user', content: prompt }], '你是软件架构专家。')) {
+      output += delta
+      if (output.length > 15_000) break
+    }
+    const jsonText = extractJsonObject(output)
+    if (!jsonText) throw new Error('Spec generation returned no JSON')
+    const parsed = JSON.parse(jsonText) as Partial<ProjectSpec>
+    return {
+      goal: parsed.goal || goal,
+      modules: parsed.modules || [],
+      dataFlow: parsed.dataFlow || '',
+      techStack: parsed.techStack || '',
+      fileLayout: parsed.fileLayout || [],
+    }
+  }
+
+  private async generateWithLlm(
+    goal: string,
+    agents: ExecutionAgent[],
+    spec?: ProjectSpec,
+    specPhases?: string,
+  ): Promise<unknown> {
     const agentCatalog = agents.map((agent) => ({
       key: agent.key,
       name: agent.name,
@@ -68,6 +137,19 @@ export class Planner {
       systemPrompt: agent.systemPrompt,
     }))
 
+    const specBlock = spec
+      ? `
+【架构规格】
+项目目标：${spec.goal}
+模块划分：
+${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.dependsOn.join('、') || '无'}）`).join('\n')}
+数据流：${spec.dataFlow}
+技术栈：${spec.techStack}
+建议文件结构：${spec.fileLayout.join(', ')}
+【规格结束】
+请严格按照以上模块划分分配任务，每个模块对应 1 个 task。`
+      : ''
+
     const system = [
       'You are AgentHub Orchestrator.',
       'Create a concise multi-agent execution plan using only the provided agent keys.',
@@ -76,6 +158,8 @@ export class Planner {
       'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
       'If tasks can run in parallel, put them in the same parallelGroup.',
       'Dependencies should reference task ids, not agent keys.',
+      'Each task must include its output contract: what files/interfaces it will produce, so downstream tasks know what to depend on.',
+      specBlock,
       specPhases || '',
     ].filter(Boolean).join('\n')
 
@@ -164,10 +248,52 @@ export class Planner {
     }
   }
 
-  private buildFallbackPlan(runId: string, goal: string, agents: ExecutionAgent[]): ExecutionPlan {
+  private buildFallbackPlan(runId: string, goal: string, agents: ExecutionAgent[], spec?: ProjectSpec): ExecutionPlan {
     const title = titleFromGoal(goal)
     const selectedAgents = agents.length ? agents.slice(0, Math.max(1, Math.min(agents.length, 4))) : []
 
+    // 如果有 Spec，按模块生成 fallback 任务
+    if (spec && spec.modules.length > 0) {
+      const tasks: ExecutionTask[] = []
+      const agentMap = new Map(selectedAgents.map((a) => [a.id, a]))
+      const moduleToTaskId = new Map<string, string>()
+
+      for (let i = 0; i < spec.modules.length; i++) {
+        const m = spec.modules[i]!
+        const taskId = slugifyTaskId(m.name, i)
+        moduleToTaskId.set(m.name, taskId)
+        // 根据模块职责匹配 Agent
+        const keywords = [m.name, ...m.responsibility.split(/\s+/)]
+        const matched = this.pickAgent(selectedAgents, keywords) ?? selectedAgents[i % selectedAgents.length]!
+        tasks.push({
+          id: taskId,
+          title: `实现模块：${m.name}`,
+          description: `${m.responsibility}\n需暴露接口：${m.interfaces.join('、') || '无'}\n技术栈：${spec.techStack}`,
+          agentId: matched.id,
+          dependencies: m.dependsOn
+            .map((dep) => moduleToTaskId.get(dep))
+            .filter((d): d is string => Boolean(d)),
+          maxRetries: 2,
+        })
+      }
+
+      // 如果只有一个模块，追加 review 任务
+      if (tasks.length === 1 && selectedAgents.length > 1) {
+        const reviewer = this.pickAgent(selectedAgents, ['审查', 'review', 'test']) ?? selectedAgents[selectedAgents.length - 1]!
+        tasks.push({
+          id: 'review',
+          title: '审查与测试',
+          description: `检查「${goal}」的交互边界、异常状态和测试缺口。`,
+          agentId: reviewer.id,
+          dependencies: [tasks[0]!.id],
+          maxRetries: 2,
+        })
+      }
+
+      return { runId, title, goal, agents: selectedAgents, tasks }
+    }
+
+    // 无 Spec 时的经典三阶段 fallback
     const leadAgent = this.pickAgent(selectedAgents, ['规划', '架构', 'architect', 'plan']) ?? selectedAgents[0]!
     const buildAgent =
       this.pickAgent(selectedAgents, ['实现', '代码', 'coder', 'code', 'build']) ??

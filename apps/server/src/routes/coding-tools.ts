@@ -475,12 +475,15 @@ async function probeTool(probe: ToolProbe) {
 }
 
 async function probeToolDirect(probe: ToolProbe) {
+  console.log(`[probe] start ${probe.id}: command=${probe.command}`)
   const version = await runVersionProbe(probe.command)
+  console.log(`[probe] version ${probe.id}: ${version ?? 'null'}`)
   const configEnv = configEnvName(probe)
   const configured = await isDirectToolConfigured(probe, configEnv)
+  console.log(`[probe] configured ${probe.id}: ${configured}`)
   const installed = Boolean(version)
   const reachable = await isCommandReachable(probe.command)
-  return {
+  const result = {
     id: probe.id,
     command: probe.command,
     installed,
@@ -490,6 +493,8 @@ async function probeToolDirect(probe: ToolProbe) {
     configMessage: configMessage({ configEnv, configured, installed, runtime: '本机环境', toolId: probe.id }),
     diagnostics: `reachable=${reachable} version=${version ?? 'null'} env=${configEnv} envValue=${readEnv(configEnv) ? 'set' : 'unset'}`,
   }
+  console.log(`[probe] result ${probe.id}: installed=${installed} configured=${configured} diagnostics=${result.diagnostics}`)
+  return result
 }
 
 async function installAllCliTools() {
@@ -610,7 +615,10 @@ async function tryVersionProbe(command: string, flag: string): Promise<string | 
     })
     const timed = await Promise.race([
       proc.exited,
-      new Promise<number>((resolve) => setTimeout(() => resolve(124), 2500)),
+      new Promise<number>((resolve) => setTimeout(() => {
+        try { proc.kill() } catch {}
+        resolve(124)
+      }, 8000)),
     ])
 
     const stdout = await new Response(proc.stdout).text().catch(() => '')
@@ -647,7 +655,13 @@ async function isCommandReachable(command: string): Promise<boolean> {
   const args = isWindows ? ['/d', '/s', '/c', commandLine] : ['-lc', commandLine]
   try {
     const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
-    const code = await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 2500))])
+    const code = await Promise.race([proc.exited, new Promise<number>((resolve) => {
+      const timer = setTimeout(() => {
+        try { proc.kill() } catch {}
+        resolve(124)
+      }, 8000)
+      return () => clearTimeout(timer)
+    })])
     return code === 0
   } catch {
     return false

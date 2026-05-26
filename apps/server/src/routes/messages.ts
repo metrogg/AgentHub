@@ -148,6 +148,7 @@ type AgentDraft = NonNullable<z.infer<typeof confirmAgentDraftSchema>['draft']>
 type DemoArtifact =
   | {
       id: string
+      kind: 'web_preview'
       type: 'preview'
       title: string
       description: string
@@ -157,6 +158,7 @@ type DemoArtifact =
     }
   | {
       id: string
+      kind: 'diff'
       type: 'diff'
       title: string
       description: string
@@ -166,6 +168,7 @@ type DemoArtifact =
     }
   | {
       id: string
+      kind: 'file'
       type: 'file'
       title: string
       description: string
@@ -176,6 +179,7 @@ type DemoArtifact =
     }
   | {
       id: string
+      kind: 'deploy'
       type: 'deploy'
       title: string
       description: string
@@ -186,6 +190,7 @@ type DemoArtifact =
     }
   | {
       id: string
+      kind: 'workflow'
       type: 'workflow'
       title: string
       description: string
@@ -638,6 +643,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const runId = crypto.randomUUID()
 
     // 创建 workspaceTasks 和 child sessions
+    // 每个任务独立 session，不复用，避免上下文污染
     for (const [index, task] of parsed.tasks.entries()) {
       const agent = agentsByKey.get(task.agentKey)
       const [workspaceTask] = await db
@@ -657,7 +663,20 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         })
         .returning()
 
-      const childSession = await ensureAgentChildSession(workspaceId, parsed.title, user.sub, agent ?? null, task.title)
+      // Orchestrator 任务：每个 task 独立 session，不复用
+      const [childSession] = await db
+        .insert(sessions)
+        .values({
+          title: agent ? `${parsed.title} / ${agent.name} / ${task.title.slice(0, 24)}` : `${parsed.title} / ${task.title.slice(0, 24)}`,
+          type: 'direct',
+          ownerId: user.sub,
+          workspaceId,
+          workspaceAgentId: agent?.id ?? null,
+          metadata: { orchestratorRunId: runId, orchestratorTaskId: task.id },
+        })
+        .returning()
+      if (!childSession) throw new HTTPException(500, { message: 'Failed to create task session' })
+
       if (workspaceTask) {
         await db
           .update(workspaceTasks)
@@ -738,6 +757,7 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
   if (wantsWorkflow) {
     artifacts.push({
       id: `workflow-${crypto.randomUUID()}`,
+      kind: 'workflow',
       type: 'workflow',
       title: 'Agent 协作 Workflow',
       description: '多 Agent 协作工作流定义，可在聊天流中可视化预览并一键执行。',
@@ -760,6 +780,7 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
   if (wantsPreview || (!wantsDeploy && !wantsDiff && !wantsFile && !wantsWorkflow)) {
     artifacts.push({
       id: `web-${crypto.randomUUID()}`,
+      kind: 'web_preview',
       type: 'preview',
       title: 'AgentHub Web Preview',
       description: '聊天流内联网页预览，可展开后接入 iframe、Sandpack 或真实预览 URL。',
@@ -772,9 +793,10 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
   if (wantsDiff) {
     artifacts.push({
       id: `diff-${crypto.randomUUID()}`,
+      kind: 'diff',
       type: 'diff',
       title: 'UI 变更 Diff',
-      description: '展示 Agent 产出的代码补丁，后续可接"一键应用 Diff"。',
+      description: '展示 Agent 产出的代码补丁，后续可接”一键应用 Diff”。',
       filePath: 'apps/web/src/components/chat/SessionList.tsx',
       language: 'tsx',
       diff: [
@@ -797,6 +819,7 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
   if (wantsDeploy) {
     artifacts.push({
       id: `deploy-${crypto.randomUUID()}`,
+      kind: 'deploy',
       type: 'deploy',
       title: '静态站点部署',
       description: '部署状态卡片先以 Demo 方式闭环，真实版本可接 Vercel、Netlify 或容器平台。',
@@ -810,6 +833,7 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
   if (wantsFile) {
     artifacts.push({
       id: `file-${crypto.randomUUID()}`,
+      kind: 'file',
       type: 'file',
       title: '源码打包附件',
       description: '用于展示 Agent 回复中的文件附件入口。',

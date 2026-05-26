@@ -7,7 +7,7 @@ import { db, settings } from '@agenthub/db'
 import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
-import { resolveLlmRuntimeConfig } from './llm-client'
+import { getLlmRuntimeStatus, resolveLlmRuntimeConfig } from './llm-client'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -182,7 +182,7 @@ export async function* streamCodeAgentReply(
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
-  const configured = isRuntimeConfigured(type, adapter)
+  const configured = await isRuntimeConfigured(type, adapter)
   const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION') !== 'false'
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
 
@@ -282,9 +282,27 @@ export async function* streamCodeAgentReply(
   yield formatCodeAgentFailure(adapter, finalResult)
 }
 
-function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
+async function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
   if (readEnv(adapter.envKey)) return true
-  return type === 'codex' || type === 'opencode' || type === 'claude-code' || type === 'gemini'
+  if (type === 'codex') return true
+
+  try {
+    const llmStatus = await getLlmRuntimeStatus()
+    if (!llmStatus.apiKeyConfigured) return false
+    if (type === 'claude-code') {
+      if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com')) return true
+      if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
+    }
+    if (type === 'gemini') {
+      if (llmStatus.provider === 'gemini' || llmStatus.provider === 'google') return true
+      if (llmStatus.apiKeySource === 'GEMINI_API_KEY') return true
+    }
+    if (type === 'opencode') return true
+  } catch (err: any) {
+    console.error(`[isRuntimeConfigured] getLlmRuntimeStatus failed for ${type}:`, err?.message || String(err))
+  }
+
+  return false
 }
 
 function codeAgentBlockerText(options: {
@@ -1212,7 +1230,7 @@ async function mergedEnv(adapter?: CodeAgentAdapter) {
       if (!base[adapter.envKey]) {
         try {
           const llmConfig = await resolveLlmRuntimeConfig()
-          if (llmConfig.apiKey) {
+          if (llmConfig.apiKey && isProviderMatching(adapter.envKey, llmConfig.provider, llmConfig.baseUrl)) {
             base[adapter.envKey] = llmConfig.apiKey
           }
         } catch {
@@ -1229,6 +1247,20 @@ async function mergedEnv(adapter?: CodeAgentAdapter) {
     ...base,
     CODEX_HOME: runtimeHome,
   }
+}
+
+function isProviderMatching(envKey: string, provider?: string, baseUrl?: string) {
+  if (envKey === 'ANTHROPIC_API_KEY') {
+    return provider === 'anthropic' || baseUrl?.includes('anthropic.com')
+  }
+  if (envKey === 'OPENAI_API_KEY') {
+    return provider === 'openai' || baseUrl?.includes('openai.com')
+  }
+  if (envKey === 'GEMINI_API_KEY') {
+    return provider === 'gemini' || provider === 'google'
+  }
+  // OpenCode / others: any provider is fine
+  return true
 }
 
 function rootEnv() {

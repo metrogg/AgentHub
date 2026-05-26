@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 
 export interface BranchContext {
   branch: string
@@ -19,10 +20,32 @@ export interface MergeResult {
 
 export class GitBranchManager {
   /**
+   * 确保 projectPath 是一个有效的 git 仓库（自动 init + 空 commit）
+   */
+  async ensureGitRepo(projectPath: string): Promise<void> {
+    const gitDir = join(projectPath, '.git')
+    if (existsSync(gitDir)) {
+      try {
+        await this.execGit(projectPath, ['rev-parse', 'HEAD'])
+        return
+      } catch {
+        // .git 存在但没有 commit，继续初始化
+      }
+    }
+
+    logger.info({ projectPath }, 'Auto-initializing git repo for workspace')
+    await this.execGit(projectPath, ['init'])
+    await this.execGit(projectPath, ['config', 'user.email', 'agenthub@local'])
+    await this.execGit(projectPath, ['config', 'user.name', 'AgentHub'])
+    await this.execGit(projectPath, ['commit', '--allow-empty', '-m', 'init: AgentHub workspace'])
+  }
+
+  /**
    * 为 Agent 任务准备独立分支 + Git worktree
-   * 1. stash 当前未提交变更（保护用户工作区）
-   * 2. 从 base branch 创建新分支（不切换）
-   * 3. 使用 git worktree add 创建独立工作目录
+   * 1. 自动 git init（如果项目不是 git 仓库）
+   * 2. stash 当前未提交变更（保护用户工作区）
+   * 3. 从 base branch 创建新分支（不切换）
+   * 4. 使用 git worktree add 创建独立工作目录
    */
   async prepareBranch(
     projectPath: string,
@@ -30,6 +53,8 @@ export class GitBranchManager {
     agentKey: string,
     taskId: string
   ): Promise<BranchContext> {
+    await this.ensureGitRepo(projectPath)
+
     const branch = `agenthub/${runId}/${agentKey}/${taskId}`
 
     const originalBranch = await this.getCurrentBranch(projectPath)

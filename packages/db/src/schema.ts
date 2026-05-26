@@ -24,6 +24,7 @@ export const sessions = sqliteTable('sessions', {
   ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   workspaceId: text('workspace_id'),
   workspaceAgentId: text('workspace_agent_id'),
+  metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
   createdAt: now(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })

@@ -64,6 +64,13 @@
       "when": 1729843200001,
       "tag": "0008_message_replies",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1729843200002,
+      "tag": "0009_sessions_metadata",
+      "breakpoints": true
     }
   ]
 }

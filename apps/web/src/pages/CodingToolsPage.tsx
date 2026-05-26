@@ -131,6 +131,7 @@ export default function CodingToolsPage() {
   const [codexAuthFileMessage, setCodexAuthFileMessage] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [toolPage, setToolPage] = useState(0)
+  const [statusError, setStatusError] = useState<string | null>(null)
 
   useEffect(() => {
     api.getSettings().then((settings) => {
@@ -161,7 +162,7 @@ export default function CodingToolsPage() {
   }, [])
 
   const activeTool = tools.find((tool) => tool.id === activeToolId) ?? tools[0]
-  const envSnippet = buildEnvSnippet(activeTool)
+  const envSnippet = buildEnvSnippet(activeTool, statuses[activeTool.id]?.configured)
   const runCommand = buildRunCommand(activeTool)
   const installedCount = useMemo(() => tools.filter((tool) => statuses[tool.id]?.installed).length, [statuses, tools])
   const configuredCount = useMemo(
@@ -179,9 +180,12 @@ export default function CodingToolsPage() {
 
   async function refreshStatus(probeTools = tools) {
     setChecking(true)
+    setStatusError(null)
     try {
       const res = await api.getCodingToolStatus(probeTools.map(({ apiKeyEnv, id, command }) => ({ apiKeyEnv, id, command })))
       setStatuses(Object.fromEntries(res.items.map((item) => [item.id, item])))
+    } catch (error: any) {
+      setStatusError(error?.message || '检测失败，请确认服务端已启动')
     } finally {
       setChecking(false)
     }
@@ -513,6 +517,12 @@ export default function CodingToolsPage() {
             </div>
           </section>
 
+          {statusError && (
+            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+              {statusError}
+            </div>
+          )}
+
           <section className="relative mt-5">
             <div className="grid gap-3 lg:grid-cols-3">
               {visibleTools.map((tool) => {
@@ -613,11 +623,18 @@ export default function CodingToolsPage() {
                 )}
               </div>
               {(activeTool.id === 'claude-code' || activeTool.id === 'opencode' || activeTool.id === 'gemini') && (
-                <div className="mt-3 rounded-lg border border-teal-100 bg-teal-50/60 px-3 py-2 text-xs leading-5 text-teal-800">
-                  <span className="font-medium">自动获取 API Key：</span>
-                  {activeTool.id === 'claude-code' && 'Claude Code 会优先读取模型配置中的 Anthropic 凭据，无需在此重复填写。'}
-                  {activeTool.id === 'opencode' && 'OpenCode 会优先读取模型配置中的 API Key，无需在此重复填写。'}
-                  {activeTool.id === 'gemini' && 'Gemini CLI 会优先读取模型配置中的 Google 凭据，无需在此重复填写。'}
+                <div className="mt-3 space-y-2">
+                  <div className="rounded-lg border border-teal-100 bg-teal-50/60 px-3 py-2 text-xs leading-5 text-teal-800">
+                    <span className="font-medium">自动获取 API Key：</span>
+                    {activeTool.id === 'claude-code' && 'Claude Code 会优先读取模型配置中的 Anthropic 凭据，无需在此重复填写。'}
+                    {activeTool.id === 'opencode' && 'OpenCode 会优先读取模型配置中的 API Key，无需在此重复填写。'}
+                    {activeTool.id === 'gemini' && 'Gemini CLI 会优先读取模型配置中的 Google 凭据，无需在此重复填写。'}
+                  </div>
+                  {statuses[activeTool.id] && !statuses[activeTool.id].configured && (
+                    <div className="rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2 text-xs leading-5 text-amber-800">
+                      当前未检测到可用凭据。如需使用，请先在「模型设置」中配置 {activeTool.apiKeyEnv} 或选择对应 provider。
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1150,9 +1167,15 @@ function ToolIcon({ toolId, name }: { toolId: string; name: string }) {
   return <img src={toolIcons[toolId] ?? '/codex-color.svg'} alt={`${name} icon`} className="h-5 w-5 object-contain" draggable={false} />
 }
 
-function buildEnvSnippet(tool: ToolConfig) {
+function buildEnvSnippet(tool: ToolConfig, configured?: boolean) {
   if (tool.id === 'codex') {
     return '# Codex reads local ~/.codex/config.toml\n# Edit model, provider, base_url, env_key, and wire_api in config.toml.'
+  }
+  if (tool.id === 'claude-code' || tool.id === 'opencode' || tool.id === 'gemini') {
+    if (configured) {
+      return `# ${tool.apiKeyEnv} is auto-detected from model settings.`
+    }
+    return `# ${tool.apiKeyEnv}=your_api_key_here\n# Or configure the matching provider in Model Settings for auto-detection.`
   }
   return `${tool.apiKeyEnv}=your_api_key_here`
 }
