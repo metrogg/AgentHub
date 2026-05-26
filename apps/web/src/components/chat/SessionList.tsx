@@ -15,6 +15,7 @@ import {
   Loader2,
   Menu,
   MessageCircle,
+  PanelLeft,
   Pin,
   PinOff,
   Search,
@@ -50,7 +51,7 @@ const defaultAccountProfile: AccountProfile = {
   avatar: '',
 }
 
-export default function SessionList() {
+export default function SessionList({ onCollapse }: { onCollapse?: () => void }) {
   const navigate = useNavigate()
   const { t, language } = useI18n()
   const location = useLocation()
@@ -273,6 +274,17 @@ export default function SessionList() {
           </div>
           <span className="text-sm font-semibold text-neutral-950">AgentHub</span>
         </div>
+        {onCollapse && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="grid h-8 w-8 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-200 hover:text-neutral-900"
+            aria-label="收起侧栏"
+            title="收起侧栏"
+          >
+            <PanelLeft className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       <div className={cn('px-2 pt-3', activeTab !== 'messages' && 'hidden')}>

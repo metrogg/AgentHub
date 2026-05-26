@@ -54,29 +54,34 @@ export default function ChatPage() {
             transition: 'opacity 300ms cubic-bezier(0.4,0,0.2,1), transform 300ms cubic-bezier(0.4,0,0.2,1)',
           }}
         >
-          <SessionList />
+          <SessionList onCollapse={toggleSidebar} />
         </div>
       </div>
-      <main className="min-w-0 flex-1">
+      <main className="relative min-w-0 flex-1">
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className="absolute left-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900"
+            aria-label="展开侧栏"
+            title="展开侧栏"
+          >
+            <PanelLeft className="h-4 w-4 rotate-180" />
+          </button>
+        )}
         {sessionId ? (
           <AgentHubRuntimeProvider>
-            <Thread sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} />
+            <Thread />
           </AgentHubRuntimeProvider>
         ) : (
-          <Welcome sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} />
+          <Welcome />
         )}
       </main>
     </div>
   )
 }
 
-function Welcome({
-  sidebarCollapsed,
-  onToggleSidebar,
-}: {
-  sidebarCollapsed: boolean
-  onToggleSidebar: () => void
-}) {
+function Welcome() {
   const { t } = useI18n()
   const { sendMode } = useShortcutSettings()
   const navigate = useNavigate()
@@ -290,25 +295,6 @@ function Welcome({
 
   return (
     <div className="agenthub-welcome-root flex h-full flex-col bg-white">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 px-7">
-        <div className="flex items-center gap-4">
-          <button
-            type="button"
-            onClick={onToggleSidebar}
-            className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
-            aria-label={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
-            title={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
-          >
-            <PanelLeft className={['h-4 w-4 transition-transform duration-300', sidebarCollapsed ? 'rotate-180' : 'rotate-0'].join(' ')} />
-          </button>
-          <div className="flex items-center gap-3 text-sm">
-            <span className="font-semibold text-neutral-950">AgentHub</span>
-            <span className="text-neutral-300">/</span>
-            <span className="text-neutral-500">{t('对话由 AI 生成')}</span>
-          </div>
-        </div>
-      </header>
-
       <div className="flex flex-1 flex-col items-center px-8">
         <section className="mt-[18vh] w-full max-w-[704px]">
           <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">

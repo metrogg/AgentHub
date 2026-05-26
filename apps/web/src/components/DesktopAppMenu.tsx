@@ -1,60 +1,48 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { Bot, FolderOpen, Menu, MessageSquarePlus, Minus, RotateCw, Square, X } from 'lucide-react'
 import { useAppActions, type AppActionId } from '../lib/app-actions'
 import { useI18n } from '../lib/i18n'
-import { isDesktopApp } from '../lib/native'
+import { isDesktopApp, startDesktopWindowDrag } from '../lib/native'
 import { shortcutFor, useShortcutSettings } from '../lib/shortcuts'
 
-const fileItems = [
-  { id: 'new-chat', label: '新建会话', enLabel: 'New Chat', shortcut: 'Ctrl+N' },
-  { id: 'quick-chat', label: '快速对话', enLabel: 'Quick Chat', shortcut: 'Alt+Ctrl+N' },
-  { id: 'open-folder', label: '打开项目文件夹...', enLabel: 'Open Project Folder...', shortcut: 'Ctrl+O' },
+const menuItems = [
+  { id: 'new-chat', label: '新建会话', shortcut: 'Ctrl+N' },
+  { id: 'quick-chat', label: '快速对话', shortcut: 'Alt+Ctrl+N' },
+  { id: 'open-folder', label: '打开项目文件夹...', shortcut: 'Ctrl+O' },
   { type: 'separator' },
-  { id: 'close-window', label: '关闭窗口', enLabel: 'Close Window', shortcut: 'Ctrl+W' },
+  { id: 'settings', label: '设置', shortcut: 'Ctrl+,' },
+  { id: 'reload', label: '重新加载', shortcut: 'Ctrl+R' },
+  { type: 'separator' },
+  { id: 'new-window', label: '新建窗口', shortcut: 'Ctrl+Shift+N' },
+  { id: 'toggle-fullscreen', label: '切换全屏', shortcut: 'F11' },
+  { id: 'close-window', label: '关闭窗口', shortcut: 'Ctrl+W' },
 ] as const
 
-const editItems = [
-  { id: 'undo', label: '撤销', enLabel: 'Undo', shortcut: 'Ctrl+Z' },
-  { type: 'separator' },
-  { id: 'cut', label: '剪切', enLabel: 'Cut', shortcut: 'Ctrl+X' },
-  { id: 'copy', label: '复制', enLabel: 'Copy', shortcut: 'Ctrl+C' },
-  { id: 'paste', label: '粘贴', enLabel: 'Paste', shortcut: 'Ctrl+V' },
-  { id: 'select-all', label: '全选', enLabel: 'Select All', shortcut: 'Ctrl+A' },
-  { type: 'separator' },
-  { id: 'settings', label: '设置', enLabel: 'Settings', shortcut: 'Ctrl+,' },
-] as const
-
-const windowItems = [
-  { id: 'new-window', label: '新建窗口', enLabel: 'New Window', shortcut: 'Ctrl+Shift+N' },
-  { id: 'reload', label: '重新加载', enLabel: 'Reload', shortcut: 'Ctrl+R' },
-  { type: 'separator' },
-  { id: 'minimize', label: '最小化', enLabel: 'Minimize', shortcut: 'Ctrl+M' },
-  { id: 'toggle-maximize', label: '最大化 / 还原', enLabel: 'Maximize / Restore', shortcut: 'Alt+Enter' },
-  { id: 'toggle-fullscreen', label: '切换全屏', enLabel: 'Toggle Full Screen', shortcut: 'F11' },
-  { type: 'separator' },
-  { id: 'close-window', label: '关闭窗口', enLabel: 'Close Window', shortcut: 'Ctrl+W' },
-] as const
-
-type FileItemId = Extract<(typeof fileItems)[number], { id: string }>['id']
-type EditItemId = Extract<(typeof editItems)[number], { id: string }>['id']
-type WindowItemId = Extract<(typeof windowItems)[number], { id: string }>['id']
-type DesktopActionId = FileItemId | EditItemId | WindowItemId
-type MenuId = 'file' | 'edit' | 'window'
+const routeLabels: Record<string, string> = {
+  '/': '消息',
+  '/agent-config': 'Agent',
+  '/agent-world': 'Agent Group',
+  '/coding-tools': 'Coding Tools',
+  '/office': '办公',
+  '/settings': '设置',
+  '/skills': 'Skills',
+}
 
 export function DesktopAppMenu() {
   const navigate = useNavigate()
-  const { language, t } = useI18n()
+  const location = useLocation()
+  const { t } = useI18n()
   const { bindings } = useShortcutSettings()
   const { busyAction, runAppAction } = useAppActions()
-  const [openMenu, setOpenMenu] = useState<MenuId | null>(null)
-
+  const [menuOpen, setMenuOpen] = useState(false)
   const desktop = isDesktopApp()
 
   useEffect(() => {
-    if (!desktop || !openMenu) return
+    if (!desktop || !menuOpen) return
 
     function closeMenu() {
-      setOpenMenu(null)
+      setMenuOpen(false)
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -67,120 +55,106 @@ export function DesktopAppMenu() {
       window.removeEventListener('pointerdown', closeMenu)
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [desktop, openMenu])
+  }, [desktop, menuOpen])
 
   if (!desktop) return null
 
-  function runEditAction(id: EditItemId) {
-    setOpenMenu(null)
-    if (id === 'settings') {
-      navigate('/settings')
-      return
-    }
-    void runAppAction(id)
+  async function runTopbarAction(id: AppActionId) {
+    setMenuOpen(false)
+    await runAppAction(id as AppActionId)
   }
 
-  async function runMenuAction(id: DesktopActionId) {
-    setOpenMenu(null)
-    if (isEditAction(id)) {
-      runEditAction(id)
-    } else {
-      await runAppAction(id as AppActionId)
-    }
-  }
+  const currentLabel = routeLabel(location.pathname)
 
   return (
-    <nav className="agenthub-desktop-menu" aria-label={t('应用菜单')} onPointerDown={(event) => event.stopPropagation()}>
-      <div className="agenthub-desktop-menu-inner">
-        <DesktopMenuButton id="file" label={t('文件')} openMenu={openMenu} setOpenMenu={setOpenMenu}>
-          {fileItems.map((item, index) =>
-            isSeparator(item) ? (
-              <DesktopMenuSeparator key={`file-separator-${index}`} />
-            ) : (
-              <DesktopMenuItem
-                key={item.id}
-                disabled={Boolean(busyAction)}
-                label={menuItemLabel(item, language, t)}
-                shortcut={shortcutFor(bindings, item.id)}
-                onClick={() => void runMenuAction(item.id)}
-              />
-            ),
-          )}
-        </DesktopMenuButton>
-
-        <DesktopMenuButton id="edit" label={t('编辑')} openMenu={openMenu} setOpenMenu={setOpenMenu}>
-          {editItems.map((item, index) =>
-            isSeparator(item) ? (
-              <DesktopMenuSeparator key={`edit-separator-${index}`} />
-            ) : (
-              <DesktopMenuItem
-                key={item.id}
-                label={menuItemLabel(item, language, t)}
-                shortcut={item.shortcut}
-                onClick={() => void runMenuAction(item.id)}
-              />
-            ),
-          )}
-        </DesktopMenuButton>
-
-        <DesktopMenuButton id="window" label={t('窗口')} openMenu={openMenu} setOpenMenu={setOpenMenu}>
-          {windowItems.map((item, index) =>
-            isSeparator(item) ? (
-              <DesktopMenuSeparator key={`window-separator-${index}`} />
-            ) : (
-              <DesktopMenuItem
-                key={item.id}
-                disabled={Boolean(busyAction)}
-                label={menuItemLabel(item, language, t)}
-                shortcut={shortcutFor(bindings, item.id)}
-                onClick={() => void runMenuAction(item.id)}
-              />
-            ),
-          )}
-        </DesktopMenuButton>
+    <header className="agenthub-desktop-titlebar" aria-label={t('窗口')}>
+      <div className="agenthub-desktop-titlebar-left">
+        <button type="button" className="agenthub-titlebar-brand" onClick={() => navigate('/')} aria-label="AgentHub">
+          <span className="agenthub-titlebar-brand-icon">
+            <Bot className="h-4 w-4" />
+          </span>
+          <span className="font-semibold">AgentHub</span>
+        </button>
+        <div className="agenthub-titlebar-divider" />
+        <span className="agenthub-titlebar-location">{currentLabel}</span>
       </div>
-    </nav>
+
+      <div className="agenthub-desktop-titlebar-drag" onPointerDown={() => void startDesktopWindowDrag()} />
+
+      <div className="agenthub-desktop-titlebar-actions" onPointerDown={(event) => event.stopPropagation()}>
+        <TopbarIconButton label="新建会话" disabled={Boolean(busyAction)} onClick={() => void runTopbarAction('new-chat')}>
+          <MessageSquarePlus className="h-4 w-4" />
+        </TopbarIconButton>
+        <TopbarIconButton label="打开项目文件夹" disabled={Boolean(busyAction)} onClick={() => void runTopbarAction('open-folder')}>
+          <FolderOpen className="h-4 w-4" />
+        </TopbarIconButton>
+        <div className="relative">
+          <TopbarIconButton label="更多" pressed={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
+            <Menu className="h-4 w-4" />
+          </TopbarIconButton>
+          {menuOpen && (
+            <div className="agenthub-desktop-menu-panel agenthub-desktop-menu-panel-topbar" role="menu">
+              {menuItems.map((item, index) =>
+                isSeparator(item) ? (
+                  <DesktopMenuSeparator key={`separator-${index}`} />
+                ) : (
+                  <DesktopMenuItem
+                    key={item.id}
+                    disabled={Boolean(busyAction)}
+                    label={t(item.label)}
+                    shortcut={shortcutFor(bindings, item.id)}
+                    onClick={() => void runTopbarAction(item.id)}
+                  />
+                ),
+              )}
+            </div>
+          )}
+        </div>
+        <div className="agenthub-titlebar-divider" />
+        <TopbarIconButton label="最小化" onClick={() => void runTopbarAction('minimize')}>
+          <Minus className="h-4 w-4" />
+        </TopbarIconButton>
+        <TopbarIconButton label="最大化 / 还原" onClick={() => void runTopbarAction('toggle-maximize')}>
+          <Square className="h-3.5 w-3.5" />
+        </TopbarIconButton>
+        <TopbarIconButton label="重新加载" onClick={() => void runTopbarAction('reload')}>
+          <RotateCw className="h-4 w-4" />
+        </TopbarIconButton>
+        <TopbarIconButton label="关闭" danger onClick={() => void runTopbarAction('close-window')}>
+          <X className="h-4 w-4" />
+        </TopbarIconButton>
+      </div>
+    </header>
   )
 }
 
-function DesktopMenuButton({
+function TopbarIconButton({
   children,
-  id,
+  danger = false,
+  disabled = false,
   label,
-  openMenu,
-  setOpenMenu,
+  onClick,
+  pressed = false,
 }: {
   children: ReactNode
-  id: MenuId
+  danger?: boolean
+  disabled?: boolean
   label: string
-  openMenu: MenuId | null
-  setOpenMenu: (menu: MenuId | null) => void
+  onClick: () => void
+  pressed?: boolean
 }) {
-  const open = openMenu === id
   return (
-    <div className="agenthub-desktop-menu-group" onPointerEnter={() => openMenu && setOpenMenu(id)}>
-      <button
-        type="button"
-        className="agenthub-desktop-menu-button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-pressed={open}
-        onClick={() => setOpenMenu(open ? null : id)}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault()
-            setOpenMenu(id)
-          }
-        }}
-      >
-        {label}
-      </button>
-      {open && (
-        <div className="agenthub-desktop-menu-panel" role="menu">
-          {children}
-        </div>
-      )}
-    </div>
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={danger ? 'agenthub-titlebar-button agenthub-titlebar-button-danger' : 'agenthub-titlebar-button'}
+      aria-label={label}
+      aria-pressed={pressed}
+      title={label}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -196,13 +170,7 @@ function DesktopMenuItem({
   shortcut?: string
 }) {
   return (
-    <button
-      type="button"
-      role="menuitem"
-      disabled={disabled}
-      className="agenthub-desktop-menu-item"
-      onClick={onClick}
-    >
+    <button type="button" role="menuitem" disabled={disabled} className="agenthub-desktop-menu-item" onClick={onClick}>
       <span>{label}</span>
       {shortcut && <kbd>{shortcut}</kbd>}
     </button>
@@ -213,20 +181,11 @@ function DesktopMenuSeparator() {
   return <div className="agenthub-desktop-menu-separator" role="separator" />
 }
 
-function isSeparator<T extends { type: 'separator' } | { id: string }>(
-  item: T,
-): item is Extract<T, { type: 'separator' }> {
+function isSeparator<T extends { type: 'separator' } | { id: string }>(item: T): item is Extract<T, { type: 'separator' }> {
   return 'type' in item
 }
 
-function isEditAction(id: DesktopActionId): id is EditItemId {
-  return editItems.some((item) => 'id' in item && item.id === id)
-}
-
-function menuItemLabel(
-  item: { label: string; enLabel?: string },
-  language: string,
-  t: (text: string) => string,
-) {
-  return language === 'en' && item.enLabel ? item.enLabel : t(item.label)
+function routeLabel(pathname: string) {
+  if (pathname.startsWith('/chat/')) return '消息'
+  return routeLabels[pathname] ?? 'AgentHub'
 }

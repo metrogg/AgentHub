@@ -47,8 +47,6 @@ import {
   ImagePlus,
   ListTodo,
   Loader2,
-  MessageSquare,
-  PanelLeft,
   Paperclip,
   Pencil,
   Plus,
@@ -128,10 +126,7 @@ type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
 const maxPastedImageBytes = 5 * 1024 * 1024
 const composerSyncEvent = 'agenthub:composer-sync'
 
-export const Thread: FC<{
-  sidebarCollapsed: boolean
-  onToggleSidebar: () => void
-}> = ({ sidebarCollapsed, onToggleSidebar }) => {
+export const Thread: FC = () => {
   const currentSession = useChatStore((state) => state.currentSession)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
   const isWorkspaceChildSession =
@@ -144,7 +139,6 @@ export const Thread: FC<{
       className="agenthub-thread-root relative flex h-full flex-col overflow-hidden bg-white"
       style={{ ['--thread-max-width' as string]: '44rem' }}
     >
-      <ThreadHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} />
       <div className="flex min-h-0 flex-1">
         {isGroupSession && <GroupMemberPanel />}
         <div className="flex min-w-0 flex-1 flex-col">
@@ -185,39 +179,6 @@ const WorkspaceChildSessionRail: FC = () => {
         <div className="mt-1">这个子会话只展示当前 Agent 的任务上下文和执行结果。</div>
       </div>
     </aside>
-  )
-}
-
-const ThreadHeader: FC<{
-  sidebarCollapsed: boolean
-  onToggleSidebar: () => void
-}> = ({ sidebarCollapsed, onToggleSidebar }) => {
-  const { t } = useI18n()
-  return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-5">
-      <div className="flex min-w-0 items-center gap-3">
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
-          aria-label={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
-          title={sidebarCollapsed ? t('展开侧栏') : t('收起侧栏')}
-        >
-          <PanelLeft className={cn('h-4 w-4 transition-transform duration-300', sidebarCollapsed && 'rotate-180')} />
-        </button>
-        <div className="truncate text-sm font-medium text-neutral-950">AgentHub</div>
-        <span className="text-sm text-neutral-300">/</span>
-        <span className="truncate text-sm text-neutral-500">{t('对话由 AI 生成')}</span>
-      </div>
-      <div className="flex items-center gap-1">
-        <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" aria-label={t('新建')}>
-          <Plus className="h-4 w-4" />
-        </button>
-        <button className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" aria-label={t('对话')}>
-          <MessageSquare className="h-4 w-4" />
-        </button>
-      </div>
-    </header>
   )
 }
 

@@ -57,6 +57,13 @@ export async function minimizeDesktopWindow() {
   return true
 }
 
+export async function startDesktopWindowDrag() {
+  if (!isDesktopApp()) return false
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  await getCurrentWindow().startDragging()
+  return true
+}
+
 export async function toggleMaximizeDesktopWindow() {
   if (!isDesktopApp()) return false
   const { getCurrentWindow } = await import('@tauri-apps/api/window')
