@@ -2,10 +2,10 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import AgentConfigPage from './pages/AgentConfigPage'
-import AgentWorldPage from './pages/AgentWorldPage'
 import ChatPage from './pages/ChatPage'
 import CodingToolsPage from './pages/CodingToolsPage'
 import { DesktopAppMenu } from './components/DesktopAppMenu'
+import ModelManagementPage from './pages/ModelManagementPage'
 import OfficePage from './pages/OfficePage'
 import SettingsPage from './pages/SettingsPage'
 import SkillsMarketPage from './pages/SkillsMarketPage'
@@ -51,9 +51,10 @@ function AppShell() {
     <Routes>
       <Route path="/" element={<ChatPage />} />
       <Route path="/chat/:sessionId" element={<ChatPage />} />
+      <Route path="/models" element={<ModelManagementPage />} />
       <Route path="/coding-tools" element={<CodingToolsPage />} />
       <Route path="/agent-config" element={<AgentConfigPage />} />
-      <Route path="/agent-world" element={<AgentWorldPage />} />
+      <Route path="/agent-world" element={<Navigate to="/agent-config" replace />} />
       <Route path="/office" element={<OfficePage />} />
       <Route path="/skills" element={<SkillsMarketPage />} />
       <Route path="/orchestrator-runs" element={<OrchestratorRunsPage />} />

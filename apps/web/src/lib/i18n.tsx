@@ -178,7 +178,7 @@ const zhToEn: Record<string, string> = {
   搜索会话: 'Search chats',
   查看归档: 'Archived',
   当前会话: 'Current chats',
-  历史话题: 'History',
+  聊天: 'History',
   子话题: 'subtopics',
   新建对话: 'New conversation',
   '选择一个聊天对象，或开启普通会话。': 'Choose a chat target or start a plain conversation.',
@@ -220,7 +220,6 @@ const zhToEn: Record<string, string> = {
   '输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Orchestrator 接管。':
     'Type an @Agent name to have that member reply in the group chat. If no member is specified, Orchestrator takes over.',
   项目文件夹: 'Project folder',
-  '打开 Agent Group': 'Open Agent Group',
   '本机 Coding Tools 工具台': 'Local Coding Tools Desk',
   '直接检测和配置 Windows 本机 CLI，不再使用容器路径或远端工作区映射。':
     'Detect and configure Windows local CLIs directly, without container paths or remote workspace mapping.',
@@ -412,8 +411,8 @@ const zhToEn: Record<string, string> = {
   '没有匹配的 Agent': 'No matching agents',
   '全局 Agent 配置库': 'Global Agent Config Library',
   '管理所有 Agent': 'Manage All Agents',
-  '这里保存的是可复用 Agent 模板。保存后可以在 Agent Group 里直接套用，也可以通过下方对话指令快速调整当前 Agent。':
-    'Reusable agent templates are saved here. Once saved, they can be applied directly in Agent Group or adjusted with the instruction box below.',
+  '这里保存的是唯一的全局 Agent 通讯录。新建群聊时像微信拉群一样邀请这些 Agent，无需再维护另一套群组配置。':
+    'This is the single global Agent contact list. Create a group chat by inviting these Agents, without maintaining a second group configuration.',
   复制: 'Duplicate',
   简介: 'Description',
   运行时: 'Runtime',
