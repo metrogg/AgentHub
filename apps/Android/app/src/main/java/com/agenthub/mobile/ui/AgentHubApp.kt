@@ -21,6 +21,7 @@ fun AgentHubApp(viewModel: MobileViewModel = viewModel()) {
                 connecting = state.connecting,
                 error = state.error,
                 onConnect = viewModel::connect,
+                onScanPairingQr = viewModel::connectWithPairingQr,
             )
         } else {
             ChatShell(

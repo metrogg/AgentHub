@@ -47,6 +47,14 @@ class AgentHubClient(
         )
     }
 
+    suspend fun confirmPairing(payload: PairingPayload, deviceName: String = "Android"): PairConfirmResponse {
+        return post(
+            config = ConnectionConfig(baseUrl = payload.baseUrl),
+            path = "/mobile/pair/confirm",
+            body = PairConfirmRequest(pairingCode = payload.pairingCode, deviceName = deviceName),
+        )
+    }
+
     fun openEventSocket(
         config: ConnectionConfig,
         listener: WebSocketListener,

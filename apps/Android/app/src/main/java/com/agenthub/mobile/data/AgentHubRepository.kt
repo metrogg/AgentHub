@@ -38,7 +38,7 @@ class AgentHubRepository(
                 _uiState.update {
                     it.copy(
                         sessions = sessions,
-                        selectedSessionId = it.selectedSessionId ?: sessions.firstOrNull()?.id,
+                        selectedSessionId = it.selectedSessionId,
                         connecting = false,
                         connected = true,
                     )
@@ -67,6 +67,22 @@ class AgentHubRepository(
                 .onSuccess { sessions -> _uiState.update { it.copy(sessions = sessions, error = null) } }
                 .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
         }
+    }
+
+    suspend fun confirmPairing(payload: PairingPayload): PairConfirmResponse {
+        _uiState.update { it.copy(connecting = true, error = null) }
+        return try {
+            client.confirmPairing(payload).also {
+                _uiState.update { state -> state.copy(connecting = false, error = null) }
+            }
+        } catch (error: Throwable) {
+            _uiState.update { it.copy(connecting = false, error = error.message ?: "配对失败") }
+            throw error
+        }
+    }
+
+    fun setError(message: String) {
+        _uiState.update { it.copy(connecting = false, error = message) }
     }
 
     fun createSession(title: String = "新会话") {

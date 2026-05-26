@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import AgentConfigPage from './pages/AgentConfigPage'
@@ -11,8 +11,10 @@ import SettingsPage from './pages/SettingsPage'
 import SkillsMarketPage from './pages/SkillsMarketPage'
 import { api } from './lib/api'
 import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
+import { openWorkspaceFolderAsSession, useAppActions } from './lib/app-actions'
 import { I18nProvider, useI18n } from './lib/i18n'
 import { isDesktopApp, setDesktopWindowTitle } from './lib/native'
+import { shortcutFor, shortcutMatches, useShortcutSettings, type ShortcutActionId } from './lib/shortcuts'
 import { useChatStore } from './stores/chatStore'
 
 export default function App() {
@@ -60,6 +62,7 @@ function AppShell() {
   return (
     <div className={desktop ? 'agenthub-app-theme flex h-full flex-col' : 'agenthub-app-theme contents'}>
       <NativeDesktopBridge />
+      <GlobalShortcutBridge />
       {desktop && <DesktopAppMenu />}
       <div className={desktop ? 'min-h-0 flex-1' : 'contents'}>{routes}</div>
     </div>
@@ -86,22 +89,7 @@ function NativeDesktopBridge() {
     async function handleWorkspacePicked(event: Event) {
       const path = (event as CustomEvent<{ path?: string }>).detail?.path
       if (!path) return
-      const result = await api.openWorkspaceFolder(path)
-      if (result.cancelled || !result.projectPath) return
-      const workspace =
-        result.workspace ??
-        (
-          await api.createWorkspace({
-            name: workspaceNameFromPath(result.projectPath),
-            goal: '',
-            projectPath: result.projectPath,
-            template: 'classic',
-          })
-        ).workspace
-      const { session } = await api.openWorkspaceGroupSession(workspace.id)
-      await fetchSessions()
-      await selectSession(session.id)
-      navigate(`/chat/${session.id}`)
+      await openWorkspaceFolderAsSession({ projectPath: path, fetchSessions, selectSession, navigate })
     }
 
     window.addEventListener('agenthub:native-workspace-picked', handleWorkspacePicked)
@@ -111,7 +99,38 @@ function NativeDesktopBridge() {
   return null
 }
 
-function workspaceNameFromPath(value: string) {
-  const normalized = value.trim().replace(/[\\/]+$/, '')
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
+const globalShortcutActions: ShortcutActionId[] = [
+  'close-window',
+  'new-window',
+  'new-chat',
+  'quick-chat',
+  'open-folder',
+  'settings',
+  'reload',
+  'minimize',
+  'toggle-maximize',
+  'toggle-fullscreen',
+]
+
+function GlobalShortcutBridge() {
+  const { bindings } = useShortcutSettings()
+  const { runAppAction } = useAppActions()
+  const location = useLocation()
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return
+      for (const action of globalShortcutActions) {
+        if (!shortcutMatches(event, shortcutFor(bindings, action))) continue
+        event.preventDefault()
+        void runAppAction(action)
+        return
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [bindings, location.pathname, runAppAction])
+
+  return null
 }

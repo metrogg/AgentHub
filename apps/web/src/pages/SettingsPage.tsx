@@ -1,5 +1,6 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import QRCode from 'qrcode'
 import {
   Activity,
   AlertTriangle,
@@ -20,11 +21,13 @@ import {
   MessageSquare,
   Monitor,
   Plus,
+  QrCode,
   RefreshCw,
   Search,
   Server,
   Settings,
   Shield,
+  Smartphone,
   TerminalSquare,
   Trash2,
   X,
@@ -138,6 +141,8 @@ interface AppSettings {
   sendMode: string
   toolPermissionMode: string
   toolPermissions: Record<string, string>
+  accountName: string
+  accountAvatar: string
 }
 
 const defaultModels: ModelConfig[] = [
@@ -235,6 +240,8 @@ const defaultAppSettings: AppSettings = {
     knowledge_move: 'Auto',
     knowledge_edit: 'Ask',
   },
+  accountName: 'You',
+  accountAvatar: '',
 }
 
 function model(
@@ -708,6 +715,25 @@ function SettingsContent({
     setGeneralInfo((current) => current ? { ...current, debug: { ...current.debug, enabled: debugMode } } : current)
   }
 
+  function updateAccountAvatar(file: File | null) {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      showActionMessage('请选择图片文件')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      showActionMessage('头像图片不能超过 2 MB')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      patchSettings({ accountAvatar: String(reader.result || '') })
+      showActionMessage('头像已更新')
+    }
+    reader.onerror = () => showActionMessage('读取头像失败')
+    reader.readAsDataURL(file)
+  }
+
   function resetAllSettings() {
     patchSettings(defaultAppSettings)
     setLanguage('zh')
@@ -719,8 +745,47 @@ function SettingsContent({
       return (
         <SettingsStack>
           {actionMessage && <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-600 shadow-sm">{actionMessage}</div>}
+          <SettingsSection title="账号资料" desc="配置本机账号在 Web、桌面端左侧导航和“我的”页面中显示的名称与头像。">
+            <InsetPanel>
+              <div className="flex flex-wrap items-center gap-4">
+                <AccountAvatarPreview name={settings.accountName} avatar={settings.accountAvatar} size="large" />
+                <div className="min-w-0 flex-1 space-y-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>显示名称</span>
+                    <input
+                      value={settings.accountName}
+                      onChange={(event) => patchSettings({ accountName: event.target.value })}
+                      className="settings-input"
+                      maxLength={32}
+                      placeholder="You"
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <label className="settings-soft-button cursor-pointer">
+                      上传头像
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(event) => {
+                          updateAccountAvatar(event.currentTarget.files?.[0] ?? null)
+                          event.currentTarget.value = ''
+                        }}
+                      />
+                    </label>
+                    <button type="button" className="settings-soft-button" onClick={() => patchSettings({ accountAvatar: '' })}>
+                      移除头像
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </InsetPanel>
+          </SettingsSection>
           <SettingsSection title="界面语言" desc="切换界面显示语言">
             <SegmentedControl value={languageToSettingValue(normalizeLanguage(settings.language))} options={['中文', 'English']} onChange={patchLanguage} />
+          </SettingsSection>
+          <SettingsSection title="移动端扫码连接" desc="让手机在同一局域网内扫码连接这台电脑的 AgentHub。二维码 2 分钟有效，用后即失效。">
+            <MobilePairingPanel />
           </SettingsSection>
           <SettingsSection
             title="调试模式"
@@ -913,10 +978,84 @@ function SettingsContent({
   }
 }
 
+function MobilePairingPanel() {
+  const { t } = useI18n()
+  const [qrDataUrl, setQrDataUrl] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [webUrl, setWebUrl] = useState('')
+  const [expiresAt, setExpiresAt] = useState('')
+  const [pairingCode, setPairingCode] = useState('')
+  const [message, setMessage] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function createPairingCode() {
+    if (loading) return
+    setLoading(true)
+    setMessage('')
+    try {
+      const result = await api.startMobilePairing()
+      const dataUrl = await QRCode.toDataURL(result.qrPayload, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        scale: 7,
+        color: {
+          dark: '#171717',
+          light: '#ffffff',
+        },
+      })
+      setQrDataUrl(dataUrl)
+      setBaseUrl(result.baseUrl)
+      setWebUrl(result.webUrl)
+      setExpiresAt(result.expiresAt)
+      setPairingCode(result.pairingCode)
+      setMessage(t('请用 Android 客户端点击“扫码连接”扫描二维码'))
+    } catch (error: any) {
+      setMessage(error?.message || t('生成二维码失败'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <InsetPanel>
+      <div className="grid gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
+        <div className="grid min-h-64 place-items-center rounded-xl border border-neutral-200 bg-white p-4">
+          {qrDataUrl ? (
+            <img src={qrDataUrl} alt={t('移动端配对二维码')} className="h-52 w-52 rounded-lg" />
+          ) : (
+            <div className="grid h-52 w-52 place-items-center rounded-xl border border-dashed border-neutral-200 bg-neutral-50 text-neutral-400">
+              <QrCode className="h-10 w-10" />
+            </div>
+          )}
+        </div>
+        <div className="min-w-0 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900">
+              <Smartphone className="h-4 w-4" />
+              {t('局域网移动端配对')}
+            </div>
+            <button type="button" className="settings-soft-button" disabled={loading} onClick={() => void createPairingCode()}>
+              {loading ? t('生成中') : qrDataUrl ? t('刷新二维码') : t('生成二维码')}
+            </button>
+          </div>
+          <InfoRow label="Server" value={baseUrl || t('等待生成')} />
+          <InfoRow label="Web" value={webUrl || t('等待生成')} />
+          <InfoRow label="配对码" value={pairingCode || t('等待生成')} />
+          <InfoRow label="过期时间" value={expiresAt ? new Date(expiresAt).toLocaleString() : t('等待生成')} />
+          {message && <Notice tone={qrDataUrl ? 'neutral' : 'warning'}>{message}</Notice>}
+          <Notice>
+            {t('手机和电脑需要在同一 Wi-Fi 或局域网内。若扫码后无法连接，请确认 Windows 防火墙已放行服务端端口 8000。')}
+          </Notice>
+        </div>
+      </div>
+    </InsetPanel>
+  )
+}
+
 const shortcutActionLabels: Record<ShortcutActionId, { title: string; desc: string }> = {
   'new-chat': { title: '新建会话', desc: '在会话页打开新建会话弹窗。' },
   'quick-chat': { title: '快速对话', desc: '立即创建一个空白直接对话。' },
-  'open-folder': { title: '打开文件夹', desc: '选择本地项目文件夹并进入 Agent Group。' },
+  'open-folder': { title: '打开项目文件夹', desc: '选择本地项目文件夹并进入 Agent Group。' },
   settings: { title: '打开设置', desc: '从任意页面进入设置中心。' },
   'new-window': { title: '新建窗口', desc: '桌面端打开一个新的 AgentHub 窗口。' },
   'close-window': { title: '关闭窗口', desc: '关闭当前桌面窗口。' },
@@ -1613,6 +1752,28 @@ function SettingsSection({ title, desc, children }: { title: string; desc?: stri
 
 function InsetPanel({ children }: { children: React.ReactNode }) {
   return <div className="space-y-4 rounded-xl border p-4 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>{children}</div>
+}
+
+function AccountAvatarPreview({
+  name,
+  avatar,
+  size = 'small',
+}: {
+  name: string
+  avatar: string
+  size?: 'small' | 'large'
+}) {
+  const dimension = size === 'large' ? 'h-16 w-16 text-2xl' : 'h-10 w-10 text-sm'
+  const fallback = (name.trim().slice(0, 1) || 'Y').toUpperCase()
+  return (
+    <div className={cn('grid shrink-0 place-items-center overflow-hidden rounded-2xl border bg-white shadow-sm', dimension)} style={{ borderColor: 'var(--settings-border)' }}>
+      {avatar ? (
+        <img src={avatar} alt={name || 'Account avatar'} className="h-full w-full object-cover" />
+      ) : (
+        <span className="font-semibold" style={{ color: 'var(--settings-accent)' }}>{fallback}</span>
+      )}
+    </div>
+  )
 }
 
 function StorageMetric({ label, value }: { label: string; value: string }) {

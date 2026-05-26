@@ -146,6 +146,7 @@ export const Thread: FC<{
     >
       <ThreadHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} />
       <div className="flex min-h-0 flex-1">
+        {isGroupSession && <GroupMemberPanel />}
         <div className="flex min-w-0 flex-1 flex-col">
           <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
             <ThreadWelcome />
@@ -156,7 +157,6 @@ export const Thread: FC<{
           </ThreadPrimitive.Viewport>
           <Composer />
         </div>
-        {isGroupSession && <GroupMemberPanel />}
         {!isGroupSession && isWorkspaceChildSession && <WorkspaceChildSessionRail />}
       </div>
     </ThreadPrimitive.Root>
@@ -232,7 +232,7 @@ const GroupMemberPanel: FC = () => {
   return (
     <aside
       className={cn(
-        'hidden shrink-0 border-l border-neutral-200 bg-[#fbfbf9] xl:block',
+        'hidden shrink-0 border-r border-neutral-200 bg-[#fbfbf9] xl:block',
         'transition-[width,padding] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]',
         collapsed ? 'w-12 px-0 py-4' : 'w-72 px-4 py-5'
       )}

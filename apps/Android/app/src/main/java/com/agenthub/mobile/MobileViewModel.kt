@@ -8,8 +8,10 @@ import com.agenthub.mobile.data.AgentHubRepository
 import com.agenthub.mobile.data.ConnectionConfig
 import com.agenthub.mobile.data.ConnectionStore
 import com.agenthub.mobile.data.MobileUiState
+import com.agenthub.mobile.data.PairingPayload
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 
 class MobileViewModel(application: Application) : AndroidViewModel(application) {
@@ -48,6 +50,24 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
                     authToken = authToken?.trim()?.takeIf { it.isNotBlank() },
                 ),
             )
+        }
+    }
+
+    fun connectWithPairingQr(contents: String) {
+        viewModelScope.launch {
+            runCatching {
+                val payload = json.decodeFromString<PairingPayload>(contents.trim())
+                val confirmed = repository.confirmPairing(payload)
+                connectionStore.save(
+                    ConnectionConfig(
+                        baseUrl = confirmed.baseUrl.trim().trimEnd('/'),
+                        deviceName = confirmed.deviceName.ifBlank { "Android" },
+                        authToken = confirmed.authToken?.trim()?.takeIf { it.isNotBlank() },
+                    ),
+                )
+            }.onFailure { error ->
+                repository.setError(error.message ?: "二维码无效或配对失败")
+            }
         }
     }
 

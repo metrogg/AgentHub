@@ -85,6 +85,7 @@ export function shortcutFromRecordingEvent(event: KeyboardEvent | ReactKeyboardE
   if (event.key === 'Escape') return 'Escape'
   const key = normalizeKey(event.key)
   if (!key) return ''
+  if (key === 'Ctrl' || key === 'Alt' || key === 'Shift') return ''
   const hasModifier = event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
   const isFunctionKey = /^F\d{1,2}$/.test(key)
   if (!hasModifier && !isFunctionKey) return ''

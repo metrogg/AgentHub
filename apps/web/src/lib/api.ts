@@ -346,6 +346,17 @@ export interface CodexConfigFile {
   message: string
 }
 
+export interface MobilePairStartResult {
+  version: number
+  baseUrl: string
+  webUrl: string
+  pairingCode: string
+  expiresAt: string
+  ttlSeconds: number
+  qrPayload: string
+  localAddresses: string[]
+}
+
 export interface SettingsGeneralInfo {
   debug: {
     enabled: boolean
@@ -634,6 +645,7 @@ export const api = {
       python: { runtime: string; path: string; ok: boolean; message: string }
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
+  startMobilePairing: () => request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
   ensureStorageDirectory: (path: string) =>
     request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>('/settings/storage/ensure', {
       method: 'POST',

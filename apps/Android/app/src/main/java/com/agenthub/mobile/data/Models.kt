@@ -14,8 +14,24 @@ data class ConnectionConfig(
 data class PairingPayload(
     val version: Int = 1,
     val baseUrl: String,
+    val webUrl: String? = null,
     val pairingCode: String,
     val expiresAt: String,
+)
+
+@Serializable
+data class PairConfirmRequest(
+    val pairingCode: String,
+    val deviceName: String = "Android",
+)
+
+@Serializable
+data class PairConfirmResponse(
+    val baseUrl: String,
+    val webUrl: String? = null,
+    val deviceName: String = "Android",
+    val authToken: String? = null,
+    val expiresAt: String? = null,
 )
 
 @Serializable

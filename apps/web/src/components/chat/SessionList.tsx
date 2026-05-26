@@ -6,31 +6,48 @@ import {
   Archive,
   ArchiveRestore,
   Bot,
+  BriefcaseBusiness,
   ChevronRight,
   Code2,
   Building2,
   Folder,
   History,
   Loader2,
+  Menu,
   MessageCircle,
   Pin,
   PinOff,
   Search,
   Settings2,
   Trash2,
+  UserCircle,
+  Users,
   X,
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import type { Session } from '../../lib/api'
+import { api, type Session, type WorkspaceAgent, type WorkspaceFull } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
 import { loadSessionListPrefs, normalizeSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent, type SessionListPrefs } from '../../lib/sessionArchive'
+import { settingsUpdatedEvent } from '../../lib/shortcuts'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 
 type SessionGroup = {
   parent: Session
   children: Session[]
   latestUpdatedAt: string
+}
+
+type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
+
+type AccountProfile = {
+  name: string
+  avatar: string
+}
+
+const defaultAccountProfile: AccountProfile = {
+  name: 'You',
+  avatar: '',
 }
 
 export default function SessionList() {
@@ -47,6 +64,11 @@ export default function SessionList() {
   const [query, setQuery] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [prefs, setPrefs] = useState<SessionListPrefs>(loadSessionListPrefs)
+  const [activeTab, setActiveTab] = useState<SidebarTab>('messages')
+  const [accountProfile, setAccountProfile] = useState<AccountProfile>(defaultAccountProfile)
+  const [workspaceFulls, setWorkspaceFulls] = useState<WorkspaceFull[]>([])
+  const [workspaceLoading, setWorkspaceLoading] = useState(false)
+  const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
   const archivedSessionCount = useMemo(() => prefs.archived.length, [prefs.archived])
@@ -60,6 +82,50 @@ export default function SessionList() {
   useEffect(() => {
     fetchSessions()
   }, [fetchSessions])
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadAccountProfile() {
+      const settings = await api.getSettings().catch((): Record<string, string> => ({}))
+      if (cancelled) return
+      setAccountProfile(readAccountProfile(settings.APP_SETTINGS))
+    }
+    void loadAccountProfile()
+    window.addEventListener(settingsUpdatedEvent, loadAccountProfile)
+    return () => {
+      cancelled = true
+      window.removeEventListener(settingsUpdatedEvent, loadAccountProfile)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (['/agent-world', '/coding-tools', '/office'].includes(location.pathname)) {
+      setActiveTab('workspace')
+    } else if (location.pathname === '/settings') {
+      setActiveTab('me')
+    }
+  }, [location.pathname])
+
+  useEffect(() => {
+    if (activeTab !== 'agents') return
+    let cancelled = false
+    setWorkspaceLoading(true)
+    api
+      .listWorkspaces()
+      .then(({ items }) => Promise.all(items.map((workspace) => api.getWorkspace(workspace.id))))
+      .then((items) => {
+        if (!cancelled) setWorkspaceFulls(items)
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaceFulls([])
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab])
 
   useEffect(() => {
     const syncPrefs = () => setPrefs(loadSessionListPrefs())
@@ -158,8 +224,48 @@ export default function SessionList() {
     setDeleteTarget(null)
   }
 
+  async function openAgentSession(workspaceId: string, agent: WorkspaceAgent) {
+    if (openingAgentId) return
+    setOpeningAgentId(agent.id)
+    try {
+      const { session } = await api.openWorkspaceAgentSession(workspaceId, agent.id)
+      await fetchSessions()
+      navigate(`/chat/${session.id}`)
+    } finally {
+      setOpeningAgentId(null)
+    }
+  }
+
   return (
-    <aside className="flex h-full min-h-0 w-64 shrink-0 flex-col border-r border-neutral-200 bg-[#f7f7f4]">
+    <aside className="flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#f7f7f4]">
+      <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#f7f7f4] py-3">
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('me')
+            navigate('/settings')
+          }}
+          className="grid h-10 w-10 place-items-center overflow-hidden rounded-xl bg-white shadow-sm"
+          aria-label={accountProfile.name}
+          title={accountProfile.name}
+        >
+          <AccountAvatar name={accountProfile.name} avatar={accountProfile.avatar} />
+        </button>
+
+        <div className="flex flex-1 flex-col items-center gap-2 pt-2">
+          <DockButton active={activeTab === 'messages'} icon={MessageCircle} label="Messages" onClick={() => setActiveTab('messages')} />
+          <DockButton active={activeTab === 'agents'} icon={Users} label="Agent" onClick={() => setActiveTab('agents')} />
+          <DockButton active={activeTab === 'workspace'} icon={BriefcaseBusiness} label="Workspace" onClick={() => setActiveTab('workspace')} />
+          <DockButton active={activeTab === 'me'} icon={UserCircle} label="Me" onClick={() => setActiveTab('me')} />
+        </div>
+
+        <div className="flex flex-col items-center gap-2">
+          <DockButton icon={Settings2} label="Settings" onClick={() => navigate('/settings')} />
+          <DockButton icon={Menu} label="Menu" onClick={() => setActiveTab('messages')} />
+        </div>
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col bg-[#f7f7f4]">
       <div className="flex h-14 items-center justify-between px-4">
         <div className="flex items-center gap-2">
           <div className="grid h-7 w-7 place-items-center rounded-lg bg-neutral-950 text-white">
@@ -169,7 +275,7 @@ export default function SessionList() {
         </div>
       </div>
 
-      <div className="px-2">
+      <div className={cn('px-2 pt-3', activeTab !== 'messages' && 'hidden')}>
         <div className="mb-3 flex w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-white p-3 text-left shadow-sm transition hover:border-neutral-300">
           <button
             type="button"
@@ -224,7 +330,7 @@ export default function SessionList() {
         </button>
       </div>
 
-      <nav className="space-y-1 px-3">
+      <nav className={cn('space-y-1 px-3 pt-3', activeTab !== 'workspace' && 'hidden')}>
         <NavItem
           icon={Code2}
           label="Coding Tools"
@@ -245,9 +351,18 @@ export default function SessionList() {
         />
       </nav>
 
-      <div className="my-3 border-t border-neutral-200" />
+      {activeTab === 'workspace' && (
+        <div className="px-3 pt-3 text-xs leading-5 text-neutral-500">
+          <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
+            <div className="font-medium text-neutral-900">工作台</div>
+            <div className="mt-1">项目、Agent Group 和本地工具入口统一放在这里。</div>
+          </div>
+        </div>
+      )}
 
-      <div className="flex-1 overflow-y-auto px-2">
+      <div className={cn('my-3 border-t border-neutral-200', activeTab !== 'messages' && 'hidden')} />
+
+      <div className={cn('flex-1 overflow-y-auto px-2', activeTab !== 'messages' && 'hidden')}>
         <div className="mb-1 px-2 text-xs text-neutral-400">{t('历史话题')}</div>
         {sessionTree.length === 0 ? (
           <div className="px-2 py-4 text-xs text-neutral-400">
@@ -403,7 +518,78 @@ export default function SessionList() {
         )}
       </div>
 
-      <div className="border-t border-neutral-200 p-2">
+      {activeTab === 'agents' && (
+        <div className="flex-1 overflow-y-auto px-2 pt-3">
+          <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-neutral-950">Agent 联系人</div>
+                <div className="mt-1 truncate text-xs text-neutral-500">
+                  {workspaceLoading ? '正在加载工作区...' : '点击 Agent 直接打开独立会话'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/agent-world')}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900"
+                aria-label="管理 Agent"
+                title="管理 Agent"
+              >
+                <Settings2 className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-3 space-y-2">
+              {workspaceFulls.flatMap((entry) =>
+                entry.agents.map((agent) => (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    onClick={() => openAgentSession(entry.workspace.id, agent)}
+                    disabled={openingAgentId === agent.id}
+                    className="flex w-full items-center gap-3 rounded-xl border border-neutral-200 bg-[#fbfbf9] px-3 py-2.5 text-left transition hover:border-neutral-300 hover:bg-white disabled:opacity-60"
+                  >
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm font-semibold text-white" style={{ background: agent.color }}>
+                      {agent.name.slice(0, 1).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-neutral-950">{agent.name}</div>
+                      <div className="mt-0.5 truncate text-xs text-neutral-500">{agent.role}</div>
+                    </div>
+                    <div className="max-w-16 truncate text-[11px] text-neutral-400">
+                      {openingAgentId === agent.id ? '打开中...' : entry.workspace.name}
+                    </div>
+                  </button>
+                ))
+              )}
+              {!workspaceLoading && workspaceFulls.every((entry) => entry.agents.length === 0) && (
+                <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
+                  还没有可用的 Agent
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'me' && (
+        <div className="flex-1 px-2 pt-3 text-xs leading-5 text-neutral-500">
+          <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-2xl border border-neutral-200 bg-white">
+                <AccountAvatar name={accountProfile.name} avatar={accountProfile.avatar} />
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-neutral-950">{accountProfile.name}</div>
+                <div className="mt-1 truncate text-xs text-neutral-500">Local account</div>
+              </div>
+            </div>
+            <div className="mt-3">快捷键、主题、归档会话和客户端设置都在这里。</div>
+          </div>
+        </div>
+      )}
+
+      <div className={cn('border-t border-neutral-200 p-2', activeTab !== 'me' && 'hidden')}>
         <button
           onClick={() => navigate('/settings')}
           className="flex h-10 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-white/70"
@@ -411,6 +597,7 @@ export default function SessionList() {
           <Settings2 className="h-4 w-4 text-neutral-500" />
           {t('设置')}
         </button>
+      </div>
       </div>
 
       {deleteTarget && (
@@ -530,6 +717,57 @@ function NavItem({
       {label}
     </button>
   )
+}
+
+function DockButton({
+  icon: Icon,
+  label,
+  active = false,
+  onClick,
+}: {
+  icon: typeof Folder
+  label: string
+  active?: boolean
+  onClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'relative grid h-10 w-10 place-items-center rounded-xl transition',
+        active ? 'bg-neutral-950 text-white shadow-sm' : 'text-neutral-500 hover:bg-white/80 hover:text-neutral-900',
+      )}
+      title={label}
+      aria-label={label}
+    >
+      <Icon className="h-5 w-5" />
+    </button>
+  )
+}
+
+function AccountAvatar({ name, avatar }: AccountProfile) {
+  if (avatar) {
+    return <img src={avatar} alt={name || 'Account avatar'} className="h-full w-full object-cover" />
+  }
+  return (
+    <span className="text-sm font-semibold text-neutral-950">
+      {(name.trim().slice(0, 1) || 'Y').toUpperCase()}
+    </span>
+  )
+}
+
+function readAccountProfile(value?: string): AccountProfile {
+  if (!value) return defaultAccountProfile
+  try {
+    const parsed = JSON.parse(value) as Partial<{ accountName: string; accountAvatar: string }>
+    return {
+      name: typeof parsed.accountName === 'string' && parsed.accountName.trim() ? parsed.accountName.trim() : defaultAccountProfile.name,
+      avatar: typeof parsed.accountAvatar === 'string' ? parsed.accountAvatar : '',
+    }
+  } catch {
+    return defaultAccountProfile
+  }
 }
 
 function buildSessionTree(sessions: Session[], pinnedIds = new Set<string>()): SessionGroup[] {

@@ -41,13 +41,13 @@ export default function ChatPage() {
         aria-hidden={sidebarCollapsed}
         className="h-full shrink-0 overflow-hidden"
         style={{
-          width: sidebarCollapsed ? 0 : 256,
+          width: sidebarCollapsed ? 0 : 340,
           transition: 'width 300ms cubic-bezier(0.4,0,0.2,1)',
         }}
       >
         <div
           className={[
-            'h-full w-64 transform-gpu will-change-transform',
+            'h-full w-[340px] transform-gpu will-change-transform',
             sidebarCollapsed ? 'pointer-events-none -translate-x-full opacity-0' : 'translate-x-0 opacity-100',
           ].join(' ')}
           style={{

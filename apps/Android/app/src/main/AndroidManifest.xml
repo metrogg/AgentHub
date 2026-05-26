@@ -10,6 +10,7 @@
         android:label="AgentHub"
         android:roundIcon="@drawable/ic_agenthub"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.AgentHubMobile">
         <activity
             android:name=".MainActivity"

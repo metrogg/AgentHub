@@ -28,6 +28,7 @@ let server: ReturnType<typeof Bun.serve>
 for (let i = 0; i < maxTries; i++) {
   try {
     server = Bun.serve({
+      hostname: '0.0.0.0',
       port: currentPort,
       fetch(req, srv) {
         if (req.headers.get('upgrade') === 'websocket') {
@@ -76,4 +77,4 @@ if (!server!) {
   process.exit(1)
 }
 
-logger.info(`🚀 AgentHub server listening on http://localhost:${server.port}`)
+logger.info(`🚀 AgentHub server listening on http://0.0.0.0:${server.port}`)

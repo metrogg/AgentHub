@@ -1,5 +1,6 @@
 package com.agenthub.mobile.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -23,15 +24,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 @Composable
 fun ConnectScreen(
     connecting: Boolean,
     error: String?,
     onConnect: (baseUrl: String, authToken: String?) -> Unit,
+    onScanPairingQr: (String) -> Unit,
 ) {
     var baseUrl by remember { mutableStateOf("http://10.0.2.2:8000") }
     var token by remember { mutableStateOf("") }
+    val qrLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val contents = result.contents
+        if (!contents.isNullOrBlank()) onScanPairingQr(contents)
+    }
 
     Column(
         modifier = Modifier
@@ -91,13 +99,21 @@ fun ConnectScreen(
             Text(if (connecting) "正在连接" else "连接")
         }
         OutlinedButton(
-            onClick = { },
-            enabled = false,
+            onClick = {
+                qrLauncher.launch(
+                    ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt("扫描电脑端 AgentHub 配对二维码")
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(false),
+                )
+            },
+            enabled = !connecting,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 10.dp),
         ) {
-            Text("扫码连接（下一步接入）")
+            Text("扫码连接局域网")
         }
         Text(
             text = "模拟器默认使用 10.0.2.2 访问宿主机；真机请填写电脑局域网 IP。",
