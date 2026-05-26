@@ -158,12 +158,12 @@ export const orchestratorRuns = sqliteTable('orchestrator_runs', {
   id: id(),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   groupSessionId: text('group_session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
-  planMessageId: text('plan_message_id').references(() => messages.id),
+  planMessageId: text('plan_message_id').references(() => messages.id, { onDelete: 'set null' }),
   status: text('status', {
     enum: ['planning', 'running', 'synthesizing', 'completed', 'failed', 'cancelled'],
   }).notNull().default('planning'),
   plan: text('plan', { mode: 'json' }),
-  summaryMessageId: text('summary_message_id').references(() => messages.id),
+  summaryMessageId: text('summary_message_id').references(() => messages.id, { onDelete: 'set null' }),
   conflictReport: text('conflict_report', { mode: 'json' }).$type<ConflictReport[]>(),
   createdAt: now(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
@@ -231,7 +231,7 @@ export const blackboardEntries = sqliteTable('blackboard_entries', {
 export const executionLogs = sqliteTable('execution_logs', {
   id: id(),
   runId: text('run_id').notNull(),
-  sessionId: text('session_id').notNull(),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
   agentId: text('agent_id').notNull(),
   taskId: text('task_id'),
   type: text('type', { enum: ['llm_call', 'tool_call', 'blackboard_read', 'blackboard_write', 'error', 'task_start', 'task_end'] }).notNull(),

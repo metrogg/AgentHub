@@ -67,3 +67,8 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
     await db.delete(sessions).where(eq(sessions.id, id))
     return c.body(null, 204)
   })
+  .delete('/all', async (c) => {
+    const user = c.get('user')
+    await db.delete(sessions).where(eq(sessions.ownerId, user.sub))
+    return c.json({ deleted: true })
+  })

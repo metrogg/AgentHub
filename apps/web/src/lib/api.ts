@@ -617,6 +617,7 @@ export const api = {
   createSession: (data: { title: string; type?: 'direct' | 'group'; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
     request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
+  deleteAllSessions: () => request<{ deleted: boolean }>('/sessions/all', { method: 'DELETE' }),
 
   // Messages
   listMessages: (sessionId: string) =>

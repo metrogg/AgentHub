@@ -44,7 +44,7 @@ const envSchema = z.object({
   AGENTHUB_WORKSPACE_ROOT: z.string().default('.'),
   AGENTHUB_SKILLS_ROOT: z.string().optional(),
   AGENTHUB_NATIVE_MAX_TOOL_ROUNDS: z.coerce.number().int().min(1).max(12).default(6),
-  AGENTHUB_ENABLE_CODE_AGENT_EXECUTION: envBoolean.default(false),
+  AGENTHUB_ENABLE_CODE_AGENT_EXECUTION: envBoolean.default(true),
   AGENTHUB_CODE_AGENT_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
 })
 
