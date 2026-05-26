@@ -76,6 +76,7 @@ docs/        — Product docs, design records and competition materials
 
 - **Entry**: `src/index.ts` — seeds default user, starts Bun.serve with HTTP + WebSocket upgrade, auto-increments port if occupied
 - **Routes**: `src/routes/` — Hono routers mounted at `/api/sessions`, `/api/messages`, `/api/settings`, `/api/workspaces`, `/api/coding-tools`, `/api/skills`, `/api/artifacts`, `/api/orchestrator-runs`
+  - `DELETE /api/sessions/all` — bulk delete all sessions and their messages for the current user
 - **LLM**: `src/services/llm-client.ts` — multi-provider streaming client (OpenAI-compatible + Anthropic). Config resolved from DB `settings` table first, then env vars. `src/services/llm.ts` is the thin wrapper used by agent runners.
 - **Agent Runner**: `src/services/agent-runner.ts` — manages WebSocket rooms per session, routes execution through `RuntimeRegistry`, broadcasts `message:stream` / `message:completed` / `message:cancelled` events
 - **Auth**: `src/middleware/auth.ts` — JWT-based, single-user mode with a seeded default user (`default-user`)
@@ -100,7 +101,7 @@ All agent execution goes through a unified `AgentRuntime` interface:
 Multi-agent task orchestration with DAG scheduling:
 
 - `orchestrator-engine.ts` — master controller: `dispatch()` → build DAG → schedule → conflict resolve → synthesize
-- `planner.ts` — LLM-based task DAG generator with fallback templates
+- `planner.ts` — LLM-based task DAG generator with **Spec-first planning**: generates a `ProjectSpec` (module decomposition, interface contracts, data flow) before task breakdown, then derives tasks from the spec. Includes fallback templates.
 - `task-graph.ts` — DAG utilities (topological sort, cycle detection)
 - `task-scheduler.ts` — concurrent executor (max 3 parallel), dependency-aware
 - `synthesizer.ts` — LLM-based intelligent aggregation of agent outputs
@@ -144,11 +145,11 @@ User: "@orchestrator write a login page"
 
 SQLite with WAL mode. Key tables:
 
-- `users`, `sessions` (direct/group), `messages`, `session_members`, `settings`
+- `users`, `sessions` (direct/group, with `metadata` JSON), `messages`, `session_members`, `settings`
 - `workspaces`, `workspace_agents`, `workspace_tasks`
-- `orchestrator_runs` — tracks orchestrator dispatch lifecycle (planning → running → synthesizing → completed/failed)
+- `orchestrator_runs` — tracks orchestrator dispatch lifecycle (planning → running → synthesizing → completed/failed). `planMessageId` and `summaryMessageId` reference `messages.id` with `onDelete: 'set null'`.
 - `blackboard_entries` — namespaced key-value store with versioning
-- `execution_logs` — tracing records for agent runs and tool calls
+- `execution_logs` — tracing records for agent runs and tool calls. `sessionId` references `sessions.id` with `onDelete: 'cascade'`.
 
 `workspace_tasks` extended fields for DAG scheduling:
 - `run_id`, `dependencies` (JSON array), `parallel_group`, `max_retries`, `attempt_count`
@@ -200,7 +201,8 @@ Covered areas:
   - `read-only`: no branch created, agent only reads files
   - `workspace-write`: isolated Git branch per task, diff collected after execution
   - `danger-full-access`: same branch isolation, but allows broader operations
-- **`AGENTHUB_ENABLE_CODE_AGENT_EXECUTION`**: default is `false`. Actual restrictions enforced by `sandboxPolicy`.
+- **`AGENTHUB_ENABLE_CODE_AGENT_EXECUTION`**: default is `true`. Actual restrictions enforced by `sandboxPolicy`.
+  **Note**: Always use `env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` from `src/env.ts` instead of raw `readEnv()` string checks. The `.env` file value overrides the Zod default at runtime.
 - **MCP runtime**: read-only only (`nativeToolRuntime` only exposes read tools).
 
 ## Environment Variables
@@ -215,7 +217,7 @@ Key env vars from `apps/server/src/env.ts`:
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | — | Generic LLM config |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | — | OpenAI-specific |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | — | Anthropic-specific |
-| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | `false` | Code Agent execution switch |
+| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | `true` | Code Agent execution switch |
 | `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | `120000` | Code Agent timeout |
 | `AGENTHUB_NATIVE_MAX_TOOL_ROUNDS` | `6` | Max tool rounds for native runtime |
 | `ENABLE_LOCAL_CLI_PROBES` | `true` | Probe host-installed CLI tools |
@@ -232,6 +234,14 @@ docker compose --profile agents up  # includes cli-agent container
 ```
 
 Server runs migrations automatically on start in Docker.
+
+## Communication Preferences
+
+- **Advisory mode first**: When asked to explain or advise on architecture/design, provide written analysis and explanation first. Do not start building, compiling, or modifying code unless explicitly asked (e.g., user says "MODE: IMPLEMENT").
+- **Focused explanations**: Answer the specific question directly first. Only expand to broader exploration if explicitly requested.
+- **Local-first preference**: Before suggesting Docker, WSL, or remote solutions, verify local environment has required tools. Check PATH and common install locations.
+- **China network context**: For Docker builds, package installations, or downloads, default to domestic mirrors (Tsinghua, Alibaba) and verify mirror persistence after source list modifications.
+- **Git state verification**: Always confirm baseline/reference state is synced with remote before comparisons (e.g., `git fetch origin`). Never assume local branches are up to date.
 
 ## Development Conventions
 
