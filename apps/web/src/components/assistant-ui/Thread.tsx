@@ -232,7 +232,7 @@ const GroupMemberPanel: FC = () => {
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-neutral-950">群聊成员</div>
-              <div className="mt-1 truncate text-xs text-neutral-500">{workspace?.name ?? 'Agent Group'}</div>
+              <div className="mt-1 truncate text-xs text-neutral-500">{workspace?.name ?? 'Agent 群聊'}</div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <button
@@ -283,10 +283,10 @@ const GroupMemberPanel: FC = () => {
           {workspace && (
             <button
               type="button"
-              onClick={() => navigate('/agent-world', { state: { workspaceId: workspace.id } })}
+              onClick={() => navigate('/agent-config')}
               className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
             >
-              打开 Agent Group
+              管理 Agent
             </button>
           )}
         </div>
@@ -953,14 +953,14 @@ const ComposerMenu: FC<{
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [addProjectOpen, setAddProjectOpen] = useState(false)
   const legacyAgents = [
-    { title: '@Orchestrator', desc: '拆解任务并分发到 Agent Group' },
+    { title: '@Orchestrator', desc: '拆解任务并分发到当前群聊' },
     { title: '@architect', desc: '架构与任务拆解' },
     { title: '@coder', desc: '代码实现' },
     { title: '@reviewer', desc: '审查与边界检查' },
   ]
   const agentRows = agents.length
     ? [
-        { title: '@orchestrator', desc: '拆解任务、创建任务卡并协调 Agent Group' },
+        { title: '@orchestrator', desc: '拆解任务、创建任务卡并协调当前群聊' },
         ...agents.map((agent) => ({
           title: `@${agent.name}`,
           desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${agent.capabilityTags.length ? ` · ${agent.capabilityTags.slice(0, 3).join(', ')}` : ''}`,
@@ -2003,10 +2003,10 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => navigate('/agent-world', { state: { workspaceId: result.workspaceId } })}
+                onClick={() => navigate('/agent-config')}
                 className="inline-flex h-8 items-center gap-2 rounded-lg bg-neutral-950 px-3 text-xs font-medium text-white hover:bg-neutral-800"
               >
-                打开 Agent Group
+                管理 Agent
               </button>
               {result.groupSessionId && (
                 <button
@@ -2046,7 +2046,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
               className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-300"
             >
               {dispatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
-              {dispatching ? '正在创建并分发' : '创建并分发到 Agent Group'}
+              {dispatching ? '正在创建并分发' : '创建并分发到当前群聊'}
             </button>
           </div>
         )}

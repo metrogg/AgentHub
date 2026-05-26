@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { basename, delimiter, dirname, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -64,8 +66,10 @@ export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
 
 async function runSkillhub(args: string[]) {
   try {
-    const proc = Bun.spawn(['skillhub', ...args], {
+    const command = resolveSkillhubCommand()
+    const proc = Bun.spawn(buildSkillhubSpawnCommand(command, args), {
       cwd: projectRoot,
+      env: buildSkillhubEnv(),
       stdout: 'pipe',
       stderr: 'pipe',
     })
@@ -78,6 +82,58 @@ async function runSkillhub(args: string[]) {
   } catch (error: any) {
     return { code: 1, output: error?.message || 'skillhub command not found' }
   }
+}
+
+function resolveSkillhubCommand() {
+  const explicit = process.env.AGENTHUB_SKILLHUB_BIN
+  if (explicit && existsSync(explicit)) return explicit
+
+  const candidates = buildSkillhubSearchPaths()
+  for (const dir of candidates) {
+    for (const name of skillhubExecutableNames()) {
+      const file = resolve(dir, name)
+      if (existsSync(file)) return file
+    }
+  }
+
+  return 'skillhub'
+}
+
+function buildSkillhubSearchPaths() {
+  return [
+    ...splitPath(process.env.PATH),
+    resolve(homedir(), '.local', 'bin'),
+    resolve(homedir(), '.bun', 'bin'),
+    resolve(homedir(), 'AppData', 'Roaming', 'npm'),
+  ].filter(Boolean)
+}
+
+function buildSkillhubEnv() {
+  const extraPath = [
+    process.platform === 'win32' ? resolve(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0') : '',
+    process.platform === 'win32' ? resolve(process.env.SystemRoot || 'C:\\Windows', 'System32') : '',
+    resolve(homedir(), '.local', 'bin'),
+    resolve(homedir(), '.bun', 'bin'),
+    resolve(homedir(), 'AppData', 'Roaming', 'npm'),
+  ].filter((path) => path && !splitPath(process.env.PATH).includes(path))
+  return {
+    ...process.env,
+    PATH: [...extraPath, process.env.PATH ?? ''].filter(Boolean).join(delimiter),
+  }
+}
+
+function buildSkillhubSpawnCommand(command: string, args: string[]) {
+  return [command, ...args]
+}
+
+function skillhubExecutableNames() {
+  return process.platform === 'win32'
+    ? ['skillhub.exe', 'skillhub.cmd', 'skillhub.bat', 'skillhub']
+    : ['skillhub']
+}
+
+function splitPath(value?: string) {
+  return (value ?? '').split(delimiter).map((item) => item.trim()).filter(Boolean)
 }
 
 function parseSkillhubSearch(output: string) {

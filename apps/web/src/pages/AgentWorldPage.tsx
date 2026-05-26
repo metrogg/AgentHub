@@ -330,7 +330,7 @@ export default function AgentWorldPage() {
             </button>
             <span className="text-sm font-semibold">AgentHub</span>
             <span className="text-sm text-neutral-300">/</span>
-            <span className="truncate text-sm text-neutral-500">Agent Group</span>
+            <span className="truncate text-sm text-neutral-500">Agent 群聊</span>
           </div>
           <div className="flex items-center gap-2">
             <button

@@ -1055,7 +1055,7 @@ function MobilePairingPanel() {
 const shortcutActionLabels: Record<ShortcutActionId, { title: string; desc: string }> = {
   'new-chat': { title: '新建会话', desc: '在会话页打开新建会话弹窗。' },
   'quick-chat': { title: '快速对话', desc: '立即创建一个空白直接对话。' },
-  'open-folder': { title: '打开项目文件夹', desc: '选择本地项目文件夹并进入 Agent Group。' },
+  'open-folder': { title: '打开项目文件夹', desc: '选择本地项目文件夹并进入群聊。' },
   settings: { title: '打开设置', desc: '从任意页面进入设置中心。' },
   'new-window': { title: '新建窗口', desc: '桌面端打开一个新的 AgentHub 窗口。' },
   'close-window': { title: '关闭窗口', desc: '关闭当前桌面窗口。' },

@@ -28,11 +28,10 @@ const menuItems = [
 const routeLabels: Record<string, string> = {
   '/': '消息',
   '/agent-config': 'Agent',
-  '/agent-world': 'Agent Group',
   '/coding-tools': 'Coding Tools',
   '/office': '办公',
   '/settings': '设置',
-  '/skills': 'Skills',
+  '/skills': 'Skills 市场',
 }
 
 export function DesktopAppMenu() {

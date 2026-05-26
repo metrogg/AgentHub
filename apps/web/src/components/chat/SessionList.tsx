@@ -23,6 +23,7 @@ import {
   Trash2,
   UserCircle,
   Users,
+  Wand2,
   X,
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
@@ -105,7 +106,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   }, [])
 
   useEffect(() => {
-    if (['/coding-tools', '/office'].includes(location.pathname)) {
+    if (['/coding-tools', '/skills', '/office'].includes(location.pathname)) {
       setActiveTab('workspace')
     } else if (location.pathname === '/agent-config') {
       setActiveTab('agents')
@@ -348,10 +349,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           onClick={() => navigate('/coding-tools')}
         />
         <NavItem
-          icon={MessageCircle}
-          label="Agent Group"
-          active={location.pathname === '/agent-world'}
-          onClick={() => navigate('/agent-world')}
+          icon={Wand2}
+          label="Skills 市场"
+          active={location.pathname === '/skills'}
+          onClick={() => navigate('/skills')}
         />
         <NavItem
           icon={Building2}
@@ -365,7 +366,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
         <div className="px-3 pt-3 text-xs leading-5 text-neutral-500">
           <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
             <div className="font-medium text-neutral-900">工作台</div>
-            <div className="mt-1">项目、Agent Group 和本地工具入口统一放在这里。</div>
+            <div className="mt-1">项目文件夹、Coding Tools 和本地办公入口统一放在这里。</div>
           </div>
         </div>
       )}
@@ -533,14 +534,14 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-neutral-950">Agent 联系人</div>
+                <div className="text-sm font-semibold text-neutral-950">Agent 通讯录</div>
                 <div className="mt-1 truncate text-xs text-neutral-500">
-                  {workspaceLoading ? '正在加载工作区...' : '点击 Agent 直接打开独立会话'}
+                  从全局 Agent 库发起单聊，群聊请点击新建会话邀请成员
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => navigate('/agent-world')}
+                onClick={() => navigate('/agent-config')}
                 className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900"
                 aria-label="管理 Agent"
                 title="管理 Agent"
@@ -549,13 +550,21 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
               </button>
             </div>
 
+            <button
+              type="button"
+              onClick={requestNewSessionDialog}
+              className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-[#fbfbf9] text-sm font-medium text-neutral-700 transition hover:border-neutral-300 hover:bg-white"
+            >
+              <Users className="h-4 w-4 text-neutral-500" />
+              新建 Agent 群聊
+            </button>
+
             <div className="mt-3 space-y-2">
-              {workspaceFulls.flatMap((entry) =>
-                entry.agents.map((agent) => (
+              {libraryAgents.map((agent) => (
                   <button
                     key={agent.id}
                     type="button"
-                    onClick={() => openAgentSession(entry.workspace.id, agent)}
+                    onClick={() => openAgentSession(agent)}
                     disabled={openingAgentId === agent.id}
                     className="flex w-full items-center gap-3 rounded-xl border border-neutral-200 bg-[#fbfbf9] px-3 py-2.5 text-left transition hover:border-neutral-300 hover:bg-white disabled:opacity-60"
                   >
@@ -567,14 +576,13 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       <div className="mt-0.5 truncate text-xs text-neutral-500">{agent.role}</div>
                     </div>
                     <div className="max-w-16 truncate text-[11px] text-neutral-400">
-                      {openingAgentId === agent.id ? '打开中...' : entry.workspace.name}
+                      {openingAgentId === agent.id ? '打开中...' : '全局'}
                     </div>
                   </button>
-                ))
-              )}
-              {!workspaceLoading && workspaceFulls.every((entry) => entry.agents.length === 0) && (
+                ))}
+              {!libraryAgents.length && (
                 <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
-                  还没有可用的 Agent
+                  还没有可用 Agent，请先进入 Agent 管理创建。
                 </div>
               )}
             </div>

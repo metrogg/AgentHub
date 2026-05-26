@@ -726,7 +726,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ slug }),
     }),
-  // Workspaces (Agent Group)
+  // Workspaces (group chats)
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
   createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>
     request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),

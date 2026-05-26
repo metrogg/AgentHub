@@ -258,7 +258,7 @@ export default function AgentConfigPage() {
                   </div>
                   <h1 className="mt-4 text-3xl font-semibold tracking-normal">{t('管理所有 Agent')}</h1>
                   <p className="mt-2 max-w-2xl text-sm leading-7 text-neutral-500">
-                    {t('这里保存的是可复用 Agent 模板。保存后可以在 Agent Group 里直接套用，也可以通过下方对话指令快速调整当前 Agent。')}
+                    {t('这里保存的是唯一的全局 Agent 通讯录。新建群聊时像微信拉群一样邀请这些 Agent，无需再维护另一套群组配置。')}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
