@@ -27,7 +27,13 @@ import {
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import { api, type Session, type WorkspaceAgent, type WorkspaceFull } from '../../lib/api'
+import { api, type Session } from '../../lib/api'
+import {
+  agentLibraryChangeEvent,
+  loadAgentLibrary,
+  type SavedAgentConfig,
+} from '../../lib/agentLibrary'
+import { startAgentConversation } from '../../lib/agentConversation'
 import { useI18n } from '../../lib/i18n'
 import { loadSessionListPrefs, normalizeSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent, type SessionListPrefs } from '../../lib/sessionArchive'
 import { settingsUpdatedEvent } from '../../lib/shortcuts'
@@ -67,8 +73,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [prefs, setPrefs] = useState<SessionListPrefs>(loadSessionListPrefs)
   const [activeTab, setActiveTab] = useState<SidebarTab>('messages')
   const [accountProfile, setAccountProfile] = useState<AccountProfile>(defaultAccountProfile)
-  const [workspaceFulls, setWorkspaceFulls] = useState<WorkspaceFull[]>([])
-  const [workspaceLoading, setWorkspaceLoading] = useState(false)
+  const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
@@ -100,8 +105,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   }, [])
 
   useEffect(() => {
-    if (['/agent-world', '/coding-tools', '/office'].includes(location.pathname)) {
+    if (['/coding-tools', '/office'].includes(location.pathname)) {
       setActiveTab('workspace')
+    } else if (location.pathname === '/agent-config') {
+      setActiveTab('agents')
     } else if (location.pathname === '/settings') {
       setActiveTab('me')
     }
@@ -109,22 +116,13 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
 
   useEffect(() => {
     if (activeTab !== 'agents') return
-    let cancelled = false
-    setWorkspaceLoading(true)
-    api
-      .listWorkspaces()
-      .then(({ items }) => Promise.all(items.map((workspace) => api.getWorkspace(workspace.id))))
-      .then((items) => {
-        if (!cancelled) setWorkspaceFulls(items)
-      })
-      .catch(() => {
-        if (!cancelled) setWorkspaceFulls([])
-      })
-      .finally(() => {
-        if (!cancelled) setWorkspaceLoading(false)
-      })
+    const syncAgents = () => setLibraryAgents(loadAgentLibrary())
+    syncAgents()
+    window.addEventListener(agentLibraryChangeEvent, syncAgents)
+    window.addEventListener('storage', syncAgents)
     return () => {
-      cancelled = true
+      window.removeEventListener(agentLibraryChangeEvent, syncAgents)
+      window.removeEventListener('storage', syncAgents)
     }
   }, [activeTab])
 
@@ -225,11 +223,11 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     setDeleteTarget(null)
   }
 
-  async function openAgentSession(workspaceId: string, agent: WorkspaceAgent) {
+  async function openAgentSession(agent: SavedAgentConfig) {
     if (openingAgentId) return
     setOpeningAgentId(agent.id)
     try {
-      const { session } = await api.openWorkspaceAgentSession(workspaceId, agent.id)
+      const session = await startAgentConversation({ agents: [agent], title: agent.name })
       await fetchSessions()
       navigate(`/chat/${session.id}`)
     } finally {
