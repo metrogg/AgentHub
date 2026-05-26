@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { basename, delimiter, dirname, resolve } from 'node:path'
-import { homedir } from 'node:os'
+import { mkdir, mkdtemp, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { basename, delimiter, dirname, resolve, sep } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { inflateRawSync } from 'node:zlib'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -34,11 +35,11 @@ export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/skillhub/search', zValidator('query', skillhubSearchSchema), async (c) => {
     const { q } = c.req.valid('query')
-    const result = await runSkillhub(['--skip-self-upgrade', '--dir', installedSkillsRoot, 'search', q])
-    if (result.code !== 0) {
-      return c.json({ ok: false, items: [], message: result.output || 'SkillHub 搜索失败' }, 500)
+    const result = await searchSkillhubNative(q)
+    if (!result.ok) {
+      return c.json({ ok: false, items: [], message: result.message || 'SkillHub 搜索失败' }, 500)
     }
-    return c.json({ ok: true, items: parseSkillhubSearch(result.output), message: result.output })
+    return c.json(result)
   })
   .post('/install', zValidator('json', installSkillSchema), async (c) => {
     const { sourceUrl, id } = c.req.valid('json')
@@ -47,15 +48,13 @@ export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .post('/skillhub/install', zValidator('json', skillhubInstallSchema), async (c) => {
     const { slug } = c.req.valid('json')
-    const result = await runSkillhub(['--skip-self-upgrade', '--dir', installedSkillsRoot, 'install', slug])
-    if (result.code !== 0) {
-      return c.json({ ok: false, message: result.output || `SkillHub 安装失败：${slug}` }, 500)
-    }
-    const installed = await globalSkillRegistry.loadSkill(slug)
+    const result = await installSkillhubNative(slug)
+    if (!result.ok) return c.json(result, 500)
+    const installed = await globalSkillRegistry.loadSkill(result.slug)
     return c.json({
       ok: true,
       installed,
-      message: installed ? `已安装 skill:${installed.id}` : result.output || `已安装 ${slug}`,
+      message: installed ? `已安装 skill:${installed.id}` : `已安装 ${result.slug}`,
     })
   })
   .get('/:id', async (c) => {
@@ -64,144 +63,153 @@ export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json(skill)
   })
 
-async function runSkillhub(args: string[]) {
+async function searchSkillhubNative(q: string) {
   try {
-    const command = resolveSkillhubCommand()
-    const proc = Bun.spawn(buildSkillhubSpawnCommand(command, args), {
-      cwd: projectRoot,
-      env: buildSkillhubEnv(),
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const url = new URL('https://lightmake.site/api/v1/search')
+    url.searchParams.set('q', q)
+    url.searchParams.set('limit', '40')
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'AgentHub/SkillHub',
+      },
     })
-    const [code, stdout, stderr] = await Promise.all([
-      proc.exited,
-      decodeProcessOutput(proc.stdout).catch(() => ''),
-      decodeProcessOutput(proc.stderr).catch(() => ''),
-    ])
-    return { code, output: [stdout.trim(), stderr.trim()].filter(Boolean).join('\n') }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const payload = (await response.json()) as any
+    const rawItems = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload?.items) ? payload.items : []
+    const items = rawItems.map(normalizeSkillhubItem).filter(Boolean).slice(0, 40)
+    return { ok: true, items, message: `SkillHub 搜索完成：${items.length} 个结果` }
   } catch (error: any) {
-    return { code: 1, output: error?.message || 'skillhub command not found' }
+    return { ok: false, items: [], message: error?.message || 'SkillHub 搜索失败' }
   }
 }
 
-function resolveSkillhubCommand() {
-  const explicit = process.env.AGENTHUB_SKILLHUB_BIN
-  if (explicit && existsSync(explicit)) return explicit
-
-  const candidates = buildSkillhubSearchPaths()
-  for (const dir of candidates) {
-    for (const name of skillhubExecutableNames()) {
-      const file = resolve(dir, name)
-      if (existsSync(file)) return file
-    }
+async function installSkillhubNative(slug: string) {
+  const targetDir = resolve(installedSkillsRoot, slug)
+  if (!isInside(targetDir, installedSkillsRoot)) return { ok: false, slug, message: 'Invalid skill slug' }
+  const stageDir = await mkdtemp(resolve(tmpdir(), 'agenthub-skill-'))
+  try {
+    const zipBytes = await downloadSkillhubZip(slug)
+    await extractZip(zipBytes, stageDir)
+    const skillRoot = await findExtractedSkillRoot(stageDir)
+    if (!skillRoot) throw new Error('下载包中没有找到 SKILL.md')
+    await rm(targetDir, { recursive: true, force: true })
+    await mkdir(dirname(targetDir), { recursive: true })
+    await rename(skillRoot, targetDir)
+    return { ok: true, slug, message: `已安装 ${slug}` }
+  } catch (error: any) {
+    return { ok: false, slug, message: error?.message || `SkillHub 安装失败：${slug}` }
+  } finally {
+    await rm(stageDir, { recursive: true, force: true }).catch(() => undefined)
   }
-
-  return 'skillhub'
 }
 
-function buildSkillhubSearchPaths() {
-  return [
-    ...splitPath(process.env.PATH),
-    resolve(homedir(), '.local', 'bin'),
-    resolve(homedir(), '.bun', 'bin'),
-    resolve(homedir(), 'AppData', 'Roaming', 'npm'),
-  ].filter(Boolean)
-}
-
-function buildSkillhubEnv() {
-  const extraPath = [
-    process.platform === 'win32' ? resolve(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0') : '',
-    process.platform === 'win32' ? resolve(process.env.SystemRoot || 'C:\\Windows', 'System32') : '',
-    resolve(homedir(), '.local', 'bin'),
-    resolve(homedir(), '.bun', 'bin'),
-    resolve(homedir(), 'AppData', 'Roaming', 'npm'),
-  ].filter((path) => path && !splitPath(process.env.PATH).includes(path))
+function normalizeSkillhubItem(value: any) {
+  const slug = stringValue(value?.slug || value?.id || value?.name)
+  if (!slug) return null
+  const title = stringValue(value?.displayName || value?.title || value?.name || slug)
+  const description = stringValue(value?.description_zh || value?.description || value?.summary)
+  const version = stringValue(value?.version)
   return {
-    ...process.env,
-    PATH: [...extraPath, process.env.PATH ?? ''].filter(Boolean).join(delimiter),
+    slug,
+    title: cleanSkillhubText(title || slug),
+    description: cleanSkillhubText(description),
+    ...(version ? { version } : {}),
+    source: stringValue(value?.source) || 'SkillHub',
   }
 }
 
-function buildSkillhubSpawnCommand(command: string, args: string[]) {
-  return [command, ...args]
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
-function skillhubExecutableNames() {
-  return process.platform === 'win32'
-    ? ['skillhub.exe', 'skillhub.cmd', 'skillhub.bat', 'skillhub']
-    : ['skillhub']
-}
-
-function splitPath(value?: string) {
-  return (value ?? '').split(delimiter).map((item) => item.trim()).filter(Boolean)
-}
-
-function parseSkillhubSearch(output: string) {
-  const items: Array<{ slug: string; title: string; description: string; version?: string; source: string }> = []
-  let current: { slug: string; title: string; descriptions: string[]; version?: string } | null = null
-  const pushCurrent = () => {
-    if (!current) return
-    const item: { slug: string; title: string; description: string; version?: string; source: string } = {
-      slug: current.slug,
-      title: cleanSkillhubText(current.title) || current.slug,
-      description: chooseDescription(current.descriptions),
-      source: 'SkillHub',
-    }
-    if (current.version) item.version = current.version
-    items.push(item)
-  }
-  for (const line of output.split(/\r?\n/)) {
-    const trimmedRight = line.trimEnd()
-    if (!trimmedRight.trim() || /^You can use/i.test(trimmedRight)) continue
-    const entry = /^([a-z0-9][a-z0-9_-]{1,120})\s{2,}(.+)$/.exec(trimmedRight)
-    if (entry?.[1]) {
-      pushCurrent()
-      current = {
-        slug: entry[1],
-        title: entry[2]?.trim() || entry[1],
-        descriptions: [],
-      }
-      continue
-    }
-    if (!current) continue
-    const version = /^\s*-\s*version:\s*(.+)$/i.exec(trimmedRight)
-    if (version?.[1]) {
-      current.version = version[1].trim()
-      continue
-    }
-    const description = /^\s*-\s*(.+)$/.exec(trimmedRight) ?? /^\s{2,}(.+)$/.exec(trimmedRight)
-    if (description?.[1]) {
-      current.descriptions.push(description[1].trim())
+async function downloadSkillhubZip(slug: string) {
+  const urls = [
+    `https://lightmake.site/api/v1/download?slug=${encodeURIComponent(slug)}`,
+    `https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/skills/${encodeURIComponent(slug)}.zip`,
+  ]
+  let lastError = ''
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          Accept: 'application/zip, application/octet-stream, */*',
+          'User-Agent': 'AgentHub/SkillHub',
+        },
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const bytes = Buffer.from(await response.arrayBuffer())
+      if (bytes.readUInt32LE(0) !== 0x04034b50) throw new Error('下载内容不是 zip 包')
+      return bytes
+    } catch (error: any) {
+      lastError = error?.message || String(error)
     }
   }
-  pushCurrent()
-  return items.slice(0, 40)
+  throw new Error(lastError || '下载 SkillHub 技能失败')
 }
 
-async function decodeProcessOutput(stream: ReadableStream<Uint8Array> | null) {
-  if (!stream) return ''
-  const bytes = new Uint8Array(await new Response(stream).arrayBuffer())
-  const utf8 = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-  const gb18030 = new TextDecoder('gb18030' as any, { fatal: false }).decode(bytes)
-  return scoreDecodedText(gb18030) > scoreDecodedText(utf8) ? gb18030 : utf8
+async function extractZip(zip: Buffer, targetDir: string) {
+  const entries = readZipEntries(zip)
+  for (const entry of entries) {
+    if (entry.name.endsWith('/')) continue
+    const filePath = resolve(targetDir, entry.name.replace(/\\/g, '/'))
+    if (!isInside(filePath, targetDir)) throw new Error(`非法 zip 路径：${entry.name}`)
+    await mkdir(dirname(filePath), { recursive: true })
+    await writeFile(filePath, entry.data)
+  }
 }
 
-function scoreDecodedText(value: string) {
-  const replacementPenalty = (value.match(/\uFFFD/g) ?? []).length * 20
-  const chineseBonus = (value.match(/[\u4e00-\u9fa5]/g) ?? []).length
-  const readableBonus = (value.match(/[a-z0-9]/gi) ?? []).length * 0.15
-  return chineseBonus + readableBonus - replacementPenalty
+function readZipEntries(zip: Buffer) {
+  const eocdOffset = findEndOfCentralDirectory(zip)
+  if (eocdOffset < 0) throw new Error('zip 目录损坏')
+  const totalEntries = zip.readUInt16LE(eocdOffset + 10)
+  let centralOffset = zip.readUInt32LE(eocdOffset + 16)
+  const entries: Array<{ name: string; data: Buffer }> = []
+
+  for (let index = 0; index < totalEntries; index += 1) {
+    if (zip.readUInt32LE(centralOffset) !== 0x02014b50) throw new Error('zip 中央目录损坏')
+    const method = zip.readUInt16LE(centralOffset + 10)
+    const compressedSize = zip.readUInt32LE(centralOffset + 20)
+    const fileNameLength = zip.readUInt16LE(centralOffset + 28)
+    const extraLength = zip.readUInt16LE(centralOffset + 30)
+    const commentLength = zip.readUInt16LE(centralOffset + 32)
+    const localOffset = zip.readUInt32LE(centralOffset + 42)
+    const name = zip.slice(centralOffset + 46, centralOffset + 46 + fileNameLength).toString('utf8')
+    const localNameLength = zip.readUInt16LE(localOffset + 26)
+    const localExtraLength = zip.readUInt16LE(localOffset + 28)
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength
+    const compressed = zip.slice(dataStart, dataStart + compressedSize)
+    let data: Buffer
+    if (method === 0) data = compressed
+    else if (method === 8) data = inflateRawSync(compressed)
+    else throw new Error(`暂不支持 zip 压缩方式：${method}`)
+    entries.push({ name, data })
+    centralOffset += 46 + fileNameLength + extraLength + commentLength
+  }
+
+  return entries
 }
 
-function chooseDescription(values: string[]) {
-  const cleaned = values.map(cleanSkillhubText).filter(Boolean)
-  if (!cleaned.length) return ''
-  return (
-    cleaned.find((item) => /[\u4e00-\u9fa5]/.test(item) && item.length >= 8) ??
-    cleaned.find((item) => item.length >= 8) ??
-    cleaned[0] ??
-    ''
-  )
+function findEndOfCentralDirectory(zip: Buffer) {
+  for (let offset = zip.length - 22; offset >= Math.max(0, zip.length - 66_000); offset -= 1) {
+    if (zip.readUInt32LE(offset) === 0x06054b50) return offset
+  }
+  return -1
+}
+
+async function findExtractedSkillRoot(stageDir: string) {
+  if (existsSync(resolve(stageDir, 'SKILL.md'))) return stageDir
+  const entries = await readdir(stageDir, { withFileTypes: true })
+  const child = entries.find((entry) => entry.isDirectory())
+  if (!child) return null
+  const childPath = resolve(stageDir, child.name)
+  return existsSync(resolve(childPath, 'SKILL.md')) ? childPath : null
+}
+
+function isInside(target: string, root: string) {
+  const normalizedRoot = resolve(root)
+  const normalizedTarget = resolve(target)
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${sep}`)
 }
 
 function cleanSkillhubText(value: string) {
