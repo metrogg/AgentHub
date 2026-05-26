@@ -68,7 +68,6 @@ export default function AgentWorldPage() {
     createWorkspace,
     selectWorkspace,
     updateWorkspace,
-    deleteWorkspace,
     addAgent,
     updateAgent,
     deleteAgent,
@@ -79,7 +78,6 @@ export default function AgentWorldPage() {
     summarize,
     openGroupSession,
   } = useWorkspaceStore()
-  const [newGoal, setNewGoal] = useState('')
   const [agentDialogMode, setAgentDialogMode] = useState<'create' | 'edit' | null>(null)
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null)
   const [agentDraft, setAgentDraft] = useState<AgentConfigInput>(freshAgentDraft())
@@ -165,7 +163,7 @@ export default function AgentWorldPage() {
 
   async function openProjectFolder() {
     if (openingFolder) return
-    const goal = newGoal.trim()
+    const goal = workspaceDraft.goal.trim()
     setOpeningFolder(true)
     toast('正在打开文件夹选择器...')
     try {
@@ -197,7 +195,6 @@ export default function AgentWorldPage() {
           })
         }
       }
-      setNewGoal('')
       toast('已打开项目文件夹')
     } catch (err) {
       toast(friendlyErrorMessage(err, '项目文件夹打开失败'))
@@ -374,124 +371,81 @@ export default function AgentWorldPage() {
         </header>
 
         <div className="flex min-h-0 flex-1">
-          <aside className="w-80 shrink-0 border-r border-neutral-200 bg-[#fbfbf9] p-4">
-            <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
-              <label className="text-xs text-neutral-500">{t('打开项目文件夹')}</label>
-              <div className="mt-2 flex items-center gap-2 rounded-xl border border-neutral-200 px-3">
-                <FolderOpen className="h-4 w-4 shrink-0 text-neutral-400" />
-                <div className="flex h-10 min-w-0 flex-1 items-center truncate text-sm text-neutral-500">
-                  {activeWorkspace?.projectPath || t('选择本地项目文件夹')}
-                </div>
-              </div>
-              <textarea
-                value={newGoal}
-                onChange={(event) => setNewGoal(event.target.value)}
-                className="mt-3 h-20 w-full resize-none rounded-xl border border-neutral-200 bg-transparent px-3 py-2 text-sm leading-6 outline-none placeholder:text-neutral-300"
-                placeholder={t('协作目标，可选')}
-              />
-              <button
-                type="button"
-                onClick={openProjectFolder}
-                disabled={openingFolder}
-                className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
-              >
-                {openingFolder ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
-                {openingFolder ? t('正在打开...') : t('打开文件夹')}
-              </button>
-            </div>
-
-            <div className="mt-5 text-xs text-neutral-400">{t('已打开文件夹')}</div>
-            <div className="mt-2 space-y-2">
-              {workspaces.map((workspace) => (
-                <div
-                  key={workspace.id}
-                  className={cn(
-                    'group flex w-full items-center gap-2 rounded-xl px-3 py-3 transition',
-                    currentId === workspace.id ? 'bg-white shadow-sm' : 'hover:bg-white/70'
-                  )}
-                >
-                  <button
-                    type="button"
-                    onClick={() => selectWorkspace(workspace.id)}
-                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                  >
-                    <FolderOpen className="h-4 w-4 shrink-0 text-neutral-500" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">{workspace.name}</span>
-                        <span className="block truncate text-xs text-neutral-400">
-                          {workspace.projectPath || formatTime(workspace.updatedAt)}
-                        </span>
-                      </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteWorkspace(workspace.id)}
-                    className="grid h-7 w-7 place-items-center rounded-md text-neutral-300 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
-                    aria-label="删除协作组"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-              {!workspaces.length && (
-                <div className="rounded-xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-400">
-                  {t('暂无项目文件夹，先打开一个本地项目。')}
-                </div>
-              )}
-            </div>
-          </aside>
-
           <section className="min-w-0 flex-1 overflow-y-auto px-8 py-8">
             {activeWorkspace ? (
               <div className="mx-auto max-w-7xl">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <div className="inline-flex h-7 items-center gap-2 rounded-full border border-neutral-200 px-3 text-xs text-neutral-500">
-                      <Users className="h-3.5 w-3.5" />
-                      {t('多会话并行调度')}
-                    </div>
-                    <input
-                      value={workspaceDraft.name}
-                      onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, name: event.target.value }))}
-                      className="mt-4 block w-full max-w-2xl bg-transparent text-3xl font-semibold tracking-normal outline-none"
-                    />
-                    <textarea
-                      value={workspaceDraft.goal}
-                      onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, goal: event.target.value }))}
-                      className="mt-3 h-16 w-full max-w-3xl resize-none bg-transparent text-sm leading-7 text-neutral-500 outline-none"
-                    />
-                    <label className="mt-2 flex max-w-3xl items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-600 shadow-sm">
-                      <FolderOpen className="h-4 w-4 shrink-0 text-neutral-400" />
+                <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="inline-flex h-7 items-center gap-2 rounded-full border border-neutral-200 px-3 text-xs text-neutral-500">
+                          <Users className="h-3.5 w-3.5" />
+                          {t('多会话并行调度')}
+                        </div>
+                        <select
+                          value={currentId ?? ''}
+                          onChange={(event) => event.target.value && selectWorkspace(event.target.value)}
+                          className="h-8 max-w-xs rounded-full border border-neutral-200 bg-white px-3 text-xs text-neutral-600 outline-none transition hover:border-neutral-300"
+                        >
+                          {workspaces.map((workspace) => (
+                            <option key={workspace.id} value={workspace.id}>
+                              {workspace.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={openProjectFolder}
+                          disabled={openingFolder}
+                          className="inline-flex h-8 items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:text-neutral-300"
+                        >
+                          {openingFolder ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
+                          {openingFolder ? t('正在打开...') : t('打开项目')}
+                        </button>
+                      </div>
                       <input
-                        value={workspaceDraft.projectPath}
-                        onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, projectPath: event.target.value }))}
-                        className="h-10 min-w-0 flex-1 bg-transparent outline-none placeholder:text-neutral-300"
-                        placeholder={t('项目文件夹路径，Agent 集群会在这里运行')}
+                        value={workspaceDraft.name}
+                        onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, name: event.target.value }))}
+                        className="mt-4 block w-full max-w-3xl bg-transparent text-3xl font-semibold tracking-normal outline-none"
                       />
-                    </label>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={saveGoal}
-                      className="inline-flex h-10 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 text-sm font-medium shadow-sm transition hover:bg-neutral-50"
-                    >
-                      <Pencil className="h-4 w-4" />
-                      {savingGoal ? t('保存中') : t('保存')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={dispatchAll}
-                      disabled={!tasks.length}
-                      className="inline-flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-200"
-                    >
-                      <Play className="h-4 w-4" />
-                      {t('一键分派')}
-                    </button>
+                      <textarea
+                        value={workspaceDraft.goal}
+                        onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, goal: event.target.value }))}
+                        className="mt-3 h-16 w-full max-w-4xl resize-none bg-transparent text-sm leading-7 text-neutral-500 outline-none placeholder:text-neutral-300"
+                        placeholder={t('协作目标，可选')}
+                      />
+                      <label className="mt-2 flex max-w-4xl items-center gap-2 rounded-xl border border-neutral-200 bg-[#fbfbf9] px-3 text-sm text-neutral-600">
+                        <FolderOpen className="h-4 w-4 shrink-0 text-neutral-400" />
+                        <input
+                          value={workspaceDraft.projectPath}
+                          onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, projectPath: event.target.value }))}
+                          className="h-10 min-w-0 flex-1 bg-transparent outline-none placeholder:text-neutral-300"
+                          placeholder={t('项目文件夹路径，Agent 集群会在这里运行')}
+                        />
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={saveGoal}
+                        className="inline-flex h-10 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 text-sm font-medium shadow-sm transition hover:bg-neutral-50"
+                      >
+                        <Pencil className="h-4 w-4" />
+                        {savingGoal ? t('保存中') : t('保存')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={dispatchAll}
+                        disabled={!tasks.length}
+                        className="inline-flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-200"
+                      >
+                        <Play className="h-4 w-4" />
+                        {t('一键分派')}
+                      </button>
+                    </div>
                   </div>
                 </div>
-
-                <div className="mt-8 grid gap-3 sm:grid-cols-4">
+                <div className="mt-6 grid gap-3 sm:grid-cols-4">
                   <Stat value={agents.length} label="Agent 成员" />
                   <Stat value={tasks.length} label="任务总数" />
                   <Stat value={runningCount} label="进行中" />
@@ -683,12 +637,6 @@ function starterTaskTitle(role: string) {
     审查: '审查风险、缺口与测试建议',
   }
   return map[role] ?? `${role} 分工任务`
-}
-
-function formatTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function splitList(value: string) {

@@ -642,9 +642,6 @@ export default function CodingToolsPage() {
                     <StatusBadge configured={configured} installed={Boolean(status?.installed)} savedOnly={savedConfig && !status?.configured} />
                   </div>
                   <p className="mt-3 line-clamp-2 text-xs leading-5 text-neutral-600">{t(tool.description)}</p>
-                  <div className={cn('mt-3 truncate text-xs', configured ? 'text-emerald-700' : status?.installed ? 'text-amber-700' : 'text-neutral-400')}>
-                    {status?.configMessage ? t(status.configMessage) : savedConfig ? t('配置已保存。') : t('等待检测本机 CLI。')}
-                  </div>
                 </button>
               )
             })}
