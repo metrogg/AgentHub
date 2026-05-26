@@ -289,6 +289,7 @@ export default function SettingsPage() {
     appSettings.fontSize,
     appSettings.inlineCodeFont,
     appSettings.mainWindowTheme,
+    appSettings.embeddedWindowTheme,
     appSettings.terminalFont,
     appSettings.uiFont,
   ])
@@ -849,8 +850,8 @@ function SettingsContent({
                 <div className="flex items-center gap-2">
                   <Keycap>Ctrl</Keycap>
                   <Keycap>N</Keycap>
-                  <button type="button" className="settings-soft-button">{t('录制')}</button>
-                  <button type="button" className="settings-soft-button">{t('恢复默认')}</button>
+                  <button type="button" disabled className="settings-soft-button opacity-50">{t('录制')}</button>
+                  <button type="button" disabled className="settings-soft-button opacity-50">{t('恢复默认')}</button>
                 </div>
               </ShortcutRow>
             </InsetPanel>
@@ -907,7 +908,7 @@ function SettingsContent({
                 <span className="text-neutral-500">{t('开发组织')}</span><span className="font-medium">AgentHub</span>
                 <span className="text-neutral-500">{t('联系邮箱')}</span><span className="font-medium">771473941@qq.com</span>
                 <span className="text-neutral-500">{t('版本来源')}</span><span className="font-medium">{t('本地开发版')}</span>
-                <span className="text-neutral-500">{t('上次检查')}</span><span><button type="button" className="settings-soft-button">{t('检查更新')}</button></span>
+                <span className="text-neutral-500">{t('上次检查')}</span><span><button type="button" disabled className="settings-soft-button opacity-50">{t('检查更新')}</button></span>
               </div>
             </div>
           </SettingsSection>
@@ -926,7 +927,7 @@ function ArchivedSessionsPanel({
   onRetentionChange: (value: string) => void
 }) {
   const navigate = useNavigate()
-  const { t } = useI18n()
+  const { t, language } = useI18n()
   const [sessions, setSessions] = useState<Session[]>([])
   const [archivedIds, setArchivedIds] = useState<string[]>(() => loadSessionListPrefs().archived)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -1152,7 +1153,7 @@ function ArchivedSessionsPanel({
                     </div>
                     <div className="mt-1 flex items-center gap-1.5 text-xs" style={{ color: 'var(--settings-muted-text)' }}>
                       <Clock3 className="h-3.5 w-3.5" />
-                      {relativeTime(session.updatedAt)}
+                      {relativeTime(session.updatedAt, language)}
                     </div>
                   </button>
                 ))}
@@ -1202,7 +1203,7 @@ function ArchivedSessionsPanel({
 
               <div className="grid gap-3 border-b p-4 sm:grid-cols-3" style={{ borderColor: 'var(--settings-border)' }}>
                 <ArchiveMetric icon={<MessageSquare className="h-4 w-4" />} label="消息数量" value={loadingMessages ? t('读取中') : String(messages.length)} />
-                <ArchiveMetric icon={<Clock3 className="h-4 w-4" />} label="最后更新" value={relativeTime(selectedSession.updatedAt)} />
+                <ArchiveMetric icon={<Clock3 className="h-4 w-4" />} label="最后更新" value={relativeTime(selectedSession.updatedAt, language)} />
                 <ArchiveMetric icon={<FileText className="h-4 w-4" />} label="保留策略" value={retention} />
               </div>
 
@@ -1240,8 +1241,8 @@ function ArchivedSessionsPanel({
       </div>
 
       {deleteTarget && (
-        <div className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" onMouseDown={() => setDeleteTarget(null)}>
-          <div className="w-full max-w-sm rounded-2xl border p-4 shadow-2xl" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }} onMouseDown={(event) => event.stopPropagation()}>
+        <div className="agenthub-portal-theme fixed inset-0 z-50 flex items-center justify-center bg-transparent px-4" role="dialog" aria-modal="true" onMouseDown={() => setDeleteTarget(null)}>
+          <div className="w-full max-w-[382px] rounded-2xl border p-4 shadow-[0_24px_80px_rgba(15,23,42,0.16)]" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }} onMouseDown={(event) => event.stopPropagation()}>
             <div className="flex items-start gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-red-50 text-red-500">
                 <Trash2 className="h-5 w-5" />
@@ -1255,7 +1256,7 @@ function ArchivedSessionsPanel({
             </div>
             <div className="mt-4 rounded-xl border px-3 py-2" style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}>
               <div className="truncate text-sm font-medium" style={{ color: 'var(--settings-text)' }}>{deleteTarget.title || t('未命名会话')}</div>
-              <div className="mt-0.5 text-xs" style={{ color: 'var(--settings-muted-text)' }}>{relativeTime(deleteTarget.updatedAt)}</div>
+              <div className="mt-0.5 text-xs" style={{ color: 'var(--settings-muted-text)' }}>{relativeTime(deleteTarget.updatedAt, language)}</div>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button type="button" onClick={() => setDeleteTarget(null)} disabled={Boolean(busyAction)} className="settings-soft-button h-10">

@@ -34,6 +34,7 @@ const probes: ToolProbe[] = [
   { id: 'codex', command: 'codex' },
   { id: 'claude-code', command: 'claude' },
   { id: 'opencode', command: 'opencode' },
+  { id: 'gemini', command: 'gemini' },
 ]
 
 const agentAdapters = [
@@ -58,13 +59,21 @@ const agentAdapters = [
     envKey: 'DEEPSEEK_API_KEY',
     docsHint: 'OpenCode 会使用本机配置；如果 Agent 绑定了 provider/model，会通过 --model 传给 OpenCode。',
   },
+  {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    command: 'gemini',
+    envKey: 'GEMINI_API_KEY',
+    docsHint: 'Gemini CLI 会使用本机 Google Gemini 凭据，并在当前项目目录中执行代码任务。',
+  },
 ] as const
 
-const cliPackages = [
-  '@openai/codex@0.42.0',
-  '@anthropic-ai/claude-code@2.1.146',
-  'opencode-ai@1.15.7',
-]
+const cliPackages: Record<string, string> = {
+  codex: '@openai/codex@0.42.0',
+  'claude-code': '@anthropic-ai/claude-code@2.1.146',
+  opencode: 'opencode-ai@1.15.7',
+  gemini: '@google/gemini-cli',
+}
 
 const chatGptAuthDisabledMessage =
   'ChatGPT device auth is disabled for runtime use. Configure OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL in the environment instead.'
@@ -176,14 +185,6 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
     })
   })
   .post('/codex/auth/start', async (c) => {
-    if (!env.ENABLE_CODEX_CHATGPT_AUTH) return c.json(disabledAuthAction('failed'), 200)
-    try {
-      return c.json(await startCodexLogin())
-    } catch (error: any) {
-      return c.json({ ok: false, status: 'failed', message: sanitizeAuthOutput(error?.message || 'Login failed') }, 200)
-    }
-  })
-  .post('/codex/auth/login', async (c) => {
     if (!env.ENABLE_CODEX_CHATGPT_AUTH) return c.json(disabledAuthAction('failed'), 200)
     try {
       return c.json(await startCodexLogin())
@@ -486,7 +487,36 @@ async function probeToolDirect(probe: ToolProbe) {
 }
 
 async function installAllCliTools() {
-  const install = await runFixedCommand(['bun', 'install', '-g', ...cliPackages], {
+  const before = await Promise.all(probes.map(probeToolDirect))
+  const missing = before.filter((item) => !item.installed)
+  const skipped = before.filter((item) => item.installed)
+  const packages = missing.map((item) => cliPackages[item.id]).filter((pkg): pkg is string => Boolean(pkg))
+
+  if (!missing.length) {
+    return {
+      ok: true,
+      status: 'completed' as const,
+      code: 0,
+      message: '所有 CLI 均已安装，已跳过重复安装。',
+      output: installSummaryOutput({ skipped, missing, commandOutput: '' }),
+      items: before,
+      runtime: 'host' as const,
+    }
+  }
+
+  if (!packages.length) {
+    return {
+      ok: false,
+      status: 'failed' as const,
+      code: 1,
+      message: '检测到缺失 CLI，但没有找到对应的安装包配置。',
+      output: installSummaryOutput({ skipped, missing, commandOutput: '' }),
+      items: before,
+      runtime: 'host' as const,
+    }
+  }
+
+  const install = await runFixedCommand(['bun', 'install', '-g', ...packages], {
     timeoutMs: 10 * 60 * 1000,
   })
   const items = await Promise.all(probes.map(probeToolDirect))
@@ -500,12 +530,29 @@ async function installAllCliTools() {
       ok && configured
         ? 'CLI 工具已在本机安装并完成运行配置。'
         : ok
-          ? 'CLI 工具已安装，仍有 API Key 或 ChatGPT 登录状态需要补齐。'
-          : 'CLI 安装过程返回错误，或至少一个工具仍未被检测到。',
-    output: limitOutput(install.output),
+          ? '缺失的 CLI 已安装，仍有 API Key 或 ChatGPT 登录状态需要补齐。'
+          : 'CLI 自动安装过程返回错误，或至少一个缺失工具仍未被检测到。',
+    output: installSummaryOutput({ skipped, missing, commandOutput: install.output }),
     items,
     runtime: 'host' as const,
   }
+}
+
+function installSummaryOutput(options: {
+  skipped: Awaited<ReturnType<typeof probeToolDirect>>[]
+  missing: Awaited<ReturnType<typeof probeToolDirect>>[]
+  commandOutput: string
+}) {
+  const lines = [
+    options.skipped.length
+      ? `已安装，跳过：${options.skipped.map((item) => `${item.id}${item.version ? ` (${item.version})` : ''}`).join('、')}`
+      : '已安装，跳过：无',
+    options.missing.length
+      ? `本次安装缺失项：${options.missing.map((item) => `${item.id} -> ${cliPackages[item.id] ?? '未配置安装包'}`).join('、')}`
+      : '本次安装缺失项：无',
+    options.commandOutput.trim(),
+  ].filter(Boolean)
+  return limitOutput(lines.join('\n\n'))
 }
 
 async function getApiKeyAuthStatus() {
@@ -542,6 +589,7 @@ async function runVersionProbe(command: string): Promise<string | null> {
     const proc = Bun.spawn([shell, ...args], {
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const timed = await Promise.race([
       proc.exited,
@@ -566,6 +614,7 @@ async function runFixedCommand(
       cwd: options.cwd,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const timer = setTimeout(() => {
       try {
@@ -597,6 +646,7 @@ async function runHostCliCommand(
       cwd: options.cwd,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const timer = setTimeout(() => {
       try {
@@ -668,6 +718,7 @@ function isSafeEnvName(name?: string) {
 function defaultApiKeyEnv(id: string) {
   if (id === 'claude-code') return 'ANTHROPIC_API_KEY'
   if (id === 'opencode') return 'DEEPSEEK_API_KEY'
+  if (id === 'gemini') return 'GEMINI_API_KEY'
   return 'OPENAI_API_KEY'
 }
 

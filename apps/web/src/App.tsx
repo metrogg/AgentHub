@@ -9,14 +9,25 @@ import { DesktopAppMenu } from './components/DesktopAppMenu'
 import OfficePage from './pages/OfficePage'
 import SettingsPage from './pages/SettingsPage'
 import SkillsMarketPage from './pages/SkillsMarketPage'
+import OrchestratorRunsPage from './pages/OrchestratorRunsPage'
+import ExecutionLogsPage from './pages/ExecutionLogsPage'
 import { api } from './lib/api'
 import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
-import { I18nProvider } from './lib/i18n'
-import { isDesktopApp } from './lib/native'
+import { I18nProvider, useI18n } from './lib/i18n'
+import { isDesktopApp, setDesktopWindowTitle } from './lib/native'
 import { useChatStore } from './stores/chatStore'
 
 export default function App() {
+  return (
+    <I18nProvider>
+      <AppShell />
+    </I18nProvider>
+  )
+}
+
+function AppShell() {
   const desktop = isDesktopApp()
+  const { language } = useI18n()
 
   useEffect(() => {
     applyAppearanceSettings(defaultAppearanceSettings)
@@ -29,6 +40,11 @@ export default function App() {
       .catch(() => undefined)
   }, [])
 
+  useEffect(() => {
+    if (!desktop) return
+    void setDesktopWindowTitle('AgentHub')
+  }, [desktop, language])
+
   const routes = (
     <Routes>
       <Route path="/" element={<ChatPage />} />
@@ -38,19 +54,19 @@ export default function App() {
       <Route path="/agent-world" element={<AgentWorldPage />} />
       <Route path="/office" element={<OfficePage />} />
       <Route path="/skills" element={<SkillsMarketPage />} />
+      <Route path="/orchestrator-runs" element={<OrchestratorRunsPage />} />
+      <Route path="/execution-logs" element={<ExecutionLogsPage />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 
   return (
-    <I18nProvider>
-      <div className={desktop ? 'agenthub-app-theme flex h-full flex-col' : 'agenthub-app-theme contents'}>
-        <NativeDesktopBridge />
-        {desktop && <DesktopAppMenu />}
-        <div className={desktop ? 'min-h-0 flex-1' : 'contents'}>{routes}</div>
-      </div>
-    </I18nProvider>
+    <div className={desktop ? 'agenthub-app-theme flex h-full flex-col' : 'agenthub-app-theme contents'}>
+      <NativeDesktopBridge />
+      {desktop && <DesktopAppMenu />}
+      <div className={desktop ? 'min-h-0 flex-1' : 'contents'}>{routes}</div>
+    </div>
   )
 }
 
@@ -61,6 +77,7 @@ const defaultAppearanceSettings: AppearanceSettings = {
   fontSize: '14',
   inlineCodeFont: '默认',
   mainWindowTheme: '跟随系统',
+  embeddedWindowTheme: '暗色',
   terminalFont: '默认',
   uiFont: '默认',
 }

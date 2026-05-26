@@ -1,5 +1,6 @@
 import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
+import { harnessManager } from '../harness'
 import type { AgentOutputChunk, AgentProfile, AgentRuntime, ExecutionContext } from './agent-runtime'
 
 export class LlmRuntime implements AgentRuntime {
@@ -9,7 +10,7 @@ export class LlmRuntime implements AgentRuntime {
   async *execute(ctx: ExecutionContext): AsyncGenerator<AgentOutputChunk> {
     const { profile, prompt, history, signal, workspacePath } = ctx
 
-    const system = buildAgentSystem(profile, workspacePath)
+    const system = await buildAgentSystem(profile, workspacePath)
 
     const llmMessages = history.map((m) => ({
       role: (m.senderType === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
@@ -31,7 +32,17 @@ export class LlmRuntime implements AgentRuntime {
   }
 }
 
-function buildAgentSystem(profile: AgentProfile, workspacePath?: string | null): string {
+async function buildAgentSystem(profile: AgentProfile, workspacePath?: string | null): Promise<string> {
+  // 如果工作区有 .agenthub/ 目录，使用 Harness 组装系统提示
+  if (workspacePath) {
+    try {
+      await harnessManager.loadFromWorkspace(workspacePath)
+      return harnessManager.buildSystemPrompt({ agent: profile, workspacePath })
+    } catch (err) {
+      logger.error({ err, workspacePath }, 'Harness buildSystemPrompt failed, falling back to default')
+    }
+  }
+
   return [
     profile.systemPrompt || `你是 ${profile.name}，AgentHub 中的协作智能体。`,
     profile.role ? `你在群聊中的角色：${profile.role}。` : '',

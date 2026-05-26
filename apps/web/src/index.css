@@ -24,19 +24,6 @@
   .agenthub-desktop-shell .h-screen {
     height: 100% !important;
   }
-  .agenthub-desktop-shell,
-  .agenthub-desktop-shell body {
-    overflow: hidden;
-    background: transparent;
-  }
-  .agenthub-desktop-shell #root {
-    overflow: hidden;
-    border-radius: 32px;
-    background: #ffffff;
-    box-shadow:
-      inset 0 0 0 1px rgba(15, 23, 42, 0.08),
-      0 24px 80px rgba(15, 23, 42, 0.24);
-  }
   ::selection {
     @apply bg-neutral-900 text-white;
   }
@@ -867,6 +854,13 @@
     padding: 0 0.375rem;
   }
 
+  .agenthub-desktop-menu-group {
+    position: relative;
+    display: inline-flex;
+    height: 100%;
+    align-items: center;
+  }
+
   .agenthub-desktop-menu-button {
     display: inline-flex;
     height: 1.45rem;
@@ -885,7 +879,7 @@
 
   .agenthub-desktop-menu-panel {
     position: absolute;
-    left: 0.375rem;
+    left: 0;
     top: calc(100% + 0.125rem);
     z-index: 1001;
     min-width: 18rem;
@@ -1208,6 +1202,66 @@
   .agenthub-portal-theme .shadow-xl,
   .agenthub-portal-theme .shadow-2xl {
     box-shadow: 0 16px 38px rgba(15, 23, 42, 0.1);
+  }
+
+  .agenthub-embedded-window {
+    background: var(--agenthub-embedded-bg, #fbfbf8);
+    border-color: var(--agenthub-embedded-border, #e5e5e0);
+    color: var(--agenthub-embedded-text, #171717);
+  }
+
+  .agenthub-embedded-window :where(header, section, aside, .agenthub-embedded-frame),
+  .agenthub-embedded-window .bg-white {
+    background-color: var(--agenthub-embedded-panel, #ffffff);
+    border-color: var(--agenthub-embedded-border, #e5e5e0);
+  }
+
+  .agenthub-embedded-window .agenthub-embedded-window-body,
+  .agenthub-embedded-window .bg-neutral-50,
+  .agenthub-embedded-window .bg-neutral-100,
+  .agenthub-embedded-window .bg-\[\#f5f4ef\],
+  .agenthub-embedded-window .bg-\[\#f7f7f4\] {
+    background-color: var(--agenthub-embedded-panel-muted, #f4f4ef);
+  }
+
+  .agenthub-embedded-window .border-neutral-100,
+  .agenthub-embedded-window .border-neutral-200,
+  .agenthub-embedded-window .border-neutral-300 {
+    border-color: var(--agenthub-embedded-border, #e5e5e0);
+  }
+
+  .agenthub-embedded-window .text-neutral-950,
+  .agenthub-embedded-window .text-neutral-900,
+  .agenthub-embedded-window .text-neutral-800,
+  .agenthub-embedded-window .text-neutral-700 {
+    color: var(--agenthub-embedded-text, #171717);
+  }
+
+  .agenthub-embedded-window .text-neutral-600,
+  .agenthub-embedded-window .text-neutral-500,
+  .agenthub-embedded-window .text-neutral-400,
+  .agenthub-embedded-window .text-neutral-300 {
+    color: var(--agenthub-embedded-muted-text, #666660);
+  }
+
+  .agenthub-embedded-window .hover\:bg-neutral-50:hover,
+  .agenthub-embedded-window .hover\:bg-neutral-100:hover,
+  .agenthub-embedded-window .hover\:bg-white\/70:hover {
+    background-color: var(--agenthub-embedded-hover, #ecece7);
+  }
+
+  .agenthub-embedded-window .bg-\[\#edf7f3\],
+  .agenthub-embedded-window .bg-\[\#eef8f6\] {
+    background-color: var(--agenthub-embedded-accent-soft, #eef8f6);
+  }
+
+  .agenthub-embedded-frame,
+  .agenthub-embedded-iframe {
+    background-color: var(--agenthub-embedded-panel, #ffffff);
+  }
+
+  .agenthub-embedded-loading {
+    background-color: color-mix(in srgb, var(--agenthub-embedded-panel, #ffffff) 90%, transparent);
   }
 
   @keyframes agenthub-desktop-menu-in {

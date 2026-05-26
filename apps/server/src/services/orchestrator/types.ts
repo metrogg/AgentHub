@@ -1,3 +1,4 @@
+import type { BlackboardRef } from '../blackboard'
 import type { AgentProfile } from '../runtime'
 
 export interface ExecutionPlan {
@@ -18,7 +19,7 @@ export interface ExecutionAgent {
   systemPrompt?: string
   modelId?: string | null
   runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode'
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   capabilityTags: string[]
   toolPermissions: string[]
   sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -32,6 +33,8 @@ export interface ExecutionTask {
   dependencies: string[]
   parallelGroup?: string
   maxRetries: number
+  retryCount?: number
+  timeout?: number
   fallbackAgentId?: string
 }
 
@@ -42,6 +45,7 @@ export interface TaskResult {
   status: 'done' | 'failed' | 'cancelled'
   output: string
   artifacts: Array<Record<string, unknown>>
+  outputRef?: BlackboardRef
   startedAt?: Date
   completedAt?: Date
   error?: string

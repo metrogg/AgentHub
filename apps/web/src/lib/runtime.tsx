@@ -1,4 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
@@ -104,11 +105,12 @@ function readChatAttachments(value: unknown): ChatAttachment[] {
 function readAgentAvatarPart(metadata: Message['metadata'], codeAgentRun: CodeAgentRunMetadata | null) {
   const runtime = codeAgentRun?.runtime ?? metadata?.codeAgentType
   if (metadata?.runtimeType !== 'code-agent' && !codeAgentRun) return []
-  if (runtime !== 'codex' && runtime !== 'claude-code' && runtime !== 'opencode') return []
+  if (runtime !== 'codex' && runtime !== 'claude-code' && runtime !== 'opencode' && runtime !== 'gemini') return []
   return [{ type: 'data' as const, name: 'agent_avatar', data: { runtime } }]
 }
 
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
+  const navigate = useNavigate()
   const messages = useChatStore((state) => state.messages)
   const streamingMessage = useChatStore((state) => state.streamingMessage)
   const streamingCodeAgentRun = useChatStore((state) => state.streamingCodeAgentRun)
@@ -166,7 +168,10 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
         throw new Error('仅支持纯文本消息')
       }
 
-      await sendMessage(part.text)
+      const result = await sendMessage(part.text)
+      if (result?.groupSessionId && result.groupSessionId !== currentSessionId) {
+        navigate(`/chat/${result.groupSessionId}`)
+      }
     },
   })
 

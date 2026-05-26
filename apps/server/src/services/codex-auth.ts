@@ -533,6 +533,7 @@ async function runPowerShell(command: string, args: string[]) {
   const proc = Bun.spawn(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command, ...args], {
     stdout: 'pipe',
     stderr: 'pipe',
+    env: process.env,
   })
   const [code, stdout, stderr] = await Promise.all([
     proc.exited,
@@ -556,6 +557,7 @@ async function openExternalUrl(url: string) {
   const proc = Bun.spawn(command, {
     stdout: 'pipe',
     stderr: 'pipe',
+    env: process.env,
   })
   const [code, stderr] = await Promise.all([
     proc.exited,

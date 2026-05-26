@@ -45,7 +45,7 @@ const createAgentSchema = z.object({
   color: z.string().max(20).default('#6366f1'),
   modelId: z.string().max(120).nullable().optional(),
   runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']).default('llm'),
-  codeAgentType: z.enum(['codex', 'claude-code', 'opencode']).nullable().optional(),
+  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
   capabilityTags: z.array(z.string().max(40)).max(12).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30).default([]),
   sandboxPolicy: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('workspace-write'),
@@ -101,7 +101,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
   // Create
   .post('/', zValidator('json', createWorkspaceSchema), async (c) => {
     const user = c.get('user')
-    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
+    const input = c.req.valid('json')
     const projectPath = ensureProjectDirectory(input.projectPath)
     const [ws] = await db
       .insert(workspaces)
@@ -166,7 +166,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
+    const input = c.req.valid('json')
     const patch = {
       ...input,
       ...(input.projectPath !== undefined ? { projectPath: ensureProjectDirectory(input.projectPath) } : {}),
@@ -181,6 +181,53 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const session = await ensureGroupSession(c.req.param('id'), user.sub)
     return c.json({ session })
+  })
+
+  // Agent child session
+  .post('/:id/agents/:agentId/session', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const agentId = c.req.param('agentId')
+    await ensureWorkspace(id, user.sub)
+
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id)))
+      .limit(1)
+    if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1)
+
+    const [existing] = await db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.ownerId, user.sub),
+          eq(sessions.type, 'direct'),
+          eq(sessions.workspaceId, id),
+          eq(sessions.workspaceAgentId, agentId)
+        )
+      )
+      .orderBy(desc(sessions.updatedAt))
+      .limit(1)
+
+    if (existing) return c.json({ session: existing })
+
+    const [created] = await db
+      .insert(sessions)
+      .values({
+        title: `${workspace?.name || 'Workspace'} / ${agent.name}`,
+        type: 'direct',
+        ownerId: user.sub,
+        workspaceId: id,
+        workspaceAgentId: agentId,
+      })
+      .returning()
+
+    if (!created) throw new HTTPException(500, { message: 'Failed to create session' })
+    return c.json({ session: created })
   })
 
   // Active runs
@@ -215,7 +262,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
-    const input = c.req.valid('json')
+    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
     const existing = await db.select({ id: workspaceAgents.id }).from(workspaceAgents).where(eq(workspaceAgents.workspaceId, id))
     const [agent] = await db
       .insert(workspaceAgents)
@@ -230,7 +277,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
-    const input = c.req.valid('json')
+    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
     const [agent] = await db
       .update(workspaceAgents)
       .set(input)

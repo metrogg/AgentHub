@@ -1,21 +1,28 @@
 import { logger } from '../../lib/logger'
+import { Semaphore } from '../concurrency'
 import { TaskGraph } from './task-graph'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 
 export type TaskExecutor = (task: ExecutionTask, signal: AbortSignal) => Promise<TaskResult>
 
 export class TaskScheduler {
-  private concurrency = 3
+  private semaphore = new Semaphore(3)
   private activeControllers = new Map<string, AbortController>()
+  private activeGraphs = new Map<string, TaskGraph>()
+  private activePlans = new Map<string, ExecutionPlan>()
 
   setConcurrency(n: number) {
-    this.concurrency = Math.max(1, Math.min(n, 10))
+    this.semaphore = new Semaphore(Math.max(1, Math.min(n, 10)))
   }
 
   async executePlan(plan: ExecutionPlan, executor: TaskExecutor): Promise<TaskResult[]> {
     const graph = new TaskGraph(plan.tasks)
+    this.activeGraphs.set(plan.runId, graph)
+    this.activePlans.set(plan.runId, plan)
 
     if (graph.detectCycles()) {
+      this.activeGraphs.delete(plan.runId)
+      this.activePlans.delete(plan.runId)
       throw new Error('Execution plan contains circular dependencies')
     }
 
@@ -27,10 +34,8 @@ export class TaskScheduler {
       while (!graph.allDone() && !runController.signal.aborted) {
         const readyTasks = graph.getReadyTasks()
         const runningCount = graph.getRunningTasks().length
-        const slots = this.concurrency - runningCount
-
-        if (slots > 0 && readyTasks.length > 0) {
-          const toRun = readyTasks.slice(0, slots)
+        if (runningCount < readyTasks.length) {
+          const toRun = readyTasks.filter((t) => graph.getStatus(t.id) === 'pending').slice(0, readyTasks.length - runningCount)
           for (const task of toRun) {
             graph.setStatus(task.id, 'running')
             this.runTask(task, graph, results, executor, runController.signal).catch((err) => {
@@ -39,13 +44,28 @@ export class TaskScheduler {
           }
         }
 
-        await sleep(500)
+        await sleep(200)
       }
     } finally {
       this.activeControllers.delete(plan.runId)
+      this.activeGraphs.delete(plan.runId)
+      this.activePlans.delete(plan.runId)
     }
 
     return plan.tasks.map((task) => results.get(task.id)!).filter(Boolean)
+  }
+
+  addTasksToRun(runId: string, tasks: import('./types').ExecutionTask[]) {
+    const graph = this.activeGraphs.get(runId)
+    const plan = this.activePlans.get(runId)
+    if (graph && plan) {
+      graph.addTasks(tasks)
+      for (const task of tasks) {
+        if (!plan.tasks.find((t) => t.id === task.id)) {
+          plan.tasks.push(task)
+        }
+      }
+    }
   }
 
   cancelRun(runId: string) {
@@ -63,6 +83,7 @@ export class TaskScheduler {
     executor: TaskExecutor,
     runSignal: AbortSignal,
   ) {
+    const release = await this.semaphore.acquire(60000)
     const taskController = new AbortController()
     const combinedSignal = combineAbortSignals(runSignal, taskController.signal)
 
@@ -88,6 +109,8 @@ export class TaskScheduler {
         artifacts: [],
         error: error?.message || 'Unknown error',
       })
+    } finally {
+      release()
     }
   }
 }

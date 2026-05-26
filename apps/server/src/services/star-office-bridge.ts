@@ -49,7 +49,7 @@ export function starOfficeStateForProfile(profile?: AgentRunProfile): StarOffice
     .toLowerCase()
 
   if (/research|search|资料|调研|研究/.test(text)) return 'researching'
-  if (/code|codex|claude-code|opencode|coder|开发|实现|代码|执行/.test(text)) return 'executing'
+  if (/code|codex|claude-code|opencode|gemini|coder|开发|实现|代码|执行/.test(text)) return 'executing'
   if (/sync|deploy|发布|同步|部署/.test(text)) return 'syncing'
   return 'writing'
 }

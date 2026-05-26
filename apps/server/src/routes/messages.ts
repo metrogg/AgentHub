@@ -50,7 +50,7 @@ const confirmAgentDraftSchema = z.object({
       color: z.string().max(20).default('#111827'),
       modelId: z.string().max(120).nullable().optional(),
       runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']).default('llm'),
-      codeAgentType: z.enum(['codex', 'claude-code', 'opencode']).nullable().optional(),
+      codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
       capabilityTags: z.array(z.string().max(40)).max(12).default([]),
       toolPermissions: z.array(z.string().max(80)).max(30).default(['chat']),
       sandboxPolicy: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('workspace-write'),
@@ -108,7 +108,7 @@ type PlanAgent = {
   description?: string
   modelId?: string | null
   runtimeType?: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | null
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags?: string[]
   toolPermissions?: string[]
   sandboxPolicy?: 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -394,7 +394,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           senderId: 'agent-builder',
           senderType: 'agent',
           type: 'text',
-          content: '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和群聊成员列表。',
+          content: '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和Agent 联系人列表。',
           metadata: { agentDraftStatus: 'requires_group' },
         })
         .returning()
@@ -536,12 +536,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     let groupSessionId: string
     let createdAgents: Array<typeof workspaceAgents.$inferSelect>
 
+    let agentsByKey: Map<string, typeof workspaceAgents.$inferSelect>
+
     if (sourceSession?.type === 'group' && sourceSession.workspaceId && sourceSession.ownerId === user.sub) {
       // 复用已有 workspace
       const existing = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
       workspaceId = existing.workspaceId
       groupSessionId = existing.groupSessionId ?? sessionId
-      createdAgents = existing.createdAgents ?? []
+      agentsByKey = existing.agentsByKey
+      createdAgents = Array.from(agentsByKey.values())
     } else {
       // 新建 workspace
       const [workspace] = await db
@@ -574,9 +577,12 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
       const groupSession = await createWorkspaceGroupSession(workspace.id, workspace.name, user.sub, createdAgents)
       groupSessionId = groupSession.id
+      agentsByKey = new Map<string, typeof workspaceAgents.$inferSelect>()
+      for (let i = 0; i < parsed.agents.length; i++) {
+        const agent = createdAgents[i]
+        if (agent) agentsByKey.set(parsed.agents[i]!.key, agent)
+      }
     }
-
-    const agentByKey = new Map(parsed.agents.map((agent, index) => [agent.key, createdAgents[index]]))
     const childSessions = new Map<string, { sessionId: string; workspaceId: string; projectPath?: string | null }>()
     const taskResults: OrchestratorDispatchResult['tasks'] = []
 
@@ -593,7 +599,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     // 创建 workspaceTasks 和 child sessions
     for (const [index, task] of parsed.tasks.entries()) {
-      const agent = agentByKey.get(task.agentKey)
+      const agent = agentsByKey.get(task.agentKey)
       const [workspaceTask] = await db
         .insert(workspaceTasks)
         .values({
@@ -634,7 +640,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       title: parsed.title,
       goal: parsed.goal,
       agents: parsed.agents.map((a) => {
-        const dbAgent = agentByKey.get(a.key)
+        const dbAgent = agentsByKey.get(a.key)
         return {
           id: dbAgent?.id ?? a.key,
           key: a.key,
@@ -655,7 +661,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         id: t.id,
         title: t.title,
         description: t.description,
-        agentId: agentByKey.get(t.agentKey)?.id ?? t.agentKey,
+        agentId: agentsByKey.get(t.agentKey)?.id ?? t.agentKey,
         dependencies: t.dependencies ?? [],
         parallelGroup: t.parallelGroup,
         maxRetries: t.maxRetries ?? 2,
@@ -797,6 +803,7 @@ function inferCodeAgentType(content: string): AgentDraft['codeAgentType'] {
   const lower = content.toLowerCase()
   if (lower.includes('claude')) return 'claude-code'
   if (lower.includes('opencode') || lower.includes('open code')) return 'opencode'
+  if (lower.includes('gemini')) return 'gemini'
   if (lower.includes('codex')) return 'codex'
   return null
 }
@@ -815,7 +822,7 @@ function inferAgentRole(content: string) {
 function inferAgentName(content: string, role: string, codeAgentType: AgentDraft['codeAgentType']) {
   const explicit = /(?:创建|添加|新建)\s*(?:一个)?\s*([A-Za-z][A-Za-z0-9_-]{1,24})\s*(?:Agent|代理|助手)/i.exec(content)?.[1]
   if (explicit && !['agent', 'coder', 'code'].includes(explicit.toLowerCase())) return explicit
-  const prefix = codeAgentType === 'claude-code' ? 'Claude' : codeAgentType === 'opencode' ? 'OpenCode' : codeAgentType === 'codex' ? 'Codex' : ''
+  const prefix = codeAgentType === 'claude-code' ? 'Claude' : codeAgentType === 'opencode' ? 'OpenCode' : codeAgentType === 'gemini' ? 'Gemini' : codeAgentType === 'codex' ? 'Codex' : ''
   const suffix = role.includes('前端') ? 'Frontend' : role.includes('后端') ? 'Backend' : role.includes('审查') ? 'Reviewer' : role.includes('部署') ? 'Deploy' : 'Coder'
   return [prefix, suffix].filter(Boolean).join(' ') || 'Custom Agent'
 }
@@ -1364,7 +1371,7 @@ async function dispatchPlanToExistingGroup(
   session: typeof sessions.$inferSelect,
   ownerId: string,
   plan: OrchestratorPlan
-): Promise<OrchestratorDispatchResult & { createdAgents?: Array<typeof workspaceAgents.$inferSelect> }> {
+): Promise<{ workspaceId: string; groupSessionId: string; agentsByKey: Map<string, typeof workspaceAgents.$inferSelect> }> {
   if (!session.workspaceId) throw new HTTPException(400, { message: 'Session is not attached to a workspace' })
 
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
@@ -1430,65 +1437,7 @@ async function dispatchPlanToExistingGroup(
     )
   }
 
-  const taskResults: OrchestratorDispatchResult['tasks'] = []
-  const monitor: DispatchMonitor = { dispatchId: crypto.randomUUID(), groupSessionId: session.id, taskIds: [] }
-
-  for (const [index, task] of plan.tasks.entries()) {
-    const agent = agentsByKey.get(task.agentKey)
-    const [workspaceTask] = await db
-      .insert(workspaceTasks)
-      .values({
-        workspaceId: workspace.id,
-        agentId: agent?.id ?? null,
-        title: task.title,
-        description: task.description,
-        status: 'running',
-        orderIdx: index,
-      })
-      .returning()
-    if (!workspaceTask) continue
-    monitor.taskIds.push(workspaceTask.id)
-
-    const childSession = await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent ?? null, task.title)
-
-    await db
-      .update(workspaceTasks)
-      .set({ sessionId: childSession.id, updatedAt: new Date() })
-      .where(eq(workspaceTasks.id, workspaceTask.id))
-
-    const [promptMsg] = await db
-      .insert(messages)
-      .values({
-        sessionId: childSession.id,
-        senderId: ownerId,
-        senderType: 'user',
-        type: 'text',
-        content: buildDispatchPrompt(plan, task, agent),
-      })
-      .returning()
-
-    if (promptMsg) {
-      import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(childSession.id, promptMsg, agent ? toAgentProfile(agent, workspace.projectPath) : undefined)
-          .then(async (result) => {
-            await db
-              .update(workspaceTasks)
-              .set({ status: result?.ok ? 'done' : 'failed', updatedAt: new Date() })
-              .where(eq(workspaceTasks.id, workspaceTask.id))
-          })
-          .catch(() => {})
-      })
-    }
-
-    taskResults.push({
-      taskId: workspaceTask.id,
-      sessionId: childSession.id,
-      title: task.title,
-      agentName: agent?.name ?? 'Agent',
-    })
-  }
-
-  return { workspaceId: workspace.id, groupSessionId: session.id, tasks: taskResults, createdAgents: [...existingAgents, ...createdAgents] }
+  return { workspaceId: workspace.id, groupSessionId: session.id, agentsByKey }
 }
 
 async function updatePlanCardDispatchResult(
@@ -1501,7 +1450,7 @@ async function updatePlanCardDispatchResult(
   const runningPlan: OrchestratorPlan = {
     ...plan,
     dispatchResult,
-    tasks: plan.tasks.map((task) => ({ ...task, status: task.status === 'done' ? 'done' : 'running' })),
+    tasks: plan.tasks.map((task) => ({ ...task, status: 'pending' })),
   }
   await db
     .update(messages)
@@ -1573,6 +1522,7 @@ async function runGit(cwd: string, args: string[]) {
     cwd,
     stdout: 'ignore',
     stderr: 'ignore',
+    env: process.env,
   })
   return await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 5000))])
 }

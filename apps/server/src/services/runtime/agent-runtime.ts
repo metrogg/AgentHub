@@ -9,7 +9,7 @@ export interface AgentProfile {
   color?: string
   modelId?: string | null
   runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode'
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   capabilityTags: string[]
   toolPermissions: string[]
   sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'

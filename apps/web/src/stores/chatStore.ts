@@ -25,8 +25,8 @@ interface ChatState {
   createSession: (title?: string, options?: { workspaceId?: string | null; workspaceAgentId?: string | null; type?: 'direct' | 'group' }) => Promise<Session>
   selectSession: (sessionId: string) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
-  sendMessage: (content: string) => Promise<void>
-  sendMessageToSession: (sessionId: string, content: string) => Promise<void>
+  sendMessage: (content: string) => Promise<{ groupSessionId?: string } | undefined>
+  sendMessageToSession: (sessionId: string, content: string) => Promise<{ groupSessionId?: string } | undefined>
   editMessage: (messageId: string, content: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
   regenerateMessage: (messageId: string) => Promise<void>
@@ -136,8 +136,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   async sendMessage(content) {
     const sessionId = get().currentSessionId
-    if (!sessionId) return
-    await get().sendMessageToSession(sessionId, content)
+    if (!sessionId) return undefined
+    return get().sendMessageToSession(sessionId, content)
   },
 
   async sendMessageToSession(sessionId, content) {
@@ -159,10 +159,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         displayContent: attachments.length ? content : undefined,
       })
       set((s) => ({ messages: [...s.messages, msg], pendingAttachments: [] }))
+      let dispatchResult: { groupSessionId?: string } | undefined
       if (shouldCreatePlan) {
         const card = await api.createOrchestratorPlan(sessionId, contentForAgent)
         set((s) => ({ messages: [...s.messages, card] }))
         const result = await api.dispatchOrchestratorPlan(sessionId, card.id)
+        dispatchResult = { groupSessionId: result.groupSessionId }
         set((s) => ({
           messages: s.messages.map((message) =>
             message.id === card.id
@@ -185,6 +187,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } else {
         await get().fetchSessions()
       }
+      return dispatchResult
     } catch (error) {
       set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
       throw error
@@ -326,6 +329,81 @@ export const useChatStore = create<ChatState>((set, get) => ({
         clearPendingStream()
         set({ streamingMessage: null, streamingCodeAgentRun: null, agentTyping: false })
         break
+      case 'task:update': {
+        const { taskId, status, strategy, agentId } = e.payload as {
+          taskId: string
+          status: string
+          strategy?: string
+          agentId?: string
+          agentName?: string
+        }
+        set((s) => {
+          let updated = false
+          const newMessages = s.messages.map((msg) => {
+            if (msg.type !== 'task_card' || !msg.metadata || typeof msg.metadata !== 'object') return msg
+            const plan = (msg.metadata as Record<string, unknown>).plan as
+              | { tasks?: Array<{ id: string; status?: string; agentKey?: string }>; agents?: Array<{ key: string; id?: string }> }
+              | undefined
+            if (!plan || !Array.isArray(plan.tasks)) return msg
+            const task = plan.tasks.find((t) => t.id === taskId)
+            if (!task) return msg
+            updated = true
+            const nextTasks = plan.tasks.map((t) => {
+              if (t.id !== taskId) return t
+              const next: typeof t = { ...t, status: status as 'pending' | 'running' | 'done' | 'failed' }
+              if (strategy) (next as Record<string, unknown>).strategy = strategy
+              if (agentId) {
+                const matchedAgent = plan.agents?.find((a) => a.id === agentId || a.key === agentId)
+                if (matchedAgent) next.agentKey = matchedAgent.key
+              }
+              return next
+            })
+            return {
+              ...msg,
+              metadata: { ...msg.metadata, plan: { ...plan, tasks: nextTasks } },
+            }
+          })
+          return updated ? { messages: newMessages } : s
+        })
+        break
+      }
+      case 'blackboard:update': {
+        const { taskId, summary, agentName, taskTitle } = e.payload as {
+          taskId: string
+          summary?: string
+          agentName?: string
+          taskTitle?: string
+        }
+        set((s) => {
+          let updated = false
+          const newMessages = s.messages.map((msg) => {
+            if (msg.type !== 'task_card' || !msg.metadata || typeof msg.metadata !== 'object') return msg
+            const plan = (msg.metadata as Record<string, unknown>).plan as
+              | { tasks?: Array<{ id: string; status?: string; summary?: string; agentName?: string; taskTitle?: string }> }
+              | undefined
+            if (!plan || !Array.isArray(plan.tasks)) return msg
+            const task = plan.tasks.find((t) => t.id === taskId)
+            if (!task) return msg
+            updated = true
+            const nextTasks = plan.tasks.map((t) => {
+              if (t.id !== taskId) return t
+              return {
+                ...t,
+                status: (t.status === 'running' ? 'done' : t.status) as typeof t.status,
+                summary: summary ?? t.summary,
+                agentName: agentName ?? t.agentName,
+                taskTitle: taskTitle ?? t.taskTitle,
+              }
+            })
+            return {
+              ...msg,
+              metadata: { ...msg.metadata, plan: { ...plan, tasks: nextTasks } },
+            }
+          })
+          return updated ? { messages: newMessages } : s
+        })
+        break
+      }
     }
   },
 
@@ -335,10 +413,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 }))
 
-function shouldRouteToOrchestratorPlan(content: string, session: Session | null, agents: WorkspaceAgent[]) {
-  if (mentionsOrchestrator(content)) return true
-  if (session?.type !== 'group' || !session.workspaceId) return false
-  return !agents.some((agent) => mentionsAgent(content, agent))
+function shouldRouteToOrchestratorPlan(content: string, _session: Session | null, _agents: WorkspaceAgent[]) {
+  // 只有用户明确 @orchestrator 时才创建编排计划
+  // 群聊中的普通消息应走正常的 runGroupReplies，由后端决定哪个 Agent 回复
+  return mentionsOrchestrator(content)
 }
 
 function appendAttachmentNote(content: string, attachments: ChatAttachment[]) {
@@ -346,13 +424,4 @@ function appendAttachmentNote(content: string, attachments: ChatAttachment[]) {
   return `${content.trim()}\n\n[已附加图片]\n${note}`.trim()
 }
 
-function mentionsAgent(content: string, agent: WorkspaceAgent) {
-  return [agent.name, agent.role]
-    .filter(Boolean)
-    .some((alias) => hasMention(content, alias))
-}
 
-function hasMention(content: string, alias: string) {
-  const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`(^|\\s)@${escaped}(?=$|\\s|[，,。.!！?？:：])`, 'i').test(content)
-}

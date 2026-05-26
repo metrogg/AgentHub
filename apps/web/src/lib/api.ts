@@ -179,7 +179,7 @@ export type AgentArtifact =
 export interface CodeAgentRunMetadata {
   type: 'code-agent-run'
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
-  runtime: 'codex' | 'claude-code' | 'opencode'
+  runtime: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   command: string
   cwd?: string
   durationMs: number
@@ -228,7 +228,7 @@ export interface CodingToolStatusResponse {
 }
 
 export interface AgentAdapterCatalogItem {
-  id: 'codex' | 'claude-code' | 'opencode'
+  id: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   name: string
   command: string
   envKey: string
@@ -346,6 +346,37 @@ export interface CodexConfigFile {
   message: string
 }
 
+export interface SettingsGeneralInfo {
+  debug: {
+    enabled: boolean
+    dir: string
+    logLevel: string
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+  }
+  storage: {
+    appDataDir: string
+    configDir: string
+    logDir: string
+    activeDataDir: string
+    dataPath: string
+    databasePath: string
+    migrationPending: boolean
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+    databaseSizeBytes: number
+    databaseSizeLabel: string
+    scannedFiles: number
+    truncated: boolean
+    message: string
+  }
+  git: { runtime: string; path: string; ok: boolean; message: string }
+  python: { runtime: string; path: string; ok: boolean; message: string }
+}
+
+
 export interface Workspace {
   id: string
   ownerId: string
@@ -367,7 +398,7 @@ export interface WorkspaceAgent {
   color: string
   modelId: string | null
   runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType: 'codex' | 'claude-code' | 'opencode' | null
+  codeAgentType: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   toolPermissions: string[]
   sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -497,6 +528,51 @@ export interface OrchestratorPlan {
   dispatchResult?: OrchestratorDispatchResult
 }
 
+export type OrchestratorRunStatus = 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
+
+export interface OrchestratorRunListItem {
+  id: string
+  workspaceId: string
+  groupSessionId: string
+  planMessageId: string | null
+  status: OrchestratorRunStatus
+  plan: unknown | null
+  summaryMessageId: string | null
+  conflictReport: unknown[] | null
+  createdAt: string
+  updatedAt: string
+  workspaceName: string
+  sessionTitle: string
+}
+
+export interface ExecutionLog {
+  id: string
+  runId: string
+  sessionId: string
+  agentId: string
+  taskId: string | null
+  type: 'llm_call' | 'tool_call' | 'blackboard_read' | 'blackboard_write' | 'error' | 'task_start' | 'task_end'
+  input: unknown | null
+  output: unknown | null
+  durationMs: number | null
+  tokenUsage: unknown | null
+  createdAt: string
+}
+
+export interface ConflictReportItem {
+  filePath: string
+  baseContent: string
+  variants: Array<{
+    agentId: string
+    agentName: string
+    diff: string
+    fullContent?: string
+  }>
+  resolution: 'auto-merged' | 'llm-resolved' | 'needs-human'
+  mergedContent?: string
+  notes?: string
+}
+
 export interface OrchestratorDispatchResult {
   workspaceId: string
   groupSessionId?: string
@@ -597,19 +673,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  testModel: (data: {
-    provider: string
-    apiEndpoint: string
-    anthropicEndpoint?: string
-    apiKey?: string
-    apiKeyEnv?: string
-    modelId?: string
-  }) =>
-    request<{ ok: boolean; status?: number; message: string }>('/settings/test-model', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-  getSettingsRuntimeInfo: () =>
+  getRuntimeInfo: () =>
     request<{
       git: { runtime: string; path: string; ok: boolean; message: string }
       python: { runtime: string; path: string; ok: boolean; message: string }
@@ -625,7 +689,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
-
+  testModel: (data: {
+    provider: string
+    apiEndpoint: string
+    anthropicEndpoint?: string
+    apiKey?: string
+    apiKeyEnv?: string
+    modelId?: string
+  }) =>
+    request<{ ok: boolean; status?: number; message: string }>('/settings/test-model', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   // Coding tools
   getCodingToolStatus: (tools?: CodingToolProbe[]) =>
     tools?.length
@@ -750,6 +825,12 @@ export const api = {
     request<{ session: Session }>(`/workspaces/${id}/group-session`, { method: 'POST' }),
   openWorkspaceAgentSession: (id: string, agentId: string) =>
     request<{ session: Session }>(`/workspaces/${id}/agents/${agentId}/session`, { method: 'POST' }),
+
+  // Orchestrator runs
+  listOrchestratorRuns: () => request<{ items: OrchestratorRunListItem[] }>('/orchestrator-runs'),
+  getOrchestratorRun: (id: string) => request<OrchestratorRunListItem>(`/orchestrator-runs/${id}`),
+  getOrchestratorRunLogs: (id: string) => request<{ items: ExecutionLog[] }>(`/orchestrator-runs/${id}/logs`),
+  getOrchestratorRunConflicts: (id: string) => request<{ items: ConflictReportItem[] }>(`/orchestrator-runs/${id}/conflicts`),
 }
 
 export function mentionsOrchestrator(content: string) {
