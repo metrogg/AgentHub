@@ -578,11 +578,19 @@ async function getApiKeyAuthStatus() {
 async function runVersionProbe(command: string): Promise<string | null> {
   if (!isSafeCommand(command)) return null
 
+  for (const flag of ['--version', '-v', '-V']) {
+    const result = await tryVersionProbe(command, flag)
+    if (result != null) return result
+  }
+  return null
+}
+
+async function tryVersionProbe(command: string, flag: string): Promise<string | null> {
   const isWindows = process.platform === 'win32'
   const shell = isWindows ? 'cmd.exe' : 'sh'
   const commandLine = isWindows
-    ? `where ${command} >nul 2>nul && ${command} --version`
-    : `command -v ${quoteForSh(command)} >/dev/null 2>&1 && ${quoteForSh(command)} --version`
+    ? `where ${command} >nul 2>nul && ${command} ${flag}`
+    : `command -v ${quoteForSh(command)} >/dev/null 2>&1 && ${quoteForSh(command)} ${flag}`
   const args = isWindows ? ['/d', '/s', '/c', commandLine] : ['-lc', commandLine]
 
   try {
