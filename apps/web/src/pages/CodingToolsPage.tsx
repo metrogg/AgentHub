@@ -608,8 +608,18 @@ export default function CodingToolsPage() {
               <div className="mt-5 grid gap-4 md:grid-cols-2">
                 <Field label="命令" value={activeTool.command} onChange={(value) => patchTool(activeTool.id, { command: value })} />
                 <Field label="API Key 环境变量" value={activeTool.apiKeyEnv} onChange={(value) => patchTool(activeTool.id, { apiKeyEnv: value })} />
-                <Field label="API Key" type="password" value={apiKey} onChange={(value) => setApiKey(value)} />
+                {activeTool.id !== 'claude-code' && activeTool.id !== 'opencode' && activeTool.id !== 'gemini' && (
+                  <Field label="API Key" type="password" value={apiKey} onChange={(value) => setApiKey(value)} />
+                )}
               </div>
+              {(activeTool.id === 'claude-code' || activeTool.id === 'opencode' || activeTool.id === 'gemini') && (
+                <div className="mt-3 rounded-lg border border-teal-100 bg-teal-50/60 px-3 py-2 text-xs leading-5 text-teal-800">
+                  <span className="font-medium">自动获取 API Key：</span>
+                  {activeTool.id === 'claude-code' && 'Claude Code 会优先读取模型配置中的 Anthropic 凭据，无需在此重复填写。'}
+                  {activeTool.id === 'opencode' && 'OpenCode 会优先读取模型配置中的 API Key，无需在此重复填写。'}
+                  {activeTool.id === 'gemini' && 'Gemini CLI 会优先读取模型配置中的 Google 凭据，无需在此重复填写。'}
+                </div>
+              )}
 
               {/* Codex CLI 特有配置 */}
               {activeTool.id === 'codex' && (

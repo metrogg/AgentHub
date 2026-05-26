@@ -7,6 +7,7 @@ import { db, settings } from '@agenthub/db'
 import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
+import { resolveLlmRuntimeConfig } from './llm-client'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -496,7 +497,7 @@ async function runCodeAgentCommand(
 
   const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
     cwd,
-    env: mergedEnv(adapter.command),
+    env: await mergedEnv(adapter),
     stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -1189,9 +1190,39 @@ function readEnv(key: string) {
   return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
-function mergedEnv(command?: string) {
+async function mergedEnv(adapter?: CodeAgentAdapter) {
   const base = { ...rootEnv(), ...Bun.env, ...codexAuthEnv() }
-  if (command !== 'codex') return base
+
+  // 若 CLI 需要特定 API Key，优先从 Coding Tools 设置、再自动注入模型配置中的 key
+  if (adapter?.envKey) {
+    const directValue = readEnv(adapter.envKey)
+    if (!directValue) {
+      // 1) 尝试读取前端保存的 CODE_AGENT_ACTIVE_API_KEY
+      try {
+        const rows = await db.select().from(settings).where(eq(settings.key, 'CODE_AGENT_ACTIVE_API_KEY')).limit(1)
+        const savedKey = rows[0]?.value?.trim()
+        if (savedKey) {
+          base[adapter.envKey] = savedKey
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2) 若仍无，尝试从主模型配置解析对应 provider 的 API Key
+      if (!base[adapter.envKey]) {
+        try {
+          const llmConfig = await resolveLlmRuntimeConfig()
+          if (llmConfig.apiKey) {
+            base[adapter.envKey] = llmConfig.apiKey
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  if (adapter?.command !== 'codex') return base
 
   const runtimeHome = prepareCodexRuntimeHome()
   return {

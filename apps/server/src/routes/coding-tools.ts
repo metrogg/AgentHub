@@ -738,6 +738,26 @@ async function isDirectToolConfigured(probe: ToolProbe, configEnv: string) {
     const opencode = await getOpencodeModels()
     return Boolean(opencode.defaultModel || opencode.models.length > 0)
   }
+
+  // 若主模型配置中已存在对应 provider 的 API Key，也视为已配置
+  const llmStatus = await getLlmRuntimeStatus()
+  if (llmStatus.apiKeyConfigured) {
+    if (probe.id === 'claude-code') {
+      if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com')) return true
+      if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
+    }
+    if (probe.id === 'codex') {
+      if (llmStatus.provider === 'openai' || llmStatus.baseUrl?.includes('openai.com')) return true
+      if (llmStatus.apiKeySource === 'OPENAI_API_KEY') return true
+    }
+    if (probe.id === 'gemini') {
+      if (llmStatus.provider === 'gemini' || llmStatus.provider === 'google') return true
+      if (llmStatus.apiKeySource === 'GEMINI_API_KEY') return true
+    }
+    // OpenCode 支持任意 OpenAI-compatible provider；只要主模型有 key 即可视为已配置
+    if (probe.id === 'opencode') return true
+  }
+
   if (probe.id !== 'codex' || !env.ENABLE_CODEX_CHATGPT_AUTH) return false
 
   try {
