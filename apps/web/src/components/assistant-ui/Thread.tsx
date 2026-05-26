@@ -37,6 +37,7 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  Download,
   ExternalLink,
   FileText,
   FolderOpen,
@@ -276,11 +277,16 @@ const GroupMemberPanel: FC = () => {
           </div>
 
           {workspace?.projectPath && (
-            <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-              <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
-              <div className="min-w-0">
-                <div className="font-medium text-neutral-900">项目文件夹</div>
-                <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
+            <div className="mt-3 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2">
+                  <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
+                  <div className="min-w-0">
+                    <div className="font-medium text-neutral-900">项目文件夹</div>
+                    <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
+                  </div>
+                </div>
+                <ZipDownloadButton workspaceId={workspace.id} workspaceName={workspace.name} />
               </div>
             </div>
           )}
@@ -297,6 +303,42 @@ const GroupMemberPanel: FC = () => {
         </div>
       )}
     </aside>
+  )
+}
+
+const ZipDownloadButton: FC<{ workspaceId: string; workspaceName: string }> = ({ workspaceId, workspaceName }) => {
+  const [downloading, setDownloading] = useState(false)
+
+  async function handleDownload() {
+    setDownloading(true)
+    try {
+      const blob = await api.downloadZip(workspaceId)
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${workspaceName || 'project'}.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      window.alert(friendlyErrorMessage(err, '下载失败'))
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleDownload}
+      disabled={downloading}
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700 disabled:opacity-50"
+      title="下载项目 ZIP"
+      aria-label="下载项目 ZIP"
+    >
+      {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+    </button>
   )
 }
 
@@ -1281,10 +1323,14 @@ const UserMessage: FC = () => {
   const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
   const editMessage = useChatStore((state) => state.editMessage)
   const withdrawMessage = useChatStore((state) => state.withdrawMessage)
+  const pinMessage = useChatStore((state) => state.pinMessage)
+  const unpinMessage = useChatStore((state) => state.unpinMessage)
+  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState<'edit' | 'withdraw' | null>(null)
   const canEdit = Boolean(sourceMessage?.senderType === 'user')
+  const isPinned = Boolean(sourceMessage?.isPinned)
   const text =
     typeof sourceMessage?.metadata?.displayContent === 'string'
       ? sourceMessage.metadata.displayContent
@@ -1321,9 +1367,23 @@ const UserMessage: FC = () => {
     }
   }
 
+  async function togglePin() {
+    if (!sourceMessage) return
+    if (isPinned) {
+      await unpinMessage(sourceMessage.id)
+    } else {
+      await pinMessage(sourceMessage.id)
+    }
+  }
+
+  function replyTo() {
+    if (!sourceMessage) return
+    setReplyingTo(sourceMessage.id)
+  }
+
   return (
     <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] justify-end py-3">
-      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'w-full' : 'max-w-[68%]')}>
+      <div className={cn('relative flex flex-col items-end gap-1.5', editing ? 'w-full' : 'max-w-[68%]')}>
         <div
           className={cn(
             'w-full text-sm leading-6 text-neutral-900',
@@ -1374,14 +1434,24 @@ const UserMessage: FC = () => {
             />
           )}
         </div>
-        {canEdit && !editing && (
+        {!editing && (
           <div className="flex items-center gap-1 pr-1 text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">
-            <ToolButton type="button" aria-label="修改" title="修改" onClick={startEdit} disabled={Boolean(busy)}>
-              <Pencil className="h-3.5 w-3.5" />
+            <ToolButton type="button" aria-label="回复" title="回复" onClick={replyTo}>
+              <Reply className="h-3.5 w-3.5" />
             </ToolButton>
-            <ToolButton type="button" aria-label="撤回" title="撤回并尝试回滚修改" onClick={withdraw} disabled={Boolean(busy)}>
-              {busy === 'withdraw' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            <ToolButton type="button" aria-label={isPinned ? '取消固定' : '固定到上下文'} title={isPinned ? '取消固定' : '固定到上下文'} onClick={togglePin}>
+              <Pin className={cn('h-3.5 w-3.5', isPinned && 'fill-current text-amber-500')} />
             </ToolButton>
+            {canEdit && (
+              <>
+                <ToolButton type="button" aria-label="修改" title="修改" onClick={startEdit} disabled={Boolean(busy)}>
+                  <Pencil className="h-3.5 w-3.5" />
+                </ToolButton>
+                <ToolButton type="button" aria-label="撤回" title="撤回并尝试回滚修改" onClick={withdraw} disabled={Boolean(busy)}>
+                  {busy === 'withdraw' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                </ToolButton>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -2365,6 +2435,11 @@ const SystemMessage: FC = () => (
 const AssistantActionBar: FC = () => {
   const messageId = useMessage((message) => message.id)
   const regenerateMessage = useChatStore((state) => state.regenerateMessage)
+  const pinMessage = useChatStore((state) => state.pinMessage)
+  const unpinMessage = useChatStore((state) => state.unpinMessage)
+  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
+  const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
+  const isPinned = Boolean(sourceMessage?.isPinned)
   const [regenerating, setRegenerating] = useState(false)
 
   async function regenerate() {
@@ -2375,6 +2450,20 @@ const AssistantActionBar: FC = () => {
     } finally {
       setRegenerating(false)
     }
+  }
+
+  async function togglePin() {
+    if (!sourceMessage) return
+    if (isPinned) {
+      await unpinMessage(sourceMessage.id)
+    } else {
+      await pinMessage(sourceMessage.id)
+    }
+  }
+
+  function replyTo() {
+    if (!sourceMessage) return
+    setReplyingTo(sourceMessage.id)
   }
 
   return (
@@ -2391,6 +2480,12 @@ const AssistantActionBar: FC = () => {
       </ActionBarPrimitive.Copy>
       <ToolButton aria-label="重新生成" title="重新生成" onClick={regenerate} disabled={regenerating}>
         <RefreshCw className={cn('h-3.5 w-3.5', regenerating && 'animate-spin')} />
+      </ToolButton>
+      <ToolButton aria-label="回复" title="回复" onClick={replyTo}>
+        <Reply className="h-3.5 w-3.5" />
+      </ToolButton>
+      <ToolButton aria-label={isPinned ? '取消固定' : '固定到上下文'} title={isPinned ? '取消固定' : '固定到上下文'} onClick={togglePin}>
+        <Pin className={cn('h-3.5 w-3.5', isPinned && 'fill-current text-amber-500')} />
       </ToolButton>
     </ActionBarPrimitive.Root>
   )
