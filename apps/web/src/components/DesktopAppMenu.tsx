@@ -28,6 +28,7 @@ const menuItems = [
 const routeLabels: Record<string, string> = {
   '/': '消息',
   '/agent-config': 'Agent',
+  '/models': '模型管理',
   '/coding-tools': 'Coding Tools',
   '/office': '办公',
   '/settings': '设置',

@@ -58,7 +58,10 @@ export default function ChatPage() {
           <SessionList onCollapse={desktop ? undefined : toggleSidebar} />
         </div>
       </div>
-      <main className="relative min-w-0 flex-1">
+      <main
+        className="relative min-w-0 flex-1"
+        style={{ ['--agenthub-thread-header-left-offset' as string]: desktop || sidebarCollapsed ? '3rem' : '0rem' }}
+      >
         {(desktop || sidebarCollapsed) && (
           <button
             type="button"
