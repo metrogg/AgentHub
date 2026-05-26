@@ -3,7 +3,13 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { Bot, FolderOpen, Menu, MessageSquarePlus, Minus, RotateCw, Square, X } from 'lucide-react'
 import { useAppActions, type AppActionId } from '../lib/app-actions'
 import { useI18n } from '../lib/i18n'
-import { isDesktopApp, startDesktopWindowDrag } from '../lib/native'
+import {
+  closeDesktopWindow,
+  isDesktopApp,
+  minimizeDesktopWindow,
+  startDesktopWindowDrag,
+  toggleMaximizeDesktopWindow,
+} from '../lib/native'
 import { shortcutFor, useShortcutSettings } from '../lib/shortcuts'
 
 const menuItems = [
@@ -64,11 +70,19 @@ export function DesktopAppMenu() {
     await runAppAction(id as AppActionId)
   }
 
+  function reloadDesktopWindow() {
+    window.location.reload()
+  }
+
+  async function dragDesktopWindow() {
+    await startDesktopWindowDrag().catch(() => false)
+  }
+
   const currentLabel = routeLabel(location.pathname)
 
   return (
     <header className="agenthub-desktop-titlebar" aria-label={t('窗口')}>
-      <div className="agenthub-desktop-titlebar-left">
+      <div className="agenthub-desktop-titlebar-left" onPointerDown={(event) => event.stopPropagation()}>
         <button type="button" className="agenthub-titlebar-brand" onClick={() => navigate('/')} aria-label="AgentHub">
           <span className="agenthub-titlebar-brand-icon">
             <Bot className="h-4 w-4" />
@@ -79,7 +93,12 @@ export function DesktopAppMenu() {
         <span className="agenthub-titlebar-location">{currentLabel}</span>
       </div>
 
-      <div className="agenthub-desktop-titlebar-drag" onPointerDown={() => void startDesktopWindowDrag()} />
+      <div
+        className="agenthub-desktop-titlebar-drag"
+        data-tauri-drag-region
+        onMouseDown={() => void dragDesktopWindow()}
+        onPointerDown={() => void dragDesktopWindow()}
+      />
 
       <div className="agenthub-desktop-titlebar-actions" onPointerDown={(event) => event.stopPropagation()}>
         <TopbarIconButton label="新建会话" disabled={Boolean(busyAction)} onClick={() => void runTopbarAction('new-chat')}>
@@ -111,16 +130,16 @@ export function DesktopAppMenu() {
           )}
         </div>
         <div className="agenthub-titlebar-divider" />
-        <TopbarIconButton label="最小化" onClick={() => void runTopbarAction('minimize')}>
+        <TopbarIconButton label="最小化" onClick={() => void minimizeDesktopWindow()}>
           <Minus className="h-4 w-4" />
         </TopbarIconButton>
-        <TopbarIconButton label="最大化 / 还原" onClick={() => void runTopbarAction('toggle-maximize')}>
+        <TopbarIconButton label="最大化 / 还原" onClick={() => void toggleMaximizeDesktopWindow()}>
           <Square className="h-3.5 w-3.5" />
         </TopbarIconButton>
-        <TopbarIconButton label="重新加载" onClick={() => void runTopbarAction('reload')}>
+        <TopbarIconButton label="重新加载" onClick={reloadDesktopWindow}>
           <RotateCw className="h-4 w-4" />
         </TopbarIconButton>
-        <TopbarIconButton label="关闭" danger onClick={() => void runTopbarAction('close-window')}>
+        <TopbarIconButton label="关闭" danger onClick={() => void closeDesktopWindow()}>
           <X className="h-4 w-4" />
         </TopbarIconButton>
       </div>

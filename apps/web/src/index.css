@@ -857,6 +857,7 @@
     align-items: center;
     gap: 0.25rem;
     padding: 0 0.5rem;
+    -webkit-app-region: no-drag;
   }
 
   .agenthub-desktop-titlebar-left {
@@ -871,6 +872,8 @@
     align-self: stretch;
     flex: 1 1 auto;
     min-width: 3rem;
+    cursor: move;
+    -webkit-app-region: drag;
   }
 
   .agenthub-titlebar-brand {

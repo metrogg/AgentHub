@@ -158,6 +158,34 @@ fn close_desktop_window(window: WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn minimize_desktop_window(window: WebviewWindow) -> Result<(), String> {
+    window.minimize().map_err(|err| format!("minimize window failed: {err}"))
+}
+
+#[tauri::command]
+fn toggle_maximize_desktop_window(window: WebviewWindow) -> Result<(), String> {
+    let maximized = window
+        .is_maximized()
+        .map_err(|err| format!("read maximize state failed: {err}"))?;
+    if maximized {
+        window
+            .unmaximize()
+            .map_err(|err| format!("unmaximize window failed: {err}"))
+    } else {
+        window
+            .maximize()
+            .map_err(|err| format!("maximize window failed: {err}"))
+    }
+}
+
+#[tauri::command]
+fn start_desktop_window_drag(window: WebviewWindow) -> Result<(), String> {
+    window
+        .start_dragging()
+        .map_err(|err| format!("start window drag failed: {err}"))
+}
+
+#[tauri::command]
 fn open_desktop_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
     let url = window
         .url()
@@ -210,6 +238,9 @@ pub fn run() {
             desktop_info,
             check_for_updates,
             close_desktop_window,
+            minimize_desktop_window,
+            toggle_maximize_desktop_window,
+            start_desktop_window_drag,
             open_desktop_window
         ])
         .setup(move |app| {
