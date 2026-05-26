@@ -1,4 +1,4 @@
-import { db, messages, workspaceTasks, orchestratorRuns, sessions, eq, desc } from '@agenthub/db'
+import { db, messages, workspaceTasks, orchestratorRuns, sessions, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
@@ -26,8 +26,8 @@ export class OrchestratorEngine {
   private conflictResolver = new ConflictResolver()
   private replanningEngine = new ReplanningEngine()
 
-  async createPlan(goal: string, agents: ExecutionPlan['agents']): Promise<ExecutionPlan> {
-    return this.planner.createPlan({ goal, agents })
+  async createPlan(goal: string, agents: ExecutionPlan['agents'], workspacePath?: string | null): Promise<ExecutionPlan> {
+    return this.planner.createPlan({ goal, agents, workspacePath })
   }
 
   async startRun(params: {
@@ -43,6 +43,9 @@ export class OrchestratorEngine {
       .update(orchestratorRuns)
       .set({ status: 'running', plan: plan as unknown as Record<string, unknown> })
       .where(eq(orchestratorRuns.id, runId))
+
+    const [groupSessionRecord] = await db.select().from(sessions).where(eq(sessions.id, groupSessionId)).limit(1)
+    const ownerId = groupSessionRecord?.ownerId ?? 'user'
 
     const executor: TaskExecutor = async (task, signal) => {
       let currentTask = task
@@ -65,9 +68,9 @@ export class OrchestratorEngine {
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
             await db.update(workspaceTasks).set({ status: 'pending', errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
-            broadcastSessionEvent(childInfo.sessionId, {
+            broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt, strategy: 'retry' },
+              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt, strategy: 'retry', sessionId: childInfo.sessionId },
             })
           }
           continue
@@ -79,9 +82,9 @@ export class OrchestratorEngine {
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
             await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
-            broadcastSessionEvent(childInfo.sessionId, {
+            broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId, strategy: 'agent_substitution' },
+              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId, strategy: 'agent_substitution', sessionId: childInfo.sessionId },
             })
           }
           continue
@@ -93,16 +96,74 @@ export class OrchestratorEngine {
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
             await db.update(workspaceTasks).set({ status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
-            broadcastSessionEvent(childInfo.sessionId, {
+            broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', strategy: 'local_replan' },
+              payload: { taskId: currentTask.id, status: 'pending', strategy: 'local_replan', sessionId: childInfo.sessionId },
             })
           }
           continue
         }
 
+        if (replan.strategy === 'task_split' && replan.newTasks && replan.newTasks.length > 0) {
+          for (const newTask of replan.newTasks) {
+            const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
+            const childSession = await ensureChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+            await db.insert(workspaceTasks).values({
+              id: newTask.id,
+              workspaceId,
+              agentId: newTask.agentId,
+              title: newTask.title,
+              description: newTask.description,
+              status: 'pending',
+              orderIdx: plan.tasks.length,
+              runId,
+              dependencies: newTask.dependencies ?? [],
+              parallelGroup: newTask.parallelGroup,
+              maxRetries: newTask.maxRetries ?? 2,
+            })
+            childSessions.set(newTask.id, { sessionId: childSession.id, workspaceId, projectPath: childSessions.get(currentTask.id)?.projectPath })
+          }
+          this.scheduler.addTasksToRun(runId, replan.newTasks)
+          logger.info({ taskId: currentTask.id, newTaskCount: replan.newTasks.length }, 'Task split into subtasks')
+          return { ...result, status: 'failed' as const, error: `任务已拆分为子任务: ${replan.reason}` }
+        }
+
+        if (replan.strategy === 'global_replan') {
+          try {
+            const workspacePath = childSessions.get(currentTask.id)?.projectPath ?? undefined
+            const newPlan = await this.planner.createPlan({ goal: plan.goal, agents: plan.agents, workspacePath })
+            const existingIds = new Set(plan.tasks.map((t) => t.id))
+            const tasksToAdd = newPlan.tasks.filter((t) => !existingIds.has(t.id))
+            if (tasksToAdd.length > 0) {
+              for (const newTask of tasksToAdd) {
+                const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
+                const childSession = await ensureChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+                await db.insert(workspaceTasks).values({
+                  id: newTask.id,
+                  workspaceId,
+                  agentId: newTask.agentId,
+                  title: newTask.title,
+                  description: newTask.description,
+                  status: 'pending',
+                  orderIdx: plan.tasks.length,
+                  runId,
+                  dependencies: newTask.dependencies ?? [],
+                  parallelGroup: newTask.parallelGroup,
+                  maxRetries: newTask.maxRetries ?? 2,
+                })
+                childSessions.set(newTask.id, { sessionId: childSession.id, workspaceId, projectPath: childSessions.get(currentTask.id)?.projectPath })
+              }
+              this.scheduler.addTasksToRun(runId, tasksToAdd)
+              logger.info({ taskId: currentTask.id, addedCount: tasksToAdd.length }, 'Global replan added new tasks')
+              continue
+            }
+          } catch (err: any) {
+            logger.error({ err: err?.message, taskId: currentTask.id }, 'Global replan failed')
+          }
+          return { ...result, error: replan.reason }
+        }
+
         if (replan.strategy === 'escalate_to_user') {
-          // 将错误信息写入黑板，供用户查看
           const bbNamespace = Blackboard.namespace(workspaceId, runId)
           await blackboard.write({
             namespace: bbNamespace,
@@ -114,7 +175,10 @@ export class OrchestratorEngine {
           })
         }
 
-        // fail / task_split(暂不实现) / escalate_to_user 都返回结果
+        if (replan.strategy === 'fail') {
+          return { ...result, error: replan.reason }
+        }
+
         return { ...result, error: replan.reason }
       }
     }
@@ -122,14 +186,21 @@ export class OrchestratorEngine {
     try {
       const results = await this.scheduler.executePlan(plan, executor)
 
-      // 冲突检测与解决
-      const firstPath = childSessions.get(plan.tasks[0]!.id)?.projectPath
-      const conflictReports = firstPath
-        ? await this.conflictResolver.detectAndResolve(results, {
-            projectPath: firstPath,
-            baseBranch: await gitBranchManager.inferBaseBranch(firstPath),
-          })
-        : []
+      // 冲突检测与解决：遍历所有有 projectPath 的任务目录
+      const projectPaths = new Set<string>()
+      for (const task of plan.tasks) {
+        const path = childSessions.get(task.id)?.projectPath
+        if (path) projectPaths.add(path)
+      }
+
+      const conflictReports: import('./conflict-resolver').ConflictReport[] = []
+      for (const projectPath of projectPaths) {
+        const reports = await this.conflictResolver.detectAndResolve(results, {
+          projectPath,
+          baseBranch: await gitBranchManager.inferBaseBranch(projectPath),
+        })
+        conflictReports.push(...reports)
+      }
 
       if (conflictReports.length > 0) {
         await db
@@ -210,8 +281,9 @@ export class OrchestratorEngine {
       toolPermissions: agent.toolPermissions,
       sandboxPolicy: agent.sandboxPolicy,
       contextPolicy: 'workspace-aware' as const,
-      approvalRequired: true,
-      projectPath: childInfo.projectPath ?? null,
+      approvalRequired: agent.sandboxPolicy === 'danger-full-access',
+      projectPath: branchCtx?.worktreePath ?? childInfo.projectPath ?? null,
+      originalProjectPath: childInfo.projectPath ?? null,
     }
 
     const bbNamespace = Blackboard.namespace(workspaceId, runId)
@@ -255,9 +327,9 @@ export class OrchestratorEngine {
       .set({ status: 'running', startedAt: new Date(), retryCount: attemptCount })
       .where(eq(workspaceTasks.id, task.id))
 
-    broadcastSessionEvent(childInfo.sessionId, {
+    broadcastSessionEvent(groupSessionId, {
       type: 'task:update',
-      payload: { taskId: task.id, status: 'running' },
+      payload: { taskId: task.id, status: 'running', sessionId: childInfo.sessionId },
     })
 
     const taskStartTime = Date.now()
@@ -301,7 +373,7 @@ export class OrchestratorEngine {
               const status = await gitBranchManager.getFileStatus(branchCtx.projectPath, filePath, branchCtx.branch)
               artifacts.push({
                 id: `diff-${filePath.replace(/[^a-z0-9]/gi, '-')}`,
-                kind: 'diff',
+                type: 'diff',
                 title: `${agent.name} 修改了 ${filePath}`,
                 filePath,
                 status,
@@ -328,15 +400,17 @@ export class OrchestratorEngine {
         agentId: agent.id,
         taskId: task.id,
         type: 'task_end',
-        output: { status: 'done', outputLength: output.length },
-        durationMs: taskDuration,
+        output: { status: 'done', outputLength: output.length, durationMs: taskDuration },
       })
 
-      // 写入黑板：任务产出
+      // 生成结构化摘要（接口契约），供下游任务高效引用
+      const summary = await summarizeTaskOutput(output, artifacts, agent.name, task.title)
+
+      // 写入黑板：任务产出（含结构化摘要）
       const outputRef = await blackboard.write({
         namespace: bbNamespace,
         key: `task_${task.id}_output`,
-        value: { output, artifacts, agentId: agent.id, agentName: agent.name, taskTitle: task.title },
+        value: { output, summary, artifacts, agentId: agent.id, agentName: agent.name, taskTitle: task.title },
         agentId: agent.id,
         taskId: task.id,
         tags: ['task_output', `agent_${agent.id}`],
@@ -366,6 +440,11 @@ export class OrchestratorEngine {
         })
         .where(eq(workspaceTasks.id, task.id))
 
+      broadcastSessionEvent(groupSessionId, {
+        type: 'task:update',
+        payload: { taskId: task.id, status: 'done', sessionId: childInfo.sessionId, agentId: agent.id, agentName: agent.name },
+      })
+
       if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
 
       return {
@@ -384,14 +463,18 @@ export class OrchestratorEngine {
         agentId: agent.id,
         taskId: task.id,
         type: 'error',
-        input: { taskTitle: task.title },
-        output: { error: error?.message },
-        durationMs: Date.now() - taskStartTime,
+        output: { taskTitle: task.title, error: error?.message, durationMs: Date.now() - taskStartTime },
       })
       await db
         .update(workspaceTasks)
         .set({ status: 'failed', completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
         .where(eq(workspaceTasks.id, task.id))
+
+      broadcastSessionEvent(groupSessionId, {
+        type: 'task:update',
+        payload: { taskId: task.id, status: 'failed', sessionId: childInfo.sessionId, agentId: agent.id, agentName: agent.name, error: error?.message || 'Unknown error' },
+      })
+
       if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
       return {
         taskId: task.id,
@@ -462,6 +545,28 @@ export class OrchestratorEngine {
   }
 }
 
+async function ensureChildSession(
+  workspaceId: string,
+  workspaceName: string,
+  ownerId: string,
+  agent: { id: string; name: string } | null,
+  taskTitle?: string
+) {
+  // Orchestrator 场景下不复用已有 session，每个任务独立上下文
+  const [created] = await db
+    .insert(sessions)
+    .values({
+      title: agent ? `${workspaceName} / ${agent.name} / ${taskTitle?.slice(0, 24) || 'Task'}` : `${workspaceName} / ${taskTitle?.slice(0, 24) || 'Agent'}`,
+      type: 'direct',
+      ownerId,
+      workspaceId,
+      workspaceAgentId: agent?.id ?? null,
+    })
+    .returning()
+  if (!created) throw new Error('Failed to create agent child session')
+  return created
+}
+
 async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNamespace: string): Promise<string> {
   const agent = plan.agents.find((a) => a.id === task.agentId)
 
@@ -482,8 +587,32 @@ async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNames
         '\n\n【前置依赖产出】\n' +
         relevant
           .map((e) => {
-            const val = e.value as { output: string; agentName: string; taskTitle: string }
-            return `--- 来自 ${val.agentName}（${val.taskTitle}）---\n${(val.output || '').slice(0, 2000)}`
+            const val = e.value as {
+              output: string
+              summary?: TaskOutputSummary
+              agentName: string
+              taskTitle: string
+              artifacts?: Array<{ type?: string; diff?: string; filePath?: string; path?: string }>
+            }
+            // 优先使用结构化摘要，信息密度更高；回退到截断原文
+            let text = `--- 来自 ${val.agentName}（${val.taskTitle}）---\n`
+            if (val.summary) {
+              text += formatSummary(val.summary)
+            } else {
+              text += (val.output || '').slice(0, 4000)
+            }
+            const codeArtifacts = val.artifacts?.filter((a) => a.type === 'diff' || a.type === 'file') ?? []
+            if (codeArtifacts.length > 0) {
+              text +=
+                '\n\n[代码变更]\n' +
+                codeArtifacts
+                  .map((a) => {
+                    if (a.type === 'diff' && a.diff) return `\`\`\`diff\n// ${a.filePath || 'unknown'}\n${a.diff.slice(0, 3000)}\n\`\`\``
+                    return `// ${a.path || a.filePath || 'unknown'}`
+                  })
+                  .join('\n\n')
+            }
+            return text
           })
           .join('\n\n') +
         '\n【前置依赖结束】\n'
@@ -501,4 +630,151 @@ async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNames
   ]
     .filter(Boolean)
     .join('')
+}
+
+interface TaskOutputSummary {
+  filesCreated: string[]
+  filesModified: string[]
+  interfaces: Array<{ file: string; name: string; signature: string }>
+  dependencies: string[]
+  decisions: string[]
+  brief: string
+}
+
+function formatSummary(s: TaskOutputSummary): string {
+  const parts: string[] = [s.brief]
+  if (s.filesCreated.length) parts.push(`新建文件: ${s.filesCreated.join(', ')}`)
+  if (s.filesModified.length) parts.push(`修改文件: ${s.filesModified.join(', ')}`)
+  if (s.interfaces.length) {
+    parts.push('关键接口:\n' + s.interfaces.map((i) => `  - ${i.name} (${i.file})`).join('\n'))
+  }
+  if (s.dependencies.length) parts.push(`依赖: ${s.dependencies.join(', ')}`)
+  if (s.decisions.length) parts.push(`设计决策:\n` + s.decisions.map((d) => `  - ${d}`).join('\n'))
+  return parts.join('\n')
+}
+
+async function summarizeTaskOutput(
+  output: string,
+  artifacts: Array<Record<string, unknown>>,
+  agentName: string,
+  taskTitle: string,
+): Promise<TaskOutputSummary> {
+  // 短产出直接回退，避免不必要的 LLM 调用
+  if (output.length < 2000 && artifacts.length === 0) {
+    return {
+      filesCreated: [],
+      filesModified: [],
+      interfaces: [],
+      dependencies: [],
+      decisions: [],
+      brief: output.slice(0, 600),
+    }
+  }
+
+  // 从 artifacts 提取文件变更
+  const codeArtifacts = artifacts.filter((a) => a.type === 'diff' || a.type === 'file')
+  const filesCreated: string[] = []
+  const filesModified: string[] = []
+  for (const a of codeArtifacts) {
+    const fp = (a.filePath || a.path) as string | undefined
+    if (!fp) continue
+    const status = a.status as string | undefined
+    if (status === 'created') filesCreated.push(fp)
+    else if (status === 'modified') filesModified.push(fp)
+    else if (!status && a.type === 'diff') {
+      const diff = (a.diff as string) || ''
+      if (/^---\s+\/dev\/null/m.test(diff)) filesCreated.push(fp)
+      else filesModified.push(fp)
+    } else {
+      filesModified.push(fp)
+    }
+  }
+
+  // 如果产出不长，直接提取关键信息，不走 LLM
+  if (output.length < 4000) {
+    const lines = output.split('\n')
+    const decisions = lines
+      .filter((l) => /^[\s]*[-*]\s+(决定|采用|选择|使用|方案|设计|决策)/i.test(l) || /^(决定|采用|选择|使用|方案|设计|决策)/i.test(l))
+      .map((l) => l.trim().replace(/^[\s]*[-*]\s*/, ''))
+      .slice(0, 6)
+    const interfaces: Array<{ file: string; name: string; signature: string }> = []
+    const ifaceRegex = /(?:export\s+)?(?:interface|class|function|type|const|let|var)\s+(\w+)/g
+    const codeBlocks = output.match(/```[\w]*\n([\s\S]*?)```/g) || []
+    for (const block of codeBlocks) {
+      let m: RegExpExecArray | null
+      while ((m = ifaceRegex.exec(block)) !== null) {
+        interfaces.push({ file: '', name: m[1] || '', signature: m[0] || '' })
+      }
+    }
+    return {
+      filesCreated: [...new Set(filesCreated)],
+      filesModified: [...new Set(filesModified)],
+      interfaces: interfaces.slice(0, 10),
+      dependencies: [],
+      decisions,
+      brief: output.slice(0, 600),
+    }
+  }
+
+  // 长产出调用 LLM 生成结构化摘要
+  try {
+    const { streamReply } = await import('../llm')
+    const artifactFiles = codeArtifacts.map((a) => a.filePath || a.path || 'unknown').join('\n')
+    const prompt = `请分析以下 Agent 任务产出，提取关键结构化信息。
+
+任务: ${taskTitle} (${agentName})
+
+原始产出摘要:
+${output.slice(0, 8000)}
+
+代码变更文件:
+${artifactFiles || '无'}
+
+请返回 JSON（不要 Markdown 代码块）：
+{
+  "filesCreated": ["文件路径"],
+  "filesModified": ["文件路径"],
+  "interfaces": [{"file": "文件路径", "name": "接口名", "signature": "签名"}],
+  "dependencies": ["依赖模块"],
+  "decisions": ["设计决策"],
+  "brief": "200字以内的任务总结"
+}`
+    let llmOutput = ''
+    for await (const delta of streamReply([{ role: 'user', content: prompt }], '你是代码分析助手，擅长从文本中提取结构化信息。')) {
+      llmOutput += delta
+      if (llmOutput.length > 6000) break
+    }
+    const jsonText = extractJsonObject(llmOutput)
+    if (jsonText) {
+      const parsed = JSON.parse(jsonText) as Partial<TaskOutputSummary>
+      return {
+        filesCreated: parsed.filesCreated ?? filesCreated,
+        filesModified: parsed.filesModified ?? filesModified,
+        interfaces: parsed.interfaces ?? [],
+        dependencies: parsed.dependencies ?? [],
+        decisions: parsed.decisions ?? [],
+        brief: parsed.brief ?? output.slice(0, 600),
+      }
+    }
+  } catch (err: any) {
+    logger.warn({ err: err?.message, agentName, taskTitle }, 'Failed to summarize task output via LLM')
+  }
+
+  // 回退：返回基于 artifacts 的摘要
+  return {
+    filesCreated: [...new Set(filesCreated)],
+    filesModified: [...new Set(filesModified)],
+    interfaces: [],
+    dependencies: [],
+    decisions: [],
+    brief: output.slice(0, 600),
+  }
+}
+
+function extractJsonObject(value: string) {
+  const cleaned = value.trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+  if (cleaned.startsWith('{') && cleaned.endsWith('}')) return cleaned
+  const start = cleaned.indexOf('{')
+  const end = cleaned.lastIndexOf('}')
+  return start >= 0 && end > start ? cleaned.slice(start, end + 1) : null
 }

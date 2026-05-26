@@ -1,5 +1,7 @@
-import { statSync } from 'node:fs'
-import { isAbsolute, normalize, resolve } from 'node:path'
+import { statSync, existsSync, cpSync } from 'node:fs'
+import { isAbsolute, normalize, resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { logger } from '../../lib/logger'
 import { HTTPException } from 'hono/http-exception'
 import { db, workspaces, eq } from '@agenthub/db'
 
@@ -40,4 +42,23 @@ export async function findWorkspaceByProjectPath(ownerId: string, projectPath: s
 
 export function touchWorkspace(id: string) {
   return db.update(workspaces).set({ updatedAt: new Date() }).where(eq(workspaces.id, id))
+}
+
+const serviceDir = dirname(fileURLToPath(import.meta.url))
+const presetAgenthubDir = resolve(serviceDir, '../../../../../.agenthub')
+
+export function ensureHarnessPresets(projectPath: string | null | undefined) {
+  if (!projectPath) return
+  const targetDir = resolve(projectPath, '.agenthub')
+  if (existsSync(targetDir)) return
+  if (!existsSync(presetAgenthubDir)) {
+    logger.warn('Preset .agenthub/ not found at repo root, skipping copy')
+    return
+  }
+  try {
+    cpSync(presetAgenthubDir, targetDir, { recursive: true, force: false })
+    logger.info({ targetDir }, 'Copied preset .agenthub/ to workspace')
+  } catch (err: any) {
+    logger.warn({ err: err?.message, targetDir }, 'Failed to copy preset .agenthub/ to workspace')
+  }
 }

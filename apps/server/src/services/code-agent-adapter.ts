@@ -3,8 +3,12 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentArtifact } from '@agenthub/shared'
+import { db, settings } from '@agenthub/db'
+import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
+import { getLlmRuntimeStatus, resolveLlmRuntimeConfig } from './llm-client'
+import { env } from '../env'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -22,6 +26,7 @@ interface CodeAgentRunOptions {
   modelId?: string | null
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
+  toolConfig?: Record<string, unknown>
 }
 
 interface CodeAgentCommandResult {
@@ -67,8 +72,9 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'OPENAI_API_KEY',
     docsHint: 'Codex 会使用本机安装的 CLI，并在当前项目目录中执行代码任务。',
     promptMode: 'stdin',
-    buildArgs: (_prompt, options) => {
-      const args = [
+    buildArgs: (prompt, options) => {
+      const cfg = options?.toolConfig ?? {}
+      const args: string[] = [
         'exec',
         '--skip-git-repo-check',
         '--color',
@@ -76,10 +82,19 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         '--cd',
         options?.cwd ?? projectRoot,
         '--sandbox',
-        toCodexSandbox(options?.sandboxPolicy),
-        '-c',
-        'approval_policy=never',
+        String(cfg['sandbox'] ?? toCodexSandbox(options?.sandboxPolicy)),
+        '--ask-for-approval',
+        String(cfg['approvalPolicy'] ?? 'never'),
       ]
+      if (cfg['profile']) {
+        args.push('--profile', String(cfg['profile']))
+      }
+      if (cfg['searchEnabled']) {
+        args.push('--search')
+      }
+      if (cfg['jsonOutput']) {
+        args.push('--json')
+      }
       if (options?.outputPath) args.push('--output-last-message', options.outputPath)
       args.push('-')
       return args
@@ -91,16 +106,23 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'ANTHROPIC_API_KEY',
     docsHint: 'Claude Code 会使用本机 Anthropic 凭据，并优先读取项目上下文。',
     promptMode: 'stdin',
-    buildArgs: () => [
-      '-p',
-      '--no-session-persistence',
-      '--permission-mode',
-      'bypassPermissions',
-      '--output-format',
-      'stream-json',
-      '--include-partial-messages',
-      '--verbose',
-    ],
+    buildArgs: (prompt, options) => {
+      const cfg = options?.toolConfig ?? {}
+      const args: string[] = [
+        '-p',
+        '--no-session-persistence',
+        '--permission-mode',
+        String(cfg['permissionMode'] ?? 'bypassPermissions'),
+        '--output-format',
+        String(cfg['outputFormat'] ?? 'stream-json'),
+        '--include-partial-messages',
+        '--verbose',
+      ]
+      if (cfg['maxTurns']) {
+        args.push('--max-turns', String(cfg['maxTurns']))
+      }
+      return args
+    },
   },
   opencode: {
     command: 'opencode',
@@ -108,7 +130,14 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'DEEPSEEK_API_KEY',
     docsHint: 'OpenCode 会使用本机配置；如果 Agent 绑定了 provider/model，会通过 --model 传给 OpenCode。',
     promptMode: 'argument',
-    buildArgs: (prompt, options) => ['run', ...(options?.modelId ? ['--model', options.modelId] : []), prompt],
+    buildArgs: (prompt, options) => {
+      const cfg = options?.toolConfig ?? {}
+      const args = ['run']
+      if (options?.modelId) args.push('--model', options.modelId)
+      if (cfg['agent']) args.push('--agent', String(cfg['agent']))
+      args.push(prompt)
+      return args
+    },
   },
   gemini: {
     command: 'gemini',
@@ -116,7 +145,12 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'GEMINI_API_KEY',
     docsHint: 'Gemini CLI 会使用本机 Google Gemini 凭据，并在当前项目目录中执行代码任务。',
     promptMode: 'argument',
-    buildArgs: (prompt, options) => [...(options?.modelId ? ['--model', options.modelId] : []), '-p', prompt],
+    buildArgs: (prompt, options) => {
+      const args: string[] = []
+      if (options?.modelId) args.push('--model', options.modelId)
+      args.push('-p', prompt)
+      return args
+    },
   },
 }
 
@@ -149,12 +183,14 @@ export async function* streamCodeAgentReply(
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
-  const configured = isRuntimeConfigured(type, adapter)
-  const executionEnabled = readEnv('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION') !== 'false'
+  const configured = await isRuntimeConfigured(type, adapter)
+  const executionEnabled = env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
 
   if (!canExecute) {
     yield [
+      `[错误：${adapter.displayName} 无法执行]`,
+      '',
       `**${adapter.displayName} 暂未直接执行**`,
       '',
       `- 运行时：${type}`,
@@ -192,6 +228,7 @@ export async function* streamCodeAgentReply(
     wake?.()
     wake = null
   }
+  const toolConfig = await resolveToolConfig(type)
   const runPromise = runCodeAgentCommand(
     adapter,
     prompt,
@@ -199,6 +236,7 @@ export async function* streamCodeAgentReply(
     profile.sandboxPolicy,
     profile.modelId,
     signal,
+    toolConfig,
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
       onText: (text) => push(text),
@@ -245,9 +283,27 @@ export async function* streamCodeAgentReply(
   yield formatCodeAgentFailure(adapter, finalResult)
 }
 
-function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
+async function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
   if (readEnv(adapter.envKey)) return true
-  return type === 'codex' || type === 'opencode' || type === 'claude-code' || type === 'gemini'
+  if (type === 'codex') return true
+
+  try {
+    const llmStatus = await getLlmRuntimeStatus()
+    if (!llmStatus.apiKeyConfigured) return false
+    if (type === 'claude-code') {
+      if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com')) return true
+      if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
+    }
+    if (type === 'gemini') {
+      if (llmStatus.provider === 'gemini' || llmStatus.provider === 'google') return true
+      if (llmStatus.apiKeySource === 'GEMINI_API_KEY') return true
+    }
+    if (type === 'opencode') return true
+  } catch (err: any) {
+    console.error(`[isRuntimeConfigured] getLlmRuntimeStatus failed for ${type}:`, err?.message || String(err))
+  }
+
+  return false
 }
 
 function codeAgentBlockerText(options: {
@@ -338,7 +394,7 @@ async function isCommandInstalled(command: string) {
     ? ['/d', '/s', '/c', `where ${command} >nul 2>nul`]
     : ['-lc', `command -v ${quoteForSh(command)} >/dev/null 2>&1`]
   try {
-    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe' })
+    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
     const code = await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 2000))])
     return code === 0
   } catch {
@@ -353,6 +409,7 @@ async function runCodeAgentCommand(
   sandboxPolicy?: AgentRunProfile['sandboxPolicy'],
   modelId?: string | null,
   signal?: AbortSignal,
+  toolConfig?: Record<string, unknown>,
   hooks: {
     onMetadata?: (metadata: CodeAgentRunMetadata) => void
     onText?: (text: string) => void
@@ -363,7 +420,7 @@ async function runCodeAgentCommand(
     process.platform === 'win32' && (adapter.command === 'codex' || adapter.command === 'claude')
       ? buildAsciiSafePrompt(prompt)
       : prompt
-  const args = adapter.buildArgs(commandPrompt, { cwd, modelId, outputPath, sandboxPolicy })
+  const args = adapter.buildArgs(commandPrompt, { cwd, modelId, outputPath, sandboxPolicy, toolConfig })
 
   if (signal?.aborted) {
     return {
@@ -459,7 +516,7 @@ async function runCodeAgentCommand(
 
   const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
     cwd,
-    env: mergedEnv(adapter.command),
+    env: await mergedEnv(adapter),
     stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -478,7 +535,7 @@ async function runCodeAgentCommand(
   const timer = setTimeout(() => {
     timedOut = true
     stopRun()
-  }, Number(readEnv('AGENTHUB_CODE_AGENT_TIMEOUT_MS') ?? 120_000))
+  }, env.AGENTHUB_CODE_AGENT_TIMEOUT_MS)
   const abortRun = () => {
     stopRun()
   }
@@ -891,6 +948,7 @@ async function snapshotWorkspaceFiles(cwd?: string): Promise<Map<string, string>
       cwd,
       stdout: 'pipe',
       stderr: 'ignore',
+      env: process.env,
     })
     const [code, stdout] = await Promise.all([
       Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 3000))]),
@@ -971,6 +1029,7 @@ async function runGitDiff(cwd: string, args: string[]) {
       cwd,
       stdout: 'pipe',
       stderr: 'ignore',
+      env: process.env,
     })
     const [code, stdout] = await Promise.all([
       Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 3000))]),
@@ -1133,19 +1192,76 @@ function windowsCodexCommand() {
   return npmShim && existsSync(npmShim) ? npmShim : 'codex.cmd'
 }
 
+async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, unknown>> {
+  try {
+    const rows = await db.select().from(settings).where(eq(settings.key, 'CODING_TOOLS_CONFIG')).limit(1)
+    const raw = rows[0]?.value
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Array<{ id: string; config?: Record<string, unknown> }>
+    const tool = parsed.find((t) => t.id === toolId)
+    return tool?.config ?? {}
+  } catch {
+    return {}
+  }
+}
+
 function readEnv(key: string) {
   return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
-function mergedEnv(command?: string) {
+async function mergedEnv(adapter?: CodeAgentAdapter) {
   const base = { ...rootEnv(), ...Bun.env, ...codexAuthEnv() }
-  if (command !== 'codex') return base
+
+  // 若 CLI 需要特定 API Key，优先从 Coding Tools 设置、再自动注入模型配置中的 key
+  if (adapter?.envKey) {
+    const directValue = readEnv(adapter.envKey)
+    if (!directValue) {
+      // 1) 尝试读取前端保存的 CODE_AGENT_ACTIVE_API_KEY
+      try {
+        const rows = await db.select().from(settings).where(eq(settings.key, 'CODE_AGENT_ACTIVE_API_KEY')).limit(1)
+        const savedKey = rows[0]?.value?.trim()
+        if (savedKey) {
+          base[adapter.envKey] = savedKey
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2) 若仍无，尝试从主模型配置解析对应 provider 的 API Key
+      if (!base[adapter.envKey]) {
+        try {
+          const llmConfig = await resolveLlmRuntimeConfig()
+          if (llmConfig.apiKey && isProviderMatching(adapter.envKey, llmConfig.provider, llmConfig.baseUrl)) {
+            base[adapter.envKey] = llmConfig.apiKey
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  if (adapter?.command !== 'codex') return base
 
   const runtimeHome = prepareCodexRuntimeHome()
   return {
     ...base,
     CODEX_HOME: runtimeHome,
   }
+}
+
+function isProviderMatching(envKey: string, provider?: string, baseUrl?: string) {
+  if (envKey === 'ANTHROPIC_API_KEY') {
+    return provider === 'anthropic' || baseUrl?.includes('anthropic.com')
+  }
+  if (envKey === 'OPENAI_API_KEY') {
+    return provider === 'openai' || baseUrl?.includes('openai.com')
+  }
+  if (envKey === 'GEMINI_API_KEY') {
+    return provider === 'gemini' || provider === 'google'
+  }
+  // OpenCode / others: any provider is fine
+  return true
 }
 
 function rootEnv() {

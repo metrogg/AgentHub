@@ -8,6 +8,8 @@ import { DesktopAppMenu } from './components/DesktopAppMenu'
 import OfficePage from './pages/OfficePage'
 import SettingsPage from './pages/SettingsPage'
 import SkillsMarketPage from './pages/SkillsMarketPage'
+import OrchestratorRunsPage from './pages/OrchestratorRunsPage'
+import ExecutionLogsPage from './pages/ExecutionLogsPage'
 import { api } from './lib/api'
 import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
 import { openWorkspaceFolderAsSession, useAppActions } from './lib/app-actions'
@@ -53,6 +55,8 @@ function AppShell() {
       <Route path="/agent-world" element={<Navigate to="/agent-config" replace />} />
       <Route path="/office" element={<OfficePage />} />
       <Route path="/skills" element={<SkillsMarketPage />} />
+      <Route path="/orchestrator-runs" element={<OrchestratorRunsPage />} />
+      <Route path="/execution-logs" element={<ExecutionLogsPage />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

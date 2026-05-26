@@ -294,11 +294,16 @@ describe('AgentHub smoke tests', () => {
     expect(branchCtx.branch).toBe('agenthub/run-1/coder/task-1')
     expect(branchCtx.originalBranch).toBe('master')
     expect(branchCtx.projectPath).toBe(gitDir)
+    expect(branchCtx.worktreePath).toBeTruthy()
 
-    // 在分支上创建变更
-    writeFileSync(join(gitDir, 'new-file.ts'), 'export const x = 1')
-    await exec(['add', '.'])
-    await exec(['commit', '-m', 'agent change'])
+    // 在 worktree 中创建变更（模拟 Agent 在独立工作目录中工作）
+    writeFileSync(join(branchCtx.worktreePath, 'new-file.ts'), 'export const x = 1')
+    const worktreeExec = (args: string[]) => {
+      const proc = Bun.spawn(['git', ...args], { cwd: branchCtx.worktreePath, stdout: 'pipe', stderr: 'pipe' })
+      return proc.exited
+    }
+    await worktreeExec(['add', '.'])
+    await worktreeExec(['commit', '-m', 'agent change'])
 
     const diff = await manager.collectDiff(gitDir, branchCtx.branch)
     expect(diff).toContain('new-file.ts')

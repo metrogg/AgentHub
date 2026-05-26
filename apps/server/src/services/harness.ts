@@ -17,6 +17,24 @@ export interface HarnessSkill {
   applicableTags: string[]
 }
 
+export interface HarnessSpecPhase {
+  name: string
+  description: string
+  requiredAgents: string[]
+  dependsOn?: string[]
+  expectedArtifacts?: Array<{ type: string; schema?: string }>
+}
+
+export interface HarnessSpec {
+  id: string
+  name: string
+  description: string
+  version: string
+  triggers: string[]
+  phases: HarnessSpecPhase[]
+  synthesis?: { mode: string; aggregatorPrompt?: string }
+}
+
 export interface HarnessRules {
   id: string
   name: string
@@ -39,6 +57,7 @@ export interface HarnessContext {
 // ─── HarnessManager ───────────────────────────────
 
 export class HarnessManager {
+  private specs = new Map<string, HarnessSpec>()
   private skills = new Map<string, HarnessSkill>()
   private rules = new Map<string, HarnessRules>()
   private watchers: ReturnType<typeof watch>[] = []
@@ -54,9 +73,37 @@ export class HarnessManager {
       return
     }
 
+    // 缓存：如果路径未变，跳过重新加载
+    if (this.loadedPath === harnessDir) return
+
     this.loadedPath = harnessDir
+    this.specs.clear()
     this.skills.clear()
     this.rules.clear()
+
+    // 加载 Specs
+    await this.loadYamlFiles<HarnessSpec>(resolve(harnessDir, 'specs'), '.spec.yml', (data, id) => {
+      const phasesRaw = (data.phases as Array<Record<string, unknown>>) || []
+      const phases: HarnessSpecPhase[] = phasesRaw.map((p) => ({
+        name: String(p.name || ''),
+        description: String(p.description || ''),
+        requiredAgents: Array.isArray(p.requiredAgents) ? p.requiredAgents.map(String) : [],
+        dependsOn: Array.isArray(p.dependsOn) ? p.dependsOn.map(String) : undefined,
+        expectedArtifacts: Array.isArray(p.expectedArtifacts)
+          ? p.expectedArtifacts.map((a: Record<string, unknown>) => ({ type: String(a.type || ''), schema: a.schema ? String(a.schema) : undefined }))
+          : undefined,
+      }))
+      const spec: HarnessSpec = {
+        id,
+        name: (data.name as string) || id,
+        description: (data.description as string) || '',
+        version: (data.version as string) || '1.0.0',
+        triggers: (data.triggers as string[]) || [],
+        phases,
+        synthesis: data.synthesis as HarnessSpec['synthesis'],
+      }
+      this.specs.set(id, spec)
+    })
 
     // 加载 Skills
     await this.loadYamlFiles<HarnessSkill>(resolve(harnessDir, 'skills'), '.skill.yml', (data, id) => {
@@ -88,7 +135,7 @@ export class HarnessManager {
     })
 
     logger.info(
-      { skills: Array.from(this.skills.keys()), rules: Array.from(this.rules.keys()), workspacePath },
+      { specs: Array.from(this.specs.keys()), skills: Array.from(this.skills.keys()), rules: Array.from(this.rules.keys()), workspacePath },
       'Harness loaded'
     )
   }
@@ -116,6 +163,10 @@ export class HarnessManager {
       w.close()
     }
     this.watchers = []
+  }
+
+  getLoadedPath(): string | null {
+    return this.loadedPath
   }
 
   // ─── 系统提示组装 ───────────────────────────────
@@ -164,6 +215,23 @@ export class HarnessManager {
   }
 
   // ─── 内部方法 ───────────────────────────────
+
+  findBestSpec(goal: string): HarnessSpec | undefined {
+    if (this.specs.size === 0) return undefined
+    const lowered = goal.toLowerCase()
+    for (const spec of this.specs.values()) {
+      for (const trigger of spec.triggers) {
+        try {
+          const regex = new RegExp(trigger, 'i')
+          if (regex.test(lowered)) return spec
+        } catch {
+          // 无效正则则回退到简单包含
+          if (lowered.includes(trigger.toLowerCase())) return spec
+        }
+      }
+    }
+    return undefined
+  }
 
   private findBestSkill(agent: AgentProfile, _task?: ExecutionTask): HarnessSkill | undefined {
     const caps = agent.capabilityTags || []
@@ -365,6 +433,7 @@ export class HarnessManager {
   }
 
   private clear(): void {
+    this.specs.clear()
     this.skills.clear()
     this.rules.clear()
     this.loadedPath = null

@@ -83,6 +83,7 @@ export class ConflictResolver {
         cwd: projectPath,
         stdout: 'pipe',
         stderr: 'pipe',
+        env: process.env,
       })
       const out = await new Response(proc.stdout).text()
       await proc.exited

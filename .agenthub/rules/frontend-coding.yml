@@ -1,0 +1,34 @@
+rules:
+  id: frontend-coding
+  name: 前端编码规范
+  version: 1.0.0
+
+  constraints:
+    - "使用函数组件和 Hooks，不使用类组件"
+    - "所有组件必须导出具名类型 Props"
+    - "样式使用 Tailwind 工具类，避免内联样式"
+    - "事件处理函数以 handle 开头"
+    - "异步函数以 async 开头，使用 try/catch"
+
+  naming:
+    components: PascalCase
+    hooks: "use{PascalCase}"
+    functions: camelCase
+    constants: UPPER_SNAKE_CASE
+
+  forbidden:
+    - "any 类型（除非必要，需注释说明）"
+    - "直接修改 state（必须使用 setState）"
+    - "在 useEffect 中遗漏依赖数组"
+
+  imports:
+    order:
+      - "React 内置"
+      - "第三方库"
+      - "项目内部模块"
+      - "相对路径导入"
+
+  formatting:
+    semicolons: false
+    singleQuote: true
+    trailingComma: all

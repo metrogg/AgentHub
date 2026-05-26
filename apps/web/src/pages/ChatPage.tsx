@@ -204,7 +204,10 @@ function Welcome() {
       const session = await createSession(titleFromMessage(trimmed))
       await selectSession(session.id)
       navigate(`/chat/${session.id}`)
-      await sendMessageToSession(session.id, trimmed)
+      const result = await sendMessageToSession(session.id, trimmed)
+      if (result?.groupSessionId) {
+        navigate(`/chat/${result.groupSessionId}`)
+      }
       setMessage('')
     } finally {
       setSubmitting(false)
@@ -307,9 +310,9 @@ function Welcome() {
 
           <div className="mt-24 grid gap-3 sm:grid-cols-2">
             <PromptCard
-              title={t('创建 coder 代理')}
-              text={t('帮我单开一个跳跃小游戏')}
-              onClick={() => startThread('创建一个 coder 代理，帮我简单开发一个跳跃小游戏')}
+              title={t('开发小游戏')}
+              text={t('帮我简单开发一个跳跃小游戏')}
+              onClick={() => startThread('帮我简单开发一个跳跃小游戏')}
             />
             <PromptCard
               title={t('解释架构')}
@@ -442,7 +445,7 @@ function Welcome() {
             />
             <div className="flex items-center justify-between pt-2">
               <div className="flex items-center gap-1">
-                <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100">
+                <button type="button" disabled title="暂未实现" className="grid h-8 w-8 place-items-center rounded-full text-neutral-300">
                   <Plus className="h-4 w-4" />
                 </button>
                 <button
@@ -454,7 +457,7 @@ function Welcome() {
                 >
                   <FolderOpen className="h-4 w-4" />
                 </button>
-                <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100">
+                <button type="button" disabled title="暂未实现" className="grid h-8 w-8 place-items-center rounded-full text-neutral-300">
                   <Paperclip className="h-4 w-4" />
                 </button>
                 <button
@@ -466,7 +469,7 @@ function Welcome() {
                 </button>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" className="inline-flex h-8 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-600 hover:bg-neutral-50">
+                <button type="button" disabled title="暂未实现" className="inline-flex h-8 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-300">
                   {t('自动')}
                   <ChevronDown className="h-3.5 w-3.5" />
                 </button>

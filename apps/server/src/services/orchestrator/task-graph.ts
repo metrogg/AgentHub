@@ -70,6 +70,15 @@ export class TaskGraph {
     return false
   }
 
+  addTasks(tasks: ExecutionTask[]) {
+    for (const task of tasks) {
+      if (!this.statuses.has(task.id)) {
+        this.tasks.push(task)
+        this.statuses.set(task.id, 'pending')
+      }
+    }
+  }
+
   getExecutionOrder(): string[] {
     const inDegree = new Map<string, number>()
     const adj = new Map<string, string[]>()

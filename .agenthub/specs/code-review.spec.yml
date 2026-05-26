@@ -1,0 +1,38 @@
+spec:
+  id: code-review
+  name: 代码审查
+  description: 对现有代码进行多维度审查的协作流程
+  version: 1.0.0
+
+  triggers:
+    - pattern: "(审查|review|检查).*?(代码|code|实现)"
+    - pattern: "code review|cr|review my code"
+
+  phases:
+    - name: static_analysis
+      description: 静态分析代码结构、命名规范、潜在bug
+      requiredAgents: [reviewer]
+      expectedArtifacts:
+        - type: review_report
+          schema: ReviewReportSchema
+
+    - name: security_check
+      description: 安全检查：注入、XSS、路径遍历、密钥泄露
+      requiredAgents: [security_engineer]
+      dependsOn: [static_analysis]
+      expectedArtifacts:
+        - type: review_report
+          schema: ReviewReportSchema
+
+    - name: test_gap_analysis
+      description: 检查测试覆盖率和边界条件
+      requiredAgents: [qa_engineer]
+      dependsOn: [static_analysis]
+      expectedArtifacts:
+        - type: review_report
+          schema: ReviewReportSchema
+
+  synthesis:
+    mode: final
+    aggregatorPrompt: |
+      请汇总各审查维度的发现，按严重级别排序，给出可执行的修复建议。

@@ -869,6 +869,22 @@ function SettingsContent({
               {generalInfo?.python.message && <Notice tone="warning">{generalInfo.python.message}</Notice>}
             </InsetPanel>
           </SettingsSection>
+          <SettingsSection title="清空所有聊天记录" desc="删除当前账号下的所有会话和消息记录。此操作不可恢复。">
+            <button
+              type="button"
+              disabled={busyAction === 'clear-all-sessions'}
+              onClick={() => {
+                if (!window.confirm('确定要删除所有聊天记录吗？此操作不可恢复。')) return
+                void runAction('clear-all-sessions', async () => {
+                  await api.deleteAllSessions()
+                  showActionMessage('所有聊天记录已清空')
+                })
+              }}
+              className="settings-danger-button"
+            >
+              {busyAction === 'clear-all-sessions' ? t('删除中...') : t('清空所有聊天记录')}
+            </button>
+          </SettingsSection>
           <SettingsSection title="重置所有设置" desc="清除当前配置并重新进入初始引导">
             <button type="button" onClick={resetAllSettings} className="settings-danger-button">{t('重置所有设置')}</button>
           </SettingsSection>
@@ -967,7 +983,7 @@ function SettingsContent({
                 <span className="text-neutral-500">{t('开发组织')}</span><span className="font-medium">AgentHub</span>
                 <span className="text-neutral-500">{t('联系邮箱')}</span><span className="font-medium">771473941@qq.com</span>
                 <span className="text-neutral-500">{t('版本来源')}</span><span className="font-medium">{t('本地开发版')}</span>
-                <span className="text-neutral-500">{t('上次检查')}</span><span><button type="button" className="settings-soft-button">{t('检查更新')}</button></span>
+                <span className="text-neutral-500">{t('上次检查')}</span><span><button type="button" disabled className="settings-soft-button opacity-50">{t('检查更新')}</button></span>
               </div>
             </div>
           </SettingsSection>

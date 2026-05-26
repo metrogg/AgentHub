@@ -11,9 +11,10 @@ AgentHub is a multi-agent collaboration platform where users can chat with AI ag
 - **Runtime**: Bun (>=1.1.0) — used for both server and package scripts
 - **Monorepo**: Bun workspaces (`apps/*`, `packages/*`)
 - **Server**: Hono framework on Bun.serve with WebSocket support
-- **Frontend**: React 18 + Vite + Tailwind CSS + Zustand (state) + Radix UI (primitives)
+- **Frontend**: React 18 + Vite + Tailwind CSS + Zustand (state) + Radix UI (primitives) + assistant-ui
 - **Database**: SQLite via `bun:sqlite` + Drizzle ORM (WAL mode)
 - **LLM**: Custom streaming client supporting OpenAI-compatible and Anthropic APIs
+- **Desktop**: Tauri v2 + Rust + Bun compiled sidecar
 - **Shared**: Zod schemas + constants shared between server and web
 
 ## Common Commands
@@ -28,27 +29,33 @@ bun run dev
 # Run individually
 bun run dev:server    # Server on :8000 with --watch
 bun run dev:web       # Vite dev server on :5173
+bun run dev:desktop   # Tauri dev with sidecar
 
 # Build
 bun run build
+bun run build:desktop
 
 # Typecheck all packages
 bun run typecheck
+
+# Typecheck a single package
+bun --filter @agenthub/server typecheck
+bun --filter @agenthub/web typecheck
 
 # Lint
 bun run lint
 
 # Test
-bun test
+bun test              # Run all tests
+bun test tests/smoke.test.ts   # Run a single test file
 
 # Database
 bun run db:generate   # Generate Drizzle migrations
 bun run db:migrate    # Run migrations
 bun run db:studio     # Open Drizzle Studio
 
-# Typecheck a single package
-bun --filter @agenthub/server typecheck
-bun --filter @agenthub/web typecheck
+# Desktop sidecar preparation
+bun --filter @agenthub/desktop prepare:sidecar
 ```
 
 ## Architecture
@@ -57,19 +64,24 @@ bun --filter @agenthub/web typecheck
 apps/
   server/    — Hono REST API + WebSocket server (Bun.serve)
   web/       — React SPA (Vite, proxies /api and /ws to server)
+  desktop/   — Tauri v2 shell with Rust + server sidecar
 packages/
   db/        — Drizzle ORM schema, migrations, SQLite connection
   shared/    — Zod validation schemas, shared constants/types
+tests/       — Smoke tests (Bun test runner)
+docs/        — Product docs, design records and competition materials
 ```
 
 ### Server (`apps/server`)
 
-- **Entry**: `src/index.ts` — seeds default user, starts Bun.serve with HTTP + WebSocket upgrade
-- **Routes**: `src/routes/` — Hono routers mounted at `/api/sessions`, `/api/messages`, `/api/settings`, `/api/workspaces`, `/api/coding-tools`
+- **Entry**: `src/index.ts` — seeds default user, starts Bun.serve with HTTP + WebSocket upgrade, auto-increments port if occupied
+- **Routes**: `src/routes/` — Hono routers mounted at `/api/sessions`, `/api/messages`, `/api/settings`, `/api/workspaces`, `/api/coding-tools`, `/api/skills`, `/api/artifacts`, `/api/orchestrator-runs`
 - **LLM**: `src/services/llm-client.ts` — multi-provider streaming client (OpenAI-compatible + Anthropic). Config resolved from DB `settings` table first, then env vars. `src/services/llm.ts` is the thin wrapper used by agent runners.
-- **Agent Runner**: `src/services/agent-runner.ts` — manages WebSocket rooms per session, routes execution through `RuntimeRegistry`, broadcasts `message:stream` / `message:completed` events
-- **Auth**: `src/middleware/auth.ts` — JWT-based, single-user mode with a seeded default user
-- **Env**: `src/env.ts` — Zod-validated env config. Key vars: `DATABASE_URL`, `LLM_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, `LLM_PROVIDER`, `PORT`
+- **Agent Runner**: `src/services/agent-runner.ts` — manages WebSocket rooms per session, routes execution through `RuntimeRegistry`, broadcasts `message:stream` / `message:completed` / `message:cancelled` events
+- **Auth**: `src/middleware/auth.ts` — JWT-based, single-user mode with a seeded default user (`default-user`)
+- **Env**: `src/env.ts` — Zod-validated env config. Key vars: `DATABASE_URL`, `LLM_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, `LLM_PROVIDER`, `PORT`, `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION`
+- **Blackboard**: `src/services/blackboard.ts` — namespaced key-value store for agent task outputs with versioning, tagging, and pub/sub. Used by the orchestrator to share state between tasks.
+- **Execution Tracer**: `src/services/execution-tracer.ts` — records agent runs, tool calls, blackboard operations, errors, and token usage into `execution_logs` table.
 
 ### Agent Runtime Layer (`src/services/runtime/`)
 
@@ -93,7 +105,7 @@ Multi-agent task orchestration with DAG scheduling:
 - `task-scheduler.ts` — concurrent executor (max 3 parallel), dependency-aware
 - `synthesizer.ts` — LLM-based intelligent aggregation of agent outputs
 - `conflict-resolver.ts` — detects file conflicts across agent diffs, auto-merge or LLM 3-way merge
-- `fallback-engine.ts` — retry → fallback agent → orchestrator takeover on failure
+- `replanning-engine.ts` — dynamic failure recovery: retry with backoff, agent substitution, local replan, task split, escalation to user, global replan
 
 Triggered via `POST /messages/:sessionId/orchestrator-plan/:messageId/dispatch` in `messages.ts`.
 
@@ -122,8 +134,10 @@ User: "@orchestrator write a login page"
        - Git branch isolation (if non read-only)
        - AgentRuntime.execute() → stream reply
        - Collect diff artifact
+       - Write output to Blackboard
     6. ConflictResolver: detect & resolve file conflicts
     7. Synthesizer: LLM aggregate → post summary to group chat
+    8. Cleanup Blackboard namespace
 ```
 
 ### Database (`packages/db`)
@@ -133,6 +147,8 @@ SQLite with WAL mode. Key tables:
 - `users`, `sessions` (direct/group), `messages`, `session_members`, `settings`
 - `workspaces`, `workspace_agents`, `workspace_tasks`
 - `orchestrator_runs` — tracks orchestrator dispatch lifecycle (planning → running → synthesizing → completed/failed)
+- `blackboard_entries` — namespaced key-value store with versioning
+- `execution_logs` — tracing records for agent runs and tool calls
 
 `workspace_tasks` extended fields for DAG scheduling:
 - `run_id`, `dependencies` (JSON array), `parallel_group`, `max_retries`, `attempt_count`
@@ -144,8 +160,37 @@ DB file defaults to `./storage/agenthub.db`.
 
 - Vite dev server proxies `/api` → `:8000` and `/ws` → `ws://:8000`
 - Path alias: `@` → `./src`
-- State managed via Zustand stores in `src/stores/`
-- Fully compatible with new backend — no frontend changes needed for the new architecture
+- State managed via Zustand stores in `src/stores/` (chatStore, workspaceStore)
+- Routing: React Router with pages: Chat, AgentConfig, AgentWorld, Office, SkillsMarket, OrchestratorRuns, ExecutionLogs, CodingTools, Settings
+- Desktop integration: `src/lib/native.ts` detects Tauri runtime; `src/components/DesktopAppMenu.tsx` renders native menu when in desktop mode
+- API client: `src/lib/api.ts` — typed wrapper around `fetch` for all backend endpoints
+
+### Desktop (`apps/desktop`)
+
+- Tauri v2 Rust shell in `src-tauri/`
+- Sidecar: `apps/server` compiled to `agenthub-server.exe`, placed in `src-tauri/resources/binaries/`
+- Startup flow: splash screen → find port 8000-8079 → spawn server sidecar → wait for `/health` → load web UI
+- Desktop commands: `pick_workspace_folder`, `open_in_editor`, `notify_user`, `desktop_info`, `open_desktop_window`
+- Data paths on Windows: `%APPDATA%\com.agenthub.desktop\{data,config,logs}`
+- Prepare sidecar: `bun --filter @agenthub/desktop prepare:sidecar`
+
+### Shared (`packages/shared`)
+
+- Zod schemas for API validation and types: `auth.ts`, `session.ts`, `message.ts`, `task.ts`, `agent.ts`, `artifact.ts`
+- Shared constants in `constants.ts`
+
+## Testing
+
+Smoke tests live in `tests/smoke.test.ts` and use Bun's built-in test runner. They spin up the Hono app in-memory with a temporary SQLite database.
+
+Covered areas:
+- Health endpoint, session/message CRUD
+- Settings model test mocking
+- Workspace task dispatch and failure handling
+- Agent draft confirmation
+- TaskGraph DAG topology sort and cycle detection
+- ConflictResolver multi-agent file conflict detection
+- GitBranchManager branch lifecycle
 
 ## Security & Runtime Policy
 
@@ -155,14 +200,29 @@ DB file defaults to `./storage/agenthub.db`.
   - `read-only`: no branch created, agent only reads files
   - `workspace-write`: isolated Git branch per task, diff collected after execution
   - `danger-full-access`: same branch isolation, but allows broader operations
-- **`AGENTHUB_ENABLE_CODE_AGENT_EXECUTION`**: default is now `true` (was `false`). Actual restrictions enforced by `sandboxPolicy`.
+- **`AGENTHUB_ENABLE_CODE_AGENT_EXECUTION`**: default is `false`. Actual restrictions enforced by `sandboxPolicy`.
 - **MCP runtime**: read-only only (`nativeToolRuntime` only exposes read tools).
 
-## Legacy Code References
+## Environment Variables
 
-The following files are still present and internally referenced by the new Runtime layer, but their primary logic has been migrated:
-- `src/services/code-agent-adapter.ts` — referenced by `CodeAgentRuntime`
-- `src/services/native-agent-loop.ts` — referenced by `NativeToolRuntime`
+Key env vars from `apps/server/src/env.ts`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `./storage/agenthub.db` | SQLite file path |
+| `PORT` | `8000` | Server port |
+| `LLM_PROVIDER` | `openai` | Default LLM provider |
+| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | — | Generic LLM config |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | — | OpenAI-specific |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | — | Anthropic-specific |
+| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | `false` | Code Agent execution switch |
+| `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | `120000` | Code Agent timeout |
+| `AGENTHUB_NATIVE_MAX_TOOL_ROUNDS` | `6` | Max tool rounds for native runtime |
+| `ENABLE_LOCAL_CLI_PROBES` | `true` | Probe host-installed CLI tools |
+
+Web env vars (`.env` or Vite):
+- `VITE_PROXY_TARGET` → backend for dev proxy
+- `VITE_WS_PROXY_TARGET` → WebSocket proxy target
 
 ## Docker
 
@@ -172,3 +232,16 @@ docker compose --profile agents up  # includes cli-agent container
 ```
 
 Server runs migrations automatically on start in Docker.
+
+## Development Conventions
+
+- ESM throughout the project.
+- TypeScript strict mode + isolatedModules.
+- Code formatting by Prettier.
+- UI language is Chinese; key types and protocol fields remain English.
+
+## Legacy Code References
+
+The following files are still present and internally referenced by the new Runtime layer, but their primary logic has been migrated:
+- `src/services/code-agent-adapter.ts` — referenced by `CodeAgentRuntime`
+- `src/services/native-agent-loop.ts` — referenced by `NativeToolRuntime`

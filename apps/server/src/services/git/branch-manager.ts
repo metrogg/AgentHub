@@ -1,9 +1,15 @@
 import { logger } from '../../lib/logger'
+import { randomUUID } from 'node:crypto'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 
 export interface BranchContext {
   branch: string
   originalBranch: string
   projectPath: string
+  worktreePath: string
 }
 
 export interface MergeResult {
@@ -14,9 +20,32 @@ export interface MergeResult {
 
 export class GitBranchManager {
   /**
-   * 为 Agent 任务准备独立分支
-   * 1. stash 当前未提交变更（保护用户工作区）
-   * 2. 从 main/master 切出新分支
+   * 确保 projectPath 是一个有效的 git 仓库（自动 init + 空 commit）
+   */
+  async ensureGitRepo(projectPath: string): Promise<void> {
+    const gitDir = join(projectPath, '.git')
+    if (existsSync(gitDir)) {
+      try {
+        await this.execGit(projectPath, ['rev-parse', 'HEAD'])
+        return
+      } catch {
+        // .git 存在但没有 commit，继续初始化
+      }
+    }
+
+    logger.info({ projectPath }, 'Auto-initializing git repo for workspace')
+    await this.execGit(projectPath, ['init'])
+    await this.execGit(projectPath, ['config', 'user.email', 'agenthub@local'])
+    await this.execGit(projectPath, ['config', 'user.name', 'AgentHub'])
+    await this.execGit(projectPath, ['commit', '--allow-empty', '-m', 'init: AgentHub workspace'])
+  }
+
+  /**
+   * 为 Agent 任务准备独立分支 + Git worktree
+   * 1. 自动 git init（如果项目不是 git 仓库）
+   * 2. stash 当前未提交变更（保护用户工作区）
+   * 3. 从 base branch 创建新分支（不切换）
+   * 4. 使用 git worktree add 创建独立工作目录
    */
   async prepareBranch(
     projectPath: string,
@@ -24,6 +53,8 @@ export class GitBranchManager {
     agentKey: string,
     taskId: string
   ): Promise<BranchContext> {
+    await this.ensureGitRepo(projectPath)
+
     const branch = `agenthub/${runId}/${agentKey}/${taskId}`
 
     const originalBranch = await this.getCurrentBranch(projectPath)
@@ -39,19 +70,31 @@ export class GitBranchManager {
     const baseBranch = await this.inferBaseBranch(projectPath)
     await this.fetchIfNeeded(projectPath, baseBranch)
 
-    // 创建并切换到新分支
-    await this.execGit(projectPath, ['checkout', '-b', branch, baseBranch])
+    // 创建分支但不切换
+    await this.execGit(projectPath, ['branch', branch, baseBranch])
 
-    return { branch, originalBranch, projectPath }
+    // 使用 git worktree 创建独立工作目录
+    const worktreePath = join(tmpdir(), `agenthub-wt-${randomUUID()}`)
+    await this.execGit(projectPath, ['worktree', 'add', worktreePath, branch])
+
+    logger.info({ worktreePath, branch }, 'Git worktree created for agent task')
+
+    return { branch, originalBranch, projectPath, worktreePath }
   }
 
   /**
-   * 清理分支：切回原分支，删除临时分支
+   * 清理分支：移除 worktree、删除临时分支、切回原分支
    */
   async cleanupBranch(ctx: BranchContext, options: { keepBranch?: boolean } = {}): Promise<void> {
-    const { branch, originalBranch, projectPath } = ctx
+    const { branch, originalBranch, projectPath, worktreePath } = ctx
 
     try {
+      // 移除 worktree（强制，即使有未跟踪文件）
+      await this.execGit(projectPath, ['worktree', 'remove', '--force', worktreePath]).catch((err) => {
+        logger.warn({ err: err?.message, worktreePath }, 'Failed to remove worktree via git, trying manual cleanup')
+        try { rmSync(worktreePath, { recursive: true, force: true }) } catch {}
+      })
+
       // 切回原分支
       await this.execGit(projectPath, ['checkout', originalBranch])
 
@@ -240,6 +283,7 @@ export class GitBranchManager {
       cwd: projectPath,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: process.env,
     })
     const stdout = await new Response(proc.stdout).text()
     const stderr = await new Response(proc.stderr).text()

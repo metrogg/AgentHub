@@ -26,6 +26,7 @@ import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 import { streamReply } from '../services/llm'
 import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
 import type { ExecutionPlan } from '../services/orchestrator/types'
+import { harnessManager } from '../services/harness'
 
 const orchestratorPlanSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -148,45 +149,60 @@ type DemoArtifact =
   | {
       id: string
       kind: 'web_preview'
+      type: 'preview'
       title: string
       description: string
       url: string
-      framework: string
+      previewKind: 'dev-server' | 'static-html' | 'iframe'
       status: 'ready' | 'building' | 'failed'
     }
   | {
       id: string
       kind: 'diff'
+      type: 'diff'
       title: string
       description: string
-      files: Array<{
-        path: string
-        additions: number
-        deletions: number
-        language: string
-        patch: string
-      }>
+      filePath: string
+      language: string
+      diff: string
     }
   | {
       id: string
       kind: 'file'
+      type: 'file'
       title: string
       description: string
-      fileName: string
+      path: string
       mimeType: string
-      sizeLabel: string
+      size: number
       url: string
     }
   | {
       id: string
       kind: 'deploy'
+      type: 'deploy'
       title: string
       description: string
       provider: string
-      environment: string
-      status: 'queued' | 'building' | 'ready' | 'failed'
-      previewUrl: string
+      status: 'pending' | 'running' | 'ready' | 'failed'
+      url: string
       logs: string[]
+    }
+  | {
+      id: string
+      kind: 'workflow'
+      type: 'workflow'
+      title: string
+      description: string
+      nodes: Array<{
+        id: string
+        label: string
+        type: 'agent' | 'tool' | 'input' | 'output'
+        agentKey?: string
+        agentName?: string
+        agentColor?: string
+      }>
+      edges: Array<{ from: string; to: string; label?: string }>
     }
 
 type DispatchMonitor = {
@@ -239,6 +255,30 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .where(eq(messages.id, messageId))
       .returning()
     if (!updated) throw new HTTPException(500, { message: 'Failed to update message' })
+    return c.json(updated)
+  })
+  .patch('/:sessionId/:messageId/pin', async (c) => {
+    const user = c.get('user')
+    const sessionId = c.req.param('sessionId')
+    const messageId = c.req.param('messageId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
+    if (!message || message.sessionId !== sessionId) throw new HTTPException(404, { message: 'Message not found' })
+    const [updated] = await db.update(messages).set({ isPinned: true }).where(eq(messages.id, messageId)).returning()
+    if (!updated) throw new HTTPException(500, { message: 'Failed to pin message' })
+    return c.json(updated)
+  })
+  .patch('/:sessionId/:messageId/unpin', async (c) => {
+    const user = c.get('user')
+    const sessionId = c.req.param('sessionId')
+    const messageId = c.req.param('messageId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
+    if (!message || message.sessionId !== sessionId) throw new HTTPException(404, { message: 'Message not found' })
+    const [updated] = await db.update(messages).set({ isPinned: false }).where(eq(messages.id, messageId)).returning()
+    if (!updated) throw new HTTPException(500, { message: 'Failed to unpin message' })
     return c.json(updated)
   })
   .delete('/:sessionId/:messageId', async (c) => {
@@ -307,7 +347,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const { content, type, metadata } = c.req.valid('json')
     const [msg] = await db
       .insert(messages)
-      .values({ sessionId, senderId: user.sub, senderType: 'user', type, content, metadata })
+      .values({ sessionId, senderId: user.sub, senderType: 'user', type, content, metadata, replyToMessageId: metadata?.replyToMessageId as string | undefined })
       .returning()
     // Trigger agent reply asynchronously (do not await to keep response fast).
     if (msg && !metadata?.skipAgentReply) {
@@ -336,7 +376,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           .where(eq(workspaceAgents.workspaceId, session.workspaceId))
           .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
       : []
-    const plan = await buildDynamicOrchestratorPlan(content, agentList)
+    const plan = await buildDynamicOrchestratorPlan(content, agentList, session.workspaceId)
     const [card] = await db
       .insert(messages)
       .values({
@@ -345,11 +385,16 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         senderType: 'agent',
         type: 'task_card',
         content: plan.summary,
-        metadata: { plan },
+        metadata: { plan: { ...plan, messageId: '' } },
       })
       .returning()
     if (!card) throw new HTTPException(500, { message: 'Failed to create plan card' })
-    return c.json(card)
+    const planWithId = { ...plan, messageId: card.id }
+    await db
+      .update(messages)
+      .set({ metadata: { plan: planWithId } })
+      .where(eq(messages.id, card.id))
+    return c.json({ ...card, metadata: { plan: planWithId } })
   })
   .post('/:sessionId/artifact-demo', zValidator('json', artifactDemoSchema), async (c) => {
     const user = c.get('user')
@@ -536,12 +581,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     let groupSessionId: string
     let createdAgents: Array<typeof workspaceAgents.$inferSelect>
 
+    let agentsByKey: Map<string, typeof workspaceAgents.$inferSelect>
+
     if (sourceSession?.type === 'group' && sourceSession.workspaceId && sourceSession.ownerId === user.sub) {
       // 复用已有 workspace
       const existing = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
       workspaceId = existing.workspaceId
       groupSessionId = existing.groupSessionId ?? sessionId
-      createdAgents = existing.createdAgents ?? []
+      agentsByKey = existing.agentsByKey
+      createdAgents = Array.from(agentsByKey.values())
     } else {
       // 新建 workspace
       const [workspace] = await db
@@ -574,9 +622,12 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
       const groupSession = await createWorkspaceGroupSession(workspace.id, workspace.name, user.sub, createdAgents)
       groupSessionId = groupSession.id
+      agentsByKey = new Map<string, typeof workspaceAgents.$inferSelect>()
+      for (let i = 0; i < parsed.agents.length; i++) {
+        const agent = createdAgents[i]
+        if (agent) agentsByKey.set(parsed.agents[i]!.key, agent)
+      }
     }
-
-    const agentByKey = new Map(parsed.agents.map((agent, index) => [agent.key, createdAgents[index]]))
     const childSessions = new Map<string, { sessionId: string; workspaceId: string; projectPath?: string | null }>()
     const taskResults: OrchestratorDispatchResult['tasks'] = []
 
@@ -592,8 +643,9 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const runId = crypto.randomUUID()
 
     // 创建 workspaceTasks 和 child sessions
+    // 每个任务独立 session，不复用，避免上下文污染
     for (const [index, task] of parsed.tasks.entries()) {
-      const agent = agentByKey.get(task.agentKey)
+      const agent = agentsByKey.get(task.agentKey)
       const [workspaceTask] = await db
         .insert(workspaceTasks)
         .values({
@@ -611,7 +663,20 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         })
         .returning()
 
-      const childSession = await ensureAgentChildSession(workspaceId, parsed.title, user.sub, agent ?? null, task.title)
+      // Orchestrator 任务：每个 task 独立 session，不复用
+      const [childSession] = await db
+        .insert(sessions)
+        .values({
+          title: agent ? `${parsed.title} / ${agent.name} / ${task.title.slice(0, 24)}` : `${parsed.title} / ${task.title.slice(0, 24)}`,
+          type: 'direct',
+          ownerId: user.sub,
+          workspaceId,
+          workspaceAgentId: agent?.id ?? null,
+          metadata: { orchestratorRunId: runId, orchestratorTaskId: task.id },
+        })
+        .returning()
+      if (!childSession) throw new HTTPException(500, { message: 'Failed to create task session' })
+
       if (workspaceTask) {
         await db
           .update(workspaceTasks)
@@ -634,7 +699,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       title: parsed.title,
       goal: parsed.goal,
       agents: parsed.agents.map((a) => {
-        const dbAgent = agentByKey.get(a.key)
+        const dbAgent = agentsByKey.get(a.key)
         return {
           id: dbAgent?.id ?? a.key,
           key: a.key,
@@ -655,7 +720,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         id: t.id,
         title: t.title,
         description: t.description,
-        agentId: agentByKey.get(t.agentKey)?.id ?? t.agentKey,
+        agentId: agentsByKey.get(t.agentKey)?.id ?? t.agentKey,
         dependencies: t.dependencies ?? [],
         parallelGroup: t.parallelGroup,
         maxRetries: t.maxRetries ?? 2,
@@ -687,15 +752,40 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
   const wantsPreview = /预览|preview|网页|页面|web/.test(lower)
   const wantsDiff = /diff|补丁|变更|修改|应用/.test(lower)
   const wantsFile = /文件|附件|下载|打包|源码|zip|ppt|文档/.test(lower)
+  const wantsWorkflow = /workflow|工作流|流程|编排|pipeline/.test(lower)
 
-  if (wantsPreview || (!wantsDeploy && !wantsDiff && !wantsFile)) {
+  if (wantsWorkflow) {
+    artifacts.push({
+      id: `workflow-${crypto.randomUUID()}`,
+      kind: 'workflow',
+      type: 'workflow',
+      title: 'Agent 协作 Workflow',
+      description: '多 Agent 协作工作流定义，可在聊天流中可视化预览并一键执行。',
+      nodes: [
+        { id: 'input', label: '用户输入', type: 'input' },
+        { id: 'architect', label: '架构师', type: 'agent', agentKey: 'architect', agentName: 'Architect', agentColor: '#6366f1' },
+        { id: 'coder', label: '实现者', type: 'agent', agentKey: 'coder', agentName: 'Coder', agentColor: '#10b981' },
+        { id: 'reviewer', label: '审查者', type: 'agent', agentKey: 'reviewer', agentName: 'Reviewer', agentColor: '#ef4444' },
+        { id: 'output', label: '产出汇总', type: 'output' },
+      ],
+      edges: [
+        { from: 'input', to: 'architect', label: '拆解' },
+        { from: 'architect', to: 'coder', label: '实现' },
+        { from: 'coder', to: 'reviewer', label: '审查' },
+        { from: 'reviewer', to: 'output', label: '汇总' },
+      ],
+    })
+  }
+
+  if (wantsPreview || (!wantsDeploy && !wantsDiff && !wantsFile && !wantsWorkflow)) {
     artifacts.push({
       id: `web-${crypto.randomUUID()}`,
       kind: 'web_preview',
+      type: 'preview',
       title: 'AgentHub Web Preview',
       description: '聊天流内联网页预览，可展开后接入 iframe、Sandpack 或真实预览 URL。',
       url: 'https://agenthub.local/preview/landing-page',
-      framework: 'Vite + React',
+      previewKind: 'iframe',
       status: 'ready',
     })
   }
@@ -704,26 +794,25 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
     artifacts.push({
       id: `diff-${crypto.randomUUID()}`,
       kind: 'diff',
+      type: 'diff',
       title: 'UI 变更 Diff',
-      description: '展示 Agent 产出的代码补丁，后续可接“一键应用 Diff”。',
-      files: [
-        {
-          path: 'apps/web/src/components/chat/SessionList.tsx',
-          additions: 24,
-          deletions: 5,
-          language: 'tsx',
-          patch: [
-            '@@ -42,7 +42,11 @@ export default function SessionList() {',
-            "-  const sessionTree = useMemo(() => buildSessionTree(sessions), [sessions])",
-            '+  const [query, setQuery] = useState("")',
-            '+  const [showArchived, setShowArchived] = useState(false)',
-            '+  const sessionTree = useMemo(',
-            '+    () => filterSessionTree(buildSessionTree(sessions), query, showArchived),',
-            '+    [query, sessions, showArchived]',
-            '+  )',
-          ].join('\n'),
-        },
-      ],
+      description: '展示 Agent 产出的代码补丁，后续可接”一键应用 Diff”。',
+      filePath: 'apps/web/src/components/chat/SessionList.tsx',
+      language: 'tsx',
+      diff: [
+        'diff --git a/apps/web/src/components/chat/SessionList.tsx b/apps/web/src/components/chat/SessionList.tsx',
+        'index 1234567..abcdefg 100644',
+        '--- a/apps/web/src/components/chat/SessionList.tsx',
+        '+++ b/apps/web/src/components/chat/SessionList.tsx',
+        '@@ -42,7 +42,11 @@ export default function SessionList() {',
+        '-  const sessionTree = useMemo(() => buildSessionTree(sessions), [sessions])',
+        '+  const [query, setQuery] = useState(\”\”)',
+        '+  const [showArchived, setShowArchived] = useState(false)',
+        '+  const sessionTree = useMemo(',
+        '+    () => filterSessionTree(buildSessionTree(sessions), query, showArchived),',
+        '+    [query, sessions, showArchived]',
+        '+  )',
+      ].join('\n'),
     })
   }
 
@@ -731,12 +820,12 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
     artifacts.push({
       id: `deploy-${crypto.randomUUID()}`,
       kind: 'deploy',
+      type: 'deploy',
       title: '静态站点部署',
       description: '部署状态卡片先以 Demo 方式闭环，真实版本可接 Vercel、Netlify 或容器平台。',
-      provider: 'AgentHub Deploy',
-      environment: 'preview',
+      provider: 'static',
       status: 'ready',
-      previewUrl: 'https://agenthub-preview.local/app',
+      url: 'https://agenthub-preview.local/app',
       logs: ['Build queued', 'Install dependencies', 'Run production build', 'Upload static assets', 'Preview is ready'],
     })
   }
@@ -745,11 +834,12 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
     artifacts.push({
       id: `file-${crypto.randomUUID()}`,
       kind: 'file',
+      type: 'file',
       title: '源码打包附件',
       description: '用于展示 Agent 回复中的文件附件入口。',
-      fileName: 'agenthub-preview-source.zip',
+      path: 'agenthub-preview-source.zip',
       mimeType: 'application/zip',
-      sizeLabel: '128 KB',
+      size: 131072,
       url: '#',
     })
   }
@@ -759,9 +849,10 @@ function buildDemoArtifacts(content: string): DemoArtifact[] {
 
 function artifactSummary(artifacts: DemoArtifact[]) {
   const labels = artifacts.map((artifact) => {
-    if (artifact.kind === 'web_preview') return '网页预览'
-    if (artifact.kind === 'diff') return 'Diff 视图'
-    if (artifact.kind === 'deploy') return '部署状态'
+    if (artifact.type === 'preview') return '网页预览'
+    if (artifact.type === 'diff') return 'Diff 视图'
+    if (artifact.type === 'deploy') return '部署状态'
+    if (artifact.type === 'workflow') return 'Workflow'
     return '文件附件'
   })
   return `已生成 ${labels.join('、')} 卡片，可在聊天流中直接预览和操作。`
@@ -902,13 +993,40 @@ function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
 
 async function buildDynamicOrchestratorPlan(
   content: string,
-  agents: Array<typeof workspaceAgents.$inferSelect>
+  agents: Array<typeof workspaceAgents.$inferSelect>,
+  workspaceId?: string | null
 ): Promise<OrchestratorPlan> {
   const goal = normalizeOrchestratorGoal(content)
   const planningAgents = agents.length ? agents.map(planAgentFromWorkspaceAgent) : fallbackPlanAgents()
 
+  let specPhases: string | undefined
+  if (workspaceId) {
+    try {
+      const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+      if (ws?.projectPath) {
+        await harnessManager.loadFromWorkspace(ws.projectPath)
+        const spec = harnessManager.findBestSpec(goal)
+        if (spec) {
+          specPhases = [
+            `【协作规范：${spec.name}】`,
+            spec.description,
+            '',
+            '请按以下阶段组织任务（每个阶段可映射为 1 个或多个 task）：',
+            ...spec.phases.map((p, i) => {
+              const deps = p.dependsOn?.length ? `（依赖：${p.dependsOn.join('、')}）` : ''
+              return `${i + 1}. ${p.name}：${p.description} ${deps}`
+            }),
+            '【规范结束】',
+          ].join('\n')
+        }
+      }
+    } catch {
+      // Best-effort spec loading; don't block plan generation.
+    }
+  }
+
   try {
-    const generated = await generatePlanWithLlm(goal, planningAgents)
+    const generated = await generatePlanWithLlm(goal, planningAgents, specPhases)
     const normalized = normalizeGeneratedPlan(goal, generated, planningAgents)
     if (normalized) return normalized
   } catch {
@@ -1007,7 +1125,7 @@ function pickAgent(agents: PlanAgent[], keywords: string[]) {
   })
 }
 
-async function generatePlanWithLlm(goal: string, agents: PlanAgent[]) {
+async function generatePlanWithLlm(goal: string, agents: PlanAgent[], specPhases?: string) {
   const agentCatalog = agents.map((agent) => ({
     key: agent.key,
     name: agent.name,
@@ -1026,7 +1144,8 @@ async function generatePlanWithLlm(goal: string, agents: PlanAgent[]) {
     'Return strict JSON only. Do not include Markdown fences or explanations.',
     'Schema: {"title":string,"summary":string,"tasks":[{"id":string,"title":string,"description":string,"agentKey":string,"status":"pending"}]}',
     'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
-  ].join('\n')
+    specPhases || '',
+  ].filter(Boolean).join('\n')
   const messagesForPlan = [
     {
       role: 'user' as const,
@@ -1365,7 +1484,7 @@ async function dispatchPlanToExistingGroup(
   session: typeof sessions.$inferSelect,
   ownerId: string,
   plan: OrchestratorPlan
-): Promise<OrchestratorDispatchResult & { createdAgents?: Array<typeof workspaceAgents.$inferSelect> }> {
+): Promise<{ workspaceId: string; groupSessionId: string; agentsByKey: Map<string, typeof workspaceAgents.$inferSelect> }> {
   if (!session.workspaceId) throw new HTTPException(400, { message: 'Session is not attached to a workspace' })
 
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
@@ -1431,65 +1550,7 @@ async function dispatchPlanToExistingGroup(
     )
   }
 
-  const taskResults: OrchestratorDispatchResult['tasks'] = []
-  const monitor: DispatchMonitor = { dispatchId: crypto.randomUUID(), groupSessionId: session.id, taskIds: [] }
-
-  for (const [index, task] of plan.tasks.entries()) {
-    const agent = agentsByKey.get(task.agentKey)
-    const [workspaceTask] = await db
-      .insert(workspaceTasks)
-      .values({
-        workspaceId: workspace.id,
-        agentId: agent?.id ?? null,
-        title: task.title,
-        description: task.description,
-        status: 'running',
-        orderIdx: index,
-      })
-      .returning()
-    if (!workspaceTask) continue
-    monitor.taskIds.push(workspaceTask.id)
-
-    const childSession = await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent ?? null, task.title)
-
-    await db
-      .update(workspaceTasks)
-      .set({ sessionId: childSession.id, updatedAt: new Date() })
-      .where(eq(workspaceTasks.id, workspaceTask.id))
-
-    const [promptMsg] = await db
-      .insert(messages)
-      .values({
-        sessionId: childSession.id,
-        senderId: ownerId,
-        senderType: 'user',
-        type: 'text',
-        content: buildDispatchPrompt(plan, task, agent),
-      })
-      .returning()
-
-    if (promptMsg) {
-      import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(childSession.id, promptMsg, agent ? toAgentProfile(agent, workspace.projectPath) : undefined)
-          .then(async (result) => {
-            await db
-              .update(workspaceTasks)
-              .set({ status: result?.ok ? 'done' : 'failed', updatedAt: new Date() })
-              .where(eq(workspaceTasks.id, workspaceTask.id))
-          })
-          .catch(() => {})
-      })
-    }
-
-    taskResults.push({
-      taskId: workspaceTask.id,
-      sessionId: childSession.id,
-      title: task.title,
-      agentName: agent?.name ?? 'Agent',
-    })
-  }
-
-  return { workspaceId: workspace.id, groupSessionId: session.id, tasks: taskResults, createdAgents: [...existingAgents, ...createdAgents] }
+  return { workspaceId: workspace.id, groupSessionId: session.id, agentsByKey }
 }
 
 async function updatePlanCardDispatchResult(
@@ -1502,7 +1563,7 @@ async function updatePlanCardDispatchResult(
   const runningPlan: OrchestratorPlan = {
     ...plan,
     dispatchResult,
-    tasks: plan.tasks.map((task) => ({ ...task, status: task.status === 'done' ? 'done' : 'running' })),
+    tasks: plan.tasks.map((task) => ({ ...task, status: 'pending' })),
   }
   await db
     .update(messages)
@@ -1574,6 +1635,7 @@ async function runGit(cwd: string, args: string[]) {
     cwd,
     stdout: 'ignore',
     stderr: 'ignore',
+    env: process.env,
   })
   return await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 5000))])
 }
