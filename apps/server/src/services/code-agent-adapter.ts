@@ -572,7 +572,7 @@ async function runCodeAgentCommand(
   const output = [
     stdout.trim(),
     stderr.trim(),
-    timedOut ? `Coding Tools 超过 ${readEnv('AGENTHUB_CODE_AGENT_TIMEOUT_MS') ?? 120_000}ms 未返回，已自动停止。` : '',
+    timedOut ? `Coding Tools 超过 ${env.AGENTHUB_CODE_AGENT_TIMEOUT_MS}ms 未返回，已自动停止。` : '',
   ]
     .filter(Boolean)
     .join('\n')

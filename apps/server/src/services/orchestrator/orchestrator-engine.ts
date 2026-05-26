@@ -373,7 +373,7 @@ export class OrchestratorEngine {
               const status = await gitBranchManager.getFileStatus(branchCtx.projectPath, filePath, branchCtx.branch)
               artifacts.push({
                 id: `diff-${filePath.replace(/[^a-z0-9]/gi, '-')}`,
-                type: 'diff',
+                kind: 'diff',
                 title: `${agent.name} 修改了 ${filePath}`,
                 filePath,
                 status,
@@ -578,7 +578,7 @@ async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNames
       keyPattern: 'task_%_output',
     })
     const relevant = upstreamEntries.filter((e) => {
-      const depId = e.key.replace('task_', '').replace('_output', '')
+      const depId = e.key.replace(/^task_/, '').replace(/_output$/, '')
       return task.dependencies.includes(depId)
     })
 
@@ -601,13 +601,13 @@ async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNames
             } else {
               text += (val.output || '').slice(0, 4000)
             }
-            const codeArtifacts = val.artifacts?.filter((a) => a.type === 'diff' || a.type === 'file') ?? []
+            const codeArtifacts = val.artifacts?.filter((a) => isArtifactKind(a, 'diff') || isArtifactKind(a, 'file')) ?? []
             if (codeArtifacts.length > 0) {
               text +=
                 '\n\n[代码变更]\n' +
                 codeArtifacts
                   .map((a) => {
-                    if (a.type === 'diff' && a.diff) return `\`\`\`diff\n// ${a.filePath || 'unknown'}\n${a.diff.slice(0, 3000)}\n\`\`\``
+                    if (isArtifactKind(a, 'diff') && a.diff) return `\`\`\`diff\n// ${a.filePath || 'unknown'}\n${a.diff.slice(0, 3000)}\n\`\`\``
                     return `// ${a.path || a.filePath || 'unknown'}`
                   })
                   .join('\n\n')
@@ -672,7 +672,7 @@ async function summarizeTaskOutput(
   }
 
   // 从 artifacts 提取文件变更
-  const codeArtifacts = artifacts.filter((a) => a.type === 'diff' || a.type === 'file')
+  const codeArtifacts = artifacts.filter((a) => isArtifactKind(a, 'diff') || isArtifactKind(a, 'file'))
   const filesCreated: string[] = []
   const filesModified: string[] = []
   for (const a of codeArtifacts) {
@@ -681,7 +681,7 @@ async function summarizeTaskOutput(
     const status = a.status as string | undefined
     if (status === 'created') filesCreated.push(fp)
     else if (status === 'modified') filesModified.push(fp)
-    else if (!status && a.type === 'diff') {
+    else if (!status && isArtifactKind(a, 'diff')) {
       const diff = (a.diff as string) || ''
       if (/^---\s+\/dev\/null/m.test(diff)) filesCreated.push(fp)
       else filesModified.push(fp)
@@ -777,4 +777,8 @@ function extractJsonObject(value: string) {
   const start = cleaned.indexOf('{')
   const end = cleaned.lastIndexOf('}')
   return start >= 0 && end > start ? cleaned.slice(start, end + 1) : null
+}
+
+function isArtifactKind(a: Record<string, unknown>, kind: string): boolean {
+  return (a.kind as string | undefined) === kind || (a.type as string | undefined) === kind
 }
