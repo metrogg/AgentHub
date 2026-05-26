@@ -13,6 +13,7 @@ import { skillRoutes } from './routes/skills'
 import { workspaceRoutes } from './routes/workspaces'
 import { artifactRoutes, serveDeployStatic } from './routes/artifacts'
 import { orchestratorRunRoutes } from './routes/orchestrator-runs'
+import { mobileRoutes } from './routes/mobile'
 
 const app = new Hono()
   .use('*', honoLogger())
@@ -35,6 +36,7 @@ const routes = app
   .route('/api/workspaces', workspaceRoutes)
   .route('/api/artifacts', artifactRoutes)
   .route('/api/orchestrator-runs', orchestratorRunRoutes)
+  .route('/api/mobile', mobileRoutes)
 
 app.get('/deploy/:workspaceId/*', async (c) => {
   const workspaceId = c.req.param('workspaceId')
