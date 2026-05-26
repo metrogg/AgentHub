@@ -183,9 +183,9 @@ export default function SkillsMarketPage() {
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
-              onClick={() => navigate('/agent-world')}
+              onClick={() => navigate('/coding-tools')}
               className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
-              aria-label="返回 Agent Group"
+              aria-label="返回 Coding Tools"
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
@@ -242,14 +242,14 @@ export default function SkillsMarketPage() {
                   ))}
                 </div>
 
-                <div className="mt-4 grid gap-2 lg:grid-cols-[10rem_minmax(16rem,1fr)_auto_auto]">
+                <div className="mt-4 flex flex-wrap items-center gap-2">
                   <input
                     value={sourceName}
                     onChange={(event) => setSourceName(event.target.value)}
                     placeholder="来源名称"
-                    className="h-10 rounded-md border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-emerald-700"
+                    className="h-10 w-40 rounded-md border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-emerald-700"
                   />
-                  <div className="flex items-center gap-2 rounded-md border border-neutral-200 bg-white px-3">
+                  <div className="flex h-10 min-w-[18rem] flex-1 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3">
                     <LinkIcon className="h-4 w-4 text-neutral-400" />
                     <input
                       value={sourceUrl}
@@ -262,7 +262,7 @@ export default function SkillsMarketPage() {
                     type="button"
                     onClick={addCustomSource}
                     disabled={!sourceUrl.trim()}
-                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm font-medium hover:bg-neutral-50 disabled:text-neutral-300"
+                    className="inline-flex h-10 min-w-[7.5rem] shrink-0 items-center justify-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:text-neutral-300"
                   >
                     <Plus className="h-4 w-4" />
                     添加来源
@@ -271,10 +271,10 @@ export default function SkillsMarketPage() {
                     type="button"
                     onClick={installSkill}
                     disabled={installing || !sourceUrl.trim()}
-                    className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-neutral-950 px-4 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
+                    className="inline-flex h-10 min-w-[6.5rem] shrink-0 items-center justify-center gap-2 rounded-md bg-neutral-950 px-4 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
                   >
                     {installing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                    安装
+                    安装技能
                   </button>
                 </div>
                 {message && <div className="mt-3 rounded-md bg-[#fbfbf8] px-3 py-2 text-xs leading-5 text-neutral-500">{message}</div>}

@@ -1,6 +1,14 @@
 package com.agenthub.mobile.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -16,22 +24,39 @@ fun AgentHubApp(viewModel: MobileViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     Surface(modifier = Modifier.fillMaxSize()) {
-        if (state.connection == null) {
-            ConnectScreen(
-                connecting = state.connecting,
-                error = state.error,
-                onConnect = viewModel::connect,
-                onScanPairingQr = viewModel::connectWithPairingQr,
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+        ) {
+            Spacer(
+                modifier = Modifier
+                    .windowInsetsTopHeight(WindowInsets.statusBars)
+                    .background(MaterialTheme.colorScheme.background),
             )
-        } else {
-            ChatShell(
-                state = state,
-                onDisconnect = viewModel::disconnect,
-                onRefresh = viewModel::refreshSessions,
-                onCreateSession = viewModel::createSession,
-                onSelectSession = viewModel::selectSession,
-                onSendMessage = viewModel::sendMessage,
-            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxSize(),
+            ) {
+                if (state.connection == null) {
+                    ConnectScreen(
+                        connecting = state.connecting,
+                        error = state.error,
+                        onConnect = viewModel::connect,
+                        onScanPairingQr = viewModel::connectWithPairingQr,
+                    )
+                } else {
+                    ChatShell(
+                        state = state,
+                        onDisconnect = viewModel::disconnect,
+                        onRefresh = viewModel::refreshSessions,
+                        onCreateSession = viewModel::createSession,
+                        onSelectSession = viewModel::selectSession,
+                        onSendMessage = viewModel::sendMessage,
+                    )
+                }
+            }
         }
     }
 }

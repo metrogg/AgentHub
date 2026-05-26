@@ -37,7 +37,6 @@ import {
   ChevronRight,
   Clock3,
   Copy,
-  Download,
   ExternalLink,
   FileText,
   FolderOpen,
@@ -48,14 +47,12 @@ import {
   ImagePlus,
   ListTodo,
   Loader2,
-  Maximize2,
+  MoreHorizontal,
   Paperclip,
-  Pin,
   Pencil,
   Plus,
   Presentation,
   RefreshCw,
-  Reply,
   Rocket,
   Search,
   Sheet,
@@ -66,7 +63,17 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { type ClipboardEvent, type ComponentPropsWithoutRef, type FC, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type ClipboardEvent,
+  type ComponentPropsWithoutRef,
+  type FC,
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import {
@@ -138,6 +145,7 @@ export const Thread: FC = () => {
     currentSession?.type === 'direct' &&
     Boolean(currentSession.workspaceId) &&
     Boolean(currentSession.workspaceAgentId)
+  const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
 
   return (
     <ThreadPrimitive.Root
@@ -145,12 +153,13 @@ export const Thread: FC = () => {
       style={{ ['--thread-max-width' as string]: '44rem' }}
     >
       <div className="flex min-h-0 flex-1">
-        {isGroupSession && <GroupMemberPanel />}
         <div className="flex min-w-0 flex-1 flex-col">
+          {isGroupSession && <GroupChatHeader onOpenDetails={() => setGroupDetailsOpen(true)} />}
           <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
-            <PinnedMessagesBanner />
             <ThreadWelcome />
-            <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, SystemMessage }} />
+            <ThreadPrimitive.Messages
+              components={{ UserMessage, AssistantMessage, SystemMessage }}
+            />
             <ThreadPrimitive.If empty={false}>
               <div className="min-h-28" />
             </ThreadPrimitive.If>
@@ -159,7 +168,42 @@ export const Thread: FC = () => {
         </div>
         {!isGroupSession && isWorkspaceChildSession && <WorkspaceChildSessionRail />}
       </div>
+      {isGroupSession && (
+        <GroupChatDetailsDrawer
+          open={groupDetailsOpen}
+          onClose={() => setGroupDetailsOpen(false)}
+        />
+      )}
     </ThreadPrimitive.Root>
+  )
+}
+
+const GroupChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) => {
+  const session = useChatStore((state) => state.currentSession)
+  const workspace = useChatStore((state) => state.currentWorkspace)
+  const agents = useChatStore((state) => state.currentWorkspaceAgents)
+  const title = session?.title || workspace?.name || 'Agent 群聊'
+  const memberCount = agents.length + 2
+
+  return (
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold text-neutral-950">{title}</div>
+        <div className="mt-0.5 truncate text-xs text-neutral-500">
+          {memberCount} 位成员
+          {workspace?.name && workspace.name !== title ? ` · ${workspace.name}` : ''}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onOpenDetails}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+        title="群聊详情"
+        aria-label="群聊详情"
+      >
+        <MoreHorizontal className="h-5 w-5" />
+      </button>
+    </header>
   )
 }
 
@@ -173,7 +217,9 @@ const WorkspaceChildSessionRail: FC = () => {
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-neutral-950">子会话</div>
-          <div className="mt-1 truncate text-xs text-neutral-500">{agent ? `${agent.name} / ${agent.role}` : 'Agent Task'}</div>
+          <div className="mt-1 truncate text-xs text-neutral-500">
+            {agent ? `${agent.name} / ${agent.role}` : 'Agent Task'}
+          </div>
         </div>
         <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
           <Bot className="h-4 w-4" />
@@ -188,161 +234,134 @@ const WorkspaceChildSessionRail: FC = () => {
   )
 }
 
-const GroupMemberPanel: FC = () => {
+const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const navigate = useNavigate()
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const messages = useChatStore((state) => state.messages)
-  const activeAgentIds = new Set(messages.filter((message) => message.senderType === 'agent').map((message) => message.senderId))
-  const [collapsed, setCollapsed] = useState(false)
+  const activeAgentIds = new Set(
+    messages.filter((message) => message.senderType === 'agent').map((message) => message.senderId),
+  )
+  const memberCount = agents.length + 2
 
   return (
-    <aside
+    <div
       className={cn(
-        'hidden shrink-0 border-r border-neutral-200 bg-[#fbfbf9] xl:block',
-        'transition-[width,padding] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]',
-        collapsed ? 'w-12 px-0 py-4' : 'w-72 px-4 py-5'
+        'absolute inset-0 z-40 flex justify-end overflow-hidden transition',
+        open ? 'pointer-events-auto' : 'pointer-events-none',
       )}
+      aria-hidden={!open}
     >
-      {collapsed ? (
-        <div className="flex flex-col items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setCollapsed(false)}
-            className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-100 hover:text-neutral-900"
-            title="展开成员栏"
-            aria-label="展开成员栏"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
-            <Users className="h-4 w-4" />
-          </div>
-          <div className="mt-2 flex flex-col items-center gap-2">
-            <div className="grid h-7 w-7 place-items-center rounded-full bg-blue-500 text-[10px] font-semibold text-white transition-transform duration-300" title="You">Y</div>
-            <div className="grid h-7 w-7 place-items-center rounded-full bg-neutral-900 text-[10px] font-semibold text-white transition-transform duration-300" title="Orchestrator">O</div>
-            {agents.map((agent) => (
-              <div
-                key={agent.id}
-                className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-semibold text-white transition-transform duration-300"
-                style={{ background: agent.color ?? '#111827' }}
-                title={agent.name}
-              >
-                {agent.name.slice(0, 1).toUpperCase()}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between gap-3">
+      <button
+        type="button"
+        aria-label="关闭群聊详情"
+        onClick={onClose}
+        className={cn(
+          'absolute inset-0 bg-black/5 transition-opacity duration-200',
+          open ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+      <aside
+        className={cn(
+          'relative h-full w-[320px] max-w-[88vw] border-l border-neutral-200 bg-[#fbfbf9]/95 shadow-[-18px_0_45px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          open ? 'translate-x-0' : 'translate-x-full',
+        )}
+      >
+        <div className="flex h-full flex-col overflow-hidden">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-4">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-neutral-950">群聊成员</div>
-              <div className="mt-1 truncate text-xs text-neutral-500">{workspace?.name ?? 'Agent Group'}</div>
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setCollapsed(true)}
-                className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-100 hover:text-neutral-900"
-                title="折叠成员栏"
-                aria-label="折叠成员栏"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-              <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
-                <Users className="h-4 w-4" />
+              <div className="text-sm font-semibold text-neutral-950">群聊详情</div>
+              <div className="mt-1 truncate text-xs text-neutral-500">
+                {workspace?.name ?? 'Agent 群聊'} · {memberCount} 位成员
               </div>
             </div>
-          </div>
-
-          <div className="mt-5 space-y-2">
-            <MemberRow name="You" role="发起人与决策者" active />
-            <MemberRow name="Orchestrator" role="拆解、协调、生成任务卡" active={activeAgentIds.has('orchestrator')} mentionName="orchestrator" />
-            {agents.map((agent) => (
-              <MemberRow
-                key={agent.id}
-                name={agent.name}
-                role={`${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`}
-                color={agent.color}
-                active={activeAgentIds.has(agent.id)}
-                mentionName={agent.name}
-              />
-            ))}
-          </div>
-
-          <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-            <div className="font-medium text-neutral-900">提及方式</div>
-            <div className="mt-1">输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Orchestrator 接管。</div>
-          </div>
-
-          {workspace?.projectPath && (
-            <div className="mt-3 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-2">
-                  <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
-                  <div className="min-w-0">
-                    <div className="font-medium text-neutral-900">项目文件夹</div>
-                    <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
-                  </div>
-                </div>
-                <ZipDownloadButton workspaceId={workspace.id} workspaceName={workspace.name} />
-              </div>
-            </div>
-          )}
-
-          {workspace && (
             <button
               type="button"
-              onClick={() => navigate('/agent-world', { state: { workspaceId: workspace.id } })}
-              className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
+              onClick={onClose}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-100 hover:text-neutral-950"
+              title="关闭"
+              aria-label="关闭"
             >
-              打开 Agent Group
+              <X className="h-4 w-4" />
             </button>
-          )}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+            <div className="flex items-center gap-2 rounded-2xl border border-neutral-200 bg-white p-3">
+              <div className="grid h-9 w-9 place-items-center rounded-xl bg-neutral-950 text-white">
+                <Users className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-neutral-950">Agent 群聊</div>
+                <div className="truncate text-xs text-neutral-500">
+                  邀请 Agent 协作，像群聊一样分配任务
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-2">
+              <MemberRow name="You" role="发起人与决策者" active />
+              <MemberRow
+                name="Orchestrator"
+                role="拆解、协调、生成任务卡"
+                active={activeAgentIds.has('orchestrator')}
+                mentionName="orchestrator"
+              />
+              {agents.map((agent) => (
+                <MemberRow
+                  key={agent.id}
+                  name={agent.name}
+                  role={`${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`}
+                  color={agent.color}
+                  active={activeAgentIds.has(agent.id)}
+                  mentionName={agent.name}
+                />
+              ))}
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+              <div className="font-medium text-neutral-900">提及方式</div>
+              <div className="mt-1">
+                输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Orchestrator 接管。
+              </div>
+            </div>
+
+            {workspace?.projectPath && (
+              <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+                <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
+                <div className="min-w-0">
+                  <div className="font-medium text-neutral-900">项目文件夹</div>
+                  <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
+                </div>
+              </div>
+            )}
+
+            {workspace && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose()
+                  navigate('/agent-config')
+                }}
+                className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
+              >
+                管理 Agent
+              </button>
+            )}
+          </div>
         </div>
-      )}
-    </aside>
+      </aside>
+    </div>
   )
 }
 
-const ZipDownloadButton: FC<{ workspaceId: string; workspaceName: string }> = ({ workspaceId, workspaceName }) => {
-  const [downloading, setDownloading] = useState(false)
-
-  async function handleDownload() {
-    setDownloading(true)
-    try {
-      const blob = await api.downloadZip(workspaceId)
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${workspaceName || 'project'}.zip`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      window.URL.revokeObjectURL(url)
-    } catch (err) {
-      window.alert(friendlyErrorMessage(err, '下载失败'))
-    } finally {
-      setDownloading(false)
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={handleDownload}
-      disabled={downloading}
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700 disabled:opacity-50"
-      title="下载项目 ZIP"
-      aria-label="下载项目 ZIP"
-    >
-      {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-    </button>
-  )
-}
-
-const MemberRow: FC<{ name: string; role: string; color?: string; active?: boolean; mentionName?: string }> = ({ name, role, color, active, mentionName }) => (
+const MemberRow: FC<{
+  name: string
+  role: string
+  color?: string
+  active?: boolean
+  mentionName?: string
+}> = ({ name, role, color, active, mentionName }) => (
   <div className="group flex items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
     <div
       className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
@@ -398,27 +417,10 @@ function dispatchComposerInput(input: HTMLTextAreaElement, data: string, inputTy
   } catch {
     input.dispatchEvent(new Event('input', { bubbles: true }))
   }
-  window.dispatchEvent(new CustomEvent(composerSyncEvent, { detail: { value: input.value, scrollTop: input.scrollTop } }))
-}
-
-const PinnedMessagesBanner: FC = () => {
-  const messages = useChatStore((state) => state.messages)
-  const pinned = messages.filter((m) => m.isPinned)
-  if (!pinned.length) return null
-  return (
-    <div className="mx-auto mb-2 mt-3 flex w-full max-w-[var(--thread-max-width)] flex-col gap-1.5 rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-2.5">
-      <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700">
-        <Pin className="h-3.5 w-3.5" />
-        已固定消息 {pinned.length}
-      </div>
-      <div className="space-y-1">
-        {pinned.map((m) => (
-          <div key={m.id} className="truncate text-xs leading-5 text-amber-800/80" title={m.content}>
-            <span className="font-medium">{m.senderType === 'user' ? 'You' : 'Agent'}:</span> {m.content}
-          </div>
-        ))}
-      </div>
-    </div>
+  window.dispatchEvent(
+    new CustomEvent(composerSyncEvent, {
+      detail: { value: input.value, scrollTop: input.scrollTop },
+    }),
   )
 }
 
@@ -436,7 +438,9 @@ const ThreadWelcomeContent: FC = () => {
         <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
           <TypewriterHeading text={t('有什么可以帮忙的？')} />
         </h2>
-        <p className="mt-2 text-base text-neutral-500">{t('创建 Agent、拆解任务，或直接 @ 某个助手开始协作。')}</p>
+        <p className="mt-2 text-base text-neutral-500">
+          {t('创建 Agent、拆解任务，或直接 @ 某个助手开始协作。')}
+        </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <PromptCard title={t('创建 coder 代理')} text={t('帮我单开一个跳跃小游戏')} />
@@ -473,7 +477,9 @@ const Composer: FC = () => {
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skillPanelOpen, setSkillPanelOpen] = useState(false)
   const [skillQuery, setSkillQuery] = useState('')
-  const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(null)
+  const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(
+    null,
+  )
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
@@ -561,7 +567,9 @@ const Composer: FC = () => {
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'))
+    const files = Array.from(event.clipboardData.files).filter((file) =>
+      file.type.startsWith('image/'),
+    )
     if (!files.length) return
     event.preventDefault()
     void handleFiles(files)
@@ -609,7 +617,13 @@ const Composer: FC = () => {
     input.focus()
     input.setSelectionRange(start, end)
     input.setRangeText(reference, start, end, 'end')
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText', data: reference }))
+    input.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertReplacementText',
+        data: reference,
+      }),
+    )
     setComposerText(input.value)
     setComposerScrollTop(input.scrollTop)
     setSkillPanelOpen(false)
@@ -647,7 +661,10 @@ const Composer: FC = () => {
         projectPath: null,
         template: 'classic',
       })
-      setWorkspaces((items) => [full.workspace, ...items.filter((item) => item.id !== full.workspace.id)])
+      setWorkspaces((items) => [
+        full.workspace,
+        ...items.filter((item) => item.id !== full.workspace.id),
+      ])
       setOpeningWorkspaceId(full.workspace.id)
       showHint('已创建项目，正在进入...')
       const { session } = await api.openWorkspaceGroupSession(full.workspace.id)
@@ -764,7 +781,11 @@ const Composer: FC = () => {
               }}
               onModel={(modelId) => {
                 setSelectedModelId(modelId)
-                showHint(modelId ? `已切换到 ${models.find((item) => item.id === modelId)?.modelId ?? modelId}` : '已切换到自动选择')
+                showHint(
+                  modelId
+                    ? `已切换到 ${models.find((item) => item.id === modelId)?.modelId ?? modelId}`
+                    : '已切换到自动选择',
+                )
               }}
               onPick={(value) => {
                 insertComposerText(`${value} `)
@@ -786,12 +807,23 @@ const Composer: FC = () => {
               }}
             />
           )}
-          {hint && <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">{hint}</div>}
+          {hint && (
+            <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
+              {hint}
+            </div>
+          )}
           {pendingAttachments.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-2">
               {pendingAttachments.map((attachment) => (
-                <div key={attachment.id} className="group relative h-16 w-16 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50">
-                  <img src={attachment.dataUrl} alt={attachment.name} className="h-full w-full object-cover" />
+                <div
+                  key={attachment.id}
+                  className="group relative h-16 w-16 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50"
+                >
+                  <img
+                    src={attachment.dataUrl}
+                    alt={attachment.name}
+                    className="h-full w-full object-cover"
+                  />
                   <button
                     type="button"
                     onClick={() => removePendingAttachment(attachment.id)}
@@ -807,7 +839,6 @@ const Composer: FC = () => {
               ))}
             </div>
           )}
-          <ComposerReplyBar />
           <div className="relative min-h-12">
             {composerText && (
               <div
@@ -840,20 +871,25 @@ const Composer: FC = () => {
               onScroll={(event) => setComposerScrollTop(event.currentTarget.scrollTop)}
               className={cn(
                 'relative max-h-[180px] min-h-12 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 outline-none placeholder:text-neutral-400',
-                composerText ? 'text-transparent caret-neutral-950' : 'text-neutral-950'
+                composerText ? 'text-transparent caret-neutral-950' : 'text-neutral-950',
               )}
             />
           </div>
           <div className="flex items-center justify-between pt-2">
             <div className="flex items-center gap-1">
-              <ComposerToolButton aria-label="添加" onClick={() => setMenu(menu === 'tools' ? null : 'tools')}>
+              <ComposerToolButton
+                aria-label="添加"
+                onClick={() => setMenu(menu === 'tools' ? null : 'tools')}
+              >
                 <Plus className="h-4 w-4" />
               </ComposerToolButton>
               <ComposerToolButton
                 aria-label="项目文件夹"
                 title="项目文件夹"
                 onClick={() => setMenu(menu === 'workspace' ? null : 'workspace')}
-                className={cn((currentWorkspace || menu === 'workspace') && 'agenthub-icon-button-open')}
+                className={cn(
+                  (currentWorkspace || menu === 'workspace') && 'agenthub-icon-button-open',
+                )}
               >
                 <FolderOpen className="h-4 w-4" />
               </ComposerToolButton>
@@ -871,7 +907,10 @@ const Composer: FC = () => {
                   event.currentTarget.value = ''
                 }}
               />
-              <ComposerToolButton aria-label="提及" onClick={() => setMenu(menu === 'agents' ? null : 'agents')}>
+              <ComposerToolButton
+                aria-label="提及"
+                onClick={() => setMenu(menu === 'agents' ? null : 'agents')}
+              >
                 <AtSign className="h-4 w-4" />
               </ComposerToolButton>
             </div>
@@ -881,7 +920,8 @@ const Composer: FC = () => {
                 onClick={() => setMenu(menu === 'models' ? null : 'models')}
                 className={cn(
                   'hidden h-8 max-w-40 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-600 transition-[background-color,border-color,color,box-shadow,transform] duration-200 ease-out hover:-translate-y-px hover:bg-neutral-50 sm:inline-flex',
-                  menu === 'models' && 'border-neutral-300 bg-neutral-100 text-neutral-950 shadow-sm'
+                  menu === 'models' &&
+                    'border-neutral-300 bg-neutral-100 text-neutral-950 shadow-sm',
                 )}
               >
                 <span className="truncate">{modelLabel}</span>
@@ -907,7 +947,9 @@ export const SkillCommandPanel: FC<{
   const filteredSkills = useMemo(() => {
     if (!normalizedQuery) return skills
     return skills.filter((skill) =>
-      `${skill.name} ${skill.id} ${skill.description} ${skill.source}`.toLowerCase().includes(normalizedQuery)
+      `${skill.name} ${skill.id} ${skill.description} ${skill.source}`
+        .toLowerCase()
+        .includes(normalizedQuery),
     )
   }, [normalizedQuery, skills])
   const visibleSkills = filteredSkills.slice(0, 8)
@@ -919,13 +961,21 @@ export const SkillCommandPanel: FC<{
     >
       <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-neutral-950 text-xs font-semibold text-white">/</span>
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-neutral-950 text-xs font-semibold text-white">
+            /
+          </span>
           <div className="min-w-0">
             <div className="text-sm font-medium text-neutral-950">选择 Skill</div>
-            <div className="truncate text-xs text-neutral-500">{normalizedQuery ? `筛选：${query}` : '已安装技能'}</div>
+            <div className="truncate text-xs text-neutral-500">
+              {normalizedQuery ? `筛选：${query}` : '已安装技能'}
+            </div>
           </div>
         </div>
-        <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+        >
           关闭
         </button>
       </div>
@@ -956,13 +1006,19 @@ export const SkillCommandPanel: FC<{
               </span>
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
-                  <span className="truncate font-medium text-neutral-950">{skill.name || skill.id}</span>
+                  <span className="truncate font-medium text-neutral-950">
+                    {skill.name || skill.id}
+                  </span>
                   <span className="shrink-0 rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10px] uppercase tracking-normal text-neutral-500">
                     {skill.source || 'local'}
                   </span>
                 </span>
-                <span className="mt-0.5 block truncate text-xs text-neutral-500">{skill.description || skill.id}</span>
-                <span className="mt-1 block truncate font-mono text-[11px] text-neutral-400">${skill.id}</span>
+                <span className="mt-0.5 block truncate text-xs text-neutral-500">
+                  {skill.description || skill.id}
+                </span>
+                <span className="mt-1 block truncate font-mono text-[11px] text-neutral-400">
+                  ${skill.id}
+                </span>
               </span>
             </button>
           ))}
@@ -1022,14 +1078,14 @@ const ComposerMenu: FC<{
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [addProjectOpen, setAddProjectOpen] = useState(false)
   const legacyAgents = [
-    { title: '@Orchestrator', desc: '拆解任务并分发到 Agent Group' },
+    { title: '@Orchestrator', desc: '拆解任务并分发到当前群聊' },
     { title: '@architect', desc: '架构与任务拆解' },
     { title: '@coder', desc: '代码实现' },
     { title: '@reviewer', desc: '审查与边界检查' },
   ]
   const agentRows = agents.length
     ? [
-        { title: '@orchestrator', desc: '拆解任务、创建任务卡并协调 Agent Group' },
+        { title: '@orchestrator', desc: '拆解任务、创建任务卡并协调当前群聊' },
         ...agents.map((agent) => ({
           title: `@${agent.name}`,
           desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${agent.capabilityTags.length ? ` · ${agent.capabilityTags.slice(0, 3).join(', ')}` : ''}`,
@@ -1039,7 +1095,12 @@ const ComposerMenu: FC<{
   const plugins = [
     { title: 'Documents', icon: FileText, color: 'text-blue-500', value: '@documents' },
     { title: 'Spreadsheets', icon: Sheet, color: 'text-emerald-600', value: '@spreadsheets' },
-    { title: 'Presentations', icon: Presentation, color: 'text-amber-500', value: '@presentations' },
+    {
+      title: 'Presentations',
+      icon: Presentation,
+      color: 'text-amber-500',
+      value: '@presentations',
+    },
     { title: '浏览器', icon: Globe2, color: 'text-sky-500', value: '@browser' },
   ]
   const filteredWorkspaces = workspaces.filter((workspace) => {
@@ -1053,16 +1114,30 @@ const ComposerMenu: FC<{
       className={cn(
         'agenthub-menu-popover absolute bottom-[4.5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl',
         type === 'models' ? 'right-12 w-64' : 'left-3',
-        type === 'workspace' ? 'w-80' : type === 'models' ? 'w-64' : 'w-64'
+        type === 'workspace' ? 'w-80' : type === 'models' ? 'w-64' : 'w-64',
       )}
     >
       {type === 'tools' && (
         <div className="relative group/tools">
-          <button type="button" onClick={() => onPlanMode(!planMode)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
+          <button
+            type="button"
+            onClick={() => onPlanMode(!planMode)}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
+          >
             <ListTodo className="h-4 w-4 text-neutral-500" />
             <span className="flex-1 text-neutral-900">计划模式</span>
-            <span className={cn('relative h-4 w-8 rounded-full transition', planMode ? 'bg-neutral-900' : 'bg-neutral-200')}>
-              <span className={cn('absolute top-0.5 h-3 w-3 rounded-full bg-white transition', planMode ? 'left-4' : 'left-0.5')} />
+            <span
+              className={cn(
+                'relative h-4 w-8 rounded-full transition',
+                planMode ? 'bg-neutral-900' : 'bg-neutral-200',
+              )}
+            >
+              <span
+                className={cn(
+                  'absolute top-0.5 h-3 w-3 rounded-full bg-white transition',
+                  planMode ? 'left-4' : 'left-0.5',
+                )}
+              />
             </span>
           </button>
           <div className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
@@ -1093,13 +1168,29 @@ const ComposerMenu: FC<{
         </div>
       )}
       {type === 'agents' &&
-        agentRows.map((item) => <MenuRow key={item.title} title={item.title} desc={item.desc} onClick={() => { onPick(item.title); onClose() }} />)}
+        agentRows.map((item) => (
+          <MenuRow
+            key={item.title}
+            title={item.title}
+            desc={item.desc}
+            onClick={() => {
+              onPick(item.title)
+              onClose()
+            }}
+          />
+        ))}
       {type === 'models' && (
         <>
           <button
             type="button"
-            onClick={() => { onModel(null); onClose() }}
-            className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-neutral-50', !selectedModelId && 'bg-neutral-100')}
+            onClick={() => {
+              onModel(null)
+              onClose()
+            }}
+            className={cn(
+              'flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-neutral-50',
+              !selectedModelId && 'bg-neutral-100',
+            )}
           >
             <span>{t('自动')}</span>
             <span className="text-xs text-neutral-400">{t('随机可用模型')}</span>
@@ -1108,17 +1199,27 @@ const ComposerMenu: FC<{
             <button
               key={item.id}
               type="button"
-              onClick={() => { onModel(item.id); onClose() }}
-              className={cn('flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50', selectedModelId === item.id && 'bg-neutral-100')}
+              onClick={() => {
+                onModel(item.id)
+                onClose()
+              }}
+              className={cn(
+                'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50',
+                selectedModelId === item.id && 'bg-neutral-100',
+              )}
             >
               <span className="min-w-0">
                 <span className="block truncate font-medium text-neutral-900">{item.modelId}</span>
-                <span className="block truncate text-xs text-neutral-400">{item.name || item.provider}</span>
+                <span className="block truncate text-xs text-neutral-400">
+                  {item.name || item.provider}
+                </span>
               </span>
               <span className="shrink-0 text-xs text-neutral-400">{item.provider}</span>
             </button>
           ))}
-          {models.length === 0 && <div className="px-3 py-2 text-xs text-neutral-400">还没有启用的模型</div>}
+          {models.length === 0 && (
+            <div className="px-3 py-2 text-xs text-neutral-400">还没有启用的模型</div>
+          )}
         </>
       )}
       {type === 'workspace' && (
@@ -1142,7 +1243,8 @@ const ComposerMenu: FC<{
                 disabled={workspaceBusy}
                 className={cn(
                   'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
-                  (workspace.id === currentWorkspaceId || workspace.id === openingWorkspaceId) && 'bg-neutral-100'
+                  (workspace.id === currentWorkspaceId || workspace.id === openingWorkspaceId) &&
+                    'bg-neutral-100',
                 )}
               >
                 <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
@@ -1150,7 +1252,9 @@ const ComposerMenu: FC<{
                 {workspace.id === openingWorkspaceId ? (
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
                 ) : (
-                  workspace.id === currentWorkspaceId && <ChevronDown className="h-4 w-4 shrink-0 text-neutral-300" />
+                  workspace.id === currentWorkspaceId && (
+                    <ChevronDown className="h-4 w-4 shrink-0 text-neutral-300" />
+                  )
                 )}
               </button>
             ))}
@@ -1159,7 +1263,9 @@ const ComposerMenu: FC<{
                 没有匹配的项目
               </div>
             )}
-            {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理项目...</div>}
+            {workspaceBusy && (
+              <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理项目...</div>
+            )}
           </div>
           <div className="mt-1 border-t border-neutral-200 pt-1.5">
             <div className="relative group/new-project">
@@ -1175,7 +1281,9 @@ const ComposerMenu: FC<{
               <div
                 className={cn(
                   'agenthub-menu-flyout absolute bottom-0 left-[calc(100%+0.35rem)] w-56 -translate-x-1 scale-95 rounded-2xl border border-neutral-200 bg-white p-1.5 opacity-0 shadow-xl transition group-hover/new-project:visible group-hover/new-project:translate-x-0 group-hover/new-project:scale-100 group-hover/new-project:opacity-100',
-                  addProjectOpen ? 'visible translate-x-0 scale-100 opacity-100' : 'invisible opacity-0'
+                  addProjectOpen
+                    ? 'visible translate-x-0 scale-100 opacity-100'
+                    : 'invisible opacity-0',
                 )}
               >
                 <button
@@ -1250,67 +1358,39 @@ function fileToChatAttachment(file: File): Promise<ChatAttachment> {
   })
 }
 
-const MenuRow: FC<{ title: string; desc: string; onClick: () => void }> = ({ title, desc, onClick }) => (
-  <button type="button" onClick={onClick} className="w-full rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
+const MenuRow: FC<{ title: string; desc: string; onClick: () => void }> = ({
+  title,
+  desc,
+  onClick,
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className="w-full rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
+  >
     <div className="font-medium text-neutral-900">{title}</div>
     <div className="text-xs text-neutral-500">{desc}</div>
   </button>
 )
 
-const ComposerReplyBar: FC = () => {
-  const replyingToMessage = useChatStore((state) => state.replyingToMessage)
-  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
-  if (!replyingToMessage) return null
-  const sender = replyingToMessage.senderType === 'user' ? 'You' : 'Agent'
-  const preview = replyingToMessage.content.replace(/\n/g, ' ').slice(0, 80)
-  return (
-    <div className="mb-2 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
-      <Reply className="h-3.5 w-3.5 shrink-0 text-blue-500" />
-      <div className="min-w-0 flex-1">
-        <span className="text-xs font-medium text-blue-700">回复 {sender}</span>
-        <div className="truncate text-xs text-blue-600/80" title={replyingToMessage.content}>{preview}{replyingToMessage.content.length > 80 ? '...' : ''}</div>
-      </div>
-      <button
-        type="button"
-        onClick={() => setReplyingTo(null)}
-        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-blue-400 hover:bg-blue-100 hover:text-blue-700"
-        aria-label="取消回复"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
-    </div>
-  )
-}
-
-const MessageReplyPreview: FC<{ replyToMessageId: string }> = ({ replyToMessageId }) => {
-  const messages = useChatStore((state) => state.messages)
-  const msg = messages.find((m) => m.id === replyToMessageId)
-  if (!msg) return null
-  const sender = msg.senderType === 'user' ? 'You' : 'Agent'
-  const preview = msg.content.replace(/\n/g, ' ').slice(0, 100)
-  return (
-    <div className="mb-1.5 flex items-start gap-1.5 rounded-lg border-l-2 border-blue-300 bg-blue-50/50 px-2 py-1.5 text-xs">
-      <Reply className="mt-0.5 h-3 w-3 shrink-0 text-blue-400" />
-      <div className="min-w-0 flex-1">
-        <span className="font-medium text-blue-700">{sender}</span>
-        <span className="ml-1 text-blue-600/70">{preview}{msg.content.length > 100 ? '...' : ''}</span>
-      </div>
-    </div>
-  )
-}
-
 const ComposerAction: FC = () => (
   <>
     <ThreadPrimitive.If running={false}>
       <ComposerPrimitive.Send asChild>
-        <button className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:pointer-events-none disabled:bg-neutral-200" aria-label="发送">
+        <button
+          className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:pointer-events-none disabled:bg-neutral-200"
+          aria-label="发送"
+        >
           <ArrowUp className="h-4 w-4" />
         </button>
       </ComposerPrimitive.Send>
     </ThreadPrimitive.If>
     <ThreadPrimitive.If running>
       <ComposerPrimitive.Cancel asChild>
-        <button className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white" aria-label="停止生成">
+        <button
+          className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white"
+          aria-label="停止生成"
+        >
           <Square className="h-3.5 w-3.5" />
         </button>
       </ComposerPrimitive.Cancel>
@@ -1320,21 +1400,19 @@ const ComposerAction: FC = () => (
 
 const UserMessage: FC = () => {
   const messageId = useMessage((message) => message.id)
-  const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
+  )
   const editMessage = useChatStore((state) => state.editMessage)
   const withdrawMessage = useChatStore((state) => state.withdrawMessage)
-  const pinMessage = useChatStore((state) => state.pinMessage)
-  const unpinMessage = useChatStore((state) => state.unpinMessage)
-  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState<'edit' | 'withdraw' | null>(null)
   const canEdit = Boolean(sourceMessage?.senderType === 'user')
-  const isPinned = Boolean(sourceMessage?.isPinned)
   const text =
     typeof sourceMessage?.metadata?.displayContent === 'string'
       ? sourceMessage.metadata.displayContent
-      : sourceMessage?.content ?? ''
+      : (sourceMessage?.content ?? '')
 
   function startEdit() {
     setDraft(text)
@@ -1360,45 +1438,26 @@ const UserMessage: FC = () => {
     try {
       const rollback = await withdrawMessage(sourceMessage.id)
       if (rollback?.failed) {
-        window.alert(`消息已撤回，但有 ${rollback.failed} 个文件变更未能自动回滚，请检查 git diff。`)
+        window.alert(
+          `消息已撤回，但有 ${rollback.failed} 个文件变更未能自动回滚，请检查 git diff。`,
+        )
       }
     } finally {
       setBusy(null)
     }
   }
 
-  async function togglePin() {
-    if (!sourceMessage) return
-    if (isPinned) {
-      await unpinMessage(sourceMessage.id)
-    } else {
-      await pinMessage(sourceMessage.id)
-    }
-  }
-
-  function replyTo() {
-    if (!sourceMessage) return
-    setReplyingTo(sourceMessage.id)
-  }
-
   return (
     <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] justify-end py-3">
-      <div className={cn('relative flex flex-col items-end gap-1.5', editing ? 'w-full' : 'max-w-[68%]')}>
+      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'w-full' : 'max-w-[68%]')}>
         <div
           className={cn(
             'w-full text-sm leading-6 text-neutral-900',
             editing
               ? 'min-h-36 rounded-[28px] bg-[#f4f4f4] px-4 pb-4 pt-3'
-              : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none'
+              : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none',
           )}
         >
-          {sourceMessage?.replyToMessageId && <MessageReplyPreview replyToMessageId={sourceMessage.replyToMessageId} />}
-          {sourceMessage?.isPinned && (
-            <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-amber-600">
-              <Pin className="h-3 w-3" />
-              已固定到上下文
-            </div>
-          )}
           {editing ? (
             <div className="flex min-h-32 flex-col">
               <textarea
@@ -1434,24 +1493,30 @@ const UserMessage: FC = () => {
             />
           )}
         </div>
-        {!editing && (
+        {canEdit && !editing && (
           <div className="flex items-center gap-1 pr-1 text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">
-            <ToolButton type="button" aria-label="回复" title="回复" onClick={replyTo}>
-              <Reply className="h-3.5 w-3.5" />
+            <ToolButton
+              type="button"
+              aria-label="修改"
+              title="修改"
+              onClick={startEdit}
+              disabled={Boolean(busy)}
+            >
+              <Pencil className="h-3.5 w-3.5" />
             </ToolButton>
-            <ToolButton type="button" aria-label={isPinned ? '取消固定' : '固定到上下文'} title={isPinned ? '取消固定' : '固定到上下文'} onClick={togglePin}>
-              <Pin className={cn('h-3.5 w-3.5', isPinned && 'fill-current text-amber-500')} />
+            <ToolButton
+              type="button"
+              aria-label="撤回"
+              title="撤回并尝试回滚修改"
+              onClick={withdraw}
+              disabled={Boolean(busy)}
+            >
+              {busy === 'withdraw' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
             </ToolButton>
-            {canEdit && (
-              <>
-                <ToolButton type="button" aria-label="修改" title="修改" onClick={startEdit} disabled={Boolean(busy)}>
-                  <Pencil className="h-3.5 w-3.5" />
-                </ToolButton>
-                <ToolButton type="button" aria-label="撤回" title="撤回并尝试回滚修改" onClick={withdraw} disabled={Boolean(busy)}>
-                  {busy === 'withdraw' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                </ToolButton>
-              </>
-            )}
           </div>
         )}
       </div>
@@ -1459,44 +1524,32 @@ const UserMessage: FC = () => {
   )
 }
 
-const AssistantMessage: FC = () => {
-  const messageId = useMessage((message) => message.id)
-  const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
-
-  return (
-    <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
-      <Avatar role="assistant" />
-      <div className="min-w-0 flex-1">
-        {sourceMessage?.replyToMessageId && <MessageReplyPreview replyToMessageId={sourceMessage.replyToMessageId} />}
-        {sourceMessage?.isPinned && (
-          <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-amber-600">
-            <Pin className="h-3 w-3" />
-            已固定到上下文
-          </div>
-        )}
-        <div className="text-sm leading-7 text-neutral-950">
-          <MessagePrimitive.Parts
-            components={{
-              Text: MarkdownText,
-              Empty: AssistantThinking,
-              data: {
-                by_name: {
-                  agent_avatar: AgentAvatarPart,
-                  orchestrator_plan: OrchestratorPlanCard,
-                  code_agent_run: CodeAgentRunCard,
-                  agent_artifacts: AgentArtifactsCard,
-                  chat_attachments: ChatAttachmentsPart,
-                },
+const AssistantMessage: FC = () => (
+  <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
+    <Avatar role="assistant" />
+    <div className="min-w-0 flex-1">
+      <div className="text-sm leading-7 text-neutral-950">
+        <MessagePrimitive.Parts
+          components={{
+            Text: MarkdownText,
+            Empty: AssistantThinking,
+            data: {
+              by_name: {
+                agent_avatar: AgentAvatarPart,
+                orchestrator_plan: OrchestratorPlanCard,
+                code_agent_run: CodeAgentRunCard,
+                agent_artifacts: AgentArtifactsCard,
+                chat_attachments: ChatAttachmentsPart,
               },
-            }}
-          />
-        </div>
-        <AssistantActionBar />
-        <BranchPicker />
+            },
+          }}
+        />
       </div>
-    </MessagePrimitive.Root>
-  )
-}
+      <AssistantActionBar />
+      <BranchPicker />
+    </div>
+  </MessagePrimitive.Root>
+)
 
 const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
   if (status?.type !== 'running') return null
@@ -1528,7 +1581,11 @@ const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data 
           rel="noreferrer"
           className="group overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm"
         >
-          <img src={item.dataUrl} alt={item.name} className="aspect-video w-full bg-neutral-100 object-cover transition group-hover:scale-[1.015]" />
+          <img
+            src={item.dataUrl}
+            alt={item.name}
+            className="aspect-video w-full bg-neutral-100 object-cover transition group-hover:scale-[1.015]"
+          />
           <div className="flex items-center gap-2 px-3 py-2 text-xs text-neutral-500">
             <ImagePlus className="h-3.5 w-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{item.name}</span>
@@ -1547,10 +1604,22 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
 
   return (
     <div className="not-prose mt-3 space-y-2 text-sm">
-      <CodeAgentStatusCard data={data} commandCount={commands.length} fileCount={changedFiles.length} toolCount={toolCalls.length} />
-      {toolCalls.length > 0 && <CodeAgentToolsCard items={toolCalls} running={data.status === 'running'} />}
+      <CodeAgentStatusCard
+        data={data}
+        commandCount={commands.length}
+        fileCount={changedFiles.length}
+        toolCount={toolCalls.length}
+      />
+      {toolCalls.length > 0 && (
+        <CodeAgentToolsCard items={toolCalls} running={data.status === 'running'} />
+      )}
       {commands.length > 0 && <CodeAgentCommandsCard commands={commands} />}
-      {changedFiles.length > 0 && <CodeAgentFilesCard cwd={data.cwd ?? commands.find((command) => command.cwd)?.cwd} files={changedFiles} />}
+      {changedFiles.length > 0 && (
+        <CodeAgentFilesCard
+          cwd={data.cwd ?? commands.find((command) => command.cwd)?.cwd}
+          files={changedFiles}
+        />
+      )}
       {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
       {logs.length > 0 && <CodeAgentLogsCard logs={logs} />}
     </div>
@@ -1576,49 +1645,96 @@ const CodeAgentStatusCard: FC<{
     <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
       <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
         <div className={cn('inline-flex min-w-0 items-center gap-2', statusTone)}>
-          {data.status === 'running' ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : <Clock3 className="h-4 w-4 shrink-0" />}
+          {data.status === 'running' ? (
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          ) : (
+            <Clock3 className="h-4 w-4 shrink-0" />
+          )}
           <div className="min-w-0">
-            <div className="truncate font-medium">{codeAgentStatusLabel(data.status)} · {formatRunDuration(data.durationMs)}</div>
+            <div className="truncate font-medium">
+              {codeAgentStatusLabel(data.status)} · {formatRunDuration(data.durationMs)}
+            </div>
             <div className="mt-0.5 truncate text-[11px] text-neutral-400">
               {runtimeLabel(data.runtime)} · {data.command}
             </div>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
-          <CodeAgentMiniStat icon={<Search className="h-3.5 w-3.5" />} label="工具" value={toolCount} />
-          <CodeAgentMiniStat icon={<TerminalSquare className="h-3.5 w-3.5" />} label="命令" value={commandCount} />
-          <CodeAgentMiniStat icon={<FileText className="h-3.5 w-3.5" />} label="文件" value={fileCount} />
+          <CodeAgentMiniStat
+            icon={<Search className="h-3.5 w-3.5" />}
+            label="工具"
+            value={toolCount}
+          />
+          <CodeAgentMiniStat
+            icon={<TerminalSquare className="h-3.5 w-3.5" />}
+            label="命令"
+            value={commandCount}
+          />
+          <CodeAgentMiniStat
+            icon={<FileText className="h-3.5 w-3.5" />}
+            label="文件"
+            value={fileCount}
+          />
         </div>
       </div>
     </div>
   )
 }
 
-const CodeAgentMiniStat: FC<{ icon: ReactNode; label: string; value: number }> = ({ icon, label, value }) => (
-  <span className={cn('inline-flex h-7 items-center gap-1 rounded-md border px-2', value ? 'border-neutral-200 bg-neutral-50 text-neutral-700' : 'border-neutral-100 bg-white text-neutral-300')}>
+const CodeAgentMiniStat: FC<{ icon: ReactNode; label: string; value: number }> = ({
+  icon,
+  label,
+  value,
+}) => (
+  <span
+    className={cn(
+      'inline-flex h-7 items-center gap-1 rounded-md border px-2',
+      value
+        ? 'border-neutral-200 bg-neutral-50 text-neutral-700'
+        : 'border-neutral-100 bg-white text-neutral-300',
+    )}
+  >
     {icon}
     {label} {value}
   </span>
 )
 
-const CodeAgentToolsCard: FC<{ items: NonNullable<CodeAgentRunMetadata['toolCalls']>; running: boolean }> = ({ items, running }) => (
+const CodeAgentToolsCard: FC<{
+  items: NonNullable<CodeAgentRunMetadata['toolCalls']>
+  running: boolean
+}> = ({ items, running }) => (
   <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
     <div className="flex h-10 items-center justify-between gap-3 border-b border-neutral-100 px-3">
       <span className="inline-flex min-w-0 items-center gap-2 font-medium text-neutral-800">
         <Search className="h-4 w-4 shrink-0 text-blue-500" />
         工具调用 {items.length}
       </span>
-      {running && <span className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.12)]" />}
+      {running && (
+        <span className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.12)]" />
+      )}
     </div>
     <div className="grid gap-1.5 p-2">
       {items.slice(-12).map((item) => (
-        <div key={item.id} className="grid grid-cols-[5.25rem_minmax(0,1fr)] gap-3 rounded-md bg-neutral-50 px-3 py-2.5 antialiased">
+        <div
+          key={item.id}
+          className="grid grid-cols-[5.25rem_minmax(0,1fr)] gap-3 rounded-md bg-neutral-50 px-3 py-2.5 antialiased"
+        >
           <span className="text-[13px] font-medium leading-6 text-neutral-500">{item.label}</span>
           <span className="min-w-0">
-            <span className="block truncate text-[13px] leading-6 text-neutral-900" title={item.target ?? item.name}>
+            <span
+              className="block truncate text-[13px] leading-6 text-neutral-900"
+              title={item.target ?? item.name}
+            >
               {item.target ?? item.name}
             </span>
-            {item.detail && <span className="mt-0.5 block truncate text-xs leading-5 text-neutral-500" title={item.detail}>{item.detail}</span>}
+            {item.detail && (
+              <span
+                className="mt-0.5 block truncate text-xs leading-5 text-neutral-500"
+                title={item.detail}
+              >
+                {item.detail}
+              </span>
+            )}
           </span>
         </div>
       ))}
@@ -1626,7 +1742,9 @@ const CodeAgentToolsCard: FC<{ items: NonNullable<CodeAgentRunMetadata['toolCall
   </div>
 )
 
-const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> = ({ commands }) => (
+const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> = ({
+  commands,
+}) => (
   <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
     <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
       <TerminalSquare className="h-4 w-4 shrink-0 text-emerald-600" />
@@ -1634,15 +1752,31 @@ const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> 
     </div>
     <div className="space-y-1.5 p-2">
       {commands.map((command) => (
-        <details key={command.id} className="group rounded-md border border-neutral-200 bg-neutral-50 text-neutral-900">
+        <details
+          key={command.id}
+          className="group rounded-md border border-neutral-200 bg-neutral-50 text-neutral-900"
+        >
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
-            <span className="agenthub-readable-code truncate text-[13px] leading-6" title={command.command}>{command.command}</span>
+            <span
+              className="agenthub-readable-code truncate text-[13px] leading-6"
+              title={command.command}
+            >
+              {command.command}
+            </span>
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-400 transition group-open:rotate-180" />
           </summary>
           {(command.cwd || command.output) && (
             <div className="border-t border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-700">
-              {command.cwd && <div className="agenthub-readable-code truncate text-neutral-500">cwd: {command.cwd}</div>}
-              {command.output && <pre className="agenthub-readable-code mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">{command.output}</pre>}
+              {command.cwd && (
+                <div className="agenthub-readable-code truncate text-neutral-500">
+                  cwd: {command.cwd}
+                </div>
+              )}
+              {command.output && (
+                <pre className="agenthub-readable-code mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">
+                  {command.output}
+                </pre>
+              )}
             </div>
           )}
         </details>
@@ -1651,7 +1785,10 @@ const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> 
   </div>
 )
 
-const CodeAgentFilesCard: FC<{ cwd?: string; files: CodeAgentRunMetadata['files'] }> = ({ cwd, files }) => (
+const CodeAgentFilesCard: FC<{ cwd?: string; files: CodeAgentRunMetadata['files'] }> = ({
+  cwd,
+  files,
+}) => (
   <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
     <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
       <FileText className="h-4 w-4 shrink-0 text-amber-600" />
@@ -1664,7 +1801,9 @@ const CodeAgentFilesCard: FC<{ cwd?: string; files: CodeAgentRunMetadata['files'
           <details key={`${file.status}-${file.path}`} className="group rounded-md bg-neutral-50">
             <summary className="grid cursor-pointer list-none grid-cols-[4.75rem_minmax(0,1fr)_auto_1rem] items-center gap-2 px-3 py-2.5">
               <span className="text-[13px] text-neutral-500">{fileStatusLabel(file.status)}</span>
-              <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>{file.path}</span>
+              <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>
+                {file.path}
+              </span>
               {vscodeHref ? (
                 <a
                   href={vscodeHref}
@@ -1683,11 +1822,14 @@ const CodeAgentFilesCard: FC<{ cwd?: string; files: CodeAgentRunMetadata['files'
               ) : (
                 <span className="h-7 min-w-10" />
               )}
-              <ChevronDown className={cn('h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180', !file.diff && 'opacity-0')} />
+              <ChevronDown
+                className={cn(
+                  'h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180',
+                  !file.diff && 'opacity-0',
+                )}
+              />
             </summary>
-            {file.diff && (
-              <DiffViewer diff={file.diff} maxHeightClassName="max-h-72" />
-            )}
+            {file.diff && <DiffViewer diff={file.diff} maxHeightClassName="max-h-72" />}
           </details>
         )
       })}
@@ -1699,18 +1841,46 @@ const CodeAgentLogsCard: FC<{ logs: NonNullable<CodeAgentRunMetadata['logs']> }>
   const [open, setOpen] = useState(false)
   return (
     <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-neutral-800 hover:bg-neutral-50">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-neutral-800 hover:bg-neutral-50"
+      >
         <span className="inline-flex min-w-0 items-center gap-2">
           <ListTodo className="h-4 w-4 shrink-0 text-neutral-500" />
           过程日志 {logs.length}
         </span>
-        <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-neutral-400 transition-transform',
+            open && 'rotate-180',
+          )}
+        />
       </button>
       {open && (
         <div className="max-h-64 space-y-1.5 overflow-auto border-t border-neutral-100 bg-white p-2">
           {logs.map((log) => (
-            <div key={log.id} className={cn('grid grid-cols-[4.25rem_minmax(0,1fr)] gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-6 antialiased', log.stream === 'stderr' ? 'border-red-100 bg-red-50/70' : log.stream === 'event' ? 'border-blue-100 bg-blue-50/60' : 'border-neutral-100 bg-neutral-50')}>
-              <span className={cn('inline-flex h-5 items-center justify-center rounded px-1.5 text-[11px] font-medium', log.stream === 'stderr' ? 'bg-red-100 text-red-700' : log.stream === 'event' ? 'bg-blue-100 text-blue-700' : 'bg-neutral-200 text-neutral-600')}>
+            <div
+              key={log.id}
+              className={cn(
+                'grid grid-cols-[4.25rem_minmax(0,1fr)] gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-6 antialiased',
+                log.stream === 'stderr'
+                  ? 'border-red-100 bg-red-50/70'
+                  : log.stream === 'event'
+                    ? 'border-blue-100 bg-blue-50/60'
+                    : 'border-neutral-100 bg-neutral-50',
+              )}
+            >
+              <span
+                className={cn(
+                  'inline-flex h-5 items-center justify-center rounded px-1.5 text-[11px] font-medium',
+                  log.stream === 'stderr'
+                    ? 'bg-red-100 text-red-700'
+                    : log.stream === 'event'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-neutral-200 text-neutral-600',
+                )}
+              >
                 {logStreamLabel(log.stream)}
               </span>
               <span className="whitespace-pre-wrap break-words text-neutral-800">{log.text}</span>
@@ -1726,12 +1896,18 @@ const CodeAgentDiagnosticsCard: FC<{ diagnostics: string }> = ({ diagnostics }) 
   const [open, setOpen] = useState(true)
   return (
     <div className="overflow-hidden rounded-lg border border-red-200 bg-white">
-      <button type="button" onClick={() => setOpen((value) => !value)} className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-red-700 hover:bg-red-50">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-red-700 hover:bg-red-50"
+      >
         <span className="inline-flex items-center gap-2">
           <AlertCircleIcon />
           诊断输出
         </span>
-        <ChevronDown className={cn('h-4 w-4 shrink-0 text-red-300 transition-transform', open && 'rotate-180')} />
+        <ChevronDown
+          className={cn('h-4 w-4 shrink-0 text-red-300 transition-transform', open && 'rotate-180')}
+        />
       </button>
       {open && (
         <pre className="max-h-56 overflow-auto border-t border-red-100 bg-neutral-950 px-3 py-2 text-xs leading-5 text-neutral-100">
@@ -1748,7 +1924,6 @@ const AgentArtifactsCard: FC<{ data: { items?: AgentArtifact[] } }> = ({ data })
   const diffCount = items.filter((item) => item.type === 'diff').length
   const previewCount = items.filter((item) => item.type === 'preview').length
   const deployCount = items.filter((item) => item.type === 'deploy').length
-  const workflowCount = items.filter((item) => item.type === 'workflow').length
 
   return (
     <div className="not-prose mt-3 space-y-2">
@@ -1760,7 +1935,6 @@ const AgentArtifactsCard: FC<{ data: { items?: AgentArtifact[] } }> = ({ data })
         {diffCount > 0 && <span>{diffCount} 个 Diff</span>}
         {previewCount > 0 && <span>{previewCount} 个预览</span>}
         {deployCount > 0 && <span>{deployCount} 个部署</span>}
-        {workflowCount > 0 && <span>{workflowCount} 个 Workflow</span>}
       </div>
       <div className="space-y-2">
         {items.map((item) => (
@@ -1779,44 +1953,31 @@ const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
   return <FileArtifactCard artifact={artifact} />
 }
 
-const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> }> = ({ artifact }) => (
+const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> }> = ({
+  artifact,
+}) => (
   <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2">
     <div className="flex items-center gap-2">
       <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] leading-6 text-neutral-800" title={artifact.path}>{artifact.path}</div>
-        <div className="mt-0.5 text-xs text-neutral-400">{artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}</div>
+        <div className="truncate text-[13px] leading-6 text-neutral-800" title={artifact.path}>
+          {artifact.path}
+        </div>
+        <div className="mt-0.5 text-xs text-neutral-400">
+          {artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}
+        </div>
       </div>
     </div>
   </div>
 )
 
-const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> }> = ({ artifact }) => {
+const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> }> = ({
+  artifact,
+}) => {
   const [open, setOpen] = useState(false)
-  const [applying, setApplying] = useState(false)
-  const [applyResult, setApplyResult] = useState<string | null>(null)
-  const workspace = useChatStore((state) => state.currentWorkspace)
   const lines = artifact.diff.split(/\r?\n/)
   const additions = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
   const deletions = lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
-
-  async function applyDiff() {
-    if (!workspace?.projectPath) {
-      setApplyResult('当前会话没有绑定工作区，无法应用 Diff')
-      return
-    }
-    setApplying(true)
-    setApplyResult(null)
-    try {
-      const result = await api.applyDiff(workspace.projectPath, artifact.diff)
-      setApplyResult(result.success ? '✅ Diff 已应用' : `❌ ${result.message}`)
-    } catch (err: any) {
-      setApplyResult(`❌ ${friendlyErrorMessage(err, '应用失败')}`)
-    } finally {
-      setApplying(false)
-      setTimeout(() => setApplyResult(null), 4000)
-    }
-  }
 
   return (
     <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
@@ -1828,39 +1989,39 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
         <span className="inline-flex min-w-0 items-center gap-2">
           <GitBranch className="h-4 w-4 shrink-0 text-blue-500" />
           <span className="min-w-0">
-            <span className="block truncate text-[13px] leading-6 text-neutral-900">{artifact.filePath}</span>
-            <span className="block text-xs text-neutral-400">+{additions} / -{deletions}</span>
+            <span className="block truncate text-[13px] leading-6 text-neutral-900">
+              {artifact.filePath}
+            </span>
+            <span className="block text-xs text-neutral-400">
+              +{additions} / -{deletions}
+            </span>
           </span>
         </span>
-        <span className="inline-flex items-center gap-2">
-          {applyResult && <span className="text-xs text-neutral-500">{applyResult}</span>}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              applyDiff()
-            }}
-            disabled={applying}
-            className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-          >
-            {applying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-            应用 Diff
-          </button>
-          <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
-        </span>
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-neutral-400 transition-transform',
+            open && 'rotate-180',
+          )}
+        />
       </button>
-      {open && (
-        <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" />
-      )}
+      {open && <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" />}
     </div>
   )
 }
 
-const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({ diff, maxHeightClassName = 'max-h-96' }) => {
+const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({
+  diff,
+  maxHeightClassName = 'max-h-96',
+}) => {
   const rows = useMemo(() => parseDiffRows(diff), [diff])
 
   return (
-    <div className={cn('overflow-auto border-t border-neutral-200 bg-white text-[13px]', maxHeightClassName)}>
+    <div
+      className={cn(
+        'overflow-auto border-t border-neutral-200 bg-white text-[13px]',
+        maxHeightClassName,
+      )}
+    >
       <div className="agenthub-readable-code min-w-max py-1 leading-7">
         {rows.map((row, index) => (
           <div
@@ -1871,17 +2032,35 @@ const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({ diff, m
               row.kind === 'del' && 'border-red-500 bg-red-50 text-red-950',
               row.kind === 'hunk' && 'border-blue-300 bg-blue-50 text-blue-700',
               row.kind === 'meta' && 'border-transparent bg-neutral-50 text-neutral-500',
-              row.kind === 'context' && 'border-transparent text-neutral-800'
+              row.kind === 'context' && 'border-transparent text-neutral-800',
             )}
           >
-            <span className={cn('select-none border-r border-neutral-100 px-2 text-right text-neutral-400', row.kind === 'add' && 'text-emerald-600', row.kind === 'del' && 'text-red-600')}>
+            <span
+              className={cn(
+                'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
+                row.kind === 'add' && 'text-emerald-600',
+                row.kind === 'del' && 'text-red-600',
+              )}
+            >
               {row.oldNumber ?? ''}
             </span>
-            <span className={cn('select-none border-r border-neutral-100 px-2 text-right text-neutral-400', row.kind === 'add' && 'text-emerald-600', row.kind === 'del' && 'text-red-600')}>
+            <span
+              className={cn(
+                'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
+                row.kind === 'add' && 'text-emerald-600',
+                row.kind === 'del' && 'text-red-600',
+              )}
+            >
               {row.newNumber ?? ''}
             </span>
             <code className="whitespace-pre px-3">
-              <span className={cn('mr-2 inline-block w-3 select-none', row.kind === 'add' && 'text-emerald-600', row.kind === 'del' && 'text-red-600')}>
+              <span
+                className={cn(
+                  'mr-2 inline-block w-3 select-none',
+                  row.kind === 'add' && 'text-emerald-600',
+                  row.kind === 'del' && 'text-red-600',
+                )}
+              >
                 {row.marker}
               </span>
               {row.text}
@@ -1893,222 +2072,137 @@ const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({ diff, m
   )
 }
 
-const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'preview' }> }> = ({ artifact }) => {
+const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'preview' }> }> = ({
+  artifact,
+}) => {
   const [open, setOpen] = useState(artifact.previewKind === 'static-html')
-  const [fullscreen, setFullscreen] = useState(false)
 
   return (
-    <>
-      <div className="agenthub-embedded-window overflow-hidden rounded-lg border border-neutral-200 bg-white">
-        <div className="flex h-11 items-center justify-between gap-3 px-3">
-          <button type="button" onClick={() => setOpen((value) => !value)} className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
-            <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
-            <span className="min-w-0">
-              <span className="block truncate text-xs font-medium text-neutral-900">{artifact.title}</span>
-              <span className="block truncate text-[11px] text-neutral-400">{artifact.url}</span>
-            </span>
-          </button>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setFullscreen(true)}
-              className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
-              title="全屏预览"
-            >
-              <Maximize2 className="h-3.5 w-3.5" />
-            </button>
-            <a
-              href={artifact.url}
-              target="_blank"
-              rel="noreferrer"
-              className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
-              title="新窗口打开"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          </div>
-        </div>
-        {open && (
-          <div className="agenthub-embedded-window-body border-t border-neutral-200 bg-neutral-50 p-2">
-            <iframe title={artifact.title} src={artifact.url} className="h-80 w-full rounded-md border border-neutral-200 bg-white" />
-          </div>
-        )}
-      </div>
-      {fullscreen && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-neutral-950">
-          <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-neutral-800 bg-neutral-900 px-4">
-            <div className="inline-flex min-w-0 items-center gap-2 text-sm text-neutral-200">
-              <Globe2 className="h-4 w-4 shrink-0 text-emerald-500" />
-              <span className="truncate font-medium">{artifact.title}</span>
-              <span className="truncate text-xs text-neutral-500">{artifact.url}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setFullscreen(false)}
-              className="grid h-8 w-8 place-items-center rounded-md text-neutral-400 hover:bg-neutral-800 hover:text-white"
-              title="退出全屏"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="min-h-0 flex-1 bg-neutral-950 p-3">
-            <iframe title={artifact.title} src={artifact.url} className="h-full w-full rounded-lg border border-neutral-800 bg-white" />
-          </div>
-        </div>
-      )}
-    </>
-  )
-}
-
-const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy' }> }> = ({ artifact }) => {
-  const workspace = useChatStore((state) => state.currentWorkspace)
-  const [deploying, setDeploying] = useState(false)
-  const [deployResult, setDeployResult] = useState<string | null>(null)
-  const [deployUrl, setDeployUrl] = useState<string | undefined>(artifact.url)
-
-  async function handleDeploy() {
-    if (!workspace?.id) {
-      setDeployResult('未绑定工作区，无法部署')
-      return
-    }
-    setDeploying(true)
-    setDeployResult(null)
-    try {
-      const result = await api.deployStatic(workspace.id)
-      setDeployUrl(result.url)
-      setDeployResult('✅ 部署成功')
-    } catch (err: any) {
-      setDeployResult(`❌ ${friendlyErrorMessage(err, '部署失败')}`)
-    } finally {
-      setDeploying(false)
-      setTimeout(() => setDeployResult(null), 4000)
-    }
-  }
-
-  const canDeploy = artifact.status === 'pending' && !deployUrl && workspace?.id
-
-  return (
-    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
-      <div className="flex items-center gap-2">
-        <Rocket className="h-4 w-4 shrink-0 text-emerald-700" />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-semibold text-emerald-900">{artifact.title}</div>
-          <div className="mt-0.5 truncate text-[11px] text-emerald-700">
-            {artifact.provider} · {deployStatusLabel(artifact.status)} {deployUrl && '· 已就绪'}
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          {deployResult && <span className="text-xs text-emerald-800">{deployResult}</span>}
-          {canDeploy && (
-            <button
-              type="button"
-              onClick={handleDeploy}
-              disabled={deploying}
-              className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-white px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
-            >
-              {deploying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Rocket className="h-3 w-3" />}
-              静态部署
-            </button>
-          )}
-          {deployUrl && (
-            <a href={deployUrl} target="_blank" rel="noreferrer" className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100" title="打开部署">
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workflow' }> }> = ({ artifact }) => {
-  const [expanded, setExpanded] = useState(false)
-  const currentSessionId = useChatStore((state) => state.currentSessionId)
-
-  async function runWorkflow() {
-    if (!currentSessionId) return
-    const content = `@orchestrator 执行工作流：${artifact.title}`
-    await api.sendMessageWithModel(currentSessionId, { content, skipAgentReply: true })
-    const card = await api.createOrchestratorPlan(currentSessionId, content)
-    useChatStore.setState((s) => ({ messages: [...s.messages, card] }))
-  }
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-indigo-200 bg-white shadow-sm">
+    <div className="agenthub-embedded-window overflow-hidden rounded-lg border border-neutral-200 bg-white">
       <div className="flex h-11 items-center justify-between gap-3 px-3">
-        <button type="button" onClick={() => setExpanded((v) => !v)} className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
-          <GitBranch className="h-4 w-4 shrink-0 text-indigo-500" />
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="inline-flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
           <span className="min-w-0">
-            <span className="block truncate text-xs font-medium text-neutral-900">{artifact.title}</span>
-            <span className="block truncate text-[11px] text-neutral-400">{artifact.nodes.length} 个节点 · {artifact.edges.length} 条连接</span>
+            <span className="block truncate text-xs font-medium text-neutral-900">
+              {artifact.title}
+            </span>
+            <span className="block truncate text-[11px] text-neutral-400">{artifact.url}</span>
           </span>
         </button>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              void runWorkflow()
-            }}
-            className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
-            title="执行 Workflow"
-          >
-            <Rocket className="h-3 w-3" />
-            执行
-          </button>
-          <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', expanded && 'rotate-180')} />
-        </div>
+        <a
+          href={artifact.url}
+          target="_blank"
+          rel="noreferrer"
+          className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+          title="新窗口打开"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
       </div>
-
-      <div className="border-t border-indigo-100 bg-indigo-50/40 px-3 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          {artifact.nodes.map((node, index) => (
-            <div key={node.id} className="flex items-center gap-2">
-              <div
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
-                  node.type === 'input'
-                    ? 'border-neutral-200 bg-white text-neutral-600'
-                    : node.type === 'output'
-                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                      : 'border-indigo-200 bg-white text-indigo-700'
-                )}
-              >
-                {node.type === 'agent' && (
-                  <span className="h-2 w-2 rounded-full" style={{ background: node.agentColor ?? '#6366f1' }} />
-                )}
-                <span>{node.label}</span>
-              </div>
-              {index < artifact.nodes.length - 1 && (
-                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-indigo-300" />
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="border-t border-indigo-100 bg-white px-3 py-3">
-          <div className="space-y-2 text-xs text-neutral-600">
-            {artifact.edges.map((edge) => (
-              <div key={`${edge.from}-${edge.to}`} className="flex items-center gap-2 rounded-md bg-neutral-50 px-2.5 py-1.5">
-                <span className="font-medium text-neutral-800">{artifact.nodes.find((n) => n.id === edge.from)?.label ?? edge.from}</span>
-                <ChevronRight className="h-3 w-3 text-neutral-300" />
-                <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">{edge.label ?? '下一步'}</span>
-                <ChevronRight className="h-3 w-3 text-neutral-300" />
-                <span className="font-medium text-neutral-800">{artifact.nodes.find((n) => n.id === edge.to)?.label ?? edge.to}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 rounded-md bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
-            <span className="font-medium text-neutral-700">Workflow 说明</span>
-            <div className="mt-1">{artifact.description}</div>
-          </div>
+      {open && (
+        <div className="agenthub-embedded-window-body border-t border-neutral-200 bg-neutral-50 p-2">
+          <iframe
+            title={artifact.title}
+            src={artifact.url}
+            className="h-80 w-full rounded-md border border-neutral-200 bg-white"
+          />
         </div>
       )}
     </div>
   )
 }
+
+const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy' }> }> = ({
+  artifact,
+}) => (
+  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+    <div className="flex items-center gap-2">
+      <Rocket className="h-4 w-4 shrink-0 text-emerald-700" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-semibold text-emerald-900">{artifact.title}</div>
+        <div className="mt-0.5 truncate text-[11px] text-emerald-700">
+          {artifact.provider} · {deployStatusLabel(artifact.status)}
+        </div>
+      </div>
+      {artifact.url && (
+        <a
+          href={artifact.url}
+          target="_blank"
+          rel="noreferrer"
+          className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100"
+          title="打开部署"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
+    </div>
+  </div>
+)
+
+const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workflow' }> }> = ({
+  artifact,
+}) => (
+  <div className="overflow-hidden rounded-lg border border-indigo-200 bg-white shadow-sm">
+    <div className="flex h-11 items-center justify-between gap-3 px-3">
+      <button type="button" className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
+        <GitBranch className="h-4 w-4 shrink-0 text-indigo-500" />
+        <span className="min-w-0">
+          <span className="block truncate text-xs font-medium text-neutral-900">{artifact.title}</span>
+          <span className="block truncate text-[11px] text-neutral-400">
+            {artifact.nodes.length} 个节点 · {artifact.edges.length} 条连接
+          </span>
+        </span>
+      </button>
+    </div>
+    <div className="border-t border-indigo-100 bg-indigo-50/40 px-3 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {artifact.nodes.map((node, index) => (
+          <div key={node.id} className="flex items-center gap-2">
+            <div
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+                node.type === 'input'
+                  ? 'border-neutral-200 bg-white text-neutral-600'
+                  : node.type === 'output'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-indigo-200 bg-white text-indigo-700'
+              )}
+            >
+              {node.type === 'agent' && (
+                <span className="h-2 w-2 rounded-full" style={{ background: node.agentColor ?? '#6366f1' }} />
+              )}
+              <span>{node.label}</span>
+            </div>
+            {index < artifact.nodes.length - 1 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-indigo-300" />}
+          </div>
+        ))}
+      </div>
+    </div>
+    <div className="border-t border-indigo-100 bg-white px-3 py-3">
+      <div className="space-y-2 text-xs text-neutral-600">
+        {artifact.edges.map((edge) => (
+          <div key={`${edge.from}-${edge.to}`} className="flex items-center gap-2 rounded-md bg-neutral-50 px-2.5 py-1.5">
+            <span className="font-medium text-neutral-800">{artifact.nodes.find((n) => n.id === edge.from)?.label ?? edge.from}</span>
+            <ChevronRight className="h-3 w-3 text-neutral-300" />
+            <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
+              {edge.label ?? '下一步'}
+            </span>
+            <ChevronRight className="h-3 w-3 text-neutral-300" />
+            <span className="font-medium text-neutral-800">{artifact.nodes.find((n) => n.id === edge.to)?.label ?? edge.to}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 rounded-md bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
+        <span className="font-medium text-neutral-700">Workflow 说明</span>
+        <div className="mt-1">{artifact.description}</div>
+      </div>
+    </div>
+  </div>
+)
 
 function deployStatusLabel(status: Extract<AgentArtifact, { type: 'deploy' }>['status']) {
   if (status === 'ready') return '已就绪'
@@ -2139,7 +2233,12 @@ function parseDiffRows(diff: string): DiffRow[] {
       continue
     }
 
-    if (rawLine.startsWith('diff --git') || rawLine.startsWith('index ') || rawLine.startsWith('--- ') || rawLine.startsWith('+++ ')) {
+    if (
+      rawLine.startsWith('diff --git') ||
+      rawLine.startsWith('index ') ||
+      rawLine.startsWith('--- ') ||
+      rawLine.startsWith('+++ ')
+    ) {
       rows.push({ kind: 'meta', marker: '', text: rawLine })
       continue
     }
@@ -2165,7 +2264,11 @@ function parseDiffRows(diff: string): DiffRow[] {
   return rows
 }
 
-const AlertCircleIcon: FC = () => <span className="grid h-4 w-4 place-items-center rounded-full border border-neutral-300 text-[10px]">!</span>
+const AlertCircleIcon: FC = () => (
+  <span className="grid h-4 w-4 place-items-center rounded-full border border-neutral-300 text-[10px]">
+    !
+  </span>
+)
 
 function formatRunDuration(ms: number) {
   if (!Number.isFinite(ms) || ms <= 0) return '0s'
@@ -2228,7 +2331,9 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
   const [plan, setPlan] = useState(data)
   const [saving, setSaving] = useState(false)
   const [dispatching, setDispatching] = useState(false)
-  const [result, setResult] = useState<OrchestratorDispatchResult | null>(data.dispatchResult ?? null)
+  const [result, setResult] = useState<OrchestratorDispatchResult | null>(
+    data.dispatchResult ?? null,
+  )
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -2307,7 +2412,10 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
             const agent = plan.agents.find((item) => item.key === task.agentKey)
             const status = task.status ?? 'pending'
             return (
-              <div key={task.id} className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 rounded-xl border border-neutral-200 bg-white p-3">
+              <div
+                key={task.id}
+                className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 rounded-xl border border-neutral-200 bg-white p-3"
+              >
                 <div
                   className="grid h-7 w-7 place-items-center rounded-lg text-xs font-semibold text-white"
                   style={{ background: agent?.color ?? '#111827' }}
@@ -2316,7 +2424,9 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                 </div>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className="truncate text-sm font-semibold text-neutral-900">{task.title}</div>
+                    <div className="truncate text-sm font-semibold text-neutral-900">
+                      {task.title}
+                    </div>
                     <select
                       value={task.agentKey}
                       onChange={(event) => patchTask(task.id, { agentKey: event.target.value })}
@@ -2330,7 +2440,9 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                       ))}
                     </select>
                   </div>
-                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">{task.description}</p>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">
+                    {task.description}
+                  </p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {(['pending', 'running', 'done'] as TaskStatus[]).map((item) => (
                       <button
@@ -2342,7 +2454,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                           'h-7 rounded-full border px-2.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-60',
                           status === item
                             ? 'border-neutral-900 bg-neutral-950 text-white'
-                            : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-900'
+                            : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-900',
                         )}
                       >
                         {taskStatusLabel(item)}
@@ -2355,7 +2467,9 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
           })}
         </div>
 
-        {error && <div className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{error}</div>}
+        {error && (
+          <div className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{error}</div>
+        )}
 
         {result ? (
           <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
@@ -2366,10 +2480,10 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => navigate('/agent-world', { state: { workspaceId: result.workspaceId } })}
+                onClick={() => navigate('/agent-config')}
                 className="inline-flex h-8 items-center gap-2 rounded-lg bg-neutral-950 px-3 text-xs font-medium text-white hover:bg-neutral-800"
               >
-                打开 Agent Group
+                管理 Agent
               </button>
               {result.groupSessionId && (
                 <button
@@ -2399,7 +2513,11 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
               disabled={saving || dispatching}
               className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:bg-neutral-100 disabled:text-neutral-400"
             >
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
               {saving ? '正在保存' : '保存调度'}
             </button>
             <button
@@ -2408,8 +2526,12 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
               disabled={dispatching || saving}
               className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-300"
             >
-              {dispatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
-              {dispatching ? '正在创建并分发' : '创建并分发到 Agent Group'}
+              {dispatching ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <GitBranch className="h-4 w-4" />
+              )}
+              {dispatching ? '正在创建并分发' : '创建并分发到当前群聊'}
             </button>
           </div>
         )}
@@ -2435,11 +2557,6 @@ const SystemMessage: FC = () => (
 const AssistantActionBar: FC = () => {
   const messageId = useMessage((message) => message.id)
   const regenerateMessage = useChatStore((state) => state.regenerateMessage)
-  const pinMessage = useChatStore((state) => state.pinMessage)
-  const unpinMessage = useChatStore((state) => state.unpinMessage)
-  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
-  const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
-  const isPinned = Boolean(sourceMessage?.isPinned)
   const [regenerating, setRegenerating] = useState(false)
 
   async function regenerate() {
@@ -2452,22 +2569,13 @@ const AssistantActionBar: FC = () => {
     }
   }
 
-  async function togglePin() {
-    if (!sourceMessage) return
-    if (isPinned) {
-      await unpinMessage(sourceMessage.id)
-    } else {
-      await pinMessage(sourceMessage.id)
-    }
-  }
-
-  function replyTo() {
-    if (!sourceMessage) return
-    setReplyingTo(sourceMessage.id)
-  }
-
   return (
-    <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" autohideFloat="single-branch" className="mt-2 flex items-center gap-1 text-neutral-400">
+    <ActionBarPrimitive.Root
+      hideWhenRunning
+      autohide="not-last"
+      autohideFloat="single-branch"
+      className="mt-2 flex items-center gap-1 text-neutral-400"
+    >
       <ActionBarPrimitive.Copy asChild>
         <ToolButton aria-label="复制" title="复制">
           <MessagePrimitive.If copied>
@@ -2478,21 +2586,23 @@ const AssistantActionBar: FC = () => {
           </MessagePrimitive.If>
         </ToolButton>
       </ActionBarPrimitive.Copy>
-      <ToolButton aria-label="重新生成" title="重新生成" onClick={regenerate} disabled={regenerating}>
+      <ToolButton
+        aria-label="重新生成"
+        title="重新生成"
+        onClick={regenerate}
+        disabled={regenerating}
+      >
         <RefreshCw className={cn('h-3.5 w-3.5', regenerating && 'animate-spin')} />
-      </ToolButton>
-      <ToolButton aria-label="回复" title="回复" onClick={replyTo}>
-        <Reply className="h-3.5 w-3.5" />
-      </ToolButton>
-      <ToolButton aria-label={isPinned ? '取消固定' : '固定到上下文'} title={isPinned ? '取消固定' : '固定到上下文'} onClick={togglePin}>
-        <Pin className={cn('h-3.5 w-3.5', isPinned && 'fill-current text-amber-500')} />
       </ToolButton>
     </ActionBarPrimitive.Root>
   )
 }
 
 const BranchPicker: FC = () => (
-  <BranchPickerPrimitive.Root hideWhenSingleBranch className="mt-1 flex items-center gap-1 text-xs text-neutral-400">
+  <BranchPickerPrimitive.Root
+    hideWhenSingleBranch
+    className="mt-1 flex items-center gap-1 text-xs text-neutral-400"
+  >
     <BranchPickerPrimitive.Previous asChild>
       <ToolButton aria-label="上一分支">
         <ChevronLeft className="h-3.5 w-3.5" />
@@ -2510,18 +2620,32 @@ const BranchPicker: FC = () => (
 )
 
 const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
-  const runtime = useMessage((message) => (role === 'assistant' ? codeAgentRuntimeFromParts(message.content) : null))
+  const runtime = useMessage((message) =>
+    role === 'assistant' ? codeAgentRuntimeFromParts(message.content) : null,
+  )
 
   if (role === 'assistant' && runtime) {
     return (
-      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-neutral-200 bg-white shadow-sm" title={codeAgentRuntimeLabel(runtime)}>
-        <img src={codeAgentLogoSrc(runtime)} alt={codeAgentRuntimeLabel(runtime)} className="h-5 w-5 object-contain" />
+      <div
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-neutral-200 bg-white shadow-sm"
+        title={codeAgentRuntimeLabel(runtime)}
+      >
+        <img
+          src={codeAgentLogoSrc(runtime)}
+          alt={codeAgentRuntimeLabel(runtime)}
+          className="h-5 w-5 object-contain"
+        />
       </div>
     )
   }
 
   return (
-    <div className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-full', role === 'assistant' ? 'bg-[#eef8f6] text-[#87a9a4]' : 'bg-blue-500 text-white')}>
+    <div
+      className={cn(
+        'grid h-9 w-9 shrink-0 place-items-center rounded-full',
+        role === 'assistant' ? 'bg-[#eef8f6] text-[#87a9a4]' : 'bg-blue-500 text-white',
+      )}
+    >
       {role === 'assistant' ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
     </div>
   )
@@ -2535,11 +2659,23 @@ function codeAgentRuntimeFromParts(parts: unknown): CodeAgentRunMetadata['runtim
     if (item.type !== 'data') continue
     if (item.name === 'agent_avatar') {
       const runtime = (item.data as { runtime?: unknown } | null)?.runtime
-      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode' || runtime === 'gemini') return runtime
+      if (
+        runtime === 'codex' ||
+        runtime === 'claude-code' ||
+        runtime === 'opencode' ||
+        runtime === 'gemini'
+      )
+        return runtime
     }
     if (item.name === 'code_agent_run') {
       const runtime = (item.data as { runtime?: unknown } | null)?.runtime
-      if (runtime === 'codex' || runtime === 'claude-code' || runtime === 'opencode' || runtime === 'gemini') return runtime
+      if (
+        runtime === 'codex' ||
+        runtime === 'claude-code' ||
+        runtime === 'opencode' ||
+        runtime === 'gemini'
+      )
+        return runtime
     }
   }
   return null
@@ -2562,7 +2698,10 @@ function codeAgentRuntimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
 const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
   <button
     type="button"
-    className={cn('grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 disabled:pointer-events-none disabled:opacity-45', className)}
+    className={cn(
+      'grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 disabled:pointer-events-none disabled:opacity-45',
+      className,
+    )}
     {...props}
   />
 )
@@ -2571,7 +2710,10 @@ function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
   const aliases = mentionAliases(agents)
   if (!aliases.length) return text
 
-  const pattern = new RegExp(`@(${aliases.map(escapeRegExp).join('|')})(?=$|\\s|[，,。.!！?？:：；;）)\\]】])`, 'gi')
+  const pattern = new RegExp(
+    `@(${aliases.map(escapeRegExp).join('|')})(?=$|\\s|[，,。.!！?？:：；;）)\\]】])`,
+    'gi',
+  )
   const parts: ReactNode[] = []
   let lastIndex = 0
 
@@ -2581,7 +2723,7 @@ function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
     parts.push(
       <span key={`${index}-${match[0]}`} className="font-medium text-blue-600">
         {match[0]}
-      </span>
+      </span>,
     )
     lastIndex = index + match[0].length
   }
@@ -2621,7 +2763,7 @@ const ComposerToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className,
     type="button"
     className={cn(
       'agenthub-icon-button grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900',
-      className
+      className,
     )}
     {...props}
   />
@@ -2631,9 +2773,18 @@ const CodePre: NonNullable<MarkdownComponents['pre']> = ({ className, node: _nod
   <pre className={cn('agenthub-code-pre not-prose', className)} {...props} />
 )
 
-const CodeToken: NonNullable<MarkdownComponents['code']> = ({ className, node: _node, ...props }) => {
+const CodeToken: NonNullable<MarkdownComponents['code']> = ({
+  className,
+  node: _node,
+  ...props
+}) => {
   const isBlock = className?.includes('agenthub-code') || className?.includes('language-')
-  return <code className={cn(isBlock ? 'agenthub-code' : 'agenthub-inline-code', className)} {...props} />
+  return (
+    <code
+      className={cn(isBlock ? 'agenthub-code' : 'agenthub-inline-code', className)}
+      {...props}
+    />
+  )
 }
 
 const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
@@ -2653,21 +2804,37 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
   return (
     <div className="agenthub-code-header not-prose">
       <span>{label}</span>
-      <button type="button" className="agenthub-code-copy" onClick={copyCode} title="Copy code" aria-label="Copy code">
+      <button
+        type="button"
+        className="agenthub-code-copy"
+        onClick={copyCode}
+        title="Copy code"
+        aria-label="Copy code"
+      >
         {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
       </button>
     </div>
   )
 }
 
-const CodeSyntaxHighlighter: FC<SyntaxHighlighterProps> = ({ components: { Pre, Code }, language, code }) => {
+const CodeSyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
+  components: { Pre, Code },
+  language,
+  code,
+}) => {
   const normalizedLanguage = normalizeHighlightLanguage(language)
-  const highlighted = useMemo(() => highlightCode(code, normalizedLanguage), [code, normalizedLanguage])
+  const highlighted = useMemo(
+    () => highlightCode(code, normalizedLanguage),
+    [code, normalizedLanguage],
+  )
 
   return (
     <Pre className="agenthub-code-pre not-prose">
       <Code
-        className={cn('agenthub-code', normalizedLanguage ? `language-${normalizedLanguage}` : 'language-text')}
+        className={cn(
+          'agenthub-code',
+          normalizedLanguage ? `language-${normalizedLanguage}` : 'language-text',
+        )}
         dangerouslySetInnerHTML={{ __html: highlighted }}
       />
     </Pre>
@@ -2676,7 +2843,14 @@ const CodeSyntaxHighlighter: FC<SyntaxHighlighterProps> = ({ components: { Pre, 
 
 function normalizeHighlightLanguage(language: string | undefined) {
   const key = (language ?? '').toLowerCase().trim()
-  if (!key || key === 'unknown' || key === 'text' || key === 'txt' || key === 'plain' || key === 'plaintext') {
+  if (
+    !key ||
+    key === 'unknown' ||
+    key === 'text' ||
+    key === 'txt' ||
+    key === 'plain' ||
+    key === 'plaintext'
+  ) {
     return ''
   }
   return languageAliases[key] ?? key

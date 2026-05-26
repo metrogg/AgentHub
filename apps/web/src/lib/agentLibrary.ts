@@ -7,6 +7,7 @@ export interface SavedAgentConfig extends AgentConfigInput {
 }
 
 export const agentLibraryStorageKey = 'agenthub.agentLibrary'
+export const agentLibraryChangeEvent = 'agenthub:agent-library-change'
 const legacyAgentConfigKey = 'agenthub.agentConfig'
 
 export const defaultAgentConfigs: SavedAgentConfig[] = [
@@ -69,7 +70,7 @@ export function loadAgentLibrary(): SavedAgentConfig[] {
 export function saveAgentLibrary(agents: SavedAgentConfig[]) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(agentLibraryStorageKey, JSON.stringify({ agents }))
-  window.dispatchEvent(new CustomEvent('agenthub:agent-library-change', { detail: agents }))
+  window.dispatchEvent(new CustomEvent(agentLibraryChangeEvent, { detail: agents }))
 }
 
 export function createSavedAgent(input: Partial<AgentConfigInput> & Pick<AgentConfigInput, 'name' | 'role'>): SavedAgentConfig {

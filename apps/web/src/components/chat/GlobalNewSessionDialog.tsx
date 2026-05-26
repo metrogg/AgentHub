@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { FolderOpen, Loader2, MessageCircle, Plus, X } from 'lucide-react'
-import { api, type WorkspaceFull } from '../../lib/api'
-import { useI18n } from '../../lib/i18n'
+import { Check, ChevronDown, ChevronRight, Loader2, Mic, Search, X } from 'lucide-react'
+import {
+  agentLibraryChangeEvent,
+  loadAgentLibrary,
+  type SavedAgentConfig,
+} from '../../lib/agentLibrary'
+import { defaultConversationTitle, startAgentConversation } from '../../lib/agentConversation'
 import { cn } from '../../lib/utils'
 import { useChatStore } from '../../stores/chatStore'
 
@@ -14,65 +18,50 @@ export function requestNewSessionDialog() {
 }
 
 export function GlobalNewSessionDialog() {
-  const { t } = useI18n()
   const navigate = useNavigate()
   const location = useLocation()
-  const createSession = useChatStore((state) => state.createSession)
   const selectSession = useChatStore((state) => state.selectSession)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
   const [open, setOpen] = useState(false)
-  const [workspaceChoices, setWorkspaceChoices] = useState<WorkspaceFull[]>([])
-  const [loadingChoices, setLoadingChoices] = useState(false)
+  const [agents, setAgents] = useState<SavedAgentConfig[]>([])
   const [creatingChoice, setCreatingChoice] = useState<string | null>(null)
 
-  async function openDialog() {
+  function openDialog() {
+    setAgents(loadAgentLibrary())
     setOpen(true)
-    setLoadingChoices(true)
-    try {
-      const { items } = await api.listWorkspaces()
-      const full = await Promise.all(items.map((workspace) => api.getWorkspace(workspace.id).catch(() => null)))
-      setWorkspaceChoices(full.filter((item): item is WorkspaceFull => Boolean(item)))
-    } finally {
-      setLoadingChoices(false)
-    }
   }
 
   useEffect(() => {
     function handleOpenDialog() {
-      void openDialog()
+      openDialog()
+    }
+
+    function handleLibraryChange() {
+      if (open) setAgents(loadAgentLibrary())
     }
 
     window.addEventListener(openNewSessionDialogEvent, handleOpenDialog)
-    return () => window.removeEventListener(openNewSessionDialogEvent, handleOpenDialog)
-  }, [])
+    window.addEventListener(agentLibraryChangeEvent, handleLibraryChange)
+    window.addEventListener('storage', handleLibraryChange)
+    return () => {
+      window.removeEventListener(openNewSessionDialogEvent, handleOpenDialog)
+      window.removeEventListener(agentLibraryChangeEvent, handleLibraryChange)
+      window.removeEventListener('storage', handleLibraryChange)
+    }
+  }, [open])
 
   useEffect(() => {
     const state = location.state as { openNewSessionDialog?: boolean } | null
     if (!state?.openNewSessionDialog) return
     navigate(location.pathname, { replace: true, state: null })
-    void openDialog()
+    openDialog()
   }, [location.pathname, location.state, navigate])
 
-  async function createPlainSession() {
-    setCreatingChoice('plain')
+  async function createAgentSession(selectedAgents: SavedAgentConfig[], title?: string) {
+    const key = selectedAgents.length === 1 ? selectedAgents[0]!.id : 'group'
+    setCreatingChoice(key)
     try {
-      const session = await createSession(t('新会话'))
-      await selectSession(session.id)
-      setOpen(false)
-      navigate(`/chat/${session.id}`)
-    } finally {
-      setCreatingChoice(null)
-    }
-  }
-
-  async function createAgentSession(workspace: WorkspaceFull, agentId: string) {
-    const agent = workspace.agents.find((item) => item.id === agentId)
-    setCreatingChoice(agentId)
-    try {
-      const session = await createSession(`${workspace.workspace.name} / ${agent?.name ?? 'Agent'}`, {
-        workspaceId: workspace.workspace.id,
-        workspaceAgentId: agentId,
-      })
+      const session = await startAgentConversation({ agents: selectedAgents, title })
       await fetchSessions()
       await selectSession(session.id)
       setOpen(false)
@@ -86,163 +75,186 @@ export function GlobalNewSessionDialog() {
 
   return (
     <NewSessionDialog
+      agents={agents}
       creatingChoice={creatingChoice}
-      loading={loadingChoices}
-      workspaces={workspaceChoices}
       onClose={() => !creatingChoice && setOpen(false)}
-      onCreatePlain={createPlainSession}
       onCreateAgent={createAgentSession}
-      onOpenAgentWorld={() => {
+      onManageAgents={() => {
         setOpen(false)
-        navigate('/agent-world')
+        navigate('/agent-config')
       }}
     />
   )
 }
 
 function NewSessionDialog({
+  agents,
   creatingChoice,
-  loading,
-  workspaces,
   onClose,
-  onCreatePlain,
   onCreateAgent,
-  onOpenAgentWorld,
+  onManageAgents,
 }: {
+  agents: SavedAgentConfig[]
   creatingChoice: string | null
-  loading: boolean
-  workspaces: WorkspaceFull[]
   onClose: () => void
-  onCreatePlain: () => void
-  onCreateAgent: (workspace: WorkspaceFull, agentId: string) => void
-  onOpenAgentWorld: () => void
+  onCreateAgent: (agents: SavedAgentConfig[], title?: string) => void
+  onManageAgents: () => void
 }) {
-  const { t } = useI18n()
-  const [runtimeFilter, setRuntimeFilter] = useState<'all' | 'llm' | 'codex' | 'claude-code' | 'opencode' | 'gemini'>('all')
-  const filteredWorkspaces = useMemo(
-    () =>
-      workspaces
-        .map((workspace) => ({
-          ...workspace,
-          agents: workspace.agents.filter((agent) => {
-            if (runtimeFilter === 'all') return true
-            if (runtimeFilter === 'llm') return agent.runtimeType === 'llm'
-            return agent.codeAgentType === runtimeFilter
-          }),
-        }))
-        .filter((workspace) => workspace.agents.length > 0),
-    [runtimeFilter, workspaces],
+  const [query, setQuery] = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const selectedAgents = useMemo(
+    () => agents.filter((agent) => selectedIds.has(agent.id)),
+    [agents, selectedIds],
   )
+  const groupTitle = defaultConversationTitle(selectedAgents)
+  const filteredAgents = useMemo(() => {
+    const keyword = query.trim().toLowerCase()
+    return agents.filter((agent) => {
+      if (!keyword) return true
+      return [agent.name, agent.role, agent.description, ...(agent.capabilityTags ?? [])]
+        .join(' ')
+        .toLowerCase()
+        .includes(keyword)
+    })
+  }, [agents, query])
+
+  function toggleAgent(agent: SavedAgentConfig) {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(agent.id)) next.delete(agent.id)
+      else next.add(agent.id)
+      return next
+    })
+  }
+
+  const submittingSelected = creatingChoice === 'group' || selectedAgents.some((agent) => creatingChoice === agent.id)
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/30 px-4 backdrop-blur-md" role="dialog" aria-modal="true" onMouseDown={onClose}>
-      <div className="agenthub-portal-theme max-h-[78vh] w-full max-w-lg overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between gap-3 border-b border-neutral-100 px-5 py-4">
-          <div>
-            <h2 className="text-sm font-semibold text-neutral-950">{t('新建对话')}</h2>
-            <p className="mt-1 text-xs text-neutral-500">{t('选择一个聊天对象，或开启普通会话。')}</p>
-          </div>
-          <button type="button" onClick={onClose} disabled={Boolean(creatingChoice)} className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-40">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-white/20 px-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      onMouseDown={onClose}
+    >
+      <div
+        className="agenthub-portal-theme flex h-[76vh] max-h-[620px] min-h-[500px] w-full max-w-[680px] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-[#f7f7f5] shadow-[0_18px_70px_rgba(15,23,42,0.22)]"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="relative flex h-14 shrink-0 items-center justify-center border-b border-neutral-200 bg-[#f7f7f5]">
+          <h2 className="text-sm font-medium text-neutral-950">发起群聊</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={Boolean(creatingChoice)}
+            className="absolute right-4 top-3 grid h-8 w-8 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-40"
+            aria-label="关闭"
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="max-h-[calc(78vh-8rem)] overflow-y-auto p-4">
-          <button
-            type="button"
-            onClick={onCreatePlain}
-            disabled={Boolean(creatingChoice)}
-            className="flex w-full items-center gap-3 rounded-xl border border-neutral-200 bg-[#fbfbf8] p-3 text-left transition hover:border-neutral-300 disabled:opacity-60"
-          >
-            <div className="grid h-10 w-10 place-items-center rounded-xl bg-neutral-950 text-white">
-              {creatingChoice === 'plain' ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+        <div className="grid min-h-0 flex-1 grid-cols-[306px_minmax(0,1fr)]">
+          <div className="flex min-h-0 flex-col border-r border-neutral-200 bg-[#f7f7f5] px-6 py-4">
+            <div className="flex h-9 items-center gap-2 rounded-md border border-emerald-400 bg-white px-2.5 text-neutral-400 shadow-sm">
+              <Search className="h-4 w-4 shrink-0" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索"
+                className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
+              />
+              <Mic className="h-4 w-4 shrink-0 text-neutral-500" />
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold text-neutral-950">{t('普通对话')}</div>
-              <div className="mt-1 text-xs text-neutral-500">{t('不绑定特定 Agent，使用默认模型回复。')}</div>
-            </div>
-          </button>
 
-          <div className="mt-4 flex items-center justify-between">
-            <div className="text-xs font-medium text-neutral-400">{t('工作区 Agent')}</div>
-            <button type="button" onClick={onOpenAgentWorld} className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-neutral-200 px-2 text-xs text-neutral-600 hover:bg-neutral-50">
-              <Plus className="h-3.5 w-3.5" />
-              {t('管理 Agent')}
+            <button type="button" className="mt-5 flex h-10 items-center gap-2 border-b border-neutral-200 text-left text-sm text-neutral-900">
+              <ChevronRight className="h-4 w-4 text-neutral-500" />
+              选择一个已有群
             </button>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {[
-              ['all', t('全部')],
-              ['llm', 'LLM'],
-              ['codex', 'Codex'],
-              ['claude-code', 'Claude Code'],
-              ['opencode', 'OpenCode'],
-              ['gemini', 'Gemini'],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setRuntimeFilter(value as typeof runtimeFilter)}
-                className={cn(
-                  'h-7 rounded-full border px-2.5 text-xs transition',
-                  runtimeFilter === value
-                    ? 'border-neutral-900 bg-neutral-950 text-white'
-                    : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-900',
-                )}
-              >
-                {label}
-              </button>
-            ))}
+
+            <button type="button" className="mt-2 flex h-9 items-center gap-2 text-left text-sm text-neutral-900">
+              <ChevronDown className="h-4 w-4 text-neutral-500" />
+              Agent 通讯录
+            </button>
+
+            <div className="min-h-0 flex-1 overflow-y-auto py-1">
+              {filteredAgents.map((agent) => {
+                const selected = selectedIds.has(agent.id)
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    onClick={() => toggleAgent(agent)}
+                    disabled={Boolean(creatingChoice)}
+                    className="flex min-h-12 w-full items-center gap-3 rounded-md px-0 py-1.5 text-left transition hover:bg-neutral-100 disabled:opacity-60"
+                  >
+                    <span className={cn('grid h-4 w-4 shrink-0 place-items-center rounded-full border', selected ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-neutral-300 bg-white text-transparent')}>
+                      <Check className="h-3 w-3" />
+                    </span>
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-sm text-sm font-semibold text-white" style={{ background: agent.color ?? '#111827' }}>
+                      {agent.name.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm text-neutral-900">{agent.name}</span>
+                      <span className="mt-0.5 block truncate text-xs text-neutral-500">{agent.role}</span>
+                    </span>
+                  </button>
+                )
+              })}
+              {!filteredAgents.length && (
+                <div className="px-3 py-8 text-center text-sm text-neutral-400">
+                  {agents.length ? '没有匹配的 Agent' : '还没有全局 Agent'}
+                </div>
+              )}
+            </div>
           </div>
 
-          {loading ? (
-            <div className="grid h-32 place-items-center text-sm text-neutral-400">
-              <Loader2 className="mb-2 h-5 w-5 animate-spin" />
-              {t('正在读取工作区')}
+          <div className="flex min-h-0 flex-col bg-white">
+            <div className="min-h-0 flex-1 px-14 py-10">
+              <div className="text-sm font-medium text-neutral-900">发起群聊</div>
+              <div className="mt-8 flex flex-wrap gap-3">
+                {selectedAgents.map((agent) => (
+                  <button key={agent.id} type="button" onClick={() => toggleAgent(agent)} className="group flex w-16 flex-col items-center gap-2">
+                    <span className="grid h-11 w-11 place-items-center rounded-sm text-sm font-semibold text-white" style={{ background: agent.color ?? '#111827' }}>
+                      {agent.name.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span className="max-w-full truncate text-xs text-neutral-500 group-hover:text-neutral-900">{agent.name}</span>
+                  </button>
+                ))}
+              </div>
+              {!selectedAgents.length && (
+                <div className="mt-8 text-xs text-neutral-400">请选择左侧 Agent 作为群聊成员</div>
+              )}
             </div>
-          ) : filteredWorkspaces.length ? (
-            <div className="mt-2 space-y-3">
-              {filteredWorkspaces.map((workspace) => (
-                <section key={workspace.workspace.id} className="rounded-xl border border-neutral-200 p-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <FolderOpen className="h-4 w-4 text-neutral-400" />
-                    <div className="truncate text-sm font-medium text-neutral-900">{workspace.workspace.name}</div>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {workspace.agents.map((agent) => (
-                      <button
-                        key={agent.id}
-                        type="button"
-                        onClick={() => onCreateAgent(workspace, agent.id)}
-                        disabled={Boolean(creatingChoice)}
-                        className="rounded-lg border border-neutral-200 bg-white p-3 text-left transition hover:border-neutral-300 hover:bg-neutral-50 disabled:opacity-60"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="grid h-7 w-7 place-items-center rounded-lg text-xs font-semibold text-white" style={{ background: agent.color }}>
-                            {creatingChoice === agent.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : agent.name.slice(0, 1).toUpperCase()}
-                          </span>
-                          <span className="min-w-0">
-                            <span className="block truncate text-sm font-medium text-neutral-900">{agent.name}</span>
-                            <span className="block truncate text-[11px] text-neutral-400">
-                              {agent.runtimeType}
-                              {agent.codeAgentType ? ` / ${agent.codeAgentType}` : ''}
-                            </span>
-                          </span>
-                        </div>
-                      </button>
-                    ))}
-                    {!workspace.agents.length && <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-4 text-xs text-neutral-400">{t('暂无 Agent')}</div>}
-                  </div>
-                </section>
-              ))}
+
+            <div className="flex h-20 shrink-0 items-center justify-end gap-16 border-t border-neutral-100 bg-white px-8">
+              <button
+                type="button"
+                onClick={() => onCreateAgent(selectedAgents, groupTitle)}
+                disabled={!selectedAgents.length || Boolean(creatingChoice)}
+                className="inline-flex h-9 min-w-[122px] items-center justify-center rounded-md bg-neutral-100 px-5 text-sm text-neutral-400 transition enabled:bg-emerald-500 enabled:text-white enabled:hover:bg-emerald-600"
+              >
+                {submittingSelected ? <Loader2 className="h-4 w-4 animate-spin" /> : '完成'}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={Boolean(creatingChoice)}
+                className="inline-flex h-9 min-w-[122px] items-center justify-center rounded-md bg-neutral-100 px-5 text-sm text-neutral-900 transition hover:bg-neutral-200 disabled:opacity-50"
+              >
+                取消
+              </button>
             </div>
-          ) : (
-            <div className="mt-2 rounded-xl border border-dashed border-neutral-200 px-4 py-8 text-center text-sm text-neutral-400">
-              {t('还没有工作区 Agent')}
-            </div>
-          )}
+          </div>
         </div>
-      </div>
+
+        <button
+          type="button"
+          onClick={onManageAgents}
+          className="absolute bottom-3 left-6 text-xs text-neutral-400 hover:text-neutral-700"
+        >
+          管理 Agent
+        </button>
+              </div>
     </div>,
     document.body,
   )

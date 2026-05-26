@@ -20,13 +20,11 @@ import {
   Loader2,
   MessageSquare,
   Monitor,
-  Plus,
   QrCode,
   RefreshCw,
   Search,
   Server,
   Settings,
-  Shield,
   Smartphone,
   TerminalSquare,
   Trash2,
@@ -52,7 +50,6 @@ type SectionKey =
   | '通用'
   | '显示'
   | '快捷键'
-  | '模型管理'
   | '工具权限'
   | '归档会话'
   | '控制台'
@@ -62,28 +59,11 @@ const sections: Array<{ icon: typeof Settings; label: SectionKey }> = [
   { icon: Settings, label: '通用' },
   { icon: Monitor, label: '显示' },
   { icon: Keyboard, label: '快捷键' },
-  { icon: Shield, label: '模型管理' },
   { icon: LockKeyhole, label: '工具权限' },
   { icon: Archive, label: '归档会话' },
   { icon: TerminalSquare, label: '控制台' },
   { icon: Info, label: '关于' },
 ]
-
-interface ModelConfig {
-  id: string
-  enabled: boolean
-  name: string
-  provider: string
-  modelId: string
-  apiEndpoint: string
-  anthropicEndpoint: string
-  apiKeyEnv: string
-  apiKey: string
-  temperature: string
-  topP: string
-  maxTokens: string
-  tested: boolean
-}
 
 interface AppSettings {
   startupPage: string
@@ -144,12 +124,6 @@ interface AppSettings {
   accountName: string
   accountAvatar: string
 }
-
-const defaultModels: ModelConfig[] = [
-  model('claude', 'Anthropic Claude', 'anthropic', 'claude-sonnet-4-6', 'https://api.anthropic.com', '', 'ANTHROPIC_API_KEY'),
-  model('openai', 'OpenAI', 'openai', 'gpt-4.1', 'https://api.openai.com/v1', '', 'OPENAI_API_KEY'),
-  model('deepseek', 'deepseek', 'deepseek', 'deepseek-chat', 'https://api.deepseek.com', 'https://api.deepseek.com/anthropic', 'DEEPSEEK_API_KEY'),
-]
 
 const defaultAppSettings: AppSettings = {
   startupPage: '上次会话',
@@ -244,34 +218,6 @@ const defaultAppSettings: AppSettings = {
   accountAvatar: '',
 }
 
-function model(
-  id: string,
-  name: string,
-  provider: string,
-  modelId: string,
-  apiEndpoint: string,
-  anthropicEndpoint: string,
-  apiKeyEnv: string
-): ModelConfig {
-  return {
-    id,
-    enabled: true,
-    name,
-    provider,
-    modelId,
-    apiEndpoint,
-    anthropicEndpoint,
-    apiKeyEnv,
-    apiKey: '',
-    temperature: '0.7',
-    topP: '0.9',
-    maxTokens: '4096',
-    tested: false,
-  }
-}
-
-const emptyDraft = model('', '', '', '', '', '', '')
-
 const themeModes = ['跟随系统', '亮色', '暗色']
 const accentOptions = ['黑色', '蓝色', '绿色', '琥珀色']
 const fontOptions = ['默认', 'Aptos', 'Microsoft YaHei UI', 'Noto Sans SC', 'LXGW WenKai', 'JetBrains Mono', 'Cascadia Mono']
@@ -282,16 +228,9 @@ export default function SettingsPage() {
   const navigate = useNavigate()
   const { setLanguage, t } = useI18n()
   const [activeSection, setActiveSection] = useState<SectionKey>('通用')
-  const [models, setModels] = useState<ModelConfig[]>(defaultModels)
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings)
-  const [activeModelId, setActiveModelId] = useState(defaultModels[0].id)
   const [loading, setLoading] = useState(true)
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const [draft, setDraft] = useState<ModelConfig>({ ...emptyDraft, id: crypto.randomUUID(), enabled: true })
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [showEditor, setShowEditor] = useState(false)
-  const [testingId, setTestingId] = useState<string | null>(null)
-  const [testMessages, setTestMessages] = useState<Record<string, string>>({})
 
   useEffect(() => {
     applyAppearanceSettings(appSettings)
@@ -310,14 +249,6 @@ export default function SettingsPage() {
     api
       .getSettings()
       .then((settings) => {
-        if (settings.MODEL_CATALOG) {
-          try {
-            const parsed = JSON.parse(settings.MODEL_CATALOG) as ModelConfig[]
-            if (Array.isArray(parsed) && parsed.length) setModels(parsed)
-          } catch {
-            setModels(defaultModels)
-          }
-        }
         if (settings.APP_SETTINGS) {
           try {
             const parsed = JSON.parse(settings.APP_SETTINGS) as Partial<AppSettings>
@@ -333,7 +264,6 @@ export default function SettingsPage() {
             setAppSettings(defaultAppSettings)
           }
         }
-        setActiveModelId(settings.ACTIVE_MODEL_ID ?? settings.MODEL_PROVIDER ?? defaultModels[0].id)
         if (settings.TOOL_PERMISSION_MODE || settings.TOOL_PERMISSION_RULES) {
           let parsedPermissions: Record<string, string> | null = null
           if (settings.TOOL_PERMISSION_RULES) {
@@ -358,22 +288,9 @@ export default function SettingsPage() {
   useEffect(() => {
     if (loading) return
     const timer = window.setTimeout(() => {
-      const selected = models.find((item) => item.id === activeModelId) ?? models[0]
       setSaveState('saving')
       void api.saveSettings({
         APP_SETTINGS: JSON.stringify(appSettings),
-        MODEL_CATALOG: JSON.stringify(models),
-        ACTIVE_MODEL_ID: selected?.id ?? '',
-        MODEL_PROVIDER: selected?.provider ?? '',
-        MODEL_API_KEY: selected?.apiKey ?? '',
-        MODEL_BASE_URL: selected?.apiEndpoint ?? '',
-        MODEL_NAME: selected?.modelId ?? '',
-        ACTIVE_PROVIDER: selected?.provider ?? '',
-        ACTIVE_API_KEY: selected?.apiKey ?? '',
-        ACTIVE_BASE_URL: selected?.apiEndpoint ?? '',
-        ACTIVE_MODEL: selected?.modelId ?? '',
-        ANTHROPIC_API_KEY: selected?.provider === 'anthropic' ? selected.apiKey : '',
-        ANTHROPIC_MODEL: selected?.provider === 'anthropic' ? selected.modelId : 'claude-sonnet-4-6',
         TOOL_PERMISSION_MODE: appSettings.toolPermissionMode,
         TOOL_PERMISSION_RULES: JSON.stringify(appSettings.toolPermissions),
       })
@@ -385,71 +302,13 @@ export default function SettingsPage() {
         .catch(() => setSaveState('error'))
     }, 650)
     return () => window.clearTimeout(timer)
-  }, [activeModelId, appSettings, loading, models])
+  }, [appSettings, loading])
 
   function patchSettings(patch: Partial<AppSettings>) {
     setAppSettings((current) => ({ ...current, ...patch }))
   }
 
-  function updateModel(id: string, patch: Partial<ModelConfig>) {
-    setModels((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)))
-  }
-
-  function openCreate() {
-    setEditingId(null)
-    setDraft({ ...emptyDraft, id: crypto.randomUUID(), enabled: true })
-    setShowEditor(true)
-  }
-
-  function openEdit(item: ModelConfig) {
-    setEditingId(item.id)
-    setDraft({ ...item })
-    setShowEditor(true)
-  }
-
-  function saveDraft() {
-    if (!draft.name || !draft.provider || !draft.modelId || !draft.apiEndpoint) return
-    if (editingId) {
-      setModels((current) => current.map((item) => (item.id === editingId ? draft : item)))
-    } else {
-      setModels((current) => [...current, draft])
-      setActiveModelId(draft.id)
-    }
-    setShowEditor(false)
-  }
-
-  function deleteModel(id: string) {
-    setModels((current) => {
-      if (current.length <= 1) return current
-      const next = current.filter((item) => item.id !== id)
-      if (activeModelId === id) setActiveModelId(next[0].id)
-      return next
-    })
-  }
-
   const settingsThemeStyle = createSettingsThemeStyle(appSettings)
-
-  async function testModel(item: ModelConfig) {
-    setTestingId(item.id)
-    setTestMessages((current) => ({ ...current, [item.id]: '' }))
-    try {
-      const result = await api.testModel({
-        provider: item.provider,
-        apiEndpoint: item.apiEndpoint,
-        anthropicEndpoint: item.anthropicEndpoint,
-        apiKey: item.apiKey,
-        apiKeyEnv: item.apiKeyEnv,
-        modelId: item.modelId,
-      })
-      updateModel(item.id, { tested: result.ok })
-      setTestMessages((current) => ({ ...current, [item.id]: result.ok ? t('连接成功') : result.message }))
-    } catch (error: any) {
-      updateModel(item.id, { tested: false })
-      setTestMessages((current) => ({ ...current, [item.id]: error?.message || t('连接失败') }))
-    } finally {
-      setTestingId(null)
-    }
-  }
 
   return (
     <div className="settings-theme flex h-full min-h-0 overflow-hidden" style={settingsThemeStyle}>
@@ -474,19 +333,6 @@ export default function SettingsPage() {
               <Loader2 className="h-4 w-4 animate-spin" />
               {t('加载中...')}
             </div>
-          ) : activeSection === '模型管理' ? (
-            <ModelManagement
-              models={models}
-              activeModelId={activeModelId}
-              setActiveModelId={setActiveModelId}
-              updateModel={updateModel}
-              openCreate={openCreate}
-              openEdit={openEdit}
-              deleteModel={deleteModel}
-              testModel={testModel}
-              testingId={testingId}
-              testMessages={testMessages}
-            />
           ) : (
             <SettingsContent
               section={activeSection}
@@ -498,15 +344,6 @@ export default function SettingsPage() {
         </div>
       </main>
 
-      {showEditor && (
-        <ModelEditor
-          draft={draft}
-          setDraft={setDraft}
-          onClose={() => setShowEditor(false)}
-          onSave={saveDraft}
-          editing={Boolean(editingId)}
-        />
-      )}
     </div>
   )
 }
@@ -1071,7 +908,7 @@ function MobilePairingPanel() {
 const shortcutActionLabels: Record<ShortcutActionId, { title: string; desc: string }> = {
   'new-chat': { title: '新建会话', desc: '在会话页打开新建会话弹窗。' },
   'quick-chat': { title: '快速对话', desc: '立即创建一个空白直接对话。' },
-  'open-folder': { title: '打开项目文件夹', desc: '选择本地项目文件夹并进入 Agent Group。' },
+  'open-folder': { title: '打开项目文件夹', desc: '选择本地项目文件夹并进入群聊。' },
   settings: { title: '打开设置', desc: '从任意页面进入设置中心。' },
   'new-window': { title: '新建窗口', desc: '桌面端打开一个新的 AgentHub 窗口。' },
   'close-window': { title: '关闭窗口', desc: '关闭当前桌面窗口。' },
@@ -1604,115 +1441,6 @@ function retentionDays(retention: string) {
   if (retention.includes('90')) return 90
   if (retention.includes('180')) return 180
   return null
-}
-
-function ModelManagement({
-  models,
-  activeModelId,
-  setActiveModelId,
-  updateModel,
-  openCreate,
-  openEdit,
-  deleteModel,
-  testModel,
-  testingId,
-  testMessages,
-}: {
-  models: ModelConfig[]
-  activeModelId: string
-  setActiveModelId: (id: string) => void
-  updateModel: (id: string, patch: Partial<ModelConfig>) => void
-  openCreate: () => void
-  openEdit: (item: ModelConfig) => void
-  deleteModel: (id: string) => void
-  testModel: (item: ModelConfig) => void
-  testingId: string | null
-  testMessages: Record<string, string>
-}) {
-  const { t } = useI18n()
-  const configuredCount = models.filter((item) => item.apiKey || item.apiKeyEnv).length
-  const enabledCount = models.filter((item) => item.enabled).length
-  const testedCount = models.filter((item) => item.tested).length
-
-  return (
-    <div>
-      <div className="mb-6 flex justify-end">
-        <button type="button" onClick={openCreate} className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-900 px-3 text-sm font-medium text-white hover:bg-neutral-700">
-          <Plus className="h-4 w-4" />
-          {t('添加模型')}
-        </button>
-      </div>
-
-      <div className="mb-6 flex w-full overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50">
-        <Stat value={models.length} label="模型总数" />
-        <Stat value={enabledCount} label="已启用" />
-        <Stat value={configuredCount} label="API Key 已配置" />
-        <Stat value={testedCount} label="已测试连接" />
-      </div>
-
-      <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        <table className="w-full min-w-[980px] text-left text-sm">
-          <thead className="border-b border-neutral-200 bg-neutral-50 text-xs font-medium text-neutral-500">
-            <tr>
-              <th className="w-20 px-4 py-3">{t('启用')}</th>
-              <th className="px-4 py-3">{t('名称')}</th>
-              <th className="px-4 py-3">{t('提供商')}</th>
-              <th className="px-4 py-3">{t('模型 ID')}</th>
-              <th className="px-4 py-3">{t('API 端点')}</th>
-              <th className="px-4 py-3">API Key</th>
-              <th className="px-4 py-3">{t('连接')}</th>
-              <th className="px-4 py-3">{t('操作')}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-neutral-100">
-            {models.map((item) => (
-              <tr key={item.id} className={cn(activeModelId === item.id && 'bg-neutral-50')}>
-                <td className="px-4 py-3">
-                  <SmallToggle checked={item.enabled} onChange={(enabled) => updateModel(item.id, { enabled })} />
-                </td>
-                <td className="px-4 py-3 font-medium text-neutral-800">
-                  <label className="flex items-center gap-2">
-                    <input type="radio" checked={activeModelId === item.id} onChange={() => setActiveModelId(item.id)} />
-                    {item.name}
-                  </label>
-                </td>
-                <td className="px-4 py-3 text-neutral-500">{item.provider}</td>
-                <td className="px-4 py-3 font-mono text-xs text-neutral-800">{item.modelId}</td>
-                <td className="px-4 py-3 font-mono text-xs text-neutral-600">
-                  <div>{item.apiEndpoint}</div>
-                  {item.anthropicEndpoint && <div className="mt-1 text-sky-600">Anthropic: {item.anthropicEndpoint}</div>}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="font-mono text-xs text-neutral-600">{item.apiKeyEnv || t('自动生成')}</div>
-                  {(item.apiKey || item.apiKeyEnv) && <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-600">{t('已设置')}</span>}
-                </td>
-                <td className="px-4 py-3">
-                  <button type="button" onClick={() => testModel(item)} disabled={testingId === item.id} className="rounded-lg border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50">
-                    {testingId === item.id ? t('测试中') : t('测试')}
-                  </button>
-                  {testMessages[item.id] && (
-                    <div className={cn('mt-1 max-w-[160px] truncate text-xs', item.tested ? 'text-emerald-600' : 'text-red-500')} title={testMessages[item.id]}>
-                      {testMessages[item.id]}
-                    </div>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-3 text-xs">
-                    <button type="button" onClick={() => openEdit(item)} className="text-sky-600 hover:underline">{t('编辑')}</button>
-                    <button type="button" onClick={() => deleteModel(item.id)} className="text-red-500 hover:underline">{t('删除')}</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <p className="mt-4 text-xs text-neutral-400">
-        {t('提示：模型变更会自动保存并同步到聊天后端。当前是本地单用户 Demo 模式，API Key 会保存在本机 SQLite settings 中；不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。')}
-      </p>
-    </div>
-  )
 }
 
 function AutoSaveStatus({ state }: { state: 'idle' | 'saving' | 'saved' | 'error' }) {
@@ -2542,87 +2270,12 @@ function parentDirectory(path: string | undefined) {
   return index > 0 ? normalized.slice(0, index) : normalized
 }
 
-function Stat({ value, label }: { value: number; label: string }) {
-  const { t } = useI18n()
-  return (
-    <div className="flex min-w-0 flex-1 items-center gap-2 border-r border-neutral-200 px-4 py-3 last:border-r-0">
-      <span className="text-xl font-medium text-neutral-900">{value}</span>
-      <span className="text-xs text-neutral-500">{t(label)}</span>
-    </div>
-  )
-}
-
-function ModelEditor({
-  draft,
-  setDraft,
-  onClose,
-  onSave,
-  editing,
-}: {
-  draft: ModelConfig
-  setDraft: (draft: ModelConfig) => void
-  onClose: () => void
-  onSave: () => void
-  editing: boolean
-}) {
-  const { t } = useI18n()
-  const patch = (value: Partial<ModelConfig>) => setDraft({ ...draft, ...value })
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-6">
-      <div className="w-full max-w-4xl rounded-2xl border border-neutral-200 bg-white p-6 shadow-2xl">
-        <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">{editing ? t('编辑模型') : t('添加模型')}</h2>
-          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="grid gap-5 md:grid-cols-2">
-          <Field label="名称（唯一标识）*" value={draft.name} onChange={(name) => patch({ name })} placeholder="例如：qwen-max" />
-          <Field label="提供商 *" value={draft.provider} onChange={(provider) => patch({ provider })} placeholder="例如：dashscope / openai / deepseek" />
-          <Field label="模型 ID *" value={draft.modelId} onChange={(modelId) => patch({ modelId })} placeholder="例如：qwen-max-2026-04-01" />
-          <Field label="API Key 环境变量名" value={draft.apiKeyEnv} onChange={(apiKeyEnv) => patch({ apiKeyEnv })} placeholder="留空自动生成" />
-          <Field label="API 端点（OpenAI 兼容）*" value={draft.apiEndpoint} onChange={(apiEndpoint) => patch({ apiEndpoint })} placeholder="https://api.example.com/v1" wide />
-          <Field label="Anthropic 端点（Claude Code 使用，可选）" value={draft.anthropicEndpoint} onChange={(anthropicEndpoint) => patch({ anthropicEndpoint })} placeholder="例如：https://api.deepseek.com/anthropic" wide />
-          <Field label="API Key（同步到本地设置）" value={draft.apiKey} onChange={(apiKey) => patch({ apiKey })} placeholder="输入 API Key" type="password" />
-          <Field label="temperature" value={draft.temperature} onChange={(temperature) => patch({ temperature })} placeholder="0.7" />
-          <Field label="top_p" value={draft.topP} onChange={(topP) => patch({ topP })} placeholder="0.9" />
-          <Field label="max_tokens" value={draft.maxTokens} onChange={(maxTokens) => patch({ maxTokens })} placeholder="4096" />
-        </div>
-
-        <label className="mt-5 flex items-center gap-2 text-sm text-neutral-700">
-          <input type="checkbox" checked={draft.enabled} onChange={(event) => patch({ enabled: event.target.checked })} />
-          {t('启用此模型')}
-        </label>
-
-        <div className="mt-7 flex justify-end gap-3">
-          <button onClick={onClose} className="h-9 rounded-lg border border-neutral-200 px-4 text-sm text-neutral-700 hover:bg-neutral-50">{t('取消')}</button>
-          <button onClick={onSave} className="h-9 rounded-lg bg-neutral-900 px-4 text-sm font-medium text-white hover:bg-neutral-700">{editing ? t('保存') : t('添加')}</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Field({ label, value, onChange, placeholder, type = 'text', wide = false }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string; wide?: boolean }) {
-  const { t } = useI18n()
-  if (label.toLowerCase().includes('api key')) type = 'password'
-  return (
-    <label className={cn('block', wide && 'md:col-span-2')}>
-      <span className="mb-1.5 block text-xs font-medium text-neutral-500">{t(label)}</span>
-      <input type={type} value={value} onChange={(event) => onChange(event.target.value)} className="settings-input font-mono" placeholder={placeholder ? t(placeholder) : undefined} />
-    </label>
-  )
-}
-
 function sectionDescription(section: SectionKey) {
   const descriptions: Record<SectionKey, string> = {
     显示: '选择窗口颜色、强调色，并预览聊天与工具面板的显示效果。',
     通用: '配置启动行为、语言、保存策略和基础交互习惯。',
 
     快捷键: '管理高频操作快捷键，提升聊天和编程效率。',
-    模型管理: '管理可用模型、API 端点、密钥变量和连接测试状态。',
     工具权限: '配置 Agent 可调用的工具、MCP 服务、自动化钩子和敏感操作确认。',
     归档会话: '管理归档会话的保留、恢复和清理策略。',
     控制台: '管理外部连接、Git、本地环境、工作树和浏览器预览环境。',
