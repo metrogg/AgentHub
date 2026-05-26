@@ -231,6 +231,7 @@ export interface CodingToolStatus {
   command: string
   installed: boolean
   version: string | null
+  diagnostics?: string
 }
 
 export interface CodingToolProbe {

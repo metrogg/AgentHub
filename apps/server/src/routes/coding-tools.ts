@@ -450,7 +450,11 @@ function uniqueOpencodeModels(models: OpencodeModelItem[]) {
 }
 
 async function probeTools(items: ToolProbe[]) {
-  return Promise.all(items.map(probeTool))
+  const results = []
+  for (const item of items) {
+    results.push(await probeTool(item))
+  }
+  return results
 }
 
 async function probeTool(probe: ToolProbe) {
@@ -475,6 +479,7 @@ async function probeToolDirect(probe: ToolProbe) {
   const configEnv = configEnvName(probe)
   const configured = await isDirectToolConfigured(probe, configEnv)
   const installed = Boolean(version)
+  const reachable = await isCommandReachable(probe.command)
   return {
     id: probe.id,
     command: probe.command,
@@ -483,6 +488,7 @@ async function probeToolDirect(probe: ToolProbe) {
     configured,
     configEnv,
     configMessage: configMessage({ configEnv, configured, installed, runtime: '本机环境', toolId: probe.id }),
+    diagnostics: `reachable=${reachable} version=${version ?? 'null'} env=${configEnv} envValue=${readEnv(configEnv) ? 'set' : 'unset'}`,
   }
 }
 
@@ -784,22 +790,26 @@ async function isDirectToolConfigured(probe: ToolProbe, configEnv: string) {
   }
 
   // 若主模型配置中已存在对应 provider 的 API Key，也视为已配置
-  const llmStatus = await getLlmRuntimeStatus()
-  if (llmStatus.apiKeyConfigured) {
-    if (probe.id === 'claude-code') {
-      if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com')) return true
-      if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
+  try {
+    const llmStatus = await getLlmRuntimeStatus()
+    if (llmStatus.apiKeyConfigured) {
+      if (probe.id === 'claude-code') {
+        if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com')) return true
+        if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
+      }
+      if (probe.id === 'codex') {
+        if (llmStatus.provider === 'openai' || llmStatus.baseUrl?.includes('openai.com')) return true
+        if (llmStatus.apiKeySource === 'OPENAI_API_KEY') return true
+      }
+      if (probe.id === 'gemini') {
+        if (llmStatus.provider === 'gemini' || llmStatus.provider === 'google') return true
+        if (llmStatus.apiKeySource === 'GEMINI_API_KEY') return true
+      }
+      // OpenCode 支持任意 OpenAI-compatible provider；只要主模型有 key 即可视为已配置
+      if (probe.id === 'opencode') return true
     }
-    if (probe.id === 'codex') {
-      if (llmStatus.provider === 'openai' || llmStatus.baseUrl?.includes('openai.com')) return true
-      if (llmStatus.apiKeySource === 'OPENAI_API_KEY') return true
-    }
-    if (probe.id === 'gemini') {
-      if (llmStatus.provider === 'gemini' || llmStatus.provider === 'google') return true
-      if (llmStatus.apiKeySource === 'GEMINI_API_KEY') return true
-    }
-    // OpenCode 支持任意 OpenAI-compatible provider；只要主模型有 key 即可视为已配置
-    if (probe.id === 'opencode') return true
+  } catch (err: any) {
+    console.error(`[isDirectToolConfigured] getLlmRuntimeStatus failed for ${probe.id}:`, err?.message || String(err))
   }
 
   if (probe.id !== 'codex' || !env.ENABLE_CODEX_CHATGPT_AUTH) return false
