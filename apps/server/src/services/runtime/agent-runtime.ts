@@ -16,6 +16,7 @@ export interface AgentProfile {
   contextPolicy: 'recent-only' | 'pinned-recent' | 'workspace-aware'
   approvalRequired: boolean
   projectPath?: string | null
+  originalProjectPath?: string | null
 }
 
 export interface ExecutionContext {

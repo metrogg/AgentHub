@@ -26,8 +26,8 @@ export class OrchestratorEngine {
   private conflictResolver = new ConflictResolver()
   private replanningEngine = new ReplanningEngine()
 
-  async createPlan(goal: string, agents: ExecutionPlan['agents']): Promise<ExecutionPlan> {
-    return this.planner.createPlan({ goal, agents })
+  async createPlan(goal: string, agents: ExecutionPlan['agents'], workspacePath?: string | null): Promise<ExecutionPlan> {
+    return this.planner.createPlan({ goal, agents, workspacePath })
   }
 
   async startRun(params: {
@@ -130,7 +130,8 @@ export class OrchestratorEngine {
 
         if (replan.strategy === 'global_replan') {
           try {
-            const newPlan = await this.planner.createPlan({ goal: plan.goal, agents: plan.agents })
+            const workspacePath = childSessions.get(currentTask.id)?.projectPath ?? undefined
+            const newPlan = await this.planner.createPlan({ goal: plan.goal, agents: plan.agents, workspacePath })
             const existingIds = new Set(plan.tasks.map((t) => t.id))
             const tasksToAdd = newPlan.tasks.filter((t) => !existingIds.has(t.id))
             if (tasksToAdd.length > 0) {
@@ -275,6 +276,7 @@ export class OrchestratorEngine {
       contextPolicy: 'workspace-aware' as const,
       approvalRequired: true,
       projectPath: branchCtx?.worktreePath ?? childInfo.projectPath ?? null,
+      originalProjectPath: childInfo.projectPath ?? null,
     }
 
     const bbNamespace = Blackboard.namespace(workspaceId, runId)

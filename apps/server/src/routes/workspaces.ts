@@ -11,6 +11,7 @@ import {
   ensureProjectDirectory,
   findWorkspaceByProjectPath,
   touchWorkspace,
+  ensureHarnessPresets,
 } from '../services/workspace/utils'
 import { pickNativeFolder } from '../services/workspace/folder-picker'
 import { loadWorkspaceFull, ensureWorkspace, seedClassicAgents } from '../services/workspace/workspace-queries'
@@ -112,6 +113,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     if (input.template === 'classic') {
       await seedClassicAgents(ws.id)
     }
+    ensureHarnessPresets(projectPath)
     return c.json(await loadWorkspaceFull(ws.id, user.sub))
   })
 
@@ -173,6 +175,9 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       updatedAt: new Date(),
     }
     await db.update(workspaces).set(patch).where(eq(workspaces.id, id))
+    if (input.projectPath !== undefined) {
+      ensureHarnessPresets(patch.projectPath)
+    }
     return c.json(await loadWorkspaceFull(id, user.sub))
   })
 

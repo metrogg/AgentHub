@@ -26,6 +26,7 @@ import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 import { streamReply } from '../services/llm'
 import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
 import type { ExecutionPlan } from '../services/orchestrator/types'
+import { harnessManager } from '../services/harness'
 
 const orchestratorPlanSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -336,7 +337,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           .where(eq(workspaceAgents.workspaceId, session.workspaceId))
           .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
       : []
-    const plan = await buildDynamicOrchestratorPlan(content, agentList)
+    const plan = await buildDynamicOrchestratorPlan(content, agentList, session.workspaceId)
     const [card] = await db
       .insert(messages)
       .values({
@@ -908,13 +909,40 @@ function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
 
 async function buildDynamicOrchestratorPlan(
   content: string,
-  agents: Array<typeof workspaceAgents.$inferSelect>
+  agents: Array<typeof workspaceAgents.$inferSelect>,
+  workspaceId?: string | null
 ): Promise<OrchestratorPlan> {
   const goal = normalizeOrchestratorGoal(content)
   const planningAgents = agents.length ? agents.map(planAgentFromWorkspaceAgent) : fallbackPlanAgents()
 
+  let specPhases: string | undefined
+  if (workspaceId) {
+    try {
+      const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+      if (ws?.projectPath) {
+        await harnessManager.loadFromWorkspace(ws.projectPath)
+        const spec = harnessManager.findBestSpec(goal)
+        if (spec) {
+          specPhases = [
+            `【协作规范：${spec.name}】`,
+            spec.description,
+            '',
+            '请按以下阶段组织任务（每个阶段可映射为 1 个或多个 task）：',
+            ...spec.phases.map((p, i) => {
+              const deps = p.dependsOn?.length ? `（依赖：${p.dependsOn.join('、')}）` : ''
+              return `${i + 1}. ${p.name}：${p.description} ${deps}`
+            }),
+            '【规范结束】',
+          ].join('\n')
+        }
+      }
+    } catch {
+      // Best-effort spec loading; don't block plan generation.
+    }
+  }
+
   try {
-    const generated = await generatePlanWithLlm(goal, planningAgents)
+    const generated = await generatePlanWithLlm(goal, planningAgents, specPhases)
     const normalized = normalizeGeneratedPlan(goal, generated, planningAgents)
     if (normalized) return normalized
   } catch {
@@ -1013,7 +1041,7 @@ function pickAgent(agents: PlanAgent[], keywords: string[]) {
   })
 }
 
-async function generatePlanWithLlm(goal: string, agents: PlanAgent[]) {
+async function generatePlanWithLlm(goal: string, agents: PlanAgent[], specPhases?: string) {
   const agentCatalog = agents.map((agent) => ({
     key: agent.key,
     name: agent.name,
@@ -1032,7 +1060,8 @@ async function generatePlanWithLlm(goal: string, agents: PlanAgent[]) {
     'Return strict JSON only. Do not include Markdown fences or explanations.',
     'Schema: {"title":string,"summary":string,"tasks":[{"id":string,"title":string,"description":string,"agentKey":string,"status":"pending"}]}',
     'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
-  ].join('\n')
+    specPhases || '',
+  ].filter(Boolean).join('\n')
   const messagesForPlan = [
     {
       role: 'user' as const,

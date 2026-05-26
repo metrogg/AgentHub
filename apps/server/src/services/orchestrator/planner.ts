@@ -1,19 +1,35 @@
 import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
+import { harnessManager } from '../harness'
 import type { ExecutionAgent, ExecutionPlan, ExecutionTask } from './types'
 
 export interface PlannerInput {
   goal: string
   agents: ExecutionAgent[]
+  workspacePath?: string | null
 }
 
 export class Planner {
   async createPlan(input: PlannerInput): Promise<ExecutionPlan> {
-    const { goal, agents } = input
+    const { goal, agents, workspacePath } = input
     const runId = crypto.randomUUID()
 
+    let specPhases: string | undefined
+    if (workspacePath) {
+      try {
+        await harnessManager.loadFromWorkspace(workspacePath)
+        const spec = harnessManager.findBestSpec(goal)
+        if (spec) {
+          specPhases = this.formatSpecPhases(spec)
+          logger.info({ specId: spec.id, goal }, 'Planner matched Harness spec')
+        }
+      } catch (err: any) {
+        logger.warn({ err: err?.message, workspacePath }, 'Planner failed to load Harness spec')
+      }
+    }
+
     try {
-      const generated = await this.generateWithLlm(goal, agents)
+      const generated = await this.generateWithLlm(goal, agents, specPhases)
       const normalized = this.normalizeGeneratedPlan(runId, goal, generated, agents)
       if (normalized) return normalized
     } catch (error: any) {
@@ -23,7 +39,22 @@ export class Planner {
     return this.buildFallbackPlan(runId, goal, agents)
   }
 
-  private async generateWithLlm(goal: string, agents: ExecutionAgent[]): Promise<unknown> {
+  private formatSpecPhases(spec: import('../harness').HarnessSpec): string {
+    const lines = [
+      `【协作规范：${spec.name}】`,
+      spec.description,
+      '',
+      '请按以下阶段组织任务（每个阶段可映射为 1 个或多个 task）：',
+      ...spec.phases.map((p, i) => {
+        const deps = p.dependsOn?.length ? `（依赖：${p.dependsOn.join('、')}）` : ''
+        return `${i + 1}. ${p.name}：${p.description} ${deps}`
+      }),
+      '【规范结束】',
+    ]
+    return lines.join('\n')
+  }
+
+  private async generateWithLlm(goal: string, agents: ExecutionAgent[], specPhases?: string): Promise<unknown> {
     const agentCatalog = agents.map((agent) => ({
       key: agent.key,
       name: agent.name,
@@ -45,7 +76,8 @@ export class Planner {
       'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
       'If tasks can run in parallel, put them in the same parallelGroup.',
       'Dependencies should reference task ids, not agent keys.',
-    ].join('\n')
+      specPhases || '',
+    ].filter(Boolean).join('\n')
 
     const messages = [
       {
