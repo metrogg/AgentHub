@@ -535,7 +535,7 @@ async function runCodeAgentCommand(
   const timer = setTimeout(() => {
     timedOut = true
     stopRun()
-  }, Number(readEnv('AGENTHUB_CODE_AGENT_TIMEOUT_MS') ?? 120_000))
+  }, env.AGENTHUB_CODE_AGENT_TIMEOUT_MS)
   const abortRun = () => {
     stopRun()
   }
