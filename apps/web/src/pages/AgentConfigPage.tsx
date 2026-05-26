@@ -3,6 +3,9 @@ import {
   Bot,
   Check,
   Copy,
+  Eye,
+  Globe,
+  MessageSquare,
   MessageSquareText,
   PanelLeft,
   Plus,
@@ -10,6 +13,7 @@ import {
   Search,
   Settings2,
   Sparkles,
+  Terminal,
   Trash2,
   Wand2,
 } from 'lucide-react'
@@ -43,6 +47,49 @@ const emptyDraft: AgentConfigInput = {
   autoInvoke: true,
   approvalRequired: true,
 }
+
+type ExecutionMode = WorkspaceAgent['runtimeType']
+
+interface ModeOption {
+  value: ExecutionMode
+  label: string
+  description: string
+  icon: typeof MessageSquare
+}
+
+const modeOptions: ModeOption[] = [
+  {
+    value: 'llm',
+    label: '普通 LLM Agent',
+    description: '使用已配置的模型进行对话',
+    icon: MessageSquare,
+  },
+  {
+    value: 'code-agent',
+    label: 'Coding Tools',
+    description: '调用本机 CLI 工具执行代码任务',
+    icon: Terminal,
+  },
+  {
+    value: 'mcp',
+    label: 'Native Read-only',
+    description: '只读工具 + LLM，不修改文件',
+    icon: Eye,
+  },
+  {
+    value: 'a2a',
+    label: 'A2A Agent',
+    description: '通过 A2A 协议调用外部 Agent',
+    icon: Globe,
+  },
+]
+
+const codeAgentOptions = [
+  { value: 'codex', label: 'Codex CLI' },
+  { value: 'claude-code', label: 'Claude Code' },
+  { value: 'opencode', label: 'OpenCode' },
+  { value: 'gemini', label: 'Gemini CLI' },
+]
 
 export default function AgentConfigPage() {
   const { t } = useI18n()
@@ -176,6 +223,24 @@ export default function AgentConfigPage() {
     window.setTimeout(() => setSaved(false), 1400)
   }
 
+  function handleModeChange(nextMode: ExecutionMode) {
+    const isMcp = nextMode === 'mcp'
+    const isCodeAgent = nextMode === 'code-agent'
+    setDraft((current) => ({
+      ...current,
+      runtimeType: nextMode,
+      codeAgentType: isCodeAgent ? (current.codeAgentType ?? 'codex') : null,
+      modelId: isCodeAgent ? null : current.modelId,
+      ...(isMcp
+        ? {
+            sandboxPolicy: 'read-only' as const,
+            toolPermissions: ['workspace:read', 'skills:read'],
+            approvalRequired: true,
+          }
+        : {}),
+    }))
+  }
+
   return (
     <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#fbfbf9] text-neutral-950">
       <CollapsibleSessionSidebar collapsed={sidebarCollapsed} />
@@ -240,7 +305,7 @@ export default function AgentConfigPage() {
                     <span className="block truncate text-sm font-semibold">{agent.name}</span>
                     <span className={cn('mt-1 block truncate text-xs', selectedId === agent.id ? 'text-white' : 'text-neutral-500')}>{agent.role}</span>
                     <span className={cn('mt-2 line-clamp-2 text-xs leading-5', selectedId === agent.id ? 'text-white' : 'text-neutral-400')}>
-                      {agent.description || runtimeLabel(agent.runtimeType ?? 'llm')}
+                      {agent.description || modeOptions.find((m) => m.value === agent.runtimeType)?.label}
                     </span>
                   </span>
                 </button>
@@ -295,33 +360,94 @@ export default function AgentConfigPage() {
                     <TextField label={t('简介')} rows={3} value={draft.description ?? ''} onChange={(description) => setDraft({ ...draft, description })} />
                     <TextField label={t('系统提示词')} rows={6} value={draft.systemPrompt ?? ''} onChange={(systemPrompt) => setDraft({ ...draft, systemPrompt })} />
 
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      <SelectField label={t('运行时')} value={runtimeType} onChange={(value) => {
-                        const nextRuntime = value as WorkspaceAgent['runtimeType']
-                        const isMcp = nextRuntime === 'mcp'
-                        setDraft({
-                          ...draft,
-                          runtimeType: nextRuntime,
-                          codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
-                          ...(isMcp ? { sandboxPolicy: 'read-only' as const, toolPermissions: ['workspace:read', 'skills:read'], approvalRequired: true } : {}),
-                        })
-                      }}>
-                        <option value="llm">{t('普通 LLM Agent')}</option>
-                        <option value="code-agent">Coding Tools</option>
-                        <option value="mcp">Native Read-only Agent</option>
-                        <option value="a2a">A2A Agent</option>
-                      </SelectField>
-                      <SelectField label="Coding Tools" value={runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : ''} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
-                        <option value="">{t('不绑定 CLI')}</option>
-                        <option value="codex">Codex CLI</option>
-                        <option value="claude-code">Claude Code</option>
-                        <option value="opencode">OpenCode</option>
-                        <option value="gemini">Gemini CLI</option>
-                      </SelectField>
-                      <SelectField label={t('默认模型')} value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
-                        <option value="">{t('自动模型')}</option>
-                        {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId}</option>)}
-                      </SelectField>
+                    {/* 执行方式卡片选择器 */}
+                    <div className="mt-6">
+                      <span className="mb-3 block text-sm font-medium text-neutral-700">{t('执行方式')}</span>
+                      <div className="grid grid-cols-2 gap-3">
+                        {modeOptions.map((mode) => {
+                          const Icon = mode.icon
+                          const active = runtimeType === mode.value
+                          return (
+                            <button
+                              key={mode.value}
+                              type="button"
+                              onClick={() => handleModeChange(mode.value)}
+                              className={cn(
+                                'flex flex-col items-start gap-2 rounded-xl border p-4 text-left transition',
+                                active
+                                  ? 'border-neutral-900 bg-neutral-950 text-white shadow-sm'
+                                  : 'border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300'
+                              )}
+                            >
+                              <Icon className={cn('h-5 w-5', active ? 'text-white' : 'text-neutral-400')} />
+                              <span className={cn('text-sm font-semibold', active ? 'text-white' : 'text-neutral-800')}>{mode.label}</span>
+                              <span className={cn('text-xs leading-4', active ? 'text-neutral-300' : 'text-neutral-400')}>
+                                {mode.description}
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 动态子配置区 */}
+                    <div className="mt-5 rounded-xl border border-neutral-100 bg-neutral-50/60 p-4">
+                      {runtimeType === 'llm' && (
+                        <SelectField label={t('使用模型')} value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
+                          <option value="">{t('自动模型')}</option>
+                          {models.map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {model.name || model.modelId}
+                            </option>
+                          ))}
+                        </SelectField>
+                      )}
+
+                      {runtimeType === 'code-agent' && (
+                        <>
+                          <SelectField label={t('选择工具')} value={draft.codeAgentType ?? 'codex'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || 'codex') as WorkspaceAgent['codeAgentType'] })}>
+                            {codeAgentOptions.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </SelectField>
+                          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+                            <span className="mt-0.5 shrink-0">ℹ</span>
+                            <span>
+                              {t('模型和 API 密钥由工具自身配置管理。Codex / Claude Code / OpenCode 各自使用独立的本地配置，不在此处设置。')}
+                              <a href="#/coding-tools" className="ml-1 underline hover:text-amber-800">{t('前往 Coding Tools 页面进行设置 →')}</a>
+                            </span>
+                          </div>
+                        </>
+                      )}
+
+                      {runtimeType === 'mcp' && (
+                        <>
+                          <SelectField label={t('使用模型')} value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
+                            <option value="">{t('自动模型')}</option>
+                            {models.map((model) => (
+                              <option key={model.id} value={model.id}>
+                                {model.name || model.modelId}
+                              </option>
+                            ))}
+                          </SelectField>
+                          <div className="mt-3 flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-700">
+                            <span className="mt-0.5 shrink-0">ℹ</span>
+                            <span>{t('Native Read-only Agent 强制使用只读沙箱，仅允许读取文件和调用只读工具。')}</span>
+                          </div>
+                        </>
+                      )}
+
+                      {runtimeType === 'a2a' && (
+                        <div className="flex items-start gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs leading-5 text-neutral-500">
+                          <span className="mt-0.5 shrink-0">ℹ</span>
+                          <span>{t('A2A Agent 通过外部 A2A 协议端点调用。端点配置将在后续版本支持。')}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-5 grid gap-3 md:grid-cols-2">
                       <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} disabled={runtimeType === 'mcp'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
                         <option value="read-only">{t('只读')}</option>
                         <option value="workspace-write">{t('工作区写入')}</option>
@@ -364,8 +490,11 @@ export default function AgentConfigPage() {
 
                   <aside className="space-y-4">
                     <InfoPanel title={t('当前配置')}>
-                      <InfoRow label={t('运行时')} value={runtimeLabel(runtimeType)} />
+                      <InfoRow label={t('执行方式')} value={modeOptions.find((m) => m.value === runtimeType)?.label ?? runtimeType} />
                       <InfoRow label={t('模型')} value={t(modelName(draft.modelId ?? null, models))} />
+                      {runtimeType === 'code-agent' && (
+                        <InfoRow label={t('工具')} value={codeAgentOptions.find((o) => o.value === draft.codeAgentType)?.label ?? (draft.codeAgentType || '-')} />
+                      )}
                       <InfoRow label={t('权限')} value={t(sandboxLabel(draft.sandboxPolicy ?? 'workspace-write'))} />
                       <InfoRow label={t('标签')} value={(draft.capabilityTags ?? []).join(', ') || t('未设置')} />
                     </InfoPanel>
@@ -469,26 +598,41 @@ function patchFromInstruction(text: string, current: AgentConfigInput) {
   if (lower.includes('codex')) {
     patch.runtimeType = 'code-agent'
     patch.codeAgentType = 'codex'
-    notes.push('运行时切换为 Codex')
+    patch.modelId = null
+    notes.push('执行方式切换为 Coding Tools：Codex')
   } else if (lower.includes('claude')) {
     patch.runtimeType = 'code-agent'
     patch.codeAgentType = 'claude-code'
-    notes.push('运行时切换为 Claude Code')
+    patch.modelId = null
+    notes.push('执行方式切换为 Coding Tools：Claude Code')
   } else if (lower.includes('opencode')) {
     patch.runtimeType = 'code-agent'
     patch.codeAgentType = 'opencode'
-    notes.push('运行时切换为 OpenCode')
+    patch.modelId = null
+    notes.push('执行方式切换为 Coding Tools：OpenCode')
   } else if (lower.includes('gemini')) {
     patch.runtimeType = 'code-agent'
     patch.codeAgentType = 'gemini'
-    notes.push('运行时切换为 Gemini CLI')
+    patch.modelId = null
+    notes.push('执行方式切换为 Coding Tools：Gemini CLI')
   } else if (lower.includes('普通') || lower.includes('llm')) {
     patch.runtimeType = 'llm'
     patch.codeAgentType = null
-    notes.push('运行时切换为普通 LLM')
+    notes.push('执行方式切换为普通 LLM')
+  } else if (lower.includes('只读') || lower.includes('read-only')) {
+    patch.runtimeType = 'mcp'
+    patch.codeAgentType = null
+    patch.sandboxPolicy = 'read-only'
+    patch.toolPermissions = ['workspace:read', 'skills:read']
+    patch.approvalRequired = true
+    notes.push('执行方式切换为 Native Read-only')
+  } else if (lower.includes('a2a')) {
+    patch.runtimeType = 'a2a'
+    patch.codeAgentType = null
+    notes.push('执行方式切换为 A2A Agent')
   }
 
-  if (lower.includes('只读')) {
+  if (lower.includes('只读') && !lower.includes('read-only') && !patch.runtimeType) {
     patch.sandboxPolicy = 'read-only'
     notes.push('沙箱改为只读')
   } else if (lower.includes('完全访问') || lower.includes('danger')) {
@@ -535,7 +679,7 @@ function patchFromInstruction(text: string, current: AgentConfigInput) {
 
   return {
     patch,
-    reply: notes.length ? `已根据你的指令更新：${notes.join('，')}。` : '这条指令我没识别出明确字段，试试说“角色改为… / 使用 Codex / 标签加… / 沙箱只读”。',
+    reply: notes.length ? `已根据你的指令更新：${notes.join('，')}。` : '这条指令我没识别出明确字段，试试说"角色改为… / 使用 Codex / 标签加… / 沙箱只读"。',
   }
 }
 
@@ -553,13 +697,6 @@ function splitList(value: string) {
     .split(/[,，、\s]+/)
     .map((item) => item.trim())
     .filter(Boolean)
-}
-
-function runtimeLabel(value: WorkspaceAgent['runtimeType']) {
-  if (value === 'code-agent') return 'Coding Tools'
-  if (value === 'mcp') return 'Native Read-only'
-  if (value === 'a2a') return 'A2A Agent'
-  return 'LLM Agent'
 }
 
 function sandboxLabel(value: WorkspaceAgent['sandboxPolicy']) {
@@ -594,7 +731,7 @@ function TextField({ label, value, rows, onChange }: { label: string; value: str
 
 function SelectField({ label, value, disabled, onChange, children }: { label: string; value: string; disabled?: boolean; onChange: (value: string) => void; children: ReactNode }) {
   return (
-    <label className="block text-sm">
+    <label className={cn('block text-sm', disabled && 'opacity-50')}>
       <span className="mb-2 block text-neutral-600">{label}</span>
       <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="h-10 w-full rounded-xl border border-neutral-200 bg-white px-3 outline-none focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300">
         {children}
