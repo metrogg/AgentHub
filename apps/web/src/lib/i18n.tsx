@@ -178,7 +178,7 @@ const zhToEn: Record<string, string> = {
   搜索会话: 'Search chats',
   查看归档: 'Archived',
   当前会话: 'Current chats',
-  历史话题: 'History',
+  聊天: 'History',
   子话题: 'subtopics',
   新建对话: 'New conversation',
   '选择一个聊天对象，或开启普通会话。': 'Choose a chat target or start a plain conversation.',

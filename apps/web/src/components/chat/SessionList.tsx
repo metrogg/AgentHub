@@ -374,7 +374,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
       <div className={cn('my-3 border-t border-neutral-200', activeTab !== 'messages' && 'hidden')} />
 
       <div className={cn('flex-1 overflow-y-auto px-2', activeTab !== 'messages' && 'hidden')}>
-        <div className="mb-1 px-2 text-xs text-neutral-400">{t('历史话题')}</div>
+        <div className="mb-1 px-2 text-xs text-neutral-400">{t('聊天')}</div>
         {sessionTree.length === 0 ? (
           <div className="px-2 py-4 text-xs text-neutral-400">
             {query.trim() ? t('没有匹配的会话') : showArchived ? t('还没有归档会话') : t('还没有会话')}
