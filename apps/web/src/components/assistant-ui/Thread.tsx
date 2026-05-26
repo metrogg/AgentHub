@@ -37,6 +37,7 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  Download,
   ExternalLink,
   FileText,
   FolderOpen,
@@ -47,13 +48,17 @@ import {
   ImagePlus,
   ListTodo,
   Loader2,
+  Maximize2,
 
   PanelLeft,
   Paperclip,
+  Pin,
   Pencil,
   Plus,
   Presentation,
+  Quote,
   RefreshCw,
+  Reply,
   Rocket,
   Search,
   Sheet,
@@ -62,6 +67,7 @@ import {
   Trash2,
   User,
   Users,
+  X,
 } from 'lucide-react'
 import { type ClipboardEvent, type ComponentPropsWithoutRef, type FC, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -148,6 +154,7 @@ export const Thread: FC<{
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
+            <PinnedMessagesBanner />
             <ThreadWelcome />
             <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, SystemMessage }} />
             <ThreadPrimitive.If empty={false}>
@@ -193,6 +200,11 @@ const ThreadHeader: FC<{
   onToggleSidebar: () => void
 }> = ({ sidebarCollapsed, onToggleSidebar }) => {
   const { t } = useI18n()
+  const currentSession = useChatStore((state) => state.currentSession)
+  const messages = useChatStore((state) => state.messages)
+  const pinnedCount = messages.filter((m) => m.isPinned).length
+  const sessionTitle = currentSession?.title ?? 'AgentHub'
+
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-5">
       <div className="flex min-w-0 items-center gap-3">
@@ -205,11 +217,17 @@ const ThreadHeader: FC<{
         >
           <PanelLeft className={cn('h-4 w-4 transition-transform duration-300', sidebarCollapsed && 'rotate-180')} />
         </button>
-        <div className="truncate text-sm font-medium text-neutral-950">AgentHub</div>
+        <div className="truncate text-sm font-medium text-neutral-950">{sessionTitle}</div>
         <span className="text-sm text-neutral-300">/</span>
         <span className="truncate text-sm text-neutral-500">{t('对话由 AI 生成')}</span>
       </div>
       <div className="flex items-center gap-1">
+        {pinnedCount > 0 && (
+          <div className="mr-1 flex h-6 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 text-xs font-medium text-amber-700">
+            <Pin className="h-3 w-3" />
+            {pinnedCount}
+          </div>
+        )}
         <button
           type="button"
           onClick={() => requestNewSessionDialog()}
@@ -312,11 +330,16 @@ const GroupMemberPanel: FC = () => {
           </div>
 
           {workspace?.projectPath && (
-            <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-              <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
-              <div className="min-w-0">
-                <div className="font-medium text-neutral-900">项目文件夹</div>
-                <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
+            <div className="mt-3 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2">
+                  <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
+                  <div className="min-w-0">
+                    <div className="font-medium text-neutral-900">项目文件夹</div>
+                    <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
+                  </div>
+                </div>
+                <ZipDownloadButton workspaceId={workspace.id} workspaceName={workspace.name} />
               </div>
             </div>
           )}
@@ -333,6 +356,42 @@ const GroupMemberPanel: FC = () => {
         </div>
       )}
     </aside>
+  )
+}
+
+const ZipDownloadButton: FC<{ workspaceId: string; workspaceName: string }> = ({ workspaceId, workspaceName }) => {
+  const [downloading, setDownloading] = useState(false)
+
+  async function handleDownload() {
+    setDownloading(true)
+    try {
+      const blob = await api.downloadZip(workspaceId)
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${workspaceName || 'project'}.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      window.alert(friendlyErrorMessage(err, '下载失败'))
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleDownload}
+      disabled={downloading}
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700 disabled:opacity-50"
+      title="下载项目 ZIP"
+      aria-label="下载项目 ZIP"
+    >
+      {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+    </button>
   )
 }
 
@@ -393,6 +452,27 @@ function dispatchComposerInput(input: HTMLTextAreaElement, data: string, inputTy
     input.dispatchEvent(new Event('input', { bubbles: true }))
   }
   window.dispatchEvent(new CustomEvent(composerSyncEvent, { detail: { value: input.value, scrollTop: input.scrollTop } }))
+}
+
+const PinnedMessagesBanner: FC = () => {
+  const messages = useChatStore((state) => state.messages)
+  const pinned = messages.filter((m) => m.isPinned)
+  if (!pinned.length) return null
+  return (
+    <div className="mx-auto mb-2 mt-3 flex w-full max-w-[var(--thread-max-width)] flex-col gap-1.5 rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-2.5">
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700">
+        <Pin className="h-3.5 w-3.5" />
+        已固定消息 {pinned.length}
+      </div>
+      <div className="space-y-1">
+        {pinned.map((m) => (
+          <div key={m.id} className="truncate text-xs leading-5 text-amber-800/80" title={m.content}>
+            <span className="font-medium">{m.senderType === 'user' ? 'You' : 'Agent'}:</span> {m.content}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 const ThreadWelcome: FC = () => (
@@ -771,6 +851,7 @@ const Composer: FC = () => {
               ))}
             </div>
           )}
+          <ComposerReplyBar />
           <div className="relative min-h-12">
             {composerText && (
               <div
@@ -855,6 +936,48 @@ const Composer: FC = () => {
           </div>
         </div>
       </ComposerPrimitive.Root>
+    </div>
+  )
+}
+
+const ComposerReplyBar: FC = () => {
+  const replyingToMessage = useChatStore((state) => state.replyingToMessage)
+  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
+  if (!replyingToMessage) return null
+  const sender = replyingToMessage.senderType === 'user' ? 'You' : 'Agent'
+  const preview = replyingToMessage.content.replace(/\n/g, ' ').slice(0, 80)
+  return (
+    <div className="mb-2 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
+      <Reply className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+      <div className="min-w-0 flex-1">
+        <span className="text-xs font-medium text-blue-700">回复 {sender}</span>
+        <div className="truncate text-xs text-blue-600/80" title={replyingToMessage.content}>{preview}{replyingToMessage.content.length > 80 ? '...' : ''}</div>
+      </div>
+      <button
+        type="button"
+        onClick={() => setReplyingTo(null)}
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-blue-400 hover:bg-blue-100 hover:text-blue-700"
+        aria-label="取消回复"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
+}
+
+const MessageReplyPreview: FC<{ replyToMessageId: string }> = ({ replyToMessageId }) => {
+  const messages = useChatStore((state) => state.messages)
+  const msg = messages.find((m) => m.id === replyToMessageId)
+  if (!msg) return null
+  const sender = msg.senderType === 'user' ? 'You' : 'Agent'
+  const preview = msg.content.replace(/\n/g, ' ').slice(0, 100)
+  return (
+    <div className="mb-1.5 flex items-start gap-1.5 rounded-lg border-l-2 border-blue-300 bg-blue-50/50 px-2 py-1.5 text-xs">
+      <Reply className="mt-0.5 h-3 w-3 shrink-0 text-blue-400" />
+      <div className="min-w-0 flex-1">
+        <span className="font-medium text-blue-700">{sender}</span>
+        <span className="ml-1 text-blue-600/70">{preview}{msg.content.length > 100 ? '...' : ''}</span>
+      </div>
     </div>
   )
 }
@@ -1233,10 +1356,13 @@ const UserMessage: FC = () => {
   const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
   const editMessage = useChatStore((state) => state.editMessage)
   const withdrawMessage = useChatStore((state) => state.withdrawMessage)
+  const pinMessage = useChatStore((state) => state.pinMessage)
+  const unpinMessage = useChatStore((state) => state.unpinMessage)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState<'edit' | 'withdraw' | null>(null)
   const canEdit = Boolean(sourceMessage?.senderType === 'user')
+  const isPinned = Boolean(sourceMessage?.isPinned)
   const text =
     typeof sourceMessage?.metadata?.displayContent === 'string'
       ? sourceMessage.metadata.displayContent
@@ -1273,9 +1399,35 @@ const UserMessage: FC = () => {
     }
   }
 
+  async function togglePin() {
+    if (!sourceMessage) return
+    if (isPinned) {
+      await unpinMessage(sourceMessage.id)
+    } else {
+      await pinMessage(sourceMessage.id)
+    }
+  }
+
+  function quoteMessage() {
+    if (!sourceMessage) return
+    const sender = sourceMessage.senderType === 'user' ? 'You' : 'Agent'
+    const preview = sourceMessage.content.replace(/\n/g, ' ').slice(0, 120)
+    const quoteText = `> ${sender}: ${preview}${sourceMessage.content.length > 120 ? '...' : ''}\n\n`
+    const input = insertTextIntoComposer(quoteText)
+    if (input) {
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: quoteText }))
+      window.dispatchEvent(new CustomEvent(composerSyncEvent, { detail: { value: input.value, scrollTop: input.scrollTop } }))
+    }
+  }
+
+  function replyMessage() {
+    if (!sourceMessage) return
+    useChatStore.getState().setReplyingTo(sourceMessage.id)
+  }
+
   return (
     <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] justify-end py-3">
-      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'w-full' : 'max-w-[68%]')}>
+      <div className={cn('relative flex flex-col items-end gap-1.5', editing ? 'w-full' : 'max-w-[68%]')}>
         <div
           className={cn(
             'w-full text-sm leading-6 text-neutral-900',
@@ -1284,6 +1436,13 @@ const UserMessage: FC = () => {
               : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none'
           )}
         >
+          {sourceMessage?.replyToMessageId && <MessageReplyPreview replyToMessageId={sourceMessage.replyToMessageId} />}
+          {isPinned && (
+            <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-amber-600">
+              <Pin className="h-3 w-3" />
+              已固定到上下文
+            </div>
+          )}
           {editing ? (
             <div className="flex min-h-32 flex-col">
               <textarea
@@ -1319,47 +1478,78 @@ const UserMessage: FC = () => {
             />
           )}
         </div>
-        {canEdit && !editing && (
-          <div className="flex items-center gap-1 pr-1 text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">
-            <ToolButton type="button" aria-label="修改" title="修改" onClick={startEdit} disabled={Boolean(busy)}>
-              <Pencil className="h-3.5 w-3.5" />
-            </ToolButton>
-            <ToolButton type="button" aria-label="撤回" title="撤回并尝试回滚修改" onClick={withdraw} disabled={Boolean(busy)}>
-              {busy === 'withdraw' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-            </ToolButton>
-          </div>
-        )}
+        <div className="flex items-center gap-2 pr-1">
+          {canEdit && !editing && (
+            <div className="flex items-center gap-1 text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">
+              <ToolButton type="button" aria-label="修改" title="修改" onClick={startEdit} disabled={Boolean(busy)}>
+                <Pencil className="h-3.5 w-3.5" />
+              </ToolButton>
+              <ToolButton type="button" aria-label="撤回" title="撤回并尝试回滚修改" onClick={withdraw} disabled={Boolean(busy)}>
+                {busy === 'withdraw' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              </ToolButton>
+            </div>
+          )}
+          <ToolButton type="button" aria-label="回复" title="回复" onClick={replyMessage}>
+            <Reply className="h-3.5 w-3.5" />
+          </ToolButton>
+          <ToolButton type="button" aria-label="引用" title="引用" onClick={quoteMessage}>
+            <Quote className="h-3.5 w-3.5" />
+          </ToolButton>
+          <ToolButton
+            type="button"
+            aria-label={isPinned ? '取消固定' : '固定到上下文'}
+            title={isPinned ? '取消固定' : '固定到上下文'}
+            onClick={togglePin}
+            className={cn(isPinned && 'text-amber-500 hover:text-amber-600')}
+          >
+            <Pin className="h-3.5 w-3.5" />
+          </ToolButton>
+          <span className="text-[11px] text-neutral-300">{formatMessageTime(sourceMessage?.createdAt)}</span>
+        </div>
       </div>
     </MessagePrimitive.Root>
   )
 }
 
-const AssistantMessage: FC = () => (
-  <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
-    <Avatar role="assistant" />
-    <div className="min-w-0 flex-1">
-      <div className="text-sm leading-7 text-neutral-950">
-        <MessagePrimitive.Parts
-          components={{
-            Text: MarkdownText,
-            Empty: AssistantThinking,
-            data: {
-              by_name: {
-                agent_avatar: AgentAvatarPart,
-                orchestrator_plan: OrchestratorPlanCard,
-                code_agent_run: CodeAgentRunCard,
-                agent_artifacts: AgentArtifactsCard,
-                chat_attachments: ChatAttachmentsPart,
+const AssistantMessage: FC = () => {
+  const messageId = useMessage((message) => message.id)
+  const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
+
+  return (
+    <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
+      <Avatar role="assistant" />
+      <div className="min-w-0 flex-1">
+        {sourceMessage?.replyToMessageId && <MessageReplyPreview replyToMessageId={sourceMessage.replyToMessageId} />}
+        {sourceMessage?.isPinned && (
+          <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-amber-600">
+            <Pin className="h-3 w-3" />
+            已固定到上下文
+          </div>
+        )}
+        <div className="text-sm leading-7 text-neutral-950">
+          <MessagePrimitive.Parts
+            components={{
+              Text: MarkdownText,
+              Empty: AssistantThinking,
+              data: {
+                by_name: {
+                  agent_avatar: AgentAvatarPart,
+                  orchestrator_plan: OrchestratorPlanCard,
+                  code_agent_run: CodeAgentRunCard,
+                  agent_artifacts: AgentArtifactsCard,
+                  chat_attachments: ChatAttachmentsPart,
+                },
               },
-            },
-          }}
-        />
+            }}
+          />
+        </div>
+        <AssistantActionBar />
+        <div className="mt-1 text-[11px] text-neutral-300">{formatMessageTime(sourceMessage?.createdAt)}</div>
+        <BranchPicker />
       </div>
-      <AssistantActionBar />
-      <BranchPicker />
-    </div>
-  </MessagePrimitive.Root>
-)
+    </MessagePrimitive.Root>
+  )
+}
 
 const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
   if (status?.type !== 'running') return null
@@ -1611,6 +1801,7 @@ const AgentArtifactsCard: FC<{ data: { items?: AgentArtifact[] } }> = ({ data })
   const diffCount = items.filter((item) => item.type === 'diff').length
   const previewCount = items.filter((item) => item.type === 'preview').length
   const deployCount = items.filter((item) => item.type === 'deploy').length
+  const workflowCount = items.filter((item) => item.type === 'workflow').length
 
   return (
     <div className="not-prose mt-3 space-y-2">
@@ -1622,6 +1813,7 @@ const AgentArtifactsCard: FC<{ data: { items?: AgentArtifact[] } }> = ({ data })
         {diffCount > 0 && <span>{diffCount} 个 Diff</span>}
         {previewCount > 0 && <span>{previewCount} 个预览</span>}
         {deployCount > 0 && <span>{deployCount} 个部署</span>}
+        {workflowCount > 0 && <span>{workflowCount} 个 Workflow</span>}
       </div>
       <div className="space-y-2">
         {items.map((item) => (
@@ -1636,6 +1828,7 @@ const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
   if (artifact.type === 'diff') return <DiffArtifactCard artifact={artifact} />
   if (artifact.type === 'preview') return <PreviewArtifactCard artifact={artifact} />
   if (artifact.type === 'deploy') return <DeployArtifactCard artifact={artifact} />
+  if (artifact.type === 'workflow') return <WorkflowArtifactCard artifact={artifact} />
   return <FileArtifactCard artifact={artifact} />
 }
 
@@ -1653,9 +1846,30 @@ const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> 
 
 const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> }> = ({ artifact }) => {
   const [open, setOpen] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const [applyResult, setApplyResult] = useState<string | null>(null)
+  const workspace = useChatStore((state) => state.currentWorkspace)
   const lines = artifact.diff.split(/\r?\n/)
   const additions = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
   const deletions = lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
+
+  async function applyDiff() {
+    if (!workspace?.projectPath) {
+      setApplyResult('当前会话没有绑定工作区，无法应用 Diff')
+      return
+    }
+    setApplying(true)
+    setApplyResult(null)
+    try {
+      const result = await api.applyDiff(workspace.projectPath, artifact.diff)
+      setApplyResult(result.success ? '✅ Diff 已应用' : `❌ ${result.message}`)
+    } catch (err: any) {
+      setApplyResult(`❌ ${friendlyErrorMessage(err, '应用失败')}`)
+    } finally {
+      setApplying(false)
+      setTimeout(() => setApplyResult(null), 4000)
+    }
+  }
 
   return (
     <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
@@ -1671,7 +1885,22 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
             <span className="block text-xs text-neutral-400">+{additions} / -{deletions}</span>
           </span>
         </span>
-        <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
+        <span className="inline-flex items-center gap-2">
+          {applyResult && <span className="text-xs text-neutral-500">{applyResult}</span>}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              applyDiff()
+            }}
+            disabled={applying}
+            className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+          >
+            {applying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+            应用 Diff
+          </button>
+          <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', open && 'rotate-180')} />
+        </span>
       </button>
       {open && (
         <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" />
@@ -1719,54 +1948,235 @@ const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({ diff, m
 
 const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'preview' }> }> = ({ artifact }) => {
   const [open, setOpen] = useState(artifact.previewKind === 'static-html')
+  const [fullscreen, setFullscreen] = useState(false)
 
   return (
-    <div className="agenthub-embedded-window overflow-hidden rounded-lg border border-neutral-200 bg-white">
+    <>
+      <div className="agenthub-embedded-window overflow-hidden rounded-lg border border-neutral-200 bg-white">
+        <div className="flex h-11 items-center justify-between gap-3 px-3">
+          <button type="button" onClick={() => setOpen((value) => !value)} className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
+            <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-medium text-neutral-900">{artifact.title}</span>
+              <span className="block truncate text-[11px] text-neutral-400">{artifact.url}</span>
+            </span>
+          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setFullscreen(true)}
+              className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+              title="全屏预览"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </button>
+            <a
+              href={artifact.url}
+              target="_blank"
+              rel="noreferrer"
+              className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+              title="新窗口打开"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          </div>
+        </div>
+        {open && (
+          <div className="agenthub-embedded-window-body border-t border-neutral-200 bg-neutral-50 p-2">
+            <iframe title={artifact.title} src={artifact.url} className="h-80 w-full rounded-md border border-neutral-200 bg-white" />
+          </div>
+        )}
+      </div>
+      {fullscreen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-neutral-950">
+          <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-neutral-800 bg-neutral-900 px-4">
+            <div className="inline-flex min-w-0 items-center gap-2 text-sm text-neutral-200">
+              <Globe2 className="h-4 w-4 shrink-0 text-emerald-500" />
+              <span className="truncate font-medium">{artifact.title}</span>
+              <span className="truncate text-xs text-neutral-500">{artifact.url}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFullscreen(false)}
+              className="grid h-8 w-8 place-items-center rounded-md text-neutral-400 hover:bg-neutral-800 hover:text-white"
+              title="退出全屏"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 bg-neutral-950 p-3">
+            <iframe title={artifact.title} src={artifact.url} className="h-full w-full rounded-lg border border-neutral-800 bg-white" />
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy' }> }> = ({ artifact }) => {
+  const workspace = useChatStore((state) => state.currentWorkspace)
+  const [deploying, setDeploying] = useState(false)
+  const [deployResult, setDeployResult] = useState<string | null>(null)
+  const [deployUrl, setDeployUrl] = useState<string | undefined>(artifact.url)
+
+  async function handleDeploy() {
+    if (!workspace?.id) {
+      setDeployResult('未绑定工作区，无法部署')
+      return
+    }
+    setDeploying(true)
+    setDeployResult(null)
+    try {
+      const result = await api.deployStatic(workspace.id)
+      setDeployUrl(result.url)
+      setDeployResult('✅ 部署成功')
+    } catch (err: any) {
+      setDeployResult(`❌ ${friendlyErrorMessage(err, '部署失败')}`)
+    } finally {
+      setDeploying(false)
+      setTimeout(() => setDeployResult(null), 4000)
+    }
+  }
+
+  const canDeploy = artifact.status === 'pending' && !deployUrl && workspace?.id
+
+  return (
+    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+      <div className="flex items-center gap-2">
+        <Rocket className="h-4 w-4 shrink-0 text-emerald-700" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-semibold text-emerald-900">{artifact.title}</div>
+          <div className="mt-0.5 truncate text-[11px] text-emerald-700">
+            {artifact.provider} · {deployStatusLabel(artifact.status)} {deployUrl && '· 已就绪'}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          {deployResult && <span className="text-xs text-emerald-800">{deployResult}</span>}
+          {canDeploy && (
+            <button
+              type="button"
+              onClick={handleDeploy}
+              disabled={deploying}
+              className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-white px-2 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+            >
+              {deploying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Rocket className="h-3 w-3" />}
+              静态部署
+            </button>
+          )}
+          {deployUrl && (
+            <a href={deployUrl} target="_blank" rel="noreferrer" className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100" title="打开部署">
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workflow' }> }> = ({ artifact }) => {
+  const [expanded, setExpanded] = useState(false)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+
+  async function runWorkflow() {
+    if (!currentSessionId) return
+    const content = `@orchestrator 执行工作流：${artifact.title}`
+    await api.sendMessageWithModel(currentSessionId, { content, skipAgentReply: true })
+    const card = await api.createOrchestratorPlan(currentSessionId, content)
+    useChatStore.setState((s) => ({ messages: [...s.messages, card] }))
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-indigo-200 bg-white shadow-sm">
       <div className="flex h-11 items-center justify-between gap-3 px-3">
-        <button type="button" onClick={() => setOpen((value) => !value)} className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
-          <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
+        <button type="button" onClick={() => setExpanded((v) => !v)} className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
+          <GitBranch className="h-4 w-4 shrink-0 text-indigo-500" />
           <span className="min-w-0">
             <span className="block truncate text-xs font-medium text-neutral-900">{artifact.title}</span>
-            <span className="block truncate text-[11px] text-neutral-400">{artifact.url}</span>
+            <span className="block truncate text-[11px] text-neutral-400">{artifact.nodes.length} 个节点 · {artifact.edges.length} 条连接</span>
           </span>
         </button>
-        <a
-          href={artifact.url}
-          target="_blank"
-          rel="noreferrer"
-          className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
-          title="新窗口打开"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </a>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              void runWorkflow()
+            }}
+            className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+            title="执行 Workflow"
+          >
+            <Rocket className="h-3 w-3" />
+            执行
+          </button>
+          <ChevronDown className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', expanded && 'rotate-180')} />
+        </div>
       </div>
-      {open && (
-        <div className="agenthub-embedded-window-body border-t border-neutral-200 bg-neutral-50 p-2">
-          <iframe title={artifact.title} src={artifact.url} className="h-80 w-full rounded-md border border-neutral-200 bg-white" />
+
+      <div className="border-t border-indigo-100 bg-indigo-50/40 px-3 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {artifact.nodes.map((node, index) => (
+            <div key={node.id} className="flex items-center gap-2">
+              <div
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+                  node.type === 'input'
+                    ? 'border-neutral-200 bg-white text-neutral-600'
+                    : node.type === 'output'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : 'border-indigo-200 bg-white text-indigo-700'
+                )}
+              >
+                {node.type === 'agent' && (
+                  <span className="h-2 w-2 rounded-full" style={{ background: node.agentColor ?? '#6366f1' }} />
+                )}
+                <span>{node.label}</span>
+              </div>
+              {index < artifact.nodes.length - 1 && (
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-indigo-300" />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-indigo-100 bg-white px-3 py-3">
+          <div className="space-y-2 text-xs text-neutral-600">
+            {artifact.edges.map((edge) => (
+              <div key={`${edge.from}-${edge.to}`} className="flex items-center gap-2 rounded-md bg-neutral-50 px-2.5 py-1.5">
+                <span className="font-medium text-neutral-800">{artifact.nodes.find((n) => n.id === edge.from)?.label ?? edge.from}</span>
+                <ChevronRight className="h-3 w-3 text-neutral-300" />
+                <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">{edge.label ?? '下一步'}</span>
+                <ChevronRight className="h-3 w-3 text-neutral-300" />
+                <span className="font-medium text-neutral-800">{artifact.nodes.find((n) => n.id === edge.to)?.label ?? edge.to}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 rounded-md bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
+            <span className="font-medium text-neutral-700">Workflow 说明</span>
+            <div className="mt-1">{artifact.description}</div>
+          </div>
         </div>
       )}
     </div>
   )
 }
 
-const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy' }> }> = ({ artifact }) => (
-  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
-    <div className="flex items-center gap-2">
-      <Rocket className="h-4 w-4 shrink-0 text-emerald-700" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-xs font-semibold text-emerald-900">{artifact.title}</div>
-        <div className="mt-0.5 truncate text-[11px] text-emerald-700">
-          {artifact.provider} · {deployStatusLabel(artifact.status)}
-        </div>
-      </div>
-      {artifact.url && (
-        <a href={artifact.url} target="_blank" rel="noreferrer" className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100" title="打开部署">
-          <ExternalLink className="h-3.5 w-3.5" />
-        </a>
-      )}
-    </div>
-  </div>
-)
+function formatMessageTime(iso: string | undefined) {
+  if (!iso) return ''
+  const date = new Date(iso)
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  const isYesterday = new Date(now.getTime() - 86400000).toDateString() === date.toDateString()
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  if (isToday) return `${hours}:${minutes}`
+  if (isYesterday) return `昨天 ${hours}:${minutes}`
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${month}-${day} ${hours}:${minutes}`
+}
 
 function deployStatusLabel(status: Extract<AgentArtifact, { type: 'deploy' }>['status']) {
   if (status === 'ready') return '已就绪'
@@ -2100,6 +2510,10 @@ const SystemMessage: FC = () => (
 const AssistantActionBar: FC = () => {
   const messageId = useMessage((message) => message.id)
   const regenerateMessage = useChatStore((state) => state.regenerateMessage)
+  const pinMessage = useChatStore((state) => state.pinMessage)
+  const unpinMessage = useChatStore((state) => state.unpinMessage)
+  const sourceMessage = useChatStore((state) => state.messages.find((message) => message.id === messageId))
+  const isPinned = Boolean(sourceMessage?.isPinned)
   const [regenerating, setRegenerating] = useState(false)
 
   async function regenerate() {
@@ -2110,6 +2524,32 @@ const AssistantActionBar: FC = () => {
     } finally {
       setRegenerating(false)
     }
+  }
+
+  async function togglePin() {
+    if (messageId === 'agenthub-thinking') return
+    if (isPinned) {
+      await unpinMessage(messageId)
+    } else {
+      await pinMessage(messageId)
+    }
+  }
+
+  function quoteMessage() {
+    if (!sourceMessage || messageId === 'agenthub-thinking') return
+    const sender = sourceMessage.senderType === 'user' ? 'You' : 'Agent'
+    const preview = sourceMessage.content.replace(/\n/g, ' ').slice(0, 120)
+    const quoteText = `> ${sender}: ${preview}${sourceMessage.content.length > 120 ? '...' : ''}\n\n`
+    const input = insertTextIntoComposer(quoteText)
+    if (input) {
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: quoteText }))
+      window.dispatchEvent(new CustomEvent(composerSyncEvent, { detail: { value: input.value, scrollTop: input.scrollTop } }))
+    }
+  }
+
+  function replyMessage() {
+    if (!sourceMessage || messageId === 'agenthub-thinking') return
+    useChatStore.getState().setReplyingTo(sourceMessage.id)
   }
 
   return (
@@ -2126,6 +2566,21 @@ const AssistantActionBar: FC = () => {
       </ActionBarPrimitive.Copy>
       <ToolButton aria-label="重新生成" title="重新生成" onClick={regenerate} disabled={regenerating}>
         <RefreshCw className={cn('h-3.5 w-3.5', regenerating && 'animate-spin')} />
+      </ToolButton>
+      <ToolButton type="button" aria-label="回复" title="回复" onClick={replyMessage}>
+        <Reply className="h-3.5 w-3.5" />
+      </ToolButton>
+      <ToolButton type="button" aria-label="引用" title="引用" onClick={quoteMessage}>
+        <Quote className="h-3.5 w-3.5" />
+      </ToolButton>
+      <ToolButton
+        type="button"
+        aria-label={isPinned ? '取消固定' : '固定到上下文'}
+        title={isPinned ? '取消固定' : '固定到上下文'}
+        onClick={togglePin}
+        className={cn(isPinned && 'text-amber-500 hover:text-amber-600')}
+      >
+        <Pin className="h-3.5 w-3.5" />
       </ToolButton>
     </ActionBarPrimitive.Root>
   )

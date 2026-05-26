@@ -20,6 +20,8 @@ interface ChatState {
   loadingSessions: boolean
   loadingMessages: boolean
   agentTyping: boolean
+  replyingToMessageId: string | null
+  replyingToMessage: Message | null
 
   fetchSessions: () => Promise<void>
   createSession: (title?: string, options?: { workspaceId?: string | null; workspaceAgentId?: string | null; type?: 'direct' | 'group' }) => Promise<Session>
@@ -30,11 +32,14 @@ interface ChatState {
   editMessage: (messageId: string, content: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
   regenerateMessage: (messageId: string) => Promise<void>
+  pinMessage: (messageId: string) => Promise<void>
+  unpinMessage: (messageId: string) => Promise<void>
   addPendingAttachments: (attachments: ChatAttachment[]) => void
   removePendingAttachment: (id: string) => void
   clearPendingAttachments: () => void
   cancelRun: () => Promise<void>
   setSelectedModelId: (modelId: string | null) => void
+  setReplyingTo: (messageId: string | null) => void
   handleWSEvent: (e: WSEvent) => void
   initWebSocket: () => () => void
 }
@@ -61,6 +66,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadingSessions: false,
   loadingMessages: false,
   agentTyping: false,
+  replyingToMessageId: null,
+  replyingToMessage: null,
 
   async fetchSessions() {
     set({ loadingSessions: true })
@@ -97,6 +104,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingCodeAgentRun: null,
       pendingAttachments: [],
       agentTyping: false,
+      replyingToMessageId: null,
+      replyingToMessage: null,
     })
     wsClient.joinSession(sessionId)
     try {
@@ -151,14 +160,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       get().currentWorkspaceAgents
     )
     try {
+      const replyToMessageId = get().replyingToMessageId
       const msg = await api.sendMessageWithModel(sessionId, {
         content: contentForAgent,
         modelId: get().selectedModelId ?? undefined,
         skipAgentReply: shouldCreatePlan,
         attachments,
         displayContent: attachments.length ? content : undefined,
+        replyToMessageId,
       })
-      set((s) => ({ messages: [...s.messages, msg], pendingAttachments: [] }))
+      set((s) => ({ messages: [...s.messages, msg], pendingAttachments: [], replyingToMessageId: null, replyingToMessage: null }))
       let dispatchResult: { groupSessionId?: string } | undefined
       if (shouldCreatePlan) {
         const card = await api.createOrchestratorPlan(sessionId, contentForAgent)
@@ -226,6 +237,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({ messages: s.messages.filter((message) => message.id !== result.removedMessageId) }))
   },
 
+  async pinMessage(messageId) {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return
+    const updated = await api.pinMessage(sessionId, messageId)
+    set((s) => ({
+      messages: s.messages.map((message) => (message.id === messageId ? updated : message)),
+    }))
+  },
+
+  async unpinMessage(messageId) {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return
+    const updated = await api.unpinMessage(sessionId, messageId)
+    set((s) => ({
+      messages: s.messages.map((message) => (message.id === messageId ? updated : message)),
+    }))
+  },
+
   addPendingAttachments(attachments) {
     if (!attachments.length) return
     set((s) => ({ pendingAttachments: [...s.pendingAttachments, ...attachments].slice(0, 6) }))
@@ -250,6 +279,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setSelectedModelId(modelId) {
     set({ selectedModelId: modelId })
+  },
+
+  setReplyingTo(messageId) {
+    if (!messageId) {
+      set({ replyingToMessageId: null, replyingToMessage: null })
+      return
+    }
+    const msg = get().messages.find((m) => m.id === messageId) ?? null
+    set({ replyingToMessageId: messageId, replyingToMessage: msg })
   },
 
   handleWSEvent(e) {
