@@ -43,6 +43,11 @@ interface ToolConfig {
 
 const storageKey = 'CODING_TOOLS_CONFIG'
 
+// Module-level cache for tool status, persists across page navigations within the same session
+let cachedToolStatus: Record<string, CodingToolStatus> | null = null
+let cachedToolStatusTime = 0
+const STATUS_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+
 const toolIcons: Record<string, string> = {
   codex: '/codex-color.svg',
   'claude-code': '/claude-color.svg',
@@ -193,7 +198,7 @@ export default function CodingToolsPage() {
         if (activeIndex >= 0) setToolPage(Math.floor(activeIndex / 3))
       }
       if (settings.CODEX_CHATGPT_TRANSPORT === 'websocket') setCodexTransport('websocket')
-      void refreshStatus(nextTools)
+      void refreshStatus(nextTools, false) // Use cache if available
       void refreshCodexAuth()
       void refreshCodexConfig()
       void refreshCodexAuthFile()
@@ -225,11 +230,19 @@ export default function CodingToolsPage() {
   }, [toolPage, toolPageCount])
 
 
-  async function refreshStatus(probeTools = tools) {
+  async function refreshStatus(probeTools = tools, force = false) {
+    // Use cache if available and not expired (unless forced)
+    if (!force && cachedToolStatus && Date.now() - cachedToolStatusTime < STATUS_CACHE_TTL) {
+      setStatuses(cachedToolStatus)
+      return
+    }
     setChecking(true)
     try {
       const res = await api.getCodingToolStatus(probeTools.map(({ apiKeyEnv, id, command }) => ({ apiKeyEnv, id, command })))
-      setStatuses(Object.fromEntries(res.items.map((item) => [item.id, item])))
+      const statusMap = Object.fromEntries(res.items.map((item) => [item.id, item]))
+      setStatuses(statusMap)
+      cachedToolStatus = statusMap
+      cachedToolStatusTime = Date.now()
     } finally {
       setChecking(false)
     }
@@ -577,7 +590,7 @@ export default function CodingToolsPage() {
             <span className="truncate text-sm text-neutral-500">Coding Tools</span>
           </div>
           <div className="flex items-center gap-2">
-            <IconButton label="检测" onClick={() => refreshStatus()} disabled={checking}>
+            <IconButton label="检测" onClick={() => refreshStatus(tools, true)} disabled={checking}>
               <RefreshCw className={cn('h-4 w-4', checking && 'animate-spin')} />
             </IconButton>
             <IconButton label={cliBusy ? '安装中' : '检测并安装缺失 CLI'} onClick={installAllCliTools} disabled={cliBusy}>
