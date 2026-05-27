@@ -32,10 +32,10 @@ interface OpencodeModelItem {
 }
 
 const probes: ToolProbe[] = [
-  { id: 'codex', command: 'codex' },
-  { id: 'claude-code', command: 'claude' },
-  { id: 'opencode', command: 'opencode' },
-  { id: 'gemini', command: 'gemini' },
+  { id: 'codex', command: 'codex', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
+  { id: 'claude-code', command: 'claude', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
+  { id: 'opencode', command: 'opencode', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
+  { id: 'gemini', command: 'gemini', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
 ]
 
 const agentAdapters = [
@@ -450,6 +450,19 @@ function uniqueOpencodeModels(models: OpencodeModelItem[]) {
   })
 }
 
+// CLI 探测结果缓存（避免短时间内重复 fork 子进程）
+interface ProbeCacheEntry {
+  result: Awaited<ReturnType<typeof probeToolDirectImpl>>
+  timestamp: number
+}
+
+const probeCache = new Map<string, ProbeCacheEntry>()
+const PROBE_CACHE_TTL_MS = 15_000
+
+function getProbeCacheKey(probe: ToolProbe): string {
+  return `${probe.id}:${probe.command}:${probe.apiKeyEnv ?? ''}`
+}
+
 async function probeTools(items: ToolProbe[]) {
   const results = []
   for (const item of items) {
@@ -475,16 +488,27 @@ async function probeTool(probe: ToolProbe) {
   return probeToolDirect(probe)
 }
 
-async function probeToolDirect(probe: ToolProbe) {
-  console.log(`[probe] start ${probe.id}: command=${probe.command}`)
+async function probeToolDirect(probe: ToolProbe, { skipCache = false } = {}) {
+  const cacheKey = getProbeCacheKey(probe)
+  if (!skipCache) {
+    const cached = probeCache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < PROBE_CACHE_TTL_MS) {
+      return cached.result
+    }
+  }
+
+  const result = await probeToolDirectImpl(probe)
+  probeCache.set(cacheKey, { result, timestamp: Date.now() })
+  return result
+}
+
+async function probeToolDirectImpl(probe: ToolProbe) {
   const version = await runVersionProbe(probe.command)
-  console.log(`[probe] version ${probe.id}: ${version ?? 'null'}`)
   const configEnv = configEnvName(probe)
   const configured = await isDirectToolConfigured(probe, configEnv)
-  console.log(`[probe] configured ${probe.id}: ${configured}`)
   const installed = Boolean(version)
   const reachable = await isCommandReachable(probe.command)
-  const result = {
+  return {
     id: probe.id,
     command: probe.command,
     installed,
@@ -494,12 +518,11 @@ async function probeToolDirect(probe: ToolProbe) {
     configMessage: configMessage({ configEnv, configured, installed, runtime: '本机环境', toolId: probe.id }),
     diagnostics: `reachable=${reachable} version=${version ?? 'null'} env=${configEnv} envValue=${readEnv(configEnv) ? 'set' : 'unset'}`,
   }
-  console.log(`[probe] result ${probe.id}: installed=${installed} configured=${configured} diagnostics=${result.diagnostics}`)
-  return result
 }
 
 async function installAllCliTools() {
-  const before = await Promise.all(probes.map(probeToolDirect))
+  probeCache.clear()
+  const before = await Promise.all(probes.map((p) => probeToolDirect(p, { skipCache: true })))
   const missing = before.filter((item) => !item.installed)
   const skipped = before.filter((item) => item.installed)
   const packages = missing.map((item) => cliPackages[item.id]).filter((pkg): pkg is string => Boolean(pkg))
@@ -531,7 +554,7 @@ async function installAllCliTools() {
   const install = await runFixedCommand(['bun', 'install', '-g', ...packages], {
     timeoutMs: 10 * 60 * 1000,
   })
-  const items = await Promise.all(probes.map(probeToolDirect))
+  const items = await Promise.all(probes.map((p) => probeToolDirect(p, { skipCache: true })))
   const ok = install.code === 0 && items.every((item) => item.installed)
   const configured = items.every((item) => item.configured)
   return {
@@ -793,10 +816,7 @@ function isSafeEnvName(name?: string) {
 }
 
 function defaultApiKeyEnv(id: string) {
-  if (id === 'claude-code') return 'ANTHROPIC_API_KEY'
-  if (id === 'opencode') return 'DEEPSEEK_API_KEY'
-  if (id === 'gemini') return 'GEMINI_API_KEY'
-  return 'OPENAI_API_KEY'
+  return 'AGENTHUB_MODEL_API_KEY'
 }
 
 function configEnvName(probe: ToolProbe) {
