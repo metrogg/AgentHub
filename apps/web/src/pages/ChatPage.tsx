@@ -1,6 +1,6 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, AtSign, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
+import { ArrowUp, AtSign, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, MoreHorizontal, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
 import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
@@ -8,9 +8,11 @@ import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '..
 import { useI18n } from '../lib/i18n'
 import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
+import { requestSettingsDialog } from '../lib/settingsDialog'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
 import { useChatStore } from '../stores/chatStore'
+import { requestNewSessionDialog } from '../components/chat/GlobalNewSessionDialog'
 
 export default function ChatPage() {
   const { sessionId } = useParams()
@@ -107,11 +109,30 @@ function Welcome() {
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [addProjectOpen, setAddProjectOpen] = useState(false)
   const [hint, setHint] = useState('')
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const moreMenuRef = useRef<HTMLDivElement>(null)
   const filteredWorkspaces = workspaces.filter((workspace) => {
     const query = workspaceQuery.trim().toLowerCase()
     if (!query) return true
     return workspaceSearchText(workspace).includes(query)
   })
+
+  useEffect(() => {
+    if (!moreMenuOpen) return
+    function handlePointerDown(event: PointerEvent) {
+      if (moreMenuRef.current?.contains(event.target as Node)) return
+      setMoreMenuOpen(false)
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setMoreMenuOpen(false)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [moreMenuOpen])
 
   useEffect(() => {
     if (!projectMenuOpen) return
@@ -302,6 +323,58 @@ function Welcome() {
 
   return (
     <div className="agenthub-welcome-root flex h-full flex-col bg-white">
+      <div className="pointer-events-none absolute right-5 top-4 z-20">
+        <div ref={moreMenuRef} className="pointer-events-auto relative">
+          <button
+            type="button"
+            onClick={() => setMoreMenuOpen((open) => !open)}
+            className="grid h-9 w-9 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+            aria-label="更多"
+            title="更多"
+          >
+            <MoreHorizontal className="h-5 w-5" />
+          </button>
+          {moreMenuOpen && (
+            <div className="absolute right-0 top-11 z-30 w-44 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
+              <WelcomeMenuItem
+                label="新建群聊"
+                onClick={() => {
+                  setMoreMenuOpen(false)
+                  requestNewSessionDialog()
+                }}
+              />
+              <WelcomeMenuItem
+                label="Agent 配置"
+                onClick={() => {
+                  setMoreMenuOpen(false)
+                  navigate('/agent-config')
+                }}
+              />
+              <WelcomeMenuItem
+                label="模型管理"
+                onClick={() => {
+                  setMoreMenuOpen(false)
+                  navigate('/models')
+                }}
+              />
+              <WelcomeMenuItem
+                label="Coding Tools"
+                onClick={() => {
+                  setMoreMenuOpen(false)
+                  navigate('/coding-tools')
+                }}
+              />
+              <WelcomeMenuItem
+                label="设置"
+                onClick={() => {
+                  setMoreMenuOpen(false)
+                  requestSettingsDialog()
+                }}
+              />
+            </div>
+          )}
+        </div>
+      </div>
       <div className="flex flex-1 flex-col items-center px-8">
         <section className="mt-[18vh] w-full max-w-[704px]">
           <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
@@ -499,6 +572,18 @@ function PromptCard({ title, text, onClick }: { title: string; text: string; onC
     >
       <div className="text-sm font-medium text-neutral-950">{title}</div>
       <div className="mt-1 text-sm text-neutral-500">{text}</div>
+    </button>
+  )
+}
+
+function WelcomeMenuItem({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex h-9 w-full items-center rounded-xl px-3 text-left text-sm text-neutral-900 transition hover:bg-neutral-100"
+    >
+      {label}
     </button>
   )
 }

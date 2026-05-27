@@ -22,7 +22,9 @@ mkdirSync(pathDirname(dbPath), { recursive: true })
 const sqlite = new Database(dbPath, { create: true })
 sqlite.exec('PRAGMA journal_mode = WAL;')
 sqlite.exec('PRAGMA foreign_keys = ON;')
-ensureLegacySchema(sqlite)
+if (process.env.AGENTHUB_SKIP_LEGACY_SCHEMA !== '1') {
+  ensureLegacySchema(sqlite)
+}
 
 export const db = drizzle(sqlite, { schema })
 export type DB = typeof db
@@ -70,6 +72,33 @@ function ensureLegacySchema(database: Database) {
   ensureColumn(database, 'workspace_tasks', 'started_at', 'ALTER TABLE workspace_tasks ADD COLUMN started_at integer')
   ensureColumn(database, 'workspace_tasks', 'completed_at', 'ALTER TABLE workspace_tasks ADD COLUMN completed_at integer')
   ensureColumn(database, 'workspace_tasks', 'error_log', 'ALTER TABLE workspace_tasks ADD COLUMN error_log text')
+
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'role_type',
+    "ALTER TABLE workspace_agents ADD COLUMN role_type text DEFAULT 'custom' NOT NULL",
+  )
+  ensureColumn(database, 'workspace_agents', 'role_profile', 'ALTER TABLE workspace_agents ADD COLUMN role_profile text')
+
+  ensureTable(
+    database,
+    'workspace_agent_relations',
+    `CREATE TABLE workspace_agent_relations (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      source_agent_id TEXT NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      target_agent_id TEXT NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      relation_type TEXT NOT NULL,
+      note TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+  )
+  database.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS workspace_agent_relations_unique
+      ON workspace_agent_relations(workspace_id, source_agent_id, target_agent_id, relation_type)`,
+  )
 
   ensureTable(
     database,

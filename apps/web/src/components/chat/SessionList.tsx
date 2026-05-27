@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import { api, type Session } from '../../lib/api'
+import { api, friendlyErrorMessage, type Session } from '../../lib/api'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
@@ -88,6 +88,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [agentQuery, setAgentQuery] = useState('')
   const [quickCreateOpen, setQuickCreateOpen] = useState(false)
   const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
+  const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
+  const [hint, setHint] = useState('')
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
   const archivedSessionCount = useMemo(() => prefs.archived.length, [prefs.archived])
@@ -237,6 +239,11 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     setDeleteTarget(null)
   }
 
+  function showHint(text: string) {
+    setHint(text)
+    window.setTimeout(() => setHint(''), 1800)
+  }
+
   function openNewSessionDialog() {
     setQuickCreateOpen(false)
     requestNewSessionDialog()
@@ -247,14 +254,28 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     navigate('/agent-config?newAgent=1')
   }
 
+  async function openExistingSession(session: Session) {
+    if (openingSessionId === session.id) return
+    setOpeningSessionId(session.id)
+    try {
+      await selectSession(session.id)
+      navigate(`/chat/${session.id}`)
+    } catch (error) {
+      showHint(friendlyErrorMessage(error, '打开会话失败'))
+    } finally {
+      setOpeningSessionId(null)
+    }
+  }
+
   async function openAgentSession(agent: SavedAgentConfig) {
     if (openingAgentId) return
     setOpeningAgentId(agent.id)
     try {
       const session = await startAgentConversation({ agents: [agent] })
       await fetchSessions()
-      await selectSession(session.id)
-      navigate(`/chat/${session.id}`)
+      await openExistingSession(session)
+    } catch (error) {
+      showHint(friendlyErrorMessage(error, `打开 ${agent.name} 失败`))
     } finally {
       setOpeningAgentId(null)
     }
@@ -443,6 +464,13 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
       <div className={cn('my-3 border-t border-neutral-200', activeTab !== 'messages' && 'hidden')} />
 
       <div className={cn('flex-1 overflow-y-auto px-2 pb-4', activeTab !== 'messages' && 'hidden')}>
+        {hint && (
+          <div className="mb-2 px-2">
+            <div className="rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
+              {hint}
+            </div>
+          </div>
+        )}
         <div className="mb-1 px-2 text-xs text-neutral-400">{t('群聊')}</div>
         {sessionTree.length === 0 ? (
           <div className="px-2 py-4 text-xs text-neutral-400">
@@ -461,22 +489,17 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
               return (
                 <li key={item.parent.id} className="space-y-1">
                   <div
+                    onClick={() => void openExistingSession(item.parent)}
                     className={cn(
-                      'group flex items-center gap-1 rounded-xl transition',
+                      'group cursor-pointer flex items-center gap-1 rounded-xl transition',
                       active || childActive ? 'bg-white shadow-sm' : 'hover:bg-white/70',
                     )}
                   >
                     <button
-                      onClick={() => {
-                        if (hasChildren && workspaceId) {
-                          setExpandedWorkspaces((current) => {
-                            const next = new Set(current)
-                            if (next.has(workspaceId)) next.delete(workspaceId)
-                            else next.add(workspaceId)
-                            return next
-                          })
-                        }
-                        navigate(`/chat/${item.parent.id}`)
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void openExistingSession(item.parent)
                       }}
                       className={cn(
                         'flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-2 text-left text-sm transition',
@@ -497,8 +520,12 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                             : relativeTime(item.latestUpdatedAt, language)}
                         </span>
                       </span>
+                      {openingSessionId === item.parent.id && (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-neutral-300" />
+                      )}
                     </button>
                     <button
+                      type="button"
                       onClick={(event) => togglePin(event, item.parent)}
                       className={cn(
                         'grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900',
@@ -509,6 +536,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
                     </button>
                     <button
+                      type="button"
                       onClick={(event) => toggleArchive(event, item.parent, item.children.map((child) => child.id))}
                       className={cn(
                         'grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900',
@@ -519,6 +547,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       {archived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
                     </button>
                     <button
+                      type="button"
                       onClick={(event) => requestDelete(event, item.parent)}
                       className={cn(
                         'grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-red-50 hover:text-red-500',
@@ -535,13 +564,18 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       {item.children.map((child) => (
                         <li
                           key={child.id}
+                          onClick={() => void openExistingSession(child)}
                           className={cn(
-                            'group/child flex items-center gap-1 rounded-lg transition',
+                            'group/child flex cursor-pointer items-center gap-1 rounded-lg transition',
                             sessionId === child.id ? 'bg-white shadow-sm' : 'hover:bg-white/70',
                           )}
                         >
                           <button
-                            onClick={() => navigate(`/chat/${child.id}`)}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void openExistingSession(child)
+                            }}
                             className={cn(
                               'flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition',
                               sessionId === child.id ? 'text-neutral-950' : 'text-neutral-500 hover:text-neutral-800'
@@ -556,8 +590,12 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                               <span className="block truncate">{sessionDisplayTitle(childSessionTitle(child, item.parent), t)}</span>
                               <span className="block truncate text-[10px] text-neutral-400">{relativeTime(child.updatedAt, language)}</span>
                             </span>
+                            {openingSessionId === child.id && (
+                              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-300" />
+                            )}
                           </button>
                           <button
+                            type="button"
                             onClick={(event) => togglePin(event, child)}
                             className={cn(
                               'grid h-6 w-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900',
@@ -568,6 +606,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                             {pinnedIds.has(child.id) ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
                           </button>
                           <button
+                            type="button"
                             onClick={(event) => toggleArchive(event, child)}
                             className={cn(
                               'grid h-6 w-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900',
@@ -578,6 +617,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                             {archivedIds.has(child.id) ? <ArchiveRestore className="h-3 w-3" /> : <Archive className="h-3 w-3" />}
                           </button>
                           <button
+                            type="button"
                             onClick={(event) => requestDelete(event, child)}
                             className={cn(
                               'grid h-6 w-6 place-items-center rounded-md text-neutral-400 hover:bg-red-50 hover:text-red-500',
