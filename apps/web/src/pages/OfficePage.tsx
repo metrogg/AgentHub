@@ -1,51 +1,94 @@
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import {
-  Bot,
-  Building2,
-  FolderOpen,
-  GitBranch,
-  LayoutDashboard,
+  CheckCircle2,
+  Clock,
+  ExternalLink,
   Loader2,
-  MessageSquare,
-  PlayCircle,
+  MessageCircle,
   RefreshCw,
   Settings2,
+  Sparkles,
   Users,
 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
 import SessionList from '../components/chat/SessionList'
-import { requestNewSessionDialog } from '../components/chat/GlobalNewSessionDialog'
-import { api } from '../lib/api'
+import { api, friendlyErrorMessage, type Session, type StarOfficeStatus } from '../lib/api'
 import { useI18n } from '../lib/i18n'
-import { useWorkspaceStore } from '../stores/workspaceStore'
+import { cn, relativeTime } from '../lib/utils'
+import { useChatStore } from '../stores/chatStore'
 
-type OfficePanel = 'dashboard' | 'workspace'
+const DEFAULT_STAR_OFFICE_URL = 'http://127.0.0.1:19000'
+
+type OfficePanel = 'session' | 'settings'
 
 export default function OfficePage() {
-  const { t } = useI18n()
-  const navigate = useNavigate()
-  const [activePanel, setActivePanel] = useState<OfficePanel>('dashboard')
-  const [selectingWorkspaceId, setSelectingWorkspaceId] = useState<string | null>(null)
-  const { workspaces, currentId, loadingList, fetchList, selectWorkspace } = useWorkspaceStore()
-  const currentWorkspace = workspaces.find((workspace) => workspace.id === currentId) ?? null
-  const [stats, setStats] = useState<{ sessions: number; agents: number; recentRuns: number }>({ sessions: 0, agents: 0, recentRuns: 0 })
+  const { language } = useI18n()
+  const sessions = useChatStore((state) => state.sessions)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const loadingSessions = useChatStore((state) => state.loadingSessions)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
+  const [frameKey, setFrameKey] = useState(0)
+  const [loaded, setLoaded] = useState(false)
+  const [officeBusy, setOfficeBusy] = useState(false)
+  const [officeError, setOfficeError] = useState<string | null>(null)
+  const [officeStatus, setOfficeStatus] = useState<StarOfficeStatus | null>(null)
+  const [activePanel, setActivePanel] = useState<OfficePanel>('session')
+  const [boundSessionId, setBoundSessionId] = useState<string | null>(null)
+
+  const availableSessions = useMemo(() => {
+    const seen = new Set<string>()
+    return sessions.filter((session) => {
+      const key = sessionDedupKey(session)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [sessions])
+
+  const boundSession =
+    availableSessions.find((session) => session.id === boundSessionId) ??
+    availableSessions.find((session) => session.id === currentSessionId) ??
+    null
+  const officeUrl = officeStatus?.url ?? DEFAULT_STAR_OFFICE_URL
+  const canRenderOffice = Boolean(officeStatus?.running)
 
   useEffect(() => {
-    void fetchList()
-  }, [fetchList])
+    void fetchSessions()
+  }, [fetchSessions])
 
   useEffect(() => {
-    if (!currentId) return
-    api.listSessions().then((res) => setStats((s) => ({ ...s, sessions: res.items.length }))).catch(() => {})
-  }, [currentId])
+    void ensureOffice()
+  }, [])
 
-  async function handleWorkspaceSelect(workspaceId: string | null) {
-    setSelectingWorkspaceId(workspaceId ?? 'none')
-    try {
-      await selectWorkspace(workspaceId)
-    } finally {
-      setSelectingWorkspaceId(null)
+  useEffect(() => {
+    if (boundSessionId && availableSessions.some((session) => session.id === boundSessionId)) return
+    if (currentSessionId && availableSessions.some((session) => session.id === currentSessionId)) {
+      setBoundSessionId(currentSessionId)
+      return
     }
+    setBoundSessionId(availableSessions[0]?.id ?? null)
+  }, [availableSessions, boundSessionId, currentSessionId])
+
+  async function ensureOffice() {
+    setOfficeBusy(true)
+    setOfficeError(null)
+    setLoaded(false)
+    try {
+      const status = await api.startStarOffice()
+      setOfficeStatus(status)
+      if (!status.running) {
+        setOfficeError(status.error ?? 'Star Office 暂未启动')
+      }
+    } catch (error) {
+      setOfficeStatus(null)
+      setOfficeError(friendlyErrorMessage(error, '启动 Star Office 失败'))
+    } finally {
+      setOfficeBusy(false)
+    }
+  }
+
+  function reloadOffice() {
+    setFrameKey((current) => current + 1)
+    void ensureOffice()
   }
 
   return (
@@ -53,179 +96,184 @@ export default function OfficePage() {
       <SessionList />
 
       <main className="flex min-w-0 flex-1 overflow-hidden">
-        <aside className="flex h-full w-72 shrink-0 flex-col border-r border-neutral-200 bg-white">
+        <aside className="flex h-full w-80 shrink-0 flex-col border-r border-neutral-200 bg-white">
           <div className="border-b border-neutral-200 px-4 py-4">
             <div className="flex items-center gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-neutral-950 text-white">
-                <Building2 className="h-5 w-5" />
+                <Sparkles className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <h1 className="truncate text-base font-semibold tracking-normal">{t('办公室')}</h1>
-                <p className="truncate text-sm text-neutral-500">{t('工作区仪表盘')}</p>
+                <h1 className="truncate text-base font-semibold tracking-normal">Star Office</h1>
+                <p className="truncate text-sm text-neutral-500">AgentHub 办公室看板</p>
               </div>
             </div>
           </div>
 
           <nav className="space-y-2 border-b border-neutral-200 p-3">
             <OfficeMenuButton
-              active={activePanel === 'dashboard'}
-              icon={<LayoutDashboard className="h-4 w-4" />}
-              label={t('仪表盘')}
-              onClick={() => setActivePanel('dashboard')}
+              active={activePanel === 'session'}
+              icon={<MessageCircle className="h-4 w-4" />}
+              label="切换会话"
+              onClick={() => setActivePanel('session')}
             />
             <OfficeMenuButton
-              active={activePanel === 'workspace'}
-              icon={<FolderOpen className="h-4 w-4" />}
-              label={t('切换工作区')}
-              onClick={() => setActivePanel('workspace')}
+              active={activePanel === 'settings'}
+              icon={<Settings2 className="h-4 w-4" />}
+              label="办公室设置"
+              onClick={() => setActivePanel('settings')}
             />
           </nav>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            {activePanel === 'workspace' ? (
+            {activePanel === 'session' ? (
               <section>
-                <div className="text-sm font-semibold text-neutral-900">{t('当前工作区')}</div>
-                <div className="mt-3 rounded-lg border border-neutral-200 bg-[#fafaf7] p-3">
-                  <div className="truncate text-sm font-medium text-neutral-950">
-                    {currentWorkspace?.name ?? t('未绑定工作区')}
+                <div className="rounded-lg border border-neutral-200 bg-[#fafaf7] p-3">
+                  <div className="text-xs font-medium text-neutral-400">当前绑定</div>
+                  <div className="mt-2 truncate text-sm font-semibold text-neutral-950">
+                    {boundSession?.title ?? '未绑定会话'}
                   </div>
-                  <div className="mt-1 truncate text-sm text-neutral-500" title={currentWorkspace?.projectPath ?? ''}>
-                    {currentWorkspace?.projectPath ?? t('请选择一个工作区')}
+                  <div className="mt-1 truncate text-xs text-neutral-500">
+                    {boundSession
+                      ? `${sessionTypeText(boundSession)} · ${relativeTime(boundSession.updatedAt, language)}`
+                      : '只从当前已有会话中选择'}
                   </div>
                 </div>
 
                 <div className="mt-5 flex items-center justify-between">
-                  <div className="text-sm font-semibold text-neutral-900">{t('工作区列表')}</div>
-                  {loadingList && <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />}
+                  <div>
+                    <div className="text-sm font-semibold text-neutral-900">现有会话</div>
+                    <p className="mt-1 text-xs text-neutral-500">不会新建工作区，也不会生成重复列表。</p>
+                  </div>
+                  {loadingSessions ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />
+                  ) : (
+                    <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
+                      {availableSessions.length}
+                    </span>
+                  )}
                 </div>
 
                 <div className="mt-3 space-y-2">
-                  <WorkspaceButton
-                    active={!currentId}
-                    loading={selectingWorkspaceId === 'none'}
-                    title={t('不绑定工作区')}
-                    subtitle={t('仅查看全局状态')}
-                    onClick={() => void handleWorkspaceSelect(null)}
-                  />
-                  {workspaces.map((workspace) => (
-                    <WorkspaceButton
-                      key={workspace.id}
-                      active={workspace.id === currentId}
-                      loading={selectingWorkspaceId === workspace.id}
-                      title={workspace.name}
-                      subtitle={workspace.projectPath ?? t('未设置项目文件夹')}
-                      onClick={() => void handleWorkspaceSelect(workspace.id)}
+                  {availableSessions.map((session) => (
+                    <SessionBindButton
+                      key={session.id}
+                      session={session}
+                      active={session.id === boundSession?.id}
+                      language={language}
+                      onClick={() => setBoundSessionId(session.id)}
                     />
                   ))}
-                  {!loadingList && workspaces.length === 0 && (
+                  {!loadingSessions && availableSessions.length === 0 && (
                     <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-4 text-sm text-neutral-500">
-                      {t('暂无工作区')}
+                      还没有可绑定的会话。
                     </div>
                   )}
                 </div>
               </section>
             ) : (
-              <section className="space-y-4">
-                <div className="text-sm font-semibold text-neutral-900">{t('快速操作')}</div>
-                <QuickAction
-                  icon={<MessageSquare className="h-4 w-4" />}
-                  label={t('新建对话')}
-                  onClick={() => navigate('/chat')}
-                />
-                <QuickAction
-                  icon={<Bot className="h-4 w-4" />}
-                  label={t('Agent 配置')}
-                  onClick={() => navigate('/agent-config')}
-                />
-                <QuickAction
-                  icon={<GitBranch className="h-4 w-4" />}
-                  label={t('编排任务')}
-                  onClick={() => navigate('/orchestrator-runs')}
-                />
-                <QuickAction
-                  icon={<Settings2 className="h-4 w-4" />}
-                  label={t('系统设置')}
-                  onClick={() => navigate('/settings')}
-                />
+              <section>
+                <div className="text-sm font-semibold text-neutral-900">办公室设置</div>
+                <p className="mt-1 text-xs leading-5 text-neutral-500">
+                  页面打开时会自动拉起本地 Star Office 后端；刷新会重新探活并重载嵌入窗口。
+                </p>
+
+                <div className="mt-4 grid gap-2">
+                  <button
+                    type="button"
+                    onClick={reloadOffice}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:border-neutral-300 hover:bg-neutral-50"
+                  >
+                    {officeBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    重新连接
+                  </button>
+                  <a
+                    href={officeUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-neutral-950 text-sm font-semibold text-white transition hover:bg-neutral-800"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    新窗口打开
+                  </a>
+                </div>
+
+                <div className="mt-5 rounded-lg border border-neutral-200 bg-[#fafaf7] p-3">
+                  <div className="text-sm font-semibold text-neutral-900">连接状态</div>
+                  <div className="mt-3 space-y-2 text-xs text-neutral-500">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>服务</span>
+                      <span className={officeStatus?.running ? 'text-emerald-700' : 'text-red-600'}>
+                        {officeStatus?.running ? '运行中' : officeBusy ? '启动中' : '未连接'}
+                      </span>
+                    </div>
+                    <div className="break-all rounded-md bg-white px-2 py-2 text-neutral-600">{officeUrl}</div>
+                    {officeError && <div className="text-red-600">{officeError}</div>}
+                  </div>
+                </div>
               </section>
             )}
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col bg-[#f5f4ef] p-6">
-          <header className="mb-6 flex h-12 shrink-0 items-center justify-between rounded-lg border border-neutral-200 bg-white px-4 shadow-sm">
+        <section className="agenthub-embedded-window flex min-w-0 flex-1 flex-col bg-[#f5f4ef] p-4">
+          <header className="mb-3 flex h-12 shrink-0 items-center justify-between rounded-lg border border-neutral-200 bg-white px-4 shadow-sm">
             <div className="flex min-w-0 items-center gap-3">
               <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#edf7f3] text-emerald-700">
-                <LayoutDashboard className="h-4 w-4" />
+                <Sparkles className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-neutral-950">
-                  {currentWorkspace?.name ?? t('Agent Hub 仪表盘')}
-                </div>
+                <div className="truncate text-sm font-semibold text-neutral-950">AgentHub Office</div>
                 <div className="truncate text-sm text-neutral-500">
-                  {currentWorkspace ? t('已关联 {name}').replace('{name}', currentWorkspace.name) : t('未关联工作区')}
+                  {boundSession ? `已绑定会话：${boundSession.title}` : '未绑定会话'}
                 </div>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => void fetchList()}
-              className="inline-flex h-8 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-xs text-neutral-600 hover:bg-neutral-50"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              {t('刷新')}
-            </button>
+            <ConnectionBadge running={Boolean(officeStatus?.running)} busy={officeBusy} loaded={loaded} />
           </header>
 
-          <div className="grid flex-1 content-start gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <StatCard
-              icon={<MessageSquare className="h-5 w-5 text-blue-600" />}
-              label={t('会话总数')}
-              value={stats.sessions}
-              onClick={() => navigate('/chat')}
-            />
-            <StatCard
-              icon={<Users className="h-5 w-5 text-emerald-600" />}
-              label={t('Agent 数量')}
-              value={stats.agents}
-              onClick={() => navigate('/agent-config')}
-            />
-            <StatCard
-              icon={<PlayCircle className="h-5 w-5 text-purple-600" />}
-              label={t('编排任务')}
-              value={stats.recentRuns}
-              onClick={() => navigate('/orchestrator-runs')}
-            />
-          </div>
+          <div className="agenthub-embedded-frame relative min-h-0 flex-1 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
+            {canRenderOffice && (
+              <iframe
+                key={frameKey}
+                title="Star Office UI"
+                src={officeUrl}
+                onLoad={() => setLoaded(true)}
+                className="agenthub-embedded-iframe h-full w-full border-0 bg-white"
+                allow="clipboard-read; clipboard-write"
+              />
+            )}
 
-          <div className="mt-6 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
-            <div className="text-sm font-semibold text-neutral-900">{t('开始使用')}</div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <ActionCard
-                icon={<MessageSquare className="h-5 w-5" />}
-                title={t('新建对话')}
-                desc={t('与 Agent 一对一对话')}
-                onClick={() => navigate('/chat')}
-              />
-              <ActionCard
-                icon={<Users className="h-5 w-5" />}
-                title={t('创建群聊')}
-                desc={t('多 Agent 协作')}
-                onClick={() => requestNewSessionDialog()}
-              />
-              <ActionCard
-                icon={<Bot className="h-5 w-5" />}
-                title={t('配置 Agent')}
-                desc={t('管理 Agent 通讯录')}
-                onClick={() => navigate('/agent-config')}
-              />
-              <ActionCard
-                icon={<GitBranch className="h-5 w-5" />}
-                title={t('编排任务')}
-                desc={t('查看运行历史')}
-                onClick={() => navigate('/orchestrator-runs')}
-              />
-            </div>
+            {(!canRenderOffice || !loaded) && (
+              <div className="agenthub-embedded-loading absolute inset-0 z-10 grid place-items-center bg-white/90 backdrop-blur-sm">
+                <div className="w-[24rem] rounded-lg border border-neutral-200 bg-white p-6 text-center shadow-xl">
+                  <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-neutral-950 text-white">
+                    {officeBusy || canRenderOffice ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-5 w-5" />
+                    )}
+                  </div>
+                  <div className="mt-4 text-base font-semibold text-neutral-950">
+                    {officeError && !canRenderOffice ? 'Star Office 未连接' : '正在打开 Star Office'}
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-neutral-500">
+                    {officeError && !canRenderOffice
+                      ? officeError
+                      : `正在确认本地服务 ${officeUrl}，准备好后会自动显示办公室。`}
+                  </p>
+                  {officeError && !canRenderOffice && (
+                    <button
+                      type="button"
+                      onClick={reloadOffice}
+                      className="mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-neutral-950 px-4 text-sm font-semibold text-white transition hover:bg-neutral-800"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      重试连接
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </section>
       </main>
@@ -248,10 +296,10 @@ function OfficeMenuButton({
     <button
       type="button"
       onClick={onClick}
-      className={[
+      className={cn(
         'flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition',
         active ? 'bg-neutral-950 text-white shadow-sm' : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950',
-      ].join(' ')}
+      )}
     >
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -259,91 +307,76 @@ function OfficeMenuButton({
   )
 }
 
-function QuickAction({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-10 w-full items-center gap-3 rounded-lg border border-neutral-200 bg-white px-3 text-left text-sm font-medium text-neutral-700 transition hover:border-neutral-300 hover:bg-neutral-50"
-    >
-      {icon}
-      {label}
-    </button>
-  )
-}
-
-function StatCard({ icon, label, value, onClick }: { icon: ReactNode; label: string; value: number; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="rounded-lg border border-neutral-200 bg-white p-5 text-left shadow-sm transition hover:border-neutral-300 hover:shadow-md"
-    >
-      <div className="flex items-center gap-3">
-        {icon}
-        <span className="text-sm text-neutral-500">{label}</span>
-      </div>
-      <div className="mt-3 text-3xl font-semibold text-neutral-950">{value}</div>
-    </button>
-  )
-}
-
-function ActionCard({ icon, title, desc, onClick }: { icon: ReactNode; title: string; desc: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex items-start gap-3 rounded-lg border border-neutral-200 bg-[#fafaf7] p-4 text-left transition hover:border-neutral-300 hover:bg-white"
-    >
-      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-neutral-950 text-white">
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <div className="text-sm font-semibold text-neutral-950">{title}</div>
-        <div className="mt-0.5 text-xs text-neutral-500">{desc}</div>
-      </div>
-    </button>
-  )
-}
-
-function WorkspaceButton({
+function SessionBindButton({
   active,
-  loading,
-  title,
-  subtitle,
+  language,
+  session,
   onClick,
 }: {
   active: boolean
-  loading: boolean
-  title: string
-  subtitle: string
+  language: 'zh' | 'en'
+  session: Session
   onClick: () => void
 }) {
+  const Icon = session.type === 'group' ? Users : MessageCircle
   return (
     <button
       type="button"
       onClick={onClick}
-      className={[
+      className={cn(
         'flex w-full items-center gap-3 rounded-lg border px-3 py-3 text-left transition',
         active
           ? 'border-neutral-950 bg-neutral-950 text-white'
           : 'border-neutral-200 bg-white text-neutral-900 hover:border-neutral-300 hover:bg-neutral-50',
-      ].join(' ')}
+      )}
     >
       <span
-        className={[
+        className={cn(
           'grid h-8 w-8 shrink-0 place-items-center rounded-lg',
           active ? 'bg-white/15 text-white' : 'bg-[#edf7f3] text-emerald-700',
-        ].join(' ')}
+        )}
       >
-        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+        <Icon className="h-4 w-4" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold">{title}</span>
-        <span className={['mt-0.5 block truncate text-sm', active ? 'text-white/65' : 'text-neutral-500'].join(' ')}>
-          {subtitle}
+        <span className="block truncate text-sm font-semibold">{session.title}</span>
+        <span className={cn('mt-0.5 flex items-center gap-1 truncate text-xs', active ? 'text-white/65' : 'text-neutral-500')}>
+          <Clock className="h-3 w-3 shrink-0" />
+          {sessionTypeText(session)} · {relativeTime(session.updatedAt, language)}
         </span>
       </span>
     </button>
   )
+}
+
+function ConnectionBadge({ running, busy, loaded }: { running: boolean; busy: boolean; loaded: boolean }) {
+  const connected = running && loaded
+  return (
+    <div
+      className={cn(
+        'inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium',
+        connected
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : running || busy
+            ? 'border-amber-200 bg-amber-50 text-amber-700'
+            : 'border-red-200 bg-red-50 text-red-600',
+      )}
+    >
+      {connected ? (
+        <CheckCircle2 className="h-4 w-4" />
+      ) : (
+        <Loader2 className={cn('h-4 w-4', running || busy ? 'animate-spin' : '')} />
+      )}
+      {connected ? '已连接' : running || busy ? '连接中' : '未连接'}
+    </div>
+  )
+}
+
+function sessionTypeText(session: Session) {
+  return session.type === 'group' ? '群聊' : '单聊'
+}
+
+function sessionDedupKey(session: Session) {
+  const title = session.title.trim().replace(/\s+/g, ' ').toLowerCase()
+  return `${session.type}:${title || session.id}`
 }

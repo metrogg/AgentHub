@@ -159,7 +159,9 @@ fn close_desktop_window(window: WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 fn minimize_desktop_window(window: WebviewWindow) -> Result<(), String> {
-    window.minimize().map_err(|err| format!("minimize window failed: {err}"))
+    window
+        .minimize()
+        .map_err(|err| format!("minimize window failed: {err}"))
 }
 
 #[tauri::command]
@@ -214,6 +216,41 @@ fn open_desktop_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(
     Ok(())
 }
 
+#[tauri::command]
+fn open_settings_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window("settings") {
+        let _ = existing.show();
+        let _ = existing.unminimize();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    let current_url = window
+        .url()
+        .map_err(|err| format!("无法读取当前窗口地址: {err}"))?;
+    let settings_url = current_url
+        .join("/settings")
+        .map_err(|err| format!("无法构造设置窗口地址: {err}"))?;
+
+    let settings_window =
+        WebviewWindowBuilder::new(&app, "settings", WebviewUrl::External(settings_url))
+            .title("AgentHub 设置")
+            .inner_size(1280.0, 880.0)
+            .min_inner_size(980.0, 700.0)
+            .decorations(false)
+            .transparent(false)
+            .background_color(Color(255, 255, 255, 255))
+            .shadow(true)
+            .always_on_top(true)
+            .focused(true)
+            .center()
+            .build()
+            .map_err(|err| format!("无法打开设置窗口: {err}"))?;
+
+    apply_window_chrome_style(&settings_window);
+    Ok(())
+}
+
 #[derive(Clone)]
 struct DesktopPaths {
     app_data_dir: PathBuf,
@@ -241,7 +278,8 @@ pub fn run() {
             minimize_desktop_window,
             toggle_maximize_desktop_window,
             start_desktop_window_drag,
-            open_desktop_window
+            open_desktop_window,
+            open_settings_window
         ])
         .setup(move |app| {
             let window = WebviewWindowBuilder::new(

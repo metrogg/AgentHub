@@ -37,13 +37,13 @@ const emptyDraft: AgentConfigInput = {
   color: '#111827',
   modelId: null,
   runtimeType: 'code-agent',
-  codeAgentType: 'claude-code',
+  codeAgentType: 'codex',
   capabilityTags: [],
   toolPermissions: ['chat'],
   sandboxPolicy: 'workspace-write',
   contextPolicy: 'workspace-aware',
   autoInvoke: true,
-  approvalRequired: true,
+  approvalRequired: false,
   roleType: 'custom',
   roleProfile: null,
 }
@@ -127,7 +127,7 @@ export default function AgentConfigPage() {
       systemPrompt: '你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。',
       color: '#111827',
       runtimeType: 'code-agent',
-      codeAgentType: 'claude-code',
+      codeAgentType: 'codex',
     })
     const updated = [next, ...agents]
     setAgents(updated)
@@ -322,13 +322,14 @@ export default function AgentConfigPage() {
                         setDraft({
                           ...draft,
                           runtimeType: nextRuntime,
-                          codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'claude-code') : null,
+                          codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+                          approvalRequired: nextRuntime === 'mcp' ? true : nextRuntime === 'code-agent' ? false : draft.approvalRequired,
                         })
                       }}>
                         <option value="code-agent">Coding Tools</option>
                         <option value="llm">{t('普通 LLM Agent')}</option>
                       </SelectField>
-                      <SelectField label="Coding Tools" value={draft.codeAgentType ?? 'claude-code'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
+                      <SelectField label="Coding Tools" value={draft.codeAgentType ?? 'codex'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
                         <option value="">{t('不绑定 CLI')}</option>
                         <option value="codex">Codex CLI</option>
                         <option value="claude-code">Claude Code</option>
@@ -463,6 +464,7 @@ export default function AgentConfigPage() {
 function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
   const runtimeType = draft.runtimeType ?? 'code-agent'
   const capabilityTags = draft.capabilityTags ?? []
+  const nativeReadOnly = runtimeType === 'mcp'
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -472,13 +474,13 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     color: draft.color || '#111827',
     modelId: draft.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'claude-code') : null,
+    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
     capabilityTags,
     toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
     sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: draft.approvalRequired ?? true,
+    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
     roleType: draft.roleType ?? 'custom',
     roleProfile: draft.roleProfile ?? null,
   }

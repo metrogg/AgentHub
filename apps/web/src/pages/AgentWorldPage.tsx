@@ -699,7 +699,7 @@ function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
     sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly ? true : (draft.approvalRequired ?? true),
+    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
   }
 }
 
@@ -968,7 +968,12 @@ function AgentDialog({
                       sandboxPolicy: 'read-only' as const,
                       approvalRequired: true,
                     }
-                  : {}),
+                  : nextRuntime === 'code-agent'
+                    ? {
+                        sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
+                        approvalRequired: false,
+                      }
+                    : {}),
               })
             }}
             className={selectClass}

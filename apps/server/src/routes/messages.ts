@@ -633,8 +633,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     let agentsByKey: Map<string, typeof workspaceAgents.$inferSelect>
 
-    if (sourceSession?.type === 'group' && sourceSession.workspaceId && sourceSession.ownerId === user.sub) {
-      // 复用已有 workspace
+    if (sourceSession?.workspaceId && sourceSession.ownerId === user.sub) {
+      // 复用当前会话绑定的 workspace，不因当前会话不是群聊而另建工作区。
       const existing = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
       workspaceId = existing.workspaceId
       groupSessionId = existing.groupSessionId ?? sessionId
@@ -978,7 +978,7 @@ function buildAgentDraft(content: string): AgentDraft {
     sandboxPolicy: toolPermissions.includes('workspace:write') ? 'workspace-write' : 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: codeAgentType ? false : true,
   }
 }
 
@@ -1092,7 +1092,7 @@ function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
     sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly ? true : (draft.approvalRequired ?? true),
+    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
   }
 }
 
