@@ -43,6 +43,7 @@ export default function OrchestratorRunsPage() {
   const [events, setEvents] = useState<OrchestratorRunEvent[]>([])
   const [blackboardEntries, setBlackboardEntries] = useState<TypedBlackboardEntry[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null)
 
   const selectedRun = useMemo(
     () => runs.find((r) => r.id === selectedRunId) ?? null,
@@ -87,6 +88,20 @@ export default function OrchestratorRunsPage() {
       setMessage(error?.message || '读取运行详情失败')
     } finally {
       setDetailLoading(false)
+    }
+  }
+
+  async function cancelRun(runId: string) {
+    setCancellingRunId(runId)
+    setMessage('')
+    try {
+      await api.cancelOrchestratorRun(runId)
+      await refreshRuns()
+      await loadRunDetail(runId)
+    } catch (error: any) {
+      setMessage(error?.message || '取消运行失败')
+    } finally {
+      setCancellingRunId(null)
     }
   }
 
@@ -223,7 +238,24 @@ export default function OrchestratorRunsPage() {
                         <h2 className="text-lg font-semibold tracking-normal">{selectedRun.workspaceName}</h2>
                         <p className="mt-1 text-sm text-neutral-500">{selectedRun.sessionTitle}</p>
                       </div>
-                      <StatusBadge status={selectedRun.status} large />
+                      <div className="flex shrink-0 items-center gap-2">
+                        {isCancellableRun(selectedRun.status) && (
+                          <button
+                            type="button"
+                            onClick={() => void cancelRun(selectedRun.id)}
+                            disabled={cancellingRunId === selectedRun.id}
+                            className="inline-flex h-9 items-center gap-2 rounded-md border border-red-100 bg-red-50 px-3 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {cancellingRunId === selectedRun.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <XCircle className="h-3.5 w-3.5" />
+                            )}
+                            取消运行
+                          </button>
+                        )}
+                        <StatusBadge status={selectedRun.status} large />
+                      </div>
                     </div>
 
                     <div className="mt-5 grid grid-cols-2 gap-3 text-sm lg:grid-cols-3">
@@ -599,6 +631,7 @@ function eventTitle(event: OrchestratorRunEvent) {
     'conflict.resolved': '冲突处理',
     'run.synthesizing': '正在汇总',
     'run.completed': '运行完成',
+    'run.cancelled': '运行取消',
     'run.failed': '运行失败',
   }
   return map[event.type] ?? event.type
@@ -631,6 +664,7 @@ function eventSummary(event: OrchestratorRunEvent) {
   if (event.type === 'conflict.resolved') return filePath ? `文件 ${filePath} 的冲突处理结果：${payloadText(payload.resolution) || '-'}` : '冲突已处理。'
   if (event.type === 'run.synthesizing') return '所有可用任务结果已进入汇总阶段。'
   if (event.type === 'run.completed') return payloadText(payload.summaryMessageId) ? '最终汇总消息已写入群聊。' : '运行已结束。'
+  if (event.type === 'run.cancelled') return '用户已取消本次运行，未完成任务已停止调度。'
   if (event.type === 'run.failed') return error || '运行失败。'
   return title || reason || error || summary || event.type
 }
@@ -713,6 +747,10 @@ function StatusBadge({ status, large = false }: { status: OrchestratorRunListIte
       {cfg.text}
     </span>
   )
+}
+
+function isCancellableRun(status: OrchestratorRunListItem['status']) {
+  return status === 'planning' || status === 'running' || status === 'synthesizing'
 }
 
 function ConflictResolutionBadge({ resolution }: { resolution: ConflictReportItem['resolution'] }) {

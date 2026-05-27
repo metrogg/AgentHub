@@ -510,6 +510,91 @@ describe('AgentHub smoke tests', () => {
     expect(events.items[1]!.agentId).toBe('agent-a')
   })
 
+  test('orchestrator run can be cancelled and marks unfinished tasks', async () => {
+    const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
+      await postJson('/api/workspaces', { name: 'Cancel run workspace', goal: 'Cancel run', template: 'classic' })
+    )
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+    )
+    const agentId = full.agents[0]!.id
+    const runId = crypto.randomUUID()
+    const plan = {
+      runId,
+      title: 'Cancelable run',
+      goal: 'Stop this run',
+      agents: [
+        {
+          id: agentId,
+          key: 'architect',
+          name: 'Architect',
+          role: '规划',
+          runtimeType: 'llm',
+          capabilityTags: [],
+          toolPermissions: [],
+          sandboxPolicy: 'read-only',
+        },
+      ],
+      tasks: [
+        {
+          id: 'cancel-task',
+          title: 'Cancelable task',
+          description: 'This task should be cancelled.',
+          agentId,
+          dependencies: [],
+          maxRetries: 0,
+        },
+      ],
+    }
+    const { initializeRunLedger } = await import('../apps/server/src/services/orchestrator/run-ledger')
+    await dbApi.db.insert(dbApi.orchestratorRuns).values({
+      id: runId,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      status: 'running',
+      plan: initializeRunLedger(plan as any) as unknown as Record<string, unknown>,
+    })
+    await dbApi.db.insert(dbApi.workspaceTasks).values({
+      id: 'cancel-task',
+      workspaceId: full.workspace.id,
+      agentId,
+      title: 'Cancelable task',
+      description: 'This task should be cancelled.',
+      status: 'pending',
+      orderIdx: 0,
+      runId,
+    })
+
+    const cancelled = await json<{ run: { id: string; status: string }; activeRunCancelled: boolean }>(
+      await postJson(`/api/orchestrator-runs/${runId}/cancel`, {})
+    )
+    expect(cancelled.run.id).toBe(runId)
+    expect(cancelled.run.status).toBe('cancelled')
+    expect(cancelled.activeRunCancelled).toBe(false)
+
+    const [runRecord] = await dbApi.db
+      .select()
+      .from(dbApi.orchestratorRuns)
+      .where(dbApi.eq(dbApi.orchestratorRuns.id, runId))
+      .limit(1)
+    const runPlan = runRecord?.plan as { progressLedger?: { status: string; cancelledTaskIds: string[] } } | null
+    expect(runRecord?.status).toBe('cancelled')
+    expect(runPlan?.progressLedger?.status).toBe('cancelled')
+    expect(runPlan?.progressLedger?.cancelledTaskIds).toContain('cancel-task')
+
+    const [taskRecord] = await dbApi.db
+      .select()
+      .from(dbApi.workspaceTasks)
+      .where(dbApi.eq(dbApi.workspaceTasks.id, 'cancel-task'))
+      .limit(1)
+    expect(taskRecord?.status).toBe('cancelled')
+
+    const events = await json<{ items: Array<{ type: string }> }>(
+      await app.request(`/api/orchestrator-runs/${runId}/events`)
+    )
+    expect(events.items.map((event) => event.type)).toContain('run.cancelled')
+  })
+
   test('run events update the persisted progress ledger', async () => {
     const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
       await postJson('/api/workspaces', { name: 'Ledger workspace', goal: 'Trace ledger', template: 'classic' })

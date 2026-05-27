@@ -25,6 +25,7 @@ export type OrchestratorRunEventType =
   | 'conflict.resolved'
   | 'run.synthesizing'
   | 'run.completed'
+  | 'run.cancelled'
   | 'run.failed'
 
 export type OrchestratorRunEventSeverity = 'debug' | 'info' | 'warning' | 'error'

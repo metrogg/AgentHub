@@ -676,6 +676,7 @@ export type OrchestratorRunEventType =
   | 'conflict.resolved'
   | 'run.synthesizing'
   | 'run.completed'
+  | 'run.cancelled'
   | 'run.failed'
 
 export interface OrchestratorRunEvent {
@@ -1022,6 +1023,11 @@ export const api = {
   // Orchestrator runs
   listOrchestratorRuns: () => request<{ items: OrchestratorRunListItem[] }>('/orchestrator-runs'),
   getOrchestratorRun: (id: string) => request<OrchestratorRunListItem>(`/orchestrator-runs/${id}`),
+  cancelOrchestratorRun: (id: string) =>
+    request<{ run: { id: string; status: OrchestratorRunStatus }; activeRunCancelled: boolean }>(
+      `/orchestrator-runs/${id}/cancel`,
+      { method: 'POST' },
+    ),
   getOrchestratorRunEvents: (id: string) => request<{ items: OrchestratorRunEvent[] }>(`/orchestrator-runs/${id}/events`),
   getOrchestratorRunBlackboard: (id: string, schemaType?: BlackboardSchemaType) =>
     request<{ items: TypedBlackboardEntry[] }>(

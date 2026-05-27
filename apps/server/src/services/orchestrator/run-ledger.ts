@@ -151,6 +151,11 @@ export async function updateProgressLedgerFromEvent(input: EmitRunEventInput): P
       progressLedger.status = 'completed'
       progressLedger.completedAt = now
       break
+    case 'run.cancelled':
+      cancelUnfinishedTasks(taskLedger, progressLedger)
+      progressLedger.status = 'cancelled'
+      progressLedger.completedAt = now
+      break
     case 'run.failed':
       progressLedger.status = 'failed'
       progressLedger.completedAt = now
@@ -300,6 +305,26 @@ function updateLedgerTaskAgent(taskLedger: TaskLedger, taskId: string | undefine
   if (!taskId || !agentId) return
   const task = taskLedger.tasks.find((item) => item.id === taskId)
   if (task) task.agentId = agentId
+}
+
+function cancelUnfinishedTasks(taskLedger: TaskLedger, progressLedger: ProgressLedger) {
+  const unfinished = new Set([
+    ...progressLedger.pendingTaskIds,
+    ...progressLedger.runningTaskIds,
+    ...progressLedger.blockedTaskIds,
+  ])
+  for (const task of taskLedger.tasks) {
+    if (task.status === 'pending' || task.status === 'running') {
+      unfinished.add(task.id)
+      task.status = 'cancelled'
+    }
+  }
+  progressLedger.pendingTaskIds = progressLedger.pendingTaskIds.filter((id) => !unfinished.has(id))
+  progressLedger.runningTaskIds = progressLedger.runningTaskIds.filter((id) => !unfinished.has(id))
+  progressLedger.blockedTaskIds = progressLedger.blockedTaskIds.filter((id) => !unfinished.has(id))
+  for (const taskId of unfinished) {
+    progressLedger.cancelledTaskIds = pushUnique(progressLedger.cancelledTaskIds, taskId)
+  }
 }
 
 function setCurrentPhaseFromTask(progressLedger: ProgressLedger, taskLedger: TaskLedger, taskId: string | undefined) {

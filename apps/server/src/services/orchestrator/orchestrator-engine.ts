@@ -24,11 +24,19 @@ interface ChildSessionInfo {
 }
 
 export class OrchestratorEngine {
+  private static activeEngines = new Map<string, OrchestratorEngine>()
   private planner = new Planner()
   private scheduler = new TaskScheduler()
   private synthesizer = new Synthesizer()
   private conflictResolver = new ConflictResolver()
   private replanningEngine = new ReplanningEngine()
+
+  static cancelActiveRun(runId: string): boolean {
+    const engine = OrchestratorEngine.activeEngines.get(runId)
+    if (!engine) return false
+    engine.scheduler.cancelRun(runId)
+    return true
+  }
 
   async createPlan(goal: string, agents: ExecutionPlan['agents'], workspacePath?: string | null): Promise<ExecutionPlan> {
     return this.planner.createPlan({ goal, agents, workspacePath })
@@ -43,6 +51,7 @@ export class OrchestratorEngine {
   }): Promise<void> {
     const { runId, groupSessionId, workspaceId, childSessions } = params
     const plan = initializeRunLedger(params.plan)
+    OrchestratorEngine.activeEngines.set(runId, this)
 
     await db
       .update(orchestratorRuns)
@@ -273,6 +282,15 @@ export class OrchestratorEngine {
 
     try {
       const results = await this.scheduler.executePlan(plan, executor)
+      const [currentRun] = await db
+        .select({ status: orchestratorRuns.status })
+        .from(orchestratorRuns)
+        .where(eq(orchestratorRuns.id, runId))
+        .limit(1)
+      if (currentRun?.status === 'cancelled') {
+        logger.info({ runId }, 'Orchestrator run cancelled before synthesis')
+        return
+      }
 
       // 冲突检测与解决：遍历所有有 projectPath 的任务目录
       const projectPaths = new Set<string>()
@@ -332,6 +350,9 @@ export class OrchestratorEngine {
         payload: { error: error?.message || 'Scheduler execution failed' },
       })
     } finally {
+      if (OrchestratorEngine.activeEngines.get(runId) === this) {
+        OrchestratorEngine.activeEngines.delete(runId)
+      }
       // Run 结束，清理黑板内存缓存
       blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
     }

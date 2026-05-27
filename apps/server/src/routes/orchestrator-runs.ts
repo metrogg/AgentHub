@@ -1,11 +1,12 @@
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { db, eq, and, desc, asc, sql } from '@agenthub/db'
-import { orchestratorRuns, executionLogs, workspaces, sessions } from '@agenthub/db'
+import { orchestratorRuns, executionLogs, workspaces, sessions, workspaceTasks } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
-import { listRunEvents } from '../services/orchestrator/run-events'
+import { emitRunEvent, listRunEvents } from '../services/orchestrator/run-events'
 import { blackboard, Blackboard } from '../services/blackboard'
 import type { BlackboardSchemaType } from '../services/blackboard-schemas'
+import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
 
 export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -69,6 +70,67 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     return c.json(run)
+  })
+
+  // Cancel a running orchestrator run and mark unfinished tasks as cancelled
+  .post('/:id/cancel', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+
+    const [run] = await db
+      .select({
+        id: orchestratorRuns.id,
+        workspaceId: orchestratorRuns.workspaceId,
+        groupSessionId: orchestratorRuns.groupSessionId,
+        status: orchestratorRuns.status,
+      })
+      .from(orchestratorRuns)
+      .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
+      .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
+      .limit(1)
+
+    if (!run) {
+      throw new HTTPException(404, { message: 'Run not found' })
+    }
+
+    if (run.status === 'cancelled' || run.status === 'completed' || run.status === 'failed') {
+      return c.json({ run, activeRunCancelled: false })
+    }
+
+    const activeRunCancelled = OrchestratorEngine.cancelActiveRun(id)
+    await db
+      .update(orchestratorRuns)
+      .set({ status: 'cancelled', updatedAt: new Date() })
+      .where(eq(orchestratorRuns.id, id))
+    await db
+      .update(workspaceTasks)
+      .set({
+        status: 'cancelled',
+        completedAt: new Date(),
+        errorLog: 'Run cancelled by user',
+      })
+      .where(and(eq(workspaceTasks.runId, id), sql`${workspaceTasks.status} in ('pending', 'running')`))
+    await emitRunEvent({
+      runId: id,
+      workspaceId: run.workspaceId,
+      groupSessionId: run.groupSessionId,
+      type: 'run.cancelled',
+      severity: 'warning',
+      payload: { reason: 'cancelled_by_user', activeRunCancelled },
+    })
+
+    const [updated] = await db
+      .select({
+        id: orchestratorRuns.id,
+        workspaceId: orchestratorRuns.workspaceId,
+        groupSessionId: orchestratorRuns.groupSessionId,
+        status: orchestratorRuns.status,
+      })
+      .from(orchestratorRuns)
+      .where(eq(orchestratorRuns.id, id))
+      .limit(1)
+
+    return c.json({ run: updated ?? { ...run, status: 'cancelled' }, activeRunCancelled })
   })
 
   // Get timeline events for a run
