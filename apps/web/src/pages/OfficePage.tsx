@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import SessionList from '../components/chat/SessionList'
+import { requestNewSessionDialog } from '../components/chat/GlobalNewSessionDialog'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { useWorkspaceStore } from '../stores/workspaceStore'
@@ -210,7 +211,7 @@ export default function OfficePage() {
                 icon={<Users className="h-5 w-5" />}
                 title={t('创建群聊')}
                 desc={t('多 Agent 协作')}
-                onClick={() => navigate('/chat')}
+                onClick={() => requestNewSessionDialog()}
               />
               <ActionCard
                 icon={<Bot className="h-5 w-5" />}

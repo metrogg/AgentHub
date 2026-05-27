@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AlertCircle,
   CheckCircle2,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -14,17 +13,14 @@ import {
   PlayCircle,
   RefreshCw,
   Save,
-  Shield,
   Terminal,
   XCircle,
 } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
-import { api, type CodexAuthStatus, type CodingToolStatus, type ModelCatalogItem, type OpencodeModelItem } from '../lib/api'
+import { api, type CodexAuthStatus, type CodingToolStatus } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { cn } from '../lib/utils'
 
-type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
-type Protocol = 'openai-compatible' | 'anthropic-messages' | 'openai-responses'
 type CodexTransport = 'http' | 'websocket'
 
 interface ToolConfig {
@@ -34,11 +30,7 @@ interface ToolConfig {
   description: string
   installCommand: string
   docsUrl: string
-  protocol: Protocol
-  modelId: string
   apiKeyEnv: string
-  baseUrl: string
-  sandbox: SandboxMode
 }
 
 const storageKey = 'CODING_TOOLS_CONFIG'
@@ -63,11 +55,7 @@ const defaults: ToolConfig[] = [
     description: '本机运行的 OpenAI 编程代理，用于仓库理解、修改和验证。',
     installCommand: 'npm install -g @openai/codex@0.42.0',
     docsUrl: 'https://developers.openai.com/codex',
-    protocol: 'openai-responses',
-    modelId: 'gpt-5.5',
     apiKeyEnv: 'OPENAI_API_KEY',
-    baseUrl: 'https://api.openai.com/v1',
-    sandbox: 'workspace-write',
   },
   {
     id: 'claude-code',
@@ -76,11 +64,7 @@ const defaults: ToolConfig[] = [
     description: 'Anthropic 终端编程助手，适合长上下文代码协作。',
     installCommand: 'npm install -g @anthropic-ai/claude-code',
     docsUrl: 'https://docs.anthropic.com/en/docs/claude-code',
-    protocol: 'anthropic-messages',
-    modelId: 'claude-sonnet-4-6',
     apiKeyEnv: 'ANTHROPIC_API_KEY',
-    baseUrl: 'https://api.anthropic.com',
-    sandbox: 'workspace-write',
   },
   {
     id: 'opencode',
@@ -89,11 +73,7 @@ const defaults: ToolConfig[] = [
     description: '开放式终端编程代理，适合多提供商 OpenAI-compatible 接入。',
     installCommand: 'npm install -g opencode-ai',
     docsUrl: 'https://opencode.ai',
-    protocol: 'openai-compatible',
-    modelId: 'deepseek-chat',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
-    baseUrl: 'https://api.deepseek.com',
-    sandbox: 'workspace-write',
   },
   {
     id: 'gemini',
@@ -102,43 +82,15 @@ const defaults: ToolConfig[] = [
     description: 'Google Gemini 终端编程代理，适合使用 Gemini 模型进行仓库协作。',
     installCommand: 'npm install -g @google/gemini-cli',
     docsUrl: 'https://github.com/google-gemini/gemini-cli',
-    protocol: 'openai-compatible',
-    modelId: 'gemini-2.5-pro',
     apiKeyEnv: 'GEMINI_API_KEY',
-    baseUrl: 'https://generativelanguage.googleapis.com',
-    sandbox: 'workspace-write',
   },
 ]
 
-const protocolCopy: Record<Protocol, { label: string; note: string; endpoint: string }> = {
-  'openai-compatible': {
-    label: 'OpenAI Compatible',
-    note: '适合 DeepSeek、Qwen、OpenRouter 等 /chat/completions 兼容服务。',
-    endpoint: '/chat/completions',
-  },
-  'anthropic-messages': {
-    label: 'Anthropic Messages',
-    note: 'Claude Code 原生协议，使用 x-api-key 和 anthropic-version。',
-    endpoint: '/v1/messages',
-  },
-  'openai-responses': {
-    label: 'OpenAI Responses',
-    note: 'Codex 优先协议，适合 OpenAI Responses / Agents 能力。',
-    endpoint: '/responses',
-  },
-}
-
-const sandboxCopy: Record<SandboxMode, string> = {
-  'read-only': '只读分析，不写入项目文件。',
-  'workspace-write': '允许修改当前项目工作区文件。',
-  'danger-full-access': '完全访问本机文件系统，仅用于可信任务。',
-}
 
 export default function CodingToolsPage() {
   const { t } = useI18n()
   const [tools, setTools] = useState<ToolConfig[]>(defaults)
   const [statuses, setStatuses] = useState<Record<string, CodingToolStatus>>({})
-  const [models, setModels] = useState<ModelCatalogItem[]>([])
   const [activeToolId, setActiveToolId] = useState(defaults[0].id)
   const [checking, setChecking] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -155,10 +107,6 @@ export default function CodingToolsPage() {
   const [toolTestMessage, setToolTestMessage] = useState('')
   const [toolTestOk, setToolTestOk] = useState<boolean | null>(null)
   const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({})
-  const [opencodeModels, setOpencodeModels] = useState<OpencodeModelItem[]>([])
-  const [opencodeDefaultModel, setOpencodeDefaultModel] = useState<string | null>(null)
-  const [opencodeModelMessage, setOpencodeModelMessage] = useState('')
-  const [opencodeModelBusy, setOpencodeModelBusy] = useState(false)
   const [codexConfigPath, setCodexConfigPath] = useState('')
   const [codexConfigContent, setCodexConfigContent] = useState('')
   const [codexConfigBusy, setCodexConfigBusy] = useState(false)
@@ -175,15 +123,6 @@ export default function CodingToolsPage() {
   useEffect(() => {
     api.getSettings().then((settings) => {
       let nextTools = defaults
-      if (settings.MODEL_CATALOG) {
-        try {
-          const catalog = (JSON.parse(settings.MODEL_CATALOG) as ModelCatalogItem[]).filter((item) => item.enabled)
-          setModels(catalog)
-          setApiKeyDrafts(Object.fromEntries(catalog.map((item) => [item.modelId, item.apiKey || ''])))
-        } catch {
-          setModels([])
-        }
-      }
       if (settings[storageKey]) {
         try {
           nextTools = mergeTools(JSON.parse(settings[storageKey]) as ToolConfig[])
@@ -202,23 +141,17 @@ export default function CodingToolsPage() {
       void refreshCodexAuth()
       void refreshCodexConfig()
       void refreshCodexAuthFile()
-      void refreshOpencodeModels()
     })
   }, [])
 
   const activeTool = tools.find((tool) => tool.id === activeToolId) ?? tools[0]
-  const selectedModel = models.find((model) => model.modelId === activeTool.modelId)
-  const activeApiKey = apiKeyDrafts[activeTool.modelId] ?? selectedModel?.apiKey ?? ''
+  const activeApiKey = apiKeyDrafts[activeTool.apiKeyEnv] ?? ''
   const envSnippet = buildEnvSnippet(activeTool)
   const runCommand = buildRunCommand(activeTool)
-  const modelOptions = useMemo(
-    () => buildModelOptions(activeTool.id === 'opencode' ? [] : models, activeTool.id === 'opencode' ? opencodeModels : []),
-    [activeTool.id, models, opencodeModels]
-  )
   const installedCount = useMemo(() => tools.filter((tool) => statuses[tool.id]?.installed).length, [statuses, tools])
   const configuredCount = useMemo(
-    () => tools.filter((tool) => statuses[tool.id]?.configured || hasSavedConfigForTool(models, tool)).length,
-    [models, statuses, tools]
+    () => tools.filter((tool) => statuses[tool.id]?.configured).length,
+    [statuses, tools]
   )
   const toolPageSize = 3
   const toolPageCount = Math.max(1, Math.ceil(tools.length / toolPageSize))
@@ -245,29 +178,6 @@ export default function CodingToolsPage() {
       cachedToolStatusTime = Date.now()
     } finally {
       setChecking(false)
-    }
-  }
-
-  async function refreshOpencodeModels() {
-    setOpencodeModelBusy(true)
-    try {
-      const result = await api.getOpencodeModels()
-      setOpencodeModels(result.models)
-      setOpencodeDefaultModel(result.defaultModel)
-      setOpencodeModelMessage(result.message)
-      if (result.defaultModel) {
-        setTools((current) =>
-          current.map((tool) =>
-            tool.id === 'opencode' && (!tool.modelId || tool.modelId === 'deepseek-chat')
-              ? { ...tool, modelId: result.defaultModel ?? tool.modelId }
-              : tool
-          )
-        )
-      }
-    } catch (error: any) {
-      setOpencodeModelMessage(error?.message || 'Failed to load local OpenCode models.')
-    } finally {
-      setOpencodeModelBusy(false)
     }
   }
 
@@ -438,11 +348,7 @@ export default function CodingToolsPage() {
       [storageKey]: JSON.stringify(tools),
       CODE_AGENT_ACTIVE_TOOL: activeTool.id,
       CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
-      CODE_AGENT_ACTIVE_PROTOCOL: activeTool.protocol,
-      CODE_AGENT_ACTIVE_MODEL: activeTool.modelId,
-      CODE_AGENT_ACTIVE_BASE_URL: activeTool.baseUrl,
       CODE_AGENT_ACTIVE_API_KEY_ENV: activeTool.apiKeyEnv,
-      CODE_AGENT_ACTIVE_SANDBOX: activeTool.sandbox,
       CODEX_CHATGPT_TRANSPORT: codexTransport,
     })
     showSaved()
@@ -463,7 +369,6 @@ export default function CodingToolsPage() {
       await api.saveSettings({
         [storageKey]: JSON.stringify(tools),
         CODE_AGENT_ACTIVE_TOOL: activeTool.id,
-        CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
         CODEX_CHATGPT_TRANSPORT: codexTransport,
       })
       await refreshStatus()
@@ -497,63 +402,23 @@ export default function CodingToolsPage() {
     }
   }
 
-  async function saveActiveToolConfig() {
-    const item: ModelCatalogItem = {
-      id: `code-agent-${activeTool.id}`,
-      enabled: true,
-      name: `${activeTool.name} 配置`,
-      provider: inferProvider(activeTool),
-      modelId: activeTool.modelId,
-      apiEndpoint: activeTool.baseUrl,
-      anthropicEndpoint: activeTool.protocol === 'anthropic-messages' ? activeTool.baseUrl : '',
-      apiKeyEnv: activeTool.apiKeyEnv,
-      apiKey: activeApiKey,
-    }
-    const next = [...models.filter((model) => model.id !== item.id), item]
-    setModels(next)
-    await api.saveSettings({
-      MODEL_CATALOG: JSON.stringify(next),
-      ACTIVE_MODEL_ID: item.id,
-      [storageKey]: JSON.stringify(tools),
-      CODE_AGENT_ACTIVE_TOOL: activeTool.id,
-      CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
-      CODE_AGENT_ACTIVE_PROTOCOL: activeTool.protocol,
-      CODE_AGENT_ACTIVE_MODEL: activeTool.modelId,
-      CODE_AGENT_ACTIVE_BASE_URL: activeTool.baseUrl,
-      CODE_AGENT_ACTIVE_API_KEY_ENV: activeTool.apiKeyEnv,
-      CODE_AGENT_ACTIVE_SANDBOX: activeTool.sandbox,
-    })
-    showSaved()
-  }
-
   async function testActiveToolConnection() {
     setToolTestBusy(true)
     setToolTestMessage('')
     setToolTestOk(null)
     try {
-      if (activeTool.id === 'opencode') {
-        const result = await api.getOpencodeModels()
-        setOpencodeModels(result.models)
-        setOpencodeDefaultModel(result.defaultModel)
-        setOpencodeModelMessage(result.message)
-        setToolTestOk(result.ok)
-        setToolTestMessage(result.ok ? `已读取 ${result.models.length} 个 OpenCode 本机模型。` : result.message)
-        return
+      await refreshStatus(tools, true)
+      const status = statuses[activeTool.id]
+      if (status?.installed) {
+        setToolTestOk(true)
+        setToolTestMessage(`${activeTool.name} 已安装${status.version ? ` (v${status.version})` : ''}。模型连接测试请在 Agent 配置页面进行。`)
+      } else {
+        setToolTestOk(false)
+        setToolTestMessage(`${activeTool.name} 未安装，请先运行安装命令。`)
       }
-
-      const result = await api.testModel({
-        provider: inferProvider(activeTool),
-        apiEndpoint: activeTool.baseUrl,
-        anthropicEndpoint: activeTool.protocol === 'anthropic-messages' ? activeTool.baseUrl : undefined,
-        apiKey: activeApiKey,
-        apiKeyEnv: activeTool.apiKeyEnv,
-        modelId: activeTool.modelId,
-      })
-      setToolTestOk(result.ok)
-      setToolTestMessage(result.message)
     } catch (error: any) {
       setToolTestOk(false)
-      setToolTestMessage(error?.message || '测试连接失败')
+      setToolTestMessage(error?.message || '检测失败')
     } finally {
       setToolTestBusy(false)
     }
@@ -630,8 +495,7 @@ export default function CodingToolsPage() {
             <div className="grid gap-3 lg:grid-cols-3">
             {visibleTools.map((tool) => {
               const status = statuses[tool.id]
-              const savedConfig = hasSavedConfigForTool(models, tool)
-              const configured = Boolean(status?.configured || savedConfig)
+              const configured = Boolean(status?.configured)
               return (
                 <button
                   key={tool.id}
@@ -652,7 +516,7 @@ export default function CodingToolsPage() {
                         <div className="truncate font-mono text-xs text-neutral-400">{tool.command}</div>
                       </div>
                     </div>
-                    <StatusBadge configured={configured} installed={Boolean(status?.installed)} savedOnly={savedConfig && !status?.configured} />
+                    <StatusBadge configured={configured} installed={Boolean(status?.installed)} />
                   </div>
                   <p className="mt-3 line-clamp-2 text-xs leading-5 text-neutral-600">{t(tool.description)}</p>
                 </button>
@@ -774,105 +638,21 @@ export default function CodingToolsPage() {
                 <>
                   <div className="mt-5 grid gap-4 md:grid-cols-2">
                     <Field label="命令" value={activeTool.command} onChange={(value) => patchTool(activeTool.id, { command: value })} />
-                    {activeTool.id !== 'opencode' && (
-                      <>
-                        {activeTool.id !== 'gemini' && <Field label="Base URL" value={activeTool.baseUrl} onChange={(value) => patchTool(activeTool.id, { baseUrl: value })} />}
-                        <Field label="API Key 环境变量" value={activeTool.apiKeyEnv} onChange={(value) => patchTool(activeTool.id, { apiKeyEnv: value })} />
-                        <Field label="API Key" type="password" value={activeApiKey} onChange={(value) => setApiKeyDrafts((current) => ({ ...current, [activeTool.modelId]: value }))} />
-                      </>
-                    )}
-                    <label className="block text-sm md:col-span-2">
-                      <span className="mb-2 flex items-center justify-between gap-3 text-neutral-600">
-                        <span>模型</span>
-                        {activeTool.id === 'opencode' && (
-                          <button
-                            type="button"
-                            onClick={refreshOpencodeModels}
-                            disabled={opencodeModelBusy}
-                            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2 text-xs text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
-                          >
-                            <RefreshCw className={cn('h-3.5 w-3.5', opencodeModelBusy && 'animate-spin')} />
-                            {t('读取本机 OpenCode')}
-                          </button>
-                        )}
-                      </span>
-                      <div className="relative">
-                        {activeTool.id === 'opencode' ? (
-                          <select
-                            value={activeTool.modelId}
-                            onChange={(event) => patchTool(activeTool.id, { modelId: event.target.value })}
-                            className="h-10 w-full appearance-none rounded-md border border-neutral-200 bg-white px-3 pr-8 outline-none transition focus:border-teal-700"
-                          >
-                            {modelOptions.length === 0 && <option value={activeTool.modelId}>{activeTool.modelId || 'OpenCode local default'}</option>}
-                            {modelOptions.map((model) => (
-                              <option key={model.id} value={model.value}>
-                                {model.label}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            value={activeTool.modelId}
-                            onChange={(event) => patchTool(activeTool.id, { modelId: event.target.value })}
-                            className="h-10 w-full rounded-md border border-neutral-200 bg-white px-3 outline-none transition focus:border-teal-700"
-                          />
-                        )}
-                        {activeTool.id === 'opencode' && <ChevronDown className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-neutral-400" />}
-                      </div>
-                      {activeTool.id === 'opencode' && (
-                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                          {opencodeDefaultModel && <span>{t('默认')}：{opencodeDefaultModel}</span>}
-                          {opencodeModels.length > 0 && <span>{t('已读取 {count} 个本机模型').replace('{count}', String(opencodeModels.length))}</span>}
-                          {opencodeModelMessage && <span className="text-neutral-400">{opencodeModelMessage}</span>}
-                        </div>
-                      )}
-                    </label>
+                    <Field label="API Key 环境变量" value={activeTool.apiKeyEnv} onChange={(value) => patchTool(activeTool.id, { apiKeyEnv: value })} />
+                    <Field label="API Key" type="password" value={activeApiKey} onChange={(value) => setApiKeyDrafts((current) => ({ ...current, [activeTool.apiKeyEnv]: value }))} />
                   </div>
-
-                  {activeTool.id !== 'gemini' && (
-                    <div className="mt-5">
-                      <div className="mb-2 text-sm font-medium text-neutral-700">{t('API 协议')}</div>
-                      <div className="grid gap-2 md:grid-cols-3">
-                        {(Object.keys(protocolCopy) as Protocol[]).map((protocol) => (
-                          <ChoiceButton
-                            key={protocol}
-                            active={activeTool.protocol === protocol}
-                            title={protocolCopy[protocol].label}
-                            meta={protocolCopy[protocol].endpoint}
-                            text={protocolCopy[protocol].note}
-                            onClick={() => patchTool(activeTool.id, { protocol })}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mt-5">
-                    <div className="mb-2 flex items-center gap-2 text-sm font-medium text-neutral-700">
-                      <Shield className="h-4 w-4 text-teal-700" />
-                      {t('沙箱策略')}
-                    </div>
-                    <div className="grid gap-2 md:grid-cols-3">
-                      {(Object.keys(sandboxCopy) as SandboxMode[]).map((sandbox) => (
-                        <ChoiceButton
-                          key={sandbox}
-                          active={activeTool.sandbox === sandbox}
-                          title={sandbox}
-                          text={sandboxCopy[sandbox]}
-                          onClick={() => patchTool(activeTool.id, { sandbox })}
-                        />
-                      ))}
-                    </div>
-                  </div>
+                  <p className="mt-4 text-xs leading-5 text-neutral-500">
+                    模型和协议配置请在「Agent 配置」页面中设置，每个 Agent 可以选择不同的模型。
+                  </p>
 
                   <div className="mt-5 flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      onClick={saveActiveToolConfig}
+                      onClick={save}
                       className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-medium text-white hover:bg-teal-800"
                     >
                       <Save className="h-4 w-4" />
-                      {t('同步到模型配置')}
+                      {t('保存')}
                     </button>
                     <button
                       type="button"
@@ -1214,63 +994,22 @@ function buildEnvSnippet(tool: ToolConfig) {
     return '# Codex reads local ~/.codex/config.toml\n# Edit model, provider, base_url, env_key, and wire_api in config.toml.'
   }
   if (tool.id === 'opencode') {
-    return `# OpenCode uses local config\nOPENCODE_MODEL=${tool.modelId || 'local default'}`
+    return '# OpenCode uses local config\n# Model configured per-agent in Agent Config page'
   }
   if (tool.id === 'gemini') {
-    return `${tool.apiKeyEnv}=your_gemini_api_key_here\nGEMINI_MODEL=${tool.modelId}`
+    return `${tool.apiKeyEnv}=your_gemini_api_key_here\n# Model configured per-agent in Agent Config page`
   }
-  const baseKey = `${tool.id.replace(/-/g, '_').toUpperCase()}_BASE_URL`
-  const modelKey = `${tool.id.replace(/-/g, '_').toUpperCase()}_MODEL`
-  return `${tool.apiKeyEnv}=your_api_key_here\n${baseKey}=${tool.baseUrl}\n${modelKey}=${tool.modelId}`
+  return `${tool.apiKeyEnv}=your_api_key_here\n# Model configured per-agent in Agent Config page`
 }
 
 function buildRunCommand(tool: ToolConfig) {
   if (tool.id === 'codex') return `${tool.command} exec "<task>"`
-  if (tool.id === 'claude-code') return `${tool.command} --model ${tool.modelId}`
-  if (tool.id === 'opencode') return tool.modelId ? `${tool.command} run --model ${tool.modelId} "<task>"` : `${tool.command} run "<task>"`
-  if (tool.id === 'gemini') return tool.modelId ? `${tool.command} --model ${tool.modelId} -p "<task>"` : `${tool.command} -p "<task>"`
-  return `${tool.command} --model ${tool.modelId} --provider ${inferProvider(tool)}`
+  if (tool.id === 'claude-code') return `${tool.command} "<task>"`
+  if (tool.id === 'opencode') return `${tool.command} run "<task>"`
+  if (tool.id === 'gemini') return `${tool.command} -p "<task>"`
+  return `${tool.command} "<task>"`
 }
 
-function inferProvider(tool: ToolConfig) {
-  if (tool.protocol === 'anthropic-messages') return 'anthropic'
-  if (tool.id === 'gemini' || tool.baseUrl.includes('generativelanguage.googleapis.com')) return 'gemini'
-  if (tool.protocol === 'openai-responses') return 'openai'
-  if (tool.baseUrl.includes('deepseek')) return 'deepseek'
-  if (tool.baseUrl.includes('dashscope') || tool.baseUrl.includes('aliyuncs')) return 'dashscope'
-  if (tool.baseUrl.includes('openrouter')) return 'openrouter'
-  return 'openai-compatible'
-}
-
-function buildModelOptions(models: ModelCatalogItem[], opencodeModels: OpencodeModelItem[]) {
-  const options = [
-    ...opencodeModels.map((model) => ({
-      id: `opencode:${model.id}`,
-      label: `${model.provider} / ${model.model}`,
-      value: model.id,
-    })),
-    ...models.map((model) => ({
-      id: `catalog:${model.id}`,
-      label: model.provider,
-      value: model.modelId,
-    })),
-  ]
-  const seen = new Set<string>()
-  return options.filter((option) => {
-    if (!option.value || seen.has(option.value)) return false
-    seen.add(option.value)
-    return true
-  })
-}
-
-function hasSavedConfigForTool(models: ModelCatalogItem[], tool: ToolConfig) {
-  return models.some((model) => {
-    if (model.enabled === false) return false
-    if (model.modelId !== tool.modelId) return false
-    if ((model.apiEndpoint || '').replace(/\/$/, '') !== tool.baseUrl.replace(/\/$/, '')) return false
-    return Boolean(model.apiKey || model.apiKeyEnv)
-  })
-}
 
 function IconButton({ children, disabled, label, onClick }: { children: ReactNode; disabled?: boolean; label: string; onClick: () => void }) {
   const { t } = useI18n()
@@ -1297,7 +1036,7 @@ function Stat({ value, label }: { value: number; label: string }) {
   )
 }
 
-function StatusBadge({ configured, installed, savedOnly = false }: { configured: boolean; installed: boolean; savedOnly?: boolean }) {
+function StatusBadge({ configured, installed }: { configured: boolean; installed: boolean }) {
   const { t } = useI18n()
   const ready = installed && configured
   return (
@@ -1308,7 +1047,7 @@ function StatusBadge({ configured, installed, savedOnly = false }: { configured:
       )}
     >
       {ready ? <CheckCircle2 className="h-3 w-3" /> : installed ? <AlertCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-      {ready ? (savedOnly ? t('已保存') : t('可运行')) : installed ? t('未配置') : t('未安装')}
+      {ready ? t('可运行') : installed ? t('未配置') : t('未安装')}
     </span>
   )
 }
@@ -1335,33 +1074,6 @@ function Field({
         className="h-10 w-full rounded-md border border-neutral-200 px-3 outline-none transition focus:border-teal-700"
       />
     </label>
-  )
-}
-
-function ChoiceButton({
-  active,
-  meta,
-  text,
-  title,
-  onClick,
-}: {
-  active: boolean
-  meta?: string
-  text: string
-  title: string
-  onClick: () => void
-}) {
-  const { t } = useI18n()
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn('rounded-md border p-3 text-left transition hover:border-neutral-400', active ? 'border-teal-700 bg-teal-50/60' : 'border-neutral-200 bg-white')}
-    >
-      <div className="text-sm font-medium">{t(title)}</div>
-      {meta && <div className="mt-1 font-mono text-xs text-neutral-400">{meta}</div>}
-      <div className="mt-2 text-xs leading-5 text-neutral-500">{t(text)}</div>
-    </button>
   )
 }
 

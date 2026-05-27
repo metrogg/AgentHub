@@ -25,9 +25,11 @@ export function GlobalNewSessionDialog() {
   const [open, setOpen] = useState(false)
   const [agents, setAgents] = useState<SavedAgentConfig[]>([])
   const [creatingChoice, setCreatingChoice] = useState<string | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   function openDialog() {
     setAgents(loadAgentLibrary())
+    setCreateError(null)
     setOpen(true)
   }
 
@@ -60,12 +62,15 @@ export function GlobalNewSessionDialog() {
   async function createAgentSession(selectedAgents: SavedAgentConfig[], title?: string) {
     const key = selectedAgents.length === 1 ? selectedAgents[0]!.id : 'group'
     setCreatingChoice(key)
+    setCreateError(null)
     try {
       const session = await startAgentConversation({ agents: selectedAgents, title })
       await fetchSessions()
       await selectSession(session.id)
       setOpen(false)
       navigate(`/chat/${session.id}`)
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : '创建会话失败，请稍后重试')
     } finally {
       setCreatingChoice(null)
     }
@@ -77,6 +82,7 @@ export function GlobalNewSessionDialog() {
     <NewSessionDialog
       agents={agents}
       creatingChoice={creatingChoice}
+      createError={createError}
       onClose={() => !creatingChoice && setOpen(false)}
       onCreateAgent={createAgentSession}
       onManageAgents={() => {
@@ -90,12 +96,14 @@ export function GlobalNewSessionDialog() {
 function NewSessionDialog({
   agents,
   creatingChoice,
+  createError,
   onClose,
   onCreateAgent,
   onManageAgents,
 }: {
   agents: SavedAgentConfig[]
   creatingChoice: string | null
+  createError: string | null
   onClose: () => void
   onCreateAgent: (agents: SavedAgentConfig[], title?: string) => void
   onManageAgents: () => void
@@ -226,6 +234,11 @@ function NewSessionDialog({
               )}
             </div>
 
+            {createError && (
+              <div className="shrink-0 border-t border-red-100 bg-red-50 px-8 py-2 text-xs text-red-600">
+                {createError}
+              </div>
+            )}
             <div className="flex h-20 shrink-0 items-center justify-end gap-16 border-t border-neutral-100 bg-white px-8">
               <button
                 type="button"

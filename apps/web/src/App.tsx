@@ -18,6 +18,7 @@ import { I18nProvider, useI18n } from './lib/i18n'
 import { isDesktopApp, setDesktopWindowTitle } from './lib/native'
 import { shortcutFor, shortcutMatches, useShortcutSettings, type ShortcutActionId } from './lib/shortcuts'
 import { useChatStore } from './stores/chatStore'
+import { GlobalNewSessionDialog } from './components/chat/GlobalNewSessionDialog'
 
 export default function App() {
   return (
@@ -66,6 +67,7 @@ function AppShell() {
 
   return (
     <div className={desktop ? 'agenthub-app-theme flex h-full flex-col' : 'agenthub-app-theme contents'}>
+      <GlobalNewSessionDialog />
       <NativeDesktopBridge />
       <GlobalShortcutBridge />
       {desktop && <DesktopAppMenu />}
