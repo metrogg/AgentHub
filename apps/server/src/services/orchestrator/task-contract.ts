@@ -23,7 +23,15 @@ export function validateTaskOutputContract(params: {
   const violations: TaskContractViolation[] = []
   const artifactKinds = new Set(params.artifacts.map((artifact) => artifactKind(artifact)).filter(Boolean))
   for (const required of contract.requiredArtifacts ?? []) {
-    if (!artifactKinds.has(required)) {
+    // 1) 匹配 artifact kind / type（如 file、diff）
+    if (artifactKinds.has(required)) continue
+    // 2) 匹配 artifact 的文件路径（LLM 通常把文件名写在 requiredArtifacts 中）
+    const matched = params.artifacts.some((artifact) => {
+      const path = artifactPath(artifact)
+      if (!path) return false
+      return path === required || path.endsWith(`/${required}`) || path.endsWith(`\\${required}`)
+    })
+    if (!matched) {
       violations.push({
         type: 'missing_artifact',
         message: `Required artifact "${required}" was not produced.`,

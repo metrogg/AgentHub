@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -7,7 +7,7 @@ import { db, settings } from '@agenthub/db'
 import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
-import { getLlmRuntimeStatus, resolveLlmRuntimeConfig } from './llm-client'
+import { getLlmRuntimeStatus, resolveLlmRuntimeConfig, resolveModelApiKey, resolveModelConfig } from './llm-client'
 import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
 
@@ -25,20 +25,21 @@ interface CodeAgentAdapter {
 interface CodeAgentRunOptions {
   cwd?: string
   modelId?: string | null
+  modelProvider?: string | null
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
   toolConfig?: Record<string, unknown>
 }
 
-interface CodeAgentCatalogItem {
-  id?: string
-  enabled?: boolean
-  provider?: string
-  modelId?: string
-  apiEndpoint?: string
-  anthropicEndpoint?: string
-  apiKeyEnv?: string
+interface CodeAgentModelTarget {
+  catalogId?: string
+  provider: string
+  providerKey: string
+  modelId: string
   apiKey?: string
+  apiKeySource?: string
+  openaiBaseUrl?: string
+  anthropicBaseUrl?: string
 }
 
 interface CodeAgentCommandResult {
@@ -149,8 +150,8 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       const cfg = options?.toolConfig ?? {}
       const args = ['run']
       if (options?.modelId) {
-        // OpenCode --model expects provider/model format; auto-prefix if missing
-        const modelId = options.modelId.includes('/') ? options.modelId : `${String(cfg['provider'] ?? 'opencode')}/${options.modelId}`
+        const provider = options.modelProvider || String(cfg['provider'] ?? 'agenthub')
+        const modelId = options.modelId.includes('/') ? options.modelId : `${provider}/${options.modelId}`
         args.push('--model', modelId)
       }
       if (cfg['agent']) args.push('--agent', String(cfg['agent']))
@@ -201,9 +202,9 @@ export async function* streamCodeAgentReply(
     { capabilityTags: profile.capabilityTags, limit: 3 }
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
-  const cliModelId = await resolveCodeAgentCliModelId(profile.modelId)
   const installed = await isCommandInstalled(adapter.command)
-  const configured = await isRuntimeConfigured(type, adapter, profile.modelId)
+  const modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId)
+  const configured = await isRuntimeConfigured(type, adapter, profile.modelId, modelTarget)
   const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
 
@@ -217,7 +218,8 @@ export async function* streamCodeAgentReply(
       `- 命令：\`${adapter.command}\``,
       `- 沙箱：${profile.sandboxPolicy ?? 'workspace-write'}`,
       `- 项目目录：${cwdInfo.label}`,
-      `- 环境变量：\`${adapter.envKey}\` ${configured ? '已配置或可选' : '未检测到'}`,
+      `- 模型档案：${modelTarget ? `${modelTarget.provider}/${modelTarget.modelId}` : profile.modelId ? '未找到或未启用' : '自动模型'}`,
+      `- 运行凭据：${configured ? '可由模型管理注入' : '未检测到'}`,
       `- 安装状态：${installed ? '已安装' : '未安装'}`,
       `- 执行开关：${executionEnabled ? '已启用' : '已禁用'}\``,
       `- 高风险确认：${profile.approvalRequired === false ? '关闭' : '开启'}`,
@@ -226,7 +228,7 @@ export async function* streamCodeAgentReply(
       '',
       '命令预览：',
       '```bash',
-      previewCommand(adapter, cwdInfo.cwd, profile.sandboxPolicy, cliModelId),
+      previewCommand(adapter, cwdInfo.cwd, profile.sandboxPolicy, modelTarget),
       '```',
       '',
       cwdInfo.valid ? '' : `项目目录不存在或不是文件夹：${cwdInfo.label}`,
@@ -254,7 +256,7 @@ export async function* streamCodeAgentReply(
     prompt,
     cwdInfo.cwd,
     profile.sandboxPolicy,
-    cliModelId,
+    modelTarget,
     signal,
     toolConfig,
     {
@@ -303,11 +305,50 @@ export async function* streamCodeAgentReply(
   yield formatCodeAgentFailure(adapter, finalResult)
 }
 
-async function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter, modelId?: string | null) {
-  const runtimeEnv = await mergedEnv(adapter, modelId)
-  if (runtimeEnv[adapter.envKey]?.trim()) return true
+async function resolveCodeAgentModelTarget(
+  type: CodeAgentType,
+  modelId?: string | null,
+): Promise<CodeAgentModelTarget | null> {
+  const selected = await resolveModelConfig(modelId)
+  if (!selected?.modelId) return null
+
+  const providerKey = safeProviderKey(selected.provider || selected.id)
+  const openaiBaseUrl = selected.apiEndpoint?.replace(/\/$/, '')
+  const anthropicBaseUrl = selected.anthropicEndpoint?.replace(/\/$/, '') || (
+    isAnthropicLike(selected.provider, selected.apiEndpoint) ? openaiBaseUrl : undefined
+  )
+
+  return {
+    catalogId: selected.id,
+    provider: selected.provider,
+    providerKey,
+    modelId: selected.modelId,
+    apiKey: selected.apiKey,
+    apiKeySource: selected.apiKeySource,
+    openaiBaseUrl,
+    anthropicBaseUrl,
+  }
+}
+
+async function isRuntimeConfigured(
+  type: CodeAgentType,
+  adapter: CodeAgentAdapter,
+  modelId?: string | null,
+  modelTarget?: CodeAgentModelTarget | null,
+) {
+  if (modelTarget?.apiKey) return true
   if (readEnv(adapter.envKey)) return true
-  if (type === 'codex') return true
+  if (type === 'codex' && !modelId) return true
+
+  // Check agent's selected model in MODEL_CATALOG first
+  if (modelId) {
+    try {
+      const modelConfig = await resolveModelApiKey(modelId)
+      if (modelConfig.apiKey) return true
+    } catch {
+      // fall through
+    }
+  }
 
   try {
     const llmStatus = await getLlmRuntimeStatus()
@@ -337,8 +378,9 @@ function codeAgentBlockerText(options: {
 }) {
   const blockers = [
     !options.installed ? '本机 CLI 未安装或不在 PATH' : '',
-    !options.configured ? '凭据未配置' : '',
+    !options.configured ? '模型档案缺少 API Key，或未设置对应环境变量' : '',
     !options.executionEnabled ? '执行开关未开启' : '',
+    options.profile.approvalRequired === false ? '' : '该 Agent 仍开启了“高风险操作需要确认”',
     !options.cwdValid ? '项目目录不存在或不可访问' : '',
   ].filter(Boolean)
   if (!blockers.length) return '当前配置已满足自动执行条件。'
@@ -426,7 +468,7 @@ async function runCodeAgentCommand(
   prompt: string,
   cwd?: string,
   sandboxPolicy?: AgentRunProfile['sandboxPolicy'],
-  modelId?: string | null,
+  modelTarget?: CodeAgentModelTarget | null,
   signal?: AbortSignal,
   toolConfig?: Record<string, unknown>,
   hooks: {
@@ -439,7 +481,14 @@ async function runCodeAgentCommand(
     process.platform === 'win32' && (adapter.command === 'codex' || adapter.command === 'claude')
       ? buildAsciiSafePrompt(prompt)
       : prompt
-  const args = adapter.buildArgs(commandPrompt, { cwd, modelId, outputPath, sandboxPolicy, toolConfig })
+  const args = adapter.buildArgs(commandPrompt, {
+    cwd,
+    modelId: modelTarget?.modelId,
+    modelProvider: modelTarget?.providerKey,
+    outputPath,
+    sandboxPolicy,
+    toolConfig,
+  })
 
   if (signal?.aborted) {
     return {
@@ -535,7 +584,7 @@ async function runCodeAgentCommand(
 
   const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
     cwd,
-    env: await mergedEnv(adapter, modelId),
+    env: await mergedEnv(adapter, modelTarget),
     stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -1203,7 +1252,8 @@ function fileStatusFromGitStatus(status: string): CodeAgentRunMetadata['files'][
 function buildHostCommand(command: string, args: string[]) {
   if (process.platform !== 'win32') return [command, ...args]
   if (command === 'codex') return [windowsCodexCommand(), ...args]
-  return ['cmd.exe', '/d', '/c', [command, ...args.map(windowsShellArg)].join(' ')]
+  // Windows 上直接传数组参数，避免 cmd.exe /c 的 8192 字符命令行长度限制
+  return [command, ...args]
 }
 
 function windowsCodexCommand() {
@@ -1228,89 +1278,92 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
   }
 }
 
-async function resolveCodeAgentCliModelId(modelId?: string | null) {
-  const rawModelId = modelId?.trim()
-  if (!rawModelId) return modelId
-
-  const selected = await resolveCodeAgentCatalogItem(rawModelId)
-  return selected?.modelId?.trim() || rawModelId
-}
-
-async function resolveCodeAgentCatalogItem(modelId?: string | null): Promise<CodeAgentCatalogItem | null> {
-  const rawModelId = modelId?.trim()
-  if (!rawModelId) return null
-
-  try {
-    const rows = await db.select().from(settings).where(eq(settings.key, 'MODEL_CATALOG')).limit(1)
-    const raw = rows[0]?.value
-    if (!raw) return null
-
-    const catalog = JSON.parse(raw) as CodeAgentCatalogItem[]
-    return catalog.find((item) => item.enabled !== false && (item.id === rawModelId || item.modelId === rawModelId)) ?? null
-  } catch {
-    return null
-  }
-}
-
 function readEnv(key: string) {
   return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
-async function mergedEnv(adapter?: CodeAgentAdapter, modelId?: string | null) {
+async function mergedEnv(adapter?: CodeAgentAdapter, modelTarget?: CodeAgentModelTarget | null) {
   const base = { ...rootEnv(), ...Bun.env, ...codexAuthEnv() }
-  const selectedModel = await resolveCodeAgentCatalogItem(modelId)
 
-  if (adapter?.command === 'claude' && selectedModel) {
-    const endpoint = selectedModel.anthropicEndpoint?.trim() || selectedModel.apiEndpoint?.trim()
-    if (endpoint) base.ANTHROPIC_BASE_URL = endpoint
+  applyModelTargetEnv(base, adapter, modelTarget)
+  if (adapter?.command === 'opencode' && modelTarget) {
+    base.OPENCODE_CONFIG = prepareOpencodeRuntimeConfig(modelTarget)
   }
-
-  // 若 CLI 需要特定 API Key，优先从 Coding Tools 设置、再自动注入模型配置中的 key
-  if (adapter?.envKey) {
-    const directValue = readEnv(adapter.envKey)
-    if (!directValue) {
-      if (selectedModel?.apiKey?.trim()) {
-        base[adapter.envKey] = selectedModel.apiKey.trim()
-      } else if (selectedModel?.apiKeyEnv?.trim()) {
-        const selectedEnvKey = selectedModel.apiKeyEnv.trim()
-        const selectedEnvValue = readEnv(selectedEnvKey)
-        if (selectedEnvValue) base[adapter.envKey] = selectedEnvValue
-      }
-
-      // 1) 尝试读取前端保存的 CODE_AGENT_ACTIVE_API_KEY
-      if (!base[adapter.envKey]) {
-        try {
-          const rows = await db.select().from(settings).where(eq(settings.key, 'CODE_AGENT_ACTIVE_API_KEY')).limit(1)
-          const savedKey = rows[0]?.value?.trim()
-          if (savedKey) {
-            base[adapter.envKey] = savedKey
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      // 2) 若仍无，尝试从主模型配置解析对应 provider 的 API Key
-      if (!base[adapter.envKey]) {
-        try {
-          const llmConfig = await resolveLlmRuntimeConfig()
-          if (llmConfig.apiKey && isProviderMatching(adapter.envKey, llmConfig.provider, llmConfig.baseUrl)) {
-            base[adapter.envKey] = llmConfig.apiKey
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-  }
-
   if (adapter?.command !== 'codex') return base
 
-  const runtimeHome = prepareCodexRuntimeHome()
+  const runtimeHome = prepareCodexRuntimeHome(modelTarget)
   return {
     ...base,
     CODEX_HOME: runtimeHome,
   }
+}
+
+function applyModelTargetEnv(
+  base: NodeJS.ProcessEnv,
+  adapter?: CodeAgentAdapter,
+  modelTarget?: CodeAgentModelTarget | null,
+) {
+  if (!adapter) return
+
+  const key = modelTarget?.apiKey?.trim()
+  if (key) {
+    base.AGENTHUB_MODEL_API_KEY = key
+    base[adapter.envKey] = key
+  }
+
+  if (!modelTarget) return
+
+  if (adapter.command === 'claude') {
+    if (key) base.ANTHROPIC_API_KEY = key
+    if (modelTarget.anthropicBaseUrl) base.ANTHROPIC_BASE_URL = modelTarget.anthropicBaseUrl
+    if (modelTarget.modelId) base.ANTHROPIC_MODEL = modelTarget.modelId
+  } else if (adapter.command === 'codex') {
+    if (key) base.OPENAI_API_KEY = key
+    if (modelTarget.openaiBaseUrl) base.OPENAI_BASE_URL = modelTarget.openaiBaseUrl
+    if (modelTarget.modelId) base.OPENAI_MODEL = modelTarget.modelId
+  } else if (adapter.command === 'opencode') {
+    const providerEnv = `${modelTarget.providerKey.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`
+    if (key) base[providerEnv] = key
+  } else if (adapter.command === 'gemini') {
+    if (key) base.GEMINI_API_KEY = key
+    if (modelTarget.modelId) base.GEMINI_MODEL = modelTarget.modelId
+  }
+}
+
+function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
+  const dir = resolve(tmpdir(), 'AgentHub', 'opencode-runtime')
+  mkdirSync(dir, { recursive: true })
+  const path = resolve(dir, `${modelTarget.providerKey}-${safeFileName(modelTarget.modelId)}.json`)
+  const baseUrl = modelTarget.openaiBaseUrl ?? modelTarget.anthropicBaseUrl
+  const modelRef = `${modelTarget.providerKey}/${modelTarget.modelId}`
+  const apiKey = modelTarget.apiKey?.trim() || readEnv('AGENTHUB_MODEL_API_KEY') || ''
+  writeFileSync(
+    path,
+    JSON.stringify(
+      {
+        $schema: 'https://opencode.ai/config.json',
+        model: modelRef,
+        small_model: modelRef,
+        provider: {
+          [modelTarget.providerKey]: {
+            npm: '@ai-sdk/openai-compatible',
+            name: modelTarget.provider,
+            options: {
+              baseURL: baseUrl,
+              apiKey,
+            },
+            models: {
+              [modelTarget.modelId]: {},
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  )
+  return path
 }
 
 function isProviderMatching(envKey: string, provider?: string, baseUrl?: string) {
@@ -1378,13 +1431,33 @@ function codexRuntimeHome() {
   )
 }
 
-function prepareCodexRuntimeHome() {
+function prepareCodexRuntimeHome(modelTarget?: CodeAgentModelTarget | null) {
   const sourceHome = codexConfigHome()
   const runtimeHome = codexRuntimeHome()
   mkdirSync(runtimeHome, { recursive: true })
-  syncCodexRuntimeFile(sourceHome, runtimeHome, 'config.toml')
+  if (modelTarget) {
+    writeFileSync(resolve(runtimeHome, 'config.toml'), buildCodexRuntimeConfig(modelTarget), 'utf8')
+  } else {
+    syncCodexRuntimeFile(sourceHome, runtimeHome, 'config.toml')
+  }
   syncCodexRuntimeFile(sourceHome, runtimeHome, 'auth.json')
   return runtimeHome
+}
+
+function buildCodexRuntimeConfig(modelTarget: CodeAgentModelTarget) {
+  const providerName = modelTarget.providerKey === 'openai' ? 'openai' : `agenthub-${modelTarget.providerKey}`
+  const lines = [`model_provider = "${escapeToml(providerName)}"`, `model = "${escapeToml(modelTarget.modelId)}"`]
+  if (providerName !== 'openai') {
+    lines.push(
+      '',
+      `[model_providers.${providerName}]`,
+      `name = "${escapeToml(modelTarget.provider)}"`,
+      `base_url = "${escapeToml(modelTarget.openaiBaseUrl ?? modelTarget.anthropicBaseUrl ?? '')}"`,
+      'env_key = "AGENTHUB_MODEL_API_KEY"',
+      'wire_api = "responses"',
+    )
+  }
+  return `${lines.join('\n')}\n`
 }
 
 function syncCodexRuntimeFile(sourceHome: string, runtimeHome: string, filename: string) {
@@ -1429,9 +1502,14 @@ function previewCommand(
   adapter: CodeAgentAdapter,
   cwd?: string,
   sandboxPolicy?: AgentRunProfile['sandboxPolicy'],
-  modelId?: string | null
+  modelTarget?: CodeAgentModelTarget | null
 ) {
-  return formatCommand(adapter.command, adapter.buildArgs('<task-prompt>', { cwd, modelId, sandboxPolicy }))
+  return formatCommand(adapter.command, adapter.buildArgs('<task-prompt>', {
+    cwd,
+    modelId: modelTarget?.modelId,
+    modelProvider: modelTarget?.providerKey,
+    sandboxPolicy,
+  }))
 }
 
 function formatCommand(command: string, args: string[]) {
@@ -1441,6 +1519,24 @@ function formatCommand(command: string, args: string[]) {
 function shellQuote(value: string) {
   if (/^[a-zA-Z0-9_./:@=\\-]+$/.test(value)) return value
   return JSON.stringify(value)
+}
+
+function safeProviderKey(value: string) {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  return normalized || 'agenthub'
+}
+
+function safeFileName(value: string) {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 80) || 'model'
+}
+
+function isAnthropicLike(provider?: string, baseUrl?: string) {
+  const normalized = provider?.toLowerCase()
+  return normalized === 'anthropic' || normalized === 'claude' || Boolean(baseUrl?.includes('anthropic.com'))
+}
+
+function escapeToml(value: string) {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
 function toCodexSandbox(sandboxPolicy?: AgentRunProfile['sandboxPolicy']) {

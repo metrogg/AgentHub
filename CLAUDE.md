@@ -258,6 +258,7 @@ Server runs migrations automatically on start in Docker.
 - TypeScript strict mode + isolatedModules.
 - Code formatting by Prettier.
 - UI language is Chinese; key types and protocol fields remain English.
+- **Frontend (`apps/web`) is maintained by a colleague. Do NOT modify frontend code directly.** If you find frontend issues, report them with file path, line number, root cause, and suggested fix. Only modify frontend when the user explicitly requests it.
 
 ## Legacy Code References
 
