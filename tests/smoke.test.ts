@@ -16,6 +16,7 @@ beforeAll(async () => {
   process.env.ANTHROPIC_API_KEY = ''
   process.env.ENABLE_LOCAL_CLI_PROBES = 'false'
   process.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
+  process.env.AGENTHUB_SKIP_LEGACY_SCHEMA = '1'
 
   dbApi = await import('../packages/db/src/index')
   migrate(dbApi.db, { migrationsFolder: resolve('packages/db/drizzle') })
