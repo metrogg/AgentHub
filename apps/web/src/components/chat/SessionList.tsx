@@ -41,13 +41,8 @@ import { useI18n } from '../../lib/i18n'
 import { loadSessionListPrefs, normalizeSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent, type SessionListPrefs } from '../../lib/sessionArchive'
 import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { settingsUpdatedEvent } from '../../lib/shortcuts'
+import { buildSessionTree, filterSessionTree } from '../../lib/sessionTree'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
-
-type SessionGroup = {
-  parent: Session
-  children: Session[]
-  latestUpdatedAt: string
-}
 
 type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
@@ -92,11 +87,18 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [hint, setHint] = useState('')
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
-  const archivedSessionCount = useMemo(() => prefs.archived.length, [prefs.archived])
-  const activeSessionCount = useMemo(() => sessions.length - prefs.archived.length, [sessions.length, prefs.archived])
+  const baseSessionTree = useMemo(() => buildSessionTree(sessions, pinnedIds), [pinnedIds, sessions])
+  const archivedSessionCount = useMemo(
+    () => filterSessionTree(baseSessionTree, '', true, archivedIds).length,
+    [archivedIds, baseSessionTree],
+  )
+  const activeSessionCount = useMemo(
+    () => filterSessionTree(baseSessionTree, '', false, archivedIds).length,
+    [archivedIds, baseSessionTree],
+  )
   const sessionTree = useMemo(
-    () => filterSessionTree(buildSessionTree(sessions, pinnedIds), query, showArchived, archivedIds),
-    [archivedIds, pinnedIds, query, sessions, showArchived]
+    () => filterSessionTree(baseSessionTree, query, showArchived, archivedIds),
+    [archivedIds, baseSessionTree, query, showArchived],
   )
   const activeSession = sessions.find((session) => session.id === sessionId)
   const activeTab = activeTabFromPath(location.pathname)
@@ -252,6 +254,18 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   function addAgent() {
     setQuickCreateOpen(false)
     navigate('/agent-config?newAgent=1')
+  }
+
+  function toggleWorkspaceExpanded(event: React.MouseEvent, workspaceId?: string | null) {
+    event.stopPropagation()
+    event.preventDefault()
+    if (!workspaceId) return
+    setExpandedWorkspaces((current) => {
+      const next = new Set(current)
+      if (next.has(workspaceId)) next.delete(workspaceId)
+      else next.add(workspaceId)
+      return next
+    })
   }
 
   async function openExistingSession(session: Session) {
@@ -513,7 +527,20 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                     >
                       {pinned && <Pin className="h-3.5 w-3.5 shrink-0 fill-neutral-900 text-neutral-900" />}
                       {hasChildren ? (
-                        <ChevronRight className={cn('h-4 w-4 shrink-0 text-neutral-400 transition-transform', expanded && 'rotate-90')} />
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(event) => toggleWorkspaceExpanded(event, workspaceId)}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Enter' && event.key !== ' ') return
+                            toggleWorkspaceExpanded(event as unknown as React.MouseEvent, workspaceId)
+                          }}
+                          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900"
+                          aria-label={expanded ? '收起群聊' : '展开群聊'}
+                          title={expanded ? '收起群聊' : '展开群聊'}
+                        >
+                          <ChevronRight className={cn('h-4 w-4 transition-transform', expanded && 'rotate-90')} />
+                        </span>
                       ) : (
                         <History className="h-4 w-4 shrink-0 text-neutral-400" />
                       )}
@@ -941,35 +968,6 @@ function readAccountProfile(value?: string): AccountProfile {
   }
 }
 
-function buildSessionTree(sessions: Session[], pinnedIds = new Set<string>()): SessionGroup[] {
-  const childrenByWorkspace = new Map<string, Session[]>()
-  const childIds = new Set<string>()
-
-  for (const session of sessions) {
-    if (session.type === 'direct' && session.workspaceId && session.workspaceAgentId) {
-      childIds.add(session.id)
-      const children = childrenByWorkspace.get(session.workspaceId) ?? []
-      children.push(session)
-      childrenByWorkspace.set(session.workspaceId, children)
-    }
-  }
-
-  return sessions
-    .filter((session) => !childIds.has(session.id))
-    .map((parent) => {
-      const children =
-        parent.type === 'group' && parent.workspaceId
-          ? [...(childrenByWorkspace.get(parent.workspaceId) ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-          : []
-      const latestUpdatedAt = [parent, ...children].reduce(
-        (latest, session) => (Date.parse(session.updatedAt) > Date.parse(latest) ? session.updatedAt : latest),
-        parent.updatedAt
-      )
-      return { parent, children, latestUpdatedAt }
-    })
-    .sort((a, b) => comparePinnedGroups(a, b, pinnedIds))
-}
-
 function childSessionTitle(session: Session, parent: Session) {
   const withoutParent = parent.title ? session.title.replace(parent.title, '').replace(/^(\s*\/\s*)+/, '') : session.title
   const parts = withoutParent
@@ -991,33 +989,6 @@ function formatSubtopicCount(count: number, language: 'zh' | 'en', t: (text: str
   return `${count} 个${t('子话题')}`
 }
 
-function filterSessionTree(groups: SessionGroup[], query: string, showArchived: boolean, archivedIds: Set<string>) {
-  const keyword = query.trim().toLowerCase()
-  return groups
-    .map((group) => {
-      const parentArchived = archivedIds.has(group.parent.id)
-      const children = group.children.filter((child) => archivedIds.has(child.id) === showArchived && sessionMatchesQuery(child, keyword, group.parent))
-      const parentVisible = parentArchived === showArchived && sessionMatchesQuery(group.parent, keyword)
-      if (!parentVisible && !children.length) return null
-      return {
-        ...group,
-        children,
-        latestUpdatedAt: [parentVisible ? group.parent : null, ...children]
-          .filter((item): item is Session => Boolean(item))
-          .reduce((latest, session) => (Date.parse(session.updatedAt) > Date.parse(latest) ? session.updatedAt : latest), group.latestUpdatedAt),
-      }
-    })
-    .filter((group): group is SessionGroup => Boolean(group))
-}
-
-function sessionMatchesQuery(session: Session, query: string, parent?: Session) {
-  if (!query) return true
-  return [session.title, session.type, session.workspaceId ?? '', session.workspaceAgentId ?? '', parent?.title ?? '']
-    .join(' ')
-    .toLowerCase()
-    .includes(query)
-}
-
 function findExistingAgentSession(sessions: Session[], agent: SavedAgentConfig) {
   const agentName = normalizeMatchText(agent.name)
   const agentRole = normalizeMatchText(agent.role)
@@ -1034,11 +1005,4 @@ function findExistingAgentSession(sessions: Session[], agent: SavedAgentConfig) 
 
 function normalizeMatchText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
-function comparePinnedGroups(a: SessionGroup, b: SessionGroup, pinnedIds: Set<string>) {
-  const aPinned = pinnedIds.has(a.parent.id)
-  const bPinned = pinnedIds.has(b.parent.id)
-  if (aPinned !== bPinned) return aPinned ? -1 : 1
-  return Date.parse(b.latestUpdatedAt) - Date.parse(a.latestUpdatedAt)
 }

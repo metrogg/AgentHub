@@ -472,6 +472,12 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         }
     };
 
+    let workspace_root = workspace_root_from_manifest();
+    let star_office_root = workspace_root
+        .as_ref()
+        .map(|root| root.join("storage").join("Star-Office-UI"))
+        .filter(|root| root.join("backend").join("app.py").exists());
+
     let mut command = Command::new(&server_bin);
     command
         .current_dir(&paths.app_data_dir)
@@ -482,7 +488,16 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         .env("AGENTHUB_CONFIG_DIR", &paths.config_dir)
         .env("AGENTHUB_LOG_DIR", &paths.log_dir)
         .env("AGENTHUB_WEB_DIST", &web_dist)
-        .env("DATABASE_URL", paths.data_dir.join("agenthub.db"))
+        .env("DATABASE_URL", paths.data_dir.join("agenthub.db"));
+
+    if let Some(root) = workspace_root.as_ref() {
+        command.env("PROJECT_ROOT", root);
+    }
+    if let Some(root) = star_office_root.as_ref() {
+        command.env("AGENTHUB_STAR_OFFICE_ROOT", root);
+    }
+
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file_err));
@@ -551,6 +566,18 @@ fn resolve_resource(app: &tauri::AppHandle, candidates: &[&str]) -> Option<PathB
         }
     }
     None
+}
+
+fn workspace_root_from_manifest() -> Option<PathBuf> {
+    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for _ in 0..3 {
+        root = root.parent()?.to_path_buf();
+    }
+    if root.join("package.json").exists() && root.join("apps").exists() {
+        Some(root)
+    } else {
+        None
+    }
 }
 
 fn find_available_port(start: u16, count: u16) -> Option<u16> {
