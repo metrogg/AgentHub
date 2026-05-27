@@ -1,6 +1,7 @@
 import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
 import { harnessManager } from '../harness'
+import { initializeRunLedger } from './run-ledger'
 import type { ExecutionAgent, ExecutionPlan, ExecutionTask } from './types'
 
 export interface PlannerInput {
@@ -55,12 +56,12 @@ export class Planner {
     try {
       const generated = await this.generateWithLlm(goal, agents, spec, specPhases)
       const normalized = this.normalizeGeneratedPlan(runId, goal, generated, agents)
-      if (normalized) return normalized
+      if (normalized) return initializeRunLedger(normalized)
     } catch (error: any) {
       logger.warn({ err: error?.message }, 'Planner LLM generation failed, using fallback')
     }
 
-    return this.buildFallbackPlan(runId, goal, agents, spec)
+    return initializeRunLedger(this.buildFallbackPlan(runId, goal, agents, spec))
   }
 
   private formatSpecPhases(spec: import('../harness').HarnessSpec): string {
@@ -154,7 +155,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       'You are AgentHub Orchestrator.',
       'Create a concise multi-agent execution plan using only the provided agent keys.',
       'Return strict JSON only. Do not include Markdown fences or explanations.',
-      'Schema: {"title":string,"summary":string,"tasks":[{"id":string,"title":string,"description":string,"agentKey":string,"dependencies":string[],"parallelGroup":string?,"maxRetries":number?}]}',
+      'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?}]}',
       'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
       'If tasks can run in parallel, put them in the same parallelGroup.',
       'Dependencies should reference task ids, not agent keys.',
@@ -193,9 +194,11 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       summary?: unknown
       tasks?: Array<{
         id?: unknown
+        phaseId?: unknown
         title?: unknown
         description?: unknown
         agentKey?: unknown
+        taskType?: unknown
         dependencies?: unknown
         parallelGroup?: unknown
         maxRetries?: unknown
@@ -228,9 +231,11 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
 
       tasks.push({
         id,
+        phaseId: cleanPlanText(t.phaseId) || undefined,
         title,
         description,
         agentId: agent.id,
+        taskType: parseTaskType(t.taskType),
         dependencies: deps,
         parallelGroup: typeof t.parallelGroup === 'string' ? t.parallelGroup : undefined,
         maxRetries: typeof t.maxRetries === 'number' ? Math.max(0, Math.min(t.maxRetries, 5)) : 2,
@@ -356,6 +361,21 @@ function extractJsonObject(value: string) {
 
 function cleanPlanText(value: unknown) {
   return typeof value === 'string' ? value.trim().slice(0, 1200) : ''
+}
+
+function parseTaskType(value: unknown): ExecutionTask['taskType'] | undefined {
+  if (
+    value === 'read' ||
+    value === 'research' ||
+    value === 'design' ||
+    value === 'code' ||
+    value === 'test' ||
+    value === 'review' ||
+    value === 'synthesize'
+  ) {
+    return value
+  }
+  return undefined
 }
 
 function slugifyTaskId(value: string, index: number) {

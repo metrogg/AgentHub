@@ -169,6 +169,19 @@ export const orchestratorRuns = sqliteTable('orchestrator_runs', {
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })
 
+export const orchestratorRunEvents = sqliteTable('orchestrator_run_events', {
+  id: id(),
+  runId: text('run_id').notNull().references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  groupSessionId: text('group_session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  taskId: text('task_id'),
+  agentId: text('agent_id'),
+  type: text('type').notNull(),
+  payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+  severity: text('severity', { enum: ['debug', 'info', 'warning', 'error'] }).notNull().default('info'),
+  createdAt: now(),
+})
+
 export const agents = sqliteTable('agents', {
   id: id(),
   name: text('name').notNull(),

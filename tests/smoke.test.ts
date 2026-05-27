@@ -210,6 +210,105 @@ describe('AgentHub smoke tests', () => {
     expect(prompt.metadata.agentDraft).toBeUndefined()
   })
 
+  test('orchestrator dispatch returns run id and stores it on the task card', async () => {
+    const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
+      await postJson('/api/workspaces', { name: 'Dispatch run workspace', goal: 'Trace dispatch', template: 'classic' })
+    )
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+    )
+    const plan = {
+      kind: 'orchestrator_plan',
+      title: 'Trace dispatch',
+      goal: 'Verify run id',
+      summary: 'Dispatch run id smoke plan',
+      agents: [
+        {
+          key: 'architect',
+          name: 'Architect',
+          role: '规划',
+          color: '#6366f1',
+          systemPrompt: 'Plan only.',
+          runtimeType: 'llm',
+          capabilityTags: [],
+          toolPermissions: [],
+          sandboxPolicy: 'read-only',
+        },
+      ],
+      tasks: [
+        {
+          id: 'trace-task',
+          title: 'Trace task',
+          description: 'Verify dispatch response carries run id.',
+          agentKey: 'architect',
+          dependencies: [],
+          maxRetries: 0,
+        },
+      ],
+    }
+    const [card] = await dbApi.db
+      .insert(dbApi.messages)
+      .values({
+        sessionId: group.session.id,
+        senderId: 'orchestrator',
+        senderType: 'agent',
+        type: 'task_card',
+        content: plan.summary,
+        metadata: { plan },
+      })
+      .returning()
+    expect(card?.id).toBeTruthy()
+
+    const dispatched = await json<{ runId: string; workspaceId: string; groupSessionId: string }>(
+      await postJson(`/api/messages/${group.session.id}/orchestrator-plan/${card!.id}/dispatch`, {})
+    )
+
+    expect(dispatched.runId).toBeTruthy()
+    expect(dispatched.workspaceId).toBe(full.workspace.id)
+    expect(dispatched.groupSessionId).toBe(group.session.id)
+
+    const [updatedCard] = await dbApi.db
+      .select()
+      .from(dbApi.messages)
+      .where(dbApi.eq(dbApi.messages.id, card!.id))
+      .limit(1)
+    const metadata = updatedCard?.metadata as { plan?: { dispatchResult?: { runId?: string } } } | null
+    expect(metadata?.plan?.dispatchResult?.runId).toBe(dispatched.runId)
+
+    const [runRecord] = await dbApi.db
+      .select()
+      .from(dbApi.orchestratorRuns)
+      .where(dbApi.eq(dbApi.orchestratorRuns.id, dispatched.runId))
+      .limit(1)
+    const runPlan = runRecord?.plan as {
+      phases?: Array<{ id: string; taskIds: string[] }>
+      taskLedger?: { runId: string; tasks: Array<{ id: string; phaseId: string; status: string }> }
+      progressLedger?: {
+        runId: string
+        status: string
+        pendingTaskIds: string[]
+        runningTaskIds: string[]
+        completedTaskIds: string[]
+      }
+    } | null
+    expect(runPlan?.phases?.[0]?.taskIds).toContain('trace-task')
+    expect(runPlan?.taskLedger?.runId).toBe(dispatched.runId)
+    expect(runPlan?.taskLedger?.tasks[0]?.phaseId).toBeTruthy()
+    expect(runPlan?.taskLedger?.tasks[0]?.status).toBe('pending')
+    expect(runPlan?.progressLedger?.runId).toBe(dispatched.runId)
+    expect(runPlan?.progressLedger?.status).toBe('running')
+    expect(runPlan?.progressLedger?.pendingTaskIds).toContain('trace-task')
+    expect(runPlan?.progressLedger?.runningTaskIds).toEqual([])
+    expect(runPlan?.progressLedger?.completedTaskIds).toEqual([])
+
+    const events = await json<{ items: Array<{ type: string; payload: Record<string, unknown> }> }>(
+      await app.request(`/api/orchestrator-runs/${dispatched.runId}/events`)
+    )
+    expect(events.items.map((event) => event.type)).toContain('run.started')
+    expect(events.items.map((event) => event.type)).toContain('plan.created')
+    expect(events.items.find((event) => event.type === 'plan.created')?.payload.taskCount).toBe(1)
+  })
+
   test('TaskGraph topological sort and cycle detection', async () => {
     const { TaskGraph } = await import('../apps/server/src/services/orchestrator/task-graph')
     const tasks = [
@@ -270,6 +369,155 @@ describe('AgentHub smoke tests', () => {
     expect(reports[0]!.filePath).toBe('src/app.ts')
     expect(reports[0]!.variants.length).toBe(2)
     expect(reports[0]!.resolution).toBe('needs-human')
+  })
+
+  test('orchestrator run events are persisted and exposed in order', async () => {
+    const full = await json<{ workspace: { id: string } }>(
+      await postJson('/api/workspaces', { name: 'Run events workspace', goal: 'Trace events', template: 'classic' })
+    )
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+    )
+    const [run] = await dbApi.db
+      .insert(dbApi.orchestratorRuns)
+      .values({
+        workspaceId: full.workspace.id,
+        groupSessionId: group.session.id,
+        status: 'running',
+        plan: { title: 'Trace run' },
+      })
+      .returning()
+    expect(run?.id).toBeTruthy()
+
+    const { emitRunEvent } = await import('../apps/server/src/services/orchestrator/run-events')
+    await emitRunEvent({
+      runId: run!.id,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      type: 'run.started',
+      payload: { title: 'Trace run' },
+    })
+    await emitRunEvent({
+      runId: run!.id,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      taskId: 'task-a',
+      agentId: 'agent-a',
+      type: 'task.started',
+      payload: { taskTitle: 'A', agentName: 'Agent A' },
+    })
+
+    const events = await json<{
+      items: Array<{ type: string; payload: Record<string, unknown>; taskId: string | null; agentId: string | null }>
+    }>(await app.request(`/api/orchestrator-runs/${run!.id}/events`))
+
+    expect(events.items.map((event) => event.type)).toEqual(['run.started', 'task.started'])
+    expect(events.items[0]!.payload.title).toBe('Trace run')
+    expect(events.items[1]!.taskId).toBe('task-a')
+    expect(events.items[1]!.agentId).toBe('agent-a')
+  })
+
+  test('run events update the persisted progress ledger', async () => {
+    const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
+      await postJson('/api/workspaces', { name: 'Ledger workspace', goal: 'Trace ledger', template: 'classic' })
+    )
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+    )
+
+    const plan = {
+      runId: crypto.randomUUID(),
+      title: 'Ledger run',
+      goal: 'Track progress ledger',
+      agents: [{ id: full.agents[0]!.id, key: 'architect', name: 'Architect', role: 'Plan' }],
+      phases: [{ id: 'analysis', title: 'Analysis', purpose: 'Understand scope', taskIds: ['scan'] }],
+      tasks: [
+        {
+          id: 'scan',
+          phaseId: 'analysis',
+          title: 'Scan',
+          description: 'Inspect scope',
+          agentId: full.agents[0]!.id,
+          dependencies: [],
+          maxRetries: 1,
+        },
+      ],
+    }
+    const { initializeRunLedger } = await import('../apps/server/src/services/orchestrator/run-ledger')
+    const planWithLedger = initializeRunLedger(plan)
+    const [run] = await dbApi.db
+      .insert(dbApi.orchestratorRuns)
+      .values({
+        id: plan.runId,
+        workspaceId: full.workspace.id,
+        groupSessionId: group.session.id,
+        status: 'running',
+        plan: planWithLedger as unknown as Record<string, unknown>,
+      })
+      .returning()
+    expect(run?.id).toBeTruthy()
+
+    const { emitRunEvent } = await import('../apps/server/src/services/orchestrator/run-events')
+    await emitRunEvent({
+      runId: run!.id,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      taskId: 'scan',
+      agentId: full.agents[0]!.id,
+      type: 'task.started',
+      payload: { title: 'Scan' },
+    })
+    await emitRunEvent({
+      runId: run!.id,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      taskId: 'scan',
+      agentId: full.agents[0]!.id,
+      type: 'blackboard.written',
+      payload: { key: 'task_scan_output', summary: 'Scoped' },
+    })
+    await emitRunEvent({
+      runId: run!.id,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      taskId: 'scan',
+      agentId: full.agents[0]!.id,
+      type: 'task.completed',
+      payload: { artifactCount: 0 },
+    })
+    await emitRunEvent({
+      runId: run!.id,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      type: 'run.replanned',
+      severity: 'warning',
+      payload: { strategy: 'local_replan', reason: 'Need a narrower scan', changedTaskIds: ['scan'] },
+    })
+
+    const [updatedRun] = await dbApi.db
+      .select()
+      .from(dbApi.orchestratorRuns)
+      .where(dbApi.eq(dbApi.orchestratorRuns.id, run!.id))
+      .limit(1)
+    const updatedPlan = updatedRun?.plan as {
+      taskLedger?: { tasks: Array<{ id: string; status: string }> }
+      progressLedger?: {
+        currentPhaseId?: string
+        pendingTaskIds: string[]
+        runningTaskIds: string[]
+        completedTaskIds: string[]
+        blackboardKeys: string[]
+        replanHistory: Array<{ strategy: string; reason: string }>
+      }
+    } | null
+
+    expect(updatedPlan?.taskLedger?.tasks.find((task) => task.id === 'scan')?.status).toBe('done')
+    expect(updatedPlan?.progressLedger?.currentPhaseId).toBe('analysis')
+    expect(updatedPlan?.progressLedger?.pendingTaskIds).toEqual([])
+    expect(updatedPlan?.progressLedger?.runningTaskIds).toEqual([])
+    expect(updatedPlan?.progressLedger?.completedTaskIds).toEqual(['scan'])
+    expect(updatedPlan?.progressLedger?.blackboardKeys).toContain('task_scan_output')
+    expect(updatedPlan?.progressLedger?.replanHistory[0]?.strategy).toBe('local_replan')
   })
 
   test('GitBranchManager prepares and cleans up agent branches', async () => {

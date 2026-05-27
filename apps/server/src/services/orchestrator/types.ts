@@ -5,8 +5,18 @@ export interface ExecutionPlan {
   runId: string
   title: string
   goal: string
+  phases?: OrchestratorPhase[]
   agents: ExecutionAgent[]
   tasks: ExecutionTask[]
+  taskLedger?: TaskLedger
+  progressLedger?: ProgressLedger
+}
+
+export interface OrchestratorPhase {
+  id: string
+  title: string
+  purpose: string
+  taskIds: string[]
 }
 
 export interface ExecutionAgent {
@@ -27,15 +37,82 @@ export interface ExecutionAgent {
 
 export interface ExecutionTask {
   id: string
+  phaseId?: string
   title: string
   description: string
   agentId: string
   dependencies: string[]
+  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'review' | 'synthesize'
   parallelGroup?: string
   maxRetries: number
   retryCount?: number
   timeout?: number
   fallbackAgentId?: string
+  inputRefs?: BlackboardRef[]
+  outputContract?: TaskOutputContract
+  validation?: TaskValidation
+}
+
+export interface TaskOutputContract {
+  requiredBlackboardWrites: Array<{
+    key: string
+    schemaType: 'fact' | 'decision' | 'risk' | 'artifact_ref' | 'diff_summary' | 'test_result' | 'task_output'
+  }>
+  requiredArtifacts?: string[]
+  acceptanceCriteria?: string[]
+}
+
+export interface TaskValidation {
+  commands?: string[]
+  requiresReview?: boolean
+}
+
+export interface TaskLedger {
+  runId: string
+  title: string
+  goal: string
+  assumptions: string[]
+  constraints: string[]
+  phases: OrchestratorPhase[]
+  tasks: Array<{
+    id: string
+    phaseId: string
+    title: string
+    description: string
+    agentId: string
+    dependencies: string[]
+    taskType: NonNullable<ExecutionTask['taskType']>
+    status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+    outputContract: TaskOutputContract
+    validation: TaskValidation
+  }>
+  agentAssignments: Array<{
+    agentId: string
+    taskIds: string[]
+  }>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ProgressLedger {
+  runId: string
+  status: 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
+  currentPhaseId?: string
+  pendingTaskIds: string[]
+  runningTaskIds: string[]
+  completedTaskIds: string[]
+  failedTaskIds: string[]
+  cancelledTaskIds: string[]
+  blockedTaskIds: string[]
+  blackboardKeys: string[]
+  artifactIds: string[]
+  conflicts: Array<{ filePath?: string; resolution?: string; severity?: string }>
+  retryHistory: Array<{ taskId?: string; attempt?: number; reason?: string; at: string }>
+  agentSubstitutions: Array<{ taskId?: string; fromAgentId?: string; toAgentId?: string; reason?: string; at: string }>
+  replanHistory: Array<{ strategy?: string; reason?: string; changedTaskIds: string[]; at: string }>
+  startedAt?: string
+  updatedAt: string
+  completedAt?: string
 }
 
 export interface TaskResult {

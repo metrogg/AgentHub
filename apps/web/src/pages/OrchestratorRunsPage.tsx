@@ -22,6 +22,9 @@ import {
   type OrchestratorRunListItem,
   type ExecutionLog,
   type ConflictReportItem,
+  type OrchestratorRunEvent,
+  type OrchestratorProgressLedger,
+  type OrchestratorTaskLedger,
 } from '../lib/api'
 import { cn, relativeTime } from '../lib/utils'
 import { useI18n } from '../lib/i18n'
@@ -36,12 +39,18 @@ export default function OrchestratorRunsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [logs, setLogs] = useState<ExecutionLog[]>([])
   const [conflicts, setConflicts] = useState<ConflictReportItem[]>([])
+  const [events, setEvents] = useState<OrchestratorRunEvent[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
 
   const selectedRun = useMemo(
     () => runs.find((r) => r.id === selectedRunId) ?? null,
     [runs, selectedRunId]
   )
+  const selectedPlan = selectedRun?.plan && typeof selectedRun.plan === 'object'
+    ? (selectedRun.plan as { taskLedger?: OrchestratorTaskLedger; progressLedger?: OrchestratorProgressLedger })
+    : null
+  const taskLedger = selectedPlan?.taskLedger ?? null
+  const progressLedger = selectedPlan?.progressLedger ?? null
 
   async function refreshRuns() {
     setLoading(true)
@@ -62,12 +71,14 @@ export default function OrchestratorRunsPage() {
   async function loadRunDetail(runId: string) {
     setDetailLoading(true)
     try {
-      const [logsResult, conflictsResult] = await Promise.all([
+      const [logsResult, conflictsResult, eventsResult] = await Promise.all([
         api.getOrchestratorRunLogs(runId),
         api.getOrchestratorRunConflicts(runId),
+        api.getOrchestratorRunEvents(runId),
       ])
       setLogs(logsResult.items)
       setConflicts(conflictsResult.items)
+      setEvents(eventsResult.items)
     } catch (error: any) {
       setMessage(error?.message || '读取运行详情失败')
     } finally {
@@ -234,6 +245,95 @@ export default function OrchestratorRunsPage() {
                     </div>
                   </div>
 
+                  {taskLedger && progressLedger && (
+                    <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="h-4 w-4 text-emerald-600" />
+                          <h3 className="text-sm font-semibold">Progress Ledger</h3>
+                        </div>
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                          {progressLedger.completedTaskIds.length}/{taskLedger.tasks.length}
+                        </span>
+                      </div>
+                      <div className="grid gap-3 lg:grid-cols-3">
+                        {taskLedger.phases.map((phase) => {
+                          const phaseTasks = taskLedger.tasks.filter((task) => task.phaseId === phase.id)
+                          const done = phaseTasks.filter((task) => progressLedger.completedTaskIds.includes(task.id)).length
+                          const running = phaseTasks.some((task) => progressLedger.runningTaskIds.includes(task.id))
+                          const failed = phaseTasks.some((task) => progressLedger.failedTaskIds.includes(task.id))
+                          return (
+                            <div key={phase.id} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="truncate text-sm font-medium text-neutral-800">{phase.title}</span>
+                                <span className={cn(
+                                  'rounded px-1.5 py-0.5 text-[11px]',
+                                  failed
+                                    ? 'bg-red-50 text-red-700'
+                                    : running
+                                      ? 'bg-indigo-50 text-indigo-700'
+                                      : done === phaseTasks.length && phaseTasks.length > 0
+                                        ? 'bg-emerald-50 text-emerald-700'
+                                        : 'bg-neutral-100 text-neutral-500',
+                                )}>
+                                  {failed ? 'failed' : running ? 'running' : `${done}/${phaseTasks.length}`}
+                                </span>
+                              </div>
+                              <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">{phase.purpose}</p>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
+                    <div className="mb-4 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <GitBranch className="h-4 w-4 text-indigo-600" />
+                        <h3 className="text-sm font-semibold">运行时间线</h3>
+                        <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                          {events.length} 条
+                        </span>
+                      </div>
+                    </div>
+                    {detailLoading && events.length === 0 ? (
+                      <div className="grid h-24 place-items-center text-sm text-neutral-400">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      </div>
+                    ) : events.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-neutral-200 bg-[#fbfbf8] px-4 py-8 text-center text-sm text-neutral-400">
+                        暂无运行事件
+                      </div>
+                    ) : (
+                      <ol className="relative space-y-3 before:absolute before:left-[0.8125rem] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-neutral-200">
+                        {events.map((event) => (
+                          <li key={event.id} className="relative flex gap-3">
+                            <div className={cn('z-10 grid h-7 w-7 shrink-0 place-items-center rounded-full border bg-white', eventTone(event).dotClass)}>
+                              <TimelineIcon event={event} />
+                            </div>
+                            <div className="min-w-0 flex-1 rounded-lg border border-neutral-100 bg-[#fbfbf8] px-3 py-2">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="text-xs font-semibold text-neutral-800">{eventTitle(event)}</div>
+                                  <div className="mt-0.5 text-xs leading-5 text-neutral-500">{eventSummary(event)}</div>
+                                </div>
+                                <span className="shrink-0 text-[11px] text-neutral-400">
+                                  {relativeTime(event.createdAt, language)}
+                                </span>
+                              </div>
+                              <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] text-neutral-500">
+                                {event.taskId && <span className="rounded bg-white px-1.5 py-0.5">task:{event.taskId.slice(0, 8)}</span>}
+                                {event.agentId && <span className="rounded bg-white px-1.5 py-0.5">agent:{event.agentId.slice(0, 8)}</span>}
+                                <span className={cn('rounded px-1.5 py-0.5', eventTone(event).badgeClass)}>{event.severity}</span>
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+
                   {/* Conflicts */}
                   {conflicts.length > 0 && (
                     <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
@@ -368,6 +468,96 @@ function StatusIcon({ status }: { status: OrchestratorRunListItem['status'] }) {
     default:
       return <Sparkles className="h-5 w-5 shrink-0 text-amber-500" />
   }
+}
+
+function TimelineIcon({ event }: { event: OrchestratorRunEvent }) {
+  if (event.type.includes('failed')) return <XCircle className="h-3.5 w-3.5 text-red-500" />
+  if (event.type.includes('completed')) return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+  if (event.type.includes('conflict')) return <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+  if (event.type.includes('artifact')) return <FileDiff className="h-3.5 w-3.5 text-blue-500" />
+  if (event.type.includes('blackboard')) return <GitBranch className="h-3.5 w-3.5 text-emerald-500" />
+  if (event.type.includes('task')) return <PlayCircle className="h-3.5 w-3.5 text-indigo-500" />
+  if (event.type.includes('synthesizing')) return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+  return <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
+}
+
+function eventTone(event: OrchestratorRunEvent) {
+  if (event.severity === 'error') {
+    return { dotClass: 'border-red-100 text-red-500', badgeClass: 'bg-red-50 text-red-700' }
+  }
+  if (event.severity === 'warning') {
+    return { dotClass: 'border-amber-100 text-amber-500', badgeClass: 'bg-amber-50 text-amber-700' }
+  }
+  if (event.severity === 'debug') {
+    return { dotClass: 'border-neutral-100 text-neutral-500', badgeClass: 'bg-neutral-100 text-neutral-600' }
+  }
+  return { dotClass: 'border-indigo-100 text-indigo-500', badgeClass: 'bg-indigo-50 text-indigo-700' }
+}
+
+function eventTitle(event: OrchestratorRunEvent) {
+  const map: Record<OrchestratorRunEvent['type'], string> = {
+    'run.started': '运行开始',
+    'plan.created': '计划已创建',
+    'plan.validated': '计划已校验',
+    'approval.requested': '等待确认',
+    'approval.granted': '确认通过',
+    'phase.started': '阶段开始',
+    'task.queued': '任务入队',
+    'task.started': '任务开始',
+    'task.stream': '任务输出',
+    'blackboard.written': '黑板写入',
+    'artifact.created': '产物生成',
+    'task.completed': '任务完成',
+    'task.failed': '任务失败',
+    'task.cancelled': '任务取消',
+    'task.retrying': '任务重试',
+    'task.reassigned': '任务改派',
+    'run.replanned': '运行重规划',
+    'conflict.detected': '检测到冲突',
+    'conflict.resolved': '冲突处理',
+    'run.synthesizing': '正在汇总',
+    'run.completed': '运行完成',
+    'run.failed': '运行失败',
+  }
+  return map[event.type] ?? event.type
+}
+
+function eventSummary(event: OrchestratorRunEvent) {
+  const payload = event.payload ?? {}
+  const title = payloadText(payload.title)
+  const taskTitle = payloadText(payload.taskTitle)
+  const agentName = payloadText(payload.agentName)
+  const filePath = payloadText(payload.filePath)
+  const reason = payloadText(payload.reason)
+  const error = payloadText(payload.error)
+  const summary = payloadText(payload.summary)
+
+  if (event.type === 'plan.created') {
+    const taskCount = payloadText(payload.taskCount)
+    const agentCount = payloadText(payload.agentCount)
+    return `计划包含 ${taskCount || '-'} 个任务，${agentCount || '-'} 个 Agent。`
+  }
+  if (event.type === 'task.started') return `${agentName || 'Agent'} 开始处理${title ? `：${title}` : '任务'}。`
+  if (event.type === 'task.completed') return `${agentName || 'Agent'} 完成${title ? `：${title}` : '任务'}。`
+  if (event.type === 'task.failed') return error || `${agentName || 'Agent'} 执行失败。`
+  if (event.type === 'task.retrying') return reason || '任务将按退避策略重试。'
+  if (event.type === 'task.reassigned') return reason || '任务已改派给备用 Agent。'
+  if (event.type === 'run.replanned') return reason || 'Orchestrator 已调整执行计划。'
+  if (event.type === 'blackboard.written') return summary || `${taskTitle || '任务'} 写入了共享黑板。`
+  if (event.type === 'artifact.created') return `${agentName || 'Agent'} 生成了${payloadText(payload.artifactKind) || '产物'}${filePath ? `：${filePath}` : ''}。`
+  if (event.type === 'conflict.detected') return filePath ? `文件 ${filePath} 存在多 Agent 修改。` : '检测到多 Agent 变更冲突。'
+  if (event.type === 'conflict.resolved') return filePath ? `文件 ${filePath} 的冲突处理结果：${payloadText(payload.resolution) || '-'}` : '冲突已处理。'
+  if (event.type === 'run.synthesizing') return '所有可用任务结果已进入汇总阶段。'
+  if (event.type === 'run.completed') return payloadText(payload.summaryMessageId) ? '最终汇总消息已写入群聊。' : '运行已结束。'
+  if (event.type === 'run.failed') return error || '运行失败。'
+  return title || reason || error || summary || event.type
+}
+
+function payloadText(value: unknown) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
 }
 
 function StatusBadge({ status, large = false }: { status: OrchestratorRunListItem['status']; large?: boolean }) {

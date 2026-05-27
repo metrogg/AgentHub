@@ -442,6 +442,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
+      case 'run:event':
+        // Timeline events are persisted and rendered on the Orchestrator Runs page.
+        // Task cards continue to use task:update/blackboard:update in this phase.
+        break
     }
   },
 

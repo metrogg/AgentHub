@@ -681,6 +681,15 @@ Office / Orchestrator Runs 页面应展示：
 - Scheduler 执行中周期性更新 progress ledger。
 - ReplanningEngine 把重试、替换 Agent、局部重规划写入 ledger。
 
+实施状态（2026-05-27）：
+
+- Phase 1 已完成第一阶段闭环：新增 `orchestrator_run_events` 表、`run:event` 广播、`GET /api/orchestrator-runs/:id/events`、Orchestrator Runs 时间线，以及关键 Engine 节点事件。
+- Phase 2 已完成最小可交付切片：新增 `TaskLedger` / `ProgressLedger` 运行时 schema，持久化在 `orchestrator_runs.plan` 中，不新增额外表，避免过早扩大迁移面。
+- Planner / task card / dispatch 现在兼容 `phases + tasks` 两层结构；旧的平铺 `tasks` 会自动补默认 phase。
+- `emitRunEvent` 会把 `task.started/completed/failed/cancelled`、`blackboard.written`、`artifact.created`、`task.retrying`、`task.reassigned`、`run.replanned`、`conflict.*`、`run.completed/failed` 增量折叠到 Progress Ledger。
+- Orchestrator Runs 详情页新增 Progress Ledger 阶段进度区块；聊天任务卡增加 phase 标签，但仍保留 `task:update` / `blackboard:update` 作为任务卡状态来源。
+- Phase 2 剩余增强：任务级 retry API、pause/resume/cancel、并发运行下 ledger 原子更新、Planner 输出 contract/validation 的强校验。
+
 ### Phase 3：Blackboard typed schema
 
 目标：让 Agent 产出可追溯、可合成、可审查。

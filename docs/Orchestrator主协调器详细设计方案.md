@@ -563,6 +563,15 @@ interface ProgressLedger {
 }
 ```
 
+当前实现状态（2026-05-27）：
+
+- `TaskLedger` / `ProgressLedger` 已作为第一版运行时账本落地，暂存于 `orchestrator_runs.plan.taskLedger` 与 `orchestrator_runs.plan.progressLedger`。
+- `initializeRunLedger(plan)` 会把旧版平铺任务自动补齐为 `phases + tasks + taskLedger + progressLedger`，因此历史 plan card 和新 plan 均可兼容。
+- `emitRunEvent` 在写入 `orchestrator_run_events` 后，会同步增量更新 Progress Ledger：任务状态、黑板 key、artifact id、retry 记录、Agent 替换、replan 历史和冲突记录都会进入账本。
+- `Planner` 的 JSON schema 已扩展为 `phases + tasks`，并保留无 phase 输出的自动归一化逻辑。
+- Orchestrator Runs 页面新增 Progress Ledger 阶段进度视图，Run Timeline 继续作为细粒度事件视图。
+- 尚未完成：pause/resume/cancel、任务级 retry API、ledger 原子更新锁、typed Blackboard schema、contract/validation 强校验。
+
 ### 5.10 recover：失败降级与重规划
 
 失败处理不能只有 retry。建议按失败类型决策。

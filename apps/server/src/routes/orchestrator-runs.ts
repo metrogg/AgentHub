@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception'
 import { db, eq, and, desc, asc, sql } from '@agenthub/db'
 import { orchestratorRuns, executionLogs, workspaces, sessions } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import { listRunEvents } from '../services/orchestrator/run-events'
 
 export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -66,6 +67,26 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     return c.json(run)
+  })
+
+  // Get timeline events for a run
+  .get('/:id/events', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+
+    const [run] = await db
+      .select({ id: orchestratorRuns.id })
+      .from(orchestratorRuns)
+      .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
+      .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
+      .limit(1)
+
+    if (!run) {
+      throw new HTTPException(404, { message: 'Run not found' })
+    }
+
+    const events = await listRunEvents(id)
+    return c.json({ items: events })
   })
 
   // Get execution logs for a run

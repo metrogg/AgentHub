@@ -9,6 +9,8 @@ import { TaskScheduler, type TaskExecutor } from './task-scheduler'
 import { Synthesizer } from './synthesizer'
 import { ConflictResolver } from './conflict-resolver'
 import { ReplanningEngine } from './replanning-engine'
+import { emitRunEvent } from './run-events'
+import { initializeRunLedger } from './run-ledger'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
@@ -37,7 +39,8 @@ export class OrchestratorEngine {
     plan: ExecutionPlan
     childSessions: Map<string, ChildSessionInfo>
   }): Promise<void> {
-    const { runId, groupSessionId, workspaceId, plan, childSessions } = params
+    const { runId, groupSessionId, workspaceId, childSessions } = params
+    const plan = initializeRunLedger(params.plan)
 
     await db
       .update(orchestratorRuns)
@@ -64,6 +67,16 @@ export class OrchestratorEngine {
 
         if (replan.strategy === 'retry_with_backoff') {
           const delayMs = replan.delayMs ?? 1000
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: currentTask.id,
+            agentId: currentTask.agentId,
+            type: 'task.retrying',
+            severity: 'warning',
+            payload: { attempt: currentAttempt, delayMs, reason: replan.reason },
+          })
           await new Promise((r) => setTimeout(r, delayMs))
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
@@ -77,8 +90,19 @@ export class OrchestratorEngine {
         }
 
         if (replan.strategy === 'agent_substitution' && replan.updatedTask) {
+          const previousAgentId = currentTask.agentId
           currentTask = replan.updatedTask
           currentAttempt = 0
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: currentTask.id,
+            agentId: currentTask.agentId,
+            type: 'task.reassigned',
+            severity: 'warning',
+            payload: { fromAgentId: previousAgentId, toAgentId: currentTask.agentId, reason: replan.reason },
+          })
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
             await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
@@ -93,6 +117,16 @@ export class OrchestratorEngine {
         if (replan.strategy === 'local_replan' && replan.updatedTask) {
           currentTask = replan.updatedTask
           currentAttempt = 0
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: currentTask.id,
+            agentId: currentTask.agentId,
+            type: 'run.replanned',
+            severity: 'warning',
+            payload: { strategy: 'local_replan', reason: replan.reason, changedTaskIds: [currentTask.id] },
+          })
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
             await db.update(workspaceTasks).set({ status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
@@ -117,12 +151,33 @@ export class OrchestratorEngine {
               status: 'pending',
               orderIdx: plan.tasks.length,
               runId,
+              phaseId: newTask.phaseId,
               dependencies: newTask.dependencies ?? [],
               parallelGroup: newTask.parallelGroup,
               maxRetries: newTask.maxRetries ?? 2,
             })
             childSessions.set(newTask.id, { sessionId: childSession.id, workspaceId, projectPath: childSessions.get(currentTask.id)?.projectPath })
+            await emitRunEvent({
+              runId,
+              workspaceId,
+              groupSessionId,
+              taskId: newTask.id,
+              agentId: newTask.agentId,
+              type: 'task.queued',
+              severity: 'warning',
+              payload: { strategy: 'task_split', title: newTask.title, phaseId: newTask.phaseId, reason: replan.reason },
+            })
           }
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: currentTask.id,
+            agentId: currentTask.agentId,
+            type: 'run.replanned',
+            severity: 'warning',
+            payload: { strategy: 'task_split', reason: replan.reason, changedTaskIds: replan.newTasks.map((t) => t.id) },
+          })
           this.scheduler.addTasksToRun(runId, replan.newTasks)
           logger.info({ taskId: currentTask.id, newTaskCount: replan.newTasks.length }, 'Task split into subtasks')
           return { ...result, status: 'failed' as const, error: `任务已拆分为子任务: ${replan.reason}` }
@@ -147,13 +202,34 @@ export class OrchestratorEngine {
                   status: 'pending',
                   orderIdx: plan.tasks.length,
                   runId,
+                  phaseId: newTask.phaseId,
                   dependencies: newTask.dependencies ?? [],
                   parallelGroup: newTask.parallelGroup,
                   maxRetries: newTask.maxRetries ?? 2,
                 })
                 childSessions.set(newTask.id, { sessionId: childSession.id, workspaceId, projectPath: childSessions.get(currentTask.id)?.projectPath })
+                await emitRunEvent({
+                  runId,
+                  workspaceId,
+                  groupSessionId,
+                  taskId: newTask.id,
+                  agentId: newTask.agentId,
+                  type: 'task.queued',
+                  severity: 'warning',
+                  payload: { strategy: 'global_replan', title: newTask.title, phaseId: newTask.phaseId },
+                })
               }
               this.scheduler.addTasksToRun(runId, tasksToAdd)
+              await emitRunEvent({
+                runId,
+                workspaceId,
+                groupSessionId,
+                taskId: currentTask.id,
+                agentId: currentTask.agentId,
+                type: 'run.replanned',
+                severity: 'warning',
+                payload: { strategy: 'global_replan', reason: replan.reason, changedTaskIds: tasksToAdd.map((t) => t.id) },
+              })
               logger.info({ taskId: currentTask.id, addedCount: tasksToAdd.length }, 'Global replan added new tasks')
               continue
             }
@@ -172,6 +248,16 @@ export class OrchestratorEngine {
             agentId: 'orchestrator',
             taskId: currentTask.id,
             tags: ['escalation', 'needs_user_action'],
+          })
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: currentTask.id,
+            agentId: currentTask.agentId,
+            type: 'run.replanned',
+            severity: 'warning',
+            payload: { strategy: 'escalate_to_user', reason: replan.reason, changedTaskIds: [currentTask.id] },
           })
         }
 
@@ -203,6 +289,28 @@ export class OrchestratorEngine {
       }
 
       if (conflictReports.length > 0) {
+        for (const report of conflictReports) {
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            type: 'conflict.detected',
+            severity: report.resolution === 'needs-human' ? 'warning' : 'info',
+            payload: {
+              filePath: report.filePath,
+              resolution: report.resolution,
+              agents: report.variants.map((variant) => ({ agentId: variant.agentId, agentName: variant.agentName })),
+            },
+          })
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            type: 'conflict.resolved',
+            severity: report.resolution === 'needs-human' ? 'warning' : 'info',
+            payload: { filePath: report.filePath, resolution: report.resolution, notes: report.notes },
+          })
+        }
         await db
           .update(orchestratorRuns)
           .set({ conflictReport: conflictReports as unknown as import('@agenthub/db').ConflictReport[] })
@@ -213,6 +321,14 @@ export class OrchestratorEngine {
     } catch (error: any) {
       logger.error({ err: error?.message, runId }, 'Scheduler execution failed')
       await db.update(orchestratorRuns).set({ status: 'failed' }).where(eq(orchestratorRuns.id, runId))
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        type: 'run.failed',
+        severity: 'error',
+        payload: { error: error?.message || 'Scheduler execution failed' },
+      })
     } finally {
       // Run 结束，清理黑板内存缓存
       blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
@@ -231,6 +347,16 @@ export class OrchestratorEngine {
   ): Promise<TaskResult> {
     const agent = plan.agents.find((a) => a.id === task.agentId)
     if (!agent) {
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        taskId: task.id,
+        agentId: task.agentId,
+        type: 'task.failed',
+        severity: 'error',
+        payload: { title: task.title, error: `Agent ${task.agentId} not found in plan` },
+      })
       return {
         taskId: task.id,
         agentId: task.agentId,
@@ -243,6 +369,16 @@ export class OrchestratorEngine {
 
     const childInfo = childSessions.get(task.id)
     if (!childInfo) {
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        taskId: task.id,
+        agentId: agent.id,
+        type: 'task.failed',
+        severity: 'error',
+        payload: { title: task.title, error: `Child session not found for task ${task.id}` },
+      })
       return {
         taskId: task.id,
         agentId: agent.id,
@@ -327,6 +463,16 @@ export class OrchestratorEngine {
       .set({ status: 'running', startedAt: new Date(), retryCount: attemptCount })
       .where(eq(workspaceTasks.id, task.id))
 
+    await emitRunEvent({
+      runId,
+      workspaceId,
+      groupSessionId,
+      taskId: task.id,
+      agentId: agent.id,
+      type: 'task.started',
+      payload: { title: task.title, agentName: agent.name, attempt: attemptCount, sessionId: childInfo.sessionId },
+    })
+
     broadcastSessionEvent(groupSessionId, {
       type: 'task:update',
       payload: { taskId: task.id, status: 'running', sessionId: childInfo.sessionId },
@@ -341,6 +487,16 @@ export class OrchestratorEngine {
           .update(workspaceTasks)
           .set({ status: 'cancelled', completedAt: new Date() })
           .where(eq(workspaceTasks.id, task.id))
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          taskId: task.id,
+          agentId: agent.id,
+          type: 'task.cancelled',
+          severity: 'warning',
+          payload: { title: task.title, agentName: agent.name, sessionId: childInfo.sessionId },
+        })
         if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
         return {
           taskId: task.id,
@@ -416,6 +572,41 @@ export class OrchestratorEngine {
         tags: ['task_output', `agent_${agent.id}`],
       })
 
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        taskId: task.id,
+        agentId: agent.id,
+        type: 'blackboard.written',
+        payload: {
+          namespace: bbNamespace,
+          key: `task_${task.id}_output`,
+          version: outputRef.version,
+          summary: summary.brief,
+          agentName: agent.name,
+          taskTitle: task.title,
+        },
+      })
+
+      for (const artifact of artifacts) {
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          taskId: task.id,
+          agentId: agent.id,
+          type: 'artifact.created',
+          payload: {
+            artifactId: artifact.id,
+            artifactKind: artifact.kind ?? artifact.type,
+            title: artifact.title,
+            filePath: artifact.filePath ?? artifact.path,
+            agentName: agent.name,
+          },
+        })
+      }
+
       // 广播黑板更新到群聊会话
       broadcastSessionEvent(groupSessionId, {
         type: 'blackboard:update',
@@ -443,6 +634,22 @@ export class OrchestratorEngine {
       broadcastSessionEvent(groupSessionId, {
         type: 'task:update',
         payload: { taskId: task.id, status: 'done', sessionId: childInfo.sessionId, agentId: agent.id, agentName: agent.name },
+      })
+
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        taskId: task.id,
+        agentId: agent.id,
+        type: 'task.completed',
+        payload: {
+          title: task.title,
+          agentName: agent.name,
+          sessionId: childInfo.sessionId,
+          durationMs: taskDuration,
+          artifactCount: artifacts.length,
+        },
       })
 
       if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
@@ -475,6 +682,23 @@ export class OrchestratorEngine {
         payload: { taskId: task.id, status: 'failed', sessionId: childInfo.sessionId, agentId: agent.id, agentName: agent.name, error: error?.message || 'Unknown error' },
       })
 
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        taskId: task.id,
+        agentId: agent.id,
+        type: 'task.failed',
+        severity: 'error',
+        payload: {
+          title: task.title,
+          agentName: agent.name,
+          sessionId: childInfo.sessionId,
+          error: error?.message || 'Unknown error',
+          durationMs: Date.now() - taskStartTime,
+        },
+      })
+
       if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
       return {
         taskId: task.id,
@@ -497,6 +721,17 @@ export class OrchestratorEngine {
     conflictReports: import('./conflict-resolver').ConflictReport[] = [],
   ) {
     await db.update(orchestratorRuns).set({ status: 'synthesizing' }).where(eq(orchestratorRuns.id, runId))
+    await emitRunEvent({
+      runId,
+      workspaceId,
+      groupSessionId,
+      type: 'run.synthesizing',
+      payload: {
+        taskCount: results.length,
+        succeeded: results.filter((result) => result.status === 'done').length,
+        failed: results.filter((result) => result.status === 'failed').length,
+      },
+    })
 
     // 从黑板读取所有产物，供 Synthesizer 使用（替代直接从 results 读取）
     const bbNamespace = Blackboard.namespace(workspaceId, runId)
@@ -537,6 +772,14 @@ export class OrchestratorEngine {
       .update(orchestratorRuns)
       .set({ status: 'completed', summaryMessageId: summaryMsg?.id ?? null })
       .where(eq(orchestratorRuns.id, runId))
+
+    await emitRunEvent({
+      runId,
+      workspaceId,
+      groupSessionId,
+      type: 'run.completed',
+      payload: { summaryMessageId: summaryMsg?.id ?? null, taskCount: results.length },
+    })
 
     broadcastSessionEvent(groupSessionId, {
       type: 'message:completed',

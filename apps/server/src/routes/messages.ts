@@ -26,6 +26,8 @@ import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 import { streamReply } from '../services/llm'
 import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
 import type { ExecutionPlan } from '../services/orchestrator/types'
+import { emitRunEvent } from '../services/orchestrator/run-events'
+import { initializeRunLedger } from '../services/orchestrator/run-ledger'
 import { harnessManager } from '../services/harness'
 
 const orchestratorPlanSchema = z.object({
@@ -117,17 +119,27 @@ type PlanAgent = {
 
 type PlanTask = {
   id: string
+  phaseId?: string
   title: string
   description: string
   agentKey: string
   status?: 'pending' | 'running' | 'done' | 'failed'
+  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'review' | 'synthesize'
   dependencies?: string[]
   parallelGroup?: string
   maxRetries?: number
   fallbackAgentId?: string
 }
 
+type PlanPhase = {
+  id: string
+  title: string
+  purpose: string
+  taskIds: string[]
+}
+
 type OrchestratorDispatchResult = {
+  runId: string
   workspaceId: string
   groupSessionId?: string
   tasks: Array<{ taskId: string; sessionId: string; title: string; agentName: string }>
@@ -139,6 +151,7 @@ type OrchestratorPlan = {
   goal: string
   summary: string
   agents: PlanAgent[]
+  phases?: PlanPhase[]
   tasks: PlanTask[]
   dispatchResult?: OrchestratorDispatchResult
 }
@@ -646,6 +659,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     // 每个任务独立 session，不复用，避免上下文污染
     for (const [index, task] of parsed.tasks.entries()) {
       const agent = agentsByKey.get(task.agentKey)
+      const phaseId = task.phaseId ?? inferPlanTaskPhase(task, index)
       const [workspaceTask] = await db
         .insert(workspaceTasks)
         .values({
@@ -657,6 +671,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           status: 'pending',
           orderIdx: index,
           runId,
+          phaseId,
           dependencies: task.dependencies ?? [],
           parallelGroup: task.parallelGroup,
           maxRetries: task.maxRetries ?? 2,
@@ -694,10 +709,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     // 构建 ExecutionPlan 并启动 OrchestratorEngine
-    const executionPlan: ExecutionPlan = {
+    const rawExecutionPlan: ExecutionPlan = {
       runId,
       title: parsed.title,
       goal: parsed.goal,
+      phases: parsed.phases,
       agents: parsed.agents.map((a) => {
         const dbAgent = agentsByKey.get(a.key)
         return {
@@ -716,17 +732,20 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           sandboxPolicy: a.sandboxPolicy ?? 'workspace-write',
         }
       }),
-      tasks: parsed.tasks.map((t) => ({
+      tasks: parsed.tasks.map((t, index) => ({
         id: t.id,
+        phaseId: t.phaseId ?? inferPlanTaskPhase(t, index),
         title: t.title,
         description: t.description,
         agentId: agentsByKey.get(t.agentKey)?.id ?? t.agentKey,
+        taskType: t.taskType,
         dependencies: t.dependencies ?? [],
         parallelGroup: t.parallelGroup,
         maxRetries: t.maxRetries ?? 2,
         fallbackAgentId: t.fallbackAgentId,
       })),
     }
+    const executionPlan = initializeRunLedger(rawExecutionPlan)
 
     await db.insert(orchestratorRuns).values({
       id: runId,
@@ -737,10 +756,30 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       plan: executionPlan as unknown as Record<string, unknown>,
     })
 
+    await emitRunEvent({
+      runId,
+      workspaceId,
+      groupSessionId,
+      type: 'run.started',
+      payload: { title: executionPlan.title, goal: executionPlan.goal },
+    })
+    await emitRunEvent({
+      runId,
+      workspaceId,
+      groupSessionId,
+      type: 'plan.created',
+      payload: {
+        title: executionPlan.title,
+        taskCount: executionPlan.tasks.length,
+        agentCount: executionPlan.agents.length,
+        phaseCount: executionPlan.phases?.length ?? 0,
+      },
+    })
+
     const engine = new OrchestratorEngine()
     engine.startRun({ runId, groupSessionId, workspaceId, plan: executionPlan, childSessions }).catch(() => {})
 
-    const result: OrchestratorDispatchResult = { workspaceId, groupSessionId, tasks: taskResults }
+    const result: OrchestratorDispatchResult = { runId, workspaceId, groupSessionId, tasks: taskResults }
     await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result)
     return c.json(result)
   })
@@ -1052,6 +1091,11 @@ function buildOrchestratorPlan(content: string, agents = fallbackPlanAgents()): 
     goal: normalizedGoal,
     summary: `我已根据当前 Agent 团队把「${title}」拆成 3 个子任务。确认后会创建或复用 Agent Group 并分发执行。`,
     agents: selectedAgents,
+    phases: [
+      { id: 'analysis', title: '分析', purpose: '梳理目标、边界和验收标准', taskIds: ['plan'] },
+      { id: 'implementation', title: '实现', purpose: '完成核心交付路径', taskIds: ['build'] },
+      { id: 'verification', title: '验证', purpose: '审查风险并补齐测试建议', taskIds: ['review'] },
+    ],
     tasks: [
       {
         id: 'plan',
@@ -1142,7 +1186,7 @@ async function generatePlanWithLlm(goal: string, agents: PlanAgent[], specPhases
     'You are AgentHub Orchestrator.',
     'Create a concise multi-agent execution plan using only the provided agent keys.',
     'Return strict JSON only. Do not include Markdown fences or explanations.',
-    'Schema: {"title":string,"summary":string,"tasks":[{"id":string,"title":string,"description":string,"agentKey":string,"status":"pending"}]}',
+    'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","status":"pending"}]}',
     'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
     specPhases || '',
   ].filter(Boolean).join('\n')
@@ -1177,11 +1221,19 @@ function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAg
   const candidate = generated as {
     title?: unknown
     summary?: unknown
+    phases?: Array<{
+      id?: unknown
+      title?: unknown
+      purpose?: unknown
+      taskIds?: unknown
+    }>
     tasks?: Array<{
       id?: unknown
+      phaseId?: unknown
       title?: unknown
       description?: unknown
       agentKey?: unknown
+      taskType?: unknown
       status?: unknown
     }>
   }
@@ -1197,9 +1249,11 @@ function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAg
       if (!title || !description || !agentKey) return null
       return {
         id: slugifyTaskId(cleanPlanText(task.id) || title, index),
+        phaseId: cleanPlanText(task.phaseId) || undefined,
         title,
         description,
         agentKey,
+        taskType: parsePlanTaskType(task.taskType) ?? inferTaskTypeFromPlanText(`${title} ${description}`),
         status: task.status === 'running' || task.status === 'done' || task.status === 'failed' ? task.status : 'pending',
       }
     })
@@ -1207,6 +1261,7 @@ function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAg
 
   if (!tasks.length) return null
   const title = cleanPlanText(candidate.title) || titleFromGoal(goal)
+  const phases = normalizePlanPhases(candidate.phases, tasks)
 
   return {
     kind: 'orchestrator_plan',
@@ -1214,6 +1269,7 @@ function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAg
     goal,
     summary: cleanPlanText(candidate.summary) || `我已根据当前 Agent 团队把「${title}」拆成 ${tasks.length} 个子任务。`,
     agents,
+    phases,
     tasks,
   }
 }
@@ -1242,6 +1298,95 @@ function slugifyTaskId(value: string, index: number) {
 function titleFromGoal(goal: string) {
   const cleaned = goal.replace(/[。.!?？\n\r]/g, ' ').trim()
   return cleaned.length > 18 ? `${cleaned.slice(0, 18)}...` : cleaned || '多 Agent 协作任务'
+}
+
+function normalizePlanPhases(phases: unknown, tasks: PlanTask[]): PlanPhase[] {
+  const normalized: PlanPhase[] = []
+  if (Array.isArray(phases)) {
+    for (const phase of phases) {
+      if (!phase || typeof phase !== 'object') continue
+      const item = phase as { id?: unknown; title?: unknown; purpose?: unknown; taskIds?: unknown }
+      const id = cleanPlanText(item.id)
+      if (!id || normalized.some((existing) => existing.id === id)) continue
+      normalized.push({
+        id,
+        title: cleanPlanText(item.title) || phaseTitleFromId(id),
+        purpose: cleanPlanText(item.purpose) || phaseTitleFromId(id),
+        taskIds: Array.isArray(item.taskIds) ? item.taskIds.filter((taskId): taskId is string => typeof taskId === 'string') : [],
+      })
+    }
+  }
+
+  for (const [index, task] of tasks.entries()) {
+    const phaseId = task.phaseId ?? inferPlanTaskPhase(task, index)
+    task.phaseId = phaseId
+    let phase = normalized.find((item) => item.id === phaseId)
+    if (!phase) {
+      phase = {
+        id: phaseId,
+        title: phaseTitleFromId(phaseId),
+        purpose: phasePurposeFromId(phaseId),
+        taskIds: [],
+      }
+      normalized.push(phase)
+    }
+    if (!phase.taskIds.includes(task.id)) phase.taskIds.push(task.id)
+  }
+
+  return normalized
+}
+
+function inferPlanTaskPhase(task: Pick<PlanTask, 'id' | 'title' | 'description'>, index: number): string {
+  const text = `${task.id} ${task.title} ${task.description}`.toLowerCase()
+  if (/(plan|analysis|scan|read|理解|梳理|分析|调研)/i.test(text)) return 'analysis'
+  if (/(design|方案|架构|设计)/i.test(text)) return 'design'
+  if (/(build|code|implement|实现|开发|修改)/i.test(text)) return 'implementation'
+  if (/(review|test|verify|审查|测试|验证|风险)/i.test(text)) return 'verification'
+  if (/(summary|synthesize|汇总|总结)/i.test(text)) return 'synthesis'
+  return index === 0 ? 'analysis' : 'execution'
+}
+
+function parsePlanTaskType(value: unknown): PlanTask['taskType'] | undefined {
+  if (
+    value === 'read' ||
+    value === 'research' ||
+    value === 'design' ||
+    value === 'code' ||
+    value === 'test' ||
+    value === 'review' ||
+    value === 'synthesize'
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function inferTaskTypeFromPlanText(text: string): NonNullable<PlanTask['taskType']> {
+  if (/(review|审查|风险)/i.test(text)) return 'review'
+  if (/(test|verify|测试|验证)/i.test(text)) return 'test'
+  if (/(code|build|implement|实现|开发|修改)/i.test(text)) return 'code'
+  if (/(design|方案|架构|设计|plan|规划)/i.test(text)) return 'design'
+  if (/(research|调研|搜索|资料)/i.test(text)) return 'research'
+  if (/(summary|synthesize|汇总|总结)/i.test(text)) return 'synthesize'
+  return 'read'
+}
+
+function phaseTitleFromId(id: string): string {
+  if (id === 'analysis') return '分析'
+  if (id === 'design') return '设计'
+  if (id === 'implementation') return '实现'
+  if (id === 'verification') return '验证'
+  if (id === 'synthesis') return '汇总'
+  return '执行'
+}
+
+function phasePurposeFromId(id: string): string {
+  if (id === 'analysis') return '理解目标和上下文'
+  if (id === 'design') return '确定方案和边界'
+  if (id === 'implementation') return '完成核心实现'
+  if (id === 'verification') return '验证质量和风险'
+  if (id === 'synthesis') return '汇总协作产出'
+  return '推进当前任务'
 }
 
 function parsePlan(metadata: unknown): OrchestratorPlan | null {

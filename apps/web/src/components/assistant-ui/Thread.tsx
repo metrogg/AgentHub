@@ -2411,6 +2411,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
           {plan.tasks.map((task, index) => {
             const agent = plan.agents.find((item) => item.key === task.agentKey)
             const status = task.status ?? 'pending'
+            const phase = plan.phases?.find((item) => item.id === task.phaseId || item.taskIds.includes(task.id))
             return (
               <div
                 key={task.id}
@@ -2424,6 +2425,11 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                 </div>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
+                    {phase && (
+                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 text-[11px] text-neutral-500">
+                        {phase.title}
+                      </span>
+                    )}
                     <div className="truncate text-sm font-semibold text-neutral-900">
                       {task.title}
                     </div>

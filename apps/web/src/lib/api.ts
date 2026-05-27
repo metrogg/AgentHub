@@ -542,10 +542,19 @@ export interface OrchestratorPlanAgent {
 
 export interface OrchestratorPlanTask {
   id: string
+  phaseId?: string
   title: string
   description: string
   agentKey: string
+  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'review' | 'synthesize'
   status?: TaskStatus
+}
+
+export interface OrchestratorPlanPhase {
+  id: string
+  title: string
+  purpose: string
+  taskIds: string[]
 }
 
 export interface OrchestratorPlan {
@@ -554,9 +563,43 @@ export interface OrchestratorPlan {
   goal: string
   summary: string
   agents: OrchestratorPlanAgent[]
+  phases?: OrchestratorPlanPhase[]
   tasks: OrchestratorPlanTask[]
   messageId?: string
   dispatchResult?: OrchestratorDispatchResult
+}
+
+export interface OrchestratorTaskLedger {
+  runId: string
+  title: string
+  goal: string
+  phases: OrchestratorPlanPhase[]
+  tasks: Array<{
+    id: string
+    phaseId: string
+    title: string
+    description: string
+    agentId: string
+    dependencies: string[]
+    taskType: NonNullable<OrchestratorPlanTask['taskType']>
+    status: TaskStatus | 'cancelled'
+  }>
+}
+
+export interface OrchestratorProgressLedger {
+  runId: string
+  status: OrchestratorRunStatus
+  currentPhaseId?: string
+  pendingTaskIds: string[]
+  runningTaskIds: string[]
+  completedTaskIds: string[]
+  failedTaskIds: string[]
+  cancelledTaskIds: string[]
+  blockedTaskIds: string[]
+  blackboardKeys: string[]
+  artifactIds: string[]
+  replanHistory: Array<{ strategy?: string; reason?: string; changedTaskIds: string[]; at: string }>
+  updatedAt: string
 }
 
 export type OrchestratorRunStatus = 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
@@ -590,6 +633,45 @@ export interface ExecutionLog {
   createdAt: string
 }
 
+export type OrchestratorRunEventSeverity = 'debug' | 'info' | 'warning' | 'error'
+
+export type OrchestratorRunEventType =
+  | 'run.started'
+  | 'plan.created'
+  | 'plan.validated'
+  | 'approval.requested'
+  | 'approval.granted'
+  | 'phase.started'
+  | 'task.queued'
+  | 'task.started'
+  | 'task.stream'
+  | 'blackboard.written'
+  | 'artifact.created'
+  | 'task.completed'
+  | 'task.failed'
+  | 'task.cancelled'
+  | 'task.retrying'
+  | 'task.reassigned'
+  | 'run.replanned'
+  | 'conflict.detected'
+  | 'conflict.resolved'
+  | 'run.synthesizing'
+  | 'run.completed'
+  | 'run.failed'
+
+export interface OrchestratorRunEvent {
+  id: string
+  runId: string
+  workspaceId: string
+  groupSessionId: string
+  taskId: string | null
+  agentId: string | null
+  type: OrchestratorRunEventType
+  payload: Record<string, unknown>
+  severity: OrchestratorRunEventSeverity
+  createdAt: string
+}
+
 export interface ConflictReportItem {
   filePath: string
   baseContent: string
@@ -605,6 +687,7 @@ export interface ConflictReportItem {
 }
 
 export interface OrchestratorDispatchResult {
+  runId: string
   workspaceId: string
   groupSessionId?: string
   tasks: Array<{ taskId: string; sessionId: string; title: string; agentName: string }>
@@ -889,6 +972,7 @@ export const api = {
   // Orchestrator runs
   listOrchestratorRuns: () => request<{ items: OrchestratorRunListItem[] }>('/orchestrator-runs'),
   getOrchestratorRun: (id: string) => request<OrchestratorRunListItem>(`/orchestrator-runs/${id}`),
+  getOrchestratorRunEvents: (id: string) => request<{ items: OrchestratorRunEvent[] }>(`/orchestrator-runs/${id}/events`),
   getOrchestratorRunLogs: (id: string) => request<{ items: ExecutionLog[] }>(`/orchestrator-runs/${id}/logs`),
   getOrchestratorRunConflicts: (id: string) => request<{ items: ConflictReportItem[] }>(`/orchestrator-runs/${id}/conflicts`),
 }
