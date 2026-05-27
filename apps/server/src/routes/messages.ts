@@ -28,6 +28,7 @@ import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine
 import type { ExecutionPlan, TaskOutputContract, TaskValidation } from '../services/orchestrator/types'
 import { emitRunEvent } from '../services/orchestrator/run-events'
 import { initializeRunLedger } from '../services/orchestrator/run-ledger'
+import { checkInputGuardrails } from '../services/orchestrator/input-guardrails'
 import { harnessManager } from '../services/harness'
 
 const orchestratorPlanSchema = z.object({
@@ -589,6 +590,18 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const parsed = parsePlan(card.metadata)
     if (!parsed) throw new HTTPException(400, { message: 'Invalid plan metadata' })
+
+    // Guardrails: check user intent for dangerous operations
+    const guardrails = checkInputGuardrails(parsed.goal)
+    if (!guardrails.ok && guardrails.riskLevel === 'high') {
+      return c.json({
+        ok: false,
+        blocked: true,
+        riskLevel: guardrails.riskLevel,
+        violations: guardrails.violations,
+        message: `请求被安全策略拦截：${guardrails.violations.join('；')}`,
+      }, 400)
+    }
 
     const [sourceSession] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
 

@@ -330,6 +330,14 @@ export class OrchestratorEngine {
         return
       }
 
+      // Task #37: Auto-review chain — code tasks 完成后自动注入 review 任务
+      const reviewResults = await this.injectAutoReviewTasks(
+        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, new AbortController().signal,
+      )
+      if (reviewResults.length > 0) {
+        results.push(...reviewResults)
+      }
+
       // 冲突检测与解决：遍历所有有 projectPath 的任务目录
       const projectPaths = new Set<string>()
       for (const task of plan.tasks) {
@@ -940,6 +948,100 @@ export class OrchestratorEngine {
         error: error?.message || 'Unknown error',
       }
     }
+  }
+
+  /**
+   * Auto-review chain: 为 code 类型且 requiresReview 的已完成任务自动注入 review 任务
+   */
+  private async injectAutoReviewTasks(
+    plan: ExecutionPlan,
+    results: TaskResult[],
+    childSessions: Map<string, ChildSessionInfo>,
+    runId: string,
+    groupSessionId: string,
+    workspaceId: string,
+    ownerId: string,
+    signal: AbortSignal,
+  ): Promise<TaskResult[]> {
+    const reviewResults: TaskResult[] = []
+    const codeTasksNeedingReview = plan.tasks.filter((task) => {
+      if (task.taskType !== 'code' || !task.validation?.requiresReview) return false
+      const result = results.find((r) => r.taskId === task.id)
+      return result?.status === 'done' && result.output
+    })
+
+    if (codeTasksNeedingReview.length === 0) return reviewResults
+
+    // Find a reviewer agent (prefer one with 'review' in role/tags)
+    const reviewerAgent = plan.agents.find((a) => {
+      const text = [a.name, a.role, a.description, ...(a.capabilityTags ?? [])].filter(Boolean).join(' ').toLowerCase()
+      return text.includes('review') || text.includes('审查') || text.includes('test')
+    }) ?? plan.agents.find((a) => a.id !== codeTasksNeedingReview[0]!.agentId) ?? plan.agents[0]
+
+    if (!reviewerAgent) return reviewResults
+
+    for (const codeTask of codeTasksNeedingReview) {
+      const codeResult = results.find((r) => r.taskId === codeTask.id)
+      if (!codeResult) continue
+
+      const reviewTaskId = `review-${codeTask.id}`
+      // Skip if already exists
+      if (plan.tasks.some((t) => t.id === reviewTaskId)) continue
+
+      // Create review task
+      const reviewTask: ExecutionTask = {
+        id: reviewTaskId,
+        title: `审查 ${codeTask.title}`,
+        description: `审查「${codeTask.title}」的代码变更质量、安全性和最佳实践。关注：代码风格一致性、潜在bug、安全漏洞、性能问题。`,
+        agentId: reviewerAgent.id,
+        dependencies: [codeTask.id],
+        taskType: 'review',
+        maxRetries: 1,
+      }
+
+      // Create child session for review
+      const reviewSession = await ensureChildSession(workspaceId, plan.title, ownerId, reviewerAgent, reviewTask.title)
+      childSessions.set(reviewTaskId, {
+        sessionId: reviewSession.id,
+        workspaceId,
+        projectPath: childSessions.get(codeTask.id)?.projectPath,
+      })
+
+      // Insert into DB
+      await db.insert(workspaceTasks).values({
+        id: reviewTaskId,
+        workspaceId,
+        agentId: reviewerAgent.id,
+        title: reviewTask.title,
+        description: reviewTask.description,
+        status: 'pending',
+        orderIdx: plan.tasks.length,
+        runId,
+        dependencies: [codeTask.id],
+        maxRetries: 1,
+      })
+
+      plan.tasks.push(reviewTask)
+
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        taskId: reviewTaskId,
+        agentId: reviewerAgent.id,
+        type: 'task.queued',
+        severity: 'info',
+        payload: { title: reviewTask.title, reason: 'Auto-review after code task', parentTaskId: codeTask.id },
+      })
+
+      // Execute the review task
+      const reviewResult = await this.executeTask(reviewTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, 0)
+      reviewResults.push(reviewResult)
+
+      logger.info({ reviewTaskId, codeTaskId: codeTask.id, status: reviewResult.status }, 'Auto-review task completed')
+    }
+
+    return reviewResults
   }
 
   private async synthesizeAndReport(

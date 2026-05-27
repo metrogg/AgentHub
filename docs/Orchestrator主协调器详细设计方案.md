@@ -372,7 +372,11 @@ interface TaskValidation {
 - 非白名单命令不会进入 shell 执行，会被记录为 `skipped`，避免模型生成命令直接触发高风险操作。
 - `OrchestratorEngine` 会校验 required artifacts 和 allowed paths；缺少 artifact 或产物路径越界会写 typed `risk`，并让任务失败进入现有恢复路径。
 - 群聊计划卡会展示任务的 paths/artifacts/validation；Runs 详情会展示阶段级 contract/validation 数量。
-- 当前仍未完成：Reviewer 自动审查、用户合并确认、专门 contract/validation 详情面板。
+- **Reviewer 自动审查**（2026-05-27 新增）：code 类型任务完成且 `requiresReview: true` 时，`OrchestratorEngine.injectAutoReviewTasks()` 自动注入 Reviewer 审查任务，审查 diff 质量和安全性，结果写入黑板。
+- **Intent Router 显性化**（2026-05-27 新增）：`chatStore.ts` 新增 `assessIntentComplexity()` 启发式检测，群聊中无需 `@orchestrator` 即可自动路由复杂需求（多文件引用、多阶段关键词、架构意图等 6 种信号评分，≥3 分自动路由）。
+- **Clarifier 需求澄清**（2026-05-27 新增）：Planner 的 JSON schema 扩展 `clarificationQuestions` 字段，LLM 在目标模糊时生成 1-3 个澄清问题（含选项）；前端计划卡片展示"需求澄清"区域，用户可点击选项回答。
+- **Handoff 上下文裁剪**（2026-05-27 新增）：`agent-runner.ts` 的 `runAgentReply()` 在群聊场景下自动裁剪历史为 pinned + 最近 3 条 + 中间消息摘要，减少 token 消耗。
+- 尚未完成：用户合并确认、专门 contract/validation 详情面板。
 
 ### 5.5 validate_plan：校验计划
 
@@ -579,10 +583,10 @@ interface ProgressLedger {
 - `TaskLedger` / `ProgressLedger` 已作为第一版运行时账本落地，暂存于 `orchestrator_runs.plan.taskLedger` 与 `orchestrator_runs.plan.progressLedger`。
 - `initializeRunLedger(plan)` 会把旧版平铺任务自动补齐为 `phases + tasks + taskLedger + progressLedger`，因此历史 plan card 和新 plan 均可兼容。
 - `emitRunEvent` 在写入 `orchestrator_run_events` 后，会同步增量更新 Progress Ledger：任务状态、黑板 key、artifact id、retry 记录、Agent 替换、replan 历史和冲突记录都会进入账本。
-- `Planner` 的 JSON schema 已扩展为 `phases + tasks`，并保留无 phase 输出的自动归一化逻辑。
+- `Planner` 的 JSON schema 已扩展为 `phases + tasks + clarificationQuestions`，并保留无 phase 输出的自动归一化逻辑。
 - Orchestrator Runs 页面新增 Progress Ledger 阶段进度视图，Run Timeline 继续作为细粒度事件视图。
 - typed Blackboard 第一阶段已落地：`Blackboard.write` 校验带 `schemaType` 的条目，Orchestrator 写入 `task_output`、`decision`、`diff_summary`、`artifact_ref`，Runs 页面可查看结构化证据。
-- 尚未完成：pause/resume/cancel、任务级 retry API、ledger 原子更新锁、contract/validation 强校验、typed schema 迁移到 shared contract。
+- 尚未完成：pause/resume/cancel、任务级 retry API、ledger 原子更新锁、typed schema 迁移到 shared contract。
 
 ### 5.10 recover：失败降级与重规划
 
@@ -906,7 +910,8 @@ interface DiffSummaryValue extends BaseBlackboardValue {
 - `Blackboard.write` 会对带 `schemaType` 的 value 做 Zod 校验并存储规范化 JSON；不带 `schemaType` 的历史自由 JSON 继续兼容。
 - `Blackboard.query` 支持按 `schemaType` 过滤；`GET /api/orchestrator-runs/:id/blackboard` 使用 run ownership 鉴权后返回 `{ items }`。
 - Orchestrator task completed 路径会写 typed `task_output`，并从 task summary 派生 `decision`、`diff_summary`、`artifact_ref`。
-- `Synthesizer.synthesize` 已接收 typed blackboard entries 并注入汇总 prompt；Runs 页面新增“结构化黑板”证据面板，展示 schema 类型、summary、task/agent、版本和 confidence。
+- `Synthesizer.synthesize` 已接收 typed blackboard entries 并注入汇总 prompt；Runs 页面新增”结构化黑板”证据面板，展示 schema 类型、summary、task/agent、版本和 confidence。
+- Reviewer 自动审查结果也会写入黑板 `task_output`，与普通任务产出一致。
 
 ---
 

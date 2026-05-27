@@ -1,6 +1,13 @@
 import type { BlackboardRef } from '../blackboard'
 import type { AgentProfile } from '../runtime'
 
+export interface ClarificationQuestion {
+  id: string
+  question: string
+  options?: string[]
+  answer?: string
+}
+
 export interface ExecutionPlan {
   runId: string
   title: string
@@ -8,6 +15,7 @@ export interface ExecutionPlan {
   phases?: OrchestratorPhase[]
   agents: ExecutionAgent[]
   tasks: ExecutionTask[]
+  clarificationQuestions?: ClarificationQuestion[]
   taskLedger?: TaskLedger
   progressLedger?: ProgressLedger
 }

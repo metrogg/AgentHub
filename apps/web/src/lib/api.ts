@@ -574,6 +574,13 @@ export interface OrchestratorPlanPhase {
   taskIds: string[]
 }
 
+export interface ClarificationQuestion {
+  id: string
+  question: string
+  options?: string[]
+  answer?: string
+}
+
 export interface OrchestratorPlan {
   kind: 'orchestrator_plan'
   title: string
@@ -582,6 +589,7 @@ export interface OrchestratorPlan {
   agents: OrchestratorPlanAgent[]
   phases?: OrchestratorPlanPhase[]
   tasks: OrchestratorPlanTask[]
+  clarificationQuestions?: ClarificationQuestion[]
   messageId?: string
   dispatchResult?: OrchestratorDispatchResult
 }

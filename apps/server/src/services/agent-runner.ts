@@ -1,4 +1,4 @@
-import { db, messages, eq, and, desc, asc } from '@agenthub/db'
+import { db, messages, sessions, sessionMembers, eq, and, desc, asc } from '@agenthub/db'
 import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
 import { runtimeRegistry } from './runtime'
@@ -129,6 +129,10 @@ export async function runAgentReply(
     }
   }
 
+  // Task #38: Handoff 上下文裁剪 — 群聊多 Agent 场景下只传摘要+refs
+  const isGroupSession = await checkIsGroupSession(sessionId)
+  const trimmedHistory = isGroupSession ? trimHistoryForHandoff(historyAsc) : historyAsc
+
   const streamMsgId = crypto.randomUUID()
 
   broadcast(sessionId, {
@@ -151,9 +155,9 @@ export async function runAgentReply(
         const preview = repliedTo.content.slice(0, 200)
         return `[回复 ${repliedTo.senderType === 'user' ? '用户' : 'Agent'}: ${preview}${repliedTo.content.length > 200 ? '...' : ''}]\n${userMsg.content}`
       })()
-      const historyWithReply = historyAsc.map((m) => {
+      const historyWithReply = trimmedHistory.map((m) => {
         if (!m.replyToMessageId) return { senderType: m.senderType, content: m.content }
-        const repliedTo = historyAsc.find((x) => x.id === m.replyToMessageId)
+        const repliedTo = trimmedHistory.find((x) => x.id === m.replyToMessageId)
         if (!repliedTo) return { senderType: m.senderType, content: m.content }
         const preview = repliedTo.content.slice(0, 200)
         return {
@@ -301,4 +305,55 @@ function looksLikeAgentFailure(content: string) {
     /Model returned an empty response/i.test(content) ||
     /模型返回了空响应/.test(content)
   )
+}
+
+/** 检查 session 是否为群聊（多 Agent）会话 */
+async function checkIsGroupSession(sessionId: string): Promise<boolean> {
+  const [session] = await db
+    .select({ type: sessions.type })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1)
+  return session?.type === 'group'
+}
+
+/**
+ * Handoff 上下文裁剪：群聊场景下只传 pinned + 最近 3 条 + 中间消息的摘要
+ * 减少 token 消耗，避免下游 Agent 被无关历史淹没
+ */
+function trimHistoryForHandoff(history: MessageRow[]): MessageRow[] {
+  if (history.length <= 6) return history
+
+  const pinned = history.filter((m) => m.isPinned)
+  const nonPinned = history.filter((m) => !m.isPinned)
+  const recent3 = nonPinned.slice(-3)
+  const skipped = nonPinned.slice(0, -3)
+
+  if (skipped.length === 0) return history
+
+  // 从跳过的消息中提取关键信息
+  const skippedSummary = skipped
+    .map((m) => {
+      const sender = m.senderType === 'user' ? '用户' : m.senderType === 'agent' ? 'Agent' : '系统'
+      const meta = m.metadata as Record<string, unknown> | null
+      const agentName = meta?.agentName ? `(${meta.agentName})` : ''
+      // 只保留前 100 字符作为摘要
+      const preview = m.content.slice(0, 100).replace(/\n/g, ' ')
+      return `- ${sender}${agentName}: ${preview}${m.content.length > 100 ? '...' : ''}`
+    })
+    .join('\n')
+
+  // 创建摘要消息
+  const summaryMsg: MessageRow = {
+    id: 'context-summary',
+    sessionId: history[0]?.sessionId ?? '',
+    senderId: 'system',
+    senderType: 'system',
+    type: 'text',
+    content: `[上下文摘要] 以下是之前 ${skipped.length} 条消息的摘要（已裁剪以节省上下文）：\n${skippedSummary}`,
+    metadata: { contextTrimmed: true, originalCount: skipped.length },
+    createdAt: new Date(),
+  }
+
+  return [...pinned, summaryMsg, ...recent3]
 }

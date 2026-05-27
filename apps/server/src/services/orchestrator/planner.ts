@@ -2,7 +2,7 @@ import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
 import { harnessManager } from '../harness'
 import { initializeRunLedger } from './run-ledger'
-import type { ExecutionAgent, ExecutionPlan, ExecutionTask, TaskOutputContract, TaskValidation } from './types'
+import type { ClarificationQuestion, ExecutionAgent, ExecutionPlan, ExecutionTask, TaskOutputContract, TaskValidation } from './types'
 
 export interface PlannerInput {
   goal: string
@@ -155,11 +155,12 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       'You are AgentHub Orchestrator.',
       'Create a concise multi-agent execution plan using only the provided agent keys.',
       'Return strict JSON only. Do not include Markdown fences or explanations.',
-      'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
+      'Schema: {"title":string,"summary":string,"clarificationQuestions":[{"id":string,"question":string,"options":string[]}],"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
       'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
       'If tasks can run in parallel, put them in the same parallelGroup.',
       'Dependencies should reference task ids, not agent keys.',
       'Each task must include its output contract: what files/interfaces it will produce, so downstream tasks know what to depend on.',
+      'If the goal is ambiguous or missing critical details (tech stack, scope, constraints, data sources, auth method, UI framework, etc.), include 1-3 clarificationQuestions. Each question should have 2-4 options. If the goal is clear enough, return an empty array.',
       specBlock,
       specPhases || '',
     ].filter(Boolean).join('\n')
@@ -192,6 +193,11 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     const candidate = generated as {
       title?: unknown
       summary?: unknown
+      clarificationQuestions?: Array<{
+        id?: unknown
+        question?: unknown
+        options?: unknown
+      }>
       tasks?: Array<{
         id?: unknown
         phaseId?: unknown
@@ -248,12 +254,29 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
 
     if (!tasks.length) return null
 
+    // Extract clarification questions
+    const clarificationQuestions: ClarificationQuestion[] = []
+    if (Array.isArray(candidate.clarificationQuestions)) {
+      for (const q of candidate.clarificationQuestions) {
+        if (!q || typeof q !== 'object') continue
+        const question = cleanPlanText(q.question)
+        if (!question) continue
+        const options = Array.isArray(q.options) ? q.options.filter((o): o is string => typeof o === 'string') : []
+        clarificationQuestions.push({
+          id: typeof q.id === 'string' ? q.id : `cq-${clarificationQuestions.length}`,
+          question,
+          options: options.length > 0 ? options : undefined,
+        })
+      }
+    }
+
     return {
       runId,
       title: cleanPlanText(candidate.title) || titleFromGoal(goal),
       goal,
       agents,
       tasks,
+      clarificationQuestions: clarificationQuestions.length > 0 ? clarificationQuestions : undefined,
     }
   }
 

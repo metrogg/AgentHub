@@ -48,6 +48,7 @@ import {
   ImagePlus,
   ListTodo,
   Loader2,
+  MessageSquare,
   MoreHorizontal,
   Paperclip,
   Pencil,
@@ -2330,18 +2331,24 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
   const navigate = useNavigate()
   const currentSessionId = useChatStore((state) => state.currentSessionId)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
-  const [plan, setPlan] = useState(data)
+  const messageId = useMessage((message) => message.id)
+  const liveMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
+  )
+  const livePlan = (liveMessage?.metadata as { plan?: OrchestratorPlan } | null)?.plan
+  const basePlan = livePlan ?? data
+  const [plan, setPlan] = useState(basePlan)
   const [saving, setSaving] = useState(false)
   const [dispatching, setDispatching] = useState(false)
   const [result, setResult] = useState<OrchestratorDispatchResult | null>(
-    data.dispatchResult ?? null,
+    basePlan.dispatchResult ?? null,
   )
   const [error, setError] = useState('')
 
   useEffect(() => {
-    setPlan(data)
-    setResult(data.dispatchResult ?? null)
-  }, [data])
+    setPlan(basePlan)
+    setResult(basePlan.dispatchResult ?? null)
+  }, [basePlan])
 
   function patchTask(taskId: string, patch: Partial<{ agentKey: string; status: TaskStatus }>) {
     setPlan((current) => ({
@@ -2506,6 +2513,46 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
 
         {error && (
           <div className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{error}</div>
+        )}
+
+        {plan.clarificationQuestions && plan.clarificationQuestions.length > 0 && !result && (
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-amber-600">
+              <MessageSquare className="h-3.5 w-3.5" />
+              需求澄清（回答后可优化计划）
+            </div>
+            {plan.clarificationQuestions.map((cq) => (
+              <div key={cq.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm font-medium text-amber-900">{cq.question}</p>
+                {cq.options && cq.options.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {cq.options.map((opt) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        onClick={() => {
+                          setPlan((current) => ({
+                            ...current,
+                            clarificationQuestions: current.clarificationQuestions?.map((q) =>
+                              q.id === cq.id ? { ...q, answer: opt } : q,
+                            ),
+                          }))
+                        }}
+                        className={cn(
+                          'rounded-full border px-2.5 py-1 text-xs transition',
+                          cq.answer === opt
+                            ? 'border-amber-500 bg-amber-100 text-amber-800 font-medium'
+                            : 'border-amber-200 bg-white text-amber-600 hover:border-amber-400',
+                        )}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         )}
 
         {result ? (

@@ -138,7 +138,9 @@ LangChain 的 handoff 文档进一步强调：handoff 需要明确的 active_age
   - `reason`
   - `contextSummary`
   - `handoffArtifacts`
-- handoff 不应传完整聊天历史，而应传“用户目标 + 当前结论 + 相关 artifact refs”。
+- handoff 不应传完整聊天历史，而应传”用户目标 + 当前结论 + 相关 artifact refs”。
+
+**实施状态**（2026-05-27）：已实现。`agent-runner.ts` 的 `runAgentReply()` 新增群聊上下文裁剪逻辑：`checkIsGroupSession()` 检测群聊会话，`trimHistoryForHandoff()` 将历史裁剪为 pinned + 最近 3 条 + 中间消息摘要（发送者 + Agent 名 + 前 100 字符预览），摘要消息标记 `{ contextTrimmed: true }`。
 
 参考：[OpenAI Agents SDK: multi-agent design patterns](https://openai.github.io/openai-agents-python/agents/)、[LangChain handoffs](https://docs.langchain.com/oss/python/langchain/multi-agent/handoffs)
 
@@ -301,7 +303,9 @@ else:
 - 是否需要多个工具？
 - 预计 token / 时间成本是否值得？
 
-这一步很重要，因为多 Agent 的失败常来自“任务本来不该多 Agent”。
+这一步很重要，因为多 Agent 的失败常来自”任务本来不该多 Agent”。
+
+**实施状态**（2026-05-27）：已实现。`chatStore.ts` 新增 `assessIntentComplexity()` 启发式检测，6 种信号自动评分（多文件引用 +2、多阶段关键词 +2、架构意图 +2、协作暗示 +1、复杂动词+技术对象 +1、长消息+技术内容 +1），≥3 分自动路由到编排器。仅在群聊 + ≥2 Agent 时生效。
 
 ### 5.2 Clarifier：复杂任务先澄清，不要直接开跑
 
@@ -314,9 +318,11 @@ Kimi Researcher、Anthropic Research 这类系统都不是盲目执行。AgentHu
 
 产品形态：
 
-- 任务卡顶部显示“需要确认的信息”。
+- 任务卡顶部显示”需要确认的信息”。
 - 用户可以点选或直接编辑。
 - 确认后生成最终计划。
+
+**实施状态**（2026-05-27）：已实现。Planner 的 JSON schema 扩展 `clarificationQuestions` 字段，LLM 在目标模糊时生成 1-3 个澄清问题（含 2-4 个选项）。前端 `Thread.tsx` 的 `OrchestratorPlanCard` 新增”需求澄清”区域，用户可点击选项回答，回答后高亮显示。
 
 ### 5.3 Planner：输出阶段 + 任务，而不是平铺任务
 
@@ -733,8 +739,9 @@ Office / Orchestrator Runs 页面应展示：
 - Orchestrator Engine 在任务完成后执行安全白名单内的 `validation.commands`，将每条命令结果写入 typed Blackboard `test_result`；失败命令会让任务进入失败/重试路径，非白名单命令会被标记为 `skipped`。
 - Orchestrator Engine 会校验 `requiredArtifacts` 和 `allowedPaths`：缺少必需 artifact 或产物路径越界会写入 typed `risk` 并让任务失败，进入现有 retry/fallback/replan 路径。
 - 群聊计划卡会展示每个任务的 allowed paths、required artifacts 和 validation commands；Runs 详情的 Progress Ledger 会展示阶段级 contract/validation 数量。
-- Runs 页已有“结构化黑板”证据区，因此 `test_result` 会作为测试证据显示；后续可再做专门的 validation panel。
-- 尚未完成：Code Agent diff artifact 更严格标准化、Reviewer 自动审查链路、用户确认合并/放弃动作、专门 validation/contract 详情面板。
+- Runs 页已有”结构化黑板”证据区，因此 `test_result` 会作为测试证据显示；后续可再做专门的 validation panel。
+- **Reviewer 自动审查链路**（2026-05-27 新增）：`OrchestratorEngine.injectAutoReviewTasks()` 在 code 任务完成且 `requiresReview: true` 时自动注入 Reviewer 审查任务，审查 diff 质量和安全性。
+- 尚未完成：Code Agent diff artifact 更严格标准化、用户确认合并/放弃动作、专门 validation/contract 详情面板。
 
 ### Phase 5：小规模动态 Swarm
 

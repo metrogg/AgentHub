@@ -100,13 +100,19 @@ All agent execution goes through a unified `AgentRuntime` interface:
 
 Multi-agent task orchestration with DAG scheduling:
 
-- `orchestrator-engine.ts` — master controller: `dispatch()` → build DAG → schedule → conflict resolve → synthesize
-- `planner.ts` — LLM-based task DAG generator with **Spec-first planning**: generates a `ProjectSpec` (module decomposition, interface contracts, data flow) before task breakdown, then derives tasks from the spec. Includes fallback templates.
+- `orchestrator-engine.ts` — master controller: `dispatch()` → build DAG → schedule → auto-review → conflict resolve → synthesize. `injectAutoReviewTasks()` auto-creates Reviewer tasks for code tasks with `requiresReview: true`.
+- `planner.ts` — LLM-based task DAG generator with **Spec-first planning**: generates a `ProjectSpec` (module decomposition, interface contracts, data flow) before task breakdown, then derives tasks from the spec. Includes fallback templates. Generates `clarificationQuestions` when goal is ambiguous.
+- `types.ts` — `ExecutionPlan`, `ClarificationQuestion`, `ExecutionTask`, `TaskOutputContract`, `TaskValidation`, `TaskLedger`, `ProgressLedger`
+- `input-guardrails.ts` — security guardrails: pattern matching for dangerous operations (rm -rf, .env deletion, force push, etc.)
 - `task-graph.ts` — DAG utilities (topological sort, cycle detection)
 - `task-scheduler.ts` — concurrent executor (max 3 parallel), dependency-aware
 - `synthesizer.ts` — LLM-based intelligent aggregation of agent outputs
 - `conflict-resolver.ts` — detects file conflicts across agent diffs, auto-merge or LLM 3-way merge
 - `replanning-engine.ts` — dynamic failure recovery: retry with backoff, agent substitution, local replan, task split, escalation to user, global replan
+
+**Intent Router**: `chatStore.ts` `shouldRouteToOrchestratorPlan()` uses `assessIntentComplexity()` to auto-route complex messages (multi-file, multi-phase, architecture keywords) to orchestrator without explicit `@orchestrator`.
+
+**Handoff Context Trimming**: `agent-runner.ts` `trimHistoryForHandoff()` trims group session history to pinned + last 3 messages + context summary, reducing token consumption.
 
 Triggered via `POST /messages/:sessionId/orchestrator-plan/:messageId/dispatch` in `messages.ts`.
 
@@ -123,8 +129,9 @@ Applies to `workspace-write` and `danger-full-access` sandbox policies. `read-on
 ### Multi-Agent Orchestration Flow
 
 ```
-User: "@orchestrator write a login page"
+User: "@orchestrator write a login page" (or complex message auto-routed by Intent Router)
   → messages.ts: createOrchestratorPlan() → LLM generates ExecutionPlan (task card shown in chat)
+  → If ambiguous: plan includes clarificationQuestions (Clarifier)
   → User confirms plan → POST .../dispatch → OrchestratorEngine.dispatch()
     1. Create workspace + agents + group session
     2. Insert orchestratorRuns record
@@ -133,9 +140,10 @@ User: "@orchestrator write a login page"
     5. For each task:
        - Create child session
        - Git branch isolation (if non read-only)
-       - AgentRuntime.execute() → stream reply
+       - AgentRuntime.execute() → stream reply (history trimmed for group sessions)
        - Collect diff artifact
        - Write output to Blackboard
+       - If code task with requiresReview: auto-inject Reviewer task
     6. ConflictResolver: detect & resolve file conflicts
     7. Synthesizer: LLM aggregate → post summary to group chat
     8. Cleanup Blackboard namespace
@@ -165,6 +173,7 @@ DB file defaults to `./storage/agenthub.db`.
 - Routing: React Router with pages: Chat, AgentConfig, AgentWorld, Office, SkillsMarket, OrchestratorRuns, ExecutionLogs, CodingTools, Settings
 - Desktop integration: `src/lib/native.ts` detects Tauri runtime; `src/components/DesktopAppMenu.tsx` renders native menu when in desktop mode
 - API client: `src/lib/api.ts` — typed wrapper around `fetch` for all backend endpoints
+- **Orchestrator Plan Card** (`Thread.tsx`): `OrchestratorPlanCard` renders plan with task list, contract details, clarification questions, diff viewer, and conflict resolution UI. Uses `useMessage` + `useChatStore` for live metadata updates via WebSocket `run:event`.
 
 ### Desktop (`apps/desktop`)
 
