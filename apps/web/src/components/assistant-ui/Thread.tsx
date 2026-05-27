@@ -40,6 +40,7 @@ import {
   Copy,
   ExternalLink,
   FileText,
+  Minus,
   FolderOpen,
   FolderPlus,
   FolderX,
@@ -62,7 +63,6 @@ import {
   TerminalSquare,
   Trash2,
   User,
-  Users,
   X,
 } from 'lucide-react'
 import {
@@ -96,9 +96,16 @@ import {
 import { pickWorkspaceFolder } from '../../lib/native'
 import { sendModeShouldSubmit, shouldInsertNewline, useShortcutSettings } from '../../lib/shortcuts'
 import { cn } from '../../lib/utils'
+import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../../lib/workspaceFilters'
 import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
+import {
+  agentLibraryChangeEvent,
+  loadAgentLibrary,
+  toAgentConfigInput,
+  type SavedAgentConfig,
+} from '../../lib/agentLibrary'
 
 const highlightLanguageMap = {
   bash,
@@ -149,6 +156,12 @@ export const Thread: FC = () => {
     Boolean(currentSession.workspaceId) &&
     Boolean(currentSession.workspaceAgentId)
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
+  const [childDetailsOpen, setChildDetailsOpen] = useState(false)
+
+  useEffect(() => {
+    setGroupDetailsOpen(false)
+    setChildDetailsOpen(false)
+  }, [currentSession?.id])
 
   return (
     <ThreadPrimitive.Root
@@ -158,6 +171,9 @@ export const Thread: FC = () => {
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           {isGroupSession && <GroupChatHeader onOpenDetails={() => setGroupDetailsOpen(true)} />}
+          {!isGroupSession && isWorkspaceChildSession && (
+            <AgentChatHeader onOpenDetails={() => setChildDetailsOpen(true)} />
+          )}
           <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
             <ThreadWelcome />
             <ThreadPrimitive.Messages
@@ -169,12 +185,17 @@ export const Thread: FC = () => {
           </ThreadPrimitive.Viewport>
           <Composer />
         </div>
-        {!isGroupSession && isWorkspaceChildSession && <WorkspaceChildSessionRail />}
       </div>
       {isGroupSession && (
         <GroupChatDetailsDrawer
           open={groupDetailsOpen}
           onClose={() => setGroupDetailsOpen(false)}
+        />
+      )}
+      {!isGroupSession && isWorkspaceChildSession && (
+        <WorkspaceChildSessionDrawer
+          open={childDetailsOpen}
+          onClose={() => setChildDetailsOpen(false)}
         />
       )}
     </ThreadPrimitive.Root>
@@ -210,42 +231,362 @@ const GroupChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) =
   )
 }
 
-const WorkspaceChildSessionRail: FC = () => {
+const AgentChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) => {
   const session = useChatStore((state) => state.currentSession)
+  const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const agent = agents.find((item) => item.id === session?.workspaceAgentId)
+  const title = agent?.name || session?.title || 'Agent'
+  const subtitle = [agent?.role, workspace?.name].filter(Boolean).join(' · ') || '单 Agent 会话'
 
   return (
-    <aside className="hidden w-72 shrink-0 border-l border-neutral-200 bg-[#fbfbf9] px-4 py-5 xl:block">
-      <div className="flex items-center justify-between gap-3">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+      <div className="flex min-w-0 items-center gap-3">
+        <div
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-xl text-sm font-semibold text-white shadow-sm"
+          style={{ background: agent?.color ?? '#111827' }}
+        >
+          {(title.trim().slice(0, 1) || 'A').toUpperCase()}
+        </div>
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-neutral-950">子会话</div>
-          <div className="mt-1 truncate text-xs text-neutral-500">
-            {agent ? `${agent.name} / ${agent.role}` : 'Agent Task'}
+          <div className="truncate text-sm font-semibold text-neutral-950">{title}</div>
+          <div className="mt-0.5 truncate text-xs text-neutral-500">{subtitle}</div>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onOpenDetails}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+        title="Agent 设置"
+        aria-label="Agent 设置"
+      >
+        <MoreHorizontal className="h-5 w-5" />
+      </button>
+    </header>
+  )
+}
+
+const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+  const session = useChatStore((state) => state.currentSession)
+  const workspace = useChatStore((state) => state.currentWorkspace)
+  const agents = useChatStore((state) => state.currentWorkspaceAgents)
+  const selectSession = useChatStore((state) => state.selectSession)
+  const agent = agents.find((item) => item.id === session?.workspaceAgentId)
+  const [models, setModels] = useState<ModelCatalogItem[]>([])
+  const [draft, setDraft] = useState({
+    role: '',
+    description: '',
+    systemPrompt: '',
+    modelId: '',
+  })
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+
+  useEffect(() => {
+    if (!open) return
+    api
+      .getSettings()
+      .then((settings) => {
+        if (!settings.MODEL_CATALOG) {
+          setModels([])
+          return
+        }
+        const parsed = JSON.parse(settings.MODEL_CATALOG) as ModelCatalogItem[]
+        setModels(parsed.filter((item) => item.enabled))
+      })
+      .catch(() => setModels([]))
+  }, [open])
+
+  useEffect(() => {
+    setDraft({
+      role: agent?.role ?? '',
+      description: agent?.description ?? '',
+      systemPrompt: agent?.systemPrompt ?? '',
+      modelId: agent?.modelId ?? '',
+    })
+    setSaveState('idle')
+  }, [agent?.id, agent?.role, agent?.description, agent?.systemPrompt, agent?.modelId])
+
+  async function saveAgentPatch(patch: Partial<Pick<WorkspaceAgent, 'role' | 'description' | 'systemPrompt' | 'modelId'>>) {
+    if (!workspace || !agent || saveState === 'saving') return
+    setSaveState('saving')
+    try {
+      await api.updateWorkspaceAgent(workspace.id, agent.id, patch)
+      if (session?.id) await selectSession(session.id)
+      setSaveState('saved')
+      window.setTimeout(() => setSaveState('idle'), 1400)
+    } catch {
+      setSaveState('error')
+    }
+  }
+
+  function saveTextField(field: 'role' | 'description' | 'systemPrompt') {
+    if (!agent) return
+    const next = draft[field].trim()
+    if (next === agent[field]) return
+    void saveAgentPatch({ [field]: next })
+  }
+
+  function updateModel(modelId: string) {
+    setDraft((current) => ({ ...current, modelId }))
+    void saveAgentPatch({ modelId: modelId || null })
+  }
+
+  return (
+    <div
+      className={cn(
+        'absolute inset-0 z-40 flex justify-end overflow-hidden transition',
+        open ? 'pointer-events-auto' : 'pointer-events-none',
+      )}
+      aria-hidden={!open}
+    >
+      <button
+        type="button"
+        aria-label="关闭会话详情"
+        onClick={onClose}
+        className={cn(
+          'absolute inset-0 bg-black/5 transition-opacity duration-200',
+          open ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+      <aside
+        className={cn(
+          'relative h-full w-[320px] max-w-[88vw] border-l border-neutral-200 bg-[#fbfbf9]/95 shadow-[-18px_0_45px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          open ? 'translate-x-0' : 'translate-x-full',
+        )}
+      >
+        <div className="flex h-full flex-col overflow-hidden">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-4">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-neutral-950">
+                {agent?.name ?? 'Agent 设置'}
+              </div>
+              <div className="mt-1 truncate text-xs text-neutral-500">
+                {agent?.role ? `${agent.role} · 快捷配置` : '模型与系统提示词'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-100 hover:text-neutral-950"
+              title="关闭"
+              aria-label="关闭"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+            <div className="flex items-center gap-2 rounded-2xl border border-neutral-200 bg-white p-3">
+              <div
+                className="grid h-9 w-9 place-items-center rounded-xl text-sm font-semibold text-white"
+                style={{ background: agent?.color ?? '#111827' }}
+              >
+                {(agent?.name?.slice(0, 1) || 'A').toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-neutral-950">
+                  {agent?.name ?? session?.title ?? 'Agent'}
+                </div>
+                <div className="truncate text-xs text-neutral-500">
+                  {agent?.role ?? '独立 Agent 会话'}
+                </div>
+              </div>
+            </div>
+
+            {agent && (
+              <div className="mt-4 space-y-3">
+                <div className="flex items-center justify-between px-1">
+                  <div className="text-xs font-medium uppercase tracking-wide text-neutral-400">Agent 配置</div>
+                  <AgentQuickSaveState state={saveState} />
+                </div>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-neutral-500">模型</span>
+                  <select
+                    value={draft.modelId}
+                    onChange={(event) => updateModel(event.target.value)}
+                    disabled={saveState === 'saving'}
+                    className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
+                  >
+                    <option value="">自动模型</option>
+                    {models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name || model.modelId}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-neutral-500">角色</span>
+                  <input
+                    value={draft.role}
+                    onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))}
+                    onBlur={() => saveTextField('role')}
+                    className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-neutral-300"
+                    placeholder="例如：规划"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-neutral-500">简介</span>
+                  <textarea
+                    value={draft.description}
+                    onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+                    onBlur={() => saveTextField('description')}
+                    rows={3}
+                    className="min-h-20 w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm leading-5 text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-neutral-300"
+                    placeholder="这个 Agent 负责什么"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-neutral-500">系统提示词</span>
+                  <textarea
+                    value={draft.systemPrompt}
+                    onChange={(event) => setDraft((current) => ({ ...current, systemPrompt: event.target.value }))}
+                    onBlur={() => saveTextField('systemPrompt')}
+                    rows={6}
+                    className="min-h-32 w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm leading-5 text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-neutral-300"
+                    placeholder="描述这个 Agent 的行为准则、输出风格和限制"
+                  />
+                </label>
+              </div>
+            )}
+
+            {workspace?.projectPath && (
+              <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+                <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
+                <div className="min-w-0">
+                  <div className="font-medium text-neutral-900">工作区</div>
+                  <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
-        <div className="grid h-8 w-8 place-items-center rounded-xl bg-white text-neutral-500 shadow-sm">
-          <Bot className="h-4 w-4" />
-        </div>
-      </div>
-
-      <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-        <div className="font-medium text-neutral-900">独立输出</div>
-        <div className="mt-1">这个子会话只展示当前 Agent 的任务上下文和执行结果。</div>
-      </div>
-    </aside>
+      </aside>
+    </div>
   )
+}
+
+const AgentQuickSaveState: FC<{ state: 'idle' | 'saving' | 'saved' | 'error' }> = ({ state }) => {
+  if (state === 'saving') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-neutral-400">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        保存中
+      </span>
+    )
+  }
+  if (state === 'saved') return <span className="text-xs text-emerald-600">已保存</span>
+  if (state === 'error') return <span className="text-xs text-red-500">保存失败</span>
+  return <span className="text-xs text-neutral-300">自动保存</span>
 }
 
 const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const navigate = useNavigate()
+  const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
   const messages = useChatStore((state) => state.messages)
-  const activeAgentIds = new Set(
-    messages.filter((message) => message.senderType === 'agent').map((message) => message.senderId),
-  )
+  const selectSession = useChatStore((state) => state.selectSession)
+  const deleteSession = useChatStore((state) => state.deleteSession)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
   const memberCount = agents.length + 2
+  const groupTitle = session?.title || workspace?.name || 'Agent 群聊'
+  const [titleDraft, setTitleDraft] = useState(groupTitle)
+  const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
+  const [inviteOpen, setInviteOpen] = useState(false)
+  const [busyAction, setBusyAction] = useState<'rename' | 'invite' | 'delete' | null>(null)
+
+  useEffect(() => {
+    setTitleDraft(groupTitle)
+  }, [groupTitle])
+
+  useEffect(() => {
+    if (!open) return
+    const syncAgents = () => setLibraryAgents(loadAgentLibrary())
+    syncAgents()
+    window.addEventListener(agentLibraryChangeEvent, syncAgents)
+    window.addEventListener('storage', syncAgents)
+    return () => {
+      window.removeEventListener(agentLibraryChangeEvent, syncAgents)
+      window.removeEventListener('storage', syncAgents)
+    }
+  }, [open])
+
+  const inviteCandidates = libraryAgents.filter(
+    (candidate) => !agents.some((agent) => agent.name.toLowerCase() === candidate.name.toLowerCase()),
+  )
+
+  async function saveGroupTitle() {
+    const next = titleDraft.trim() || 'Agent 群聊'
+    if (!session || next === groupTitle || busyAction) return
+    setBusyAction('rename')
+    try {
+      await api.updateSession(session.id, { title: next })
+      if (workspace) await api.updateWorkspace(workspace.id, { name: next }).catch(() => undefined)
+      await fetchSessions()
+      await selectSession(session.id)
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function inviteAgent(agent: SavedAgentConfig) {
+    if (!workspace || !session || busyAction) return
+    setBusyAction('invite')
+    try {
+      await api.addWorkspaceAgent(workspace.id, toAgentConfigInput(agent))
+      await selectSession(session.id)
+      setInviteOpen(false)
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function deleteGroupChat() {
+    if (!session || busyAction) return
+    if (!window.confirm('确定删除这个群聊吗？')) return
+    setBusyAction('delete')
+    try {
+      await deleteSession(session.id)
+      await fetchSessions()
+      onClose()
+      navigate('/', { replace: true })
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const monitorRows: AgentMonitorRowData[] = [
+    {
+      id: 'orchestrator',
+      name: 'Orchestrator',
+      role: '拆解、协调、生成任务卡',
+      color: '#111827',
+      mentionName: 'orchestrator',
+    },
+    ...agents.map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      role: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`,
+      color: agent.color,
+      mentionName: agent.name,
+    })),
+  ].map((row) => {
+    const live = isStreamingForAgent(streamingMessage, row.id, row.name)
+    const latest = live
+      ? streamingMessage?.content
+      : latestAgentOutput(messages, row.id, row.name)
+    return {
+      ...row,
+      active: live,
+      bubble: latest ? lastOutputSnippet(latest, 20) : '',
+    }
+  })
 
   return (
     <div
@@ -266,7 +607,7 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
       />
       <aside
         className={cn(
-          'relative h-full w-[320px] max-w-[88vw] border-l border-neutral-200 bg-[#fbfbf9]/95 shadow-[-18px_0_45px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'relative h-full w-[340px] max-w-[88vw] border-l border-neutral-200 bg-[#fbfbf9]/95 shadow-[-18px_0_45px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
       >
@@ -290,42 +631,80 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
-            <div className="flex items-center gap-2 rounded-2xl border border-neutral-200 bg-white p-3">
-              <div className="grid h-9 w-9 place-items-center rounded-xl bg-neutral-950 text-white">
-                <Users className="h-4 w-4" />
-              </div>
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-neutral-950">Agent 群聊</div>
-                <div className="truncate text-xs text-neutral-500">
-                  邀请 Agent 协作，像群聊一样分配任务
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-5 space-y-2">
-              <MemberRow name="You" role="发起人与决策者" active />
-              <MemberRow
-                name="Orchestrator"
-                role="拆解、协调、生成任务卡"
-                active={activeAgentIds.has('orchestrator')}
-                mentionName="orchestrator"
-              />
-              {agents.map((agent) => (
-                <MemberRow
-                  key={agent.id}
-                  name={agent.name}
-                  role={`${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`}
-                  color={agent.color}
-                  active={activeAgentIds.has(agent.id)}
-                  mentionName={agent.name}
+            <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-neutral-500">群聊名称</span>
+                <input
+                  value={titleDraft}
+                  onChange={(event) => setTitleDraft(event.target.value)}
+                  onBlur={() => void saveGroupTitle()}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return
+                    event.preventDefault()
+                    event.currentTarget.blur()
+                  }}
+                  disabled={busyAction === 'rename'}
+                  className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-950 outline-none transition focus:border-neutral-300 disabled:opacity-60"
                 />
-              ))}
+              </label>
+              <div className="relative mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setInviteOpen((value) => !value)}
+                  disabled={!workspace || busyAction === 'invite'}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  <Plus className="h-4 w-4" />
+                  邀请
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteGroupChat()}
+                  disabled={busyAction === 'delete'}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-100 bg-red-50 text-sm font-medium text-red-600 transition hover:bg-red-100 disabled:opacity-50"
+                >
+                  {busyAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Minus className="h-4 w-4" />}
+                  删除
+                </button>
+                {inviteOpen && (
+                  <div className="absolute left-0 top-11 z-10 w-full rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
+                    {inviteCandidates.map((agent) => (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        onClick={() => void inviteAgent(agent)}
+                        disabled={busyAction === 'invite'}
+                        className="flex min-h-10 w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition hover:bg-neutral-50 disabled:opacity-60"
+                      >
+                        <span
+                          className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-semibold text-white"
+                          style={{ background: agent.color ?? '#111827' }}
+                        >
+                          {agent.name.slice(0, 1).toUpperCase()}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-neutral-900">{agent.name}</span>
+                          <span className="block truncate text-xs text-neutral-500">{agent.role}</span>
+                        </span>
+                      </button>
+                    ))}
+                    {!inviteCandidates.length && (
+                      <div className="px-3 py-4 text-center text-xs text-neutral-400">没有可邀请的 Agent</div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-              <div className="font-medium text-neutral-900">提及方式</div>
-              <div className="mt-1">
-                输入 @Agent 名称即可让对应成员在当前群聊里回复。未指定成员时由 Orchestrator 接管。
+            <div className="mt-5">
+              <div className="mb-2 flex items-center justify-between px-1">
+                <div className="text-xs font-medium uppercase tracking-wide text-neutral-400">Agent 工作监控</div>
+                <div className="text-xs text-neutral-400">{monitorRows.length} 个 Agent</div>
+              </div>
+              <div className="space-y-2">
+                {monitorRows.map((row) => (
+                  <AgentMonitorRow key={row.id} row={row} />
+                ))}
               </div>
             </div>
 
@@ -333,7 +712,7 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
               <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
                 <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
                 <div className="min-w-0">
-                  <div className="font-medium text-neutral-900">项目文件夹</div>
+                  <div className="font-medium text-neutral-900">工作区</div>
                   <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
                 </div>
               </div>
@@ -358,41 +737,79 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
   )
 }
 
-const MemberRow: FC<{
+type AgentMonitorRowData = {
+  id: string
   name: string
   role: string
   color?: string
-  active?: boolean
-  mentionName?: string
-}> = ({ name, role, color, active, mentionName }) => (
-  <div className="group flex items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
+  mentionName: string
+  active: boolean
+  bubble: string
+}
+
+const AgentMonitorRow: FC<{ row: AgentMonitorRowData }> = ({ row }) => (
+  <div className="group relative flex items-start gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
+    {row.bubble && (
+      <div
+        className={cn(
+          'absolute right-[3.25rem] top-1 max-w-[11rem] rounded-2xl px-3 py-1.5 text-xs leading-5 shadow-sm transition',
+          row.active
+            ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100'
+            : 'bg-white text-neutral-500 ring-1 ring-neutral-100',
+        )}
+      >
+        {row.bubble}
+      </div>
+    )}
     <div
       className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
-      style={{ background: color ?? (name === 'You' ? '#2563eb' : '#111827') }}
+      style={{ background: row.color ?? '#111827' }}
     >
-      {name.slice(0, 1).toUpperCase()}
+      {row.name.slice(0, 1).toUpperCase()}
     </div>
-    <div className="min-w-0 flex-1">
-      <div className="truncate text-sm font-medium text-neutral-950">{name}</div>
-      <div className="truncate text-xs text-neutral-500">{role}</div>
+    <div className="min-w-0 flex-1 pr-16">
+      <div className="truncate text-sm font-medium text-neutral-950">{row.name}</div>
+      <div className="truncate text-xs text-neutral-500">{row.role}</div>
     </div>
-    {mentionName && (
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation()
-          insertComposerMention(mentionName)
-        }}
-        className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 opacity-70 transition hover:bg-neutral-100 hover:text-blue-600 group-hover:opacity-100"
-        title={`提及 ${name}`}
-        aria-label={`提及 ${name}`}
-      >
-        <AtSign className="h-3.5 w-3.5" />
-      </button>
-    )}
-    <span className={cn('h-2 w-2 rounded-full', active ? 'bg-emerald-500' : 'bg-neutral-300')} />
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation()
+        insertComposerMention(row.mentionName)
+      }}
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 opacity-70 transition hover:bg-neutral-100 hover:text-blue-600 group-hover:opacity-100"
+      title={`提及 ${row.name}`}
+      aria-label={`提及 ${row.name}`}
+    >
+      <AtSign className="h-3.5 w-3.5" />
+    </button>
+    <span className={cn('mt-3 h-2 w-2 shrink-0 rounded-full', row.active ? 'bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.14)]' : 'bg-neutral-300')} />
   </div>
 )
+
+function isStreamingForAgent(
+  streaming: { id: string; content: string; agentId?: string; agentName?: string } | null,
+  id: string,
+  name: string,
+) {
+  if (!streaming) return false
+  return streaming.agentId === id || streaming.agentName?.toLowerCase() === name.toLowerCase()
+}
+
+function latestAgentOutput(messages: Array<{ senderType: string; senderId: string; content: string; metadata: Record<string, unknown> | null }>, id: string, name: string) {
+  for (const message of [...messages].reverse()) {
+    if (message.senderType !== 'agent') continue
+    const agentName = typeof message.metadata?.agentName === 'string' ? message.metadata.agentName : ''
+    if (message.senderId === id || agentName.toLowerCase() === name.toLowerCase()) return message.content
+  }
+  return ''
+}
+
+function lastOutputSnippet(content: string, maxLength: number) {
+  const text = content.replace(/\s+/g, ' ').trim()
+  if (text.length <= maxLength) return text
+  return text.slice(-maxLength)
+}
 
 function insertComposerMention(name: string) {
   const value = `@${name} `
@@ -463,19 +880,16 @@ const PromptCard: FC<{ title: string; text: string }> = ({ title, text }) => (
 const Composer: FC = () => {
   const { sendMode } = useShortcutSettings()
   const { t } = useI18n()
-  const navigate = useNavigate()
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const selectedModelId = useChatStore((state) => state.selectedModelId)
-  const setSelectedModelId = useChatStore((state) => state.setSelectedModelId)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
   const currentWorkspace = useChatStore((state) => state.currentWorkspace)
   const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
-  const selectSession = useChatStore((state) => state.selectSession)
+  const setSessionWorkspace = useChatStore((state) => state.setSessionWorkspace)
   const pendingAttachments = useChatStore((state) => state.pendingAttachments)
   const addPendingAttachments = useChatStore((state) => state.addPendingAttachments)
   const removePendingAttachment = useChatStore((state) => state.removePendingAttachment)
-  const [models, setModels] = useState<ModelCatalogItem[]>([])
-  const [menu, setMenu] = useState<'tools' | 'agents' | 'models' | 'workspace' | null>(null)
+  const [menu, setMenu] = useState<'tools' | 'agents' | 'workspace' | null>(null)
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skillPanelOpen, setSkillPanelOpen] = useState(false)
@@ -490,23 +904,7 @@ const Composer: FC = () => {
   const [planMode, setPlanMode] = useState(false)
   const [composerText, setComposerText] = useState('')
   const [composerScrollTop, setComposerScrollTop] = useState(0)
-  const selectedModel = models.find((item) => item.id === selectedModelId)
-  const modelLabel = selectedModel?.modelId ?? t('自动')
-
-  useEffect(() => {
-    let cancelled = false
-    api
-      .getSettings()
-      .then((settings) => {
-        if (cancelled || !settings.MODEL_CATALOG) return
-        const parsed = JSON.parse(settings.MODEL_CATALOG) as ModelCatalogItem[]
-        setModels(parsed.filter((item) => item.enabled))
-      })
-      .catch(() => setModels([]))
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const currentProjectWorkspace = currentWorkspace && isProjectWorkspace(currentWorkspace) ? currentWorkspace : null
 
   useEffect(() => {
     if (menu !== 'workspace') return
@@ -515,7 +913,7 @@ const Composer: FC = () => {
     api
       .listWorkspaces()
       .then(({ items }) => {
-        if (!cancelled) setWorkspaces(items)
+        if (!cancelled) setWorkspaces(items.filter(isProjectWorkspace))
       })
       .catch(() => {
         if (!cancelled) setWorkspaces([])
@@ -636,18 +1034,17 @@ const Composer: FC = () => {
   }
 
   async function openWorkspace(workspaceId: string) {
-    if (workspaceBusy) return
+    if (workspaceBusy || !currentSessionId) return
     setWorkspaceBusy(true)
     setOpeningWorkspaceId(workspaceId)
-    showHint('正在打开项目...')
+    showHint('正在选择工作区...')
     try {
-      const { session } = await api.openWorkspaceGroupSession(workspaceId)
-      await fetchSessions()
-      await selectSession(session.id)
+      await setSessionWorkspace(currentSessionId, workspaceId)
       setMenu(null)
-      navigate(`/chat/${session.id}`)
+      await fetchSessions()
+      showHint('工作区已应用到当前会话')
     } catch (err) {
-      showHint(friendlyErrorMessage(err, '打开项目失败'))
+      showHint(friendlyErrorMessage(err, '选择工作区失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -659,7 +1056,7 @@ const Composer: FC = () => {
     setWorkspaceBusy(true)
     try {
       const full = await api.createWorkspace({
-        name: '空白项目',
+        name: '空白工作区',
         goal: '',
         projectPath: null,
         template: 'classic',
@@ -669,14 +1066,12 @@ const Composer: FC = () => {
         ...items.filter((item) => item.id !== full.workspace.id),
       ])
       setOpeningWorkspaceId(full.workspace.id)
-      showHint('已创建项目，正在进入...')
-      const { session } = await api.openWorkspaceGroupSession(full.workspace.id)
-      await fetchSessions()
-      await selectSession(session.id)
+      if (currentSessionId) await setSessionWorkspace(currentSessionId, full.workspace.id)
       setMenu(null)
-      navigate(`/chat/${session.id}`)
+      await fetchSessions()
+      showHint('已创建并应用工作区')
     } catch (err) {
-      showHint(friendlyErrorMessage(err, '打开文件夹失败'))
+      showHint(friendlyErrorMessage(err, '创建工作区失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -694,7 +1089,7 @@ const Composer: FC = () => {
         showHint('已取消选择文件夹')
         return
       }
-      showHint('已选择文件夹，正在打开项目...')
+      showHint('已选择文件夹，正在处理工作区...')
       const workspace =
         result.workspace ??
         (
@@ -707,14 +1102,12 @@ const Composer: FC = () => {
         ).workspace
       setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
       setOpeningWorkspaceId(workspace.id)
-      showHint('项目已加入，正在进入...')
-      const { session } = await api.openWorkspaceGroupSession(workspace.id)
-      await fetchSessions()
-      await selectSession(session.id)
+      if (currentSessionId) await setSessionWorkspace(currentSessionId, workspace.id)
       setMenu(null)
-      navigate(`/chat/${session.id}`)
+      await fetchSessions()
+      showHint('工作区已应用到当前会话')
     } catch (err) {
-      showHint(friendlyErrorMessage(err, '打开文件夹失败'))
+      showHint(friendlyErrorMessage(err, '处理工作区失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -722,8 +1115,13 @@ const Composer: FC = () => {
   }
 
   function clearWorkspaceContext() {
+    if (currentSessionId) {
+      void setSessionWorkspace(currentSessionId, null)
+        .then(fetchSessions)
+        .catch((err) => showHint(friendlyErrorMessage(err, '清除工作区失败')))
+    }
     setMenu(null)
-    navigate('/')
+    showHint('已清除工作区')
   }
 
   function syncComposerTextFromInput() {
@@ -766,12 +1164,10 @@ const Composer: FC = () => {
             <ComposerMenu
               key={menu}
               type={menu}
-              models={models}
               agents={workspaceAgents}
               workspaces={workspaces}
-              currentWorkspaceId={currentWorkspace?.id ?? null}
+              currentWorkspaceId={currentProjectWorkspace?.id ?? null}
               openingWorkspaceId={openingWorkspaceId}
-              selectedModelId={selectedModelId}
               workspaceBusy={workspaceBusy}
               planMode={planMode}
               onOpenWorkspace={(workspaceId) => void openWorkspace(workspaceId)}
@@ -781,14 +1177,6 @@ const Composer: FC = () => {
               onPlanMode={(next) => {
                 setPlanMode(next)
                 showHint(next ? '已开启计划模式' : '已关闭计划模式')
-              }}
-              onModel={(modelId) => {
-                setSelectedModelId(modelId)
-                showHint(
-                  modelId
-                    ? `已切换到 ${models.find((item) => item.id === modelId)?.modelId ?? modelId}`
-                    : '已切换到自动选择',
-                )
               }}
               onPick={(value) => {
                 insertComposerText(`${value} `)
@@ -887,11 +1275,11 @@ const Composer: FC = () => {
                 <Plus className="h-4 w-4" />
               </ComposerToolButton>
               <ComposerToolButton
-                aria-label="项目文件夹"
-                title="项目文件夹"
+                aria-label="选择工作区"
+                title={currentProjectWorkspace ? currentProjectWorkspace.name : '选择工作区'}
                 onClick={() => setMenu(menu === 'workspace' ? null : 'workspace')}
                 className={cn(
-                  (currentWorkspace || menu === 'workspace') && 'agenthub-icon-button-open',
+                  (currentProjectWorkspace || menu === 'workspace') && 'agenthub-icon-button-open',
                 )}
               >
                 <FolderOpen className="h-4 w-4" />
@@ -918,18 +1306,6 @@ const Composer: FC = () => {
               </ComposerToolButton>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setMenu(menu === 'models' ? null : 'models')}
-                className={cn(
-                  'hidden h-8 max-w-40 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-600 transition-[background-color,border-color,color,box-shadow,transform] duration-200 ease-out hover:-translate-y-px hover:bg-neutral-50 sm:inline-flex',
-                  menu === 'models' &&
-                    'border-neutral-300 bg-neutral-100 text-neutral-950 shadow-sm',
-                )}
-              >
-                <span className="truncate">{modelLabel}</span>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-              </button>
               <ComposerAction />
             </div>
           </div>
@@ -1041,13 +1417,11 @@ export const SkillCommandPanel: FC<{
 }
 
 const ComposerMenu: FC<{
-  type: 'tools' | 'agents' | 'models' | 'workspace'
-  models: ModelCatalogItem[]
+  type: 'tools' | 'agents' | 'workspace'
   agents: WorkspaceAgent[]
   workspaces: Workspace[]
   currentWorkspaceId: string | null
   openingWorkspaceId: string | null
-  selectedModelId: string | null
   workspaceBusy: boolean
   planMode: boolean
   onOpenWorkspace: (workspaceId: string) => void
@@ -1055,17 +1429,14 @@ const ComposerMenu: FC<{
   onOpenFolderWorkspace: () => void
   onClearWorkspace: () => void
   onPlanMode: (enabled: boolean) => void
-  onModel: (modelId: string | null) => void
   onPick: (value: string) => void
   onClose: () => void
 }> = ({
   type,
-  models,
   agents,
   workspaces,
   currentWorkspaceId,
   openingWorkspaceId,
-  selectedModelId,
   workspaceBusy,
   planMode,
   onOpenWorkspace,
@@ -1073,11 +1444,9 @@ const ComposerMenu: FC<{
   onOpenFolderWorkspace,
   onClearWorkspace,
   onPlanMode,
-  onModel,
   onPick,
   onClose,
 }) => {
-  const { t } = useI18n()
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [addProjectOpen, setAddProjectOpen] = useState(false)
   const legacyAgents = [
@@ -1109,15 +1478,15 @@ const ComposerMenu: FC<{
   const filteredWorkspaces = workspaces.filter((workspace) => {
     const query = workspaceQuery.trim().toLowerCase()
     if (!query) return true
-    return `${workspace.name} ${workspace.projectPath ?? ''}`.toLowerCase().includes(query)
+    return workspaceSearchText(workspace).includes(query)
   })
 
   return (
     <div
       className={cn(
         'agenthub-menu-popover absolute bottom-[4.5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl',
-        type === 'models' ? 'right-12 w-64' : 'left-3',
-        type === 'workspace' ? 'w-80' : type === 'models' ? 'w-64' : 'w-64',
+        'left-3',
+        type === 'workspace' ? 'w-80' : 'w-64',
       )}
     >
       {type === 'tools' && (
@@ -1182,49 +1551,6 @@ const ComposerMenu: FC<{
             }}
           />
         ))}
-      {type === 'models' && (
-        <>
-          <button
-            type="button"
-            onClick={() => {
-              onModel(null)
-              onClose()
-            }}
-            className={cn(
-              'flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-neutral-50',
-              !selectedModelId && 'bg-neutral-100',
-            )}
-          >
-            <span>{t('自动')}</span>
-            <span className="text-xs text-neutral-400">{t('随机可用模型')}</span>
-          </button>
-          {models.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => {
-                onModel(item.id)
-                onClose()
-              }}
-              className={cn(
-                'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50',
-                selectedModelId === item.id && 'bg-neutral-100',
-              )}
-            >
-              <span className="min-w-0">
-                <span className="block truncate font-medium text-neutral-900">{item.modelId}</span>
-                <span className="block truncate text-xs text-neutral-400">
-                  {item.name || item.provider}
-                </span>
-              </span>
-              <span className="shrink-0 text-xs text-neutral-400">{item.provider}</span>
-            </button>
-          ))}
-          {models.length === 0 && (
-            <div className="px-3 py-2 text-xs text-neutral-400">还没有启用的模型</div>
-          )}
-        </>
-      )}
       {type === 'workspace' && (
         <div className="p-1">
           <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
@@ -1234,7 +1560,7 @@ const ComposerMenu: FC<{
               onChange={(event) => setWorkspaceQuery(event.target.value)}
               autoFocus
               className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-              placeholder="搜索项目"
+              placeholder="搜索工作区"
             />
           </div>
           <div className="max-h-44 space-y-1 overflow-y-auto py-1">
@@ -1245,13 +1571,16 @@ const ComposerMenu: FC<{
                 onClick={() => onOpenWorkspace(workspace.id)}
                 disabled={workspaceBusy}
                 className={cn(
-                  'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
+                  'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
                   (workspace.id === currentWorkspaceId || workspace.id === openingWorkspaceId) &&
                     'bg-neutral-100',
                 )}
               >
                 <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                <span className="min-w-0 flex-1 truncate text-neutral-900">{workspace.name}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-neutral-900">{workspace.name}</span>
+                  <span className="block truncate text-[11px] text-neutral-400">{workspaceSubtitle(workspace)}</span>
+                </span>
                 {workspace.id === openingWorkspaceId ? (
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
                 ) : (
@@ -1263,11 +1592,11 @@ const ComposerMenu: FC<{
             ))}
             {!workspaceBusy && filteredWorkspaces.length === 0 && (
               <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
-                没有匹配的项目
+                没有匹配的工作区
               </div>
             )}
             {workspaceBusy && (
-              <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理项目...</div>
+              <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理工作区...</div>
             )}
           </div>
           <div className="mt-1 border-t border-neutral-200 pt-1.5">
@@ -1278,7 +1607,7 @@ const ComposerMenu: FC<{
                 className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50"
               >
                 <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
-                <span className="min-w-0 flex-1 truncate text-neutral-900">添加新项目</span>
+                <span className="min-w-0 flex-1 truncate text-neutral-900">添加工作区</span>
                 <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
               </button>
               <div
@@ -1296,7 +1625,7 @@ const ComposerMenu: FC<{
                   className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-100 disabled:opacity-60"
                 >
                   <Plus className="h-4 w-4 shrink-0 text-neutral-600" />
-                  新建空白项目
+                  新建空白工作区
                 </button>
                 <button
                   type="button"
@@ -1315,7 +1644,7 @@ const ComposerMenu: FC<{
               className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50"
             >
               <FolderX className="h-4 w-4 shrink-0 text-neutral-600" />
-              不使用项目
+              不使用工作区
             </button>
           </div>
         </div>
@@ -1340,7 +1669,7 @@ export function readSlashCommand(text: string, cursor: number) {
 
 function workspaceNameFromPath(value: string) {
   const normalized = value.trim().replace(/[\\/]+$/, '')
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || '工作区文件夹'
 }
 
 function fileToChatAttachment(file: File): Promise<ChatAttachment> {

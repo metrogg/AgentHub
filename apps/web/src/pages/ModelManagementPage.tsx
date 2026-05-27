@@ -203,7 +203,7 @@ export default function ModelManagementPage() {
             <div>
               <div className="inline-flex h-7 items-center gap-2 rounded-md border border-neutral-300 bg-white px-2.5 text-xs text-neutral-600">
                 <SlidersHorizontal className="h-3.5 w-3.5" />
-                {t('默认模型')}
+                {t('模型目录')}
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">{t('模型管理')}</h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-600">
@@ -348,7 +348,7 @@ function ModelManagement({
       </div>
 
       <p className="mt-4 text-xs text-neutral-400">
-        {t('提示：模型变更会自动保存并同步到聊天后端。不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。')}
+        {t('提示：模型变更会自动保存，并作为 Agent 配置和 Coding Tools 的可选模型来源。')}
       </p>
     </div>
   )

@@ -86,7 +86,15 @@ const updateTaskSchema = z.object({
 
 type AgentConfigPatch = z.input<typeof createAgentSchema> | z.infer<typeof updateAgentSchema>
 
-function normalizeNativeReadOnlyAgent<T extends AgentConfigPatch>(input: T): T {
+function normalizeAgentRuntimeDefaults<T extends AgentConfigPatch>(input: T): T {
+  if (input.runtimeType === 'code-agent') {
+    return {
+      ...input,
+      codeAgentType: input.codeAgentType ?? 'codex',
+      sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
+      approvalRequired: false,
+    }
+  }
   if (input.runtimeType !== 'mcp') return input
   return {
     ...input,
@@ -234,19 +242,46 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
 
     if (existing) return c.json({ session: existing })
 
-    const [created] = await db
-      .insert(sessions)
-      .values({
-        title: `${workspace?.name || 'Workspace'} / ${agent.name}`,
-        type: 'direct',
-        ownerId: user.sub,
-        workspaceId: id,
-        workspaceAgentId: agentId,
-      })
-      .returning()
+    try {
+      const [created] = await db
+        .insert(sessions)
+        .values({
+          title: `${workspace?.name || 'Workspace'} / ${agent.name}`,
+          type: 'direct',
+          ownerId: user.sub,
+          workspaceId: id,
+          workspaceAgentId: agentId,
+        })
+        .returning()
 
-    if (!created) throw new HTTPException(500, { message: 'Failed to create session' })
-    return c.json({ session: created })
+      if (!created) throw new HTTPException(500, { message: 'Failed to create session' })
+      return c.json({ session: created })
+    } catch (error) {
+      logger.error(
+        {
+          err: error instanceof Error ? error.message : String(error),
+          workspaceId: id,
+          agentId,
+          userId: user.sub,
+        },
+        'Failed to create agent child session',
+      )
+      if (error instanceof HTTPException) throw error
+      throw new HTTPException(500, { message: error instanceof Error ? error.message : 'Failed to create session' })
+    }
+  })
+
+  // Agent child session
+  .get('/:id/sessions', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    await ensureWorkspace(id, user.sub)
+    const list = await db
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.workspaceId, id), eq(sessions.ownerId, user.sub)))
+      .orderBy(desc(sessions.updatedAt))
+    return c.json({ items: list })
   })
 
   // Active runs
@@ -342,7 +377,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
+    const input = normalizeAgentRuntimeDefaults(c.req.valid('json'))
     const existing = await db.select({ id: workspaceAgents.id }).from(workspaceAgents).where(eq(workspaceAgents.workspaceId, id))
     const [agent] = await db
       .insert(workspaceAgents)
@@ -357,7 +392,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
+    const input = normalizeAgentRuntimeDefaults(c.req.valid('json'))
     const [agent] = await db
       .update(workspaceAgents)
       .set(input)

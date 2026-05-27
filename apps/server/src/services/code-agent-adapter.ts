@@ -9,6 +9,7 @@ import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
 import { getLlmRuntimeStatus, resolveLlmRuntimeConfig } from './llm-client'
 import { env } from '../env'
+import { getBooleanSetting } from './settings-helper'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -27,6 +28,17 @@ interface CodeAgentRunOptions {
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
   toolConfig?: Record<string, unknown>
+}
+
+interface CodeAgentCatalogItem {
+  id?: string
+  enabled?: boolean
+  provider?: string
+  modelId?: string
+  apiEndpoint?: string
+  anthropicEndpoint?: string
+  apiKeyEnv?: string
+  apiKey?: string
 }
 
 interface CodeAgentCommandResult {
@@ -121,6 +133,9 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       if (cfg['maxTurns']) {
         args.push('--max-turns', String(cfg['maxTurns']))
       }
+      if (options?.modelId) {
+        args.push('--model', options.modelId)
+      }
       return args
     },
   },
@@ -133,7 +148,11 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
       const args = ['run']
-      if (options?.modelId) args.push('--model', options.modelId)
+      if (options?.modelId) {
+        // OpenCode --model expects provider/model format; auto-prefix if missing
+        const modelId = options.modelId.includes('/') ? options.modelId : `${String(cfg['provider'] ?? 'opencode')}/${options.modelId}`
+        args.push('--model', modelId)
+      }
       if (cfg['agent']) args.push('--agent', String(cfg['agent']))
       args.push(prompt)
       return args
@@ -182,9 +201,10 @@ export async function* streamCodeAgentReply(
     { capabilityTags: profile.capabilityTags, limit: 3 }
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
+  const cliModelId = await resolveCodeAgentCliModelId(profile.modelId)
   const installed = await isCommandInstalled(adapter.command)
-  const configured = await isRuntimeConfigured(type, adapter)
-  const executionEnabled = env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION
+  const configured = await isRuntimeConfigured(type, adapter, profile.modelId)
+  const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
 
   if (!canExecute) {
@@ -206,7 +226,7 @@ export async function* streamCodeAgentReply(
       '',
       '命令预览：',
       '```bash',
-      previewCommand(adapter, cwdInfo.cwd, profile.sandboxPolicy, profile.modelId),
+      previewCommand(adapter, cwdInfo.cwd, profile.sandboxPolicy, cliModelId),
       '```',
       '',
       cwdInfo.valid ? '' : `项目目录不存在或不是文件夹：${cwdInfo.label}`,
@@ -234,7 +254,7 @@ export async function* streamCodeAgentReply(
     prompt,
     cwdInfo.cwd,
     profile.sandboxPolicy,
-    profile.modelId,
+    cliModelId,
     signal,
     toolConfig,
     {
@@ -283,7 +303,9 @@ export async function* streamCodeAgentReply(
   yield formatCodeAgentFailure(adapter, finalResult)
 }
 
-async function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
+async function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter, modelId?: string | null) {
+  const runtimeEnv = await mergedEnv(adapter, modelId)
+  if (runtimeEnv[adapter.envKey]?.trim()) return true
   if (readEnv(adapter.envKey)) return true
   if (type === 'codex') return true
 
@@ -317,7 +339,6 @@ function codeAgentBlockerText(options: {
     !options.installed ? '本机 CLI 未安装或不在 PATH' : '',
     !options.configured ? '凭据未配置' : '',
     !options.executionEnabled ? '执行开关未开启' : '',
-    options.profile.approvalRequired === false ? '' : '该 Agent 仍开启了“高风险操作需要确认”',
     !options.cwdValid ? '项目目录不存在或不可访问' : '',
   ].filter(Boolean)
   if (!blockers.length) return '当前配置已满足自动执行条件。'
@@ -389,12 +410,10 @@ function sanitizeHistoryContent(content: string) {
 async function isCommandInstalled(command: string) {
   if (!/^[a-zA-Z0-9._-]+$/.test(command)) return false
   const isWindows = process.platform === 'win32'
-  const shell = isWindows ? 'cmd.exe' : 'sh'
-  const args = isWindows
-    ? ['/d', '/s', '/c', `where ${command} >nul 2>nul`]
-    : ['-lc', `command -v ${quoteForSh(command)} >/dev/null 2>&1`]
   try {
-    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
+    const proc = isWindows
+      ? Bun.spawn(['where', command], { stdout: 'ignore', stderr: 'ignore', env: process.env })
+      : Bun.spawn(['sh', '-lc', `command -v ${quoteForSh(command)}`], { stdout: 'ignore', stderr: 'ignore', env: process.env })
     const code = await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 2000))])
     return code === 0
   } catch {
@@ -516,7 +535,7 @@ async function runCodeAgentCommand(
 
   const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
     cwd,
-    env: await mergedEnv(adapter),
+    env: await mergedEnv(adapter, modelId),
     stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -1197,11 +1216,39 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
     const rows = await db.select().from(settings).where(eq(settings.key, 'CODING_TOOLS_CONFIG')).limit(1)
     const raw = rows[0]?.value
     if (!raw) return {}
-    const parsed = JSON.parse(raw) as Array<{ id: string; config?: Record<string, unknown> }>
+    const parsed = JSON.parse(raw) as Array<{ id: string; config?: Record<string, unknown>; provider?: string; agent?: string }>
     const tool = parsed.find((t) => t.id === toolId)
-    return tool?.config ?? {}
+    const config = { ...(tool?.config ?? {}) }
+    // 兼容前端直接保存的扁平字段
+    if (tool?.provider) config.provider = tool.provider
+    if (tool?.agent) config.agent = tool.agent
+    return config
   } catch {
     return {}
+  }
+}
+
+async function resolveCodeAgentCliModelId(modelId?: string | null) {
+  const rawModelId = modelId?.trim()
+  if (!rawModelId) return modelId
+
+  const selected = await resolveCodeAgentCatalogItem(rawModelId)
+  return selected?.modelId?.trim() || rawModelId
+}
+
+async function resolveCodeAgentCatalogItem(modelId?: string | null): Promise<CodeAgentCatalogItem | null> {
+  const rawModelId = modelId?.trim()
+  if (!rawModelId) return null
+
+  try {
+    const rows = await db.select().from(settings).where(eq(settings.key, 'MODEL_CATALOG')).limit(1)
+    const raw = rows[0]?.value
+    if (!raw) return null
+
+    const catalog = JSON.parse(raw) as CodeAgentCatalogItem[]
+    return catalog.find((item) => item.enabled !== false && (item.id === rawModelId || item.modelId === rawModelId)) ?? null
+  } catch {
+    return null
   }
 }
 
@@ -1209,22 +1256,38 @@ function readEnv(key: string) {
   return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
-async function mergedEnv(adapter?: CodeAgentAdapter) {
+async function mergedEnv(adapter?: CodeAgentAdapter, modelId?: string | null) {
   const base = { ...rootEnv(), ...Bun.env, ...codexAuthEnv() }
+  const selectedModel = await resolveCodeAgentCatalogItem(modelId)
+
+  if (adapter?.command === 'claude' && selectedModel) {
+    const endpoint = selectedModel.anthropicEndpoint?.trim() || selectedModel.apiEndpoint?.trim()
+    if (endpoint) base.ANTHROPIC_BASE_URL = endpoint
+  }
 
   // 若 CLI 需要特定 API Key，优先从 Coding Tools 设置、再自动注入模型配置中的 key
   if (adapter?.envKey) {
     const directValue = readEnv(adapter.envKey)
     if (!directValue) {
+      if (selectedModel?.apiKey?.trim()) {
+        base[adapter.envKey] = selectedModel.apiKey.trim()
+      } else if (selectedModel?.apiKeyEnv?.trim()) {
+        const selectedEnvKey = selectedModel.apiKeyEnv.trim()
+        const selectedEnvValue = readEnv(selectedEnvKey)
+        if (selectedEnvValue) base[adapter.envKey] = selectedEnvValue
+      }
+
       // 1) 尝试读取前端保存的 CODE_AGENT_ACTIVE_API_KEY
-      try {
-        const rows = await db.select().from(settings).where(eq(settings.key, 'CODE_AGENT_ACTIVE_API_KEY')).limit(1)
-        const savedKey = rows[0]?.value?.trim()
-        if (savedKey) {
-          base[adapter.envKey] = savedKey
+      if (!base[adapter.envKey]) {
+        try {
+          const rows = await db.select().from(settings).where(eq(settings.key, 'CODE_AGENT_ACTIVE_API_KEY')).limit(1)
+          const savedKey = rows[0]?.value?.trim()
+          if (savedKey) {
+            base[adapter.envKey] = savedKey
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
 
       // 2) 若仍无，尝试从主模型配置解析对应 provider 的 API Key

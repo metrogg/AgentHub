@@ -1,29 +1,50 @@
-import { api, type Session } from './api'
+import { api, type Session, type WorkspaceFull } from './api'
 import { loadAgentLibraryState, toAgentConfigInput, type SavedAgentConfig } from './agentLibrary'
 
 export interface StartAgentConversationOptions {
   agents: SavedAgentConfig[]
   title?: string
+  workspaceId?: string | null
+  projectPath?: string | null
 }
 
 export async function startAgentConversation({
   agents,
   title,
+  workspaceId,
+  projectPath,
 }: StartAgentConversationOptions): Promise<Session> {
   if (!agents.length) throw new Error('请选择至少一个 Agent')
 
-  const workspaceTitle = (title?.trim() || defaultConversationTitle(agents)).slice(0, 80)
-  const full = await api.createWorkspace({
-    name: workspaceTitle,
-    goal: agents.length === 1 ? `与 ${agents[0]!.name} 单聊` : `邀请 ${agents.length} 个 Agent 组成群聊`,
-    projectPath: null,
-    template: 'blank',
-  })
+  let workspace: WorkspaceFull['workspace']
+  let workspaceAgentsList: WorkspaceFull['agents']
+
+  if (workspaceId) {
+    const full = await api.getWorkspace(workspaceId)
+    workspace = full.workspace
+    workspaceAgentsList = full.agents
+  } else {
+    const workspaceTitle = (title?.trim() || defaultConversationTitle(agents)).slice(0, 80)
+    const full = await api.createWorkspace({
+      name: workspaceTitle,
+      goal: agents.length === 1 ? `与 ${agents[0]!.name} 单聊` : `邀请 ${agents.length} 个 Agent 组成群聊`,
+      projectPath: projectPath ?? null,
+      template: 'blank',
+    })
+    workspace = full.workspace
+    workspaceAgentsList = []
+  }
 
   const invitedAgents = []
   const savedToWorkspaceAgentId = new Map<string, string>()
   for (const agent of agents) {
-    const workspaceAgent = await api.addWorkspaceAgent(full.workspace.id, toAgentConfigInput(agent))
+    const existing = workspaceAgentsList.find((wa) => wa.name === agent.name && wa.role === agent.role)
+    if (existing) {
+      invitedAgents.push(existing)
+      savedToWorkspaceAgentId.set(agent.id, existing.id)
+      continue
+    }
+    const workspaceAgent = await api.addWorkspaceAgent(workspace.id, toAgentConfigInput(agent))
     invitedAgents.push(workspaceAgent)
     savedToWorkspaceAgentId.set(agent.id, workspaceAgent.id)
   }
@@ -42,16 +63,16 @@ export async function startAgentConversation({
       }]
     })
     if (copiedRelations.length) {
-      await api.replaceWorkspaceAgentRelations(full.workspace.id, copiedRelations)
+      await api.replaceWorkspaceAgentRelations(workspace.id, copiedRelations)
     }
   }
 
   if (invitedAgents.length === 1) {
-    const { session } = await api.openWorkspaceAgentSession(full.workspace.id, invitedAgents[0]!.id)
+    const { session } = await api.openWorkspaceAgentSession(workspace.id, invitedAgents[0]!.id)
     return session
   }
 
-  const { session } = await api.openWorkspaceGroupSession(full.workspace.id)
+  const { session } = await api.openWorkspaceGroupSession(workspace.id)
   return session
 }
 

@@ -14,6 +14,7 @@ import { workspaceRoutes } from './routes/workspaces'
 import { artifactRoutes, serveDeployStatic } from './routes/artifacts'
 import { orchestratorRunRoutes } from './routes/orchestrator-runs'
 import { mobileRoutes } from './routes/mobile'
+import { officeRoutes } from './routes/office'
 
 const app = new Hono()
   .use('*', honoLogger())
@@ -22,8 +23,11 @@ const app = new Hono()
     if (err instanceof HTTPException) {
       return c.json({ error: err.message }, err.status)
     }
+    const isDev = env.NODE_ENV !== 'production'
+    const message = err instanceof Error ? err.message : String(err)
+    const stack = isDev && err instanceof Error ? err.stack : undefined
     console.error(err)
-    return c.json({ error: 'Internal Server Error' }, 500)
+    return c.json({ error: isDev ? message : 'Internal Server Error', stack }, 500)
   })
   .get('/health', (c) => c.json({ status: 'ok', version: '0.1.0' }))
 
@@ -37,6 +41,7 @@ const routes = app
   .route('/api/artifacts', artifactRoutes)
   .route('/api/orchestrator-runs', orchestratorRunRoutes)
   .route('/api/mobile', mobileRoutes)
+  .route('/api/office', officeRoutes)
 
 app.get('/deploy/:workspaceId/*', async (c) => {
   const workspaceId = c.req.param('workspaceId')

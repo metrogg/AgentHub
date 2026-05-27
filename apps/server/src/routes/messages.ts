@@ -625,8 +625,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     let agentsByKey: Map<string, typeof workspaceAgents.$inferSelect>
 
-    if (sourceSession?.type === 'group' && sourceSession.workspaceId && sourceSession.ownerId === user.sub) {
-      // 复用已有 workspace
+    if (sourceSession?.workspaceId && sourceSession.ownerId === user.sub) {
+      // 复用当前会话绑定的 workspace，不因当前会话不是群聊而另建工作区。
       const existing = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
       workspaceId = existing.workspaceId
       groupSessionId = existing.groupSessionId ?? sessionId
@@ -688,13 +688,22 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     // 创建 workspaceTasks 和 child sessions
     // 每个任务独立 session，不复用，避免上下文污染
+    // 如果任务 ID 已存在（旧 plan 使用 task1/task2 等简单 ID 导致冲突），自动分配新 UUID
+    const taskIdRemap = new Map<string, string>()
     for (const [index, task] of parsed.tasks.entries()) {
       const agent = agentsByKey.get(task.agentKey)
       const phaseId = task.phaseId ?? inferPlanTaskPhase(task, index)
+      let taskId = task.id
+      const existingTask = await db.select({ id: workspaceTasks.id }).from(workspaceTasks).where(eq(workspaceTasks.id, taskId)).limit(1)
+      if (existingTask.length > 0) {
+        taskId = crypto.randomUUID()
+        taskIdRemap.set(task.id, taskId)
+        task.id = taskId
+      }
       const [workspaceTask] = await db
         .insert(workspaceTasks)
         .values({
-          id: task.id,
+          id: taskId,
           workspaceId,
           agentId: agent?.id ?? null,
           title: task.title,
@@ -703,7 +712,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           orderIdx: index,
           runId,
           phaseId,
-          dependencies: task.dependencies ?? [],
+          dependencies: (task.dependencies ?? []).map((depId) => taskIdRemap.get(depId) ?? depId),
           parallelGroup: task.parallelGroup,
           maxRetries: task.maxRetries ?? 2,
         })
@@ -961,7 +970,7 @@ function buildAgentDraft(content: string): AgentDraft {
     sandboxPolicy: toolPermissions.includes('workspace:write') ? 'workspace-write' : 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: codeAgentType ? false : true,
   }
 }
 
@@ -1075,7 +1084,7 @@ function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
     sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly ? true : (draft.approvalRequired ?? true),
+    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
   }
 }
 
@@ -1355,6 +1364,8 @@ function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAg
   if (!Array.isArray(candidate.tasks) || candidate.tasks.length === 0) return null
 
   const agentKeys = new Set(agents.map((agent) => agent.key))
+  // 原始 task.id（如 task1） → UUID 的映射，用于同步更新 phases 中的引用
+  const rawIdToUuid = new Map<string, string>()
   const tasks = candidate.tasks
     .slice(0, 6)
     .map((task, index): PlanTask | null => {
@@ -1362,7 +1373,9 @@ function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAg
       const description = cleanPlanText(task.description)
       const agentKey = typeof task.agentKey === 'string' && agentKeys.has(task.agentKey) ? task.agentKey : agents[0]?.key
       if (!title || !description || !agentKey) return null
-      const id = slugifyTaskId(cleanPlanText(task.id) || title, index)
+      const rawId = slugifyTaskId(cleanPlanText(task.id) || title, index)
+      const id = crypto.randomUUID()
+      rawIdToUuid.set(rawId, id)
       return {
         id,
         phaseId: cleanPlanText(task.phaseId) || undefined,
@@ -1379,7 +1392,7 @@ function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAg
 
   if (!tasks.length) return null
   const title = cleanPlanText(candidate.title) || titleFromGoal(goal)
-  const phases = normalizePlanPhases(candidate.phases, tasks)
+  const phases = normalizePlanPhases(candidate.phases, tasks, rawIdToUuid)
 
   return {
     kind: 'orchestrator_plan',
@@ -1418,7 +1431,7 @@ function titleFromGoal(goal: string) {
   return cleaned.length > 18 ? `${cleaned.slice(0, 18)}...` : cleaned || '多 Agent 协作任务'
 }
 
-function normalizePlanPhases(phases: unknown, tasks: PlanTask[]): PlanPhase[] {
+function normalizePlanPhases(phases: unknown, tasks: PlanTask[], rawIdToUuid?: Map<string, string>): PlanPhase[] {
   const normalized: PlanPhase[] = []
   if (Array.isArray(phases)) {
     for (const phase of phases) {
@@ -1426,11 +1439,18 @@ function normalizePlanPhases(phases: unknown, tasks: PlanTask[]): PlanPhase[] {
       const item = phase as { id?: unknown; title?: unknown; purpose?: unknown; taskIds?: unknown }
       const id = cleanPlanText(item.id)
       if (!id || normalized.some((existing) => existing.id === id)) continue
+      const rawTaskIds = Array.isArray(item.taskIds)
+        ? item.taskIds.filter((taskId): taskId is string => typeof taskId === 'string')
+        : []
+      // 将原始 taskId（如 task1）替换为对应的 UUID
+      const taskIds = rawIdToUuid
+        ? rawTaskIds.map((tid) => rawIdToUuid.get(tid) ?? tid).filter(Boolean) as string[]
+        : rawTaskIds
       normalized.push({
         id,
         title: cleanPlanText(item.title) || phaseTitleFromId(id),
         purpose: cleanPlanText(item.purpose) || phaseTitleFromId(id),
-        taskIds: Array.isArray(item.taskIds) ? item.taskIds.filter((taskId): taskId is string => typeof taskId === 'string') : [],
+        taskIds,
       })
     }
   }

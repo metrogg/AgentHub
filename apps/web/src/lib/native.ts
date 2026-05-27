@@ -50,6 +50,12 @@ export async function openDesktopWindow() {
   return true
 }
 
+export async function openSettingsWindow() {
+  if (!isDesktopApp()) return false
+  await invokeNative('open_settings_window')
+  return true
+}
+
 export async function minimizeDesktopWindow() {
   if (!isDesktopApp()) return false
   if (await tryWindowApi(async (window) => window.minimize())) return true

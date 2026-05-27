@@ -1,6 +1,6 @@
 import { logger } from '../../lib/logger'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -10,6 +10,7 @@ export interface BranchContext {
   originalBranch: string
   projectPath: string
   worktreePath: string
+  stashRef?: string
 }
 
 export interface MergeResult {
@@ -18,10 +19,32 @@ export interface MergeResult {
   mergedBranch?: string
 }
 
+/**
+ * 项目级互斥锁：同一个 projectPath 的 git 操作串行执行
+ * 防止并发 stash/checkout/branch 产生竞态条件
+ */
+class ProjectLock {
+  private locks = new Map<string, Promise<void>>()
+
+  async acquire(projectPath: string): Promise<() => void> {
+    while (this.locks.has(projectPath)) {
+      await this.locks.get(projectPath)
+    }
+    let release: () => void
+    const lock = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    this.locks.set(projectPath, lock)
+    return () => {
+      this.locks.delete(projectPath)
+      release!()
+    }
+  }
+}
+
+const projectLock = new ProjectLock()
+
 export class GitBranchManager {
-  /**
-   * 确保 projectPath 是一个有效的 git 仓库（自动 init + 空 commit）
-   */
   async ensureGitRepo(projectPath: string): Promise<void> {
     const gitDir = join(projectPath, '.git')
     if (existsSync(gitDir)) {
@@ -40,14 +63,21 @@ export class GitBranchManager {
     await this.execGit(projectPath, ['commit', '--allow-empty', '-m', 'init: AgentHub workspace'])
   }
 
-  /**
-   * 为 Agent 任务准备独立分支 + Git worktree
-   * 1. 自动 git init（如果项目不是 git 仓库）
-   * 2. stash 当前未提交变更（保护用户工作区）
-   * 3. 从 base branch 创建新分支（不切换）
-   * 4. 使用 git worktree add 创建独立工作目录
-   */
   async prepareBranch(
+    projectPath: string,
+    runId: string,
+    agentKey: string,
+    taskId: string
+  ): Promise<BranchContext> {
+    const release = await projectLock.acquire(projectPath)
+    try {
+      return await this._prepareBranchUnsafe(projectPath, runId, agentKey, taskId)
+    } finally {
+      release()
+    }
+  }
+
+  private async _prepareBranchUnsafe(
     projectPath: string,
     runId: string,
     agentKey: string,
@@ -56,52 +86,68 @@ export class GitBranchManager {
     await this.ensureGitRepo(projectPath)
 
     const branch = `agenthub/${runId}/${agentKey}/${taskId}`
-
     const originalBranch = await this.getCurrentBranch(projectPath)
     logger.info({ projectPath, originalBranch, newBranch: branch }, 'Preparing agent branch')
 
-    // 检查是否有未提交变更，有则 stash
+    // stash 当前未提交变更，记录 stash ref 以便精确恢复
+    let stashRef: string | undefined
     const hasChanges = await this.hasUncommittedChanges(projectPath)
     if (hasChanges) {
-      await this.stash(projectPath, `agenthub-pre-${agentKey}-${taskId}`)
+      const stashMessage = `agenthub-stash-${runId}-${agentKey}-${taskId}`
+      await this.execGit(projectPath, ['stash', 'push', '-m', stashMessage])
+      const stashList = await this.execGit(projectPath, ['stash', 'list'])
+      const stashLine = stashList.split('\n').find((line) => line.includes(stashMessage))
+      if (stashLine) {
+        stashRef = stashLine.split(':')[0]
+      }
     }
 
-    // 确保 base branch 存在且最新
     const baseBranch = await this.inferBaseBranch(projectPath)
-    await this.fetchIfNeeded(projectPath, baseBranch)
 
     // 创建分支但不切换
     await this.execGit(projectPath, ['branch', branch, baseBranch])
 
-    // 使用 git worktree 创建独立工作目录
+    // git worktree 创建独立工作目录
     const worktreePath = join(tmpdir(), `agenthub-wt-${randomUUID()}`)
     await this.execGit(projectPath, ['worktree', 'add', worktreePath, branch])
 
     logger.info({ worktreePath, branch }, 'Git worktree created for agent task')
 
-    return { branch, originalBranch, projectPath, worktreePath }
+    return { branch, originalBranch, projectPath, worktreePath, stashRef }
   }
 
-  /**
-   * 清理分支：移除 worktree、删除临时分支、切回原分支
-   */
   async cleanupBranch(ctx: BranchContext, options: { keepBranch?: boolean } = {}): Promise<void> {
-    const { branch, originalBranch, projectPath, worktreePath } = ctx
+    const release = await projectLock.acquire(ctx.projectPath)
+    try {
+      await this._cleanupBranchUnsafe(ctx, options)
+    } finally {
+      release()
+    }
+  }
+
+  private async _cleanupBranchUnsafe(ctx: BranchContext, options: { keepBranch?: boolean } = {}): Promise<void> {
+    const { branch, originalBranch, projectPath, worktreePath, stashRef } = ctx
 
     try {
-      // 移除 worktree（强制，即使有未跟踪文件）
+      // 移除 worktree
       await this.execGit(projectPath, ['worktree', 'remove', '--force', worktreePath]).catch((err) => {
         logger.warn({ err: err?.message, worktreePath }, 'Failed to remove worktree via git, trying manual cleanup')
         try { rmSync(worktreePath, { recursive: true, force: true }) } catch {}
       })
 
       // 切回原分支
-      await this.execGit(projectPath, ['checkout', originalBranch])
+      await this.execGit(projectPath, ['checkout', originalBranch]).catch(() => {})
 
-      // 尝试恢复 stash
-      await this.popStashIfExists(projectPath, `agenthub-pre-${branch.split('/').pop()}`)
+      // 精确恢复 stash（用 ref 而非字符串匹配）
+      if (stashRef) {
+        try {
+          await this.execGit(projectPath, ['stash', 'pop', stashRef])
+        } catch (err: any) {
+          logger.warn({ err: err?.message, stashRef }, 'Failed to pop stash (may have conflicts)')
+        }
+      }
 
-      // 删除临时分支（除非显式保留）
+      // 删除临时分支
       if (!options.keepBranch) {
         await this.execGit(projectPath, ['branch', '-D', branch]).catch(() => {
           logger.warn({ branch }, 'Failed to delete agent branch (may not exist)')
@@ -112,9 +158,6 @@ export class GitBranchManager {
     }
   }
 
-  /**
-   * 收集该分支相对于 base 的所有变更
-   */
   async collectDiff(projectPath: string, branch: string, baseBranch?: string): Promise<string> {
     const base = baseBranch ?? (await this.inferBaseBranch(projectPath))
     try {
@@ -134,9 +177,6 @@ export class GitBranchManager {
     }
   }
 
-  /**
-   * 获取文件变更状态（created/modified/deleted）
-   */
   async getFileStatus(
     projectPath: string,
     filePath: string,
@@ -156,15 +196,20 @@ export class GitBranchManager {
     }
   }
 
-  /**
-   * 尝试将 agent 分支合并到临时分支，检测冲突
-   */
   async tryMerge(projectPath: string, agentBranches: string[], baseBranch?: string): Promise<MergeResult> {
+    const release = await projectLock.acquire(projectPath)
+    try {
+      return await this._tryMergeUnsafe(projectPath, agentBranches, baseBranch)
+    } finally {
+      release()
+    }
+  }
+
+  private async _tryMergeUnsafe(projectPath: string, agentBranches: string[], baseBranch?: string): Promise<MergeResult> {
     const base = baseBranch ?? (await this.inferBaseBranch(projectPath))
     const tmpBranch = `agenthub/merge-tmp-${Date.now()}`
 
     try {
-      // 从 base 创建临时合并分支
       await this.execGit(projectPath, ['checkout', '-b', tmpBranch, base])
 
       const conflictFiles: string[] = []
@@ -173,18 +218,14 @@ export class GitBranchManager {
         try {
           await this.execGit(projectPath, ['merge', '--no-commit', '--no-ff', branch])
         } catch {
-          // merge 可能产生冲突，检查冲突文件
           const conflicts = await this.getConflictFiles(projectPath)
           conflictFiles.push(...conflicts)
-
-          // 中止合并，清理状态
           await this.execGit(projectPath, ['merge', '--abort']).catch(() => {})
           await this.execGit(projectPath, ['checkout', tmpBranch]).catch(() => {})
           await this.execGit(projectPath, ['reset', '--hard']).catch(() => {})
         }
       }
 
-      // 清理临时分支
       await this.execGit(projectPath, ['checkout', base]).catch(() => {})
       await this.execGit(projectPath, ['branch', '-D', tmpBranch]).catch(() => {})
 
@@ -193,30 +234,33 @@ export class GitBranchManager {
         conflictFiles: [...new Set(conflictFiles)],
       }
     } catch (err: any) {
-      // 清理临时分支
       await this.execGit(projectPath, ['checkout', base]).catch(() => {})
       await this.execGit(projectPath, ['branch', '-D', tmpBranch]).catch(() => {})
       return { clean: false, conflictFiles: [] }
     }
   }
 
-  /**
-   * 将指定分支 squash 合并到 base
-   */
   async squashMerge(projectPath: string, sourceBranch: string, targetBranch?: string, message?: string): Promise<void> {
-    const target = targetBranch ?? (await this.inferBaseBranch(projectPath))
-    await this.execGit(projectPath, ['checkout', target])
-    await this.execGit(projectPath, ['merge', '--squash', sourceBranch])
-    await this.execGit(projectPath, ['commit', '-m', message ?? `Merge changes from ${sourceBranch}`])
+    const release = await projectLock.acquire(projectPath)
+    try {
+      const target = targetBranch ?? (await this.inferBaseBranch(projectPath))
+      await this.execGit(projectPath, ['checkout', target])
+      await this.execGit(projectPath, ['merge', '--squash', sourceBranch])
+      await this.execGit(projectPath, ['commit', '-m', message ?? `Merge changes from ${sourceBranch}`])
+    } finally {
+      release()
+    }
   }
 
-  /**
-   * 丢弃分支所有变更（hard reset 到 base）
-   */
   async resetToBase(projectPath: string, branch: string, baseBranch?: string): Promise<void> {
-    const base = baseBranch ?? (await this.inferBaseBranch(projectPath))
-    await this.execGit(projectPath, ['checkout', branch])
-    await this.execGit(projectPath, ['reset', '--hard', base])
+    const release = await projectLock.acquire(projectPath)
+    try {
+      const base = baseBranch ?? (await this.inferBaseBranch(projectPath))
+      await this.execGit(projectPath, ['checkout', branch])
+      await this.execGit(projectPath, ['reset', '--hard', base])
+    } finally {
+      release()
+    }
   }
 
   // ===== 内部辅助 =====
@@ -242,31 +286,6 @@ export class GitBranchManager {
   private async hasUncommittedChanges(projectPath: string): Promise<boolean> {
     const output = await this.execGit(projectPath, ['status', '--porcelain'])
     return output.trim().length > 0
-  }
-
-  private async stash(projectPath: string, message: string): Promise<void> {
-    await this.execGit(projectPath, ['stash', 'push', '-m', message])
-  }
-
-  private async popStashIfExists(projectPath: string, messagePrefix: string): Promise<void> {
-    try {
-      const list = await this.execGit(projectPath, ['stash', 'list'])
-      const lines = list.split('\n')
-      const match = lines.find((line) => line.includes(messagePrefix))
-      if (match) {
-        const stashIndex = match.split(':')[0]
-        if (stashIndex) {
-          await this.execGit(projectPath, ['stash', 'pop', stashIndex])
-        }
-      }
-    } catch {
-      // stash 可能不存在，忽略
-    }
-  }
-
-  private async fetchIfNeeded(projectPath: string, branch: string): Promise<void> {
-    // 简单实现：不做 fetch，假设本地有 base branch
-    // 生产环境可以加上 `git fetch origin ${branch}`
   }
 
   private async getConflictFiles(projectPath: string): Promise<string[]> {

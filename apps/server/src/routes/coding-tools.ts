@@ -3,8 +3,10 @@ import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Hono } from 'hono'
+import { db, and, eq, settings, workspaceAgents } from '@agenthub/db'
 import { env } from '../env'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import { getBooleanSetting } from '../services/settings-helper'
 import {
   getCodexAuthStatus,
   getCodexModels,
@@ -89,7 +91,7 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/agent-adapters', async (c) => {
     const statuses = new Map((await probeTools(probes)).map((item) => [item.id, item]))
-    const executionEnabled = env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION
+    const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
     return c.json({
       platform: process.platform,
       localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES,
@@ -141,6 +143,10 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .post('/cli/install', async (c) => {
     return c.json(await installAllCliTools(), 200)
+  })
+  .post('/lifecycle/startup', async (c) => {
+    const result = await ensureCodingToolsStartupLifecycle()
+    return c.json(result, 200)
   })
   .get('/opencode/models', async (c) => {
     return c.json(await getOpencodeModels(), 200)
@@ -230,6 +236,52 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ ok: false, message: sanitizeAuthOutput(error?.message || 'Failed to fetch Codex models') }, 200)
     }
   })
+
+async function ensureCodingToolsStartupLifecycle() {
+  const [settingsChanged, repairedAgents] = await Promise.all([
+    ensureDefaultCodingToolSettings(),
+    db
+      .update(workspaceAgents)
+      .set({ approvalRequired: false })
+      .where(and(eq(workspaceAgents.runtimeType, 'code-agent'), eq(workspaceAgents.approvalRequired, true)))
+      .returning({ id: workspaceAgents.id }),
+  ])
+  const items = await probeTools(probes)
+  return {
+    ok: true,
+    settingsChanged,
+    repairedAgents: repairedAgents.length,
+    items,
+    message:
+      repairedAgents.length || settingsChanged
+        ? 'Coding Tools 启动生命周期已完成自愈。'
+        : 'Coding Tools 启动生命周期已检查，当前无需修复。',
+  }
+}
+
+async function ensureDefaultCodingToolSettings() {
+  const rows = await db.select().from(settings)
+  const map = Object.fromEntries(rows.map((row) => [row.key, row.value]))
+  const patch: Record<string, string> = {}
+
+  if (!map.CODE_AGENT_ACTIVE_TOOL) patch.CODE_AGENT_ACTIVE_TOOL = 'codex'
+  if (!map.CODE_AGENT_ACTIVE_COMMAND) patch.CODE_AGENT_ACTIVE_COMMAND = 'codex'
+  if (!map.CODE_AGENT_ACTIVE_SANDBOX) patch.CODE_AGENT_ACTIVE_SANDBOX = 'workspace-write'
+  if (!map.CODEX_CHATGPT_TRANSPORT) patch.CODEX_CHATGPT_TRANSPORT = 'http'
+  patch.CODE_AGENT_LIFECYCLE_LAST_RUN_AT = new Date().toISOString()
+
+  for (const [key, value] of Object.entries(patch)) {
+    const existing = map[key]
+    if (existing === value && key !== 'CODE_AGENT_LIFECYCLE_LAST_RUN_AT') continue
+    if (existing !== undefined) {
+      await db.update(settings).set({ value, updatedAt: new Date() }).where(eq(settings.key, key))
+    } else {
+      await db.insert(settings).values({ key, value })
+    }
+  }
+
+  return Object.keys(patch).some((key) => key !== 'CODE_AGENT_LIFECYCLE_LAST_RUN_AT' && map[key] !== patch[key])
+}
 
 async function getOpencodeModels() {
   const config = readOpencodeConfig()
@@ -601,11 +653,26 @@ async function runVersionProbe(command: string): Promise<string | null> {
 
 async function tryVersionProbe(command: string, flag: string): Promise<string | null> {
   const isWindows = process.platform === 'win32'
+
+  // Step 1: check command exists
+  try {
+    const reachProc = isWindows
+      ? Bun.spawn(['where', command], { stdout: 'ignore', stderr: 'ignore', env: process.env })
+      : Bun.spawn(['sh', '-lc', `command -v ${quoteForSh(command)}`], { stdout: 'ignore', stderr: 'ignore', env: process.env })
+    const reachCode = await Promise.race([
+      reachProc.exited,
+      new Promise<number>((resolve) => setTimeout(() => { try { reachProc.kill() } catch {} ; resolve(124) }, 5000)),
+    ])
+    if (reachCode !== 0) return null
+  } catch {
+    return null
+  }
+
+  // Step 2: run version probe
   const shell = isWindows ? 'cmd.exe' : 'sh'
-  const commandLine = isWindows
-    ? `where ${command} >nul 2>nul && ${command} ${flag}`
-    : `command -v ${quoteForSh(command)} >/dev/null 2>&1 && ${quoteForSh(command)} ${flag}`
-  const args = isWindows ? ['/d', '/s', '/c', commandLine] : ['-lc', commandLine]
+  const args = isWindows
+    ? ['/c', `${command} ${flag}`]
+    : ['-lc', `${quoteForSh(command)} ${flag}`]
 
   try {
     const proc = Bun.spawn([shell, ...args], {
@@ -648,13 +715,10 @@ async function tryVersionProbe(command: string, flag: string): Promise<string | 
 async function isCommandReachable(command: string): Promise<boolean> {
   if (!isSafeCommand(command)) return false
   const isWindows = process.platform === 'win32'
-  const shell = isWindows ? 'cmd.exe' : 'sh'
-  const commandLine = isWindows
-    ? `where ${command} >nul 2>nul`
-    : `command -v ${quoteForSh(command)} >/dev/null 2>&1`
-  const args = isWindows ? ['/d', '/s', '/c', commandLine] : ['-lc', commandLine]
   try {
-    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
+    const proc = isWindows
+      ? Bun.spawn(['where', command], { stdout: 'ignore', stderr: 'ignore', env: process.env })
+      : Bun.spawn(['sh', '-lc', `command -v ${quoteForSh(command)}`], { stdout: 'ignore', stderr: 'ignore', env: process.env })
     const code = await Promise.race([proc.exited, new Promise<number>((resolve) => {
       const timer = setTimeout(() => {
         try { proc.kill() } catch {}

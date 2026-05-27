@@ -226,6 +226,18 @@ const messageStyleOptions = ['紧凑', '简洁', '气泡']
 
 export default function SettingsPage() {
   const navigate = useNavigate()
+  return <SettingsSurface onClose={() => navigate(-1)} />
+}
+
+export function SettingsSurface({
+  onClose,
+  compact = false,
+  showSidebarClose = true,
+}: {
+  onClose: () => void
+  compact?: boolean
+  showSidebarClose?: boolean
+}) {
   const { setLanguage, t } = useI18n()
   const [activeSection, setActiveSection] = useState<SectionKey>('通用')
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings)
@@ -315,14 +327,19 @@ export default function SettingsPage() {
       <SettingsSidebar
         activeSection={activeSection}
         setActiveSection={setActiveSection}
-        navigateBack={() => navigate(-1)}
+        navigateBack={onClose}
+        compact={compact}
+        showClose={showSidebarClose}
       />
 
-      <main className="min-h-0 flex-1 overflow-y-auto px-10 py-9" style={{ background: 'var(--settings-bg)', color: 'var(--settings-text)' }}>
-        <div className="max-w-6xl">
-          <div className="mb-8 flex items-start justify-between gap-4">
+      <main
+        className={cn('min-h-0 flex-1 overflow-y-auto', compact ? 'px-6 py-5' : 'px-10 py-9')}
+        style={{ background: 'var(--settings-bg)', color: 'var(--settings-text)' }}
+      >
+        <div className={compact ? 'max-w-4xl' : 'max-w-6xl'}>
+          <div className={cn('flex items-start justify-between gap-4', compact ? 'mb-5' : 'mb-8')}>
             <div>
-              <h1 className="text-2xl font-semibold tracking-normal" style={{ color: 'var(--settings-text)' }}>{t(activeSection)}</h1>
+              <h1 className={cn('font-semibold tracking-normal', compact ? 'text-xl' : 'text-2xl')} style={{ color: 'var(--settings-text)' }}>{t(activeSection)}</h1>
               <p className="mt-1 text-sm" style={{ color: 'var(--settings-muted-text)' }}>{t(sectionDescription(activeSection))}</p>
             </div>
             <AutoSaveStatus state={saveState} />
@@ -352,28 +369,37 @@ function SettingsSidebar({
   activeSection,
   setActiveSection,
   navigateBack,
+  compact = false,
+  showClose = true,
 }: {
   activeSection: SectionKey
   setActiveSection: (section: SectionKey) => void
   navigateBack: () => void
+  compact?: boolean
+  showClose?: boolean
 }) {
   const { t } = useI18n()
   return (
-    <aside className="h-full w-[260px] shrink-0 overflow-hidden border-r px-5 py-5" style={{ background: 'var(--settings-sidebar)', borderColor: 'var(--settings-border)' }}>
-      <div className="mb-7 flex items-center justify-between px-1">
+    <aside
+      className={cn('h-full shrink-0 overflow-hidden border-r', compact ? 'w-[220px] px-4 py-4' : 'w-[260px] px-5 py-5')}
+      style={{ background: 'var(--settings-sidebar)', borderColor: 'var(--settings-border)' }}
+    >
+      <div className={cn('flex items-center justify-between px-1', compact ? 'mb-5' : 'mb-7')}>
         <div className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t('设置')}</div>
-        <button
-          type="button"
-          onClick={navigateBack}
-          className="grid h-6 w-6 place-items-center rounded-md transition hover:brightness-95"
-          style={{ color: 'var(--settings-muted-text)' }}
-          aria-label={t('关闭设置')}
-          title={t('关闭设置')}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        {showClose && (
+          <button
+            type="button"
+            onClick={navigateBack}
+            className="grid h-6 w-6 place-items-center rounded-md transition hover:brightness-95"
+            style={{ color: 'var(--settings-muted-text)' }}
+            aria-label={t('关闭设置')}
+            title={t('关闭设置')}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
-      <nav className="space-y-3">
+      <nav className={compact ? 'space-y-2' : 'space-y-3'}>
         {sections.map((section) => (
           <button
             key={section.label}

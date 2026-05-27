@@ -26,7 +26,12 @@ function isRetryableError(error: unknown): boolean {
 
 export function friendlyErrorMessage(error: unknown, context?: string): string {
   const prefix = context ? `${context}：` : ''
-  if (error instanceof ApiError) return prefix + error.message
+  if (error instanceof ApiError) {
+    if (error.status === 500 && error.message === 'Internal Server Error') {
+      return prefix + '服务端暂不可用，请确认后端服务已启动后重试'
+    }
+    return prefix + error.message
+  }
   if (error instanceof Error) {
     const msg = error.message.toLowerCase()
     if (msg.includes('failed to fetch')) {
@@ -42,6 +47,8 @@ export function friendlyErrorMessage(error: unknown, context?: string): string {
 
 async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt = 0): Promise<T> {
   const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT_MS
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const canRetry = method === 'GET' || method === 'HEAD' || method === 'OPTIONS'
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
@@ -82,6 +89,7 @@ async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt 
     // Server errors (5xx) and network errors are retryable
     const shouldRetry =
       attempt < MAX_RETRIES &&
+      canRetry &&
       (isRetryableError(error) || (error instanceof ApiError && error.status >= 500))
 
     if (shouldRetry) {
@@ -106,6 +114,17 @@ export interface Session {
   workspaceAgentId?: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface StarOfficeStatus {
+  url: string
+  root: string
+  rootExists: boolean
+  running: boolean
+  starting: boolean
+  started: boolean
+  pid?: number
+  error?: string
 }
 
 export interface Message {
@@ -278,6 +297,14 @@ export interface CliInstallAction {
   message: string
   runtime?: 'local' | 'host'
   status: 'completed' | 'failed'
+}
+
+export interface CodingToolsStartupLifecycleResult {
+  items: CodingToolStatus[]
+  message: string
+  ok: boolean
+  repairedAgents: number
+  settingsChanged: boolean
 }
 
 export interface SettingsGeneralInfo {
@@ -798,6 +825,8 @@ export const api = {
   getSession: (id: string) => request<Session>(`/sessions/${id}`),
   createSession: (data: { title: string; type?: 'direct' | 'group'; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
     request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
+  updateSession: (id: string, data: { title?: string; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
+    request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   deleteAllSessions: () => request<{ deleted: boolean }>('/sessions/all', { method: 'DELETE' }),
 
@@ -899,6 +928,8 @@ export const api = {
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
   startMobilePairing: () => request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
+  getStarOfficeStatus: () => request<StarOfficeStatus>('/office/status'),
+  startStarOffice: () => request<StarOfficeStatus>('/office/start', { method: 'POST', timeout: 15_000 }),
   ensureStorageDirectory: (path: string) =>
     request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>('/settings/storage/ensure', {
       method: 'POST',
@@ -933,6 +964,8 @@ export const api = {
     request<AgentAdapterCatalogResponse>('/coding-tools/agent-adapters'),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
+  ensureCodingToolsStartupLifecycle: () =>
+    request<CodingToolsStartupLifecycleResult>('/coding-tools/lifecycle/startup', { method: 'POST' }),
   getOpencodeModels: () =>
     request<OpencodeModelsResponse>('/coding-tools/opencode/models'),
   getCodexConfig: () =>
@@ -990,6 +1023,7 @@ export const api = {
       body: projectPath ? JSON.stringify({ projectPath }) : undefined,
     }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
+  getWorkspaceSessions: (id: string) => request<{ items: Session[] }>(`/workspaces/${id}/sessions`),
   getWorkspaceActiveRuns: (id: string) => request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
   updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>
     request<WorkspaceFull>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
