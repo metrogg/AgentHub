@@ -688,7 +688,11 @@ Office / Orchestrator Runs 页面应展示：
 - Planner / task card / dispatch 现在兼容 `phases + tasks` 两层结构；旧的平铺 `tasks` 会自动补默认 phase。
 - `emitRunEvent` 会把 `task.started/completed/failed/cancelled`、`blackboard.written`、`artifact.created`、`task.retrying`、`task.reassigned`、`run.replanned`、`conflict.*`、`run.completed/failed` 增量折叠到 Progress Ledger。
 - Orchestrator Runs 详情页新增 Progress Ledger 阶段进度区块；聊天任务卡增加 phase 标签，但仍保留 `task:update` / `blackboard:update` 作为任务卡状态来源。
-- Phase 2 剩余增强：任务级 retry API、pause/resume/cancel、并发运行下 ledger 原子更新、Planner 输出 contract/validation 的强校验。
+- Phase 3 已完成最小可交付切片：新增 typed Blackboard value schema，覆盖 `fact`、`decision`、`risk`、`artifact_ref`、`diff_summary`、`test_result`、`task_output`。
+- `Blackboard.write` 对带 `schemaType` 的 value 做 Zod 校验；无 `schemaType` 的历史/自由 JSON 仍兼容，避免打断现有黑板使用。
+- Orchestrator 任务完成后会写入 typed `task_output`，并从任务摘要派生 `decision`、`diff_summary`、`artifact_ref`；`GET /api/orchestrator-runs/:id/blackboard` 可按 `schemaType` 查询。
+- Synthesizer 已接收完整 typed Blackboard 条目作为结构化上下文；Orchestrator Runs 页面新增“结构化黑板”证据区，展示来源、贡献者、confidence 与版本。
+- 剩余增强：任务级 retry API、pause/resume/cancel、并发运行下 ledger 原子更新、Planner 输出 contract/validation 的强校验、typed schema 向共享契约包收敛。
 
 ### Phase 3：Blackboard typed schema
 
@@ -700,6 +704,14 @@ Office / Orchestrator Runs 页面应展示：
 - Blackboard 写入时校验 schema。
 - Synthesizer 只读取 typed entries。
 - 前端显示“证据来源”和“贡献者”。
+
+实施状态（2026-05-27）：
+
+- 已在服务端新增 `blackboard-schemas.ts`，第一版 schema 覆盖事实、决策、风险、产物引用、diff 摘要、测试结果和任务产出。
+- `Blackboard.write` 会校验 typed value 并存储校验后的规范化 JSON；`Blackboard.query` 支持 `schemaType` 过滤。
+- Orchestrator Engine 已在 task completed 路径写入 typed `task_output`、`decision`、`diff_summary`、`artifact_ref`，同时保留原有 `blackboard:update` 广播。
+- 新增 `GET /api/orchestrator-runs/:id/blackboard`，鉴权复用 run ownership；前端 API 和 Orchestrator Runs 页面已展示结构化证据。
+- Synthesizer 汇总 prompt 已注入 typed Blackboard context，减少只靠 raw output 拼接的不可追溯问题。
 
 ### Phase 4：Code Agent 协作闭环
 

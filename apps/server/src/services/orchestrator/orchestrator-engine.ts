@@ -566,11 +566,63 @@ export class OrchestratorEngine {
       const outputRef = await blackboard.write({
         namespace: bbNamespace,
         key: `task_${task.id}_output`,
-        value: { output, summary, artifacts, agentId: agent.id, agentName: agent.name, taskTitle: task.title },
+        value: {
+          schemaType: 'task_output',
+          summary: summary.brief || `${task.title} completed`,
+          confidence: 0.8,
+          sourceAgentId: agent.id,
+          taskId: task.id,
+          output,
+          summaryData: summary,
+          artifacts,
+          agentId: agent.id,
+          agentName: agent.name,
+          taskTitle: task.title,
+        },
         agentId: agent.id,
         taskId: task.id,
         tags: ['task_output', `agent_${agent.id}`],
       })
+
+      for (const [index, decision] of summary.decisions.entries()) {
+        await blackboard.write({
+          namespace: bbNamespace,
+          key: `decisions/${task.id}/${index + 1}`,
+          value: {
+            schemaType: 'decision',
+            summary: decision.slice(0, 180),
+            confidence: 0.7,
+            sourceAgentId: agent.id,
+            taskId: task.id,
+            decision,
+            rationale: `Extracted from ${agent.name}'s task output.`,
+            alternatives: [],
+          },
+          agentId: agent.id,
+          taskId: task.id,
+          tags: ['decision', `agent_${agent.id}`],
+        })
+      }
+
+      const changedFiles = [...new Set([...summary.filesCreated, ...summary.filesModified])]
+      if (changedFiles.length > 0) {
+        await blackboard.write({
+          namespace: bbNamespace,
+          key: `diffs/${task.id}`,
+          value: {
+            schemaType: 'diff_summary',
+            summary: `${agent.name} changed ${changedFiles.length} file(s).`,
+            confidence: 0.8,
+            sourceAgentId: agent.id,
+            taskId: task.id,
+            changedFiles,
+            branchName: branchCtx?.branch,
+          },
+          agentId: agent.id,
+          taskId: task.id,
+          tags: ['diff_summary', `agent_${agent.id}`],
+        })
+      }
 
       await emitRunEvent({
         runId,
@@ -590,6 +642,27 @@ export class OrchestratorEngine {
       })
 
       for (const artifact of artifacts) {
+        const artifactId = typeof artifact.id === 'string' && artifact.id ? artifact.id : `artifact-${task.id}`
+        const artifactKind = String(artifact.kind ?? artifact.type ?? 'artifact')
+        const artifactTitle = String(artifact.title ?? artifactId)
+        await blackboard.write({
+          namespace: bbNamespace,
+          key: `artifacts/${artifactId}`,
+          value: {
+            schemaType: 'artifact_ref',
+            summary: artifactTitle,
+            confidence: 0.8,
+            sourceAgentId: agent.id,
+            taskId: task.id,
+            artifactId,
+            artifactKind,
+            title: artifactTitle,
+            filePath: typeof artifact.filePath === 'string' ? artifact.filePath : typeof artifact.path === 'string' ? artifact.path : undefined,
+          },
+          agentId: agent.id,
+          taskId: task.id,
+          tags: ['artifact_ref', `agent_${agent.id}`],
+        })
         await emitRunEvent({
           runId,
           workspaceId,
@@ -598,9 +671,9 @@ export class OrchestratorEngine {
           agentId: agent.id,
           type: 'artifact.created',
           payload: {
-            artifactId: artifact.id,
-            artifactKind: artifact.kind ?? artifact.type,
-            title: artifact.title,
+            artifactId,
+            artifactKind,
+            title: artifactTitle,
             filePath: artifact.filePath ?? artifact.path,
             agentName: agent.name,
           },
@@ -735,7 +808,8 @@ export class OrchestratorEngine {
 
     // 从黑板读取所有产物，供 Synthesizer 使用（替代直接从 results 读取）
     const bbNamespace = Blackboard.namespace(workspaceId, runId)
-    const bbResults = await blackboard.query({ namespace: bbNamespace, keyPattern: 'task_%_output' })
+    const typedBlackboardEntries = await blackboard.query({ namespace: bbNamespace, orderBy: 'asc' })
+    const bbResults = typedBlackboardEntries.filter((entry) => entry.key.startsWith('task_') && entry.key.endsWith('_output'))
     const enrichedResults: TaskResult[] = results.map((r) => {
       const bbEntry = bbResults.find((e) => e.key === `task_${r.taskId}_output`)
       if (bbEntry) {
@@ -745,7 +819,7 @@ export class OrchestratorEngine {
       return r
     })
 
-    const summary = await this.synthesizer.synthesize(plan, enrichedResults, conflictReports)
+    const summary = await this.synthesizer.synthesize(plan, enrichedResults, conflictReports, typedBlackboardEntries)
 
     const [summaryMsg] = await db
       .insert(messages)
@@ -832,15 +906,17 @@ async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNames
           .map((e) => {
             const val = e.value as {
               output: string
-              summary?: TaskOutputSummary
+              summary?: TaskOutputSummary | string
+              summaryData?: TaskOutputSummary
               agentName: string
               taskTitle: string
               artifacts?: Array<{ type?: string; diff?: string; filePath?: string; path?: string }>
             }
             // 优先使用结构化摘要，信息密度更高；回退到截断原文
             let text = `--- 来自 ${val.agentName}（${val.taskTitle}）---\n`
-            if (val.summary) {
-              text += formatSummary(val.summary)
+            const summaryData = val.summaryData ?? (typeof val.summary === 'object' ? val.summary : undefined)
+            if (summaryData) {
+              text += formatSummary(summaryData)
             } else {
               text += (val.output || '').slice(0, 4000)
             }

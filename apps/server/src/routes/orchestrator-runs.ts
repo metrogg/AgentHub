@@ -4,6 +4,8 @@ import { db, eq, and, desc, asc, sql } from '@agenthub/db'
 import { orchestratorRuns, executionLogs, workspaces, sessions } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { listRunEvents } from '../services/orchestrator/run-events'
+import { blackboard, Blackboard } from '../services/blackboard'
+import type { BlackboardSchemaType } from '../services/blackboard-schemas'
 
 export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -87,6 +89,32 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const events = await listRunEvents(id)
     return c.json({ items: events })
+  })
+
+  // Get typed blackboard entries for a run
+  .get('/:id/blackboard', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const schemaType = c.req.query('schemaType') as BlackboardSchemaType | undefined
+
+    const [run] = await db
+      .select({ id: orchestratorRuns.id, workspaceId: orchestratorRuns.workspaceId })
+      .from(orchestratorRuns)
+      .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
+      .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
+      .limit(1)
+
+    if (!run) {
+      throw new HTTPException(404, { message: 'Run not found' })
+    }
+
+    const items = await blackboard.query({
+      namespace: Blackboard.namespace(run.workspaceId, id),
+      schemaType,
+      orderBy: 'asc',
+    })
+
+    return c.json({ items })
   })
 
   // Get execution logs for a run

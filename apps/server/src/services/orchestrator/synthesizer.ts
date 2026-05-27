@@ -1,9 +1,15 @@
 import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
+import type { BlackboardEntry } from '../blackboard'
 import type { ExecutionPlan, TaskResult } from './types'
 
 export class Synthesizer {
-  async synthesize(plan: ExecutionPlan, results: TaskResult[], conflictReports: Array<{ filePath: string; resolution: string; notes?: string }> = []): Promise<string> {
+  async synthesize(
+    plan: ExecutionPlan,
+    results: TaskResult[],
+    conflictReports: Array<{ filePath: string; resolution: string; notes?: string }> = [],
+    blackboardEntries: BlackboardEntry[] = [],
+  ): Promise<string> {
     const sections = results
       .filter((r) => r.status === 'done')
       .map((r) => ({
@@ -30,6 +36,8 @@ export class Synthesizer {
       ? `代码冲突情况：\n${conflictReports.map((c) => `- ${c.filePath}: ${c.resolution}${c.notes ? ` (${c.notes})` : ''}`).join('\n')}`
       : '无代码冲突。'
 
+    const typedContext = formatTypedBlackboardEntries(blackboardEntries)
+
     const prompt = `
 协作目标：${plan.goal}
 任务总数：${results.length}
@@ -37,6 +45,9 @@ export class Synthesizer {
 失败：${results.filter((r) => r.status === 'failed').length}
 
 ${conflictInfo}
+
+结构化 Blackboard：
+${typedContext}
 
 各 Agent 当前最新产出：
 ${JSON.stringify(sections, null, 2)}
@@ -55,6 +66,27 @@ ${JSON.stringify(sections, null, 2)}
       return buildFallbackSummary(results)
     }
   }
+}
+
+function formatTypedBlackboardEntries(entries: BlackboardEntry[]): string {
+  const typed = entries
+    .map((entry) => {
+      const value = entry.value as { schemaType?: string; summary?: string } | null
+      if (!value?.schemaType) return null
+      return {
+        key: entry.key,
+        schemaType: value.schemaType,
+        summary: value.summary ?? '',
+      }
+    })
+    .filter((entry): entry is { key: string; schemaType: string; summary: string } => Boolean(entry))
+
+  if (typed.length === 0) return '暂无结构化条目。'
+
+  return typed
+    .slice(0, 30)
+    .map((entry) => `- [${entry.schemaType}] ${entry.key}: ${entry.summary}`)
+    .join('\n')
 }
 
 function buildFallbackSummary(results: TaskResult[]): string {

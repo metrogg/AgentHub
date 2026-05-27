@@ -25,6 +25,7 @@ import {
   type OrchestratorRunEvent,
   type OrchestratorProgressLedger,
   type OrchestratorTaskLedger,
+  type TypedBlackboardEntry,
 } from '../lib/api'
 import { cn, relativeTime } from '../lib/utils'
 import { useI18n } from '../lib/i18n'
@@ -40,6 +41,7 @@ export default function OrchestratorRunsPage() {
   const [logs, setLogs] = useState<ExecutionLog[]>([])
   const [conflicts, setConflicts] = useState<ConflictReportItem[]>([])
   const [events, setEvents] = useState<OrchestratorRunEvent[]>([])
+  const [blackboardEntries, setBlackboardEntries] = useState<TypedBlackboardEntry[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
 
   const selectedRun = useMemo(
@@ -71,14 +73,16 @@ export default function OrchestratorRunsPage() {
   async function loadRunDetail(runId: string) {
     setDetailLoading(true)
     try {
-      const [logsResult, conflictsResult, eventsResult] = await Promise.all([
+      const [logsResult, conflictsResult, eventsResult, blackboardResult] = await Promise.all([
         api.getOrchestratorRunLogs(runId),
         api.getOrchestratorRunConflicts(runId),
         api.getOrchestratorRunEvents(runId),
+        api.getOrchestratorRunBlackboard(runId),
       ])
       setLogs(logsResult.items)
       setConflicts(conflictsResult.items)
       setEvents(eventsResult.items)
+      setBlackboardEntries(blackboardResult.items)
     } catch (error: any) {
       setMessage(error?.message || '读取运行详情失败')
     } finally {
@@ -286,6 +290,68 @@ export default function OrchestratorRunsPage() {
                       </div>
                     </div>
                   )}
+
+                  <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
+                    <div className="mb-4 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="h-4 w-4 text-emerald-600" />
+                        <h3 className="text-sm font-semibold">结构化黑板</h3>
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                          {blackboardEntries.length} 条
+                        </span>
+                      </div>
+                    </div>
+                    {detailLoading && blackboardEntries.length === 0 ? (
+                      <div className="grid h-24 place-items-center text-sm text-neutral-400">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      </div>
+                    ) : blackboardEntries.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-neutral-200 bg-[#fbfbf8] px-4 py-8 text-center text-sm text-neutral-400">
+                        暂无结构化证据
+                      </div>
+                    ) : (
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        {blackboardEntries.slice(0, 10).map((entry) => (
+                          <div key={`${entry.key}:${entry.version}`} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-medium', blackboardTone(entry).badgeClass)}>
+                                    {blackboardTypeLabel(entry.value.schemaType)}
+                                  </span>
+                                  <span className="truncate font-mono text-[11px] text-neutral-400">{entry.key}</span>
+                                </div>
+                                <div className="mt-2 line-clamp-2 text-xs leading-5 text-neutral-700">
+                                  {entry.value.summary || blackboardEntryDetail(entry)}
+                                </div>
+                                <div className="mt-1 text-[11px] leading-5 text-neutral-500">
+                                  {blackboardEntryDetail(entry)}
+                                </div>
+                              </div>
+                              <span className="shrink-0 text-[11px] text-neutral-400">
+                                {relativeTime(entry.createdAt, language)}
+                              </span>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-neutral-500">
+                              {entry.taskId && <span className="rounded bg-white px-1.5 py-0.5">task:{entry.taskId.slice(0, 8)}</span>}
+                              {entry.agentId && <span className="rounded bg-white px-1.5 py-0.5">agent:{entry.agentId.slice(0, 8)}</span>}
+                              <span className="rounded bg-white px-1.5 py-0.5">v{entry.version}</span>
+                              {typeof entry.value.confidence === 'number' && (
+                                <span className="rounded bg-white px-1.5 py-0.5">
+                                  conf:{Math.round(entry.value.confidence * 100)}%
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        {blackboardEntries.length > 10 && (
+                          <div className="rounded-lg border border-dashed border-neutral-200 bg-[#fbfbf8] p-3 text-center text-xs text-neutral-400 lg:col-span-2">
+                            还有 {blackboardEntries.length - 10} 条结构化条目
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
 
                   <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
                     <div className="mb-4 flex items-center justify-between">
@@ -557,6 +623,56 @@ function payloadText(value: unknown) {
   if (value == null) return ''
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
+}
+
+function blackboardTypeLabel(type: TypedBlackboardEntry['value']['schemaType']) {
+  const map: Record<TypedBlackboardEntry['value']['schemaType'], string> = {
+    fact: '事实',
+    decision: '决策',
+    risk: '风险',
+    artifact_ref: '产物',
+    diff_summary: '变更',
+    test_result: '测试',
+    task_output: '任务产出',
+  }
+  return map[type] ?? type
+}
+
+function blackboardTone(entry: TypedBlackboardEntry) {
+  if (entry.value.schemaType === 'risk') return { badgeClass: 'bg-amber-50 text-amber-700' }
+  if (entry.value.schemaType === 'test_result' && entry.value.status === 'failed') {
+    return { badgeClass: 'bg-red-50 text-red-700' }
+  }
+  if (entry.value.schemaType === 'decision') return { badgeClass: 'bg-blue-50 text-blue-700' }
+  if (entry.value.schemaType === 'artifact_ref' || entry.value.schemaType === 'diff_summary') {
+    return { badgeClass: 'bg-indigo-50 text-indigo-700' }
+  }
+  return { badgeClass: 'bg-emerald-50 text-emerald-700' }
+}
+
+function blackboardEntryDetail(entry: TypedBlackboardEntry) {
+  const value = entry.value
+  if (value.schemaType === 'task_output') {
+    const agentName = payloadText(value.agentName)
+    const taskTitle = payloadText(value.taskTitle)
+    return [agentName, taskTitle].filter(Boolean).join(' / ')
+  }
+  if (value.schemaType === 'artifact_ref') {
+    const title = payloadText(value.title)
+    const filePath = payloadText(value.filePath)
+    return filePath ? `${title || '产物'} · ${filePath}` : title
+  }
+  if (value.schemaType === 'diff_summary') {
+    const changedFiles = Array.isArray(value.changedFiles) ? value.changedFiles.filter((item): item is string => typeof item === 'string') : []
+    return changedFiles.length > 0 ? changedFiles.slice(0, 3).join(', ') : payloadText(value.branchName)
+  }
+  if (value.schemaType === 'decision') return payloadText(value.decision)
+  if (value.schemaType === 'risk') return payloadText(value.risk)
+  if (value.schemaType === 'fact') return payloadText(value.fact)
+  if (value.schemaType === 'test_result') {
+    return [payloadText(value.status), payloadText(value.command)].filter(Boolean).join(' · ')
+  }
   return ''
 }
 

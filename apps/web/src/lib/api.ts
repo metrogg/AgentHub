@@ -672,6 +672,37 @@ export interface OrchestratorRunEvent {
   createdAt: string
 }
 
+export type BlackboardSchemaType =
+  | 'fact'
+  | 'decision'
+  | 'risk'
+  | 'artifact_ref'
+  | 'diff_summary'
+  | 'test_result'
+  | 'task_output'
+
+export interface TypedBlackboardValue {
+  schemaType: BlackboardSchemaType
+  summary: string
+  confidence?: number
+  sourceAgentId?: string
+  taskId?: string
+  [key: string]: unknown
+}
+
+export interface TypedBlackboardEntry {
+  id: string
+  namespace: string
+  key: string
+  value: TypedBlackboardValue
+  schemaVersion: number
+  agentId: string | null
+  taskId: string | null
+  version: number
+  tags: string[]
+  createdAt: string
+}
+
 export interface ConflictReportItem {
   filePath: string
   baseContent: string
@@ -973,6 +1004,10 @@ export const api = {
   listOrchestratorRuns: () => request<{ items: OrchestratorRunListItem[] }>('/orchestrator-runs'),
   getOrchestratorRun: (id: string) => request<OrchestratorRunListItem>(`/orchestrator-runs/${id}`),
   getOrchestratorRunEvents: (id: string) => request<{ items: OrchestratorRunEvent[] }>(`/orchestrator-runs/${id}/events`),
+  getOrchestratorRunBlackboard: (id: string, schemaType?: BlackboardSchemaType) =>
+    request<{ items: TypedBlackboardEntry[] }>(
+      `/orchestrator-runs/${id}/blackboard${schemaType ? `?schemaType=${encodeURIComponent(schemaType)}` : ''}`,
+    ),
   getOrchestratorRunLogs: (id: string) => request<{ items: ExecutionLog[] }>(`/orchestrator-runs/${id}/logs`),
   getOrchestratorRunConflicts: (id: string) => request<{ items: ConflictReportItem[] }>(`/orchestrator-runs/${id}/conflicts`),
 }

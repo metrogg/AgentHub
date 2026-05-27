@@ -307,6 +307,16 @@ describe('AgentHub smoke tests', () => {
     expect(events.items.map((event) => event.type)).toContain('run.started')
     expect(events.items.map((event) => event.type)).toContain('plan.created')
     expect(events.items.find((event) => event.type === 'plan.created')?.payload.taskCount).toBe(1)
+
+    await waitForTaskStatus(dispatched.workspaceId, 'trace-task', 'done')
+    const blackboardEntries = await json<{ items: Array<{ key: string; value: { schemaType: string; summary: string; output: string } }> }>(
+      await app.request(`/api/orchestrator-runs/${dispatched.runId}/blackboard?schemaType=task_output`)
+    )
+    expect(blackboardEntries.items).toHaveLength(1)
+    expect(blackboardEntries.items[0]!.key).toBe('task_trace-task_output')
+    expect(blackboardEntries.items[0]!.value.schemaType).toBe('task_output')
+    expect(blackboardEntries.items[0]!.value.summary).toBeTruthy()
+    expect(blackboardEntries.items[0]!.value.output).toBeTruthy()
   })
 
   test('TaskGraph topological sort and cycle detection', async () => {
@@ -518,6 +528,73 @@ describe('AgentHub smoke tests', () => {
     expect(updatedPlan?.progressLedger?.completedTaskIds).toEqual(['scan'])
     expect(updatedPlan?.progressLedger?.blackboardKeys).toContain('task_scan_output')
     expect(updatedPlan?.progressLedger?.replanHistory[0]?.strategy).toBe('local_replan')
+  })
+
+  test('typed blackboard entries are validated and exposed through run detail API', async () => {
+    const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
+      await postJson('/api/workspaces', { name: 'Typed blackboard workspace', goal: 'Trace typed entries', template: 'classic' })
+    )
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+    )
+    const [run] = await dbApi.db
+      .insert(dbApi.orchestratorRuns)
+      .values({
+        workspaceId: full.workspace.id,
+        groupSessionId: group.session.id,
+        status: 'running',
+        plan: { runId: 'typed-run', title: 'Typed run', goal: 'Trace typed entries', agents: [], tasks: [] },
+      })
+      .returning()
+    expect(run?.id).toBeTruthy()
+
+    const { blackboard, Blackboard } = await import('../apps/server/src/services/blackboard')
+    const namespace = Blackboard.namespace(full.workspace.id, run!.id)
+    await expect(
+      blackboard.write({
+        namespace,
+        key: 'facts/invalid',
+        value: {
+          schemaType: 'fact',
+          summary: 'Missing fact field',
+          confidence: 0.9,
+          sourceAgentId: full.agents[0]!.id,
+          taskId: 'scan',
+          source: 'agent',
+        },
+        agentId: full.agents[0]!.id,
+        taskId: 'scan',
+      })
+    ).rejects.toThrow(/Invalid blackboard entry/)
+
+    const ref = await blackboard.write({
+      namespace,
+      key: 'facts/server',
+      value: {
+        schemaType: 'fact',
+        summary: 'Server framework identified',
+        confidence: 0.9,
+        sourceAgentId: full.agents[0]!.id,
+        taskId: 'scan',
+        fact: 'Server uses Hono routes.',
+        source: 'agent',
+      },
+      agentId: full.agents[0]!.id,
+      taskId: 'scan',
+    })
+    expect(ref.version).toBe(1)
+
+    const body = await json<{
+      items: Array<{ key: string; value: { schemaType: string; summary: string; fact?: string }; agentId: string | null; taskId: string | null }>
+    }>(await app.request(`/api/orchestrator-runs/${run!.id}/blackboard?schemaType=fact`))
+
+    expect(body.items).toHaveLength(1)
+    expect(body.items[0]!.key).toBe('facts/server')
+    expect(body.items[0]!.value.schemaType).toBe('fact')
+    expect(body.items[0]!.value.summary).toBe('Server framework identified')
+    expect(body.items[0]!.value.fact).toBe('Server uses Hono routes.')
+    expect(body.items[0]!.agentId).toBe(full.agents[0]!.id)
+    expect(body.items[0]!.taskId).toBe('scan')
   })
 
   test('GitBranchManager prepares and cleans up agent branches', async () => {

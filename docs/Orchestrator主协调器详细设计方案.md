@@ -570,7 +570,8 @@ interface ProgressLedger {
 - `emitRunEvent` 在写入 `orchestrator_run_events` 后，会同步增量更新 Progress Ledger：任务状态、黑板 key、artifact id、retry 记录、Agent 替换、replan 历史和冲突记录都会进入账本。
 - `Planner` 的 JSON schema 已扩展为 `phases + tasks`，并保留无 phase 输出的自动归一化逻辑。
 - Orchestrator Runs 页面新增 Progress Ledger 阶段进度视图，Run Timeline 继续作为细粒度事件视图。
-- 尚未完成：pause/resume/cancel、任务级 retry API、ledger 原子更新锁、typed Blackboard schema、contract/validation 强校验。
+- typed Blackboard 第一阶段已落地：`Blackboard.write` 校验带 `schemaType` 的条目，Orchestrator 写入 `task_output`、`decision`、`diff_summary`、`artifact_ref`，Runs 页面可查看结构化证据。
+- 尚未完成：pause/resume/cancel、任务级 retry API、ledger 原子更新锁、contract/validation 强校验、typed schema 迁移到 shared contract。
 
 ### 5.10 recover：失败降级与重规划
 
@@ -887,6 +888,14 @@ interface DiffSummaryValue extends BaseBlackboardValue {
 - 关键决策必须由 Orchestrator 或 Reviewer 写入。
 - `confidence < 0.6` 的事实不能作为最终结论，只能作为线索。
 - Synthesizer 必须优先使用 typed entries，而不是 raw output。
+
+当前实现状态（2026-05-27）：
+
+- 服务端新增 `blackboard-schemas.ts`，第一版 typed value 覆盖 `fact`、`decision`、`risk`、`artifact_ref`、`diff_summary`、`test_result`、`task_output`。
+- `Blackboard.write` 会对带 `schemaType` 的 value 做 Zod 校验并存储规范化 JSON；不带 `schemaType` 的历史自由 JSON 继续兼容。
+- `Blackboard.query` 支持按 `schemaType` 过滤；`GET /api/orchestrator-runs/:id/blackboard` 使用 run ownership 鉴权后返回 `{ items }`。
+- Orchestrator task completed 路径会写 typed `task_output`，并从 task summary 派生 `decision`、`diff_summary`、`artifact_ref`。
+- `Synthesizer.synthesize` 已接收 typed blackboard entries 并注入汇总 prompt；Runs 页面新增“结构化黑板”证据面板，展示 schema 类型、summary、task/agent、版本和 confidence。
 
 ---
 

@@ -2,6 +2,7 @@ import { eq, and, desc, asc, like } from 'drizzle-orm'
 import { db, blackboardEntries } from '@agenthub/db'
 import type { ZodSchema } from 'zod'
 import { logger } from '../lib/logger'
+import { parseTypedBlackboardValue, type BlackboardSchemaType } from './blackboard-schemas'
 
 export interface BlackboardEntry<T = unknown> {
   id: string
@@ -27,6 +28,7 @@ export interface BlackboardQuery {
   keyPattern?: string
   agentId?: string
   taskId?: string
+  schemaType?: BlackboardSchemaType
   tags?: string[]
   limit?: number
   orderBy?: 'asc' | 'desc'
@@ -52,6 +54,8 @@ export class Blackboard {
     tags?: string[]
   }): Promise<BlackboardRef> {
     const { namespace, key, value, schemaVersion = 1, agentId, taskId, tags = [] } = params
+    const parsedTypedValue = parseTypedBlackboardValue(value)
+    const valueToStore = (parsedTypedValue ?? value) as T
 
     const existing = await this.readVersionsFromDb(namespace, key)
     const version = existing.length > 0 ? existing[existing.length - 1]!.version + 1 : 1
@@ -60,7 +64,7 @@ export class Blackboard {
       id: crypto.randomUUID(),
       namespace,
       key,
-      value: value as unknown,
+      value: valueToStore as unknown,
       schemaVersion,
       agentId: agentId ?? null,
       taskId: taskId ?? null,
@@ -73,7 +77,7 @@ export class Blackboard {
       id: entry.id,
       namespace,
       key,
-      value: value as Record<string, unknown>,
+      value: valueToStore as Record<string, unknown>,
       schemaVersion,
       agentId: entry.agentId,
       taskId: entry.taskId,
@@ -175,7 +179,12 @@ export class Blackboard {
     }
 
     const rows = await q
-    return rows.map((r) => this.rowToEntry(r))
+    const entries = rows.map((r) => this.rowToEntry(r))
+    if (!query.schemaType) return entries
+    return entries.filter((entry) => {
+      const value = entry.value as { schemaType?: unknown } | null
+      return value?.schemaType === query.schemaType
+    })
   }
 
   async readVersions(namespace: string, key: string): Promise<BlackboardEntry[]> {
