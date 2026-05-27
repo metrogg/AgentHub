@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
-import { db, workspaces, workspaceAgents, workspaceTasks, sessions, messages, eq, and, desc, asc } from '@agenthub/db'
+import { db, workspaces, workspaceAgents, workspaceAgentRelations, workspaceTasks, sessions, messages, eq, and, desc, asc } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 
@@ -17,6 +17,7 @@ import { pickNativeFolder } from '../services/workspace/folder-picker'
 import { loadWorkspaceFull, ensureWorkspace, seedClassicAgents } from '../services/workspace/workspace-queries'
 import { ensureGroupSession } from '../services/workspace/group-session'
 import { workspaceAgentRunProfile, getActiveRunSessionIds } from '../services/workspace/agent-runtime'
+import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
 
 // ---------- Validation schemas ----------
 
@@ -40,9 +41,11 @@ const openWorkspaceFolderSchema = z.object({
 const createAgentSchema = z.object({
   name: z.string().min(1).max(60),
   role: z.string().min(1).max(60),
+  roleType: z.enum(AGENT_ROLE_TYPES).default('custom'),
   description: z.string().max(500).default(''),
   avatar: z.string().max(500).nullable().optional(),
   systemPrompt: z.string().max(4000).default(''),
+  roleProfile: z.record(z.unknown()).nullable().optional(),
   color: z.string().max(20).default('#6366f1'),
   modelId: z.string().max(120).nullable().optional(),
   runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']).default('llm'),
@@ -56,6 +59,17 @@ const createAgentSchema = z.object({
 })
 
 const updateAgentSchema = createAgentSchema.partial()
+
+const agentRelationsReplaceSchema = z.object({
+  relations: z.array(
+    z.object({
+      sourceAgentId: z.string().min(1),
+      targetAgentId: z.string().min(1),
+      relationType: z.enum(AGENT_RELATION_TYPES),
+      note: z.string().max(500).nullable().optional(),
+    }),
+  ).max(100),
+})
 
 const createTaskSchema = z.object({
   title: z.string().min(1).max(200),
@@ -251,6 +265,67 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
           sessionId: session.id,
         })),
     })
+  })
+
+  // Agent collaboration relations
+  .get('/:id/agent-relations', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    await ensureWorkspace(id, user.sub)
+    const items = await db
+      .select()
+      .from(workspaceAgentRelations)
+      .where(eq(workspaceAgentRelations.workspaceId, id))
+      .orderBy(asc(workspaceAgentRelations.createdAt))
+    return c.json({ items })
+  })
+
+  .put('/:id/agent-relations', zValidator('json', agentRelationsReplaceSchema), async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    await ensureWorkspace(id, user.sub)
+    const { relations } = c.req.valid('json')
+
+    const agents = await db
+      .select({ id: workspaceAgents.id })
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.workspaceId, id))
+    const agentIds = new Set(agents.map((agent) => agent.id))
+    const deduped = new Map<string, {
+      workspaceId: string
+      sourceAgentId: string
+      targetAgentId: string
+      relationType: (typeof AGENT_RELATION_TYPES)[number]
+      note: string | null
+    }>()
+
+    for (const relation of relations) {
+      if (!agentIds.has(relation.sourceAgentId) || !agentIds.has(relation.targetAgentId)) {
+        throw new HTTPException(400, { message: 'Relation agent must belong to the workspace' })
+      }
+      if (relation.sourceAgentId === relation.targetAgentId) {
+        throw new HTTPException(400, { message: 'Relation source and target must be different agents' })
+      }
+      const key = `${relation.sourceAgentId}:${relation.targetAgentId}:${relation.relationType}`
+      if (deduped.has(key)) continue
+      deduped.set(key, {
+        workspaceId: id,
+        sourceAgentId: relation.sourceAgentId,
+        targetAgentId: relation.targetAgentId,
+        relationType: relation.relationType,
+        note: relation.note?.trim() || null,
+      })
+    }
+
+    const items = await db.transaction(async (tx) => {
+      await tx.delete(workspaceAgentRelations).where(eq(workspaceAgentRelations.workspaceId, id))
+      const values = Array.from(deduped.values())
+      if (!values.length) return []
+      return tx.insert(workspaceAgentRelations).values(values).returning()
+    })
+
+    await touchWorkspace(id)
+    return c.json({ items })
   })
 
   // Delete

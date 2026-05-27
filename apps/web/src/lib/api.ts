@@ -423,9 +423,11 @@ export interface WorkspaceAgent {
   workspaceId: string
   name: string
   role: string
+  roleType: AgentRoleType
   description: string
   avatar: string | null
   systemPrompt: string
+  roleProfile?: Record<string, unknown> | null
   color: string
   modelId: string | null
   runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
@@ -438,6 +440,33 @@ export interface WorkspaceAgent {
   approvalRequired: boolean
   orderIdx: number
   createdAt: string
+}
+
+export type AgentRoleType =
+  | 'clarifier'
+  | 'architect'
+  | 'researcher'
+  | 'coder'
+  | 'reviewer'
+  | 'integrator'
+  | 'custom'
+
+export type AgentRelationType =
+  | 'handoff_to'
+  | 'reviewed_by'
+  | 'fallback_to'
+  | 'reports_to'
+  | 'blocks'
+
+export interface WorkspaceAgentRelation {
+  id: string
+  workspaceId: string
+  sourceAgentId: string
+  targetAgentId: string
+  relationType: AgentRelationType
+  note: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 export interface SkillSummary {
@@ -476,9 +505,11 @@ export interface SkillhubSearchResult {
 export interface AgentConfigInput {
   name: string
   role: string
+  roleType?: AgentRoleType
   description?: string
   avatar?: string | null
   systemPrompt?: string
+  roleProfile?: Record<string, unknown> | null
   color?: string
   modelId?: string | null
   runtimeType?: WorkspaceAgent['runtimeType']
@@ -521,6 +552,7 @@ export interface WorkspaceFull {
   workspace: Workspace
   agents: WorkspaceAgent[]
   tasks: WorkspaceTask[]
+  agentRelations?: WorkspaceAgentRelation[]
 }
 
 export interface WorkspaceActiveRun {
@@ -536,6 +568,7 @@ export interface OrchestratorPlanAgent {
   key: string
   name: string
   role: string
+  roleType?: AgentRoleType
   color: string
   systemPrompt: string
 }
@@ -550,6 +583,13 @@ export interface OrchestratorPlanTask {
   status?: TaskStatus
   outputContract?: OrchestratorTaskOutputContract
   validation?: OrchestratorTaskValidation
+  agentSelection?: {
+    selectedAgentKey: string
+    score: number
+    rationale: string[]
+    reviewerAgentKey?: string
+    fallbackAgentKey?: string
+  }
 }
 
 export interface OrchestratorTaskOutputContract {
@@ -974,6 +1014,16 @@ export const api = {
     }),
   deleteWorkspaceAgent: (id: string, agentId: string) =>
     request<void>(`/workspaces/${id}/agents/${agentId}`, { method: 'DELETE' }),
+  getWorkspaceAgentRelations: (id: string) =>
+    request<{ items: WorkspaceAgentRelation[] }>(`/workspaces/${id}/agent-relations`),
+  replaceWorkspaceAgentRelations: (
+    id: string,
+    relations: Array<Pick<WorkspaceAgentRelation, 'sourceAgentId' | 'targetAgentId' | 'relationType'> & { note?: string | null }>
+  ) =>
+    request<{ items: WorkspaceAgentRelation[] }>(`/workspaces/${id}/agent-relations`, {
+      method: 'PUT',
+      body: JSON.stringify({ relations }),
+    }),
 
   addWorkspaceTask: (
     id: string,

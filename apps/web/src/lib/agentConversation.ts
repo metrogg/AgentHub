@@ -1,5 +1,5 @@
 import { api, type Session } from './api'
-import { toAgentConfigInput, type SavedAgentConfig } from './agentLibrary'
+import { loadAgentLibraryState, toAgentConfigInput, type SavedAgentConfig } from './agentLibrary'
 
 export interface StartAgentConversationOptions {
   agents: SavedAgentConfig[]
@@ -21,8 +21,29 @@ export async function startAgentConversation({
   })
 
   const invitedAgents = []
+  const savedToWorkspaceAgentId = new Map<string, string>()
   for (const agent of agents) {
-    invitedAgents.push(await api.addWorkspaceAgent(full.workspace.id, toAgentConfigInput(agent)))
+    const workspaceAgent = await api.addWorkspaceAgent(full.workspace.id, toAgentConfigInput(agent))
+    invitedAgents.push(workspaceAgent)
+    savedToWorkspaceAgentId.set(agent.id, workspaceAgent.id)
+  }
+
+  if (invitedAgents.length > 1) {
+    const library = loadAgentLibraryState()
+    const copiedRelations = library.relations.flatMap((relation) => {
+      const sourceAgentId = savedToWorkspaceAgentId.get(relation.sourceAgentId)
+      const targetAgentId = savedToWorkspaceAgentId.get(relation.targetAgentId)
+      if (!sourceAgentId || !targetAgentId) return []
+      return [{
+        sourceAgentId,
+        targetAgentId,
+        relationType: relation.relationType,
+        note: relation.note ?? null,
+      }]
+    })
+    if (copiedRelations.length) {
+      await api.replaceWorkspaceAgentRelations(full.workspace.id, copiedRelations)
+    }
   }
 
   if (invitedAgents.length === 1) {

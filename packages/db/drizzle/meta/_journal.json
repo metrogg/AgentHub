@@ -85,6 +85,13 @@
       "when": 1729843200004,
       "tag": "0011_orchestrator_run_events",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1729843200005,
+      "tag": "0012_workspace_agent_relations",
+      "breakpoints": true
     }
   ]
 }

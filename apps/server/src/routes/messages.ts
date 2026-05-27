@@ -13,6 +13,7 @@ import {
   sessions,
   sessionMembers,
   workspaceAgents,
+  workspaceAgentRelations,
   workspaces,
   workspaceTasks,
   orchestratorRuns,
@@ -29,7 +30,9 @@ import type { ExecutionPlan, TaskOutputContract, TaskValidation } from '../servi
 import { emitRunEvent } from '../services/orchestrator/run-events'
 import { initializeRunLedger } from '../services/orchestrator/run-ledger'
 import { checkInputGuardrails } from '../services/orchestrator/input-guardrails'
+import { selectAgentForTask } from '../services/orchestrator/agent-router'
 import { harnessManager } from '../services/harness'
+import { AGENT_ROLE_TYPES, inferRoleType } from '../services/workspace/agent-role-presets'
 
 const orchestratorPlanSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -48,9 +51,11 @@ const confirmAgentDraftSchema = z.object({
     .object({
       name: z.string().min(1).max(60),
       role: z.string().min(1).max(60),
+      roleType: z.enum(AGENT_ROLE_TYPES).default('custom'),
       description: z.string().max(500).default(''),
       avatar: z.string().max(500).nullable().optional(),
       systemPrompt: z.string().max(4000).default(''),
+      roleProfile: z.record(z.unknown()).nullable().optional(),
       color: z.string().max(20).default('#111827'),
       modelId: z.string().max(120).nullable().optional(),
       runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']).default('llm'),
@@ -107,9 +112,11 @@ type PlanAgent = {
   key: string
   name: string
   role: string
+  roleType?: 'clarifier' | 'architect' | 'researcher' | 'coder' | 'reviewer' | 'integrator' | 'custom'
   color: string
   systemPrompt: string
   description?: string
+  roleProfile?: Record<string, unknown> | null
   modelId?: string | null
   runtimeType?: 'llm' | 'code-agent' | 'mcp' | 'a2a'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
@@ -132,6 +139,13 @@ type PlanTask = {
   fallbackAgentId?: string
   outputContract?: TaskOutputContract
   validation?: TaskValidation
+  agentSelection?: {
+    selectedAgentKey: string
+    score: number
+    rationale: string[]
+    reviewerAgentKey?: string
+    fallbackAgentKey?: string
+  }
 }
 
 type PlanPhase = {
@@ -634,8 +648,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             workspaceId: workspace.id,
             name: agent.name,
             role: agent.role,
+            roleType: agent.roleType ?? 'custom',
             description: agent.description ?? '',
             systemPrompt: agent.systemPrompt,
+            roleProfile: agent.roleProfile ?? null,
             color: agent.color,
             modelId: agent.modelId ?? null,
             runtimeType: agent.runtimeType ?? 'llm',
@@ -724,11 +740,14 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     // 构建 ExecutionPlan 并启动 OrchestratorEngine
+    const executionRelations = await loadWorkspaceAgentRelationsForPlanning(workspaceId)
+
     const rawExecutionPlan: ExecutionPlan = {
       runId,
       title: parsed.title,
       goal: parsed.goal,
       phases: parsed.phases,
+      agentRelations: executionRelations,
       agents: parsed.agents.map((a) => {
         const dbAgent = agentsByKey.get(a.key)
         return {
@@ -736,9 +755,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           key: a.key,
           name: a.name,
           role: a.role,
+          roleType: dbAgent?.roleType ?? a.roleType,
           description: a.description,
           color: a.color,
           systemPrompt: a.systemPrompt,
+          roleProfile: dbAgent?.roleProfile ?? a.roleProfile,
           modelId: a.modelId,
           runtimeType: a.runtimeType ?? 'llm',
           codeAgentType: a.codeAgentType ?? undefined,
@@ -760,6 +781,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         fallbackAgentId: t.fallbackAgentId,
         outputContract: normalizeTaskOutputContract(t.outputContract, t.id),
         validation: normalizeTaskValidation(t.validation),
+        agentSelection: t.agentSelection,
       })),
     }
     const executionPlan = initializeRunLedger(rawExecutionPlan)
@@ -921,12 +943,15 @@ function buildAgentDraft(content: string): AgentDraft {
   const name = inferAgentName(content, role, codeAgentType)
   const capabilityTags = inferCapabilityTags(content, role)
   const toolPermissions = inferToolPermissions(content)
+  const roleType = inferRoleType({ name, role, capabilityTags, roleType: 'custom' })
   return {
     name,
     role,
+    roleType,
     description: `${role} Agent，负责${capabilityTags.slice(0, 3).join('、') || '协作任务'}。`,
     avatar: null,
     systemPrompt: buildAgentSystemPrompt(role, capabilityTags),
+    roleProfile: null,
     color: colorForRole(role),
     modelId: null,
     runtimeType,
@@ -1031,9 +1056,16 @@ function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
+    roleType: draft.roleType ?? inferRoleType({
+      name: draft.name,
+      role: draft.role,
+      capabilityTags: draft.capabilityTags ?? [],
+      roleType: 'custom',
+    }),
     description: draft.description?.trim() ?? '',
     avatar: draft.avatar ?? null,
     systemPrompt: draft.systemPrompt?.trim() ?? '',
+    roleProfile: draft.roleProfile ?? null,
     color: draft.color ?? '#111827',
     modelId: draft.modelId ?? null,
     runtimeType,
@@ -1054,6 +1086,7 @@ async function buildDynamicOrchestratorPlan(
 ): Promise<OrchestratorPlan> {
   const goal = normalizeOrchestratorGoal(content)
   const planningAgents = agents.length ? agents.map(planAgentFromWorkspaceAgent) : fallbackPlanAgents()
+  const planningRelations = workspaceId ? await loadWorkspaceAgentRelationsForPlanning(workspaceId) : []
 
   let specPhases: string | undefined
   if (workspaceId) {
@@ -1084,12 +1117,12 @@ async function buildDynamicOrchestratorPlan(
   try {
     const generated = await generatePlanWithLlm(goal, planningAgents, specPhases)
     const normalized = normalizeGeneratedPlan(goal, generated, planningAgents)
-    if (normalized) return normalized
+    if (normalized) return applyAgentSelections(normalized, planningRelations)
   } catch {
     // Keep task card creation reliable when model credentials are missing or JSON generation fails.
   }
 
-  return buildOrchestratorPlan(content, planningAgents)
+  return applyAgentSelections(buildOrchestratorPlan(content, planningAgents), planningRelations)
 }
 
 function buildOrchestratorPlan(content: string, agents = fallbackPlanAgents()): OrchestratorPlan {
@@ -1119,6 +1152,7 @@ function buildOrchestratorPlan(content: string, agents = fallbackPlanAgents()): 
         title: '梳理目标与交付范围',
         description: `围绕「${normalizedGoal}」定义核心目标、交付物、边界、依赖和验收标准。`,
         agentKey: leadAgent.key,
+        taskType: 'design',
         status: 'pending',
       },
       {
@@ -1126,6 +1160,7 @@ function buildOrchestratorPlan(content: string, agents = fallbackPlanAgents()): 
         title: '实现核心功能与界面',
         description: '基于拆解结果产出可执行实现方案，优先完成关键路径、组件接入和小步验证。',
         agentKey: buildAgent.key,
+        taskType: 'code',
         status: 'pending',
       },
       {
@@ -1133,6 +1168,7 @@ function buildOrchestratorPlan(content: string, agents = fallbackPlanAgents()): 
         title: '审查风险与测试建议',
         description: '检查交互边界、异常状态、测试缺口和交付风险，并给出可直接执行的修复建议。',
         agentKey: reviewAgent.key,
+        taskType: 'review',
         status: 'pending',
       },
     ],
@@ -1152,6 +1188,7 @@ function fallbackPlanAgents(): PlanAgent[] {
   return PLAN_AGENTS.map((agent) => ({
     ...agent,
     runtimeType: 'llm' as const,
+    roleType: agent.key === 'architect' ? 'architect' : agent.key === 'coder' ? 'coder' : 'reviewer',
     capabilityTags: [],
     toolPermissions: ['chat'],
     sandboxPolicy: 'workspace-write' as const,
@@ -1163,7 +1200,9 @@ function planAgentFromWorkspaceAgent(agent: typeof workspaceAgents.$inferSelect)
     key: agent.id,
     name: agent.name,
     role: agent.role,
+    roleType: agent.roleType,
     description: agent.description,
+    roleProfile: agent.roleProfile,
     color: agent.color,
     systemPrompt: agent.systemPrompt,
     modelId: agent.modelId,
@@ -1172,6 +1211,61 @@ function planAgentFromWorkspaceAgent(agent: typeof workspaceAgents.$inferSelect)
     capabilityTags: agent.capabilityTags,
     toolPermissions: agent.toolPermissions,
     sandboxPolicy: agent.sandboxPolicy,
+  }
+}
+
+async function loadWorkspaceAgentRelationsForPlanning(workspaceId: string) {
+  return db
+    .select({
+      sourceAgentId: workspaceAgentRelations.sourceAgentId,
+      targetAgentId: workspaceAgentRelations.targetAgentId,
+      relationType: workspaceAgentRelations.relationType,
+      note: workspaceAgentRelations.note,
+    })
+    .from(workspaceAgentRelations)
+    .where(eq(workspaceAgentRelations.workspaceId, workspaceId))
+}
+
+function applyAgentSelections(plan: OrchestratorPlan, relations: Awaited<ReturnType<typeof loadWorkspaceAgentRelationsForPlanning>>): OrchestratorPlan {
+  const executionAgents = plan.agents.map((agent) => ({
+    id: agent.key,
+    key: agent.key,
+    name: agent.name,
+    role: agent.role,
+    roleType: agent.roleType,
+    description: agent.description,
+    color: agent.color,
+    systemPrompt: agent.systemPrompt,
+    roleProfile: agent.roleProfile,
+    modelId: agent.modelId,
+    runtimeType: agent.runtimeType ?? 'llm',
+    codeAgentType: agent.codeAgentType ?? undefined,
+    capabilityTags: agent.capabilityTags ?? [],
+    toolPermissions: agent.toolPermissions ?? [],
+    sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
+  }))
+  return {
+    ...plan,
+    tasks: plan.tasks.map((task) => {
+      const selection = selectAgentForTask({
+        task: {
+          id: task.id,
+          title: task.title,
+          description: task.description,
+          agentId: task.agentKey,
+          taskType: task.taskType,
+          dependencies: task.dependencies ?? [],
+          maxRetries: task.maxRetries ?? 1,
+        },
+        agents: executionAgents,
+        relations,
+      })
+      return {
+        ...task,
+        agentKey: selection.selectedAgentKey || task.agentKey,
+        agentSelection: selection,
+      }
+    }),
   }
 }
 
@@ -1191,7 +1285,9 @@ async function generatePlanWithLlm(goal: string, agents: PlanAgent[], specPhases
     key: agent.key,
     name: agent.name,
     role: agent.role,
+    roleType: agent.roleType,
     description: agent.description,
+    roleProfile: agent.roleProfile,
     runtimeType: agent.runtimeType,
     codeAgentType: agent.codeAgentType,
     capabilityTags: agent.capabilityTags ?? [],
@@ -1751,8 +1847,10 @@ async function dispatchPlanToExistingGroup(
         workspaceId: workspace.id,
         name: planAgent.name,
         role: planAgent.role,
+        roleType: planAgent.roleType ?? 'custom',
         description: planAgent.description ?? '',
         systemPrompt: planAgent.systemPrompt,
+        roleProfile: planAgent.roleProfile ?? null,
         color: planAgent.color,
         modelId: planAgent.modelId ?? null,
         runtimeType: planAgent.runtimeType ?? 'llm',

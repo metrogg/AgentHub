@@ -17,12 +17,14 @@ import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSide
 import { GlobalNewSessionDialog } from '../components/chat/GlobalNewSessionDialog'
 import {
   createSavedAgent,
-  loadAgentLibrary,
-  saveAgentLibrary,
+  loadAgentLibraryState,
+  saveAgentLibraryState,
   saveAgentToLibrary,
   toAgentConfigInput,
+  type SavedAgentRelation,
   type SavedAgentConfig,
 } from '../lib/agentLibrary'
+import { agentRolePresets, presetForRole } from '../lib/agentRolePresets'
 import { api, type AgentConfigInput, type ModelCatalogItem, type WorkspaceAgent } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { cn } from '../lib/utils'
@@ -35,20 +37,23 @@ const emptyDraft: AgentConfigInput = {
   systemPrompt: '',
   color: '#111827',
   modelId: null,
-  runtimeType: 'llm',
-  codeAgentType: null,
+  runtimeType: 'code-agent',
+  codeAgentType: 'claude-code',
   capabilityTags: [],
   toolPermissions: ['chat'],
   sandboxPolicy: 'workspace-write',
   contextPolicy: 'workspace-aware',
   autoInvoke: true,
   approvalRequired: true,
+  roleType: 'custom',
+  roleProfile: null,
 }
 
 export default function AgentConfigPage() {
   const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   const [agents, setAgents] = useState<SavedAgentConfig[]>([])
+  const [relations, setRelations] = useState<SavedAgentRelation[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<AgentConfigInput>(emptyDraft)
   const [models, setModels] = useState<ModelCatalogItem[]>([])
@@ -58,7 +63,9 @@ export default function AgentConfigPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   useEffect(() => {
-    const loaded = loadAgentLibrary()
+    const library = loadAgentLibraryState()
+    const loaded = library.agents
+    setRelations(library.relations)
     if (searchParams.get('newAgent') === '1') {
       const next = createSavedAgent({
         name: 'New Agent',
@@ -69,7 +76,7 @@ export default function AgentConfigPage() {
       })
       const updated = [next, ...loaded]
       setAgents(updated)
-      saveAgentLibrary(updated)
+      saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations: library.relations })
       setSelectedId(next.id)
       setDraft(toAgentConfigInput(next))
       setSearchParams({ agentId: next.id }, { replace: true })
@@ -120,10 +127,12 @@ export default function AgentConfigPage() {
       description: '描述这个 Agent 的职责、产出和适合处理的任务。',
       systemPrompt: '你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。',
       color: '#111827',
+      runtimeType: 'code-agent',
+      codeAgentType: 'claude-code',
     })
     const updated = [next, ...agents]
     setAgents(updated)
-    saveAgentLibrary(updated)
+    saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations })
     selectAgent(next)
     toastSaved()
   }
@@ -136,7 +145,7 @@ export default function AgentConfigPage() {
     })
     const updated = [next, ...agents]
     setAgents(updated)
-    saveAgentLibrary(updated)
+    saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations })
     selectAgent(next)
     toastSaved()
   }
@@ -147,6 +156,7 @@ export default function AgentConfigPage() {
     if (!normalized.name || !normalized.role) return
     const updated = saveAgentToLibrary(agents, normalized, selectedId ?? undefined)
     setAgents(updated)
+    setRelations((current) => saveLibrary(updated, current))
     const current = selectedId ? updated.find((agent) => agent.id === selectedId) : updated[0]
     if (current) {
       setSelectedId(current.id)
@@ -160,8 +170,10 @@ export default function AgentConfigPage() {
     const confirmed = window.confirm(`删除 Agent「${selectedAgent.name}」？已加入工作区的成员不会被自动删除。`)
     if (!confirmed) return
     const updated = agents.filter((agent) => agent.id !== selectedAgent.id)
+    const nextRelations = relations.filter((relation) => relation.sourceAgentId !== selectedAgent.id && relation.targetAgentId !== selectedAgent.id)
     setAgents(updated)
-    saveAgentLibrary(updated)
+    setRelations(nextRelations)
+    saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations: nextRelations })
     const next = updated[0] ?? null
     setSelectedId(next?.id ?? null)
     setDraft(next ? toAgentConfigInput(next) : emptyDraft)
@@ -180,6 +192,7 @@ export default function AgentConfigPage() {
     setAssistantReply(reply)
     const updated = saveAgentToLibrary(agents, nextDraft, selectedId ?? undefined)
     setAgents(updated)
+    setRelations((current) => saveLibrary(updated, current))
     const current = selectedId ? updated.find((agent) => agent.id === selectedId) : updated[0]
     if (current) setSelectedId(current.id)
     toastSaved()
@@ -188,6 +201,41 @@ export default function AgentConfigPage() {
   function toastSaved() {
     setSaved(true)
     window.setTimeout(() => setSaved(false), 1400)
+  }
+
+  function applyRolePreset(roleType: string) {
+    const preset = presetForRole(roleType as WorkspaceAgent['roleType'])
+    if (!preset) {
+      setDraft({ ...draft, roleType: 'custom' })
+      return
+    }
+    setDraft({
+      ...draft,
+      ...preset,
+      name: preset.name,
+      role: preset.role,
+      codeAgentType: preset.runtimeType === 'code-agent' ? (preset.codeAgentType ?? 'claude-code') : null,
+    })
+  }
+
+  function updateSelectedRelation(relationType: SavedAgentRelation['relationType'], targetAgentId: string) {
+    if (!selectedAgent) return
+    const next = relations.filter((relation) => !(relation.sourceAgentId === selectedAgent.id && relation.relationType === relationType))
+    if (targetAgentId && targetAgentId !== selectedAgent.id) {
+      const now = new Date().toISOString()
+      next.push({
+        id: `${selectedAgent.id}-${relationType}-${targetAgentId}`,
+        sourceAgentId: selectedAgent.id,
+        targetAgentId,
+        relationType,
+        note: relationLabel(relationType),
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+    setRelations(next)
+    saveAgentLibraryState({ schemaVersion: 2, agents, relations: next })
+    toastSaved()
   }
 
   return (
@@ -249,6 +297,14 @@ export default function AgentConfigPage() {
               {selectedAgent ? (
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
                   <form onSubmit={saveDraft} className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+                    <div className="mb-4">
+                      <SelectField label="角色模板" value={draft.roleType ?? 'custom'} onChange={applyRolePreset}>
+                        <option value="custom">自定义</option>
+                        {agentRolePresets.map((preset) => (
+                          <option key={preset.roleType} value={preset.roleType}>{preset.label}</option>
+                        ))}
+                      </SelectField>
+                    </div>
                     <div className="flex items-start gap-4">
                       <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl text-white shadow-sm" style={{ background: draft.color ?? '#111827' }}>
                         <Bot className="h-7 w-7" />
@@ -268,15 +324,13 @@ export default function AgentConfigPage() {
                         setDraft({
                           ...draft,
                           runtimeType: nextRuntime,
-                          codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+                          codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'claude-code') : null,
                         })
                       }}>
-                        <option value="llm">{t('普通 LLM Agent')}</option>
                         <option value="code-agent">Coding Tools</option>
-                        <option value="mcp">Native Read-only Agent</option>
-                        <option value="a2a">A2A Agent</option>
+                        <option value="llm">{t('普通 LLM Agent')}</option>
                       </SelectField>
-                      <SelectField label="Coding Tools" value={runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : ''} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
+                      <SelectField label="Coding Tools" value={draft.codeAgentType ?? 'claude-code'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
                         <option value="">{t('不绑定 CLI')}</option>
                         <option value="codex">Codex CLI</option>
                         <option value="claude-code">Claude Code</option>
@@ -322,11 +376,37 @@ export default function AgentConfigPage() {
                   </form>
 
                   <aside className="space-y-4">
-                    <InfoPanel title={t('当前配置')}>
+                    <InfoPanel title="能力卡">
                       <InfoRow label={t('运行时')} value={runtimeLabel(runtimeType)} />
                       <InfoRow label={t('模型')} value={t(modelName(draft.modelId ?? null, models))} />
                       <InfoRow label={t('权限')} value={t(sandboxLabel(draft.sandboxPolicy ?? 'workspace-write'))} />
+                      <InfoRow label="可接任务" value={presetForRole(draft.roleType)?.acceptsTaskTypes.join(', ') || '自定义'} />
+                      <InfoRow label="主要产出" value={presetForRole(draft.roleType)?.produces.join(', ') || '自定义'} />
                       <InfoRow label={t('标签')} value={(draft.capabilityTags ?? []).join(', ') || t('未设置')} />
+                    </InfoPanel>
+
+                    <InfoPanel title="协作关系">
+                      <RelationSelect
+                        label="下游交接"
+                        value={relationTarget(relations, selectedAgent.id, 'handoff_to')}
+                        agents={agents}
+                        currentId={selectedAgent.id}
+                        onChange={(targetId) => updateSelectedRelation('handoff_to', targetId)}
+                      />
+                      <RelationSelect
+                        label="审查者"
+                        value={relationTarget(relations, selectedAgent.id, 'reviewed_by')}
+                        agents={agents}
+                        currentId={selectedAgent.id}
+                        onChange={(targetId) => updateSelectedRelation('reviewed_by', targetId)}
+                      />
+                      <RelationSelect
+                        label="失败降级"
+                        value={relationTarget(relations, selectedAgent.id, 'fallback_to')}
+                        agents={agents}
+                        currentId={selectedAgent.id}
+                        onChange={(targetId) => updateSelectedRelation('fallback_to', targetId)}
+                      />
                     </InfoPanel>
 
                     <InfoPanel title={t('对话式修改')}>
@@ -377,9 +457,8 @@ export default function AgentConfigPage() {
 }
 
 function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
-  const runtimeType = draft.runtimeType ?? 'llm'
+  const runtimeType = draft.runtimeType ?? 'code-agent'
   const capabilityTags = draft.capabilityTags ?? []
-  const nativeReadOnly = runtimeType === 'mcp'
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -389,13 +468,15 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     color: draft.color || '#111827',
     modelId: draft.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'claude-code') : null,
     capabilityTags,
-    toolPermissions: nativeReadOnly ? ['workspace:read', 'skills:read'] : draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
-    sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
+    toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
+    sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly ? true : (draft.approvalRequired ?? true),
+    approvalRequired: draft.approvalRequired ?? true,
+    roleType: draft.roleType ?? 'custom',
+    roleProfile: draft.roleProfile ?? null,
   }
 }
 
@@ -514,10 +595,41 @@ function splitList(value: string) {
     .filter(Boolean)
 }
 
+function saveLibrary(agents: SavedAgentConfig[], relations: SavedAgentRelation[]) {
+  const agentIds = new Set(agents.map((agent) => agent.id))
+  const pruned = relations.filter(
+    (relation) =>
+      agentIds.has(relation.sourceAgentId) &&
+      agentIds.has(relation.targetAgentId) &&
+      relation.sourceAgentId !== relation.targetAgentId,
+  )
+  saveAgentLibraryState({ schemaVersion: 2, agents, relations: pruned })
+  return pruned
+}
+
+function relationTarget(
+  relations: SavedAgentRelation[],
+  sourceAgentId: string,
+  relationType: SavedAgentRelation['relationType'],
+) {
+  return (
+    relations.find(
+      (relation) =>
+        relation.sourceAgentId === sourceAgentId && relation.relationType === relationType,
+    )?.targetAgentId ?? ''
+  )
+}
+
+function relationLabel(relationType: SavedAgentRelation['relationType']) {
+  if (relationType === 'handoff_to') return 'handoff'
+  if (relationType === 'reviewed_by') return 'review'
+  if (relationType === 'fallback_to') return 'fallback'
+  if (relationType === 'reports_to') return 'report'
+  return 'blocks'
+}
+
 function runtimeLabel(value: WorkspaceAgent['runtimeType']) {
   if (value === 'code-agent') return 'Coding Tools'
-  if (value === 'mcp') return 'Native Read-only'
-  if (value === 'a2a') return 'A2A Agent'
   return 'LLM Agent'
 }
 
@@ -557,6 +669,40 @@ function SelectField({ label, value, disabled, onChange, children }: { label: st
       <span className="mb-2 block text-neutral-600">{label}</span>
       <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="h-10 w-full rounded-xl border border-neutral-200 bg-white px-3 outline-none focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300">
         {children}
+      </select>
+    </label>
+  )
+}
+
+function RelationSelect({
+  label,
+  value,
+  agents,
+  currentId,
+  onChange,
+}: {
+  label: string
+  value: string
+  agents: SavedAgentConfig[]
+  currentId: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="block border-t border-neutral-100 py-2 text-sm first:border-t-0">
+      <span className="mb-2 block text-neutral-400">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 w-full rounded-lg border border-neutral-200 bg-white px-2 text-sm outline-none focus:border-neutral-400"
+      >
+        <option value="">未设置</option>
+        {agents
+          .filter((agent) => agent.id !== currentId)
+          .map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name} / {agent.role}
+            </option>
+          ))}
       </select>
     </label>
   )

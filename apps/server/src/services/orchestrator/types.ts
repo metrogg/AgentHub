@@ -15,6 +15,7 @@ export interface ExecutionPlan {
   phases?: OrchestratorPhase[]
   agents: ExecutionAgent[]
   tasks: ExecutionTask[]
+  agentRelations?: AgentRelation[]
   clarificationQuestions?: ClarificationQuestion[]
   taskLedger?: TaskLedger
   progressLedger?: ProgressLedger
@@ -32,15 +33,24 @@ export interface ExecutionAgent {
   key: string
   name: string
   role: string
+  roleType?: 'clarifier' | 'architect' | 'researcher' | 'coder' | 'reviewer' | 'integrator' | 'custom'
   description?: string
   color?: string
   systemPrompt?: string
+  roleProfile?: Record<string, unknown> | null
   modelId?: string | null
   runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   capabilityTags: string[]
   toolPermissions: string[]
   sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
+}
+
+export interface AgentRelation {
+  sourceAgentId: string
+  targetAgentId: string
+  relationType: 'handoff_to' | 'reviewed_by' | 'fallback_to' | 'reports_to' | 'blocks'
+  note?: string | null
 }
 
 export interface ExecutionTask {
@@ -59,6 +69,15 @@ export interface ExecutionTask {
   inputRefs?: BlackboardRef[]
   outputContract?: TaskOutputContract
   validation?: TaskValidation
+  agentSelection?: AgentSelection
+}
+
+export interface AgentSelection {
+  selectedAgentKey: string
+  score: number
+  rationale: string[]
+  reviewerAgentKey?: string
+  fallbackAgentKey?: string
 }
 
 export interface TaskOutputContract {

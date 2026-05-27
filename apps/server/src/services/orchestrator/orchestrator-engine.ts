@@ -973,10 +973,16 @@ export class OrchestratorEngine {
     if (codeTasksNeedingReview.length === 0) return reviewResults
 
     // Find a reviewer agent (prefer one with 'review' in role/tags)
-    const reviewerAgent = plan.agents.find((a) => {
+    const firstCodeTask = codeTasksNeedingReview[0]!
+    const reviewedBy = plan.agentRelations?.find((relation) =>
+      relation.sourceAgentId === firstCodeTask.agentId && relation.relationType === 'reviewed_by'
+    )
+    const reviewerAgent = (reviewedBy ? plan.agents.find((agent) => agent.id === reviewedBy.targetAgentId) : undefined)
+      ?? plan.agents.find((agent) => agent.roleType === 'reviewer')
+      ?? plan.agents.find((a) => {
       const text = [a.name, a.role, a.description, ...(a.capabilityTags ?? [])].filter(Boolean).join(' ').toLowerCase()
       return text.includes('review') || text.includes('审查') || text.includes('test')
-    }) ?? plan.agents.find((a) => a.id !== codeTasksNeedingReview[0]!.agentId) ?? plan.agents[0]
+    }) ?? plan.agents.find((a) => a.id !== firstCodeTask.agentId) ?? plan.agents[0]
 
     if (!reviewerAgent) return reviewResults
 

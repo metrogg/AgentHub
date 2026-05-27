@@ -2,11 +2,17 @@ import {
   db,
   workspaces,
   workspaceAgents,
+  workspaceAgentRelations,
   workspaceTasks,
   eq,
   asc,
 } from '@agenthub/db'
 import { HTTPException } from 'hono/http-exception'
+import {
+  DEFAULT_CODE_TEAM_RELATIONS,
+  DEFAULT_CODE_TEAM_ROLE_TYPES,
+  rolePresetValues,
+} from './agent-role-presets'
 
 export async function loadWorkspaceFull(id: string, ownerId: string) {
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1)
@@ -23,7 +29,12 @@ export async function loadWorkspaceFull(id: string, ownerId: string) {
     .from(workspaceTasks)
     .where(eq(workspaceTasks.workspaceId, id))
     .orderBy(asc(workspaceTasks.orderIdx), asc(workspaceTasks.createdAt))
-  return { workspace: ws, agents, tasks }
+  const agentRelations = await db
+    .select()
+    .from(workspaceAgentRelations)
+    .where(eq(workspaceAgentRelations.workspaceId, id))
+    .orderBy(asc(workspaceAgentRelations.createdAt))
+  return { workspace: ws, agents, tasks, agentRelations }
 }
 
 export async function ensureWorkspace(id: string, ownerId: string) {
@@ -34,15 +45,36 @@ export async function ensureWorkspace(id: string, ownerId: string) {
   return ws
 }
 
-const CLASSIC_AGENTS = [
-  { name: 'Architect', role: '规划', systemPrompt: '你是架构师。优先拆解目标、定义边界、给出里程碑与依赖关系。', color: '#6366f1' },
-  { name: 'Coder', role: '实现', systemPrompt: '你是实现者。负责代码实现、组件接入和小步验证。先理解上下文,再小步迭代。', color: '#10b981' },
-  { name: 'Researcher', role: '研究', systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点。给出参考来源。', color: '#f59e0b' },
-  { name: 'Reviewer', role: '审查', systemPrompt: '你是审查者。检查风险、交互漏洞和缺失的测试。直接、克制、不绕弯。', color: '#ef4444' },
-]
-
 export async function seedClassicAgents(workspaceId: string) {
-  await db.insert(workspaceAgents).values(
-    CLASSIC_AGENTS.map((agent, index) => ({ ...agent, workspaceId, orderIdx: index }))
-  )
+  const createdAgents = await db
+    .insert(workspaceAgents)
+    .values(
+      DEFAULT_CODE_TEAM_ROLE_TYPES.map((roleType, index) => ({
+        ...rolePresetValues(roleType),
+        workspaceId,
+        orderIdx: index,
+      })),
+    )
+    .returning()
+
+  const byRole = new Map(createdAgents.map((agent) => [agent.roleType, agent]))
+  const relations = DEFAULT_CODE_TEAM_RELATIONS.flatMap((relation) => {
+    const source = byRole.get(relation.sourceRoleType)
+    const target = byRole.get(relation.targetRoleType)
+    if (!source || !target) return []
+    return [
+      {
+        workspaceId,
+        sourceAgentId: source.id,
+        targetAgentId: target.id,
+        relationType: relation.relationType,
+        note: relation.note,
+      },
+    ]
+  })
+
+  if (relations.length) {
+    await db.insert(workspaceAgentRelations).values(relations)
+  }
+  return createdAgents
 }

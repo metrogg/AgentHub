@@ -130,6 +130,75 @@ describe('AgentHub smoke tests', () => {
     await waitForTaskStatus(full.workspace.id, task.id, 'failed')
   })
 
+  test('classic workspace seeds role agents and editable relations', async () => {
+    const full = await json<{
+      workspace: { id: string }
+      agents: Array<{ id: string; name: string; roleType: string }>
+      agentRelations: Array<{ sourceAgentId: string; targetAgentId: string; relationType: string }>
+    }>(
+      await postJson('/api/workspaces', {
+        name: 'Role relation workspace',
+        goal: 'Coordinate agents by role',
+        template: 'classic',
+      })
+    )
+
+    expect(full.agents.map((agent) => agent.roleType)).toEqual([
+      'clarifier',
+      'architect',
+      'coder',
+      'reviewer',
+      'integrator',
+    ])
+    expect(full.agentRelations.map((relation) => relation.relationType)).toContain('handoff_to')
+    expect(full.agentRelations.map((relation) => relation.relationType)).toContain('reviewed_by')
+    expect(full.agentRelations.map((relation) => relation.relationType)).toContain('fallback_to')
+
+    const coder = full.agents.find((agent) => agent.roleType === 'coder')!
+    const reviewer = full.agents.find((agent) => agent.roleType === 'reviewer')!
+    const architect = full.agents.find((agent) => agent.roleType === 'architect')!
+
+    const replaced = await json<{
+      items: Array<{ sourceAgentId: string; targetAgentId: string; relationType: string; note: string | null }>
+    }>(
+      await app.request(`/api/workspaces/${full.workspace.id}/agent-relations`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          relations: [
+            {
+              sourceAgentId: coder.id,
+              targetAgentId: reviewer.id,
+              relationType: 'reviewed_by',
+              note: 'Reviewer checks Coder output',
+            },
+            {
+              sourceAgentId: coder.id,
+              targetAgentId: reviewer.id,
+              relationType: 'reviewed_by',
+              note: 'Duplicate should be deduped',
+            },
+            {
+              sourceAgentId: coder.id,
+              targetAgentId: architect.id,
+              relationType: 'fallback_to',
+            },
+          ],
+        }),
+      })
+    )
+
+    expect(replaced.items).toHaveLength(2)
+    expect(replaced.items.find((relation) => relation.relationType === 'reviewed_by')?.note).toBe(
+      'Reviewer checks Coder output',
+    )
+
+    const listed = await json<{
+      items: Array<{ sourceAgentId: string; targetAgentId: string; relationType: string }>
+    }>(await app.request(`/api/workspaces/${full.workspace.id}/agent-relations`))
+    expect(listed.items.map((relation) => relation.relationType).sort()).toEqual(['fallback_to', 'reviewed_by'])
+  })
+
   test('artifact demo endpoint persists inline preview metadata', async () => {
     const session = await json<{ id: string }>(
       await postJson('/api/sessions', { title: 'Artifact chat', type: 'direct' })
@@ -208,6 +277,44 @@ describe('AgentHub smoke tests', () => {
     expect(prompt.content).toContain('Agent Group')
     expect(prompt.metadata.agentDraftStatus).toBe('requires_group')
     expect(prompt.metadata.agentDraft).toBeUndefined()
+  })
+
+  test('orchestrator plan includes agent selection rationale', async () => {
+    const full = await json<{ workspace: { id: string } }>(
+      await postJson('/api/workspaces', { name: 'Routed plan workspace', goal: 'Explain routing', template: 'classic' })
+    )
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+    )
+
+    const card = await json<{
+      metadata: {
+        plan?: {
+          tasks: Array<{
+            id: string
+            taskType?: string
+            agentSelection?: {
+              selectedAgentKey: string
+              reviewerAgentKey?: string
+              fallbackAgentKey?: string
+              rationale: string[]
+            }
+          }>
+        }
+      }
+    }>(
+      await postJson(`/api/messages/${group.session.id}/orchestrator-plan`, {
+        content: '@orchestrator implement a small UI change and review it',
+      })
+    )
+
+    const tasks = card.metadata.plan?.tasks ?? []
+    expect(tasks.length).toBeGreaterThan(0)
+    expect(tasks.every((task) => task.agentSelection?.selectedAgentKey)).toBe(true)
+    expect(tasks.every((task) => task.agentSelection?.rationale.length)).toBe(true)
+    const codeTask = tasks.find((task) => task.taskType === 'code')
+    expect(codeTask?.agentSelection?.reviewerAgentKey).toBeTruthy()
+    expect(codeTask?.agentSelection?.fallbackAgentKey).toBeTruthy()
   })
 
   test('orchestrator dispatch returns run id and stores it on the task card', async () => {
@@ -385,6 +492,68 @@ describe('AgentHub smoke tests', () => {
     ]
     const graph = new TaskGraph(tasks)
     expect(graph.detectCycles()).toBe(true)
+  })
+
+  test('agent router explains selected coder with reviewer and fallback relations', async () => {
+    const { selectAgentForTask } = await import('../apps/server/src/services/orchestrator/agent-router')
+    const agents = [
+      {
+        id: 'architect',
+        key: 'architect',
+        name: 'Architect',
+        role: 'Architecture',
+        roleType: 'architect',
+        runtimeType: 'llm',
+        capabilityTags: ['planning', 'architecture'],
+        toolPermissions: ['workspace:read'],
+        sandboxPolicy: 'read-only',
+      },
+      {
+        id: 'coder',
+        key: 'coder',
+        name: 'Coder',
+        role: 'Implementation',
+        roleType: 'coder',
+        runtimeType: 'code-agent',
+        codeAgentType: 'codex',
+        capabilityTags: ['code', 'implementation'],
+        toolPermissions: ['workspace:read', 'workspace:write'],
+        sandboxPolicy: 'workspace-write',
+      },
+      {
+        id: 'reviewer',
+        key: 'reviewer',
+        name: 'Reviewer',
+        role: 'Review',
+        roleType: 'reviewer',
+        runtimeType: 'llm',
+        capabilityTags: ['review', 'quality'],
+        toolPermissions: ['workspace:read'],
+        sandboxPolicy: 'read-only',
+      },
+    ]
+    const selection = selectAgentForTask({
+      task: {
+        id: 'build',
+        title: 'Implement UI',
+        description: 'Change React components',
+        agentId: '',
+        taskType: 'code',
+        dependencies: [],
+        maxRetries: 1,
+      },
+      agents: agents as any,
+      relations: [
+        { sourceAgentId: 'coder', targetAgentId: 'reviewer', relationType: 'reviewed_by' },
+        { sourceAgentId: 'coder', targetAgentId: 'architect', relationType: 'fallback_to' },
+      ],
+    })
+
+    expect(selection.selectedAgentKey).toBe('coder')
+    expect(selection.reviewerAgentKey).toBe('reviewer')
+    expect(selection.fallbackAgentKey).toBe('architect')
+    expect(selection.score).toBeGreaterThan(0)
+    expect(selection.rationale.join(' ')).toContain('code')
   })
 
   test('task validation skips commands outside the safe allowlist', async () => {

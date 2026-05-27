@@ -7,6 +7,7 @@ import type { ClarificationQuestion, ExecutionAgent, ExecutionPlan, ExecutionTas
 export interface PlannerInput {
   goal: string
   agents: ExecutionAgent[]
+  agentRelations?: ExecutionPlan['agentRelations']
   workspacePath?: string | null
 }
 
@@ -27,7 +28,7 @@ interface ProjectSpec {
 
 export class Planner {
   async createPlan(input: PlannerInput): Promise<ExecutionPlan> {
-    const { goal, agents, workspacePath } = input
+    const { goal, agents, agentRelations = [], workspacePath } = input
     const runId = crypto.randomUUID()
 
     let specPhases: string | undefined
@@ -54,14 +55,14 @@ export class Planner {
     }
 
     try {
-      const generated = await this.generateWithLlm(goal, agents, spec, specPhases)
+      const generated = await this.generateWithLlm(goal, agents, agentRelations, spec, specPhases)
       const normalized = this.normalizeGeneratedPlan(runId, goal, generated, agents)
-      if (normalized) return initializeRunLedger(normalized)
+      if (normalized) return initializeRunLedger({ ...normalized, agentRelations })
     } catch (error: any) {
       logger.warn({ err: error?.message }, 'Planner LLM generation failed, using fallback')
     }
 
-    return initializeRunLedger(this.buildFallbackPlan(runId, goal, agents, spec))
+    return initializeRunLedger({ ...this.buildFallbackPlan(runId, goal, agents, spec), agentRelations })
   }
 
   private formatSpecPhases(spec: import('../harness').HarnessSpec): string {
@@ -122,6 +123,7 @@ ${agents.map((a) => `- ${a.name}（${a.role}）：${a.description || '无描述'
   private async generateWithLlm(
     goal: string,
     agents: ExecutionAgent[],
+    agentRelations: ExecutionPlan['agentRelations'] = [],
     spec?: ProjectSpec,
     specPhases?: string,
   ): Promise<unknown> {
@@ -129,7 +131,15 @@ ${agents.map((a) => `- ${a.name}（${a.role}）：${a.description || '无描述'
       key: agent.key,
       name: agent.name,
       role: agent.role,
+      roleType: agent.roleType,
       description: agent.description,
+      roleProfile: agent.roleProfile,
+      upstreamRelations: agentRelations
+        .filter((relation) => relation.targetAgentId === agent.id)
+        .map((relation) => `${relation.relationType}:${relation.sourceAgentId}`),
+      downstreamRelations: agentRelations
+        .filter((relation) => relation.sourceAgentId === agent.id)
+        .map((relation) => `${relation.relationType}:${relation.targetAgentId}`),
       runtimeType: agent.runtimeType,
       codeAgentType: agent.codeAgentType,
       capabilityTags: agent.capabilityTags,

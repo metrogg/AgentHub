@@ -372,7 +372,8 @@ interface TaskValidation {
 - 非白名单命令不会进入 shell 执行，会被记录为 `skipped`，避免模型生成命令直接触发高风险操作。
 - `OrchestratorEngine` 会校验 required artifacts 和 allowed paths；缺少 artifact 或产物路径越界会写 typed `risk`，并让任务失败进入现有恢复路径。
 - 群聊计划卡会展示任务的 paths/artifacts/validation；Runs 详情会展示阶段级 contract/validation 数量。
-- **Reviewer 自动审查**（2026-05-27 新增）：code 类型任务完成且 `requiresReview: true` 时，`OrchestratorEngine.injectAutoReviewTasks()` 自动注入 Reviewer 审查任务，审查 diff 质量和安全性，结果写入黑板。
+- **Reviewer 自动审查**（2026-05-27 新增）：code 类型任务完成且 `requiresReview: true` 时，`OrchestratorEngine.injectAutoReviewTasks()` 自动注入 Reviewer 审查任务，审查 diff 质量和安全性，结果写入黑板。当前选择顺序为 `reviewed_by` 关系 > `roleType=reviewer` > review/test 字符串启发式。
+- **Agent 角色关系第一阶段**（2026-05-27 新增）：Workspace 已新增 `workspace_agent_relations`，classic template 默认 seed Clarifier/Architect/Coder/Reviewer/Integrator 五人骨干团队；Planner 输入包含 `roleType`、`roleProfile` 和上下游关系摘要；计划任务包含 `agentSelection`，前端计划卡展示路由理由、reviewer 和 fallback。
 - **Intent Router 显性化**（2026-05-27 新增）：`chatStore.ts` 新增 `assessIntentComplexity()` 启发式检测，群聊中无需 `@orchestrator` 即可自动路由复杂需求（多文件引用、多阶段关键词、架构意图等 6 种信号评分，≥3 分自动路由）。
 - **Clarifier 需求澄清**（2026-05-27 新增）：Planner 的 JSON schema 扩展 `clarificationQuestions` 字段，LLM 在目标模糊时生成 1-3 个澄清问题（含选项）；前端计划卡片展示"需求澄清"区域，用户可点击选项回答。
 - **Handoff 上下文裁剪**（2026-05-27 新增）：`agent-runner.ts` 的 `runAgentReply()` 在群聊场景下自动裁剪历史为 pinned + 最近 3 条 + 中间消息摘要，减少 token 消耗。

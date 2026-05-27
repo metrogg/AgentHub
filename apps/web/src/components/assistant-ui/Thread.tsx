@@ -2487,6 +2487,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                     {task.description}
                   </p>
                   <TaskContractDetails task={task} />
+                  <TaskRoutingDetails task={task} agents={plan.agents} />
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {(['pending', 'running', 'done'] as TaskStatus[]).map((item) => (
                       <button
@@ -2713,6 +2714,52 @@ const TaskContractDetails: FC<{ task: OrchestratorPlanTask }> = ({ task }) => {
               此任务需要人工 Review 后才能继续
             </div>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const TaskRoutingDetails: FC<{
+  task: OrchestratorPlanTask
+  agents: OrchestratorPlan['agents']
+}> = ({ task, agents }) => {
+  const selection = task.agentSelection
+  if (!selection) return null
+
+  const reviewer = selection.reviewerAgentKey
+    ? agents.find((agent) => agent.key === selection.reviewerAgentKey)
+    : null
+  const fallback = selection.fallbackAgentKey
+    ? agents.find((agent) => agent.key === selection.fallbackAgentKey)
+    : null
+
+  return (
+    <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50/60 px-2.5 py-2 text-[11px] text-blue-900">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <GitBranch className="h-3 w-3 text-blue-600" />
+        <span className="font-medium">路由理由</span>
+        <span className="rounded-full bg-white px-1.5 py-0.5 text-blue-700">
+          score {selection.score}
+        </span>
+        {reviewer && (
+          <span className="rounded-full bg-white px-1.5 py-0.5 text-blue-700">
+            review: {reviewer.name}
+          </span>
+        )}
+        {fallback && (
+          <span className="rounded-full bg-white px-1.5 py-0.5 text-blue-700">
+            fallback: {fallback.name}
+          </span>
+        )}
+      </div>
+      {selection.rationale.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {selection.rationale.slice(0, 4).map((item) => (
+            <span key={item} className="rounded bg-white/80 px-1.5 py-0.5 text-blue-700">
+              {item}
+            </span>
+          ))}
         </div>
       )}
     </div>

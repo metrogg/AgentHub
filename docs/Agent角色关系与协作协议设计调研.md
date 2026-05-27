@@ -2,6 +2,20 @@
 
 更新时间：2026-05-27
 
+## 0. 第一阶段落地状态（2026-05-27）
+
+本阶段已选择“固定骨干团队 + 轻量关系图”，暂缓 Kimi 式动态 swarm。落地边界如下：
+
+- 默认代码协作组固定为 5 个角色：Clarifier、Architect、Coder、Reviewer、Integrator。Researcher 保留为可选模板，Tester 暂并入 Reviewer。
+- 系统角色类型使用 `clarifier | architect | researcher | coder | reviewer | integrator | custom`，关系类型使用 `handoff_to | reviewed_by | fallback_to | reports_to | blocks`。
+- 全局 Agent 配置库继续放在 localStorage，但升级为 `{ schemaVersion, agents, relations }`；旧数据会自动推断 `roleType` 并迁移。
+- Workspace 层新增真实关系表 `workspace_agent_relations`，创建 classic workspace 时会 seed 5 个默认 Agent 和默认关系。
+- Orchestrator Planner 的 Agent catalog 已携带 `roleType`、`roleProfile` 和上下游关系摘要；任务会生成 `agentSelection`，包括路由分数、理由、reviewer、fallback。
+- 计划卡已展示路由理由；自动 review 优先读取 `reviewed_by`，没有关系时再回退到 `roleType=reviewer` 和旧启发式。
+- 前端 Agent 配置页已加入角色模板、能力卡和轻量关系编辑，不做复杂拓扑图。
+
+后续阶段再做：Handoff Contract 独立落库、`agent.selected`/`handoff.*` 事件、动态 swarm worker、关系图可视化和更严格的 typed role profile schema。
+
 ## 1. 核心结论
 
 AgentHub 现在的 Agent 配置更像“通讯录条目”：名称、角色、简介、系统提示词、运行时、权限、标签。这个形态适合创建和邀请 Agent，但还不足以支撑稳定的多 Agent 协作。真正需要补的是一层 **Agent Role Profile + Collaboration Graph + Handoff Contract**：

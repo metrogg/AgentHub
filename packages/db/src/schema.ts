@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import { relations } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 
@@ -44,9 +44,13 @@ export const workspaceAgents = sqliteTable('workspace_agents', {
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   role: text('role').notNull(),
+  roleType: text('role_type', {
+    enum: ['clarifier', 'architect', 'researcher', 'coder', 'reviewer', 'integrator', 'custom'],
+  }).notNull().default('custom'),
   description: text('description').notNull().default(''),
   avatar: text('avatar'),
   systemPrompt: text('system_prompt').notNull().default(''),
+  roleProfile: text('role_profile', { mode: 'json' }).$type<Record<string, unknown>>(),
   color: text('color').notNull().default('#6366f1'),
   modelId: text('model_id'),
   runtimeType: text('runtime_type', { enum: ['llm', 'code-agent', 'mcp', 'a2a'] }).notNull().default('llm'),
@@ -64,6 +68,30 @@ export const workspaceAgents = sqliteTable('workspace_agents', {
   orderIdx: integer('order_idx').notNull().default(0),
   createdAt: now(),
 })
+
+export const workspaceAgentRelations = sqliteTable(
+  'workspace_agent_relations',
+  {
+    id: id(),
+    workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+    sourceAgentId: text('source_agent_id').notNull().references(() => workspaceAgents.id, { onDelete: 'cascade' }),
+    targetAgentId: text('target_agent_id').notNull().references(() => workspaceAgents.id, { onDelete: 'cascade' }),
+    relationType: text('relation_type', {
+      enum: ['handoff_to', 'reviewed_by', 'fallback_to', 'reports_to', 'blocks'],
+    }).notNull(),
+    note: text('note'),
+    createdAt: now(),
+    updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    uniqueRelation: uniqueIndex('workspace_agent_relations_unique').on(
+      table.workspaceId,
+      table.sourceAgentId,
+      table.targetAgentId,
+      table.relationType,
+    ),
+  }),
+)
 
 export interface AgentArtifact {
   id: string
