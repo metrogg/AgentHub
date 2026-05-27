@@ -62,7 +62,11 @@ function broadcast(sessionId: string, data: unknown) {
   const payload = JSON.stringify(data)
   for (const ws of room) {
     if (ws.readyState === 1) {
-      ws.send(payload)
+      try {
+        ws.send(payload)
+      } catch {
+        // WebSocket may close between readyState check and send; ignore.
+      }
     }
   }
 }

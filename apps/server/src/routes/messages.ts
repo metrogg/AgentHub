@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { unlink, writeFile } from 'node:fs/promises'
 import { sendMessageSchema } from '@agenthub/shared'
+import { logger } from '../lib/logger'
 import {
   db,
   messages,
@@ -370,11 +371,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const { cancelAgentReply } = await import('../services/agent-runner')
     cancelAgentReply(sessionId)
     if (session.type === 'group' && session.workspaceId) {
-      runGroupReplies(session.workspaceId, sessionId, previousUser, previousUser.content).catch(() => {})
+      runGroupReplies(session.workspaceId, sessionId, previousUser, previousUser.content).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runGroupReplies failed on regenerate'))
     } else {
       const profile = await profileForDirectSession(session)
       import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId, previousUser, profile).catch(() => {})
+        runAgentReply(sessionId, previousUser, profile).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on regenerate'))
       })
     }
     return c.json({ removedMessageId: message.id })
@@ -392,11 +393,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
       if (session?.type === 'group' && session.workspaceId) {
         await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
-        runGroupReplies(session.workspaceId, sessionId, msg, content).catch(() => {})
+        runGroupReplies(session.workspaceId, sessionId, msg, content).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runGroupReplies failed on new message'))
       } else {
         const profile = session ? await profileForDirectSession(session) : undefined
         import('../services/agent-runner').then(({ runAgentReply }) => {
-          runAgentReply(sessionId, msg, profile).catch(() => {})
+          runAgentReply(sessionId, msg, profile).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on new message'))
         })
       }
     }
