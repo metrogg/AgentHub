@@ -530,7 +530,9 @@ async function fetchWithRetry(
       })
 
       if (isRetryableStatus(res.status) && attempt < config.maxRetries) {
-        await res.arrayBuffer().catch(() => undefined)
+        await res.arrayBuffer().catch((err: any) => {
+          logger.warn({ err: err?.message, label, status: res.status }, 'Failed to read retry response body')
+        })
         await delay(backoffMs(attempt))
         continue
       }
@@ -638,7 +640,10 @@ function delay(ms: number) {
 }
 
 async function formatHttpError(label: string, res: Response, config: LlmRuntimeConfig): Promise<string> {
-  const body = await res.text().catch(() => '')
+  const body = await res.text().catch((err: any) => {
+    logger.warn({ err: err?.message, label, status: res.status }, 'Failed to read error response body')
+    return ''
+  })
   const providerMessage = extractProviderErrorMessage(body)
   const details = providerMessage || body || `HTTP ${res.status}`
   return `${label}失败，状态码 ${res.status}：${redactSensitive(details.slice(0, 500), [config.apiKey])}`
