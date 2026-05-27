@@ -26,6 +26,7 @@ import typescript from 'highlight.js/lib/languages/typescript'
 import xml from 'highlight.js/lib/languages/xml'
 import yaml from 'highlight.js/lib/languages/yaml'
 import {
+  AlertTriangle,
   ArrowUp,
   AtSign,
   Bot,
@@ -85,6 +86,7 @@ import {
   type ModelCatalogItem,
   type OrchestratorDispatchResult,
   type OrchestratorPlan,
+  type OrchestratorPlanTask,
   type SkillSummary,
   type TaskStatus,
   type Workspace,
@@ -2404,6 +2406,34 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
           </span>
         </div>
         <p className="mt-2 line-clamp-2 text-sm leading-6 text-neutral-500">{plan.goal}</p>
+        {(() => {
+          const contractCount = plan.tasks.filter((t) => t.outputContract).length
+          const validationCount = plan.tasks.filter((t) => t.validation?.commands?.length).length
+          const reviewCount = plan.tasks.filter((t) => t.validation?.requiresReview).length
+          if (!contractCount && !validationCount && !reviewCount) return null
+          return (
+            <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+              {contractCount > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                  <CheckCircle2 className="h-3 w-3" />
+                  {contractCount} 个任务含契约
+                </span>
+              )}
+              {validationCount > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-blue-700">
+                  <TerminalSquare className="h-3 w-3" />
+                  {validationCount} 个任务含验证
+                </span>
+              )}
+              {reviewCount > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-700">
+                  <AlertTriangle className="h-3 w-3" />
+                  {reviewCount} 个任务需 Review
+                </span>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       <div className="px-4 py-3">
@@ -2449,28 +2479,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">
                     {task.description}
                   </p>
-                  {(task.outputContract || task.validation) && (
-                    <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-neutral-500">
-                      {task.outputContract?.allowedPaths?.slice(0, 2).map((path) => (
-                        <span key={path} className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
-                          path:{path}
-                        </span>
-                      ))}
-                      {task.outputContract?.requiredArtifacts?.slice(0, 3).map((artifact) => (
-                        <span key={artifact} className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
-                          artifact:{artifact}
-                        </span>
-                      ))}
-                      {task.validation?.commands?.slice(0, 2).map((command) => (
-                        <span key={command} className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">
-                          validate:{command}
-                        </span>
-                      ))}
-                      {task.validation?.requiresReview && (
-                        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">review required</span>
-                      )}
-                    </div>
-                  )}
+                  <TaskContractDetails task={task} />
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {(['pending', 'running', 'done'] as TaskStatus[]).map((item) => (
                       <button
@@ -2564,6 +2573,101 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+const TaskContractDetails: FC<{ task: OrchestratorPlanTask }> = ({ task }) => {
+  const [open, setOpen] = useState(false)
+  const contract = task.outputContract
+  const validation = task.validation
+  if (!contract && !validation) return null
+  const hasDetails =
+    (contract?.allowedPaths && contract.allowedPaths.length > 0) ||
+    (contract?.requiredArtifacts && contract.requiredArtifacts.length > 0) ||
+    (contract?.requiredBlackboardWrites && contract.requiredBlackboardWrites.length > 0) ||
+    (contract?.acceptanceCriteria && contract.acceptanceCriteria.length > 0) ||
+    (validation?.commands && validation.commands.length > 0) ||
+    validation?.requiresReview
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] text-neutral-600 transition hover:bg-neutral-50"
+      >
+        <FileText className="h-3 w-3" />
+        任务契约
+        {hasDetails && <span className="rounded-full bg-emerald-50 px-1 text-[10px] text-emerald-700">详情</span>}
+        <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && hasDetails && (
+        <div className="mt-2 space-y-2 rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3 text-[11px]">
+          {contract?.allowedPaths && contract.allowedPaths.length > 0 && (
+            <div>
+              <span className="font-medium text-neutral-700">允许路径：</span>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {contract.allowedPaths.map((path: string) => (
+                  <span key={path} className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">{path}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {contract?.requiredArtifacts && contract.requiredArtifacts.length > 0 && (
+            <div>
+              <span className="font-medium text-neutral-700">必需产物：</span>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {contract.requiredArtifacts.map((a: string) => (
+                  <span key={a} className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">{a}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {contract?.requiredBlackboardWrites && contract.requiredBlackboardWrites.length > 0 && (
+            <div>
+              <span className="font-medium text-neutral-700">黑板写入：</span>
+              <div className="mt-1 space-y-1">
+                {contract.requiredBlackboardWrites.map((bw: { key: string; schemaType: string }) => (
+                  <div key={bw.key} className="flex items-center gap-1.5">
+                    <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-neutral-600">{bw.key}</span>
+                    <span className="text-neutral-400">→</span>
+                    <span className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">{bw.schemaType}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {contract?.acceptanceCriteria && contract.acceptanceCriteria.length > 0 && (
+            <div>
+              <span className="font-medium text-neutral-700">验收标准：</span>
+              <ul className="mt-1 list-inside list-disc space-y-0.5 text-neutral-600">
+                {contract.acceptanceCriteria.map((c: string, i: number) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {validation?.commands && validation.commands.length > 0 && (
+            <div>
+              <span className="font-medium text-neutral-700">验证命令：</span>
+              <div className="mt-1 space-y-1">
+                {validation.commands.map((cmd: string) => (
+                  <div key={cmd} className="rounded bg-neutral-900 px-2 py-1 font-mono text-[10px] text-neutral-100">
+                    {cmd}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {validation?.requiresReview && (
+            <div className="flex items-center gap-1.5 rounded bg-amber-50 px-2 py-1 text-amber-700">
+              <AlertTriangle className="h-3 w-3" />
+              此任务需要人工 Review 后才能继续
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
