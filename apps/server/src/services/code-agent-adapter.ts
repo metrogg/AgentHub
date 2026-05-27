@@ -7,7 +7,7 @@ import { db, settings } from '@agenthub/db'
 import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
-import { getLlmRuntimeStatus, resolveLlmRuntimeConfig } from './llm-client'
+import { getLlmRuntimeStatus, resolveLlmRuntimeConfig, resolveModelApiKey } from './llm-client'
 import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
 
@@ -188,7 +188,7 @@ export async function* streamCodeAgentReply(
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
-  const configured = await isRuntimeConfigured(type, adapter)
+  const configured = await isRuntimeConfigured(type, adapter, profile.modelId)
   const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
 
@@ -288,9 +288,19 @@ export async function* streamCodeAgentReply(
   yield formatCodeAgentFailure(adapter, finalResult)
 }
 
-async function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter) {
+async function isRuntimeConfigured(type: CodeAgentType, adapter: CodeAgentAdapter, modelId?: string | null) {
   if (readEnv(adapter.envKey)) return true
   if (type === 'codex') return true
+
+  // Check agent's selected model in MODEL_CATALOG first
+  if (modelId) {
+    try {
+      const modelConfig = await resolveModelApiKey(modelId)
+      if (modelConfig.apiKey) return true
+    } catch {
+      // fall through
+    }
+  }
 
   try {
     const llmStatus = await getLlmRuntimeStatus()
@@ -519,7 +529,7 @@ async function runCodeAgentCommand(
 
   const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
     cwd,
-    env: await mergedEnv(adapter),
+    env: await mergedEnv(adapter, modelId),
     stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -1216,25 +1226,39 @@ function readEnv(key: string) {
   return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
-async function mergedEnv(adapter?: CodeAgentAdapter) {
+async function mergedEnv(adapter?: CodeAgentAdapter, modelId?: string | null) {
   const base = { ...rootEnv(), ...Bun.env, ...codexAuthEnv() }
 
-  // 若 CLI 需要特定 API Key，优先从 Coding Tools 设置、再自动注入模型配置中的 key
+  // 若 CLI 需要特定 API Key，优先从 Agent 选择的模型目录解析
   if (adapter?.envKey) {
     const directValue = readEnv(adapter.envKey)
     if (!directValue) {
-      // 1) 尝试读取前端保存的 CODE_AGENT_ACTIVE_API_KEY
-      try {
-        const rows = await db.select().from(settings).where(eq(settings.key, 'CODE_AGENT_ACTIVE_API_KEY')).limit(1)
-        const savedKey = rows[0]?.value?.trim()
-        if (savedKey) {
-          base[adapter.envKey] = savedKey
+      // 1) 优先从 Agent 选择的模型目录解析
+      if (modelId) {
+        try {
+          const modelConfig = await resolveModelApiKey(modelId)
+          if (modelConfig.apiKey) {
+            base[adapter.envKey] = modelConfig.apiKey
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
 
-      // 2) 若仍无，尝试从主模型配置解析对应 provider 的 API Key
+      // 2) 回退: 尝试读取前端保存的 CODE_AGENT_ACTIVE_API_KEY
+      if (!base[adapter.envKey]) {
+        try {
+          const rows = await db.select().from(settings).where(eq(settings.key, 'CODE_AGENT_ACTIVE_API_KEY')).limit(1)
+          const savedKey = rows[0]?.value?.trim()
+          if (savedKey) {
+            base[adapter.envKey] = savedKey
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // 3) 最后回退: 从主模型配置解析对应 provider 的 API Key
       if (!base[adapter.envKey]) {
         try {
           const llmConfig = await resolveLlmRuntimeConfig()

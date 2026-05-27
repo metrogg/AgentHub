@@ -220,7 +220,8 @@ function normalizeLibraryState(value: unknown): AgentLibraryState {
     : buildDefaultSavedRelations(agents)
   const pruned = pruneRelations(relations, agents)
   const state: AgentLibraryState = { schemaVersion: 2, agents, relations: pruned }
-  if (typeof window !== 'undefined') saveAgentLibraryState(state)
+  // Only save back if this is from a write path (not loading) to avoid overwriting user data during load
+  // The caller (loadAgentLibraryState / saveAgentLibraryState) is responsible for saving
   return state
 }
 

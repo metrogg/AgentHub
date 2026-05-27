@@ -15,7 +15,7 @@ import {
   retryCodexAuth,
   startCodexLogin,
 } from '../services/codex-auth'
-import { getLlmRuntimeStatus } from '../services/llm-client'
+import { getLlmRuntimeStatus, resolveModelApiKey } from '../services/llm-client'
 import { globalSkillRegistry } from '../services/skill-registry'
 import { readOnlyToolRegistry } from '../services/tool-registry'
 
@@ -816,7 +816,21 @@ async function isDirectToolConfigured(probe: ToolProbe, configEnv: string) {
     return Boolean(opencode.defaultModel || opencode.models.length > 0)
   }
 
-  // 若主模型配置中已存在对应 provider 的 API Key，也视为已配置
+  // Check if any model in MODEL_CATALOG has a matching provider with configured API key
+  try {
+    const catalogModels = await getCatalogModels()
+    for (const model of catalogModels) {
+      if (!model.provider || !model.modelId) continue
+      if (isToolProviderMatch(probe.id, model.provider, model.apiEndpoint, model.anthropicEndpoint)) {
+        const keyResult = await resolveModelApiKey(model.id)
+        if (keyResult.apiKey) return true
+      }
+    }
+  } catch (err: any) {
+    console.error(`[isDirectToolConfigured] catalog check failed for ${probe.id}:`, err?.message || String(err))
+  }
+
+  // Fallback: check active LLM runtime
   try {
     const llmStatus = await getLlmRuntimeStatus()
     if (llmStatus.apiKeyConfigured) {
@@ -850,6 +864,48 @@ async function isDirectToolConfigured(probe: ToolProbe, configEnv: string) {
 
 function readEnv(key: string) {
   return rootEnv()[key] ?? Bun.env[key]
+}
+
+interface CatalogModelEntry {
+  id: string
+  provider?: string
+  modelId?: string
+  apiEndpoint?: string
+  anthropicEndpoint?: string
+  apiKey?: string
+  apiKeyEnv?: string
+}
+
+async function getCatalogModels(): Promise<CatalogModelEntry[]> {
+  const { db, settings } = await import('@agenthub/db')
+  const allRows = await db.select().from(settings)
+  const map = Object.fromEntries(allRows.map((row: any) => [row.key, row.value]))
+  const raw = map.MODEL_CATALOG
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function isToolProviderMatch(toolId: string, provider: string, apiEndpoint?: string, anthropicEndpoint?: string): boolean {
+  const p = provider.toLowerCase()
+  const baseUrl = (apiEndpoint || '').toLowerCase()
+  const anthropicUrl = (anthropicEndpoint || '').toLowerCase()
+
+  if (toolId === 'claude-code') {
+    return p === 'anthropic' || p === 'claude' || baseUrl.includes('anthropic.com') || anthropicUrl.includes('anthropic.com') || Boolean(anthropicEndpoint)
+  }
+  if (toolId === 'codex') {
+    return p === 'openai' || baseUrl.includes('openai.com')
+  }
+  if (toolId === 'gemini') {
+    return p === 'gemini' || p === 'google'
+  }
+  // OpenCode: any provider is compatible
+  return true
 }
 
 function rootEnv() {

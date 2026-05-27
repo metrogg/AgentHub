@@ -13,7 +13,9 @@ import { useChatStore } from '../stores/chatStore'
 
 export default function ChatPage() {
   const { sessionId } = useParams()
+  const navigate = useNavigate()
   const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const sessions = useChatStore((state) => state.sessions)
   const selectSession = useChatStore((state) => state.selectSession)
   const initWebSocket = useChatStore((state) => state.initWebSocket)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -28,11 +30,17 @@ export default function ChatPage() {
     return off
   }, [initWebSocket])
 
+  // Sync URL sessionId with store, but skip if the session was deleted
   useEffect(() => {
-    if (sessionId && sessionId !== currentSessionId) {
-      selectSession(sessionId)
+    if (!sessionId) return
+    if (sessionId === currentSessionId) return
+    // If sessions are loaded but this ID doesn't exist, it was deleted — go home
+    if (sessions.length > 0 && !sessions.some((s) => s.id === sessionId)) {
+      navigate('/chat', { replace: true })
+      return
     }
-  }, [sessionId, currentSessionId, selectSession])
+    selectSession(sessionId)
+  }, [sessionId, currentSessionId, sessions, selectSession, navigate])
 
   return (
     <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-white text-neutral-950">

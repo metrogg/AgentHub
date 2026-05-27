@@ -108,7 +108,6 @@ export default function CodingToolsPage() {
   const [toolTestBusy, setToolTestBusy] = useState(false)
   const [toolTestMessage, setToolTestMessage] = useState('')
   const [toolTestOk, setToolTestOk] = useState<boolean | null>(null)
-  const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({})
   const [codexConfigPath, setCodexConfigPath] = useState('')
   const [codexConfigContent, setCodexConfigContent] = useState('')
   const [codexConfigBusy, setCodexConfigBusy] = useState(false)
@@ -152,7 +151,6 @@ export default function CodingToolsPage() {
   }, [])
 
   const activeTool = tools.find((tool) => tool.id === activeToolId) ?? tools[0]
-  const activeApiKey = apiKeyDrafts[activeTool.apiKeyEnv] ?? ''
   const envSnippet = buildEnvSnippet(activeTool)
   const runCommand = buildRunCommand(activeTool)
   const installedCount = useMemo(() => tools.filter((tool) => statuses[tool.id]?.installed).length, [statuses, tools])
@@ -687,13 +685,12 @@ export default function CodingToolsPage() {
                   <div className="mt-5 grid gap-4 md:grid-cols-2">
                     <Field label="命令" value={activeTool.command} onChange={(value) => patchTool(activeTool.id, { command: value })} />
                     <Field label="API Key 环境变量" value={activeTool.apiKeyEnv} onChange={(value) => patchTool(activeTool.id, { apiKeyEnv: value })} />
-                    <Field label="API Key" type="password" value={activeApiKey} onChange={(value) => setApiKeyDrafts((current) => ({ ...current, [activeTool.apiKeyEnv]: value }))} />
                     {activeTool.id === 'opencode' && (
                       <Field label="Provider" value={activeTool.provider ?? ''} onChange={(value) => patchTool(activeTool.id, { provider: value.trim() || undefined })} />
                     )}
                   </div>
                   <p className="mt-4 text-xs leading-5 text-neutral-500">
-                    模型和协议配置请在「Agent 配置」页面中设置，每个 Agent 可以选择不同的模型。
+                    API Key 在「模型管理」页面配置，模型和协议在「Agent 配置」页面中设置。每个 Agent 可以选择不同的 Coding Tool 和模型组合。
                   </p>
 
                   <div className="mt-5 flex flex-wrap items-center gap-2">

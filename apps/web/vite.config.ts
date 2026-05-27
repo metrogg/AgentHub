@@ -1,8 +1,21 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { readFileSync } from 'fs'
 
-const apiProxyTarget = process.env.VITE_PROXY_TARGET ?? 'http://localhost:8000'
+function resolveProxyTarget(): string {
+  if (process.env.VITE_PROXY_TARGET) return process.env.VITE_PROXY_TARGET
+  try {
+    const portFile = path.resolve(__dirname, '../../.agenthub-port')
+    const port = readFileSync(portFile, 'utf8').trim()
+    if (port && /^\d+$/.test(port)) return `http://localhost:${port}`
+  } catch {
+    // Port file not found; server may not be running yet
+  }
+  return 'http://localhost:8000'
+}
+
+const apiProxyTarget = resolveProxyTarget()
 const wsProxyTarget = process.env.VITE_WS_PROXY_TARGET ?? apiProxyTarget.replace(/^http/, 'ws')
 
 export default defineConfig({
@@ -19,6 +32,7 @@ export default defineConfig({
       '/api': {
         target: apiProxyTarget,
         changeOrigin: true,
+        timeout: 0,
       },
       '/ws': {
         target: wsProxyTarget,

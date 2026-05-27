@@ -3,7 +3,10 @@
     "allow": [
       "Bash(bun install *)",
       "Bash(bun pm *)",
-      "Bash(bun add *)"
+      "Bash(bun add *)",
+      "Bash(claude --version)",
+      "Read(//c/Users/wzd/**)",
+      "Bash(claude auth *)"
     ]
   }
 }

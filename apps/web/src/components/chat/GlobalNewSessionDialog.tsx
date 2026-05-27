@@ -101,6 +101,7 @@ export function GlobalNewSessionDialog() {
       onWorkspacesChange={setWorkspaces}
       creatingChoice={creatingChoice}
       createError={createError}
+      onCreateError={setCreateError}
       onClose={() => !creatingChoice && setOpen(false)}
       onCreateAgent={createAgentSession}
       onManageAgents={() => {
@@ -119,6 +120,7 @@ function NewSessionDialog({
   onWorkspacesChange,
   creatingChoice,
   createError,
+  onCreateError,
   onClose,
   onCreateAgent,
   onManageAgents,
@@ -130,6 +132,7 @@ function NewSessionDialog({
   onWorkspacesChange: (workspaces: Workspace[]) => void
   creatingChoice: string | null
   createError: string | null
+  onCreateError: (msg: string | null) => void
   onClose: () => void
   onCreateAgent: (agents: SavedAgentConfig[], title?: string) => void
   onManageAgents: () => void
@@ -137,6 +140,7 @@ function NewSessionDialog({
   const [query, setQuery] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [projectPath, setProjectPath] = useState<string | null>(null)
+  const [isPickingFolder, setIsPickingFolder] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const selectedAgents = useMemo(
     () => agents.filter((agent) => selectedIds.has(agent.id)),
@@ -274,20 +278,40 @@ function NewSessionDialog({
                       )}
                       <button
                         type="button"
-                        disabled={Boolean(creatingChoice)}
+                        disabled={Boolean(creatingChoice) || isPickingFolder}
                         onClick={async () => {
                           if (isDesktopApp()) {
                             const path = await pickWorkspaceFolder().catch(() => null)
                             if (path) setProjectPath(path)
-                          } else {
-                            const path = window.prompt('请输入项目文件夹路径', projectPath || '')
+                            return
+                          }
+                          setIsPickingFolder(true)
+                          onCreateError(null)
+                          try {
+                            const result = await api.openWorkspaceFolder()
+                            if (!result.cancelled && result.projectPath) {
+                              setProjectPath(result.projectPath)
+                            }
+                          } catch (err: any) {
+                            const message =
+                              err?.message?.includes('fetch') || err?.message?.includes('ECONNRESET')
+                                ? '连接超时：文件夹选择器没有响应，请手动输入路径'
+                                : '打开文件夹选择器失败'
+                            onCreateError(message)
+                            const path = window.prompt('请输入项目文件夹的绝对路径', projectPath || '')
                             if (path !== null) setProjectPath(path.trim() || null)
+                          } finally {
+                            setIsPickingFolder(false)
                           }
                         }}
                         className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs hover:bg-neutral-50 disabled:opacity-50"
                       >
-                        <FolderOpen className="h-3 w-3" />
-                        选择文件夹
+                        {isPickingFolder ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <FolderOpen className="h-3 w-3" />
+                        )}
+                        {isPickingFolder ? '选择中...' : '选择文件夹'}
                       </button>
                       {projectPath && (
                         <button

@@ -203,26 +203,6 @@ function pickSettingsCandidate(map: Record<string, string>, selectedModelId?: st
     }
   }
 
-  if (clean(map.ACTIVE_MODEL) || clean(map.ACTIVE_BASE_URL) || clean(map.ACTIVE_API_KEY)) {
-    return {
-      apiKey: clean(map.ACTIVE_API_KEY),
-      apiKeySource: clean(map.ACTIVE_API_KEY) ? 'settings' : undefined,
-      baseUrl: clean(map.ACTIVE_BASE_URL),
-      model: clean(map.ACTIVE_MODEL),
-      provider: clean(map.ACTIVE_PROVIDER),
-    }
-  }
-
-  if (clean(map.ANTHROPIC_API_KEY)) {
-    return {
-      apiKey: clean(map.ANTHROPIC_API_KEY),
-      apiKeySource: 'settings',
-      baseUrl: env.ANTHROPIC_BASE_URL,
-      model: clean(map.ANTHROPIC_MODEL),
-      provider: 'anthropic',
-    }
-  }
-
   return null
 }
 
@@ -246,6 +226,28 @@ export async function resolveLlmRuntimeConfig(selectedModelId?: string): Promise
     },
     'env'
   ), {})
+}
+
+export async function resolveModelApiKey(modelId?: string | null): Promise<{ apiKey?: string; provider?: string; baseUrl?: string }> {
+  try {
+    const map = await getSettingsMap()
+    const catalog = parseCatalog(map.MODEL_CATALOG)
+    const targetId = clean(modelId) ?? clean(map.ACTIVE_MODEL_ID)
+    const item = targetId
+      ? catalog.find((entry) => entry.id === targetId && entry.enabled !== false)
+      : catalog.find((entry) => entry.enabled !== false && clean(entry.modelId))
+    if (item?.modelId) {
+      const key = configuredApiKey(item)
+      const baseUrl = item.provider === 'anthropic'
+        ? clean(item.anthropicEndpoint) ?? clean(item.apiEndpoint)
+        : clean(item.apiEndpoint) ?? clean(item.anthropicEndpoint)
+      return { apiKey: key.value, provider: item.provider, baseUrl }
+    }
+  } catch {
+    // fall through to LLM runtime config fallback
+  }
+  const fallback = await resolveLlmRuntimeConfig(modelId ?? undefined)
+  return { apiKey: fallback.apiKey ?? undefined, provider: fallback.provider, baseUrl: fallback.baseUrl }
 }
 
 export async function getLlmRuntimeStatus(selectedModelId?: string) {

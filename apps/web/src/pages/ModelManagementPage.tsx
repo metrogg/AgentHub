@@ -97,16 +97,6 @@ export default function ModelManagementPage() {
         .saveSettings({
           MODEL_CATALOG: JSON.stringify(models),
           ACTIVE_MODEL_ID: selected?.id ?? '',
-          MODEL_PROVIDER: selected?.provider ?? '',
-          MODEL_API_KEY: selected?.apiKey ?? '',
-          MODEL_BASE_URL: selected?.apiEndpoint ?? '',
-          MODEL_NAME: selected?.modelId ?? '',
-          ACTIVE_PROVIDER: selected?.provider ?? '',
-          ACTIVE_API_KEY: selected?.apiKey ?? '',
-          ACTIVE_BASE_URL: selected?.apiEndpoint ?? '',
-          ACTIVE_MODEL: selected?.modelId ?? '',
-          ANTHROPIC_API_KEY: selected?.provider === 'anthropic' ? selected.apiKey : '',
-          ANTHROPIC_MODEL: selected?.provider === 'anthropic' ? selected.modelId : 'claude-sonnet-4-6',
         })
         .then(() => {
           window.dispatchEvent(new Event(settingsUpdatedEvent))
