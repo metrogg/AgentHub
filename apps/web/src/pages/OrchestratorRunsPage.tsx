@@ -410,6 +410,58 @@ export default function OrchestratorRunsPage() {
                     </div>
                   )}
 
+                  {/* Validation / Test Results Panel */}
+                  {(() => {
+                    const testResults = blackboardEntries.filter((e) => e.value.schemaType === 'test_result')
+                    if (testResults.length === 0) return null
+                    return (
+                      <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
+                        <div className="mb-4 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <ShieldAlert className="h-4 w-4 text-blue-600" />
+                            <h3 className="text-sm font-semibold">Validation 结果</h3>
+                            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                              {testResults.length} 条
+                            </span>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          {testResults.map((entry) => {
+                            const val = entry.value as unknown as { command: string; status: 'passed' | 'failed' | 'skipped'; outputSummary: string }
+                            const statusConfig = {
+                              passed: { icon: CheckCircle2, className: 'text-emerald-600 bg-emerald-50' },
+                              failed: { icon: XCircle, className: 'text-red-600 bg-red-50' },
+                              skipped: { icon: AlertTriangle, className: 'text-amber-600 bg-amber-50' },
+                            }
+                            const cfg = statusConfig[val.status] ?? statusConfig.skipped
+                            const StatusIcon = cfg.icon
+                            return (
+                              <div key={`${entry.key}:${entry.version}`} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <StatusIcon className={cn('h-4 w-4', cfg.className.split(' ')[0])} />
+                                      <span className="text-xs font-medium text-neutral-800">{val.command}</span>
+                                      <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', cfg.className)}>
+                                        {val.status}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1.5 text-xs leading-5 text-neutral-600 whitespace-pre-wrap">
+                                      {val.outputSummary}
+                                    </div>
+                                  </div>
+                                  <span className="shrink-0 text-[11px] text-neutral-400">
+                                    {relativeTime(entry.createdAt, language)}
+                                  </span>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })()}
+
                   <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
                     <div className="mb-4 flex items-center justify-between">
                       <div className="flex items-center gap-2">

@@ -24,13 +24,32 @@ export class Synthesizer {
     }
 
     const system = `你是 AgentHub 的协调器。基于各子 Agent 的产出，生成一份统一的进展报告。
-要求：
+
+你必须严格使用以下固定结构输出（Markdown 格式，中文）：
+
+## 执行摘要
+用 2-3 句话概括整体进展、成功完成的任务数和关键成果。
+
+## 各 Agent 产出
+对每个成功的子任务，使用三级标题：
+### {agentName} — {taskTitle}
+- 核心产出摘要
+- 关键文件/产物（如有）
+
+## 冲突处理
+如有代码冲突，列出每个文件的处理结果；如无冲突，写"无代码冲突"。
+
+## 风险与建议
+指出不一致、潜在风险或需要人工决策的地方；如没有，写"未发现明显风险"。
+
+## 下一步行动
+给出 1-3 条具体、可执行的后续建议。
+
+注意事项：
 1. 整合为连贯叙述，消除重复，统一术语
 2. 明确标注各部分的贡献者
-3. 指出不一致、风险或需要人工决策的地方
-4. 如果有代码冲突，说明冲突处理结果
-5. 给出下一步行动建议
-6. 使用 Markdown 格式，中文回复`
+3. 使用 Markdown 格式，中文回复
+4. 严禁省略任何一级标题`
 
     const conflictInfo = conflictReports.length
       ? `代码冲突情况：\n${conflictReports.map((c) => `- ${c.filePath}: ${c.resolution}${c.notes ? ` (${c.notes})` : ''}`).join('\n')}`
@@ -90,17 +109,37 @@ function formatTypedBlackboardEntries(entries: BlackboardEntry[]): string {
 }
 
 function buildFallbackSummary(results: TaskResult[]): string {
-  const sections = results.map((r, index) => {
-    const compact = r.output.trim().replace(/\n{3,}/g, '\n\n').slice(0, 1400)
-    return [`${index + 1}. ${r.taskId} (${r.agentName}) [${r.status}]`, compact || '无输出。'].join('\n')
+  const doneResults = results.filter((r) => r.status === 'done')
+  const failedResults = results.filter((r) => r.status === 'failed')
+
+  const agentOutputs = doneResults.map((r) => {
+    const compact = r.output.trim().replace(/\n{3,}/g, '\n\n').slice(0, 800)
+    return [
+      `### ${r.agentName} — ${r.taskId}`,
+      compact || '无输出。',
+      r.artifacts.length > 0 ? `- 产物：${r.artifacts.map((a) => (a as { filePath?: string }).filePath || 'artifact').join(', ')}` : '',
+    ].join('\n')
   })
 
+  const riskSection = failedResults.length > 0
+    ? failedResults.map((r) => `- **${r.agentName}** 的任务 **${r.taskId}** 执行失败，需人工检查或重试。`).join('\n')
+    : '未发现明显风险。'
+
   return [
-    '**Orchestrator 汇总**',
+    '## 执行摘要',
+    `本次协调共包含 ${results.length} 个子任务，其中 ${doneResults.length} 个成功完成，${failedResults.length} 个失败。`,
     '',
-    `已监听到 ${results.length} 个子会话完成，下面是合并后的结果：`,
+    '## 各 Agent 产出',
+    ...agentOutputs.flatMap((s) => [s, '']),
+    '## 冲突处理',
+    '无代码冲突。',
     '',
-    ...sections.flatMap((section) => [section, '']),
-    '后续可以继续在群聊里 @具体 Agent 追问，或让 Orchestrator 继续拆下一轮任务。',
+    '## 风险与建议',
+    riskSection,
+    '',
+    '## 下一步行动',
+    '1. 检查失败任务的状态和日志，决定是否需要重试。',
+    '2. 在群聊中 @具体 Agent 追问细节。',
+    '3. 如需继续推进，可让 Orchestrator 规划下一轮任务。',
   ].join('\n')
 }
