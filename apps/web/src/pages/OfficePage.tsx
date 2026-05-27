@@ -13,6 +13,7 @@ import {
 import SessionList from '../components/chat/SessionList'
 import { api, friendlyErrorMessage, type Session, type StarOfficeStatus } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { buildSessionTree } from '../lib/sessionTree'
 import { cn, relativeTime } from '../lib/utils'
 import { useChatStore } from '../stores/chatStore'
 
@@ -36,7 +37,7 @@ export default function OfficePage() {
 
   const availableSessions = useMemo(() => {
     const seen = new Set<string>()
-    return sessions.filter((session) => {
+    return buildSessionTree(sessions).map((group) => group.parent).filter((session) => {
       const key = sessionDedupKey(session)
       if (seen.has(key)) return false
       seen.add(key)
@@ -142,7 +143,6 @@ export default function OfficePage() {
                 <div className="mt-5 flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold text-neutral-900">现有会话</div>
-                    <p className="mt-1 text-xs text-neutral-500">不会新建工作区，也不会生成重复列表。</p>
                   </div>
                   {loadingSessions ? (
                     <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />

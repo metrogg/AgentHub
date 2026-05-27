@@ -15,11 +15,11 @@
   .agenthub-desktop-shell,
   .agenthub-desktop-shell body {
     overflow: hidden;
-    background: var(--agenthub-app-bg, #ffffff);
+    background: var(--agenthub-app-bg, #f7f7f7);
   }
   .agenthub-desktop-shell #root {
     overflow: hidden;
-    background: var(--agenthub-app-bg, #ffffff);
+    background: var(--agenthub-app-bg, #f7f7f7);
   }
   .agenthub-desktop-shell .h-screen {
     height: 100% !important;
@@ -854,8 +854,8 @@
     flex-shrink: 0;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid var(--agenthub-menu-border, #e7e5df);
-    background: color-mix(in srgb, var(--agenthub-menu-bg, #f7f7f4) 96%, transparent);
+    border-bottom: 1px solid var(--agenthub-menu-border, #e7e7e7);
+    background: var(--agenthub-menu-bg, #fbfbfb);
     color: var(--agenthub-app-text, #111111);
     font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
     font-size: 0.8125rem;
@@ -902,7 +902,7 @@
   }
 
   .agenthub-titlebar-brand:hover {
-    background: var(--agenthub-menu-hover, #e9e9e4);
+    background: var(--agenthub-menu-hover, #f7f7f7);
   }
 
   .agenthub-titlebar-brand-icon {
@@ -946,7 +946,7 @@
 
   .agenthub-titlebar-button:hover,
   .agenthub-titlebar-button[aria-pressed='true'] {
-    background: var(--agenthub-menu-hover, #e9e9e4);
+    background: var(--agenthub-menu-hover, #f7f7f7);
     color: var(--agenthub-app-text, #111111);
   }
 
@@ -1004,7 +1004,7 @@
 
   .agenthub-desktop-menu-item:hover:not(:disabled),
   .agenthub-desktop-menu-item:focus-visible {
-    background: var(--agenthub-menu-hover, #f1f1ec);
+    background: var(--agenthub-menu-hover, #f7f7f7);
     outline: none;
   }
 
@@ -1034,14 +1034,14 @@
   .agenthub-app-theme,
   .agenthub-chat-shell,
   .agenthub-thread-root {
-    background: var(--agenthub-app-bg, #ffffff);
+    background: var(--agenthub-app-bg, #f7f7f7);
     color: var(--agenthub-app-text, #111111);
   }
 
   .agenthub-chat-shell main,
   .agenthub-chat-shell .agenthub-thread-root,
   .agenthub-chat-shell .agenthub-welcome-root {
-    background: var(--agenthub-app-bg, #ffffff);
+    background: var(--agenthub-app-bg, #f7f7f7);
   }
 
   .agenthub-chat-shell .agenthub-welcome-root {
@@ -1058,9 +1058,9 @@
     background: linear-gradient(
       to bottom,
       transparent 0%,
-      color-mix(in srgb, var(--agenthub-app-bg, #ffffff) 42%, transparent) 34%,
-      color-mix(in srgb, var(--agenthub-app-bg, #ffffff) 88%, transparent) 68%,
-      var(--agenthub-app-bg, #ffffff) 100%
+      color-mix(in srgb, var(--agenthub-app-bg, #f7f7f7) 42%, transparent) 34%,
+      color-mix(in srgb, var(--agenthub-app-bg, #f7f7f7) 88%, transparent) 68%,
+      var(--agenthub-app-bg, #f7f7f7) 100%
     );
     backdrop-filter: blur(10px);
     mask-image: linear-gradient(to bottom, transparent 0%, black 32%, black 100%);
@@ -1073,8 +1073,13 @@
   }
 
   .agenthub-chat-shell aside {
-    background: var(--agenthub-app-sidebar, #f7f7f4);
+    background: var(--agenthub-app-sidebar, #fbfbfb);
     border-color: var(--agenthub-app-border, #e5e5e0);
+  }
+
+  .agenthub-chat-shell > div > div > aside,
+  .agenthub-chat-shell .agenthub-thread-root aside {
+    box-shadow: none;
   }
 
   .agenthub-chat-shell header,
@@ -1087,8 +1092,8 @@
     position: relative;
     background: linear-gradient(
       to top,
-      var(--agenthub-app-bg, #ffffff) 0%,
-      color-mix(in srgb, var(--agenthub-app-bg, #ffffff) 92%, transparent) 54%,
+      var(--agenthub-app-bg, #f7f7f7) 0%,
+      color-mix(in srgb, var(--agenthub-app-bg, #f7f7f7) 92%, transparent) 54%,
       transparent 100%
     );
     backdrop-filter: blur(10px);
@@ -1112,7 +1117,7 @@
   .agenthub-thread-root .bg-\[\#fbfbf9\],
   .agenthub-thread-root .bg-\[\#f4f4f4\],
   .agenthub-thread-root .bg-\[\#f1f1f1\] {
-    background-color: var(--agenthub-app-sidebar, #f7f7f4);
+    background-color: var(--agenthub-app-sidebar, #fbfbfb);
   }
 
   .agenthub-chat-shell .bg-\[\#edf7f3\],
@@ -1133,7 +1138,7 @@
   .agenthub-chat-shell .bg-neutral-100,
   .agenthub-thread-root .bg-neutral-50,
   .agenthub-thread-root .bg-neutral-100 {
-    background-color: var(--agenthub-app-panel-muted, #f4f4ef);
+    background-color: var(--agenthub-app-panel-muted, #f7f7f7);
   }
 
   .agenthub-chat-shell .bg-neutral-950,
@@ -1192,7 +1197,7 @@
   .agenthub-thread-root .hover\:bg-neutral-50:hover,
   .agenthub-thread-root .hover\:bg-neutral-100:hover,
   .agenthub-thread-root .hover\:bg-white\/70:hover {
-    background-color: var(--agenthub-app-hover, #ecece7);
+    background-color: var(--agenthub-app-hover, #f7f7f7);
   }
 
   .agenthub-chat-shell .shadow-sm,
@@ -1238,7 +1243,7 @@
   .agenthub-portal-theme .bg-\[\#fbfbf8\],
   .agenthub-portal-theme .bg-\[\#fbfbf9\],
   .agenthub-portal-theme .bg-\[\#fafaf7\] {
-    background-color: var(--agenthub-app-sidebar, #f7f7f4);
+    background-color: var(--agenthub-app-sidebar, #fbfbfb);
   }
 
   .agenthub-themed-page .bg-\[\#edf7f3\],
@@ -1263,7 +1268,7 @@
   .agenthub-portal-theme .bg-neutral-50,
   .agenthub-portal-theme .bg-neutral-100,
   .agenthub-portal-theme .bg-neutral-200 {
-    background-color: var(--agenthub-app-panel-muted, #f4f4ef);
+    background-color: var(--agenthub-app-panel-muted, #f7f7f7);
   }
 
   .agenthub-themed-page .bg-neutral-900,
@@ -1330,7 +1335,7 @@
   .agenthub-portal-theme .hover\:bg-neutral-200:hover,
   .agenthub-portal-theme .hover\:bg-white\/70:hover,
   .agenthub-portal-theme .hover\:bg-white\/80:hover {
-    background-color: var(--agenthub-app-hover, #ecece7);
+    background-color: var(--agenthub-app-hover, #f7f7f7);
   }
 
   .agenthub-themed-page .hover\:border-neutral-300:hover,
@@ -1350,7 +1355,7 @@
   }
 
   .agenthub-embedded-window {
-    background: var(--agenthub-embedded-bg, #fbfbf8);
+    background: var(--agenthub-embedded-bg, #f7f7f7);
     border-color: var(--agenthub-embedded-border, #e5e5e0);
     color: var(--agenthub-embedded-text, #171717);
   }
@@ -1366,7 +1371,7 @@
   .agenthub-embedded-window .bg-neutral-100,
   .agenthub-embedded-window .bg-\[\#f5f4ef\],
   .agenthub-embedded-window .bg-\[\#f7f7f4\] {
-    background-color: var(--agenthub-embedded-panel-muted, #f4f4ef);
+    background-color: var(--agenthub-embedded-panel-muted, #f7f7f7);
   }
 
   .agenthub-embedded-window .border-neutral-100,
@@ -1392,7 +1397,7 @@
   .agenthub-embedded-window .hover\:bg-neutral-50:hover,
   .agenthub-embedded-window .hover\:bg-neutral-100:hover,
   .agenthub-embedded-window .hover\:bg-white\/70:hover {
-    background-color: var(--agenthub-embedded-hover, #ecece7);
+    background-color: var(--agenthub-embedded-hover, #f7f7f7);
   }
 
   .agenthub-embedded-window .bg-\[\#edf7f3\],

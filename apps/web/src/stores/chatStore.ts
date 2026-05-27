@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
+import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent, type WorkspaceFull } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 let pendingStream: { messageId: string; delta: string; agentId?: string; agentName?: string } | null = null
@@ -22,6 +22,7 @@ interface ChatState {
   agentTyping: boolean
   replyingToMessageId: string | null
   replyingToMessage: Message | null
+  sessionsBootstrapped: boolean
 
   fetchSessions: () => Promise<void>
   createSession: (title?: string, options?: { workspaceId?: string | null; workspaceAgentId?: string | null; type?: 'direct' | 'group' }) => Promise<Session>
@@ -68,12 +69,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   agentTyping: false,
   replyingToMessageId: null,
   replyingToMessage: null,
+  sessionsBootstrapped: false,
 
   async fetchSessions() {
     set({ loadingSessions: true })
     try {
       const { items } = await api.listSessions()
-      set({ sessions: items, loadingSessions: false })
+      set({ sessions: items, loadingSessions: false, sessionsBootstrapped: true })
     } catch {
       set({ loadingSessions: false })
     }
@@ -93,13 +95,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async selectSession(sessionId) {
     clearPendingStream()
     cancelledSessions.delete(sessionId)
+    const state = get()
+    const optimisticSession =
+      state.sessions.find((session) => session.id === sessionId) ??
+      (state.currentSession?.id === sessionId ? state.currentSession : null)
+    const cachedWorkspace = optimisticSession?.workspaceId
+      ? workspaceDetailsCache.get(optimisticSession.workspaceId)
+      : null
+    const canReuseWorkspace =
+      optimisticSession?.workspaceId &&
+      state.currentSession?.workspaceId === optimisticSession.workspaceId
+    const cachedMessages = messageCache.get(sessionId)
+
     set({
       currentSessionId: sessionId,
-      currentSession: null,
-      currentWorkspace: null,
-      currentWorkspaceAgents: [],
+      currentSession: optimisticSession ?? state.currentSession,
+      currentWorkspace: optimisticSession?.workspaceId
+        ? cachedWorkspace?.workspace ?? (canReuseWorkspace ? state.currentWorkspace : null)
+        : null,
+      currentWorkspaceAgents: optimisticSession?.workspaceId
+        ? cachedWorkspace?.agents ?? (canReuseWorkspace ? state.currentWorkspaceAgents : [])
+        : [],
       loadingMessages: true,
-      messages: [],
+      messages: cachedMessages ?? state.messages,
       streamingMessage: null,
       streamingCodeAgentRun: null,
       pendingAttachments: [],
@@ -110,8 +128,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     wsClient.joinSession(sessionId)
     try {
       const [session, { items }] = await Promise.all([api.getSession(sessionId), api.listMessages(sessionId)])
+      messageCache.set(sessionId, items)
       if (session.workspaceId) {
         const full = await api.getWorkspace(session.workspaceId)
+        workspaceDetailsCache.set(session.workspaceId, {
+          workspace: full.workspace,
+          agents: full.agents,
+        })
+        if (get().currentSessionId !== sessionId) return
         set({
           currentSession: session,
           currentWorkspace: full.workspace,
@@ -120,9 +144,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
           loadingMessages: false,
         })
       } else {
-        set({ currentSession: session, messages: items, loadingMessages: false })
+        if (get().currentSessionId !== sessionId) return
+        set({
+          currentSession: session,
+          currentWorkspace: null,
+          currentWorkspaceAgents: [],
+          messages: items,
+          loadingMessages: false,
+        })
       }
     } catch (error) {
+      if (get().currentSessionId !== sessionId) return
       set({ loadingMessages: false })
       throw error
     }
@@ -131,6 +163,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async setSessionWorkspace(sessionId, workspaceId) {
     const session = await api.updateSession(sessionId, { workspaceId, workspaceAgentId: null })
     const full = workspaceId ? await api.getWorkspace(workspaceId) : null
+    if (workspaceId && full) {
+      workspaceDetailsCache.set(workspaceId, {
+        workspace: full.workspace,
+        agents: full.agents,
+      })
+    }
     set((s) => ({
       sessions: s.sessions.map((item) => (item.id === session.id ? session : item)),
       currentSession: s.currentSessionId === session.id ? session : s.currentSession,

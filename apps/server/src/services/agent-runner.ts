@@ -1,4 +1,4 @@
-import { db, messages, sessions, sessionMembers, eq, and, desc, asc } from '@agenthub/db'
+import { db, messages, sessions, sessionMembers, settings, eq, and, desc, asc } from '@agenthub/db'
 import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
 import { runtimeRegistry } from './runtime'
@@ -147,7 +147,8 @@ export async function runAgentReply(
 
   try {
     if (profile) {
-      const runtime = runtimeRegistry.resolveForProfile(profile)
+      const profileWithUserMemory = await withUserProfileContext(profile)
+      const runtime = runtimeRegistry.resolveForProfile(profileWithUserMemory)
       const promptWithReply = (() => {
         if (!userMsg.replyToMessageId) return userMsg.content
         const repliedTo = historyAsc.find((m) => m.id === userMsg.replyToMessageId)
@@ -169,9 +170,9 @@ export async function runAgentReply(
         sessionId,
         prompt: promptWithReply,
         history: historyWithReply,
-        profile,
+        profile: profileWithUserMemory,
         signal: run.controller.signal,
-        workspacePath: profile.projectPath ?? null,
+        workspacePath: profileWithUserMemory.projectPath ?? null,
       }
 
       for await (const chunk of runtime.execute(ctx)) {
@@ -201,6 +202,7 @@ export async function runAgentReply(
     } else {
       // 无 profile 时回退到默认 LLM
       const { streamReply } = await import('./llm')
+      const { DEFAULT_AGENT_INSTRUCTIONS } = await import('./llm-client')
       const llmMessages = historyAsc.map((m) => {
         let content = m.content
         if (m.replyToMessageId) {
@@ -215,7 +217,9 @@ export async function runAgentReply(
           content,
         }
       })
-      for await (const delta of streamReply(llmMessages, undefined, undefined, run.controller.signal)) {
+      const userContext = await userProfileSystemContext()
+      const systemContext = userContext ? `${DEFAULT_AGENT_INSTRUCTIONS}\n\n${userContext}` : undefined
+      for await (const delta of streamReply(llmMessages, systemContext, undefined, run.controller.signal)) {
         if (run.cancelled) break
         fullContent += delta
         broadcast(sessionId, {
@@ -305,6 +309,35 @@ function looksLikeAgentFailure(content: string) {
     /Model returned an empty response/i.test(content) ||
     /模型返回了空响应/.test(content)
   )
+}
+
+async function withUserProfileContext(profile: AgentRunProfile): Promise<AgentRunProfile> {
+  const userContext = await userProfileSystemContext()
+  if (!userContext) return profile
+  return {
+    ...profile,
+    systemPrompt: [profile.systemPrompt, userContext].filter(Boolean).join('\n\n'),
+  }
+}
+
+async function userProfileSystemContext() {
+  const [row] = await db.select().from(settings).where(eq(settings.key, 'APP_SETTINGS')).limit(1)
+  if (!row?.value) return undefined
+  try {
+    const parsed = JSON.parse(row.value) as { accountName?: unknown; accountMemory?: unknown }
+    const name = typeof parsed.accountName === 'string' ? parsed.accountName.trim() : ''
+    const memory = typeof parsed.accountMemory === 'string' ? parsed.accountMemory.trim() : ''
+    if (!name && !memory) return undefined
+    return [
+      'USER.md',
+      name ? `昵称：${name}` : '',
+      memory ? `希望你长期记住的用户偏好：\n${memory}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+  } catch {
+    return undefined
+  }
 }
 
 /** 检查 session 是否为群聊（多 Agent）会话 */

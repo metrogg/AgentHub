@@ -1,18 +1,17 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, AtSign, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, MoreHorizontal, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
+import { ArrowUp, AtSign, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
-import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
+import { readMentionCommand, readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
 import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '../lib/api'
+import { agentLibraryChangeEvent, loadAgentLibrary, type SavedAgentConfig } from '../lib/agentLibrary'
 import { useI18n } from '../lib/i18n'
 import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
-import { requestSettingsDialog } from '../lib/settingsDialog'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
 import { useChatStore } from '../stores/chatStore'
-import { requestNewSessionDialog } from '../components/chat/GlobalNewSessionDialog'
 
 export default function ChatPage() {
   const { sessionId } = useParams()
@@ -39,7 +38,7 @@ export default function ChatPage() {
   }, [sessionId, currentSessionId, navigate, selectSession])
 
   return (
-    <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-white text-neutral-950">
+    <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-[#F7F7F7] text-neutral-950">
       <div
         aria-hidden={sidebarCollapsed}
         className="h-full shrink-0 overflow-hidden"
@@ -101,6 +100,9 @@ function Welcome() {
   const [skillPanelOpen, setSkillPanelOpen] = useState(false)
   const [skillQuery, setSkillQuery] = useState('')
   const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(null)
+  const [mentionPanelOpen, setMentionPanelOpen] = useState(false)
+  const [mentionRange, setMentionRange] = useState<{ start: number; end: number; query: string } | null>(null)
+  const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
@@ -110,8 +112,6 @@ function Welcome() {
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [addProjectOpen, setAddProjectOpen] = useState(false)
   const [hint, setHint] = useState('')
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
-  const moreMenuRef = useRef<HTMLDivElement>(null)
   const filteredWorkspaces = workspaces.filter((workspace) => {
     const query = workspaceQuery.trim().toLowerCase()
     if (!query) return true
@@ -119,21 +119,11 @@ function Welcome() {
   })
 
   useEffect(() => {
-    if (!moreMenuOpen) return
-    function handlePointerDown(event: PointerEvent) {
-      if (moreMenuRef.current?.contains(event.target as Node)) return
-      setMoreMenuOpen(false)
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setMoreMenuOpen(false)
-    }
-    window.addEventListener('pointerdown', handlePointerDown)
-    window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown)
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [moreMenuOpen])
+    const syncAgents = () => setLibraryAgents(loadAgentLibrary())
+    syncAgents()
+    window.addEventListener(agentLibraryChangeEvent, syncAgents)
+    return () => window.removeEventListener(agentLibraryChangeEvent, syncAgents)
+  }, [])
 
   useEffect(() => {
     if (!projectMenuOpen) return
@@ -186,19 +176,32 @@ function Welcome() {
     setSkillQuery('')
   }
 
+  function closeMentionPanel() {
+    setMentionPanelOpen(false)
+    setMentionRange(null)
+  }
+
   function handleMessageChange(event: ChangeEvent<HTMLTextAreaElement>) {
     const input = event.currentTarget
     const nextMessage = input.value
     const cursor = input.selectionStart ?? nextMessage.length
     const command = readSlashCommand(nextMessage, cursor)
+    const mention = readMentionCommand(nextMessage, cursor)
     setMessage(nextMessage)
     if (command) {
       setProjectMenuOpen(false)
+      closeMentionPanel()
       setSkillQuery(command.query)
       setSkillCommandRange({ start: command.start, end: command.end })
       setSkillPanelOpen(true)
+    } else if (mention) {
+      closeSkillPanel()
+      setProjectMenuOpen(false)
+      setMentionRange(mention)
+      setMentionPanelOpen(true)
     } else {
       closeSkillPanel()
+      closeMentionPanel()
     }
   }
 
@@ -214,6 +217,45 @@ function Welcome() {
     showHint(`已选择 Skill：${skill.name || skill.id}`)
     window.requestAnimationFrame(() => {
       const nextCursor = range.start + reference.length
+      messageInputRef.current?.focus()
+      messageInputRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
+  function insertMentionReference(value: string) {
+    const input = messageInputRef.current
+    const range = mentionRange ?? { start: message.length, end: message.length }
+    const source = input?.value ?? message
+    const reference = `${value} `
+    const nextMessage = `${source.slice(0, range.start)}${reference}${source.slice(range.end)}`
+    setMessage(nextMessage)
+    closeMentionPanel()
+    showHint(`已插入 ${value}`)
+    window.requestAnimationFrame(() => {
+      const nextCursor = range.start + reference.length
+      messageInputRef.current?.focus()
+      messageInputRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
+  function insertAtSign() {
+    const input = messageInputRef.current
+    if (!input) {
+      setMessage((current) => (current.includes('@') ? current : `${current}@`))
+      setMentionPanelOpen(true)
+      setMentionRange({ start: message.length, end: message.length + 1, query: '' })
+      return
+    }
+    const start = input.selectionStart ?? message.length
+    const end = input.selectionEnd ?? message.length
+    const nextMessage = `${message.slice(0, start)}@${message.slice(end)}`
+    setMessage(nextMessage)
+    setMentionRange({ start, end: start + 1, query: '' })
+    setMentionPanelOpen(true)
+    setProjectMenuOpen(false)
+    closeSkillPanel()
+    window.requestAnimationFrame(() => {
+      const nextCursor = start + 1
       messageInputRef.current?.focus()
       messageInputRef.current?.setSelectionRange(nextCursor, nextCursor)
     })
@@ -323,59 +365,7 @@ function Welcome() {
   }
 
   return (
-    <div className="agenthub-welcome-root flex h-full flex-col bg-white">
-      <div className="pointer-events-none absolute right-5 top-4 z-20">
-        <div ref={moreMenuRef} className="pointer-events-auto relative">
-          <button
-            type="button"
-            onClick={() => setMoreMenuOpen((open) => !open)}
-            className="grid h-9 w-9 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-            aria-label="更多"
-            title="更多"
-          >
-            <MoreHorizontal className="h-5 w-5" />
-          </button>
-          {moreMenuOpen && (
-            <div className="absolute right-0 top-11 z-30 w-44 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
-              <WelcomeMenuItem
-                label="新建群聊"
-                onClick={() => {
-                  setMoreMenuOpen(false)
-                  requestNewSessionDialog()
-                }}
-              />
-              <WelcomeMenuItem
-                label="Agent 配置"
-                onClick={() => {
-                  setMoreMenuOpen(false)
-                  navigate('/agent-config')
-                }}
-              />
-              <WelcomeMenuItem
-                label="模型管理"
-                onClick={() => {
-                  setMoreMenuOpen(false)
-                  navigate('/models')
-                }}
-              />
-              <WelcomeMenuItem
-                label="Coding Tools"
-                onClick={() => {
-                  setMoreMenuOpen(false)
-                  navigate('/coding-tools')
-                }}
-              />
-              <WelcomeMenuItem
-                label="设置"
-                onClick={() => {
-                  setMoreMenuOpen(false)
-                  requestSettingsDialog()
-                }}
-              />
-            </div>
-          )}
-        </div>
-      </div>
+    <div className="agenthub-welcome-root flex h-full flex-col bg-[#F7F7F7]">
       <div className="flex flex-1 flex-col items-center px-8">
         <section className="mt-[18vh] w-full max-w-[704px]">
           <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
@@ -412,6 +402,14 @@ function Welcome() {
                 loading={skillsLoading}
                 onPick={insertSkillReference}
                 onClose={closeSkillPanel}
+              />
+            )}
+            {mentionPanelOpen && (
+              <WelcomeMentionPanel
+                agents={libraryAgents}
+                query={mentionRange?.query ?? ''}
+                onPick={insertMentionReference}
+                onClose={closeMentionPanel}
               />
             )}
             {projectMenuOpen && (
@@ -511,6 +509,15 @@ function Welcome() {
                   closeSkillPanel()
                   return
                 }
+                if (event.key === 'Escape' && mentionPanelOpen) {
+                  event.preventDefault()
+                  closeMentionPanel()
+                  return
+                }
+                if (mentionPanelOpen && event.key === 'Enter') {
+                  event.preventDefault()
+                  return
+                }
                 if (skillPanelOpen && event.key === 'Enter') {
                   event.preventDefault()
                   return
@@ -542,7 +549,7 @@ function Welcome() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMessage((current) => (current.includes('@') ? current : `${current}@`))}
+                  onClick={insertAtSign}
                   className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
                 >
                   <AtSign className="h-4 w-4" />
@@ -577,15 +584,80 @@ function PromptCard({ title, text, onClick }: { title: string; text: string; onC
   )
 }
 
-function WelcomeMenuItem({ label, onClick }: { label: string; onClick: () => void }) {
+function WelcomeMentionPanel({
+  agents,
+  onClose,
+  onPick,
+  query,
+}: {
+  agents: SavedAgentConfig[]
+  onClose: () => void
+  onPick: (value: string) => void
+  query: string
+}) {
+  const normalizedQuery = query.trim().toLowerCase()
+  const rows = [
+    {
+      color: '#111827',
+      desc: '拆解任务并协调 Agent 群聊',
+      name: 'Orchestrator',
+      value: '@orchestrator',
+    },
+    ...agents.map((agent) => ({
+      color: agent.color ?? '#111827',
+      desc: [agent.role, agent.description].filter(Boolean).join(' · ') || 'Agent',
+      name: agent.name,
+      value: `@${agent.name}`,
+    })),
+  ]
+  const filteredRows = normalizedQuery
+    ? rows.filter((row) => `${row.value} ${row.name} ${row.desc}`.toLowerCase().includes(normalizedQuery))
+    : rows
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-9 w-full items-center rounded-xl px-3 text-left text-sm text-neutral-900 transition hover:bg-neutral-100"
+    <div
+      className="absolute bottom-[4.5rem] left-3 z-30 w-72 overflow-hidden rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl"
+      onMouseDown={(event) => event.preventDefault()}
     >
-      {label}
-    </button>
+      <div className="flex items-center justify-between px-3 pb-1 pt-1">
+        <div className="text-xs text-neutral-400">
+          {query ? `匹配：${query}` : '提及 Agent'}
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+        >
+          关闭
+        </button>
+      </div>
+      <div className="max-h-72 overflow-y-auto">
+        {filteredRows.map((row) => (
+          <button
+            key={row.value}
+            type="button"
+            onClick={() => onPick(row.value)}
+            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
+          >
+            <span
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
+              style={{ background: row.color }}
+            >
+              {row.name.slice(0, 1).toUpperCase() || '@'}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium text-neutral-900">{row.value}</span>
+              <span className="block truncate text-xs text-neutral-500">{row.desc}</span>
+            </span>
+          </button>
+        ))}
+        {filteredRows.length === 0 && (
+          <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
+            没有匹配的 Agent
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
