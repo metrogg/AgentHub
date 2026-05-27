@@ -79,6 +79,11 @@ async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt 
     clearTimeout(timer)
     callerSignal?.removeEventListener('abort', onCallerAbort)
 
+    // Don't retry if the caller explicitly aborted (e.g. component unmount or user cancel)
+    if (callerSignal?.aborted) {
+      throw error
+    }
+
     // Server errors (5xx) and network errors are retryable
     const shouldRetry =
       attempt < MAX_RETRIES &&
@@ -831,6 +836,10 @@ export const api = {
   cancelMessage: (sessionId: string) =>
     request<{ cancelled: boolean }>(`/messages/${sessionId}/cancel`, {
       method: 'POST',
+    }),
+  clearMessages: (sessionId: string) =>
+    request<{ deleted: boolean }>(`/messages/${sessionId}/all`, {
+      method: 'DELETE',
     }),
   updateMessage: (sessionId: string, messageId: string, data: { content: string }) =>
     request<Message>(`/messages/${sessionId}/${messageId}`, {

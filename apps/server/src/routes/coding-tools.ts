@@ -15,7 +15,7 @@ import {
   retryCodexAuth,
   startCodexLogin,
 } from '../services/codex-auth'
-import { getLlmRuntimeStatus, resolveModelApiKey } from '../services/llm-client'
+import { getLlmRuntimeStatus } from '../services/llm-client'
 import { globalSkillRegistry } from '../services/skill-registry'
 import { readOnlyToolRegistry } from '../services/tool-registry'
 
@@ -43,29 +43,29 @@ const agentAdapters = [
     id: 'codex',
     name: 'Codex CLI',
     command: 'codex',
-    envKey: 'OPENAI_API_KEY',
-    docsHint: 'Codex 会使用本机安装的 CLI，并在当前项目目录中执行代码任务。',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint: 'Codex 会使用 Agent 选择的模型档案生成临时运行配置，并在当前项目目录中执行代码任务。',
   },
   {
     id: 'claude-code',
     name: 'Claude Code',
     command: 'claude',
-    envKey: 'ANTHROPIC_API_KEY',
-    docsHint: 'Claude Code 会使用本机 Anthropic 凭据，并优先读取项目上下文。',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint: 'Claude Code 会使用 Agent 选择的模型档案注入 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL。',
   },
   {
     id: 'opencode',
     name: 'OpenCode',
     command: 'opencode',
-    envKey: 'DEEPSEEK_API_KEY',
-    docsHint: 'OpenCode 会使用本机配置；如果 Agent 绑定了 provider/model，会通过 --model 传给 OpenCode。',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint: 'OpenCode 会使用 Agent 选择的模型档案生成临时 opencode 配置，并通过 --model 传入。',
   },
   {
     id: 'gemini',
     name: 'Gemini CLI',
     command: 'gemini',
-    envKey: 'GEMINI_API_KEY',
-    docsHint: 'Gemini CLI 会使用本机 Google Gemini 凭据，并在当前项目目录中执行代码任务。',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint: 'Gemini CLI 会使用 Agent 选择的模型档案注入 GEMINI_API_KEY。',
   },
 ] as const
 
@@ -810,56 +810,9 @@ function cleanEnvValue(value?: string) {
 
 async function isDirectToolConfigured(probe: ToolProbe, configEnv: string) {
   if (cleanEnvValue(readEnv(configEnv))) return true
-  if (probe.id === 'codex' && readCodexConfig().exists) return true
-  if (probe.id === 'opencode') {
-    const opencode = await getOpencodeModels()
-    return Boolean(opencode.defaultModel || opencode.models.length > 0)
-  }
-
-  // Check if any model in MODEL_CATALOG has a matching provider with configured API key
-  try {
-    const catalogModels = await getCatalogModels()
-    for (const model of catalogModels) {
-      if (!model.provider || !model.modelId) continue
-      if (isToolProviderMatch(probe.id, model.provider, model.apiEndpoint, model.anthropicEndpoint)) {
-        const keyResult = await resolveModelApiKey(model.id)
-        if (keyResult.apiKey) return true
-      }
-    }
-  } catch (err: any) {
-    console.error(`[isDirectToolConfigured] catalog check failed for ${probe.id}:`, err?.message || String(err))
-  }
-
-  // Fallback: check active LLM runtime
-  try {
-    const llmStatus = await getLlmRuntimeStatus()
-    if (llmStatus.apiKeyConfigured) {
-      if (probe.id === 'claude-code') {
-        if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com')) return true
-        if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
-      }
-      if (probe.id === 'codex') {
-        if (llmStatus.provider === 'openai' || llmStatus.baseUrl?.includes('openai.com')) return true
-        if (llmStatus.apiKeySource === 'OPENAI_API_KEY') return true
-      }
-      if (probe.id === 'gemini') {
-        if (llmStatus.provider === 'gemini' || llmStatus.provider === 'google') return true
-        if (llmStatus.apiKeySource === 'GEMINI_API_KEY') return true
-      }
-      // OpenCode 支持任意 OpenAI-compatible provider；只要主模型有 key 即可视为已配置
-      if (probe.id === 'opencode') return true
-    }
-  } catch (err: any) {
-    console.error(`[isDirectToolConfigured] getLlmRuntimeStatus failed for ${probe.id}:`, err?.message || String(err))
-  }
-
-  if (probe.id !== 'codex' || !env.ENABLE_CODEX_CHATGPT_AUTH) return false
-
-  try {
-    return (await getCodexAuthStatus()).loggedIn
-  } catch {
-    return false
-  }
+  // Coding Tools 只负责 CLI 本身和工具原生参数。模型、Base URL、API Key 在模型管理中维护，
+  // 执行 Agent 时由 code-agent-adapter 按 Agent 选择动态注入。
+  return true
 }
 
 function readEnv(key: string) {

@@ -14,6 +14,7 @@ export interface LLMMessage {
 
 export interface ModelCatalogItem {
   id: string
+  name?: string
   enabled?: boolean
   provider?: string
   modelId?: string
@@ -21,6 +22,17 @@ export interface ModelCatalogItem {
   anthropicEndpoint?: string
   apiKeyEnv?: string
   apiKey?: string
+}
+
+export interface ResolvedModelConfig {
+  id: string
+  name: string
+  provider: string
+  modelId: string
+  apiEndpoint?: string
+  anthropicEndpoint?: string
+  apiKey?: string
+  apiKeySource?: string
 }
 
 export interface LlmRuntimeConfig {
@@ -248,6 +260,32 @@ export async function resolveModelApiKey(modelId?: string | null): Promise<{ api
   }
   const fallback = await resolveLlmRuntimeConfig(modelId ?? undefined)
   return { apiKey: fallback.apiKey ?? undefined, provider: fallback.provider, baseUrl: fallback.baseUrl }
+}
+
+export async function resolveModelConfig(modelId?: string | null): Promise<ResolvedModelConfig | null> {
+  try {
+    const map = await getSettingsMap()
+    const catalog = parseCatalog(map.MODEL_CATALOG)
+    const targetId = clean(modelId) ?? clean(map.ACTIVE_MODEL_ID)
+    const item = targetId
+      ? catalog.find((entry) => entry.id === targetId && entry.enabled !== false)
+      : catalog.find((entry) => entry.enabled !== false && clean(entry.modelId))
+    if (!item?.modelId) return null
+
+    const key = configuredApiKey(item)
+    return {
+      id: item.id,
+      name: clean(item.name) ?? item.id,
+      provider: normalizeProvider(item.provider),
+      modelId: item.modelId,
+      apiEndpoint: clean(item.apiEndpoint),
+      anthropicEndpoint: clean(item.anthropicEndpoint),
+      apiKey: key.value,
+      apiKeySource: key.source,
+    }
+  } catch {
+    return null
+  }
 }
 
 export async function getLlmRuntimeStatus(selectedModelId?: string) {

@@ -186,8 +186,15 @@ const GroupChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) =
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
+  const clearMessages = useChatStore((state) => state.clearMessages)
   const title = session?.title || workspace?.name || 'Agent 群聊'
   const memberCount = agents.length + 2
+
+  async function handleClear() {
+    if (!session) return
+    if (!window.confirm('确定清空当前会话的所有消息？此操作不可撤销。')) return
+    await clearMessages(session.id)
+  }
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
@@ -198,15 +205,26 @@ const GroupChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) =
           {workspace?.name && workspace.name !== title ? ` · ${workspace.name}` : ''}
         </div>
       </div>
-      <button
-        type="button"
-        onClick={onOpenDetails}
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-        title="群聊详情"
-        aria-label="群聊详情"
-      >
-        <MoreHorizontal className="h-5 w-5" />
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={handleClear}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-red-50 hover:text-red-500"
+          title="清空消息"
+          aria-label="清空消息"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onOpenDetails}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+          title="群聊详情"
+          aria-label="群聊详情"
+        >
+          <MoreHorizontal className="h-5 w-5" />
+        </button>
+      </div>
     </header>
   )
 }
@@ -1664,37 +1682,59 @@ const UserMessage: FC = () => {
             </ToolButton>
           </div>
         )}
+        {sourceMessage?.createdAt && (
+          <div className="pr-1 text-[11px] text-neutral-400">{formatTime(sourceMessage.createdAt)}</div>
+        )}
       </div>
     </MessagePrimitive.Root>
   )
 }
 
-const AssistantMessage: FC = () => (
-  <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
-    <Avatar role="assistant" />
-    <div className="min-w-0 flex-1">
-      <div className="text-sm leading-7 text-neutral-950">
-        <MessagePrimitive.Parts
-          components={{
-            Text: MarkdownText,
-            Empty: AssistantThinking,
-            data: {
-              by_name: {
-                agent_avatar: AgentAvatarPart,
-                orchestrator_plan: OrchestratorPlanCard,
-                code_agent_run: CodeAgentRunCard,
-                agent_artifacts: AgentArtifactsCard,
-                chat_attachments: ChatAttachmentsPart,
+function formatTime(value: string | Date) {
+  const date = typeof value === 'string' ? new Date(value) : value
+  if (Number.isNaN(date.getTime())) return ''
+  const now = new Date()
+  const isToday = date.toDateString() === now.toDateString()
+  const time = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  if (isToday) return time
+  return `${date.getMonth() + 1}/${date.getDate()} ${time}`
+}
+
+const AssistantMessage: FC = () => {
+  const messageId = useMessage((message) => message.id)
+  const createdAt = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId)?.createdAt,
+  )
+  return (
+    <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
+      <Avatar role="assistant" />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm leading-7 text-neutral-950">
+          <MessagePrimitive.Parts
+            components={{
+              Text: MarkdownText,
+              Empty: AssistantThinking,
+              data: {
+                by_name: {
+                  agent_avatar: AgentAvatarPart,
+                  orchestrator_plan: OrchestratorPlanCard,
+                  code_agent_run: CodeAgentRunCard,
+                  agent_artifacts: AgentArtifactsCard,
+                  chat_attachments: ChatAttachmentsPart,
+                },
               },
-            },
-          }}
-        />
+            }}
+          />
+        </div>
+        <AssistantActionBar />
+        <BranchPicker />
+        {createdAt && (
+          <div className="mt-1 text-[11px] text-neutral-400">{formatTime(createdAt)}</div>
+        )}
       </div>
-      <AssistantActionBar />
-      <BranchPicker />
-    </div>
-  </MessagePrimitive.Root>
-)
+    </MessagePrimitive.Root>
+  )
+}
 
 const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
   if (status?.type !== 'running') return null

@@ -7,9 +7,7 @@ import {
   Copy,
   Download,
   ExternalLink,
-  KeyRound,
   Loader2,
-  LogOut,
   PanelLeft,
   PlayCircle,
   RefreshCw,
@@ -18,11 +16,9 @@ import {
   XCircle,
 } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
-import { api, type CodexAuthStatus, type CodingToolStatus } from '../lib/api'
+import { api, type CodingToolStatus } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { cn } from '../lib/utils'
-
-type CodexTransport = 'http' | 'websocket'
 
 interface ToolConfig {
   id: string
@@ -32,6 +28,7 @@ interface ToolConfig {
   installCommand: string
   docsUrl: string
   apiKeyEnv: string
+  config?: Record<string, string | boolean>
   provider?: string
 }
 
@@ -57,7 +54,8 @@ const defaults: ToolConfig[] = [
     description: '本机运行的 OpenAI 编程代理，用于仓库理解、修改和验证。',
     installCommand: 'npm install -g @openai/codex@0.42.0',
     docsUrl: 'https://developers.openai.com/codex',
-    apiKeyEnv: 'OPENAI_API_KEY',
+    apiKeyEnv: 'AGENTHUB_MODEL_API_KEY',
+    config: { approvalPolicy: 'never', sandbox: 'workspace-write' },
   },
   {
     id: 'claude-code',
@@ -66,7 +64,8 @@ const defaults: ToolConfig[] = [
     description: 'Anthropic 终端编程助手，适合长上下文代码协作。',
     installCommand: 'npm install -g @anthropic-ai/claude-code',
     docsUrl: 'https://docs.anthropic.com/en/docs/claude-code',
-    apiKeyEnv: 'ANTHROPIC_API_KEY',
+    apiKeyEnv: 'AGENTHUB_MODEL_API_KEY',
+    config: { permissionMode: 'bypassPermissions', outputFormat: 'stream-json' },
   },
   {
     id: 'opencode',
@@ -75,7 +74,8 @@ const defaults: ToolConfig[] = [
     description: '开放式终端编程代理，适合多提供商 OpenAI-compatible 接入。',
     installCommand: 'npm install -g opencode-ai',
     docsUrl: 'https://opencode.ai',
-    apiKeyEnv: 'DEEPSEEK_API_KEY',
+    apiKeyEnv: 'AGENTHUB_MODEL_API_KEY',
+    config: { agent: '' },
   },
   {
     id: 'gemini',
@@ -84,7 +84,8 @@ const defaults: ToolConfig[] = [
     description: 'Google Gemini 终端编程代理，适合使用 Gemini 模型进行仓库协作。',
     installCommand: 'npm install -g @google/gemini-cli',
     docsUrl: 'https://github.com/google-gemini/gemini-cli',
-    apiKeyEnv: 'GEMINI_API_KEY',
+    apiKeyEnv: 'AGENTHUB_MODEL_API_KEY',
+    config: {},
   },
 ]
 
@@ -97,27 +98,12 @@ export default function CodingToolsPage() {
   const [checking, setChecking] = useState(false)
   const [saved, setSaved] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
-  const [codexAuth, setCodexAuth] = useState<CodexAuthStatus | null>(null)
-  const [authBusy, setAuthBusy] = useState(false)
-  const [authMessage, setAuthMessage] = useState('')
-  const [authSession, setAuthSession] = useState<{ userCode?: string; verificationUrl?: string; expiresAt?: string } | null>(null)
-  const [codexTransport, setCodexTransport] = useState<CodexTransport>('http')
   const [cliBusy, setCliBusy] = useState(false)
   const [cliMessage, setCliMessage] = useState('')
   const [cliOutput, setCliOutput] = useState('')
   const [toolTestBusy, setToolTestBusy] = useState(false)
   const [toolTestMessage, setToolTestMessage] = useState('')
   const [toolTestOk, setToolTestOk] = useState<boolean | null>(null)
-  const [codexConfigPath, setCodexConfigPath] = useState('')
-  const [codexConfigContent, setCodexConfigContent] = useState('')
-  const [codexConfigBusy, setCodexConfigBusy] = useState(false)
-  const [codexConfigDirty, setCodexConfigDirty] = useState(false)
-  const [codexConfigMessage, setCodexConfigMessage] = useState('')
-  const [codexAuthFilePath, setCodexAuthFilePath] = useState('')
-  const [codexAuthFileContent, setCodexAuthFileContent] = useState('')
-  const [codexAuthFileBusy, setCodexAuthFileBusy] = useState(false)
-  const [codexAuthFileDirty, setCodexAuthFileDirty] = useState(false)
-  const [codexAuthFileMessage, setCodexAuthFileMessage] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [toolPage, setToolPage] = useState(0)
   const [executionEnabled, setExecutionEnabled] = useState<boolean | null>(null)
@@ -142,11 +128,7 @@ export default function CodingToolsPage() {
         const activeIndex = nextTools.findIndex((tool) => tool.id === settings.CODE_AGENT_ACTIVE_TOOL)
         if (activeIndex >= 0) setToolPage(Math.floor(activeIndex / 3))
       }
-      if (settings.CODEX_CHATGPT_TRANSPORT === 'websocket') setCodexTransport('websocket')
       void refreshStatus(nextTools, false) // Use cache if available
-      void refreshCodexAuth()
-      void refreshCodexConfig()
-      void refreshCodexAuthFile()
     })
   }, [])
 
@@ -186,36 +168,6 @@ export default function CodingToolsPage() {
     }
   }
 
-  async function refreshCodexConfig() {
-    setCodexConfigBusy(true)
-    try {
-      const result = await api.getCodexConfig()
-      setCodexConfigPath(result.path)
-      setCodexConfigContent(result.content)
-      setCodexConfigDirty(false)
-      setCodexConfigMessage(result.message)
-    } catch (error: any) {
-      setCodexConfigMessage(error?.message || '读取 Codex config.toml 失败')
-    } finally {
-      setCodexConfigBusy(false)
-    }
-  }
-
-  async function refreshCodexAuthFile() {
-    setCodexAuthFileBusy(true)
-    try {
-      const result = await api.getCodexAuthFile()
-      setCodexAuthFilePath(result.path)
-      setCodexAuthFileContent(result.content)
-      setCodexAuthFileDirty(false)
-      setCodexAuthFileMessage(result.message)
-    } catch (error: any) {
-      setCodexAuthFileMessage(error?.message || '读取 Codex auth.json 失败')
-    } finally {
-      setCodexAuthFileBusy(false)
-    }
-  }
-
   async function installAllCliTools() {
     setCliBusy(true)
     setCliMessage('正在检测本机 CLI，只安装缺失的 Codex、Claude Code、OpenCode、Gemini...')
@@ -238,111 +190,6 @@ export default function CodingToolsPage() {
     setTools((current) => current.map((tool) => (tool.id === id ? { ...tool, ...patch } : tool)))
   }
 
-  async function refreshCodexAuth() {
-    try {
-      setCodexAuth(await api.getCodexAuthStatus())
-    } catch (error: any) {
-      setCodexAuth({
-        loggedIn: false,
-        authMode: 'none',
-        status: 'logged-out',
-        message: error?.message || '无法检测 Codex 登录状态',
-      })
-    }
-  }
-
-  async function startChatGptLogin() {
-    setAuthBusy(true)
-    setAuthMessage('')
-    setAuthSession(null)
-    try {
-      const result = await api.startCodexChatGptLogin()
-      if (!result.ok || !result.loginId) {
-        setAuthMessage(result.message)
-        return
-      }
-
-      setAuthSession({
-        userCode: result.userCode,
-        verificationUrl: result.verificationUrl,
-        expiresAt: result.expiresAt,
-      })
-      setAuthMessage(result.userCode ? `验证码：${result.userCode}。请在浏览器授权后等待自动刷新。` : result.message)
-      void openCodexAuthPage()
-
-      let interval = Math.max(1, result.interval ?? 5)
-      const expiresAtMs = result.expiresAt ? new Date(result.expiresAt).getTime() : Date.now() + 15 * 60 * 1000
-      while (Date.now() < expiresAtMs) {
-        await delay(Math.min(interval * 1000, Math.max(0, expiresAtMs - Date.now())))
-        if (Date.now() >= expiresAtMs) break
-
-        const poll = await withTimeout(api.pollCodexChatGptLogin(result.loginId), 15000, '本次轮询超时，仍在等待浏览器授权')
-        setAuthMessage(poll.message)
-        if (poll.status === 'pending') {
-          interval = Math.max(1, poll.interval ?? interval)
-          continue
-        }
-        if (poll.status === 'completed') {
-          setAuthSession(null)
-          await refreshCodexAuth()
-        }
-        break
-      }
-      if (Date.now() >= expiresAtMs) {
-        setAuthSession(null)
-        setAuthMessage('验证码已过期，请重新开始授权。')
-      }
-    } catch (error: any) {
-      setAuthMessage(error?.message || '启动 ChatGPT 登录失败')
-    } finally {
-      setAuthBusy(false)
-    }
-  }
-
-  async function openCodexAuthPage() {
-    try {
-      const result = await api.openCodexChatGptDevicePage()
-      if (!result.ok) setAuthMessage(result.message || '打开授权页失败')
-    } catch (error: any) {
-      setAuthMessage(error?.message || '打开授权页失败')
-    }
-  }
-
-  async function retryChatGptAuth() {
-    setAuthBusy(true)
-    setAuthMessage('')
-    try {
-      const result = await api.retryCodexChatGptAuth()
-      setAuthMessage(result.message)
-      await refreshCodexAuth()
-    } catch (error: any) {
-      setAuthMessage(error?.message || '重试验证失败')
-    } finally {
-      setAuthBusy(false)
-    }
-  }
-
-  async function logoutChatGpt() {
-    setAuthBusy(true)
-    setAuthMessage('')
-    try {
-      const result = await api.logoutCodexChatGpt()
-      setAuthMessage(result.message)
-      setAuthSession(null)
-      await refreshCodexAuth()
-    } catch (error: any) {
-      setAuthMessage(error?.message || '登出失败')
-    } finally {
-      setAuthBusy(false)
-    }
-  }
-
-  async function patchCodexTransport(next: CodexTransport) {
-    setCodexTransport(next)
-    await api.saveSettings({ CODEX_CHATGPT_TRANSPORT: next })
-    showSaved()
-  }
-
   async function toggleExecutionEnabled() {
     const next = !executionEnabled
     setExecutionBusy(true)
@@ -361,67 +208,12 @@ export default function CodingToolsPage() {
   }
 
   async function save() {
-    if (activeTool.id === 'codex') {
-      const [authOk, configOk] = await Promise.all([saveCodexAuthFile(), saveCodexConfig()])
-      if (authOk && configOk) showSaved()
-      return
-    }
     await api.saveSettings({
       [storageKey]: JSON.stringify(tools),
       CODE_AGENT_ACTIVE_TOOL: activeTool.id,
       CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
-      CODE_AGENT_ACTIVE_API_KEY_ENV: activeTool.apiKeyEnv,
-      CODEX_CHATGPT_TRANSPORT: codexTransport,
     })
     showSaved()
-  }
-
-  async function saveCodexConfig() {
-    setCodexConfigBusy(true)
-    try {
-      const result = await api.saveCodexConfig(codexConfigContent)
-      if (!result.ok) {
-        setCodexConfigMessage(result.message)
-        return false
-      }
-      setCodexConfigPath(result.path)
-      setCodexConfigContent(result.content)
-      setCodexConfigDirty(false)
-      setCodexConfigMessage(result.message)
-      await api.saveSettings({
-        [storageKey]: JSON.stringify(tools),
-        CODE_AGENT_ACTIVE_TOOL: activeTool.id,
-        CODEX_CHATGPT_TRANSPORT: codexTransport,
-      })
-      await refreshStatus()
-      return true
-    } catch (error: any) {
-      setCodexConfigMessage(error?.message || '保存 Codex config.toml 失败')
-      return false
-    } finally {
-      setCodexConfigBusy(false)
-    }
-  }
-
-  async function saveCodexAuthFile() {
-    setCodexAuthFileBusy(true)
-    try {
-      const result = await api.saveCodexAuthFile(codexAuthFileContent)
-      if (!result.ok) {
-        setCodexAuthFileMessage(result.message)
-        return false
-      }
-      setCodexAuthFilePath(result.path)
-      setCodexAuthFileContent(result.content)
-      setCodexAuthFileDirty(false)
-      setCodexAuthFileMessage(result.message)
-      return true
-    } catch (error: any) {
-      setCodexAuthFileMessage(error?.message || '保存 Codex auth.json 失败')
-      return false
-    } finally {
-      setCodexAuthFileBusy(false)
-    }
   }
 
   async function testActiveToolConnection() {
@@ -611,7 +403,7 @@ export default function CodingToolsPage() {
                   <h2 className="text-lg font-semibold">{activeTool.name}</h2>
                   <p className="mt-1 text-sm text-neutral-500">
                     {activeTool.id === 'codex'
-                      ? t('Codex 使用本机 auth.json 与 config.toml；AgentHub 不再维护额外的 Codex 模型配置。')
+                      ? t('AgentHub 执行时按 Agent 模型档案生成临时 Codex 配置；这里只维护 CLI 参数。')
                       : t('配置会写入 AgentHub 设置，并作为 Coding Tools 的默认运行参数。')}
                   </p>
                 </div>
@@ -626,99 +418,38 @@ export default function CodingToolsPage() {
                 </a>
               </div>
 
-              {activeTool.id === 'codex' ? (
-                <>
-                  <CodexConfigPanel
-                    title="auth.json"
-                    language="JSON"
-                    path={codexAuthFilePath}
-                    content={codexAuthFileContent}
-                    busy={codexAuthFileBusy}
-                    dirty={codexAuthFileDirty}
-                    message={codexAuthFileMessage}
-                    minHeight="10rem"
-                    placeholder={'{\n  "OPENAI_API_KEY": ""\n}'}
-                    onChange={(content) => {
-                      setCodexAuthFileContent(content)
-                      setCodexAuthFileDirty(true)
-                    }}
-                    onReload={refreshCodexAuthFile}
-                    onSave={async () => {
-                      if (await saveCodexAuthFile()) showSaved()
-                    }}
-                  />
-                  <CodexConfigPanel
-                    title="config.toml"
-                    language="TOML"
-                    path={codexConfigPath}
-                    content={codexConfigContent}
-                    busy={codexConfigBusy}
-                    dirty={codexConfigDirty}
-                    message={codexConfigMessage}
-                    minHeight="30rem"
-                    placeholder='model_provider = "openai"'
-                    onChange={(content) => {
-                      setCodexConfigContent(content)
-                      setCodexConfigDirty(true)
-                    }}
-                    onReload={refreshCodexConfig}
-                    onSave={async () => {
-                      if (await saveCodexConfig()) showSaved()
-                    }}
-                  />
-                  <CodexAuthPanel
-                    status={codexAuth}
-                    busy={authBusy}
-                    message={authMessage}
-                    session={authSession}
-                    transport={codexTransport}
-                    onLogin={startChatGptLogin}
-                    onLogout={logoutChatGpt}
-                    onRefresh={refreshCodexAuth}
-                    onRetry={retryChatGptAuth}
-                    onOpenAuthPage={openCodexAuthPage}
-                    onTransport={patchCodexTransport}
-                  />
-                </>
-              ) : (
-                <>
-                  <div className="mt-5 grid gap-4 md:grid-cols-2">
-                    <Field label="命令" value={activeTool.command} onChange={(value) => patchTool(activeTool.id, { command: value })} />
-                    <Field label="API Key 环境变量" value={activeTool.apiKeyEnv} onChange={(value) => patchTool(activeTool.id, { apiKeyEnv: value })} />
-                    {activeTool.id === 'opencode' && (
-                      <Field label="Provider" value={activeTool.provider ?? ''} onChange={(value) => patchTool(activeTool.id, { provider: value.trim() || undefined })} />
-                    )}
-                  </div>
-                  <p className="mt-4 text-xs leading-5 text-neutral-500">
-                    API Key 在「模型管理」页面配置，模型和协议在「Agent 配置」页面中设置。每个 Agent 可以选择不同的 Coding Tool 和模型组合。
-                  </p>
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                <Field label="命令" value={activeTool.command} onChange={(value) => patchTool(activeTool.id, { command: value })} />
+                <ToolNativeFields tool={activeTool} onPatch={(patch) => patchTool(activeTool.id, patch)} />
+              </div>
+              <p className="mt-4 text-xs leading-5 text-neutral-500">
+                API Key、Base URL、模型 ID 只在「模型管理」维护；这里保存 CLI 命令和各工具自己的运行参数。Agent 执行时会按 Agent 配置选择的模型档案自动注入到 {activeTool.name}。
+              </p>
 
-                  <div className="mt-5 flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={save}
-                      className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-medium text-white hover:bg-teal-800"
-                    >
-                      <Save className="h-4 w-4" />
-                      {t('保存')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={testActiveToolConnection}
-                      disabled={toolTestBusy}
-                      className="inline-flex h-10 items-center gap-2 rounded-md border border-neutral-200 bg-white px-4 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
-                    >
-                      <PlayCircle className={cn('h-4 w-4', toolTestBusy && 'animate-pulse')} />
-                      {t('测试连接')}
-                    </button>
-                    {toolTestMessage && (
-                      <span className={cn('text-sm', toolTestOk ? 'text-emerald-700' : toolTestOk === false ? 'text-red-600' : 'text-neutral-500')}>
-                        {toolTestMessage}
-                      </span>
-                    )}
-                  </div>
-                </>
-              )}
+              <div className="mt-5 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={save}
+                  className="inline-flex h-10 items-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-medium text-white hover:bg-teal-800"
+                >
+                  <Save className="h-4 w-4" />
+                  {t('保存')}
+                </button>
+                <button
+                  type="button"
+                  onClick={testActiveToolConnection}
+                  disabled={toolTestBusy}
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-neutral-200 bg-white px-4 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  <PlayCircle className={cn('h-4 w-4', toolTestBusy && 'animate-pulse')} />
+                  {t('检测 CLI')}
+                </button>
+                {toolTestMessage && (
+                  <span className={cn('text-sm', toolTestOk ? 'text-emerald-700' : toolTestOk === false ? 'text-red-600' : 'text-neutral-500')}>
+                    {toolTestMessage}
+                  </span>
+                )}
+              </div>
             </div>
 
             <aside className="space-y-4">
@@ -774,263 +505,43 @@ function mergeTools(saved: ToolConfig[]) {
   return defaults.map((item) => ({ ...item, ...saved.find((tool) => tool.id === item.id) }))
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
+function ToolNativeFields({
+  tool,
+  onPatch,
+}: {
+  tool: ToolConfig
+  onPatch: (patch: Partial<ToolConfig>) => void
+}) {
+  const config = tool.config ?? {}
+  const patchConfig = (key: string, value: string | boolean) => {
+    onPatch({ config: { ...config, [key]: value } })
+  }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(message)), ms)
-    promise.then(
-      (value) => {
-        window.clearTimeout(timer)
-        resolve(value)
-      },
-      (error) => {
-        window.clearTimeout(timer)
-        reject(error)
-      }
+  if (tool.id === 'codex') {
+    return (
+      <>
+        <Field label="Codex approvalPolicy" value={String(config.approvalPolicy ?? 'never')} onChange={(value) => patchConfig('approvalPolicy', value)} />
+        <Field label="Codex sandbox" value={String(config.sandbox ?? 'workspace-write')} onChange={(value) => patchConfig('sandbox', value)} />
+        <Field label="Codex profile（可选）" value={String(config.profile ?? '')} onChange={(value) => patchConfig('profile', value)} />
+      </>
     )
-  })
-}
-
-function CodexConfigPanel({
-  title,
-  language,
-  path,
-  content,
-  busy,
-  dirty,
-  message,
-  minHeight,
-  placeholder,
-  onChange,
-  onReload,
-  onSave,
-}: {
-  title: string
-  language: string
-  path: string
-  content: string
-  busy: boolean
-  dirty: boolean
-  message: string
-  minHeight: string
-  placeholder: string
-  onChange: (content: string) => void
-  onReload: () => void
-  onSave: () => void | Promise<void>
-}) {
-  const { t } = useI18n()
-  return (
-    <div className="mt-5 rounded-lg border border-neutral-200 bg-white p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm font-semibold text-neutral-800">
-            <Terminal className="h-4 w-4 text-teal-700" />
-            {title} <span className="font-normal text-neutral-400">({language})</span>
-          </div>
-          <div className="mt-1 truncate font-mono text-xs text-neutral-400">{path || `~/.codex/${title}`}</div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {dirty && <span className="rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700">{t('未保存')}</span>}
-          <button
-            type="button"
-            onClick={onReload}
-            disabled={busy}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
-            {t('重新读取')}
-          </button>
-          <button
-            type="button"
-            onClick={onSave}
-            disabled={busy}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-teal-700 px-2.5 text-xs font-medium text-white hover:bg-teal-800 disabled:bg-neutral-300"
-          >
-            <Save className="h-3.5 w-3.5" />
-            {t('保存')}
-          </button>
-        </div>
-      </div>
-      <textarea
-        value={content}
-        onChange={(event) => onChange(event.target.value)}
-        spellCheck={false}
-        className="mt-3 w-full resize-y rounded-md border border-neutral-200 bg-white px-4 py-3 font-mono text-xs leading-6 text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-teal-700"
-        style={{ minHeight }}
-        placeholder={placeholder}
-      />
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-500">
-        <span>{message || t('Codex CLI 会直接读取这个文件。')}</span>
-        <span>{content.length.toLocaleString()} chars</span>
-      </div>
-    </div>
-  )
-}
-
-function CodexAuthPanel({
-  status,
-  busy,
-  message,
-  session,
-  transport,
-  onLogin,
-  onLogout,
-  onRefresh,
-  onRetry,
-  onOpenAuthPage,
-  onTransport,
-}: {
-  status: CodexAuthStatus | null
-  busy: boolean
-  message: string
-  session: { userCode?: string; verificationUrl?: string; expiresAt?: string } | null
-  transport: CodexTransport
-  onLogin: () => void
-  onLogout: () => void
-  onRefresh: () => void
-  onRetry: () => void
-  onOpenAuthPage: () => void
-  onTransport: (transport: CodexTransport) => void
-}) {
-  const { t } = useI18n()
-  const accountLoggedIn = status?.authMode === 'chatgpt'
-  const apiKeyMode = status?.authMode === 'api-key'
-  const deviceAuthEnabled = Boolean(status?.deviceAuthEnabled)
-  const badgeLabel = accountLoggedIn ? 'ChatGPT 已登录' : apiKeyMode ? 'API Key 可用' : '未登录'
-  const displayMessage = normalizeCodexAuthMessage(message || status?.message || '')
-
-  return (
-    <div className="mt-5 rounded-lg border border-neutral-200 bg-[#fbfbf8] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 text-sm font-semibold text-neutral-800">
-            <KeyRound className="h-4 w-4 text-teal-700" />
-            {t('OpenAI 运行认证')}
-          </div>
-          <p className="mt-1 text-xs leading-5 text-neutral-500">
-            {t('推荐用 OPENAI_API_KEY；开启设备授权时也可以同步 ChatGPT 登录状态。')}
-          </p>
-          {status?.accountId && <p className="mt-1 font-mono text-xs text-neutral-400">{status.accountId}</p>}
-        </div>
-        <span
-          className={cn(
-            'rounded-md px-2.5 py-1 text-xs font-medium',
-            accountLoggedIn ? 'bg-emerald-50 text-emerald-700' : apiKeyMode ? 'bg-sky-50 text-sky-700' : 'bg-neutral-100 text-neutral-600'
-          )}
-        >
-          {t(badgeLabel)}
-        </span>
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2">
-          {deviceAuthEnabled && !accountLoggedIn && (
-            <button
-              type="button"
-              onClick={onLogin}
-              disabled={busy}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-medium text-white hover:bg-teal-800 disabled:bg-neutral-300"
-            >
-              <KeyRound className={cn('h-4 w-4', busy && 'animate-pulse')} />
-              {busy ? t('授权中') : t('登录 ChatGPT')}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={busy}
-            className="inline-flex h-9 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
-          >
-            <RefreshCw className="h-4 w-4" />
-            {t('刷新')}
-          </button>
-          {deviceAuthEnabled && accountLoggedIn && (
-            <button
-              type="button"
-              onClick={onRetry}
-              disabled={busy}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
-            >
-              <RefreshCw className="h-4 w-4" />
-              {t('重试验证')}
-            </button>
-          )}
-          {deviceAuthEnabled && accountLoggedIn && (
-            <button
-              type="button"
-              onClick={onLogout}
-              disabled={busy}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-red-100 bg-red-50 px-3 text-sm text-red-600 hover:bg-red-100 disabled:opacity-50"
-            >
-              <LogOut className="h-4 w-4" />
-              {t('登出')}
-            </button>
-          )}
-        </div>
-        <div className="inline-flex rounded-md border border-neutral-200 bg-white p-1">
-          {(['http', 'websocket'] as CodexTransport[]).map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => onTransport(item)}
-              className={cn(
-                'h-7 rounded px-3 text-xs font-medium transition',
-                transport === item ? 'bg-teal-50 text-teal-800' : 'text-neutral-600 hover:bg-neutral-50'
-              )}
-            >
-              {item === 'http' ? 'HTTP' : 'WebSocket'}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {deviceAuthEnabled && session?.userCode && (
-        <div className="mt-3 rounded-md border border-teal-100 bg-teal-50 px-3 py-2">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-xs text-teal-700">{t('授权验证码')}</div>
-              <div className="mt-1 font-mono text-lg font-semibold tracking-normal text-teal-950">{session.userCode}</div>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => void navigator.clipboard?.writeText(session.userCode || '').catch(() => undefined)}
-                className="inline-flex h-9 items-center gap-2 rounded-md border border-teal-200 bg-white px-3 text-sm font-medium text-teal-800 hover:bg-teal-50"
-              >
-                <Copy className="h-4 w-4" />
-                {t('复制验证码')}
-              </button>
-              {session.verificationUrl && (
-                <button
-                  type="button"
-                  onClick={onOpenAuthPage}
-                  className="inline-flex h-9 items-center gap-2 rounded-md bg-teal-700 px-3 text-sm font-medium text-white hover:bg-teal-800"
-                >
-                  {t('打开授权页')}
-                  <ExternalLink className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {displayMessage && <div className="mt-3 rounded-md bg-white px-3 py-2 font-mono text-xs leading-5 text-neutral-600">{displayMessage}</div>}
-    </div>
-  )
-}
-
-function normalizeCodexAuthMessage(message: string) {
-  if (/ChatGPT device auth is disabled/i.test(message)) {
-    return 'ChatGPT 设备授权已关闭；后端只读取 OPENAI_API_KEY、OPENAI_BASE_URL、OPENAI_MODEL 等显式环境变量。'
   }
-  if (/Route Error/i.test(message) && /Invalid content type:\s*text\/html/i.test(message)) {
-    return '授权页返回 Route Error。请复制授权链接，在普通浏览器或无痕窗口打开，并确认 ChatGPT 已登录。'
+
+  if (tool.id === 'claude-code') {
+    return (
+      <>
+        <Field label="Claude permissionMode" value={String(config.permissionMode ?? 'bypassPermissions')} onChange={(value) => patchConfig('permissionMode', value)} />
+        <Field label="Claude outputFormat" value={String(config.outputFormat ?? 'stream-json')} onChange={(value) => patchConfig('outputFormat', value)} />
+        <Field label="Claude maxTurns（可选）" value={String(config.maxTurns ?? '')} onChange={(value) => patchConfig('maxTurns', value)} />
+      </>
+    )
   }
-  return message
+
+  if (tool.id === 'opencode') {
+    return <Field label="OpenCode agent（可选）" value={String(config.agent ?? '')} onChange={(value) => patchConfig('agent', value)} />
+  }
+
+  return <div className="text-sm text-neutral-400">此工具暂无额外原生参数。</div>
 }
 
 function ToolIcon({ toolId, name }: { toolId: string; name: string }) {
@@ -1038,16 +549,11 @@ function ToolIcon({ toolId, name }: { toolId: string; name: string }) {
 }
 
 function buildEnvSnippet(tool: ToolConfig) {
-  if (tool.id === 'codex') {
-    return '# Codex reads local ~/.codex/config.toml\n# Edit model, provider, base_url, env_key, and wire_api in config.toml.'
-  }
-  if (tool.id === 'opencode') {
-    return '# OpenCode uses local config\n# Model configured per-agent in Agent Config page'
-  }
-  if (tool.id === 'gemini') {
-    return `${tool.apiKeyEnv}=your_gemini_api_key_here\n# Model configured per-agent in Agent Config page`
-  }
-  return `${tool.apiKeyEnv}=your_api_key_here\n# Model configured per-agent in Agent Config page`
+  return [
+    '# Runtime env is generated per Agent run.',
+    '# Configure API Key, Base URL, and model ID in Model Management.',
+    `${tool.apiKeyEnv}=<injected-from-selected-model>`,
+  ].join('\n')
 }
 
 function buildRunCommand(tool: ToolConfig) {

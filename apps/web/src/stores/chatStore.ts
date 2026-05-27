@@ -5,6 +5,7 @@ import { wsClient, type WSEvent } from '../lib/ws'
 let pendingStream: { messageId: string; delta: string } | null = null
 let pendingStreamTimer: number | null = null
 const cancelledSessions = new Set<string>()
+const pendingOrchestratorPlans = new Set<string>()
 
 interface ChatState {
   sessions: Session[]
@@ -27,6 +28,7 @@ interface ChatState {
   createSession: (title?: string, options?: { workspaceId?: string | null; workspaceAgentId?: string | null; type?: 'direct' | 'group' }) => Promise<Session>
   selectSession: (sessionId: string) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
+  clearMessages: (sessionId: string) => Promise<void>
   sendMessage: (content: string) => Promise<{ groupSessionId?: string } | undefined>
   sendMessageToSession: (sessionId: string, content: string) => Promise<{ groupSessionId?: string } | undefined>
   editMessage: (messageId: string, content: string) => Promise<void>
@@ -143,6 +145,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }))
   },
 
+  async clearMessages(sessionId) {
+    await api.clearMessages(sessionId)
+    if (get().currentSessionId === sessionId) {
+      set({ messages: [], streamingMessage: null, streamingCodeAgentRun: null, agentTyping: false })
+    }
+  },
+
   async sendMessage(content) {
     const sessionId = get().currentSessionId
     if (!sessionId) return undefined
@@ -171,31 +180,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })
       set((s) => ({ messages: [...s.messages, msg], pendingAttachments: [], replyingToMessageId: null, replyingToMessage: null }))
       let dispatchResult: { groupSessionId?: string } | undefined
-      if (shouldCreatePlan) {
-        const card = await api.createOrchestratorPlan(sessionId, contentForAgent)
-        set((s) => ({ messages: [...s.messages, card] }))
-        const result = await api.dispatchOrchestratorPlan(sessionId, card.id)
-        dispatchResult = { groupSessionId: result.groupSessionId }
-        set((s) => ({
-          messages: s.messages.map((message) =>
-            message.id === card.id
-              ? {
-                  ...message,
-                  metadata: {
-                    ...(message.metadata ?? {}),
-                    dispatchResult: result,
-                    plan:
-                      message.metadata && typeof message.metadata.plan === 'object'
-                        ? { ...(message.metadata.plan as Record<string, unknown>), dispatchResult: result }
-                        : message.metadata?.plan,
-                  },
-                }
-              : message
-          ),
-        }))
-        await get().fetchSessions()
-        set({ agentTyping: false })
-      } else {
+      if (shouldCreatePlan && !pendingOrchestratorPlans.has(sessionId)) {
+        pendingOrchestratorPlans.add(sessionId)
+        try {
+          const card = await api.createOrchestratorPlan(sessionId, contentForAgent)
+          set((s) => ({ messages: [...s.messages, card] }))
+          const result = await api.dispatchOrchestratorPlan(sessionId, card.id)
+          dispatchResult = { groupSessionId: result.groupSessionId }
+          set((s) => ({
+            messages: s.messages.map((message) =>
+              message.id === card.id
+                ? {
+                    ...message,
+                    metadata: {
+                      ...(message.metadata ?? {}),
+                      dispatchResult: result,
+                      plan:
+                        message.metadata && typeof message.metadata.plan === 'object'
+                          ? { ...(message.metadata.plan as Record<string, unknown>), dispatchResult: result }
+                          : message.metadata?.plan,
+                    },
+                  }
+                : message
+            ),
+          }))
+          await get().fetchSessions()
+          set({ agentTyping: false })
+        } finally {
+          pendingOrchestratorPlans.delete(sessionId)
+        }
+      } else if (!shouldCreatePlan) {
         await get().fetchSessions()
       }
       return dispatchResult
