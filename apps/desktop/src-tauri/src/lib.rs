@@ -208,11 +208,14 @@ fn open_desktop_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(
         .transparent(false)
         .background_color(Color(255, 255, 255, 255))
         .shadow(true)
+        .focused(true)
         .center()
         .build()
         .map_err(|err| format!("无法打开新窗口: {err}"))?;
 
     apply_window_chrome_style(&new_window);
+    let _ = new_window.show();
+    let _ = new_window.set_focus();
     Ok(())
 }
 

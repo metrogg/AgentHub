@@ -31,6 +31,7 @@ const routeLabels: Record<string, string> = {
   '/models': '模型管理',
   '/coding-tools': 'Coding Tools',
   '/office': '办公',
+  '/profile': '个人资料',
   '/settings': '设置',
   '/skills': 'Skills 市场',
 }
@@ -112,7 +113,11 @@ export function DesktopAppMenu() {
             <Menu className="h-4 w-4" />
           </TopbarIconButton>
           {menuOpen && (
-            <div className="agenthub-desktop-menu-panel agenthub-desktop-menu-panel-topbar" role="menu">
+            <div
+              className="agenthub-desktop-menu-panel agenthub-desktop-menu-panel-topbar"
+              role="menu"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
               {menuItems.map((item, index) =>
                 isSeparator(item) ? (
                   <DesktopMenuSeparator key={`separator-${index}`} />
@@ -189,7 +194,14 @@ function DesktopMenuItem({
   shortcut?: string
 }) {
   return (
-    <button type="button" role="menuitem" disabled={disabled} className="agenthub-desktop-menu-item" onClick={onClick}>
+    <button
+      type="button"
+      role="menuitem"
+      disabled={disabled}
+      className="agenthub-desktop-menu-item"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={onClick}
+    >
       <span>{label}</span>
       {shortcut && <kbd>{shortcut}</kbd>}
     </button>

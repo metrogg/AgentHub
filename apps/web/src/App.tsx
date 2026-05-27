@@ -8,11 +8,13 @@ import CodingToolsPage from './pages/CodingToolsPage'
 import { DesktopAppMenu } from './components/DesktopAppMenu'
 import ModelManagementPage from './pages/ModelManagementPage'
 import OfficePage from './pages/OfficePage'
+import ProfilePage from './pages/ProfilePage'
 import SettingsPage, { SettingsSurface } from './pages/SettingsPage'
 import SkillsMarketPage from './pages/SkillsMarketPage'
 import OrchestratorRunsPage from './pages/OrchestratorRunsPage'
 import ExecutionLogsPage from './pages/ExecutionLogsPage'
 import { api } from './lib/api'
+import { cacheAccountProfileFromSettingsValue } from './lib/accountProfile'
 import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
 import { openWorkspaceFolderAsSession, useAppActions } from './lib/app-actions'
 import { ensureCodingToolsStartupLifecycle } from './lib/codingToolsLifecycle'
@@ -44,6 +46,7 @@ function AppShell() {
       .getSettings()
       .then((settings) => {
         if (!settings.APP_SETTINGS) return
+        cacheAccountProfileFromSettingsValue(settings.APP_SETTINGS)
         applyAppearanceSettings({ ...defaultAppearanceSettings, ...JSON.parse(settings.APP_SETTINGS) })
       })
       .catch(() => undefined)
@@ -69,6 +72,7 @@ function AppShell() {
       <Route path="/agent-config" element={<AgentConfigPage />} />
       <Route path="/agent-world" element={<Navigate to="/agent-config" replace />} />
       <Route path="/office" element={<OfficePage />} />
+      <Route path="/profile" element={<ProfilePage />} />
       <Route path="/skills" element={<SkillsMarketPage />} />
       <Route path="/orchestrator-runs" element={<OrchestratorRunsPage />} />
       <Route path="/execution-logs" element={<ExecutionLogsPage />} />

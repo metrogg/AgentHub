@@ -224,14 +224,14 @@ export default function SkillsMarketPage() {
                   </a>
                 </div>
 
-                <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
                   {marketSources.map((source) => (
                     <a
                       key={source.id}
                       href={source.url.startsWith('http') ? source.url : undefined}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex items-start gap-3 rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3 transition hover:border-neutral-300 hover:bg-white"
+                      className="flex min-h-[8rem] w-full items-start gap-3 rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3 transition hover:border-neutral-300 hover:bg-white"
                     >
                       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white text-neutral-600 shadow-sm">{source.icon}</span>
                       <span className="min-w-0">

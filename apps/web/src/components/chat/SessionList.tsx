@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import { api, friendlyErrorMessage, type Session } from '../../lib/api'
+import { friendlyErrorMessage, type Session } from '../../lib/api'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
@@ -42,23 +42,19 @@ import { loadSessionListPrefs, normalizeSessionListPrefs, saveSessionListPrefs, 
 import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { settingsUpdatedEvent } from '../../lib/shortcuts'
 import { buildSessionTree, filterSessionTree } from '../../lib/sessionTree'
+import {
+  getCachedAccountProfile,
+  loadAccountProfileFromSettings,
+  sameAccountProfile,
+  type AccountProfile,
+} from '../../lib/accountProfile'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 
 type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
-type AccountProfile = {
-  name: string
-  avatar: string
-}
-
-const defaultAccountProfile: AccountProfile = {
-  name: 'You',
-  avatar: '',
-}
-
 function activeTabFromPath(pathname: string): SidebarTab {
   if (pathname === '/agent-config') return 'agents'
-  if (pathname === '/settings') return 'me'
+  if (pathname === '/profile' || pathname === '/settings') return 'me'
   if (['/models', '/coding-tools', '/skills', '/office', '/orchestrator-runs', '/execution-logs'].includes(pathname)) return 'workspace'
   return 'messages'
 }
@@ -69,6 +65,9 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const location = useLocation()
   const { sessionId } = useParams()
   const sessions = useChatStore((state) => state.sessions)
+  const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
+  const loadingSessions = useChatStore((state) => state.loadingSessions)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
   const selectSession = useChatStore((state) => state.selectSession)
   const deleteSession = useChatStore((state) => state.deleteSession)
@@ -78,7 +77,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [query, setQuery] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [prefs, setPrefs] = useState<SessionListPrefs>(loadSessionListPrefs)
-  const [accountProfile, setAccountProfile] = useState<AccountProfile>(defaultAccountProfile)
+  const [accountProfile, setAccountProfile] = useState<AccountProfile>(getCachedAccountProfile)
   const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [agentQuery, setAgentQuery] = useState('')
   const [quickCreateOpen, setQuickCreateOpen] = useState(false)
@@ -115,21 +114,25 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   }, [agentQuery, libraryAgents])
 
   useEffect(() => {
+    if (sessionsBootstrapped || loadingSessions) return
     fetchSessions()
-  }, [fetchSessions])
+  }, [fetchSessions, loadingSessions, sessionsBootstrapped])
 
   useEffect(() => {
     let cancelled = false
-    async function loadAccountProfile() {
-      const settings = await api.getSettings().catch((): Record<string, string> => ({}))
+    function applyAccountProfile(profile: AccountProfile) {
       if (cancelled) return
-      setAccountProfile(readAccountProfile(settings.APP_SETTINGS))
+      setAccountProfile((current) => (sameAccountProfile(current, profile) ? current : profile))
     }
-    void loadAccountProfile()
-    window.addEventListener(settingsUpdatedEvent, loadAccountProfile)
+    function syncAccountProfile() {
+      applyAccountProfile(getCachedAccountProfile())
+      void loadAccountProfileFromSettings().then(applyAccountProfile)
+    }
+    syncAccountProfile()
+    window.addEventListener(settingsUpdatedEvent, syncAccountProfile)
     return () => {
       cancelled = true
-      window.removeEventListener(settingsUpdatedEvent, loadAccountProfile)
+      window.removeEventListener(settingsUpdatedEvent, syncAccountProfile)
     }
   }, [])
 
@@ -256,9 +259,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     navigate('/agent-config?newAgent=1')
   }
 
-  function toggleWorkspaceExpanded(event: React.MouseEvent, workspaceId?: string | null) {
-    event.stopPropagation()
-    event.preventDefault()
+  function toggleWorkspaceExpanded(workspaceId?: string | null) {
     if (!workspaceId) return
     setExpandedWorkspaces((current) => {
       const next = new Set(current)
@@ -272,8 +273,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     if (openingSessionId === session.id) return
     setOpeningSessionId(session.id)
     try {
-      await selectSession(session.id)
       navigate(`/chat/${session.id}`)
+      if (currentSessionId !== session.id) {
+        await selectSession(session.id)
+      }
     } catch (error) {
       showHint(friendlyErrorMessage(error, '打开会话失败'))
     } finally {
@@ -301,12 +304,12 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   }
 
   return (
-    <aside className="flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#f7f7f4]">
-      <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#f7f7f4] py-3">
+    <aside className="flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
+      <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#FBFBFB] py-3">
         <button
           type="button"
-          onClick={requestSettingsDialog}
-          className="grid h-10 w-10 place-items-center overflow-hidden rounded-xl bg-white shadow-sm"
+          onClick={() => navigate('/profile')}
+          className="grid h-10 w-10 place-items-center overflow-hidden rounded-xl bg-[#F7F7F7] shadow-sm"
           aria-label={accountProfile.name}
           title={accountProfile.name}
         >
@@ -342,7 +345,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             active={activeTab === 'me'}
             icon={UserCircle}
             label="Me"
-            onClick={requestSettingsDialog}
+            onClick={() => navigate('/profile')}
           />
         </div>
 
@@ -351,7 +354,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
         </div>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col bg-[#f7f7f4]">
+      <div className="flex min-w-0 flex-1 flex-col bg-[#FBFBFB]">
         <div className="agenthub-session-panel-header flex h-14 items-center justify-between px-4">
           <div className="agenthub-session-panel-brand flex items-center gap-2">
             <div className="grid h-7 w-7 place-items-center rounded-lg bg-neutral-950 text-white">
@@ -374,7 +377,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
 
         <div className={cn('px-2 pt-3', activeTab !== 'messages' && 'hidden')}>
           <div className="relative mb-2 flex h-9 items-center gap-2">
-            <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-2.5 text-neutral-400 shadow-sm">
+            <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl border border-neutral-200 bg-[#F7F7F7] px-2.5 text-neutral-400 shadow-sm">
               <Search className="h-4 w-4 shrink-0" />
               <input
                 value={query}
@@ -386,19 +389,19 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             <button
               type="button"
               onClick={() => setQuickCreateOpen((open) => !open)}
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-neutral-600 transition hover:bg-white hover:text-neutral-950"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-neutral-600 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
               aria-label="新建"
               title="新建"
             >
               <Plus className="h-4 w-4" />
             </button>
             {quickCreateOpen && (
-              <div className="absolute right-0 top-10 z-30 w-36 rounded-lg border border-neutral-200 bg-white py-1.5 text-sm shadow-xl">
-                <span className="absolute -top-1.5 right-3 h-3 w-3 rotate-45 border-l border-t border-neutral-200 bg-white" />
+              <div className="absolute right-0 top-10 z-30 w-36 rounded-lg border border-neutral-200 bg-[#FBFBFB] py-1.5 text-sm shadow-xl">
+                <span className="absolute -top-1.5 right-3 h-3 w-3 rotate-45 border-l border-t border-neutral-200 bg-[#FBFBFB]" />
                 <button
                   type="button"
                   onClick={openNewSessionDialog}
-                  className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-neutral-50"
+                  className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-[#F7F7F7]"
                 >
                   <MessageCircle className="h-4 w-4 text-neutral-600" />
                   新建群聊
@@ -406,7 +409,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                 <button
                   type="button"
                   onClick={addAgent}
-                  className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-neutral-50"
+                  className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-[#F7F7F7]"
                 >
                   <UserPlus className="h-4 w-4 text-neutral-600" />
                   添加 Agent
@@ -420,24 +423,21 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             onClick={() => setShowArchived((value) => !value)}
             className={cn(
               'mb-3 flex h-8 w-full items-center justify-between rounded-lg px-2 text-xs transition',
-              showArchived ? 'bg-white text-neutral-950 shadow-sm' : 'text-neutral-500 hover:bg-white/70',
+              showArchived ? 'bg-[#F7F7F7] text-neutral-950 shadow-sm' : 'text-neutral-500 hover:bg-[#F7F7F7]',
             )}
           >
             <span className="inline-flex items-center gap-2">
               {showArchived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
               {showArchived ? t('查看归档') : t('当前会话')}
             </span>
-            <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">
+            <span className="rounded-full bg-[#F7F7F7] px-2 py-0.5 text-[11px] text-neutral-500">
               {showArchived ? archivedSessionCount : activeSessionCount}
             </span>
           </button>
         </div>
       {activeTab === 'workspace' && (
-        <div className="px-3 pt-3 text-xs leading-5 text-neutral-500">
-          <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
-            <div className="font-medium text-neutral-900">工作台</div>
-            <div className="mt-1">项目、Agent Group 和本地工具入口统一放在这里。</div>
-          </div>
+        <div className="px-3 pt-3">
+          <div className="px-1 text-sm font-medium text-neutral-900">&gt;工作区</div>
         </div>
       )}
 
@@ -511,7 +511,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                     onClick={() => void openExistingSession(item.parent)}
                     className={cn(
                       'group cursor-pointer flex items-center gap-1 rounded-xl transition',
-                      active || childActive ? 'bg-white shadow-sm' : 'hover:bg-white/70',
+                      active || childActive ? 'bg-[#F7F7F7] shadow-sm' : 'hover:bg-[#F7F7F7]',
                     )}
                   >
                     <button
@@ -530,12 +530,18 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                         <span
                           role="button"
                           tabIndex={0}
-                          onClick={(event) => toggleWorkspaceExpanded(event, workspaceId)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            event.preventDefault()
+                            toggleWorkspaceExpanded(workspaceId)
+                          }}
                           onKeyDown={(event) => {
                             if (event.key !== 'Enter' && event.key !== ' ') return
-                            toggleWorkspaceExpanded(event as unknown as React.MouseEvent, workspaceId)
+                            event.stopPropagation()
+                            event.preventDefault()
+                            toggleWorkspaceExpanded(workspaceId)
                           }}
-                          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900"
+                          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-neutral-400 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
                           aria-label={expanded ? '收起群聊' : '展开群聊'}
                           title={expanded ? '收起群聊' : '展开群聊'}
                         >
@@ -560,7 +566,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       type="button"
                       onClick={(event) => togglePin(event, item.parent)}
                       className={cn(
-                        'grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900',
+                        'grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-[#F7F7F7] hover:text-neutral-900',
                         active || childActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
                       )}
                       title={pinned ? t('取消置顶') : t('置顶')}
@@ -571,7 +577,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       type="button"
                       onClick={(event) => toggleArchive(event, item.parent, item.children.map((child) => child.id))}
                       className={cn(
-                        'grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900',
+                        'grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-[#F7F7F7] hover:text-neutral-900',
                         active || childActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
                       )}
                       title={archived ? t('移出归档') : t('归档')}
@@ -599,7 +605,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                           onClick={() => void openExistingSession(child)}
                           className={cn(
                             'group/child flex cursor-pointer items-center gap-1 rounded-lg transition',
-                            sessionId === child.id ? 'bg-white shadow-sm' : 'hover:bg-white/70',
+                            sessionId === child.id ? 'bg-[#F7F7F7] shadow-sm' : 'hover:bg-[#F7F7F7]',
                           )}
                         >
                           <button
@@ -630,7 +636,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                             type="button"
                             onClick={(event) => togglePin(event, child)}
                             className={cn(
-                              'grid h-6 w-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900',
+                              'grid h-6 w-6 place-items-center rounded-md text-neutral-400 hover:bg-[#F7F7F7] hover:text-neutral-900',
                               sessionId === child.id ? 'opacity-100' : 'opacity-0 group-hover/child:opacity-100',
                             )}
                             title={pinnedIds.has(child.id) ? t('取消置顶') : t('置顶')}
@@ -641,7 +647,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                             type="button"
                             onClick={(event) => toggleArchive(event, child)}
                             className={cn(
-                              'grid h-6 w-6 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900',
+                              'grid h-6 w-6 place-items-center rounded-md text-neutral-400 hover:bg-[#F7F7F7] hover:text-neutral-900',
                               sessionId === child.id ? 'opacity-100' : 'opacity-0 group-hover/child:opacity-100',
                             )}
                             title={archivedIds.has(child.id) ? t('移出归档') : t('归档')}
@@ -683,7 +689,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                 type="button"
                 onClick={() => void openAgentSession(agent)}
                 disabled={opening}
-                className="flex min-h-12 w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition hover:bg-white/70 disabled:opacity-60"
+                className="flex min-h-12 w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition hover:bg-[#F7F7F7] disabled:opacity-60"
               >
                 <div
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-sm font-semibold text-white shadow-sm"
@@ -713,7 +719,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
 
       {activeTab === 'agents' && (
         <div className="flex-1 overflow-y-auto px-4 pt-3">
-          <div className="mb-3 flex h-9 items-center gap-2 rounded-lg bg-white px-3 text-neutral-400 shadow-sm">
+          <div className="mb-3 flex h-9 items-center gap-2 rounded-lg bg-[#F7F7F7] px-3 text-neutral-400 shadow-sm">
             <Search className="h-4 w-4 shrink-0" />
             <input
               value={agentQuery}
@@ -726,7 +732,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           <button
             type="button"
             onClick={requestNewSessionDialog}
-            className="mb-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-white text-sm font-medium text-neutral-800 shadow-sm transition hover:bg-neutral-50"
+            className="mb-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#F7F7F7] text-sm font-medium text-neutral-800 shadow-sm transition hover:bg-neutral-100"
           >
             <Users className="h-4 w-4 text-neutral-500" />
             新建 Agent 群聊
@@ -747,7 +753,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                   onClick={() => navigate(`/agent-config?agentId=${encodeURIComponent(agent.id)}`)}
                   className={cn(
                     'flex min-h-14 w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition',
-                    active ? 'bg-[#dededb]' : 'hover:bg-white/80',
+                    active ? 'bg-[#F7F7F7]' : 'hover:bg-[#F7F7F7]',
                   )}
                 >
                   <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white" style={{ background: agent.color }}>
@@ -772,9 +778,9 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
 
       {activeTab === 'me' && (
         <div className="flex-1 px-2 pt-3 text-xs leading-5 text-neutral-500">
-          <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
+          <div className="rounded-2xl border border-neutral-200 bg-[#F7F7F7] p-3 shadow-sm">
             <div className="flex items-center gap-3">
-              <div className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-2xl border border-neutral-200 bg-white">
+              <div className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-2xl border border-neutral-200 bg-[#FBFBFB]">
                 <AccountAvatar name={accountProfile.name} avatar={accountProfile.avatar} />
               </div>
               <div className="min-w-0">
@@ -782,7 +788,13 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                 <div className="mt-1 truncate text-xs text-neutral-500">Local account</div>
               </div>
             </div>
-            <div className="mt-3">快捷键、主题、归档会话和客户端设置都在这里。</div>
+            <button
+              type="button"
+              onClick={() => navigate('/profile')}
+              className="mt-3 flex h-9 w-full items-center justify-center rounded-lg bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
+            >
+              编辑个人资料
+            </button>
           </div>
         </div>
       )}
@@ -790,7 +802,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
       <div className={cn('border-t border-neutral-200 p-2', activeTab !== 'me' && 'hidden')}>
         <button
           onClick={requestSettingsDialog}
-          className="flex h-10 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-white/70"
+          className="flex h-10 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-[#F7F7F7]"
         >
           <Settings2 className="h-4 w-4 text-neutral-500" />
           {t('设置')}
@@ -906,9 +918,9 @@ function NavItem({
     <button
       onClick={onClick}
       className={cn(
-        'flex h-9 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-white/70',
+        'flex h-9 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-[#F7F7F7]',
         strong && 'font-semibold text-neutral-950',
-        active && 'bg-white text-neutral-950 shadow-sm'
+        active && 'bg-[#F7F7F7] text-neutral-950 shadow-sm'
       )}
     >
       <Icon className="h-4 w-4 text-neutral-500" />
@@ -934,7 +946,7 @@ function DockButton({
       onClick={onClick}
       className={cn(
         'relative grid h-10 w-10 place-items-center rounded-xl transition',
-        active ? 'bg-neutral-950 text-white shadow-sm' : 'text-neutral-500 hover:bg-white/80 hover:text-neutral-900',
+        active ? 'bg-neutral-950 text-white shadow-sm' : 'text-neutral-500 hover:bg-[#F7F7F7] hover:text-neutral-900',
       )}
       title={label}
       aria-label={label}
@@ -946,26 +958,21 @@ function DockButton({
 
 function AccountAvatar({ name, avatar }: AccountProfile) {
   if (avatar) {
-    return <img src={avatar} alt={name || 'Account avatar'} className="h-full w-full object-cover" />
+    return (
+      <img
+        src={avatar}
+        alt={name || 'Account avatar'}
+        className="h-full w-full object-cover"
+        decoding="async"
+        draggable={false}
+      />
+    )
   }
   return (
     <span className="text-sm font-semibold text-neutral-950">
       {(name.trim().slice(0, 1) || 'Y').toUpperCase()}
     </span>
   )
-}
-
-function readAccountProfile(value?: string): AccountProfile {
-  if (!value) return defaultAccountProfile
-  try {
-    const parsed = JSON.parse(value) as Partial<{ accountName: string; accountAvatar: string }>
-    return {
-      name: typeof parsed.accountName === 'string' && parsed.accountName.trim() ? parsed.accountName.trim() : defaultAccountProfile.name,
-      avatar: typeof parsed.accountAvatar === 'string' ? parsed.accountAvatar : '',
-    }
-  } catch {
-    return defaultAccountProfile
-  }
 }
 
 function childSessionTitle(session: Session, parent: Session) {
