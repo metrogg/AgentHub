@@ -1252,7 +1252,8 @@ function fileStatusFromGitStatus(status: string): CodeAgentRunMetadata['files'][
 function buildHostCommand(command: string, args: string[]) {
   if (process.platform !== 'win32') return [command, ...args]
   if (command === 'codex') return [windowsCodexCommand(), ...args]
-  return ['cmd.exe', '/d', '/c', [command, ...args.map(windowsShellArg)].join(' ')]
+  // Windows 上直接传数组参数，避免 cmd.exe /c 的 8192 字符命令行长度限制
+  return [command, ...args]
 }
 
 function windowsCodexCommand() {
@@ -1335,6 +1336,7 @@ function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
   const path = resolve(dir, `${modelTarget.providerKey}-${safeFileName(modelTarget.modelId)}.json`)
   const baseUrl = modelTarget.openaiBaseUrl ?? modelTarget.anthropicBaseUrl
   const modelRef = `${modelTarget.providerKey}/${modelTarget.modelId}`
+  const apiKey = modelTarget.apiKey?.trim() || readEnv('AGENTHUB_MODEL_API_KEY') || ''
   writeFileSync(
     path,
     JSON.stringify(
@@ -1348,7 +1350,7 @@ function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
             name: modelTarget.provider,
             options: {
               baseURL: baseUrl,
-              apiKey: '{env:AGENTHUB_MODEL_API_KEY}',
+              apiKey,
             },
             models: {
               [modelTarget.modelId]: {},
