@@ -350,18 +350,26 @@ interface OrchestratorTask {
 interface TaskOutputContract {
   requiredBlackboardWrites: Array<{
     key: string
-    schemaType: 'fact' | 'decision' | 'risk' | 'artifact_ref' | 'diff_summary' | 'test_result'
+    schemaType: 'fact' | 'decision' | 'risk' | 'artifact_ref' | 'diff_summary' | 'test_result' | 'task_output'
   }>
-  expectedArtifacts: Array<'diff' | 'file' | 'preview' | 'log' | 'review' | 'test_result'>
-  finalSummaryFormat: 'markdown' | 'json'
+  requiredArtifacts: Array<'diff' | 'file' | 'preview' | 'log' | 'review' | 'test_result'>
+  acceptanceCriteria: string[]
 }
 
 interface TaskValidation {
-  required: boolean
   commands: string[]
-  expectedSignals: string[]
+  requiresReview: boolean
 }
 ```
+
+当前实现状态（2026-05-27）：
+
+- `ExecutionTask` / `TaskLedger` 已保留 `outputContract` 与 `validation`，dispatch 会把 task card 中声明的契约贯通到运行计划。
+- `Planner` 的 JSON schema 已提示模型输出 `outputContract.requiredBlackboardWrites`、`requiredArtifacts`、`acceptanceCriteria` 与 `validation.commands`、`requiresReview`。
+- `OrchestratorEngine` 在任务产出写入黑板后执行安全白名单内的 `validation.commands`；每条命令结果写入 typed Blackboard `test_result`，并通过 `/api/orchestrator-runs/:id/blackboard?schemaType=test_result` 查询。
+- validation 失败会抛出任务错误，进入现有 retry / fallback / replan 路径；通过的结果会继续随最终 Synthesizer typed context 汇总。
+- 非白名单命令不会进入 shell 执行，会被记录为 `skipped`，避免模型生成命令直接触发高风险操作。
+- 当前只实现命令级 validation；`allowedPaths`、expected artifact 强校验、Reviewer 自动审查和用户合并确认仍在下一步。
 
 ### 5.5 validate_plan：校验计划
 
@@ -1148,6 +1156,8 @@ Orchestrator Runs 页面以事件流展示：
 Task completed
   -> collect diff
   -> write diff_summary to blackboard
+  -> run validation.commands
+  -> write test_result to blackboard
   -> after all write tasks completed
   -> group by file path
   -> no overlap: auto accept

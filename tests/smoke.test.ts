@@ -241,8 +241,18 @@ describe('AgentHub smoke tests', () => {
           title: 'Trace task',
           description: 'Verify dispatch response carries run id.',
           agentKey: 'architect',
+          taskType: 'code',
           dependencies: [],
           maxRetries: 0,
+          outputContract: {
+            requiredBlackboardWrites: [{ key: 'task_trace-task_output', schemaType: 'task_output' }],
+            requiredArtifacts: ['diff'],
+            acceptanceCriteria: ['validation command passes'],
+          },
+          validation: {
+            commands: ['bun --version'],
+            requiresReview: true,
+          },
         },
       ],
     }
@@ -282,7 +292,16 @@ describe('AgentHub smoke tests', () => {
       .limit(1)
     const runPlan = runRecord?.plan as {
       phases?: Array<{ id: string; taskIds: string[] }>
-      taskLedger?: { runId: string; tasks: Array<{ id: string; phaseId: string; status: string }> }
+      taskLedger?: {
+        runId: string
+        tasks: Array<{
+          id: string
+          phaseId: string
+          status: string
+          outputContract?: { requiredArtifacts?: string[]; acceptanceCriteria?: string[] }
+          validation?: { commands?: string[]; requiresReview?: boolean }
+        }>
+      }
       progressLedger?: {
         runId: string
         status: string
@@ -295,6 +314,9 @@ describe('AgentHub smoke tests', () => {
     expect(runPlan?.taskLedger?.runId).toBe(dispatched.runId)
     expect(runPlan?.taskLedger?.tasks[0]?.phaseId).toBeTruthy()
     expect(runPlan?.taskLedger?.tasks[0]?.status).toBe('pending')
+    expect(runPlan?.taskLedger?.tasks[0]?.outputContract?.requiredArtifacts).toContain('diff')
+    expect(runPlan?.taskLedger?.tasks[0]?.validation?.commands).toEqual(['bun --version'])
+    expect(runPlan?.taskLedger?.tasks[0]?.validation?.requiresReview).toBe(true)
     expect(runPlan?.progressLedger?.runId).toBe(dispatched.runId)
     expect(runPlan?.progressLedger?.status).toBe('running')
     expect(runPlan?.progressLedger?.pendingTaskIds).toContain('trace-task')
@@ -317,6 +339,16 @@ describe('AgentHub smoke tests', () => {
     expect(blackboardEntries.items[0]!.value.schemaType).toBe('task_output')
     expect(blackboardEntries.items[0]!.value.summary).toBeTruthy()
     expect(blackboardEntries.items[0]!.value.output).toBeTruthy()
+
+    const testResults = await json<{ items: Array<{ key: string; value: { schemaType: string; command: string; status: string; outputSummary: string } }> }>(
+      await app.request(`/api/orchestrator-runs/${dispatched.runId}/blackboard?schemaType=test_result`)
+    )
+    expect(testResults.items).toHaveLength(1)
+    expect(testResults.items[0]!.key).toBe('tests/trace-task/1')
+    expect(testResults.items[0]!.value.schemaType).toBe('test_result')
+    expect(testResults.items[0]!.value.command).toBe('bun --version')
+    expect(testResults.items[0]!.value.status).toBe('passed')
+    expect(testResults.items[0]!.value.outputSummary).toBeTruthy()
   })
 
   test('TaskGraph topological sort and cycle detection', async () => {
@@ -352,6 +384,16 @@ describe('AgentHub smoke tests', () => {
     ]
     const graph = new TaskGraph(tasks)
     expect(graph.detectCycles()).toBe(true)
+  })
+
+  test('task validation skips commands outside the safe allowlist', async () => {
+    const { runTaskValidation } = await import('../apps/server/src/services/orchestrator/task-validation')
+    const results = await runTaskValidation({ commands: ['echo unsafe'] })
+
+    expect(results).toHaveLength(1)
+    expect(results[0]!.command).toBe('echo unsafe')
+    expect(results[0]!.status).toBe('skipped')
+    expect(results[0]!.outputSummary).toContain('not allowed')
   })
 
   test('ConflictResolver detects file conflicts across agents', async () => {

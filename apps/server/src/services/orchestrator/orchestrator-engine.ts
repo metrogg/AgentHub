@@ -11,6 +11,7 @@ import { ConflictResolver } from './conflict-resolver'
 import { ReplanningEngine } from './replanning-engine'
 import { emitRunEvent } from './run-events'
 import { initializeRunLedger } from './run-ledger'
+import { runTaskValidation } from './task-validation'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
@@ -678,6 +679,52 @@ export class OrchestratorEngine {
             agentName: agent.name,
           },
         })
+      }
+
+      const validationResults = await runTaskValidation({
+        commands: task.validation?.commands ?? [],
+        cwd: branchCtx?.worktreePath ?? childInfo.projectPath ?? process.cwd(),
+      })
+      for (const [index, validation] of validationResults.entries()) {
+        const validationKey = `tests/${task.id}/${index + 1}`
+        await blackboard.write({
+          namespace: bbNamespace,
+          key: validationKey,
+          value: {
+            schemaType: 'test_result',
+            summary: `${validation.command}: ${validation.status}`,
+            confidence: 1,
+            sourceAgentId: agent.id,
+            taskId: task.id,
+            command: validation.command,
+            status: validation.status,
+            outputSummary: validation.outputSummary,
+          },
+          agentId: agent.id,
+          taskId: task.id,
+          tags: ['test_result', `agent_${agent.id}`],
+        })
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          taskId: task.id,
+          agentId: agent.id,
+          type: 'blackboard.written',
+          severity: validation.status === 'failed' ? 'warning' : 'info',
+          payload: {
+            namespace: bbNamespace,
+            key: validationKey,
+            schemaType: 'test_result',
+            command: validation.command,
+            status: validation.status,
+            durationMs: validation.durationMs,
+          },
+        })
+      }
+      const failedValidation = validationResults.find((result) => result.status === 'failed')
+      if (failedValidation) {
+        throw new Error(`Validation failed: ${failedValidation.command}`)
       }
 
       // 广播黑板更新到群聊会话

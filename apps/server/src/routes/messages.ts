@@ -25,7 +25,7 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 import { streamReply } from '../services/llm'
 import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
-import type { ExecutionPlan } from '../services/orchestrator/types'
+import type { ExecutionPlan, TaskOutputContract, TaskValidation } from '../services/orchestrator/types'
 import { emitRunEvent } from '../services/orchestrator/run-events'
 import { initializeRunLedger } from '../services/orchestrator/run-ledger'
 import { harnessManager } from '../services/harness'
@@ -129,6 +129,8 @@ type PlanTask = {
   parallelGroup?: string
   maxRetries?: number
   fallbackAgentId?: string
+  outputContract?: TaskOutputContract
+  validation?: TaskValidation
 }
 
 type PlanPhase = {
@@ -743,6 +745,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         parallelGroup: t.parallelGroup,
         maxRetries: t.maxRetries ?? 2,
         fallbackAgentId: t.fallbackAgentId,
+        outputContract: normalizeTaskOutputContract(t.outputContract, t.id),
+        validation: normalizeTaskValidation(t.validation),
       })),
     }
     const executionPlan = initializeRunLedger(rawExecutionPlan)
@@ -1186,7 +1190,7 @@ async function generatePlanWithLlm(goal: string, agents: PlanAgent[], specPhases
     'You are AgentHub Orchestrator.',
     'Create a concise multi-agent execution plan using only the provided agent keys.',
     'Return strict JSON only. Do not include Markdown fences or explanations.',
-    'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","status":"pending"}]}',
+    'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","status":"pending","outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
     'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
     specPhases || '',
   ].filter(Boolean).join('\n')
@@ -1235,6 +1239,8 @@ function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAg
       agentKey?: unknown
       taskType?: unknown
       status?: unknown
+      outputContract?: unknown
+      validation?: unknown
     }>
   }
   if (!Array.isArray(candidate.tasks) || candidate.tasks.length === 0) return null
@@ -1247,14 +1253,17 @@ function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAg
       const description = cleanPlanText(task.description)
       const agentKey = typeof task.agentKey === 'string' && agentKeys.has(task.agentKey) ? task.agentKey : agents[0]?.key
       if (!title || !description || !agentKey) return null
+      const id = slugifyTaskId(cleanPlanText(task.id) || title, index)
       return {
-        id: slugifyTaskId(cleanPlanText(task.id) || title, index),
+        id,
         phaseId: cleanPlanText(task.phaseId) || undefined,
         title,
         description,
         agentKey,
         taskType: parsePlanTaskType(task.taskType) ?? inferTaskTypeFromPlanText(`${title} ${description}`),
         status: task.status === 'running' || task.status === 'done' || task.status === 'failed' ? task.status : 'pending',
+        outputContract: normalizeTaskOutputContract(task.outputContract, id),
+        validation: normalizeTaskValidation(task.validation),
       }
     })
     .filter((task): task is PlanTask => Boolean(task))
@@ -1359,6 +1368,66 @@ function parsePlanTaskType(value: unknown): PlanTask['taskType'] | undefined {
     return value
   }
   return undefined
+}
+
+function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutputContract {
+  const fallback: TaskOutputContract = {
+    requiredBlackboardWrites: [{ key: `task_${taskId}_output`, schemaType: 'task_output' }],
+    requiredArtifacts: [],
+    acceptanceCriteria: [],
+  }
+  if (!value || typeof value !== 'object') return fallback
+  const item = value as {
+    requiredBlackboardWrites?: unknown
+    requiredArtifacts?: unknown
+    acceptanceCriteria?: unknown
+  }
+  const requiredBlackboardWrites = Array.isArray(item.requiredBlackboardWrites)
+    ? item.requiredBlackboardWrites
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object') return null
+          const candidate = entry as { key?: unknown; schemaType?: unknown }
+          const key = cleanPlanText(candidate.key)
+          const schemaType = parseBlackboardSchemaType(candidate.schemaType)
+          return key && schemaType ? { key, schemaType } : null
+        })
+        .filter((entry): entry is TaskOutputContract['requiredBlackboardWrites'][number] => Boolean(entry))
+    : []
+
+  return {
+    requiredBlackboardWrites: requiredBlackboardWrites.length ? requiredBlackboardWrites : fallback.requiredBlackboardWrites,
+    requiredArtifacts: arrayOfPlanStrings(item.requiredArtifacts).slice(0, 12),
+    acceptanceCriteria: arrayOfPlanStrings(item.acceptanceCriteria).slice(0, 12),
+  }
+}
+
+function normalizeTaskValidation(value: unknown): TaskValidation {
+  if (!value || typeof value !== 'object') return { commands: [], requiresReview: false }
+  const item = value as { commands?: unknown; requiresReview?: unknown }
+  return {
+    commands: arrayOfPlanStrings(item.commands).slice(0, 8),
+    requiresReview: item.requiresReview === true,
+  }
+}
+
+function parseBlackboardSchemaType(value: unknown): TaskOutputContract['requiredBlackboardWrites'][number]['schemaType'] | undefined {
+  if (
+    value === 'fact' ||
+    value === 'decision' ||
+    value === 'risk' ||
+    value === 'artifact_ref' ||
+    value === 'diff_summary' ||
+    value === 'test_result' ||
+    value === 'task_output'
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function arrayOfPlanStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => cleanPlanText(item)).filter(Boolean)
 }
 
 function inferTaskTypeFromPlanText(text: string): NonNullable<PlanTask['taskType']> {

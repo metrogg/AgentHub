@@ -2,7 +2,7 @@ import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
 import { harnessManager } from '../harness'
 import { initializeRunLedger } from './run-ledger'
-import type { ExecutionAgent, ExecutionPlan, ExecutionTask } from './types'
+import type { ExecutionAgent, ExecutionPlan, ExecutionTask, TaskOutputContract, TaskValidation } from './types'
 
 export interface PlannerInput {
   goal: string
@@ -155,7 +155,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       'You are AgentHub Orchestrator.',
       'Create a concise multi-agent execution plan using only the provided agent keys.',
       'Return strict JSON only. Do not include Markdown fences or explanations.',
-      'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?}]}',
+      'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
       'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
       'If tasks can run in parallel, put them in the same parallelGroup.',
       'Dependencies should reference task ids, not agent keys.',
@@ -202,6 +202,8 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         dependencies?: unknown
         parallelGroup?: unknown
         maxRetries?: unknown
+        outputContract?: unknown
+        validation?: unknown
       }>
     }
 
@@ -239,6 +241,8 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         dependencies: deps,
         parallelGroup: typeof t.parallelGroup === 'string' ? t.parallelGroup : undefined,
         maxRetries: typeof t.maxRetries === 'number' ? Math.max(0, Math.min(t.maxRetries, 5)) : 2,
+        outputContract: normalizeTaskOutputContract(t.outputContract, id),
+        validation: normalizeTaskValidation(t.validation),
       })
     }
 
@@ -349,6 +353,65 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       return lowered.some((keyword) => text.includes(keyword))
     })
   }
+}
+
+function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutputContract | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const item = value as {
+    requiredBlackboardWrites?: unknown
+    requiredArtifacts?: unknown
+    acceptanceCriteria?: unknown
+  }
+  const requiredBlackboardWrites = Array.isArray(item.requiredBlackboardWrites)
+    ? item.requiredBlackboardWrites
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object') return null
+          const candidate = entry as { key?: unknown; schemaType?: unknown }
+          const key = cleanPlanText(candidate.key) || `task_${taskId}_output`
+          const schemaType = parseBlackboardSchemaType(candidate.schemaType)
+          return schemaType ? { key, schemaType } : null
+        })
+        .filter((entry): entry is TaskOutputContract['requiredBlackboardWrites'][number] => Boolean(entry))
+    : []
+  const requiredArtifacts = arrayOfStrings(item.requiredArtifacts)
+  const acceptanceCriteria = arrayOfStrings(item.acceptanceCriteria)
+  if (!requiredBlackboardWrites.length && !requiredArtifacts.length && !acceptanceCriteria.length) return undefined
+  return {
+    requiredBlackboardWrites,
+    requiredArtifacts,
+    acceptanceCriteria,
+  }
+}
+
+function normalizeTaskValidation(value: unknown): TaskValidation | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const item = value as { commands?: unknown; requiresReview?: unknown }
+  const commands = arrayOfStrings(item.commands)
+  if (!commands.length && item.requiresReview !== true) return undefined
+  return {
+    commands,
+    requiresReview: item.requiresReview === true,
+  }
+}
+
+function parseBlackboardSchemaType(value: unknown): TaskOutputContract['requiredBlackboardWrites'][number]['schemaType'] | undefined {
+  if (
+    value === 'fact' ||
+    value === 'decision' ||
+    value === 'risk' ||
+    value === 'artifact_ref' ||
+    value === 'diff_summary' ||
+    value === 'test_result' ||
+    value === 'task_output'
+  ) {
+    return value
+  }
+  return undefined
+}
+
+function arrayOfStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => cleanPlanText(item)).filter(Boolean).slice(0, 12)
 }
 
 function extractJsonObject(value: string) {
