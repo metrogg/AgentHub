@@ -6,7 +6,7 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { emitRunEvent, listRunEvents } from '../services/orchestrator/run-events'
 import { blackboard, Blackboard } from '../services/blackboard'
 import type { BlackboardSchemaType } from '../services/blackboard-schemas'
-import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
+import { OrchestratorEngine, type ExecutionTask } from '../services/orchestrator/orchestrator-engine'
 
 export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -131,6 +131,78 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       .limit(1)
 
     return c.json({ run: updated ?? { ...run, status: 'cancelled' }, activeRunCancelled })
+  })
+
+  // Retry a failed task within a run
+  .post('/:id/retry-task/:taskId', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const taskId = c.req.param('taskId')
+
+    const [run] = await db
+      .select({
+        id: orchestratorRuns.id,
+        workspaceId: orchestratorRuns.workspaceId,
+        groupSessionId: orchestratorRuns.groupSessionId,
+        status: orchestratorRuns.status,
+        plan: orchestratorRuns.plan,
+      })
+      .from(orchestratorRuns)
+      .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
+      .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
+      .limit(1)
+
+    if (!run) {
+      throw new HTTPException(404, { message: 'Run not found' })
+    }
+
+    const [taskRow] = await db
+      .select()
+      .from(workspaceTasks)
+      .where(and(eq(workspaceTasks.id, taskId), eq(workspaceTasks.runId, id)))
+      .limit(1)
+
+    if (!taskRow) {
+      throw new HTTPException(404, { message: 'Task not found' })
+    }
+
+    if (taskRow.status !== 'failed' && taskRow.status !== 'cancelled') {
+      return c.json({ ok: false, message: 'Only failed or cancelled tasks can be retried' }, 400)
+    }
+
+    const plan = run.plan as { tasks?: Array<{ id: string; agentId: string; title: string; description: string; dependencies: string[]; taskType?: string; maxRetries?: number; outputContract?: unknown; validation?: unknown }> } | null
+    const planTask = plan?.tasks?.find((t) => t.id === taskId)
+    if (!planTask) {
+      throw new HTTPException(404, { message: 'Task not found in run plan' })
+    }
+
+    const engine = new OrchestratorEngine()
+    const childSessions = new Map<string, { sessionId: string; workspaceId: string; projectPath?: string | null }>()
+    childSessions.set(taskId, {
+      sessionId: taskRow.sessionId ?? '',
+      workspaceId: run.workspaceId,
+      projectPath: null,
+    })
+
+    const result = await engine.retryTask({
+      runId: id,
+      groupSessionId: run.groupSessionId,
+      workspaceId: run.workspaceId,
+      task: {
+        id: taskId,
+        agentId: planTask.agentId,
+        title: planTask.title,
+        description: planTask.description ?? '',
+        dependencies: planTask.dependencies ?? [],
+        taskType: planTask.taskType as ExecutionTask['taskType'],
+        maxRetries: planTask.maxRetries ?? 2,
+        outputContract: planTask.outputContract as ExecutionTask['outputContract'],
+        validation: planTask.validation as ExecutionTask['validation'],
+      },
+      childSessions,
+    })
+
+    return c.json({ ok: true, result })
   })
 
   // Get timeline events for a run

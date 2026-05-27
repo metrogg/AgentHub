@@ -38,6 +38,44 @@ export class OrchestratorEngine {
     return true
   }
 
+  async retryTask(params: {
+    runId: string
+    groupSessionId: string
+    workspaceId: string
+    task: ExecutionTask
+    childSessions: Map<string, ChildSessionInfo>
+  }): Promise<TaskResult> {
+    const { runId, groupSessionId, workspaceId, task, childSessions } = params
+
+    await db
+      .update(workspaceTasks)
+      .set({ status: 'pending', completedAt: null, errorLog: null })
+      .where(eq(workspaceTasks.id, task.id))
+
+    await emitRunEvent({
+      runId,
+      workspaceId,
+      groupSessionId,
+      taskId: task.id,
+      agentId: task.agentId,
+      type: 'task.retrying',
+      severity: 'warning',
+      payload: { title: task.title, reason: 'User triggered retry' },
+    })
+
+    const [runRow] = await db
+      .select({ plan: orchestratorRuns.plan })
+      .from(orchestratorRuns)
+      .where(eq(orchestratorRuns.id, runId))
+      .limit(1)
+
+    const plan = (runRow?.plan as ExecutionPlan | undefined) ?? { runId, title: '', goal: '', agents: [], tasks: [task] }
+
+    const result = await this.executeTask(task, plan, childSessions, runId, groupSessionId, workspaceId, new AbortController().signal, 0)
+
+    return result
+  }
+
   async createPlan(goal: string, agents: ExecutionPlan['agents'], workspacePath?: string | null): Promise<ExecutionPlan> {
     return this.planner.createPlan({ goal, agents, workspacePath })
   }

@@ -44,6 +44,7 @@ export default function OrchestratorRunsPage() {
   const [blackboardEntries, setBlackboardEntries] = useState<TypedBlackboardEntry[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null)
+  const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null)
 
   const selectedRun = useMemo(
     () => runs.find((r) => r.id === selectedRunId) ?? null,
@@ -102,6 +103,20 @@ export default function OrchestratorRunsPage() {
       setMessage(error?.message || '取消运行失败')
     } finally {
       setCancellingRunId(null)
+    }
+  }
+
+  async function retryTask(runId: string, taskId: string) {
+    setRetryingTaskId(taskId)
+    setMessage('')
+    try {
+      await api.retryOrchestratorTask(runId, taskId)
+      await refreshRuns()
+      if (selectedRunId) await loadRunDetail(selectedRunId)
+    } catch (error: any) {
+      setMessage(error?.message || '重试任务失败')
+    } finally {
+      setRetryingTaskId(null)
     }
   }
 
@@ -330,6 +345,62 @@ export default function OrchestratorRunsPage() {
                                       {validationCount} validations
                                     </span>
                                   )}
+                                </div>
+                              )}
+                              {phaseTasks.length > 0 && (
+                                <div className="mt-2 space-y-1.5">
+                                  {phaseTasks.map((task) => {
+                                    const taskStatus = progressLedger.completedTaskIds.includes(task.id)
+                                      ? 'completed'
+                                      : progressLedger.runningTaskIds.includes(task.id)
+                                        ? 'running'
+                                        : progressLedger.failedTaskIds.includes(task.id)
+                                          ? 'failed'
+                                          : progressLedger.cancelledTaskIds.includes(task.id)
+                                            ? 'cancelled'
+                                            : progressLedger.blockedTaskIds.includes(task.id)
+                                              ? 'blocked'
+                                              : 'pending'
+                                    const canRetry = taskStatus === 'failed' || taskStatus === 'cancelled'
+                                    return (
+                                      <div key={task.id} className="flex items-center justify-between gap-2 rounded bg-white px-2 py-1">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <span className={cn('h-1.5 w-1.5 rounded-full shrink-0',
+                                            taskStatus === 'completed' ? 'bg-emerald-500' :
+                                            taskStatus === 'running' ? 'bg-indigo-500' :
+                                            taskStatus === 'failed' ? 'bg-red-500' :
+                                            taskStatus === 'cancelled' ? 'bg-orange-400' :
+                                            taskStatus === 'blocked' ? 'bg-neutral-400' : 'bg-neutral-300',
+                                          )} />
+                                          <span className="truncate text-[11px] text-neutral-700">{task.title}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <span className={cn('text-[10px] font-medium',
+                                            taskStatus === 'completed' ? 'text-emerald-600' :
+                                            taskStatus === 'failed' ? 'text-red-600' :
+                                            taskStatus === 'cancelled' ? 'text-orange-500' :
+                                            taskStatus === 'running' ? 'text-indigo-600' :
+                                            'text-neutral-500',
+                                          )}>{taskStatus}</span>
+                                          {canRetry && selectedRun && (
+                                            <button
+                                              type="button"
+                                              onClick={() => void retryTask(selectedRun.id, task.id)}
+                                              disabled={retryingTaskId === task.id}
+                                              className="inline-flex items-center gap-1 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                                            >
+                                              {retryingTaskId === task.id ? (
+                                                <Loader2 className="h-3 w-3 animate-spin" />
+                                              ) : (
+                                                <RefreshCw className="h-3 w-3" />
+                                              )}
+                                              重试
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
                                 </div>
                               )}
                             </div>

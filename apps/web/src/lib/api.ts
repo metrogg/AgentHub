@@ -1028,6 +1028,8 @@ export const api = {
       `/orchestrator-runs/${id}/cancel`,
       { method: 'POST' },
     ),
+  retryOrchestratorTask: (runId: string, taskId: string) =>
+    request<{ ok: boolean; result: unknown }>(`/orchestrator-runs/${runId}/retry-task/${taskId}`, { method: 'POST' }),
   getOrchestratorRunEvents: (id: string) => request<{ items: OrchestratorRunEvent[] }>(`/orchestrator-runs/${id}/events`),
   getOrchestratorRunBlackboard: (id: string, schemaType?: BlackboardSchemaType) =>
     request<{ items: TypedBlackboardEntry[] }>(
