@@ -88,6 +88,7 @@ import {
   type OrchestratorDispatchResult,
   type OrchestratorPlan,
   type OrchestratorPlanTask,
+  type Session,
   type SkillSummary,
   type TaskStatus,
   type Workspace,
@@ -242,10 +243,49 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const messages = useChatStore((state) => state.messages)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
+  const deleteSession = useChatStore((state) => state.deleteSession)
+  const selectSession = useChatStore((state) => state.selectSession)
   const activeAgentIds = new Set(
     messages.filter((message) => message.senderType === 'agent').map((message) => message.senderId),
   )
   const memberCount = agents.length + 2
+  const [childSessions, setChildSessions] = useState<Session[]>([])
+  const [loadingChildren, setLoadingChildren] = useState(false)
+  const [newTalkOpen, setNewTalkOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open || !workspace) return
+    setLoadingChildren(true)
+    api
+      .getWorkspaceSessions(workspace.id)
+      .then(({ items }) => {
+        setChildSessions(items.filter((s) => s.type === 'direct'))
+      })
+      .catch(() => setChildSessions([]))
+      .finally(() => setLoadingChildren(false))
+  }, [open, workspace?.id])
+
+  async function startChildTalk(agentId: string) {
+    if (!workspace) return
+    setNewTalkOpen(false)
+    try {
+      const { session } = await api.openWorkspaceAgentSession(workspace.id, agentId)
+      await fetchSessions()
+      await selectSession(session.id)
+      onClose()
+      navigate(`/chat/${session.id}`)
+    } catch {
+      // ignore
+    }
+  }
+
+  async function removeChildSession(sessionId: string) {
+    if (!confirm('确定删除这个对话吗？')) return
+    await deleteSession(sessionId)
+    setChildSessions((prev) => prev.filter((s) => s.id !== sessionId))
+  }
 
   return (
     <div
@@ -266,7 +306,7 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
       />
       <aside
         className={cn(
-          'relative h-full w-[320px] max-w-[88vw] border-l border-neutral-200 bg-[#fbfbf9]/95 shadow-[-18px_0_45px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'relative h-full w-[340px] max-w-[88vw] border-l border-neutral-200 bg-[#fbfbf9]/95 shadow-[-18px_0_45px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
       >
@@ -321,6 +361,108 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
                 />
               ))}
             </div>
+
+            {/* 子对话管理 */}
+            {workspace && (
+              <div className="mt-5">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-medium text-neutral-500 uppercase tracking-wider">子对话</div>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setNewTalkOpen((v) => !v)}
+                      className="inline-flex h-7 items-center gap-1 rounded-lg bg-neutral-900 px-2.5 text-xs font-medium text-white transition hover:bg-neutral-700"
+                    >
+                      <Plus className="h-3 w-3" />
+                      新建对话
+                    </button>
+                    {newTalkOpen && (
+                      <div className="absolute right-0 top-9 z-30 w-56 rounded-xl border border-neutral-200 bg-white p-1.5 shadow-xl">
+                        <div className="px-2 py-1 text-[10px] font-medium text-neutral-400">选择 Agent 开始对话</div>
+                        {agents.map((agent) => (
+                          <button
+                            key={agent.id}
+                            type="button"
+                            onClick={() => void startChildTalk(agent.id)}
+                            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-neutral-50"
+                          >
+                            <span
+                              className="grid h-6 w-6 shrink-0 place-items-center rounded-sm text-[10px] font-semibold text-white"
+                              style={{ background: agent.color ?? '#111827' }}
+                            >
+                              {agent.name.slice(0, 1).toUpperCase()}
+                            </span>
+                            <span className="truncate text-neutral-700">{agent.name}</span>
+                          </button>
+                        ))}
+                        {!agents.length && (
+                          <div className="px-2 py-2 text-xs text-neutral-400">当前群聊没有 Agent</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-2 space-y-1">
+                  {loadingChildren && (
+                    <div className="px-2 py-3 text-center text-xs text-neutral-400">
+                      <Loader2 className="mx-auto h-4 w-4 animate-spin" />
+                    </div>
+                  )}
+                  {!loadingChildren && childSessions.length === 0 && (
+                    <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-4 text-center text-xs text-neutral-400">
+                      暂无子对话，点击上方「新建对话」开始
+                    </div>
+                  )}
+                  {childSessions.map((session) => {
+                    const agent = agents.find((a) => a.id === session.workspaceAgentId)
+                    const isActive = session.id === currentSessionId
+                    return (
+                      <div
+                        key={session.id}
+                        className={cn(
+                          'group flex items-center gap-2 rounded-xl border px-2.5 py-2 transition',
+                          isActive
+                            ? 'border-emerald-200 bg-emerald-50'
+                            : 'border-neutral-200 bg-white hover:border-neutral-300',
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClose()
+                            navigate(`/chat/${session.id}`)
+                          }}
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        >
+                          {agent ? (
+                            <span
+                              className="grid h-6 w-6 shrink-0 place-items-center rounded-sm text-[10px] font-semibold text-white"
+                              style={{ background: agent.color ?? '#111827' }}
+                            >
+                              {agent.name.slice(0, 1).toUpperCase()}
+                            </span>
+                          ) : (
+                            <MessageSquare className="h-4 w-4 shrink-0 text-neutral-400" />
+                          )}
+                          <span className={cn('min-w-0 flex-1 truncate text-sm', isActive ? 'font-medium text-emerald-700' : 'text-neutral-700')}>
+                            {session.title}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void removeChildSession(session.id)}
+                          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-neutral-300 opacity-0 transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+                          title="删除对话"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="mt-5 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
               <div className="font-medium text-neutral-900">提及方式</div>

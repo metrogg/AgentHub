@@ -9,11 +9,11 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
   .get('/', async (c) => {
     const user = c.get('user')
-    const list = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.ownerId, user.sub))
-      .orderBy(desc(sessions.updatedAt))
+    const workspaceId = c.req.query('workspaceId')
+    const conditions = workspaceId
+      ? and(eq(sessions.ownerId, user.sub), eq(sessions.workspaceId, workspaceId))
+      : eq(sessions.ownerId, user.sub)
+    const list = await db.select().from(sessions).where(conditions).orderBy(desc(sessions.updatedAt))
     return c.json({ items: list })
   })
   .post('/', zValidator('json', createSessionSchema), async (c) => {

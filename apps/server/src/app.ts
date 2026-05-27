@@ -22,8 +22,11 @@ const app = new Hono()
     if (err instanceof HTTPException) {
       return c.json({ error: err.message }, err.status)
     }
+    const isDev = env.NODE_ENV !== 'production'
+    const message = err instanceof Error ? err.message : String(err)
+    const stack = isDev && err instanceof Error ? err.stack : undefined
     console.error(err)
-    return c.json({ error: 'Internal Server Error' }, 500)
+    return c.json({ error: isDev ? message : 'Internal Server Error', stack }, 500)
   })
   .get('/health', (c) => c.json({ status: 'ok', version: '0.1.0' }))
 

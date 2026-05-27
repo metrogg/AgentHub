@@ -990,6 +990,7 @@ export const api = {
       body: projectPath ? JSON.stringify({ projectPath }) : undefined,
     }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
+  getWorkspaceSessions: (id: string) => request<{ items: Session[] }>(`/workspaces/${id}/sessions`),
   getWorkspaceActiveRuns: (id: string) => request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
   updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>
     request<WorkspaceFull>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

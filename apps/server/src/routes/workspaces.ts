@@ -249,6 +249,19 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ session: created })
   })
 
+  // Agent child session
+  .get('/:id/sessions', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    await ensureWorkspace(id, user.sub)
+    const list = await db
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.workspaceId, id), eq(sessions.ownerId, user.sub)))
+      .orderBy(desc(sessions.updatedAt))
+    return c.json({ items: list })
+  })
+
   // Active runs
   .get('/:id/active-runs', async (c) => {
     const user = c.get('user')
