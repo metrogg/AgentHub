@@ -2449,6 +2449,28 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">
                     {task.description}
                   </p>
+                  {(task.outputContract || task.validation) && (
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-neutral-500">
+                      {task.outputContract?.allowedPaths?.slice(0, 2).map((path) => (
+                        <span key={path} className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
+                          path:{path}
+                        </span>
+                      ))}
+                      {task.outputContract?.requiredArtifacts?.slice(0, 3).map((artifact) => (
+                        <span key={artifact} className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
+                          artifact:{artifact}
+                        </span>
+                      ))}
+                      {task.validation?.commands?.slice(0, 2).map((command) => (
+                        <span key={command} className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">
+                          validate:{command}
+                        </span>
+                      ))}
+                      {task.validation?.requiresReview && (
+                        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">review required</span>
+                      )}
+                    </div>
+                  )}
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {(['pending', 'running', 'done'] as TaskStatus[]).map((item) => (
                       <button

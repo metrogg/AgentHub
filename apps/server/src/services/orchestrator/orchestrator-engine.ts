@@ -11,6 +11,7 @@ import { ConflictResolver } from './conflict-resolver'
 import { ReplanningEngine } from './replanning-engine'
 import { emitRunEvent } from './run-events'
 import { initializeRunLedger } from './run-ledger'
+import { validateTaskOutputContract } from './task-contract'
 import { runTaskValidation } from './task-validation'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 
@@ -725,6 +726,56 @@ export class OrchestratorEngine {
       const failedValidation = validationResults.find((result) => result.status === 'failed')
       if (failedValidation) {
         throw new Error(`Validation failed: ${failedValidation.command}`)
+      }
+
+      const contractResult = validateTaskOutputContract({
+        task,
+        artifacts,
+        writtenBlackboardKeys: [
+          `task_${task.id}_output`,
+          ...summary.decisions.map((_, index) => `decisions/${task.id}/${index + 1}`),
+          ...(changedFiles.length > 0 ? [`diffs/${task.id}`] : []),
+          ...artifacts.map((artifact) => {
+            const artifactId = typeof artifact.id === 'string' && artifact.id ? artifact.id : `artifact-${task.id}`
+            return `artifacts/${artifactId}`
+          }),
+          ...validationResults.map((_, index) => `tests/${task.id}/${index + 1}`),
+        ],
+      })
+      if (contractResult.status === 'failed') {
+        await blackboard.write({
+          namespace: bbNamespace,
+          key: `risks/${task.id}/contract`,
+          value: {
+            schemaType: 'risk',
+            summary: `Task contract failed with ${contractResult.violations.length} violation(s).`,
+            confidence: 1,
+            sourceAgentId: agent.id,
+            taskId: task.id,
+            risk: contractResult.violations.map((violation) => violation.message).join('\n'),
+            severity: 'high',
+            mitigation: 'Review the task output contract, allowed paths, and produced artifacts before accepting this task.',
+          },
+          agentId: agent.id,
+          taskId: task.id,
+          tags: ['risk', 'contract_violation', `agent_${agent.id}`],
+        })
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          taskId: task.id,
+          agentId: agent.id,
+          type: 'task.failed',
+          severity: 'error',
+          payload: {
+            title: task.title,
+            agentName: agent.name,
+            error: `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`,
+            violations: contractResult.violations,
+          },
+        })
+        throw new Error(`Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`)
       }
 
       // 广播黑板更新到群聊会话

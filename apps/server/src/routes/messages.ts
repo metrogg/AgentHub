@@ -1190,7 +1190,7 @@ async function generatePlanWithLlm(goal: string, agents: PlanAgent[], specPhases
     'You are AgentHub Orchestrator.',
     'Create a concise multi-agent execution plan using only the provided agent keys.',
     'Return strict JSON only. Do not include Markdown fences or explanations.',
-    'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","status":"pending","outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
+    'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","status":"pending","outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
     'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
     specPhases || '',
   ].filter(Boolean).join('\n')
@@ -1380,6 +1380,7 @@ function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutput
   const item = value as {
     requiredBlackboardWrites?: unknown
     requiredArtifacts?: unknown
+    allowedPaths?: unknown
     acceptanceCriteria?: unknown
   }
   const requiredBlackboardWrites = Array.isArray(item.requiredBlackboardWrites)
@@ -1397,6 +1398,7 @@ function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutput
   return {
     requiredBlackboardWrites: requiredBlackboardWrites.length ? requiredBlackboardWrites : fallback.requiredBlackboardWrites,
     requiredArtifacts: arrayOfPlanStrings(item.requiredArtifacts).slice(0, 12),
+    allowedPaths: arrayOfPlanStrings(item.allowedPaths).slice(0, 24),
     acceptanceCriteria: arrayOfPlanStrings(item.acceptanceCriteria).slice(0, 12),
   }
 }

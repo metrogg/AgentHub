@@ -727,11 +727,13 @@ Office / Orchestrator Runs 页面应展示：
 
 实施状态（2026-05-27）：
 
-- 已完成 Phase 4 第一刀：Plan task 支持 `outputContract` 与 `validation`，dispatch 会把契约写入 `ExecutionPlan` / `TaskLedger`，不再只停留在文档字段。
-- Planner / 群聊 task card 解析均已接受 `outputContract.requiredBlackboardWrites`、`requiredArtifacts`、`acceptanceCriteria` 和 `validation.commands`、`requiresReview`。
+- 已完成 Phase 4 前两刀：Plan task 支持 `outputContract` 与 `validation`，dispatch 会把契约写入 `ExecutionPlan` / `TaskLedger`，不再只停留在文档字段。
+- Planner / 群聊 task card 解析均已接受 `outputContract.requiredBlackboardWrites`、`requiredArtifacts`、`allowedPaths`、`acceptanceCriteria` 和 `validation.commands`、`requiresReview`。
 - Orchestrator Engine 在任务完成后执行安全白名单内的 `validation.commands`，将每条命令结果写入 typed Blackboard `test_result`；失败命令会让任务进入失败/重试路径，非白名单命令会被标记为 `skipped`。
+- Orchestrator Engine 会校验 `requiredArtifacts` 和 `allowedPaths`：缺少必需 artifact 或产物路径越界会写入 typed `risk` 并让任务失败，进入现有 retry/fallback/replan 路径。
+- 群聊计划卡会展示每个任务的 allowed paths、required artifacts 和 validation commands；Runs 详情的 Progress Ledger 会展示阶段级 contract/validation 数量。
 - Runs 页已有“结构化黑板”证据区，因此 `test_result` 会作为测试证据显示；后续可再做专门的 validation panel。
-- 尚未完成：`allowedPaths` 强约束、Code Agent diff artifact 更严格标准化、Reviewer 自动审查链路、用户确认合并/放弃动作。
+- 尚未完成：Code Agent diff artifact 更严格标准化、Reviewer 自动审查链路、用户确认合并/放弃动作、专门 validation/contract 详情面板。
 
 ### Phase 5：小规模动态 Swarm
 

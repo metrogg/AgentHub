@@ -266,6 +266,8 @@ export default function OrchestratorRunsPage() {
                           const done = phaseTasks.filter((task) => progressLedger.completedTaskIds.includes(task.id)).length
                           const running = phaseTasks.some((task) => progressLedger.runningTaskIds.includes(task.id))
                           const failed = phaseTasks.some((task) => progressLedger.failedTaskIds.includes(task.id))
+                          const contractCount = phaseTasks.filter((task) => task.outputContract).length
+                          const validationCount = phaseTasks.filter((task) => task.validation?.commands?.length).length
                           return (
                             <div key={phase.id} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3">
                               <div className="flex items-center justify-between gap-2">
@@ -284,6 +286,20 @@ export default function OrchestratorRunsPage() {
                                 </span>
                               </div>
                               <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">{phase.purpose}</p>
+                              {(contractCount > 0 || validationCount > 0) && (
+                                <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                                  {contractCount > 0 && (
+                                    <span className="rounded bg-white px-1.5 py-0.5 text-emerald-700">
+                                      {contractCount} contracts
+                                    </span>
+                                  )}
+                                  {validationCount > 0 && (
+                                    <span className="rounded bg-white px-1.5 py-0.5 text-blue-700">
+                                      {validationCount} validations
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           )
                         })}

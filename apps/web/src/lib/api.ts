@@ -548,6 +548,23 @@ export interface OrchestratorPlanTask {
   agentKey: string
   taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'review' | 'synthesize'
   status?: TaskStatus
+  outputContract?: OrchestratorTaskOutputContract
+  validation?: OrchestratorTaskValidation
+}
+
+export interface OrchestratorTaskOutputContract {
+  requiredBlackboardWrites: Array<{
+    key: string
+    schemaType: BlackboardSchemaType
+  }>
+  requiredArtifacts?: string[]
+  allowedPaths?: string[]
+  acceptanceCriteria?: string[]
+}
+
+export interface OrchestratorTaskValidation {
+  commands?: string[]
+  requiresReview?: boolean
 }
 
 export interface OrchestratorPlanPhase {
@@ -583,6 +600,8 @@ export interface OrchestratorTaskLedger {
     dependencies: string[]
     taskType: NonNullable<OrchestratorPlanTask['taskType']>
     status: TaskStatus | 'cancelled'
+    outputContract?: OrchestratorTaskOutputContract
+    validation?: OrchestratorTaskValidation
   }>
 }
 

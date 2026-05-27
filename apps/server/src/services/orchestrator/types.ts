@@ -59,6 +59,7 @@ export interface TaskOutputContract {
     schemaType: 'fact' | 'decision' | 'risk' | 'artifact_ref' | 'diff_summary' | 'test_result' | 'task_output'
   }>
   requiredArtifacts?: string[]
+  allowedPaths?: string[]
   acceptanceCriteria?: string[]
 }
 

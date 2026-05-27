@@ -155,7 +155,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       'You are AgentHub Orchestrator.',
       'Create a concise multi-agent execution plan using only the provided agent keys.',
       'Return strict JSON only. Do not include Markdown fences or explanations.',
-      'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
+      'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
       'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
       'If tasks can run in parallel, put them in the same parallelGroup.',
       'Dependencies should reference task ids, not agent keys.',
@@ -360,6 +360,7 @@ function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutput
   const item = value as {
     requiredBlackboardWrites?: unknown
     requiredArtifacts?: unknown
+    allowedPaths?: unknown
     acceptanceCriteria?: unknown
   }
   const requiredBlackboardWrites = Array.isArray(item.requiredBlackboardWrites)
@@ -374,11 +375,13 @@ function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutput
         .filter((entry): entry is TaskOutputContract['requiredBlackboardWrites'][number] => Boolean(entry))
     : []
   const requiredArtifacts = arrayOfStrings(item.requiredArtifacts)
+  const allowedPaths = arrayOfStrings(item.allowedPaths)
   const acceptanceCriteria = arrayOfStrings(item.acceptanceCriteria)
-  if (!requiredBlackboardWrites.length && !requiredArtifacts.length && !acceptanceCriteria.length) return undefined
+  if (!requiredBlackboardWrites.length && !requiredArtifacts.length && !allowedPaths.length && !acceptanceCriteria.length) return undefined
   return {
     requiredBlackboardWrites,
     requiredArtifacts,
+    allowedPaths,
     acceptanceCriteria,
   }
 }

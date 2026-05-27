@@ -353,6 +353,7 @@ interface TaskOutputContract {
     schemaType: 'fact' | 'decision' | 'risk' | 'artifact_ref' | 'diff_summary' | 'test_result' | 'task_output'
   }>
   requiredArtifacts: Array<'diff' | 'file' | 'preview' | 'log' | 'review' | 'test_result'>
+  allowedPaths: string[]
   acceptanceCriteria: string[]
 }
 
@@ -365,11 +366,13 @@ interface TaskValidation {
 当前实现状态（2026-05-27）：
 
 - `ExecutionTask` / `TaskLedger` 已保留 `outputContract` 与 `validation`，dispatch 会把 task card 中声明的契约贯通到运行计划。
-- `Planner` 的 JSON schema 已提示模型输出 `outputContract.requiredBlackboardWrites`、`requiredArtifacts`、`acceptanceCriteria` 与 `validation.commands`、`requiresReview`。
+- `Planner` 的 JSON schema 已提示模型输出 `outputContract.requiredBlackboardWrites`、`requiredArtifacts`、`allowedPaths`、`acceptanceCriteria` 与 `validation.commands`、`requiresReview`。
 - `OrchestratorEngine` 在任务产出写入黑板后执行安全白名单内的 `validation.commands`；每条命令结果写入 typed Blackboard `test_result`，并通过 `/api/orchestrator-runs/:id/blackboard?schemaType=test_result` 查询。
 - validation 失败会抛出任务错误，进入现有 retry / fallback / replan 路径；通过的结果会继续随最终 Synthesizer typed context 汇总。
 - 非白名单命令不会进入 shell 执行，会被记录为 `skipped`，避免模型生成命令直接触发高风险操作。
-- 当前只实现命令级 validation；`allowedPaths`、expected artifact 强校验、Reviewer 自动审查和用户合并确认仍在下一步。
+- `OrchestratorEngine` 会校验 required artifacts 和 allowed paths；缺少 artifact 或产物路径越界会写 typed `risk`，并让任务失败进入现有恢复路径。
+- 群聊计划卡会展示任务的 paths/artifacts/validation；Runs 详情会展示阶段级 contract/validation 数量。
+- 当前仍未完成：Reviewer 自动审查、用户合并确认、专门 contract/validation 详情面板。
 
 ### 5.5 validate_plan：校验计划
 

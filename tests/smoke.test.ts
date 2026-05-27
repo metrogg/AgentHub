@@ -246,7 +246,8 @@ describe('AgentHub smoke tests', () => {
           maxRetries: 0,
           outputContract: {
             requiredBlackboardWrites: [{ key: 'task_trace-task_output', schemaType: 'task_output' }],
-            requiredArtifacts: ['diff'],
+            requiredArtifacts: [],
+            allowedPaths: ['apps/web/src/**'],
             acceptanceCriteria: ['validation command passes'],
           },
           validation: {
@@ -298,7 +299,7 @@ describe('AgentHub smoke tests', () => {
           id: string
           phaseId: string
           status: string
-          outputContract?: { requiredArtifacts?: string[]; acceptanceCriteria?: string[] }
+          outputContract?: { requiredArtifacts?: string[]; allowedPaths?: string[]; acceptanceCriteria?: string[] }
           validation?: { commands?: string[]; requiresReview?: boolean }
         }>
       }
@@ -314,7 +315,7 @@ describe('AgentHub smoke tests', () => {
     expect(runPlan?.taskLedger?.runId).toBe(dispatched.runId)
     expect(runPlan?.taskLedger?.tasks[0]?.phaseId).toBeTruthy()
     expect(runPlan?.taskLedger?.tasks[0]?.status).toBe('pending')
-    expect(runPlan?.taskLedger?.tasks[0]?.outputContract?.requiredArtifacts).toContain('diff')
+    expect(runPlan?.taskLedger?.tasks[0]?.outputContract?.allowedPaths).toContain('apps/web/src/**')
     expect(runPlan?.taskLedger?.tasks[0]?.validation?.commands).toEqual(['bun --version'])
     expect(runPlan?.taskLedger?.tasks[0]?.validation?.requiresReview).toBe(true)
     expect(runPlan?.progressLedger?.runId).toBe(dispatched.runId)
@@ -394,6 +395,46 @@ describe('AgentHub smoke tests', () => {
     expect(results[0]!.command).toBe('echo unsafe')
     expect(results[0]!.status).toBe('skipped')
     expect(results[0]!.outputSummary).toContain('not allowed')
+  })
+
+  test('task output contract enforces allowed paths and required artifacts', async () => {
+    const { validateTaskOutputContract } = await import('../apps/server/src/services/orchestrator/task-contract')
+    const baseTask = {
+      id: 'code-task',
+      title: 'Code task',
+      description: 'Modify allowed files only.',
+      agentId: 'agent-1',
+      dependencies: [],
+      maxRetries: 0,
+      outputContract: {
+        requiredBlackboardWrites: [{ key: 'task_code-task_output', schemaType: 'task_output' as const }],
+        requiredArtifacts: ['diff'],
+        allowedPaths: ['apps/web/src/**'],
+      },
+    }
+
+    const pass = validateTaskOutputContract({
+      task: baseTask,
+      artifacts: [{ kind: 'diff', filePath: 'apps/web/src/App.tsx' }],
+      writtenBlackboardKeys: ['task_code-task_output'],
+    })
+    expect(pass.status).toBe('passed')
+
+    const failPath = validateTaskOutputContract({
+      task: baseTask,
+      artifacts: [{ kind: 'diff', filePath: 'packages/db/src/schema.ts' }],
+      writtenBlackboardKeys: ['task_code-task_output'],
+    })
+    expect(failPath.status).toBe('failed')
+    expect(failPath.violations.some((item) => item.type === 'path_not_allowed')).toBe(true)
+
+    const failArtifact = validateTaskOutputContract({
+      task: baseTask,
+      artifacts: [],
+      writtenBlackboardKeys: ['task_code-task_output'],
+    })
+    expect(failArtifact.status).toBe('failed')
+    expect(failArtifact.violations.some((item) => item.type === 'missing_artifact')).toBe(true)
   })
 
   test('ConflictResolver detects file conflicts across agents', async () => {
