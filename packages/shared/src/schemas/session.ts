@@ -20,3 +20,10 @@ export const createSessionSchema = z.object({
   workspaceAgentId: z.string().nullable().optional(),
 })
 export type CreateSessionInput = z.infer<typeof createSessionSchema>
+
+export const updateSessionSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  workspaceId: z.string().nullable().optional(),
+  workspaceAgentId: z.string().nullable().optional(),
+})
+export type UpdateSessionInput = z.infer<typeof updateSessionSchema>

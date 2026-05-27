@@ -1,6 +1,6 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, AtSign, ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
+import { ArrowUp, AtSign, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
 import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
@@ -9,6 +9,7 @@ import { useI18n } from '../lib/i18n'
 import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
+import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
 import { useChatStore } from '../stores/chatStore'
 
 export default function ChatPage() {
@@ -90,7 +91,6 @@ function Welcome() {
   const messageInputRef = useRef<HTMLTextAreaElement>(null)
   const createSession = useChatStore((state) => state.createSession)
   const selectSession = useChatStore((state) => state.selectSession)
-  const fetchSessions = useChatStore((state) => state.fetchSessions)
   const sendMessageToSession = useChatStore((state) => state.sendMessageToSession)
   const [message, setMessage] = useState('')
   const [skills, setSkills] = useState<SkillSummary[]>([])
@@ -101,6 +101,7 @@ function Welcome() {
   const [submitting, setSubmitting] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null)
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
   const [workspaceQuery, setWorkspaceQuery] = useState('')
@@ -109,7 +110,7 @@ function Welcome() {
   const filteredWorkspaces = workspaces.filter((workspace) => {
     const query = workspaceQuery.trim().toLowerCase()
     if (!query) return true
-    return `${workspace.name} ${workspace.projectPath ?? ''}`.toLowerCase().includes(query)
+    return workspaceSearchText(workspace).includes(query)
   })
 
   useEffect(() => {
@@ -119,7 +120,7 @@ function Welcome() {
     api
       .listWorkspaces()
       .then(({ items }) => {
-        if (!cancelled) setWorkspaces(items)
+        if (!cancelled) setWorkspaces(items.filter(isProjectWorkspace))
       })
       .catch(() => {
         if (!cancelled) setWorkspaces([])
@@ -202,7 +203,9 @@ function Welcome() {
 
     setSubmitting(true)
     try {
-      const session = await createSession(titleFromMessage(trimmed))
+      const session = await createSession(titleFromMessage(trimmed), {
+        workspaceId: selectedWorkspace?.id ?? null,
+      })
       await selectSession(session.id)
       navigate(`/chat/${session.id}`)
       const result = await sendMessageToSession(session.id, trimmed)
@@ -220,19 +223,18 @@ function Welcome() {
     await startThread(message)
   }
 
-  async function openWorkspace(workspaceId: string) {
+  async function selectWorkspace(workspaceId: string) {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
     setOpeningWorkspaceId(workspaceId)
-    showHint('正在打开项目...')
+    showHint('正在选择工作区...')
     try {
-      const { session } = await api.openWorkspaceGroupSession(workspaceId)
-      await fetchSessions()
-      await selectSession(session.id)
+      const workspace = workspaces.find((item) => item.id === workspaceId) ?? (await api.getWorkspace(workspaceId)).workspace
+      setSelectedWorkspace(workspace)
       setProjectMenuOpen(false)
-      navigate(`/chat/${session.id}`)
+      showHint(`已选择工作区：${workspace.name}`)
     } catch (err) {
-      showHint(friendlyErrorMessage(err, '打开项目失败'))
+      showHint(friendlyErrorMessage(err, '选择工作区失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -243,17 +245,14 @@ function Welcome() {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
     try {
-      const full = await api.createWorkspace({ name: '空白项目', goal: '', projectPath: null, template: 'classic' })
+      const full = await api.createWorkspace({ name: '空白工作区', goal: '', projectPath: null, template: 'classic' })
       setWorkspaces((items) => [full.workspace, ...items.filter((item) => item.id !== full.workspace.id)])
       setOpeningWorkspaceId(full.workspace.id)
-      showHint('已创建项目，正在进入...')
-      const { session } = await api.openWorkspaceGroupSession(full.workspace.id)
-      await fetchSessions()
-      await selectSession(session.id)
+      setSelectedWorkspace(full.workspace)
       setProjectMenuOpen(false)
-      navigate(`/chat/${session.id}`)
+      showHint('已创建并选中工作区')
     } catch (err) {
-      showHint(friendlyErrorMessage(err, '创建空白项目失败'))
+      showHint(friendlyErrorMessage(err, '创建空白工作区失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -263,7 +262,7 @@ function Welcome() {
   async function openFolderWorkspace() {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
-    showHint('正在打开文件夹选择器...')
+    showHint('正在打开工作区文件夹选择器...')
     try {
       const nativePath = await pickWorkspaceFolder().catch(() => null)
       const result = await api.openWorkspaceFolder(nativePath)
@@ -271,7 +270,7 @@ function Welcome() {
         showHint('已取消选择文件夹')
         return
       }
-      showHint('已选择文件夹，正在打开项目...')
+      showHint('已选择文件夹，正在处理工作区...')
       const workspace =
         result.workspace ??
         (
@@ -284,18 +283,21 @@ function Welcome() {
         ).workspace
       setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
       setOpeningWorkspaceId(workspace.id)
-      showHint('项目已加入，正在进入...')
-      const { session } = await api.openWorkspaceGroupSession(workspace.id)
-      await fetchSessions()
-      await selectSession(session.id)
+      setSelectedWorkspace(workspace)
       setProjectMenuOpen(false)
-      navigate(`/chat/${session.id}`)
+      showHint('工作区已选中')
     } catch (err) {
-      showHint(friendlyErrorMessage(err, '打开文件夹失败'))
+      showHint(friendlyErrorMessage(err, '处理工作区失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
     }
+  }
+
+  function clearWorkspaceContext() {
+    setSelectedWorkspace(null)
+    setProjectMenuOpen(false)
+    showHint('已清除工作区')
   }
 
   return (
@@ -347,7 +349,7 @@ function Welcome() {
                     onChange={(event) => setWorkspaceQuery(event.target.value)}
                     autoFocus
                     className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-                    placeholder={t('搜索项目')}
+                    placeholder={t('搜索工作区')}
                   />
                 </div>
                 <div className="max-h-44 space-y-1 overflow-y-auto py-1">
@@ -355,24 +357,27 @@ function Welcome() {
                     <button
                       key={workspace.id}
                       type="button"
-                      onClick={() => void openWorkspace(workspace.id)}
+                      onClick={() => void selectWorkspace(workspace.id)}
                       disabled={workspaceBusy}
                       className={[
-                        'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
-                        workspace.id === openingWorkspaceId ? 'bg-neutral-100' : '',
+                        'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
+                        (workspace.id === selectedWorkspace?.id || workspace.id === openingWorkspaceId) ? 'bg-neutral-100' : '',
                       ].join(' ')}
                     >
                       <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                      <span className="min-w-0 flex-1 truncate text-neutral-900">{workspace.name}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-neutral-900">{workspace.name}</span>
+                        <span className="block truncate text-[11px] text-neutral-400">{workspaceSubtitle(workspace)}</span>
+                      </span>
                       {workspace.id === openingWorkspaceId && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />}
                     </button>
                   ))}
                   {!workspaceBusy && filteredWorkspaces.length === 0 && (
                     <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
-                      {t('没有匹配的项目')}
+                      {t('没有匹配的工作区')}
                     </div>
                   )}
-                  {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">{t('正在处理项目...')}</div>}
+                  {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">{t('正在处理工作区...')}</div>}
                 </div>
                 <div className="mt-1 border-t border-neutral-200 pt-1.5">
                   <div className="relative group/new-project">
@@ -382,7 +387,7 @@ function Welcome() {
                       className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50"
                     >
                       <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
-                      <span className="min-w-0 flex-1 truncate text-neutral-900">{t('添加新项目')}</span>
+                      <span className="min-w-0 flex-1 truncate text-neutral-900">{t('添加工作区')}</span>
                       <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
                     </button>
                     <div
@@ -398,7 +403,7 @@ function Welcome() {
                         className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-100 disabled:opacity-60"
                       >
                         <Plus className="h-4 w-4 shrink-0 text-neutral-600" />
-                        {t('新建空白项目')}
+                        {t('新建空白工作区')}
                       </button>
                       <button
                         type="button"
@@ -413,11 +418,11 @@ function Welcome() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setProjectMenuOpen(false)}
+                    onClick={clearWorkspaceContext}
                     className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50"
                   >
                     <FolderX className="h-4 w-4 shrink-0 text-neutral-600" />
-                    {t('不使用项目')}
+                    {t('不使用工作区')}
                   </button>
                 </div>
               </div>
@@ -453,8 +458,8 @@ function Welcome() {
                   type="button"
                   onClick={() => setProjectMenuOpen((open) => !open)}
                   className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
-                  aria-label={t('打开项目文件夹')}
-                  title={t('打开项目文件夹')}
+                  aria-label={t('选择工作区')}
+                  title={selectedWorkspace ? selectedWorkspace.name : t('选择工作区')}
                 >
                   <FolderOpen className="h-4 w-4" />
                 </button>
@@ -470,10 +475,6 @@ function Welcome() {
                 </button>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" disabled title="暂未实现" className="inline-flex h-8 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-300">
-                  {t('自动')}
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </button>
                 <button
                   type="submit"
                   disabled={!message.trim() || submitting}
@@ -508,5 +509,5 @@ function titleFromMessage(message: string) {
 
 function workspaceNameFromPath(value: string) {
   const normalized = value.trim().replace(/[\\/]+$/, '')
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || '工作区文件夹'
 }

@@ -4,6 +4,7 @@ import { requestNewSessionDialog } from '../components/chat/GlobalNewSessionDial
 import { useChatStore } from '../stores/chatStore'
 import { api } from './api'
 import { useI18n } from './i18n'
+import { requestSettingsDialog } from './settingsDialog'
 import {
   closeDesktopWindow,
   minimizeDesktopWindow,
@@ -80,7 +81,7 @@ export function useAppActions() {
           navigate,
         })
       } else if (action === 'settings') {
-        navigate('/settings')
+        requestSettingsDialog()
       } else if (action === 'new-window') {
         await openDesktopWindow()
       } else if (action === 'close-window') {

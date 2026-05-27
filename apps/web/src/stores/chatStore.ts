@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
-let pendingStream: { messageId: string; delta: string } | null = null
+let pendingStream: { messageId: string; delta: string; agentId?: string; agentName?: string } | null = null
 let pendingStreamTimer: number | null = null
 const cancelledSessions = new Set<string>()
 
@@ -13,10 +13,9 @@ interface ChatState {
   currentWorkspaceAgents: WorkspaceAgent[]
   currentSessionId: string | null
   messages: Message[]
-  streamingMessage: { id: string; content: string } | null
+  streamingMessage: { id: string; content: string; agentId?: string; agentName?: string } | null
   streamingCodeAgentRun: CodeAgentRunMetadata | null
   pendingAttachments: ChatAttachment[]
-  selectedModelId: string | null
   loadingSessions: boolean
   loadingMessages: boolean
   agentTyping: boolean
@@ -26,6 +25,7 @@ interface ChatState {
   fetchSessions: () => Promise<void>
   createSession: (title?: string, options?: { workspaceId?: string | null; workspaceAgentId?: string | null; type?: 'direct' | 'group' }) => Promise<Session>
   selectSession: (sessionId: string) => Promise<void>
+  setSessionWorkspace: (sessionId: string, workspaceId: string | null) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   sendMessage: (content: string) => Promise<{ groupSessionId?: string } | undefined>
   sendMessageToSession: (sessionId: string, content: string) => Promise<{ groupSessionId?: string } | undefined>
@@ -38,7 +38,6 @@ interface ChatState {
   removePendingAttachment: (id: string) => void
   clearPendingAttachments: () => void
   cancelRun: () => Promise<void>
-  setSelectedModelId: (modelId: string | null) => void
   setReplyingTo: (messageId: string | null) => void
   handleWSEvent: (e: WSEvent) => void
   initWebSocket: () => () => void
@@ -62,7 +61,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingMessage: null,
   streamingCodeAgentRun: null,
   pendingAttachments: [],
-  selectedModelId: null,
   loadingSessions: false,
   loadingMessages: false,
   agentTyping: false,
@@ -127,6 +125,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  async setSessionWorkspace(sessionId, workspaceId) {
+    const session = await api.updateSession(sessionId, { workspaceId, workspaceAgentId: null })
+    const full = workspaceId ? await api.getWorkspace(workspaceId) : null
+    set((s) => ({
+      sessions: s.sessions.map((item) => (item.id === session.id ? session : item)),
+      currentSession: s.currentSessionId === session.id ? session : s.currentSession,
+      currentWorkspace: s.currentSessionId === session.id ? full?.workspace ?? null : s.currentWorkspace,
+      currentWorkspaceAgents: s.currentSessionId === session.id ? full?.agents ?? [] : s.currentWorkspaceAgents,
+    }))
+  },
+
   async deleteSession(sessionId) {
     await api.deleteSession(sessionId)
     clearPendingStream()
@@ -163,7 +172,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const replyToMessageId = get().replyingToMessageId
       const msg = await api.sendMessageWithModel(sessionId, {
         content: contentForAgent,
-        modelId: get().selectedModelId ?? undefined,
         skipAgentReply: shouldCreatePlan,
         attachments,
         displayContent: attachments.length ? content : undefined,
@@ -277,10 +285,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await api.cancelMessage(sessionId).catch(() => undefined)
   },
 
-  setSelectedModelId(modelId) {
-    set({ selectedModelId: modelId })
-  },
-
   setReplyingTo(messageId) {
     if (!messageId) {
       set({ replyingToMessageId: null, replyingToMessage: null })
@@ -302,14 +306,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break
       case 'message:stream': {
         if (cancelledSessions.has(sessionId)) break
-        const { messageId, delta } = e.payload as { messageId: string; delta: string }
-        const commitPendingStream = (pending: { messageId: string; delta: string }) => {
+        const { messageId, delta, agentId, agentName } = e.payload as {
+          messageId: string
+          delta: string
+          agentId?: string
+          agentName?: string
+        }
+        const commitPendingStream = (pending: { messageId: string; delta: string; agentId?: string; agentName?: string }) => {
           set((s) => {
             const current = s.streamingMessage
             if (current?.id === pending.messageId) {
-              return { streamingMessage: { id: pending.messageId, content: current.content + pending.delta } }
+              return {
+                streamingMessage: {
+                  id: pending.messageId,
+                  content: current.content + pending.delta,
+                  agentId: pending.agentId ?? current.agentId,
+                  agentName: pending.agentName ?? current.agentName,
+                },
+              }
             }
-            return { streamingMessage: { id: pending.messageId, content: pending.delta }, agentTyping: false }
+            return {
+              streamingMessage: {
+                id: pending.messageId,
+                content: pending.delta,
+                agentId: pending.agentId,
+                agentName: pending.agentName,
+              },
+              agentTyping: false,
+            }
           })
         }
 
@@ -320,9 +344,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
 
         if (pendingStream && pendingStream.messageId === messageId) {
-          pendingStream = { messageId, delta: pendingStream.delta + delta }
+          pendingStream = {
+            messageId,
+            delta: pendingStream.delta + delta,
+            agentId: agentId ?? pendingStream.agentId,
+            agentName: agentName ?? pendingStream.agentName,
+          }
         } else {
-          pendingStream = { messageId, delta }
+          pendingStream = { messageId, delta, agentId, agentName }
         }
 
         if (pendingStreamTimer === null) {

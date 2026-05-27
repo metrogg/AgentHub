@@ -50,6 +50,7 @@ export const defaultAgentConfigs: SavedAgentConfig[] = [
     codeAgentType: 'codex',
     capabilityTags: ['code', 'implementation'],
     toolPermissions: ['workspace:read', 'workspace:write'],
+    approvalRequired: false,
   }),
   createSavedAgent({
     roleType: 'researcher',
@@ -137,7 +138,7 @@ export function createSavedAgent(input: Partial<AgentConfigInput> & Pick<AgentCo
     sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
     contextPolicy: input.contextPolicy ?? 'workspace-aware',
     autoInvoke: input.autoInvoke ?? true,
-    approvalRequired: input.approvalRequired ?? true,
+    approvalRequired: input.approvalRequired ?? (input.runtimeType === 'code-agent' ? false : true),
     createdAt: now,
     updatedAt: now,
   })!
@@ -161,7 +162,7 @@ export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
     sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
     contextPolicy: agent.contextPolicy ?? 'workspace-aware',
     autoInvoke: agent.autoInvoke ?? true,
-    approvalRequired: agent.approvalRequired ?? true,
+    approvalRequired: agent.runtimeType === 'code-agent' ? false : (agent.approvalRequired ?? true),
   }
 }
 
@@ -204,7 +205,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
     contextPolicy: input.contextPolicy ?? 'workspace-aware',
     autoInvoke: input.autoInvoke ?? true,
-    approvalRequired: input.approvalRequired ?? true,
+    approvalRequired: runtimeType === 'code-agent' ? false : (input.approvalRequired ?? true),
     createdAt: input.createdAt ?? new Date().toISOString(),
     updatedAt: input.updatedAt ?? new Date().toISOString(),
   }

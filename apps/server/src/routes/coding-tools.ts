@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Hono } from 'hono'
+import { db, and, eq, settings, workspaceAgents } from '@agenthub/db'
 import { env } from '../env'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { getBooleanSetting } from '../services/settings-helper'
@@ -143,6 +144,10 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   .post('/cli/install', async (c) => {
     return c.json(await installAllCliTools(), 200)
   })
+  .post('/lifecycle/startup', async (c) => {
+    const result = await ensureCodingToolsStartupLifecycle()
+    return c.json(result, 200)
+  })
   .get('/opencode/models', async (c) => {
     return c.json(await getOpencodeModels(), 200)
   })
@@ -231,6 +236,52 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ ok: false, message: sanitizeAuthOutput(error?.message || 'Failed to fetch Codex models') }, 200)
     }
   })
+
+async function ensureCodingToolsStartupLifecycle() {
+  const [settingsChanged, repairedAgents] = await Promise.all([
+    ensureDefaultCodingToolSettings(),
+    db
+      .update(workspaceAgents)
+      .set({ approvalRequired: false })
+      .where(and(eq(workspaceAgents.runtimeType, 'code-agent'), eq(workspaceAgents.approvalRequired, true)))
+      .returning({ id: workspaceAgents.id }),
+  ])
+  const items = await probeTools(probes)
+  return {
+    ok: true,
+    settingsChanged,
+    repairedAgents: repairedAgents.length,
+    items,
+    message:
+      repairedAgents.length || settingsChanged
+        ? 'Coding Tools 启动生命周期已完成自愈。'
+        : 'Coding Tools 启动生命周期已检查，当前无需修复。',
+  }
+}
+
+async function ensureDefaultCodingToolSettings() {
+  const rows = await db.select().from(settings)
+  const map = Object.fromEntries(rows.map((row) => [row.key, row.value]))
+  const patch: Record<string, string> = {}
+
+  if (!map.CODE_AGENT_ACTIVE_TOOL) patch.CODE_AGENT_ACTIVE_TOOL = 'codex'
+  if (!map.CODE_AGENT_ACTIVE_COMMAND) patch.CODE_AGENT_ACTIVE_COMMAND = 'codex'
+  if (!map.CODE_AGENT_ACTIVE_SANDBOX) patch.CODE_AGENT_ACTIVE_SANDBOX = 'workspace-write'
+  if (!map.CODEX_CHATGPT_TRANSPORT) patch.CODEX_CHATGPT_TRANSPORT = 'http'
+  patch.CODE_AGENT_LIFECYCLE_LAST_RUN_AT = new Date().toISOString()
+
+  for (const [key, value] of Object.entries(patch)) {
+    const existing = map[key]
+    if (existing === value && key !== 'CODE_AGENT_LIFECYCLE_LAST_RUN_AT') continue
+    if (existing !== undefined) {
+      await db.update(settings).set({ value, updatedAt: new Date() }).where(eq(settings.key, key))
+    } else {
+      await db.insert(settings).values({ key, value })
+    }
+  }
+
+  return Object.keys(patch).some((key) => key !== 'CODE_AGENT_LIFECYCLE_LAST_RUN_AT' && map[key] !== patch[key])
+}
 
 async function getOpencodeModels() {
   const config = readOpencodeConfig()

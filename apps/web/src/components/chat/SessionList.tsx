@@ -6,6 +6,7 @@ import {
   Archive,
   ArchiveRestore,
   BriefcaseBusiness,
+  Clock,
   ChevronRight,
   Code2,
   Building2,
@@ -13,7 +14,6 @@ import {
   Folder,
   History,
   Loader2,
-  Menu,
   MessageCircle,
   PanelLeft,
   Pin,
@@ -36,8 +36,10 @@ import {
   loadAgentLibrary,
   type SavedAgentConfig,
 } from '../../lib/agentLibrary'
+import { startAgentConversation } from '../../lib/agentConversation'
 import { useI18n } from '../../lib/i18n'
 import { loadSessionListPrefs, normalizeSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent, type SessionListPrefs } from '../../lib/sessionArchive'
+import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { settingsUpdatedEvent } from '../../lib/shortcuts'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 
@@ -62,7 +64,7 @@ const defaultAccountProfile: AccountProfile = {
 function activeTabFromPath(pathname: string): SidebarTab {
   if (pathname === '/agent-config') return 'agents'
   if (pathname === '/settings') return 'me'
-  if (['/models', '/coding-tools', '/skills', '/office'].includes(pathname)) return 'workspace'
+  if (['/models', '/coding-tools', '/skills', '/office', '/orchestrator-runs', '/execution-logs'].includes(pathname)) return 'workspace'
   return 'messages'
 }
 
@@ -73,6 +75,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const { sessionId } = useParams()
   const sessions = useChatStore((state) => state.sessions)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
+  const selectSession = useChatStore((state) => state.selectSession)
   const deleteSession = useChatStore((state) => state.deleteSession)
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null)
@@ -84,6 +87,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [agentQuery, setAgentQuery] = useState('')
   const [quickCreateOpen, setQuickCreateOpen] = useState(false)
+  const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
   const archivedSessionCount = useMemo(() => prefs.archived.length, [prefs.archived])
@@ -126,7 +130,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   }, [])
 
   useEffect(() => {
-    if (activeTab !== 'agents') return
     const syncAgents = () => setLibraryAgents(loadAgentLibrary())
     syncAgents()
     window.addEventListener(agentLibraryChangeEvent, syncAgents)
@@ -135,7 +138,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
       window.removeEventListener(agentLibraryChangeEvent, syncAgents)
       window.removeEventListener('storage', syncAgents)
     }
-  }, [activeTab])
+  }, [])
 
   useEffect(() => {
     const syncPrefs = () => setPrefs(loadSessionListPrefs())
@@ -244,12 +247,25 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     navigate('/agent-config?newAgent=1')
   }
 
+  async function openAgentSession(agent: SavedAgentConfig) {
+    if (openingAgentId) return
+    setOpeningAgentId(agent.id)
+    try {
+      const session = await startAgentConversation({ agents: [agent] })
+      await fetchSessions()
+      await selectSession(session.id)
+      navigate(`/chat/${session.id}`)
+    } finally {
+      setOpeningAgentId(null)
+    }
+  }
+
   return (
     <aside className="flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#f7f7f4]">
       <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#f7f7f4] py-3">
         <button
           type="button"
-          onClick={() => navigate('/settings')}
+          onClick={requestSettingsDialog}
           className="grid h-10 w-10 place-items-center overflow-hidden rounded-xl bg-white shadow-sm"
           aria-label={accountProfile.name}
           title={accountProfile.name}
@@ -286,106 +302,118 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             active={activeTab === 'me'}
             icon={UserCircle}
             label="Me"
-            onClick={() => {
-              navigate('/settings')
-            }}
+            onClick={requestSettingsDialog}
           />
         </div>
 
         <div className="flex flex-col items-center gap-2">
-          <DockButton icon={Settings2} label="Settings" onClick={() => navigate('/settings')} />
-          <DockButton
-            icon={Menu}
-            label="Menu"
-            onClick={() => {
-              navigate(sessionId ? `/chat/${sessionId}` : '/')
-            }}
-          />
+          <DockButton icon={Settings2} label="Settings" onClick={requestSettingsDialog} />
         </div>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col bg-[#f7f7f4]">
-      <div className="agenthub-session-panel-header flex h-14 items-center justify-between px-4">
-        <div className="agenthub-session-panel-brand flex items-center gap-2">
-          <div className="grid h-7 w-7 place-items-center rounded-lg bg-neutral-950 text-white">
-            <MessageCircle className="h-4 w-4" />
-          </div>
-          <span className="text-sm font-semibold text-neutral-950">AgentHub</span>
-        </div>
-        {onCollapse && (
-          <button
-            type="button"
-            onClick={onCollapse}
-            className="grid h-8 w-8 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-200 hover:text-neutral-900"
-            aria-label="收起侧栏"
-            title="收起侧栏"
-          >
-            <PanelLeft className="h-4 w-4" />
-          </button>
-        )}
-      </div>
-
-      <div className={cn('px-2 pt-3', activeTab !== 'messages' && 'hidden')}>
-        <div className="relative mb-2 flex h-9 items-center gap-2">
-          <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-2.5 text-neutral-400 shadow-sm">
-            <Search className="h-4 w-4 shrink-0" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-              placeholder={t('搜索')}
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => setQuickCreateOpen((open) => !open)}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-neutral-600 transition hover:bg-white hover:text-neutral-950"
-            aria-label="新建"
-            title="新建"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-          {quickCreateOpen && (
-            <div className="absolute right-0 top-10 z-30 w-36 rounded-lg border border-neutral-200 bg-white py-1.5 text-sm shadow-xl">
-              <span className="absolute -top-1.5 right-3 h-3 w-3 rotate-45 border-l border-t border-neutral-200 bg-white" />
-              <button
-                type="button"
-                onClick={openNewSessionDialog}
-                className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-neutral-50"
-              >
-                <MessageCircle className="h-4 w-4 text-neutral-600" />
-                新建群聊
-              </button>
-              <button
-                type="button"
-                onClick={addAgent}
-                className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-neutral-50"
-              >
-                <UserPlus className="h-4 w-4 text-neutral-600" />
-                添加 Agent
-              </button>
+        <div className="agenthub-session-panel-header flex h-14 items-center justify-between px-4">
+          <div className="agenthub-session-panel-brand flex items-center gap-2">
+            <div className="grid h-7 w-7 place-items-center rounded-lg bg-neutral-950 text-white">
+              <MessageCircle className="h-4 w-4" />
             </div>
+            <span className="text-sm font-semibold text-neutral-950">AgentHub</span>
+          </div>
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              className="grid h-8 w-8 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-200 hover:text-neutral-900"
+              aria-label="收起侧栏"
+              title="收起侧栏"
+            >
+              <PanelLeft className="h-4 w-4" />
+            </button>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => setShowArchived((value) => !value)}
-          className={cn(
-            'mb-3 flex h-8 w-full items-center justify-between rounded-lg px-2 text-xs transition',
-            showArchived ? 'bg-white text-neutral-950 shadow-sm' : 'text-neutral-500 hover:bg-white/70'
-          )}
-        >
-          <span className="inline-flex items-center gap-2">
-            {showArchived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
-            {showArchived ? t('查看归档') : t('当前会话')}
-          </span>
-          <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">
-            {showArchived ? archivedSessionCount : activeSessionCount}
-          </span>
-        </button>
-      </div>
+
+        <div className={cn('px-2 pt-3', activeTab !== 'messages' && 'hidden')}>
+          <div className="relative mb-2 flex h-9 items-center gap-2">
+            <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-2.5 text-neutral-400 shadow-sm">
+              <Search className="h-4 w-4 shrink-0" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
+                placeholder={t('搜索')}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setQuickCreateOpen((open) => !open)}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-neutral-600 transition hover:bg-white hover:text-neutral-950"
+              aria-label="新建"
+              title="新建"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+            {quickCreateOpen && (
+              <div className="absolute right-0 top-10 z-30 w-36 rounded-lg border border-neutral-200 bg-white py-1.5 text-sm shadow-xl">
+                <span className="absolute -top-1.5 right-3 h-3 w-3 rotate-45 border-l border-t border-neutral-200 bg-white" />
+                <button
+                  type="button"
+                  onClick={openNewSessionDialog}
+                  className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-neutral-50"
+                >
+                  <MessageCircle className="h-4 w-4 text-neutral-600" />
+                  新建群聊
+                </button>
+                <button
+                  type="button"
+                  onClick={addAgent}
+                  className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-neutral-50"
+                >
+                  <UserPlus className="h-4 w-4 text-neutral-600" />
+                  添加 Agent
+                </button>
+              </div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowArchived((value) => !value)}
+            className={cn(
+              'mb-3 flex h-8 w-full items-center justify-between rounded-lg px-2 text-xs transition',
+              showArchived ? 'bg-white text-neutral-950 shadow-sm' : 'text-neutral-500 hover:bg-white/70',
+            )}
+          >
+            <span className="inline-flex items-center gap-2">
+              {showArchived ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
+              {showArchived ? t('查看归档') : t('当前会话')}
+            </span>
+            <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">
+              {showArchived ? archivedSessionCount : activeSessionCount}
+            </span>
+          </button>
+        </div>
+      {activeTab === 'workspace' && (
+        <div className="px-3 pt-3 text-xs leading-5 text-neutral-500">
+          <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
+            <div className="font-medium text-neutral-900">工作台</div>
+            <div className="mt-1">项目、Agent Group 和本地工具入口统一放在这里。</div>
+          </div>
+        </div>
+      )}
 
       <nav className={cn('space-y-1 px-3 pt-3', activeTab !== 'workspace' && 'hidden')}>
+        <NavItem
+          icon={History}
+          label="运行历史"
+          active={location.pathname === '/orchestrator-runs'}
+          onClick={() => navigate('/orchestrator-runs')}
+        />
+        <NavItem
+          icon={Clock}
+          label="执行日志"
+          active={location.pathname === '/execution-logs'}
+          onClick={() => navigate('/execution-logs')}
+        />
         <NavItem
           icon={SlidersHorizontal}
           label="模型管理"
@@ -412,19 +440,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
         />
       </nav>
 
-      {activeTab === 'workspace' && (
-        <div className="px-3 pt-3 text-xs leading-5 text-neutral-500">
-          <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
-            <div className="font-medium text-neutral-900">工作台</div>
-            <div className="mt-1">模型、Coding Tools、Skills 和本地办公入口统一放在这里。</div>
-          </div>
-        </div>
-      )}
-
       <div className={cn('my-3 border-t border-neutral-200', activeTab !== 'messages' && 'hidden')} />
 
-      <div className={cn('flex-1 overflow-y-auto px-2', activeTab !== 'messages' && 'hidden')}>
-        <div className="mb-1 px-2 text-xs text-neutral-400">{t('聊天')}</div>
+      <div className={cn('flex-1 overflow-y-auto px-2 pb-4', activeTab !== 'messages' && 'hidden')}>
+        <div className="mb-1 px-2 text-xs text-neutral-400">{t('群聊')}</div>
         {sessionTree.length === 0 ? (
           <div className="px-2 py-4 text-xs text-neutral-400">
             {query.trim() ? t('没有匹配的会话') : showArchived ? t('还没有归档会话') : t('还没有会话')}
@@ -577,6 +596,47 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             })}
           </ul>
         )}
+
+        <div className="my-4 border-t border-neutral-200" />
+        <div className="mb-1 flex items-center justify-between px-2 text-xs text-neutral-400">
+          <span>Agent</span>
+          <span>{libraryAgents.length}</span>
+        </div>
+        <div className="space-y-1">
+          {libraryAgents.map((agent) => {
+            const opening = openingAgentId === agent.id
+            return (
+              <button
+                key={agent.id}
+                type="button"
+                onClick={() => void openAgentSession(agent)}
+                disabled={opening}
+                className="flex min-h-12 w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition hover:bg-white/70 disabled:opacity-60"
+              >
+                <div
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-sm font-semibold text-white shadow-sm"
+                  style={{ background: agent.color ?? '#111827' }}
+                >
+                  {agent.name.slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-neutral-950">{agent.name}</div>
+                  <div className="mt-0.5 truncate text-xs text-neutral-500">{agent.role}</div>
+                </div>
+                {opening ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />
+                ) : (
+                  <MessageCircle className="h-4 w-4 text-neutral-300" />
+                )}
+              </button>
+            )
+          })}
+          {!libraryAgents.length && (
+            <div className="px-2 py-4 text-xs text-neutral-400">
+              还没有 Agent，先去配置页创建一个
+            </div>
+          )}
+        </div>
       </div>
 
       {activeTab === 'agents' && (
@@ -657,7 +717,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
 
       <div className={cn('border-t border-neutral-200 p-2', activeTab !== 'me' && 'hidden')}>
         <button
-          onClick={() => navigate('/settings')}
+          onClick={requestSettingsDialog}
           className="flex h-10 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-white/70"
         >
           <Settings2 className="h-4 w-4 text-neutral-500" />

@@ -26,7 +26,12 @@ function isRetryableError(error: unknown): boolean {
 
 export function friendlyErrorMessage(error: unknown, context?: string): string {
   const prefix = context ? `${context}：` : ''
-  if (error instanceof ApiError) return prefix + error.message
+  if (error instanceof ApiError) {
+    if (error.status === 500 && error.message === 'Internal Server Error') {
+      return prefix + '服务端暂不可用，请确认后端服务已启动后重试'
+    }
+    return prefix + error.message
+  }
   if (error instanceof Error) {
     const msg = error.message.toLowerCase()
     if (msg.includes('failed to fetch')) {
@@ -278,6 +283,14 @@ export interface CliInstallAction {
   message: string
   runtime?: 'local' | 'host'
   status: 'completed' | 'failed'
+}
+
+export interface CodingToolsStartupLifecycleResult {
+  items: CodingToolStatus[]
+  message: string
+  ok: boolean
+  repairedAgents: number
+  settingsChanged: boolean
 }
 
 export interface SettingsGeneralInfo {
@@ -798,6 +811,8 @@ export const api = {
   getSession: (id: string) => request<Session>(`/sessions/${id}`),
   createSession: (data: { title: string; type?: 'direct' | 'group'; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
     request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
+  updateSession: (id: string, data: { title?: string; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
+    request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   deleteAllSessions: () => request<{ deleted: boolean }>('/sessions/all', { method: 'DELETE' }),
 
@@ -933,6 +948,8 @@ export const api = {
     request<AgentAdapterCatalogResponse>('/coding-tools/agent-adapters'),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
+  ensureCodingToolsStartupLifecycle: () =>
+    request<CodingToolsStartupLifecycleResult>('/coding-tools/lifecycle/startup', { method: 'POST' }),
   getOpencodeModels: () =>
     request<OpencodeModelsResponse>('/coding-tools/opencode/models'),
   getCodexConfig: () =>

@@ -21,6 +21,7 @@ const zhToEn: Record<string, string> = {
   显示: 'Display',
   快捷键: 'Shortcuts',
   模型管理: 'Model Management',
+  模型目录: 'Model Catalog',
   默认模型: 'Default Model',
   工具权限: 'Tool Permissions',
   归档会话: 'Archived Conversations',
@@ -179,6 +180,7 @@ const zhToEn: Record<string, string> = {
   查看归档: 'Archived',
   当前会话: 'Current chats',
   聊天: 'History',
+  群聊: 'Group Chats',
   子话题: 'subtopics',
   新建对话: 'New conversation',
   '选择一个聊天对象，或开启普通会话。': 'Choose a chat target or start a plain conversation.',
@@ -570,6 +572,8 @@ const zhToEn: Record<string, string> = {
   编辑模型: 'Edit Model',
   '提示：模型变更会自动保存并同步到聊天后端。不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。':
     'Tip: model changes are auto-saved and synced to the chat backend. CLI tool configs with different API protocols are managed on the Coding Tools page.',
+  '提示：模型变更会自动保存，并作为 Agent 配置和 Coding Tools 的可选模型来源。':
+    'Tip: model changes are auto-saved and used as selectable model sources for Agent configuration and Coding Tools.',
   '提示：模型变更会自动保存并同步到聊天后端。当前是本地单用户 Demo 模式，API Key 会保存在本机 SQLite settings 中；不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。':
     'Tip: model changes are auto-saved and synced to the chat backend. This is a local single-user demo mode, so API keys are stored in the local SQLite settings table. CLI tool configs with different API protocols are managed on the Coding Tools page.',
   自动保存中: 'Auto-saving',

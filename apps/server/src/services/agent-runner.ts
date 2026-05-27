@@ -181,7 +181,7 @@ export async function runAgentReply(
             fullContent += chunk.text
             broadcast(sessionId, {
               type: 'message:stream',
-              payload: { sessionId, messageId: streamMsgId, delta: chunk.text },
+              payload: { sessionId, messageId: streamMsgId, delta: chunk.text, agentId, agentName },
             })
             break
           case 'metadata':
@@ -220,7 +220,7 @@ export async function runAgentReply(
         fullContent += delta
         broadcast(sessionId, {
           type: 'message:stream',
-          payload: { sessionId, messageId: streamMsgId, delta },
+          payload: { sessionId, messageId: streamMsgId, delta, agentId, agentName },
         })
       }
     }
@@ -252,7 +252,7 @@ export async function runAgentReply(
     fullContent = '[错误：模型返回了空响应。请检查当前供应商、模型 ID、Base URL 和 API Key。]'
     broadcast(sessionId, {
       type: 'message:stream',
-      payload: { sessionId, messageId: streamMsgId, delta: fullContent },
+      payload: { sessionId, messageId: streamMsgId, delta: fullContent, agentId, agentName },
     })
   }
 
