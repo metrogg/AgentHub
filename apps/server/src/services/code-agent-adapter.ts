@@ -9,6 +9,7 @@ import type { AgentRunProfile, MessageRow } from './agent-runner'
 import { globalSkillRegistry } from './skill-registry'
 import { getLlmRuntimeStatus, resolveLlmRuntimeConfig } from './llm-client'
 import { env } from '../env'
+import { getBooleanSetting } from './settings-helper'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -133,7 +134,11 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
       const args = ['run']
-      if (options?.modelId) args.push('--model', options.modelId)
+      if (options?.modelId) {
+        // OpenCode --model expects provider/model format; auto-prefix if missing
+        const modelId = options.modelId.includes('/') ? options.modelId : `${String(cfg['provider'] ?? 'opencode')}/${options.modelId}`
+        args.push('--model', modelId)
+      }
       if (cfg['agent']) args.push('--agent', String(cfg['agent']))
       args.push(prompt)
       return args
@@ -184,7 +189,7 @@ export async function* streamCodeAgentReply(
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
   const configured = await isRuntimeConfigured(type, adapter)
-  const executionEnabled = env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION
+  const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
 
   if (!canExecute) {
@@ -389,12 +394,10 @@ function sanitizeHistoryContent(content: string) {
 async function isCommandInstalled(command: string) {
   if (!/^[a-zA-Z0-9._-]+$/.test(command)) return false
   const isWindows = process.platform === 'win32'
-  const shell = isWindows ? 'cmd.exe' : 'sh'
-  const args = isWindows
-    ? ['/d', '/s', '/c', `where ${command} >nul 2>nul`]
-    : ['-lc', `command -v ${quoteForSh(command)} >/dev/null 2>&1`]
   try {
-    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
+    const proc = isWindows
+      ? Bun.spawn(['where', command], { stdout: 'ignore', stderr: 'ignore', env: process.env })
+      : Bun.spawn(['sh', '-lc', `command -v ${quoteForSh(command)}`], { stdout: 'ignore', stderr: 'ignore', env: process.env })
     const code = await Promise.race([proc.exited, new Promise<number>((resolve) => setTimeout(() => resolve(124), 2000))])
     return code === 0
   } catch {
@@ -1197,9 +1200,13 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
     const rows = await db.select().from(settings).where(eq(settings.key, 'CODING_TOOLS_CONFIG')).limit(1)
     const raw = rows[0]?.value
     if (!raw) return {}
-    const parsed = JSON.parse(raw) as Array<{ id: string; config?: Record<string, unknown> }>
+    const parsed = JSON.parse(raw) as Array<{ id: string; config?: Record<string, unknown>; provider?: string; agent?: string }>
     const tool = parsed.find((t) => t.id === toolId)
-    return tool?.config ?? {}
+    const config = { ...(tool?.config ?? {}) }
+    // 兼容前端直接保存的扁平字段
+    if (tool?.provider) config.provider = tool.provider
+    if (tool?.agent) config.agent = tool.agent
+    return config
   } catch {
     return {}
   }

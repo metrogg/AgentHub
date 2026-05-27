@@ -8,6 +8,7 @@ import {
   Download,
   ExternalLink,
   KeyRound,
+  Loader2,
   LogOut,
   PanelLeft,
   PlayCircle,
@@ -31,6 +32,7 @@ interface ToolConfig {
   installCommand: string
   docsUrl: string
   apiKeyEnv: string
+  provider?: string
 }
 
 const storageKey = 'CODING_TOOLS_CONFIG'
@@ -119,8 +121,13 @@ export default function CodingToolsPage() {
   const [codexAuthFileMessage, setCodexAuthFileMessage] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [toolPage, setToolPage] = useState(0)
+  const [executionEnabled, setExecutionEnabled] = useState<boolean | null>(null)
+  const [executionBusy, setExecutionBusy] = useState(false)
 
   useEffect(() => {
+    api.getAgentAdapters().then((res) => {
+      setExecutionEnabled(res.executionEnabled)
+    }).catch(() => setExecutionEnabled(null))
     api.getSettings().then((settings) => {
       let nextTools = defaults
       if (settings[storageKey]) {
@@ -338,6 +345,23 @@ export default function CodingToolsPage() {
     showSaved()
   }
 
+  async function toggleExecutionEnabled() {
+    const next = !executionEnabled
+    setExecutionBusy(true)
+    try {
+      await api.saveSettings({ AGENTHUB_ENABLE_CODE_AGENT_EXECUTION: next ? 'true' : 'false' })
+      setExecutionEnabled(next)
+      showSaved()
+      // Refresh adapter statuses to reflect new execution state
+      void refreshStatus(tools, true)
+    } catch (error: any) {
+      setToolTestMessage(error?.message || '保存失败')
+      setToolTestOk(false)
+    } finally {
+      setExecutionBusy(false)
+    }
+  }
+
   async function save() {
     if (activeTool.id === 'codex') {
       const [authOk, configOk] = await Promise.all([saveCodexAuthFile(), saveCodexConfig()])
@@ -483,6 +507,30 @@ export default function CodingToolsPage() {
               <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-600">
                 {t('直接检测和配置 Windows 本机 CLI，不再使用容器路径或远端工作区映射。')}
               </p>
+              {executionEnabled !== null && (
+                <div className="mt-3 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={toggleExecutionEnabled}
+                    disabled={executionBusy}
+                    className={cn(
+                      'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:opacity-50',
+                      executionEnabled ? 'bg-emerald-500' : 'bg-neutral-300'
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                        executionEnabled ? 'translate-x-5' : 'translate-x-0'
+                      )}
+                    />
+                  </button>
+                  <span className="text-sm text-neutral-700">
+                    {executionEnabled ? '代码 Agent 自动执行已启用' : '代码 Agent 自动执行已禁用'}
+                  </span>
+                  {executionBusy && <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />}
+                </div>
+              )}
             </div>
             <div className="grid w-full grid-cols-3 gap-2 sm:w-auto">
               <Stat value={tools.length} label="工具" />
@@ -640,6 +688,9 @@ export default function CodingToolsPage() {
                     <Field label="命令" value={activeTool.command} onChange={(value) => patchTool(activeTool.id, { command: value })} />
                     <Field label="API Key 环境变量" value={activeTool.apiKeyEnv} onChange={(value) => patchTool(activeTool.id, { apiKeyEnv: value })} />
                     <Field label="API Key" type="password" value={activeApiKey} onChange={(value) => setApiKeyDrafts((current) => ({ ...current, [activeTool.apiKeyEnv]: value }))} />
+                    {activeTool.id === 'opencode' && (
+                      <Field label="Provider" value={activeTool.provider ?? ''} onChange={(value) => patchTool(activeTool.id, { provider: value.trim() || undefined })} />
+                    )}
                   </div>
                   <p className="mt-4 text-xs leading-5 text-neutral-500">
                     模型和协议配置请在「Agent 配置」页面中设置，每个 Agent 可以选择不同的模型。

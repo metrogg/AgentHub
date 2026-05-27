@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { Hono } from 'hono'
 import { env } from '../env'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import { getBooleanSetting } from '../services/settings-helper'
 import {
   getCodexAuthStatus,
   getCodexModels,
@@ -89,7 +90,7 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/agent-adapters', async (c) => {
     const statuses = new Map((await probeTools(probes)).map((item) => [item.id, item]))
-    const executionEnabled = env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION
+    const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
     return c.json({
       platform: process.platform,
       localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES,
@@ -601,11 +602,26 @@ async function runVersionProbe(command: string): Promise<string | null> {
 
 async function tryVersionProbe(command: string, flag: string): Promise<string | null> {
   const isWindows = process.platform === 'win32'
+
+  // Step 1: check command exists
+  try {
+    const reachProc = isWindows
+      ? Bun.spawn(['where', command], { stdout: 'ignore', stderr: 'ignore', env: process.env })
+      : Bun.spawn(['sh', '-lc', `command -v ${quoteForSh(command)}`], { stdout: 'ignore', stderr: 'ignore', env: process.env })
+    const reachCode = await Promise.race([
+      reachProc.exited,
+      new Promise<number>((resolve) => setTimeout(() => { try { reachProc.kill() } catch {} ; resolve(124) }, 5000)),
+    ])
+    if (reachCode !== 0) return null
+  } catch {
+    return null
+  }
+
+  // Step 2: run version probe
   const shell = isWindows ? 'cmd.exe' : 'sh'
-  const commandLine = isWindows
-    ? `where ${command} >nul 2>nul && ${command} ${flag}`
-    : `command -v ${quoteForSh(command)} >/dev/null 2>&1 && ${quoteForSh(command)} ${flag}`
-  const args = isWindows ? ['/d', '/s', '/c', commandLine] : ['-lc', commandLine]
+  const args = isWindows
+    ? ['/c', `${command} ${flag}`]
+    : ['-lc', `${quoteForSh(command)} ${flag}`]
 
   try {
     const proc = Bun.spawn([shell, ...args], {
@@ -648,13 +664,10 @@ async function tryVersionProbe(command: string, flag: string): Promise<string | 
 async function isCommandReachable(command: string): Promise<boolean> {
   if (!isSafeCommand(command)) return false
   const isWindows = process.platform === 'win32'
-  const shell = isWindows ? 'cmd.exe' : 'sh'
-  const commandLine = isWindows
-    ? `where ${command} >nul 2>nul`
-    : `command -v ${quoteForSh(command)} >/dev/null 2>&1`
-  const args = isWindows ? ['/d', '/s', '/c', commandLine] : ['-lc', commandLine]
   try {
-    const proc = Bun.spawn([shell, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env })
+    const proc = isWindows
+      ? Bun.spawn(['where', command], { stdout: 'ignore', stderr: 'ignore', env: process.env })
+      : Bun.spawn(['sh', '-lc', `command -v ${quoteForSh(command)}`], { stdout: 'ignore', stderr: 'ignore', env: process.env })
     const code = await Promise.race([proc.exited, new Promise<number>((resolve) => {
       const timer = setTimeout(() => {
         try { proc.kill() } catch {}

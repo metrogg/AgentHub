@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Check, ChevronDown, ChevronRight, FolderOpen, Loader2, Mic, Plus, Search, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, FolderOpen, Loader2, Mic, Plus, Search, Trash2, X } from 'lucide-react'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
@@ -9,6 +9,7 @@ import {
 } from '../../lib/agentLibrary'
 import { defaultConversationTitle, startAgentConversation } from '../../lib/agentConversation'
 import { api, type Workspace } from '../../lib/api'
+import { isDesktopApp, pickWorkspaceFolder } from '../../lib/native'
 import { cn } from '../../lib/utils'
 import { useChatStore } from '../../stores/chatStore'
 
@@ -29,11 +30,13 @@ export function GlobalNewSessionDialog() {
   const [createError, setCreateError] = useState<string | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [workspaceMode, setWorkspaceMode] = useState<'new' | string>('new')
+  const [projectPath, setProjectPath] = useState<string | null>(null)
 
   function openDialog() {
     setAgents(loadAgentLibrary())
     setCreateError(null)
     setWorkspaceMode('new')
+    setProjectPath(null)
     setOpen(true)
     api.listWorkspaces().then(({ items }) => setWorkspaces(items)).catch(() => setWorkspaces([]))
   }
@@ -70,7 +73,12 @@ export function GlobalNewSessionDialog() {
     setCreateError(null)
     try {
       const workspaceId = workspaceMode === 'new' ? null : workspaceMode
-      const session = await startAgentConversation({ agents: selectedAgents, title, workspaceId })
+      const session = await startAgentConversation({
+        agents: selectedAgents,
+        title,
+        workspaceId,
+        projectPath: workspaceMode === 'new' ? projectPath : null,
+      })
       await fetchSessions()
       await selectSession(session.id)
       setOpen(false)
@@ -90,6 +98,7 @@ export function GlobalNewSessionDialog() {
       workspaces={workspaces}
       workspaceMode={workspaceMode}
       onWorkspaceModeChange={setWorkspaceMode}
+      onWorkspacesChange={setWorkspaces}
       creatingChoice={creatingChoice}
       createError={createError}
       onClose={() => !creatingChoice && setOpen(false)}
@@ -107,6 +116,7 @@ function NewSessionDialog({
   workspaces,
   workspaceMode,
   onWorkspaceModeChange,
+  onWorkspacesChange,
   creatingChoice,
   createError,
   onClose,
@@ -117,6 +127,7 @@ function NewSessionDialog({
   workspaces: Workspace[]
   workspaceMode: 'new' | string
   onWorkspaceModeChange: (mode: 'new' | string) => void
+  onWorkspacesChange: (workspaces: Workspace[]) => void
   creatingChoice: string | null
   createError: string | null
   onClose: () => void
@@ -125,6 +136,8 @@ function NewSessionDialog({
 }) {
   const [query, setQuery] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [projectPath, setProjectPath] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const selectedAgents = useMemo(
     () => agents.filter((agent) => selectedIds.has(agent.id)),
     [agents, selectedIds],
@@ -251,25 +264,87 @@ function NewSessionDialog({
                     <Plus className="h-4 w-4 shrink-0 text-neutral-400" />
                     <span className="text-sm text-neutral-700">新建工作区</span>
                   </label>
+                  {workspaceMode === 'new' && (
+                    <div className="flex items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 py-2">
+                      <span className="text-xs text-neutral-500">项目路径：</span>
+                      {projectPath ? (
+                        <span className="min-w-0 flex-1 truncate text-xs text-neutral-700">{projectPath}</span>
+                      ) : (
+                        <span className="min-w-0 flex-1 truncate text-xs text-neutral-400">未选择（可选）</span>
+                      )}
+                      <button
+                        type="button"
+                        disabled={Boolean(creatingChoice)}
+                        onClick={async () => {
+                          if (isDesktopApp()) {
+                            const path = await pickWorkspaceFolder().catch(() => null)
+                            if (path) setProjectPath(path)
+                          } else {
+                            const path = window.prompt('请输入项目文件夹路径', projectPath || '')
+                            if (path !== null) setProjectPath(path.trim() || null)
+                          }
+                        }}
+                        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs hover:bg-neutral-50 disabled:opacity-50"
+                      >
+                        <FolderOpen className="h-3 w-3" />
+                        选择文件夹
+                      </button>
+                      {projectPath && (
+                        <button
+                          type="button"
+                          onClick={() => setProjectPath(null)}
+                          className="grid h-6 w-6 shrink-0 place-items-center rounded text-neutral-400 hover:text-red-600"
+                          title="清除路径"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {workspaces.map((ws) => (
-                    <label
+                    <div
                       key={ws.id}
                       className="flex cursor-pointer items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 py-2 transition hover:bg-neutral-50"
                     >
-                      <input
-                        type="radio"
-                        name="workspace-mode"
-                        value={ws.id}
-                        checked={workspaceMode === ws.id}
-                        onChange={() => onWorkspaceModeChange(ws.id)}
-                        className="h-3.5 w-3.5 accent-emerald-500"
-                      />
-                      <FolderOpen className="h-4 w-4 shrink-0 text-neutral-400" />
-                      <span className="min-w-0 flex-1 truncate text-sm text-neutral-700">{ws.name}</span>
-                      {ws.projectPath && (
-                        <span className="truncate text-[10px] text-neutral-400">{ws.projectPath}</span>
-                      )}
-                    </label>
+                      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                        <input
+                          type="radio"
+                          name="workspace-mode"
+                          value={ws.id}
+                          checked={workspaceMode === ws.id}
+                          onChange={() => onWorkspaceModeChange(ws.id)}
+                          className="h-3.5 w-3.5 accent-emerald-500"
+                        />
+                        <FolderOpen className="h-4 w-4 shrink-0 text-neutral-400" />
+                        <span className="min-w-0 flex-1 truncate text-sm text-neutral-700">{ws.name}</span>
+                        {ws.projectPath && (
+                          <span className="truncate text-[10px] text-neutral-400">{ws.projectPath}</span>
+                        )}
+                      </label>
+                      <button
+                        type="button"
+                        disabled={deletingId === ws.id}
+                        onClick={async (e) => {
+                          e.stopPropagation()
+                          if (!window.confirm(`确定删除工作区「${ws.name}」？这会同时删除该工作区下的所有会话和任务，但不会影响本地文件夹。`)) return
+                          setDeletingId(ws.id)
+                          try {
+                            await api.deleteWorkspace(ws.id)
+                            const next = workspaces.filter((w) => w.id !== ws.id)
+                            onWorkspacesChange(next)
+                            if (workspaceMode === ws.id) onWorkspaceModeChange('new')
+                          } catch (err) {
+                            alert(err instanceof Error ? err.message : '删除失败')
+                          } finally {
+                            setDeletingId(null)
+                          }
+                        }}
+                        className="grid h-6 w-6 shrink-0 place-items-center rounded text-neutral-400 hover:text-red-600 disabled:opacity-50"
+                        title="删除工作区"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   ))}
                   {!workspaces.length && workspaceMode !== 'new' && (
                     <div className="px-2 py-1 text-xs text-neutral-400">暂无已有工作区</div>
