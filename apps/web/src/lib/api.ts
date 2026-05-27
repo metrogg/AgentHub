@@ -732,7 +732,7 @@ export interface ConflictReportItem {
     diff: string
     fullContent?: string
   }>
-  resolution: 'auto-merged' | 'llm-resolved' | 'needs-human'
+  resolution: 'auto-merged' | 'llm-resolved' | 'needs-human' | 'human-approved' | 'human-rejected' | 'human-overridden'
   mergedContent?: string
   notes?: string
 }
@@ -1037,6 +1037,15 @@ export const api = {
     ),
   getOrchestratorRunLogs: (id: string) => request<{ items: ExecutionLog[] }>(`/orchestrator-runs/${id}/logs`),
   getOrchestratorRunConflicts: (id: string) => request<{ items: ConflictReportItem[] }>(`/orchestrator-runs/${id}/conflicts`),
+  resolveOrchestratorConflict: (
+    id: string,
+    body: { filePath: string; resolution: 'approved' | 'rejected' | 'overridden'; mergedContent?: string; notes?: string },
+  ) =>
+    request<{ ok: boolean; item: ConflictReportItem }>(`/orchestrator-runs/${id}/resolve-conflict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
 }
 
 export function mentionsOrchestrator(content: string) {

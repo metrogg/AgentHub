@@ -8,6 +8,7 @@ import {
   FileDiff,
   GitBranch,
   Loader2,
+  Pencil,
   PlayCircle,
   RefreshCw,
   Search,
@@ -45,6 +46,9 @@ export default function OrchestratorRunsPage() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null)
   const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null)
+  const [resolvingConflictFile, setResolvingConflictFile] = useState<string | null>(null)
+  const [resolveNotes, setResolveNotes] = useState('')
+  const [resolveMergedContent, setResolveMergedContent] = useState('')
 
   const selectedRun = useMemo(
     () => runs.find((r) => r.id === selectedRunId) ?? null,
@@ -117,6 +121,27 @@ export default function OrchestratorRunsPage() {
       setMessage(error?.message || '重试任务失败')
     } finally {
       setRetryingTaskId(null)
+    }
+  }
+
+  async function resolveConflict(runId: string, filePath: string, resolution: 'approved' | 'rejected' | 'overridden') {
+    setMessage('')
+    try {
+      await api.resolveOrchestratorConflict(runId, {
+        filePath,
+        resolution,
+        mergedContent: resolution === 'overridden' ? resolveMergedContent || undefined : undefined,
+        notes: resolveNotes || undefined,
+      })
+      setResolvingConflictFile(null)
+      setResolveNotes('')
+      setResolveMergedContent('')
+      if (selectedRunId) {
+        const refreshed = await api.getOrchestratorRunConflicts(selectedRunId)
+        setConflicts(refreshed.items)
+      }
+    } catch (error: any) {
+      setMessage(error?.message || '处理冲突失败')
     }
   }
 
@@ -582,43 +607,125 @@ export default function OrchestratorRunsPage() {
                         </span>
                       </div>
                       <div className="space-y-4">
-                        {conflicts.map((c, idx) => (
-                          <div key={idx} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-4">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="truncate font-mono text-xs text-neutral-600">{c.filePath}</span>
-                              <ConflictResolutionBadge resolution={c.resolution} />
-                            </div>
-                            {c.notes && (
-                              <p className="mt-2 text-xs leading-5 text-neutral-500">{c.notes}</p>
-                            )}
-                            {c.variants.length > 0 && (
-                              <div className="mt-3 space-y-2">
-                                {c.variants.map((v, vidx) => (
-                                  <div key={vidx} className="rounded border border-neutral-200 bg-white p-2">
-                                    <div className="text-xs font-medium text-neutral-700">
-                                      {v.agentName} ({v.agentId.slice(0, 8)})
+                        {conflicts.map((c, idx) => {
+                          const isResolving = resolvingConflictFile === c.filePath
+                          const canAct = c.resolution === 'needs-human' || c.resolution === 'llm-resolved' || c.resolution === 'auto-merged'
+                          return (
+                            <div key={idx} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-4">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="truncate font-mono text-xs text-neutral-600">{c.filePath}</span>
+                                <ConflictResolutionBadge resolution={c.resolution} />
+                              </div>
+                              {c.notes && (
+                                <p className="mt-2 text-xs leading-5 text-neutral-500">{c.notes}</p>
+                              )}
+                              {c.variants.length > 0 && (
+                                <div className="mt-3 space-y-2">
+                                  <div className="text-[11px] font-medium text-neutral-500">各 Agent 修改：</div>
+                                  {c.variants.map((v, vidx) => (
+                                    <div key={vidx} className="rounded border border-neutral-200 bg-white">
+                                      <div className="flex items-center gap-2 border-b border-neutral-100 px-2 py-1.5">
+                                        <span className="text-xs font-medium text-neutral-700">{v.agentName}</span>
+                                        <span className="text-[10px] text-neutral-400">{v.agentId.slice(0, 8)}</span>
+                                      </div>
+                                      {v.diff && (
+                                        <div className="max-h-40 overflow-auto p-2">
+                                          <SimpleDiffLines diff={v.diff} />
+                                        </div>
+                                      )}
                                     </div>
-                                    {v.diff && (
-                                      <pre className="mt-1 max-h-32 overflow-auto rounded bg-neutral-50 p-2 text-[11px] leading-4 text-neutral-600">
-                                        {v.diff.slice(0, 800)}
-                                        {v.diff.length > 800 && '...'}
-                                      </pre>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            {c.mergedContent && (
-                              <div className="mt-3">
-                                <div className="text-xs font-medium text-emerald-700">合并结果</div>
-                                <pre className="mt-1 max-h-40 overflow-auto rounded border border-emerald-100 bg-emerald-50/40 p-2 text-[11px] leading-4 text-neutral-700">
-                                  {c.mergedContent.slice(0, 1200)}
-                                  {c.mergedContent.length > 1200 && '...'}
-                                </pre>
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                                  ))}
+                                </div>
+                              )}
+                              {c.mergedContent && (
+                                <div className="mt-3">
+                                  <div className="text-[11px] font-medium text-emerald-700">合并结果</div>
+                                  <pre className="mt-1 max-h-40 overflow-auto rounded border border-emerald-100 bg-emerald-50/40 p-2 text-[11px] leading-4 text-neutral-700">
+                                    {c.mergedContent.slice(0, 1200)}
+                                    {c.mergedContent.length > 1200 && '...'}
+                                  </pre>
+                                </div>
+                              )}
+                              {canAct && selectedRun && (
+                                <div className="mt-3">
+                                  {!isResolving ? (
+                                    <div className="flex flex-wrap gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setResolvingConflictFile(c.filePath)
+                                          setResolveMergedContent(c.mergedContent || '')
+                                          setResolveNotes('')
+                                        }}
+                                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                                      >
+                                        <CheckCircle2 className="h-3.5 w-3.5" />
+                                        确认合并
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setResolvingConflictFile(c.filePath)
+                                          setResolveMergedContent(c.mergedContent || '')
+                                          setResolveNotes('')
+                                        }}
+                                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 hover:bg-neutral-50"
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                        修改决议
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void resolveConflict(selectedRun.id, c.filePath, 'rejected')}
+                                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-medium text-red-700 hover:bg-red-100"
+                                      >
+                                        <XCircle className="h-3.5 w-3.5" />
+                                        拒绝合并
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-2 rounded-lg border border-neutral-200 bg-white p-3">
+                                      <label className="block text-[11px] font-medium text-neutral-700">最终合并内容</label>
+                                      <textarea
+                                        value={resolveMergedContent}
+                                        onChange={(e) => setResolveMergedContent(e.target.value)}
+                                        rows={4}
+                                        className="w-full rounded-md border border-neutral-200 bg-neutral-50 p-2 text-[11px] leading-4 text-neutral-700 outline-none focus:border-neutral-400"
+                                      />
+                                      <label className="block text-[11px] font-medium text-neutral-700">备注</label>
+                                      <input
+                                        value={resolveNotes}
+                                        onChange={(e) => setResolveNotes(e.target.value)}
+                                        className="w-full rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-[11px] text-neutral-700 outline-none focus:border-neutral-400"
+                                        placeholder="说明决议原因..."
+                                      />
+                                      <div className="flex flex-wrap gap-2 pt-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => void resolveConflict(selectedRun.id, c.filePath, 'overridden')}
+                                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-neutral-950 px-3 text-xs font-medium text-white hover:bg-neutral-800"
+                                        >
+                                          保存决议
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setResolvingConflictFile(null)
+                                            setResolveNotes('')
+                                            setResolveMergedContent('')
+                                          }}
+                                          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 hover:bg-neutral-50"
+                                        >
+                                          取消
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   )}
@@ -876,11 +983,53 @@ function isCancellableRun(status: OrchestratorRunListItem['status']) {
   return status === 'planning' || status === 'running' || status === 'synthesizing'
 }
 
+function SimpleDiffLines({ diff }: { diff: string }) {
+  const lines = diff.split(/\r?\n/)
+  return (
+    <div className="space-y-0 text-[11px] leading-4">
+      {lines.map((line, i) => {
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          return (
+            <div key={i} className="flex gap-2 bg-emerald-50 text-emerald-900">
+              <span className="w-4 shrink-0 text-emerald-500">+</span>
+              <span className="break-all">{line.slice(1)}</span>
+            </div>
+          )
+        }
+        if (line.startsWith('-') && !line.startsWith('---')) {
+          return (
+            <div key={i} className="flex gap-2 bg-red-50 text-red-900">
+              <span className="w-4 shrink-0 text-red-500">-</span>
+              <span className="break-all">{line.slice(1)}</span>
+            </div>
+          )
+        }
+        if (line.startsWith('@@')) {
+          return (
+            <div key={i} className="bg-blue-50 text-blue-700">
+              {line}
+            </div>
+          )
+        }
+        return (
+          <div key={i} className="flex gap-2 text-neutral-600">
+            <span className="w-4 shrink-0"> </span>
+            <span className="break-all">{line}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function ConflictResolutionBadge({ resolution }: { resolution: ConflictReportItem['resolution'] }) {
   const map: Record<string, { text: string; className: string }> = {
     'auto-merged': { text: '自动合并', className: 'bg-emerald-50 text-emerald-700' },
     'llm-resolved': { text: 'LLM 解决', className: 'bg-blue-50 text-blue-700' },
     'needs-human': { text: '需人工介入', className: 'bg-red-50 text-red-700' },
+    'human-approved': { text: '已确认', className: 'bg-emerald-100 text-emerald-800' },
+    'human-rejected': { text: '已拒绝', className: 'bg-red-100 text-red-800' },
+    'human-overridden': { text: '已覆盖', className: 'bg-amber-100 text-amber-800' },
   }
   const cfg = map[resolution] ?? { text: resolution, className: 'bg-neutral-100 text-neutral-600' }
   return (

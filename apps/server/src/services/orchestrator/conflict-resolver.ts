@@ -12,7 +12,7 @@ export interface ConflictReport {
   filePath: string
   baseContent: string
   variants: FileVariant[]
-  resolution: 'auto-merged' | 'llm-resolved' | 'needs-human'
+  resolution: 'auto-merged' | 'llm-resolved' | 'needs-human' | 'human-approved' | 'human-rejected' | 'human-overridden'
   mergedContent?: string
   notes?: string
 }

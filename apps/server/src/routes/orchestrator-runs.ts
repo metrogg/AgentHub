@@ -7,6 +7,7 @@ import { emitRunEvent, listRunEvents } from '../services/orchestrator/run-events
 import { blackboard, Blackboard } from '../services/blackboard'
 import type { BlackboardSchemaType } from '../services/blackboard-schemas'
 import { OrchestratorEngine, type ExecutionTask } from '../services/orchestrator/orchestrator-engine'
+import type { ConflictReport } from '../services/orchestrator/conflict-resolver'
 
 export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -294,4 +295,52 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     return c.json({ items: run.conflictReport ?? [] })
+  })
+
+  // Resolve a conflict manually (approve/reject/override)
+  .post('/:id/resolve-conflict', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const body = await c.req.json()
+    const filePath = body?.filePath as string | undefined
+    const resolution = body?.resolution as 'approved' | 'rejected' | 'overridden' | undefined
+    const mergedContent = body?.mergedContent as string | undefined
+    const notes = body?.notes as string | undefined
+
+    if (!filePath || !resolution) {
+      return c.json({ ok: false, message: 'filePath and resolution are required' }, 400)
+    }
+
+    const [run] = await db
+      .select({ conflictReport: orchestratorRuns.conflictReport })
+      .from(orchestratorRuns)
+      .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
+      .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
+      .limit(1)
+
+    if (!run) {
+      throw new HTTPException(404, { message: 'Run not found' })
+    }
+
+    const report = (run.conflictReport ?? []) as ConflictReport[]
+    const idx = report.findIndex((item) => item.filePath === filePath)
+    if (idx < 0) {
+      return c.json({ ok: false, message: 'Conflict not found for filePath' }, 404)
+    }
+
+    const target = report[idx]!
+    const updated: ConflictReport[] = [...report]
+    updated[idx] = {
+      ...target,
+      resolution: resolution === 'approved' ? 'human-approved' : resolution === 'rejected' ? 'human-rejected' : 'human-overridden',
+      mergedContent: mergedContent ?? target.mergedContent,
+      notes: notes ? `${target.notes ?? ''}\n[用户决议] ${notes}`.trim() : target.notes,
+    }
+
+    await db
+      .update(orchestratorRuns)
+      .set({ conflictReport: updated, updatedAt: new Date() })
+      .where(eq(orchestratorRuns.id, id))
+
+    return c.json({ ok: true, item: updated[idx] })
   })
