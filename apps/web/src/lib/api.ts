@@ -47,6 +47,8 @@ export function friendlyErrorMessage(error: unknown, context?: string): string {
 
 async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt = 0): Promise<T> {
   const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT_MS
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const canRetry = method === 'GET' || method === 'HEAD' || method === 'OPTIONS'
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
@@ -87,6 +89,7 @@ async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt 
     // Server errors (5xx) and network errors are retryable
     const shouldRetry =
       attempt < MAX_RETRIES &&
+      canRetry &&
       (isRetryableError(error) || (error instanceof ApiError && error.status >= 500))
 
     if (shouldRetry) {
@@ -111,6 +114,17 @@ export interface Session {
   workspaceAgentId?: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface StarOfficeStatus {
+  url: string
+  root: string
+  rootExists: boolean
+  running: boolean
+  starting: boolean
+  started: boolean
+  pid?: number
+  error?: string
 }
 
 export interface Message {
@@ -914,6 +928,8 @@ export const api = {
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
   startMobilePairing: () => request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
+  getStarOfficeStatus: () => request<StarOfficeStatus>('/office/status'),
+  startStarOffice: () => request<StarOfficeStatus>('/office/start', { method: 'POST', timeout: 15_000 }),
   ensureStorageDirectory: (path: string) =>
     request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>('/settings/storage/ensure', {
       method: 'POST',

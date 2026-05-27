@@ -16,6 +16,7 @@ import { requestNewSessionDialog } from '../components/chat/GlobalNewSessionDial
 
 export default function ChatPage() {
   const { sessionId } = useParams()
+  const navigate = useNavigate()
   const currentSessionId = useChatStore((state) => state.currentSessionId)
   const selectSession = useChatStore((state) => state.selectSession)
   const initWebSocket = useChatStore((state) => state.initWebSocket)
@@ -33,9 +34,9 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (sessionId && sessionId !== currentSessionId) {
-      selectSession(sessionId)
+      void selectSession(sessionId).catch(() => navigate('/', { replace: true }))
     }
-  }, [sessionId, currentSessionId, selectSession])
+  }, [sessionId, currentSessionId, navigate, selectSession])
 
   return (
     <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-white text-neutral-950">

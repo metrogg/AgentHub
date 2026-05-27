@@ -1,26 +1,42 @@
 import { logger } from '../lib/logger'
 import type { AgentRunProfile } from './agent-runner'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 type StarOfficeState = 'idle' | 'writing' | 'researching' | 'executing' | 'syncing' | 'error'
 
-const DEFAULT_OFFICE_URL = 'http://127.0.0.1:19000'
+export const DEFAULT_STAR_OFFICE_URL = 'http://127.0.0.1:19000'
 const DEFAULT_JOIN_KEY = 'ocj_example_team_01'
 const REQUEST_TIMEOUT_MS = 2500
 
 const joinedAgents = new Map<string, string>()
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 
-function officeUrl() {
-  return (process.env.AGENTHUB_STAR_OFFICE_URL || process.env.STAR_OFFICE_URL || DEFAULT_OFFICE_URL).replace(/\/+$/, '')
+export function starOfficeUrl() {
+  return (process.env.AGENTHUB_STAR_OFFICE_URL || process.env.STAR_OFFICE_URL || DEFAULT_STAR_OFFICE_URL).replace(/\/+$/, '')
 }
 
-function joinKey() {
+export function starOfficeJoinKey() {
   return process.env.AGENTHUB_STAR_OFFICE_JOIN_KEY || process.env.STAR_OFFICE_JOIN_KEY || DEFAULT_JOIN_KEY
 }
 
-function localOfficeRoot() {
-  return resolve(process.env.AGENTHUB_STAR_OFFICE_ROOT || process.env.STAR_OFFICE_ROOT || 'storage/Star-Office-UI')
+export function starOfficeRoot() {
+  const rawRoot = process.env.AGENTHUB_STAR_OFFICE_ROOT || process.env.STAR_OFFICE_ROOT || 'storage/Star-Office-UI'
+  if (isAbsolute(rawRoot)) return rawRoot
+
+  const candidates = [
+    process.env.PROJECT_ROOT?.trim(),
+    PROJECT_ROOT,
+    process.cwd(),
+    resolve(process.cwd(), '../..'),
+  ].filter(Boolean) as string[]
+  for (const base of [...new Set(candidates)]) {
+    const candidate = resolve(base, rawRoot)
+    if (existsSync(candidate)) return candidate
+  }
+  return resolve(PROJECT_ROOT, rawRoot)
 }
 
 function enabled() {
@@ -66,7 +82,7 @@ export async function pushStarOfficeAgentState(
     if (!agentId) return
     await postJson('/agent-push', {
       agentId,
-      joinKey: joinKey(),
+      joinKey: starOfficeJoinKey(),
       name: officeAgentName(profile),
       state,
       detail,
@@ -84,7 +100,7 @@ async function ensureStarOfficeAgent(profile: AgentRunProfile) {
   await ensureLocalJoinKey()
   const response = await postJson('/join-agent', {
     name: officeAgentName(profile),
-    joinKey: joinKey(),
+    joinKey: starOfficeJoinKey(),
     state: 'idle',
     detail: 'AgentHub 已加入办公室',
   })
@@ -95,10 +111,10 @@ async function ensureStarOfficeAgent(profile: AgentRunProfile) {
 }
 
 async function ensureLocalJoinKey() {
-  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(officeUrl())) return
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(starOfficeUrl())) return
 
-  const key = joinKey()
-  const file = join(localOfficeRoot(), 'join-keys.json')
+  const key = starOfficeJoinKey()
+  const file = join(starOfficeRoot(), 'join-keys.json')
   let data: { keys?: Array<Record<string, unknown>> } = { keys: [] }
   try {
     data = JSON.parse(await readFile(file, 'utf8')) as { keys?: Array<Record<string, unknown>> }
@@ -118,7 +134,7 @@ async function ensureLocalJoinKey() {
     usedByAgentId: null,
     usedAt: null,
   })
-  await mkdir(localOfficeRoot(), { recursive: true })
+  await mkdir(starOfficeRoot(), { recursive: true })
   await writeFile(file, JSON.stringify({ keys }, null, 2), 'utf8')
 }
 
@@ -126,7 +142,7 @@ async function postJson(path: string, body: Record<string, unknown>) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const response = await fetch(`${officeUrl()}${path}`, {
+    const response = await fetch(`${starOfficeUrl()}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

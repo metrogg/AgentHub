@@ -271,6 +271,11 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     if (openingAgentId) return
     setOpeningAgentId(agent.id)
     try {
+      const existing = findExistingAgentSession(sessions, agent)
+      if (existing) {
+        await openExistingSession(existing)
+        return
+      }
       const session = await startAgentConversation({ agents: [agent] })
       await fetchSessions()
       await openExistingSession(session)
@@ -1011,6 +1016,24 @@ function sessionMatchesQuery(session: Session, query: string, parent?: Session) 
     .join(' ')
     .toLowerCase()
     .includes(query)
+}
+
+function findExistingAgentSession(sessions: Session[], agent: SavedAgentConfig) {
+  const agentName = normalizeMatchText(agent.name)
+  const agentRole = normalizeMatchText(agent.role)
+  if (!agentName) return null
+
+  return sessions.find((session) => {
+    if (session.type !== 'direct' || !session.workspaceAgentId) return false
+    const title = normalizeMatchText(session.title)
+    const titleParts = session.title.split('/').map((part) => normalizeMatchText(part))
+    if (titleParts.some((part) => part === agentName)) return true
+    return title.includes(agentName) && (!agentRole || title.includes(agentRole))
+  }) ?? null
+}
+
+function normalizeMatchText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 function comparePinnedGroups(a: SessionGroup, b: SessionGroup, pinnedIds: Set<string>) {

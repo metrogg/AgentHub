@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import AgentConfigPage from './pages/AgentConfigPage'
 import ChatPage from './pages/ChatPage'
@@ -124,14 +125,14 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
     dragRef.current = null
   }
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/10 backdrop-blur-[2px]" role="dialog" aria-modal="true">
+  return createPortal(
+    <div className="fixed inset-0 z-[2147483647] bg-black/15 backdrop-blur-[3px]" role="dialog" aria-modal="true">
       <div
-        className="absolute left-1/2 top-1/2 flex h-[min(720px,calc(100vh-5rem))] w-[min(980px,calc(100vw-5rem))] min-w-[720px] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
+        className="absolute left-1/2 top-1/2 flex h-[min(880px,calc(100vh-2.5rem))] w-[min(1280px,calc(100vw-2.5rem))] min-w-[920px] flex-col overflow-hidden rounded-[22px] border border-neutral-200 bg-white shadow-[0_36px_120px_rgba(15,23,42,0.34)]"
         style={{ transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px))` }}
       >
         <div
-          className="flex h-10 shrink-0 cursor-move select-none items-center justify-between border-b border-neutral-200 bg-[#f7f7f4] px-3"
+          className="flex h-11 shrink-0 cursor-move select-none items-center justify-between border-b border-neutral-200 bg-[#f7f7f4] px-4"
           onPointerDown={startDrag}
           onPointerMove={drag}
           onPointerUp={stopDrag}
@@ -156,10 +157,11 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
           </div>
         </div>
         <div className="min-h-0 flex-1">
-          <SettingsSurface onClose={onClose} compact showSidebarClose={false} />
+          <SettingsSurface onClose={onClose} compact={false} showSidebarClose={false} />
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

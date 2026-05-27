@@ -220,9 +220,7 @@ function normalizeLibraryState(value: unknown): AgentLibraryState {
     ? parsed.relations.map(normalizeSavedRelation).filter(Boolean) as SavedAgentRelation[]
     : buildDefaultSavedRelations(agents)
   const pruned = pruneRelations(relations, agents)
-  const state: AgentLibraryState = { schemaVersion: 2, agents, relations: pruned }
-  if (typeof window !== 'undefined') saveAgentLibraryState(state)
-  return state
+  return { schemaVersion: 2, agents, relations: pruned }
 }
 
 function normalizeSavedRelation(value: unknown): SavedAgentRelation | null {

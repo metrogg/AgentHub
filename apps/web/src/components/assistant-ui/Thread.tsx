@@ -257,8 +257,8 @@ const AgentChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) =
         type="button"
         onClick={onOpenDetails}
         className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-        title="会话详情"
-        aria-label="会话详情"
+        title="Agent 设置"
+        aria-label="Agent 设置"
       >
         <MoreHorizontal className="h-5 w-5" />
       </button>
@@ -357,9 +357,11 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
         <div className="flex h-full flex-col overflow-hidden">
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-4">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-neutral-950">子会话</div>
+              <div className="truncate text-sm font-semibold text-neutral-950">
+                {agent?.name ?? 'Agent 设置'}
+              </div>
               <div className="mt-1 truncate text-xs text-neutral-500">
-                {agent ? `${agent.name} / ${agent.role}` : 'Agent Task'}
+                {agent?.role ? `${agent.role} · 快捷配置` : '模型与系统提示词'}
               </div>
             </div>
             <button

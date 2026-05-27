@@ -120,8 +120,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } else {
         set({ currentSession: session, messages: items, loadingMessages: false })
       }
-    } catch {
+    } catch (error) {
       set({ loadingMessages: false })
+      throw error
     }
   },
 
