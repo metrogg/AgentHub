@@ -246,7 +246,7 @@ export async function resolveModelApiKey(modelId?: string | null): Promise<{ api
     const catalog = parseCatalog(map.MODEL_CATALOG)
     const targetId = clean(modelId) ?? clean(map.ACTIVE_MODEL_ID)
     const item = targetId
-      ? catalog.find((entry) => entry.id === targetId && entry.enabled !== false)
+      ? catalog.find((entry) => (entry.id === targetId || entry.modelId === targetId) && entry.enabled !== false)
       : catalog.find((entry) => entry.enabled !== false && clean(entry.modelId))
     if (item?.modelId) {
       const key = configuredApiKey(item)
@@ -268,7 +268,7 @@ export async function resolveModelConfig(modelId?: string | null): Promise<Resol
     const catalog = parseCatalog(map.MODEL_CATALOG)
     const targetId = clean(modelId) ?? clean(map.ACTIVE_MODEL_ID)
     const item = targetId
-      ? catalog.find((entry) => entry.id === targetId && entry.enabled !== false)
+      ? catalog.find((entry) => (entry.id === targetId || entry.modelId === targetId) && entry.enabled !== false)
       : catalog.find((entry) => entry.enabled !== false && clean(entry.modelId))
     if (!item?.modelId) return null
 

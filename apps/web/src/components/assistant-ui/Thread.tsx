@@ -106,6 +106,7 @@ import { TypewriterHeading } from '../chat/TypewriterHeading'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
+  saveAgentToLibrary,
   toAgentConfigInput,
   type SavedAgentConfig,
 } from '../../lib/agentLibrary'
@@ -349,6 +350,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
   })
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const modelChoices = filterModelsForCodeAgent(models, agent?.codeAgentType, draft.modelId)
+  const selectedModelName = modelName(draft.modelId || null, models)
 
   useEffect(() => {
     if (!open) return
@@ -380,6 +382,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     setSaveState('saving')
     try {
       await api.updateWorkspaceAgent(workspace.id, agent.id, patch)
+      syncAgentLibraryFromWorkspaceAgent({ ...agent, ...patch })
       if (session?.id) await selectSession(session.id)
       setSaveState('saved')
       window.setTimeout(() => setSaveState('idle'), 1400)
@@ -477,13 +480,17 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                     disabled={saveState === 'saving'}
                     className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
                   >
-                    <option value="">自动模型</option>
+                    <option value="">使用 Coding Tool 默认模型</option>
                     {modelChoices.map((model) => (
                       <option key={model.id} value={model.id}>
                         {model.name || model.modelId}
                       </option>
                     ))}
                   </select>
+                  <span className="mt-1 block text-xs leading-5 text-neutral-400">
+                    Agent 模型会覆盖 Coding Tools 页面里的工具默认模型。当前：
+                    {draft.modelId ? selectedModelName : '跟随工具默认'}
+                  </span>
                 </label>
 
                 <label className="block">
@@ -551,6 +558,45 @@ const AgentQuickSaveState: FC<{ state: 'idle' | 'saving' | 'saved' | 'error' }> 
   if (state === 'saved') return <span className="text-xs text-emerald-600">已保存</span>
   if (state === 'error') return <span className="text-xs text-red-500">保存失败</span>
   return <span className="text-xs text-neutral-300">自动保存</span>
+}
+
+function syncAgentLibraryFromWorkspaceAgent(agent: WorkspaceAgent) {
+  const library = loadAgentLibrary()
+  const matched =
+    library.find((item) => item.id === agent.id) ??
+    library.find((item) => item.name === agent.name && item.role === agent.role) ??
+    library.find((item) => item.roleType && item.roleType === agent.roleType)
+  if (!matched) return
+  saveAgentToLibrary(
+    library,
+    {
+      ...toAgentConfigInput(matched),
+      name: agent.name,
+      role: agent.role,
+      roleType: agent.roleType,
+      description: agent.description,
+      avatar: agent.avatar,
+      systemPrompt: agent.systemPrompt,
+      roleProfile: agent.roleProfile ?? null,
+      color: agent.color,
+      modelId: agent.modelId,
+      runtimeType: agent.runtimeType,
+      codeAgentType: agent.runtimeType === 'code-agent' ? agent.codeAgentType : null,
+      capabilityTags: agent.capabilityTags,
+      toolPermissions: agent.toolPermissions,
+      sandboxPolicy: agent.sandboxPolicy,
+      contextPolicy: agent.contextPolicy,
+      autoInvoke: agent.autoInvoke,
+      approvalRequired: agent.approvalRequired,
+    },
+    matched.id,
+  )
+}
+
+function modelName(modelId: string | null, models: ModelCatalogItem[]) {
+  if (!modelId) return '跟随工具默认'
+  const model = models.find((item) => item.id === modelId || item.modelId === modelId)
+  return model?.name || model?.modelId || modelId
 }
 
 const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {

@@ -379,7 +379,10 @@ async function resolveCodeAgentModelTarget(
   modelId?: string | null,
   toolConfig?: Record<string, unknown>,
 ): Promise<CodeAgentModelTarget | null> {
-  const selected = await resolveModelConfig(resolveCodeAgentModelId(modelId, toolConfig))
+  const effectiveModelId = resolveCodeAgentModelId(modelId, toolConfig)
+  if (!effectiveModelId) return null
+
+  const selected = await resolveModelConfig(effectiveModelId)
   if (!selected?.modelId) return null
 
   const providerKey = safeProviderKey(selected.provider || selected.id)
@@ -617,6 +620,7 @@ async function runCodeAgentCommand(
   let lastMetadataAt = 0
   let claudeStdoutBuffer = ''
   let claudeFinalMessage = ''
+  let claudeHasStreamedText = false
   const emitLiveMetadata = (force = false) => {
     const now = Date.now()
     if (!force && now - lastMetadataAt < 250) return
@@ -730,8 +734,13 @@ async function runCodeAgentCommand(
           addToolCall,
           addLog,
           onText: (text) => {
+            claudeHasStreamedText = true
             claudeFinalMessage += text
             hooks.onText?.(text)
+          },
+          onAssistantText: (text) => {
+            claudeFinalMessage ||= text
+            if (!claudeHasStreamedText) hooks.onText?.(text)
           },
         })
       } else {
@@ -902,6 +911,7 @@ function consumeClaudeStreamJson(
     addToolCall: (name: string, input?: Record<string, unknown>) => void
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
     onText: (text: string) => void
+    onAssistantText?: (text: string) => void
   }
 ) {
   const combined = previousBuffer + chunk
@@ -912,7 +922,10 @@ function consumeClaudeStreamJson(
 }
 
 function extractClaudeResultMessage(output: string) {
-  const messages: string[] = []
+  const resultMessages: string[] = []
+  const assistantMessages: string[] = []
+  const streamText: string[] = []
+  const errorMessages: string[] = []
   const lines = output.split(/\r?\n/)
   for (const line of lines) {
     const trimmed = line.trim()
@@ -932,7 +945,15 @@ function extractClaudeResultMessage(output: string) {
             : typeof payload.message === 'string'
               ? payload.message
               : ''
-      if (text) messages.push(text)
+      if (text) resultMessages.push(text)
+    }
+    if (payload?.type === 'assistant') {
+      const text = extractClaudeContentText(payload.message?.content)
+      if (text) assistantMessages.push(text)
+    }
+    if (payload?.type === 'stream_event') {
+      const delta = payload.event?.delta
+      if (delta?.type === 'text_delta' && typeof delta.text === 'string') streamText.push(delta.text)
     }
     if (payload?.type === 'error') {
       const text =
@@ -943,10 +964,29 @@ function extractClaudeResultMessage(output: string) {
             : typeof payload.detail === 'string'
               ? payload.detail
               : ''
-      if (text) messages.push(text)
+      if (text) errorMessages.push(text)
     }
   }
-  return messages.find(Boolean)?.trim()
+  return (
+    resultMessages.find(Boolean)?.trim() ||
+    assistantMessages.find(Boolean)?.trim() ||
+    streamText.join('').trim() ||
+    errorMessages.find(Boolean)?.trim()
+  )
+}
+
+function extractClaudeContentText(content: unknown): string {
+  const blocks = Array.isArray(content) ? content : content ? [content] : []
+  return blocks
+    .map((block) => {
+      if (typeof block === 'string') return block
+      if (!block || typeof block !== 'object') return ''
+      const value = block as Record<string, unknown>
+      if (value.type === 'text' && typeof value.text === 'string') return value.text
+      return ''
+    })
+    .join('')
+    .trim()
 }
 
 function parseClaudeJsonLine(
@@ -957,6 +997,7 @@ function parseClaudeJsonLine(
     addToolCall: (name: string, input?: Record<string, unknown>) => void
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
     onText: (text: string) => void
+    onAssistantText?: (text: string) => void
   }
 ) {
   const trimmed = line.trim()
@@ -987,6 +1028,8 @@ function parseClaudeJsonLine(
     for (const block of payload.message?.content ?? []) {
       if (block?.type === 'tool_use') recordClaudeToolUse(block, handlers)
     }
+    const text = extractClaudeContentText(payload.message?.content)
+    if (text) (handlers.onAssistantText ?? handlers.onText)(text)
     return
   }
 
@@ -1871,6 +1914,7 @@ function stripToolNoise(output: string) {
       if (/^Recent group context:/i.test(trimmed)) return false
       if (/^(user|agent|assistant|system)\s*:/i.test(trimmed)) return false
       if (/^Reading additional input from stdin\.\.\./i.test(trimmed)) return false
+      if (/^\{"type":"(?:system|assistant|result|stream_event|error)"/.test(trimmed)) return false
       if (
         /^(workdir|model|provider|approval|sandbox|reasoning effort|reasoning summaries|session id|Project workspace path|Allowed tool scopes|Capabilities|Sandbox policy):/i.test(
           trimmed

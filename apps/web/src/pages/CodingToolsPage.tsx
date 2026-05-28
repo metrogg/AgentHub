@@ -995,7 +995,7 @@ export default function CodingToolsPage() {
 
                     <label className="block text-sm md:col-span-2">
                       <span className="mb-2 flex items-center justify-between gap-3 text-neutral-600">
-                        <span>{t('模型')}</span>
+                        <span>工具默认模型</span>
                         {activeTool.id === 'opencode' && (
                           <button
                             type="button"
@@ -1090,6 +1090,9 @@ export default function CodingToolsPage() {
                           )}
                         </div>
                       )}
+                      <p className="mt-2 text-xs leading-5 text-neutral-500">
+                        这里设置的是该 CLI 的默认模型；如果某个 Agent 自己选择了模型，会优先生效 Agent 模型。
+                      </p>
                     </label>
                   </div>
 
