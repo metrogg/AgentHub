@@ -83,7 +83,7 @@ type PlanAgent = {
   key: string
   name: string
   role: string
-  roleType?: 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
+  roleType?: 'orchestrator' | 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
   color: string
   systemPrompt: string
   description?: string
@@ -916,7 +916,6 @@ async function createWorkspaceGroupSession(
 
   await db.insert(sessionMembers).values([
     { sessionId: session.id, memberType: 'user', memberId: ownerId },
-    { sessionId: session.id, memberType: 'agent', memberId: 'orchestrator' },
     ...agents.map((agent) => ({ sessionId: session.id, memberType: 'agent' as const, memberId: agent.id })),
   ])
 
@@ -1045,47 +1044,13 @@ async function dispatchPlanToExistingGroup(
     if (matched) agentsByKey.set(matched.key, agent)
   }
 
-  const createdAgents: Array<typeof workspaceAgents.$inferSelect> = []
-  for (const [index, planAgent] of plan.agents.entries()) {
-    if (agentsByKey.has(planAgent.key)) continue
-    const [created] = await db
-      .insert(workspaceAgents)
-      .values({
-        workspaceId: workspace.id,
-        name: planAgent.name,
-        role: planAgent.role,
-        roleType: planAgent.roleType ?? 'custom',
-        description: planAgent.description ?? '',
-        systemPrompt: planAgent.systemPrompt,
-        roleProfile: planAgent.roleProfile ?? null,
-        color: planAgent.color,
-        modelId: planAgent.modelId ?? null,
-        runtimeType: planAgent.runtimeType ?? 'llm',
-        codeAgentType: planAgent.codeAgentType ?? null,
-        capabilityTags: planAgent.capabilityTags ?? [],
-        toolPermissions: planAgent.toolPermissions ?? [],
-        sandboxPolicy: planAgent.sandboxPolicy ?? 'workspace-write',
-        orderIdx: existingAgents.length + index,
-      })
-      .returning()
-    if (created) {
-      agentsByKey.set(planAgent.key, created)
-      createdAgents.push(created)
-    }
-  }
-
-  if (createdAgents.length) {
-    await db.insert(sessionMembers).values(
-      createdAgents.map((agent) => ({
-        sessionId: session.id,
-        memberType: 'agent' as const,
-        memberId: agent.id,
-      }))
+  // 不再自动创建计划中的 Agent；所有 Agent 必须已在 workspace 中存在
+  const missingAgents = plan.agents.filter((a) => !agentsByKey.has(a.key))
+  if (missingAgents.length > 0) {
+    logger.warn(
+      { missing: missingAgents.map((a) => a.name), workspaceId: workspace.id },
+      'dispatchPlanToExistingGroup: plan references agents not in workspace, skipping missing tasks'
     )
-    // 修复 Bug 10: 为新创建的 agent 创建 child sessions
-    for (const agent of createdAgents) {
-      await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent)
-    }
   }
 
   return { workspaceId: workspace.id, groupSessionId: session.id, agentsByKey }

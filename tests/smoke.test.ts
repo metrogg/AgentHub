@@ -184,7 +184,7 @@ describe('AgentHub smoke tests', () => {
     )
 
     expect(full.agents.map((agent) => agent.roleType)).toEqual([
-      'architect',
+      'orchestrator',
       'coder',
       'reviewer',
     ])
@@ -194,7 +194,7 @@ describe('AgentHub smoke tests', () => {
 
     const coder = full.agents.find((agent) => agent.roleType === 'coder')!
     const reviewer = full.agents.find((agent) => agent.roleType === 'reviewer')!
-    const architect = full.agents.find((agent) => agent.roleType === 'architect')!
+    const orchestrator = full.agents.find((agent) => agent.roleType === 'orchestrator')!
 
     const replaced = await json<{
       items: Array<{ sourceAgentId: string; targetAgentId: string; relationType: string; note: string | null }>
@@ -218,7 +218,7 @@ describe('AgentHub smoke tests', () => {
             },
             {
               sourceAgentId: coder.id,
-              targetAgentId: architect.id,
+              targetAgentId: orchestrator.id,
               relationType: 'fallback_to',
             },
           ],

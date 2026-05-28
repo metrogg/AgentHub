@@ -8,7 +8,7 @@ type PlanAgent = {
   key: string
   name: string
   role: string
-  roleType?: 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
+  roleType?: 'orchestrator' | 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
   color?: string
   systemPrompt?: string
   description?: string
