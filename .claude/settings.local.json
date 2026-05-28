@@ -3,7 +3,13 @@
     "allow": [
       "Bash(bun install *)",
       "Bash(bun pm *)",
-      "Bash(bun add *)"
+      "Bash(bun add *)",
+      "WebSearch",
+      "WebFetch(domain:langchain-ai.github.io)",
+      "WebFetch(domain:docs.crewai.com)",
+      "WebFetch(domain:microsoft.github.io)",
+      "WebFetch(domain:github.com)",
+      "mcp__plugin_everything-claude-code_exa__web_search_exa"
     ]
   }
 }
