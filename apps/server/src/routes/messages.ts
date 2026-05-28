@@ -23,6 +23,7 @@ import {
   asc,
   desc,
 } from '@agenthub/db'
+import { inArray } from 'drizzle-orm'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
@@ -1096,6 +1097,11 @@ function aliasesForAgent(agent: typeof workspaceAgents.$inferSelect) {
   return [...aliases]
 }
 
+function isOrchestratorAlias(agent: typeof workspaceAgents.$inferSelect): boolean {
+  const text = [agent.name, agent.role, ...(agent.capabilityTags ?? [])].join(' ').toLowerCase()
+  return text.includes('orchestrator') || text.includes('协调器') || text.includes('调度')
+}
+
 async function runGroupReplies(workspaceId: string, sessionId: string, msg: MessageRow, content: string) {
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
   const projectPath = workspace?.projectPath ?? null
@@ -1118,6 +1124,8 @@ async function runGroupReplies(workspaceId: string, sessionId: string, msg: Mess
   }
 
   for (const agent of agentList) {
+    // 保护：跳过与系统 Orchestrator 同名的 workspace agent，避免硬编码 Orchestrator 和同名 Agent 同时回复
+    if (isOrchestratorAlias(agent)) continue
     if (hasMention(content, aliasesForAgent(agent))) {
       pushProfile(toAgentProfile(agent, projectPath))
     }
@@ -1211,11 +1219,34 @@ function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {
 async function ensureWorkspaceAgentChildSessions(workspaceId: string, ownerId: string) {
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
   if (!workspace || workspace.ownerId !== ownerId) return
+
+  // 只给群聊 session_members 中的 Agent 创建 child session，避免 workspace 下所有 Agent 都出现子话题
+  const [groupSession] = await db
+    .select()
+    .from(sessions)
+    .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.type, 'group')))
+    .orderBy(desc(sessions.createdAt))
+    .limit(1)
+
+  if (!groupSession) return
+
+  const members = await db
+    .select()
+    .from(sessionMembers)
+    .where(eq(sessionMembers.sessionId, groupSession.id))
+
+  const agentMemberIds = members
+    .filter((m) => m.memberType === 'agent' && m.memberId !== 'orchestrator')
+    .map((m) => m.memberId)
+
+  if (agentMemberIds.length === 0) return
+
   const agents = await db
     .select()
     .from(workspaceAgents)
-    .where(eq(workspaceAgents.workspaceId, workspaceId))
+    .where(and(eq(workspaceAgents.workspaceId, workspaceId), inArray(workspaceAgents.id, agentMemberIds)))
     .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+
   for (const agent of agents) {
     await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent)
   }
