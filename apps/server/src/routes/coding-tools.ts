@@ -692,7 +692,7 @@ async function tryVersionProbe(command: string, flag: string): Promise<string | 
   }
 
   // Step 2: run version probe
-  const shell = isWindows ? 'cmd.exe' : 'sh'
+  const shell = isWindows ? getWindowsCommandShell() : 'sh'
   const args = isWindows
     ? ['/c', `${command} ${flag}`]
     : ['-lc', `${quoteForSh(command)} ${flag}`]
@@ -761,7 +761,7 @@ async function runFixedCommand(
 ): Promise<{ code: number; output: string }> {
   try {
     const isWindows = process.platform === 'win32'
-    const proc = Bun.spawn(isWindows ? ['cmd.exe', '/d', '/s', '/c', command.map(quoteForCmd).join(' ')] : command, {
+    const proc = Bun.spawn(isWindows ? [getWindowsCommandShell(), '/d', '/s', '/c', command.map(quoteForCmd).join(' ')] : command, {
       cwd: options.cwd,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -793,7 +793,7 @@ async function runHostCliCommand(
 ): Promise<{ code: number; output: string }> {
   try {
     const isWindows = process.platform === 'win32'
-    const proc = Bun.spawn(isWindows ? ['cmd.exe', '/d', '/c', [command, ...args.map(windowsShellArg)].join(' ')] : [command, ...args], {
+    const proc = Bun.spawn(isWindows ? [getWindowsCommandShell(), '/d', '/c', [command, ...args.map(windowsShellArg)].join(' ')] : [command, ...args], {
       cwd: options.cwd,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -860,6 +860,10 @@ function disabledAuthAction(status?: 'pending' | 'completed' | 'failed') {
 
 function isSafeCommand(command: string) {
   return /^[a-zA-Z0-9._-]+$/.test(command)
+}
+
+function getWindowsCommandShell() {
+  return process.env.ComSpec || `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\cmd.exe`
 }
 
 function isSafeEnvName(name?: string) {

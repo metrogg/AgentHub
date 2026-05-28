@@ -273,10 +273,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     if (openingSessionId === session.id) return
     setOpeningSessionId(session.id)
     try {
-      navigate(`/chat/${session.id}`)
       if (currentSessionId !== session.id) {
         await selectSession(session.id)
       }
+      navigate(`/chat/${session.id}`)
     } catch (error) {
       showHint(friendlyErrorMessage(error, '打开会话失败'))
     } finally {

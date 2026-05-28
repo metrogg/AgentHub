@@ -11,12 +11,11 @@ import { db, workspaces, eq } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 
-const WORKSPACE_ROOT = resolve(import.meta.dir, '..', '..', '..', '..')
-
 export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
   .get('/preview-file', async (c) => {
     const rawPath = c.req.query('path')?.trim()
+    const workspaceId = c.req.query('workspaceId')?.trim()
     if (!rawPath) throw new HTTPException(400, { message: 'Missing preview path' })
 
     const filePath = resolve(rawPath)
@@ -25,9 +24,17 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       throw new HTTPException(400, { message: 'Only HTML files can be previewed' })
     }
 
-    const rel = relative(WORKSPACE_ROOT, filePath)
-    if (rel.startsWith('..') || isAbsolute(rel)) {
-      throw new HTTPException(403, { message: 'Access denied: path outside workspace' })
+    // 基于 workspace 的 projectPath 做安全校验
+    if (workspaceId) {
+      const user = c.get('user')
+      const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+      if (ws && ws.ownerId === user.sub && ws.projectPath) {
+        const allowedRoot = resolve(ws.projectPath)
+        const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
+        if (filePath !== allowedRoot && !filePath.startsWith(rootWithSep)) {
+          throw new HTTPException(403, { message: 'Access denied: path outside workspace' })
+        }
+      }
     }
 
     if (!existsSync(filePath) || !statSync(filePath).isFile()) {

@@ -11,7 +11,11 @@ import { getLlmRuntimeStatus, resolveLlmRuntimeConfig, resolveModelApiKey, resol
 import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
-import { DEFAULT_ENV_ALLOWLIST, validateEnvelope, buildExecutionCwd } from './execution/agent-execution-envelope'
+import {
+  DEFAULT_ENV_ALLOWLIST,
+  validateEnvelope,
+  buildExecutionCwd,
+} from './execution/agent-execution-envelope'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -231,15 +235,17 @@ export async function* streamCodeAgentReply(
   }
 
   // 如果提供了 envelope，使用 envelope 的执行上下文；否则降级到旧路径（已废弃）
+  const legacyProjectPath = profile.projectPath?.trim() || null
+
   const cwdInfo = envelope
     ? resolveExecutionCwd(envelope)
     : resolveExecutionCwd({
-        runId: 'legacy',
-        taskId: 'legacy',
+        runId: userMsg.sessionId || 'legacy',
+        taskId: userMsg.id || 'legacy',
         agentId: profile.id,
         agentName: profile.name,
-        projectPath: profile.projectPath ?? null,
-        worktreePath: profile.projectPath ?? null,
+        projectPath: legacyProjectPath,
+        worktreePath: legacyProjectPath,
         sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
         envAllowlist: DEFAULT_ENV_ALLOWLIST,
       })
@@ -254,7 +260,9 @@ export async function* streamCodeAgentReply(
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
-  const modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId)
+  const toolConfig = await resolveToolConfig(type)
+  const modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+  const runtimeModelTarget = normalizeCodeAgentModelTarget(type, modelTarget)
   const configured = await isRuntimeConfigured(type, adapter, profile.modelId, modelTarget)
   const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
@@ -269,7 +277,7 @@ export async function* streamCodeAgentReply(
       `- 命令：\`${adapter.command}\``,
       `- 沙箱：${profile.sandboxPolicy ?? 'workspace-write'}`,
       `- 项目目录：${cwdInfo.label}`,
-      `- 模型档案：${modelTarget ? `${modelTarget.provider}/${modelTarget.modelId}` : profile.modelId ? '未找到或未启用' : '自动模型'}`,
+      `- 模型档案：${runtimeModelTarget ? `${runtimeModelTarget.provider}/${runtimeModelTarget.modelId}` : profile.modelId ? '未找到或未启用' : '自动模型'}`,
       `- 运行凭据：${configured ? '可由模型管理注入' : '未检测到'}`,
       `- 安装状态：${installed ? '已安装' : '未安装'}`,
       `- 执行开关：${executionEnabled ? '已启用' : '已禁用'}\``,
@@ -279,7 +287,7 @@ export async function* streamCodeAgentReply(
       '',
       '命令预览：',
       '```bash',
-      previewCommand(adapter, cwdInfo.cwd, profile.sandboxPolicy, modelTarget),
+      previewCommand(adapter, cwdInfo.cwd, profile.sandboxPolicy, runtimeModelTarget),
       '```',
       '',
       cwdInfo.valid ? '' : `项目目录不存在或不是文件夹：${cwdInfo.label}`,
@@ -301,13 +309,12 @@ export async function* streamCodeAgentReply(
     wake?.()
     wake = null
   }
-  const toolConfig = await resolveToolConfig(type)
   const runPromise = runCodeAgentCommand(
     adapter,
     prompt,
     cwdInfo.cwd,
     profile.sandboxPolicy,
-    modelTarget,
+    runtimeModelTarget,
     signal,
     toolConfig,
     envelope?.envAllowlist,
@@ -360,8 +367,12 @@ export async function* streamCodeAgentReply(
 async function resolveCodeAgentModelTarget(
   type: CodeAgentType,
   modelId?: string | null,
+  toolConfig?: Record<string, unknown>,
 ): Promise<CodeAgentModelTarget | null> {
-  const selected = await resolveModelConfig(modelId)
+  const effectiveModelId = resolveCodeAgentModelId(modelId, toolConfig)
+  if (!effectiveModelId) return null
+
+  const selected = await resolveModelConfig(effectiveModelId)
   if (!selected?.modelId) return null
 
   const providerKey = safeProviderKey(selected.provider || selected.id)
@@ -380,6 +391,43 @@ async function resolveCodeAgentModelTarget(
     openaiBaseUrl,
     anthropicBaseUrl,
   }
+}
+
+function resolveCodeAgentModelId(
+  agentModelId?: string | null,
+  toolConfig?: Record<string, unknown>,
+) {
+  const fromAgent = agentModelId?.trim()
+  if (fromAgent) return fromAgent
+
+  const fromTool = typeof toolConfig?.['modelId'] === 'string' ? toolConfig['modelId'].trim() : ''
+  return fromTool || null
+}
+
+function normalizeCodeAgentModelTarget(
+  type: CodeAgentType,
+  modelTarget?: CodeAgentModelTarget | null,
+) {
+  if (type !== 'claude-code') return modelTarget ?? null
+  if (!modelTarget) return null
+  return isClaudeCodeModelTarget(modelTarget) ? modelTarget : null
+}
+
+function isClaudeCodeModelTarget(modelTarget: CodeAgentModelTarget) {
+  const modelId = modelTarget.modelId.trim()
+  if (modelTarget.anthropicBaseUrl) return true
+  if (!/\b(claude|sonnet|opus|haiku)\b/i.test(modelId)) return false
+
+  const provider = modelTarget.provider.trim().toLowerCase()
+  const providerKey = modelTarget.providerKey.trim().toLowerCase()
+  const endpoint = (modelTarget.anthropicBaseUrl || modelTarget.openaiBaseUrl || '').toLowerCase()
+  return (
+    provider.includes('anthropic') ||
+    provider.includes('claude') ||
+    providerKey.includes('anthropic') ||
+    providerKey.includes('claude') ||
+    endpoint.includes('anthropic.com')
+  )
 }
 
 async function isRuntimeConfigured(
@@ -562,6 +610,7 @@ async function runCodeAgentCommand(
   let lastMetadataAt = 0
   let claudeStdoutBuffer = ''
   let claudeFinalMessage = ''
+  let claudeHasStreamedText = false
   const emitLiveMetadata = (force = false) => {
     const now = Date.now()
     if (!force && now - lastMetadataAt < 250) return
@@ -675,8 +724,13 @@ async function runCodeAgentCommand(
           addToolCall,
           addLog,
           onText: (text) => {
+            claudeHasStreamedText = true
             claudeFinalMessage += text
             hooks.onText?.(text)
+          },
+          onAssistantText: (text) => {
+            claudeFinalMessage ||= text
+            if (!claudeHasStreamedText) hooks.onText?.(text)
           },
         })
       } else {
@@ -847,6 +901,7 @@ function consumeClaudeStreamJson(
     addToolCall: (name: string, input?: Record<string, unknown>) => void
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
     onText: (text: string) => void
+    onAssistantText?: (text: string) => void
   }
 ) {
   const combined = previousBuffer + chunk
@@ -857,7 +912,10 @@ function consumeClaudeStreamJson(
 }
 
 function extractClaudeResultMessage(output: string) {
-  const messages: string[] = []
+  const resultMessages: string[] = []
+  const assistantMessages: string[] = []
+  const streamText: string[] = []
+  const errorMessages: string[] = []
   const lines = output.split(/\r?\n/)
   for (const line of lines) {
     const trimmed = line.trim()
@@ -877,7 +935,15 @@ function extractClaudeResultMessage(output: string) {
             : typeof payload.message === 'string'
               ? payload.message
               : ''
-      if (text) messages.push(text)
+      if (text) resultMessages.push(text)
+    }
+    if (payload?.type === 'assistant') {
+      const text = extractClaudeContentText(payload.message?.content)
+      if (text) assistantMessages.push(text)
+    }
+    if (payload?.type === 'stream_event') {
+      const delta = payload.event?.delta
+      if (delta?.type === 'text_delta' && typeof delta.text === 'string') streamText.push(delta.text)
     }
     if (payload?.type === 'error') {
       const text =
@@ -888,10 +954,29 @@ function extractClaudeResultMessage(output: string) {
             : typeof payload.detail === 'string'
               ? payload.detail
               : ''
-      if (text) messages.push(text)
+      if (text) errorMessages.push(text)
     }
   }
-  return messages.find(Boolean)?.trim()
+  return (
+    resultMessages.find(Boolean)?.trim() ||
+    assistantMessages.find(Boolean)?.trim() ||
+    streamText.join('').trim() ||
+    errorMessages.find(Boolean)?.trim()
+  )
+}
+
+function extractClaudeContentText(content: unknown): string {
+  const blocks = Array.isArray(content) ? content : content ? [content] : []
+  return blocks
+    .map((block) => {
+      if (typeof block === 'string') return block
+      if (!block || typeof block !== 'object') return ''
+      const value = block as Record<string, unknown>
+      if (value.type === 'text' && typeof value.text === 'string') return value.text
+      return ''
+    })
+    .join('')
+    .trim()
 }
 
 function parseClaudeJsonLine(
@@ -902,6 +987,7 @@ function parseClaudeJsonLine(
     addToolCall: (name: string, input?: Record<string, unknown>) => void
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
     onText: (text: string) => void
+    onAssistantText?: (text: string) => void
   }
 ) {
   const trimmed = line.trim()
@@ -932,6 +1018,8 @@ function parseClaudeJsonLine(
     for (const block of payload.message?.content ?? []) {
       if (block?.type === 'tool_use') recordClaudeToolUse(block, handlers)
     }
+    const text = extractClaudeContentText(payload.message?.content)
+    if (text) (handlers.onAssistantText ?? handlers.onText)(text)
     return
   }
 
@@ -1388,12 +1476,44 @@ function buildHostCommand(command: string, args: string[]) {
   if (process.platform !== 'win32') return [command, ...args]
   if (command === 'codex') return [windowsCodexCommand(), ...args]
   // Windows 上直接传数组参数，避免 cmd.exe /c 的 8192 字符命令行长度限制
-  return [command, ...args]
+  return [windowsCliCommand(command), ...args]
 }
 
 function windowsCodexCommand() {
-  const npmShim = Bun.env.APPDATA ? resolve(Bun.env.APPDATA, 'npm', 'codex.cmd') : ''
+  const npmShim = windowsNpmShim('codex')
   return npmShim && existsSync(npmShim) ? npmShim : 'codex.cmd'
+}
+
+function windowsCliCommand(command: string) {
+  const candidates = [
+    ...windowsPathCommandCandidates(command),
+    windowsNpmShim(command),
+    windowsBunShim(command),
+  ].filter(Boolean) as string[]
+
+  for (const candidate of [...new Set(candidates)]) {
+    if (existsSync(candidate)) return candidate
+  }
+
+  return `${command}.cmd`
+}
+
+function windowsPathCommandCandidates(command: string) {
+  const pathValue = Bun.env.PATH ?? Bun.env.Path ?? process.env.PATH ?? process.env.Path ?? ''
+  const extensions = command.includes('.') ? [''] : ['.cmd', '.exe', '.bat', '']
+  return pathValue
+    .split(';')
+    .filter(Boolean)
+    .flatMap((dir) => extensions.map((extension) => resolve(dir, `${command}${extension}`)))
+}
+
+function windowsNpmShim(command: string) {
+  const appData = Bun.env.APPDATA ?? process.env.APPDATA
+  return appData ? resolve(appData, 'npm', `${command}.cmd`) : ''
+}
+
+function windowsBunShim(command: string) {
+  return resolve(homedir(), '.bun', 'bin', `${command}.exe`)
 }
 
 async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, unknown>> {
@@ -1401,12 +1521,25 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
     const rows = await db.select().from(settings).where(eq(settings.key, 'CODING_TOOLS_CONFIG')).limit(1)
     const raw = rows[0]?.value
     if (!raw) return {}
-    const parsed = JSON.parse(raw) as Array<{ id: string; config?: Record<string, unknown>; provider?: string; agent?: string }>
+    const parsed = JSON.parse(raw) as Array<{
+      id: string
+      config?: Record<string, unknown>
+      provider?: string
+      agent?: string
+      modelId?: string
+      baseUrl?: string
+      apiKeyEnv?: string
+      protocol?: string
+    }>
     const tool = parsed.find((t) => t.id === toolId)
     const config = { ...(tool?.config ?? {}) }
     // 兼容前端直接保存的扁平字段
     if (tool?.provider) config.provider = tool.provider
     if (tool?.agent) config.agent = tool.agent
+    if (tool?.modelId) config.modelId = tool.modelId
+    if (tool?.baseUrl) config.baseUrl = tool.baseUrl
+    if (tool?.apiKeyEnv) config.apiKeyEnv = tool.apiKeyEnv
+    if (tool?.protocol) config.protocol = tool.protocol
     return config
   } catch {
     return {}
@@ -1771,6 +1904,7 @@ function stripToolNoise(output: string) {
       if (/^Recent group context:/i.test(trimmed)) return false
       if (/^(user|agent|assistant|system)\s*:/i.test(trimmed)) return false
       if (/^Reading additional input from stdin\.\.\./i.test(trimmed)) return false
+      if (/^\{"type":"(?:system|assistant|result|stream_event|error)"/.test(trimmed)) return false
       if (
         /^(workdir|model|provider|approval|sandbox|reasoning effort|reasoning summaries|session id|Project workspace path|Allowed tool scopes|Capabilities|Sandbox policy):/i.test(
           trimmed
@@ -1824,6 +1958,12 @@ function cleanDiagnosticOutput(output: string) {
 }
 
 function friendlyCodeAgentError(output: string) {
+  if (/unsupported_vendor|specified model is not supported at this endpoint/i.test(output)) {
+    return [
+      'Claude Code 已经使用 Anthropic 兼容端点发起请求，但该端点拒绝了当前模型名。',
+      '请检查模型档案里的 Anthropic 端点和 modelId 是否是该端点支持的精确组合；例如 DeepSeek 的 Anthropic 兼容端点可能不接受当前填写的 deepseek-v4-pro。',
+    ].join('\n')
+  }
   if (/Coding Tools timed out after/i.test(output)) {
     return 'Coding Tools 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。'
   }

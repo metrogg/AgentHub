@@ -130,7 +130,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? cachedWorkspace?.agents ?? (canReuseWorkspace ? state.currentWorkspaceAgents : [])
         : [],
       loadingMessages: true,
-      messages: cachedMessages ?? state.messages,
+      messages: cachedMessages ?? [],
       streamingMessage: null,
       streamingCodeAgentRun: null,
       pendingAttachments: [],

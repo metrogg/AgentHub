@@ -15,6 +15,7 @@ import { validateTaskOutputContract } from './task-contract'
 import { runTaskValidation } from './task-validation'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 import { PolicyGuard } from '../policy-guard'
+import { DEFAULT_ENV_ALLOWLIST } from '../execution/agent-execution-envelope'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
 
@@ -631,8 +632,8 @@ export class OrchestratorEngine {
       agentName: agent.name,
       projectPath: childInfo.projectPath ?? null,
       worktreePath: branchCtx?.worktreePath ?? null,
-      sandboxPolicy: agent.sandboxPolicy,
-      envAllowlist: [], // 使用 code-agent-adapter.ts 中的 DEFAULT_ENV_ALLOWLIST
+      sandboxPolicy: policy.sandboxPolicy,
+      envAllowlist: DEFAULT_ENV_ALLOWLIST,
     }
 
     try {

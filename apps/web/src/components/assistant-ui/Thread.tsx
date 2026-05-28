@@ -42,7 +42,6 @@ import {
   ExternalLink,
   File,
   FileText,
-  Minus,
   FolderOpen,
   FolderPlus,
   FolderX,
@@ -51,6 +50,8 @@ import {
   ImagePlus,
   ListTodo,
   Loader2,
+  Maximize2,
+  Minimize2,
   Monitor,
   MessageSquare,
   MoreHorizontal,
@@ -73,6 +74,7 @@ import {
   type ComponentPropsWithoutRef,
   type FC,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useEffect,
   useMemo,
@@ -97,7 +99,14 @@ import {
   type WorkspaceAgent,
 } from '../../lib/api'
 import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
-import { pickWorkspaceFolder } from '../../lib/native'
+import {
+  downloadExternalUrl,
+  isDesktopApp,
+  notifyUser,
+  openExternalUrl,
+  openPath,
+  pickWorkspaceFolder,
+} from '../../lib/native'
 import { sendModeShouldSubmit, shouldInsertNewline, useShortcutSettings } from '../../lib/shortcuts'
 import { cn } from '../../lib/utils'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../../lib/workspaceFilters'
@@ -107,9 +116,11 @@ import { TypewriterHeading } from '../chat/TypewriterHeading'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
+  saveAgentToLibrary,
   toAgentConfigInput,
   type SavedAgentConfig,
 } from '../../lib/agentLibrary'
+import { workspaceNameFromPath } from '@agenthub/shared'
 
 const highlightLanguageMap = {
   bash,
@@ -152,6 +163,7 @@ type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
 const maxPastedImageBytes = 5 * 1024 * 1024
 const composerSyncEvent = 'agenthub:composer-sync'
 const artifactPreviewEvent = 'agenthub:artifact-preview'
+const previewPanelWidthStorageKey = 'agenthub:preview-panel-width'
 
 type ArtifactPreviewItem = {
   id: string
@@ -163,6 +175,18 @@ type ArtifactPreviewItem = {
   path?: string
   mimeType?: string
   source?: string
+  /** 用于构造 HTML 预览 URL 的 workspaceId */
+  workspaceId?: string
+}
+
+type PreviewActionItem = {
+  id: string
+  kind: 'open' | 'download'
+  status: 'working' | 'success' | 'error'
+  title: string
+  detail: string
+  path?: string
+  folder?: string
 }
 
 function classifyAgentSession(
@@ -236,13 +260,13 @@ export const Thread: FC = () => {
             onClose={() => setPreviewItem(null)}
           />
         )}
+        {isGroupSession && (
+          <GroupChatDetailsPanel
+            open={groupDetailsOpen}
+            onClose={() => setGroupDetailsOpen(false)}
+          />
+        )}
       </div>
-      {isGroupSession && (
-        <GroupChatDetailsDrawer
-          open={groupDetailsOpen}
-          onClose={() => setGroupDetailsOpen(false)}
-        />
-      )}
       {!isGroupSession && (isAgentDirectSession || isWorkspaceChildSession) && (
         <WorkspaceChildSessionDrawer
           open={childDetailsOpen}
@@ -350,6 +374,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
   })
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const modelChoices = filterModelsForCodeAgent(models, agent?.codeAgentType, draft.modelId)
+  const selectedModelName = modelName(draft.modelId || null, models)
 
   useEffect(() => {
     if (!open) return
@@ -381,6 +406,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     setSaveState('saving')
     try {
       await api.updateWorkspaceAgent(workspace.id, agent.id, patch)
+      syncAgentLibraryFromWorkspaceAgent({ ...agent, ...patch })
       if (session?.id) await selectSession(session.id)
       setSaveState('saved')
       window.setTimeout(() => setSaveState('idle'), 1400)
@@ -478,13 +504,17 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                     disabled={saveState === 'saving'}
                     className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
                   >
-                    <option value="">自动模型</option>
+                    <option value="">使用 Coding Tool 默认模型</option>
                     {modelChoices.map((model) => (
                       <option key={model.id} value={model.id}>
                         {model.name || model.modelId}
                       </option>
                     ))}
                   </select>
+                  <span className="mt-1 block text-xs leading-5 text-neutral-400">
+                    Agent 模型会覆盖 Coding Tools 页面里的工具默认模型。当前：
+                    {draft.modelId ? selectedModelName : '跟随工具默认'}
+                  </span>
                 </label>
 
                 <label className="block">
@@ -554,7 +584,46 @@ const AgentQuickSaveState: FC<{ state: 'idle' | 'saving' | 'saved' | 'error' }> 
   return <span className="text-xs text-neutral-300">自动保存</span>
 }
 
-const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+function syncAgentLibraryFromWorkspaceAgent(agent: WorkspaceAgent) {
+  const library = loadAgentLibrary()
+  const matched =
+    library.find((item) => item.id === agent.id) ??
+    library.find((item) => item.name === agent.name && item.role === agent.role) ??
+    library.find((item) => item.roleType && item.roleType === agent.roleType)
+  if (!matched) return
+  saveAgentToLibrary(
+    library,
+    {
+      ...toAgentConfigInput(matched),
+      name: agent.name,
+      role: agent.role,
+      roleType: agent.roleType,
+      description: agent.description,
+      avatar: agent.avatar,
+      systemPrompt: agent.systemPrompt,
+      roleProfile: agent.roleProfile ?? null,
+      color: agent.color,
+      modelId: agent.modelId,
+      runtimeType: agent.runtimeType,
+      codeAgentType: agent.runtimeType === 'code-agent' ? agent.codeAgentType : null,
+      capabilityTags: agent.capabilityTags,
+      toolPermissions: agent.toolPermissions,
+      sandboxPolicy: agent.sandboxPolicy,
+      contextPolicy: agent.contextPolicy,
+      autoInvoke: agent.autoInvoke,
+      approvalRequired: agent.approvalRequired,
+    },
+    matched.id,
+  )
+}
+
+function modelName(modelId: string | null, models: ModelCatalogItem[]) {
+  if (!modelId) return '跟随工具默认'
+  const model = models.find((item) => item.id === modelId || item.modelId === modelId)
+  return model?.name || model?.modelId || modelId
+}
+
+const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const navigate = useNavigate()
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
@@ -684,7 +753,7 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
         <div className="flex h-full flex-col overflow-hidden">
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-4">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-neutral-950">群聊详情</div>
+              <div className="text-sm font-semibold text-neutral-950">群聊设置</div>
               <div className="mt-1 truncate text-xs text-neutral-500">
                 {workspace?.name ?? 'Agent 群聊'} · {memberCount} 位成员
               </div>
@@ -700,106 +769,175 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
             </button>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
-            <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium text-neutral-500">群聊名称</span>
-                <input
-                  value={titleDraft}
-                  onChange={(event) => setTitleDraft(event.target.value)}
-                  onBlur={() => void saveGroupTitle()}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter') return
-                    event.preventDefault()
-                    event.currentTarget.blur()
-                  }}
-                  disabled={busyAction === 'rename'}
-                  className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-950 outline-none transition focus:border-neutral-300 disabled:opacity-60"
-                />
-              </label>
-              <div className="relative mt-3 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setInviteOpen((value) => !value)}
-                  disabled={!workspace || busyAction === 'invite'}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-50"
-                >
-                  <Plus className="h-4 w-4" />
-                  邀请
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void deleteGroupChat()}
-                  disabled={busyAction === 'delete'}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-100 bg-red-50 text-sm font-medium text-red-600 transition hover:bg-red-100 disabled:opacity-50"
-                >
-                  {busyAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Minus className="h-4 w-4" />}
-                  删除
-                </button>
-                {inviteOpen && (
-                  <div className="absolute left-0 top-11 z-10 w-full rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
-                    {inviteCandidates.map((agent) => (
-                      <button
-                        key={agent.id}
-                        type="button"
-                        onClick={() => void inviteAgent(agent)}
-                        disabled={busyAction === 'invite'}
-                        className="flex min-h-10 w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition hover:bg-neutral-50 disabled:opacity-60"
-                      >
-                        <span
-                          className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-semibold text-white"
-                          style={{ background: agent.color ?? '#111827' }}
-                        >
-                          {agent.name.slice(0, 1).toUpperCase()}
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium text-neutral-900">{agent.name}</span>
-                          <span className="block truncate text-xs text-neutral-500">{agent.role}</span>
-                        </span>
-                      </button>
-                    ))}
-                    {!inviteCandidates.length && (
-                      <div className="px-3 py-4 text-center text-xs text-neutral-400">没有可邀请的 Agent</div>
+          <div className="min-h-0 flex-1 overflow-y-auto bg-[#FBFBFB] px-6 py-6">
+            <div className="flex flex-col items-center text-center">
+              <div className="relative h-20 w-20">
+                <div className="absolute left-1 top-3 grid h-12 w-12 place-items-center rounded-full bg-neutral-900 text-sm font-semibold text-white ring-4 ring-[#FBFBFB]">
+                  Y
+                </div>
+                {agents.slice(0, 3).map((agent, index) => (
+                  <div
+                    key={agent.id}
+                    className="absolute grid place-items-center overflow-hidden rounded-full text-sm font-semibold text-white ring-4 ring-[#FBFBFB]"
+                    style={{
+                      width: index === 0 ? 48 : 40,
+                      height: index === 0 ? 48 : 40,
+                      right: index === 0 ? 0 : index === 1 ? 10 : 28,
+                      bottom: index === 0 ? 2 : index === 1 ? 0 : 10,
+                      background: agent.color ?? '#2563eb',
+                    }}
+                  >
+                    {agent.avatar ? (
+                      <img src={agent.avatar} alt={agent.name} className="h-full w-full object-cover" />
+                    ) : (
+                      agent.name.slice(0, 1).toUpperCase()
                     )}
                   </div>
-                )}
+                ))}
+              </div>
+              <input
+                data-agenthub-group-title-input="true"
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onBlur={() => void saveGroupTitle()}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return
+                  event.preventDefault()
+                  event.currentTarget.blur()
+                }}
+                disabled={busyAction === 'rename'}
+                className="mt-4 h-9 max-w-[18rem] rounded-lg bg-transparent px-2 text-center text-base font-semibold text-neutral-950 outline-none transition focus:bg-white focus:ring-1 focus:ring-neutral-200 disabled:opacity-60"
+              />
+              <div className="mt-1 max-w-[18rem] truncate text-xs text-neutral-400">
+                {workspace?.projectPath || `${memberCount} 位成员 · AgentHub 群聊`}
+              </div>
+            </div>
+
+            <div className="relative mt-8 grid grid-cols-3 gap-3">
+              <button
+                type="button"
+                onClick={() => setInviteOpen((value) => !value)}
+                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70"
+              >
+                <User className="h-5 w-5" />
+                <span className="text-xs">邀请朋友</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setInviteOpen((value) => !value)}
+                disabled={!workspace || busyAction === 'invite'}
+                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70 disabled:opacity-50"
+              >
+                <Plus className="h-5 w-5" />
+                <span className="text-xs">添加Agent</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => document.querySelector<HTMLInputElement>('[data-agenthub-group-title-input="true"]')?.focus()}
+                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70"
+              >
+                <Pencil className="h-5 w-5" />
+                <span className="text-xs">编辑群信息</span>
+              </button>
+              {inviteOpen && (
+                <div className="absolute left-0 right-0 top-[5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
+                  {inviteCandidates.map((agent) => (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      onClick={() => void inviteAgent(agent)}
+                      disabled={busyAction === 'invite'}
+                      className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition hover:bg-neutral-50 disabled:opacity-60"
+                    >
+                      <span
+                        className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full text-xs font-semibold text-white"
+                        style={{ background: agent.color ?? '#111827' }}
+                      >
+                        {agent.avatar ? (
+                          <img src={agent.avatar} alt={agent.name} className="h-full w-full object-cover" />
+                        ) : (
+                          agent.name.slice(0, 1).toUpperCase()
+                        )}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-neutral-900">{agent.name}</span>
+                        <span className="block truncate text-xs text-neutral-500">{agent.role}</span>
+                      </span>
+                    </button>
+                  ))}
+                  {!inviteCandidates.length && (
+                    <div className="px-3 py-4 text-center text-xs text-neutral-400">没有可添加的 Agent</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-7">
+              <div className="mb-2 px-4 text-xs text-neutral-500">人类</div>
+              <div className="rounded-2xl bg-[#F3F3F3] px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-neutral-900 text-sm font-semibold text-white">Y</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-neutral-950">You</span>
+                      <span className="rounded bg-white px-1.5 py-0.5 text-[11px] text-neutral-500">群主</span>
+                    </div>
+                    <div className="mt-0.5 text-xs text-neutral-400">发起人与决策者</div>
+                  </div>
+                </div>
               </div>
             </div>
 
             <div className="mt-5">
-              <div className="mb-2 flex items-center justify-between px-1">
-                <div className="text-xs font-medium uppercase tracking-wide text-neutral-400">Agent 工作监控</div>
-                <div className="text-xs text-neutral-400">{monitorRows.length} 个 Agent</div>
-              </div>
-              <div className="space-y-2">
-                {monitorRows.map((row) => (
-                  <AgentMonitorRow key={row.id} row={row} />
+              <div className="mb-2 px-4 text-xs text-neutral-500">Agent</div>
+              <div className="overflow-hidden rounded-2xl bg-[#F3F3F3]">
+                {monitorRows.map((row, index) => (
+                  <button
+                    key={row.id}
+                    type="button"
+                    onClick={() => insertComposerMention(row.mentionName)}
+                    className={cn(
+                      'relative flex min-h-[74px] w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-neutral-200/60',
+                      index > 0 && 'border-t border-neutral-200',
+                    )}
+                  >
+                    <span
+                      className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white"
+                      style={{ background: row.color ?? '#2563eb' }}
+                    >
+                      {row.name.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span
+                      className={cn(
+                        'absolute left-11 top-[2.85rem] h-2 w-2 rounded-full ring-2 ring-[#F3F3F3]',
+                        row.active ? 'bg-emerald-500' : 'bg-neutral-300',
+                      )}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium text-neutral-950">{row.name}</span>
+                        <span className="rounded bg-white px-1.5 py-0.5 text-[11px] text-neutral-500">{row.role}</span>
+                      </span>
+                      <span className="mt-1 block truncate text-xs text-neutral-400">
+                        {row.active && row.bubble ? row.bubble : `@${row.mentionName}`}
+                      </span>
+                    </span>
+                  </button>
                 ))}
+                {!monitorRows.length && (
+                  <div className="px-4 py-6 text-center text-xs text-neutral-400">还没有 Agent，点击上方添加。</div>
+                )}
               </div>
             </div>
 
-            {workspace?.projectPath && (
-              <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-                <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
-                <div className="min-w-0">
-                  <div className="font-medium text-neutral-900">工作区</div>
-                  <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
-                </div>
-              </div>
-            )}
-
-            {workspace && (
-              <button
-                type="button"
-                onClick={() => {
-                  onClose()
-                  navigate('/agent-config')
-                }}
-                className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
-              >
-                管理 Agent
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => void deleteGroupChat()}
+              disabled={busyAction === 'delete'}
+              className="mt-5 flex h-11 w-full items-center justify-center rounded-xl bg-[#F3F3F3] text-sm font-medium text-red-500 transition hover:bg-red-50 disabled:opacity-60"
+            >
+              {busyAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : '解散群聊'}
+            </button>
           </div>
         </div>
       </aside>
@@ -816,46 +954,6 @@ type AgentMonitorRowData = {
   active: boolean
   bubble: string
 }
-
-const AgentMonitorRow: FC<{ row: AgentMonitorRowData }> = ({ row }) => (
-  <div className="group relative flex items-start gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
-    {row.bubble && (
-      <div
-        className={cn(
-          'absolute right-[3.25rem] top-1 max-w-[11rem] rounded-2xl px-3 py-1.5 text-xs leading-5 shadow-sm transition',
-          row.active
-            ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100'
-            : 'bg-white text-neutral-500 ring-1 ring-neutral-100',
-        )}
-      >
-        {row.bubble}
-      </div>
-    )}
-    <div
-      className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
-      style={{ background: row.color ?? '#111827' }}
-    >
-      {row.name.slice(0, 1).toUpperCase()}
-    </div>
-    <div className="min-w-0 flex-1 pr-16">
-      <div className="truncate text-sm font-medium text-neutral-950">{row.name}</div>
-      <div className="truncate text-xs text-neutral-500">{row.role}</div>
-    </div>
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation()
-        insertComposerMention(row.mentionName)
-      }}
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 opacity-70 transition hover:bg-neutral-100 hover:text-blue-600 group-hover:opacity-100"
-      title={`提及 ${row.name}`}
-      aria-label={`提及 ${row.name}`}
-    >
-      <AtSign className="h-3.5 w-3.5" />
-    </button>
-    <span className={cn('mt-3 h-2 w-2 shrink-0 rounded-full', row.active ? 'bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.14)]' : 'bg-neutral-300')} />
-  </div>
-)
 
 function isStreamingForAgent(
   streaming: { id: string; content: string; agentId?: string; agentName?: string } | null,
@@ -1836,11 +1934,6 @@ export function readSlashCommand(text: string, cursor: number) {
   }
 }
 
-function workspaceNameFromPath(value: string) {
-  const normalized = value.trim().replace(/[\\/]+$/, '')
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || '工作区文件夹'
-}
-
 function fileToChatAttachment(file: File): Promise<ChatAttachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -2153,96 +2246,555 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   onClose,
 }) => {
   const canOpen = Boolean(item.url)
+  const [maximized, setMaximized] = useState(false)
+  const [visible, setVisible] = useState(false)
+  const [panelWidth, setPanelWidth] = useState(() => readStoredPreviewPanelWidth())
+  const [resizing, setResizing] = useState(false)
+  const [loadingState, setLoadingState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    item.kind === 'web' || item.kind === 'deploy' ? 'loading' : 'ready',
+  )
+  const [loadError, setLoadError] = useState('')
+  const [actionPanelOpen, setActionPanelOpen] = useState(false)
+  const [actionItems, setActionItems] = useState<PreviewActionItem[]>([])
+  const [reloadToken, setReloadToken] = useState(0)
+  const panelRef = useRef<HTMLElement | null>(null)
+  const panelWidthRef = useRef(panelWidth)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const previewUrl = useMemo(() => normalizePreviewUrl(item.url), [item.url])
+
+  useEffect(() => {
+    panelWidthRef.current = panelWidth
+  }, [panelWidth])
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setVisible(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
+  function handleClose() {
+    setVisible(false)
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = setTimeout(onClose, 240)
+  }
+
+  function handleResizeStart(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (maximized) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const previousCursor = document.body.style.cursor
+    const previousSelect = document.body.style.userSelect
+
+    setResizing(true)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    function commitPanelWidth(clientX: number) {
+      const containerRect = panelRef.current?.parentElement?.getBoundingClientRect()
+      const rawWidth = containerRect ? containerRect.right - clientX : window.innerWidth - clientX
+      const nextWidth = clampPreviewPanelWidth(rawWidth, getPreviewPanelWidthBounds(panelRef.current))
+      panelWidthRef.current = nextWidth
+      setPanelWidth(nextWidth)
+    }
+
+    commitPanelWidth(event.clientX)
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      moveEvent.preventDefault()
+      commitPanelWidth(moveEvent.clientX)
+    }
+
+    function handlePointerUp() {
+      setResizing(false)
+      storePreviewPanelWidth(panelWidthRef.current)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousSelect
+      document.removeEventListener('pointermove', handlePointerMove)
+      document.removeEventListener('pointerup', handlePointerUp)
+      document.removeEventListener('pointercancel', handlePointerUp)
+    }
+
+    document.addEventListener('pointermove', handlePointerMove)
+    document.addEventListener('pointerup', handlePointerUp, { once: true })
+    document.addEventListener('pointercancel', handlePointerUp, { once: true })
+  }
+
+  function pushActionItem(item: Omit<PreviewActionItem, 'id'>) {
+    const id = `${item.kind}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    setActionItems((items) => [{ ...item, id }, ...items].slice(0, 8))
+    setActionPanelOpen(true)
+    return id
+  }
+
+  function updateActionItem(id: string, patch: Partial<PreviewActionItem>) {
+    setActionItems((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)))
+    setActionPanelOpen(true)
+  }
+
+  async function handleOpenDownloadedPath(path?: string) {
+    if (!path) return
+    try {
+      const opened = await openPath(path)
+      if (!opened) return
+    } catch (error) {
+      pushActionItem({
+        kind: 'open',
+        status: 'error',
+        title: '打开失败',
+        detail: formatPreviewError(error),
+      })
+    }
+  }
+
+  async function handleOpenInNewWindow() {
+    if (!item.url) return
+    const resolvedUrl = normalizePreviewUrl(item.url)?.href ?? item.url
+    const desktopApp = isDesktopApp()
+    const actionId = pushActionItem({
+      kind: 'open',
+      status: 'working',
+      title: item.title,
+      detail: desktopApp ? '正在打开外部浏览器窗口...' : '正在打开新窗口...',
+    })
+    try {
+      const openedNative = await openExternalUrl(resolvedUrl)
+      if (openedNative) {
+        updateActionItem(actionId, {
+          status: 'success',
+          detail: '已请求系统浏览器打开新窗口',
+        })
+        return
+      }
+    } catch (error) {
+      console.warn('[AgentHub] Failed to open external preview URL:', error)
+      if (desktopApp) {
+        const detail = formatPreviewError(error) || '请确认系统已安装并设置默认浏览器，或重启客户端加载最新桌面命令。'
+        updateActionItem(actionId, {
+          status: 'error',
+          detail: `无法打开外部浏览器窗口：${detail}`,
+        })
+        await notifyUser('无法打开外部浏览器窗口', detail).catch(() => undefined)
+        return
+      }
+    }
+    window.open(resolvedUrl, '_blank', 'noopener,noreferrer')
+    updateActionItem(actionId, {
+      status: 'success',
+      detail: '已交给浏览器打开新窗口',
+    })
+  }
+
+  async function handleDownload() {
+    if (!item.url) return
+    const resolvedUrl = normalizePreviewUrl(item.url)?.href ?? item.url
+    const filename = downloadFileName(item)
+    const desktopApp = isDesktopApp()
+    const actionId = pushActionItem({
+      kind: 'download',
+      status: 'working',
+      title: filename,
+      detail: desktopApp ? '正在保存到系统下载目录...' : '正在准备下载...',
+    })
+
+    try {
+      if (desktopApp) {
+        const result = await downloadExternalUrl(resolvedUrl, filename)
+        if (!result) throw new Error('客户端下载命令不可用，请重启客户端后重试。')
+        updateActionItem(actionId, {
+          status: 'success',
+          title: result.fileName,
+          detail: '已保存到下载目录',
+          path: result.path,
+          folder: result.folder,
+        })
+        await notifyUser('下载完成', result.fileName).catch(() => undefined)
+        return
+      }
+
+      const response = await fetch(resolvedUrl, { credentials: 'include' })
+      if (!response.ok) throw new Error(await extractPreviewErrorMessage(response))
+
+      const blob = await response.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = filename
+      link.rel = 'noreferrer'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000)
+
+      updateActionItem(actionId, {
+        status: 'success',
+        detail: '浏览器已开始下载',
+      })
+    } catch (error) {
+      const message = formatPreviewError(error)
+      updateActionItem(actionId, {
+        status: 'error',
+        detail: `下载失败：${message}`,
+      })
+      if (desktopApp) await notifyUser('下载失败', message).catch(() => undefined)
+    }
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        if (maximized) setMaximized(false)
+        else handleClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    }
+  }, [maximized])
+
+  useEffect(() => {
+    function syncPanelWidth() {
+      setPanelWidth((width) => {
+        const bounds = getPreviewPanelWidthBounds(panelRef.current)
+        const nextWidth = clampPreviewPanelWidth(width, bounds)
+        panelWidthRef.current = nextWidth
+        storePreviewPanelWidth(nextWidth)
+        return nextWidth
+      })
+    }
+
+    syncPanelWidth()
+    window.addEventListener('resize', syncPanelWidth)
+    return () => window.removeEventListener('resize', syncPanelWidth)
+  }, [])
+
+  useEffect(() => {
+    if (!item.url || (item.kind !== 'web' && item.kind !== 'deploy')) {
+      setLoadingState('ready')
+      setLoadError('')
+      return
+    }
+
+    let cancelled = false
+    setLoadingState('loading')
+    setLoadError('')
+
+    async function probePreview() {
+      if (!previewUrl || previewUrl.origin !== window.location.origin) {
+        if (!cancelled) setLoadingState('ready')
+        return
+      }
+
+      try {
+        const response = await fetch(previewUrl.href, { credentials: 'include' })
+        if (cancelled) return
+        if (!response.ok) throw new Error(await extractPreviewErrorMessage(response))
+        const contentType = response.headers.get('content-type') ?? ''
+        if (contentType.includes('application/json')) {
+          throw new Error(await extractPreviewErrorMessage(response))
+        }
+        setLoadingState('ready')
+      } catch (error) {
+        if (cancelled) return
+        setLoadingState('error')
+        setLoadError(formatPreviewError(error))
+      }
+    }
+
+    void probePreview()
+    return () => {
+      cancelled = true
+    }
+  }, [item.kind, item.url, previewUrl, reloadToken])
+
+  const panelClasses = cn(
+    'relative flex shrink-0 flex-col overflow-hidden border-neutral-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.12)]',
+    resizing ? 'transition-none' : 'transition-all duration-300 ease-out',
+    maximized ? 'fixed inset-3 z-50 rounded-2xl border' : 'border-l',
+    visible ? 'translate-x-0 scale-100 opacity-100' : 'translate-x-4 scale-[0.985] opacity-0',
+  )
 
   return (
-    <aside className="flex h-full w-[min(48vw,720px)] min-w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-[#FBFBFB]">
-      <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-neutral-700 shadow-sm">
-            {previewIcon(item)}
-          </span>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-neutral-950">{item.title}</div>
-            <div className="mt-0.5 truncate text-xs text-neutral-500">
-              {item.subtitle ?? previewKindLabel(item)}
-            </div>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {canOpen && (
-            <>
-              <a
-                href={item.url}
-                target="_blank"
-                rel="noreferrer"
-                className="grid h-8 w-8 place-items-center rounded-xl text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
-                title="新窗口打开"
-                aria-label="新窗口打开"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
-              <a
-                href={item.url}
-                download={item.title}
-                className="grid h-8 w-8 place-items-center rounded-xl text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
-                title="下载"
-                aria-label="下载"
-              >
-                <Download className="h-4 w-4" />
-              </a>
-            </>
+    <>
+      {maximized && (
+        <button
+          type="button"
+          aria-label="Close preview overlay"
+          onClick={handleClose}
+          className={cn(
+            'fixed inset-0 z-40 bg-slate-950/20 backdrop-blur-[1px] transition-opacity duration-300',
+            visible ? 'opacity-100' : 'opacity-0',
           )}
+        />
+      )}
+      {resizing && (
+        <div
+          className="fixed inset-0 z-40 cursor-col-resize select-none bg-transparent"
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        ref={panelRef}
+        className={panelClasses}
+        style={maximized ? undefined : { width: panelWidth }}
+      >
+        {!maximized && (
           <button
             type="button"
-            onClick={onClose}
-            className="grid h-8 w-8 place-items-center rounded-xl text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
-            title="关闭预览"
-            aria-label="关闭预览"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col bg-[#F7F7F7] p-3">
-        {item.description && (
-          <div className="mb-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs leading-5 text-neutral-600">
-            {item.description}
-          </div>
+            aria-label="Resize preview panel"
+            onPointerDown={handleResizeStart}
+            className={cn(
+              'absolute inset-y-0 left-0 z-20 w-3 -translate-x-1/2 cursor-col-resize touch-none',
+              'after:absolute after:inset-y-3 after:left-1/2 after:w-px after:-translate-x-1/2 after:rounded-full after:bg-transparent after:transition',
+              'hover:after:bg-neutral-300 focus-visible:outline-none focus-visible:after:bg-neutral-400',
+              resizing && 'after:bg-neutral-400',
+            )}
+          />
         )}
-        <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-neutral-200 bg-white">
-          {item.kind === 'image' && item.url ? (
-            <div className="grid h-full place-items-center bg-neutral-50 p-4">
-              <img
-                src={item.url}
-                alt={item.title}
-                className="max-h-full max-w-full rounded-lg object-contain shadow-sm"
-                decoding="async"
-                draggable={false}
-              />
+        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-neutral-200 bg-white/90 px-3 backdrop-blur">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-neutral-200 bg-gradient-to-br from-white to-neutral-100 text-neutral-500 shadow-sm">
+              {previewIcon(item)}
             </div>
-          ) : (item.kind === 'web' || item.kind === 'deploy') && item.url ? (
-            <iframe
-              title={item.title}
-              src={item.url}
-              className="h-full w-full border-0 bg-white"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            />
-          ) : item.kind === 'diff' ? (
-            <div className="h-full overflow-auto">
-              <DiffViewer diff={item.source ?? ''} maxHeightClassName="max-h-none" />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-neutral-900">{item.title}</div>
+              <div className="truncate text-xs text-neutral-500">
+                {item.subtitle ?? previewKindLabel(item)}
+              </div>
             </div>
-          ) : item.kind === 'workflow' ? (
-            <PreviewPlaceholder item={item} />
-          ) : (
-            <DocumentPreviewPlaceholder item={item} />
-          )}
+          </div>
+
+          <div className="hidden min-w-0 max-w-[36%] flex-1 justify-center md:flex">
+            <div className="truncate rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-[11px] text-neutral-500">
+              {item.path ?? item.url ?? 'Preview window'}
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1">
+            {canOpen && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleOpenInNewWindow()}
+                  className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+                  title="Open in new window"
+                  aria-label="Open in new window"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDownload()}
+                  className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+                  title="Download"
+                  aria-label="Download"
+                >
+                  <Download className="h-4 w-4" />
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setMaximized((v) => !v)}
+              className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+              title={maximized ? 'Restore preview' : 'Enlarge preview'}
+              aria-label={maximized ? 'Restore preview' : 'Enlarge preview'}
+            >
+              {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </button>
+            <div className="mx-1 h-5 w-px bg-neutral-200" />
+            <button
+              type="button"
+              onClick={handleClose}
+              className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-red-50 hover:text-red-500"
+              title="Close preview"
+              aria-label="Close preview"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
-      </div>
-    </aside>
+
+        {actionPanelOpen && actionItems.length > 0 && (
+          <PreviewActionPanel
+            items={actionItems}
+            onClose={() => setActionPanelOpen(false)}
+            onOpenPath={(path) => void handleOpenDownloadedPath(path)}
+          />
+        )}
+
+        <div className="flex min-h-0 flex-1 flex-col bg-[#f6f7f9] p-2">
+          {item.description && (
+            <div className="mb-2 rounded-2xl border border-neutral-200 bg-white/90 px-3 py-2 text-xs leading-5 text-neutral-600 shadow-sm">
+              {item.description}
+            </div>
+          )}
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+            {item.kind === 'image' && item.url ? (
+              <div className="grid h-full place-items-center bg-neutral-950 p-4">
+                <img
+                  src={item.url}
+                  alt={item.title}
+                  className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+                  decoding="async"
+                  draggable={false}
+                />
+              </div>
+            ) : (item.kind === 'web' || item.kind === 'deploy') && item.url ? (
+              loadingState === 'error' ? (
+                <PreviewErrorState
+                  title={item.title}
+                  error={loadError}
+                  onRetry={() => setReloadToken((value) => value + 1)}
+                />
+              ) : loadingState !== 'ready' ? (
+                <PreviewLoadingState item={item} />
+              ) : (
+                <iframe
+                  title={item.title}
+                  src={item.url}
+                  className="h-full w-full border-0 bg-white"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                />
+              )
+            ) : item.kind === 'diff' ? (
+              <div className="h-full overflow-auto">
+                <DiffViewer diff={item.source ?? ''} maxHeightClassName="max-h-none" />
+              </div>
+            ) : item.kind === 'workflow' ? (
+              <PreviewPlaceholder item={item} />
+            ) : (
+              <DocumentPreviewPlaceholder item={item} />
+            )}
+          </div>
+        </div>
+      </aside>
+    </>
   )
 }
 
+const PreviewActionPanel: FC<{
+  items: PreviewActionItem[]
+  onClose: () => void
+  onOpenPath: (path?: string) => void
+}> = ({ items, onClose, onOpenPath }) => (
+  <div className="absolute right-3 top-[4.5rem] z-30 w-[min(22rem,calc(100%-1.5rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-[0_18px_60px_rgba(15,23,42,0.18)]">
+    <div className="flex h-12 items-center justify-between border-b border-neutral-100 px-4">
+      <div className="text-sm font-semibold text-neutral-950">下载</div>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          className="grid h-8 w-8 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
+          title="下载目录"
+          aria-label="下载目录"
+          onClick={() => onOpenPath(items.find((item) => item.folder)?.folder)}
+        >
+          <FolderOpen className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="grid h-8 w-8 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
+          title="关闭"
+          aria-label="关闭下载弹窗"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+    <div className="max-h-[28rem] overflow-y-auto p-2">
+      {items.map((item) => (
+        <div
+          key={item.id}
+          className="grid grid-cols-[2rem_minmax(0,1fr)] gap-2 rounded-lg px-2 py-2.5 transition hover:bg-neutral-50"
+        >
+          <div className="mt-0.5 grid h-8 w-8 place-items-center rounded-lg bg-neutral-50 text-neutral-500">
+            {item.status === 'working' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : item.status === 'error' ? (
+              <AlertTriangle className="h-4 w-4 text-red-500" />
+            ) : item.kind === 'download' ? (
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            ) : (
+              <ExternalLink className="h-4 w-4 text-emerald-600" />
+            )}
+          </div>
+          <div className="min-w-0">
+            <div
+              className={cn(
+                'truncate text-sm text-neutral-900',
+                item.status === 'error' && 'text-red-600',
+              )}
+              title={item.title}
+            >
+              {item.title}
+            </div>
+            <div className="mt-1 line-clamp-2 text-xs leading-4 text-neutral-500">{item.detail}</div>
+            {item.status === 'success' && item.path && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => onOpenPath(item.path)}
+                  className="rounded-md bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-200"
+                >
+                  打开文件
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenPath(item.folder)}
+                  className="rounded-md bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-200"
+                >
+                  打开文件夹
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+)
+
+const PreviewLoadingState: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
+  <div className="grid h-full place-items-center bg-[#f8fafc] p-6">
+    <div className="w-full max-w-md rounded-[22px] border border-neutral-200 bg-white p-6 text-center shadow-sm">
+      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-neutral-100 bg-neutral-50 text-neutral-500">
+        <Loader2 className="h-6 w-6 animate-spin" />
+      </div>
+      <div className="mt-4 text-sm font-semibold text-neutral-950">Loading preview</div>
+      <div className="mt-2 text-xs leading-5 text-neutral-500">
+        {item.subtitle ?? previewKindLabel(item)}
+      </div>
+    </div>
+  </div>
+)
+
+const PreviewErrorState: FC<{ error: string; onRetry: () => void; title: string }> = ({
+  error,
+  onRetry,
+  title,
+}) => (
+  <div className="grid h-full place-items-center bg-[#f8fafc] p-6">
+    <div className="w-full max-w-lg rounded-[22px] border border-red-100 bg-white p-6 text-center shadow-sm">
+      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-red-100 bg-red-50 text-red-500">
+        <AlertTriangle className="h-6 w-6" />
+      </div>
+      <div className="mt-4 text-sm font-semibold text-neutral-950">Preview failed</div>
+      <div className="mt-2 text-xs leading-6 text-neutral-500">{title}</div>
+      <div className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-left text-xs leading-6 text-red-700">
+        {error || 'The preview service returned an error response.'}
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800"
+      >
+        <RefreshCw className="h-4 w-4" />
+        Retry
+      </button>
+    </div>
+  </div>
+)
 const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
   const fileName = item.path ?? item.title
   return (
@@ -3004,10 +3556,14 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       title: artifact.title,
     }
   }
+  // HTML 文件生成预览 URL
+  const ext = artifact.path.split('.').pop()?.toLowerCase()
+  const isHtml = ext === 'html' || ext === 'htm'
+
   return {
     id: artifact.id,
     description: artifact.description,
-    kind: filePreviewKind(artifact),
+    kind: isHtml ? 'web' : filePreviewKind(artifact),
     mimeType: artifact.mimeType,
     path: artifact.path,
     source: artifact.source,
@@ -3015,6 +3571,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       [artifact.mimeType, artifact.size ? formatBytes(artifact.size) : null].filter(Boolean).join(' · ') ||
       fileStatusLabel(artifact.status ?? 'created'),
     title: artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path,
+    url: isHtml ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}` : undefined,
   }
 }
 
@@ -4002,3 +4559,82 @@ const MarkdownText: FC = () => (
     className="agenthub-markdown prose prose-neutral prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-code:before:content-none prose-code:after:content-none"
   />
 )
+
+
+function normalizePreviewUrl(url?: string) {
+  if (!url) return null
+  try {
+    return new URL(url, window.location.origin)
+  } catch {
+    return null
+  }
+}
+
+function downloadFileName(item: ArtifactPreviewItem) {
+  const source = item.path || normalizePreviewUrl(item.url)?.pathname || item.title || 'preview'
+  const rawName = source.split(/[\\/]/).filter(Boolean).pop() || item.title || 'preview'
+  const hasExtension = /\.[A-Za-z0-9]{1,8}$/.test(rawName)
+  const fallbackExtension = item.mimeType?.includes('image/') ? item.mimeType.split('/').pop() : 'html'
+  const name = hasExtension ? rawName : `${rawName}.${fallbackExtension || 'html'}`
+  return sanitizeDownloadFileName(name)
+}
+
+function sanitizeDownloadFileName(value: string) {
+  return value
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160) || 'preview.html'
+}
+
+function getPreviewPanelWidthBounds(panel: HTMLElement | null) {
+  const containerWidth = panel?.parentElement?.clientWidth ?? window.innerWidth
+  const reservedThreadWidth = Math.min(360, Math.max(280, Math.round(containerWidth * 0.38)))
+  const maxWidth = Math.max(320, containerWidth - reservedThreadWidth)
+  const minWidth = Math.min(420, maxWidth)
+  return { maxWidth, minWidth }
+}
+
+function clampPreviewPanelWidth(width: number, bounds: { maxWidth: number; minWidth: number }) {
+  return Math.min(bounds.maxWidth, Math.max(bounds.minWidth, width))
+}
+
+function readStoredPreviewPanelWidth() {
+  const fallbackWidth = 520
+  try {
+    const storedWidth = Number(window.localStorage.getItem(previewPanelWidthStorageKey))
+    return Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : fallbackWidth
+  } catch {
+    return fallbackWidth
+  }
+}
+
+function storePreviewPanelWidth(width: number) {
+  try {
+    window.localStorage.setItem(previewPanelWidthStorageKey, String(Math.round(width)))
+  } catch {
+    // localStorage can be unavailable in restricted browser contexts.
+  }
+}
+
+async function extractPreviewErrorMessage(response: Response) {
+  const text = await response.text().catch(() => '')
+  if (!text.trim()) return 'HTTP ' + response.status
+  try {
+    const parsed = JSON.parse(text)
+    const payload = parsed?.error ?? parsed
+    if (typeof payload === 'string') return payload
+    if (payload && typeof payload === 'object') {
+      return payload.message ?? payload.details?.message ?? text
+    }
+  } catch {
+    // ignore
+  }
+  return text
+}
+
+function formatPreviewError(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return 'Preview request failed'
+}

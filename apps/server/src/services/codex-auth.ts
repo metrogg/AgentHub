@@ -549,7 +549,7 @@ async function openExternalUrl(url: string) {
 
   const command =
     process.platform === 'win32'
-      ? ['cmd.exe', '/d', '/s', '/c', 'start', '""', url]
+      ? [getWindowsCommandShell(), '/d', '/s', '/c', 'start', '""', url]
       : process.platform === 'darwin'
         ? ['open', url]
         : ['xdg-open', url]
@@ -564,6 +564,10 @@ async function openExternalUrl(url: string) {
     new Response(proc.stderr).text().catch(() => ''),
   ])
   if (code !== 0) throw new Error(stderr.trim() || `Failed to open authorization page with exit code ${code}`)
+}
+
+function getWindowsCommandShell() {
+  return process.env.ComSpec || `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\cmd.exe`
 }
 
 function inferAccountId(idToken?: string) {
