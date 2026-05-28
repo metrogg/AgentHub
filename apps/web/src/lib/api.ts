@@ -868,9 +868,20 @@ export const api = {
   // Sessions
   listSessions: () => request<{ items: Session[] }>('/sessions'),
   getSession: (id: string) => request<Session>(`/sessions/${id}`),
-  createSession: (data: { title: string; type?: 'direct' | 'group'; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
+  createSession: (data: {
+    title: string
+    type?: 'direct' | 'group'
+    workspaceId?: string | null
+    workspaceAgentId?: string | null
+    metadata?: Record<string, unknown> | null
+  }) =>
     request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
-  updateSession: (id: string, data: { title?: string; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
+  updateSession: (id: string, data: {
+    title?: string
+    workspaceId?: string | null
+    workspaceAgentId?: string | null
+    metadata?: Record<string, unknown> | null
+  }) =>
     request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   deleteAllSessions: () => request<{ deleted: boolean }>('/sessions/all', { method: 'DELETE' }),

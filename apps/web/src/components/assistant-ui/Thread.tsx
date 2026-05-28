@@ -163,13 +163,30 @@ type ArtifactPreviewItem = {
   source?: string
 }
 
+function classifyAgentSession(
+  session: ReturnType<typeof useChatStore.getState>['currentSession'],
+  sessions: ReturnType<typeof useChatStore.getState>['sessions'],
+) {
+  if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return 'regular'
+  const metadata = session.metadata ?? {}
+  if (metadata.kind === 'agent-direct') return 'agent-direct'
+  if (metadata.kind === 'workspace-agent-child') return 'workspace-agent-child'
+  if (metadata.orchestratorTaskId || metadata.orchestratorRunId || metadata.hiddenFromSessionTree) {
+    return 'orchestrator-task'
+  }
+  const hasGroupParent = sessions.some(
+    (item) => item.type === 'group' && item.workspaceId === session.workspaceId,
+  )
+  return hasGroupParent ? 'workspace-agent-child' : 'agent-direct'
+}
+
 export const Thread: FC = () => {
   const currentSession = useChatStore((state) => state.currentSession)
+  const sessions = useChatStore((state) => state.sessions)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
-  const isWorkspaceChildSession =
-    currentSession?.type === 'direct' &&
-    Boolean(currentSession.workspaceId) &&
-    Boolean(currentSession.workspaceAgentId)
+  const sessionKind = classifyAgentSession(currentSession, sessions)
+  const isAgentDirectSession = sessionKind === 'agent-direct'
+  const isWorkspaceChildSession = sessionKind === 'workspace-agent-child'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
@@ -197,7 +214,7 @@ export const Thread: FC = () => {
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           {isGroupSession && <GroupChatHeader onToggleDetails={() => setGroupDetailsOpen((open) => !open)} />}
-          {!isGroupSession && isWorkspaceChildSession && (
+          {!isGroupSession && (isAgentDirectSession || isWorkspaceChildSession) && (
             <AgentChatHeader onToggleDetails={() => setChildDetailsOpen((open) => !open)} />
           )}
           <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
@@ -224,7 +241,7 @@ export const Thread: FC = () => {
           onClose={() => setGroupDetailsOpen(false)}
         />
       )}
-      {!isGroupSession && isWorkspaceChildSession && (
+      {!isGroupSession && (isAgentDirectSession || isWorkspaceChildSession) && (
         <WorkspaceChildSessionDrawer
           open={childDetailsOpen}
           onClose={() => setChildDetailsOpen(false)}
@@ -1909,7 +1926,9 @@ const UserMessage: FC = () => {
       ? sourceMessage.metadata.displayContent
       : (sourceMessage?.content ?? '')
 
-  function startEdit() {
+  function startEdit(event?: React.MouseEvent<HTMLButtonElement>) {
+    event?.preventDefault()
+    event?.stopPropagation()
     setDraft(text)
     setEditing(true)
   }
@@ -1925,7 +1944,9 @@ const UserMessage: FC = () => {
     }
   }
 
-  async function withdraw() {
+  async function withdraw(event?: React.MouseEvent<HTMLButtonElement>) {
+    event?.preventDefault()
+    event?.stopPropagation()
     if (!sourceMessage) return
     const ok = window.confirm('撤回这条消息？如果后续 Agent 产生了文件修改，将尝试一并回滚。')
     if (!ok) return
@@ -2595,13 +2616,23 @@ const CodeAgentLogsCard: FC<{ logs: NonNullable<CodeAgentRunMetadata['logs']> }>
       {open && (
         <div className="max-h-64 space-y-1.5 overflow-auto border-t border-neutral-100 bg-white p-2">
           {logs.map((log) => (
+            <CodeAgentLogRow key={log.id} log={log} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const CodeAgentLogRow: FC<{ log: NonNullable<CodeAgentRunMetadata['logs']>[number] }> = ({ log }) => {
+  const stream = displayLogStream(log)
+  return (
             <div
-              key={log.id}
               className={cn(
                 'grid grid-cols-[4.25rem_minmax(0,1fr)] gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-6 antialiased',
-                log.stream === 'stderr'
+                stream === 'stderr'
                   ? 'border-red-100 bg-red-50/70'
-                  : log.stream === 'event'
+                  : stream === 'event'
                     ? 'border-blue-100 bg-blue-50/60'
                     : 'border-neutral-100 bg-neutral-50',
               )}
@@ -2609,21 +2640,33 @@ const CodeAgentLogsCard: FC<{ logs: NonNullable<CodeAgentRunMetadata['logs']> }>
               <span
                 className={cn(
                   'inline-flex h-5 items-center justify-center rounded px-1.5 text-[11px] font-medium',
-                  log.stream === 'stderr'
+                  stream === 'stderr'
                     ? 'bg-red-100 text-red-700'
-                    : log.stream === 'event'
+                    : stream === 'event'
                       ? 'bg-blue-100 text-blue-700'
                       : 'bg-neutral-200 text-neutral-600',
                 )}
               >
-                {logStreamLabel(log.stream)}
+                {logStreamLabel(stream)}
               </span>
               <span className="whitespace-pre-wrap break-words text-neutral-800">{log.text}</span>
             </div>
-          ))}
-        </div>
-      )}
-    </div>
+  )
+}
+
+function displayLogStream(log: NonNullable<CodeAgentRunMetadata['logs']>[number]) {
+  if (log.stream !== 'stderr') return log.stream
+  return isProgressLikeCodeAgentLog(log.text) ? 'event' : 'stderr'
+}
+
+function isProgressLikeCodeAgentLog(text: string) {
+  const normalized = text.trim()
+  return (
+    /^(->|→)\s*(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)\b/i.test(normalized) ||
+    /^#\s*Todos\b/i.test(normalized) ||
+    /^\[[ xX-]\]\s+/.test(normalized) ||
+    /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(normalized) ||
+    /^(Warning|Warn|警告)[：:\s]/i.test(normalized)
   )
 }
 

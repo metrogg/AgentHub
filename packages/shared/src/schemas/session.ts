@@ -7,6 +7,7 @@ export const sessionSchema = z.object({
   ownerId: z.string(),
   workspaceId: z.string().nullable().optional(),
   workspaceAgentId: z.string().nullable().optional(),
+  metadata: z.record(z.unknown()).nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 })
@@ -18,6 +19,7 @@ export const createSessionSchema = z.object({
   agentIds: z.array(z.string()).default([]),
   workspaceId: z.string().nullable().optional(),
   workspaceAgentId: z.string().nullable().optional(),
+  metadata: z.record(z.unknown()).nullable().optional(),
 })
 export type CreateSessionInput = z.infer<typeof createSessionSchema>
 
@@ -25,5 +27,6 @@ export const updateSessionSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   workspaceId: z.string().nullable().optional(),
   workspaceAgentId: z.string().nullable().optional(),
+  metadata: z.record(z.unknown()).nullable().optional(),
 })
 export type UpdateSessionInput = z.infer<typeof updateSessionSchema>

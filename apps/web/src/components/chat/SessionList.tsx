@@ -304,7 +304,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   }
 
   return (
-    <aside className="flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
+    <aside className="agenthub-session-sidebar flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
       <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#FBFBFB] py-3">
         <button
           type="button"
@@ -1000,9 +1000,22 @@ function findExistingAgentSession(sessions: Session[], agent: SavedAgentConfig) 
   const agentName = normalizeMatchText(agent.name)
   const agentRole = normalizeMatchText(agent.role)
   if (!agentName) return null
+  const groupWorkspaceIds = new Set(
+    sessions
+      .filter((session) => session.type === 'group' && session.workspaceId)
+      .map((session) => session.workspaceId!),
+  )
 
-  return sessions.find((session) => {
-    if (session.type !== 'direct' || !session.workspaceAgentId) return false
+  const directAgentSessions = sessions.filter((session) => {
+    if (session.type !== 'direct' || !session.workspaceAgentId || !session.workspaceId) return false
+    const metadata = session.metadata ?? {}
+    if (metadata.kind === 'workspace-agent-child' || metadata.kind === 'orchestrator-task') return false
+    if (metadata.orchestratorTaskId || metadata.orchestratorRunId || metadata.hiddenFromSessionTree) return false
+    if (metadata.kind === 'agent-direct') return metadata.savedAgentId === agent.id
+    return !groupWorkspaceIds.has(session.workspaceId)
+  })
+
+  return directAgentSessions.find((session) => {
     const title = normalizeMatchText(session.title)
     const titleParts = session.title.split('/').map((part) => normalizeMatchText(part))
     if (titleParts.some((part) => part === agentName)) return true

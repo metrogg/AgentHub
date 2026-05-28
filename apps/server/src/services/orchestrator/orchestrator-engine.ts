@@ -1345,6 +1345,10 @@ async function ensureChildSession(
       ownerId,
       workspaceId,
       workspaceAgentId: agent?.id ?? null,
+      metadata: {
+        kind: 'orchestrator-task',
+        hiddenFromSessionTree: true,
+      },
     })
     .returning()
   if (!created) throw new Error('Failed to create agent child session')
