@@ -180,7 +180,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   async openGroupSession() {
     const id = get().currentId
     if (!id) return null
-    const { session } = await api.openWorkspaceGroupSession(id)
+    const agentIds = get().agents.map((a) => a.id)
+    const { session } = await api.openWorkspaceGroupSession(id, agentIds)
     return session.id
   },
 }))

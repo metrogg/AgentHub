@@ -1145,8 +1145,11 @@ export const api = {
     ),
   workspaceSummary: (id: string) =>
     request<{ sessionId: string }>(`/workspaces/${id}/summary`, { method: 'POST' }),
-  openWorkspaceGroupSession: (id: string) =>
-    request<{ session: Session }>(`/workspaces/${id}/group-session`, { method: 'POST' }),
+  openWorkspaceGroupSession: (id: string, agentIds?: string[]) =>
+    request<{ session: Session }>(`/workspaces/${id}/group-session`, {
+      method: 'POST',
+      body: agentIds ? JSON.stringify({ agentIds }) : undefined,
+    }),
   openWorkspaceAgentSession: (id: string, agentId: string) =>
     request<{ session: Session }>(`/workspaces/${id}/agents/${agentId}/session`, { method: 'POST' }),
 
