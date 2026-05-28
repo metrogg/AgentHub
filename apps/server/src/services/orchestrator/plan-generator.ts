@@ -115,7 +115,7 @@ function normalizeOrchestratorGoal(content: string) {
 }
 
 function fallbackPlanAgents(): PlanAgent[] {
-  const fallbackKeys: Array<Exclude<keyof typeof ROLE_PRESETS, 'custom'>> = ['architect', 'coder', 'reviewer']
+  const fallbackKeys: Array<Exclude<keyof typeof ROLE_PRESETS, 'custom'>> = ['orchestrator', 'coder', 'reviewer']
   return fallbackKeys.map((key) => {
     const preset = ROLE_PRESETS[key]
     return {

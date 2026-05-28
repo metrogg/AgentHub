@@ -29,15 +29,17 @@ const legacyAgentConfigKey = 'agenthub.agentConfig'
 
 export const defaultAgentConfigs: SavedAgentConfig[] = [
   createSavedAgent({
-    roleType: 'architect',
-    name: 'Architect',
-    role: '规划',
-    description: '拆解目标、定义边界、规划里程碑和依赖关系。',
-    systemPrompt: '你是架构师。优先拆解目标、定义边界、给出里程碑与依赖关系。',
-    color: '#6366f1',
+    roleType: 'orchestrator',
+    name: 'Orchestrator',
+    role: '总指挥',
+    description: '群聊总指挥，负责理解用户需求、制定计划并调度其他 Agent 协作完成复杂任务。',
+    systemPrompt: '你是群聊总指挥。你的职责是理解用户意图，分析任务复杂度，制定执行计划，并决定调用哪些 Agent 来完成任务。你不需要直接写代码，而是专注于规划和协调。',
+    color: '#7c3aed',
     runtimeType: 'code-agent',
     codeAgentType: 'claude-code',
-    capabilityTags: ['planning', 'architecture'],
+    capabilityTags: ['orchestrate', 'plan', 'dispatch', 'coordinate'],
+    toolPermissions: ['chat', 'workspace:read'],
+    sandboxPolicy: 'read-only',
   }),
   createSavedAgent({
     roleType: 'coder',
@@ -51,17 +53,6 @@ export const defaultAgentConfigs: SavedAgentConfig[] = [
     capabilityTags: ['code', 'implementation'],
     toolPermissions: ['workspace:read', 'workspace:write'],
     approvalRequired: false,
-  }),
-  createSavedAgent({
-    roleType: 'researcher',
-    name: 'Researcher',
-    role: '研究',
-    description: '补充资料、比较方案、标记不确定点。',
-    systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点。给出参考来源。',
-    color: '#f59e0b',
-    runtimeType: 'code-agent',
-    codeAgentType: 'claude-code',
-    capabilityTags: ['research', 'sources'],
   }),
   createSavedAgent({
     roleType: 'reviewer',
@@ -92,8 +83,24 @@ export function loadAgentLibraryState(): AgentLibraryState {
   if (raw) {
     try {
       const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) return normalizeLibraryState({ agents: parsed })
-      if (Array.isArray(parsed?.agents)) return normalizeLibraryState(parsed)
+      const state = Array.isArray(parsed)
+        ? normalizeLibraryState({ agents: parsed })
+        : Array.isArray(parsed?.agents)
+          ? normalizeLibraryState(parsed)
+          : null
+      if (state) {
+        // 如果迁移添加了 orchestrator，保存回 localStorage
+        const hadOrchestrator = Array.isArray(parsed?.agents)
+          ? parsed.agents.some((a: unknown) => {
+              const agent = a as { roleType?: string; name?: string; role?: string }
+              return agent.roleType === 'orchestrator' || (agent.name ?? '').toLowerCase().includes('orchestrator') || (agent.role ?? '').includes('总指挥')
+            })
+          : false
+        if (!hadOrchestrator) {
+          saveAgentLibraryState(state)
+        }
+        return state
+      }
     } catch {
       // Keep the app usable when local config is broken.
     }
@@ -213,9 +220,19 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
 
 function normalizeLibraryState(value: unknown): AgentLibraryState {
   const parsed = value as Partial<AgentLibraryState> & { agents?: unknown; relations?: unknown }
-  const agents = Array.isArray(parsed.agents)
+  let agents = Array.isArray(parsed.agents)
     ? parsed.agents.map(normalizeSavedAgent).filter(Boolean) as SavedAgentConfig[]
     : defaultAgentConfigs
+
+  // 迁移：如果缺少 orchestrator，自动添加
+  const hasOrchestrator = agents.some((a) => (a.roleType ?? inferRoleType(a)) === 'orchestrator')
+  if (!hasOrchestrator) {
+    const orchestratorPreset = defaultAgentConfigs.find((a) => a.roleType === 'orchestrator')
+    if (orchestratorPreset) {
+      agents = [orchestratorPreset, ...agents]
+    }
+  }
+
   const relations = Array.isArray(parsed.relations)
     ? parsed.relations.map(normalizeSavedRelation).filter(Boolean) as SavedAgentRelation[]
     : buildDefaultSavedRelations(agents)

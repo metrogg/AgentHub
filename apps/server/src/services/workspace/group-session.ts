@@ -47,7 +47,6 @@ async function syncGroupMembers(sessionId: string, workspaceId: string, ownerId:
   const keys = new Set(existing.map((member) => `${member.memberType}:${member.memberId}`))
   const wanted = [
     { memberType: 'user' as const, memberId: ownerId },
-    { memberType: 'agent' as const, memberId: 'orchestrator' },
     ...agents.map((agent) => ({ memberType: 'agent' as const, memberId: agent.id })),
   ]
   const missing = wanted.filter((member) => !keys.has(`${member.memberType}:${member.memberId}`))

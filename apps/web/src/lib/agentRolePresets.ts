@@ -13,6 +13,7 @@ export interface AgentRolePreset extends AgentConfigInput {
 }
 
 const roleToLabel: Record<Exclude<AgentRoleType, 'custom'>, string> = {
+  orchestrator: '总指挥',
   clarifier: '需求澄清',
   architect: '架构规划',
   researcher: '资料研究',

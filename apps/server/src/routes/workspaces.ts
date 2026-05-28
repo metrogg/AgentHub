@@ -407,10 +407,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
     const input = normalizeAgentCreateDefaults(c.req.valid('json'))
-    // 禁止创建与系统 Orchestrator 同名的 Agent，避免调度冲突
-    if (/orchestrator|协调器|调度/i.test(input.name)) {
-      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 名称不能包含 Orchestrator / 协调器 / 调度，这是系统保留角色')
-    }
     const existing = await db.select({ id: workspaceAgents.id }).from(workspaceAgents).where(eq(workspaceAgents.workspaceId, id))
     const [agent] = await db
       .insert(workspaceAgents)
@@ -426,10 +422,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
     const input = normalizeAgentUpdateDefaults(c.req.valid('json'))
-    // 禁止改名成系统保留角色
-    if (input.name && /orchestrator|协调器|调度/i.test(input.name)) {
-      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 名称不能包含 Orchestrator / 协调器 / 调度，这是系统保留角色')
-    }
     const [agent] = await db
       .update(workspaceAgents)
       .set(input)

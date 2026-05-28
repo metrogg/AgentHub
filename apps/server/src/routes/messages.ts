@@ -995,7 +995,7 @@ async function ensureWorkspaceAgentChildSessions(workspaceId: string, ownerId: s
     .where(eq(sessionMembers.sessionId, groupSession.id))
 
   const agentMemberIds = members
-    .filter((m) => m.memberType === 'agent' && m.memberId !== 'orchestrator')
+    .filter((m) => m.memberType === 'agent')
     .map((m) => m.memberId)
 
   if (agentMemberIds.length === 0) return

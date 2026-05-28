@@ -514,6 +514,7 @@ export interface WorkspaceAgent {
 }
 
 export type AgentRoleType =
+  | 'orchestrator'
   | 'clarifier'
   | 'architect'
   | 'researcher'
