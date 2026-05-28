@@ -25,6 +25,7 @@ import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSide
 import { loadAgentLibrary, toAgentConfigInput, type SavedAgentConfig } from '../lib/agentLibrary'
 import { api, friendlyErrorMessage, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type TaskStatus, type WorkspaceAgent, type WorkspaceTask } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { pickWorkspaceFolder } from '../lib/native'
 import { cn } from '../lib/utils'
 import { useWorkspaceStore } from '../stores/workspaceStore'
@@ -890,6 +891,11 @@ function AgentDialog({
 }) {
   const { t } = useI18n()
   const runtimeType = draft.runtimeType ?? 'llm'
+  const modelChoices = filterModelsForCodeAgent(
+    models,
+    runtimeType === 'code-agent' ? draft.codeAgentType : null,
+    draft.modelId ?? null,
+  )
   const selectClass = 'h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300'
 
   return (
@@ -997,7 +1003,11 @@ function AgentDialog({
           </select>
           <select value={draft.modelId ?? ''} onChange={(event) => onChange({ modelId: event.target.value || null })} className={selectClass}>
             <option value="">{t('自动模型')}</option>
-            {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId}</option>)}
+            {modelChoices.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name || model.modelId}
+              </option>
+            ))}
           </select>
           <select value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(event) => onChange({ sandboxPolicy: event.target.value as WorkspaceAgent['sandboxPolicy'] })} className={selectClass}>
             <option value="read-only">{t('只读权限')}</option>

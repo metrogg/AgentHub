@@ -28,6 +28,7 @@ import {
   type OpencodeModelItem,
 } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { cn } from '../lib/utils'
 
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -247,10 +248,14 @@ export default function CodingToolsPage() {
   const modelOptions = useMemo(
     () =>
       buildModelOptions(
-        activeTool.id === 'opencode' ? [] : models,
+        activeTool.id === 'opencode'
+          ? []
+          : activeTool.id === 'claude-code'
+            ? filterModelsForCodeAgent(models, 'claude-code', activeTool.modelId)
+            : models,
         activeTool.id === 'opencode' ? opencodeModels : [],
       ),
-    [activeTool.id, models, opencodeModels],
+    [activeTool.id, activeTool.modelId, models, opencodeModels],
   )
   const installedCount = useMemo(
     () => tools.filter((tool) => statuses[tool.id]?.installed).length,

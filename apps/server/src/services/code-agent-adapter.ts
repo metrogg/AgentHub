@@ -72,7 +72,8 @@ export interface CodeAgentMetadataChunk {
 export type CodeAgentReplyChunk = string | CodeAgentMetadataChunk
 
 const serviceDir = dirname(fileURLToPath(import.meta.url))
-const projectRoot = resolve(serviceDir, '../../../..')
+const sourceProjectRoot = resolve(serviceDir, '../../../..')
+const projectRoot = resolveServerProjectRoot()
 const lastMessageStart = '__AGENTHUB_LAST_MESSAGE_START__'
 const lastMessageEnd = '__AGENTHUB_LAST_MESSAGE_END__'
 let rootEnvCache: Record<string, string> | null = null
@@ -86,6 +87,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     promptMode: 'stdin',
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
+      const sandbox = String(cfg['sandbox'] ?? toCodexSandbox(options?.sandboxPolicy))
       const args: string[] = [
         'exec',
         '--skip-git-repo-check',
@@ -94,10 +96,13 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         '--cd',
         options?.cwd ?? projectRoot,
         '--sandbox',
-        String(cfg['sandbox'] ?? toCodexSandbox(options?.sandboxPolicy)),
-        '--ask-for-approval',
-        String(cfg['approvalPolicy'] ?? 'never'),
+        sandbox,
       ]
+      if (sandbox === 'danger-full-access') {
+        args.push('--dangerously-bypass-approvals-and-sandbox')
+      } else if (String(cfg['approvalPolicy'] ?? 'never') === 'never') {
+        args.push('--full-auto')
+      }
       if (cfg['profile']) {
         args.push('--profile', String(cfg['profile']))
       }
@@ -201,7 +206,7 @@ export async function* streamCodeAgentReply(
     { capabilityTags: profile.capabilityTags, limit: 3 }
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
-  const cliModelId = await resolveCodeAgentCliModelId(profile.modelId)
+  const cliModelId = await resolveCodeAgentCliModelId(type, profile.modelId)
   const installed = await isCommandInstalled(adapter.command)
   const configured = await isRuntimeConfigured(type, adapter, profile.modelId)
   const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
@@ -605,7 +610,11 @@ async function runCodeAgentCommand(
   }
   const parsed = withExtractedLastMessage({ code, output })
   const finalMessage =
-    outputFileMessage || claudeFinalMessage.trim() || parsed.finalMessage || extractCodexAssistantMessage(parsed.output)
+    outputFileMessage ||
+    claudeFinalMessage.trim() ||
+    parsed.finalMessage ||
+    extractClaudeResultMessage(parsed.output) ||
+    extractCodexAssistantMessage(parsed.output)
   const effectiveCode = code === 0 && !finalMessage && isCodeAgentFailureOutput(output) ? 1 : code
   const metadata = await buildCodeAgentRunMetadata({
     adapter,
@@ -749,6 +758,44 @@ function consumeClaudeStreamJson(
   return nextBuffer
 }
 
+function extractClaudeResultMessage(output: string) {
+  const messages: string[] = []
+  const lines = output.split(/\r?\n/)
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    let payload: any
+    try {
+      payload = JSON.parse(trimmed)
+    } catch {
+      continue
+    }
+    if (payload?.type === 'result') {
+      const text =
+        typeof payload.result === 'string'
+          ? payload.result
+          : typeof payload.error === 'string'
+            ? payload.error
+            : typeof payload.message === 'string'
+              ? payload.message
+              : ''
+      if (text) messages.push(text)
+    }
+    if (payload?.type === 'error') {
+      const text =
+        typeof payload.message === 'string'
+          ? payload.message
+          : typeof payload.error === 'string'
+            ? payload.error
+            : typeof payload.detail === 'string'
+              ? payload.detail
+              : ''
+      if (text) messages.push(text)
+    }
+  }
+  return messages.find(Boolean)?.trim()
+}
+
 function parseClaudeJsonLine(
   line: string,
   handlers: {
@@ -791,7 +838,30 @@ function parseClaudeJsonLine(
   }
 
   if (payload.type === 'result' && payload.subtype) {
-    handlers.addLog(payload.is_error ? 'stderr' : 'event', payload.is_error ? payload.result || 'Claude Code 执行失败' : 'Claude Code 执行完成')
+    const message =
+      typeof payload.result === 'string'
+        ? payload.result
+        : typeof payload.error === 'string'
+          ? payload.error
+          : typeof payload.message === 'string'
+            ? payload.message
+            : payload.is_error
+              ? 'Claude Code 执行失败'
+              : 'Claude Code 执行完成'
+    handlers.addLog(payload.is_error ? 'stderr' : 'event', message)
+    return
+  }
+
+  if (payload.type === 'error') {
+    const message =
+      typeof payload.message === 'string'
+        ? payload.message
+        : typeof payload.error === 'string'
+          ? payload.error
+          : typeof payload.detail === 'string'
+            ? payload.detail
+            : 'Claude Code 执行失败'
+    handlers.addLog('stderr', message)
   }
 }
 
@@ -1228,12 +1298,29 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
   }
 }
 
-async function resolveCodeAgentCliModelId(modelId?: string | null) {
+async function resolveCodeAgentCliModelId(type: CodeAgentType, modelId?: string | null) {
   const rawModelId = modelId?.trim()
   if (!rawModelId) return modelId
 
   const selected = await resolveCodeAgentCatalogItem(rawModelId)
+  if (type === 'claude-code' && !isClaudeCodeCompatibleModel(selected, rawModelId)) {
+    return isClaudeCodeModelId(rawModelId) ? rawModelId : null
+  }
   return selected?.modelId?.trim() || rawModelId
+}
+
+function isClaudeCodeCompatibleModel(model?: CodeAgentCatalogItem | null, rawModelId?: string | null) {
+  const modelId = model?.modelId?.trim() || rawModelId?.trim() || ''
+  if (!isClaudeCodeModelId(modelId)) return false
+
+  const provider = model?.provider?.trim().toLowerCase() ?? ''
+  const endpoint = (model?.anthropicEndpoint?.trim() || model?.apiEndpoint?.trim() || '').toLowerCase()
+  if (!model) return true
+  return provider.includes('anthropic') || provider.includes('claude') || endpoint.includes('anthropic.com')
+}
+
+function isClaudeCodeModelId(modelId?: string | null) {
+  return /\b(claude|sonnet|opus|haiku)\b/i.test(modelId?.trim() ?? '')
 }
 
 async function resolveCodeAgentCatalogItem(modelId?: string | null): Promise<CodeAgentCatalogItem | null> {
@@ -1256,29 +1343,68 @@ function readEnv(key: string) {
   return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
+function resolveServerProjectRoot() {
+  const candidates = [
+    Bun.env.PROJECT_ROOT?.trim(),
+    process.env.PROJECT_ROOT?.trim(),
+    process.cwd(),
+    sourceProjectRoot,
+  ].filter(Boolean) as string[]
+
+  for (const candidate of [...new Set(candidates)]) {
+    if (!existsSync(candidate) || isRuntimeDataDir(candidate)) continue
+    try {
+      if (statSync(candidate).isDirectory()) return candidate
+    } catch {
+      // Ignore invalid candidates.
+    }
+  }
+
+  return sourceProjectRoot
+}
+
 async function mergedEnv(adapter?: CodeAgentAdapter, modelId?: string | null) {
   const base = { ...rootEnv(), ...Bun.env, ...codexAuthEnv() }
   const selectedModel = await resolveCodeAgentCatalogItem(modelId)
 
-  if (adapter?.command === 'claude' && selectedModel) {
-    const endpoint = selectedModel.anthropicEndpoint?.trim() || selectedModel.apiEndpoint?.trim()
-    if (endpoint) base.ANTHROPIC_BASE_URL = endpoint
+  if (adapter?.command === 'claude') {
+    const compatibleModel = isClaudeCodeCompatibleModel(selectedModel, modelId)
+      ? selectedModel
+      : null
+    if (base.CLAUDE_CODE_MODEL && !isClaudeCodeModelId(base.CLAUDE_CODE_MODEL)) {
+      delete base.CLAUDE_CODE_MODEL
+    }
+    if (base.ANTHROPIC_MODEL && !isClaudeCodeModelId(base.ANTHROPIC_MODEL)) {
+      delete base.ANTHROPIC_MODEL
+    }
+    if (compatibleModel) {
+      const endpoint = compatibleModel.anthropicEndpoint?.trim() || compatibleModel.apiEndpoint?.trim()
+      if (endpoint) base.ANTHROPIC_BASE_URL = endpoint
+    }
   }
 
   // 若 CLI 需要特定 API Key，优先从 Coding Tools 设置、再自动注入模型配置中的 key
   if (adapter?.envKey) {
     const directValue = readEnv(adapter.envKey)
     if (!directValue) {
-      if (selectedModel?.apiKey?.trim()) {
-        base[adapter.envKey] = selectedModel.apiKey.trim()
-      } else if (selectedModel?.apiKeyEnv?.trim()) {
-        const selectedEnvKey = selectedModel.apiKeyEnv.trim()
+      const compatibleModel =
+        adapter?.command === 'claude' && !isClaudeCodeCompatibleModel(selectedModel, modelId)
+          ? null
+          : selectedModel
+      const canUseSavedActiveKey =
+        adapter?.command !== 'claude' ||
+        !modelId?.trim() ||
+        isClaudeCodeCompatibleModel(selectedModel, modelId)
+      if (compatibleModel?.apiKey?.trim()) {
+        base[adapter.envKey] = compatibleModel.apiKey.trim()
+      } else if (compatibleModel?.apiKeyEnv?.trim()) {
+        const selectedEnvKey = compatibleModel.apiKeyEnv.trim()
         const selectedEnvValue = readEnv(selectedEnvKey)
         if (selectedEnvValue) base[adapter.envKey] = selectedEnvValue
       }
 
       // 1) 尝试读取前端保存的 CODE_AGENT_ACTIVE_API_KEY
-      if (!base[adapter.envKey]) {
+      if (!base[adapter.envKey] && canUseSavedActiveKey) {
         try {
           const rows = await db.select().from(settings).where(eq(settings.key, 'CODE_AGENT_ACTIVE_API_KEY')).limit(1)
           const savedKey = rows[0]?.value?.trim()
@@ -1398,7 +1524,7 @@ function syncCodexRuntimeFile(sourceHome: string, runtimeHome: string, filename:
 }
 
 function resolveExecutionCwd(projectPath?: string | null) {
-  const fallback = existsSync(projectRoot) ? projectRoot : undefined
+  const fallback = resolveProjectFallbackCwd()
   const trimmed = projectPath?.trim()
   if (!trimmed) {
     return {
@@ -1409,6 +1535,13 @@ function resolveExecutionCwd(projectPath?: string | null) {
   }
 
   const absolute = isAbsolute(trimmed) ? trimmed : resolve(projectRoot, trimmed)
+  if (isRuntimeDataDir(absolute)) {
+    return {
+      cwd: fallback,
+      label: fallback ?? absolute,
+      valid: Boolean(fallback),
+    }
+  }
   try {
     const stat = statSync(absolute)
     return {
@@ -1423,6 +1556,34 @@ function resolveExecutionCwd(projectPath?: string | null) {
       valid: false,
     }
   }
+}
+
+function resolveProjectFallbackCwd() {
+  const candidates = [
+    Bun.env.PROJECT_ROOT?.trim(),
+    process.env.PROJECT_ROOT?.trim(),
+    projectRoot,
+    sourceProjectRoot,
+  ].filter(Boolean) as string[]
+
+  for (const candidate of [...new Set(candidates)]) {
+    if (!existsSync(candidate) || isRuntimeDataDir(candidate)) continue
+    try {
+      if (statSync(candidate).isDirectory()) return candidate
+    } catch {
+      // Ignore invalid candidates.
+    }
+  }
+
+  return undefined
+}
+
+function isRuntimeDataDir(candidate: string) {
+  const appDataDir = Bun.env.AGENTHUB_APP_DATA_DIR?.trim() || process.env.AGENTHUB_APP_DATA_DIR?.trim()
+  if (!appDataDir) return false
+  const normalizedCandidate = candidate.replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase()
+  const normalizedAppData = appDataDir.replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase()
+  return normalizedCandidate === normalizedAppData || normalizedCandidate.startsWith(`${normalizedAppData}\\`)
 }
 
 function previewCommand(
@@ -1535,6 +1696,7 @@ function formatCodeAgentFailure(adapter: CodeAgentAdapter, result: CodeAgentComm
 }
 
 function cleanDiagnosticOutput(output: string) {
+  const claudeMessage = extractClaudeResultMessage(output)
   const cleanedLines = stripToolNoise(stripLastMessageBlock(output))
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -1546,7 +1708,7 @@ function cleanDiagnosticOutput(output: string) {
   const diagnosticLines = cleanedLines.filter((line) =>
     /error|failed|unexpected|unauthorized|not found|timed out|wire_api|missing bearer|invalid|No such file|status \d{3}|exited/i.test(line)
   )
-  const cleaned = (diagnosticLines.length ? diagnosticLines : cleanedLines).join('\n')
+  const cleaned = [claudeMessage, ...(diagnosticLines.length ? diagnosticLines : cleanedLines)].filter(Boolean).join('\n')
   return limitOutput(cleaned, 2000)
 }
 

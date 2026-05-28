@@ -26,6 +26,7 @@ import {
 import { agentRolePresets, presetForRole } from '../lib/agentRolePresets'
 import { api, type AgentConfigInput, type ModelCatalogItem, type WorkspaceAgent } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { cn } from '../lib/utils'
 
 const emptyDraft: AgentConfigInput = {
@@ -112,6 +113,11 @@ export default function AgentConfigPage() {
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null
   const runtimeType = draft.runtimeType ?? 'llm'
+  const modelChoices = filterModelsForCodeAgent(
+    models,
+    runtimeType === 'code-agent' ? draft.codeAgentType : null,
+    draft.modelId ?? null,
+  )
 
   function selectAgent(agent: SavedAgentConfig, replaceUrl = false) {
     setSelectedId(agent.id)
@@ -338,7 +344,11 @@ export default function AgentConfigPage() {
                       </SelectField>
                       <SelectField label={t('默认模型')} value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
                         <option value="">{t('自动模型')}</option>
-                        {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId}</option>)}
+                        {modelChoices.map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.name || model.modelId}
+                          </option>
+                        ))}
                       </SelectField>
                       <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
                         <option value="read-only">{t('只读')}</option>
