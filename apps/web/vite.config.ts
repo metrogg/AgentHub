@@ -28,6 +28,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    watch: {
+      ignored: ['**/dist/**', '**/node_modules/**', '**/.git/**'],
+    },
     proxy: {
       '/api': {
         target: apiProxyTarget,
