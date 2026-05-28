@@ -1,5 +1,8 @@
 import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
+import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 
 export interface FileVariant {
   agentId: string
@@ -94,14 +97,54 @@ export class ConflictResolver {
   }
 
   private async tryAutoMerge(base: string, variants: FileVariant[]): Promise<{ ok: boolean; content?: string }> {
-    // 简化：如果所有 diff 的行号范围不重叠，返回合并结果
-    // 实际实现中可以用 diff 解析库，这里用启发式方法
+    // 使用 git apply --check 来验证多个 patch 是否可以无冲突应用
+    const tmpDir = join(tmpdir(), `agenthub-merge-${crypto.randomUUID()}`)
+    mkdirSync(tmpDir, { recursive: true })
     try {
-      // 如果只有一个 Agent 修改了文件，或者 diffs 看起来不冲突
-      if (variants.length === 1) return { ok: true, content: variants[0]?.fullContent || base }
-      return { ok: false }
+      const baseFile = join(tmpDir, 'base')
+      await Bun.write(baseFile, base)
+
+      const patchFiles: string[] = []
+      for (let i = 0; i < variants.length; i++) {
+        const variant = variants[i]!
+        const patchFile = join(tmpDir, `patch-${i}.diff`)
+        await Bun.write(patchFile, variant.diff)
+        patchFiles.push(patchFile)
+      }
+
+      // Step 1: 逐个检查 patch 能否应用到 base
+      const workingFile = join(tmpDir, 'working')
+      await Bun.write(workingFile, base)
+      for (let i = 0; i < patchFiles.length; i++) {
+        const patchPath = patchFiles[i]!
+        const proc = Bun.spawn(['git', 'apply', '--check', '-p0', patchPath], {
+          cwd: tmpDir,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        })
+        const exitCode = await proc.exited
+        if (exitCode !== 0) {
+          return { ok: false }
+        }
+      }
+
+      // Step 2: 依次应用所有 patch
+      for (let i = 0; i < patchFiles.length; i++) {
+        const patchPath = patchFiles[i]!
+        const proc = Bun.spawn(['git', 'apply', '-p0', patchPath], {
+          cwd: tmpDir,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        })
+        await proc.exited
+      }
+
+      const merged = await Bun.file(workingFile).text()
+      return { ok: true, content: merged }
     } catch {
       return { ok: false }
+    } finally {
+      try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore cleanup errors */ }
     }
   }
 

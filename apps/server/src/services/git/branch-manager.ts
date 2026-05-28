@@ -167,6 +167,15 @@ export class GitBranchManager {
     }
   }
 
+  async collectFileDiff(projectPath: string, filePath: string, branch: string, baseBranch?: string): Promise<string> {
+    const base = baseBranch ?? (await this.inferBaseBranch(projectPath))
+    try {
+      return await this.execGit(projectPath, ['diff', `${base}...${branch}`, '--', filePath])
+    } catch {
+      return ''
+    }
+  }
+
   async collectChangedFiles(projectPath: string, branch: string, baseBranch?: string): Promise<string[]> {
     const base = baseBranch ?? (await this.inferBaseBranch(projectPath))
     try {
