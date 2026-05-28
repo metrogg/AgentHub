@@ -7,24 +7,25 @@
 AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可以单独与 AI Agent 对话，也可以通过 `@orchestrator` 协调多个 Agent（架构师、实现者、审查者等）共同完成任务。项目为**字节跳动 AI 全栈挑战赛**参赛作品。
 
 核心交互范式：
+
 - **单聊（Direct）**：用户与一个 Agent 一对一对话。
 - **群聊（Group）**：Workspace 级别的 Agent Group，支持 `@Agent名` 指定回复对象。
 - **协调器（Orchestrator）**：通过 `@orchestrator` 触发任务拆解，自动创建 Workspace、分配 Agent、分发子任务，支持 DAG 依赖调度、并发执行、失败降级和代码冲突处理。
 
 ## 技术栈
 
-| 层面 | 技术选型 |
-|------|---------|
-| 运行时 | Bun >= 1.1.0 |
-|  Monorepo | Bun workspaces (`apps/*`, `packages/*`) |
-| 后端框架 | Hono + Bun.serve（HTTP + WebSocket 同一端口） |
-| 前端框架 | React 18 + Vite + TypeScript |
+| 层面       | 技术选型                                                       |
+| -------- | ---------------------------------------------------------- |
+| 运行时      | Bun >= 1.1.0                                               |
+| Monorepo | Bun workspaces (`apps/*`, `packages/*`)                    |
+| 后端框架     | Hono + Bun.serve（HTTP + WebSocket 同一端口）                    |
+| 前端框架     | React 18 + Vite + TypeScript                               |
 | UI / CSS | Tailwind CSS + Radix UI primitives + `@assistant-ui/react` |
-| 状态管理 | Zustand |
-| 数据库 | SQLite (`bun:sqlite`) + Drizzle ORM（WAL 模式） |
-| LLM 接入 | 自研流式客户端（OpenAI-compatible + Anthropic） |
-| 共享契约 | Zod schemas + 常量（`packages/shared`） |
-| 包管理器 | Bun（`bun.lock`） |
+| 状态管理     | Zustand                                                    |
+| 数据库      | SQLite (`bun:sqlite`) + Drizzle ORM（WAL 模式）                |
+| LLM 接入   | 自研流式客户端（OpenAI-compatible + Anthropic）                     |
+| 共享契约     | Zod schemas + 常量（`packages/shared`）                        |
+| 包管理器     | Bun（`bun.lock`）                                            |
 
 ## 项目结构
 
@@ -165,7 +166,7 @@ bun --filter @agenthub/web typecheck
   - `workspaces` / `workspace_agents` / `workspace_tasks`
   - `session_members` / `settings`
   - `orchestrator_runs`（新增：记录 Orchestrator 调度生命周期）
-- **workspace_tasks 扩展字段**（支持 DAG 调度）：
+- **workspace\_tasks 扩展字段**（支持 DAG 调度）：
   - `run_id`, `dependencies` (JSON), `parallel_group`, `max_retries`, `attempt_count`
   - `fallback_agent_id`, `artifacts` (JSON), `started_at`, `completed_at`, `error_log`
 - **特性**：启用 `PRAGMA journal_mode = WAL;` 与 `PRAGMA foreign_keys = ON;`。
@@ -175,19 +176,19 @@ bun --filter @agenthub/web typecheck
 
 复制 `.env.example` 为 `.env` 后按需填写。关键变量：
 
-| 变量 | 说明 |
-|------|------|
-| `DATABASE_URL` | SQLite 文件路径，默认 `./storage/agenthub.db` |
-| `PORT` | 服务端端口，默认 `8000` |
-| `JWT_SECRET` | JWT 密钥（开发环境有默认值，生产必须修改） |
-| `CORS_ORIGIN` | 前端地址，默认 `http://localhost:5173` |
-| `LLM_PROVIDER` | 默认 LLM 供应商，默认 `openai` |
-| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 通用 LLM 配置 |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI 专用 |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Anthropic 专用 |
-| `ENABLE_LOCAL_CLI_PROBES` | 是否探测本机 CLI 工具（codex/claude/opencode），默认 `true` |
-| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | 代码 Agent 执行总开关，默认 `true`；实际限制由 Agent 的 `sandboxPolicy` 控制 |
-| `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | 代码 Agent 超时，默认 `120000` |
+| 变量                                                             | 说明                                                        |
+| -------------------------------------------------------------- | --------------------------------------------------------- |
+| `DATABASE_URL`                                                 | SQLite 文件路径，默认 `./storage/agenthub.db`                    |
+| `PORT`                                                         | 服务端端口，默认 `8000`                                           |
+| `JWT_SECRET`                                                   | JWT 密钥（开发环境有默认值，生产必须修改）                                   |
+| `CORS_ORIGIN`                                                  | 前端地址，默认 `http://localhost:5173`                           |
+| `LLM_PROVIDER`                                                 | 默认 LLM 供应商，默认 `openai`                                    |
+| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`                   | 通用 LLM 配置                                                 |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`          | OpenAI 专用                                                 |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Anthropic 专用                                              |
+| `ENABLE_LOCAL_CLI_PROBES`                                      | 是否探测本机 CLI 工具（codex/claude/opencode），默认 `true`            |
+| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION`                         | 代码 Agent 执行总开关，默认 `true`；实际限制由 Agent 的 `sandboxPolicy` 控制 |
+| `AGENTHUB_CODE_AGENT_TIMEOUT_MS`                               | 代码 Agent 超时，默认 `120000`                                   |
 
 服务端优先从数据库 `settings` 表读取模型配置，其次回退到环境变量。
 
@@ -242,19 +243,19 @@ bun --filter @agenthub/web typecheck
 
 错误码定义于 `apps/server/src/lib/error.ts` 的 `AppErrorCodes`，按领域分组：
 
-| 前缀 | 说明 | 示例 |
-|------|------|------|
-| `GENERAL_*` | 通用服务器错误 | `INTERNAL_ERROR`, `TIMEOUT` |
-| `VALIDATION_*` | 请求参数校验 | `VALIDATION_FAILED`, `MISSING_FIELD` |
-| `AUTH_*` | 认证授权（预留） | `UNAUTHORIZED`, `FORBIDDEN` |
-| `SESSION_*` | 会话 | `SESSION_NOT_FOUND`, `SESSION_CREATE_FAILED` |
-| `MESSAGE_*` | 消息 | `MESSAGE_NOT_FOUND`, `MESSAGE_UPDATE_FAILED` |
-| `WORKSPACE_*` | 工作区 | `WORKSPACE_NOT_FOUND`, `WORKSPACE_CREATE_FAILED` |
-| `TASK_*` | 任务 | `TASK_NOT_FOUND`, `TASK_EXECUTION_FAILED` |
-| `AGENT_*` | Agent | `AGENT_NOT_FOUND`, `CODE_AGENT_EXECUTION_FAILED` |
-| `LLM_*` | LLM 服务 | `LLM_REQUEST_FAILED`, `LLM_RATE_LIMITED` |
-| `ORCHESTRATOR_*` | 编排器 | `ORCHESTRATOR_PLAN_FAILED`, `ORCHESTRATOR_RUN_FAILED` |
-| `FILE_*` | 文件/产物 | `FILE_NOT_FOUND`, `DIFF_APPLY_FAILED` |
+| 前缀               | 说明       | 示例                                                    |
+| ---------------- | -------- | ----------------------------------------------------- |
+| `GENERAL_*`      | 通用服务器错误  | `INTERNAL_ERROR`, `TIMEOUT`                           |
+| `VALIDATION_*`   | 请求参数校验   | `VALIDATION_FAILED`, `MISSING_FIELD`                  |
+| `AUTH_*`         | 认证授权（预留） | `UNAUTHORIZED`, `FORBIDDEN`                           |
+| `SESSION_*`      | 会话       | `SESSION_NOT_FOUND`, `SESSION_CREATE_FAILED`          |
+| `MESSAGE_*`      | 消息       | `MESSAGE_NOT_FOUND`, `MESSAGE_UPDATE_FAILED`          |
+| `WORKSPACE_*`    | 工作区      | `WORKSPACE_NOT_FOUND`, `WORKSPACE_CREATE_FAILED`      |
+| `TASK_*`         | 任务       | `TASK_NOT_FOUND`, `TASK_EXECUTION_FAILED`             |
+| `AGENT_*`        | Agent    | `AGENT_NOT_FOUND`, `CODE_AGENT_EXECUTION_FAILED`      |
+| `LLM_*`          | LLM 服务   | `LLM_REQUEST_FAILED`, `LLM_RATE_LIMITED`              |
+| `ORCHESTRATOR_*` | 编排器      | `ORCHESTRATOR_PLAN_FAILED`, `ORCHESTRATOR_RUN_FAILED` |
+| `FILE_*`         | 文件/产物    | `FILE_NOT_FOUND`, `DIFF_APPLY_FAILED`                 |
 
 ### 路由中使用 AppError
 
@@ -279,7 +280,7 @@ throw AppError.internal(AppErrorCodes.LLM_REQUEST_FAILED, 'LLM 请求失败', { 
 
 `requestContextMiddleware` 为每个 HTTP 请求注入：
 
-1. **生成 `requestId`**：优先读取请求头 `X-Request-Id`（支持分布式追踪），否则 `crypto.randomUUID()`。
+1. **生成** **`requestId`**：优先读取请求头 `X-Request-Id`（支持分布式追踪），否则 `crypto.randomUUID()`。
 2. **绑定 child logger**：通过 `c.get('requestContext').logger` 获取带 `requestId` 的 logger，日志自动关联请求。
 3. **响应头回写**：`X-Request-Id` 随响应返回给前端，方便用户报障时定位。
 
@@ -292,12 +293,12 @@ logger.info({ taskId }, 'Task started')
 
 ### 日志级别规范
 
-| 级别 | 使用场景 |
-|------|---------|
-| `fatal` | 进程即将崩溃，无法恢复 |
-| `error` | 业务错误、未捕获异常、外部服务彻底失败 |
-| `warn` | 可恢复的错误、降级、重试、客户端错误（4xx） |
-| `info` | 关键业务事件（请求完成、任务开始/结束、计划生成） |
+| 级别      | 使用场景                        |
+| ------- | --------------------------- |
+| `fatal` | 进程即将崩溃，无法恢复                 |
+| `error` | 业务错误、未捕获异常、外部服务彻底失败         |
+| `warn`  | 可恢复的错误、降级、重试、客户端错误（4xx）     |
+| `info`  | 关键业务事件（请求完成、任务开始/结束、计划生成）   |
 | `debug` | 调试信息（WebSocket 消息、工具调用入参出参） |
 
 **禁止**使用 `console.log` / `console.error`（启动阶段 fallback 除外）。统一使用 `apps/server/src/lib/logger.ts` 导出的 pino logger。
@@ -317,7 +318,7 @@ interface AgentRuntime {
 
 - `LlmRuntime`：直接 LLM 对话
 - `CodeAgentRuntime`：调用 Codex / Claude Code / OpenCode CLI
-- `NativeToolRuntime`：LLM + 只读工具循环（OpenAI function calling / Anthropic tool_use）
+- `NativeToolRuntime`：LLM + 只读工具循环（OpenAI function calling / Anthropic tool\_use）
 
 注册中心 `RuntimeRegistry` 根据 `profile.runtimeType` 自动路由。
 
@@ -340,6 +341,7 @@ IntentClassifier（可选）→ Planner → TaskScheduler → Synthesizer
 ### Git 分支隔离
 
 每个非 read-only Agent 任务执行前：
+
 1. `git stash` 保护用户当前工作区
 2. `git checkout -b agenthub/{runId}/{agentKey}/{taskId} main`
 3. Agent 在分支上执行代码变更（Claude Code / Codex 会自动 commit）
@@ -349,10 +351,11 @@ IntentClassifier（可选）→ Planner → TaskScheduler → Synthesizer
 
 ## 开发约定
 
-- **前端代码（`apps/web`）由同事负责维护，不要直接修改。** 发现前端问题时，报告文件路径、行号、根因和修复建议，由用户与同事沟通后决定是否修改。仅在用户明确要求时才修改前端代码。
+- **前端代码（`apps/web`）由同事负责维护，不要直接修改界面ui。** 发现前端问题时，报告文件路径、行号、根因和修复建议，由用户与同事沟通后决定是否修改。仅在用户明确要求时才修改前端代码。
 - **新增路由**：在 `apps/server/src/routes/` 创建 Hono Router，然后在 `apps/server/src/app.ts` 中通过 `.route('/api/xxx', xxxRoutes)` 挂载。
 - **新增数据库表**：在 `packages/db/src/schema.ts` 中定义，使用 `sqliteTable` + `relations`，然后执行 `bun run db:generate`。
 - **前后端共享类型**：在 `packages/shared/src/schemas/` 中新增 Zod schema，并在 `packages/shared/src/index.ts` 导出。
 - **前端新增页面**：在 `apps/web/src/pages/` 创建组件，在 `apps/web/src/App.tsx` 中添加 `<Route>`。
 - **WebSocket 事件**：服务端通过 `broadcastSessionEvent` 发送，前端在 `chatStore.handleWSEvent` 中消费。常用事件类型定义于 `packages/shared/src/constants.ts` 的 `WsEvent`。新增事件：`task:update`。
 - **Agent 回复流**：服务端 `agent-runner.ts` 中的 `runAgentReply` 负责调度；LLM 流式输出通过 `message:stream` 事件推送到前端，完成后写入数据库并发送 `message:completed`。
+

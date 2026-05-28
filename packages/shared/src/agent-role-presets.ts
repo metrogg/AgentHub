@@ -1,4 +1,5 @@
 export const AGENT_ROLE_TYPES = [
+  'orchestrator',
   'clarifier',
   'architect',
   'researcher',
@@ -50,6 +51,32 @@ export interface AgentRolePreset {
 }
 
 export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePreset> = {
+  orchestrator: {
+    roleType: 'orchestrator',
+    name: 'Orchestrator',
+    role: '总指挥',
+    description: '群聊总指挥，负责理解用户需求、制定计划并调度其他 Agent 协作完成复杂任务。',
+    systemPrompt: '你是群聊总指挥。你的职责是理解用户意图，分析任务复杂度，制定执行计划，并决定调用哪些 Agent 来完成任务。你不需要直接写代码，而是专注于规划和协调。',
+    color: '#7c3aed',
+    runtimeType: 'code-agent',
+    codeAgentType: 'claude-code',
+    capabilityTags: ['orchestrate', 'plan', 'dispatch', 'coordinate'],
+    toolPermissions: ['chat', 'workspace:read'],
+    sandboxPolicy: 'read-only',
+    contextPolicy: 'workspace-aware',
+    autoInvoke: true,
+    approvalRequired: true,
+    roleProfile: {
+      goal: '理解用户意图并协调多 Agent 协作完成任务。',
+      responsibilities: ['理解需求', '制定计划', '调度 Agent', '汇总结果'],
+      acceptsTaskTypes: ['read', 'design', 'synthesize'],
+      produces: ['decision', 'risk', 'task_output'],
+      requiredInputs: ['user_goal'],
+      qualityGates: ['计划必须可执行', 'Agent 分工必须明确'],
+      canUseTools: ['chat', 'workspace:read'],
+      cannotDo: ['直接修改代码', '绕过用户确认执行高风险操作'],
+    },
+  },
   clarifier: {
     roleType: 'clarifier',
     name: 'Clarifier',
@@ -82,7 +109,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     description: '拆解目标、定义边界、规划里程碑和依赖关系。',
     systemPrompt: '你是架构师。优先拆解目标、定义边界、给出里程碑、依赖关系和任务契约。',
     color: '#6366f1',
-    runtimeType: 'llm',
+    runtimeType: 'code-agent',
+    codeAgentType: 'claude-code',
     capabilityTags: ['planning', 'architecture', 'design'],
     toolPermissions: ['chat', 'workspace:read'],
     sandboxPolicy: 'read-only',
@@ -107,7 +135,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     description: '补充资料、比较方案、阅读上下文并标记不确定点。',
     systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点，给出来源和置信度。',
     color: '#f59e0b',
-    runtimeType: 'llm',
+    runtimeType: 'code-agent',
+    codeAgentType: 'opencode',
     capabilityTags: ['research', 'sources', 'analysis'],
     toolPermissions: ['chat', 'workspace:read', 'skills:read'],
     sandboxPolicy: 'read-only',
@@ -133,7 +162,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     systemPrompt: '你是实现者。按任务契约小步修改代码，优先保持现有风格，完成后给出 diff、验证结果和风险。',
     color: '#10b981',
     runtimeType: 'code-agent',
-    codeAgentType: 'claude-code',
+    codeAgentType: 'codex',
     capabilityTags: ['code', 'implementation', 'workspace-write'],
     toolPermissions: ['chat', 'workspace:read', 'workspace:write'],
     sandboxPolicy: 'workspace-write',
@@ -158,7 +187,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     description: '在沙箱中运行测试、构建、类型检查，产出 pass/fail 报告和日志。',
     systemPrompt: '你是验证执行 Agent。在隔离环境中运行测试、构建、类型检查等验证命令，产出结构化测试结果。你只做验证，不修改代码。',
     color: '#d946ef',
-    runtimeType: 'llm',
+    runtimeType: 'code-agent',
+    codeAgentType: 'claude-code',
     capabilityTags: ['verify', 'test', 'build', 'typecheck', 'lint'],
     toolPermissions: ['chat', 'workspace:read'],
     sandboxPolicy: 'read-only',
@@ -183,7 +213,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     description: '检查风险、交互漏洞、代码质量和缺失测试。',
     systemPrompt: '你是审查者。优先指出 bug、风险、回归和缺失测试；结论直接、可执行，不重写无关代码。',
     color: '#ef4444',
-    runtimeType: 'llm',
+    runtimeType: 'code-agent',
+    codeAgentType: 'claude-code',
     capabilityTags: ['review', 'quality', 'test'],
     toolPermissions: ['chat', 'workspace:read'],
     sandboxPolicy: 'read-only',
@@ -208,7 +239,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     description: '整合多 Agent 产出、冲突和风险，形成最终交付建议。',
     systemPrompt: '你是交付整合者。汇总各 Agent 的产出、冲突、验证结果和剩余风险，给用户清晰的最终建议。',
     color: '#2563eb',
-    runtimeType: 'llm',
+    runtimeType: 'code-agent',
+    codeAgentType: 'claude-code',
     capabilityTags: ['synthesize', 'delivery', 'summary'],
     toolPermissions: ['chat', 'workspace:read'],
     sandboxPolicy: 'read-only',
@@ -228,23 +260,23 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
   },
 }
 
-/** 默认代码团队角色（精简为3核心：架构-实现-审查；Researcher由Planner动态启用，Verifier由auto-review链自动调用） */
-export const DEFAULT_CODE_TEAM_ROLE_TYPES: Array<Exclude<AgentRoleType, 'custom' | 'researcher'>> = [
-  'architect',
+/** 默认代码团队角色（总指挥-实现-审查） */
+export const DEFAULT_CODE_TEAM_ROLE_TYPES: Array<Exclude<AgentRoleType, 'custom' | 'clarifier' | 'architect' | 'researcher' | 'verifier' | 'integrator'>> = [
+  'orchestrator',
   'coder',
   'reviewer',
 ]
 
-/** 默认代码团队协作关系：Architect -> Coder -> Reviewer */
+/** 默认代码团队协作关系：Orchestrator -> Coder -> Reviewer */
 export const DEFAULT_CODE_TEAM_RELATIONS: Array<{
   sourceRoleType: AgentRoleType
   targetRoleType: AgentRoleType
   relationType: AgentRelationType
   note: string
 }> = [
-  { sourceRoleType: 'architect', targetRoleType: 'coder', relationType: 'handoff_to', note: '架构计划交给实现者' },
+  { sourceRoleType: 'orchestrator', targetRoleType: 'coder', relationType: 'handoff_to', note: '总指挥派发任务给实现者' },
   { sourceRoleType: 'coder', targetRoleType: 'reviewer', relationType: 'reviewed_by', note: '代码实现后由 Reviewer 审查' },
-  { sourceRoleType: 'coder', targetRoleType: 'architect', relationType: 'fallback_to', note: '实现受阻时回到架构拆解' },
+  { sourceRoleType: 'coder', targetRoleType: 'orchestrator', relationType: 'fallback_to', note: '实现受阻时回到总指挥重新规划' },
 ]
 
 export function rolePresetValues(roleType: Exclude<AgentRoleType, 'custom'>) {
@@ -276,6 +308,7 @@ export function inferRoleType(agent: {
 }): AgentRoleType {
   if (agent.roleType && agent.roleType !== 'custom') return agent.roleType as AgentRoleType
   const text = [agent.name ?? '', agent.role ?? '', ...(agent.capabilityTags ?? [])].join(' ').toLowerCase()
+  if (text.includes('orchestrator') || text.includes('总指挥') || text.includes('协调') || text.includes('调度')) return 'orchestrator'
   if (text.includes('clarif') || text.includes('需求') || text.includes('澄清')) return 'clarifier'
   if (text.includes('architect') || text.includes('规划') || text.includes('架构')) return 'architect'
   if (text.includes('research') || text.includes('研究')) return 'researcher'

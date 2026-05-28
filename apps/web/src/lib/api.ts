@@ -962,9 +962,7 @@ export const api = {
         type: data.type ?? 'text',
         metadata: {
           ...(data.modelId ? { modelId: data.modelId } : {}),
-          ...(data.skipAgentReply || mentionsOrchestrator(data.content)
-            ? { skipAgentReply: true }
-            : {}),
+          ...(data.skipAgentReply ? { skipAgentReply: true } : {}),
           ...(data.attachments?.length ? { attachments: data.attachments } : {}),
           ...(data.displayContent !== undefined ? { displayContent: data.displayContent } : {}),
           ...(data.replyToMessageId ? { replyToMessageId: data.replyToMessageId } : {}),
@@ -1289,12 +1287,4 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
-}
-
-export function mentionsOrchestrator(content: string) {
-  return (
-    /(^|\s)@(orchestrator|coordinator|agenthub)\b/i.test(content) ||
-    content.includes('@协调器') ||
-    content.includes('@调度')
-  )
 }

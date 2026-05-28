@@ -45,7 +45,7 @@ export const workspaceAgents = sqliteTable('workspace_agents', {
   name: text('name').notNull(),
   role: text('role').notNull(),
   roleType: text('role_type', {
-    enum: ['clarifier', 'architect', 'researcher', 'coder', 'verifier', 'reviewer', 'integrator', 'custom'],
+    enum: ['orchestrator', 'clarifier', 'architect', 'researcher', 'coder', 'verifier', 'reviewer', 'integrator', 'custom'],
   }).notNull().default('custom'),
   description: text('description').notNull().default(''),
   avatar: text('avatar'),

@@ -1,11 +1,10 @@
 import { create } from 'zustand'
-import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
+import { api, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 let pendingStream: { messageId: string; delta: string; agentId?: string; agentName?: string } | null = null
 let pendingStreamTimer: number | null = null
 const cancelledSessions = new Set<string>()
-const pendingOrchestratorPlans = new Set<string>()
 const messageCache = new Map<string, Message[]>()
 const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
 
@@ -225,35 +224,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ agentTyping: true })
     const attachments = get().pendingAttachments
     const contentForAgent = attachments.length ? appendAttachmentNote(content, attachments) : content
-    const shouldCreatePlan = shouldRouteToOrchestratorPlan(
-      contentForAgent,
-      get().currentSession,
-      get().currentWorkspaceAgents
-    )
     try {
       const replyToMessageId = get().replyingToMessageId
       const msg = await api.sendMessageWithModel(sessionId, {
         content: contentForAgent,
-        skipAgentReply: shouldCreatePlan,
         attachments,
         displayContent: attachments.length ? content : undefined,
         replyToMessageId,
       })
-      set((s) => ({ messages: [...s.messages, msg], pendingAttachments: [], replyingToMessageId: null, replyingToMessage: null }))
-      if (shouldCreatePlan && !pendingOrchestratorPlans.has(sessionId)) {
-        pendingOrchestratorPlans.add(sessionId)
-        try {
-          const card = await api.createOrchestratorPlan(sessionId, contentForAgent)
-          set((s) => ({ messages: [...s.messages, card] }))
-          await get().fetchSessions()
-          set({ agentTyping: false })
-        } finally {
-          pendingOrchestratorPlans.delete(sessionId)
-        }
-      } else if (!shouldCreatePlan) {
-        await get().fetchSessions()
-        set({ agentTyping: false })
-      }
+      set((s) => ({
+        messages: [...s.messages, msg],
+        pendingAttachments: [],
+        replyingToMessageId: null,
+        replyingToMessage: null,
+      }))
+      await get().fetchSessions()
+      set({ agentTyping: false })
     } catch (error) {
       set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
       throw error
@@ -594,70 +580,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return wsClient.on((e) => get().handleWSEvent(e))
   },
 }))
-
-/**
- * Intent Router: 判断用户消息是否应路由到编排器
- * 除显式 @orchestrator 外，还通过启发式复杂度检测自动路由
- */
-function shouldRouteToOrchestratorPlan(content: string, session: Session | null, agents: WorkspaceAgent[]) {
-  // 1. 显式 @orchestrator 始终路由
-  if (mentionsOrchestrator(content)) return true
-
-  // 2. 非群聊会话不自动路由（直接对话走正常 Agent 回复）
-  if (!session || session.type !== 'group' || agents.length < 2) return false
-
-  // 3. 启发式复杂度检测
-  return assessIntentComplexity(content)
-}
-
-/**
- * 启发式评估消息复杂度，判断是否需要多 Agent 协作
- * 信号：多文件/模块引用、阶段关键词、架构/系统级意图、消息长度
- */
-function assessIntentComplexity(content: string): boolean {
-  const lower = content.toLowerCase()
-  let signals = 0
-
-  // 多文件/模块引用 (≥2 个文件路径或模块名)
-  const fileRefs = content.match(/[\w./-]+\.(ts|tsx|js|jsx|py|rs|go|java|vue|css|scss|html|sql|json|yaml|yml|toml|md)\b/gi)
-  if (fileRefs && new Set(fileRefs.map(f => f.toLowerCase())).size >= 2) signals += 2
-
-  // 多阶段/步骤关键词
-  const phasePatterns = [
-    /先.{2,20}然后/, /先.{2,20}再/, /第[一二三四五六七八九十\d]步/,
-    /step\s*\d/i, /phase\s*\d/i, /first.{5,30}then/i, /首先.{2,20}接着/,
-    /\d+\.\s+\S.{3,}/m, // 有序列表
-  ]
-  if (phasePatterns.some(p => p.test(content))) signals += 2
-
-  // 架构/系统级意图
-  const archKeywords = [
-    '架构', '重构', '系统设计', '整体', '全流程', '端到端', '从零开始',
-    'architecture', 'refactor', 'system design', 'end-to-end', 'e2e',
-    'full stack', 'fullstack', '全栈', '迁移', 'migration', 'migrate',
-  ]
-  if (archKeywords.some(k => lower.includes(k))) signals += 2
-
-  // 多 Agent 协作暗示
-  const collabKeywords = [
-    '同时', '并行', '一起', '分别', '各自', '协作',
-    'simultaneously', 'in parallel', 'together', 'respectively',
-  ]
-  if (collabKeywords.some(k => lower.includes(k))) signals += 1
-
-  // 复杂任务动词 + 技术对象
-  const complexVerbs = ['实现', '创建', '搭建', '开发', '构建', '设计', 'implement', 'create', 'build', 'develop', 'design']
-  const techObjects = ['api', 'ui', '数据库', 'database', '认证', 'auth', '组件', 'component', '服务', 'service', '模块', 'module', '页面', 'page']
-  const hasComplexVerb = complexVerbs.some(v => lower.includes(v))
-  const hasTechObj = techObjects.some(t => lower.includes(t))
-  if (hasComplexVerb && hasTechObj) signals += 1
-
-  // 长消息 + 技术内容
-  if (content.length > 200 && hasTechObj) signals += 1
-
-  // 需要 ≥3 个信号才自动路由到编排器
-  return signals >= 3
-}
 
 function appendAttachmentNote(content: string, attachments: ChatAttachment[]) {
   const note = attachments.map((attachment) => `- ${attachment.name} (${attachment.mimeType})`).join('\n')
