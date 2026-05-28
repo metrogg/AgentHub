@@ -2229,19 +2229,25 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   const canOpen = Boolean(item.url)
   const [maximized, setMaximized] = useState(false)
   const [visible, setVisible] = useState(false)
+  const [loadingState, setLoadingState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    item.kind === 'web' || item.kind === 'deploy' ? 'loading' : 'ready',
+  )
+  const [loadError, setLoadError] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const previewUrl = useMemo(() => normalizePreviewUrl(item.url), [item.url])
 
-  // 入场动画
   useEffect(() => {
-    requestAnimationFrame(() => setVisible(true))
+    const frame = requestAnimationFrame(() => setVisible(true))
+    return () => cancelAnimationFrame(frame)
   }, [])
 
-  // 退出动画
   function handleClose() {
     setVisible(false)
-    setTimeout(onClose, 200)
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = setTimeout(onClose, 240)
   }
 
-  // ESC 退出最大化
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -2250,127 +2256,228 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
       }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    }
   }, [maximized])
 
-  const panelWidth = maximized ? 'w-full' : 'w-[min(48vw,720px)] min-w-[420px]'
+  useEffect(() => {
+    if (!item.url || (item.kind !== 'web' && item.kind !== 'deploy')) {
+      setLoadingState('ready')
+      setLoadError('')
+      return
+    }
+
+    let cancelled = false
+    setLoadingState('loading')
+    setLoadError('')
+
+    async function probePreview() {
+      if (!previewUrl || previewUrl.origin !== window.location.origin) {
+        if (!cancelled) setLoadingState('ready')
+        return
+      }
+
+      try {
+        const response = await fetch(previewUrl.href, { credentials: 'include' })
+        if (cancelled) return
+        if (!response.ok) throw new Error(await extractPreviewErrorMessage(response))
+        const contentType = response.headers.get('content-type') ?? ''
+        if (contentType.includes('application/json')) {
+          throw new Error(await extractPreviewErrorMessage(response))
+        }
+        setLoadingState('ready')
+      } catch (error) {
+        if (cancelled) return
+        setLoadingState('error')
+        setLoadError(formatPreviewError(error))
+      }
+    }
+
+    void probePreview()
+    return () => {
+      cancelled = true
+    }
+  }, [item.kind, item.url, previewUrl, reloadToken])
+
+  const panelClasses = cn(
+    'relative flex shrink-0 flex-col overflow-hidden border-neutral-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.12)] transition-all duration-300 ease-out',
+    maximized
+      ? 'fixed inset-3 z-50 rounded-2xl border'
+      : 'w-[min(48vw,760px)] min-w-[420px] border-l',
+    visible ? 'translate-x-0 scale-100 opacity-100' : 'translate-x-4 scale-[0.985] opacity-0',
+  )
 
   return (
-    <aside
-      className={cn(
-        'flex shrink-0 flex-col border-neutral-200 bg-white transition-all duration-200 ease-out',
-        panelWidth,
-        maximized ? 'border-0' : 'border-l',
-        visible
-          ? 'translate-x-0 opacity-100'
-          : 'translate-x-4 opacity-0',
+    <>
+      {maximized && (
+        <button
+          type="button"
+          aria-label="Close preview overlay"
+          onClick={handleClose}
+          className={cn(
+            'fixed inset-0 z-40 bg-slate-950/20 backdrop-blur-[1px] transition-opacity duration-300',
+            visible ? 'opacity-100' : 'opacity-0',
+          )}
+        />
       )}
-      style={maximized ? { position: 'fixed', inset: 0, zIndex: 50 } : undefined}
-    >
-      {/* 工具栏 */}
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 bg-[#FAFAFA] px-2">
-        {/* 文件图标 + 信息 */}
-        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1">
-          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-neutral-100 text-neutral-500">
-            {previewIcon(item)}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[13px] font-medium leading-tight text-neutral-800">
-              {item.title}
+      <aside className={panelClasses}>
+        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-neutral-200 bg-white/90 px-3 backdrop-blur">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-neutral-200 bg-gradient-to-br from-white to-neutral-100 text-neutral-500 shadow-sm">
+              {previewIcon(item)}
             </div>
-            <div className="truncate text-[11px] leading-tight text-neutral-400">
-              {item.subtitle ?? previewKindLabel(item)}
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-neutral-900">{item.title}</div>
+              <div className="truncate text-xs text-neutral-500">
+                {item.subtitle ?? previewKindLabel(item)}
+              </div>
             </div>
+          </div>
+
+          <div className="hidden min-w-0 max-w-[36%] flex-1 justify-center md:flex">
+            <div className="truncate rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-[11px] text-neutral-500">
+              {item.path ?? item.url ?? 'Preview window'}
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1">
+            {canOpen && (
+              <>
+                <a
+                  href={item.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+                  title="Open in new window"
+                  aria-label="Open in new window"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+                <a
+                  href={item.url}
+                  download={item.title}
+                  className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+                  title="Download"
+                  aria-label="Download"
+                >
+                  <Download className="h-4 w-4" />
+                </a>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setMaximized((v) => !v)}
+              className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+              title={maximized ? 'Restore preview' : 'Enlarge preview'}
+              aria-label={maximized ? 'Restore preview' : 'Enlarge preview'}
+            >
+              {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </button>
+            <div className="mx-1 h-5 w-px bg-neutral-200" />
+            <button
+              type="button"
+              onClick={handleClose}
+              className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-red-50 hover:text-red-500"
+              title="Close preview"
+              aria-label="Close preview"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
-        {/* 操作按钮组 */}
-        <div className="flex shrink-0 items-center gap-0.5">
-          {canOpen && (
-            <>
-              <a
-                href={item.url}
-                target="_blank"
-                rel="noreferrer"
-                className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
-                title="新窗口打开"
-                aria-label="新窗口打开"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
-              <a
-                href={item.url}
-                download={item.title}
-                className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
-                title="下载"
-                aria-label="下载"
-              >
-                <Download className="h-4 w-4" />
-              </a>
-            </>
+        <div className="flex min-h-0 flex-1 flex-col bg-[#f6f7f9] p-2">
+          {item.description && (
+            <div className="mb-2 rounded-2xl border border-neutral-200 bg-white/90 px-3 py-2 text-xs leading-5 text-neutral-600 shadow-sm">
+              {item.description}
+            </div>
           )}
-          <button
-            type="button"
-            onClick={() => setMaximized((v) => !v)}
-            className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
-            title={maximized ? '退出全屏' : '全屏预览'}
-            aria-label={maximized ? '退出全屏' : '全屏预览'}
-          >
-            {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-          </button>
-          <div className="mx-1 h-4 w-px bg-neutral-200" />
-          <button
-            type="button"
-            onClick={handleClose}
-            className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-red-50 hover:text-red-500"
-            title="关闭预览"
-            aria-label="关闭预览"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* 内容区 */}
-      <div className="flex min-h-0 flex-1 flex-col bg-[#F7F7F7] p-2">
-        {item.description && (
-          <div className="mb-2 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs leading-5 text-neutral-600">
-            {item.description}
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
+            {item.kind === 'image' && item.url ? (
+              <div className="grid h-full place-items-center bg-neutral-950 p-4">
+                <img
+                  src={item.url}
+                  alt={item.title}
+                  className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+                  decoding="async"
+                  draggable={false}
+                />
+              </div>
+            ) : (item.kind === 'web' || item.kind === 'deploy') && item.url ? (
+              loadingState === 'error' ? (
+                <PreviewErrorState
+                  title={item.title}
+                  error={loadError}
+                  onRetry={() => setReloadToken((value) => value + 1)}
+                />
+              ) : loadingState !== 'ready' ? (
+                <PreviewLoadingState item={item} />
+              ) : (
+                <iframe
+                  title={item.title}
+                  src={item.url}
+                  className="h-full w-full border-0 bg-white"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                />
+              )
+            ) : item.kind === 'diff' ? (
+              <div className="h-full overflow-auto">
+                <DiffViewer diff={item.source ?? ''} maxHeightClassName="max-h-none" />
+              </div>
+            ) : item.kind === 'workflow' ? (
+              <PreviewPlaceholder item={item} />
+            ) : (
+              <DocumentPreviewPlaceholder item={item} />
+            )}
           </div>
-        )}
-        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          {item.kind === 'image' && item.url ? (
-            <div className="grid h-full place-items-center bg-neutral-50 p-4">
-              <img
-                src={item.url}
-                alt={item.title}
-                className="max-h-full max-w-full rounded-lg object-contain shadow-sm"
-                decoding="async"
-                draggable={false}
-              />
-            </div>
-          ) : (item.kind === 'web' || item.kind === 'deploy') && item.url ? (
-            <iframe
-              title={item.title}
-              src={item.url}
-              className="h-full w-full border-0 bg-white"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            />
-          ) : item.kind === 'diff' ? (
-            <div className="h-full overflow-auto">
-              <DiffViewer diff={item.source ?? ''} maxHeightClassName="max-h-none" />
-            </div>
-          ) : item.kind === 'workflow' ? (
-            <PreviewPlaceholder item={item} />
-          ) : (
-            <DocumentPreviewPlaceholder item={item} />
-          )}
         </div>
-      </div>
-    </aside>
+      </aside>
+    </>
   )
 }
 
+const PreviewLoadingState: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
+  <div className="grid h-full place-items-center bg-[#f8fafc] p-6">
+    <div className="w-full max-w-md rounded-[22px] border border-neutral-200 bg-white p-6 text-center shadow-sm">
+      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-neutral-100 bg-neutral-50 text-neutral-500">
+        <Loader2 className="h-6 w-6 animate-spin" />
+      </div>
+      <div className="mt-4 text-sm font-semibold text-neutral-950">Loading preview</div>
+      <div className="mt-2 text-xs leading-5 text-neutral-500">
+        {item.subtitle ?? previewKindLabel(item)}
+      </div>
+    </div>
+  </div>
+)
+
+const PreviewErrorState: FC<{ error: string; onRetry: () => void; title: string }> = ({
+  error,
+  onRetry,
+  title,
+}) => (
+  <div className="grid h-full place-items-center bg-[#f8fafc] p-6">
+    <div className="w-full max-w-lg rounded-[22px] border border-red-100 bg-white p-6 text-center shadow-sm">
+      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-red-100 bg-red-50 text-red-500">
+        <AlertTriangle className="h-6 w-6" />
+      </div>
+      <div className="mt-4 text-sm font-semibold text-neutral-950">Preview failed</div>
+      <div className="mt-2 text-xs leading-6 text-neutral-500">{title}</div>
+      <div className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-left text-xs leading-6 text-red-700">
+        {error || 'The preview service returned an error response.'}
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800"
+      >
+        <RefreshCw className="h-4 w-4" />
+        Retry
+      </button>
+    </div>
+  </div>
+)
 const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
   const fileName = item.path ?? item.title
   return (
@@ -4135,3 +4242,35 @@ const MarkdownText: FC = () => (
     className="agenthub-markdown prose prose-neutral prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-code:before:content-none prose-code:after:content-none"
   />
 )
+
+
+function normalizePreviewUrl(url?: string) {
+  if (!url) return null
+  try {
+    return new URL(url, window.location.origin)
+  } catch {
+    return null
+  }
+}
+
+async function extractPreviewErrorMessage(response: Response) {
+  const text = await response.text().catch(() => '')
+  if (!text.trim()) return 'HTTP ' + response.status
+  try {
+    const parsed = JSON.parse(text)
+    const payload = parsed?.error ?? parsed
+    if (typeof payload === 'string') return payload
+    if (payload && typeof payload === 'object') {
+      return payload.message ?? payload.details?.message ?? text
+    }
+  } catch {
+    // ignore
+  }
+  return text
+}
+
+function formatPreviewError(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return 'Preview request failed'
+}
