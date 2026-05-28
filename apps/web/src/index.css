@@ -3,13 +3,22 @@
 @tailwind utilities;
 
 @layer base {
-  html, body, #root {
+  html,
+  body,
+  #root {
     height: 100%;
   }
   body {
     @apply bg-bg text-neutral-950 antialiased font-sans;
     font-feature-settings: 'cv11', 'ss01';
-    font-family: var(--agenthub-font-body, "Aptos", "IBM Plex Sans", "Noto Sans SC", ui-sans-serif, sans-serif);
+    font-family: var(
+      --agenthub-font-body,
+      'Aptos',
+      'IBM Plex Sans',
+      'Noto Sans SC',
+      ui-sans-serif,
+      sans-serif
+    );
     font-size: var(--agenthub-font-size, 14px);
   }
   .agenthub-desktop-shell,
@@ -135,7 +144,10 @@
     font-size: 0.8125rem;
     font-weight: 600;
     color: #525252;
-    transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      transform 160ms ease;
   }
 
   .office-controls button:hover:not(:disabled) {
@@ -254,7 +266,8 @@
     box-sizing: border-box;
     height: 100%;
     min-width: 0;
-    padding: clamp(3.45rem, 5.8vh, 4.5rem) clamp(0.5rem, 1.6vw, 1.5rem) clamp(0.15rem, 0.8vh, 0.5rem);
+    padding: clamp(3.45rem, 5.8vh, 4.5rem) clamp(0.5rem, 1.6vw, 1.5rem)
+      clamp(0.15rem, 0.8vh, 0.5rem);
   }
 
   .office-desk-grid {
@@ -296,7 +309,9 @@
     width: 1.9rem;
     border-radius: 999px;
     background: #ffffff;
-    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08), 0 0.8rem 1.5rem rgba(37, 99, 235, 0.08);
+    box-shadow:
+      0 0 0 1px rgba(15, 23, 42, 0.08),
+      0 0.8rem 1.5rem rgba(37, 99, 235, 0.08);
     animation: office-data-packet 3.5s linear infinite;
   }
 
@@ -331,7 +346,10 @@
     transform-origin: center bottom;
     animation: office-station-enter 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
     animation-delay: calc(var(--slot-index) * 70ms);
-    transition: transform 220ms ease, filter 220ms ease, opacity 220ms ease;
+    transition:
+      transform 220ms ease,
+      filter 220ms ease,
+      opacity 220ms ease;
   }
 
   .office-station:hover:not(:disabled) {
@@ -385,9 +403,15 @@
     height: 14.5%;
     width: 25.4%;
     border-radius: 0.08rem;
-    background: radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--agent-color) 42%, #111827), #111827 72%);
+    background: radial-gradient(
+      circle at 50% 45%,
+      color-mix(in srgb, var(--agent-color) 42%, #111827),
+      #111827 72%
+    );
     opacity: 0;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18), 0 0 1.5rem color-mix(in srgb, var(--agent-color) 35%, transparent);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.18),
+      0 0 1.5rem color-mix(in srgb, var(--agent-color) 35%, transparent);
     transition: opacity 180ms ease;
   }
 
@@ -603,7 +627,9 @@
     place-items: center;
     border-radius: 0.65rem;
     color: #a3a3a3;
-    transition: background-color 160ms ease, color 160ms ease;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease;
   }
 
   .office-icon-close:hover {
@@ -620,7 +646,9 @@
     place-items: center;
     border-radius: 999px;
     background: #ffffff;
-    box-shadow: inset 0 0 0 1px #e5e7eb, 0 1rem 2rem rgba(15, 23, 42, 0.06);
+    box-shadow:
+      inset 0 0 0 1px #e5e7eb,
+      0 1rem 2rem rgba(15, 23, 42, 0.06);
   }
 
   .office-overview-avatar .office-agent-avatar {
@@ -840,7 +868,8 @@
   }
 
   .agenthub-readable-code {
-    font-family: 'Cascadia Mono', 'JetBrains Mono', 'SFMono-Regular', Consolas, ui-monospace, monospace;
+    font-family:
+      'Cascadia Mono', 'JetBrains Mono', 'SFMono-Regular', Consolas, ui-monospace, monospace;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: geometricPrecision;
@@ -857,7 +886,7 @@
     border-bottom: 1px solid var(--agenthub-menu-border, #e7e7e7);
     background: var(--agenthub-menu-bg, #fbfbfb);
     color: var(--agenthub-app-text, #111111);
-    font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    font-family: 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif;
     font-size: 0.8125rem;
     -webkit-font-smoothing: antialiased;
     text-rendering: geometricPrecision;
@@ -1013,7 +1042,7 @@
   }
 
   .agenthub-desktop-menu-item kbd {
-    font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    font-family: 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif;
     min-width: 4.75rem;
     text-align: right;
     font-size: 0.75rem;
@@ -1050,7 +1079,7 @@
   }
 
   .agenthub-chat-shell .agenthub-welcome-root::after {
-    content: "";
+    content: '';
     position: absolute;
     inset: auto 0 0;
     height: 11rem;
@@ -1271,7 +1300,10 @@
     color: var(--agenthub-app-bg, #171717);
   }
 
-  [data-agenthub-theme='dark'] .agenthub-chat-shell .agenthub-session-sidebar .bg-neutral-950.text-white {
+  [data-agenthub-theme='dark']
+    .agenthub-chat-shell
+    .agenthub-session-sidebar
+    .bg-neutral-950.text-white {
     color: var(--agenthub-app-bg, #171717);
   }
 
@@ -1598,7 +1630,10 @@
   }
 
   .agenthub-menu-popover button {
-    transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      transform 160ms ease;
   }
 
   .agenthub-menu-popover button:hover:not(:disabled) {
@@ -1611,7 +1646,10 @@
 
   .agenthub-menu-popover button svg,
   .agenthub-icon-button svg {
-    transition: transform 180ms ease, color 180ms ease, opacity 180ms ease;
+    transition:
+      transform 180ms ease,
+      color 180ms ease,
+      opacity 180ms ease;
   }
 
   .agenthub-menu-popover button:hover:not(:disabled) svg {
@@ -1626,7 +1664,11 @@
   }
 
   .agenthub-icon-button {
-    transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
   }
 
   .agenthub-icon-button:hover {
@@ -1739,6 +1781,48 @@
     }
   }
 
+  .agenthub-code-agent-step {
+    animation: agenthub-code-agent-step-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .agenthub-code-agent-step-live {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .agenthub-code-agent-step-live::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.08), transparent);
+    transform: translateX(-100%);
+    animation: agenthub-code-agent-step-sheen 1.45s ease-in-out infinite;
+  }
+
+  @keyframes agenthub-code-agent-step-in {
+    from {
+      opacity: 0;
+      transform: translateY(0.375rem) scale(0.99);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes agenthub-code-agent-step-sheen {
+    0% {
+      transform: translateX(-100%);
+    }
+
+    55%,
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
   .agenthub-inline-code {
     border-radius: 0.375rem;
     background: #f4f4f5;
@@ -1760,7 +1844,9 @@
     border-radius: 0.625rem 0.625rem 0 0;
     background: #111827;
     padding: 0 0.625rem 0 0.875rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+      monospace;
     font-size: 0.6875rem;
     font-weight: 600;
     letter-spacing: 0;
@@ -1775,7 +1861,9 @@
     place-items: center;
     border-radius: 0.375rem;
     color: #cbd5e1;
-    transition: background-color 150ms ease, color 150ms ease;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease;
   }
 
   .agenthub-code-copy:hover {
@@ -1802,7 +1890,9 @@
     white-space: pre;
     background: transparent;
     padding: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+      monospace;
     color: inherit;
   }
 
@@ -1855,8 +1945,7 @@
     background:
       radial-gradient(circle at 20% 17%, rgba(255, 255, 255, 0.9), transparent 16rem),
       radial-gradient(circle at 77% 21%, rgba(37, 99, 235, 0.06), transparent 14rem),
-      linear-gradient(180deg, #f6f6f0 0%, #eeefe9 55%, #f6f6f2 100%),
-      #f1f2ed;
+      linear-gradient(180deg, #f6f6f0 0%, #eeefe9 55%, #f6f6f2 100%), #f1f2ed;
   }
 
   .office-hud {
@@ -1886,7 +1975,9 @@
     width: 1.75rem;
     border-radius: 999px;
     background: #ffffff;
-    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08), 0 0 1.25rem rgba(37, 99, 235, 0.16);
+    box-shadow:
+      0 0 0 1px rgba(15, 23, 42, 0.08),
+      0 0 1.25rem rgba(37, 99, 235, 0.16);
     animation: office-data-packet 3.1s linear infinite;
   }
 
@@ -1949,7 +2040,9 @@
   .office-work-zone {
     border: 1px solid rgba(15, 23, 42, 0.045);
     background: rgba(255, 255, 255, 0.34);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34), 0 20px 42px rgba(15, 23, 42, 0.035);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.34),
+      0 20px 42px rgba(15, 23, 42, 0.035);
     pointer-events: none;
   }
 
@@ -1968,7 +2061,9 @@
   }
 
   .office-seat {
-    animation: office-seat-enter 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both, office-seat-float 4.8s ease-in-out infinite;
+    animation:
+      office-seat-enter 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both,
+      office-seat-float 4.8s ease-in-out infinite;
     transform-origin: center bottom;
     will-change: transform;
   }
@@ -1982,7 +2077,9 @@
   }
 
   .office-seat-running .office-desk {
-    box-shadow: 0 24px 42px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(37, 99, 235, 0.12);
+    box-shadow:
+      0 24px 42px rgba(15, 23, 42, 0.14),
+      0 0 0 1px rgba(37, 99, 235, 0.12);
   }
 
   .office-monitor-screen {

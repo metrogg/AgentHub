@@ -10,7 +10,12 @@ export class ApiError extends Error {
   public code?: string
   public requestId?: string
 
-  constructor(public status: number, message: string, code?: string, requestId?: string) {
+  constructor(
+    public status: number,
+    message: string,
+    code?: string,
+    requestId?: string,
+  ) {
     super(message)
     this.name = 'ApiError'
     this.code = code
@@ -112,7 +117,10 @@ async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt 
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }))
       const errorPayload = body?.error ?? {}
-      const message = typeof errorPayload === 'string' ? errorPayload : (errorPayload.message ?? body?.error ?? body?.message ?? `HTTP ${res.status}`)
+      const message =
+        typeof errorPayload === 'string'
+          ? errorPayload
+          : (errorPayload.message ?? body?.error ?? body?.message ?? `HTTP ${res.status}`)
       const code = typeof errorPayload === 'object' ? errorPayload.code : undefined
       const requestId = typeof errorPayload === 'object' ? errorPayload.requestId : undefined
       throw new ApiError(res.status, message, code, requestId)
@@ -267,10 +275,28 @@ export interface CodeAgentRunMetadata {
   durationMs: number
   exitCode: number
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
-  files: Array<{ path: string; status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'; diff?: string }>
+  files: Array<{
+    path: string
+    status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+    diff?: string
+  }>
   toolCalls?: Array<{ id: string; name: string; label: string; target?: string; detail?: string }>
   artifacts?: AgentArtifact[]
   logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
+  steps?: Array<{
+    id: string
+    kind: 'status' | 'tool' | 'command' | 'file' | 'log'
+    status: 'running' | 'completed' | 'failed'
+    title: string
+    subtitle?: string
+    detail?: string
+    toolName?: string
+    command?: string
+    path?: string
+    fileStatus?: CodeAgentRunMetadata['files'][number]['status']
+    stream?: 'stdout' | 'stderr' | 'event'
+    createdAt?: number
+  }>
   diagnostics?: string
 }
 
@@ -440,7 +466,9 @@ export interface CodexConfigFile {
 export interface MobilePairStartResult {
   version: number
   baseUrl: string
+  baseUrls?: string[]
   webUrl: string
+  webUrls?: string[]
   pairingCode: string
   expiresAt: string
   ttlSeconds: number
@@ -477,7 +505,6 @@ export interface SettingsGeneralInfo {
   git: { runtime: string; path: string; ok: boolean; message: string }
   python: { runtime: string; path: string; ok: boolean; message: string }
 }
-
 
 export interface Workspace {
   id: string
@@ -594,7 +621,9 @@ export interface AgentConfigInput {
   approvalRequired?: boolean
 }
 
-export type AgentDraft = Required<Omit<AgentConfigInput, 'avatar' | 'modelId' | 'codeAgentType'>> & {
+export type AgentDraft = Required<
+  Omit<AgentConfigInput, 'avatar' | 'modelId' | 'codeAgentType'>
+> & {
   avatar?: string | null
   modelId?: string | null
   codeAgentType?: WorkspaceAgent['codeAgentType']
@@ -741,7 +770,13 @@ export interface OrchestratorProgressLedger {
   updatedAt: string
 }
 
-export type OrchestratorRunStatus = 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
+export type OrchestratorRunStatus =
+  | 'planning'
+  | 'running'
+  | 'synthesizing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
 
 export interface OrchestratorRunListItem {
   id: string
@@ -764,7 +799,14 @@ export interface ExecutionLog {
   sessionId: string
   agentId: string
   taskId: string | null
-  type: 'llm_call' | 'tool_call' | 'blackboard_read' | 'blackboard_write' | 'error' | 'task_start' | 'task_end'
+  type:
+    | 'llm_call'
+    | 'tool_call'
+    | 'blackboard_read'
+    | 'blackboard_write'
+    | 'error'
+    | 'task_start'
+    | 'task_end'
   input: unknown | null
   output: unknown | null
   durationMs: number | null
@@ -852,7 +894,13 @@ export interface ConflictReportItem {
     diff: string
     fullContent?: string
   }>
-  resolution: 'auto-merged' | 'llm-resolved' | 'needs-human' | 'human-approved' | 'human-rejected' | 'human-overridden'
+  resolution:
+    | 'auto-merged'
+    | 'llm-resolved'
+    | 'needs-human'
+    | 'human-approved'
+    | 'human-rejected'
+    | 'human-overridden'
   mergedContent?: string
   notes?: string
 }
@@ -874,21 +922,21 @@ export const api = {
     workspaceId?: string | null
     workspaceAgentId?: string | null
     metadata?: Record<string, unknown> | null
-  }) =>
-    request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
-  updateSession: (id: string, data: {
-    title?: string
-    workspaceId?: string | null
-    workspaceAgentId?: string | null
-    metadata?: Record<string, unknown> | null
-  }) =>
-    request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  }) => request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
+  updateSession: (
+    id: string,
+    data: {
+      title?: string
+      workspaceId?: string | null
+      workspaceAgentId?: string | null
+      metadata?: Record<string, unknown> | null
+    },
+  ) => request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   deleteAllSessions: () => request<{ deleted: boolean }>('/sessions/all', { method: 'DELETE' }),
 
   // Messages
-  listMessages: (sessionId: string) =>
-    request<{ items: Message[] }>(`/messages/${sessionId}`),
+  listMessages: (sessionId: string) => request<{ items: Message[] }>(`/messages/${sessionId}`),
   sendMessage: (sessionId: string, data: { content: string; type?: string }) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
@@ -897,7 +945,15 @@ export const api = {
 
   sendMessageWithModel: (
     sessionId: string,
-    data: { content: string; modelId?: string; type?: string; skipAgentReply?: boolean; attachments?: ChatAttachment[]; displayContent?: string; replyToMessageId?: string | null }
+    data: {
+      content: string
+      modelId?: string
+      type?: string
+      skipAgentReply?: boolean
+      attachments?: ChatAttachment[]
+      displayContent?: string
+      replyToMessageId?: string | null
+    },
   ) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
@@ -929,7 +985,7 @@ export const api = {
   withdrawMessage: (sessionId: string, messageId: string, data: { rollback?: boolean } = {}) =>
     request<{ removedMessageIds: string[]; rollback: { reverted: number; failed: number } }>(
       `/messages/${sessionId}/${messageId}${data.rollback === false ? '?rollback=false' : ''}`,
-      { method: 'DELETE' }
+      { method: 'DELETE' },
     ),
   regenerateMessage: (sessionId: string, messageId: string) =>
     request<{ removedMessageId: string }>(`/messages/${sessionId}/${messageId}/regenerate`, {
@@ -947,7 +1003,7 @@ export const api = {
   updateOrchestratorPlan: (
     sessionId: string,
     messageId: string,
-    data: { tasks: Array<{ id: string; agentKey?: string; status?: TaskStatus }> }
+    data: { tasks: Array<{ id: string; agentKey?: string; status?: TaskStatus }> },
   ) =>
     request<Message>(`/messages/${sessionId}/orchestrator-plan/${messageId}`, {
       method: 'PATCH',
@@ -956,7 +1012,7 @@ export const api = {
   dispatchOrchestratorPlan: (sessionId: string, messageId: string) =>
     request<OrchestratorDispatchResult>(
       `/messages/${sessionId}/orchestrator-plan/${messageId}/dispatch`,
-      { method: 'POST' }
+      { method: 'POST' },
     ),
   createArtifactDemo: (sessionId: string, content: string) =>
     request<Message>(`/messages/${sessionId}/artifact-demo`, {
@@ -987,14 +1043,19 @@ export const api = {
       python: { runtime: string; path: string; ok: boolean; message: string }
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
-  startMobilePairing: () => request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
+  startMobilePairing: () =>
+    request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
   getStarOfficeStatus: () => request<StarOfficeStatus>('/office/status'),
-  startStarOffice: () => request<StarOfficeStatus>('/office/start', { method: 'POST', timeout: 15_000 }),
+  startStarOffice: () =>
+    request<StarOfficeStatus>('/office/start', { method: 'POST', timeout: 15_000 }),
   ensureStorageDirectory: (path: string) =>
-    request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>('/settings/storage/ensure', {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    }),
+    request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>(
+      '/settings/storage/ensure',
+      {
+        method: 'POST',
+        body: JSON.stringify({ path }),
+      },
+    ),
   openLocalPath: (path: string) =>
     request<{ ok: boolean; message: string }>('/settings/storage/open-path', {
       method: 'POST',
@@ -1020,23 +1081,21 @@ export const api = {
           body: JSON.stringify({ tools }),
         })
       : request<CodingToolStatusResponse>('/coding-tools/status'),
-  getAgentAdapters: () =>
-    request<AgentAdapterCatalogResponse>('/coding-tools/agent-adapters'),
+  getAgentAdapters: () => request<AgentAdapterCatalogResponse>('/coding-tools/agent-adapters'),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
   ensureCodingToolsStartupLifecycle: () =>
-    request<CodingToolsStartupLifecycleResult>('/coding-tools/lifecycle/startup', { method: 'POST' }),
-  getOpencodeModels: () =>
-    request<OpencodeModelsResponse>('/coding-tools/opencode/models'),
-  getCodexConfig: () =>
-    request<CodexConfigFile>('/coding-tools/codex/config'),
+    request<CodingToolsStartupLifecycleResult>('/coding-tools/lifecycle/startup', {
+      method: 'POST',
+    }),
+  getOpencodeModels: () => request<OpencodeModelsResponse>('/coding-tools/opencode/models'),
+  getCodexConfig: () => request<CodexConfigFile>('/coding-tools/codex/config'),
   saveCodexConfig: (content: string) =>
     request<CodexConfigFile>('/coding-tools/codex/config', {
       method: 'POST',
       body: JSON.stringify({ content }),
     }),
-  getCodexAuthFile: () =>
-    request<CodexConfigFile>('/coding-tools/codex/auth-file'),
+  getCodexAuthFile: () => request<CodexConfigFile>('/coding-tools/codex/auth-file'),
   saveCodexAuthFile: (content: string) =>
     request<CodexConfigFile>('/coding-tools/codex/auth-file', {
       method: 'POST',
@@ -1074,8 +1133,12 @@ export const api = {
     }),
   // Workspaces (group chats)
   listWorkspaces: () => request<{ items: Workspace[] }>('/workspaces'),
-  createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) =>
-    request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
+  createWorkspace: (data: {
+    name: string
+    goal?: string
+    projectPath?: string | null
+    template?: 'blank' | 'classic'
+  }) => request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
   openWorkspaceFolder: (projectPath?: string | null) =>
     request<WorkspaceFolderOpenResult>('/workspaces/open-folder', {
       method: 'POST',
@@ -1084,24 +1147,20 @@ export const api = {
     }),
   getWorkspace: (id: string) => request<WorkspaceFull>(`/workspaces/${id}`),
   getWorkspaceSessions: (id: string) => request<{ items: Session[] }>(`/workspaces/${id}/sessions`),
-  getWorkspaceActiveRuns: (id: string) => request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
-  updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) =>
-    request<WorkspaceFull>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  getWorkspaceActiveRuns: (id: string) =>
+    request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
+  updateWorkspace: (
+    id: string,
+    data: { name?: string; goal?: string; projectPath?: string | null },
+  ) => request<WorkspaceFull>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteWorkspace: (id: string) => request<void>(`/workspaces/${id}`, { method: 'DELETE' }),
 
-  addWorkspaceAgent: (
-    id: string,
-    data: AgentConfigInput
-  ) =>
+  addWorkspaceAgent: (id: string, data: AgentConfigInput) =>
     request<WorkspaceAgent>(`/workspaces/${id}/agents`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  updateWorkspaceAgent: (
-    id: string,
-    agentId: string,
-    data: Partial<AgentConfigInput>
-  ) =>
+  updateWorkspaceAgent: (id: string, agentId: string, data: Partial<AgentConfigInput>) =>
     request<WorkspaceAgent>(`/workspaces/${id}/agents/${agentId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
@@ -1112,7 +1171,11 @@ export const api = {
     request<{ items: WorkspaceAgentRelation[] }>(`/workspaces/${id}/agent-relations`),
   replaceWorkspaceAgentRelations: (
     id: string,
-    relations: Array<Pick<WorkspaceAgentRelation, 'sourceAgentId' | 'targetAgentId' | 'relationType'> & { note?: string | null }>
+    relations: Array<
+      Pick<WorkspaceAgentRelation, 'sourceAgentId' | 'targetAgentId' | 'relationType'> & {
+        note?: string | null
+      }
+    >,
   ) =>
     request<{ items: WorkspaceAgentRelation[] }>(`/workspaces/${id}/agent-relations`, {
       method: 'PUT',
@@ -1121,7 +1184,7 @@ export const api = {
 
   addWorkspaceTask: (
     id: string,
-    data: { title: string; description?: string; agentId?: string | null }
+    data: { title: string; description?: string; agentId?: string | null },
   ) =>
     request<WorkspaceTask>(`/workspaces/${id}/tasks`, {
       method: 'POST',
@@ -1130,7 +1193,12 @@ export const api = {
   updateWorkspaceTask: (
     id: string,
     taskId: string,
-    data: Partial<{ title: string; description: string; agentId: string | null; status: TaskStatus }>
+    data: Partial<{
+      title: string
+      description: string
+      agentId: string | null
+      status: TaskStatus
+    }>,
   ) =>
     request<WorkspaceTask>(`/workspaces/${id}/tasks/${taskId}`, {
       method: 'PATCH',
@@ -1141,7 +1209,7 @@ export const api = {
   dispatchWorkspaceTask: (id: string, taskId: string) =>
     request<{ task: WorkspaceTask; sessionId: string }>(
       `/workspaces/${id}/tasks/${taskId}/dispatch`,
-      { method: 'POST' }
+      { method: 'POST' },
     ),
   workspaceSummary: (id: string) =>
     request<{ sessionId: string }>(`/workspaces/${id}/summary`, { method: 'POST' }),
@@ -1151,7 +1219,9 @@ export const api = {
       body: agentIds ? JSON.stringify({ agentIds }) : undefined,
     }),
   openWorkspaceAgentSession: (id: string, agentId: string) =>
-    request<{ session: Session }>(`/workspaces/${id}/agents/${agentId}/session`, { method: 'POST' }),
+    request<{ session: Session }>(`/workspaces/${id}/agents/${agentId}/session`, {
+      method: 'POST',
+    }),
 
   // Artifacts
   deployStatic: (workspaceId: string) =>
@@ -1165,9 +1235,12 @@ export const api = {
       body: JSON.stringify({ projectPath, diff }),
     }),
   downloadZip: async (workspaceId: string) => {
-    const res = await fetch(`${API_BASE}/artifacts/zip-download?workspaceId=${encodeURIComponent(workspaceId)}`, {
-      credentials: 'include',
-    })
+    const res = await fetch(
+      `${API_BASE}/artifacts/zip-download?workspaceId=${encodeURIComponent(workspaceId)}`,
+      {
+        credentials: 'include',
+      },
+    )
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }))
       throw new ApiError(res.status, body?.error ?? body?.message ?? `HTTP ${res.status}`)
@@ -1184,21 +1257,34 @@ export const api = {
       { method: 'POST' },
     ),
   retryOrchestratorTask: (runId: string, taskId: string) =>
-    request<{ ok: boolean; result: unknown }>(`/orchestrator-runs/${runId}/retry-task/${taskId}`, { method: 'POST' }),
-  getOrchestratorRunEvents: (id: string) => request<{ items: OrchestratorRunEvent[] }>(`/orchestrator-runs/${id}/events`),
+    request<{ ok: boolean; result: unknown }>(`/orchestrator-runs/${runId}/retry-task/${taskId}`, {
+      method: 'POST',
+    }),
+  getOrchestratorRunEvents: (id: string) =>
+    request<{ items: OrchestratorRunEvent[] }>(`/orchestrator-runs/${id}/events`),
   getOrchestratorRunBlackboard: (id: string, schemaType?: BlackboardSchemaType) =>
     request<{ items: TypedBlackboardEntry[] }>(
       `/orchestrator-runs/${id}/blackboard${schemaType ? `?schemaType=${encodeURIComponent(schemaType)}` : ''}`,
     ),
-  getOrchestratorRunLogs: (id: string) => request<{ items: ExecutionLog[] }>(`/orchestrator-runs/${id}/logs`),
-  getOrchestratorRunConflicts: (id: string) => request<{ items: ConflictReportItem[] }>(`/orchestrator-runs/${id}/conflicts`),
+  getOrchestratorRunLogs: (id: string) =>
+    request<{ items: ExecutionLog[] }>(`/orchestrator-runs/${id}/logs`),
+  getOrchestratorRunConflicts: (id: string) =>
+    request<{ items: ConflictReportItem[] }>(`/orchestrator-runs/${id}/conflicts`),
   resolveOrchestratorConflict: (
     id: string,
-    body: { filePath: string; resolution: 'approved' | 'rejected' | 'overridden'; mergedContent?: string; notes?: string },
+    body: {
+      filePath: string
+      resolution: 'approved' | 'rejected' | 'overridden'
+      mergedContent?: string
+      notes?: string
+    },
   ) =>
-    request<{ ok: boolean; item: ConflictReportItem }>(`/orchestrator-runs/${id}/resolve-conflict`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
+    request<{ ok: boolean; item: ConflictReportItem }>(
+      `/orchestrator-runs/${id}/resolve-conflict`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+    ),
 }

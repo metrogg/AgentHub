@@ -602,7 +602,25 @@ async function installAllCliTools() {
     }
   }
 
-  const install = await runFixedCommand(['bun', 'install', '-g', ...packages], {
+  const installer = await resolveCliInstaller()
+  if (!installer) {
+    const items = await Promise.all(probes.map((p) => probeToolDirect(p, { skipCache: true })))
+    return {
+      ok: false,
+      status: 'failed' as const,
+      code: 127,
+      message: '未检测到可用的 npm 或 Bun，无法自动安装缺失 CLI。',
+      output: installSummaryOutput({
+        skipped,
+        missing,
+        commandOutput: '请先安装 Node.js/npm，或把 Bun 加入系统 PATH 后重试。',
+      }),
+      items,
+      runtime: 'host' as const,
+    }
+  }
+
+  const install = await runHostCliCommand(installer.command, [...installer.args, ...packages], {
     timeoutMs: 10 * 60 * 1000,
   })
   const items = await Promise.all(probes.map((p) => probeToolDirect(p, { skipCache: true })))
@@ -618,10 +636,22 @@ async function installAllCliTools() {
         : ok
           ? '缺失的 CLI 已安装，仍有 API Key 或 ChatGPT 登录状态需要补齐。'
           : 'CLI 自动安装过程返回错误，或至少一个缺失工具仍未被检测到。',
-    output: installSummaryOutput({ skipped, missing, commandOutput: install.output }),
+    output: installSummaryOutput({
+      skipped,
+      missing,
+      commandOutput: [`执行命令：${[installer.command, ...installer.args, ...packages].join(' ')}`, install.output].filter(Boolean).join('\n\n'),
+    }),
     items,
     runtime: 'host' as const,
   }
+}
+
+async function resolveCliInstaller(): Promise<{ command: string; args: string[] } | null> {
+  // 桌面端 sidecar 是编译后的 exe，运行时不一定能访问 `bun` 命令；CLI 包本身是 npm 包，
+  // 所以优先走用户机器上更常见的 npm，只有 npm 不可用时再回退 Bun。
+  if (await isCommandReachable('npm')) return { command: 'npm', args: ['install', '-g'] }
+  if (await isCommandReachable('bun')) return { command: 'bun', args: ['install', '-g'] }
+  return null
 }
 
 function installSummaryOutput(options: {
@@ -752,37 +782,6 @@ async function isCommandReachable(command: string): Promise<boolean> {
     return code === 0
   } catch {
     return false
-  }
-}
-
-async function runFixedCommand(
-  command: string[],
-  options: { cwd?: string; timeoutMs?: number } = {}
-): Promise<{ code: number; output: string }> {
-  try {
-    const isWindows = process.platform === 'win32'
-    const proc = Bun.spawn(isWindows ? [getWindowsCommandShell(), '/d', '/s', '/c', command.map(quoteForCmd).join(' ')] : command, {
-      cwd: options.cwd,
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: process.env,
-    })
-    const timer = setTimeout(() => {
-      try {
-        proc.kill()
-      } catch {
-        // The process may have already exited.
-      }
-    }, options.timeoutMs ?? 5000)
-    const [code, stdout, stderr] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout).text().catch(() => ''),
-      new Response(proc.stderr).text().catch(() => ''),
-    ])
-    clearTimeout(timer)
-    return { code, output: [stdout.trim(), stderr.trim()].filter(Boolean).join('\n') }
-  } catch (error: any) {
-    return { code: 127, output: error?.message || 'Command failed to start.' }
   }
 }
 

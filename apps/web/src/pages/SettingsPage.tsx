@@ -808,6 +808,7 @@ function MobilePairingPanel() {
   const { t } = useI18n()
   const [qrDataUrl, setQrDataUrl] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
+  const [baseUrls, setBaseUrls] = useState<string[]>([])
   const [webUrl, setWebUrl] = useState('')
   const [expiresAt, setExpiresAt] = useState('')
   const [pairingCode, setPairingCode] = useState('')
@@ -831,6 +832,7 @@ function MobilePairingPanel() {
       })
       setQrDataUrl(dataUrl)
       setBaseUrl(result.baseUrl)
+      setBaseUrls(result.baseUrls?.length ? result.baseUrls : [result.baseUrl])
       setWebUrl(result.webUrl)
       setExpiresAt(result.expiresAt)
       setPairingCode(result.pairingCode)
@@ -865,12 +867,22 @@ function MobilePairingPanel() {
             </button>
           </div>
           <InfoRow label="Server" value={baseUrl || t('等待生成')} />
+          {baseUrls.length > 1 && (
+            <div className="rounded-lg bg-neutral-50 px-3 py-2">
+              <div className="text-xs font-medium text-neutral-400">可尝试地址</div>
+              <div className="mt-1 space-y-1">
+                {baseUrls.map((url) => (
+                  <div key={url} className="break-all font-mono text-xs text-neutral-600">{url}</div>
+                ))}
+              </div>
+            </div>
+          )}
           <InfoRow label="Web" value={webUrl || t('等待生成')} />
           <InfoRow label="配对码" value={pairingCode || t('等待生成')} />
           <InfoRow label="过期时间" value={expiresAt ? new Date(expiresAt).toLocaleString() : t('等待生成')} />
           {message && <Notice tone={qrDataUrl ? 'neutral' : 'warning'}>{message}</Notice>}
           <Notice>
-            {t('手机和电脑需要在同一 Wi-Fi 或局域网内。若扫码后无法连接，请确认 Windows 防火墙已放行服务端端口 8000。')}
+            {t('手机和电脑需要在同一 Wi-Fi 或局域网内。若扫码后无法连接，请确认 Windows 防火墙已放行当前 Server 地址对应端口。')}
           </Notice>
         </div>
       </div>

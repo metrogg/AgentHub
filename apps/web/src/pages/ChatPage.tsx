@@ -20,9 +20,11 @@ export default function ChatPage() {
   const currentSessionId = useChatStore((state) => state.currentSessionId)
   const selectSession = useChatStore((state) => state.selectSession)
   const sessions = useChatStore((state) => state.sessions)
+  const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
   const initWebSocket = useChatStore((state) => state.initWebSocket)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const desktop = isDesktopApp()
+  const threadReady = Boolean(sessionId && currentSessionId === sessionId)
 
   function toggleSidebar() {
     setSidebarCollapsed((current) => !current)
@@ -36,13 +38,14 @@ export default function ChatPage() {
   useEffect(() => {
     if (!sessionId) return
     if (sessionId === currentSessionId) return
+    if (!sessionsBootstrapped) return
     const exists = sessions.some((s) => s.id === sessionId)
     if (!exists) {
       navigate('/', { replace: true })
       return
     }
     void selectSession(sessionId).catch(() => navigate('/', { replace: true }))
-  }, [sessionId, currentSessionId, navigate, selectSession, sessions])
+  }, [sessionId, currentSessionId, navigate, selectSession, sessions, sessionsBootstrapped])
 
   return (
     <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-[#F7F7F7] text-neutral-950">
@@ -81,14 +84,25 @@ export default function ChatPage() {
             <PanelLeft className={['h-4 w-4 transition-transform', sidebarCollapsed ? 'rotate-180' : ''].join(' ')} />
           </button>
         )}
-        {sessionId ? (
+        {sessionId && threadReady ? (
           <AgentHubRuntimeProvider key={sessionId}>
             <Thread key={sessionId} />
           </AgentHubRuntimeProvider>
+        ) : sessionId ? (
+          <ThreadSwitching />
         ) : (
           <Welcome />
         )}
       </main>
+    </div>
+  )
+}
+
+function ThreadSwitching() {
+  return (
+    <div className="flex h-full items-center justify-center bg-white text-sm text-neutral-400">
+      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+      正在切换会话...
     </div>
   )
 }

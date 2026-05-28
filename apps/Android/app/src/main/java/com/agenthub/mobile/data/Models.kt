@@ -14,7 +14,9 @@ data class ConnectionConfig(
 data class PairingPayload(
     val version: Int = 1,
     val baseUrl: String,
+    val baseUrls: List<String> = emptyList(),
     val webUrl: String? = null,
+    val webUrls: List<String> = emptyList(),
     val pairingCode: String,
     val expiresAt: String,
 )

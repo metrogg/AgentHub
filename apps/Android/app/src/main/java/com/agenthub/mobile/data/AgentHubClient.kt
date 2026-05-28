@@ -12,10 +12,15 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.util.concurrent.TimeUnit
 
 class AgentHubClient(
     private val json: Json,
-    private val httpClient: OkHttpClient = OkHttpClient.Builder().build(),
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .build(),
 ) {
     suspend fun health(config: ConnectionConfig): Boolean = withContext(Dispatchers.IO) {
         val request = requestBuilder(config, "/health", withApiPrefix = false).get().build()
@@ -47,9 +52,13 @@ class AgentHubClient(
         )
     }
 
-    suspend fun confirmPairing(payload: PairingPayload, deviceName: String = "Android"): PairConfirmResponse {
+    suspend fun confirmPairing(
+        payload: PairingPayload,
+        deviceName: String = "Android",
+        baseUrl: String = payload.baseUrl,
+    ): PairConfirmResponse {
         return post(
-            config = ConnectionConfig(baseUrl = payload.baseUrl),
+            config = ConnectionConfig(baseUrl = baseUrl),
             path = "/mobile/pair/confirm",
             body = PairConfirmRequest(pairingCode = payload.pairingCode, deviceName = deviceName),
         )
