@@ -87,7 +87,8 @@ const updateTaskSchema = z.object({
 
 type AgentConfigPatch = z.input<typeof createAgentSchema> | z.infer<typeof updateAgentSchema>
 
-function normalizeAgentRuntimeDefaults<T extends AgentConfigPatch>(input: T): T {
+/** 创建 Agent 时应用运行时默认值 */
+function normalizeAgentCreateDefaults(input: z.infer<typeof createAgentSchema>): z.infer<typeof createAgentSchema> {
   if (input.runtimeType === 'code-agent') {
     return {
       ...input,
@@ -96,14 +97,39 @@ function normalizeAgentRuntimeDefaults<T extends AgentConfigPatch>(input: T): T 
       approvalRequired: false,
     }
   }
-  if (input.runtimeType !== 'mcp') return input
-  return {
-    ...input,
-    codeAgentType: null,
-    toolPermissions: ['workspace:read', 'skills:read'],
-    sandboxPolicy: 'read-only',
-    approvalRequired: true,
+  if (input.runtimeType === 'mcp') {
+    return {
+      ...input,
+      codeAgentType: null,
+      toolPermissions: ['workspace:read', 'skills:read'],
+      sandboxPolicy: 'read-only',
+      approvalRequired: true,
+    }
   }
+  return input
+}
+
+/** 更新 Agent 时只填充显式为 null 的字段，不覆盖已有配置 */
+function normalizeAgentUpdateDefaults(input: z.infer<typeof updateAgentSchema>): z.infer<typeof updateAgentSchema> {
+  const result = { ...input }
+  if (input.runtimeType === 'code-agent') {
+    if (input.codeAgentType === null) {
+      result.codeAgentType = 'codex'
+    }
+    if (input.sandboxPolicy === undefined) {
+      result.sandboxPolicy = 'workspace-write'
+    }
+    if (input.approvalRequired === undefined) {
+      result.approvalRequired = false
+    }
+  }
+  if (input.runtimeType === 'mcp') {
+    result.codeAgentType = null
+    result.toolPermissions = ['workspace:read', 'skills:read']
+    result.sandboxPolicy = 'read-only'
+    result.approvalRequired = true
+  }
+  return result
 }
 
 // ---------- Routes ----------
@@ -380,7 +406,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeAgentRuntimeDefaults(c.req.valid('json'))
+    const input = normalizeAgentCreateDefaults(c.req.valid('json'))
     // 禁止创建与系统 Orchestrator 同名的 Agent，避免调度冲突
     if (/orchestrator|协调器|调度/i.test(input.name)) {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 名称不能包含 Orchestrator / 协调器 / 调度，这是系统保留角色')
@@ -399,7 +425,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeAgentRuntimeDefaults(c.req.valid('json'))
+    const input = normalizeAgentUpdateDefaults(c.req.valid('json'))
     // 禁止改名成系统保留角色
     if (input.name && /orchestrator|协调器|调度/i.test(input.name)) {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 名称不能包含 Orchestrator / 协调器 / 调度，这是系统保留角色')
