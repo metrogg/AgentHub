@@ -55,18 +55,14 @@ export class TaskExecutionService {
       }
     }
 
-    const runId = input.runId ?? 'standalone'
-    const fallbackExecutionPath = ensureNoProjectExecutionDir({
-      runId,
-      taskId,
-      agentId: profile.id,
-      agentName: profile.name,
-      projectPath: projectPath ?? null,
-    })
+    // 若未提供 projectPath 或 worktree 创建失败，降级为 read-only 避免 validateEnvelope 报错
+    const effectiveSandboxPolicy: AgentRunProfile['sandboxPolicy'] =
+      branchCtx?.worktreePath ? (profile.sandboxPolicy ?? 'workspace-write') : 'read-only'
 
     const executionProfile: AgentRunProfile = {
       ...profile,
-      projectPath: branchCtx?.worktreePath ?? profile.projectPath ?? fallbackExecutionPath ?? null,
+      sandboxPolicy: effectiveSandboxPolicy,
+      projectPath: branchCtx?.worktreePath ?? profile.projectPath ?? null,
       originalProjectPath: profile.projectPath ?? null,
     }
 
@@ -76,8 +72,8 @@ export class TaskExecutionService {
       agentId: profile.id,
       agentName: profile.name,
       projectPath: projectPath ?? null,
-      worktreePath: branchCtx?.worktreePath ?? fallbackExecutionPath ?? null,
-      sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
+      worktreePath: branchCtx?.worktreePath ?? null,
+      sandboxPolicy: effectiveSandboxPolicy,
       envAllowlist: DEFAULT_ENV_ALLOWLIST,
     }
 
