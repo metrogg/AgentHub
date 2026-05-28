@@ -84,7 +84,11 @@ logger.info(`🚀 AgentHub server listening on http://0.0.0.0:${server.port}`)
 // Write actual port to file so Vite dev proxy can read it
 const portFile = resolve(import.meta.dir, '../../../.agenthub-port')
 try {
-  writeFileSync(portFile, String(server.port), 'utf8')
+  writeFileSync(
+    portFile,
+    JSON.stringify({ port: server.port, pid: process.pid, updatedAt: new Date().toISOString() }),
+    'utf8',
+  )
 } catch {
   // Best-effort; non-critical
 }

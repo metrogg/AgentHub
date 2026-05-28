@@ -7,12 +7,30 @@ function resolveProxyTarget(): string {
   if (process.env.VITE_PROXY_TARGET) return process.env.VITE_PROXY_TARGET
   try {
     const portFile = path.resolve(__dirname, '../../.agenthub-port')
-    const port = readFileSync(portFile, 'utf8').trim()
-    if (port && /^\d+$/.test(port)) return `http://localhost:${port}`
+    const raw = readFileSync(portFile, 'utf8').trim()
+    const parsed = JSON.parse(raw) as { port?: unknown; pid?: unknown }
+    if (
+      typeof parsed.port === 'number' &&
+      Number.isInteger(parsed.port) &&
+      parsed.port > 0 &&
+      typeof parsed.pid === 'number' &&
+      isProcessAlive(parsed.pid)
+    ) {
+      return `http://localhost:${parsed.port}`
+    }
   } catch {
-    // Port file not found; server may not be running yet
+    // Port file not found, stale, or from an older build; fall back to the default dev port.
   }
   return 'http://localhost:8000'
+}
+
+function isProcessAlive(pid: number) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 const apiProxyTarget = resolveProxyTarget()

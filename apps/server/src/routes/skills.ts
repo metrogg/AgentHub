@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { basename, delimiter, dirname, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -43,10 +43,18 @@ export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .post('/install', zValidator('json', installSkillSchema), async (c) => {
     const { sourceUrl, id } = c.req.valid('json')
-    const result = isNpxSkillsAddCommand(sourceUrl)
-      ? await installSkillFromNpxCommand(sourceUrl)
-      : await installSkillFromUrl(sourceUrl, id)
-    return c.json(result)
+    try {
+      const result = isNpxSkillsAddCommand(sourceUrl)
+        ? await installSkillFromNpxCommand(sourceUrl)
+        : await installSkillFromUrl(sourceUrl, id)
+      return c.json(result)
+    } catch (error) {
+      return c.json({
+        ok: false,
+        installed: null,
+        message: getInstallErrorMessage(error),
+      })
+    }
   })
   .post('/skillhub/install', zValidator('json', skillhubInstallSchema), async (c) => {
     const { slug } = c.req.valid('json')
@@ -97,7 +105,7 @@ async function installSkillhubNative(slug: string) {
     if (!skillRoot) throw new Error('下载包中没有找到 SKILL.md')
     await rm(targetDir, { recursive: true, force: true })
     await mkdir(dirname(targetDir), { recursive: true })
-    await rename(skillRoot, targetDir)
+    await cp(skillRoot, targetDir, { recursive: true })
     return { ok: true, slug, message: `已安装 ${slug}` }
   } catch (error: any) {
     return { ok: false, slug, message: error?.message || `SkillHub 安装失败：${slug}` }
@@ -222,7 +230,11 @@ async function runNpxSkillsAdd(packageRef: string, extraArgs: string[]) {
 
 function buildHostCommand(args: string[]) {
   if (process.platform !== 'win32') return args
-  return ['cmd.exe', '/d', '/s', '/c', args.map(quoteForCmd).join(' ')]
+  return [getWindowsCommandShell(), '/d', '/s', '/c', args.map(quoteForCmd).join(' ')]
+}
+
+function getWindowsCommandShell() {
+  return process.env.ComSpec || `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\cmd.exe`
 }
 
 function quoteForCmd(value: string) {
@@ -346,8 +358,18 @@ function cleanSkillhubText(value: string) {
     .trim()
 }
 
+function getInstallErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return cleanSkillhubText(message) || 'Skill 安装失败'
+}
+
 async function installSkillFromUrl(sourceUrl: string, requestedId?: string) {
-  const skillUrl = normalizeSkillUrl(sourceUrl)
+  let skillUrl: string
+  try {
+    skillUrl = normalizeSkillUrl(sourceUrl)
+  } catch {
+    throw new Error('请输入有效的 SKILL.md / GitHub 技能链接，或 npx skills@latest add owner/repo 命令。')
+  }
   const response = await fetch(skillUrl, {
     headers: { Accept: 'text/plain, text/markdown, */*' },
   })
@@ -362,7 +384,7 @@ async function installSkillFromUrl(sourceUrl: string, requestedId?: string) {
   const frontmatter = parseFrontmatter(content)
   const skillId = slugify(requestedId || frontmatter.name || frontmatter.id || basename(dirname(new URL(skillUrl).pathname)) || 'skill')
   const skillDir = resolve(installedSkillsRoot, skillId)
-  if (!skillDir.startsWith(installedSkillsRoot)) throw new Error('Invalid skill id')
+  if (!isInside(skillDir, installedSkillsRoot)) throw new Error('Invalid skill id')
 
   await mkdir(skillDir, { recursive: true })
   await writeFile(resolve(skillDir, 'SKILL.md'), content, 'utf8')

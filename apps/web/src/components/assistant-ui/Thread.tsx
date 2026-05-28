@@ -74,6 +74,7 @@ import {
   type ComponentPropsWithoutRef,
   type FC,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useEffect,
   useMemo,
@@ -98,7 +99,14 @@ import {
   type WorkspaceAgent,
 } from '../../lib/api'
 import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
-import { pickWorkspaceFolder } from '../../lib/native'
+import {
+  downloadExternalUrl,
+  isDesktopApp,
+  notifyUser,
+  openExternalUrl,
+  openPath,
+  pickWorkspaceFolder,
+} from '../../lib/native'
 import { sendModeShouldSubmit, shouldInsertNewline, useShortcutSettings } from '../../lib/shortcuts'
 import { cn } from '../../lib/utils'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../../lib/workspaceFilters'
@@ -155,6 +163,7 @@ type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
 const maxPastedImageBytes = 5 * 1024 * 1024
 const composerSyncEvent = 'agenthub:composer-sync'
 const artifactPreviewEvent = 'agenthub:artifact-preview'
+const previewPanelWidthStorageKey = 'agenthub:preview-panel-width'
 
 type ArtifactPreviewItem = {
   id: string
@@ -168,6 +177,16 @@ type ArtifactPreviewItem = {
   source?: string
   /** 用于构造 HTML 预览 URL 的 workspaceId */
   workspaceId?: string
+}
+
+type PreviewActionItem = {
+  id: string
+  kind: 'open' | 'download'
+  status: 'working' | 'success' | 'error'
+  title: string
+  detail: string
+  path?: string
+  folder?: string
 }
 
 function classifyAgentSession(
@@ -2229,13 +2248,23 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   const canOpen = Boolean(item.url)
   const [maximized, setMaximized] = useState(false)
   const [visible, setVisible] = useState(false)
+  const [panelWidth, setPanelWidth] = useState(() => readStoredPreviewPanelWidth())
+  const [resizing, setResizing] = useState(false)
   const [loadingState, setLoadingState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     item.kind === 'web' || item.kind === 'deploy' ? 'loading' : 'ready',
   )
   const [loadError, setLoadError] = useState('')
+  const [actionPanelOpen, setActionPanelOpen] = useState(false)
+  const [actionItems, setActionItems] = useState<PreviewActionItem[]>([])
   const [reloadToken, setReloadToken] = useState(0)
+  const panelRef = useRef<HTMLElement | null>(null)
+  const panelWidthRef = useRef(panelWidth)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previewUrl = useMemo(() => normalizePreviewUrl(item.url), [item.url])
+
+  useEffect(() => {
+    panelWidthRef.current = panelWidth
+  }, [panelWidth])
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => setVisible(true))
@@ -2246,6 +2275,167 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     setVisible(false)
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
     closeTimerRef.current = setTimeout(onClose, 240)
+  }
+
+  function handleResizeStart(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (maximized) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const previousCursor = document.body.style.cursor
+    const previousSelect = document.body.style.userSelect
+
+    setResizing(true)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    function commitPanelWidth(clientX: number) {
+      const containerRect = panelRef.current?.parentElement?.getBoundingClientRect()
+      const rawWidth = containerRect ? containerRect.right - clientX : window.innerWidth - clientX
+      const nextWidth = clampPreviewPanelWidth(rawWidth, getPreviewPanelWidthBounds(panelRef.current))
+      panelWidthRef.current = nextWidth
+      setPanelWidth(nextWidth)
+    }
+
+    commitPanelWidth(event.clientX)
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      moveEvent.preventDefault()
+      commitPanelWidth(moveEvent.clientX)
+    }
+
+    function handlePointerUp() {
+      setResizing(false)
+      storePreviewPanelWidth(panelWidthRef.current)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousSelect
+      document.removeEventListener('pointermove', handlePointerMove)
+      document.removeEventListener('pointerup', handlePointerUp)
+      document.removeEventListener('pointercancel', handlePointerUp)
+    }
+
+    document.addEventListener('pointermove', handlePointerMove)
+    document.addEventListener('pointerup', handlePointerUp, { once: true })
+    document.addEventListener('pointercancel', handlePointerUp, { once: true })
+  }
+
+  function pushActionItem(item: Omit<PreviewActionItem, 'id'>) {
+    const id = `${item.kind}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    setActionItems((items) => [{ ...item, id }, ...items].slice(0, 8))
+    setActionPanelOpen(true)
+    return id
+  }
+
+  function updateActionItem(id: string, patch: Partial<PreviewActionItem>) {
+    setActionItems((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)))
+    setActionPanelOpen(true)
+  }
+
+  async function handleOpenDownloadedPath(path?: string) {
+    if (!path) return
+    try {
+      const opened = await openPath(path)
+      if (!opened) return
+    } catch (error) {
+      pushActionItem({
+        kind: 'open',
+        status: 'error',
+        title: '打开失败',
+        detail: formatPreviewError(error),
+      })
+    }
+  }
+
+  async function handleOpenInNewWindow() {
+    if (!item.url) return
+    const resolvedUrl = normalizePreviewUrl(item.url)?.href ?? item.url
+    const desktopApp = isDesktopApp()
+    const actionId = pushActionItem({
+      kind: 'open',
+      status: 'working',
+      title: item.title,
+      detail: desktopApp ? '正在打开外部浏览器窗口...' : '正在打开新窗口...',
+    })
+    try {
+      const openedNative = await openExternalUrl(resolvedUrl)
+      if (openedNative) {
+        updateActionItem(actionId, {
+          status: 'success',
+          detail: '已请求系统浏览器打开新窗口',
+        })
+        return
+      }
+    } catch (error) {
+      console.warn('[AgentHub] Failed to open external preview URL:', error)
+      if (desktopApp) {
+        const detail = formatPreviewError(error) || '请确认系统已安装并设置默认浏览器，或重启客户端加载最新桌面命令。'
+        updateActionItem(actionId, {
+          status: 'error',
+          detail: `无法打开外部浏览器窗口：${detail}`,
+        })
+        await notifyUser('无法打开外部浏览器窗口', detail).catch(() => undefined)
+        return
+      }
+    }
+    window.open(resolvedUrl, '_blank', 'noopener,noreferrer')
+    updateActionItem(actionId, {
+      status: 'success',
+      detail: '已交给浏览器打开新窗口',
+    })
+  }
+
+  async function handleDownload() {
+    if (!item.url) return
+    const resolvedUrl = normalizePreviewUrl(item.url)?.href ?? item.url
+    const filename = downloadFileName(item)
+    const desktopApp = isDesktopApp()
+    const actionId = pushActionItem({
+      kind: 'download',
+      status: 'working',
+      title: filename,
+      detail: desktopApp ? '正在保存到系统下载目录...' : '正在准备下载...',
+    })
+
+    try {
+      if (desktopApp) {
+        const result = await downloadExternalUrl(resolvedUrl, filename)
+        if (!result) throw new Error('客户端下载命令不可用，请重启客户端后重试。')
+        updateActionItem(actionId, {
+          status: 'success',
+          title: result.fileName,
+          detail: '已保存到下载目录',
+          path: result.path,
+          folder: result.folder,
+        })
+        await notifyUser('下载完成', result.fileName).catch(() => undefined)
+        return
+      }
+
+      const response = await fetch(resolvedUrl, { credentials: 'include' })
+      if (!response.ok) throw new Error(await extractPreviewErrorMessage(response))
+
+      const blob = await response.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = filename
+      link.rel = 'noreferrer'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000)
+
+      updateActionItem(actionId, {
+        status: 'success',
+        detail: '浏览器已开始下载',
+      })
+    } catch (error) {
+      const message = formatPreviewError(error)
+      updateActionItem(actionId, {
+        status: 'error',
+        detail: `下载失败：${message}`,
+      })
+      if (desktopApp) await notifyUser('下载失败', message).catch(() => undefined)
+    }
   }
 
   useEffect(() => {
@@ -2261,6 +2451,22 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
     }
   }, [maximized])
+
+  useEffect(() => {
+    function syncPanelWidth() {
+      setPanelWidth((width) => {
+        const bounds = getPreviewPanelWidthBounds(panelRef.current)
+        const nextWidth = clampPreviewPanelWidth(width, bounds)
+        panelWidthRef.current = nextWidth
+        storePreviewPanelWidth(nextWidth)
+        return nextWidth
+      })
+    }
+
+    syncPanelWidth()
+    window.addEventListener('resize', syncPanelWidth)
+    return () => window.removeEventListener('resize', syncPanelWidth)
+  }, [])
 
   useEffect(() => {
     if (!item.url || (item.kind !== 'web' && item.kind !== 'deploy')) {
@@ -2302,10 +2508,9 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   }, [item.kind, item.url, previewUrl, reloadToken])
 
   const panelClasses = cn(
-    'relative flex shrink-0 flex-col overflow-hidden border-neutral-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.12)] transition-all duration-300 ease-out',
-    maximized
-      ? 'fixed inset-3 z-50 rounded-2xl border'
-      : 'w-[min(48vw,760px)] min-w-[420px] border-l',
+    'relative flex shrink-0 flex-col overflow-hidden border-neutral-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.12)]',
+    resizing ? 'transition-none' : 'transition-all duration-300 ease-out',
+    maximized ? 'fixed inset-3 z-50 rounded-2xl border' : 'border-l',
     visible ? 'translate-x-0 scale-100 opacity-100' : 'translate-x-4 scale-[0.985] opacity-0',
   )
 
@@ -2322,7 +2527,30 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
           )}
         />
       )}
-      <aside className={panelClasses}>
+      {resizing && (
+        <div
+          className="fixed inset-0 z-40 cursor-col-resize select-none bg-transparent"
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        ref={panelRef}
+        className={panelClasses}
+        style={maximized ? undefined : { width: panelWidth }}
+      >
+        {!maximized && (
+          <button
+            type="button"
+            aria-label="Resize preview panel"
+            onPointerDown={handleResizeStart}
+            className={cn(
+              'absolute inset-y-0 left-0 z-20 w-3 -translate-x-1/2 cursor-col-resize touch-none',
+              'after:absolute after:inset-y-3 after:left-1/2 after:w-px after:-translate-x-1/2 after:rounded-full after:bg-transparent after:transition',
+              'hover:after:bg-neutral-300 focus-visible:outline-none focus-visible:after:bg-neutral-400',
+              resizing && 'after:bg-neutral-400',
+            )}
+          />
+        )}
         <div className="flex h-16 shrink-0 items-center gap-3 border-b border-neutral-200 bg-white/90 px-3 backdrop-blur">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-neutral-200 bg-gradient-to-br from-white to-neutral-100 text-neutral-500 shadow-sm">
@@ -2345,25 +2573,24 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
           <div className="flex shrink-0 items-center gap-1">
             {canOpen && (
               <>
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
+                  onClick={() => void handleOpenInNewWindow()}
                   className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
                   title="Open in new window"
                   aria-label="Open in new window"
                 >
                   <ExternalLink className="h-4 w-4" />
-                </a>
-                <a
-                  href={item.url}
-                  download={item.title}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDownload()}
                   className="grid h-9 w-9 place-items-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
                   title="Download"
                   aria-label="Download"
                 >
                   <Download className="h-4 w-4" />
-                </a>
+                </button>
               </>
             )}
             <button
@@ -2387,6 +2614,14 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
             </button>
           </div>
         </div>
+
+        {actionPanelOpen && actionItems.length > 0 && (
+          <PreviewActionPanel
+            items={actionItems}
+            onClose={() => setActionPanelOpen(false)}
+            onOpenPath={(path) => void handleOpenDownloadedPath(path)}
+          />
+        )}
 
         <div className="flex min-h-0 flex-1 flex-col bg-[#f6f7f9] p-2">
           {item.description && (
@@ -2437,6 +2672,88 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     </>
   )
 }
+
+const PreviewActionPanel: FC<{
+  items: PreviewActionItem[]
+  onClose: () => void
+  onOpenPath: (path?: string) => void
+}> = ({ items, onClose, onOpenPath }) => (
+  <div className="absolute right-3 top-[4.5rem] z-30 w-[min(22rem,calc(100%-1.5rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-[0_18px_60px_rgba(15,23,42,0.18)]">
+    <div className="flex h-12 items-center justify-between border-b border-neutral-100 px-4">
+      <div className="text-sm font-semibold text-neutral-950">下载</div>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          className="grid h-8 w-8 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
+          title="下载目录"
+          aria-label="下载目录"
+          onClick={() => onOpenPath(items.find((item) => item.folder)?.folder)}
+        >
+          <FolderOpen className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="grid h-8 w-8 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
+          title="关闭"
+          aria-label="关闭下载弹窗"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+    <div className="max-h-[28rem] overflow-y-auto p-2">
+      {items.map((item) => (
+        <div
+          key={item.id}
+          className="grid grid-cols-[2rem_minmax(0,1fr)] gap-2 rounded-lg px-2 py-2.5 transition hover:bg-neutral-50"
+        >
+          <div className="mt-0.5 grid h-8 w-8 place-items-center rounded-lg bg-neutral-50 text-neutral-500">
+            {item.status === 'working' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : item.status === 'error' ? (
+              <AlertTriangle className="h-4 w-4 text-red-500" />
+            ) : item.kind === 'download' ? (
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            ) : (
+              <ExternalLink className="h-4 w-4 text-emerald-600" />
+            )}
+          </div>
+          <div className="min-w-0">
+            <div
+              className={cn(
+                'truncate text-sm text-neutral-900',
+                item.status === 'error' && 'text-red-600',
+              )}
+              title={item.title}
+            >
+              {item.title}
+            </div>
+            <div className="mt-1 line-clamp-2 text-xs leading-4 text-neutral-500">{item.detail}</div>
+            {item.status === 'success' && item.path && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => onOpenPath(item.path)}
+                  className="rounded-md bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-200"
+                >
+                  打开文件
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenPath(item.folder)}
+                  className="rounded-md bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-200"
+                >
+                  打开文件夹
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+)
 
 const PreviewLoadingState: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
   <div className="grid h-full place-items-center bg-[#f8fafc] p-6">
@@ -4250,6 +4567,53 @@ function normalizePreviewUrl(url?: string) {
     return new URL(url, window.location.origin)
   } catch {
     return null
+  }
+}
+
+function downloadFileName(item: ArtifactPreviewItem) {
+  const source = item.path || normalizePreviewUrl(item.url)?.pathname || item.title || 'preview'
+  const rawName = source.split(/[\\/]/).filter(Boolean).pop() || item.title || 'preview'
+  const hasExtension = /\.[A-Za-z0-9]{1,8}$/.test(rawName)
+  const fallbackExtension = item.mimeType?.includes('image/') ? item.mimeType.split('/').pop() : 'html'
+  const name = hasExtension ? rawName : `${rawName}.${fallbackExtension || 'html'}`
+  return sanitizeDownloadFileName(name)
+}
+
+function sanitizeDownloadFileName(value: string) {
+  return value
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160) || 'preview.html'
+}
+
+function getPreviewPanelWidthBounds(panel: HTMLElement | null) {
+  const containerWidth = panel?.parentElement?.clientWidth ?? window.innerWidth
+  const reservedThreadWidth = Math.min(360, Math.max(280, Math.round(containerWidth * 0.38)))
+  const maxWidth = Math.max(320, containerWidth - reservedThreadWidth)
+  const minWidth = Math.min(420, maxWidth)
+  return { maxWidth, minWidth }
+}
+
+function clampPreviewPanelWidth(width: number, bounds: { maxWidth: number; minWidth: number }) {
+  return Math.min(bounds.maxWidth, Math.max(bounds.minWidth, width))
+}
+
+function readStoredPreviewPanelWidth() {
+  const fallbackWidth = 520
+  try {
+    const storedWidth = Number(window.localStorage.getItem(previewPanelWidthStorageKey))
+    return Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : fallbackWidth
+  } catch {
+    return fallbackWidth
+  }
+}
+
+function storePreviewPanelWidth(width: number) {
+  try {
+    window.localStorage.setItem(previewPanelWidthStorageKey, String(Math.round(width)))
+  } catch {
+    // localStorage can be unavailable in restricted browser contexts.
   }
 }
 

@@ -28,6 +28,22 @@ export async function openPath(path: string) {
   return true
 }
 
+export async function openExternalUrl(url: string) {
+  if (!isDesktopApp()) return false
+  await invokeNative('open_external_url', { url })
+  return true
+}
+
+export interface NativeDownloadResult {
+  fileName: string
+  path: string
+  folder: string
+}
+
+export async function downloadExternalUrl(url: string, fileName: string) {
+  return invokeNative<NativeDownloadResult>('download_external_url', { url, fileName })
+}
+
 export async function getDesktopInfo() {
   return invokeNative<{ app_data_dir: string; config_dir: string; log_dir: string }>('desktop_info')
 }
@@ -47,6 +63,12 @@ export async function closeDesktopWindow() {
 export async function openDesktopWindow() {
   if (!isDesktopApp()) return false
   await invokeNative('open_desktop_window')
+  return true
+}
+
+export async function openUrlWindow(url: string) {
+  if (!isDesktopApp()) return false
+  await invokeNative('open_url_window', { url })
   return true
 }
 
