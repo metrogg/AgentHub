@@ -94,6 +94,7 @@ import {
   type Workspace,
   type WorkspaceAgent,
 } from '../../lib/api'
+import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
 import { pickWorkspaceFolder } from '../../lib/native'
 import { sendModeShouldSubmit, shouldInsertNewline, useShortcutSettings } from '../../lib/shortcuts'
 import { cn } from '../../lib/utils'
@@ -329,6 +330,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     modelId: '',
   })
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const modelChoices = filterModelsForCodeAgent(models, agent?.codeAgentType, draft.modelId)
 
   useEffect(() => {
     if (!open) return
@@ -458,7 +460,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                     className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
                   >
                     <option value="">自动模型</option>
-                    {models.map((model) => (
+                    {modelChoices.map((model) => (
                       <option key={model.id} value={model.id}>
                         {model.name || model.modelId}
                       </option>
@@ -2191,6 +2193,144 @@ const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data 
   )
 }
 
+const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void }> = ({
+  item,
+  onClose,
+}) => {
+  const canOpen = Boolean(item.url)
+
+  return (
+    <aside className="flex h-full w-[min(48vw,720px)] min-w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-[#FBFBFB]">
+      <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-neutral-700 shadow-sm">
+            {previewIcon(item)}
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-neutral-950">{item.title}</div>
+            <div className="mt-0.5 truncate text-xs text-neutral-500">
+              {item.subtitle ?? previewKindLabel(item)}
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {canOpen && (
+            <>
+              <a
+                href={item.url}
+                target="_blank"
+                rel="noreferrer"
+                className="grid h-8 w-8 place-items-center rounded-xl text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
+                title="新窗口打开"
+                aria-label="新窗口打开"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </a>
+              <a
+                href={item.url}
+                download={item.title}
+                className="grid h-8 w-8 place-items-center rounded-xl text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
+                title="下载"
+                aria-label="下载"
+              >
+                <Download className="h-4 w-4" />
+              </a>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-8 w-8 place-items-center rounded-xl text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
+            title="关闭预览"
+            aria-label="关闭预览"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col bg-[#F7F7F7] p-3">
+        {item.description && (
+          <div className="mb-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs leading-5 text-neutral-600">
+            {item.description}
+          </div>
+        )}
+        <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-neutral-200 bg-white">
+          {item.kind === 'image' && item.url ? (
+            <div className="grid h-full place-items-center bg-neutral-50 p-4">
+              <img
+                src={item.url}
+                alt={item.title}
+                className="max-h-full max-w-full rounded-lg object-contain shadow-sm"
+                decoding="async"
+                draggable={false}
+              />
+            </div>
+          ) : (item.kind === 'web' || item.kind === 'deploy') && item.url ? (
+            <iframe
+              title={item.title}
+              src={item.url}
+              className="h-full w-full border-0 bg-white"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          ) : item.kind === 'diff' ? (
+            <div className="h-full overflow-auto">
+              <DiffViewer diff={item.source ?? ''} maxHeightClassName="max-h-none" />
+            </div>
+          ) : item.kind === 'workflow' ? (
+            <PreviewPlaceholder item={item} />
+          ) : (
+            <DocumentPreviewPlaceholder item={item} />
+          )}
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const fileName = item.path ?? item.title
+  return (
+    <div className="flex h-full flex-col bg-white">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-3 text-xs text-neutral-500">
+        <FileText className="h-4 w-4 text-neutral-400" />
+        <span className="min-w-0 flex-1 truncate">{fileName}</span>
+        <span className="rounded-md bg-[#F7F7F7] px-2 py-1">只读预览</span>
+      </div>
+      <div className="grid min-h-0 flex-1 place-items-center bg-[#F7F7F7] p-8">
+        <div className="w-full max-w-md rounded-2xl border border-neutral-200 bg-white p-6 text-center shadow-sm">
+          <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#F7F7F7] text-neutral-500">
+            <File className="h-8 w-8" />
+          </div>
+          <div className="mt-4 truncate text-sm font-semibold text-neutral-950">{item.title}</div>
+          <div className="mt-2 text-xs leading-5 text-neutral-500">
+            {previewFileHint(item)}
+          </div>
+          {item.path && (
+            <div className="agenthub-readable-code mt-4 rounded-xl bg-[#F7F7F7] px-3 py-2 text-left text-xs leading-5 text-neutral-500">
+              {item.path}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
+  <div className="grid h-full place-items-center bg-[#F7F7F7] p-8">
+    <div className="max-w-md rounded-2xl border border-neutral-200 bg-white p-6 text-center shadow-sm">
+      <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#F7F7F7] text-neutral-500">
+        <GitBranch className="h-8 w-8" />
+      </div>
+      <div className="mt-4 text-sm font-semibold text-neutral-950">{item.title}</div>
+      <div className="mt-2 text-xs leading-5 text-neutral-500">
+        {item.description ?? '这个产物会在右侧预览栏保持上下文，后续可接入更完整的图形化查看器。'}
+      </div>
+    </div>
+  </div>
+)
+
 const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
   const changedFiles = data.files ?? []
   const commands = data.commands ?? []
@@ -2768,7 +2908,11 @@ const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workf
 }) => (
   <div className="overflow-hidden rounded-lg border border-indigo-200 bg-white shadow-sm">
     <div className="flex h-11 items-center justify-between gap-3 px-3">
-      <button type="button" className="inline-flex min-w-0 flex-1 items-center gap-2 text-left">
+      <button
+        type="button"
+        onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
+        className="inline-flex min-w-0 flex-1 items-center gap-2 text-left"
+      >
         <GitBranch className="h-4 w-4 shrink-0 text-indigo-500" />
         <span className="min-w-0">
           <span className="block truncate text-xs font-medium text-neutral-900">{artifact.title}</span>
@@ -2776,6 +2920,14 @@ const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workf
             {artifact.nodes.length} 个节点 · {artifact.edges.length} 条连接
           </span>
         </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-indigo-500 hover:bg-indigo-50"
+        title="右侧预览"
+      >
+        <Monitor className="h-3.5 w-3.5" />
       </button>
     </div>
     <div className="border-t border-indigo-100 bg-indigo-50/40 px-3 py-3">
@@ -2829,6 +2981,114 @@ function deployStatusLabel(status: Extract<AgentArtifact, { type: 'deploy' }>['s
   if (status === 'running') return '部署中'
   if (status === 'failed') return '失败'
   return '待部署'
+}
+
+function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
+  if (artifact.type === 'preview') {
+    return {
+      id: artifact.id,
+      description: artifact.description,
+      kind: 'web',
+      source: artifact.source,
+      subtitle: previewKindName(artifact.previewKind),
+      title: artifact.title,
+      url: artifact.url,
+    }
+  }
+  if (artifact.type === 'deploy') {
+    return {
+      id: artifact.id,
+      description: artifact.description ?? artifact.logs,
+      kind: 'deploy',
+      source: artifact.source,
+      subtitle: `${artifact.provider} · ${deployStatusLabel(artifact.status)}`,
+      title: artifact.title,
+      url: artifact.url,
+    }
+  }
+  if (artifact.type === 'diff') {
+    return {
+      id: artifact.id,
+      description: artifact.description,
+      kind: 'diff',
+      path: artifact.filePath,
+      source: artifact.diff,
+      subtitle: `${fileStatusLabel(artifact.status ?? 'modified')} · Diff`,
+      title: artifact.title || artifact.filePath,
+    }
+  }
+  if (artifact.type === 'workflow') {
+    return {
+      id: artifact.id,
+      description: artifact.description,
+      kind: 'workflow',
+      source: artifact.source,
+      subtitle: `${artifact.nodes.length} 个节点 · ${artifact.edges.length} 条连接`,
+      title: artifact.title,
+    }
+  }
+  return {
+    id: artifact.id,
+    description: artifact.description,
+    kind: filePreviewKind(artifact),
+    mimeType: artifact.mimeType,
+    path: artifact.path,
+    source: artifact.source,
+    subtitle:
+      [artifact.mimeType, artifact.size ? formatBytes(artifact.size) : null].filter(Boolean).join(' · ') ||
+      fileStatusLabel(artifact.status ?? 'created'),
+    title: artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path,
+  }
+}
+
+function filePreviewKind(artifact: Extract<AgentArtifact, { type: 'file' }>): ArtifactPreviewItem['kind'] {
+  if (artifact.mimeType?.startsWith('image/')) return 'image'
+  return 'file'
+}
+
+function previewKindName(kind: Extract<AgentArtifact, { type: 'preview' }>['previewKind']) {
+  if (kind === 'dev-server') return '开发服务器预览'
+  if (kind === 'static-html') return 'HTML 预览'
+  return '网页预览'
+}
+
+function previewKindLabel(item: ArtifactPreviewItem) {
+  if (item.kind === 'web') return '网页预览'
+  if (item.kind === 'deploy') return '部署预览'
+  if (item.kind === 'image') return '图片预览'
+  if (item.kind === 'diff') return '代码 Diff'
+  if (item.kind === 'workflow') return '流程预览'
+  return '文件预览'
+}
+
+function previewFileHint(item: ArtifactPreviewItem) {
+  const lower = (item.mimeType || item.path || item.title).toLowerCase()
+  if (/\.(docx?|pptx?|xlsx?|pdf)$/.test(lower)) {
+    return '文档类产物会在这里显示可读预览。当前先保留文件信息，后续接入文档渲染器即可直接翻页查看。'
+  }
+  if (/\.(html?|svg)$/.test(lower)) {
+    return '这个文件可以作为网页预览打开。若 Agent 提供 URL，会自动切换为内嵌网页视图。'
+  }
+  return '这个产物暂无可嵌入的预览地址，先展示文件信息和上下文。'
+}
+
+function previewIcon(item: ArtifactPreviewItem) {
+  if (item.kind === 'web' || item.kind === 'deploy') return <Globe2 className="h-4 w-4" />
+  if (item.kind === 'image') return <ImagePlus className="h-4 w-4" />
+  if (item.kind === 'diff' || item.kind === 'workflow') return <GitBranch className="h-4 w-4" />
+  return <FileText className="h-4 w-4" />
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
 }
 
 type DiffRow = {

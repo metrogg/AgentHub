@@ -40,8 +40,10 @@ export async function startAgentConversation({
   for (const agent of agents) {
     const existing = workspaceAgentsList.find((wa) => wa.name === agent.name && wa.role === agent.role)
     if (existing) {
-      invitedAgents.push(existing)
+      const updated = await api.updateWorkspaceAgent(workspace.id, existing.id, toAgentConfigInput(agent))
+      invitedAgents.push(updated)
       savedToWorkspaceAgentId.set(agent.id, existing.id)
+      workspaceAgentsList = workspaceAgentsList.map((item) => (item.id === existing.id ? updated : item))
       continue
     }
     const workspaceAgent = await api.addWorkspaceAgent(workspace.id, toAgentConfigInput(agent))

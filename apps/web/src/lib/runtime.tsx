@@ -81,7 +81,7 @@ function readArtifacts(value: unknown, codeAgentRun: CodeAgentRunMetadata | null
     const artifact = item as { id?: unknown; type?: unknown }
     if (typeof artifact.id !== 'string' || typeof artifact.type !== 'string' || seen.has(artifact.id)) return false
     seen.add(artifact.id)
-    return ['diff', 'preview', 'file', 'deploy'].includes(artifact.type)
+    return ['diff', 'preview', 'file', 'deploy', 'workflow'].includes(artifact.type)
   })
 }
 

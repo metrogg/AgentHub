@@ -489,6 +489,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       memberType: 'agent',
       memberId: agent.id,
     })
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
+    await ensureAgentChildSession(session.workspaceId, workspace?.name ?? 'Agent Group', user.sub, agent)
     await db.update(workspaces).set({ updatedAt: new Date() }).where(eq(workspaces.id, session.workspaceId))
     const [updatedCard] = await db
       .update(messages)
@@ -1187,7 +1189,7 @@ async function ensureAgentChildSession(
   taskTitle?: string
 ) {
   if (agent) {
-    const [existing] = await db
+    const existingSessions = await db
       .select()
       .from(sessions)
       .where(
@@ -1199,8 +1201,8 @@ async function ensureAgentChildSession(
         )
       )
       .orderBy(desc(sessions.updatedAt))
-      .limit(1)
-    if (existing) return existing
+    const fixedSession = existingSessions.find((session) => !isGeneratedTaskSession(session.metadata))
+    if (fixedSession) return fixedSession
   }
 
   const [created] = await db
@@ -1215,6 +1217,10 @@ async function ensureAgentChildSession(
     .returning()
   if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Agent 子会话创建失败')
   return created
+}
+
+function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {
+  return Boolean(metadata?.orchestratorTaskId || metadata?.orchestratorRunId || metadata?.hiddenFromSessionTree)
 }
 
 async function ensureWorkspaceAgentChildSessions(workspaceId: string, ownerId: string) {

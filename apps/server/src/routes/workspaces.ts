@@ -484,7 +484,14 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       const title = `${ws.name} · ${agent?.role ?? '任务'} · ${task.title.slice(0, 24)}`
       const [session] = await db
         .insert(sessions)
-        .values({ title, type: 'direct', ownerId: user.sub, workspaceId: id, workspaceAgentId: agent?.id ?? null })
+        .values({
+          title,
+          type: 'direct',
+          ownerId: user.sub,
+          workspaceId: id,
+          workspaceAgentId: agent?.id ?? null,
+          metadata: { hiddenFromSessionTree: true, workspaceTaskId: task.id },
+        })
         .returning()
       if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
       sessionId = session.id
