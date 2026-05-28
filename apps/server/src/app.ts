@@ -61,7 +61,23 @@ function resolveCorsOrigin(origin: string | undefined) {
   if (!origin) return allowedOrigins[0] ?? env.CORS_ORIGIN
   if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return origin
   if (/^http:\/\/(localhost|127\.0\.0\.1):517\d$/.test(origin)) return origin
+  if (isPrivateLanDevOrigin(origin)) return origin
   return allowedOrigins[0] ?? env.CORS_ORIGIN
+}
+
+function isPrivateLanDevOrigin(origin: string) {
+  try {
+    const url = new URL(origin)
+    if (url.protocol !== 'http:' || !/^517\d$/.test(url.port)) return false
+    const host = url.hostname
+    return (
+      host.startsWith('10.') ||
+      host.startsWith('192.168.') ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    )
+  } catch {
+    return false
+  }
 }
 
 function installStaticRoutes(app: Hono) {

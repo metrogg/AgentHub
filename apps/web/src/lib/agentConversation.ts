@@ -108,29 +108,12 @@ export async function startAgentConversation({
     const [agent] = agents
     const [workspaceAgent] = invitedAgents
     if (!agent || !workspaceAgent) throw new Error('Agent session create failed')
-    // 优先复用已有的 agent 子会话（POST 接口会自动查找或创建）
+    if (dedicatedSingleAgent) {
+      return ensureAgentDirectSession(agent, workspace.id, workspaceAgent.id)
+    }
+
     const { session } = await api.openWorkspaceAgentSession(workspace.id, workspaceAgent.id)
-    if (!dedicatedSingleAgent) return session
-
-    const metadata = {
-      ...(session.metadata ?? {}),
-      kind: 'agent-direct',
-      savedAgentId: agent.id,
-    }
-    if (
-      session.title === agent.name &&
-      session.metadata?.kind === 'agent-direct' &&
-      session.metadata?.savedAgentId === agent.id
-    ) {
-      return session
-    }
-
-    return api.updateSession(session.id, {
-      title: agent.name,
-      workspaceId: workspace.id,
-      workspaceAgentId: workspaceAgent.id,
-      metadata,
-    })
+    return session
   }
 
   const agentIds = invitedAgents.map((a) => a.id)
@@ -166,7 +149,8 @@ async function findWorkspaceForAgent(agent: SavedAgentConfig) {
       return (
         isDirectWorkspaceAgentSession(session) &&
         metadata.kind === 'agent-direct' &&
-        metadata.savedAgentId === agent.id
+        metadata.savedAgentId === agent.id &&
+        !groupWorkspaceIds.has(session.workspaceId!)
       )
     })
     if (directBySavedId?.workspaceId) {
@@ -221,6 +205,77 @@ async function findWorkspaceForAgent(agent: SavedAgentConfig) {
   return null
 }
 
+async function ensureAgentDirectSession(
+  agent: SavedAgentConfig,
+  workspaceId: string,
+  workspaceAgentId: string,
+) {
+  const metadata = { kind: 'agent-direct', savedAgentId: agent.id }
+  const { items } = await api.listSessions()
+  const existing = findAgentDirectSession(items, agent, workspaceId, workspaceAgentId)
+  if (existing) {
+    const nextMetadata: Record<string, unknown> = { ...(existing.metadata ?? {}), ...metadata }
+    delete nextMetadata.hiddenFromSessionTree
+    const needsUpdate =
+      existing.title !== agent.name ||
+      existing.workspaceId !== workspaceId ||
+      existing.workspaceAgentId !== workspaceAgentId ||
+      existing.metadata?.kind !== metadata.kind ||
+      existing.metadata?.savedAgentId !== metadata.savedAgentId
+    if (!needsUpdate) return existing
+
+    return api.updateSession(existing.id, {
+      title: agent.name,
+      workspaceId,
+      workspaceAgentId,
+      metadata: nextMetadata,
+    })
+  }
+
+  return api.createSession({
+    title: agent.name,
+    type: 'direct',
+    workspaceId,
+    workspaceAgentId,
+    metadata,
+  })
+}
+
+function findAgentDirectSession(
+  sessions: Session[],
+  agent: SavedAgentConfig,
+  workspaceId: string,
+  workspaceAgentId: string,
+) {
+  const bySavedAgentId = sessions.find((session) => {
+    const metadata = session.metadata ?? {}
+    return (
+      isDirectWorkspaceAgentSession(session) &&
+      session.workspaceId === workspaceId &&
+      metadata.kind === 'agent-direct' &&
+      metadata.savedAgentId === agent.id
+    )
+  })
+  if (bySavedAgentId) return bySavedAgentId
+
+  const agentName = normalizeMatchText(agent.name)
+  const agentRole = normalizeMatchText(agent.role)
+  return (
+    sessions.find((session) => {
+      if (!isDirectWorkspaceSession(session)) return false
+      if (session.workspaceId !== workspaceId) {
+        return false
+      }
+      if (session.workspaceAgentId && session.workspaceAgentId !== workspaceAgentId) return false
+      if (isGeneratedTaskMetadata(session.metadata)) return false
+      const metadata = session.metadata ?? {}
+      if (metadata.kind === 'workspace-agent-child') return true
+      if (metadata.kind && metadata.kind !== 'agent-direct') return false
+      return sessionLooksLikeAgentSession(session.title, agentName, agentRole)
+    }) ?? null
+  )
+}
+
 function singleAgentWorkspaceName(agent: SavedAgentConfig) {
   return (agent.name.trim() || 'Agent').slice(0, 80)
 }
@@ -252,6 +307,10 @@ function findReusableWorkspaceAgent(
 
 function isDirectWorkspaceAgentSession(session: Session) {
   return session.type === 'direct' && Boolean(session.workspaceId && session.workspaceAgentId)
+}
+
+function isDirectWorkspaceSession(session: Session) {
+  return session.type === 'direct' && Boolean(session.workspaceId)
 }
 
 function isGeneratedTaskMetadata(metadata: Record<string, unknown> | null | undefined) {

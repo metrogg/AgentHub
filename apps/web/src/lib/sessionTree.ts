@@ -50,8 +50,8 @@ export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string
 function agentSessionVisibility(session: Session, groupWorkspaceIds: Set<string>): 'top' | 'child' | 'hidden' {
   if (session.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return 'top'
   const metadata = session.metadata ?? {}
-  if (metadata.hiddenFromSessionTree) return 'hidden'
   if (metadata.kind === 'agent-direct') return 'top'
+  if (metadata.hiddenFromSessionTree) return 'hidden'
   if (metadata.kind === 'workspace-agent-child') return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
   if (metadata.kind === 'orchestrator-task') return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
   if (groupWorkspaceIds.has(session.workspaceId)) return 'child'

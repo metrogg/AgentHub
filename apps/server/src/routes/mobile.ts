@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Hono } from 'hono'
 import { env } from '../env'
+import { getRuntimeServerPort } from '../lib/runtime-server'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 
 const PAIRING_TTL_MS = 2 * 60 * 1000
@@ -12,7 +13,9 @@ const execFileAsync = promisify(execFile)
 interface PairingRecord {
   code: string
   baseUrl: string
+  baseUrls: string[]
   webUrl: string
+  webUrls: string[]
   expiresAt: number
 }
 
@@ -25,19 +28,25 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
     const body: Record<string, unknown> = await c.req
       .json<Record<string, unknown>>()
       .catch(() => ({} as Record<string, unknown>))
-    const host = typeof body.host === 'string' && body.host.trim() ? body.host.trim() : await pickLanAddress()
-    const port = typeof body.port === 'number' ? body.port : Number(env.PORT || 8000)
-    const webPort = typeof body.webPort === 'number' ? body.webPort : 5173
+    const requestedHost = typeof body.host === 'string' && body.host.trim() ? body.host.trim() : ''
+    const host = requestedHost || await pickLanAddress()
+    const port = typeof body.port === 'number' ? body.port : getRuntimeServerPort() ?? Number(env.PORT || 8000)
+    const webPort = typeof body.webPort === 'number' ? body.webPort : env.AGENTHUB_WEB_DIST ? port : 5173
     const code = createPairingCode()
     const expiresAt = Date.now() + PAIRING_TTL_MS
-    const baseUrl = `http://${host}:${port}`
-    const webUrl = `http://${host}:${webPort}`
-    const record: PairingRecord = { code, baseUrl, webUrl, expiresAt }
+    const hosts = uniqueHosts([host, ...listLanAddresses(), '10.0.2.2'])
+    const baseUrls = hosts.map((item) => `http://${item}:${port}`)
+    const webUrls = hosts.map((item) => `http://${item}:${webPort}`)
+    const baseUrl = baseUrls[0] ?? `http://${host}:${port}`
+    const webUrl = webUrls[0] ?? `http://${host}:${webPort}`
+    const record: PairingRecord = { code, baseUrl, baseUrls, webUrl, webUrls, expiresAt }
     pairings.set(code, record)
     const payload = {
       version: 1,
       baseUrl,
+      baseUrls,
       webUrl,
+      webUrls,
       pairingCode: code,
       expiresAt: new Date(expiresAt).toISOString(),
     }
@@ -46,6 +55,7 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
       ttlSeconds: Math.floor(PAIRING_TTL_MS / 1000),
       qrPayload: JSON.stringify(payload),
       localAddresses: listLanAddresses(),
+      baseUrls,
     })
   })
   .post('/pair/confirm', async (c) => {
@@ -62,9 +72,14 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ error: '配对码已过期' }, 410)
     }
     pairings.delete(code)
+    const requestBaseUrl = requestOrigin(c.req.raw)
+    const baseUrl = requestBaseUrl && isAllowedPairingBaseUrl(requestBaseUrl, record.baseUrls)
+      ? requestBaseUrl
+      : record.baseUrl
+    const webUrl = record.webUrls.find((item) => sameHost(item, baseUrl)) ?? record.webUrl
     return c.json({
-      baseUrl: record.baseUrl,
-      webUrl: record.webUrl,
+      baseUrl,
+      webUrl,
       deviceName: typeof body.deviceName === 'string' && body.deviceName.trim() ? body.deviceName.trim() : 'Android',
       authToken: `mobile_${randomUUID().replace(/-/g, '')}`,
       expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
@@ -79,6 +94,47 @@ function cleanupExpiredPairings() {
   const now = Date.now()
   for (const [code, record] of pairings) {
     if (record.expiresAt <= now) pairings.delete(code)
+  }
+}
+
+function uniqueHosts(hosts: string[]) {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const host of hosts) {
+    const normalized = normalizeHost(host)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    result.push(normalized)
+  }
+  return result
+}
+
+function normalizeHost(value: string) {
+  return value
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .replace(/:\d+$/, '')
+}
+
+function requestOrigin(request: Request) {
+  const url = new URL(request.url)
+  const host = request.headers.get('host') || url.host
+  if (!host) return ''
+  const proto = request.headers.get('x-forwarded-proto') || url.protocol.replace(/:$/, '') || 'http'
+  return `${proto}://${host}`
+}
+
+function isAllowedPairingBaseUrl(value: string, allowed: string[]) {
+  const normalized = value.replace(/\/+$/, '').toLowerCase()
+  return allowed.some((item) => item.replace(/\/+$/, '').toLowerCase() === normalized)
+}
+
+function sameHost(left: string, right: string) {
+  try {
+    return new URL(left).hostname === new URL(right).hostname
+  } catch {
+    return false
   }
 }
 
