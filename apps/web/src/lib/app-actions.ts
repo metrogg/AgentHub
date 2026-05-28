@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useLocation, useNavigate, type NavigateFunction } from 'react-router-dom'
+import { workspaceNameFromPath } from '@agenthub/shared'
 import { requestNewSessionDialog } from '../components/chat/GlobalNewSessionDialog'
 import { useChatStore } from '../stores/chatStore'
 import { api } from './api'
@@ -105,10 +106,7 @@ export function useAppActions() {
   return { busyAction, runAppAction }
 }
 
-export function workspaceNameFromPath(value: string) {
-  const normalized = value.trim().replace(/[\\/]+$/, '')
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
-}
+export { workspaceNameFromPath }
 
 async function runNativeEditCommand(id: EditCommandId) {
   const target = getEditableTarget()

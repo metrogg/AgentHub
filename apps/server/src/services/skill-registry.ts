@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { basename, delimiter, dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { env } from '../env'
@@ -109,19 +110,38 @@ function defaultSkillRoots() {
 
   const roots = [
     ...configured,
+    resolve(projectRoot, '.codex', 'skills'),
+    resolve(projectRoot, '.agents', 'skills'),
+    resolve(projectRoot, '.claude', 'skills'),
     resolve(projectRoot, 'skills'),
     resolve(projectRoot, 'storage', 'skills'),
   ]
 
+  const home = homedir()
+  if (home) {
+    roots.push(resolve(home, '.codex', 'skills'))
+    roots.push(resolve(home, '.agents', 'skills'))
+    roots.push(resolve(home, '.claude', 'skills'))
+  }
   if (env.CODEX_HOME) roots.push(resolve(env.CODEX_HOME, 'skills'))
   return [...new Set(roots)]
 }
 
 async function childDirectories(root: string) {
   const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
-  return entries
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-    .map((entry) => resolve(root, entry.name))
+  const dirs: string[] = []
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const childPath = resolve(root, entry.name)
+    if (entry.isDirectory()) {
+      dirs.push(childPath)
+      continue
+    }
+    if (!entry.isSymbolicLink()) continue
+    const info = await stat(childPath).catch(() => null)
+    if (info?.isDirectory()) dirs.push(childPath)
+  }
+  return dirs
 }
 
 async function readSkillSummary(skillPath: string, rootPath: string): Promise<SkillSummary | null> {
@@ -208,10 +228,23 @@ function limitText(value: string, max: number) {
 
 function sourceLabel(rootPath: string) {
   const normalized = rootPath.replace(/\\/g, '/').toLowerCase()
+  const projectCodexSkills = resolve(projectRoot, '.codex', 'skills').replace(/\\/g, '/').toLowerCase()
+  const projectAgentsSkills = resolve(projectRoot, '.agents', 'skills').replace(/\\/g, '/').toLowerCase()
+  const projectClaudeSkills = resolve(projectRoot, '.claude', 'skills').replace(/\\/g, '/').toLowerCase()
   const projectSkills = resolve(projectRoot, 'skills').replace(/\\/g, '/').toLowerCase()
   const storageSkills = resolve(projectRoot, 'storage', 'skills').replace(/\\/g, '/').toLowerCase()
+  const home = homedir()
+  const homeCodexSkills = home ? resolve(home, '.codex', 'skills').replace(/\\/g, '/').toLowerCase() : ''
+  const homeAgentsSkills = home ? resolve(home, '.agents', 'skills').replace(/\\/g, '/').toLowerCase() : ''
+  const homeClaudeSkills = home ? resolve(home, '.claude', 'skills').replace(/\\/g, '/').toLowerCase() : ''
+  if (normalized === projectCodexSkills) return 'Codex 项目'
+  if (normalized === projectAgentsSkills) return 'Agents 项目'
+  if (normalized === projectClaudeSkills) return 'Claude 项目'
   if (normalized === projectSkills) return '项目内置'
   if (normalized === storageSkills) return '本机安装'
+  if (normalized === homeCodexSkills) return 'Codex 本机'
+  if (normalized === homeAgentsSkills) return 'Agents 本机'
+  if (normalized === homeClaudeSkills) return 'Claude 本机'
   if (env.CODEX_HOME && normalized === resolve(env.CODEX_HOME, 'skills').replace(/\\/g, '/').toLowerCase()) return 'Codex 本机'
   return basename(rootPath) || rootPath
 }

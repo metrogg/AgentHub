@@ -491,7 +491,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
 
     let sessionId = task.sessionId
     if (!sessionId) {
-      const title = `${ws.name} · ${agent?.role ?? '任务'} · ${task.title.slice(0, 24)}`
+      const title = `${ws.name} / ${agent?.role ?? '任务'} / ${task.title.slice(0, 24)}`
       const [session] = await db
         .insert(sessions)
         .values({
@@ -569,7 +569,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const summarySession = await db
       .insert(sessions)
-      .values({ title: `${ws.name} · 协调汇总`, type: 'group', ownerId: user.sub, workspaceId: id })
+      .values({ title: `${ws.name} / 协调汇总`, type: 'group', ownerId: user.sub, workspaceId: id })
       .returning()
     const session = summarySession[0]
     if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '总结会话创建失败')

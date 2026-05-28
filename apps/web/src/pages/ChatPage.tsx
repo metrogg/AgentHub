@@ -1,5 +1,6 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { workspaceNameFromPath } from '@agenthub/shared'
 import { ArrowUp, AtSign, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
@@ -671,7 +672,3 @@ function titleFromMessage(message: string) {
   return message.length > 18 ? `${message.slice(0, 18)}...` : message
 }
 
-function workspaceNameFromPath(value: string) {
-  const normalized = value.trim().replace(/[\\/]+$/, '')
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || '工作区文件夹'
-}

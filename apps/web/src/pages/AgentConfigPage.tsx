@@ -359,8 +359,8 @@ export default function AgentConfigPage() {
                         <option value="opencode">OpenCode</option>
                         <option value="gemini">Gemini CLI</option>
                       </SelectField>
-                      <SelectField label={t('默认模型')} value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
-                        <option value="">{t('自动模型')}</option>
+                      <SelectField label="Agent 模型覆盖" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
+                        <option value="">使用 Coding Tool 默认模型</option>
                         {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
                       </SelectField>
                       <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
@@ -669,7 +669,7 @@ function sandboxLabel(value: WorkspaceAgent['sandboxPolicy']) {
 }
 
 function modelName(modelId: string | null, models: ModelCatalogItem[]) {
-  if (!modelId) return '自动模型'
+  if (!modelId) return '跟随 Coding Tool 默认模型'
   const model = models.find((item) => item.id === modelId || item.modelId === modelId)
   return model?.name || model?.modelId || modelId
 }

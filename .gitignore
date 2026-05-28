@@ -63,6 +63,7 @@ packages/*/storage/
 # Runtime
 .agenthub-port
 .agenthub-*
+.AgentHub/
 !.agenthub.example
 
 # Logs
