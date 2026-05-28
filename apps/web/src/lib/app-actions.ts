@@ -44,7 +44,7 @@ export async function openWorkspaceFolderAsSession({
         template: 'classic',
       })
     ).workspace
-  const { session } = await api.openWorkspaceGroupSession(workspace.id)
+  const { session } = await api.openWorkspaceGroupSession(workspace.id, [])
   await fetchSessions()
   await selectSession(session.id)
   navigate(`/chat/${session.id}`)

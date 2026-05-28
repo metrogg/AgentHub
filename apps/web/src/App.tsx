@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
-import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
+import { type PointerEvent as ReactPointerEvent, Component, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import AgentConfigPage from './pages/AgentConfigPage'
@@ -32,6 +32,38 @@ export default function App() {
       <AppShell />
     </I18nProvider>
   )
+}
+
+class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean; error?: Error }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props)
+    this.state = { hasError: false }
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex h-screen flex-col items-center justify-center bg-white px-6 text-center">
+          <div className="text-lg font-semibold text-neutral-900">页面出现错误</div>
+          <div className="mt-2 max-w-md text-sm text-neutral-500">
+            {this.state.error?.message || '未知错误'}
+          </div>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-6 rounded-lg bg-neutral-900 px-4 py-2 text-sm text-white transition hover:bg-neutral-800"
+          >
+            刷新页面
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 function AppShell() {
@@ -87,7 +119,7 @@ function AppShell() {
       <NativeDesktopBridge />
       <GlobalShortcutBridge />
       {desktop && <DesktopAppMenu />}
-      <div className={desktop ? 'min-h-0 flex-1' : 'contents'}>{routes}</div>
+      <div className={desktop ? 'min-h-0 flex-1' : 'contents'}><ErrorBoundary>{routes}</ErrorBoundary></div>
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
     </div>
   )

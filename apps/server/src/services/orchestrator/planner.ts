@@ -573,7 +573,11 @@ export function normalizeTaskOutputContract(value: unknown, taskId: string): Tas
         .map((entry) => {
           if (!entry || typeof entry !== 'object') return null
           const candidate = entry as { key?: unknown; schemaType?: unknown }
-          const key = cleanPlanText(candidate.key) || `task_${taskId}_output`
+          const rawKey = cleanPlanText(candidate.key)
+          // 修复：如果 LLM 生成了包含其他 task ID 的 blackboard key，强制修正为当前 task ID
+          const key = rawKey
+            ? rawKey.replace(/^task_[a-f0-9-]+_output$/, `task_${taskId}_output`)
+            : `task_${taskId}_output`
           const schemaType = parseBlackboardSchemaType(candidate.schemaType)
           return schemaType ? { key, schemaType } : null
         })

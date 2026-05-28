@@ -147,7 +147,7 @@ export class OrchestratorEngine {
             await db.update(workspaceTasks).set({ status: 'pending', errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
             broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt, strategy: 'retry', sessionId: childInfo.sessionId },
+              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt, strategy: 'retry', sessionId: groupSessionId },
             })
           }
           continue
@@ -172,7 +172,7 @@ export class OrchestratorEngine {
             await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
             broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId, strategy: 'agent_substitution', sessionId: childInfo.sessionId },
+              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId, strategy: 'agent_substitution', sessionId: groupSessionId },
             })
           }
           continue
@@ -196,7 +196,7 @@ export class OrchestratorEngine {
             await db.update(workspaceTasks).set({ status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
             broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', strategy: 'local_replan', sessionId: childInfo.sessionId },
+              payload: { taskId: currentTask.id, status: 'pending', strategy: 'local_replan', sessionId: groupSessionId },
             })
           }
           continue
@@ -357,7 +357,7 @@ export class OrchestratorEngine {
             })
             broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: task.id, status: 'blocked', error: result.error },
+              payload: { taskId: task.id, status: 'blocked', error: result.error, sessionId: groupSessionId },
             })
           }
         }
@@ -534,7 +534,7 @@ export class OrchestratorEngine {
         })
         broadcastSessionEvent(groupSessionId, {
           type: 'task:update',
-          payload: { taskId: task.id, status: 'failed', error: `Git worktree 创建失败：${err?.message || '未知错误'}` },
+          payload: { taskId: task.id, status: 'failed', error: `Git worktree 创建失败：${err?.message || '未知错误'}`, sessionId: groupSessionId },
         })
         return {
           taskId: task.id,
@@ -619,7 +619,7 @@ export class OrchestratorEngine {
 
     broadcastSessionEvent(groupSessionId, {
       type: 'task:update',
-      payload: { taskId: task.id, status: 'running', sessionId: childInfo.sessionId },
+      payload: { taskId: task.id, status: 'running', sessionId: groupSessionId },
     })
 
     const taskStartTime = Date.now()
@@ -974,7 +974,7 @@ export class OrchestratorEngine {
 
       broadcastSessionEvent(groupSessionId, {
         type: 'task:update',
-        payload: { taskId: task.id, status: 'done', sessionId: childInfo.sessionId, agentId: agent.id, agentName: agent.name },
+        payload: { taskId: task.id, status: 'done', sessionId: groupSessionId, agentId: agent.id, agentName: agent.name },
       })
 
       await emitRunEvent({
@@ -1020,7 +1020,7 @@ export class OrchestratorEngine {
 
       broadcastSessionEvent(groupSessionId, {
         type: 'task:update',
-        payload: { taskId: task.id, status: 'failed', sessionId: childInfo.sessionId, agentId: agent.id, agentName: agent.name, error: error?.message || 'Unknown error' },
+        payload: { taskId: task.id, status: 'failed', sessionId: groupSessionId, agentId: agent.id, agentName: agent.name, error: error?.message || 'Unknown error' },
       })
 
       await emitRunEvent({
@@ -1348,7 +1348,6 @@ async function ensureChildSession(
       workspaceAgentId: agent?.id ?? null,
       metadata: {
         kind: 'orchestrator-task',
-        hiddenFromSessionTree: true,
       },
     })
     .returning()

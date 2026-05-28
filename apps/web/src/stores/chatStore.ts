@@ -436,12 +436,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const { message } = e.payload as { message: Message }
         cancelledSessions.delete(sessionId)
         clearPendingStream()
-        set((s) => ({
-          messages: [...s.messages, message],
-          streamingMessage: null,
-          streamingCodeAgentRun: null,
-          agentTyping: false,
-        }))
+        set((s) => {
+          const exists = s.messages.some((msg) => msg.id === message.id)
+          return {
+            messages: exists
+              ? s.messages.map((msg) => (msg.id === message.id ? message : msg))
+              : [...s.messages, message],
+            streamingMessage: null,
+            streamingCodeAgentRun: null,
+            agentTyping: false,
+          }
+        })
         break
       }
       case 'message:cancelled':

@@ -23,8 +23,10 @@ import {
   asc,
   desc,
 } from '@agenthub/db'
+import { inArray } from 'drizzle-orm'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
+import { broadcastSessionEvent } from '../services/agent-runner'
 import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
 import { Planner } from '../services/orchestrator/planner'
 import {
@@ -330,25 +332,82 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           .where(eq(workspaceAgents.workspaceId, session.workspaceId))
           .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
       : []
-    const plan = await buildDynamicOrchestratorPlan(content, agentList, session.workspaceId)
-    const [card] = await db
+
+    // 先插入 loading 占位消息，立即返回，避免前端空白等待
+    const loadingPlan: OrchestratorPlan = {
+      kind: 'orchestrator_plan',
+      title: '计划生成中',
+      goal: '正在分析任务并制定执行计划，请稍候...',
+      summary: '正在分析任务并制定执行计划，请稍候...',
+      tasks: [],
+      agents: [],
+    }
+    const [loadingCard] = await db
       .insert(messages)
       .values({
         sessionId,
         senderId: 'orchestrator',
         senderType: 'agent',
         type: 'task_card',
-        content: plan.summary,
-        metadata: { plan: { ...plan, messageId: '' } },
+        content: loadingPlan.summary,
+        metadata: { plan: { ...loadingPlan, messageId: '' } },
       })
       .returning()
-    if (!card) throw AppError.fromCode(AppErrorCodes.ORCHESTRATOR_PLAN_FAILED, '编排计划卡片创建失败')
-    const planWithId = { ...plan, messageId: card.id }
+    if (!loadingCard) throw AppError.fromCode(AppErrorCodes.ORCHESTRATOR_PLAN_FAILED, '编排计划卡片创建失败')
+
+    const loadingPlanWithId = { ...loadingPlan, messageId: loadingCard.id }
     await db
       .update(messages)
-      .set({ metadata: { plan: planWithId } })
-      .where(eq(messages.id, card.id))
-    return c.json({ ...card, metadata: { plan: planWithId } })
+      .set({ metadata: { plan: loadingPlanWithId } })
+      .where(eq(messages.id, loadingCard.id))
+
+    // 立即广播 loading 消息，让前端即时显示
+    broadcastSessionEvent(sessionId, {
+      type: 'message:completed',
+      payload: { sessionId, message: { ...loadingCard, metadata: { plan: loadingPlanWithId } } },
+    })
+
+    // 后台异步生成完整计划
+    ;(async () => {
+      try {
+        const plan = await buildDynamicOrchestratorPlan(content, agentList, session.workspaceId)
+        const planWithId = { ...plan, messageId: loadingCard.id }
+        await db
+          .update(messages)
+          .set({ content: plan.summary, metadata: { plan: planWithId } })
+          .where(eq(messages.id, loadingCard.id))
+        const [updatedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
+        if (updatedCard) {
+          broadcastSessionEvent(sessionId, {
+            type: 'message:completed',
+            payload: { sessionId, message: { ...updatedCard, metadata: { plan: planWithId } } },
+          })
+        }
+      } catch (err: any) {
+        logger.error({ err: err?.message, sessionId }, 'Orchestrator plan generation failed')
+        const failedPlan: OrchestratorPlan = {
+          kind: 'orchestrator_plan',
+          title: '计划生成失败',
+          goal: '分析任务时出错，请稍后重试',
+          summary: '分析任务时出错，请稍后重试',
+          tasks: [],
+          agents: [],
+        }
+        await db
+          .update(messages)
+          .set({ content: failedPlan.summary, metadata: { plan: { ...failedPlan, messageId: loadingCard.id } } })
+          .where(eq(messages.id, loadingCard.id))
+        const [failedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
+        if (failedCard) {
+          broadcastSessionEvent(sessionId, {
+            type: 'message:completed',
+            payload: { sessionId, message: failedCard },
+          })
+        }
+      }
+    })()
+
+    return c.json({ ...loadingCard, metadata: { plan: loadingPlanWithId } })
   })
   .post('/:sessionId/artifact-demo', zValidator('json', artifactDemoSchema), async (c) => {
     const user = c.get('user')
@@ -660,7 +719,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           ownerId: user.sub,
           workspaceId,
           workspaceAgentId: agent?.id ?? null,
-          metadata: { orchestratorRunId: runId, orchestratorTaskId: task.id },
+          metadata: { kind: 'orchestrator-task', orchestratorRunId: runId, orchestratorTaskId: task.id },
         })
         .returning()
       if (!childSession) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '任务会话创建失败')
@@ -791,7 +850,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     })
 
     const result: OrchestratorDispatchResult = { runId, workspaceId, groupSessionId, tasks: taskResults }
-    await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result)
+    await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result, groupSessionId)
     return c.json(result)
   })
 
@@ -920,7 +979,7 @@ function planAgentFromWorkspaceAgent(agent: typeof workspaceAgents.$inferSelect)
     modelId: agent.modelId,
     runtimeType: agent.runtimeType,
     codeAgentType: agent.codeAgentType ?? undefined,
-    capabilityTags: agent.capabilityTags,
+    capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: agent.toolPermissions,
     sandboxPolicy: agent.sandboxPolicy,
   }
@@ -1004,26 +1063,6 @@ function buildDispatchPrompt(
   ].join('')
 }
 
-const ORCHESTRATOR_PROFILE: AgentRunProfile = {
-  id: 'orchestrator',
-  name: 'Supervisor',
-  role: '调度中枢',
-  color: '#111827',
-  systemPrompt:
-    '你是 AgentHub Supervisor（调度中枢）。你的职责是：1) 分析用户意图并判断是否需要多 Agent 协作；2) 如需协作，调用编排器生成执行计划；3) 监控任务执行状态并播报给用户；4) 禁止普通 Agent 在群里自由发言，所有 Agent 的发言必须由你调度触发。回复简洁，聚焦下一步动作。',
-  runtimeType: 'llm',
-  capabilityTags: ['supervise', 'orchestrate', 'dispatch'],
-  toolPermissions: ['chat', 'workspace:read'],
-  sandboxPolicy: 'read-only',
-  contextPolicy: 'workspace-aware',
-  approvalRequired: true,
-}
-
-function withWorkspacePath(profile: AgentRunProfile, projectPath?: string | null): AgentRunProfile {
-  const trimmed = projectPath?.trim()
-  return trimmed ? { ...profile, projectPath: trimmed } : profile
-}
-
 function toAgentProfile(agent: typeof workspaceAgents.$inferSelect, projectPath?: string | null): AgentRunProfile {
   return {
     id: agent.id,
@@ -1034,7 +1073,7 @@ function toAgentProfile(agent: typeof workspaceAgents.$inferSelect, projectPath?
     modelId: agent.modelId,
     runtimeType: agent.runtimeType,
     codeAgentType: agent.codeAgentType ?? undefined,
-    capabilityTags: agent.capabilityTags,
+    capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: agent.toolPermissions,
     sandboxPolicy: agent.sandboxPolicy,
     contextPolicy: agent.contextPolicy,
@@ -1096,6 +1135,11 @@ function aliasesForAgent(agent: typeof workspaceAgents.$inferSelect) {
   return [...aliases]
 }
 
+function isOrchestratorAlias(agent: typeof workspaceAgents.$inferSelect): boolean {
+  const text = [agent.name, agent.role, ...(agent.capabilityTags ?? [])].join(' ').toLowerCase()
+  return text.includes('orchestrator') || text.includes('协调器') || text.includes('调度')
+}
+
 async function runGroupReplies(workspaceId: string, sessionId: string, msg: MessageRow, content: string) {
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
   const projectPath = workspace?.projectPath ?? null
@@ -1105,32 +1149,68 @@ async function runGroupReplies(workspaceId: string, sessionId: string, msg: Mess
     .where(eq(workspaceAgents.workspaceId, workspaceId))
     .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
 
-  const profiles: AgentRunProfile[] = []
+  const otherProfiles: AgentRunProfile[] = []
   const seen = new Set<string>()
   const pushProfile = (profile: AgentRunProfile) => {
     if (seen.has(profile.id)) return
     seen.add(profile.id)
-    profiles.push(profile)
+    otherProfiles.push(profile)
   }
 
+  // 判断是否需要 Orchestrator 调度
+  let needOrchestrator = false
   if (hasMention(content, ['orchestrator', 'coordinator', 'agenthub', '协调器', '调度'])) {
-    pushProfile(withWorkspacePath(ORCHESTRATOR_PROFILE, projectPath))
+    needOrchestrator = true
   }
 
   for (const agent of agentList) {
+    // 保护：跳过与系统 Orchestrator 同名的 workspace agent，避免硬编码 Orchestrator 和同名 Agent 同时回复
+    if (isOrchestratorAlias(agent)) continue
     if (hasMention(content, aliasesForAgent(agent))) {
       pushProfile(toAgentProfile(agent, projectPath))
     }
   }
 
-  if (!profiles.length) {
-    // Supervisor 模式：没有显式 @mention 时，默认由 Orchestrator 调度
-    // 不再允许单个 agent autoInvoke 抢话
-    pushProfile(withWorkspacePath(ORCHESTRATOR_PROFILE, projectPath))
+  if (!needOrchestrator && otherProfiles.length === 0) {
+    // 没有显式 @mention 时，默认由 Orchestrator 调度
+    needOrchestrator = true
   }
 
   const { runAgentReply } = await import('../services/agent-runner')
-  await Promise.allSettled(profiles.map((profile) => runAgentReply(sessionId, msg, profile)))
+
+  if (needOrchestrator) {
+    try {
+      const plan = await buildDynamicOrchestratorPlan(content, agentList, workspaceId)
+      const [card] = await db
+        .insert(messages)
+        .values({
+          sessionId,
+          senderId: 'orchestrator',
+          senderType: 'agent',
+          type: 'task_card',
+          content: plan.summary,
+          metadata: { plan: { ...plan, messageId: '' } },
+        })
+        .returning()
+      if (card) {
+        const planWithId = { ...plan, messageId: card.id }
+        await db
+          .update(messages)
+          .set({ metadata: { plan: planWithId } })
+          .where(eq(messages.id, card.id))
+        broadcastSessionEvent(sessionId, {
+          type: 'message:completed',
+          payload: { sessionId, message: { ...card, metadata: { plan: planWithId } } },
+        })
+      }
+    } catch (err: any) {
+      logger.error({ err: err?.message, sessionId }, 'Orchestrator plan generation failed in group reply')
+    }
+  }
+
+  if (otherProfiles.length) {
+    await Promise.allSettled(otherProfiles.map((profile) => runAgentReply(sessionId, msg, profile)))
+  }
 }
 
 async function createWorkspaceGroupSession(
@@ -1205,17 +1285,45 @@ async function ensureAgentChildSession(
 }
 
 function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {
-  return Boolean(metadata?.orchestratorTaskId || metadata?.orchestratorRunId || metadata?.hiddenFromSessionTree)
+  return Boolean(
+    metadata?.orchestratorTaskId ||
+      metadata?.orchestratorRunId ||
+      metadata?.hiddenFromSessionTree ||
+      metadata?.kind === 'orchestrator-task',
+  )
 }
 
 async function ensureWorkspaceAgentChildSessions(workspaceId: string, ownerId: string) {
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
   if (!workspace || workspace.ownerId !== ownerId) return
+
+  // 只给群聊 session_members 中的 Agent 创建 child session，避免 workspace 下所有 Agent 都出现子话题
+  const [groupSession] = await db
+    .select()
+    .from(sessions)
+    .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.type, 'group')))
+    .orderBy(desc(sessions.createdAt))
+    .limit(1)
+
+  if (!groupSession) return
+
+  const members = await db
+    .select()
+    .from(sessionMembers)
+    .where(eq(sessionMembers.sessionId, groupSession.id))
+
+  const agentMemberIds = members
+    .filter((m) => m.memberType === 'agent' && m.memberId !== 'orchestrator')
+    .map((m) => m.memberId)
+
+  if (agentMemberIds.length === 0) return
+
   const agents = await db
     .select()
     .from(workspaceAgents)
-    .where(eq(workspaceAgents.workspaceId, workspaceId))
+    .where(and(eq(workspaceAgents.workspaceId, workspaceId), inArray(workspaceAgents.id, agentMemberIds)))
     .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+
   for (const agent of agents) {
     await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent)
   }
@@ -1304,7 +1412,8 @@ async function updatePlanCardDispatchResult(
   messageId: string,
   previousMetadata: Record<string, unknown> | null,
   plan: OrchestratorPlan,
-  dispatchResult: OrchestratorDispatchResult
+  dispatchResult: OrchestratorDispatchResult,
+  groupSessionId?: string,
 ) {
   const metadata = previousMetadata && typeof previousMetadata === 'object' ? previousMetadata : {}
   const runningPlan: OrchestratorPlan = {
@@ -1316,6 +1425,17 @@ async function updatePlanCardDispatchResult(
     .update(messages)
     .set({ content: runningPlan.summary, metadata: { ...metadata, plan: runningPlan, dispatchResult } })
     .where(eq(messages.id, messageId))
+
+  // 修复：广播更新后的 plan 卡片到群聊，确保前端状态同步
+  if (groupSessionId) {
+    const [updatedCard] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
+    if (updatedCard) {
+      broadcastSessionEvent(groupSessionId, {
+        type: 'message:completed',
+        payload: { sessionId: groupSessionId, message: updatedCard },
+      })
+    }
+  }
 }
 
 function collectAffectedMessages(list: Array<typeof messages.$inferSelect>, targetIndex: number) {

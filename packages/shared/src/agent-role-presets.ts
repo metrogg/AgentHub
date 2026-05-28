@@ -228,28 +228,22 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
   },
 }
 
-/** 默认代码团队角色（不含 researcher，由 Planner 动态启用） */
+/** 默认代码团队角色（精简为3核心：架构-实现-审查；Researcher由Planner动态启用，Verifier由auto-review链自动调用） */
 export const DEFAULT_CODE_TEAM_ROLE_TYPES: Array<Exclude<AgentRoleType, 'custom' | 'researcher'>> = [
-  'clarifier',
   'architect',
   'coder',
-  'verifier',
   'reviewer',
-  'integrator',
 ]
 
-/** 默认代码团队协作关系：Coder -> Verifier -> Reviewer -> Integrator */
+/** 默认代码团队协作关系：Architect -> Coder -> Reviewer */
 export const DEFAULT_CODE_TEAM_RELATIONS: Array<{
   sourceRoleType: AgentRoleType
   targetRoleType: AgentRoleType
   relationType: AgentRelationType
   note: string
 }> = [
-  { sourceRoleType: 'clarifier', targetRoleType: 'architect', relationType: 'handoff_to', note: '需求澄清后交给架构规划' },
   { sourceRoleType: 'architect', targetRoleType: 'coder', relationType: 'handoff_to', note: '架构计划交给实现者' },
-  { sourceRoleType: 'coder', targetRoleType: 'verifier', relationType: 'reviewed_by', note: '代码实现后由 Verifier 跑验证' },
-  { sourceRoleType: 'verifier', targetRoleType: 'reviewer', relationType: 'handoff_to', note: '验证通过后交给 Reviewer 审查' },
-  { sourceRoleType: 'reviewer', targetRoleType: 'integrator', relationType: 'handoff_to', note: '审查结论交给汇总交付' },
+  { sourceRoleType: 'coder', targetRoleType: 'reviewer', relationType: 'reviewed_by', note: '代码实现后由 Reviewer 审查' },
   { sourceRoleType: 'coder', targetRoleType: 'architect', relationType: 'fallback_to', note: '实现受阻时回到架构拆解' },
 ]
 

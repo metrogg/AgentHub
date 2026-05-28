@@ -97,7 +97,8 @@ export async function startAgentConversation({
     return session
   }
 
-  const { session } = await api.openWorkspaceGroupSession(workspace.id)
+  const agentIds = invitedAgents.map((a) => a.id)
+  const { session } = await api.openWorkspaceGroupSession(workspace.id, agentIds)
   return session
 }
 

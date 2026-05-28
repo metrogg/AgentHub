@@ -207,7 +207,8 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
   // Group session
   .post('/:id/group-session', async (c) => {
     const user = c.get('user')
-    const session = await ensureGroupSession(c.req.param('id'), user.sub)
+    const body = await c.req.json().catch(() => ({}))
+    const session = await ensureGroupSession(c.req.param('id'), user.sub, body?.agentIds)
     return c.json({ session })
   })
 
@@ -380,6 +381,10 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
     const input = normalizeAgentRuntimeDefaults(c.req.valid('json'))
+    // 禁止创建与系统 Orchestrator 同名的 Agent，避免调度冲突
+    if (/orchestrator|协调器|调度/i.test(input.name)) {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 名称不能包含 Orchestrator / 协调器 / 调度，这是系统保留角色')
+    }
     const existing = await db.select({ id: workspaceAgents.id }).from(workspaceAgents).where(eq(workspaceAgents.workspaceId, id))
     const [agent] = await db
       .insert(workspaceAgents)
@@ -394,12 +399,11 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
-    // 合并当前 agent 的 runtimeType，确保 partial update 时 normalizeAgentRuntimeDefaults 能正确判断
-    const [currentAgent] = await db.select({ runtimeType: workspaceAgents.runtimeType }).from(workspaceAgents)
-      .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id))).limit(1)
-    if (!currentAgent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
-    const raw = c.req.valid('json')
-    const input = normalizeAgentRuntimeDefaults({ runtimeType: currentAgent.runtimeType, ...raw } as AgentConfigPatch)
+    const input = normalizeAgentRuntimeDefaults(c.req.valid('json'))
+    // 禁止改名成系统保留角色
+    if (input.name && /orchestrator|协调器|调度/i.test(input.name)) {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 名称不能包含 Orchestrator / 协调器 / 调度，这是系统保留角色')
+    }
     const [agent] = await db
       .update(workspaceAgents)
       .set(input)

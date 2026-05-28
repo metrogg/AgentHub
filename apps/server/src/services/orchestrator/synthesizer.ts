@@ -49,7 +49,8 @@ export class Synthesizer {
 1. 整合为连贯叙述，消除重复，统一术语
 2. 明确标注各部分的贡献者
 3. 使用 Markdown 格式，中文回复
-4. 严禁省略任何一级标题`
+4. 严禁省略任何一级标题
+5. 如果存在失败任务，必须在「执行摘要」中明确指出失败数量和原因，严禁掩盖或编造成功信息`
 
     const conflictInfo = conflictReports.length
       ? `代码冲突情况：\n${conflictReports.map((c) => `- ${c.filePath}: ${c.resolution}${c.notes ? ` (${c.notes})` : ''}`).join('\n')}`

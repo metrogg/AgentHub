@@ -98,6 +98,17 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!session || session.ownerId !== user.sub) {
       throw new HTTPException(404, { message: 'Session not found' })
     }
+    // 删除群聊时级联删除 workspace 下的所有子会话（direct sessions）
+    // 避免删除群聊后旧子话题仍残留在 sidebar 中
+    if (session.type === 'group' && session.workspaceId) {
+      await db.delete(sessions).where(
+        and(
+          eq(sessions.workspaceId, session.workspaceId),
+          eq(sessions.type, 'direct'),
+          eq(sessions.ownerId, user.sub)
+        )
+      )
+    }
     await db.delete(sessions).where(eq(sessions.id, id))
     return c.body(null, 204)
   })
