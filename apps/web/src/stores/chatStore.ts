@@ -6,6 +6,8 @@ let pendingStream: { messageId: string; delta: string; agentId?: string; agentNa
 let pendingStreamTimer: number | null = null
 const cancelledSessions = new Set<string>()
 const pendingOrchestratorPlans = new Set<string>()
+const messageCache = new Map<string, Message[]>()
+const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
 
 interface ChatState {
   sessions: Session[]
