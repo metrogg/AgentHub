@@ -105,6 +105,7 @@ import {
   notifyUser,
   openExternalUrl,
   openPath,
+  openUrlWindow,
   pickWorkspaceFolder,
 } from '../../lib/native'
 import { sendModeShouldSubmit, shouldInsertNewline, useShortcutSettings } from '../../lib/shortcuts'
@@ -2367,6 +2368,18 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     } catch (error) {
       console.warn('[AgentHub] Failed to open external preview URL:', error)
       if (desktopApp) {
+        try {
+          const openedPreviewWindow = await openUrlWindow(resolvedUrl)
+          if (openedPreviewWindow) {
+            updateActionItem(actionId, {
+              status: 'success',
+              detail: '外部浏览器命令不可用，已打开独立预览窗口',
+            })
+            return
+          }
+        } catch (fallbackError) {
+          console.warn('[AgentHub] Failed to open native preview window:', fallbackError)
+        }
         const detail = formatPreviewError(error) || '请确认系统已安装并设置默认浏览器，或重启客户端加载最新桌面命令。'
         updateActionItem(actionId, {
           status: 'error',
@@ -2397,17 +2410,24 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
 
     try {
       if (desktopApp) {
+        let nativeDownloadError: unknown = null
         const result = await downloadExternalUrl(resolvedUrl, filename)
-        if (!result) throw new Error('客户端下载命令不可用，请重启客户端后重试。')
-        updateActionItem(actionId, {
-          status: 'success',
-          title: result.fileName,
-          detail: '已保存到下载目录',
-          path: result.path,
-          folder: result.folder,
-        })
-        await notifyUser('下载完成', result.fileName).catch(() => undefined)
-        return
+          .catch((error) => {
+            nativeDownloadError = error
+            return null
+          })
+        if (result) {
+          updateActionItem(actionId, {
+            status: 'success',
+            title: result.fileName,
+            detail: '已保存到下载目录',
+            path: result.path,
+            folder: result.folder,
+          })
+          await notifyUser('下载完成', result.fileName).catch(() => undefined)
+          return
+        }
+        console.warn('[AgentHub] Native download failed, falling back to browser download:', nativeDownloadError)
       }
 
       const response = await fetch(resolvedUrl, { credentials: 'include' })
@@ -2426,7 +2446,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
 
       updateActionItem(actionId, {
         status: 'success',
-        detail: '浏览器已开始下载',
+        detail: desktopApp ? '客户端下载命令不可用，已使用浏览器下载' : '浏览器已开始下载',
       })
     } catch (error) {
       const message = formatPreviewError(error)

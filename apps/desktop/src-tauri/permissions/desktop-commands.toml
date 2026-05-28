@@ -1,0 +1,20 @@
+[[permission]]
+identifier = "desktop-commands"
+description = "Allow AgentHub desktop shell commands used by the local web UI."
+commands.allow = [
+  "pick_workspace_folder",
+  "open_in_editor",
+  "open_path",
+  "open_external_url",
+  "download_external_url",
+  "notify_user",
+  "desktop_info",
+  "check_for_updates",
+  "close_desktop_window",
+  "minimize_desktop_window",
+  "toggle_maximize_desktop_window",
+  "start_desktop_window_drag",
+  "open_desktop_window",
+  "open_url_window",
+  "open_settings_window",
+]

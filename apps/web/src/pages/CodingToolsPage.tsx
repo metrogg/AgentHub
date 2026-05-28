@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   AlertCircle,
+  ArrowLeft,
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -30,6 +33,7 @@ import {
 import { useI18n } from '../lib/i18n'
 import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { cn } from '../lib/utils'
+import { useChatStore } from '../stores/chatStore'
 
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 type Protocol = 'openai-compatible' | 'anthropic-messages' | 'openai-responses'
@@ -143,6 +147,10 @@ const sandboxCopy: Record<SandboxMode, string> = {
 
 export default function CodingToolsPage() {
   const { t } = useI18n()
+  const navigate = useNavigate()
+  const currentSession = useChatStore((state) => state.currentSession)
+  const currentWorkspace = useChatStore((state) => state.currentWorkspace)
+  const currentWorkspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const [tools, setTools] = useState<ToolConfig[]>(defaults)
   const [statuses, setStatuses] = useState<Record<string, CodingToolStatus>>({})
   const [models, setModels] = useState<ModelCatalogItem[]>([])
@@ -184,6 +192,7 @@ export default function CodingToolsPage() {
   const [toolPage, setToolPage] = useState(0)
   const [executionEnabled, setExecutionEnabled] = useState<boolean | null>(null)
   const [executionBusy, setExecutionBusy] = useState(false)
+  const [focusedAgentToolKey, setFocusedAgentToolKey] = useState<string | null>(null)
 
   useEffect(() => {
     api
@@ -241,6 +250,21 @@ export default function CodingToolsPage() {
   }, [])
 
   const activeTool = tools.find((tool) => tool.id === activeToolId) ?? tools[0]!
+  const currentAgent = currentWorkspaceAgents.find(
+    (agent) => agent.id === currentSession?.workspaceAgentId,
+  )
+  const hasAgentWorkspaceContext = Boolean(
+    currentSession?.type === 'direct' &&
+      currentSession.workspaceId &&
+      currentSession.workspaceAgentId,
+  )
+  const currentAgentToolName = currentAgent?.codeAgentType
+    ? tools.find((tool) => tool.id === currentAgent.codeAgentType)?.name ?? currentAgent.codeAgentType
+    : null
+  const currentAgentToolKey =
+    currentAgent?.runtimeType === 'code-agent' && currentAgent.codeAgentType
+      ? `${currentAgent.id}:${currentAgent.codeAgentType}`
+      : null
   const selectedModel = models.find((model) => model.modelId === activeTool.modelId)
   const activeApiKey = apiKeyDrafts[activeTool.modelId] ?? selectedModel?.apiKey ?? ''
   const envSnippet = buildEnvSnippet(activeTool)
@@ -279,6 +303,15 @@ export default function CodingToolsPage() {
   useEffect(() => {
     if (toolPage >= toolPageCount) setToolPage(toolPageCount - 1)
   }, [toolPage, toolPageCount])
+
+  useEffect(() => {
+    if (!currentAgentToolKey || focusedAgentToolKey === currentAgentToolKey) return
+    if (!currentAgent?.codeAgentType) return
+    setFocusedAgentToolKey(currentAgentToolKey)
+    setActiveToolId(currentAgent.codeAgentType)
+    const activeIndex = tools.findIndex((tool) => tool.id === currentAgent.codeAgentType)
+    if (activeIndex >= 0) setToolPage(Math.floor(activeIndex / toolPageSize))
+  }, [currentAgent?.codeAgentType, currentAgentToolKey, focusedAgentToolKey, tools])
 
   async function refreshStatus(probeTools = tools, force = false) {
     if (!force && cachedToolStatus && Date.now() - cachedToolStatusTime < STATUS_CACHE_TTL) {
@@ -782,6 +815,43 @@ export default function CodingToolsPage() {
               <Stat value={configuredCount} label="可运行" />
             </div>
           </section>
+
+          {hasAgentWorkspaceContext && currentSession && (
+            <section className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-teal-100 bg-white px-4 py-3 shadow-sm">
+              <div className="flex min-w-0 items-center gap-3">
+                <div
+                  className="grid h-10 w-10 shrink-0 place-items-center rounded-md text-white"
+                  style={{ background: currentAgent?.color ?? '#111827' }}
+                >
+                  <Bot className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs text-neutral-400">{t('当前 Agent 工作区')}</div>
+                  <div className="truncate text-sm font-semibold text-neutral-950">
+                    {currentAgent?.name ?? currentWorkspace?.name ?? currentSession.title}
+                  </div>
+                </div>
+              </div>
+              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 text-xs text-neutral-500">
+                <span className="max-w-[220px] truncate rounded-md bg-neutral-100 px-2.5 py-1">
+                  {currentWorkspace?.name ?? t('工作区加载中')}
+                </span>
+                {currentAgentToolName && (
+                  <span className="rounded-md bg-teal-50 px-2.5 py-1 text-teal-700">
+                    {currentAgentToolName}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => navigate(`/chat/${currentSession.id}`)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-50"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  {t('返回对话')}
+                </button>
+              </div>
+            </section>
+          )}
 
           <section className="relative mt-5">
             <div className="grid gap-3 lg:grid-cols-3">

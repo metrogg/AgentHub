@@ -30,6 +30,7 @@ struct DesktopInfo {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DownloadedFile {
     file_name: String,
     path: String,
