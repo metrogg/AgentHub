@@ -50,6 +50,8 @@ import {
   ImagePlus,
   ListTodo,
   Loader2,
+  Maximize2,
+  Minimize2,
   Monitor,
   MessageSquare,
   MoreHorizontal,
@@ -164,6 +166,8 @@ type ArtifactPreviewItem = {
   path?: string
   mimeType?: string
   source?: string
+  /** 用于构造 HTML 预览 URL 的 workspaceId */
+  workspaceId?: string
 }
 
 function classifyAgentSession(
@@ -2223,29 +2227,72 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   onClose,
 }) => {
   const canOpen = Boolean(item.url)
+  const [maximized, setMaximized] = useState(false)
+  const [visible, setVisible] = useState(false)
+
+  // 入场动画
+  useEffect(() => {
+    requestAnimationFrame(() => setVisible(true))
+  }, [])
+
+  // 退出动画
+  function handleClose() {
+    setVisible(false)
+    setTimeout(onClose, 200)
+  }
+
+  // ESC 退出最大化
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        if (maximized) setMaximized(false)
+        else handleClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [maximized])
+
+  const panelWidth = maximized ? 'w-full' : 'w-[min(48vw,720px)] min-w-[420px]'
 
   return (
-    <aside className="flex h-full w-[min(48vw,720px)] min-w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-[#FBFBFB]">
-      <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-neutral-700 shadow-sm">
+    <aside
+      className={cn(
+        'flex shrink-0 flex-col border-neutral-200 bg-white transition-all duration-200 ease-out',
+        panelWidth,
+        maximized ? 'border-0' : 'border-l',
+        visible
+          ? 'translate-x-0 opacity-100'
+          : 'translate-x-4 opacity-0',
+      )}
+      style={maximized ? { position: 'fixed', inset: 0, zIndex: 50 } : undefined}
+    >
+      {/* 工具栏 */}
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 bg-[#FAFAFA] px-2">
+        {/* 文件图标 + 信息 */}
+        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-neutral-100 text-neutral-500">
             {previewIcon(item)}
           </span>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-neutral-950">{item.title}</div>
-            <div className="mt-0.5 truncate text-xs text-neutral-500">
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-medium leading-tight text-neutral-800">
+              {item.title}
+            </div>
+            <div className="truncate text-[11px] leading-tight text-neutral-400">
               {item.subtitle ?? previewKindLabel(item)}
             </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+
+        {/* 操作按钮组 */}
+        <div className="flex shrink-0 items-center gap-0.5">
           {canOpen && (
             <>
               <a
                 href={item.url}
                 target="_blank"
                 rel="noreferrer"
-                className="grid h-8 w-8 place-items-center rounded-xl text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
+                className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
                 title="新窗口打开"
                 aria-label="新窗口打开"
               >
@@ -2254,7 +2301,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
               <a
                 href={item.url}
                 download={item.title}
-                className="grid h-8 w-8 place-items-center rounded-xl text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
+                className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
                 title="下载"
                 aria-label="下载"
               >
@@ -2264,8 +2311,18 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
           )}
           <button
             type="button"
-            onClick={onClose}
-            className="grid h-8 w-8 place-items-center rounded-xl text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
+            onClick={() => setMaximized((v) => !v)}
+            className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+            title={maximized ? '退出全屏' : '全屏预览'}
+            aria-label={maximized ? '退出全屏' : '全屏预览'}
+          >
+            {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
+          <div className="mx-1 h-4 w-px bg-neutral-200" />
+          <button
+            type="button"
+            onClick={handleClose}
+            className="grid h-8 w-8 place-items-center rounded-lg text-neutral-400 transition hover:bg-red-50 hover:text-red-500"
             title="关闭预览"
             aria-label="关闭预览"
           >
@@ -2274,13 +2331,14 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col bg-[#F7F7F7] p-3">
+      {/* 内容区 */}
+      <div className="flex min-h-0 flex-1 flex-col bg-[#F7F7F7] p-2">
         {item.description && (
-          <div className="mb-3 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-xs leading-5 text-neutral-600">
+          <div className="mb-2 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs leading-5 text-neutral-600">
             {item.description}
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-neutral-200 bg-white">
+        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-neutral-200 bg-white">
           {item.kind === 'image' && item.url ? (
             <div className="grid h-full place-items-center bg-neutral-50 p-4">
               <img
@@ -3074,10 +3132,14 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       title: artifact.title,
     }
   }
+  // HTML 文件生成预览 URL
+  const ext = artifact.path.split('.').pop()?.toLowerCase()
+  const isHtml = ext === 'html' || ext === 'htm'
+
   return {
     id: artifact.id,
     description: artifact.description,
-    kind: filePreviewKind(artifact),
+    kind: isHtml ? 'web' : filePreviewKind(artifact),
     mimeType: artifact.mimeType,
     path: artifact.path,
     source: artifact.source,
@@ -3085,6 +3147,7 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
       [artifact.mimeType, artifact.size ? formatBytes(artifact.size) : null].filter(Boolean).join(' · ') ||
       fileStatusLabel(artifact.status ?? 'created'),
     title: artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path,
+    url: isHtml ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}` : undefined,
   }
 }
 

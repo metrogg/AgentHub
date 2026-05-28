@@ -394,7 +394,12 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeAgentRuntimeDefaults(c.req.valid('json'))
+    // 合并当前 agent 的 runtimeType，确保 partial update 时 normalizeAgentRuntimeDefaults 能正确判断
+    const [currentAgent] = await db.select({ runtimeType: workspaceAgents.runtimeType }).from(workspaceAgents)
+      .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id))).limit(1)
+    if (!currentAgent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
+    const raw = c.req.valid('json')
+    const input = normalizeAgentRuntimeDefaults({ runtimeType: currentAgent.runtimeType, ...raw } as AgentConfigPatch)
     const [agent] = await db
       .update(workspaceAgents)
       .set(input)
