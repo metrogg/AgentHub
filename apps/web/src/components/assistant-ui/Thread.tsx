@@ -38,7 +38,9 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  Download,
   ExternalLink,
+  File,
   FileText,
   Minus,
   FolderOpen,
@@ -49,6 +51,7 @@ import {
   ImagePlus,
   ListTodo,
   Loader2,
+  Monitor,
   MessageSquare,
   MoreHorizontal,
   Paperclip,
@@ -147,6 +150,19 @@ const autoHighlightLanguages = Object.keys(highlightLanguageMap)
 type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
 const maxPastedImageBytes = 5 * 1024 * 1024
 const composerSyncEvent = 'agenthub:composer-sync'
+const artifactPreviewEvent = 'agenthub:artifact-preview'
+
+type ArtifactPreviewItem = {
+  id: string
+  title: string
+  subtitle?: string
+  description?: string
+  kind: 'web' | 'file' | 'image' | 'diff' | 'deploy' | 'workflow'
+  url?: string
+  path?: string
+  mimeType?: string
+  source?: string
+}
 
 export const Thread: FC = () => {
   const currentSession = useChatStore((state) => state.currentSession)
@@ -157,11 +173,22 @@ export const Thread: FC = () => {
     Boolean(currentSession.workspaceAgentId)
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
+  const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
 
   useEffect(() => {
     setGroupDetailsOpen(false)
     setChildDetailsOpen(false)
   }, [currentSession?.id])
+
+  useEffect(() => {
+    function handlePreview(event: Event) {
+      const item = (event as CustomEvent<ArtifactPreviewItem>).detail
+      if (!item?.id) return
+      setPreviewItem(item)
+    }
+    window.addEventListener(artifactPreviewEvent, handlePreview)
+    return () => window.removeEventListener(artifactPreviewEvent, handlePreview)
+  }, [])
 
   return (
     <ThreadPrimitive.Root
@@ -170,9 +197,9 @@ export const Thread: FC = () => {
     >
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          {isGroupSession && <GroupChatHeader onOpenDetails={() => setGroupDetailsOpen(true)} />}
+          {isGroupSession && <GroupChatHeader onToggleDetails={() => setGroupDetailsOpen((open) => !open)} />}
           {!isGroupSession && isWorkspaceChildSession && (
-            <AgentChatHeader onOpenDetails={() => setChildDetailsOpen(true)} />
+            <AgentChatHeader onToggleDetails={() => setChildDetailsOpen((open) => !open)} />
           )}
           <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
             <ThreadWelcome />
@@ -185,6 +212,12 @@ export const Thread: FC = () => {
           </ThreadPrimitive.Viewport>
           <Composer />
         </div>
+        {previewItem && (
+          <ArtifactPreviewPanel
+            item={previewItem}
+            onClose={() => setPreviewItem(null)}
+          />
+        )}
       </div>
       {isGroupSession && (
         <GroupChatDetailsDrawer
@@ -202,7 +235,7 @@ export const Thread: FC = () => {
   )
 }
 
-const GroupChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) => {
+const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails }) => {
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
@@ -249,7 +282,7 @@ const GroupChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) =
   )
 }
 
-const AgentChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) => {
+const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails }) => {
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
@@ -273,7 +306,7 @@ const AgentChatHeader: FC<{ onOpenDetails: () => void }> = ({ onOpenDetails }) =
       </div>
       <button
         type="button"
-        onClick={onOpenDetails}
+        onClick={onToggleDetails}
         className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
         title="Agent 设置"
         aria-label="Agent 设置"
@@ -368,7 +401,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
       />
       <aside
         className={cn(
-          'relative h-full w-[320px] max-w-[88vw] border-l border-neutral-200 bg-[#fbfbf9]/95 shadow-[-18px_0_45px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'relative h-full w-[320px] max-w-[88vw] border-l border-neutral-200 bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
       >
@@ -625,7 +658,7 @@ const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ op
       />
       <aside
         className={cn(
-          'relative h-full w-[340px] max-w-[88vw] border-l border-neutral-200 bg-[#fbfbf9]/95 shadow-[-18px_0_45px_rgba(15,23,42,0.16)] backdrop-blur-xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'relative h-full w-[340px] max-w-[88vw] border-l border-neutral-200 bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
       >
@@ -834,19 +867,41 @@ function insertComposerMention(name: string) {
   insertTextIntoComposer(value)
 }
 
-function insertTextIntoComposer(value: string, inputType = 'insertText') {
+function insertTextIntoComposer(
+  value: string,
+  inputType = 'insertText',
+  range?: { start: number; end: number },
+) {
   const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
   if (!input) {
     void navigator.clipboard?.writeText(value).catch(() => undefined)
     return null
   }
-  const start = input.selectionStart ?? input.value.length
-  const end = input.selectionEnd ?? input.value.length
+  const start = range?.start ?? input.selectionStart ?? input.value.length
+  const end = range?.end ?? input.selectionEnd ?? input.value.length
   input.focus()
   input.setSelectionRange(start, end)
   input.setRangeText(value, start, end, 'end')
   dispatchComposerInput(input, value, inputType)
   return input
+}
+
+function replaceTextRangeInComposer(value: string, range: { start: number; end: number }) {
+  return insertTextIntoComposer(value, 'insertReplacementText', range)
+}
+
+export function readMentionCommand(text: string, cursor: number) {
+  const before = text.slice(0, cursor)
+  const match = /(^|\s)@([^\s@]*)$/.exec(before)
+  if (!match) return null
+  const suffix = /^[^\s]*/.exec(text.slice(cursor))?.[0] ?? ''
+  const start = match.index + match[1].length
+  const prefix = match[2] ?? ''
+  return {
+    start,
+    end: cursor + suffix.length,
+    query: `${prefix}${suffix}`,
+  }
 }
 
 function dispatchComposerInput(input: HTMLTextAreaElement, data: string, inputType = 'insertText') {
@@ -862,11 +917,15 @@ function dispatchComposerInput(input: HTMLTextAreaElement, data: string, inputTy
   )
 }
 
-const ThreadWelcome: FC = () => (
-  <ThreadPrimitive.Empty>
-    <ThreadWelcomeContent />
-  </ThreadPrimitive.Empty>
-)
+const ThreadWelcome: FC = () => {
+  const loadingMessages = useChatStore((state) => state.loadingMessages)
+
+  return (
+    <ThreadPrimitive.Empty>
+      {!loadingMessages && <ThreadWelcomeContent />}
+    </ThreadPrimitive.Empty>
+  )
+}
 
 const ThreadWelcomeContent: FC = () => {
   const { t } = useI18n()
@@ -915,6 +974,8 @@ const Composer: FC = () => {
   const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(
     null,
   )
+  const [agentMenuMode, setAgentMenuMode] = useState<'manual' | 'mention' | null>(null)
+  const [agentMentionRange, setAgentMentionRange] = useState<{ start: number; end: number; query: string } | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
@@ -1002,22 +1063,45 @@ const Composer: FC = () => {
     }
   }
 
+  function replaceComposerTextRange(value: string, range: { start: number; end: number }) {
+    const input = replaceTextRangeInComposer(value, range)
+    if (input) {
+      setComposerText(input.value)
+      setComposerScrollTop(input.scrollTop)
+    }
+  }
+
   function handleComposerInput(event: FormEvent<HTMLTextAreaElement>) {
     const input = event.currentTarget
     const nextText = input.value
     const cursor = input.selectionStart ?? nextText.length
     const command = readSlashCommand(nextText, cursor)
+    const mention = readMentionCommand(nextText, cursor)
     setComposerText(nextText)
     setComposerScrollTop(input.scrollTop)
     if (command) {
       setMenu(null)
+      setAgentMenuMode(null)
+      setAgentMentionRange(null)
       setSkillQuery(command.query)
       setSkillCommandRange({ start: command.start, end: command.end })
       setSkillPanelOpen(true)
+    } else if (mention) {
+      setSkillPanelOpen(false)
+      setSkillCommandRange(null)
+      setSkillQuery('')
+      setAgentMentionRange(mention)
+      setAgentMenuMode('mention')
+      setMenu('agents')
     } else {
       setSkillPanelOpen(false)
       setSkillCommandRange(null)
       setSkillQuery('')
+      setAgentMentionRange(null)
+      if (agentMenuMode === 'mention') {
+        setAgentMenuMode(null)
+        setMenu((current) => (current === 'agents' ? null : current))
+      }
     }
   }
 
@@ -1183,6 +1267,7 @@ const Composer: FC = () => {
               key={menu}
               type={menu}
               agents={workspaceAgents}
+              agentQuery={agentMenuMode === 'mention' ? (agentMentionRange?.query ?? '') : ''}
               workspaces={workspaces}
               currentWorkspaceId={currentProjectWorkspace?.id ?? null}
               openingWorkspaceId={openingWorkspaceId}
@@ -1197,10 +1282,21 @@ const Composer: FC = () => {
                 showHint(next ? '已开启计划模式' : '已关闭计划模式')
               }}
               onPick={(value) => {
-                insertComposerText(`${value} `)
+                const mentionRange = agentMenuMode === 'mention' ? agentMentionRange : null
+                if (mentionRange) {
+                  replaceComposerTextRange(`${value} `, mentionRange)
+                  setAgentMentionRange(null)
+                  setAgentMenuMode(null)
+                } else {
+                  insertComposerText(`${value} `)
+                }
                 showHint(`已插入 ${value}`)
               }}
-              onClose={() => setMenu(null)}
+              onClose={() => {
+                setMenu(null)
+                setAgentMenuMode(null)
+                setAgentMentionRange(null)
+              }}
             />
           )}
           {skillPanelOpen && (
@@ -1275,6 +1371,13 @@ const Composer: FC = () => {
                   setSkillPanelOpen(false)
                   setSkillCommandRange(null)
                   setSkillQuery('')
+                } else if (event.key === 'Escape' && menu) {
+                  event.preventDefault()
+                  setMenu(null)
+                  setAgentMenuMode(null)
+                  setAgentMentionRange(null)
+                } else if (event.key === 'Enter' && menu === 'agents' && agentMenuMode === 'mention') {
+                  event.preventDefault()
                 }
               }}
               onScroll={(event) => setComposerScrollTop(event.currentTarget.scrollTop)}
@@ -1318,7 +1421,13 @@ const Composer: FC = () => {
               />
               <ComposerToolButton
                 aria-label="提及"
-                onClick={() => setMenu(menu === 'agents' ? null : 'agents')}
+                onClick={() => {
+                  const nextOpen = menu !== 'agents'
+                  setMenu(nextOpen ? 'agents' : null)
+                  setAgentMenuMode(nextOpen ? 'manual' : null)
+                  setAgentMentionRange(null)
+                  setSkillPanelOpen(false)
+                }}
               >
                 <AtSign className="h-4 w-4" />
               </ComposerToolButton>
@@ -1437,6 +1546,7 @@ export const SkillCommandPanel: FC<{
 const ComposerMenu: FC<{
   type: 'tools' | 'agents' | 'workspace'
   agents: WorkspaceAgent[]
+  agentQuery?: string
   workspaces: Workspace[]
   currentWorkspaceId: string | null
   openingWorkspaceId: string | null
@@ -1452,6 +1562,7 @@ const ComposerMenu: FC<{
 }> = ({
   type,
   agents,
+  agentQuery = '',
   workspaces,
   currentWorkspaceId,
   openingWorkspaceId,
@@ -1467,21 +1578,28 @@ const ComposerMenu: FC<{
 }) => {
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [addProjectOpen, setAddProjectOpen] = useState(false)
+  const normalizedAgentQuery = agentQuery.trim().toLowerCase()
   const legacyAgents = [
-    { title: '@Orchestrator', desc: '拆解任务并分发到当前群聊' },
-    { title: '@architect', desc: '架构与任务拆解' },
-    { title: '@coder', desc: '代码实现' },
-    { title: '@reviewer', desc: '审查与边界检查' },
+    { title: '@Orchestrator', desc: '拆解任务并分发到当前群聊', color: '#111827' },
+    { title: '@architect', desc: '架构与任务拆解', color: '#2563eb' },
+    { title: '@coder', desc: '代码实现', color: '#16a34a' },
+    { title: '@reviewer', desc: '审查与边界检查', color: '#ef4444' },
   ]
   const agentRows = agents.length
     ? [
-        { title: '@orchestrator', desc: '拆解任务、创建任务卡并协调当前群聊' },
+        { title: '@orchestrator', desc: '拆解任务、创建任务卡并协调当前群聊', color: '#111827' },
         ...agents.map((agent) => ({
           title: `@${agent.name}`,
           desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${agent.capabilityTags.length ? ` · ${agent.capabilityTags.slice(0, 3).join(', ')}` : ''}`,
+          color: agent.color ?? '#111827',
         })),
       ]
     : legacyAgents
+  const filteredAgentRows = normalizedAgentQuery
+    ? agentRows.filter((item) =>
+        `${item.title} ${item.desc}`.toLowerCase().includes(normalizedAgentQuery),
+      )
+    : agentRows
   const plugins = [
     { title: 'Documents', icon: FileText, color: 'text-blue-500', value: '@documents' },
     { title: 'Spreadsheets', icon: Sheet, color: 'text-emerald-600', value: '@spreadsheets' },
@@ -1557,18 +1675,32 @@ const ComposerMenu: FC<{
           </div>
         </div>
       )}
-      {type === 'agents' &&
-        agentRows.map((item) => (
-          <MenuRow
-            key={item.title}
-            title={item.title}
-            desc={item.desc}
-            onClick={() => {
-              onPick(item.title)
-              onClose()
-            }}
-          />
-        ))}
+      {type === 'agents' && (
+        <div className="max-h-72 overflow-y-auto">
+          {agentQuery !== '' && (
+            <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">
+              {filteredAgentRows.length ? `匹配：${agentQuery}` : `没有匹配：${agentQuery}`}
+            </div>
+          )}
+          {filteredAgentRows.map((item) => (
+            <MenuRow
+              key={item.title}
+              title={item.title}
+              desc={item.desc}
+              color={item.color}
+              onClick={() => {
+                onPick(item.title)
+                onClose()
+              }}
+            />
+          ))}
+          {filteredAgentRows.length === 0 && (
+            <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
+              没有匹配的 Agent
+            </div>
+          )}
+        </div>
+      )}
       {type === 'workspace' && (
         <div className="p-1">
           <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
@@ -1708,20 +1840,33 @@ function fileToChatAttachment(file: File): Promise<ChatAttachment> {
   })
 }
 
-const MenuRow: FC<{ title: string; desc: string; onClick: () => void }> = ({
+const MenuRow: FC<{ title: string; desc: string; color?: string; onClick: () => void }> = ({
   title,
   desc,
+  color = '#111827',
   onClick,
 }) => (
   <button
     type="button"
     onClick={onClick}
-    className="w-full rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
+    className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
   >
-    <div className="font-medium text-neutral-900">{title}</div>
-    <div className="text-xs text-neutral-500">{desc}</div>
+    <span
+      className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
+      style={{ background: color }}
+    >
+      {mentionInitial(title)}
+    </span>
+    <span className="min-w-0 flex-1">
+      <span className="block truncate font-medium text-neutral-900">{title}</span>
+      <span className="block truncate text-xs text-neutral-500">{desc}</span>
+    </span>
   </button>
 )
+
+function mentionInitial(title: string) {
+  return title.replace(/^@/, '').trim().slice(0, 1).toUpperCase() || '@'
+}
 
 const ComposerAction: FC = () => (
   <>
@@ -1940,17 +2085,29 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
 
 const AgentAvatarPart: FC<{ data: { runtime?: CodeAgentRunMetadata['runtime'] } }> = () => null
 
+function requestArtifactPreview(item: ArtifactPreviewItem) {
+  window.dispatchEvent(new CustomEvent<ArtifactPreviewItem>(artifactPreviewEvent, { detail: item }))
+}
+
 const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data }) => {
   const items = Array.isArray(data.items) ? data.items : []
   if (!items.length) return null
   return (
     <div className="not-prose mt-3 grid gap-2 sm:grid-cols-2">
       {items.map((item) => (
-        <a
+        <button
           key={item.id}
-          href={item.dataUrl}
-          target="_blank"
-          rel="noreferrer"
+          type="button"
+          onClick={() =>
+            requestArtifactPreview({
+              id: item.id,
+              kind: 'image',
+              mimeType: item.mimeType,
+              subtitle: `${formatBytes(item.size)} · 图片附件`,
+              title: item.name,
+              url: item.dataUrl,
+            })
+          }
           className="group overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm"
         >
           <img
@@ -1962,7 +2119,7 @@ const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data 
             <ImagePlus className="h-3.5 w-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{item.name}</span>
           </div>
-        </a>
+        </button>
       ))}
     </div>
   )
@@ -2339,6 +2496,14 @@ const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> 
           {artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}
         </div>
       </div>
+      <button
+        type="button"
+        onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
+      >
+        <Monitor className="h-3.5 w-3.5" />
+        预览
+      </button>
     </div>
   </div>
 )
@@ -2376,6 +2541,16 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
           )}
         />
       </button>
+      <div className="border-t border-neutral-100 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
+        >
+          <Monitor className="h-3.5 w-3.5" />
+          在右侧预览
+        </button>
+      </div>
       {open && <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" />}
     </div>
   )
@@ -2447,14 +2622,12 @@ const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({
 const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'preview' }> }> = ({
   artifact,
 }) => {
-  const [open, setOpen] = useState(artifact.previewKind === 'static-html')
-
   return (
     <div className="agenthub-embedded-window overflow-hidden rounded-lg border border-neutral-200 bg-white">
       <div className="flex h-11 items-center justify-between gap-3 px-3">
         <button
           type="button"
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
           className="inline-flex min-w-0 flex-1 items-center gap-2 text-left"
         >
           <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
@@ -2464,6 +2637,14 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
             </span>
             <span className="block truncate text-[11px] text-neutral-400">{artifact.url}</span>
           </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
+          className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+          title="右侧预览"
+        >
+          <Monitor className="h-3.5 w-3.5" />
         </button>
         <a
           href={artifact.url}
@@ -2475,15 +2656,6 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
       </div>
-      {open && (
-        <div className="agenthub-embedded-window-body border-t border-neutral-200 bg-neutral-50 p-2">
-          <iframe
-            title={artifact.title}
-            src={artifact.url}
-            className="h-80 w-full rounded-md border border-neutral-200 bg-white"
-          />
-        </div>
-      )}
     </div>
   )
 }
@@ -2510,6 +2682,16 @@ const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy'
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
+      )}
+      {artifact.url && (
+        <button
+          type="button"
+          onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
+          className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100"
+          title="右侧预览"
+        >
+          <Monitor className="h-3.5 w-3.5" />
+        </button>
       )}
     </div>
   </div>
@@ -3229,6 +3411,8 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
           src={codeAgentLogoSrc(runtime)}
           alt={codeAgentRuntimeLabel(runtime)}
           className="h-5 w-5 object-contain"
+          decoding="async"
+          draggable={false}
         />
       </div>
     )
