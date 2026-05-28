@@ -662,7 +662,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           ownerId: user.sub,
           workspaceId,
           workspaceAgentId: agent?.id ?? null,
-          metadata: { orchestratorRunId: runId, orchestratorTaskId: task.id },
+          metadata: { kind: 'orchestrator-task', orchestratorRunId: runId, orchestratorTaskId: task.id },
         })
         .returning()
       if (!childSession) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '任务会话创建失败')
@@ -793,7 +793,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     })
 
     const result: OrchestratorDispatchResult = { runId, workspaceId, groupSessionId, tasks: taskResults }
-    await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result)
+    await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result, groupSessionId)
     return c.json(result)
   })
 
@@ -1228,7 +1228,12 @@ async function ensureAgentChildSession(
 }
 
 function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {
-  return Boolean(metadata?.orchestratorTaskId || metadata?.orchestratorRunId || metadata?.hiddenFromSessionTree)
+  return Boolean(
+    metadata?.orchestratorTaskId ||
+      metadata?.orchestratorRunId ||
+      metadata?.hiddenFromSessionTree ||
+      metadata?.kind === 'orchestrator-task',
+  )
 }
 
 async function ensureWorkspaceAgentChildSessions(workspaceId: string, ownerId: string) {
@@ -1350,7 +1355,8 @@ async function updatePlanCardDispatchResult(
   messageId: string,
   previousMetadata: Record<string, unknown> | null,
   plan: OrchestratorPlan,
-  dispatchResult: OrchestratorDispatchResult
+  dispatchResult: OrchestratorDispatchResult,
+  groupSessionId?: string,
 ) {
   const metadata = previousMetadata && typeof previousMetadata === 'object' ? previousMetadata : {}
   const runningPlan: OrchestratorPlan = {
@@ -1362,6 +1368,17 @@ async function updatePlanCardDispatchResult(
     .update(messages)
     .set({ content: runningPlan.summary, metadata: { ...metadata, plan: runningPlan, dispatchResult } })
     .where(eq(messages.id, messageId))
+
+  // 修复：广播更新后的 plan 卡片到群聊，确保前端状态同步
+  if (groupSessionId) {
+    const [updatedCard] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
+    if (updatedCard) {
+      broadcastSessionEvent(groupSessionId, {
+        type: 'message:completed',
+        payload: { sessionId: groupSessionId, message: updatedCard },
+      })
+    }
+  }
 }
 
 function collectAffectedMessages(list: Array<typeof messages.$inferSelect>, targetIndex: number) {

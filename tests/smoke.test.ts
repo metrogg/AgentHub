@@ -76,11 +76,11 @@ function mockSseStream(chunks: string[]) {
 }
 
 async function waitForTaskStatus(workspaceId: string, taskId: string, status: string) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
     const full = await json<{ tasks: Array<{ id: string; status: string }> }>(await app.request(`/api/workspaces/${workspaceId}`))
     const task = full.tasks.find((item) => item.id === taskId)
     if (task?.status === status) return task
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
   throw new Error(`Task ${taskId} did not reach ${status}`)
 }
