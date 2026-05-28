@@ -110,6 +110,7 @@ import {
   toAgentConfigInput,
   type SavedAgentConfig,
 } from '../../lib/agentLibrary'
+import { workspaceNameFromPath } from '@agenthub/shared'
 
 const highlightLanguageMap = {
   bash,
@@ -1908,11 +1909,6 @@ export function readSlashCommand(text: string, cursor: number) {
     end: cursor + suffix.length,
     query: `${prefix}${suffix}`,
   }
-}
-
-function workspaceNameFromPath(value: string) {
-  const normalized = value.trim().replace(/[\\/]+$/, '')
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || '工作区文件夹'
 }
 
 function fileToChatAttachment(file: File): Promise<ChatAttachment> {

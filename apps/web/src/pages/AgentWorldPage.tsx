@@ -1,5 +1,6 @@
 import { FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { workspaceNameFromPath } from '@agenthub/shared'
 import {
   ArrowRight,
   Bot,
@@ -622,12 +623,6 @@ export default function AgentWorldPage() {
       )}
     </div>
   )
-}
-
-function workspaceNameFromPath(value: string) {
-  const normalized = value.trim().replace(/[\\/]+$/, '')
-  const last = normalized.split(/[\\/]/).filter(Boolean).pop()
-  return last ?? ''
 }
 
 function starterTaskTitle(role: string) {

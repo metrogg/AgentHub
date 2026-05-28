@@ -15,7 +15,6 @@ import {
   DEFAULT_ENV_ALLOWLIST,
   validateEnvelope,
   buildExecutionCwd,
-  ensureNoProjectExecutionDir,
 } from './execution/agent-execution-envelope'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
@@ -237,15 +236,6 @@ export async function* streamCodeAgentReply(
 
   // 如果提供了 envelope，使用 envelope 的执行上下文；否则降级到旧路径（已废弃）
   const legacyProjectPath = profile.projectPath?.trim() || null
-  const legacyExecutionPath =
-    legacyProjectPath ??
-    ensureNoProjectExecutionDir({
-      runId: userMsg.sessionId || 'legacy',
-      taskId: userMsg.id || 'legacy',
-      agentId: profile.id,
-      agentName: profile.name,
-      projectPath: null,
-    })
 
   const cwdInfo = envelope
     ? resolveExecutionCwd(envelope)
@@ -255,7 +245,7 @@ export async function* streamCodeAgentReply(
         agentId: profile.id,
         agentName: profile.name,
         projectPath: legacyProjectPath,
-        worktreePath: legacyExecutionPath,
+        worktreePath: legacyProjectPath,
         sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
         envAllowlist: DEFAULT_ENV_ALLOWLIST,
       })

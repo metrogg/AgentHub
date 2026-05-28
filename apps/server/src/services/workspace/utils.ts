@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { logger } from '../../lib/logger'
 import { HTTPException } from 'hono/http-exception'
 import { db, workspaces, eq } from '@agenthub/db'
+import { workspaceNameFromPath } from '@agenthub/shared'
 
 export function cleanProjectPath(value?: string | null) {
   const trimmed = value?.trim()
@@ -22,10 +23,7 @@ export function ensureProjectDirectory(value?: string | null) {
   throw new HTTPException(400, { message: '项目文件夹不存在或不是目录' })
 }
 
-export function workspaceNameFromPath(value: string) {
-  const normalized = value.trim().replace(/[\\/]+$/, '')
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
-}
+export { workspaceNameFromPath }
 
 export function projectPathKey(value?: string | null) {
   const cleaned = cleanProjectPath(value)

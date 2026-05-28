@@ -15,7 +15,7 @@ import { validateTaskOutputContract } from './task-contract'
 import { runTaskValidation } from './task-validation'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 import { PolicyGuard } from '../policy-guard'
-import { DEFAULT_ENV_ALLOWLIST, ensureNoProjectExecutionDir } from '../execution/agent-execution-envelope'
+import { DEFAULT_ENV_ALLOWLIST } from '../execution/agent-execution-envelope'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
 
@@ -548,14 +548,6 @@ export class OrchestratorEngine {
       }
     }
 
-    const fallbackExecutionPath = ensureNoProjectExecutionDir({
-      runId,
-      taskId: task.id,
-      agentId: agent.id,
-      agentName: agent.name,
-      projectPath: childInfo.projectPath ?? null,
-    })
-
     const profile = {
       id: agent.id,
       name: agent.name,
@@ -570,7 +562,7 @@ export class OrchestratorEngine {
       sandboxPolicy: policy.sandboxPolicy,
       contextPolicy: 'workspace-aware' as const,
       approvalRequired: policy.approvalRequired,
-      projectPath: branchCtx?.worktreePath ?? childInfo.projectPath ?? fallbackExecutionPath ?? null,
+      projectPath: branchCtx?.worktreePath ?? childInfo.projectPath ?? null,
       originalProjectPath: childInfo.projectPath ?? null,
     }
 
@@ -639,7 +631,7 @@ export class OrchestratorEngine {
       agentId: agent.id,
       agentName: agent.name,
       projectPath: childInfo.projectPath ?? null,
-      worktreePath: branchCtx?.worktreePath ?? fallbackExecutionPath ?? null,
+      worktreePath: branchCtx?.worktreePath ?? null,
       sandboxPolicy: policy.sandboxPolicy,
       envAllowlist: DEFAULT_ENV_ALLOWLIST,
     }

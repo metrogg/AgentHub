@@ -76,6 +76,8 @@ export function validateEnvelope(envelope: AgentExecutionEnvelope): void {
         `Git worktree must be prepared before execution. Fallback to original projectPath is prohibited.`
     )
   }
+  // projectPath 为 null 时（无项目工作区），允许 worktreePath 为 null，
+  // buildExecutionCwd 会按需创建 no-project 执行目录。
 }
 
 export function buildExecutionCwd(envelope: AgentExecutionEnvelope): {
