@@ -18,6 +18,7 @@ export default function ChatPage() {
   const navigate = useNavigate()
   const currentSessionId = useChatStore((state) => state.currentSessionId)
   const selectSession = useChatStore((state) => state.selectSession)
+  const sessions = useChatStore((state) => state.sessions)
   const initWebSocket = useChatStore((state) => state.initWebSocket)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const desktop = isDesktopApp()
@@ -32,10 +33,15 @@ export default function ChatPage() {
   }, [initWebSocket])
 
   useEffect(() => {
-    if (sessionId && sessionId !== currentSessionId) {
-      void selectSession(sessionId).catch(() => navigate('/', { replace: true }))
+    if (!sessionId) return
+    if (sessionId === currentSessionId) return
+    const exists = sessions.some((s) => s.id === sessionId)
+    if (!exists) {
+      navigate('/', { replace: true })
+      return
     }
-  }, [sessionId, currentSessionId, navigate, selectSession])
+    void selectSession(sessionId).catch(() => navigate('/', { replace: true }))
+  }, [sessionId, currentSessionId, navigate, selectSession, sessions])
 
   return (
     <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-[#F7F7F7] text-neutral-950">
