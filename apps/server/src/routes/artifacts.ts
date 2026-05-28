@@ -53,22 +53,20 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     logger.info({ workspaceId, projectPath: ws.projectPath, deployUrl }, 'Static deployment created')
     return c.json({ deployId: workspaceId, url: deployUrl, status: 'ready' as const })
   })
-  .post('/apply-diff', zValidator('json', z.object({ projectPath: z.string(), diff: z.string() })), async (c) => {
+  .post('/apply-diff', zValidator('json', z.object({ workspaceId: z.string(), diff: z.string() })), async (c) => {
     const user = c.get('user')
-    const { projectPath, diff } = c.req.valid('json')
-    const resolvedPath = resolve(projectPath)
+    const { workspaceId, diff } = c.req.valid('json')
 
-    // 校验 projectPath 是否属于当前用户的 workspace
-    const userWorkspaces = await db.select().from(workspaces).where(eq(workspaces.ownerId, user.sub))
-    const isOwner = userWorkspaces.some(
-      (ws) => ws.projectPath && resolve(ws.projectPath) === resolvedPath,
-    )
-    if (!isOwner) {
-      throw new HTTPException(403, {
-        message: 'Access denied: project path does not belong to current user',
-      })
+    // 后端根据 workspaceId 获取 projectPath，禁止前端传任意路径
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    if (!ws || ws.ownerId !== user.sub) {
+      throw new HTTPException(403, { message: 'Access denied: workspace not found' })
+    }
+    if (!ws.projectPath) {
+      throw new HTTPException(400, { message: 'Workspace has no project path' })
     }
 
+    const resolvedPath = resolve(ws.projectPath)
     if (!existsSync(resolvedPath) || !statSync(resolvedPath).isDirectory()) {
       throw new HTTPException(400, { message: 'Project path does not exist' })
     }

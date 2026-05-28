@@ -92,10 +92,16 @@ export function getActiveRunSessionIds() {
   return Array.from(activeRuns.keys())
 }
 
+import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
+import { DEFAULT_ENV_ALLOWLIST } from './execution/agent-execution-envelope'
+import { gitBranchManager } from './git/branch-manager'
+import { isCodeAgentProfile } from './runtime'
+
 export async function runAgentReply(
   sessionId: string,
   userMsg: MessageRow,
   profile?: AgentProfile,
+  envelope?: AgentExecutionEnvelope,
 ): Promise<AgentRunResult> {
   cancelAgentReply(sessionId)
   const run = { cancelled: false, controller: new AbortController() }
@@ -178,6 +184,7 @@ export async function runAgentReply(
         profile: profileWithUserMemory,
         signal: run.controller.signal,
         workspacePath: profileWithUserMemory.projectPath ?? null,
+        envelope,
       }
 
       for await (const chunk of runtime.execute(ctx)) {

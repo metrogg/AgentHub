@@ -19,6 +19,8 @@ export interface AgentProfile {
   originalProjectPath?: string | null
 }
 
+import type { AgentExecutionEnvelope } from '../execution/agent-execution-envelope'
+
 export interface ExecutionContext {
   sessionId: string
   prompt: string
@@ -26,6 +28,7 @@ export interface ExecutionContext {
   profile: AgentProfile
   signal: AbortSignal
   workspacePath?: string | null
+  envelope?: AgentExecutionEnvelope
 }
 
 export type AgentOutputChunk =

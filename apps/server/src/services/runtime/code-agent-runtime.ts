@@ -26,7 +26,7 @@ export class CodeAgentRuntime implements AgentRuntime {
     }
 
     try {
-      for await (const chunk of streamCodeAgentReply(profile, userMsg, history, signal)) {
+      for await (const chunk of streamCodeAgentReply(profile, userMsg, history, signal, ctx.envelope)) {
         if (signal?.aborted) break
         yield normalizeChunk(chunk)
       }

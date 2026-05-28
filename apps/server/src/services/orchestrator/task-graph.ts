@@ -1,6 +1,6 @@
 import type { ExecutionTask } from './types'
 
-type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled' | 'blocked' | 'skipped'
 
 export class TaskGraph {
   private statuses = new Map<string, TaskStatus>()
@@ -34,10 +34,14 @@ export class TaskGraph {
     return this.tasks.filter((task) => this.getStatus(task.id) === 'failed')
   }
 
+  getBlockedTasks(): ExecutionTask[] {
+    return this.tasks.filter((task) => this.getStatus(task.id) === 'blocked')
+  }
+
   allDone(): boolean {
     return this.tasks.every((task) => {
       const s = this.getStatus(task.id)
-      return s === 'done' || s === 'failed' || s === 'cancelled'
+      return s === 'done' || s === 'failed' || s === 'cancelled' || s === 'blocked' || s === 'skipped'
     })
   }
 
@@ -80,8 +84,8 @@ export class TaskGraph {
   }
 
   /**
-   * 当上游任务失败或被取消时，递归把依赖它的 pending 任务标记为 cancelled。
-   * 返回被影响（新标记为 cancelled）的任务列表。
+   * 当上游任务失败或被取消时，递归把依赖它的 pending 任务标记为 blocked。
+   * 返回被影响（新标记为 blocked）的任务列表。
    */
   markBlockedByFailedDependencies(): ExecutionTask[] {
     const blocked: ExecutionTask[] = []
@@ -94,10 +98,10 @@ export class TaskGraph {
         if (this.getStatus(task.id) !== 'pending') continue
         const hasFailedDep = task.dependencies.some((depId) => {
           const depStatus = this.getStatus(depId)
-          return depStatus === 'failed' || depStatus === 'cancelled'
+          return depStatus === 'failed' || depStatus === 'cancelled' || depStatus === 'blocked'
         })
         if (hasFailedDep && !changed.has(task.id)) {
-          this.setStatus(task.id, 'cancelled')
+          this.setStatus(task.id, 'blocked')
           blocked.push(task)
           changed.add(task.id)
           foundNew = true

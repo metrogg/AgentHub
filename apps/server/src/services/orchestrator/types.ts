@@ -147,7 +147,7 @@ export interface TaskResult {
   taskId: string
   agentId: string
   agentName: string
-  status: 'done' | 'failed' | 'cancelled'
+  status: 'done' | 'failed' | 'cancelled' | 'blocked' | 'skipped'
   output: string
   artifacts: Array<Record<string, unknown>>
   outputRef?: BlackboardRef

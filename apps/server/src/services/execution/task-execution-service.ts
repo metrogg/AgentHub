@@ -2,6 +2,7 @@ import { db, messages, workspaceTasks, eq, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { runAgentReply, type AgentRunProfile } from '../agent-runner'
 import { gitBranchManager, type BranchContext } from '../git/branch-manager'
+import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
 
 export interface TaskExecutionInput {
   taskId: string
@@ -46,6 +47,11 @@ export class TaskExecutionService {
         logger.info({ branch: branchCtx.branch, agent: profile.name }, 'Agent branch prepared')
       } catch (err: any) {
         logger.error({ err: err?.message, projectPath, agent: profile.name }, 'Failed to prepare agent branch')
+        await db
+          .update(workspaceTasks)
+          .set({ status: 'failed', completedAt: new Date(), errorLog: `Git worktree 创建失败：${err?.message || '未知错误'}` })
+          .where(eq(workspaceTasks.id, taskId))
+        return { status: 'failed', output: '', artifacts: [], error: `Git worktree 创建失败：${err?.message || '未知错误'}`, durationMs: 0 }
       }
     }
 
@@ -53,6 +59,17 @@ export class TaskExecutionService {
       ...profile,
       projectPath: branchCtx?.worktreePath ?? profile.projectPath ?? null,
       originalProjectPath: profile.projectPath ?? null,
+    }
+
+    const envelope: import('./agent-execution-envelope').AgentExecutionEnvelope = {
+      runId: input.runId ?? 'standalone',
+      taskId,
+      agentId: profile.id,
+      agentName: profile.name,
+      projectPath: projectPath ?? null,
+      worktreePath: branchCtx?.worktreePath ?? null,
+      sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
+      envAllowlist: DEFAULT_ENV_ALLOWLIST,
     }
 
     // 插入 user message
@@ -91,7 +108,7 @@ export class TaskExecutionService {
         }, { once: true })
       })
 
-      const result = await Promise.race([runAgentReply(sessionId, userMsg, executionProfile), timeoutPromise])
+      const result = await Promise.race([runAgentReply(sessionId, userMsg, executionProfile, envelope), timeoutPromise])
 
       if (signal?.aborted) {
         await db.update(workspaceTasks).set({ status: 'cancelled', completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))

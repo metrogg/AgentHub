@@ -334,14 +334,14 @@ export class OrchestratorEngine {
     try {
       const results = await this.scheduler.executePlan(plan, executor)
 
-      // 为因上游失败而被取消的任务写入状态并广播事件
+      // 为因上游失败而被阻塞的任务写入状态并广播事件
       for (const result of results) {
-        if (result.status === 'cancelled' && result.error?.includes('上游依赖任务失败')) {
+        if (result.status === 'blocked') {
           const task = plan.tasks.find((t) => t.id === result.taskId)
           if (task) {
             await db
               .update(workspaceTasks)
-              .set({ status: 'cancelled', completedAt: new Date(), errorLog: result.error })
+              .set({ status: 'blocked', completedAt: new Date(), errorLog: result.error })
               .where(eq(workspaceTasks.id, task.id))
             await emitRunEvent({
               runId,
@@ -349,13 +349,13 @@ export class OrchestratorEngine {
               groupSessionId,
               taskId: task.id,
               agentId: task.agentId,
-              type: 'task.cancelled',
+              type: 'task.failed',
               severity: 'warning',
-              payload: { title: task.title, reason: result.error },
+              payload: { title: task.title, error: result.error, reason: 'blocked_by_dependency' },
             })
             broadcastSessionEvent(groupSessionId, {
               type: 'task:update',
-              payload: { taskId: task.id, status: 'cancelled', error: result.error },
+              payload: { taskId: task.id, status: 'blocked', error: result.error },
             })
           }
         }
@@ -512,7 +512,33 @@ export class OrchestratorEngine {
         logger.info({ branch: branchCtx.branch, agent: agent.name }, 'Agent branch prepared')
       } catch (err: any) {
         logger.error({ err: err?.message, projectPath, agent: agent.name }, 'Failed to prepare agent branch')
-        // 分支准备失败时，继续执行（降级到直接在原分支上运行）
+        await db
+          .update(workspaceTasks)
+          .set({ status: 'failed', completedAt: new Date(), errorLog: `Git worktree 创建失败：${err?.message || '未知错误'}` })
+          .where(eq(workspaceTasks.id, task.id))
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          taskId: task.id,
+          agentId: agent.id,
+          type: 'task.failed',
+          severity: 'error',
+          payload: { title: task.title, error: `Git worktree 创建失败：${err?.message || '未知错误'}` },
+        })
+        broadcastSessionEvent(groupSessionId, {
+          type: 'task:update',
+          payload: { taskId: task.id, status: 'failed', error: `Git worktree 创建失败：${err?.message || '未知错误'}` },
+        })
+        return {
+          taskId: task.id,
+          agentId: agent.id,
+          agentName: agent.name,
+          status: 'failed',
+          output: '',
+          artifacts: [],
+          error: `Git worktree 创建失败：${err?.message || '未知错误'}`,
+        }
       }
     }
 
@@ -591,6 +617,19 @@ export class OrchestratorEngine {
     })
 
     const taskStartTime = Date.now()
+
+    // 构造 AgentExecutionEnvelope，强制追踪每次执行上下文
+    const envelope: import('../execution/agent-execution-envelope').AgentExecutionEnvelope = {
+      runId,
+      taskId: task.id,
+      agentId: agent.id,
+      agentName: agent.name,
+      projectPath: childInfo.projectPath ?? null,
+      worktreePath: branchCtx?.worktreePath ?? null,
+      sandboxPolicy: agent.sandboxPolicy,
+      envAllowlist: [], // 使用 code-agent-adapter.ts 中的 DEFAULT_ENV_ALLOWLIST
+    }
+
     try {
       // 修复 Bug 8: LLM 任务添加超时，防止死锁
       const TASK_TIMEOUT_MS = 300_000 // 5 分钟
@@ -598,7 +637,7 @@ export class OrchestratorEngine {
         const timer = setTimeout(() => reject(new Error(`任务执行超时（${TASK_TIMEOUT_MS / 1000}秒）`)), TASK_TIMEOUT_MS)
         signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('任务已取消')) }, { once: true })
       })
-      const result = await Promise.race([runAgentReply(childInfo.sessionId, userMsg, profile), timeoutPromise])
+      const result = await Promise.race([runAgentReply(childInfo.sessionId, userMsg, profile, envelope), timeoutPromise])
 
       // 修复 Bug 7: 检查 Agent 执行结果，如果失败则抛出错误
       if (!result.ok) {
@@ -1144,6 +1183,36 @@ export class OrchestratorEngine {
 
     const summary = await this.synthesizer.synthesize(plan, enrichedResults, conflictReports, typedBlackboardEntries)
 
+    // 检查是否有未通过的 review 或 validation，决定是否允许合并提示
+    const failedReviews = enrichedResults.filter(
+      (r) => r.taskId.startsWith('review-') && (r.status === 'failed' || r.status === 'blocked')
+    )
+    const failedValidations = enrichedResults.filter(
+      (r) => r.status === 'failed' && r.error?.includes('Validation')
+    )
+    const hasPendingMergeBlockers = failedReviews.length > 0 || failedValidations.length > 0 || conflictReports.length > 0
+
+    const mergeNotice = hasPendingMergeBlockers
+      ? `
+
+---
+⚠️ **代码尚未合并到主分支**
+
+当前代码变更仅存在于隔离分支（Git worktree）中，尚未自动合并回原项目目录。原因：
+${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过\n` : ''}${failedValidations.length > 0 ? `- ${failedValidations.length} 个验证任务失败\n` : ''}${conflictReports.length > 0 ? `- 检测到 ${conflictReports.length} 个文件冲突未解决\n` : ''}
+请先解决上述问题后，在「运行历史」页面手动确认应用变更。
+`
+      : `
+
+---
+✅ **代码已审查通过，可手动合并**
+
+所有审查和验证任务已完成。代码变更仍保留在隔离分支中，尚未自动合并。
+如需应用变更，请前往「运行历史」页面手动确认。
+`
+
+    const finalSummary = summary + mergeNotice
+
     const [summaryMsg] = await db
       .insert(messages)
       .values({
@@ -1151,7 +1220,7 @@ export class OrchestratorEngine {
         senderId: 'orchestrator',
         senderType: 'agent',
         type: 'text',
-        content: summary,
+        content: finalSummary,
         metadata: {
           agentName: 'Orchestrator',
           role: 'Coordinator',
@@ -1160,6 +1229,10 @@ export class OrchestratorEngine {
             dispatchId: runId,
             taskIds: plan.tasks.map((t) => t.id),
             workspaceId,
+            mergeBlocked: hasPendingMergeBlockers,
+            failedReviewCount: failedReviews.length,
+            failedValidationCount: failedValidations.length,
+            unresolvedConflictCount: conflictReports.length,
           },
         },
       })

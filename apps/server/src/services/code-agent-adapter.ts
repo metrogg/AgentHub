@@ -10,6 +10,8 @@ import { globalSkillRegistry } from './skill-registry'
 import { getLlmRuntimeStatus, resolveLlmRuntimeConfig, resolveModelApiKey, resolveModelConfig } from './llm-client'
 import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
+import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
+import { DEFAULT_ENV_ALLOWLIST, validateEnvelope, buildExecutionCwd } from './execution/agent-execution-envelope'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -188,7 +190,8 @@ export async function* streamCodeAgentReply(
   profile: AgentRunProfile,
   userMsg: MessageRow,
   history: Array<{ senderType: string; content: string }>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  envelope?: AgentExecutionEnvelope,
 ): AsyncGenerator<CodeAgentReplyChunk, void, unknown> {
   const type = profile.codeAgentType
   if (!type) {
@@ -202,7 +205,24 @@ export async function* streamCodeAgentReply(
     return
   }
 
-  const cwdInfo = resolveExecutionCwd(profile.projectPath)
+  // 如果提供了 envelope，使用 envelope 的执行上下文；否则降级到旧路径（已废弃）
+  const cwdInfo = envelope
+    ? resolveExecutionCwd(envelope)
+    : resolveExecutionCwd({
+        runId: 'legacy',
+        taskId: 'legacy',
+        agentId: profile.id,
+        agentName: profile.name,
+        projectPath: profile.projectPath ?? null,
+        worktreePath: profile.projectPath ?? null,
+        sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
+        envAllowlist: DEFAULT_ENV_ALLOWLIST,
+      })
+  if (!cwdInfo.valid) {
+    yield `\n\n[错误：执行目录无效 — ${cwdInfo.label}]`
+    return
+  }
+
   const skillContext = await globalSkillRegistry.buildSkillContext(
     [profile.systemPrompt, profile.description, userMsg.content].filter(Boolean).join('\n\n'),
     { capabilityTags: profile.capabilityTags, limit: 3 }
@@ -265,6 +285,7 @@ export async function* streamCodeAgentReply(
     modelTarget,
     signal,
     toolConfig,
+    envelope?.envAllowlist,
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
       onText: (text) => push(text),
@@ -477,6 +498,7 @@ async function runCodeAgentCommand(
   modelTarget?: CodeAgentModelTarget | null,
   signal?: AbortSignal,
   toolConfig?: Record<string, unknown>,
+  envAllowlist?: string[],
   hooks: {
     onMetadata?: (metadata: CodeAgentRunMetadata) => void
     onText?: (text: string) => void
@@ -590,7 +612,7 @@ async function runCodeAgentCommand(
 
   const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
     cwd,
-    env: await mergedEnv(adapter, modelTarget),
+    env: await mergedEnv(adapter, modelTarget, envAllowlist),
     stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -1288,20 +1310,47 @@ function readEnv(key: string) {
   return (rootEnv()[key] ?? Bun.env[key])?.trim()
 }
 
-async function mergedEnv(adapter?: CodeAgentAdapter, modelTarget?: CodeAgentModelTarget | null) {
-  const base = { ...rootEnv(), ...Bun.env, ...codexAuthEnv() }
+async function mergedEnv(
+  adapter?: CodeAgentAdapter,
+  modelTarget?: CodeAgentModelTarget | null,
+  allowlist?: string[],
+): Promise<Record<string, string>> {
+  const allowedKeys = new Set(allowlist?.length ? allowlist : DEFAULT_ENV_ALLOWLIST)
+  const base: Record<string, string> = {}
+
+  // 1. 白名单过滤 Bun.env
+  for (const [key, value] of Object.entries(Bun.env)) {
+    if (allowedKeys.has(key) && value !== undefined) {
+      base[key] = value
+    }
+  }
+
+  // 2. 白名单过滤 .env 文件中的值（rootEnv）
+  const rootEnvValues = rootEnv()
+  for (const [key, value] of Object.entries(rootEnvValues)) {
+    if (allowedKeys.has(key)) {
+      base[key] = value
+    }
+  }
+
+  // 3. 白名单过滤 codex auth env
+  const codexEnv = codexAuthEnv()
+  for (const [key, value] of Object.entries(codexEnv)) {
+    if (allowedKeys.has(key) && value !== undefined) {
+      base[key] = value
+    }
+  }
 
   applyModelTargetEnv(base, adapter, modelTarget)
+
   if (adapter?.command === 'opencode' && modelTarget) {
     base.OPENCODE_CONFIG = prepareOpencodeRuntimeConfig(modelTarget)
   }
   if (adapter?.command !== 'codex') return base
 
   const runtimeHome = prepareCodexRuntimeHome(modelTarget)
-  return {
-    ...base,
-    CODEX_HOME: runtimeHome,
-  }
+  base.CODEX_HOME = runtimeHome
+  return base
 }
 
 function applyModelTargetEnv(
@@ -1476,32 +1525,18 @@ function syncCodexRuntimeFile(sourceHome: string, runtimeHome: string, filename:
   }
 }
 
-function resolveExecutionCwd(projectPath?: string | null) {
-  const fallback = existsSync(projectRoot) ? projectRoot : undefined
-  const trimmed = projectPath?.trim()
-  if (!trimmed) {
-    return {
-      cwd: fallback,
-      label: fallback ?? '(默认目录)',
-      valid: true,
-    }
+function resolveExecutionCwd(envelope?: AgentExecutionEnvelope) {
+  if (!envelope) {
+    return { cwd: undefined, label: '(无执行信封)', valid: false }
   }
 
-  const absolute = isAbsolute(trimmed) ? trimmed : resolve(projectRoot, trimmed)
   try {
-    const stat = statSync(absolute)
-    return {
-      cwd: stat.isDirectory() ? absolute : fallback,
-      label: absolute,
-      valid: stat.isDirectory(),
-    }
-  } catch {
-    return {
-      cwd: fallback,
-      label: absolute,
-      valid: false,
-    }
+    validateEnvelope(envelope)
+  } catch (err: any) {
+    return { cwd: undefined, label: err?.message ?? '信封校验失败', valid: false }
   }
+
+  return buildExecutionCwd(envelope)
 }
 
 function previewCommand(

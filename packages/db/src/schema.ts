@@ -123,7 +123,7 @@ export const workspaceTasks = sqliteTable('workspace_tasks', {
   agentId: text('agent_id').references(() => workspaceAgents.id, { onDelete: 'set null' }),
   title: text('title').notNull(),
   description: text('description').notNull().default(''),
-  status: text('status', { enum: ['pending', 'running', 'done', 'failed', 'cancelled'] }).notNull().default('pending'),
+  status: text('status', { enum: ['pending', 'running', 'done', 'failed', 'cancelled', 'blocked', 'skipped'] }).notNull().default('pending'),
   sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
   orderIdx: integer('order_idx').notNull().default(0),
 
