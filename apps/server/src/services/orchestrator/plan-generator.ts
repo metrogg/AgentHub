@@ -1,5 +1,5 @@
 import { db, workspaceAgents, workspaceAgentRelations, workspaces, eq } from '@agenthub/db'
-import { ROLE_PRESETS } from '@agenthub/shared'
+import { ROLE_PRESETS, AgentRoleType, RuntimeType, CodeAgentType, SandboxPolicy, TaskStatus, TaskType } from '@agenthub/shared'
 import { Planner } from './planner'
 import { selectAgentForTask } from './agent-router'
 import type { ExecutionPlan, TaskOutputContract, TaskValidation } from './types'
@@ -8,17 +8,17 @@ type PlanAgent = {
   key: string
   name: string
   role: string
-  roleType?: 'orchestrator' | 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
+  roleType?: AgentRoleType
   color?: string
   systemPrompt?: string
   description?: string
   roleProfile?: Record<string, unknown> | null
   modelId?: string | null
-  runtimeType?: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  runtimeType?: RuntimeType
+  codeAgentType?: CodeAgentType | null
   capabilityTags?: string[]
   toolPermissions?: string[]
-  sandboxPolicy?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandboxPolicy?: SandboxPolicy
 }
 
 type PlanTask = {
@@ -27,8 +27,8 @@ type PlanTask = {
   title: string
   description: string
   agentKey: string
-  status?: 'pending' | 'running' | 'done' | 'failed'
-  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'verify' | 'review' | 'synthesize'
+  status?: TaskStatus
+  taskType?: TaskType
   dependencies?: string[]
   parallelGroup?: string
   maxRetries?: number

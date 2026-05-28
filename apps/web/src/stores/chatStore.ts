@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { api, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
+import { WsEvent, TaskStatus, MessageType, SessionType } from '@agenthub/shared'
 
 let pendingStream: { messageId: string; delta: string; agentId?: string; agentName?: string } | null = null
 let pendingStreamTimer: number | null = null
@@ -96,7 +97,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async createSession(title = '新会话', options = {}) {
     const session = await api.createSession({
       title,
-      type: options.type ?? 'direct',
+      type: options.type ?? SessionType.Direct,
       workspaceId: options.workspaceId ?? null,
       workspaceAgentId: options.workspaceAgentId ?? null,
       metadata: options.metadata ?? null,
@@ -339,11 +340,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (e.payload?.sessionId && e.payload.sessionId !== sessionId) return
 
     switch (e.type) {
-      case 'agent:typing':
+      case WsEvent.AgentTyping:
         if (cancelledSessions.has(sessionId)) break
         set({ agentTyping: true })
         break
-      case 'message:stream': {
+      case WsEvent.MessageStream: {
         if (cancelledSessions.has(sessionId)) break
         const { messageId, delta, agentId, agentName } = e.payload as {
           messageId: string
@@ -405,7 +406,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         break
       }
-      case 'message:metadata': {
+      case WsEvent.MessageMetadata: {
         if (cancelledSessions.has(sessionId)) break
         const { messageId, codeAgentRun } = e.payload as { messageId: string; codeAgentRun: CodeAgentRunMetadata }
         set((s) => {
@@ -418,7 +419,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
-      case 'message:completed': {
+      case WsEvent.MessageCompleted: {
         const { message } = e.payload as { message: Message }
         cancelledSessions.delete(sessionId)
         clearPendingStream()
@@ -435,12 +436,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
-      case 'message:cancelled':
+      case WsEvent.MessageCancelled:
         cancelledSessions.add(sessionId)
         clearPendingStream()
         set({ streamingMessage: null, streamingCodeAgentRun: null, agentTyping: false })
         break
-      case 'task:update': {
+      case WsEvent.TaskUpdate: {
         const { taskId, status, strategy, agentId } = e.payload as {
           taskId: string
           status: string
@@ -451,7 +452,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((s) => {
           let updated = false
           const newMessages = s.messages.map((msg) => {
-            if (msg.type !== 'task_card' || !msg.metadata || typeof msg.metadata !== 'object') return msg
+            if (msg.type !== MessageType.TaskCard || !msg.metadata || typeof msg.metadata !== 'object') return msg
             const plan = (msg.metadata as Record<string, unknown>).plan as
               | { tasks?: Array<{ id: string; status?: string; agentKey?: string }>; agents?: Array<{ key: string; id?: string }> }
               | undefined
@@ -478,7 +479,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
-      case 'blackboard:update': {
+      case WsEvent.BlackboardUpdate: {
         const { taskId, summary, agentName, taskTitle } = e.payload as {
           taskId: string
           summary?: string
@@ -488,7 +489,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((s) => {
           let updated = false
           const newMessages = s.messages.map((msg) => {
-            if (msg.type !== 'task_card' || !msg.metadata || typeof msg.metadata !== 'object') return msg
+            if (msg.type !== MessageType.TaskCard || !msg.metadata || typeof msg.metadata !== 'object') return msg
             const plan = (msg.metadata as Record<string, unknown>).plan as
               | { tasks?: Array<{ id: string; status?: string; summary?: string; agentName?: string; taskTitle?: string }> }
               | undefined
@@ -500,7 +501,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               if (t.id !== taskId) return t
               return {
                 ...t,
-                status: (t.status === 'running' ? 'done' : t.status) as typeof t.status,
+                status: (t.status === TaskStatus.Running ? TaskStatus.Done : t.status) as typeof t.status,
                 summary: summary ?? t.summary,
                 agentName: agentName ?? t.agentName,
                 taskTitle: taskTitle ?? t.taskTitle,
@@ -515,7 +516,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
-      case 'run:event': {
+      case WsEvent.RunEvent: {
         const event = e.payload as {
           id: string
           runId: string
@@ -526,7 +527,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((s) => {
           let updated = false
           const newMessages = s.messages.map((msg) => {
-            if (msg.type !== 'task_card' || !msg.metadata || typeof msg.metadata !== 'object') return msg
+            if (msg.type !== MessageType.TaskCard || !msg.metadata || typeof msg.metadata !== 'object') return msg
             const dispatchResult = (msg.metadata as Record<string, unknown>).dispatchResult as
               | { runId?: string }
               | undefined
@@ -550,10 +551,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   if (t.id !== taskId) return t
                   const statusMap: Record<string, string> = {
                     'task.started': 'running',
-                    'task.completed': 'done',
-                    'task.failed': 'failed',
-                    'task.cancelled': 'cancelled',
-                    'task.retrying': 'pending',
+                    'task.completed': TaskStatus.Done,
+                    'task.failed': TaskStatus.Failed,
+                    'task.cancelled': TaskStatus.Cancelled,
+                    'task.retrying': TaskStatus.Pending,
                   }
                   return { ...t, status: statusMap[event.type] ?? t.status }
                 })

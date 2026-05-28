@@ -22,38 +22,32 @@ async function findGroupSession(workspaceId: string) {
 }
 
 async function syncGroupMembers(sessionId: string, workspaceId: string, ownerId: string, selectedAgentIds?: string[]) {
-  // 如果前端传了选中的 agentIds，清理工作区中未选中的旧 agents，只保留选中的
-  if (selectedAgentIds && selectedAgentIds.length > 0) {
-    const allAgents = await db
-      .select()
-      .from(workspaceAgents)
-      .where(eq(workspaceAgents.workspaceId, workspaceId))
-
-    const toDelete = allAgents.filter((a) => !selectedAgentIds.includes(a.id))
-    if (toDelete.length > 0) {
-      for (const agent of toDelete) {
-        await db.delete(workspaceAgents).where(eq(workspaceAgents.id, agent.id))
-      }
-    }
-  }
-
-  const agents = await db
+  const allAgents = await db
     .select()
     .from(workspaceAgents)
     .where(eq(workspaceAgents.workspaceId, workspaceId))
     .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
 
+  // 确定哪些 agents 应该作为群聊成员
+  let wantedAgents = allAgents
+  if (selectedAgentIds && selectedAgentIds.length > 0) {
+    wantedAgents = allAgents.filter((a) => selectedAgentIds.includes(a.id))
+  }
+
   const existing = await db.select().from(sessionMembers).where(eq(sessionMembers.sessionId, sessionId))
   const keys = new Set(existing.map((member) => `${member.memberType}:${member.memberId}`))
   const wanted = [
     { memberType: 'user' as const, memberId: ownerId },
-    ...agents.map((agent) => ({ memberType: 'agent' as const, memberId: agent.id })),
+    ...wantedAgents.map((agent) => ({ memberType: 'agent' as const, memberId: agent.id })),
   ]
+
+  // 添加缺失的成员
   const missing = wanted.filter((member) => !keys.has(`${member.memberType}:${member.memberId}`))
   if (missing.length) {
     await db.insert(sessionMembers).values(missing.map((member) => ({ sessionId, ...member })))
   }
-  // 修复 Bug 3: 删除已不在 workspace 中的幽灵成员
+
+  // 删除已不在 wanted 列表中的成员（幽灵成员清理）
   const stale = existing.filter((member) => !wanted.some((w) => w.memberType === member.memberType && w.memberId === member.memberId))
   if (stale.length) {
     for (const member of stale) {

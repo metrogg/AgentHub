@@ -306,21 +306,34 @@ export class GitBranchManager {
     }
   }
 
-  private async execGit(projectPath: string, args: string[]): Promise<string> {
+  private async execGit(projectPath: string, args: string[], timeoutMs = 30000): Promise<string> {
     const proc = Bun.spawn(['git', ...args], {
       cwd: projectPath,
       stdout: 'pipe',
       stderr: 'pipe',
       env: process.env,
     })
-    const stdout = await new Response(proc.stdout).text()
-    const stderr = await new Response(proc.stderr).text()
-    const exitCode = await proc.exited
 
-    if (exitCode !== 0 && stderr) {
-      throw new Error(`git ${args.join(' ')} failed: ${stderr.trim()}`)
+    const timeout = setTimeout(() => {
+      try { proc.kill() } catch {}
+    }, timeoutMs)
+
+    try {
+      const stdout = await new Response(proc.stdout).text()
+      const stderr = await new Response(proc.stderr).text()
+      const exitCode = await proc.exited
+
+      clearTimeout(timeout)
+
+      if (exitCode !== 0) {
+        throw new Error(`git ${args.join(' ')} failed (exit ${exitCode}): ${stderr.trim() || 'unknown error'}`)
+      }
+      return stdout
+    } catch (error) {
+      clearTimeout(timeout)
+      try { proc.kill() } catch {}
+      throw error
     }
-    return stdout
   }
 }
 

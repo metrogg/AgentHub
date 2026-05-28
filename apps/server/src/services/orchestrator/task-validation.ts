@@ -30,11 +30,22 @@ export async function runTaskValidation(params: {
       stdout: 'pipe',
       stderr: 'pipe',
     })
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
+    const timeoutMs = 60000
+    const timeout = setTimeout(() => {
+      try { proc.kill() } catch {}
+    }, timeoutMs)
+    let stdout = ''
+    let stderr = ''
+    let exitCode = 0
+    try {
+      ;[stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+    } finally {
+      clearTimeout(timeout)
+    }
     const outputSummary = compactOutput(stdout, stderr)
     results.push({
       command,

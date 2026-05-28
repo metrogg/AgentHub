@@ -1,13 +1,12 @@
 import type { ExecutionTask } from './types'
-
-type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled' | 'blocked' | 'skipped'
+import { TaskStatus } from '@agenthub/shared'
 
 export class TaskGraph {
   private statuses = new Map<string, TaskStatus>()
 
   constructor(private tasks: ExecutionTask[]) {
     for (const task of tasks) {
-      this.statuses.set(task.id, 'pending')
+      this.statuses.set(task.id, TaskStatus.Pending)
     }
   }
 
@@ -16,37 +15,41 @@ export class TaskGraph {
   }
 
   getStatus(taskId: string): TaskStatus {
-    return this.statuses.get(taskId) ?? 'pending'
+    return this.statuses.get(taskId) ?? TaskStatus.Pending
   }
 
   getReadyTasks(): ExecutionTask[] {
     return this.tasks.filter((task) => {
-      if (this.getStatus(task.id) !== 'pending') return false
-      return task.dependencies.every((depId) => this.getStatus(depId) === 'done')
+      if (this.getStatus(task.id) !== TaskStatus.Pending) return false
+      return task.dependencies.every((depId) => {
+        // 缺失的依赖视为已满足，避免任务永远挂起
+        if (!this.statuses.has(depId)) return true
+        return this.getStatus(depId) === TaskStatus.Done
+      })
     })
   }
 
   getRunningTasks(): ExecutionTask[] {
-    return this.tasks.filter((task) => this.getStatus(task.id) === 'running')
+    return this.tasks.filter((task) => this.getStatus(task.id) === TaskStatus.Running)
   }
 
   getFailedTasks(): ExecutionTask[] {
-    return this.tasks.filter((task) => this.getStatus(task.id) === 'failed')
+    return this.tasks.filter((task) => this.getStatus(task.id) === TaskStatus.Failed)
   }
 
   getBlockedTasks(): ExecutionTask[] {
-    return this.tasks.filter((task) => this.getStatus(task.id) === 'blocked')
+    return this.tasks.filter((task) => this.getStatus(task.id) === TaskStatus.Blocked)
   }
 
   allDone(): boolean {
     return this.tasks.every((task) => {
       const s = this.getStatus(task.id)
-      return s === 'done' || s === 'failed' || s === 'cancelled' || s === 'blocked' || s === 'skipped'
+      return s === TaskStatus.Done || s === TaskStatus.Failed || s === TaskStatus.Cancelled || s === TaskStatus.Blocked || s === TaskStatus.Skipped
     })
   }
 
   allSucceeded(): boolean {
-    return this.tasks.every((task) => this.getStatus(task.id) === 'done')
+    return this.tasks.every((task) => this.getStatus(task.id) === TaskStatus.Done)
   }
 
   detectCycles(): boolean {

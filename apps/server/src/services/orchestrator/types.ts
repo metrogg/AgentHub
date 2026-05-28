@@ -1,5 +1,16 @@
 import type { BlackboardRef } from '../blackboard'
 import type { AgentProfile } from '../runtime'
+import {
+  AgentRoleType,
+  RuntimeType,
+  CodeAgentType,
+  SandboxPolicy,
+  AgentRelationType,
+  TaskType,
+  TaskStatus,
+  BlackboardSchemaType,
+  OrchestratorRunStatus,
+} from '@agenthub/shared'
 
 export interface ClarificationQuestion {
   id: string
@@ -33,23 +44,23 @@ export interface ExecutionAgent {
   key: string
   name: string
   role: string
-  roleType?: 'orchestrator' | 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
+  roleType?: AgentRoleType
   description?: string
   color?: string
   systemPrompt?: string
   roleProfile?: Record<string, unknown> | null
   modelId?: string | null
-  runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini'
+  runtimeType: RuntimeType
+  codeAgentType?: CodeAgentType
   capabilityTags: string[]
   toolPermissions: string[]
-  sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandboxPolicy: SandboxPolicy
 }
 
 export interface AgentRelation {
   sourceAgentId: string
   targetAgentId: string
-  relationType: 'handoff_to' | 'reviewed_by' | 'fallback_to' | 'reports_to' | 'blocks'
+  relationType: AgentRelationType
   note?: string | null
 }
 
@@ -60,7 +71,7 @@ export interface ExecutionTask {
   description: string
   agentId: string
   dependencies: string[]
-  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'verify' | 'review' | 'synthesize'
+  taskType?: TaskType
   parallelGroup?: string
   maxRetries: number
   retryCount?: number
@@ -83,7 +94,7 @@ export interface AgentSelection {
 export interface TaskOutputContract {
   requiredBlackboardWrites: Array<{
     key: string
-    schemaType: 'fact' | 'decision' | 'risk' | 'artifact_ref' | 'diff_summary' | 'test_result' | 'task_output'
+    schemaType: BlackboardSchemaType
   }>
   requiredArtifacts?: string[]
   allowedPaths?: string[]
@@ -110,7 +121,7 @@ export interface TaskLedger {
     agentId: string
     dependencies: string[]
     taskType: NonNullable<ExecutionTask['taskType']>
-    status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+    status: TaskStatus
     outputContract: TaskOutputContract
     validation: TaskValidation
   }>
@@ -124,7 +135,7 @@ export interface TaskLedger {
 
 export interface ProgressLedger {
   runId: string
-  status: 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
+  status: OrchestratorRunStatus
   currentPhaseId?: string
   pendingTaskIds: string[]
   runningTaskIds: string[]
@@ -147,7 +158,7 @@ export interface TaskResult {
   taskId: string
   agentId: string
   agentName: string
-  status: 'done' | 'failed' | 'cancelled' | 'blocked' | 'skipped'
+  status: TaskStatus
   output: string
   artifacts: Array<Record<string, unknown>>
   outputRef?: BlackboardRef

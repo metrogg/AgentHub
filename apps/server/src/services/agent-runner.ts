@@ -3,6 +3,7 @@ import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
 import { runtimeRegistry } from './runtime'
 import type { AgentProfile, AgentOutputChunk } from './runtime'
+import { WsEvent, SenderType, MessageType } from '@agenthub/shared'
 
 export interface MessageRow {
   id: string
@@ -28,6 +29,24 @@ export interface AgentRunResult {
 
 const sessionRooms = new Map<string, Set<ServerWebSocket<unknown>>>()
 const activeRuns = new Map<string, { cancelled: boolean; controller: AbortController }>()
+const runLocks = new Map<string, Promise<void>>()
+
+async function withRunLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  while (runLocks.has(sessionId)) {
+    await runLocks.get(sessionId)!
+  }
+  let release: () => void
+  const lock = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  runLocks.set(sessionId, lock)
+  try {
+    return await fn()
+  } finally {
+    runLocks.delete(sessionId)
+    release!()
+  }
+}
 
 export function joinRoom(sessionId: string, ws: ServerWebSocket<unknown>) {
   const set = sessionRooms.get(sessionId) ?? new Set()
@@ -103,6 +122,15 @@ export async function runAgentReply(
   profile?: AgentProfile,
   envelope?: AgentExecutionEnvelope,
 ): Promise<AgentRunResult> {
+  return withRunLock(sessionId, () => _runAgentReply(sessionId, userMsg, profile, envelope))
+}
+
+async function _runAgentReply(
+  sessionId: string,
+  userMsg: MessageRow,
+  profile?: AgentProfile,
+  envelope?: AgentExecutionEnvelope,
+): Promise<AgentRunResult> {
   cancelAgentReply(sessionId)
   const run = { cancelled: false, controller: new AbortController() }
   activeRuns.set(sessionId, run)
@@ -147,7 +175,7 @@ export async function runAgentReply(
   const streamMsgId = crypto.randomUUID()
 
   broadcast(sessionId, {
-    type: 'agent:typing',
+    type: WsEvent.AgentTyping,
     payload: { sessionId, agentId, agentName },
   })
 
@@ -193,7 +221,7 @@ export async function runAgentReply(
           case 'text':
             fullContent += chunk.text
             broadcast(sessionId, {
-              type: 'message:stream',
+              type: WsEvent.MessageStream,
               payload: { sessionId, messageId: streamMsgId, delta: chunk.text, agentId, agentName },
             })
             break
@@ -240,7 +268,7 @@ export async function runAgentReply(
         if (run.cancelled) break
         fullContent += delta
         broadcast(sessionId, {
-          type: 'message:stream',
+          type: WsEvent.MessageStream,
           payload: { sessionId, messageId: streamMsgId, delta, agentId, agentName },
         })
       }
@@ -272,7 +300,7 @@ export async function runAgentReply(
   if (!fullContent.trim()) {
     fullContent = '[错误：模型返回了空响应。请检查当前供应商、模型 ID、Base URL 和 API Key。]'
     broadcast(sessionId, {
-      type: 'message:stream',
+      type: WsEvent.MessageStream,
       payload: { sessionId, messageId: streamMsgId, delta: fullContent, agentId, agentName },
     })
   }
@@ -303,7 +331,7 @@ export async function runAgentReply(
     .returning()
 
   broadcast(sessionId, {
-    type: 'message:completed',
+    type: WsEvent.MessageCompleted,
     payload: { sessionId, message: agentMsg },
   })
 

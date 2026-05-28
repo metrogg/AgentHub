@@ -8,6 +8,7 @@ import { blackboard, Blackboard } from '../services/blackboard'
 import type { BlackboardSchemaType } from '../services/blackboard-schemas'
 import { OrchestratorEngine, type ExecutionTask } from '../services/orchestrator/orchestrator-engine'
 import type { ConflictReport } from '../services/orchestrator/conflict-resolver'
+import { TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 
 export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -93,19 +94,19 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       throw new HTTPException(404, { message: 'Run not found' })
     }
 
-    if (run.status === 'cancelled' || run.status === 'completed' || run.status === 'failed') {
+    if (run.status === OrchestratorRunStatus.Cancelled || run.status === OrchestratorRunStatus.Completed || run.status === OrchestratorRunStatus.Failed) {
       return c.json({ run, activeRunCancelled: false })
     }
 
     const activeRunCancelled = OrchestratorEngine.cancelActiveRun(id)
     await db
       .update(orchestratorRuns)
-      .set({ status: 'cancelled', updatedAt: new Date() })
+      .set({ status: OrchestratorRunStatus.Cancelled, updatedAt: new Date() })
       .where(eq(orchestratorRuns.id, id))
     await db
       .update(workspaceTasks)
       .set({
-        status: 'cancelled',
+        status: TaskStatus.Cancelled,
         completedAt: new Date(),
         errorLog: 'Run cancelled by user',
       })
@@ -130,7 +131,7 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       .where(eq(orchestratorRuns.id, id))
       .limit(1)
 
-    return c.json({ run: updated ?? { ...run, status: 'cancelled' }, activeRunCancelled })
+    return c.json({ run: updated ?? { ...run, status: OrchestratorRunStatus.Cancelled }, activeRunCancelled })
   })
 
   // Retry a failed task within a run

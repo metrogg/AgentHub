@@ -9,6 +9,7 @@ import type {
   GroupChatState,
 } from './types'
 import { DEFAULT_GROUP_CHAT_CONFIG } from './types'
+import { WsEvent } from '@agenthub/shared'
 
 /**
  * 从消息内容中提取 @mention 的 Agent
@@ -46,9 +47,11 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * 查找群聊中的 Orchestrator Agent（按 roleType 或名称匹配）
+ * 查找群聊中的 Orchestrator Agent（按 roleType 优先匹配，回退到名称）
  */
 function findOrchestrator(agents: GroupChatAgent[]): GroupChatAgent | undefined {
+  const byRoleType = agents.find((a) => a.roleType === 'orchestrator')
+  if (byRoleType) return byRoleType
   return agents.find((a) => {
     const text = [a.name, a.role ?? '', ...(a.capabilityTags ?? [])].join(' ').toLowerCase()
     return text.includes('orchestrator') || text.includes('总指挥') || text.includes('协调') || text.includes('调度')
@@ -216,7 +219,7 @@ export class GroupChatManager {
 
       // 广播 Agent 开始发言
       broadcastSessionEvent(sessionId, {
-        type: 'agent:typing',
+        type: WsEvent.AgentTyping,
         payload: {
           sessionId,
           agentId: currentAgent.id,
@@ -529,7 +532,7 @@ export class GroupChatManager {
         .set({ metadata: { plan: loadingPlanWithId } })
         .where(eq(messages.id, loadingCard.id))
       broadcastSessionEvent(sessionId, {
-        type: 'message:completed',
+        type: WsEvent.MessageCompleted,
         payload: { sessionId, message: { ...loadingCard, metadata: { plan: loadingPlanWithId } } },
       })
     }
@@ -547,7 +550,7 @@ export class GroupChatManager {
           const [updatedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
           if (updatedCard) {
             broadcastSessionEvent(sessionId, {
-              type: 'message:completed',
+              type: WsEvent.MessageCompleted,
               payload: { sessionId, message: { ...updatedCard, metadata: { plan: planWithId } } },
             })
           }
@@ -570,7 +573,7 @@ export class GroupChatManager {
           const [failedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
           if (failedCard) {
             broadcastSessionEvent(sessionId, {
-              type: 'message:completed',
+              type: WsEvent.MessageCompleted,
               payload: { sessionId, message: failedCard },
             })
           }
@@ -588,6 +591,7 @@ function toGroupChatAgent(row: typeof workspaceAgents.$inferSelect): GroupChatAg
     id: row.id,
     name: row.name,
     role: row.role,
+    roleType: (row.roleType as GroupChatAgent['roleType']) ?? undefined,
     description: row.description,
     systemPrompt: row.systemPrompt ?? undefined,
     color: row.color ?? undefined,

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, uniqueIndex, index } from 'drizzle-orm/sqlite-core'
 import { relations } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 
@@ -39,9 +39,11 @@ export const workspaces = sqliteTable('workspaces', {
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })
 
-export const workspaceAgents = sqliteTable('workspace_agents', {
-  id: id(),
-  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+export const workspaceAgents = sqliteTable(
+  'workspace_agents',
+  {
+    id: id(),
+    workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   role: text('role').notNull(),
   roleType: text('role_type', {
@@ -67,7 +69,10 @@ export const workspaceAgents = sqliteTable('workspace_agents', {
   approvalRequired: integer('approval_required', { mode: 'boolean' }).notNull().default(true),
   orderIdx: integer('order_idx').notNull().default(0),
   createdAt: now(),
-})
+},
+(table) => ({
+  workspaceIdIdx: index('workspace_agents_workspace_id_idx').on(table.workspaceId),
+}))
 
 export const workspaceAgentRelations = sqliteTable(
   'workspace_agent_relations',
@@ -117,8 +122,10 @@ export interface AgentArtifact {
   logs?: string[]
 }
 
-export const workspaceTasks = sqliteTable('workspace_tasks', {
-  id: id(),
+export const workspaceTasks = sqliteTable(
+  'workspace_tasks',
+  {
+    id: id(),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   agentId: text('agent_id').references(() => workspaceAgents.id, { onDelete: 'set null' }),
   title: text('title').notNull(),
@@ -145,28 +152,45 @@ export const workspaceTasks = sqliteTable('workspace_tasks', {
 
   createdAt: now(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
-})
+},
+(table) => ({
+  workspaceIdIdx: index('workspace_tasks_workspace_id_idx').on(table.workspaceId),
+  runIdIdx: index('workspace_tasks_run_id_idx').on(table.runId),
+}))
 
-export const sessionMembers = sqliteTable('session_members', {
-  id: id(),
-  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
-  memberId: text('member_id').notNull(),
-  memberType: text('member_type', { enum: ['user', 'agent'] }).notNull(),
-  joinedAt: now(),
-})
+export const sessionMembers = sqliteTable(
+  'session_members',
+  {
+    id: id(),
+    sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+    memberId: text('member_id').notNull(),
+    memberType: text('member_type', { enum: ['user', 'agent'] }).notNull(),
+    joinedAt: now(),
+  },
+  (table) => ({
+    sessionIdIdx: index('session_members_session_id_idx').on(table.sessionId),
+  }),
+)
 
-export const messages = sqliteTable('messages', {
-  id: id(),
-  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
-  senderId: text('sender_id').notNull(),
-  senderType: text('sender_type', { enum: ['user', 'agent', 'system'] }).notNull(),
-  type: text('type').notNull().default('text'),
-  content: text('content').notNull(),
-  metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
-  isPinned: integer('is_pinned', { mode: 'boolean' }).notNull().default(false),
-  replyToMessageId: text('reply_to_message_id'),
-  createdAt: now(),
-})
+export const messages = sqliteTable(
+  'messages',
+  {
+    id: id(),
+    sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+    senderId: text('sender_id').notNull(),
+    senderType: text('sender_type', { enum: ['user', 'agent', 'system'] }).notNull(),
+    type: text('type').notNull().default('text'),
+    content: text('content').notNull(),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
+    isPinned: integer('is_pinned', { mode: 'boolean' }).notNull().default(false),
+    replyToMessageId: text('reply_to_message_id'),
+    createdAt: now(),
+  },
+  (table) => ({
+    sessionIdIdx: index('messages_session_id_idx').on(table.sessionId),
+    pinnedIdx: index('messages_pinned_idx').on(table.sessionId, table.isPinned),
+  }),
+)
 
 export interface ConflictReport {
   filePath: string
@@ -238,7 +262,7 @@ export const tasks = sqliteTable('tasks', {
   title: text('title').notNull(),
   description: text('description'),
   status: text('status', {
-    enum: ['pending', 'running', 'succeeded', 'failed', 'cancelled'],
+    enum: ['pending', 'running', 'done', 'failed', 'cancelled'],
   }).notNull().default('pending'),
   result: text('result', { mode: 'json' }),
   createdAt: now(),
@@ -256,32 +280,44 @@ export const messagesRelations = relations(messages, ({ one }) => ({
   session: one(sessions, { fields: [messages.sessionId], references: [sessions.id] }),
 }))
 
-export const blackboardEntries = sqliteTable('blackboard_entries', {
-  id: id(),
-  namespace: text('namespace').notNull(),
-  key: text('key').notNull(),
-  value: text('value', { mode: 'json' }).notNull(),
-  schemaVersion: integer('schema_version').notNull().default(1),
-  agentId: text('agent_id'),
-  taskId: text('task_id'),
-  version: integer('version').notNull().default(1),
-  tags: text('tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
-  createdAt: now(),
-})
+export const blackboardEntries = sqliteTable(
+  'blackboard_entries',
+  {
+    id: id(),
+    namespace: text('namespace').notNull(),
+    key: text('key').notNull(),
+    value: text('value', { mode: 'json' }).notNull(),
+    schemaVersion: integer('schema_version').notNull().default(1),
+    agentId: text('agent_id'),
+    taskId: text('task_id'),
+    version: integer('version').notNull().default(1),
+    tags: text('tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    createdAt: now(),
+  },
+  (table) => ({
+    namespaceKeyIdx: index('blackboard_entries_namespace_key_idx').on(table.namespace, table.key),
+  }),
+)
 
-export const executionLogs = sqliteTable('execution_logs', {
-  id: id(),
-  runId: text('run_id').notNull(),
-  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
-  agentId: text('agent_id').notNull(),
-  taskId: text('task_id'),
-  type: text('type', { enum: ['llm_call', 'tool_call', 'blackboard_read', 'blackboard_write', 'error', 'task_start', 'task_end'] }).notNull(),
-  input: text('input', { mode: 'json' }),
-  output: text('output', { mode: 'json' }),
-  durationMs: integer('duration_ms'),
-  tokenUsage: text('token_usage', { mode: 'json' }),
-  createdAt: now(),
-})
+export const executionLogs = sqliteTable(
+  'execution_logs',
+  {
+    id: id(),
+    runId: text('run_id').notNull(),
+    sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id').notNull(),
+    taskId: text('task_id'),
+    type: text('type', { enum: ['llm_call', 'tool_call', 'blackboard_read', 'blackboard_write', 'error', 'task_start', 'task_end'] }).notNull(),
+    input: text('input', { mode: 'json' }),
+    output: text('output', { mode: 'json' }),
+    durationMs: integer('duration_ms'),
+    tokenUsage: text('token_usage', { mode: 'json' }),
+    createdAt: now(),
+  },
+  (table) => ({
+    runIdIdx: index('execution_logs_run_id_idx').on(table.runId),
+  }),
+)
 
 export const tasksRelations = relations(tasks, ({ one, many }) => ({
   session: one(sessions, { fields: [tasks.sessionId], references: [sessions.id] }),

@@ -88,9 +88,16 @@ export class ConflictResolver {
         stderr: 'pipe',
         env: process.env,
       })
-      const out = await new Response(proc.stdout).text()
-      await proc.exited
-      return out
+      const timeout = setTimeout(() => {
+        try { proc.kill() } catch {}
+      }, 30000)
+      try {
+        const out = await new Response(proc.stdout).text()
+        await proc.exited
+        return out
+      } finally {
+        clearTimeout(timeout)
+      }
     } catch {
       return ''
     }
@@ -136,7 +143,10 @@ export class ConflictResolver {
           stdout: 'pipe',
           stderr: 'pipe',
         })
-        await proc.exited
+        const exitCode = await proc.exited
+        if (exitCode !== 0) {
+          return { ok: false }
+        }
       }
 
       const merged = await Bun.file(workingFile).text()

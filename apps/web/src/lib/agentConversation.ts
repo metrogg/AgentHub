@@ -1,4 +1,4 @@
-import { api, type Session, type WorkspaceAgent, type WorkspaceFull } from './api'
+import { api, type Session, type WorkspaceAgent, type WorkspaceFull, SessionType } from './api'
 import { loadAgentLibraryState, toAgentConfigInput, type SavedAgentConfig } from './agentLibrary'
 
 export interface StartAgentConversationOptions {
@@ -140,7 +140,7 @@ async function findWorkspaceForAgent(agent: SavedAgentConfig) {
     const { items: sessions } = await api.listSessions()
     groupWorkspaceIds = new Set(
       sessions
-        .filter((session) => session.type === 'group' && session.workspaceId)
+        .filter((session) => session.type === SessionType.Group && session.workspaceId)
         .map((session) => session.workspaceId!),
     )
 
@@ -306,11 +306,11 @@ function findReusableWorkspaceAgent(
 }
 
 function isDirectWorkspaceAgentSession(session: Session) {
-  return session.type === 'direct' && Boolean(session.workspaceId && session.workspaceAgentId)
+  return session.type === SessionType.Direct && Boolean(session.workspaceId && session.workspaceAgentId)
 }
 
 function isDirectWorkspaceSession(session: Session) {
-  return session.type === 'direct' && Boolean(session.workspaceId)
+  return session.type === SessionType.Direct && Boolean(session.workspaceId)
 }
 
 function isGeneratedTaskMetadata(metadata: Record<string, unknown> | null | undefined) {

@@ -7,6 +7,7 @@ import { setRuntimeServerPort } from './lib/runtime-server'
 import { joinRoom, cleanupWebSocket } from './services/agent-runner'
 import { db, users, eq } from '@agenthub/db'
 import { DEFAULT_USER } from './middleware/auth'
+import { WsEvent } from '@agenthub/shared'
 
 // Seed the local default user (single-user mode, no auth)
 async function seedDefaultUser() {
@@ -50,9 +51,9 @@ for (let i = 0; i < maxTries; i++) {
             const data = JSON.parse(text)
             logger.debug({ type: data.type }, 'ws message')
 
-            if (data.type === 'session:join' && data.payload?.sessionId) {
+            if (data.type === WsEvent.SessionJoin && data.payload?.sessionId) {
               joinRoom(data.payload.sessionId, ws)
-              ws.send(JSON.stringify({ type: 'session:joined', payload: { sessionId: data.payload.sessionId } }))
+              ws.send(JSON.stringify({ type: WsEvent.SessionJoined, payload: { sessionId: data.payload.sessionId } }))
             }
           } catch {
             // ignore malformed messages

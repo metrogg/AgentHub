@@ -1,4 +1,4 @@
-import type { Session } from './api'
+import { type Session, SessionType } from './api'
 
 export type SessionGroup = {
   parent: Session
@@ -11,7 +11,7 @@ export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string
   const hiddenIds = new Set<string>()
   const groupWorkspaceIds = new Set(
     sessions
-      .filter((session) => session.type === 'group' && session.workspaceId)
+      .filter((session) => session.type === SessionType.Group && session.workspaceId)
       .map((session) => session.workspaceId!),
   )
 
@@ -33,7 +33,7 @@ export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string
     .filter((session) => !hiddenIds.has(session.id))
     .map((parent) => {
       const children =
-        parent.type === 'group' && parent.workspaceId
+        parent.type === SessionType.Group && parent.workspaceId
           ? [...(childrenByWorkspace.get(parent.workspaceId) ?? [])].sort(
               (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
             )
@@ -48,7 +48,7 @@ export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string
 }
 
 function agentSessionVisibility(session: Session, groupWorkspaceIds: Set<string>): 'top' | 'child' | 'hidden' {
-  if (session.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return 'top'
+  if (session.type !== SessionType.Direct || !session.workspaceId || !session.workspaceAgentId) return 'top'
   const metadata = session.metadata ?? {}
   if (metadata.kind === 'agent-direct') return 'top'
   if (metadata.hiddenFromSessionTree) return 'hidden'

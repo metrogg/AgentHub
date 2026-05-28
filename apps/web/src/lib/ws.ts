@@ -1,7 +1,9 @@
+import { WsEvent } from '@agenthub/shared'
+
 type Listener = (event: WSEvent) => void
 
 export interface WSEvent {
-  type: string
+  type: WsEvent
   payload?: any
 }
 
@@ -55,7 +57,7 @@ class WSClient {
   joinSession(sessionId: string) {
     this.currentSessionId = sessionId
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'session:join', payload: { sessionId } }))
+      this.ws.send(JSON.stringify({ type: WsEvent.SessionJoin, payload: { sessionId } }))
     } else {
       this.connect()
     }

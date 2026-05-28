@@ -6,7 +6,17 @@ import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { unlink, writeFile } from 'node:fs/promises'
-import { sendMessageSchema, ROLE_PRESETS } from '@agenthub/shared'
+import {
+  sendMessageSchema,
+  ROLE_PRESETS,
+  TaskStatus,
+  AgentRoleType,
+  RuntimeType,
+  CodeAgentType,
+  SandboxPolicy,
+  TaskType,
+  WsEvent,
+} from '@agenthub/shared'
 import { logger } from '../lib/logger'
 import {
   db,
@@ -68,7 +78,7 @@ const updateOrchestratorPlanSchema = z.object({
     z.object({
       id: z.string().min(1),
       agentKey: z.string().min(1).optional(),
-        status: z.enum(['pending', 'running', 'done', 'failed']).optional(),
+        status: z.enum(Object.values(TaskStatus) as [string, ...string[]]).optional(),
     })
   ),
 })
@@ -83,17 +93,17 @@ type PlanAgent = {
   key: string
   name: string
   role: string
-  roleType?: 'orchestrator' | 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
+  roleType?: AgentRoleType
   color: string
   systemPrompt: string
   description?: string
   roleProfile?: Record<string, unknown> | null
   modelId?: string | null
-  runtimeType?: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  runtimeType?: RuntimeType
+  codeAgentType?: CodeAgentType | null
   capabilityTags?: string[]
   toolPermissions?: string[]
-  sandboxPolicy?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandboxPolicy?: SandboxPolicy
 }
 
 type PlanTask = {
@@ -102,8 +112,8 @@ type PlanTask = {
   title: string
   description: string
   agentKey: string
-  status?: 'pending' | 'running' | 'done' | 'failed'
-  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'verify' | 'review' | 'synthesize'
+  status?: TaskStatus
+  taskType?: TaskType
   dependencies?: string[]
   parallelGroup?: string
   maxRetries?: number
@@ -365,7 +375,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     // 立即广播 loading 消息，让前端即时显示
     broadcastSessionEvent(sessionId, {
-      type: 'message:completed',
+      type: WsEvent.MessageCompleted,
       payload: { sessionId, message: { ...loadingCard, metadata: { plan: loadingPlanWithId } } },
     })
 
@@ -381,7 +391,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         const [updatedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
         if (updatedCard) {
           broadcastSessionEvent(sessionId, {
-            type: 'message:completed',
+            type: WsEvent.MessageCompleted,
             payload: { sessionId, message: { ...updatedCard, metadata: { plan: planWithId } } },
           })
         }
@@ -402,7 +412,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         const [failedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
         if (failedCard) {
           broadcastSessionEvent(sessionId, {
-            type: 'message:completed',
+            type: WsEvent.MessageCompleted,
             payload: { sessionId, message: failedCard },
           })
         }
@@ -565,7 +575,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         return {
           ...task,
           agentKey: patch.agentKey && agentKeys.has(patch.agentKey) ? (patch.agentKey as PlanTask['agentKey']) : task.agentKey,
-          status: patch.status ?? task.status,
+          status: (patch.status as TaskStatus | undefined) ?? task.status,
         }
       }),
     }
@@ -1079,7 +1089,7 @@ async function updatePlanCardDispatchResult(
     const [updatedCard] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (updatedCard) {
       broadcastSessionEvent(groupSessionId, {
-        type: 'message:completed',
+        type: WsEvent.MessageCompleted,
         payload: { sessionId: groupSessionId, message: updatedCard },
       })
     }

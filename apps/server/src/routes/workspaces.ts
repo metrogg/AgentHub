@@ -19,6 +19,7 @@ import { ensureGroupSession } from '../services/workspace/group-session'
 import { workspaceAgentRunProfile, getActiveRunSessionIds } from '../services/workspace/agent-runtime'
 import { taskExecutionService } from '../services/execution/task-execution-service'
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
+import { TaskStatus } from '@agenthub/shared'
 
 // ---------- Validation schemas ----------
 
@@ -82,7 +83,7 @@ const updateTaskSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(4000).optional(),
   agentId: z.string().nullable().optional(),
-  status: z.enum(['pending', 'running', 'done', 'failed']).optional(),
+  status: z.enum(['pending', 'running', 'done', 'failed', 'cancelled', 'blocked', 'skipped']).optional(),
 })
 
 type AgentConfigPatch = z.input<typeof createAgentSchema> | z.infer<typeof updateAgentSchema>

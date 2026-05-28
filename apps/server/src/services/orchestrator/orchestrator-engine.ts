@@ -16,6 +16,7 @@ import { runTaskValidation } from './task-validation'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 import { PolicyGuard } from '../policy-guard'
 import { DEFAULT_ENV_ALLOWLIST } from '../execution/agent-execution-envelope'
+import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
 
@@ -51,7 +52,7 @@ export class OrchestratorEngine {
 
     await db
       .update(workspaceTasks)
-      .set({ status: 'pending', completedAt: null, errorLog: null })
+      .set({ status: TaskStatus.Pending, completedAt: null, errorLog: null })
       .where(eq(workspaceTasks.id, task.id))
 
     await emitRunEvent({
@@ -73,7 +74,11 @@ export class OrchestratorEngine {
 
     const plan = (runRow?.plan as ExecutionPlan | undefined) ?? { runId, title: '', goal: '', agents: [], tasks: [task] }
 
-    const result = await this.executeTask(task, plan, childSessions, runId, groupSessionId, workspaceId, new AbortController().signal, 0)
+    const result = await this.executeTask(
+      task, plan, childSessions, runId, groupSessionId, workspaceId,
+      this.scheduler.getRunSignal(runId) ?? new AbortController().signal,
+      0,
+    )
 
     return result
   }
@@ -95,7 +100,7 @@ export class OrchestratorEngine {
 
     await db
       .update(orchestratorRuns)
-      .set({ status: 'running', plan: plan as unknown as Record<string, unknown> })
+      .set({ status: OrchestratorRunStatus.Running, plan: plan as unknown as Record<string, unknown> })
       .where(eq(orchestratorRuns.id, runId))
 
     const [groupSessionRecord] = await db.select().from(sessions).where(eq(sessions.id, groupSessionId)).limit(1)
@@ -107,7 +112,7 @@ export class OrchestratorEngine {
 
       while (true) {
         const result = await this.executeTask(currentTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, currentAttempt)
-        if (result.status === 'done' || result.status === 'cancelled') {
+        if (result.status === TaskStatus.Done || result.status === TaskStatus.Cancelled) {
           return result
         }
 
@@ -118,7 +123,7 @@ export class OrchestratorEngine {
             taskId: currentTask.id,
             agentId: currentTask.agentId,
             agentName: 'Unknown',
-            status: 'failed',
+            status: TaskStatus.Failed,
             output: '',
             artifacts: [],
             error: '任务重试次数超过系统上限（20次），已强制终止。',
@@ -144,10 +149,10 @@ export class OrchestratorEngine {
           await new Promise((r) => setTimeout(r, delayMs))
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
-            await db.update(workspaceTasks).set({ status: 'pending', errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
+            await db.update(workspaceTasks).set({ status: TaskStatus.Pending, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
             broadcastSessionEvent(groupSessionId, {
-              type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', attempt: currentAttempt, strategy: 'retry', sessionId: groupSessionId },
+              type: WsEvent.TaskUpdate,
+              payload: { taskId: currentTask.id, status: TaskStatus.Pending, attempt: currentAttempt, strategy: 'retry', sessionId: groupSessionId },
             })
           }
           continue
@@ -169,10 +174,10 @@ export class OrchestratorEngine {
           })
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
-            await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
+            await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: TaskStatus.Pending, retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
             broadcastSessionEvent(groupSessionId, {
-              type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', agentId: currentTask.agentId, strategy: 'agent_substitution', sessionId: groupSessionId },
+              type: WsEvent.TaskUpdate,
+              payload: { taskId: currentTask.id, status: TaskStatus.Pending, agentId: currentTask.agentId, strategy: 'agent_substitution', sessionId: groupSessionId },
             })
           }
           continue
@@ -193,10 +198,10 @@ export class OrchestratorEngine {
           })
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
-            await db.update(workspaceTasks).set({ status: 'pending', retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
+            await db.update(workspaceTasks).set({ status: TaskStatus.Pending, retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
             broadcastSessionEvent(groupSessionId, {
-              type: 'task:update',
-              payload: { taskId: currentTask.id, status: 'pending', strategy: 'local_replan', sessionId: groupSessionId },
+              type: WsEvent.TaskUpdate,
+              payload: { taskId: currentTask.id, status: TaskStatus.Pending, strategy: 'local_replan', sessionId: groupSessionId },
             })
           }
           continue
@@ -212,7 +217,7 @@ export class OrchestratorEngine {
               agentId: newTask.agentId,
               title: newTask.title,
               description: newTask.description,
-              status: 'pending',
+              status: TaskStatus.Pending,
               orderIdx: plan.tasks.length,
               runId,
               phaseId: newTask.phaseId,
@@ -244,7 +249,7 @@ export class OrchestratorEngine {
           })
           this.scheduler.addTasksToRun(runId, replan.newTasks)
           logger.info({ taskId: currentTask.id, newTaskCount: replan.newTasks.length }, 'Task split into subtasks')
-          return { ...result, status: 'failed' as const, error: `任务已拆分为子任务: ${replan.reason}` }
+          return { ...result, status: TaskStatus.Failed, error: `任务已拆分为子任务: ${replan.reason}` }
         }
 
         if (replan.strategy === 'global_replan') {
@@ -263,7 +268,7 @@ export class OrchestratorEngine {
                   agentId: newTask.agentId,
                   title: newTask.title,
                   description: newTask.description,
-                  status: 'pending',
+                  status: TaskStatus.Pending,
                   orderIdx: plan.tasks.length,
                   runId,
                   phaseId: newTask.phaseId,
@@ -356,7 +361,7 @@ export class OrchestratorEngine {
               payload: { title: task.title, error: result.error, reason: 'blocked_by_dependency' },
             })
             broadcastSessionEvent(groupSessionId, {
-              type: 'task:update',
+              type: WsEvent.TaskUpdate,
               payload: { taskId: task.id, status: 'blocked', error: result.error, sessionId: groupSessionId },
             })
           }
@@ -368,7 +373,7 @@ export class OrchestratorEngine {
         .from(orchestratorRuns)
         .where(eq(orchestratorRuns.id, runId))
         .limit(1)
-      if (currentRun?.status === 'cancelled') {
+      if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
         logger.info({ runId }, 'Orchestrator run cancelled before synthesis')
         return
       }
@@ -431,7 +436,7 @@ export class OrchestratorEngine {
       await this.synthesizeAndReport(runId, groupSessionId, workspaceId, plan, results, conflictReports)
     } catch (error: any) {
       logger.error({ err: error?.message, runId }, 'Scheduler execution failed')
-      await db.update(orchestratorRuns).set({ status: 'failed' }).where(eq(orchestratorRuns.id, runId))
+      await db.update(orchestratorRuns).set({ status: OrchestratorRunStatus.Failed }).where(eq(orchestratorRuns.id, runId))
       await emitRunEvent({
         runId,
         workspaceId,
@@ -475,7 +480,7 @@ export class OrchestratorEngine {
         taskId: task.id,
         agentId: task.agentId,
         agentName: 'Unknown',
-        status: 'failed',
+        status: TaskStatus.Failed,
         output: `Agent ${task.agentId} not found in plan`,
         artifacts: [],
       }
@@ -497,7 +502,7 @@ export class OrchestratorEngine {
         taskId: task.id,
         agentId: agent.id,
         agentName: agent.name,
-        status: 'failed',
+        status: TaskStatus.Failed,
         output: `Child session not found for task ${task.id}`,
         artifacts: [],
       }
@@ -520,7 +525,7 @@ export class OrchestratorEngine {
         logger.error({ err: err?.message, projectPath, agent: agent.name }, 'Failed to prepare agent branch')
         await db
           .update(workspaceTasks)
-          .set({ status: 'failed', completedAt: new Date(), errorLog: `Git worktree 创建失败：${err?.message || '未知错误'}` })
+          .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: `Git worktree 创建失败：${err?.message || '未知错误'}` })
           .where(eq(workspaceTasks.id, task.id))
         await emitRunEvent({
           runId,
@@ -533,14 +538,14 @@ export class OrchestratorEngine {
           payload: { title: task.title, error: `Git worktree 创建失败：${err?.message || '未知错误'}` },
         })
         broadcastSessionEvent(groupSessionId, {
-          type: 'task:update',
-          payload: { taskId: task.id, status: 'failed', error: `Git worktree 创建失败：${err?.message || '未知错误'}`, sessionId: groupSessionId },
+          type: WsEvent.TaskUpdate,
+          payload: { taskId: task.id, status: TaskStatus.Failed, error: `Git worktree 创建失败：${err?.message || '未知错误'}`, sessionId: groupSessionId },
         })
         return {
           taskId: task.id,
           agentId: agent.id,
           agentName: agent.name,
-          status: 'failed',
+          status: TaskStatus.Failed,
           output: '',
           artifacts: [],
           error: `Git worktree 创建失败：${err?.message || '未知错误'}`,
@@ -596,7 +601,7 @@ export class OrchestratorEngine {
         taskId: task.id,
         agentId: agent.id,
         agentName: agent.name,
-        status: 'failed',
+        status: TaskStatus.Failed,
         output: 'Failed to create user message in child session',
         artifacts: [],
       }
@@ -604,7 +609,7 @@ export class OrchestratorEngine {
 
     await db
       .update(workspaceTasks)
-      .set({ status: 'running', startedAt: new Date(), retryCount: attemptCount })
+      .set({ status: TaskStatus.Running, startedAt: new Date(), retryCount: attemptCount })
       .where(eq(workspaceTasks.id, task.id))
 
     await emitRunEvent({
@@ -618,8 +623,8 @@ export class OrchestratorEngine {
     })
 
     broadcastSessionEvent(groupSessionId, {
-      type: 'task:update',
-      payload: { taskId: task.id, status: 'running', sessionId: groupSessionId },
+      type: WsEvent.TaskUpdate,
+      payload: { taskId: task.id, status: TaskStatus.Running, sessionId: groupSessionId },
     })
 
     const taskStartTime = Date.now()
@@ -653,7 +658,7 @@ export class OrchestratorEngine {
       if (signal.aborted || result.cancelled) {
         await db
           .update(workspaceTasks)
-          .set({ status: 'cancelled', completedAt: new Date() })
+          .set({ status: TaskStatus.Cancelled, completedAt: new Date() })
           .where(eq(workspaceTasks.id, task.id))
         await emitRunEvent({
           runId,
@@ -670,7 +675,7 @@ export class OrchestratorEngine {
           taskId: task.id,
           agentId: agent.id,
           agentName: agent.name,
-          status: 'cancelled',
+          status: TaskStatus.Cancelled,
           output: 'Task was cancelled',
           artifacts: [],
         }
@@ -724,7 +729,7 @@ export class OrchestratorEngine {
         agentId: agent.id,
         taskId: task.id,
         type: 'task_end',
-        output: { status: 'done', outputLength: output.length, durationMs: taskDuration },
+        output: { status: TaskStatus.Done, outputLength: output.length, durationMs: taskDuration },
       })
 
       // 生成结构化摘要（接口契约），供下游任务高效引用
@@ -966,15 +971,15 @@ export class OrchestratorEngine {
       await db
         .update(workspaceTasks)
         .set({
-          status: 'done',
+          status: TaskStatus.Done,
           completedAt: new Date(),
           artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
         })
         .where(eq(workspaceTasks.id, task.id))
 
       broadcastSessionEvent(groupSessionId, {
-        type: 'task:update',
-        payload: { taskId: task.id, status: 'done', sessionId: groupSessionId, agentId: agent.id, agentName: agent.name },
+        type: WsEvent.TaskUpdate,
+        payload: { taskId: task.id, status: TaskStatus.Done, sessionId: groupSessionId, agentId: agent.id, agentName: agent.name },
       })
 
       await emitRunEvent({
@@ -1015,12 +1020,12 @@ export class OrchestratorEngine {
       })
       await db
         .update(workspaceTasks)
-        .set({ status: 'failed', completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
+        .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
         .where(eq(workspaceTasks.id, task.id))
 
       broadcastSessionEvent(groupSessionId, {
-        type: 'task:update',
-        payload: { taskId: task.id, status: 'failed', sessionId: groupSessionId, agentId: agent.id, agentName: agent.name, error: error?.message || 'Unknown error' },
+        type: WsEvent.TaskUpdate,
+        payload: { taskId: task.id, status: TaskStatus.Failed, sessionId: groupSessionId, agentId: agent.id, agentName: agent.name, error: error?.message || 'Unknown error' },
       })
 
       await emitRunEvent({
@@ -1045,7 +1050,7 @@ export class OrchestratorEngine {
         taskId: task.id,
         agentId: agent.id,
         agentName: agent.name,
-        status: 'failed',
+        status: TaskStatus.Failed,
         output: '',
         artifacts: [],
         error: error?.message || 'Unknown error',
@@ -1071,7 +1076,7 @@ export class OrchestratorEngine {
     const codeTasksNeedingReview = plan.tasks.filter((task) => {
       if (task.taskType !== 'code' || !task.validation?.requiresReview) return false
       const result = results.find((r) => r.taskId === task.id)
-      return result?.status === 'done' && result.output
+      return result?.status === TaskStatus.Done && result.output
     })
 
     if (codeTasksNeedingReview.length === 0) return chainResults
@@ -1235,8 +1240,8 @@ export class OrchestratorEngine {
       type: 'run.synthesizing',
       payload: {
         taskCount: results.length,
-        succeeded: results.filter((result) => result.status === 'done').length,
-        failed: results.filter((result) => result.status === 'failed').length,
+        succeeded: results.filter((result) => result.status === TaskStatus.Done).length,
+        failed: results.filter((result) => result.status === TaskStatus.Failed).length,
       },
     })
 
@@ -1257,10 +1262,10 @@ export class OrchestratorEngine {
 
     // 检查是否有未通过的 review 或 validation，决定是否允许合并提示
     const failedReviews = enrichedResults.filter(
-      (r) => r.taskId.startsWith('review-') && (r.status === 'failed' || r.status === 'blocked')
+      (r) => r.taskId.startsWith('review-') && (r.status === TaskStatus.Failed || r.status === TaskStatus.Blocked)
     )
     const failedValidations = enrichedResults.filter(
-      (r) => r.status === 'failed' && r.error?.includes('Validation')
+      (r) => r.status === TaskStatus.Failed && r.error?.includes('Validation')
     )
     const hasPendingMergeBlockers = failedReviews.length > 0 || failedValidations.length > 0 || conflictReports.length > 0
 
@@ -1324,7 +1329,7 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
     })
 
     broadcastSessionEvent(groupSessionId, {
-      type: 'message:completed',
+      type: WsEvent.MessageCompleted,
       payload: { sessionId: groupSessionId, message: summaryMsg },
     })
   }
