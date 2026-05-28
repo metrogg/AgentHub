@@ -13,7 +13,6 @@ import SettingsPage, { SettingsSurface } from './pages/SettingsPage'
 import SkillsMarketPage from './pages/SkillsMarketPage'
 import OrchestratorRunsPage from './pages/OrchestratorRunsPage'
 import ExecutionLogsPage from './pages/ExecutionLogsPage'
-import JumpGamePage from './pages/JumpGamePage'
 import { api } from './lib/api'
 import { cacheAccountProfileFromSettingsValue } from './lib/accountProfile'
 import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
@@ -77,7 +76,6 @@ function AppShell() {
       <Route path="/skills" element={<SkillsMarketPage />} />
       <Route path="/orchestrator-runs" element={<OrchestratorRunsPage />} />
       <Route path="/execution-logs" element={<ExecutionLogsPage />} />
-      <Route path="/jump-game" element={<JumpGamePage />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

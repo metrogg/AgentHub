@@ -236,13 +236,13 @@ export const Thread: FC = () => {
             onClose={() => setPreviewItem(null)}
           />
         )}
+        {isGroupSession && (
+          <GroupChatDetailsPanel
+            open={groupDetailsOpen}
+            onClose={() => setGroupDetailsOpen(false)}
+          />
+        )}
       </div>
-      {isGroupSession && (
-        <GroupChatDetailsDrawer
-          open={groupDetailsOpen}
-          onClose={() => setGroupDetailsOpen(false)}
-        />
-      )}
       {!isGroupSession && (isAgentDirectSession || isWorkspaceChildSession) && (
         <WorkspaceChildSessionDrawer
           open={childDetailsOpen}
@@ -554,7 +554,7 @@ const AgentQuickSaveState: FC<{ state: 'idle' | 'saving' | 'saved' | 'error' }> 
   return <span className="text-xs text-neutral-300">自动保存</span>
 }
 
-const GroupChatDetailsDrawer: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const navigate = useNavigate()
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
