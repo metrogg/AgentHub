@@ -11,7 +11,12 @@ import { getLlmRuntimeStatus, resolveLlmRuntimeConfig, resolveModelApiKey, resol
 import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
-import { DEFAULT_ENV_ALLOWLIST, validateEnvelope, buildExecutionCwd } from './execution/agent-execution-envelope'
+import {
+  DEFAULT_ENV_ALLOWLIST,
+  validateEnvelope,
+  buildExecutionCwd,
+  ensureNoProjectExecutionDir,
+} from './execution/agent-execution-envelope'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -231,15 +236,26 @@ export async function* streamCodeAgentReply(
   }
 
   // 如果提供了 envelope，使用 envelope 的执行上下文；否则降级到旧路径（已废弃）
+  const legacyProjectPath = profile.projectPath?.trim() || null
+  const legacyExecutionPath =
+    legacyProjectPath ??
+    ensureNoProjectExecutionDir({
+      runId: userMsg.sessionId || 'legacy',
+      taskId: userMsg.id || 'legacy',
+      agentId: profile.id,
+      agentName: profile.name,
+      projectPath: null,
+    })
+
   const cwdInfo = envelope
     ? resolveExecutionCwd(envelope)
     : resolveExecutionCwd({
-        runId: 'legacy',
-        taskId: 'legacy',
+        runId: userMsg.sessionId || 'legacy',
+        taskId: userMsg.id || 'legacy',
         agentId: profile.id,
         agentName: profile.name,
-        projectPath: profile.projectPath ?? null,
-        worktreePath: profile.projectPath ?? null,
+        projectPath: legacyProjectPath,
+        worktreePath: legacyExecutionPath,
         sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
         envAllowlist: DEFAULT_ENV_ALLOWLIST,
       })

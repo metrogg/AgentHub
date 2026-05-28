@@ -1,3 +1,7 @@
+import { mkdirSync } from 'node:fs'
+import { homedir, platform, tmpdir } from 'node:os'
+import { resolve } from 'node:path'
+
 /**
  * AgentExecutionEnvelope — 每次 Agent 执行的强制上下文信封。
  *
@@ -66,7 +70,7 @@ export function validateEnvelope(envelope: AgentExecutionEnvelope): void {
   if (!envelope.runId) throw new Error('AgentExecutionEnvelope.runId is required')
   if (!envelope.taskId) throw new Error('AgentExecutionEnvelope.taskId is required')
   if (!envelope.agentId) throw new Error('AgentExecutionEnvelope.agentId is required')
-  if (envelope.sandboxPolicy !== 'read-only' && !envelope.worktreePath) {
+  if (envelope.sandboxPolicy !== 'read-only' && envelope.projectPath && !envelope.worktreePath) {
     throw new Error(
       `AgentExecutionEnvelope.worktreePath is required for sandboxPolicy=${envelope.sandboxPolicy}. ` +
         `Git worktree must be prepared before execution. Fallback to original projectPath is prohibited.`
@@ -80,11 +84,11 @@ export function buildExecutionCwd(envelope: AgentExecutionEnvelope): {
   valid: boolean
 } {
   if (envelope.sandboxPolicy === 'read-only') {
-    const path = envelope.projectPath ?? undefined
+    const path = envelope.projectPath ?? ensureNoProjectExecutionDir(envelope) ?? undefined
     return { cwd: path, label: path ?? '(只读模式，无项目目录)', valid: true }
   }
 
-  const wt = envelope.worktreePath
+  const wt = envelope.worktreePath ?? ensureNoProjectExecutionDir(envelope)
   if (!wt) {
     return {
       cwd: undefined,
@@ -94,4 +98,50 @@ export function buildExecutionCwd(envelope: AgentExecutionEnvelope): {
   }
 
   return { cwd: wt, label: wt, valid: true }
+}
+
+export function ensureNoProjectExecutionDir(
+  envelope: Pick<AgentExecutionEnvelope, 'runId' | 'taskId' | 'agentId' | 'agentName' | 'projectPath'>,
+) {
+  if (envelope.projectPath) return null
+  const dir = resolve(
+    agentHubUserCacheRoot(),
+    'workspaces',
+    'no-project',
+    safePathSegment(envelope.runId),
+    safePathSegment(envelope.taskId),
+    `${safePathSegment(envelope.agentName)}-${safePathSegment(envelope.agentId)}`,
+  )
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+export function agentHubUserCacheRoot() {
+  const configured =
+    Bun.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
+    Bun.env.AGENTHUB_USER_CACHE_DIR?.trim() ||
+    process.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
+    process.env.AGENTHUB_USER_CACHE_DIR?.trim()
+  if (configured) {
+    const root = resolve(configured, '.AgentHub')
+    mkdirSync(root, { recursive: true })
+    return root
+  }
+
+  const base =
+    platform() === 'win32'
+      ? Bun.env.LOCALAPPDATA?.trim() ||
+        process.env.LOCALAPPDATA?.trim() ||
+        Bun.env.APPDATA?.trim() ||
+        process.env.APPDATA?.trim()
+      : platform() === 'darwin'
+        ? resolve(homedir(), 'Library', 'Caches')
+        : Bun.env.XDG_CACHE_HOME?.trim() || process.env.XDG_CACHE_HOME?.trim() || resolve(homedir(), '.cache')
+  const root = resolve(base || tmpdir(), '.AgentHub')
+  mkdirSync(root, { recursive: true })
+  return root
+}
+
+function safePathSegment(value: string) {
+  return value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'unknown'
 }

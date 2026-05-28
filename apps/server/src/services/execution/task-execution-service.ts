@@ -2,7 +2,7 @@ import { db, messages, workspaceTasks, eq, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { runAgentReply, type AgentRunProfile } from '../agent-runner'
 import { gitBranchManager, type BranchContext } from '../git/branch-manager'
-import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
+import { DEFAULT_ENV_ALLOWLIST, ensureNoProjectExecutionDir } from './agent-execution-envelope'
 
 export interface TaskExecutionInput {
   taskId: string
@@ -55,19 +55,28 @@ export class TaskExecutionService {
       }
     }
 
-    const executionProfile: AgentRunProfile = {
-      ...profile,
-      projectPath: branchCtx?.worktreePath ?? profile.projectPath ?? null,
-      originalProjectPath: profile.projectPath ?? null,
-    }
-
-    const envelope: import('./agent-execution-envelope').AgentExecutionEnvelope = {
-      runId: input.runId ?? 'standalone',
+    const runId = input.runId ?? 'standalone'
+    const fallbackExecutionPath = ensureNoProjectExecutionDir({
+      runId,
       taskId,
       agentId: profile.id,
       agentName: profile.name,
       projectPath: projectPath ?? null,
-      worktreePath: branchCtx?.worktreePath ?? null,
+    })
+
+    const executionProfile: AgentRunProfile = {
+      ...profile,
+      projectPath: branchCtx?.worktreePath ?? profile.projectPath ?? fallbackExecutionPath ?? null,
+      originalProjectPath: profile.projectPath ?? null,
+    }
+
+    const envelope: import('./agent-execution-envelope').AgentExecutionEnvelope = {
+      runId,
+      taskId,
+      agentId: profile.id,
+      agentName: profile.name,
+      projectPath: projectPath ?? null,
+      worktreePath: branchCtx?.worktreePath ?? fallbackExecutionPath ?? null,
       sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
       envAllowlist: DEFAULT_ENV_ALLOWLIST,
     }
