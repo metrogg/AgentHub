@@ -1,6 +1,7 @@
 package com.agenthub.mobile
 
 import android.app.Application
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.agenthub.mobile.data.AgentHubClient
@@ -43,6 +44,10 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
     fun connect(baseUrl: String, authToken: String?) {
         val trimmedUrl = baseUrl.trim().trimEnd('/')
         if (trimmedUrl.isBlank()) return
+        if (isAndroidEmulatorHost(trimmedUrl) && !isProbablyEmulator()) {
+            repository.setError("10.0.2.2 只适用于 Android 模拟器。真机连接手机热点时，请填写电脑在热点里获得的 IP。")
+            return
+        }
         viewModelScope.launch {
             connectionStore.save(
                 ConnectionConfig(
@@ -84,4 +89,18 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
     fun selectSession(sessionId: String) = repository.selectSession(sessionId)
 
     fun sendMessage(content: String) = repository.sendMessage(content)
+
+    private fun isAndroidEmulatorHost(url: String): Boolean {
+        return Regex("^https?://10\\.0\\.2\\.2(?::\\d+)?(?:/.*)?$", RegexOption.IGNORE_CASE).matches(url)
+    }
+
+    private fun isProbablyEmulator(): Boolean {
+        return Build.FINGERPRINT.startsWith("generic") ||
+            Build.FINGERPRINT.startsWith("unknown") ||
+            Build.MODEL.contains("Emulator", ignoreCase = true) ||
+            Build.MODEL.contains("Android SDK built for", ignoreCase = true) ||
+            Build.MANUFACTURER.contains("Genymotion", ignoreCase = true) ||
+            Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic") ||
+            Build.PRODUCT == "google_sdk"
+    }
 }
