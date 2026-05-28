@@ -1,14 +1,11 @@
 import { create } from 'zustand'
 import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
-import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 let pendingStream: { messageId: string; delta: string; agentId?: string; agentName?: string } | null = null
 let pendingStreamTimer: number | null = null
 const cancelledSessions = new Set<string>()
 const pendingOrchestratorPlans = new Set<string>()
-const messageCache = new Map<string, Message[]>()
-const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
 const messageCache = new Map<string, Message[]>()
 const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
 
