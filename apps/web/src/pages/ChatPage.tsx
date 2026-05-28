@@ -82,8 +82,8 @@ export default function ChatPage() {
           </button>
         )}
         {sessionId ? (
-          <AgentHubRuntimeProvider>
-            <Thread />
+          <AgentHubRuntimeProvider key={sessionId}>
+            <Thread key={sessionId} />
           </AgentHubRuntimeProvider>
         ) : (
           <Welcome />

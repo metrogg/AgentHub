@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::{
+    env,
     fs::{self, OpenOptions},
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
@@ -26,6 +27,13 @@ struct DesktopInfo {
     app_data_dir: String,
     config_dir: String,
     log_dir: String,
+}
+
+#[derive(Serialize)]
+struct DownloadedFile {
+    file_name: String,
+    path: String,
+    folder: String,
 }
 
 #[tauri::command]
@@ -119,6 +127,317 @@ fn open_path(path: String) -> Result<(), String> {
             .map_err(|err| format!("无法打开路径: {err}"))?;
         Ok(())
     }
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let parsed_url = tauri::Url::parse(&url).map_err(|err| format!("无法解析浏览器地址: {err}"))?;
+    match parsed_url.scheme() {
+        "http" | "https" => {}
+        scheme => return Err(format!("不支持的浏览器地址协议: {scheme}")),
+    }
+
+    open_browser_window(parsed_url.as_str())
+}
+
+#[tauri::command]
+fn download_external_url(
+    app: tauri::AppHandle,
+    url: String,
+    file_name: String,
+) -> Result<DownloadedFile, String> {
+    let parsed_url = tauri::Url::parse(&url).map_err(|err| format!("无法解析下载地址: {err}"))?;
+    match parsed_url.scheme() {
+        "http" | "https" => {}
+        scheme => return Err(format!("不支持的下载地址协议: {scheme}")),
+    }
+
+    let download_dir = default_download_dir(&app)?;
+    fs::create_dir_all(&download_dir)
+        .map_err(|err| format!("无法创建下载目录 {}: {err}", download_dir.display()))?;
+
+    let safe_name = sanitize_download_file_name(&file_name);
+    let target = unique_download_path(&download_dir, &safe_name);
+    download_to_path(parsed_url.as_str(), &target)?;
+
+    Ok(DownloadedFile {
+        file_name: target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&safe_name)
+            .to_string(),
+        path: target.to_string_lossy().to_string(),
+        folder: download_dir.to_string_lossy().to_string(),
+    })
+}
+
+fn open_browser_window(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        for browser in windows_browser_candidates(url) {
+            if browser.exists() {
+                let status = Command::new(&browser)
+                    .arg("--new-window")
+                    .arg(url)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
+                if status.is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+
+        let shell =
+            env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".to_string());
+        Command::new(shell)
+            .args(["/C", "start", "", url])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| format!("无法打开浏览器窗口: {err}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-n")
+            .arg(url)
+            .spawn()
+            .map_err(|err| format!("无法打开浏览器窗口: {err}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for browser in ["google-chrome", "chromium", "microsoft-edge", "firefox"] {
+            let status = Command::new(browser)
+                .arg("--new-window")
+                .arg(url)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            if status.is_ok() {
+                return Ok(());
+            }
+        }
+        Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|err| format!("无法打开浏览器窗口: {err}"))?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_browser_candidates(url: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(default_browser) = windows_default_browser_path(url) {
+        candidates.push(default_browser);
+    }
+    for base in ["ProgramFiles", "ProgramFiles(x86)", "LocalAppData"] {
+        if let Some(root) = env_path(base) {
+            candidates.extend([
+                root.join("Microsoft\\Edge\\Application\\msedge.exe"),
+                root.join("Google\\Chrome\\Application\\chrome.exe"),
+                root.join("BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
+                root.join("Mozilla Firefox\\firefox.exe"),
+            ]);
+        }
+    }
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+fn windows_default_browser_path(url: &str) -> Option<PathBuf> {
+    let scheme = tauri::Url::parse(url).ok()?.scheme().to_string();
+    let user_choice_key = format!(
+        r"HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\{}\UserChoice",
+        scheme
+    );
+    let user_choice_output = Command::new("reg")
+        .args(["query", &user_choice_key, "/v", "ProgId"])
+        .output()
+        .ok()?;
+    let user_choice_text = String::from_utf8_lossy(&user_choice_output.stdout);
+    let prog_id = parse_reg_value(&user_choice_text, "ProgId")?;
+    let command_key = format!(r"HKCR\{}\shell\open\command", prog_id);
+    let command_output = Command::new("reg")
+        .args(["query", &command_key, "/ve"])
+        .output()
+        .ok()?;
+    let command_text = String::from_utf8_lossy(&command_output.stdout);
+    let command = parse_reg_default_value(&command_text)?;
+    browser_path_from_command(&command)
+}
+
+#[cfg(target_os = "windows")]
+fn env_path(name: &str) -> Option<PathBuf> {
+    env::var_os(name).map(PathBuf::from)
+}
+
+#[cfg(target_os = "windows")]
+fn parse_reg_value(output: &str, name: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if !trimmed.starts_with(name) {
+            return None;
+        }
+        trimmed
+            .split_once("REG_SZ")
+            .map(|(_, value)| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn parse_reg_default_value(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("(Default)")
+            && !trimmed.starts_with("(默认)")
+            && !trimmed.starts_with("默认")
+        {
+            return None;
+        }
+        trimmed
+            .split_once("REG_SZ")
+            .map(|(_, value)| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn browser_path_from_command(command: &str) -> Option<PathBuf> {
+    let trimmed = command.trim();
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        let end = rest.find('"')?;
+        return Some(PathBuf::from(&rest[..end]));
+    }
+    let exe_end = trimmed.to_ascii_lowercase().find(".exe")?;
+    Some(PathBuf::from(&trimmed[..exe_end + 4]))
+}
+
+fn default_download_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
+    if let Some(home) = home {
+        let downloads = PathBuf::from(home).join("Downloads");
+        if downloads.exists() {
+            return Ok(downloads);
+        }
+    }
+
+    let fallback = desktop_paths(app)?.app_data_dir.join("downloads");
+    Ok(fallback)
+}
+
+fn sanitize_download_file_name(value: &str) -> String {
+    let trimmed = value.trim();
+    let sanitized: String = trimmed
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control()
+            {
+                '-'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let sanitized = sanitized.trim_matches(|ch| ch == ' ' || ch == '.').trim();
+    if sanitized.is_empty() {
+        "preview.html".to_string()
+    } else {
+        sanitized.chars().take(160).collect()
+    }
+}
+
+fn unique_download_path(folder: &Path, file_name: &str) -> PathBuf {
+    let initial = folder.join(file_name);
+    if !initial.exists() {
+        return initial;
+    }
+
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("download");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for index in 1..1000 {
+        let candidate_name = if let Some(extension) = extension {
+            format!("{stem} ({index}).{extension}")
+        } else {
+            format!("{stem} ({index})")
+        };
+        let candidate = folder.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    folder.join(format!("{stem}-{}.download", unix_timestamp_millis()))
+}
+
+fn download_to_path(url: &str, target: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let powershell = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri $args[0] -OutFile $args[1] -UseBasicParsing",
+            ])
+            .arg(url)
+            .arg(target)
+            .output();
+
+        if let Ok(output) = powershell {
+            if output.status.success() {
+                return Ok(());
+            }
+        }
+
+        let curl = Command::new("curl.exe")
+            .args(["-L", "--fail", "--silent", "--show-error", "-o"])
+            .arg(target)
+            .arg(url)
+            .output()
+            .map_err(|err| format!("无法启动下载工具: {err}"))?;
+        if curl.status.success() {
+            return Ok(());
+        }
+        return Err(String::from_utf8_lossy(&curl.stderr).trim().to_string());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let curl = Command::new("curl")
+            .args(["-L", "--fail", "--silent", "--show-error", "-o"])
+            .arg(target)
+            .arg(url)
+            .output()
+            .map_err(|err| format!("无法启动下载工具: {err}"))?;
+        if curl.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&curl.stderr).trim().to_string())
+        }
+    }
+}
+
+fn unix_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -220,6 +539,41 @@ fn open_desktop_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(
 }
 
 #[tauri::command]
+fn open_url_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let parsed_url = tauri::Url::parse(&url).map_err(|err| format!("无法解析窗口地址: {err}"))?;
+    match parsed_url.scheme() {
+        "http" | "https" => {}
+        scheme => return Err(format!("不支持的窗口地址协议: {scheme}")),
+    }
+
+    let label = format!(
+        "preview-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default()
+    );
+
+    let new_window = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed_url))
+        .title("AgentHub Preview")
+        .inner_size(1280.0, 860.0)
+        .min_inner_size(720.0, 520.0)
+        .decorations(false)
+        .transparent(false)
+        .background_color(Color(255, 255, 255, 255))
+        .shadow(true)
+        .focused(true)
+        .center()
+        .build()
+        .map_err(|err| format!("无法打开预览窗口: {err}"))?;
+
+    apply_window_chrome_style(&new_window);
+    let _ = new_window.show();
+    let _ = new_window.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
 fn open_settings_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
     if let Some(existing) = app.get_webview_window("settings") {
         let _ = existing.show();
@@ -274,6 +628,8 @@ pub fn run() {
             pick_workspace_folder,
             open_in_editor,
             open_path,
+            open_external_url,
+            download_external_url,
             notify_user,
             desktop_info,
             check_for_updates,
@@ -282,6 +638,7 @@ pub fn run() {
             toggle_maximize_desktop_window,
             start_desktop_window_drag,
             open_desktop_window,
+            open_url_window,
             open_settings_window
         ])
         .setup(move |app| {
