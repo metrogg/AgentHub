@@ -325,7 +325,8 @@ describe('AgentHub smoke tests', () => {
       await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
     )
 
-    const card = await json<{
+    const loadingCard = await json<{
+      id: string
       metadata: {
         plan?: {
           tasks: Array<{
@@ -345,6 +346,17 @@ describe('AgentHub smoke tests', () => {
         content: '@orchestrator implement a small UI change and review it',
       })
     )
+
+    // 后端异步生成 plan，轮询等待结果
+    let card = loadingCard
+    for (let i = 0; i < 20; i++) {
+      const tasks = card.metadata.plan?.tasks ?? []
+      if (tasks.length > 0) break
+      await new Promise((r) => setTimeout(r, 50))
+      const refreshed = await json<{ items: Array<typeof card> }>(await app.request(`/api/messages/${group.session.id}`))
+      const found = refreshed.items.find((m) => m.id === loadingCard.id)
+      if (found) card = found
+    }
 
     const tasks = card.metadata.plan?.tasks ?? []
     expect(tasks.length).toBeGreaterThan(0)

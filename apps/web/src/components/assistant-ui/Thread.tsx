@@ -1609,7 +1609,7 @@ const ComposerMenu: FC<{
         { title: '@orchestrator', desc: '拆解任务、创建任务卡并协调当前群聊', color: '#111827' },
         ...agents.map((agent) => ({
           title: `@${agent.name}`,
-          desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${agent.capabilityTags.length ? ` · ${agent.capabilityTags.slice(0, 3).join(', ')}` : ''}`,
+          desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${(agent.capabilityTags ?? []).length ? ` · ${(agent.capabilityTags ?? []).slice(0, 3).join(', ')}` : ''}`,
           color: agent.color ?? '#111827',
         })),
       ]
@@ -3302,7 +3302,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
           {plan.tasks.map((task, index) => {
             const agent = plan.agents.find((item) => item.key === task.agentKey)
             const status = task.status ?? 'pending'
-            const phase = plan.phases?.find((item) => item.id === task.phaseId || item.taskIds.includes(task.id))
+            const phase = plan.phases?.find((item) => item.id === task.phaseId || (item.taskIds ?? []).includes(task.id))
             return (
               <div
                 key={task.id}

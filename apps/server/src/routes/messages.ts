@@ -332,25 +332,82 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           .where(eq(workspaceAgents.workspaceId, session.workspaceId))
           .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
       : []
-    const plan = await buildDynamicOrchestratorPlan(content, agentList, session.workspaceId)
-    const [card] = await db
+
+    // 先插入 loading 占位消息，立即返回，避免前端空白等待
+    const loadingPlan: OrchestratorPlan = {
+      kind: 'orchestrator_plan',
+      title: '计划生成中',
+      goal: '正在分析任务并制定执行计划，请稍候...',
+      summary: '正在分析任务并制定执行计划，请稍候...',
+      tasks: [],
+      agents: [],
+    }
+    const [loadingCard] = await db
       .insert(messages)
       .values({
         sessionId,
         senderId: 'orchestrator',
         senderType: 'agent',
         type: 'task_card',
-        content: plan.summary,
-        metadata: { plan: { ...plan, messageId: '' } },
+        content: loadingPlan.summary,
+        metadata: { plan: { ...loadingPlan, messageId: '' } },
       })
       .returning()
-    if (!card) throw AppError.fromCode(AppErrorCodes.ORCHESTRATOR_PLAN_FAILED, '编排计划卡片创建失败')
-    const planWithId = { ...plan, messageId: card.id }
+    if (!loadingCard) throw AppError.fromCode(AppErrorCodes.ORCHESTRATOR_PLAN_FAILED, '编排计划卡片创建失败')
+
+    const loadingPlanWithId = { ...loadingPlan, messageId: loadingCard.id }
     await db
       .update(messages)
-      .set({ metadata: { plan: planWithId } })
-      .where(eq(messages.id, card.id))
-    return c.json({ ...card, metadata: { plan: planWithId } })
+      .set({ metadata: { plan: loadingPlanWithId } })
+      .where(eq(messages.id, loadingCard.id))
+
+    // 立即广播 loading 消息，让前端即时显示
+    broadcastSessionEvent(sessionId, {
+      type: 'message:completed',
+      payload: { sessionId, message: { ...loadingCard, metadata: { plan: loadingPlanWithId } } },
+    })
+
+    // 后台异步生成完整计划
+    ;(async () => {
+      try {
+        const plan = await buildDynamicOrchestratorPlan(content, agentList, session.workspaceId)
+        const planWithId = { ...plan, messageId: loadingCard.id }
+        await db
+          .update(messages)
+          .set({ content: plan.summary, metadata: { plan: planWithId } })
+          .where(eq(messages.id, loadingCard.id))
+        const [updatedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
+        if (updatedCard) {
+          broadcastSessionEvent(sessionId, {
+            type: 'message:completed',
+            payload: { sessionId, message: { ...updatedCard, metadata: { plan: planWithId } } },
+          })
+        }
+      } catch (err: any) {
+        logger.error({ err: err?.message, sessionId }, 'Orchestrator plan generation failed')
+        const failedPlan: OrchestratorPlan = {
+          kind: 'orchestrator_plan',
+          title: '计划生成失败',
+          goal: '分析任务时出错，请稍后重试',
+          summary: '分析任务时出错，请稍后重试',
+          tasks: [],
+          agents: [],
+        }
+        await db
+          .update(messages)
+          .set({ content: failedPlan.summary, metadata: { plan: { ...failedPlan, messageId: loadingCard.id } } })
+          .where(eq(messages.id, loadingCard.id))
+        const [failedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
+        if (failedCard) {
+          broadcastSessionEvent(sessionId, {
+            type: 'message:completed',
+            payload: { sessionId, message: failedCard },
+          })
+        }
+      }
+    })()
+
+    return c.json({ ...loadingCard, metadata: { plan: loadingPlanWithId } })
   })
   .post('/:sessionId/artifact-demo', zValidator('json', artifactDemoSchema), async (c) => {
     const user = c.get('user')
@@ -922,7 +979,7 @@ function planAgentFromWorkspaceAgent(agent: typeof workspaceAgents.$inferSelect)
     modelId: agent.modelId,
     runtimeType: agent.runtimeType,
     codeAgentType: agent.codeAgentType ?? undefined,
-    capabilityTags: agent.capabilityTags,
+    capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: agent.toolPermissions,
     sandboxPolicy: agent.sandboxPolicy,
   }
@@ -1016,7 +1073,7 @@ function toAgentProfile(agent: typeof workspaceAgents.$inferSelect, projectPath?
     modelId: agent.modelId,
     runtimeType: agent.runtimeType,
     codeAgentType: agent.codeAgentType ?? undefined,
-    capabilityTags: agent.capabilityTags,
+    capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: agent.toolPermissions,
     sandboxPolicy: agent.sandboxPolicy,
     contextPolicy: agent.contextPolicy,
