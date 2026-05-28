@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { app } from './app'
 import { env } from './env'
 import { logger } from './lib/logger'
+import { setRuntimeServerPort } from './lib/runtime-server'
 import { joinRoom, cleanupWebSocket } from './services/agent-runner'
 import { db, users, eq } from '@agenthub/db'
 import { DEFAULT_USER } from './middleware/auth'
@@ -79,14 +80,16 @@ if (!server!) {
   process.exit(1)
 }
 
-logger.info(`🚀 AgentHub server listening on http://0.0.0.0:${server.port}`)
+const runtimePort = server.port ?? currentPort
+logger.info(`🚀 AgentHub server listening on http://0.0.0.0:${runtimePort}`)
+setRuntimeServerPort(runtimePort)
 
 // Write actual port to file so Vite dev proxy can read it
 const portFile = resolve(import.meta.dir, '../../../.agenthub-port')
 try {
   writeFileSync(
     portFile,
-    JSON.stringify({ port: server.port, pid: process.pid, updatedAt: new Date().toISOString() }),
+    JSON.stringify({ port: runtimePort, pid: process.pid, updatedAt: new Date().toISOString() }),
     'utf8',
   )
 } catch {

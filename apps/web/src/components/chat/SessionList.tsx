@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import { friendlyErrorMessage, type Session } from '../../lib/api'
+import { api, friendlyErrorMessage, type Session } from '../../lib/api'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
@@ -49,10 +49,16 @@ import {
   type AccountProfile,
 } from '../../lib/accountProfile'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
+import { GroupAvatar } from './GroupAvatar'
 
 type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
-function activeTabFromPath(pathname: string): SidebarTab {
+function activeTabFromPath(
+  pathname: string,
+  activeSession: Session | undefined,
+  groupWorkspaceIds: Set<string>,
+): SidebarTab {
+  if (pathname.startsWith('/chat/') && isPrivateAgentSession(activeSession, groupWorkspaceIds)) return 'agents'
   if (pathname === '/agent-config') return 'agents'
   if (pathname === '/profile' || pathname === '/settings') return 'me'
   if (['/models', '/coding-tools', '/skills', '/office', '/orchestrator-runs', '/execution-logs'].includes(pathname)) return 'workspace'
@@ -81,12 +87,36 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [agentQuery, setAgentQuery] = useState('')
   const [quickCreateOpen, setQuickCreateOpen] = useState(false)
+  const [tabOverride, setTabOverride] = useState<SidebarTab | null>(null)
   const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const [hint, setHint] = useState('')
+  const [groupMemberCounts, setGroupMemberCounts] = useState<Record<string, number>>({})
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
-  const baseSessionTree = useMemo(() => buildSessionTree(sessions, pinnedIds), [pinnedIds, sessions])
+  const groupWorkspaceIds = useMemo(
+    () =>
+      new Set(
+        sessions
+          .filter((session) => session.type === 'group' && session.workspaceId)
+          .map((session) => session.workspaceId!),
+      ),
+    [sessions],
+  )
+  const groupWorkspaceKey = useMemo(
+    () => Array.from(groupWorkspaceIds).sort().join('|'),
+    [groupWorkspaceIds],
+  )
+  const messageSessions = useMemo(
+    () =>
+      sessions.filter(
+        (session) =>
+          !isPrivateAgentSession(session, groupWorkspaceIds) &&
+          !looksLikeLegacyAgentSession(session, libraryAgents, groupWorkspaceIds),
+      ),
+    [groupWorkspaceIds, libraryAgents, sessions],
+  )
+  const baseSessionTree = useMemo(() => buildSessionTree(messageSessions, pinnedIds), [messageSessions, pinnedIds])
   const archivedSessionCount = useMemo(
     () => filterSessionTree(baseSessionTree, '', true, archivedIds).length,
     [archivedIds, baseSessionTree],
@@ -100,8 +130,19 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     [archivedIds, baseSessionTree, query, showArchived],
   )
   const activeSession = sessions.find((session) => session.id === sessionId)
-  const activeTab = activeTabFromPath(location.pathname)
+  const routeTab = activeTabFromPath(location.pathname, activeSession, groupWorkspaceIds)
+  const activeTab = tabOverride ?? routeTab
   const activeAgentConfigId = new URLSearchParams(location.search).get('agentId')
+  const agentDirectSessionsBySavedId = useMemo(() => {
+    const byAgentId = new Map<string, Session>()
+    for (const session of sessions) {
+      if (!isPrivateAgentSession(session, groupWorkspaceIds)) continue
+      const savedAgentId = readSavedAgentId(session)
+      if (!savedAgentId || byAgentId.has(savedAgentId)) continue
+      byAgentId.set(savedAgentId, session)
+    }
+    return byAgentId
+  }, [groupWorkspaceIds, sessions])
   const filteredLibraryAgents = useMemo(() => {
     const keyword = agentQuery.trim().toLowerCase()
     if (!keyword) return libraryAgents
@@ -117,6 +158,42 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     if (sessionsBootstrapped || loadingSessions) return
     fetchSessions()
   }, [fetchSessions, loadingSessions, sessionsBootstrapped])
+
+  useEffect(() => {
+    const workspaceIds = groupWorkspaceKey
+      .split('|')
+      .map((id) => id.trim())
+      .filter((id) => id && groupMemberCounts[id] === undefined)
+    if (!workspaceIds.length) return
+
+    let cancelled = false
+    void Promise.allSettled(
+      workspaceIds.map(async (workspaceId) => {
+        const full = await api.getWorkspace(workspaceId)
+        return [workspaceId, full.agents.length + 2] as const
+      }),
+    ).then((results) => {
+      if (cancelled) return
+      setGroupMemberCounts((current) => {
+        const next = { ...current }
+        for (let index = 0; index < results.length; index += 1) {
+          const result = results[index]
+          const workspaceId = workspaceIds[index]
+          if (!workspaceId) continue
+          next[workspaceId] = result?.status === 'fulfilled' ? result.value[1] : -1
+        }
+        return next
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [groupMemberCounts, groupWorkspaceKey])
+
+  useEffect(() => {
+    setTabOverride(null)
+  }, [location.pathname, location.search])
 
   useEffect(() => {
     let cancelled = false
@@ -273,11 +350,12 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     if (openingSessionId === session.id) return
     setOpeningSessionId(session.id)
     try {
+      navigate(`/chat/${session.id}`)
       if (currentSessionId !== session.id) {
         await selectSession(session.id)
       }
-      navigate(`/chat/${session.id}`)
     } catch (error) {
+      navigate('/', { replace: true })
       showHint(friendlyErrorMessage(error, '打开会话失败'))
     } finally {
       setOpeningSessionId(null)
@@ -317,6 +395,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             icon={MessageCircle}
             label="Messages"
             onClick={() => {
+              setTabOverride('messages')
               navigate(sessionId ? `/chat/${sessionId}` : '/')
             }}
           />
@@ -325,7 +404,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             icon={Users}
             label="Agent"
             onClick={() => {
-              navigate('/agent-config')
+              setTabOverride('agents')
+              if (!sessionId) navigate('/agent-config')
             }}
           />
           <DockButton
@@ -500,6 +580,11 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
               const active = sessionId === item.parent.id
               const pinned = pinnedIds.has(item.parent.id)
               const archived = archivedIds.has(item.parent.id)
+              const isGroupParent = item.parent.type === 'group' && Boolean(workspaceId)
+              const groupTitle = isGroupParent ? groupSessionDisplayTitle(item.parent.title) : ''
+              const memberCount = isGroupParent
+                ? groupMemberCount(item.parent, item.children.length, groupMemberCounts[workspaceId ?? ''])
+                : 0
               return (
                 <li key={item.parent.id} className="space-y-1">
                   <div
@@ -521,38 +606,80 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       )}
                     >
                       {pinned && <Pin className="h-3.5 w-3.5 shrink-0 fill-neutral-900 text-neutral-900" />}
-                      {hasChildren ? (
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            event.preventDefault()
-                            toggleWorkspaceExpanded(workspaceId)
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key !== 'Enter' && event.key !== ' ') return
-                            event.stopPropagation()
-                            event.preventDefault()
-                            toggleWorkspaceExpanded(workspaceId)
-                          }}
-                          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-neutral-400 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
-                          aria-label={expanded ? '收起群聊' : '展开群聊'}
-                          title={expanded ? '收起群聊' : '展开群聊'}
-                        >
-                          <ChevronRight className={cn('h-4 w-4 transition-transform', expanded && 'rotate-90')} />
-                        </span>
+                      {isGroupParent ? (
+                        <>
+                          <GroupAvatar className="shrink-0" size="sm" title={groupTitle} />
+                          <span className="flex min-w-0 flex-1 items-center">
+                            <span className="truncate font-medium">{groupTitle}</span>
+                            <span className="ml-1 shrink-0 font-normal text-neutral-400">
+                              ({memberCount})
+                            </span>
+                          </span>
+                          {hasChildren && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                event.preventDefault()
+                                toggleWorkspaceExpanded(workspaceId)
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter' && event.key !== ' ') return
+                                event.stopPropagation()
+                                event.preventDefault()
+                                toggleWorkspaceExpanded(workspaceId)
+                              }}
+                              className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-neutral-400 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
+                              aria-label={expanded ? '收起群聊' : '展开群聊'}
+                              title={expanded ? '收起群聊' : '展开群聊'}
+                            >
+                              <ChevronRight
+                                className={cn('h-4 w-4 transition-transform', expanded && 'rotate-90')}
+                              />
+                            </span>
+                          )}
+                        </>
                       ) : (
-                        <History className="h-4 w-4 shrink-0 text-neutral-400" />
+                        <>
+                          {hasChildren ? (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                event.preventDefault()
+                                toggleWorkspaceExpanded(workspaceId)
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter' && event.key !== ' ') return
+                                event.stopPropagation()
+                                event.preventDefault()
+                                toggleWorkspaceExpanded(workspaceId)
+                              }}
+                              className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-neutral-400 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
+                              aria-label={expanded ? '收起群聊' : '展开群聊'}
+                              title={expanded ? '收起群聊' : '展开群聊'}
+                            >
+                              <ChevronRight
+                                className={cn('h-4 w-4 transition-transform', expanded && 'rotate-90')}
+                              />
+                            </span>
+                          ) : (
+                            <History className="h-4 w-4 shrink-0 text-neutral-400" />
+                          )}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">
+                              {sessionDisplayTitle(item.parent.title, t)}
+                            </span>
+                            <span className="block truncate text-[11px] text-neutral-400">
+                              {hasChildren
+                                ? `${formatSubtopicCount(item.children.length, language, t)} · ${relativeTime(item.latestUpdatedAt, language)}`
+                                : relativeTime(item.latestUpdatedAt, language)}
+                            </span>
+                          </span>
+                        </>
                       )}
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate">{sessionDisplayTitle(item.parent.title, t)}</span>
-                        <span className="block truncate text-[11px] text-neutral-400">
-                          {hasChildren
-                            ? `${formatSubtopicCount(item.children.length, language, t)} · ${relativeTime(item.latestUpdatedAt, language)}`
-                            : relativeTime(item.latestUpdatedAt, language)}
-                        </span>
-                      </span>
                       {openingSessionId === item.parent.id && (
                         <Loader2 className="h-4 w-4 shrink-0 animate-spin text-neutral-300" />
                       )}
@@ -669,47 +796,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             })}
           </ul>
         )}
-
-        <div className="my-4 border-t border-neutral-200" />
-        <div className="mb-1 flex items-center justify-between px-2 text-xs text-neutral-400">
-          <span>Agent</span>
-          <span>{libraryAgents.length}</span>
-        </div>
-        <div className="space-y-1">
-          {libraryAgents.map((agent) => {
-            const opening = openingAgentId === agent.id
-            return (
-              <button
-                key={agent.id}
-                type="button"
-                onClick={() => void openAgentSession(agent)}
-                disabled={opening}
-                className="flex min-h-12 w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition hover:bg-[#F7F7F7] disabled:opacity-60"
-              >
-                <div
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-sm font-semibold text-white shadow-sm"
-                  style={{ background: agent.color ?? '#111827' }}
-                >
-                  {agent.name.slice(0, 1).toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-neutral-950">{agent.name}</div>
-                  <div className="mt-0.5 truncate text-xs text-neutral-500">{agent.role}</div>
-                </div>
-                {opening ? (
-                  <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />
-                ) : (
-                  <MessageCircle className="h-4 w-4 text-neutral-300" />
-                )}
-              </button>
-            )
-          })}
-          {!libraryAgents.length && (
-            <div className="px-2 py-4 text-xs text-neutral-400">
-              还没有 Agent，先去配置页创建一个
-            </div>
-          )}
-        </div>
       </div>
 
       {activeTab === 'agents' && (
@@ -726,40 +812,66 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
 
           <button
             type="button"
-            onClick={requestNewSessionDialog}
+            onClick={() => navigate('/agent-config?newAgent=1')}
             className="mb-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#F7F7F7] text-sm font-medium text-neutral-800 shadow-sm transition hover:bg-neutral-100"
           >
-            <Users className="h-4 w-4 text-neutral-500" />
-            新建 Agent 群聊
+            <UserPlus className="h-4 w-4 text-neutral-500" />
+            添加 Agent
           </button>
 
           <div className="mb-2 flex items-center justify-between px-1 text-xs text-neutral-500">
-            <span>Agent 通讯录</span>
+            <span>Agent 私聊</span>
             <span>{filteredLibraryAgents.length}</span>
           </div>
 
           <div className="space-y-1">
             {filteredLibraryAgents.map((agent) => {
-              const active = location.pathname === '/agent-config' && activeAgentConfigId === agent.id
+              const agentSession = agentDirectSessionsBySavedId.get(agent.id)
+              const active = agentSession?.id === sessionId
+              const configActive = location.pathname === '/agent-config' && activeAgentConfigId === agent.id
+              const opening = openingAgentId === agent.id
               return (
-                <button
+                <div
                   key={agent.id}
-                  type="button"
-                  onClick={() => navigate(`/agent-config?agentId=${encodeURIComponent(agent.id)}`)}
                   className={cn(
-                    'flex min-h-14 w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition',
-                    active ? 'bg-[#F7F7F7]' : 'hover:bg-[#F7F7F7]',
+                    'group/agent flex min-h-14 items-center gap-1 rounded-lg transition',
+                    active || configActive ? 'bg-[#F7F7F7] shadow-sm' : 'hover:bg-[#F7F7F7]',
                   )}
                 >
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white" style={{ background: agent.color }}>
-                    {agent.name.slice(0, 1).toUpperCase()}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-neutral-950">{agent.name}</div>
-                    <div className="mt-0.5 truncate text-xs text-neutral-500">{agent.role}</div>
-                  </div>
-                  <div className="text-xs text-neutral-400">全局</div>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => void openAgentSession(agent)}
+                    disabled={opening}
+                    className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-left disabled:opacity-60"
+                  >
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white" style={{ background: agent.color }}>
+                      {agent.name.slice(0, 1).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-neutral-950">{agent.name}</div>
+                      <div className="mt-0.5 truncate text-xs text-neutral-500">
+                        {agentSession ? relativeTime(agentSession.updatedAt, language) : agent.role || '未开始私聊'}
+                      </div>
+                    </div>
+                    {opening ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-neutral-400" />
+                    ) : (
+                      <MessageCircle className={cn('h-4 w-4 shrink-0', active ? 'text-neutral-700' : 'text-neutral-300')} />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/agent-config?agentId=${encodeURIComponent(agent.id)}`)}
+                    className={cn(
+                      'mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-400 hover:bg-white hover:text-neutral-900',
+                      configActive || active ? 'opacity-100' : 'opacity-0 group-hover/agent:opacity-100',
+                    )}
+                    title="Agent 配置"
+                    aria-label="Agent 配置"
+                  >
+                    <Settings2 className="h-4 w-4" />
+                  </button>
+                </div>
               )
             })}
             {!filteredLibraryAgents.length && (
@@ -970,6 +1082,56 @@ function AccountAvatar({ name, avatar }: AccountProfile) {
   )
 }
 
+function isPrivateAgentSession(session: Session | null | undefined, groupWorkspaceIds: Set<string>) {
+  if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
+  const metadata = session.metadata ?? {}
+  if (metadata.kind === 'agent-direct') return true
+  if (metadata.kind === 'workspace-agent-child') return false
+  if (metadata.kind === 'orchestrator-task' || metadata.hiddenFromSessionTree) return false
+  return !groupWorkspaceIds.has(session.workspaceId)
+}
+
+function readSavedAgentId(session: Session) {
+  const savedAgentId = session.metadata?.savedAgentId
+  return typeof savedAgentId === 'string' ? savedAgentId : null
+}
+
+function looksLikeLegacyAgentSession(
+  session: Session,
+  agents: SavedAgentConfig[],
+  groupWorkspaceIds: Set<string>,
+) {
+  if (session.type !== 'direct' || !session.workspaceId) return false
+  const metadata = session.metadata ?? {}
+  if (metadata.kind || metadata.hiddenFromSessionTree) return false
+  if (groupWorkspaceIds.has(session.workspaceId) && session.workspaceAgentId) return false
+
+  const titleParts = session.title
+    .split('/')
+    .map((part) => normalizeSessionText(part))
+    .filter(Boolean)
+  if (titleParts.length < 2) return false
+
+  const aliases = new Set(
+    [
+      'architect',
+      'coder',
+      'researcher',
+      'reviewer',
+      '规划',
+      '实现',
+      '研究',
+      '审查',
+      ...agents.flatMap((agent) => [agent.name, agent.role].map((part) => normalizeSessionText(part))),
+    ].filter(Boolean),
+  )
+  return titleParts.some((part) => aliases.has(part))
+}
+
+function normalizeSessionText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
 function childSessionTitle(session: Session, parent: Session) {
   const withoutParent = parent.title ? session.title.replace(parent.title, '').replace(/^(\s*\/\s*)+/, '') : session.title
   const parts = withoutParent
@@ -984,6 +1146,30 @@ function sessionDisplayTitle(title: string | undefined, t: (text: string) => str
   if (normalized === '新会话' || normalized === 'New Chat') return t('新会话')
   if (normalized === '快速对话' || normalized === 'Quick Chat') return t('快速对话')
   return normalized
+}
+
+function groupSessionDisplayTitle(title: string | undefined) {
+  const normalized = title?.trim() || 'Agent 群聊'
+  const withoutSuffix = normalized.replace(/\s*\/\s*Agent Group\s*$/i, '').trim()
+  return withoutSuffix || 'Agent 群聊'
+}
+
+function groupMemberCount(session: Session, childCount: number, loadedCount?: number) {
+  if (loadedCount && loadedCount > 0) return loadedCount
+  const metadata = session.metadata ?? {}
+  const explicitMemberCount = readPositiveNumber(metadata.memberCount)
+  if (explicitMemberCount) return explicitMemberCount
+  const explicitAgentCount = readNonNegativeNumber(metadata.agentCount)
+  if (explicitAgentCount !== null) return explicitAgentCount + 2
+  return Math.max(2, childCount + 2)
+}
+
+function readPositiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+function readNonNegativeNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
 function formatSubtopicCount(count: number, language: 'zh' | 'en', t: (text: string) => string) {

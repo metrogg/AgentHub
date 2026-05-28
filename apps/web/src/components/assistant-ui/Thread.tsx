@@ -110,10 +110,15 @@ import {
 } from '../../lib/native'
 import { sendModeShouldSubmit, shouldInsertNewline, useShortcutSettings } from '../../lib/shortcuts'
 import { cn } from '../../lib/utils'
-import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../../lib/workspaceFilters'
+import {
+  isProjectWorkspace,
+  workspaceSearchText,
+  workspaceSubtitle,
+} from '../../lib/workspaceFilters'
 import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
+import { GroupAvatar } from '../chat/GroupAvatar'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
@@ -194,7 +199,8 @@ function classifyAgentSession(
   session: ReturnType<typeof useChatStore.getState>['currentSession'],
   sessions: ReturnType<typeof useChatStore.getState>['sessions'],
 ) {
-  if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return 'regular'
+  if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId)
+    return 'regular'
   const metadata = session.metadata ?? {}
   if (metadata.kind === 'agent-direct') return 'agent-direct'
   if (metadata.kind === 'workspace-agent-child') return 'workspace-agent-child'
@@ -240,7 +246,9 @@ export const Thread: FC = () => {
     >
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          {isGroupSession && <GroupChatHeader onToggleDetails={() => setGroupDetailsOpen((open) => !open)} />}
+          {isGroupSession && (
+            <GroupChatHeader onToggleDetails={() => setGroupDetailsOpen((open) => !open)} />
+          )}
           {!isGroupSession && (isAgentDirectSession || isWorkspaceChildSession) && (
             <AgentChatHeader onToggleDetails={() => setChildDetailsOpen((open) => !open)} />
           )}
@@ -256,10 +264,7 @@ export const Thread: FC = () => {
           <Composer />
         </div>
         {previewItem && (
-          <ArtifactPreviewPanel
-            item={previewItem}
-            onClose={() => setPreviewItem(null)}
-          />
+          <ArtifactPreviewPanel item={previewItem} onClose={() => setPreviewItem(null)} />
         )}
         {isGroupSession && (
           <GroupChatDetailsPanel
@@ -283,7 +288,7 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const clearMessages = useChatStore((state) => state.clearMessages)
-  const title = session?.title || workspace?.name || 'Agent 群聊'
+  const title = groupChatDisplayTitle(session?.title, workspace?.name)
   const memberCount = agents.length + 2
 
   async function handleClear() {
@@ -294,11 +299,11 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
-      <div className="min-w-0">
-        <div className="truncate text-sm font-semibold text-neutral-950">{title}</div>
-        <div className="mt-0.5 truncate text-xs text-neutral-500">
-          {memberCount} 位成员
-          {workspace?.name && workspace.name !== title ? ` · ${workspace.name}` : ''}
+      <div className="flex min-w-0 items-center gap-2.5">
+        <GroupAvatar agents={agents} size="md" title={title} />
+        <div className="flex min-w-0 items-center text-sm">
+          <span className="truncate font-semibold text-neutral-950">{title}</span>
+          <span className="ml-1 shrink-0 font-normal text-neutral-500">({memberCount})</span>
         </div>
       </div>
       <div className="flex items-center gap-1">
@@ -360,7 +365,10 @@ const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
   )
 }
 
-const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = ({
+  open,
+  onClose,
+}) => {
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
@@ -402,7 +410,9 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     setSaveState('idle')
   }, [agent?.id, agent?.role, agent?.description, agent?.systemPrompt, agent?.modelId])
 
-  async function saveAgentPatch(patch: Partial<Pick<WorkspaceAgent, 'role' | 'description' | 'systemPrompt' | 'modelId'>>) {
+  async function saveAgentPatch(
+    patch: Partial<Pick<WorkspaceAgent, 'role' | 'description' | 'systemPrompt' | 'modelId'>>,
+  ) {
     if (!workspace || !agent || saveState === 'saving') return
     setSaveState('saving')
     try {
@@ -493,7 +503,9 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
             {agent && (
               <div className="mt-4 space-y-3">
                 <div className="flex items-center justify-between px-1">
-                  <div className="text-xs font-medium uppercase tracking-wide text-neutral-400">Agent 配置</div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-neutral-400">
+                    Agent 配置
+                  </div>
                   <AgentQuickSaveState state={saveState} />
                 </div>
 
@@ -522,7 +534,9 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                   <span className="mb-1 block text-xs font-medium text-neutral-500">角色</span>
                   <input
                     value={draft.role}
-                    onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, role: event.target.value }))
+                    }
                     onBlur={() => saveTextField('role')}
                     className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-neutral-300"
                     placeholder="例如：规划"
@@ -533,7 +547,9 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                   <span className="mb-1 block text-xs font-medium text-neutral-500">简介</span>
                   <textarea
                     value={draft.description}
-                    onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, description: event.target.value }))
+                    }
                     onBlur={() => saveTextField('description')}
                     rows={3}
                     className="min-h-20 w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm leading-5 text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-neutral-300"
@@ -542,10 +558,14 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                 </label>
 
                 <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-neutral-500">系统提示词</span>
+                  <span className="mb-1 block text-xs font-medium text-neutral-500">
+                    系统提示词
+                  </span>
                   <textarea
                     value={draft.systemPrompt}
-                    onChange={(event) => setDraft((current) => ({ ...current, systemPrompt: event.target.value }))}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, systemPrompt: event.target.value }))
+                    }
                     onBlur={() => saveTextField('systemPrompt')}
                     rows={6}
                     className="min-h-32 w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm leading-5 text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-neutral-300"
@@ -658,7 +678,8 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
   }, [open])
 
   const inviteCandidates = libraryAgents.filter(
-    (candidate) => !agents.some((agent) => agent.name.toLowerCase() === candidate.name.toLowerCase()),
+    (candidate) =>
+      !agents.some((agent) => agent.name.toLowerCase() === candidate.name.toLowerCase()),
   )
 
   async function saveGroupTitle() {
@@ -718,9 +739,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
     })),
   ].map((row) => {
     const live = isStreamingForAgent(streamingMessage, row.id, row.name)
-    const latest = live
-      ? streamingMessage?.content
-      : latestAgentOutput(messages, row.id, row.name)
+    const latest = live ? streamingMessage?.content : latestAgentOutput(messages, row.id, row.name)
     return {
       ...row,
       active: live,
@@ -789,7 +808,11 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                     }}
                   >
                     {agent.avatar ? (
-                      <img src={agent.avatar} alt={agent.name} className="h-full w-full object-cover" />
+                      <img
+                        src={agent.avatar}
+                        alt={agent.name}
+                        className="h-full w-full object-cover"
+                      />
                     ) : (
                       agent.name.slice(0, 1).toUpperCase()
                     )}
@@ -834,7 +857,11 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
               </button>
               <button
                 type="button"
-                onClick={() => document.querySelector<HTMLInputElement>('[data-agenthub-group-title-input="true"]')?.focus()}
+                onClick={() =>
+                  document
+                    .querySelector<HTMLInputElement>('[data-agenthub-group-title-input="true"]')
+                    ?.focus()
+                }
                 className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70"
               >
                 <Pencil className="h-5 w-5" />
@@ -855,19 +882,29 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                         style={{ background: agent.color ?? '#111827' }}
                       >
                         {agent.avatar ? (
-                          <img src={agent.avatar} alt={agent.name} className="h-full w-full object-cover" />
+                          <img
+                            src={agent.avatar}
+                            alt={agent.name}
+                            className="h-full w-full object-cover"
+                          />
                         ) : (
                           agent.name.slice(0, 1).toUpperCase()
                         )}
                       </span>
                       <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium text-neutral-900">{agent.name}</span>
-                        <span className="block truncate text-xs text-neutral-500">{agent.role}</span>
+                        <span className="block truncate text-sm font-medium text-neutral-900">
+                          {agent.name}
+                        </span>
+                        <span className="block truncate text-xs text-neutral-500">
+                          {agent.role}
+                        </span>
                       </span>
                     </button>
                   ))}
                   {!inviteCandidates.length && (
-                    <div className="px-3 py-4 text-center text-xs text-neutral-400">没有可添加的 Agent</div>
+                    <div className="px-3 py-4 text-center text-xs text-neutral-400">
+                      没有可添加的 Agent
+                    </div>
                   )}
                 </div>
               )}
@@ -877,11 +914,13 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
               <div className="mb-2 px-4 text-xs text-neutral-500">人类</div>
               <div className="rounded-2xl bg-[#F3F3F3] px-4 py-3">
                 <div className="flex items-center gap-3">
-                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-neutral-900 text-sm font-semibold text-white">Y</span>
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-neutral-900 text-sm font-semibold text-white">
+                    Y
+                  </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-sm font-semibold text-neutral-950">You</span>
-                      <span className="rounded bg-white px-1.5 py-0.5 text-[11px] text-neutral-500">群主</span>
+                      <MemberRolePill label="群主" tone="owner" />
                     </div>
                     <div className="mt-0.5 text-xs text-neutral-400">发起人与决策者</div>
                   </div>
@@ -916,8 +955,10 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                     />
                     <span className="min-w-0 flex-1">
                       <span className="flex min-w-0 items-center gap-2">
-                        <span className="truncate text-sm font-medium text-neutral-950">{row.name}</span>
-                        <span className="rounded bg-white px-1.5 py-0.5 text-[11px] text-neutral-500">{row.role}</span>
+                        <span className="truncate text-sm font-medium text-neutral-950">
+                          {row.name}
+                        </span>
+                        <MemberRolePill color={row.color} label={row.role} />
                       </span>
                       <span className="mt-1 block truncate text-xs text-neutral-400">
                         {row.active && row.bubble ? row.bubble : `@${row.mentionName}`}
@@ -926,7 +967,9 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                   </button>
                 ))}
                 {!monitorRows.length && (
-                  <div className="px-4 py-6 text-center text-xs text-neutral-400">还没有 Agent，点击上方添加。</div>
+                  <div className="px-4 py-6 text-center text-xs text-neutral-400">
+                    还没有 Agent，点击上方添加。
+                  </div>
                 )}
               </div>
             </div>
@@ -965,11 +1008,22 @@ function isStreamingForAgent(
   return streaming.agentId === id || streaming.agentName?.toLowerCase() === name.toLowerCase()
 }
 
-function latestAgentOutput(messages: Array<{ senderType: string; senderId: string; content: string; metadata: Record<string, unknown> | null }>, id: string, name: string) {
+function latestAgentOutput(
+  messages: Array<{
+    senderType: string
+    senderId: string
+    content: string
+    metadata: Record<string, unknown> | null
+  }>,
+  id: string,
+  name: string,
+) {
   for (const message of [...messages].reverse()) {
     if (message.senderType !== 'agent') continue
-    const agentName = typeof message.metadata?.agentName === 'string' ? message.metadata.agentName : ''
-    if (message.senderId === id || agentName.toLowerCase() === name.toLowerCase()) return message.content
+    const agentName =
+      typeof message.metadata?.agentName === 'string' ? message.metadata.agentName : ''
+    if (message.senderId === id || agentName.toLowerCase() === name.toLowerCase())
+      return message.content
   }
   return ''
 }
@@ -978,6 +1032,27 @@ function lastOutputSnippet(content: string, maxLength: number) {
   const text = content.replace(/\s+/g, ' ').trim()
   if (text.length <= maxLength) return text
   return text.slice(-maxLength)
+}
+
+const MemberRolePill: FC<{ color?: string | null; label: string; tone?: 'agent' | 'owner' }> = ({
+  color,
+  label,
+  tone = 'agent',
+}) => {
+  const accent = tone === 'owner' ? '#111827' : color || '#737373'
+  return (
+    <span
+      className={cn(
+        'inline-flex h-5 max-w-[7.75rem] shrink min-w-0 items-center gap-1.5 rounded-full border bg-white/75 px-2 text-[11px] leading-none text-neutral-600 shadow-[0_1px_0_rgba(15,23,42,0.03)]',
+        tone === 'owner' && 'border-neutral-200 bg-white text-neutral-700',
+      )}
+      style={tone === 'agent' ? { borderColor: `${accent}24` } : undefined}
+      title={label}
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: accent }} />
+      <span className="min-w-0 truncate">{label}</span>
+    </span>
+  )
 }
 
 function insertComposerMention(name: string) {
@@ -1039,9 +1114,7 @@ const ThreadWelcome: FC = () => {
   const loadingMessages = useChatStore((state) => state.loadingMessages)
 
   return (
-    <ThreadPrimitive.Empty>
-      {!loadingMessages && <ThreadWelcomeContent />}
-    </ThreadPrimitive.Empty>
+    <ThreadPrimitive.Empty>{!loadingMessages && <ThreadWelcomeContent />}</ThreadPrimitive.Empty>
   )
 }
 
@@ -1093,7 +1166,11 @@ const Composer: FC = () => {
     null,
   )
   const [agentMenuMode, setAgentMenuMode] = useState<'manual' | 'mention' | null>(null)
-  const [agentMentionRange, setAgentMentionRange] = useState<{ start: number; end: number; query: string } | null>(null)
+  const [agentMentionRange, setAgentMentionRange] = useState<{
+    start: number
+    end: number
+    query: string
+  } | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
@@ -1101,7 +1178,8 @@ const Composer: FC = () => {
   const [planMode, setPlanMode] = useState(false)
   const [composerText, setComposerText] = useState('')
   const [composerScrollTop, setComposerScrollTop] = useState(0)
-  const currentProjectWorkspace = currentWorkspace && isProjectWorkspace(currentWorkspace) ? currentWorkspace : null
+  const currentProjectWorkspace =
+    currentWorkspace && isProjectWorkspace(currentWorkspace) ? currentWorkspace : null
 
   useEffect(() => {
     if (menu !== 'workspace') return
@@ -1494,7 +1572,11 @@ const Composer: FC = () => {
                   setMenu(null)
                   setAgentMenuMode(null)
                   setAgentMentionRange(null)
-                } else if (event.key === 'Enter' && menu === 'agents' && agentMenuMode === 'mention') {
+                } else if (
+                  event.key === 'Enter' &&
+                  menu === 'agents' &&
+                  agentMenuMode === 'mention'
+                ) {
                   event.preventDefault()
                 }
               }}
@@ -1847,7 +1929,9 @@ const ComposerMenu: FC<{
                 <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-neutral-900">{workspace.name}</span>
-                  <span className="block truncate text-[11px] text-neutral-400">{workspaceSubtitle(workspace)}</span>
+                  <span className="block truncate text-[11px] text-neutral-400">
+                    {workspaceSubtitle(workspace)}
+                  </span>
                 </span>
                 {workspace.id === openingWorkspaceId ? (
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
@@ -2132,7 +2216,9 @@ const UserMessage: FC = () => {
           </div>
         )}
         {sourceMessage?.createdAt && (
-          <div className="pr-1 text-[11px] text-neutral-400">{formatTime(sourceMessage.createdAt)}</div>
+          <div className="pr-1 text-[11px] text-neutral-400">
+            {formatTime(sourceMessage.createdAt)}
+          </div>
         )}
       </div>
     </MessagePrimitive.Root>
@@ -2151,8 +2237,8 @@ function formatTime(value: string | Date) {
 
 const AssistantMessage: FC = () => {
   const messageId = useMessage((message) => message.id)
-  const createdAt = useChatStore((state) =>
-    state.messages.find((message) => message.id === messageId)?.createdAt,
+  const createdAt = useChatStore(
+    (state) => state.messages.find((message) => message.id === messageId)?.createdAt,
   )
   return (
     <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
@@ -2292,7 +2378,10 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     function commitPanelWidth(clientX: number) {
       const containerRect = panelRef.current?.parentElement?.getBoundingClientRect()
       const rawWidth = containerRect ? containerRect.right - clientX : window.innerWidth - clientX
-      const nextWidth = clampPreviewPanelWidth(rawWidth, getPreviewPanelWidthBounds(panelRef.current))
+      const nextWidth = clampPreviewPanelWidth(
+        rawWidth,
+        getPreviewPanelWidthBounds(panelRef.current),
+      )
       panelWidthRef.current = nextWidth
       setPanelWidth(nextWidth)
     }
@@ -2380,7 +2469,9 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
         } catch (fallbackError) {
           console.warn('[AgentHub] Failed to open native preview window:', fallbackError)
         }
-        const detail = formatPreviewError(error) || '请确认系统已安装并设置默认浏览器，或重启客户端加载最新桌面命令。'
+        const detail =
+          formatPreviewError(error) ||
+          '请确认系统已安装并设置默认浏览器，或重启客户端加载最新桌面命令。'
         updateActionItem(actionId, {
           status: 'error',
           detail: `无法打开外部浏览器窗口：${detail}`,
@@ -2411,11 +2502,10 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     try {
       if (desktopApp) {
         let nativeDownloadError: unknown = null
-        const result = await downloadExternalUrl(resolvedUrl, filename)
-          .catch((error) => {
-            nativeDownloadError = error
-            return null
-          })
+        const result = await downloadExternalUrl(resolvedUrl, filename).catch((error) => {
+          nativeDownloadError = error
+          return null
+        })
         if (result) {
           updateActionItem(actionId, {
             status: 'success',
@@ -2427,7 +2517,10 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
           await notifyUser('下载完成', result.fileName).catch(() => undefined)
           return
         }
-        console.warn('[AgentHub] Native download failed, falling back to browser download:', nativeDownloadError)
+        console.warn(
+          '[AgentHub] Native download failed, falling back to browser download:',
+          nativeDownloadError,
+        )
       }
 
       const response = await fetch(resolvedUrl, { credentials: 'include' })
@@ -2749,7 +2842,9 @@ const PreviewActionPanel: FC<{
             >
               {item.title}
             </div>
-            <div className="mt-1 line-clamp-2 text-xs leading-4 text-neutral-500">{item.detail}</div>
+            <div className="mt-1 line-clamp-2 text-xs leading-4 text-neutral-500">
+              {item.detail}
+            </div>
             {item.status === 'success' && item.path && (
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
@@ -2830,9 +2925,7 @@ const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item })
             <File className="h-8 w-8" />
           </div>
           <div className="mt-4 truncate text-sm font-semibold text-neutral-950">{item.title}</div>
-          <div className="mt-2 text-xs leading-5 text-neutral-500">
-            {previewFileHint(item)}
-          </div>
+          <div className="mt-2 text-xs leading-5 text-neutral-500">{previewFileHint(item)}</div>
           {item.path && (
             <div className="agenthub-readable-code mt-4 rounded-xl bg-[#F7F7F7] px-3 py-2 text-left text-xs leading-5 text-neutral-500">
               {item.path}
@@ -2858,11 +2951,16 @@ const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
   </div>
 )
 
+type CodeAgentRunStep = NonNullable<CodeAgentRunMetadata['steps']>[number]
+
 const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
   const changedFiles = data.files ?? []
   const commands = data.commands ?? []
   const toolCalls = data.toolCalls ?? []
   const logs = data.logs ?? []
+  const steps = useMemo(() => codeAgentProcessSteps(data), [data])
+  const hasDetails =
+    toolCalls.length > 0 || commands.length > 0 || changedFiles.length > 0 || logs.length > 0
 
   return (
     <div className="not-prose mt-3 space-y-2 text-sm">
@@ -2872,18 +2970,18 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
         fileCount={changedFiles.length}
         toolCount={toolCalls.length}
       />
-      {toolCalls.length > 0 && (
-        <CodeAgentToolsCard items={toolCalls} running={data.status === 'running'} />
-      )}
-      {commands.length > 0 && <CodeAgentCommandsCard commands={commands} />}
-      {changedFiles.length > 0 && (
-        <CodeAgentFilesCard
+      <CodeAgentProcessTimeline steps={steps} running={data.status === 'running'} />
+      {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
+      {hasDetails && (
+        <CodeAgentRunDetails
+          changedFiles={changedFiles}
+          commands={commands}
           cwd={data.cwd ?? commands.find((command) => command.cwd)?.cwd}
-          files={changedFiles}
+          logs={logs}
+          running={data.status === 'running'}
+          toolCalls={toolCalls}
         />
       )}
-      {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
-      {logs.length > 0 && <CodeAgentLogsCard logs={logs} />}
     </div>
   )
 }
@@ -2959,6 +3057,167 @@ const CodeAgentMiniStat: FC<{ icon: ReactNode; label: string; value: number }> =
     {icon}
     {label} {value}
   </span>
+)
+
+const CodeAgentProcessTimeline: FC<{ running: boolean; steps: CodeAgentRunStep[] }> = ({
+  running,
+  steps,
+}) => {
+  const [expanded, setExpanded] = useState(false)
+  const visibleSteps = expanded ? steps : steps.slice(-12)
+  const hiddenCount = Math.max(0, steps.length - visibleSteps.length)
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-xs text-neutral-500">
+        <span className="inline-flex items-center gap-2 font-medium text-neutral-700">
+          <span
+            className={cn(
+              'h-2 w-2 rounded-full',
+              running ? 'bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.12)]' : 'bg-neutral-300',
+            )}
+          />
+          执行过程
+        </span>
+        <span>
+          {running ? '实时更新' : '已记录'} {steps.length} 项
+        </span>
+      </div>
+
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="flex h-9 w-full items-center justify-center gap-1 rounded-lg border border-neutral-200 bg-white text-xs font-medium text-neutral-500 shadow-sm transition hover:border-neutral-300 hover:text-neutral-800"
+        >
+          展开更早 {hiddenCount} 项
+          <ChevronDown className="h-3.5 w-3.5" />
+        </button>
+      )}
+
+      <div className="space-y-1.5">
+        {visibleSteps.length ? (
+          visibleSteps.map((step, index) => (
+            <CodeAgentProcessStepCard
+              key={step.id}
+              latest={running && index === visibleSteps.length - 1}
+              step={step}
+            />
+          ))
+        ) : (
+          <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-3 text-xs text-neutral-500">
+            等待 Coding Tools 返回过程事件
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+const CodeAgentProcessStepCard: FC<{ latest: boolean; step: CodeAgentRunStep }> = ({
+  latest,
+  step,
+}) => {
+  const canExpand = Boolean(step.detail || step.command || step.path)
+  const content = (
+    <div
+      className={cn(
+        'agenthub-code-agent-step flex min-h-[3.75rem] min-w-0 items-center gap-3 rounded-lg border bg-white px-3 py-2.5 shadow-sm transition',
+        step.status === 'failed'
+          ? 'border-red-200 bg-red-50/50'
+          : step.status === 'running'
+            ? 'border-blue-200 bg-blue-50/40'
+            : 'border-neutral-200',
+        latest && 'agenthub-code-agent-step-live',
+      )}
+    >
+      <span
+        className={cn(
+          'grid h-9 w-9 shrink-0 place-items-center rounded-md border',
+          step.status === 'failed'
+            ? 'border-red-200 bg-white text-red-600'
+            : step.status === 'running'
+              ? 'border-blue-200 bg-white text-blue-600'
+              : 'border-neutral-200 bg-neutral-50 text-neutral-500',
+        )}
+      >
+        {codeAgentStepIcon(step)}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-[11px] font-semibold text-neutral-400">
+            {codeAgentStepKindLabel(step)}
+          </span>
+          <span className="truncate text-[13px] font-medium leading-5 text-neutral-900">
+            {step.title}
+          </span>
+        </span>
+        <span
+          className="mt-0.5 block truncate text-[13px] leading-5 text-neutral-600"
+          title={step.subtitle ?? step.detail ?? step.command ?? step.path}
+        >
+          {step.subtitle ?? step.detail ?? step.command ?? step.path ?? '处理中'}
+        </span>
+      </span>
+      <span className="grid h-6 w-6 shrink-0 place-items-center text-neutral-400">
+        {step.status === 'running' ? (
+          <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+        ) : step.status === 'failed' ? (
+          <AlertTriangle className="h-4 w-4 text-red-500" />
+        ) : canExpand ? (
+          <ChevronRight className="h-4 w-4 transition group-open:rotate-90" />
+        ) : (
+          <CheckCircle2 className="h-4 w-4 text-neutral-300" />
+        )}
+      </span>
+    </div>
+  )
+
+  if (!canExpand) return content
+
+  return (
+    <details className="group">
+      <summary className="list-none cursor-pointer [&::-webkit-details-marker]:hidden">
+        {content}
+      </summary>
+      <div className="mx-3 border-l border-neutral-200 px-4 py-2 text-xs leading-5 text-neutral-600">
+        {step.command && (
+          <pre className="agenthub-readable-code max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-neutral-950 px-3 py-2 text-neutral-100">
+            {step.command}
+          </pre>
+        )}
+        {step.detail && <div className="mt-1 whitespace-pre-wrap break-words">{step.detail}</div>}
+        {step.path && !step.command && (
+          <div className="agenthub-readable-code mt-1 truncate text-neutral-500">{step.path}</div>
+        )}
+      </div>
+    </details>
+  )
+}
+
+const CodeAgentRunDetails: FC<{
+  changedFiles: CodeAgentRunMetadata['files']
+  commands: CodeAgentRunMetadata['commands']
+  cwd?: string
+  logs: NonNullable<CodeAgentRunMetadata['logs']>
+  running: boolean
+  toolCalls: NonNullable<CodeAgentRunMetadata['toolCalls']>
+}> = ({ changedFiles, commands, cwd, logs, running, toolCalls }) => (
+  <details className="group">
+    <summary className="flex h-10 cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-3 text-left text-[13px] font-medium text-neutral-700 shadow-sm transition hover:bg-neutral-50 [&::-webkit-details-marker]:hidden">
+      <span className="inline-flex min-w-0 items-center gap-2">
+        <ListTodo className="h-4 w-4 shrink-0 text-neutral-500" />
+        执行明细
+      </span>
+      <ChevronDown className="h-4 w-4 shrink-0 text-neutral-400 transition-transform group-open:rotate-180" />
+    </summary>
+    <div className="mt-2 space-y-2">
+      {toolCalls.length > 0 && <CodeAgentToolsCard items={toolCalls} running={running} />}
+      {commands.length > 0 && <CodeAgentCommandsCard commands={commands} />}
+      {changedFiles.length > 0 && <CodeAgentFilesCard cwd={cwd} files={changedFiles} />}
+      {logs.length > 0 && <CodeAgentLogsCard logs={logs} />}
+    </div>
+  </details>
 )
 
 const CodeAgentToolsCard: FC<{
@@ -3130,33 +3389,35 @@ const CodeAgentLogsCard: FC<{ logs: NonNullable<CodeAgentRunMetadata['logs']> }>
   )
 }
 
-const CodeAgentLogRow: FC<{ log: NonNullable<CodeAgentRunMetadata['logs']>[number] }> = ({ log }) => {
+const CodeAgentLogRow: FC<{ log: NonNullable<CodeAgentRunMetadata['logs']>[number] }> = ({
+  log,
+}) => {
   const stream = displayLogStream(log)
   return (
-            <div
-              className={cn(
-                'grid grid-cols-[4.25rem_minmax(0,1fr)] gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-6 antialiased',
-                stream === 'stderr'
-                  ? 'border-red-100 bg-red-50/70'
-                  : stream === 'event'
-                    ? 'border-blue-100 bg-blue-50/60'
-                    : 'border-neutral-100 bg-neutral-50',
-              )}
-            >
-              <span
-                className={cn(
-                  'inline-flex h-5 items-center justify-center rounded px-1.5 text-[11px] font-medium',
-                  stream === 'stderr'
-                    ? 'bg-red-100 text-red-700'
-                    : stream === 'event'
-                      ? 'bg-blue-100 text-blue-700'
-                      : 'bg-neutral-200 text-neutral-600',
-                )}
-              >
-                {logStreamLabel(stream)}
-              </span>
-              <span className="whitespace-pre-wrap break-words text-neutral-800">{log.text}</span>
-            </div>
+    <div
+      className={cn(
+        'grid grid-cols-[4.25rem_minmax(0,1fr)] gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-6 antialiased',
+        stream === 'stderr'
+          ? 'border-red-100 bg-red-50/70'
+          : stream === 'event'
+            ? 'border-blue-100 bg-blue-50/60'
+            : 'border-neutral-100 bg-neutral-50',
+      )}
+    >
+      <span
+        className={cn(
+          'inline-flex h-5 items-center justify-center rounded px-1.5 text-[11px] font-medium',
+          stream === 'stderr'
+            ? 'bg-red-100 text-red-700'
+            : stream === 'event'
+              ? 'bg-blue-100 text-blue-700'
+              : 'bg-neutral-200 text-neutral-600',
+        )}
+      >
+        {logStreamLabel(stream)}
+      </span>
+      <span className="whitespace-pre-wrap break-words text-neutral-800">{log.text}</span>
+    </div>
   )
 }
 
@@ -3168,13 +3429,120 @@ function displayLogStream(log: NonNullable<CodeAgentRunMetadata['logs']>[number]
 function isProgressLikeCodeAgentLog(text: string) {
   const normalized = text.trim()
   return (
-    /^(->|→)\s*(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)\b/i.test(normalized) ||
+    /^(->|→)\s*(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)\b/i.test(
+      normalized,
+    ) ||
     /^#\s*Todos\b/i.test(normalized) ||
     /^\[[ xX-]\]\s+/.test(normalized) ||
-    /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(normalized) ||
+    /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(
+      normalized,
+    ) ||
     /^(Warning|Warn|警告)[：:\s]/i.test(normalized)
   )
 }
+
+function codeAgentProcessSteps(data: CodeAgentRunMetadata): CodeAgentRunStep[] {
+  const steps = Array.isArray(data.steps) ? data.steps.filter(isCodeAgentStep) : []
+  if (steps.length) return steps.slice(-120)
+
+  const fallback: CodeAgentRunStep[] = []
+  fallback.push({
+    id: 'fallback-status',
+    kind: 'status',
+    status:
+      data.status === 'running' ? 'running' : data.status === 'completed' ? 'completed' : 'failed',
+    title: codeAgentStatusLabel(data.status),
+    subtitle: `${runtimeLabel(data.runtime)} · ${formatRunDuration(data.durationMs)}`,
+  })
+
+  for (const item of (data.toolCalls ?? []).slice(-20)) {
+    fallback.push({
+      id: `fallback-tool-${item.id}`,
+      kind: 'tool',
+      status: 'completed',
+      title: item.label,
+      subtitle: item.target ?? item.name,
+      detail: item.detail,
+      toolName: item.name,
+    })
+  }
+
+  for (const command of (data.commands ?? []).slice(-20)) {
+    fallback.push({
+      id: `fallback-command-${command.id}`,
+      kind: 'command',
+      status: 'completed',
+      title: '运行命令',
+      subtitle: command.command,
+      detail: command.cwd ? `cwd: ${command.cwd}` : undefined,
+      command: command.command,
+    })
+  }
+
+  for (const file of (data.files ?? []).slice(-20)) {
+    fallback.push({
+      id: `fallback-file-${file.status}-${file.path}`,
+      kind: 'file',
+      status: 'completed',
+      title: `${fileStatusLabel(file.status)}文件`,
+      subtitle: file.path,
+      path: file.path,
+      fileStatus: file.status,
+    })
+  }
+
+  return fallback.slice(-120)
+}
+
+function isCodeAgentStep(value: unknown): value is CodeAgentRunStep {
+  if (!value || typeof value !== 'object') return false
+  const step = value as Partial<CodeAgentRunStep>
+  return (
+    typeof step.id === 'string' &&
+    typeof step.title === 'string' &&
+    (step.kind === 'status' ||
+      step.kind === 'tool' ||
+      step.kind === 'command' ||
+      step.kind === 'file' ||
+      step.kind === 'log') &&
+    (step.status === 'running' || step.status === 'completed' || step.status === 'failed')
+  )
+}
+
+function codeAgentStepKindLabel(step: CodeAgentRunStep) {
+  if (step.kind === 'command') return '命令'
+  if (step.kind === 'file') return '文件'
+  if (step.kind === 'log') return step.stream === 'stderr' ? '错误' : '日志'
+  if (step.kind === 'status') return '运行'
+  if (step.toolName === 'TodoWrite') return '待办'
+  if (step.toolName === 'Read') return '读取'
+  if (step.toolName === 'Grep' || step.toolName === 'Glob') return '搜索'
+  if (step.toolName === 'WebFetch' || step.toolName === 'WebSearch') return '网页'
+  return '工具'
+}
+
+function codeAgentStepIcon(step: CodeAgentRunStep): ReactNode {
+  if (step.status === 'running') return <Loader2 className="h-4 w-4 animate-spin" />
+  if (step.status === 'failed') return <AlertTriangle className="h-4 w-4" />
+  if (step.kind === 'command') return <TerminalSquare className="h-4 w-4" />
+  if (step.kind === 'file')
+    return step.fileStatus === 'created' ? <FilePlusIcon /> : <FileText className="h-4 w-4" />
+  if (step.kind === 'log') return <ListTodo className="h-4 w-4" />
+  if (step.kind === 'status') return <Rocket className="h-4 w-4" />
+  if (step.toolName === 'TodoWrite') return <ListTodo className="h-4 w-4" />
+  if (step.toolName === 'Read') return <FileText className="h-4 w-4" />
+  if (step.toolName === 'WebFetch' || step.toolName === 'WebSearch')
+    return <Globe2 className="h-4 w-4" />
+  if (step.toolName === 'Grep' || step.toolName === 'Glob') return <Search className="h-4 w-4" />
+  return <Pencil className="h-4 w-4" />
+}
+
+const FilePlusIcon: FC = () => (
+  <span className="relative grid h-4 w-4 place-items-center">
+    <FileText className="h-4 w-4" />
+    <Plus className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-white" />
+  </span>
+)
 
 const CodeAgentDiagnosticsCard: FC<{ diagnostics: string }> = ({ diagnostics }) => {
   const [open, setOpen] = useState(true)
@@ -3464,7 +3832,9 @@ const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workf
       >
         <GitBranch className="h-4 w-4 shrink-0 text-indigo-500" />
         <span className="min-w-0">
-          <span className="block truncate text-xs font-medium text-neutral-900">{artifact.title}</span>
+          <span className="block truncate text-xs font-medium text-neutral-900">
+            {artifact.title}
+          </span>
           <span className="block truncate text-[11px] text-neutral-400">
             {artifact.nodes.length} 个节点 · {artifact.edges.length} 条连接
           </span>
@@ -3490,15 +3860,20 @@ const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workf
                   ? 'border-neutral-200 bg-white text-neutral-600'
                   : node.type === 'output'
                     ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'border-indigo-200 bg-white text-indigo-700'
+                    : 'border-indigo-200 bg-white text-indigo-700',
               )}
             >
               {node.type === 'agent' && (
-                <span className="h-2 w-2 rounded-full" style={{ background: node.agentColor ?? '#6366f1' }} />
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ background: node.agentColor ?? '#6366f1' }}
+                />
               )}
               <span>{node.label}</span>
             </div>
-            {index < artifact.nodes.length - 1 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-indigo-300" />}
+            {index < artifact.nodes.length - 1 && (
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-indigo-300" />
+            )}
           </div>
         ))}
       </div>
@@ -3506,14 +3881,21 @@ const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workf
     <div className="border-t border-indigo-100 bg-white px-3 py-3">
       <div className="space-y-2 text-xs text-neutral-600">
         {artifact.edges.map((edge) => (
-          <div key={`${edge.from}-${edge.to}`} className="flex items-center gap-2 rounded-md bg-neutral-50 px-2.5 py-1.5">
-            <span className="font-medium text-neutral-800">{artifact.nodes.find((n) => n.id === edge.from)?.label ?? edge.from}</span>
+          <div
+            key={`${edge.from}-${edge.to}`}
+            className="flex items-center gap-2 rounded-md bg-neutral-50 px-2.5 py-1.5"
+          >
+            <span className="font-medium text-neutral-800">
+              {artifact.nodes.find((n) => n.id === edge.from)?.label ?? edge.from}
+            </span>
             <ChevronRight className="h-3 w-3 text-neutral-300" />
             <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
               {edge.label ?? '下一步'}
             </span>
             <ChevronRight className="h-3 w-3 text-neutral-300" />
-            <span className="font-medium text-neutral-800">{artifact.nodes.find((n) => n.id === edge.to)?.label ?? edge.to}</span>
+            <span className="font-medium text-neutral-800">
+              {artifact.nodes.find((n) => n.id === edge.to)?.label ?? edge.to}
+            </span>
           </div>
         ))}
       </div>
@@ -3588,14 +3970,19 @@ function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
     path: artifact.path,
     source: artifact.source,
     subtitle:
-      [artifact.mimeType, artifact.size ? formatBytes(artifact.size) : null].filter(Boolean).join(' · ') ||
-      fileStatusLabel(artifact.status ?? 'created'),
+      [artifact.mimeType, artifact.size ? formatBytes(artifact.size) : null]
+        .filter(Boolean)
+        .join(' · ') || fileStatusLabel(artifact.status ?? 'created'),
     title: artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path,
-    url: isHtml ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}` : undefined,
+    url: isHtml
+      ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}`
+      : undefined,
   }
 }
 
-function filePreviewKind(artifact: Extract<AgentArtifact, { type: 'file' }>): ArtifactPreviewItem['kind'] {
+function filePreviewKind(
+  artifact: Extract<AgentArtifact, { type: 'file' }>,
+): ArtifactPreviewItem['kind'] {
   if (artifact.mimeType?.startsWith('image/')) return 'image'
   return 'file'
 }
@@ -3726,6 +4113,12 @@ function runtimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
   if (runtime === 'opencode') return 'OpenCode'
   if (runtime === 'gemini') return 'Gemini CLI'
   return 'Codex'
+}
+
+function groupChatDisplayTitle(sessionTitle?: string | null, workspaceName?: string | null) {
+  const normalized = (sessionTitle || workspaceName || 'Agent 群聊').trim()
+  const withoutSuffix = normalized.replace(/\s*\/\s*Agent Group\s*$/i, '').trim()
+  return withoutSuffix || workspaceName?.trim() || 'Agent 群聊'
 }
 
 function logStreamLabel(stream: NonNullable<CodeAgentRunMetadata['logs']>[number]['stream']) {
@@ -3879,7 +4272,9 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
           {plan.tasks.map((task, index) => {
             const agent = plan.agents.find((item) => item.key === task.agentKey)
             const status = task.status ?? 'pending'
-            const phase = plan.phases?.find((item) => item.id === task.phaseId || (item.taskIds ?? []).includes(task.id))
+            const phase = plan.phases?.find(
+              (item) => item.id === task.phaseId || (item.taskIds ?? []).includes(task.id),
+            )
             return (
               <div
                 key={task.id}
@@ -4078,7 +4473,9 @@ const TaskContractDetails: FC<{ task: OrchestratorPlanTask }> = ({ task }) => {
       >
         <FileText className="h-3 w-3" />
         任务契约
-        {hasDetails && <span className="rounded-full bg-emerald-50 px-1 text-[10px] text-emerald-700">详情</span>}
+        {hasDetails && (
+          <span className="rounded-full bg-emerald-50 px-1 text-[10px] text-emerald-700">详情</span>
+        )}
         <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
       </button>
       {open && hasDetails && (
@@ -4088,7 +4485,9 @@ const TaskContractDetails: FC<{ task: OrchestratorPlanTask }> = ({ task }) => {
               <span className="font-medium text-neutral-700">允许路径：</span>
               <div className="mt-1 flex flex-wrap gap-1">
                 {contract.allowedPaths.map((path: string) => (
-                  <span key={path} className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">{path}</span>
+                  <span key={path} className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
+                    {path}
+                  </span>
                 ))}
               </div>
             </div>
@@ -4098,7 +4497,9 @@ const TaskContractDetails: FC<{ task: OrchestratorPlanTask }> = ({ task }) => {
               <span className="font-medium text-neutral-700">必需产物：</span>
               <div className="mt-1 flex flex-wrap gap-1">
                 {contract.requiredArtifacts.map((a: string) => (
-                  <span key={a} className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">{a}</span>
+                  <span key={a} className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
+                    {a}
+                  </span>
                 ))}
               </div>
             </div>
@@ -4107,13 +4508,19 @@ const TaskContractDetails: FC<{ task: OrchestratorPlanTask }> = ({ task }) => {
             <div>
               <span className="font-medium text-neutral-700">黑板写入：</span>
               <div className="mt-1 space-y-1">
-                {contract.requiredBlackboardWrites.map((bw: { key: string; schemaType: string }) => (
-                  <div key={bw.key} className="flex items-center gap-1.5">
-                    <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-neutral-600">{bw.key}</span>
-                    <span className="text-neutral-400">→</span>
-                    <span className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">{bw.schemaType}</span>
-                  </div>
-                ))}
+                {contract.requiredBlackboardWrites.map(
+                  (bw: { key: string; schemaType: string }) => (
+                    <div key={bw.key} className="flex items-center gap-1.5">
+                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-neutral-600">
+                        {bw.key}
+                      </span>
+                      <span className="text-neutral-400">→</span>
+                      <span className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">
+                        {bw.schemaType}
+                      </span>
+                    </div>
+                  ),
+                )}
               </div>
             </div>
           )}
@@ -4132,7 +4539,10 @@ const TaskContractDetails: FC<{ task: OrchestratorPlanTask }> = ({ task }) => {
               <span className="font-medium text-neutral-700">验证命令：</span>
               <div className="mt-1 space-y-1">
                 {validation.commands.map((cmd: string) => (
-                  <div key={cmd} className="rounded bg-neutral-900 px-2 py-1 font-mono text-[10px] text-neutral-100">
+                  <div
+                    key={cmd}
+                    className="rounded bg-neutral-900 px-2 py-1 font-mono text-[10px] text-neutral-100"
+                  >
                     {cmd}
                   </div>
                 ))}
@@ -4580,7 +4990,6 @@ const MarkdownText: FC = () => (
   />
 )
 
-
 function normalizePreviewUrl(url?: string) {
   if (!url) return null
   try {
@@ -4594,17 +5003,21 @@ function downloadFileName(item: ArtifactPreviewItem) {
   const source = item.path || normalizePreviewUrl(item.url)?.pathname || item.title || 'preview'
   const rawName = source.split(/[\\/]/).filter(Boolean).pop() || item.title || 'preview'
   const hasExtension = /\.[A-Za-z0-9]{1,8}$/.test(rawName)
-  const fallbackExtension = item.mimeType?.includes('image/') ? item.mimeType.split('/').pop() : 'html'
+  const fallbackExtension = item.mimeType?.includes('image/')
+    ? item.mimeType.split('/').pop()
+    : 'html'
   const name = hasExtension ? rawName : `${rawName}.${fallbackExtension || 'html'}`
   return sanitizeDownloadFileName(name)
 }
 
 function sanitizeDownloadFileName(value: string) {
-  return value
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 160) || 'preview.html'
+  return (
+    value
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 160) || 'preview.html'
+  )
 }
 
 function getPreviewPanelWidthBounds(panel: HTMLElement | null) {

@@ -71,14 +71,24 @@ class AgentHubRepository(
 
     suspend fun confirmPairing(payload: PairingPayload): PairConfirmResponse {
         _uiState.update { it.copy(connecting = true, error = null) }
-        return try {
-            client.confirmPairing(payload).also {
+        val candidates = pairingBaseUrlCandidates(payload)
+        var lastError: Throwable? = null
+        for (baseUrl in candidates) {
+            val result = runCatching { client.confirmPairing(payload, baseUrl = baseUrl) }
+            if (result.isSuccess) {
                 _uiState.update { state -> state.copy(connecting = false, error = null) }
+                val confirmed = result.getOrThrow()
+                return confirmed.copy(baseUrl = baseUrl)
             }
-        } catch (error: Throwable) {
-            _uiState.update { it.copy(connecting = false, error = error.message ?: "配对失败") }
-            throw error
+            lastError = result.exceptionOrNull()
         }
+        val message = buildString {
+            append("无法连接电脑端，已尝试 ")
+            append(candidates.joinToString("、"))
+            lastError?.message?.takeIf { it.isNotBlank() }?.let { append("：").append(it) }
+        }
+        _uiState.update { it.copy(connecting = false, error = message) }
+        throw lastError ?: IllegalStateException(message)
     }
 
     fun setError(message: String) {
@@ -200,5 +210,12 @@ class AgentHubRepository(
                 it.copy(streamingMessage = null, agentTyping = false)
             }
         }
+    }
+
+    private fun pairingBaseUrlCandidates(payload: PairingPayload): List<String> {
+        return (listOf(payload.baseUrl) + payload.baseUrls)
+            .map { it.trim().trimEnd('/') }
+            .filter { it.startsWith("http://") || it.startsWith("https://") }
+            .distinct()
     }
 }
