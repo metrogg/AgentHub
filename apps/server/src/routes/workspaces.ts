@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { HTTPException } from 'hono/http-exception'
+import { AppError, AppErrorCodes } from '../lib/error'
 import { z } from 'zod'
 import { db, workspaces, workspaceAgents, workspaceAgentRelations, workspaceTasks, sessions, messages, eq, and, desc, asc } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
@@ -86,7 +86,15 @@ const updateTaskSchema = z.object({
 
 type AgentConfigPatch = z.input<typeof createAgentSchema> | z.infer<typeof updateAgentSchema>
 
-function normalizeNativeReadOnlyAgent<T extends AgentConfigPatch>(input: T): T {
+function normalizeAgentRuntimeDefaults<T extends AgentConfigPatch>(input: T): T {
+  if (input.runtimeType === 'code-agent') {
+    return {
+      ...input,
+      codeAgentType: input.codeAgentType ?? 'codex',
+      sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
+      approvalRequired: false,
+    }
+  }
   if (input.runtimeType !== 'mcp') return input
   return {
     ...input,
@@ -122,7 +130,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .insert(workspaces)
       .values({ ownerId: user.sub, name: input.name, goal: input.goal, projectPath })
       .returning()
-    if (!ws) throw new HTTPException(500, { message: 'Failed to create workspace' })
+    if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
 
     if (input.template === 'classic') {
       await seedClassicAgents(ws.id)
@@ -142,8 +150,8 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       selectedPath = selectedPath || (await pickNativeFolder())
     } catch (err) {
       logger.error({ err: err instanceof Error ? err.message : String(err), userId: user.sub }, 'Folder picker failed')
-      if (err instanceof HTTPException) throw err
-      throw new HTTPException(500, { message: '打开文件夹选择器失败' })
+      if (err instanceof AppError) throw err
+      throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, '打开文件夹选择器失败')
     }
     if (!selectedPath) {
       logger.info({ userId: user.sub }, 'Folder picker cancelled by user')
@@ -214,7 +222,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .from(workspaceAgents)
       .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id)))
       .limit(1)
-    if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
 
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1)
 
@@ -234,19 +242,33 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
 
     if (existing) return c.json({ session: existing })
 
-    const [created] = await db
-      .insert(sessions)
-      .values({
-        title: `${workspace?.name || 'Workspace'} / ${agent.name}`,
-        type: 'direct',
-        ownerId: user.sub,
-        workspaceId: id,
-        workspaceAgentId: agentId,
-      })
-      .returning()
+    try {
+      const [created] = await db
+        .insert(sessions)
+        .values({
+          title: `${workspace?.name || 'Workspace'} / ${agent.name}`,
+          type: 'direct',
+          ownerId: user.sub,
+          workspaceId: id,
+          workspaceAgentId: agentId,
+        })
+        .returning()
 
-    if (!created) throw new HTTPException(500, { message: 'Failed to create session' })
-    return c.json({ session: created })
+      if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
+      return c.json({ session: created })
+    } catch (error) {
+      logger.error(
+        {
+          err: error instanceof Error ? error.message : String(error),
+          workspaceId: id,
+          agentId,
+          userId: user.sub,
+        },
+        'Failed to create agent child session',
+      )
+      if (error instanceof AppError) throw error
+      throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, error instanceof Error ? error.message : '会话创建失败')
+    }
   })
 
   // Agent child session
@@ -314,10 +336,10 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
 
     for (const relation of relations) {
       if (!agentIds.has(relation.sourceAgentId) || !agentIds.has(relation.targetAgentId)) {
-        throw new HTTPException(400, { message: 'Relation agent must belong to the workspace' })
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '关联的 Agent 必须属于当前工作区')
       }
       if (relation.sourceAgentId === relation.targetAgentId) {
-        throw new HTTPException(400, { message: 'Relation source and target must be different agents' })
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '关联的源和目标 Agent 不能相同')
       }
       const key = `${relation.sourceAgentId}:${relation.targetAgentId}:${relation.relationType}`
       if (deduped.has(key)) continue
@@ -355,7 +377,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
+    const input = normalizeAgentRuntimeDefaults(c.req.valid('json'))
     const existing = await db.select({ id: workspaceAgents.id }).from(workspaceAgents).where(eq(workspaceAgents.workspaceId, id))
     const [agent] = await db
       .insert(workspaceAgents)
@@ -370,13 +392,13 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeNativeReadOnlyAgent(c.req.valid('json'))
+    const input = normalizeAgentRuntimeDefaults(c.req.valid('json'))
     const [agent] = await db
       .update(workspaceAgents)
       .set(input)
       .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id)))
       .returning()
-    if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
     await touchWorkspace(id)
     return c.json(agent)
   })
@@ -421,7 +443,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .set({ ...input, updatedAt: new Date() })
       .where(and(eq(workspaceTasks.id, taskId), eq(workspaceTasks.workspaceId, id)))
       .returning()
-    if (!task) throw new HTTPException(404, { message: 'Task not found' })
+    if (!task) throw AppError.fromCode(AppErrorCodes.TASK_NOT_FOUND, '任务不存在')
     await touchWorkspace(id)
     return c.json(task)
   })
@@ -448,7 +470,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .from(workspaceTasks)
       .where(and(eq(workspaceTasks.id, taskId), eq(workspaceTasks.workspaceId, id)))
       .limit(1)
-    if (!task) throw new HTTPException(404, { message: 'Task not found' })
+    if (!task) throw AppError.fromCode(AppErrorCodes.TASK_NOT_FOUND, '任务不存在')
 
     let agent: typeof workspaceAgents.$inferSelect | null = null
     if (task.agentId) {
@@ -463,7 +485,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
         .insert(sessions)
         .values({ title, type: 'direct', ownerId: user.sub, workspaceId: id, workspaceAgentId: agent?.id ?? null })
         .returning()
-      if (!session) throw new HTTPException(500, { message: 'Failed to create session' })
+      if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
       sessionId = session.id
     }
 
@@ -534,7 +556,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .values({ title: `${ws.name} · 协调汇总`, type: 'group', ownerId: user.sub, workspaceId: id })
       .returning()
     const session = summarySession[0]
-    if (!session) throw new HTTPException(500, { message: 'Failed to create summary session' })
+    if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '总结会话创建失败')
 
     const prompt = [
       `你是 Agent Group 的协调者。下面是各 Agent 的最新产出,请基于真实内容给出:`,

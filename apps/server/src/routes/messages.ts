@@ -1,12 +1,13 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { HTTPException } from 'hono/http-exception'
+import { AppError, AppErrorCodes } from '../lib/error'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { unlink, writeFile } from 'node:fs/promises'
 import { sendMessageSchema } from '@agenthub/shared'
+import { logger } from '../lib/logger'
 import {
   db,
   messages,
@@ -253,6 +254,14 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .orderBy(asc(messages.createdAt))
     return c.json({ items: list })
   })
+  .delete('/:sessionId/all', async (c) => {
+    const user = c.get('user')
+    const sessionId = c.req.param('sessionId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
+    await db.delete(messages).where(eq(messages.sessionId, sessionId))
+    return c.json({ deleted: true })
+  })
   .post('/:sessionId/cancel', async (c) => {
     const sessionId = c.req.param('sessionId')
     const { cancelAgentReply } = await import('../services/agent-runner')
@@ -264,11 +273,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const messageId = c.req.param('messageId')
     const { content } = c.req.valid('json')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
 
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!message || message.sessionId !== sessionId || message.senderType !== 'user' || message.senderId !== user.sub) {
-      throw new HTTPException(404, { message: 'Message not found' })
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     }
 
     const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
@@ -284,7 +293,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       })
       .where(eq(messages.id, messageId))
       .returning()
-    if (!updated) throw new HTTPException(500, { message: 'Failed to update message' })
+    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_UPDATE_FAILED, '消息更新失败')
     return c.json(updated)
   })
   .patch('/:sessionId/:messageId/pin', async (c) => {
@@ -292,11 +301,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-    if (!message || message.sessionId !== sessionId) throw new HTTPException(404, { message: 'Message not found' })
+    if (!message || message.sessionId !== sessionId) throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     const [updated] = await db.update(messages).set({ isPinned: true }).where(eq(messages.id, messageId)).returning()
-    if (!updated) throw new HTTPException(500, { message: 'Failed to pin message' })
+    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_PIN_FAILED, '消息置顶失败')
     return c.json(updated)
   })
   .patch('/:sessionId/:messageId/unpin', async (c) => {
@@ -304,11 +313,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-    if (!message || message.sessionId !== sessionId) throw new HTTPException(404, { message: 'Message not found' })
+    if (!message || message.sessionId !== sessionId) throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     const [updated] = await db.update(messages).set({ isPinned: false }).where(eq(messages.id, messageId)).returning()
-    if (!updated) throw new HTTPException(500, { message: 'Failed to unpin message' })
+    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_PIN_FAILED, '消息取消置顶失败')
     return c.json(updated)
   })
   .delete('/:sessionId/:messageId', async (c) => {
@@ -317,7 +326,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const messageId = c.req.param('messageId')
     const rollback = c.req.query('rollback') !== 'false'
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
 
     const list = await db
       .select()
@@ -327,7 +336,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const targetIndex = list.findIndex((message) => message.id === messageId)
     const target = targetIndex >= 0 ? list[targetIndex] : null
     if (!target || target.senderType !== 'user' || target.senderId !== user.sub) {
-      throw new HTTPException(404, { message: 'Message not found' })
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     }
 
     const affected = collectAffectedMessages(list, targetIndex)
@@ -345,7 +354,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
 
     const list = await db
       .select()
@@ -354,19 +363,19 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .orderBy(asc(messages.createdAt))
     const messageIndex = list.findIndex((message) => message.id === messageId)
     const message = messageIndex >= 0 ? list[messageIndex] : null
-    if (!message || message.senderType !== 'agent') throw new HTTPException(404, { message: 'Agent message not found' })
+    if (!message || message.senderType !== 'agent') throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 消息不存在')
     const previousUser = [...list.slice(0, messageIndex)].reverse().find((item) => item.senderType === 'user')
-    if (!previousUser) throw new HTTPException(400, { message: 'No user message to regenerate from' })
+    if (!previousUser) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '没有可重新生成的用户消息')
 
     await db.delete(messages).where(eq(messages.id, message.id))
     const { cancelAgentReply } = await import('../services/agent-runner')
     cancelAgentReply(sessionId)
     if (session.type === 'group' && session.workspaceId) {
-      runGroupReplies(session.workspaceId, sessionId, previousUser, previousUser.content).catch(() => {})
+      runGroupReplies(session.workspaceId, sessionId, previousUser, previousUser.content).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runGroupReplies failed on regenerate'))
     } else {
       const profile = await profileForDirectSession(session)
       import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId, previousUser, profile).catch(() => {})
+        runAgentReply(sessionId, previousUser, profile).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on regenerate'))
       })
     }
     return c.json({ removedMessageId: message.id })
@@ -384,11 +393,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
       if (session?.type === 'group' && session.workspaceId) {
         await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
-        runGroupReplies(session.workspaceId, sessionId, msg, content).catch(() => {})
+        runGroupReplies(session.workspaceId, sessionId, msg, content).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runGroupReplies failed on new message'))
       } else {
         const profile = session ? await profileForDirectSession(session) : undefined
         import('../services/agent-runner').then(({ runAgentReply }) => {
-          runAgentReply(sessionId, msg, profile).catch(() => {})
+          runAgentReply(sessionId, msg, profile).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on new message'))
         })
       }
     }
@@ -398,7 +407,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const { content } = c.req.valid('json')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const agentList = session.workspaceId
       ? await db
           .select()
@@ -418,7 +427,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         metadata: { plan: { ...plan, messageId: '' } },
       })
       .returning()
-    if (!card) throw new HTTPException(500, { message: 'Failed to create plan card' })
+    if (!card) throw AppError.fromCode(AppErrorCodes.ORCHESTRATOR_PLAN_FAILED, '编排计划卡片创建失败')
     const planWithId = { ...plan, messageId: card.id }
     await db
       .update(messages)
@@ -432,7 +441,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const { content } = c.req.valid('json')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub) {
-      throw new HTTPException(404, { message: 'Session not found' })
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     }
 
     const artifacts = buildDemoArtifacts(content)
@@ -452,7 +461,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         },
       })
       .returning()
-    if (!card) throw new HTTPException(500, { message: 'Failed to create artifact card' })
+    if (!card) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, '产物卡片创建失败')
     return c.json(card)
   })
   .post('/:sessionId/agent-draft', zValidator('json', agentDraftSchema), async (c) => {
@@ -460,7 +469,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const { content } = c.req.valid('json')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     if (session.type !== 'group' || !session.workspaceId) {
       const [prompt] = await db
         .insert(messages)
@@ -473,7 +482,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           metadata: { agentDraftStatus: 'requires_group' },
         })
         .returning()
-      if (!prompt) throw new HTTPException(500, { message: 'Failed to create agent group prompt' })
+      if (!prompt) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 群组提示创建失败')
       return c.json(prompt)
     }
 
@@ -489,7 +498,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         metadata: { agentDraft: draft, agentDraftStatus: 'draft' },
       })
       .returning()
-    if (!card) throw new HTTPException(500, { message: 'Failed to create agent draft' })
+    if (!card) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 草案创建失败')
     return c.json(card)
   })
   .post('/:sessionId/agent-draft/:messageId/confirm', zValidator('json', confirmAgentDraftSchema), async (c) => {
@@ -500,33 +509,33 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub || session.type !== 'group' || !session.workspaceId) {
-      throw new HTTPException(404, { message: 'Agent Group session not found' })
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
     }
     const [card] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-    if (!card || card.sessionId !== sessionId) throw new HTTPException(404, { message: 'Agent draft not found' })
+    if (!card || card.sessionId !== sessionId) throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 草案不存在')
 
     const cardMetadata = card.metadata as { agentDraftStatus?: unknown; createdAgentId?: unknown } | null
-    if (card.type !== 'task_card') throw new HTTPException(400, { message: 'Message is not an agent draft' })
+    if (card.type !== 'task_card') throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '消息不是 Agent 草案')
     if (cardMetadata?.agentDraftStatus === 'confirmed') {
       if (typeof cardMetadata.createdAgentId !== 'string') {
-        throw new HTTPException(409, { message: 'Agent draft is already confirmed but missing created agent id' })
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 草案已确认但缺少创建的 Agent ID')
       }
       const [existingAgent] = await db
         .select()
         .from(workspaceAgents)
         .where(and(eq(workspaceAgents.id, cardMetadata.createdAgentId), eq(workspaceAgents.workspaceId, session.workspaceId)))
         .limit(1)
-      if (!existingAgent) throw new HTTPException(409, { message: 'Confirmed agent draft points to a missing agent' })
+      if (!existingAgent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, '已确认的 Agent 草案指向不存在的 Agent')
       return c.json({ agent: existingAgent, message: card })
     }
     if (cardMetadata?.agentDraftStatus !== 'draft') {
-      throw new HTTPException(400, { message: 'Message is not an editable agent draft' })
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '消息不是可编辑的 Agent 草案')
     }
 
     const metadataDraft = parseAgentDraft(card.metadata)
-    if (!metadataDraft) throw new HTTPException(400, { message: 'Invalid agent draft metadata' })
+    if (!metadataDraft) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 草案元数据无效')
     const draft = normalizeAgentDraftInput(draftOverride ?? metadataDraft)
-    if (!draft) throw new HTTPException(400, { message: 'Invalid agent draft metadata' })
+    if (!draft) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 草案元数据无效')
 
     const existing = await db
       .select({ id: workspaceAgents.id })
@@ -536,7 +545,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .insert(workspaceAgents)
       .values({ ...draft, workspaceId: session.workspaceId, orderIdx: existing.length })
       .returning()
-    if (!agent) throw new HTTPException(500, { message: 'Failed to create Agent' })
+    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_REPLY_FAILED, 'Agent 创建失败')
 
     await db.insert(sessionMembers).values({
       sessionId,
@@ -562,11 +571,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const [card] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!card || card.sessionId !== sessionId || card.type !== 'task_card') {
-      throw new HTTPException(404, { message: 'Plan card not found' })
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '计划卡片不存在')
     }
 
     const parsed = parsePlan(card.metadata)
-    if (!parsed) throw new HTTPException(400, { message: 'Invalid plan metadata' })
+    if (!parsed) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '计划元数据无效')
 
     const updates = new Map(tasks.map((task) => [task.id, task]))
     const agentKeys = new Set<string>(parsed.agents.map((agent) => agent.key))
@@ -589,7 +598,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .set({ content: nextPlan.summary, metadata: { ...metadata, plan: nextPlan } })
       .where(eq(messages.id, messageId))
       .returning()
-    if (!updated) throw new HTTPException(500, { message: 'Failed to update plan card' })
+    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_UPDATE_FAILED, '计划卡片更新失败')
     return c.json(updated)
   })
   .post('/:sessionId/orchestrator-plan/:messageId/dispatch', async (c) => {
@@ -599,11 +608,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const [card] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!card || card.sessionId !== sessionId || card.type !== 'task_card') {
-      throw new HTTPException(404, { message: 'Plan card not found' })
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '计划卡片不存在')
     }
 
     const parsed = parsePlan(card.metadata)
-    if (!parsed) throw new HTTPException(400, { message: 'Invalid plan metadata' })
+    if (!parsed) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '计划元数据无效')
 
     // Guardrails: check user intent for dangerous operations
     const guardrails = checkInputGuardrails(parsed.goal)
@@ -625,8 +634,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     let agentsByKey: Map<string, typeof workspaceAgents.$inferSelect>
 
-    if (sourceSession?.type === 'group' && sourceSession.workspaceId && sourceSession.ownerId === user.sub) {
-      // 复用已有 workspace
+    if (sourceSession?.workspaceId && sourceSession.ownerId === user.sub) {
+      // 复用当前会话绑定的 workspace，不因当前会话不是群聊而另建工作区。
       const existing = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
       workspaceId = existing.workspaceId
       groupSessionId = existing.groupSessionId ?? sessionId
@@ -638,7 +647,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .insert(workspaces)
         .values({ ownerId: user.sub, name: parsed.title, goal: parsed.goal })
         .returning()
-      if (!workspace) throw new HTTPException(500, { message: 'Failed to create workspace' })
+      if (!workspace) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
       workspaceId = workspace.id
 
       createdAgents = await db
@@ -730,7 +739,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           metadata: { orchestratorRunId: runId, orchestratorTaskId: task.id },
         })
         .returning()
-      if (!childSession) throw new HTTPException(500, { message: 'Failed to create task session' })
+      if (!childSession) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '任务会话创建失败')
 
       if (workspaceTask) {
         await db
@@ -970,7 +979,7 @@ function buildAgentDraft(content: string): AgentDraft {
     sandboxPolicy: toolPermissions.includes('workspace:write') ? 'workspace-write' : 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: codeAgentType ? false : true,
   }
 }
 
@@ -1084,7 +1093,7 @@ function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
     sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly ? true : (draft.approvalRequired ?? true),
+    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
   }
 }
 
@@ -1759,7 +1768,7 @@ async function createWorkspaceGroupSession(
       workspaceId,
     })
     .returning()
-  if (!session) throw new HTTPException(500, { message: 'Failed to create group session' })
+  if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '群组会话创建失败')
 
   await db.insert(sessionMembers).values([
     { sessionId: session.id, memberType: 'user', memberId: ownerId },
@@ -1808,7 +1817,7 @@ async function ensureAgentChildSession(
       workspaceAgentId: agent?.id ?? null,
     })
     .returning()
-  if (!created) throw new HTTPException(500, { message: 'Failed to create agent child session' })
+  if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Agent 子会话创建失败')
   return created
 }
 
@@ -1830,11 +1839,11 @@ async function dispatchPlanToExistingGroup(
   ownerId: string,
   plan: OrchestratorPlan
 ): Promise<{ workspaceId: string; groupSessionId: string; agentsByKey: Map<string, typeof workspaceAgents.$inferSelect> }> {
-  if (!session.workspaceId) throw new HTTPException(400, { message: 'Session is not attached to a workspace' })
+  if (!session.workspaceId) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '会话未关联工作区')
 
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
   if (!workspace || workspace.ownerId !== ownerId) {
-    throw new HTTPException(404, { message: 'Workspace not found' })
+    throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '工作区不存在')
   }
 
   const existingAgents = await db

@@ -43,6 +43,9 @@ apps/*/src-tauri/target/
 *.db-journal
 storage/
 
+# Runtime
+.agenthub-port
+
 # Logs
 *.log
 npm-debug.log*

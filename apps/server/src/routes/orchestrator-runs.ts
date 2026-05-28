@@ -11,68 +11,67 @@ import type { ConflictReport } from '../services/orchestrator/conflict-resolver'
 
 export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
-
-  // List all orchestrator runs for current user (via workspace ownership)
   .get('/', async (c) => {
     const user = c.get('user')
+    const list = await tableSafe(
+      db
+        .select({
+          id: orchestratorRuns.id,
+          workspaceId: orchestratorRuns.workspaceId,
+          groupSessionId: orchestratorRuns.groupSessionId,
+          planMessageId: orchestratorRuns.planMessageId,
+          status: orchestratorRuns.status,
+          plan: orchestratorRuns.plan,
+          summaryMessageId: orchestratorRuns.summaryMessageId,
+          conflictReport: orchestratorRuns.conflictReport,
+          createdAt: orchestratorRuns.createdAt,
+          updatedAt: orchestratorRuns.updatedAt,
+          workspaceName: workspaces.name,
+          sessionTitle: sessions.title,
+        })
+        .from(orchestratorRuns)
+        .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
+        .leftJoin(sessions, eq(sessions.id, orchestratorRuns.groupSessionId))
+        .where(eq(workspaces.ownerId, user.sub))
+        .orderBy(desc(orchestratorRuns.createdAt)),
+      [],
+    )
 
-    const list = await db
-      .select({
-        id: orchestratorRuns.id,
-        workspaceId: orchestratorRuns.workspaceId,
-        groupSessionId: orchestratorRuns.groupSessionId,
-        planMessageId: orchestratorRuns.planMessageId,
-        status: orchestratorRuns.status,
-        plan: orchestratorRuns.plan,
-        summaryMessageId: orchestratorRuns.summaryMessageId,
-        conflictReport: orchestratorRuns.conflictReport,
-        createdAt: orchestratorRuns.createdAt,
-        updatedAt: orchestratorRuns.updatedAt,
-        workspaceName: workspaces.name,
-        sessionTitle: sessions.title,
-      })
-      .from(orchestratorRuns)
-      .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
-      .innerJoin(sessions, eq(sessions.id, orchestratorRuns.groupSessionId))
-      .where(eq(workspaces.ownerId, user.sub))
-      .orderBy(desc(orchestratorRuns.createdAt))
-
-    return c.json({ items: list })
+    return c.json({
+      items: list.map(normalizeRunRow),
+    })
   })
-
-  // Get single run detail
   .get('/:id', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
 
-    const [run] = await db
-      .select({
-        id: orchestratorRuns.id,
-        workspaceId: orchestratorRuns.workspaceId,
-        groupSessionId: orchestratorRuns.groupSessionId,
-        planMessageId: orchestratorRuns.planMessageId,
-        status: orchestratorRuns.status,
-        plan: orchestratorRuns.plan,
-        summaryMessageId: orchestratorRuns.summaryMessageId,
-        conflictReport: orchestratorRuns.conflictReport,
-        createdAt: orchestratorRuns.createdAt,
-        updatedAt: orchestratorRuns.updatedAt,
-        workspaceName: workspaces.name,
-        sessionTitle: sessions.title,
-      })
-      .from(orchestratorRuns)
-      .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
-      .innerJoin(sessions, eq(sessions.id, orchestratorRuns.groupSessionId))
-      .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
-      .limit(1)
+    const [run] = await tableSafe(
+      db
+        .select({
+          id: orchestratorRuns.id,
+          workspaceId: orchestratorRuns.workspaceId,
+          groupSessionId: orchestratorRuns.groupSessionId,
+          planMessageId: orchestratorRuns.planMessageId,
+          status: orchestratorRuns.status,
+          plan: orchestratorRuns.plan,
+          summaryMessageId: orchestratorRuns.summaryMessageId,
+          conflictReport: orchestratorRuns.conflictReport,
+          createdAt: orchestratorRuns.createdAt,
+          updatedAt: orchestratorRuns.updatedAt,
+          workspaceName: workspaces.name,
+          sessionTitle: sessions.title,
+        })
+        .from(orchestratorRuns)
+        .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
+        .leftJoin(sessions, eq(sessions.id, orchestratorRuns.groupSessionId))
+        .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
+        .limit(1),
+      [],
+    )
 
-    if (!run) {
-      throw new HTTPException(404, { message: 'Run not found' })
-    }
-
-    return c.json(run)
+    if (!run) throw new HTTPException(404, { message: 'Run not found' })
+    return c.json(normalizeRunRow(run))
   })
-
   // Cancel a running orchestrator run and mark unfinished tasks as cancelled
   .post('/:id/cancel', async (c) => {
     const user = c.get('user')
@@ -257,7 +256,6 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
 
-    // Verify run exists and belongs to user
     const [run] = await db
       .select({ id: orchestratorRuns.id })
       .from(orchestratorRuns)
@@ -265,9 +263,7 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
       .limit(1)
 
-    if (!run) {
-      throw new HTTPException(404, { message: 'Run not found' })
-    }
+    if (!run) throw new HTTPException(404, { message: 'Run not found' })
 
     const logs = await db
       .select()
@@ -277,8 +273,6 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
 
     return c.json({ items: logs })
   })
-
-  // Get conflict report for a run
   .get('/:id/conflicts', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
@@ -290,11 +284,8 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
       .limit(1)
 
-    if (!run) {
-      throw new HTTPException(404, { message: 'Run not found' })
-    }
-
-    return c.json({ items: run.conflictReport ?? [] })
+    if (!run) throw new HTTPException(404, { message: 'Run not found' })
+    return c.json({ items: Array.isArray(run.conflictReport) ? run.conflictReport : [] })
   })
 
   // Resolve a conflict manually (approve/reject/override)
@@ -344,3 +335,21 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
 
     return c.json({ ok: true, item: updated[idx] })
   })
+
+function normalizeRunRow<T extends { sessionTitle: string | null; conflictReport?: unknown }>(row: T) {
+  return {
+    ...row,
+    sessionTitle: row.sessionTitle ?? 'Deleted session',
+    conflictReport: Array.isArray(row.conflictReport) ? row.conflictReport : [],
+  }
+}
+
+async function tableSafe<T>(promise: Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await promise
+  } catch (error: any) {
+    const message = String(error?.message ?? error ?? '')
+    if (/no such table:\s*orchestrator_runs/i.test(message)) return fallback
+    throw error
+  }
+}

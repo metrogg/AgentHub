@@ -159,7 +159,9 @@ fn close_desktop_window(window: WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 fn minimize_desktop_window(window: WebviewWindow) -> Result<(), String> {
-    window.minimize().map_err(|err| format!("minimize window failed: {err}"))
+    window
+        .minimize()
+        .map_err(|err| format!("minimize window failed: {err}"))
 }
 
 #[tauri::command]
@@ -206,11 +208,49 @@ fn open_desktop_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(
         .transparent(false)
         .background_color(Color(255, 255, 255, 255))
         .shadow(true)
+        .focused(true)
         .center()
         .build()
         .map_err(|err| format!("无法打开新窗口: {err}"))?;
 
     apply_window_chrome_style(&new_window);
+    let _ = new_window.show();
+    let _ = new_window.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
+fn open_settings_window(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window("settings") {
+        let _ = existing.show();
+        let _ = existing.unminimize();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    let current_url = window
+        .url()
+        .map_err(|err| format!("无法读取当前窗口地址: {err}"))?;
+    let settings_url = current_url
+        .join("/settings")
+        .map_err(|err| format!("无法构造设置窗口地址: {err}"))?;
+
+    let settings_window =
+        WebviewWindowBuilder::new(&app, "settings", WebviewUrl::External(settings_url))
+            .title("AgentHub 设置")
+            .inner_size(1280.0, 880.0)
+            .min_inner_size(980.0, 700.0)
+            .decorations(false)
+            .transparent(false)
+            .background_color(Color(255, 255, 255, 255))
+            .shadow(true)
+            .always_on_top(true)
+            .focused(true)
+            .center()
+            .build()
+            .map_err(|err| format!("无法打开设置窗口: {err}"))?;
+
+    apply_window_chrome_style(&settings_window);
     Ok(())
 }
 
@@ -241,7 +281,8 @@ pub fn run() {
             minimize_desktop_window,
             toggle_maximize_desktop_window,
             start_desktop_window_drag,
-            open_desktop_window
+            open_desktop_window,
+            open_settings_window
         ])
         .setup(move |app| {
             let window = WebviewWindowBuilder::new(
@@ -434,6 +475,12 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         }
     };
 
+    let workspace_root = workspace_root_from_manifest();
+    let star_office_root = workspace_root
+        .as_ref()
+        .map(|root| root.join("storage").join("Star-Office-UI"))
+        .filter(|root| root.join("backend").join("app.py").exists());
+
     let mut command = Command::new(&server_bin);
     command
         .current_dir(&paths.app_data_dir)
@@ -444,7 +491,16 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         .env("AGENTHUB_CONFIG_DIR", &paths.config_dir)
         .env("AGENTHUB_LOG_DIR", &paths.log_dir)
         .env("AGENTHUB_WEB_DIST", &web_dist)
-        .env("DATABASE_URL", paths.data_dir.join("agenthub.db"))
+        .env("DATABASE_URL", paths.data_dir.join("agenthub.db"));
+
+    if let Some(root) = workspace_root.as_ref() {
+        command.env("PROJECT_ROOT", root);
+    }
+    if let Some(root) = star_office_root.as_ref() {
+        command.env("AGENTHUB_STAR_OFFICE_ROOT", root);
+    }
+
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file_err));
@@ -513,6 +569,18 @@ fn resolve_resource(app: &tauri::AppHandle, candidates: &[&str]) -> Option<PathB
         }
     }
     None
+}
+
+fn workspace_root_from_manifest() -> Option<PathBuf> {
+    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for _ in 0..3 {
+        root = root.parent()?.to_path_buf();
+    }
+    if root.join("package.json").exists() && root.join("apps").exists() {
+        Some(root)
+    } else {
+        None
+    }
 }
 
 fn find_available_port(start: u16, count: u16) -> Option<u16> {

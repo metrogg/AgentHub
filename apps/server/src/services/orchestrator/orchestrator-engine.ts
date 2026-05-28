@@ -110,6 +110,19 @@ export class OrchestratorEngine {
         }
 
         currentAttempt++
+        if (currentAttempt > 20) {
+          logger.error({ taskId: currentTask.id, currentAttempt, runId }, 'Task exceeded maximum replan attempts, forcing failure')
+          return {
+            taskId: currentTask.id,
+            agentId: currentTask.agentId,
+            agentName: 'Unknown',
+            status: 'failed',
+            output: '',
+            artifacts: [],
+            error: '任务重试次数超过系统上限（20次），已强制终止。',
+          }
+        }
+
         const replan = this.replanningEngine.handle(currentTask, new Error(result.error || 'Task failed'), currentAttempt, plan)
 
         logger.info({ taskId: currentTask.id, strategy: replan.strategy, reason: replan.reason }, 'Replanning triggered')

@@ -1,18 +1,21 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, AtSign, ChevronDown, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
+import { ArrowUp, AtSign, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
-import { readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
+import { readMentionCommand, readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
 import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '../lib/api'
+import { agentLibraryChangeEvent, loadAgentLibrary, type SavedAgentConfig } from '../lib/agentLibrary'
 import { useI18n } from '../lib/i18n'
 import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
+import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
 import { useChatStore } from '../stores/chatStore'
 
 export default function ChatPage() {
   const { sessionId } = useParams()
+  const navigate = useNavigate()
   const currentSessionId = useChatStore((state) => state.currentSessionId)
   const selectSession = useChatStore((state) => state.selectSession)
   const initWebSocket = useChatStore((state) => state.initWebSocket)
@@ -30,12 +33,12 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (sessionId && sessionId !== currentSessionId) {
-      selectSession(sessionId)
+      void selectSession(sessionId).catch(() => navigate('/', { replace: true }))
     }
-  }, [sessionId, currentSessionId, selectSession])
+  }, [sessionId, currentSessionId, navigate, selectSession])
 
   return (
-    <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-white text-neutral-950">
+    <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-[#F7F7F7] text-neutral-950">
       <div
         aria-hidden={sidebarCollapsed}
         className="h-full shrink-0 overflow-hidden"
@@ -90,7 +93,6 @@ function Welcome() {
   const messageInputRef = useRef<HTMLTextAreaElement>(null)
   const createSession = useChatStore((state) => state.createSession)
   const selectSession = useChatStore((state) => state.selectSession)
-  const fetchSessions = useChatStore((state) => state.fetchSessions)
   const sendMessageToSession = useChatStore((state) => state.sendMessageToSession)
   const [message, setMessage] = useState('')
   const [skills, setSkills] = useState<SkillSummary[]>([])
@@ -98,9 +100,13 @@ function Welcome() {
   const [skillPanelOpen, setSkillPanelOpen] = useState(false)
   const [skillQuery, setSkillQuery] = useState('')
   const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(null)
+  const [mentionPanelOpen, setMentionPanelOpen] = useState(false)
+  const [mentionRange, setMentionRange] = useState<{ start: number; end: number; query: string } | null>(null)
+  const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null)
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
   const [workspaceQuery, setWorkspaceQuery] = useState('')
@@ -109,8 +115,15 @@ function Welcome() {
   const filteredWorkspaces = workspaces.filter((workspace) => {
     const query = workspaceQuery.trim().toLowerCase()
     if (!query) return true
-    return `${workspace.name} ${workspace.projectPath ?? ''}`.toLowerCase().includes(query)
+    return workspaceSearchText(workspace).includes(query)
   })
+
+  useEffect(() => {
+    const syncAgents = () => setLibraryAgents(loadAgentLibrary())
+    syncAgents()
+    window.addEventListener(agentLibraryChangeEvent, syncAgents)
+    return () => window.removeEventListener(agentLibraryChangeEvent, syncAgents)
+  }, [])
 
   useEffect(() => {
     if (!projectMenuOpen) return
@@ -119,7 +132,7 @@ function Welcome() {
     api
       .listWorkspaces()
       .then(({ items }) => {
-        if (!cancelled) setWorkspaces(items)
+        if (!cancelled) setWorkspaces(items.filter(isProjectWorkspace))
       })
       .catch(() => {
         if (!cancelled) setWorkspaces([])
@@ -163,19 +176,32 @@ function Welcome() {
     setSkillQuery('')
   }
 
+  function closeMentionPanel() {
+    setMentionPanelOpen(false)
+    setMentionRange(null)
+  }
+
   function handleMessageChange(event: ChangeEvent<HTMLTextAreaElement>) {
     const input = event.currentTarget
     const nextMessage = input.value
     const cursor = input.selectionStart ?? nextMessage.length
     const command = readSlashCommand(nextMessage, cursor)
+    const mention = readMentionCommand(nextMessage, cursor)
     setMessage(nextMessage)
     if (command) {
       setProjectMenuOpen(false)
+      closeMentionPanel()
       setSkillQuery(command.query)
       setSkillCommandRange({ start: command.start, end: command.end })
       setSkillPanelOpen(true)
+    } else if (mention) {
+      closeSkillPanel()
+      setProjectMenuOpen(false)
+      setMentionRange(mention)
+      setMentionPanelOpen(true)
     } else {
       closeSkillPanel()
+      closeMentionPanel()
     }
   }
 
@@ -196,13 +222,54 @@ function Welcome() {
     })
   }
 
+  function insertMentionReference(value: string) {
+    const input = messageInputRef.current
+    const range = mentionRange ?? { start: message.length, end: message.length }
+    const source = input?.value ?? message
+    const reference = `${value} `
+    const nextMessage = `${source.slice(0, range.start)}${reference}${source.slice(range.end)}`
+    setMessage(nextMessage)
+    closeMentionPanel()
+    showHint(`已插入 ${value}`)
+    window.requestAnimationFrame(() => {
+      const nextCursor = range.start + reference.length
+      messageInputRef.current?.focus()
+      messageInputRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
+  function insertAtSign() {
+    const input = messageInputRef.current
+    if (!input) {
+      setMessage((current) => (current.includes('@') ? current : `${current}@`))
+      setMentionPanelOpen(true)
+      setMentionRange({ start: message.length, end: message.length + 1, query: '' })
+      return
+    }
+    const start = input.selectionStart ?? message.length
+    const end = input.selectionEnd ?? message.length
+    const nextMessage = `${message.slice(0, start)}@${message.slice(end)}`
+    setMessage(nextMessage)
+    setMentionRange({ start, end: start + 1, query: '' })
+    setMentionPanelOpen(true)
+    setProjectMenuOpen(false)
+    closeSkillPanel()
+    window.requestAnimationFrame(() => {
+      const nextCursor = start + 1
+      messageInputRef.current?.focus()
+      messageInputRef.current?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }
+
   async function startThread(content: string) {
     const trimmed = content.trim()
     if (!trimmed || submitting) return
 
     setSubmitting(true)
     try {
-      const session = await createSession(titleFromMessage(trimmed))
+      const session = await createSession(titleFromMessage(trimmed), {
+        workspaceId: selectedWorkspace?.id ?? null,
+      })
       await selectSession(session.id)
       navigate(`/chat/${session.id}`)
       const result = await sendMessageToSession(session.id, trimmed)
@@ -220,19 +287,18 @@ function Welcome() {
     await startThread(message)
   }
 
-  async function openWorkspace(workspaceId: string) {
+  async function selectWorkspace(workspaceId: string) {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
     setOpeningWorkspaceId(workspaceId)
-    showHint('正在打开项目...')
+    showHint('正在选择工作区...')
     try {
-      const { session } = await api.openWorkspaceGroupSession(workspaceId)
-      await fetchSessions()
-      await selectSession(session.id)
+      const workspace = workspaces.find((item) => item.id === workspaceId) ?? (await api.getWorkspace(workspaceId)).workspace
+      setSelectedWorkspace(workspace)
       setProjectMenuOpen(false)
-      navigate(`/chat/${session.id}`)
+      showHint(`已选择工作区：${workspace.name}`)
     } catch (err) {
-      showHint(friendlyErrorMessage(err, '打开项目失败'))
+      showHint(friendlyErrorMessage(err, '选择工作区失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -243,17 +309,14 @@ function Welcome() {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
     try {
-      const full = await api.createWorkspace({ name: '空白项目', goal: '', projectPath: null, template: 'classic' })
+      const full = await api.createWorkspace({ name: '空白工作区', goal: '', projectPath: null, template: 'classic' })
       setWorkspaces((items) => [full.workspace, ...items.filter((item) => item.id !== full.workspace.id)])
       setOpeningWorkspaceId(full.workspace.id)
-      showHint('已创建项目，正在进入...')
-      const { session } = await api.openWorkspaceGroupSession(full.workspace.id)
-      await fetchSessions()
-      await selectSession(session.id)
+      setSelectedWorkspace(full.workspace)
       setProjectMenuOpen(false)
-      navigate(`/chat/${session.id}`)
+      showHint('已创建并选中工作区')
     } catch (err) {
-      showHint(friendlyErrorMessage(err, '创建空白项目失败'))
+      showHint(friendlyErrorMessage(err, '创建空白工作区失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
@@ -263,7 +326,7 @@ function Welcome() {
   async function openFolderWorkspace() {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
-    showHint('正在打开文件夹选择器...')
+    showHint('正在打开工作区文件夹选择器...')
     try {
       const nativePath = await pickWorkspaceFolder().catch(() => null)
       const result = await api.openWorkspaceFolder(nativePath)
@@ -271,7 +334,7 @@ function Welcome() {
         showHint('已取消选择文件夹')
         return
       }
-      showHint('已选择文件夹，正在打开项目...')
+      showHint('已选择文件夹，正在处理工作区...')
       const workspace =
         result.workspace ??
         (
@@ -284,22 +347,25 @@ function Welcome() {
         ).workspace
       setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
       setOpeningWorkspaceId(workspace.id)
-      showHint('项目已加入，正在进入...')
-      const { session } = await api.openWorkspaceGroupSession(workspace.id)
-      await fetchSessions()
-      await selectSession(session.id)
+      setSelectedWorkspace(workspace)
       setProjectMenuOpen(false)
-      navigate(`/chat/${session.id}`)
+      showHint('工作区已选中')
     } catch (err) {
-      showHint(friendlyErrorMessage(err, '打开文件夹失败'))
+      showHint(friendlyErrorMessage(err, '处理工作区失败'))
     } finally {
       setWorkspaceBusy(false)
       setOpeningWorkspaceId(null)
     }
   }
 
+  function clearWorkspaceContext() {
+    setSelectedWorkspace(null)
+    setProjectMenuOpen(false)
+    showHint('已清除工作区')
+  }
+
   return (
-    <div className="agenthub-welcome-root flex h-full flex-col bg-white">
+    <div className="agenthub-welcome-root flex h-full flex-col bg-[#F7F7F7]">
       <div className="flex flex-1 flex-col items-center px-8">
         <section className="mt-[18vh] w-full max-w-[704px]">
           <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
@@ -338,6 +404,14 @@ function Welcome() {
                 onClose={closeSkillPanel}
               />
             )}
+            {mentionPanelOpen && (
+              <WelcomeMentionPanel
+                agents={libraryAgents}
+                query={mentionRange?.query ?? ''}
+                onPick={insertMentionReference}
+                onClose={closeMentionPanel}
+              />
+            )}
             {projectMenuOpen && (
               <div className="absolute bottom-[4.5rem] left-3 z-20 w-80 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl">
                 <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
@@ -347,7 +421,7 @@ function Welcome() {
                     onChange={(event) => setWorkspaceQuery(event.target.value)}
                     autoFocus
                     className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-                    placeholder={t('搜索项目')}
+                    placeholder={t('搜索工作区')}
                   />
                 </div>
                 <div className="max-h-44 space-y-1 overflow-y-auto py-1">
@@ -355,24 +429,27 @@ function Welcome() {
                     <button
                       key={workspace.id}
                       type="button"
-                      onClick={() => void openWorkspace(workspace.id)}
+                      onClick={() => void selectWorkspace(workspace.id)}
                       disabled={workspaceBusy}
                       className={[
-                        'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
-                        workspace.id === openingWorkspaceId ? 'bg-neutral-100' : '',
+                        'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
+                        (workspace.id === selectedWorkspace?.id || workspace.id === openingWorkspaceId) ? 'bg-neutral-100' : '',
                       ].join(' ')}
                     >
                       <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                      <span className="min-w-0 flex-1 truncate text-neutral-900">{workspace.name}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-neutral-900">{workspace.name}</span>
+                        <span className="block truncate text-[11px] text-neutral-400">{workspaceSubtitle(workspace)}</span>
+                      </span>
                       {workspace.id === openingWorkspaceId && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />}
                     </button>
                   ))}
                   {!workspaceBusy && filteredWorkspaces.length === 0 && (
                     <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
-                      {t('没有匹配的项目')}
+                      {t('没有匹配的工作区')}
                     </div>
                   )}
-                  {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">{t('正在处理项目...')}</div>}
+                  {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">{t('正在处理工作区...')}</div>}
                 </div>
                 <div className="mt-1 border-t border-neutral-200 pt-1.5">
                   <div className="relative group/new-project">
@@ -382,7 +459,7 @@ function Welcome() {
                       className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50"
                     >
                       <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
-                      <span className="min-w-0 flex-1 truncate text-neutral-900">{t('添加新项目')}</span>
+                      <span className="min-w-0 flex-1 truncate text-neutral-900">{t('添加工作区')}</span>
                       <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
                     </button>
                     <div
@@ -398,7 +475,7 @@ function Welcome() {
                         className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-100 disabled:opacity-60"
                       >
                         <Plus className="h-4 w-4 shrink-0 text-neutral-600" />
-                        {t('新建空白项目')}
+                        {t('新建空白工作区')}
                       </button>
                       <button
                         type="button"
@@ -413,11 +490,11 @@ function Welcome() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setProjectMenuOpen(false)}
+                    onClick={clearWorkspaceContext}
                     className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50"
                   >
                     <FolderX className="h-4 w-4 shrink-0 text-neutral-600" />
-                    {t('不使用项目')}
+                    {t('不使用工作区')}
                   </button>
                 </div>
               </div>
@@ -430,6 +507,15 @@ function Welcome() {
                 if (event.key === 'Escape' && skillPanelOpen) {
                   event.preventDefault()
                   closeSkillPanel()
+                  return
+                }
+                if (event.key === 'Escape' && mentionPanelOpen) {
+                  event.preventDefault()
+                  closeMentionPanel()
+                  return
+                }
+                if (mentionPanelOpen && event.key === 'Enter') {
+                  event.preventDefault()
                   return
                 }
                 if (skillPanelOpen && event.key === 'Enter') {
@@ -453,8 +539,8 @@ function Welcome() {
                   type="button"
                   onClick={() => setProjectMenuOpen((open) => !open)}
                   className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
-                  aria-label={t('打开项目文件夹')}
-                  title={t('打开项目文件夹')}
+                  aria-label={t('选择工作区')}
+                  title={selectedWorkspace ? selectedWorkspace.name : t('选择工作区')}
                 >
                   <FolderOpen className="h-4 w-4" />
                 </button>
@@ -463,17 +549,13 @@ function Welcome() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMessage((current) => (current.includes('@') ? current : `${current}@`))}
+                  onClick={insertAtSign}
                   className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
                 >
                   <AtSign className="h-4 w-4" />
                 </button>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" disabled title="暂未实现" className="inline-flex h-8 items-center gap-1 rounded-full border border-neutral-200 px-3 text-xs text-neutral-300">
-                  {t('自动')}
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </button>
                 <button
                   type="submit"
                   disabled={!message.trim() || submitting}
@@ -502,11 +584,88 @@ function PromptCard({ title, text, onClick }: { title: string; text: string; onC
   )
 }
 
+function WelcomeMentionPanel({
+  agents,
+  onClose,
+  onPick,
+  query,
+}: {
+  agents: SavedAgentConfig[]
+  onClose: () => void
+  onPick: (value: string) => void
+  query: string
+}) {
+  const normalizedQuery = query.trim().toLowerCase()
+  const rows = [
+    {
+      color: '#111827',
+      desc: '拆解任务并协调 Agent 群聊',
+      name: 'Orchestrator',
+      value: '@orchestrator',
+    },
+    ...agents.map((agent) => ({
+      color: agent.color ?? '#111827',
+      desc: [agent.role, agent.description].filter(Boolean).join(' · ') || 'Agent',
+      name: agent.name,
+      value: `@${agent.name}`,
+    })),
+  ]
+  const filteredRows = normalizedQuery
+    ? rows.filter((row) => `${row.value} ${row.name} ${row.desc}`.toLowerCase().includes(normalizedQuery))
+    : rows
+
+  return (
+    <div
+      className="absolute bottom-[4.5rem] left-3 z-30 w-72 overflow-hidden rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl"
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <div className="flex items-center justify-between px-3 pb-1 pt-1">
+        <div className="text-xs text-neutral-400">
+          {query ? `匹配：${query}` : '提及 Agent'}
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
+        >
+          关闭
+        </button>
+      </div>
+      <div className="max-h-72 overflow-y-auto">
+        {filteredRows.map((row) => (
+          <button
+            key={row.value}
+            type="button"
+            onClick={() => onPick(row.value)}
+            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
+          >
+            <span
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
+              style={{ background: row.color }}
+            >
+              {row.name.slice(0, 1).toUpperCase() || '@'}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium text-neutral-900">{row.value}</span>
+              <span className="block truncate text-xs text-neutral-500">{row.desc}</span>
+            </span>
+          </button>
+        ))}
+        {filteredRows.length === 0 && (
+          <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
+            没有匹配的 Agent
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function titleFromMessage(message: string) {
   return message.length > 18 ? `${message.slice(0, 18)}...` : message
 }
 
 function workspaceNameFromPath(value: string) {
   const normalized = value.trim().replace(/[\\/]+$/, '')
-  return normalized.split(/[\\/]/).filter(Boolean).pop() || '项目文件夹'
+  return normalized.split(/[\\/]/).filter(Boolean).pop() || '工作区文件夹'
 }

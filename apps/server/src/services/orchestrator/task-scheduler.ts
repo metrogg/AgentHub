@@ -117,7 +117,12 @@ export class TaskScheduler {
 
 function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
   const controller = new AbortController()
-  const onAbort = () => controller.abort()
+  const onAbort = () => {
+    for (const signal of signals) {
+      signal.removeEventListener('abort', onAbort)
+    }
+    controller.abort()
+  }
   for (const signal of signals) {
     if (signal.aborted) {
       onAbort()

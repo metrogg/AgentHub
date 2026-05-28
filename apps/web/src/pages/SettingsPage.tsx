@@ -123,6 +123,7 @@ interface AppSettings {
   toolPermissions: Record<string, string>
   accountName: string
   accountAvatar: string
+  accountMemory: string
 }
 
 const defaultAppSettings: AppSettings = {
@@ -216,6 +217,7 @@ const defaultAppSettings: AppSettings = {
   },
   accountName: 'You',
   accountAvatar: '',
+  accountMemory: '',
 }
 
 const themeModes = ['跟随系统', '亮色', '暗色']
@@ -226,6 +228,18 @@ const messageStyleOptions = ['紧凑', '简洁', '气泡']
 
 export default function SettingsPage() {
   const navigate = useNavigate()
+  return <SettingsSurface onClose={() => navigate(-1)} />
+}
+
+export function SettingsSurface({
+  onClose,
+  compact = false,
+  showSidebarClose = true,
+}: {
+  onClose: () => void
+  compact?: boolean
+  showSidebarClose?: boolean
+}) {
   const { setLanguage, t } = useI18n()
   const [activeSection, setActiveSection] = useState<SectionKey>('通用')
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings)
@@ -315,14 +329,19 @@ export default function SettingsPage() {
       <SettingsSidebar
         activeSection={activeSection}
         setActiveSection={setActiveSection}
-        navigateBack={() => navigate(-1)}
+        navigateBack={onClose}
+        compact={compact}
+        showClose={showSidebarClose}
       />
 
-      <main className="min-h-0 flex-1 overflow-y-auto px-10 py-9" style={{ background: 'var(--settings-bg)', color: 'var(--settings-text)' }}>
-        <div className="max-w-6xl">
-          <div className="mb-8 flex items-start justify-between gap-4">
+      <main
+        className={cn('min-h-0 flex-1 overflow-y-auto', compact ? 'px-6 py-5' : 'px-10 py-9')}
+        style={{ background: 'var(--settings-bg)', color: 'var(--settings-text)' }}
+      >
+        <div className={compact ? 'max-w-4xl' : 'max-w-6xl'}>
+          <div className={cn('flex items-start justify-between gap-4', compact ? 'mb-5' : 'mb-8')}>
             <div>
-              <h1 className="text-2xl font-semibold tracking-normal" style={{ color: 'var(--settings-text)' }}>{t(activeSection)}</h1>
+              <h1 className={cn('font-semibold tracking-normal', compact ? 'text-xl' : 'text-2xl')} style={{ color: 'var(--settings-text)' }}>{t(activeSection)}</h1>
               <p className="mt-1 text-sm" style={{ color: 'var(--settings-muted-text)' }}>{t(sectionDescription(activeSection))}</p>
             </div>
             <AutoSaveStatus state={saveState} />
@@ -352,28 +371,37 @@ function SettingsSidebar({
   activeSection,
   setActiveSection,
   navigateBack,
+  compact = false,
+  showClose = true,
 }: {
   activeSection: SectionKey
   setActiveSection: (section: SectionKey) => void
   navigateBack: () => void
+  compact?: boolean
+  showClose?: boolean
 }) {
   const { t } = useI18n()
   return (
-    <aside className="h-full w-[260px] shrink-0 overflow-hidden border-r px-5 py-5" style={{ background: 'var(--settings-sidebar)', borderColor: 'var(--settings-border)' }}>
-      <div className="mb-7 flex items-center justify-between px-1">
+    <aside
+      className={cn('h-full shrink-0 overflow-hidden border-r', compact ? 'w-[220px] px-4 py-4' : 'w-[260px] px-5 py-5')}
+      style={{ background: 'var(--settings-sidebar)', borderColor: 'var(--settings-border)' }}
+    >
+      <div className={cn('flex items-center justify-between px-1', compact ? 'mb-5' : 'mb-7')}>
         <div className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>{t('设置')}</div>
-        <button
-          type="button"
-          onClick={navigateBack}
-          className="grid h-6 w-6 place-items-center rounded-md transition hover:brightness-95"
-          style={{ color: 'var(--settings-muted-text)' }}
-          aria-label={t('关闭设置')}
-          title={t('关闭设置')}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        {showClose && (
+          <button
+            type="button"
+            onClick={navigateBack}
+            className="grid h-6 w-6 place-items-center rounded-md transition hover:brightness-95"
+            style={{ color: 'var(--settings-muted-text)' }}
+            aria-label={t('关闭设置')}
+            title={t('关闭设置')}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
-      <nav className="space-y-3">
+      <nav className={compact ? 'space-y-2' : 'space-y-3'}>
         {sections.map((section) => (
           <button
             key={section.label}
@@ -552,25 +580,6 @@ function SettingsContent({
     setGeneralInfo((current) => current ? { ...current, debug: { ...current.debug, enabled: debugMode } } : current)
   }
 
-  function updateAccountAvatar(file: File | null) {
-    if (!file) return
-    if (!file.type.startsWith('image/')) {
-      showActionMessage('请选择图片文件')
-      return
-    }
-    if (file.size > 2 * 1024 * 1024) {
-      showActionMessage('头像图片不能超过 2 MB')
-      return
-    }
-    const reader = new FileReader()
-    reader.onload = () => {
-      patchSettings({ accountAvatar: String(reader.result || '') })
-      showActionMessage('头像已更新')
-    }
-    reader.onerror = () => showActionMessage('读取头像失败')
-    reader.readAsDataURL(file)
-  }
-
   function resetAllSettings() {
     patchSettings(defaultAppSettings)
     setLanguage('zh')
@@ -582,42 +591,6 @@ function SettingsContent({
       return (
         <SettingsStack>
           {actionMessage && <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-600 shadow-sm">{actionMessage}</div>}
-          <SettingsSection title="账号资料" desc="配置本机账号在 Web、桌面端左侧导航和“我的”页面中显示的名称与头像。">
-            <InsetPanel>
-              <div className="flex flex-wrap items-center gap-4">
-                <AccountAvatarPreview name={settings.accountName} avatar={settings.accountAvatar} size="large" />
-                <div className="min-w-0 flex-1 space-y-3">
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>显示名称</span>
-                    <input
-                      value={settings.accountName}
-                      onChange={(event) => patchSettings({ accountName: event.target.value })}
-                      className="settings-input"
-                      maxLength={32}
-                      placeholder="You"
-                    />
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    <label className="settings-soft-button cursor-pointer">
-                      上传头像
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(event) => {
-                          updateAccountAvatar(event.currentTarget.files?.[0] ?? null)
-                          event.currentTarget.value = ''
-                        }}
-                      />
-                    </label>
-                    <button type="button" className="settings-soft-button" onClick={() => patchSettings({ accountAvatar: '' })}>
-                      移除头像
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </InsetPanel>
-          </SettingsSection>
           <SettingsSection title="界面语言" desc="切换界面显示语言">
             <SegmentedControl value={languageToSettingValue(normalizeLanguage(settings.language))} options={['中文', 'English']} onChange={patchLanguage} />
           </SettingsSection>
@@ -1496,28 +1469,6 @@ function SettingsSection({ title, desc, children }: { title: string; desc?: stri
 
 function InsetPanel({ children }: { children: React.ReactNode }) {
   return <div className="space-y-4 rounded-xl border p-4 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>{children}</div>
-}
-
-function AccountAvatarPreview({
-  name,
-  avatar,
-  size = 'small',
-}: {
-  name: string
-  avatar: string
-  size?: 'small' | 'large'
-}) {
-  const dimension = size === 'large' ? 'h-16 w-16 text-2xl' : 'h-10 w-10 text-sm'
-  const fallback = (name.trim().slice(0, 1) || 'Y').toUpperCase()
-  return (
-    <div className={cn('grid shrink-0 place-items-center overflow-hidden rounded-2xl border bg-white shadow-sm', dimension)} style={{ borderColor: 'var(--settings-border)' }}>
-      {avatar ? (
-        <img src={avatar} alt={name || 'Account avatar'} className="h-full w-full object-cover" />
-      ) : (
-        <span className="font-semibold" style={{ color: 'var(--settings-accent)' }}>{fallback}</span>
-      )}
-    </div>
-  )
 }
 
 function StorageMetric({ label, value }: { label: string; value: string }) {

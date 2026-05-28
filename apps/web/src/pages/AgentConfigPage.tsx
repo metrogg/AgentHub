@@ -37,13 +37,13 @@ const emptyDraft: AgentConfigInput = {
   color: '#111827',
   modelId: null,
   runtimeType: 'code-agent',
-  codeAgentType: 'claude-code',
+  codeAgentType: 'codex',
   capabilityTags: [],
   toolPermissions: ['chat'],
   sandboxPolicy: 'workspace-write',
   contextPolicy: 'workspace-aware',
   autoInvoke: true,
-  approvalRequired: true,
+  approvalRequired: false,
   roleType: 'custom',
   roleProfile: null,
 }
@@ -127,7 +127,7 @@ export default function AgentConfigPage() {
       systemPrompt: '你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。',
       color: '#111827',
       runtimeType: 'code-agent',
-      codeAgentType: 'claude-code',
+      codeAgentType: 'codex',
     })
     const updated = [next, ...agents]
     setAgents(updated)
@@ -322,13 +322,14 @@ export default function AgentConfigPage() {
                         setDraft({
                           ...draft,
                           runtimeType: nextRuntime,
-                          codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'claude-code') : null,
+                          codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+                          approvalRequired: nextRuntime === 'mcp' ? true : nextRuntime === 'code-agent' ? false : draft.approvalRequired,
                         })
                       }}>
                         <option value="code-agent">Coding Tools</option>
                         <option value="llm">{t('普通 LLM Agent')}</option>
                       </SelectField>
-                      <SelectField label="Coding Tools" value={draft.codeAgentType ?? 'claude-code'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
+                      <SelectField label="Coding Tools" value={draft.codeAgentType ?? 'codex'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
                         <option value="">{t('不绑定 CLI')}</option>
                         <option value="codex">Codex CLI</option>
                         <option value="claude-code">Claude Code</option>
@@ -337,7 +338,7 @@ export default function AgentConfigPage() {
                       </SelectField>
                       <SelectField label={t('默认模型')} value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
                         <option value="">{t('自动模型')}</option>
-                        {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId}</option>)}
+                        {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
                       </SelectField>
                       <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
                         <option value="read-only">{t('只读')}</option>
@@ -353,6 +354,12 @@ export default function AgentConfigPage() {
                       <Field label={t('能力标签')} value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, capabilityTags: splitList(value) })} />
                       <Field label={t('工具权限')} value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, toolPermissions: splitList(value) })} />
                     </div>
+
+                    {runtimeType === 'code-agent' && (
+                      <div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
+                        {modelCompatibilityText(draft.codeAgentType ?? null, draft.modelId ?? null, models)}
+                      </div>
+                    )}
 
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
                       <label className="flex h-11 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
@@ -457,6 +464,7 @@ export default function AgentConfigPage() {
 function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
   const runtimeType = draft.runtimeType ?? 'code-agent'
   const capabilityTags = draft.capabilityTags ?? []
+  const nativeReadOnly = runtimeType === 'mcp'
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -466,13 +474,13 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     color: draft.color || '#111827',
     modelId: draft.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'claude-code') : null,
+    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
     capabilityTags,
     toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
     sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: draft.approvalRequired ?? true,
+    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
     roleType: draft.roleType ?? 'custom',
     roleProfile: draft.roleProfile ?? null,
   }
@@ -641,6 +649,23 @@ function modelName(modelId: string | null, models: ModelCatalogItem[]) {
   if (!modelId) return '自动模型'
   const model = models.find((item) => item.id === modelId || item.modelId === modelId)
   return model?.name || model?.modelId || modelId
+}
+
+function modelCompatibilityText(
+  tool: WorkspaceAgent['codeAgentType'],
+  modelId: string | null,
+  models: ModelCatalogItem[],
+) {
+  const model = modelId ? models.find((item) => item.id === modelId || item.modelId === modelId) : null
+  if (!tool) return '未绑定 Coding Tool。'
+  if (!model) return '未选择模型时会使用模型管理里的默认启用模型，并在执行时注入到 Coding Tool。'
+  if (tool === 'claude-code' && !model.anthropicEndpoint && model.provider !== 'anthropic') {
+    return 'Claude Code 需要 Anthropic 协议入口；该模型未配置 Anthropic 端点，执行时可能无法接入。'
+  }
+  if (tool === 'opencode') {
+    return `OpenCode 会使用 ${model.provider}/${model.modelId} 生成临时 opencode 配置。`
+  }
+  return `${tool} 会使用模型档案「${model.name || model.modelId}」的 Key、Base URL 和模型 ID。`
 }
 
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {

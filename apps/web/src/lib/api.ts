@@ -7,9 +7,14 @@ interface RequestOptions extends RequestInit {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  public code?: string
+  public requestId?: string
+
+  constructor(public status: number, message: string, code?: string, requestId?: string) {
     super(message)
     this.name = 'ApiError'
+    this.code = code
+    this.requestId = requestId
   }
 }
 
@@ -26,7 +31,41 @@ function isRetryableError(error: unknown): boolean {
 
 export function friendlyErrorMessage(error: unknown, context?: string): string {
   const prefix = context ? `${context}：` : ''
-  if (error instanceof ApiError) return prefix + error.message
+  if (error instanceof ApiError) {
+    // 根据错误码提供比 HTTP 状态码更精准的中文提示
+    const codeMap: Record<string, string> = {
+      INTERNAL_ERROR: '服务端内部错误，请稍后重试',
+      SERVICE_UNAVAILABLE: '服务暂时不可用，请稍后重试',
+      TIMEOUT: '请求超时，请稍后重试',
+      VALIDATION_FAILED: '请求参数错误',
+      MISSING_FIELD: '缺少必要参数',
+      UNAUTHORIZED: '未登录或登录已过期',
+      FORBIDDEN: '没有权限执行此操作',
+      SESSION_NOT_FOUND: '会话不存在或已被删除',
+      MESSAGE_NOT_FOUND: '消息不存在或已被删除',
+      WORKSPACE_NOT_FOUND: '工作区不存在或已被删除',
+      TASK_NOT_FOUND: '任务不存在或已被删除',
+      AGENT_NOT_FOUND: 'Agent 不存在或已被删除',
+      FILE_NOT_FOUND: '文件不存在',
+      ARTIFACT_NOT_FOUND: '产物不存在',
+      LLM_REQUEST_FAILED: 'AI 服务请求失败，请检查模型配置',
+      LLM_RATE_LIMITED: 'AI 服务请求过于频繁，请稍后重试',
+      MODEL_NOT_CONFIGURED: '模型未配置，请先完成设置',
+      CODE_AGENT_NOT_INSTALLED: '代码 Agent 未安装，请先安装 CLI 工具',
+      CODE_AGENT_CONFIG_INVALID: '代码 Agent 配置错误',
+      ORCHESTRATOR_PLAN_FAILED: '编排计划生成失败，请稍后重试',
+      ORCHESTRATOR_DISPATCH_FAILED: '任务派发失败，请稍后重试',
+      DIFF_APPLY_FAILED: '代码补丁应用失败',
+      DIFF_VALIDATION_FAILED: '代码补丁校验失败',
+    }
+    if (error.code && codeMap[error.code]) {
+      return prefix + codeMap[error.code]
+    }
+    if (error.status === 500 && error.message === 'Internal Server Error') {
+      return prefix + '服务端暂不可用，请确认后端服务已启动后重试'
+    }
+    return prefix + error.message
+  }
   if (error instanceof Error) {
     const msg = error.message.toLowerCase()
     if (msg.includes('failed to fetch')) {
@@ -42,6 +81,8 @@ export function friendlyErrorMessage(error: unknown, context?: string): string {
 
 async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt = 0): Promise<T> {
   const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT_MS
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const canRetry = method === 'GET' || method === 'HEAD' || method === 'OPTIONS'
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
@@ -70,7 +111,11 @@ async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt 
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new ApiError(res.status, body?.error ?? body?.message ?? `HTTP ${res.status}`)
+      const errorPayload = body?.error ?? {}
+      const message = typeof errorPayload === 'string' ? errorPayload : (errorPayload.message ?? body?.error ?? body?.message ?? `HTTP ${res.status}`)
+      const code = typeof errorPayload === 'object' ? errorPayload.code : undefined
+      const requestId = typeof errorPayload === 'object' ? errorPayload.requestId : undefined
+      throw new ApiError(res.status, message, code, requestId)
     }
 
     if (res.status === 204) return undefined as T
@@ -79,9 +124,15 @@ async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt 
     clearTimeout(timer)
     callerSignal?.removeEventListener('abort', onCallerAbort)
 
+    // Don't retry if the caller explicitly aborted (e.g. component unmount or user cancel)
+    if (callerSignal?.aborted) {
+      throw error
+    }
+
     // Server errors (5xx) and network errors are retryable
     const shouldRetry =
       attempt < MAX_RETRIES &&
+      canRetry &&
       (isRetryableError(error) || (error instanceof ApiError && error.status >= 500))
 
     if (shouldRetry) {
@@ -106,6 +157,17 @@ export interface Session {
   workspaceAgentId?: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface StarOfficeStatus {
+  url: string
+  root: string
+  rootExists: boolean
+  running: boolean
+  starting: boolean
+  started: boolean
+  pid?: number
+  error?: string
 }
 
 export interface Message {
@@ -278,6 +340,14 @@ export interface CliInstallAction {
   message: string
   runtime?: 'local' | 'host'
   status: 'completed' | 'failed'
+}
+
+export interface CodingToolsStartupLifecycleResult {
+  items: CodingToolStatus[]
+  message: string
+  ok: boolean
+  repairedAgents: number
+  settingsChanged: boolean
 }
 
 export interface SettingsGeneralInfo {
@@ -798,6 +868,8 @@ export const api = {
   getSession: (id: string) => request<Session>(`/sessions/${id}`),
   createSession: (data: { title: string; type?: 'direct' | 'group'; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
     request<Session>('/sessions', { method: 'POST', body: JSON.stringify(data) }),
+  updateSession: (id: string, data: { title?: string; workspaceId?: string | null; workspaceAgentId?: string | null }) =>
+    request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   deleteAllSessions: () => request<{ deleted: boolean }>('/sessions/all', { method: 'DELETE' }),
 
@@ -831,6 +903,10 @@ export const api = {
   cancelMessage: (sessionId: string) =>
     request<{ cancelled: boolean }>(`/messages/${sessionId}/cancel`, {
       method: 'POST',
+    }),
+  clearMessages: (sessionId: string) =>
+    request<{ deleted: boolean }>(`/messages/${sessionId}/all`, {
+      method: 'DELETE',
     }),
   updateMessage: (sessionId: string, messageId: string, data: { content: string }) =>
     request<Message>(`/messages/${sessionId}/${messageId}`, {
@@ -899,6 +975,8 @@ export const api = {
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
   startMobilePairing: () => request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
+  getStarOfficeStatus: () => request<StarOfficeStatus>('/office/status'),
+  startStarOffice: () => request<StarOfficeStatus>('/office/start', { method: 'POST', timeout: 15_000 }),
   ensureStorageDirectory: (path: string) =>
     request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>('/settings/storage/ensure', {
       method: 'POST',
@@ -933,6 +1011,8 @@ export const api = {
     request<AgentAdapterCatalogResponse>('/coding-tools/agent-adapters'),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
+  ensureCodingToolsStartupLifecycle: () =>
+    request<CodingToolsStartupLifecycleResult>('/coding-tools/lifecycle/startup', { method: 'POST' }),
   getOpencodeModels: () =>
     request<OpencodeModelsResponse>('/coding-tools/opencode/models'),
   getCodexConfig: () =>
