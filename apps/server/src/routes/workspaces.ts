@@ -254,7 +254,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1)
 
-    const [existing] = await db
+    const existingSessions = await db
       .select()
       .from(sessions)
       .where(
@@ -266,8 +266,8 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
         )
       )
       .orderBy(desc(sessions.updatedAt))
-      .limit(1)
 
+    const existing = existingSessions.find((session) => !isGeneratedTaskSession(session.metadata))
     if (existing) return c.json({ session: existing })
 
     try {
@@ -622,3 +622,12 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     await touchWorkspace(id)
     return c.json({ sessionId: session.id })
   })
+
+function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {
+  return Boolean(
+    metadata?.orchestratorTaskId ||
+      metadata?.orchestratorRunId ||
+      metadata?.hiddenFromSessionTree ||
+      metadata?.kind === 'orchestrator-task',
+  )
+}
