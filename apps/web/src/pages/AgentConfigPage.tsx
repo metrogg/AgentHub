@@ -206,14 +206,56 @@ export default function AgentConfigPage() {
     if (!currentSession?.workspaceId) return
     try {
       const full = await api.getWorkspace(currentSession.workspaceId)
+      const metadata = currentSession.metadata ?? {}
+      const sessionAgent = currentSession.workspaceAgentId
+        ? full.agents.find((agent) => agent.id === currentSession.workspaceAgentId)
+        : null
+      const hasMatchingSavedAgentId =
+        metadata.kind === 'agent-direct' && metadata.savedAgentId === selectedId
+      if (
+        currentSession.type === 'direct' &&
+        metadata.kind === 'agent-direct' &&
+        metadata.savedAgentId &&
+        metadata.savedAgentId !== selectedId
+      ) {
+        return
+      }
+      if (
+        currentSession.type === 'direct' &&
+        !hasMatchingSavedAgentId &&
+        sessionAgent &&
+        selectedAgent &&
+        (sessionAgent.name !== selectedAgent.name || sessionAgent.role !== selectedAgent.role)
+      ) {
+        return
+      }
       const matched =
-        (currentSession.workspaceAgentId
-          ? full.agents.find((agent) => agent.id === currentSession.workspaceAgentId)
-          : null) ??
+        sessionAgent ??
         full.agents.find((agent) => agent.name === nextDraft.name && agent.role === nextDraft.role)
       if (!matched) return
 
-      await api.updateWorkspaceAgent(full.workspace.id, matched.id, nextDraft)
+      const updated = await api.updateWorkspaceAgent(full.workspace.id, matched.id, nextDraft)
+      const isDedicatedAgentSession =
+        currentSession.type === 'direct' &&
+        currentSession.workspaceAgentId === matched.id &&
+        (metadata.kind === 'agent-direct' || full.agents.length === 1)
+
+      if (isDedicatedAgentSession && nextDraft.name) {
+        const workspaceName = nextDraft.name.slice(0, 80)
+        if (full.workspace.name !== workspaceName) {
+          await api.updateWorkspace(full.workspace.id, { name: workspaceName })
+        }
+        await api.updateSession(currentSession.id, {
+          title: nextDraft.name,
+          workspaceId: full.workspace.id,
+          workspaceAgentId: updated.id,
+          metadata: {
+            ...metadata,
+            kind: 'agent-direct',
+            ...(selectedId ? { savedAgentId: selectedId } : {}),
+          },
+        })
+      }
       if (currentSession.id) await selectSession(currentSession.id)
     } catch {
       // 本地模板保存成功即可；工作区实例可能已被删除。

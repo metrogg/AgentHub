@@ -288,11 +288,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     if (openingAgentId) return
     setOpeningAgentId(agent.id)
     try {
-      const existing = findExistingAgentSession(sessions, agent)
-      if (existing) {
-        await openExistingSession(existing)
-        return
-      }
       const session = await startAgentConversation({ agents: [agent] })
       await fetchSessions()
       await openExistingSession(session)
@@ -994,35 +989,4 @@ function sessionDisplayTitle(title: string | undefined, t: (text: string) => str
 function formatSubtopicCount(count: number, language: 'zh' | 'en', t: (text: string) => string) {
   if (language === 'en') return `${count} ${count === 1 ? 'subtopic' : 'subtopics'}`
   return `${count} 个${t('子话题')}`
-}
-
-function findExistingAgentSession(sessions: Session[], agent: SavedAgentConfig) {
-  const agentName = normalizeMatchText(agent.name)
-  const agentRole = normalizeMatchText(agent.role)
-  if (!agentName) return null
-  const groupWorkspaceIds = new Set(
-    sessions
-      .filter((session) => session.type === 'group' && session.workspaceId)
-      .map((session) => session.workspaceId!),
-  )
-
-  const directAgentSessions = sessions.filter((session) => {
-    if (session.type !== 'direct' || !session.workspaceAgentId || !session.workspaceId) return false
-    const metadata = session.metadata ?? {}
-    if (metadata.kind === 'workspace-agent-child' || metadata.kind === 'orchestrator-task') return false
-    if (metadata.orchestratorTaskId || metadata.orchestratorRunId || metadata.hiddenFromSessionTree) return false
-    if (metadata.kind === 'agent-direct') return metadata.savedAgentId === agent.id
-    return !groupWorkspaceIds.has(session.workspaceId)
-  })
-
-  return directAgentSessions.find((session) => {
-    const title = normalizeMatchText(session.title)
-    const titleParts = session.title.split('/').map((part) => normalizeMatchText(part))
-    if (titleParts.some((part) => part === agentName)) return true
-    return title.includes(agentName) && (!agentRole || title.includes(agentRole))
-  }) ?? null
-}
-
-function normalizeMatchText(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
