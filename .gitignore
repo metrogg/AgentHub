@@ -3,12 +3,17 @@ node_modules/
 .pnp
 .pnp.js
 bun.lockb
+.bun/
 
 # Bun / TS
 *.tsbuildinfo
+.eslintcache
+.stylelintcache
 
 # Environment
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 
@@ -26,29 +31,48 @@ Thumbs.db
 # Build output
 dist/
 build/
+.cache/
+.parcel-cache/
+.rollup.cache/
+.vite/
+.vite-*/
 .gradle/
 .cxx/
 .externalNativeBuild/
 .next/
 .turbo/
 apps/*/dist/
+apps/*/.cache/
+apps/*/.vite/
+apps/*/.vite-*/
 packages/*/dist/
+packages/*/.cache/
 apps/*/src-tauri/gen/
 apps/*/src-tauri/resources/
 apps/*/src-tauri/target/
-.vite/
 
 # Drizzle / DB
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 storage/
+apps/*/storage/
+packages/*/storage/
 
 # Runtime
 .agenthub-port
+.agenthub-*
+!.agenthub.example
 
 # Logs
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+logs/
 
 # Android
 local.properties
