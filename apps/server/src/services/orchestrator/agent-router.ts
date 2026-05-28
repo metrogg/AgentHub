@@ -11,7 +11,8 @@ const TASK_ROLE_MATCH: Record<NonNullable<ExecutionTask['taskType']>, string[]> 
   research: ['researcher'],
   design: ['architect', 'clarifier'],
   code: ['coder'],
-  test: ['reviewer', 'coder'],
+  test: ['verifier', 'reviewer', 'coder'],
+  verify: ['verifier'],
   review: ['reviewer'],
   synthesize: ['integrator', 'architect'],
 }
@@ -21,7 +22,8 @@ const TASK_TAG_MATCH: Record<NonNullable<ExecutionTask['taskType']>, string[]> =
   research: ['research', 'sources', 'analysis'],
   design: ['planning', 'architecture', 'design', 'requirements'],
   code: ['code', 'implementation', 'workspace-write'],
-  test: ['test', 'quality', 'validation'],
+  test: ['test', 'quality', 'validation', 'verify', 'build', 'typecheck'],
+  verify: ['verify', 'test', 'build', 'typecheck'],
   review: ['review', 'quality', 'test'],
   synthesize: ['synthesize', 'summary', 'delivery'],
 }
@@ -57,6 +59,10 @@ function isEligible(agent: ExecutionAgent, taskType?: ExecutionTask['taskType'])
     return agent.runtimeType === 'code-agent'
       || agent.roleType === 'coder'
       || agent.capabilityTags.some((tag) => tag.toLowerCase().includes('code'))
+  }
+  if (taskType === 'test' || taskType === 'verify') {
+    return agent.roleType === 'verifier'
+      || agent.capabilityTags.some((tag) => ['verify', 'test', 'build', 'typecheck'].includes(tag.toLowerCase()))
   }
   if (taskType === 'review') {
     return agent.roleType === 'reviewer'
@@ -132,6 +138,7 @@ function inferTaskType(text: string): NonNullable<ExecutionTask['taskType']> {
   if (lowered.includes('review') || lowered.includes('审查')) return 'review'
   if (lowered.includes('code') || lowered.includes('implement') || lowered.includes('实现')) return 'code'
   if (lowered.includes('research') || lowered.includes('资料') || lowered.includes('调研')) return 'research'
+  if (lowered.includes('verify') || lowered.includes('verification')) return 'verify'
   if (lowered.includes('test') || lowered.includes('验证')) return 'test'
   if (lowered.includes('summary') || lowered.includes('汇总')) return 'synthesize'
   return 'design'

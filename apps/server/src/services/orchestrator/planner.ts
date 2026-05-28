@@ -29,8 +29,11 @@ interface ProjectSpec {
 
 export class Planner {
   async createPlan(input: PlannerInput): Promise<ExecutionPlan> {
-    const { goal, agents, agentRelations = [], workspacePath, useSpecFirst = true } = input
+    const { goal, agentRelations = [], workspacePath, useSpecFirst = true } = input
     const runId = crypto.randomUUID()
+
+    // 动态启用 Researcher：根据目标复杂度判断是否需要研究型 Agent
+    const agents = this.maybeInjectResearcher(input.agents, goal)
 
     let specPhases: string | undefined
     if (workspacePath) {
@@ -81,6 +84,81 @@ export class Planner {
       '【规范结束】',
     ]
     return lines.join('\n')
+  }
+
+  /**
+   * 动态启用 Researcher：根据目标复杂度判断是否需要研究型 Agent
+   * 触发条件：涉及外部 API/SDK、新技术栈、方案比较、领域知识查询
+   */
+  private maybeInjectResearcher(agents: ExecutionAgent[], goal: string): ExecutionAgent[] {
+    const hasResearcher = agents.some((a) => a.roleType === 'researcher')
+    if (hasResearcher) return agents
+
+    const lower = goal.toLowerCase()
+    const researchTriggers = [
+      'api', 'sdk', '第三方', '接入', '集成',
+      '新技术', '新框架', '方案比较', '对比',
+      '调研', '研究', '不了解', '怎么做',
+      '最佳实践', '行业标准', '竞品',
+      'docker', 'kubernetes', 'k8s', 'wasm',
+      'websocket', 'graphql', 'grpc', 'mqtt',
+      'oauth', 'jwt', 'sso', 'auth',
+    ]
+
+    const needsResearch = researchTriggers.some((t) => lower.includes(t))
+    if (!needsResearch) return agents
+
+    // 动态构造 researcher agent
+    const researcher: ExecutionAgent = {
+      id: `researcher-${crypto.randomUUID().slice(0, 8)}`,
+      key: 'researcher',
+      name: 'Researcher',
+      role: '资料研究',
+      roleType: 'researcher',
+      description: '补充资料、比较方案、阅读上下文并标记不确定点。',
+      color: '#f59e0b',
+      runtimeType: 'llm',
+      capabilityTags: ['research', 'sources', 'analysis'],
+      toolPermissions: ['chat', 'workspace:read', 'skills:read'],
+      sandboxPolicy: 'read-only',
+      systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点，给出来源和置信度。',
+    }
+
+    logger.info({ goal: goal.slice(0, 80) }, 'Planner dynamically injected Researcher')
+    return [...agents, researcher]
+  }
+
+  /**
+   * 根据目标关键词匹配 specialist agent
+   * 如果团队中没有 specialist，回退到通用 agent
+   */
+  private pickAgent(agents: ExecutionAgent[], keywords: string[]) {
+    const lowered = keywords.map((k) => k.toLowerCase())
+    return agents.find((agent) => {
+      const text = [agent.name, agent.role, agent.description, agent.runtimeType, agent.codeAgentType, ...(agent.capabilityTags ?? [])]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return lowered.some((keyword) => text.includes(keyword))
+    })
+  }
+
+  /**
+   * Coder 专业化：根据目标判断任务类型，给 build task 添加 specialist 标签
+   */
+  private inferSpecialistTags(goal: string): string[] {
+    const lower = goal.toLowerCase()
+    const tags: string[] = []
+    if (lower.includes('react') || lower.includes('vue') || lower.includes('frontend') || lower.includes('ui') || lower.includes('页面') || lower.includes('组件')) {
+      tags.push('frontend')
+    }
+    if (lower.includes('api') || lower.includes('backend') || lower.includes('server') || lower.includes('数据库') || lower.includes('db')) {
+      tags.push('backend')
+    }
+    if (lower.includes('docker') || lower.includes('ci') || lower.includes('deploy') || lower.includes('k8s') || lower.includes('devops')) {
+      tags.push('devops')
+    }
+    return tags
   }
 
   private async generateSpec(goal: string, agents: ExecutionAgent[], workspacePath?: string | null): Promise<ProjectSpec> {
@@ -428,12 +506,19 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       return { runId, title, goal, agents: selectedAgents, tasks }
     }
 
-    // 无 Spec 时的经典三阶段 fallback
+    // 无 Spec 时的经典三阶段 fallback，支持 Coder 专业化匹配
     const leadAgent = this.pickAgent(selectedAgents, ['规划', '架构', 'architect', 'plan']) ?? selectedAgents[0]!
+
+    // 尝试 specialist 匹配，如果没有则回退到通用 coder
+    const specialistTags = this.inferSpecialistTags(goal)
     const buildAgent =
+      (specialistTags.length > 0
+        ? this.pickAgent(selectedAgents, [...specialistTags, 'coder', 'code'])
+        : undefined) ??
       this.pickAgent(selectedAgents, ['实现', '代码', 'coder', 'code', 'build']) ??
       selectedAgents[1] ??
       selectedAgents[0]!
+
     const reviewAgent =
       this.pickAgent(selectedAgents, ['审查', 'review', 'test', '风险']) ??
       selectedAgents[2] ??
@@ -443,6 +528,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     const buildId = crypto.randomUUID()
     const reviewId = crypto.randomUUID()
 
+    const specialistHint = specialistTags.length > 0 ? `（专长方向: ${specialistTags.join(', ')}）` : ''
     const tasks: ExecutionTask[] = [
       {
         id: planId,
@@ -454,8 +540,8 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       },
       {
         id: buildId,
-        title: '实现核心功能与界面',
-        description: '基于拆解结果产出可执行实现方案，优先完成关键路径、组件接入和小步验证。',
+        title: `实现核心功能与界面${specialistHint}`,
+        description: `基于拆解结果产出可执行实现方案，优先完成关键路径、组件接入和小步验证。${specialistHint}`,
         agentId: buildAgent.id,
         dependencies: [planId],
         maxRetries: 2,
@@ -471,17 +557,6 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     ]
 
     return { runId, title, goal, agents: selectedAgents, tasks }
-  }
-
-  private pickAgent(agents: ExecutionAgent[], keywords: string[]) {
-    const lowered = keywords.map((k) => k.toLowerCase())
-    return agents.find((agent) => {
-      const text = [agent.name, agent.role, agent.description, agent.runtimeType, agent.codeAgentType, ...(agent.capabilityTags ?? [])]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-      return lowered.some((keyword) => text.includes(keyword))
-    })
   }
 }
 
@@ -566,6 +641,7 @@ export function parseTaskType(value: unknown): ExecutionTask['taskType'] | undef
     value === 'design' ||
     value === 'code' ||
     value === 'test' ||
+    value === 'verify' ||
     value === 'review' ||
     value === 'synthesize'
   ) {

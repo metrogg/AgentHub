@@ -14,6 +14,7 @@ import { initializeRunLedger } from './run-ledger'
 import { validateTaskOutputContract } from './task-contract'
 import { runTaskValidation } from './task-validation'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
+import { PolicyGuard } from '../policy-guard'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
 
@@ -501,10 +502,14 @@ export class OrchestratorEngine {
       }
     }
 
-    // === Git 分支隔离 ===
+    // === PolicyGuard 评估 + Git 分支隔离 ===
+    const policy = PolicyGuard.evaluate({
+      roleType: agent.roleType,
+      taskType: task.taskType,
+    })
     let branchCtx: import('../git/branch-manager').BranchContext | null = null
     const projectPath = childInfo.projectPath ?? undefined
-    const needBranch = agent.sandboxPolicy !== 'read-only' && projectPath
+    const needBranch = PolicyGuard.needsBranchIsolation(policy.sandboxPolicy) && projectPath
 
     if (needBranch) {
       try {
@@ -552,10 +557,10 @@ export class OrchestratorEngine {
       runtimeType: agent.runtimeType,
       codeAgentType: agent.codeAgentType,
       capabilityTags: agent.capabilityTags,
-      toolPermissions: agent.toolPermissions,
-      sandboxPolicy: agent.sandboxPolicy,
+      toolPermissions: policy.toolPermissions,
+      sandboxPolicy: policy.sandboxPolicy,
       contextPolicy: 'workspace-aware' as const,
-      approvalRequired: agent.sandboxPolicy === 'danger-full-access',
+      approvalRequired: policy.approvalRequired,
       projectPath: branchCtx?.worktreePath ?? childInfo.projectPath ?? null,
       originalProjectPath: childInfo.projectPath ?? null,
     }
@@ -1048,7 +1053,8 @@ export class OrchestratorEngine {
   }
 
   /**
-   * Auto-review chain: 为 code 类型且 requiresReview 的已完成任务自动注入 review 任务
+   * Auto-review chain: Coder -> Verifier -> Reviewer
+   * 为 code 类型且 requiresReview 的已完成任务自动注入验证和审查任务
    */
   private async injectAutoReviewTasks(
     plan: ExecutionPlan,
@@ -1060,38 +1066,106 @@ export class OrchestratorEngine {
     ownerId: string,
     signal: AbortSignal,
   ): Promise<TaskResult[]> {
-    const reviewResults: TaskResult[] = []
+    const chainResults: TaskResult[] = []
     const codeTasksNeedingReview = plan.tasks.filter((task) => {
       if (task.taskType !== 'code' || !task.validation?.requiresReview) return false
       const result = results.find((r) => r.taskId === task.id)
       return result?.status === 'done' && result.output
     })
 
-    if (codeTasksNeedingReview.length === 0) return reviewResults
+    if (codeTasksNeedingReview.length === 0) return chainResults
 
-    // Find a reviewer agent (prefer one with 'review' in role/tags)
+    // Find verifier agent (prefer roleType='verifier')
+    const verifierAgent = plan.agents.find((a) => a.roleType === 'verifier')
+      ?? plan.agents.find((a) => a.capabilityTags.some((t) => ['verify', 'test', 'build'].includes(t.toLowerCase())))
+
+    // Find reviewer agent (prefer roleType='reviewer')
     const firstCodeTask = codeTasksNeedingReview[0]!
-    const reviewedBy = plan.agentRelations?.find((relation) =>
-      relation.sourceAgentId === firstCodeTask.agentId && relation.relationType === 'reviewed_by'
-    )
-    const reviewerAgent = (reviewedBy ? plan.agents.find((agent) => agent.id === reviewedBy.targetAgentId) : undefined)
-      ?? plan.agents.find((agent) => agent.roleType === 'reviewer')
+    const reviewerAgent = plan.agents.find((a) => a.roleType === 'reviewer')
       ?? plan.agents.find((a) => {
-      const text = [a.name, a.role, a.description, ...(a.capabilityTags ?? [])].filter(Boolean).join(' ').toLowerCase()
-      return text.includes('review') || text.includes('审查') || text.includes('test')
-    }) ?? plan.agents.find((a) => a.id !== firstCodeTask.agentId) ?? plan.agents[0]
-
-    if (!reviewerAgent) return reviewResults
+        const text = [a.name, a.role, a.description, ...(a.capabilityTags ?? [])].filter(Boolean).join(' ').toLowerCase()
+        return text.includes('review') || text.includes('审查')
+      }) ?? plan.agents.find((a) => a.id !== firstCodeTask.agentId) ?? plan.agents[0]
 
     for (const codeTask of codeTasksNeedingReview) {
       const codeResult = results.find((r) => r.taskId === codeTask.id)
       if (!codeResult) continue
 
+      // === Step 1: Verifier ===
+      if (verifierAgent) {
+        const verifyTaskId = `verify-${codeTask.id}`
+        if (!plan.tasks.some((t) => t.id === verifyTaskId)) {
+          const verifyTask: ExecutionTask = {
+            id: verifyTaskId,
+            title: `验证 ${codeTask.title}`,
+            description: `在沙箱中运行「${codeTask.title}」的测试、构建和类型检查命令，验证代码变更是否通过自动化检查。`,
+            agentId: verifierAgent.id,
+            dependencies: [codeTask.id],
+            taskType: 'test',
+            maxRetries: 1,
+          }
+
+          const verifySession = await ensureChildSession(workspaceId, plan.title, ownerId, verifierAgent, verifyTask.title)
+          childSessions.set(verifyTaskId, {
+            sessionId: verifySession.id,
+            workspaceId,
+            projectPath: childSessions.get(codeTask.id)?.projectPath,
+          })
+
+          await db.insert(workspaceTasks).values({
+            id: verifyTaskId,
+            workspaceId,
+            agentId: verifierAgent.id,
+            title: verifyTask.title,
+            description: verifyTask.description,
+            status: 'pending',
+            orderIdx: plan.tasks.length,
+            runId,
+            dependencies: [codeTask.id],
+            maxRetries: 1,
+          })
+
+          plan.tasks.push(verifyTask)
+
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: verifyTaskId,
+            agentId: verifierAgent.id,
+            type: 'task.queued',
+            severity: 'info',
+            payload: { title: verifyTask.title, reason: 'Auto-verify after code task', parentTaskId: codeTask.id },
+          })
+
+          const verifyResult = await this.executeTask(verifyTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, 0)
+          chainResults.push(verifyResult)
+
+          logger.info({ verifyTaskId, codeTaskId: codeTask.id, status: verifyResult.status }, 'Auto-verify task completed')
+
+          // If verification failed, skip reviewer and mark as blocked
+          if (verifyResult.status !== 'done') {
+            await emitRunEvent({
+              runId,
+              workspaceId,
+              groupSessionId,
+              taskId: codeTask.id,
+              agentId: codeTask.agentId,
+              type: 'task.failed',
+              severity: 'warning',
+              payload: { title: codeTask.title, reason: 'Verification failed, skipping review', verifyTaskId },
+            })
+            continue
+          }
+        }
+      }
+
+      // === Step 2: Reviewer (only if verifier passed or no verifier) ===
+      if (!reviewerAgent) continue
+
       const reviewTaskId = `review-${codeTask.id}`
-      // Skip if already exists
       if (plan.tasks.some((t) => t.id === reviewTaskId)) continue
 
-      // Create review task
       const reviewTask: ExecutionTask = {
         id: reviewTaskId,
         title: `审查 ${codeTask.title}`,
@@ -1102,7 +1176,6 @@ export class OrchestratorEngine {
         maxRetries: 1,
       }
 
-      // Create child session for review
       const reviewSession = await ensureChildSession(workspaceId, plan.title, ownerId, reviewerAgent, reviewTask.title)
       childSessions.set(reviewTaskId, {
         sessionId: reviewSession.id,
@@ -1110,7 +1183,6 @@ export class OrchestratorEngine {
         projectPath: childSessions.get(codeTask.id)?.projectPath,
       })
 
-      // Insert into DB
       await db.insert(workspaceTasks).values({
         id: reviewTaskId,
         workspaceId,
@@ -1137,14 +1209,13 @@ export class OrchestratorEngine {
         payload: { title: reviewTask.title, reason: 'Auto-review after code task', parentTaskId: codeTask.id },
       })
 
-      // Execute the review task
       const reviewResult = await this.executeTask(reviewTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, 0)
-      reviewResults.push(reviewResult)
+      chainResults.push(reviewResult)
 
       logger.info({ reviewTaskId, codeTaskId: codeTask.id, status: reviewResult.status }, 'Auto-review task completed')
     }
 
-    return reviewResults
+    return chainResults
   }
 
   private async synthesizeAndReport(

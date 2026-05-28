@@ -33,7 +33,7 @@ export interface ExecutionAgent {
   key: string
   name: string
   role: string
-  roleType?: 'clarifier' | 'architect' | 'researcher' | 'coder' | 'reviewer' | 'integrator' | 'custom'
+  roleType?: 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
   description?: string
   color?: string
   systemPrompt?: string
@@ -60,7 +60,7 @@ export interface ExecutionTask {
   description: string
   agentId: string
   dependencies: string[]
-  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'review' | 'synthesize'
+  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'verify' | 'review' | 'synthesize'
   parallelGroup?: string
   maxRetries: number
   retryCount?: number

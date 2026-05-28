@@ -518,6 +518,7 @@ export type AgentRoleType =
   | 'architect'
   | 'researcher'
   | 'coder'
+  | 'verifier'
   | 'reviewer'
   | 'integrator'
   | 'custom'

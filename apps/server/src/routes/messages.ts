@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { unlink, writeFile } from 'node:fs/promises'
-import { sendMessageSchema } from '@agenthub/shared'
+import { sendMessageSchema, ROLE_PRESETS } from '@agenthub/shared'
 import { logger } from '../lib/logger'
 import {
   db,
@@ -75,35 +75,13 @@ const updateMessageSchema = z.object({
   content: z.string().min(1).max(10000),
 })
 
-const PLAN_AGENTS = [
-  {
-    key: 'architect',
-    name: 'Architect',
-    role: '规划',
-    color: '#6366f1',
-    systemPrompt: '你是架构师。优先拆解目标、定义边界、给出里程碑与依赖关系。',
-  },
-  {
-    key: 'coder',
-    name: 'Coder',
-    role: '实现',
-    color: '#10b981',
-    systemPrompt: '你是实现者。负责代码实现、组件接入和小步验证。先理解上下文,再小步迭代。',
-  },
-  {
-    key: 'reviewer',
-    name: 'Reviewer',
-    role: '审查',
-    color: '#ef4444',
-    systemPrompt: '你是审查者。检查风险、交互漏洞和缺失的测试。直接、克制、不绕弯。',
-  },
-] as const
+// PLAN_AGENTS removed: fallback now uses unified ROLE_PRESETS from @agenthub/shared
 
 type PlanAgent = {
   key: string
   name: string
   role: string
-  roleType?: 'clarifier' | 'architect' | 'researcher' | 'coder' | 'reviewer' | 'integrator' | 'custom'
+  roleType?: 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
   color: string
   systemPrompt: string
   description?: string
@@ -123,7 +101,7 @@ type PlanTask = {
   description: string
   agentKey: string
   status?: 'pending' | 'running' | 'done' | 'failed'
-  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'review' | 'synthesize'
+  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'verify' | 'review' | 'synthesize'
   dependencies?: string[]
   parallelGroup?: string
   maxRetries?: number
@@ -911,14 +889,22 @@ function normalizeOrchestratorGoal(content: string) {
 }
 
 function fallbackPlanAgents(): PlanAgent[] {
-  return PLAN_AGENTS.map((agent) => ({
-    ...agent,
-    runtimeType: 'llm' as const,
-    roleType: agent.key === 'architect' ? 'architect' : agent.key === 'coder' ? 'coder' : 'reviewer',
-    capabilityTags: [],
-    toolPermissions: ['chat'],
-    sandboxPolicy: 'workspace-write' as const,
-  }))
+  const fallbackKeys: Array<Exclude<keyof typeof ROLE_PRESETS, 'custom'>> = ['architect', 'coder', 'reviewer']
+  return fallbackKeys.map((key) => {
+    const preset = ROLE_PRESETS[key]
+    return {
+      key,
+      name: preset.name,
+      role: preset.role,
+      color: preset.color,
+      systemPrompt: preset.systemPrompt,
+      runtimeType: preset.runtimeType,
+      roleType: key,
+      capabilityTags: preset.capabilityTags,
+      toolPermissions: preset.toolPermissions,
+      sandboxPolicy: preset.sandboxPolicy,
+    }
+  })
 }
 
 function planAgentFromWorkspaceAgent(agent: typeof workspaceAgents.$inferSelect): PlanAgent {
@@ -1020,15 +1006,15 @@ function buildDispatchPrompt(
 
 const ORCHESTRATOR_PROFILE: AgentRunProfile = {
   id: 'orchestrator',
-  name: 'Orchestrator',
-  role: 'Coordinator',
+  name: 'Supervisor',
+  role: '调度中枢',
   color: '#111827',
   systemPrompt:
-    'You are the AgentHub coordinator. Read the group chat context, clarify the goal, split work between agents, and keep the team aligned. Reply with concise next actions.',
+    '你是 AgentHub Supervisor（调度中枢）。你的职责是：1) 分析用户意图并判断是否需要多 Agent 协作；2) 如需协作，调用编排器生成执行计划；3) 监控任务执行状态并播报给用户；4) 禁止普通 Agent 在群里自由发言，所有 Agent 的发言必须由你调度触发。回复简洁，聚焦下一步动作。',
   runtimeType: 'llm',
-  capabilityTags: [],
-  toolPermissions: [],
-  sandboxPolicy: 'workspace-write',
+  capabilityTags: ['supervise', 'orchestrate', 'dispatch'],
+  toolPermissions: ['chat', 'workspace:read'],
+  sandboxPolicy: 'read-only',
   contextPolicy: 'workspace-aware',
   approvalRequired: true,
 }
@@ -1138,12 +1124,9 @@ async function runGroupReplies(workspaceId: string, sessionId: string, msg: Mess
   }
 
   if (!profiles.length) {
-    const autoAgents = agentList.filter((agent) => agent.autoInvoke)
-    if (autoAgents.length === 1) {
-      pushProfile(toAgentProfile(autoAgents[0]!, projectPath))
-    } else {
-      pushProfile(withWorkspacePath(ORCHESTRATOR_PROFILE, projectPath))
-    }
+    // Supervisor 模式：没有显式 @mention 时，默认由 Orchestrator 调度
+    // 不再允许单个 agent autoInvoke 抢话
+    pushProfile(withWorkspacePath(ORCHESTRATOR_PROFILE, projectPath))
   }
 
   const { runAgentReply } = await import('../services/agent-runner')
