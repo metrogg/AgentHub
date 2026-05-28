@@ -55,8 +55,13 @@ export class TaskExecutionService {
       }
     }
 
+    // 若未提供 projectPath 或 worktree 创建失败，降级为 read-only 避免 validateEnvelope 报错
+    const effectiveSandboxPolicy: AgentRunProfile['sandboxPolicy'] =
+      branchCtx?.worktreePath ? (profile.sandboxPolicy ?? 'workspace-write') : 'read-only'
+
     const executionProfile: AgentRunProfile = {
       ...profile,
+      sandboxPolicy: effectiveSandboxPolicy,
       projectPath: branchCtx?.worktreePath ?? profile.projectPath ?? null,
       originalProjectPath: profile.projectPath ?? null,
     }
@@ -68,7 +73,7 @@ export class TaskExecutionService {
       agentName: profile.name,
       projectPath: projectPath ?? null,
       worktreePath: branchCtx?.worktreePath ?? null,
-      sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
+      sandboxPolicy: effectiveSandboxPolicy,
       envAllowlist: DEFAULT_ENV_ALLOWLIST,
     }
 
