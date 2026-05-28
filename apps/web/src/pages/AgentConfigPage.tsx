@@ -28,6 +28,7 @@ import { api, type AgentConfigInput, type ModelCatalogItem, type WorkspaceAgent 
 import { useI18n } from '../lib/i18n'
 import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { cn } from '../lib/utils'
+import { useChatStore } from '../stores/chatStore'
 
 const emptyDraft: AgentConfigInput = {
   name: '',
@@ -61,6 +62,8 @@ export default function AgentConfigPage() {
   const [assistantReply, setAssistantReply] = useState('可以直接说：把当前 Agent 改成 Codex 实现者，关闭风险确认，标签加 frontend。')
   const [saved, setSaved] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const currentSession = useChatStore((state) => state.currentSession)
+  const selectSession = useChatStore((state) => state.selectSession)
 
   useEffect(() => {
     const library = loadAgentLibraryState()
@@ -155,7 +158,7 @@ export default function AgentConfigPage() {
     toastSaved()
   }
 
-  function saveDraft(event?: FormEvent) {
+  async function saveDraft(event?: FormEvent) {
     event?.preventDefault()
     const normalized = normalizeDraft(draft)
     if (!normalized.name || !normalized.role) return
@@ -167,6 +170,7 @@ export default function AgentConfigPage() {
       setSelectedId(current.id)
       setDraft(toAgentConfigInput(current))
     }
+    await syncCurrentWorkspaceAgent(normalized)
     toastSaved()
   }
 
@@ -185,7 +189,7 @@ export default function AgentConfigPage() {
     toastSaved()
   }
 
-  function applyAssistantPatch(event: FormEvent) {
+  async function applyAssistantPatch(event: FormEvent) {
     event.preventDefault()
     const text = assistantText.trim()
     if (!text) return
@@ -200,7 +204,26 @@ export default function AgentConfigPage() {
     setRelations((current) => saveLibrary(updated, current))
     const current = selectedId ? updated.find((agent) => agent.id === selectedId) : updated[0]
     if (current) setSelectedId(current.id)
+    await syncCurrentWorkspaceAgent(nextDraft)
     toastSaved()
+  }
+
+  async function syncCurrentWorkspaceAgent(nextDraft: AgentConfigInput) {
+    if (!currentSession?.workspaceId) return
+    try {
+      const full = await api.getWorkspace(currentSession.workspaceId)
+      const matched =
+        (currentSession.workspaceAgentId
+          ? full.agents.find((agent) => agent.id === currentSession.workspaceAgentId)
+          : null) ??
+        full.agents.find((agent) => agent.name === nextDraft.name && agent.role === nextDraft.role)
+      if (!matched) return
+
+      await api.updateWorkspaceAgent(full.workspace.id, matched.id, nextDraft)
+      if (currentSession.id) await selectSession(currentSession.id)
+    } catch {
+      // 本地模板保存成功即可；工作区实例可能已被删除。
+    }
   }
 
   function toastSaved() {

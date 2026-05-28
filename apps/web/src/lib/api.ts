@@ -112,6 +112,7 @@ export interface Session {
   type: 'direct' | 'group'
   workspaceId?: string | null
   workspaceAgentId?: string | null
+  metadata?: Record<string, unknown> | null
   createdAt: string
   updatedAt: string
 }

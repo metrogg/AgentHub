@@ -543,6 +543,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       memberType: 'agent',
       memberId: agent.id,
     })
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
+    await ensureAgentChildSession(session.workspaceId, workspace?.name ?? 'Agent Group', user.sub, agent)
     await db.update(workspaces).set({ updatedAt: new Date() }).where(eq(workspaces.id, session.workspaceId))
     const [updatedCard] = await db
       .update(messages)
@@ -719,18 +721,13 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .returning()
 
       // Orchestrator 任务：每个 task 独立 session，不复用
-      const [childSession] = await db
-        .insert(sessions)
-        .values({
-          title: agent ? `${parsed.title} / ${agent.name} / ${task.title.slice(0, 24)}` : `${parsed.title} / ${task.title.slice(0, 24)}`,
-          type: 'direct',
-          ownerId: user.sub,
-          workspaceId,
-          workspaceAgentId: agent?.id ?? null,
-          metadata: { orchestratorRunId: runId, orchestratorTaskId: task.id },
-        })
-        .returning()
-      if (!childSession) throw new HTTPException(500, { message: 'Failed to create task session' })
+      const childSession = await ensureAgentChildSession(
+        workspaceId,
+        workspaceRecord?.name ?? parsed.title,
+        user.sub,
+        agent ?? null,
+        task.title,
+      )
 
       if (workspaceTask) {
         await db
@@ -1782,7 +1779,7 @@ async function ensureAgentChildSession(
   taskTitle?: string
 ) {
   if (agent) {
-    const [existing] = await db
+    const existingSessions = await db
       .select()
       .from(sessions)
       .where(
@@ -1794,8 +1791,8 @@ async function ensureAgentChildSession(
         )
       )
       .orderBy(desc(sessions.updatedAt))
-      .limit(1)
-    if (existing) return existing
+    const fixedSession = existingSessions.find((session) => !isGeneratedTaskSession(session.metadata))
+    if (fixedSession) return fixedSession
   }
 
   const [created] = await db
@@ -1810,6 +1807,10 @@ async function ensureAgentChildSession(
     .returning()
   if (!created) throw new HTTPException(500, { message: 'Failed to create agent child session' })
   return created
+}
+
+function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {
+  return Boolean(metadata?.orchestratorTaskId || metadata?.orchestratorRunId || metadata?.hiddenFromSessionTree)
 }
 
 async function ensureWorkspaceAgentChildSessions(workspaceId: string, ownerId: string) {

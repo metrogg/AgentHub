@@ -11,11 +11,13 @@ export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string
   const childIds = new Set<string>()
 
   for (const session of sessions) {
-    if (session.type === 'direct' && session.workspaceId && session.workspaceAgentId) {
+    if (isFixedAgentChildSession(session)) {
+      const workspaceId = session.workspaceId
+      if (!workspaceId) continue
       childIds.add(session.id)
-      const children = childrenByWorkspace.get(session.workspaceId) ?? []
+      const children = childrenByWorkspace.get(workspaceId) ?? []
       children.push(session)
-      childrenByWorkspace.set(session.workspaceId, children)
+      childrenByWorkspace.set(workspaceId, children)
     }
   }
 
@@ -35,6 +37,13 @@ export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string
       return { parent, children, latestUpdatedAt }
     })
     .sort((a, b) => comparePinnedGroups(a, b, pinnedIds))
+}
+
+function isFixedAgentChildSession(session: Session) {
+  if (session.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
+  const metadata = session.metadata ?? {}
+  if (metadata.orchestratorTaskId || metadata.orchestratorRunId || metadata.hiddenFromSessionTree) return false
+  return true
 }
 
 export function filterSessionTree(
