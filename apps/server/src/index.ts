@@ -1,3 +1,5 @@
+import { writeFileSync, unlinkSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { app } from './app'
 import { env } from './env'
 import { logger } from './lib/logger'
@@ -78,3 +80,24 @@ if (!server!) {
 }
 
 logger.info(`🚀 AgentHub server listening on http://0.0.0.0:${server.port}`)
+
+// Write actual port to file so Vite dev proxy can read it
+const portFile = resolve(import.meta.dir, '../../../.agenthub-port')
+try {
+  writeFileSync(portFile, String(server.port), 'utf8')
+} catch {
+  // Best-effort; non-critical
+}
+
+// Ensure clean shutdown on Ctrl+C / SIGTERM / parent process exit
+function shutdown() {
+  try { unlinkSync(portFile) } catch {}
+  try { server.stop() } catch {}
+  process.exit(0)
+}
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
+// On Windows, detect parent process death via stdin close
+if (process.stdin) {
+  process.stdin.on('end', shutdown)
+}

@@ -33,10 +33,10 @@ interface OpencodeModelItem {
 }
 
 const probes: ToolProbe[] = [
-  { id: 'codex', command: 'codex' },
-  { id: 'claude-code', command: 'claude' },
-  { id: 'opencode', command: 'opencode' },
-  { id: 'gemini', command: 'gemini' },
+  { id: 'codex', command: 'codex', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
+  { id: 'claude-code', command: 'claude', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
+  { id: 'opencode', command: 'opencode', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
+  { id: 'gemini', command: 'gemini', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
 ]
 
 const agentAdapters = [
@@ -44,29 +44,29 @@ const agentAdapters = [
     id: 'codex',
     name: 'Codex CLI',
     command: 'codex',
-    envKey: 'OPENAI_API_KEY',
-    docsHint: 'Codex 会使用本机安装的 CLI，并在当前项目目录中执行代码任务。',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint: 'Codex 会使用 Agent 选择的模型档案生成临时运行配置，并在当前项目目录中执行代码任务。',
   },
   {
     id: 'claude-code',
     name: 'Claude Code',
     command: 'claude',
-    envKey: 'ANTHROPIC_API_KEY',
-    docsHint: 'Claude Code 会使用本机 Anthropic 凭据，并优先读取项目上下文。',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint: 'Claude Code 会使用 Agent 选择的模型档案注入 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL。',
   },
   {
     id: 'opencode',
     name: 'OpenCode',
     command: 'opencode',
-    envKey: 'DEEPSEEK_API_KEY',
-    docsHint: 'OpenCode 会使用本机配置；如果 Agent 绑定了 provider/model，会通过 --model 传给 OpenCode。',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint: 'OpenCode 会使用 Agent 选择的模型档案生成临时 opencode 配置，并通过 --model 传入。',
   },
   {
     id: 'gemini',
     name: 'Gemini CLI',
     command: 'gemini',
-    envKey: 'GEMINI_API_KEY',
-    docsHint: 'Gemini CLI 会使用本机 Google Gemini 凭据，并在当前项目目录中执行代码任务。',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint: 'Gemini CLI 会使用 Agent 选择的模型档案注入 GEMINI_API_KEY。',
   },
 ] as const
 
@@ -501,6 +501,19 @@ function uniqueOpencodeModels(models: OpencodeModelItem[]) {
   })
 }
 
+// CLI 探测结果缓存（避免短时间内重复 fork 子进程）
+interface ProbeCacheEntry {
+  result: Awaited<ReturnType<typeof probeToolDirectImpl>>
+  timestamp: number
+}
+
+const probeCache = new Map<string, ProbeCacheEntry>()
+const PROBE_CACHE_TTL_MS = 15_000
+
+function getProbeCacheKey(probe: ToolProbe): string {
+  return `${probe.id}:${probe.command}:${probe.apiKeyEnv ?? ''}`
+}
+
 async function probeTools(items: ToolProbe[]) {
   const results = []
   for (const item of items) {
@@ -526,16 +539,27 @@ async function probeTool(probe: ToolProbe) {
   return probeToolDirect(probe)
 }
 
-async function probeToolDirect(probe: ToolProbe) {
-  console.log(`[probe] start ${probe.id}: command=${probe.command}`)
+async function probeToolDirect(probe: ToolProbe, { skipCache = false } = {}) {
+  const cacheKey = getProbeCacheKey(probe)
+  if (!skipCache) {
+    const cached = probeCache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < PROBE_CACHE_TTL_MS) {
+      return cached.result
+    }
+  }
+
+  const result = await probeToolDirectImpl(probe)
+  probeCache.set(cacheKey, { result, timestamp: Date.now() })
+  return result
+}
+
+async function probeToolDirectImpl(probe: ToolProbe) {
   const version = await runVersionProbe(probe.command)
-  console.log(`[probe] version ${probe.id}: ${version ?? 'null'}`)
   const configEnv = configEnvName(probe)
   const configured = await isDirectToolConfigured(probe, configEnv)
-  console.log(`[probe] configured ${probe.id}: ${configured}`)
   const installed = Boolean(version)
   const reachable = await isCommandReachable(probe.command)
-  const result = {
+  return {
     id: probe.id,
     command: probe.command,
     installed,
@@ -545,12 +569,11 @@ async function probeToolDirect(probe: ToolProbe) {
     configMessage: configMessage({ configEnv, configured, installed, runtime: '本机环境', toolId: probe.id }),
     diagnostics: `reachable=${reachable} version=${version ?? 'null'} env=${configEnv} envValue=${readEnv(configEnv) ? 'set' : 'unset'}`,
   }
-  console.log(`[probe] result ${probe.id}: installed=${installed} configured=${configured} diagnostics=${result.diagnostics}`)
-  return result
 }
 
 async function installAllCliTools() {
-  const before = await Promise.all(probes.map(probeToolDirect))
+  probeCache.clear()
+  const before = await Promise.all(probes.map((p) => probeToolDirect(p, { skipCache: true })))
   const missing = before.filter((item) => !item.installed)
   const skipped = before.filter((item) => item.installed)
   const packages = missing.map((item) => cliPackages[item.id]).filter((pkg): pkg is string => Boolean(pkg))
@@ -582,7 +605,7 @@ async function installAllCliTools() {
   const install = await runFixedCommand(['bun', 'install', '-g', ...packages], {
     timeoutMs: 10 * 60 * 1000,
   })
-  const items = await Promise.all(probes.map(probeToolDirect))
+  const items = await Promise.all(probes.map((p) => probeToolDirect(p, { skipCache: true })))
   const ok = install.code === 0 && items.every((item) => item.installed)
   const configured = items.every((item) => item.configured)
   return {
@@ -844,10 +867,7 @@ function isSafeEnvName(name?: string) {
 }
 
 function defaultApiKeyEnv(id: string) {
-  if (id === 'claude-code') return 'ANTHROPIC_API_KEY'
-  if (id === 'opencode') return 'DEEPSEEK_API_KEY'
-  if (id === 'gemini') return 'GEMINI_API_KEY'
-  return 'OPENAI_API_KEY'
+  return 'AGENTHUB_MODEL_API_KEY'
 }
 
 function configEnvName(probe: ToolProbe) {
@@ -861,46 +881,55 @@ function cleanEnvValue(value?: string) {
 
 async function isDirectToolConfigured(probe: ToolProbe, configEnv: string) {
   if (cleanEnvValue(readEnv(configEnv))) return true
-  if (probe.id === 'codex' && readCodexConfig().exists) return true
-  if (probe.id === 'opencode') {
-    const opencode = await getOpencodeModels()
-    return Boolean(opencode.defaultModel || opencode.models.length > 0)
-  }
-
-  // 若主模型配置中已存在对应 provider 的 API Key，也视为已配置
-  try {
-    const llmStatus = await getLlmRuntimeStatus()
-    if (llmStatus.apiKeyConfigured) {
-      if (probe.id === 'claude-code') {
-        if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com')) return true
-        if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
-      }
-      if (probe.id === 'codex') {
-        if (llmStatus.provider === 'openai' || llmStatus.baseUrl?.includes('openai.com')) return true
-        if (llmStatus.apiKeySource === 'OPENAI_API_KEY') return true
-      }
-      if (probe.id === 'gemini') {
-        if (llmStatus.provider === 'gemini' || llmStatus.provider === 'google') return true
-        if (llmStatus.apiKeySource === 'GEMINI_API_KEY') return true
-      }
-      // OpenCode 支持任意 OpenAI-compatible provider；只要主模型有 key 即可视为已配置
-      if (probe.id === 'opencode') return true
-    }
-  } catch (err: any) {
-    console.error(`[isDirectToolConfigured] getLlmRuntimeStatus failed for ${probe.id}:`, err?.message || String(err))
-  }
-
-  if (probe.id !== 'codex' || !env.ENABLE_CODEX_CHATGPT_AUTH) return false
-
-  try {
-    return (await getCodexAuthStatus()).loggedIn
-  } catch {
-    return false
-  }
+  // Coding Tools 只负责 CLI 本身和工具原生参数。模型、Base URL、API Key 在模型管理中维护，
+  // 执行 Agent 时由 code-agent-adapter 按 Agent 选择动态注入。
+  return true
 }
 
 function readEnv(key: string) {
   return rootEnv()[key] ?? Bun.env[key]
+}
+
+interface CatalogModelEntry {
+  id: string
+  provider?: string
+  modelId?: string
+  apiEndpoint?: string
+  anthropicEndpoint?: string
+  apiKey?: string
+  apiKeyEnv?: string
+}
+
+async function getCatalogModels(): Promise<CatalogModelEntry[]> {
+  const { db, settings } = await import('@agenthub/db')
+  const allRows = await db.select().from(settings)
+  const map = Object.fromEntries(allRows.map((row: any) => [row.key, row.value]))
+  const raw = map.MODEL_CATALOG
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function isToolProviderMatch(toolId: string, provider: string, apiEndpoint?: string, anthropicEndpoint?: string): boolean {
+  const p = provider.toLowerCase()
+  const baseUrl = (apiEndpoint || '').toLowerCase()
+  const anthropicUrl = (anthropicEndpoint || '').toLowerCase()
+
+  if (toolId === 'claude-code') {
+    return p === 'anthropic' || p === 'claude' || baseUrl.includes('anthropic.com') || anthropicUrl.includes('anthropic.com') || Boolean(anthropicEndpoint)
+  }
+  if (toolId === 'codex') {
+    return p === 'openai' || baseUrl.includes('openai.com')
+  }
+  if (toolId === 'gemini') {
+    return p === 'gemini' || p === 'google'
+  }
+  // OpenCode: any provider is compatible
+  return true
 }
 
 function rootEnv() {
