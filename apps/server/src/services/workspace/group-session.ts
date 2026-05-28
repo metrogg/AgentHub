@@ -21,12 +21,28 @@ async function findGroupSession(workspaceId: string) {
   return session ?? null
 }
 
-async function syncGroupMembers(sessionId: string, workspaceId: string, ownerId: string) {
+async function syncGroupMembers(sessionId: string, workspaceId: string, ownerId: string, selectedAgentIds?: string[]) {
+  // 如果前端传了选中的 agentIds，清理工作区中未选中的旧 agents，只保留选中的
+  if (selectedAgentIds && selectedAgentIds.length > 0) {
+    const allAgents = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.workspaceId, workspaceId))
+
+    const toDelete = allAgents.filter((a) => !selectedAgentIds.includes(a.id))
+    if (toDelete.length > 0) {
+      for (const agent of toDelete) {
+        await db.delete(workspaceAgents).where(eq(workspaceAgents.id, agent.id))
+      }
+    }
+  }
+
   const agents = await db
     .select()
     .from(workspaceAgents)
     .where(eq(workspaceAgents.workspaceId, workspaceId))
     .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+
   const existing = await db.select().from(sessionMembers).where(eq(sessionMembers.sessionId, sessionId))
   const keys = new Set(existing.map((member) => `${member.memberType}:${member.memberId}`))
   const wanted = [
@@ -49,7 +65,7 @@ async function syncGroupMembers(sessionId: string, workspaceId: string, ownerId:
   }
 }
 
-export async function ensureGroupSession(workspaceId: string, ownerId: string) {
+export async function ensureGroupSession(workspaceId: string, ownerId: string, selectedAgentIds?: string[]) {
   const ws = await ensureWorkspace(workspaceId, ownerId)
   let session = await findGroupSession(workspaceId)
   if (!session) {
@@ -66,6 +82,6 @@ export async function ensureGroupSession(workspaceId: string, ownerId: string) {
     if (!created) throw new HTTPException(500, { message: 'Failed to create group session' })
     session = created
   }
-  await syncGroupMembers(session.id, workspaceId, ownerId)
+  await syncGroupMembers(session.id, workspaceId, ownerId, selectedAgentIds)
   return session
 }

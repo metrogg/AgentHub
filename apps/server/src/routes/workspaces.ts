@@ -207,7 +207,8 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
   // Group session
   .post('/:id/group-session', async (c) => {
     const user = c.get('user')
-    const session = await ensureGroupSession(c.req.param('id'), user.sub)
+    const body = await c.req.json().catch(() => ({}))
+    const session = await ensureGroupSession(c.req.param('id'), user.sub, body?.agentIds)
     return c.json({ session })
   })
 

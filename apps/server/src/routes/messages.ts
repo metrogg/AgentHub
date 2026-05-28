@@ -26,6 +26,7 @@ import {
 import { inArray } from 'drizzle-orm'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
+import { broadcastSessionEvent } from '../services/agent-runner'
 import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
 import { Planner } from '../services/orchestrator/planner'
 import {
@@ -1005,26 +1006,6 @@ function buildDispatchPrompt(
   ].join('')
 }
 
-const ORCHESTRATOR_PROFILE: AgentRunProfile = {
-  id: 'orchestrator',
-  name: 'Supervisor',
-  role: '调度中枢',
-  color: '#111827',
-  systemPrompt:
-    '你是 AgentHub Supervisor（调度中枢）。你的职责是：1) 分析用户意图并判断是否需要多 Agent 协作；2) 如需协作，调用编排器生成执行计划；3) 监控任务执行状态并播报给用户；4) 禁止普通 Agent 在群里自由发言，所有 Agent 的发言必须由你调度触发。回复简洁，聚焦下一步动作。',
-  runtimeType: 'llm',
-  capabilityTags: ['supervise', 'orchestrate', 'dispatch'],
-  toolPermissions: ['chat', 'workspace:read'],
-  sandboxPolicy: 'read-only',
-  contextPolicy: 'workspace-aware',
-  approvalRequired: true,
-}
-
-function withWorkspacePath(profile: AgentRunProfile, projectPath?: string | null): AgentRunProfile {
-  const trimmed = projectPath?.trim()
-  return trimmed ? { ...profile, projectPath: trimmed } : profile
-}
-
 function toAgentProfile(agent: typeof workspaceAgents.$inferSelect, projectPath?: string | null): AgentRunProfile {
   return {
     id: agent.id,
@@ -1111,16 +1092,18 @@ async function runGroupReplies(workspaceId: string, sessionId: string, msg: Mess
     .where(eq(workspaceAgents.workspaceId, workspaceId))
     .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
 
-  const profiles: AgentRunProfile[] = []
+  const otherProfiles: AgentRunProfile[] = []
   const seen = new Set<string>()
   const pushProfile = (profile: AgentRunProfile) => {
     if (seen.has(profile.id)) return
     seen.add(profile.id)
-    profiles.push(profile)
+    otherProfiles.push(profile)
   }
 
+  // 判断是否需要 Orchestrator 调度
+  let needOrchestrator = false
   if (hasMention(content, ['orchestrator', 'coordinator', 'agenthub', '协调器', '调度'])) {
-    pushProfile(withWorkspacePath(ORCHESTRATOR_PROFILE, projectPath))
+    needOrchestrator = true
   }
 
   for (const agent of agentList) {
@@ -1131,14 +1114,46 @@ async function runGroupReplies(workspaceId: string, sessionId: string, msg: Mess
     }
   }
 
-  if (!profiles.length) {
-    // Supervisor 模式：没有显式 @mention 时，默认由 Orchestrator 调度
-    // 不再允许单个 agent autoInvoke 抢话
-    pushProfile(withWorkspacePath(ORCHESTRATOR_PROFILE, projectPath))
+  if (!needOrchestrator && otherProfiles.length === 0) {
+    // 没有显式 @mention 时，默认由 Orchestrator 调度
+    needOrchestrator = true
   }
 
   const { runAgentReply } = await import('../services/agent-runner')
-  await Promise.allSettled(profiles.map((profile) => runAgentReply(sessionId, msg, profile)))
+
+  if (needOrchestrator) {
+    try {
+      const plan = await buildDynamicOrchestratorPlan(content, agentList, workspaceId)
+      const [card] = await db
+        .insert(messages)
+        .values({
+          sessionId,
+          senderId: 'orchestrator',
+          senderType: 'agent',
+          type: 'task_card',
+          content: plan.summary,
+          metadata: { plan: { ...plan, messageId: '' } },
+        })
+        .returning()
+      if (card) {
+        const planWithId = { ...plan, messageId: card.id }
+        await db
+          .update(messages)
+          .set({ metadata: { plan: planWithId } })
+          .where(eq(messages.id, card.id))
+        broadcastSessionEvent(sessionId, {
+          type: 'message:completed',
+          payload: { sessionId, message: { ...card, metadata: { plan: planWithId } } },
+        })
+      }
+    } catch (err: any) {
+      logger.error({ err: err?.message, sessionId }, 'Orchestrator plan generation failed in group reply')
+    }
+  }
+
+  if (otherProfiles.length) {
+    await Promise.allSettled(otherProfiles.map((profile) => runAgentReply(sessionId, msg, profile)))
+  }
 }
 
 async function createWorkspaceGroupSession(
