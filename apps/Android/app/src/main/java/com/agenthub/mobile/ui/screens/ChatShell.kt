@@ -560,8 +560,8 @@ private fun MobileHomeContent(
         Spacer(modifier = Modifier.height(96.dp))
         SuggestionCard(
             title = "创建 coder 代理",
-            subtitle = "帮我单开一个跳跃小游戏",
-            onClick = { onSuggestion("创建 coder 代理，帮我单开一个跳跃小游戏") },
+            subtitle = "帮我开发一个网页跳跃小游戏",
+            onClick = { onSuggestion("创建 coder 代理，帮我开发一个网页跳跃小游戏") },
         )
         Spacer(modifier = Modifier.height(12.dp))
         SuggestionCard(

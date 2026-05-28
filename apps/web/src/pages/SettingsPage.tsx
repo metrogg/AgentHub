@@ -31,7 +31,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, type Message, type Session, type SettingsGeneralInfo } from '../lib/api'
+import { api, type Message, type MobileConnectivityStatus, type Session, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
 import { getDesktopInfo, isDesktopApp, openPath, pickWorkspaceFolder } from '../lib/native'
@@ -814,6 +814,21 @@ function MobilePairingPanel() {
   const [pairingCode, setPairingCode] = useState('')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
+  const [connectivity, setConnectivity] = useState<MobileConnectivityStatus | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [firewallLoading, setFirewallLoading] = useState(false)
+
+  useEffect(() => {
+    void refreshConnectivity(true)
+  }, [])
+
+  useEffect(() => {
+    if (!qrDataUrl) return
+    const timer = window.setInterval(() => {
+      void refreshConnectivity(true)
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [qrDataUrl])
 
   async function createPairingCode() {
     if (loading) return
@@ -837,12 +852,45 @@ function MobilePairingPanel() {
       setExpiresAt(result.expiresAt)
       setPairingCode(result.pairingCode)
       setMessage(t('请用 Android 客户端点击“扫码连接”扫描二维码'))
+      await refreshConnectivity(true)
     } catch (error: any) {
       setMessage(error?.message || t('生成二维码失败'))
     } finally {
       setLoading(false)
     }
   }
+
+  async function refreshConnectivity(silent = false) {
+    if (!silent) setDiagnosticsLoading(true)
+    try {
+      const result = await api.getMobileConnectivity()
+      setConnectivity(result)
+      if (!silent) setMessage(result.message)
+    } catch (error: any) {
+      if (!silent) setMessage(error?.message || t('读取移动端连接诊断失败'))
+    } finally {
+      if (!silent) setDiagnosticsLoading(false)
+    }
+  }
+
+  async function openFirewall() {
+    if (firewallLoading) return
+    setFirewallLoading(true)
+    try {
+      const result = await api.openMobileFirewall()
+      setConnectivity(result.diagnostics)
+      setMessage(result.message)
+    } catch (error: any) {
+      setMessage(error?.message || t('开放防火墙端口失败'))
+      await refreshConnectivity(true)
+    } finally {
+      setFirewallLoading(false)
+    }
+  }
+
+  const latestEvent = connectivity?.recentEvents[0]
+  const firewallPort = connectivity?.port ?? 8000
+  const firewallCommand = `New-NetFirewallRule -DisplayName "AgentHub Server ${firewallPort}" -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${firewallPort} -Profile Any`
 
   return (
     <InsetPanel>
@@ -862,9 +910,17 @@ function MobilePairingPanel() {
               <Smartphone className="h-4 w-4" />
               {t('局域网移动端配对')}
             </div>
-            <button type="button" className="settings-soft-button" disabled={loading} onClick={() => void createPairingCode()}>
-              {loading ? t('生成中') : qrDataUrl ? t('刷新二维码') : t('生成二维码')}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="settings-soft-button" disabled={diagnosticsLoading} onClick={() => void refreshConnectivity()}>
+                {diagnosticsLoading ? t('诊断中') : t('连接诊断')}
+              </button>
+              <button type="button" className="settings-soft-button" disabled={firewallLoading} onClick={() => void openFirewall()}>
+                {firewallLoading ? t('修复中') : t('开放端口')}
+              </button>
+              <button type="button" className="settings-soft-button" disabled={loading} onClick={() => void createPairingCode()}>
+                {loading ? t('生成中') : qrDataUrl ? t('刷新二维码') : t('生成二维码')}
+              </button>
+            </div>
           </div>
           <InfoRow label="Server" value={baseUrl || t('等待生成')} />
           {baseUrls.length > 1 && (
@@ -880,10 +936,60 @@ function MobilePairingPanel() {
           <InfoRow label="Web" value={webUrl || t('等待生成')} />
           <InfoRow label="配对码" value={pairingCode || t('等待生成')} />
           <InfoRow label="过期时间" value={expiresAt ? new Date(expiresAt).toLocaleString() : t('等待生成')} />
+          {connectivity && (
+            <div className="grid gap-2 rounded-lg bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusPill ok={connectivity.firewall.allowed} label={connectivity.firewall.allowed ? '防火墙已放行' : '防火墙未放行'} />
+                <StatusPill
+                  ok={!connectivity.networkProfiles.some((item) => item.networkCategory === 'Public')}
+                  label={connectivity.networkProfiles.some((item) => item.networkCategory === 'Public') ? 'Public 网络' : '专用网络'}
+                />
+                <StatusPill ok={Boolean(latestEvent?.type === 'pairing.confirmed')} label={latestEvent?.message || '等待手机连接'} />
+              </div>
+              <div className="break-words leading-5">{connectivity.message}</div>
+              {connectivity.networkProfiles.length > 0 && (
+                <div className="space-y-1">
+                  {connectivity.networkProfiles.map((profile) => (
+                    <div key={`${profile.interfaceAlias}:${profile.name}`} className="break-all font-mono text-[11px] text-neutral-500">
+                      {profile.interfaceAlias} / {profile.networkCategory} / {profile.ipv4Connectivity}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {connectivity.recentEvents.length > 0 && (
+                <div className="space-y-1 border-t border-neutral-200 pt-2">
+                  {connectivity.recentEvents.slice(0, 3).map((event) => (
+                    <div key={`${event.at}:${event.type}`} className="break-words text-[11px] text-neutral-500">
+                      {new Date(event.at).toLocaleTimeString()} · {event.message}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {message && <Notice tone={qrDataUrl ? 'neutral' : 'warning'}>{message}</Notice>}
           <Notice>
-            {t('手机和电脑需要在同一 Wi-Fi 或局域网内。若扫码后无法连接，请确认 Windows 防火墙已放行当前 Server 地址对应端口。')}
+            {t('手机连接失败且这里没有出现“收到移动端配对请求”时，说明请求没有到达 AgentHub，通常是 Windows 防火墙或热点网络隔离拦截。')}
           </Notice>
+          <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="text-xs font-medium text-neutral-500">管理员 PowerShell 修复命令</div>
+              <button
+                type="button"
+                className="settings-soft-button h-7 px-2 text-xs"
+                onClick={() => {
+                  void navigator.clipboard.writeText(firewallCommand)
+                  setMessage('已复制防火墙修复命令')
+                }}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                复制
+              </button>
+            </div>
+            <code className="block break-all rounded-md bg-neutral-50 px-3 py-2 font-mono text-xs leading-5 text-neutral-700">
+              {firewallCommand}
+            </code>
+          </div>
         </div>
       </div>
     </InsetPanel>

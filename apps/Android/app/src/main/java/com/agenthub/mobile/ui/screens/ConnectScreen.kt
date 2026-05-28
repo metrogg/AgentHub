@@ -54,7 +54,7 @@ fun ConnectScreen(
     onConnect: (baseUrl: String, authToken: String?) -> Unit,
     onScanPairingQr: (String) -> Unit,
 ) {
-    var baseUrl by remember { mutableStateOf("http://10.0.2.2:8000") }
+    var baseUrl by remember { mutableStateOf("") }
     var token by remember { mutableStateOf("") }
     val qrLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         val contents = result.contents
@@ -104,6 +104,7 @@ fun ConnectScreen(
                 onValueChange = { baseUrl = it },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("电脑端 Server 地址") },
+                placeholder = { Text("例如 http://电脑热点IP:8000") },
                 singleLine = true,
             )
             OutlinedTextField(
@@ -162,7 +163,7 @@ fun ConnectScreen(
         }
 
         Text(
-            text = "模拟器默认使用 10.0.2.2 访问宿主机；真机请填写电脑局域网 IP。",
+            text = "电脑连接手机热点时，请填写电脑在热点中获得的 IP；10.0.2.2 只适用于 Android 模拟器。",
             modifier = Modifier.padding(top = 16.dp),
             color = MutedText,
             fontSize = 12.sp,

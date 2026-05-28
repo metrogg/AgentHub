@@ -11,14 +11,19 @@ const webDistTarget = resolve(resources, 'web-dist')
 const serverExeSource = resolve(root, 'apps/server/dist/agenthub-server.exe')
 const serverExeTarget = resolve(resources, 'binaries/agenthub-server.exe')
 const powershellRoot = toPowerShellSingleQuotedString(root)
+const skipWebBuild = process.argv.includes('--skip-web-build')
 
 await stopStaleDevProcesses()
-await run('bun', ['--filter', '@agenthub/web', 'build'])
+if (!skipWebBuild) {
+  await run('bun', ['--filter', '@agenthub/web', 'build'])
+}
 await run('bun', ['--filter', '@agenthub/server', 'build:exe'])
 
-await rm(webDistTarget, { recursive: true, force: true })
 await mkdir(resolve(resources, 'binaries'), { recursive: true })
-await cp(webDistSource, webDistTarget, { recursive: true })
+if (!skipWebBuild) {
+  await rm(webDistTarget, { recursive: true, force: true })
+  await cp(webDistSource, webDistTarget, { recursive: true })
+}
 await copyFile(serverExeSource, serverExeTarget)
 
 async function stopStaleDevProcesses() {
@@ -82,10 +87,36 @@ foreach ($target in $targets) {
 
 function run(command, args) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+    let outputTail = ''
+    const rememberOutput = (chunk) => {
+      outputTail += chunk.toString()
+      if (outputTail.length > 20000) outputTail = outputTail.slice(-20000)
+    }
+    const child = spawn(command, args, {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
+    })
+    child.stdout?.on('data', (chunk) => {
+      rememberOutput(chunk)
+      process.stdout.write(chunk)
+    })
+    child.stderr?.on('data', (chunk) => {
+      rememberOutput(chunk)
+      process.stderr.write(chunk)
+    })
+    child.on('error', (error) => {
+      reject(error)
+    })
     child.on('exit', (code) => {
       if (code === 0) resolvePromise()
-      else reject(new Error(`${command} ${args.join(' ')} exited with ${code}`))
+      else {
+        const tail = outputTail.trim()
+        if (tail) {
+          console.error(`[prepare-sidecar] ${command} ${args.join(' ')} failed. Last output:\n${tail}`)
+        }
+        reject(new Error(`${command} ${args.join(' ')} exited with ${code}`))
+      }
     })
   })
 }

@@ -72,6 +72,11 @@ class AgentHubRepository(
     suspend fun confirmPairing(payload: PairingPayload): PairConfirmResponse {
         _uiState.update { it.copy(connecting = true, error = null) }
         val candidates = pairingBaseUrlCandidates(payload)
+        if (candidates.isEmpty()) {
+            val message = "二维码里没有可供真机访问的电脑端地址，请在电脑端重新生成二维码。"
+            _uiState.update { it.copy(connecting = false, error = message) }
+            throw IllegalStateException(message)
+        }
         var lastError: Throwable? = null
         for (baseUrl in candidates) {
             val result = runCatching { client.confirmPairing(payload, baseUrl = baseUrl) }
@@ -216,6 +221,7 @@ class AgentHubRepository(
         return (listOf(payload.baseUrl) + payload.baseUrls)
             .map { it.trim().trimEnd('/') }
             .filter { it.startsWith("http://") || it.startsWith("https://") }
+            .filterNot { it.startsWith("http://10.0.2.2") || it.startsWith("https://10.0.2.2") }
             .distinct()
     }
 }
