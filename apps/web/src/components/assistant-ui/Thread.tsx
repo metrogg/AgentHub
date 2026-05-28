@@ -42,7 +42,6 @@ import {
   ExternalLink,
   File,
   FileText,
-  Minus,
   FolderOpen,
   FolderPlus,
   FolderX,
@@ -869,106 +868,6 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
             >
               {busyAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : '解散群聊'}
             </button>
-
-            <div className="hidden rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium text-neutral-500">群聊名称</span>
-                <input
-                  value={titleDraft}
-                  onChange={(event) => setTitleDraft(event.target.value)}
-                  onBlur={() => void saveGroupTitle()}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter') return
-                    event.preventDefault()
-                    event.currentTarget.blur()
-                  }}
-                  disabled={busyAction === 'rename'}
-                  className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-950 outline-none transition focus:border-neutral-300 disabled:opacity-60"
-                />
-              </label>
-              <div className="relative mt-3 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setInviteOpen((value) => !value)}
-                  disabled={!workspace || busyAction === 'invite'}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-50"
-                >
-                  <Plus className="h-4 w-4" />
-                  邀请
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void deleteGroupChat()}
-                  disabled={busyAction === 'delete'}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-red-100 bg-red-50 text-sm font-medium text-red-600 transition hover:bg-red-100 disabled:opacity-50"
-                >
-                  {busyAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Minus className="h-4 w-4" />}
-                  删除
-                </button>
-                {inviteOpen && (
-                  <div className="absolute left-0 top-11 z-10 w-full rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
-                    {inviteCandidates.map((agent) => (
-                      <button
-                        key={agent.id}
-                        type="button"
-                        onClick={() => void inviteAgent(agent)}
-                        disabled={busyAction === 'invite'}
-                        className="flex min-h-10 w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition hover:bg-neutral-50 disabled:opacity-60"
-                      >
-                        <span
-                          className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-semibold text-white"
-                          style={{ background: agent.color ?? '#111827' }}
-                        >
-                          {agent.name.slice(0, 1).toUpperCase()}
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium text-neutral-900">{agent.name}</span>
-                          <span className="block truncate text-xs text-neutral-500">{agent.role}</span>
-                        </span>
-                      </button>
-                    ))}
-                    {!inviteCandidates.length && (
-                      <div className="px-3 py-4 text-center text-xs text-neutral-400">没有可邀请的 Agent</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-5">
-              <div className="mb-2 flex items-center justify-between px-1">
-                <div className="text-xs font-medium uppercase tracking-wide text-neutral-400">Agent 工作监控</div>
-                <div className="text-xs text-neutral-400">{monitorRows.length} 个 Agent</div>
-              </div>
-              <div className="space-y-2">
-                {monitorRows.map((row) => (
-                  <AgentMonitorRow key={row.id} row={row} />
-                ))}
-              </div>
-            </div>
-
-            {workspace?.projectPath && (
-              <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-                <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
-                <div className="min-w-0">
-                  <div className="font-medium text-neutral-900">工作区</div>
-                  <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
-                </div>
-              </div>
-            )}
-
-            {workspace && (
-              <button
-                type="button"
-                onClick={() => {
-                  onClose()
-                  navigate('/agent-config')
-                }}
-                className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
-              >
-                管理 Agent
-              </button>
-            )}
           </div>
         </div>
       </aside>
@@ -985,46 +884,6 @@ type AgentMonitorRowData = {
   active: boolean
   bubble: string
 }
-
-const AgentMonitorRow: FC<{ row: AgentMonitorRowData }> = ({ row }) => (
-  <div className="group relative flex items-start gap-3 rounded-2xl px-2 py-2 transition hover:bg-white">
-    {row.bubble && (
-      <div
-        className={cn(
-          'absolute right-[3.25rem] top-1 max-w-[11rem] rounded-2xl px-3 py-1.5 text-xs leading-5 shadow-sm transition',
-          row.active
-            ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100'
-            : 'bg-white text-neutral-500 ring-1 ring-neutral-100',
-        )}
-      >
-        {row.bubble}
-      </div>
-    )}
-    <div
-      className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
-      style={{ background: row.color ?? '#111827' }}
-    >
-      {row.name.slice(0, 1).toUpperCase()}
-    </div>
-    <div className="min-w-0 flex-1 pr-16">
-      <div className="truncate text-sm font-medium text-neutral-950">{row.name}</div>
-      <div className="truncate text-xs text-neutral-500">{row.role}</div>
-    </div>
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation()
-        insertComposerMention(row.mentionName)
-      }}
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 opacity-70 transition hover:bg-neutral-100 hover:text-blue-600 group-hover:opacity-100"
-      title={`提及 ${row.name}`}
-      aria-label={`提及 ${row.name}`}
-    >
-      <AtSign className="h-3.5 w-3.5" />
-    </button>
-    <span className={cn('mt-3 h-2 w-2 shrink-0 rounded-full', row.active ? 'bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.14)]' : 'bg-neutral-300')} />
-  </div>
-)
 
 function isStreamingForAgent(
   streaming: { id: string; content: string; agentId?: string; agentName?: string } | null,

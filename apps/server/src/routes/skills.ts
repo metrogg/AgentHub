@@ -16,7 +16,7 @@ const projectRoot = resolve(routeDir, '../../../..')
 const installedSkillsRoot = env.AGENTHUB_SKILLS_ROOT?.split(delimiter)[0] || (env.AGENTHUB_APP_DATA_DIR ? resolve(env.AGENTHUB_APP_DATA_DIR, 'skills') : resolve(projectRoot, 'storage', 'skills'))
 
 const installSkillSchema = z.object({
-  sourceUrl: z.string().url(),
+  sourceUrl: z.string().trim().min(1).max(1000),
   id: z.string().max(80).optional(),
 })
 
@@ -43,7 +43,9 @@ export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .post('/install', zValidator('json', installSkillSchema), async (c) => {
     const { sourceUrl, id } = c.req.valid('json')
-    const result = await installSkillFromUrl(sourceUrl, id)
+    const result = isNpxSkillsAddCommand(sourceUrl)
+      ? await installSkillFromNpxCommand(sourceUrl)
+      : await installSkillFromUrl(sourceUrl, id)
     return c.json(result)
   })
   .post('/skillhub/install', zValidator('json', skillhubInstallSchema), async (c) => {
@@ -102,6 +104,130 @@ async function installSkillhubNative(slug: string) {
   } finally {
     await rm(stageDir, { recursive: true, force: true }).catch(() => undefined)
   }
+}
+
+async function installSkillFromNpxCommand(input: string) {
+  const parsed = parseNpxSkillsAddCommand(input)
+  if (!parsed) {
+    throw new Error('仅支持 npx skills@latest add owner/repo 形式的安装命令。')
+  }
+
+  const before = await globalSkillRegistry.listSkills()
+  const beforeKeys = new Set(before.map((skill) => `${skill.source}:${skill.id}`.toLowerCase()))
+  const result = await runNpxSkillsAdd(parsed.packageRef, parsed.extraArgs)
+  if (result.code !== 0) {
+    throw new Error(cleanSkillhubText(result.output) || `npx skills 安装失败：${parsed.packageRef}`)
+  }
+
+  const after = await globalSkillRegistry.listSkills()
+  const installed = after.find((skill) => !beforeKeys.has(`${skill.source}:${skill.id}`.toLowerCase()))
+    ?? after.find((skill) => skill.id.toLowerCase() === slugify(parsed.packageRef.split('/').pop() || parsed.packageRef))
+    ?? null
+
+  return {
+    ok: true,
+    installed,
+    message: `已执行 npx skills 安装：${parsed.packageRef}`,
+  }
+}
+
+function isNpxSkillsAddCommand(value: string) {
+  return /^\s*npx(?:\s|$)/i.test(value)
+}
+
+function parseNpxSkillsAddCommand(input: string) {
+  const args = splitCommand(input)
+  let index = 0
+  if (args[index]?.toLowerCase() !== 'npx') return null
+  index += 1
+
+  if (['--yes', '-y'].includes(args[index]?.toLowerCase() ?? '')) index += 1
+  if (args[index]?.toLowerCase() !== 'skills@latest') return null
+  index += 1
+  if (args[index]?.toLowerCase() !== 'add') return null
+  index += 1
+
+  const packageRef = normalizeSkillsPackageRef(args[index] ?? '')
+  if (!packageRef) return null
+  index += 1
+
+  const allowedExtraArgs = new Set(['-g', '--global', '-y', '--yes', '--copy', '--all', '--full-depth'])
+  const extraArgs: string[] = []
+  for (; index < args.length; index += 1) {
+    const arg = args[index]
+    if (!arg || !allowedExtraArgs.has(arg)) return null
+    extraArgs.push(arg)
+  }
+
+  return { packageRef, extraArgs }
+}
+
+function normalizeSkillsPackageRef(value: string) {
+  const trimmed = value.trim().replace(/\.git$/i, '')
+  const github = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/i.exec(trimmed)
+  if (github?.[1] && github[2]) return `${github[1]}/${github[2]}`
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(trimmed) ? trimmed : ''
+}
+
+function splitCommand(input: string) {
+  const tokens: string[] = []
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(input))) {
+    tokens.push(match[1] ?? match[2] ?? match[3] ?? '')
+  }
+  return tokens
+}
+
+async function runNpxSkillsAdd(packageRef: string, extraArgs: string[]) {
+  const args = [
+    'npx',
+    '--yes',
+    'skills@latest',
+    'add',
+    packageRef,
+    ...extraArgs.filter((arg) => !['--yes', '-y'].includes(arg)),
+    '-y',
+  ]
+  try {
+    const proc = Bun.spawn(buildHostCommand(args), {
+      cwd: projectRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: {
+        ...process.env,
+        CI: '1',
+        NO_COLOR: '1',
+        FORCE_COLOR: '0',
+      },
+    })
+    const timer = setTimeout(() => {
+      try {
+        proc.kill()
+      } catch {
+        // Process may have already exited.
+      }
+    }, 120_000)
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text().catch(() => ''),
+      new Response(proc.stderr).text().catch(() => ''),
+      proc.exited,
+    ])
+    clearTimeout(timer)
+    return { code, output: [stdout, stderr].filter(Boolean).join('\n').trim() }
+  } catch (error: any) {
+    return { code: 127, output: error?.message || 'npx skills failed to start.' }
+  }
+}
+
+function buildHostCommand(args: string[]) {
+  if (process.platform !== 'win32') return args
+  return ['cmd.exe', '/d', '/s', '/c', args.map(quoteForCmd).join(' ')]
+}
+
+function quoteForCmd(value: string) {
+  if (/^[A-Za-z0-9_./:@-]+$/.test(value)) return value
+  return `"${value.replace(/"/g, '\\"')}"`
 }
 
 function normalizeSkillhubItem(value: any) {

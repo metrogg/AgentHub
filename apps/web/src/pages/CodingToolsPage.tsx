@@ -544,7 +544,6 @@ export default function CodingToolsPage() {
       CODE_AGENT_ACTIVE_TOOL: activeTool.id,
       CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
       CODE_AGENT_ACTIVE_PROTOCOL: activeTool.protocol,
-      CODE_AGENT_ACTIVE_MODEL: activeTool.modelId,
       CODE_AGENT_ACTIVE_BASE_URL: activeTool.baseUrl,
       CODE_AGENT_ACTIVE_API_KEY_ENV: activeTool.apiKeyEnv,
       CODE_AGENT_ACTIVE_API_KEY: activeApiKey,
@@ -620,12 +619,10 @@ export default function CodingToolsPage() {
     setModels(next)
     await api.saveSettings({
       MODEL_CATALOG: JSON.stringify(next),
-      ACTIVE_MODEL_ID: item.id,
       [storageKey]: JSON.stringify(tools),
       CODE_AGENT_ACTIVE_TOOL: activeTool.id,
       CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
       CODE_AGENT_ACTIVE_PROTOCOL: activeTool.protocol,
-      CODE_AGENT_ACTIVE_MODEL: activeTool.modelId,
       CODE_AGENT_ACTIVE_BASE_URL: activeTool.baseUrl,
       CODE_AGENT_ACTIVE_API_KEY_ENV: activeTool.apiKeyEnv,
       CODE_AGENT_ACTIVE_API_KEY: activeApiKey,

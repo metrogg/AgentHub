@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  TerminalSquare,
   Wand2,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -23,6 +24,15 @@ import { cn } from '../lib/utils'
 
 const defaultMarketUrl = 'https://www.skillhub.cn/skills'
 const defaultQuery = 'skillhub'
+const requiredSkillPacks = [
+  {
+    id: 'mattpocock-skills',
+    name: 'Matt Pocock Skills',
+    description: 'TypeScript、重构、测试与工程实践相关的高质量 Skills 包。',
+    command: 'npx skills@latest add mattpocock/skills',
+    packageRef: 'mattpocock/skills',
+  },
+]
 
 type SelectedSkill =
   | { type: 'market'; item: SkillhubSearchItem }
@@ -52,6 +62,17 @@ export default function SkillsMarketPage() {
   const [message, setMessage] = useState('')
 
   const installedIds = useMemo(() => new Set(skills.map((skill) => skill.id)), [skills])
+  const hasRequiredSkills = useMemo(
+    () =>
+      requiredSkillPacks.some((pack) =>
+        skills.some((skill) =>
+          `${skill.id} ${skill.name} ${skill.description} ${skill.skillPath}`
+            .toLowerCase()
+            .includes(pack.packageRef.split('/').pop()?.toLowerCase() ?? pack.packageRef),
+        ),
+      ),
+    [skills],
+  )
   const marketSources = useMemo(
     () => [
       {
@@ -110,15 +131,15 @@ export default function SkillsMarketPage() {
     }
   }
 
-  async function installSkill() {
-    const trimmed = sourceUrl.trim()
+  async function installSkill(input = sourceUrl) {
+    const trimmed = input.trim()
     if (!trimmed || installing) return
     setInstalling(true)
     setMessage('')
     try {
       const result = await api.installSkill({ sourceUrl: trimmed })
       setMessage(result.message)
-      setSourceUrl('')
+      if (input === sourceUrl) setSourceUrl('')
       await refreshSkills()
       if (result.installed) await openInstalledDetail(result.installed)
     } catch (error: any) {
@@ -211,7 +232,7 @@ export default function SkillsMarketPage() {
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
                     <h1 className="text-xl font-semibold tracking-normal">SkillHub 市场</h1>
-                    <p className="mt-1 text-sm text-neutral-500">左侧浏览和搜索 Skills，点击卡片后在右侧查看详情。</p>
+                    <p className="mt-1 text-sm text-neutral-500">支持市场搜索、SKILL.md 链接，以及受控的 npx skills 安装命令。</p>
                   </div>
                   <a
                     href={defaultMarketUrl}
@@ -222,6 +243,46 @@ export default function SkillsMarketPage() {
                     <ExternalLink className="h-4 w-4" />
                     官网
                   </a>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50/60 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-emerald-950">
+                        <Sparkles className="h-4 w-4 text-emerald-700" />
+                        必装 Skills
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-emerald-800/75">
+                        默认推荐安装 Matt Pocock 的 Skills 包，安装后会自动出现在本机 Skills 列表中。
+                      </p>
+                    </div>
+                    <span className={cn(
+                      'rounded-md px-2 py-1 text-xs font-medium',
+                      hasRequiredSkills ? 'bg-white text-emerald-700' : 'bg-amber-50 text-amber-700',
+                    )}>
+                      {hasRequiredSkills ? '已检测到' : '待安装'}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {requiredSkillPacks.map((pack) => (
+                      <div key={pack.id} className="flex flex-wrap items-center gap-2 rounded-md bg-white px-3 py-2">
+                        <TerminalSquare className="h-4 w-4 shrink-0 text-emerald-700" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-neutral-950">{pack.name}</div>
+                          <code className="mt-0.5 block truncate font-mono text-[11px] text-neutral-500">{pack.command}</code>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void installSkill(pack.command)}
+                          disabled={installing}
+                          className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md bg-neutral-950 px-3 text-xs font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
+                        >
+                          {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                          安装
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -254,14 +315,14 @@ export default function SkillsMarketPage() {
                     <input
                       value={sourceUrl}
                       onChange={(event) => setSourceUrl(event.target.value)}
-                      placeholder="粘贴 SKILL.md / GitHub 技能链接"
+                      placeholder="粘贴 SKILL.md / GitHub 链接 / npx skills@latest add owner/repo"
                       className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
                     />
                   </div>
                   <button
                     type="button"
                     onClick={addCustomSource}
-                    disabled={!sourceUrl.trim()}
+                    disabled={!sourceUrl.trim() || sourceUrl.trim().startsWith('npx ')}
                     className="inline-flex h-10 min-w-[7.5rem] shrink-0 items-center justify-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:text-neutral-300"
                   >
                     <Plus className="h-4 w-4" />
@@ -269,7 +330,7 @@ export default function SkillsMarketPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={installSkill}
+                    onClick={() => void installSkill()}
                     disabled={installing || !sourceUrl.trim()}
                     className="inline-flex h-10 min-w-[6.5rem] shrink-0 items-center justify-center gap-2 rounded-md bg-neutral-950 px-4 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
                   >

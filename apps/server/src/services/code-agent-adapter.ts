@@ -270,7 +270,9 @@ export async function* streamCodeAgentReply(
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const installed = await isCommandInstalled(adapter.command)
-  const modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId)
+  const toolConfig = await resolveToolConfig(type)
+  const modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+  const runtimeModelTarget = normalizeCodeAgentModelTarget(type, modelTarget)
   const configured = await isRuntimeConfigured(type, adapter, profile.modelId, modelTarget)
   const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
   const canExecute = executionEnabled && installed && configured && cwdInfo.valid
@@ -285,7 +287,7 @@ export async function* streamCodeAgentReply(
       `- 命令：\`${adapter.command}\``,
       `- 沙箱：${profile.sandboxPolicy ?? 'workspace-write'}`,
       `- 项目目录：${cwdInfo.label}`,
-      `- 模型档案：${modelTarget ? `${modelTarget.provider}/${modelTarget.modelId}` : profile.modelId ? '未找到或未启用' : '自动模型'}`,
+      `- 模型档案：${runtimeModelTarget ? `${runtimeModelTarget.provider}/${runtimeModelTarget.modelId}` : profile.modelId ? '未找到或未启用' : '自动模型'}`,
       `- 运行凭据：${configured ? '可由模型管理注入' : '未检测到'}`,
       `- 安装状态：${installed ? '已安装' : '未安装'}`,
       `- 执行开关：${executionEnabled ? '已启用' : '已禁用'}\``,
@@ -295,7 +297,7 @@ export async function* streamCodeAgentReply(
       '',
       '命令预览：',
       '```bash',
-      previewCommand(adapter, cwdInfo.cwd, profile.sandboxPolicy, modelTarget),
+      previewCommand(adapter, cwdInfo.cwd, profile.sandboxPolicy, runtimeModelTarget),
       '```',
       '',
       cwdInfo.valid ? '' : `项目目录不存在或不是文件夹：${cwdInfo.label}`,
@@ -317,13 +319,12 @@ export async function* streamCodeAgentReply(
     wake?.()
     wake = null
   }
-  const toolConfig = await resolveToolConfig(type)
   const runPromise = runCodeAgentCommand(
     adapter,
     prompt,
     cwdInfo.cwd,
     profile.sandboxPolicy,
-    modelTarget,
+    runtimeModelTarget,
     signal,
     toolConfig,
     envelope?.envAllowlist,
@@ -376,8 +377,9 @@ export async function* streamCodeAgentReply(
 async function resolveCodeAgentModelTarget(
   type: CodeAgentType,
   modelId?: string | null,
+  toolConfig?: Record<string, unknown>,
 ): Promise<CodeAgentModelTarget | null> {
-  const selected = await resolveModelConfig(modelId)
+  const selected = await resolveModelConfig(resolveCodeAgentModelId(modelId, toolConfig))
   if (!selected?.modelId) return null
 
   const providerKey = safeProviderKey(selected.provider || selected.id)
@@ -396,6 +398,43 @@ async function resolveCodeAgentModelTarget(
     openaiBaseUrl,
     anthropicBaseUrl,
   }
+}
+
+function resolveCodeAgentModelId(
+  agentModelId?: string | null,
+  toolConfig?: Record<string, unknown>,
+) {
+  const fromAgent = agentModelId?.trim()
+  if (fromAgent) return fromAgent
+
+  const fromTool = typeof toolConfig?.['modelId'] === 'string' ? toolConfig['modelId'].trim() : ''
+  return fromTool || null
+}
+
+function normalizeCodeAgentModelTarget(
+  type: CodeAgentType,
+  modelTarget?: CodeAgentModelTarget | null,
+) {
+  if (type !== 'claude-code') return modelTarget ?? null
+  if (!modelTarget) return null
+  return isClaudeCodeModelTarget(modelTarget) ? modelTarget : null
+}
+
+function isClaudeCodeModelTarget(modelTarget: CodeAgentModelTarget) {
+  const modelId = modelTarget.modelId.trim()
+  if (modelTarget.anthropicBaseUrl) return true
+  if (!/\b(claude|sonnet|opus|haiku)\b/i.test(modelId)) return false
+
+  const provider = modelTarget.provider.trim().toLowerCase()
+  const providerKey = modelTarget.providerKey.trim().toLowerCase()
+  const endpoint = (modelTarget.anthropicBaseUrl || modelTarget.openaiBaseUrl || '').toLowerCase()
+  return (
+    provider.includes('anthropic') ||
+    provider.includes('claude') ||
+    providerKey.includes('anthropic') ||
+    providerKey.includes('claude') ||
+    endpoint.includes('anthropic.com')
+  )
 }
 
 async function isRuntimeConfigured(
@@ -1404,12 +1443,44 @@ function buildHostCommand(command: string, args: string[]) {
   if (process.platform !== 'win32') return [command, ...args]
   if (command === 'codex') return [windowsCodexCommand(), ...args]
   // Windows 上直接传数组参数，避免 cmd.exe /c 的 8192 字符命令行长度限制
-  return [command, ...args]
+  return [windowsCliCommand(command), ...args]
 }
 
 function windowsCodexCommand() {
-  const npmShim = Bun.env.APPDATA ? resolve(Bun.env.APPDATA, 'npm', 'codex.cmd') : ''
+  const npmShim = windowsNpmShim('codex')
   return npmShim && existsSync(npmShim) ? npmShim : 'codex.cmd'
+}
+
+function windowsCliCommand(command: string) {
+  const candidates = [
+    ...windowsPathCommandCandidates(command),
+    windowsNpmShim(command),
+    windowsBunShim(command),
+  ].filter(Boolean) as string[]
+
+  for (const candidate of [...new Set(candidates)]) {
+    if (existsSync(candidate)) return candidate
+  }
+
+  return `${command}.cmd`
+}
+
+function windowsPathCommandCandidates(command: string) {
+  const pathValue = Bun.env.PATH ?? Bun.env.Path ?? process.env.PATH ?? process.env.Path ?? ''
+  const extensions = command.includes('.') ? [''] : ['.cmd', '.exe', '.bat', '']
+  return pathValue
+    .split(';')
+    .filter(Boolean)
+    .flatMap((dir) => extensions.map((extension) => resolve(dir, `${command}${extension}`)))
+}
+
+function windowsNpmShim(command: string) {
+  const appData = Bun.env.APPDATA ?? process.env.APPDATA
+  return appData ? resolve(appData, 'npm', `${command}.cmd`) : ''
+}
+
+function windowsBunShim(command: string) {
+  return resolve(homedir(), '.bun', 'bin', `${command}.exe`)
 }
 
 async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, unknown>> {
@@ -1417,12 +1488,25 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
     const rows = await db.select().from(settings).where(eq(settings.key, 'CODING_TOOLS_CONFIG')).limit(1)
     const raw = rows[0]?.value
     if (!raw) return {}
-    const parsed = JSON.parse(raw) as Array<{ id: string; config?: Record<string, unknown>; provider?: string; agent?: string }>
+    const parsed = JSON.parse(raw) as Array<{
+      id: string
+      config?: Record<string, unknown>
+      provider?: string
+      agent?: string
+      modelId?: string
+      baseUrl?: string
+      apiKeyEnv?: string
+      protocol?: string
+    }>
     const tool = parsed.find((t) => t.id === toolId)
     const config = { ...(tool?.config ?? {}) }
     // 兼容前端直接保存的扁平字段
     if (tool?.provider) config.provider = tool.provider
     if (tool?.agent) config.agent = tool.agent
+    if (tool?.modelId) config.modelId = tool.modelId
+    if (tool?.baseUrl) config.baseUrl = tool.baseUrl
+    if (tool?.apiKeyEnv) config.apiKeyEnv = tool.apiKeyEnv
+    if (tool?.protocol) config.protocol = tool.protocol
     return config
   } catch {
     return {}
@@ -1840,6 +1924,12 @@ function cleanDiagnosticOutput(output: string) {
 }
 
 function friendlyCodeAgentError(output: string) {
+  if (/unsupported_vendor|specified model is not supported at this endpoint/i.test(output)) {
+    return [
+      'Claude Code 已经使用 Anthropic 兼容端点发起请求，但该端点拒绝了当前模型名。',
+      '请检查模型档案里的 Anthropic 端点和 modelId 是否是该端点支持的精确组合；例如 DeepSeek 的 Anthropic 兼容端点可能不接受当前填写的 deepseek-v4-pro。',
+    ].join('\n')
+  }
   if (/Coding Tools timed out after/i.test(output)) {
     return 'Coding Tools 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。'
   }
