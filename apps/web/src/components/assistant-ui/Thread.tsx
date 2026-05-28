@@ -38,9 +38,7 @@ import {
   ChevronRight,
   Clock3,
   Copy,
-  Download,
   ExternalLink,
-  File,
   FileText,
   Minus,
   FolderOpen,
@@ -271,7 +269,7 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
         </button>
         <button
           type="button"
-          onClick={onOpenDetails}
+          onClick={onToggleDetails}
           className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
           title="群聊详情"
           aria-label="群聊详情"
@@ -2089,6 +2087,74 @@ const AgentAvatarPart: FC<{ data: { runtime?: CodeAgentRunMetadata['runtime'] } 
 
 function requestArtifactPreview(item: ArtifactPreviewItem) {
   window.dispatchEvent(new CustomEvent<ArtifactPreviewItem>(artifactPreviewEvent, { detail: item }))
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
+  switch (artifact.type) {
+    case 'diff':
+      return {
+        id: artifact.id,
+        title: artifact.title,
+        kind: 'diff',
+        path: artifact.filePath,
+        description: artifact.description,
+        source: artifact.source,
+      }
+    case 'preview':
+      return {
+        id: artifact.id,
+        title: artifact.title,
+        kind: 'web',
+        url: artifact.url,
+        description: artifact.description,
+        source: artifact.source,
+      }
+    case 'file':
+      return {
+        id: artifact.id,
+        title: artifact.title || artifact.path,
+        kind: 'file',
+        path: artifact.path,
+        mimeType: artifact.mimeType,
+        description: artifact.description,
+        source: artifact.source,
+      }
+    case 'deploy':
+      return {
+        id: artifact.id,
+        title: artifact.title,
+        kind: 'deploy',
+        url: artifact.url,
+        description: artifact.description,
+        source: artifact.source,
+      }
+    case 'workflow':
+      return {
+        id: artifact.id,
+        title: artifact.title,
+        kind: 'workflow',
+        description: artifact.description,
+        source: artifact.source,
+      }
+    default: {
+      const fallback = artifact as Extract<AgentArtifact, { type: string }>
+      return {
+        id: fallback.id,
+        title: '未知产物',
+        kind: 'file' as const,
+        description: fallback.description,
+        source: fallback.source,
+      }
+    }
+  }
 }
 
 const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data }) => {
@@ -3943,6 +4009,60 @@ function closeUnterminatedCodeFence(text: string) {
 
   if (!openFence) return text
   return `${text}${text.endsWith('\n') ? '' : '\n'}${openFence}`
+}
+
+const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void }> = ({ item, onClose }) => {
+  return (
+    <div className="absolute inset-y-0 right-0 z-20 flex w-96 flex-col border-l border-neutral-200 bg-white shadow-lg">
+      <div className="flex h-12 items-center justify-between border-b border-neutral-200 px-4">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-neutral-900">{item.title}</div>
+          {item.subtitle && <div className="truncate text-xs text-neutral-500">{item.subtitle}</div>}
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+          title="关闭"
+        >
+          <Minus className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex-1 overflow-auto p-4">
+        {item.kind === 'image' && item.url && (
+          <img src={item.url} alt={item.title} className="max-w-full rounded-lg" />
+        )}
+        {item.kind === 'web' && item.url && (
+          <iframe src={item.url} title={item.title} className="h-full w-full rounded-lg border" />
+        )}
+        {item.kind === 'file' && item.path && (
+          <div className="text-sm text-neutral-600">
+            <p>文件路径: {item.path}</p>
+            {item.mimeType && <p>MIME 类型: {item.mimeType}</p>}
+          </div>
+        )}
+        {item.kind === 'diff' && item.path && (
+          <div className="text-sm text-neutral-600">
+            <p>文件: {item.path}</p>
+            <p>差异预览待实现</p>
+          </div>
+        )}
+        {item.kind === 'deploy' && item.url && (
+          <div className="text-sm text-neutral-600">
+            <p>部署地址:</p>
+            <a href={item.url} target="_blank" rel="noreferrer" className="text-emerald-600 hover:underline">
+              {item.url}
+            </a>
+          </div>
+        )}
+        {item.kind === 'workflow' && (
+          <div className="text-sm text-neutral-600">
+            <p>工作流预览待实现</p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 const MarkdownText: FC = () => (

@@ -9,6 +9,7 @@ export interface PlannerInput {
   agents: ExecutionAgent[]
   agentRelations?: ExecutionPlan['agentRelations']
   workspacePath?: string | null
+  useSpecFirst?: boolean
 }
 
 interface SpecModule {
@@ -28,7 +29,7 @@ interface ProjectSpec {
 
 export class Planner {
   async createPlan(input: PlannerInput): Promise<ExecutionPlan> {
-    const { goal, agents, agentRelations = [], workspacePath } = input
+    const { goal, agents, agentRelations = [], workspacePath, useSpecFirst = true } = input
     const runId = crypto.randomUUID()
 
     let specPhases: string | undefined
@@ -45,13 +46,15 @@ export class Planner {
       }
     }
 
-    // Spec-first：先让 LLM 输出架构规格，再基于规格生成任务计划
+    // Spec-first：根据 useSpecFirst 决定是否让 LLM 先输出架构规格
     let spec: ProjectSpec | undefined
-    try {
-      spec = await this.generateSpec(goal, agents, workspacePath)
-      logger.info({ goal, moduleCount: spec.modules.length }, 'Planner generated spec')
-    } catch (err: any) {
-      logger.warn({ err: err?.message }, 'Planner spec generation failed, falling back to direct plan')
+    if (useSpecFirst !== false) {
+      try {
+        spec = await this.generateSpec(goal, agents, workspacePath)
+        logger.info({ goal, moduleCount: spec.modules.length }, 'Planner generated spec')
+      } catch (err: any) {
+        logger.warn({ err: err?.message }, 'Planner spec generation failed, falling back to direct plan')
+      }
     }
 
     try {
@@ -203,6 +206,12 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     const candidate = generated as {
       title?: unknown
       summary?: unknown
+      phases?: Array<{
+        id?: unknown
+        title?: unknown
+        purpose?: unknown
+        taskIds?: unknown
+      }>
       clarificationQuestions?: Array<{
         id?: unknown
         question?: unknown
@@ -227,6 +236,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
 
     const agentMap = new Map(agents.map((a) => [a.key, a]))
     const taskIds = new Set<string>()
+    const rawIdToUuid = new Map<string, string>()
     const tasks: ExecutionTask[] = []
 
     for (const [index, t] of candidate.tasks.entries()) {
@@ -236,7 +246,9 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       const agent = agentMap.get(agentKey)
       if (!title || !description || !agent) continue
 
-      const id = slugifyTaskId(cleanPlanText(t.id) || title, index)
+      const rawId = cleanPlanText(t.id) || slugifyTaskId(title, index)
+      const id = crypto.randomUUID()
+      rawIdToUuid.set(rawId, id)
       if (taskIds.has(id)) continue
       taskIds.add(id)
 
@@ -264,6 +276,14 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
 
     if (!tasks.length) return null
 
+    // 将依赖中的 rawId 替换为 UUID
+    for (const task of tasks) {
+      task.dependencies = task.dependencies.map((dep) => rawIdToUuid.get(dep) ?? dep)
+    }
+
+    // 提取并规范化 phases
+    const phases = this.normalizePhases(candidate.phases, tasks, rawIdToUuid)
+
     // Extract clarification questions
     const clarificationQuestions: ClarificationQuestion[] = []
     if (Array.isArray(candidate.clarificationQuestions)) {
@@ -286,8 +306,81 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       goal,
       agents,
       tasks,
+      phases: phases.length > 0 ? phases : undefined,
       clarificationQuestions: clarificationQuestions.length > 0 ? clarificationQuestions : undefined,
     }
+  }
+
+  private normalizePhases(
+    phases: unknown,
+    tasks: ExecutionTask[],
+    rawIdToUuid: Map<string, string>,
+  ): import('./types').OrchestratorPhase[] {
+    const normalized: import('./types').OrchestratorPhase[] = []
+    if (Array.isArray(phases)) {
+      for (const phase of phases) {
+        if (!phase || typeof phase !== 'object') continue
+        const item = phase as { id?: unknown; title?: unknown; purpose?: unknown; taskIds?: unknown }
+        const id = cleanPlanText(item.id)
+        if (!id || normalized.some((existing) => existing.id === id)) continue
+        const rawTaskIds = Array.isArray(item.taskIds)
+          ? item.taskIds.filter((taskId): taskId is string => typeof taskId === 'string')
+          : []
+        const taskIds = rawTaskIds.map((tid) => rawIdToUuid.get(tid) ?? tid).filter(Boolean) as string[]
+        normalized.push({
+          id,
+          title: cleanPlanText(item.title) || this.phaseTitleFromId(id),
+          purpose: cleanPlanText(item.purpose) || this.phasePurposeFromId(id),
+          taskIds,
+        })
+      }
+    }
+
+    for (const [index, task] of tasks.entries()) {
+      const phaseId = task.phaseId ?? this.inferTaskPhase(task, index)
+      task.phaseId = phaseId
+      let phase = normalized.find((item) => item.id === phaseId)
+      if (!phase) {
+        phase = {
+          id: phaseId,
+          title: this.phaseTitleFromId(phaseId),
+          purpose: this.phasePurposeFromId(phaseId),
+          taskIds: [],
+        }
+        normalized.push(phase)
+      }
+      if (!phase.taskIds.includes(task.id)) phase.taskIds.push(task.id)
+    }
+
+    return normalized
+  }
+
+  private inferTaskPhase(task: Pick<ExecutionTask, 'id' | 'title' | 'description'>, index: number): string {
+    const text = `${task.id} ${task.title} ${task.description}`.toLowerCase()
+    if (/(plan|analysis|scan|read|理解|梳理|分析|调研)/i.test(text)) return 'analysis'
+    if (/(design|方案|架构|设计)/i.test(text)) return 'design'
+    if (/(build|code|implement|实现|开发|修改)/i.test(text)) return 'implementation'
+    if (/(review|test|verify|审查|测试|验证|风险)/i.test(text)) return 'verification'
+    if (/(summary|synthesize|汇总|总结)/i.test(text)) return 'synthesis'
+    return index === 0 ? 'analysis' : 'execution'
+  }
+
+  private phaseTitleFromId(id: string): string {
+    if (id === 'analysis') return '分析'
+    if (id === 'design') return '设计'
+    if (id === 'implementation') return '实现'
+    if (id === 'verification') return '验证'
+    if (id === 'synthesis') return '汇总'
+    return '执行'
+  }
+
+  private phasePurposeFromId(id: string): string {
+    if (id === 'analysis') return '理解目标和上下文'
+    if (id === 'design') return '确定方案和边界'
+    if (id === 'implementation') return '完成核心实现'
+    if (id === 'verification') return '验证质量和风险'
+    if (id === 'synthesis') return '汇总协作产出'
+    return '推进当前任务'
   }
 
   private buildFallbackPlan(runId: string, goal: string, agents: ExecutionAgent[], spec?: ProjectSpec): ExecutionPlan {
@@ -297,12 +390,11 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     // 如果有 Spec，按模块生成 fallback 任务
     if (spec && spec.modules.length > 0) {
       const tasks: ExecutionTask[] = []
-      const agentMap = new Map(selectedAgents.map((a) => [a.id, a]))
       const moduleToTaskId = new Map<string, string>()
 
       for (let i = 0; i < spec.modules.length; i++) {
         const m = spec.modules[i]!
-        const taskId = slugifyTaskId(m.name, i)
+        const taskId = crypto.randomUUID()
         moduleToTaskId.set(m.name, taskId)
         // 根据模块职责匹配 Agent
         const keywords = [m.name, ...m.responsibility.split(/\s+/)]
@@ -322,8 +414,9 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       // 如果只有一个模块，追加 review 任务
       if (tasks.length === 1 && selectedAgents.length > 1) {
         const reviewer = this.pickAgent(selectedAgents, ['审查', 'review', 'test']) ?? selectedAgents[selectedAgents.length - 1]!
+        const reviewId = crypto.randomUUID()
         tasks.push({
-          id: 'review',
+          id: reviewId,
           title: '审查与测试',
           description: `检查「${goal}」的交互边界、异常状态和测试缺口。`,
           agentId: reviewer.id,
@@ -346,9 +439,13 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       selectedAgents[2] ??
       selectedAgents[selectedAgents.length - 1]!
 
+    const planId = crypto.randomUUID()
+    const buildId = crypto.randomUUID()
+    const reviewId = crypto.randomUUID()
+
     const tasks: ExecutionTask[] = [
       {
-        id: 'plan',
+        id: planId,
         title: '梳理目标与交付范围',
         description: `围绕「${goal}」定义核心目标、交付物、边界、依赖和验收标准。`,
         agentId: leadAgent.id,
@@ -356,19 +453,19 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         maxRetries: 2,
       },
       {
-        id: 'build',
+        id: buildId,
         title: '实现核心功能与界面',
         description: '基于拆解结果产出可执行实现方案，优先完成关键路径、组件接入和小步验证。',
         agentId: buildAgent.id,
-        dependencies: ['plan'],
+        dependencies: [planId],
         maxRetries: 2,
       },
       {
-        id: 'review',
+        id: reviewId,
         title: '审查风险与测试建议',
         description: '检查交互边界、异常状态、测试缺口和交付风险，并给出可直接执行的修复建议。',
         agentId: reviewAgent.id,
-        dependencies: ['build'],
+        dependencies: [buildId],
         maxRetries: 2,
       },
     ]
@@ -388,7 +485,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
   }
 }
 
-function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutputContract | undefined {
+export function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutputContract | undefined {
   if (!value || typeof value !== 'object') return undefined
   const item = value as {
     requiredBlackboardWrites?: unknown
@@ -419,7 +516,7 @@ function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutput
   }
 }
 
-function normalizeTaskValidation(value: unknown): TaskValidation | undefined {
+export function normalizeTaskValidation(value: unknown): TaskValidation | undefined {
   if (!value || typeof value !== 'object') return undefined
   const item = value as { commands?: unknown; requiresReview?: unknown }
   const commands = arrayOfStrings(item.commands)
@@ -430,7 +527,7 @@ function normalizeTaskValidation(value: unknown): TaskValidation | undefined {
   }
 }
 
-function parseBlackboardSchemaType(value: unknown): TaskOutputContract['requiredBlackboardWrites'][number]['schemaType'] | undefined {
+export function parseBlackboardSchemaType(value: unknown): TaskOutputContract['requiredBlackboardWrites'][number]['schemaType'] | undefined {
   if (
     value === 'fact' ||
     value === 'decision' ||
@@ -445,12 +542,12 @@ function parseBlackboardSchemaType(value: unknown): TaskOutputContract['required
   return undefined
 }
 
-function arrayOfStrings(value: unknown): string[] {
+export function arrayOfStrings(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.map((item) => cleanPlanText(item)).filter(Boolean).slice(0, 12)
 }
 
-function extractJsonObject(value: string) {
+export function extractJsonObject(value: string) {
   const cleaned = value.trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
   if (cleaned.startsWith('{') && cleaned.endsWith('}')) return cleaned
   const start = cleaned.indexOf('{')
@@ -458,11 +555,11 @@ function extractJsonObject(value: string) {
   return start >= 0 && end > start ? cleaned.slice(start, end + 1) : null
 }
 
-function cleanPlanText(value: unknown) {
+export function cleanPlanText(value: unknown) {
   return typeof value === 'string' ? value.trim().slice(0, 1200) : ''
 }
 
-function parseTaskType(value: unknown): ExecutionTask['taskType'] | undefined {
+export function parseTaskType(value: unknown): ExecutionTask['taskType'] | undefined {
   if (
     value === 'read' ||
     value === 'research' ||
@@ -477,7 +574,7 @@ function parseTaskType(value: unknown): ExecutionTask['taskType'] | undefined {
   return undefined
 }
 
-function slugifyTaskId(value: string, index: number) {
+export function slugifyTaskId(value: string, index: number) {
   const slug = value
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
@@ -486,7 +583,7 @@ function slugifyTaskId(value: string, index: number) {
   return slug || `task-${index + 1}`
 }
 
-function titleFromGoal(goal: string) {
+export function titleFromGoal(goal: string) {
   const cleaned = goal.replace(/[。.!?？\n\r]/g, ' ').trim()
   return cleaned.length > 18 ? `${cleaned.slice(0, 18)}...` : cleaned || '多 Agent 协作任务'
 }

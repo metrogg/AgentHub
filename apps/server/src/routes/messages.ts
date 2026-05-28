@@ -1,12 +1,13 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { HTTPException } from 'hono/http-exception'
+import { AppError, AppErrorCodes } from '../lib/error'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { unlink, writeFile } from 'node:fs/promises'
 import { sendMessageSchema } from '@agenthub/shared'
+import { logger } from '../lib/logger'
 import {
   db,
   messages,
@@ -24,15 +25,28 @@ import {
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
-import { streamReply } from '../services/llm'
 import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine'
+import { Planner } from '../services/orchestrator/planner'
+import {
+  extractJsonObject,
+  cleanPlanText,
+  normalizeTaskOutputContract,
+  normalizeTaskValidation,
+  titleFromGoal,
+} from '../services/orchestrator/planner'
 import type { ExecutionPlan, TaskOutputContract, TaskValidation } from '../services/orchestrator/types'
 import { emitRunEvent } from '../services/orchestrator/run-events'
 import { initializeRunLedger } from '../services/orchestrator/run-ledger'
 import { checkInputGuardrails } from '../services/orchestrator/input-guardrails'
 import { selectAgentForTask } from '../services/orchestrator/agent-router'
-import { harnessManager } from '../services/harness'
-import { AGENT_ROLE_TYPES, inferRoleType } from '../services/workspace/agent-role-presets'
+import {
+  confirmAgentDraftSchema,
+  type AgentDraft,
+  buildAgentDraft,
+  parseAgentDraft,
+  normalizeAgentDraftInput,
+} from '../services/agent-draft'
+import { type DemoArtifact, buildDemoArtifacts, artifactSummary } from '../services/artifact-demo'
 
 const orchestratorPlanSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -46,29 +60,6 @@ const agentDraftSchema = z.object({
   content: z.string().min(1).max(10000),
 })
 
-const confirmAgentDraftSchema = z.object({
-  draft: z
-    .object({
-      name: z.string().min(1).max(60),
-      role: z.string().min(1).max(60),
-      roleType: z.enum(AGENT_ROLE_TYPES).default('custom'),
-      description: z.string().max(500).default(''),
-      avatar: z.string().max(500).nullable().optional(),
-      systemPrompt: z.string().max(4000).default(''),
-      roleProfile: z.record(z.unknown()).nullable().optional(),
-      color: z.string().max(20).default('#111827'),
-      modelId: z.string().max(120).nullable().optional(),
-      runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']).default('llm'),
-      codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
-      capabilityTags: z.array(z.string().max(40)).max(12).default([]),
-      toolPermissions: z.array(z.string().max(80)).max(30).default(['chat']),
-      sandboxPolicy: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('workspace-write'),
-      contextPolicy: z.enum(['recent-only', 'pinned-recent', 'workspace-aware']).default('workspace-aware'),
-      autoInvoke: z.boolean().default(true),
-      approvalRequired: z.boolean().default(true),
-    })
-    .optional(),
-})
 
 const updateOrchestratorPlanSchema = z.object({
   tasks: z.array(
@@ -173,67 +164,6 @@ type OrchestratorPlan = {
   dispatchResult?: OrchestratorDispatchResult
 }
 
-type AgentDraft = NonNullable<z.infer<typeof confirmAgentDraftSchema>['draft']>
-
-type DemoArtifact =
-  | {
-      id: string
-      kind: 'web_preview'
-      type: 'preview'
-      title: string
-      description: string
-      url: string
-      previewKind: 'dev-server' | 'static-html' | 'iframe'
-      status: 'ready' | 'building' | 'failed'
-    }
-  | {
-      id: string
-      kind: 'diff'
-      type: 'diff'
-      title: string
-      description: string
-      filePath: string
-      language: string
-      diff: string
-    }
-  | {
-      id: string
-      kind: 'file'
-      type: 'file'
-      title: string
-      description: string
-      path: string
-      mimeType: string
-      size: number
-      url: string
-    }
-  | {
-      id: string
-      kind: 'deploy'
-      type: 'deploy'
-      title: string
-      description: string
-      provider: string
-      status: 'pending' | 'running' | 'ready' | 'failed'
-      url: string
-      logs: string[]
-    }
-  | {
-      id: string
-      kind: 'workflow'
-      type: 'workflow'
-      title: string
-      description: string
-      nodes: Array<{
-        id: string
-        label: string
-        type: 'agent' | 'tool' | 'input' | 'output'
-        agentKey?: string
-        agentName?: string
-        agentColor?: string
-      }>
-      edges: Array<{ from: string; to: string; label?: string }>
-    }
 
 type DispatchMonitor = {
   dispatchId: string
@@ -245,7 +175,10 @@ type DispatchMonitor = {
 export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
   .get('/:sessionId', async (c) => {
+    const user = c.get('user')
     const sessionId = c.req.param('sessionId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const list = await db
       .select()
       .from(messages)
@@ -257,12 +190,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     await db.delete(messages).where(eq(messages.sessionId, sessionId))
     return c.json({ deleted: true })
   })
   .post('/:sessionId/cancel', async (c) => {
+    const user = c.get('user')
     const sessionId = c.req.param('sessionId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const { cancelAgentReply } = await import('../services/agent-runner')
     return c.json({ cancelled: cancelAgentReply(sessionId) })
   })
@@ -272,11 +208,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const messageId = c.req.param('messageId')
     const { content } = c.req.valid('json')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
 
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!message || message.sessionId !== sessionId || message.senderType !== 'user' || message.senderId !== user.sub) {
-      throw new HTTPException(404, { message: 'Message not found' })
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     }
 
     const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
@@ -292,7 +228,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       })
       .where(eq(messages.id, messageId))
       .returning()
-    if (!updated) throw new HTTPException(500, { message: 'Failed to update message' })
+    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_UPDATE_FAILED, '消息更新失败')
     return c.json(updated)
   })
   .patch('/:sessionId/:messageId/pin', async (c) => {
@@ -300,11 +236,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-    if (!message || message.sessionId !== sessionId) throw new HTTPException(404, { message: 'Message not found' })
+    if (!message || message.sessionId !== sessionId) throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     const [updated] = await db.update(messages).set({ isPinned: true }).where(eq(messages.id, messageId)).returning()
-    if (!updated) throw new HTTPException(500, { message: 'Failed to pin message' })
+    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_PIN_FAILED, '消息置顶失败')
     return c.json(updated)
   })
   .patch('/:sessionId/:messageId/unpin', async (c) => {
@@ -312,11 +248,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-    if (!message || message.sessionId !== sessionId) throw new HTTPException(404, { message: 'Message not found' })
+    if (!message || message.sessionId !== sessionId) throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     const [updated] = await db.update(messages).set({ isPinned: false }).where(eq(messages.id, messageId)).returning()
-    if (!updated) throw new HTTPException(500, { message: 'Failed to unpin message' })
+    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_PIN_FAILED, '消息取消置顶失败')
     return c.json(updated)
   })
   .delete('/:sessionId/:messageId', async (c) => {
@@ -325,7 +261,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const messageId = c.req.param('messageId')
     const rollback = c.req.query('rollback') !== 'false'
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
 
     const list = await db
       .select()
@@ -335,7 +271,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const targetIndex = list.findIndex((message) => message.id === messageId)
     const target = targetIndex >= 0 ? list[targetIndex] : null
     if (!target || target.senderType !== 'user' || target.senderId !== user.sub) {
-      throw new HTTPException(404, { message: 'Message not found' })
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     }
 
     const affected = collectAffectedMessages(list, targetIndex)
@@ -353,7 +289,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
 
     const list = await db
       .select()
@@ -362,19 +298,19 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .orderBy(asc(messages.createdAt))
     const messageIndex = list.findIndex((message) => message.id === messageId)
     const message = messageIndex >= 0 ? list[messageIndex] : null
-    if (!message || message.senderType !== 'agent') throw new HTTPException(404, { message: 'Agent message not found' })
+    if (!message || message.senderType !== 'agent') throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 消息不存在')
     const previousUser = [...list.slice(0, messageIndex)].reverse().find((item) => item.senderType === 'user')
-    if (!previousUser) throw new HTTPException(400, { message: 'No user message to regenerate from' })
+    if (!previousUser) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '没有可重新生成的用户消息')
 
     await db.delete(messages).where(eq(messages.id, message.id))
     const { cancelAgentReply } = await import('../services/agent-runner')
     cancelAgentReply(sessionId)
     if (session.type === 'group' && session.workspaceId) {
-      runGroupReplies(session.workspaceId, sessionId, previousUser, previousUser.content).catch(() => {})
+      runGroupReplies(session.workspaceId, sessionId, previousUser, previousUser.content).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runGroupReplies failed on regenerate'))
     } else {
       const profile = await profileForDirectSession(session)
       import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId, previousUser, profile).catch(() => {})
+        runAgentReply(sessionId, previousUser, profile).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on regenerate'))
       })
     }
     return c.json({ removedMessageId: message.id })
@@ -382,6 +318,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
   .post('/:sessionId', zValidator('json', sendMessageSchema), async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const { content, type, metadata } = c.req.valid('json')
     const [msg] = await db
       .insert(messages)
@@ -392,11 +330,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
       if (session?.type === 'group' && session.workspaceId) {
         await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
-        runGroupReplies(session.workspaceId, sessionId, msg, content).catch(() => {})
+        runGroupReplies(session.workspaceId, sessionId, msg, content).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runGroupReplies failed on new message'))
       } else {
         const profile = session ? await profileForDirectSession(session) : undefined
         import('../services/agent-runner').then(({ runAgentReply }) => {
-          runAgentReply(sessionId, msg, profile).catch(() => {})
+          runAgentReply(sessionId, msg, profile).catch((err: any) => logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on new message'))
         })
       }
     }
@@ -406,7 +344,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const { content } = c.req.valid('json')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const agentList = session.workspaceId
       ? await db
           .select()
@@ -426,7 +364,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         metadata: { plan: { ...plan, messageId: '' } },
       })
       .returning()
-    if (!card) throw new HTTPException(500, { message: 'Failed to create plan card' })
+    if (!card) throw AppError.fromCode(AppErrorCodes.ORCHESTRATOR_PLAN_FAILED, '编排计划卡片创建失败')
     const planWithId = { ...plan, messageId: card.id }
     await db
       .update(messages)
@@ -440,7 +378,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const { content } = c.req.valid('json')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub) {
-      throw new HTTPException(404, { message: 'Session not found' })
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     }
 
     const artifacts = buildDemoArtifacts(content)
@@ -460,7 +398,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         },
       })
       .returning()
-    if (!card) throw new HTTPException(500, { message: 'Failed to create artifact card' })
+    if (!card) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, '产物卡片创建失败')
     return c.json(card)
   })
   .post('/:sessionId/agent-draft', zValidator('json', agentDraftSchema), async (c) => {
@@ -468,7 +406,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const sessionId = c.req.param('sessionId')
     const { content } = c.req.valid('json')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) throw new HTTPException(404, { message: 'Session not found' })
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     if (session.type !== 'group' || !session.workspaceId) {
       const [prompt] = await db
         .insert(messages)
@@ -481,7 +419,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           metadata: { agentDraftStatus: 'requires_group' },
         })
         .returning()
-      if (!prompt) throw new HTTPException(500, { message: 'Failed to create agent group prompt' })
+      if (!prompt) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 群组提示创建失败')
       return c.json(prompt)
     }
 
@@ -497,7 +435,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         metadata: { agentDraft: draft, agentDraftStatus: 'draft' },
       })
       .returning()
-    if (!card) throw new HTTPException(500, { message: 'Failed to create agent draft' })
+    if (!card) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 草案创建失败')
     return c.json(card)
   })
   .post('/:sessionId/agent-draft/:messageId/confirm', zValidator('json', confirmAgentDraftSchema), async (c) => {
@@ -508,33 +446,33 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub || session.type !== 'group' || !session.workspaceId) {
-      throw new HTTPException(404, { message: 'Agent Group session not found' })
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
     }
     const [card] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-    if (!card || card.sessionId !== sessionId) throw new HTTPException(404, { message: 'Agent draft not found' })
+    if (!card || card.sessionId !== sessionId) throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 草案不存在')
 
     const cardMetadata = card.metadata as { agentDraftStatus?: unknown; createdAgentId?: unknown } | null
-    if (card.type !== 'task_card') throw new HTTPException(400, { message: 'Message is not an agent draft' })
+    if (card.type !== 'task_card') throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '消息不是 Agent 草案')
     if (cardMetadata?.agentDraftStatus === 'confirmed') {
       if (typeof cardMetadata.createdAgentId !== 'string') {
-        throw new HTTPException(409, { message: 'Agent draft is already confirmed but missing created agent id' })
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 草案已确认但缺少创建的 Agent ID')
       }
       const [existingAgent] = await db
         .select()
         .from(workspaceAgents)
         .where(and(eq(workspaceAgents.id, cardMetadata.createdAgentId), eq(workspaceAgents.workspaceId, session.workspaceId)))
         .limit(1)
-      if (!existingAgent) throw new HTTPException(409, { message: 'Confirmed agent draft points to a missing agent' })
+      if (!existingAgent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, '已确认的 Agent 草案指向不存在的 Agent')
       return c.json({ agent: existingAgent, message: card })
     }
     if (cardMetadata?.agentDraftStatus !== 'draft') {
-      throw new HTTPException(400, { message: 'Message is not an editable agent draft' })
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '消息不是可编辑的 Agent 草案')
     }
 
     const metadataDraft = parseAgentDraft(card.metadata)
-    if (!metadataDraft) throw new HTTPException(400, { message: 'Invalid agent draft metadata' })
+    if (!metadataDraft) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 草案元数据无效')
     const draft = normalizeAgentDraftInput(draftOverride ?? metadataDraft)
-    if (!draft) throw new HTTPException(400, { message: 'Invalid agent draft metadata' })
+    if (!draft) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 草案元数据无效')
 
     const existing = await db
       .select({ id: workspaceAgents.id })
@@ -544,7 +482,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .insert(workspaceAgents)
       .values({ ...draft, workspaceId: session.workspaceId, orderIdx: existing.length })
       .returning()
-    if (!agent) throw new HTTPException(500, { message: 'Failed to create Agent' })
+    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_REPLY_FAILED, 'Agent 创建失败')
 
     await db.insert(sessionMembers).values({
       sessionId,
@@ -572,11 +510,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const [card] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!card || card.sessionId !== sessionId || card.type !== 'task_card') {
-      throw new HTTPException(404, { message: 'Plan card not found' })
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '计划卡片不存在')
     }
 
     const parsed = parsePlan(card.metadata)
-    if (!parsed) throw new HTTPException(400, { message: 'Invalid plan metadata' })
+    if (!parsed) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '计划元数据无效')
 
     const updates = new Map(tasks.map((task) => [task.id, task]))
     const agentKeys = new Set<string>(parsed.agents.map((agent) => agent.key))
@@ -599,7 +537,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .set({ content: nextPlan.summary, metadata: { ...metadata, plan: nextPlan } })
       .where(eq(messages.id, messageId))
       .returning()
-    if (!updated) throw new HTTPException(500, { message: 'Failed to update plan card' })
+    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_UPDATE_FAILED, '计划卡片更新失败')
     return c.json(updated)
   })
   .post('/:sessionId/orchestrator-plan/:messageId/dispatch', async (c) => {
@@ -609,11 +547,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const [card] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!card || card.sessionId !== sessionId || card.type !== 'task_card') {
-      throw new HTTPException(404, { message: 'Plan card not found' })
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '计划卡片不存在')
     }
 
     const parsed = parsePlan(card.metadata)
-    if (!parsed) throw new HTTPException(400, { message: 'Invalid plan metadata' })
+    if (!parsed) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '计划元数据无效')
 
     // Guardrails: check user intent for dangerous operations
     const guardrails = checkInputGuardrails(parsed.goal)
@@ -639,7 +577,14 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       // 复用当前会话绑定的 workspace，不因当前会话不是群聊而另建工作区。
       const existing = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
       workspaceId = existing.workspaceId
-      groupSessionId = existing.groupSessionId ?? sessionId
+      if (sourceSession.type === 'group') {
+        groupSessionId = existing.groupSessionId
+      } else {
+        // 修复 Bug 1: 如果源会话是 direct，必须找到/创建对应的 group session
+        const { ensureGroupSession } = await import('../services/workspace/group-session')
+        const groupSession = await ensureGroupSession(workspaceId, user.sub)
+        groupSessionId = groupSession.id
+      }
       agentsByKey = existing.agentsByKey
       createdAgents = Array.from(agentsByKey.values())
     } else {
@@ -648,7 +593,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .insert(workspaces)
         .values({ ownerId: user.sub, name: parsed.title, goal: parsed.goal })
         .returning()
-      if (!workspace) throw new HTTPException(500, { message: 'Failed to create workspace' })
+      if (!workspace) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
       workspaceId = workspace.id
 
       createdAgents = await db
@@ -702,7 +647,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const taskIdRemap = new Map<string, string>()
     for (const [index, task] of parsed.tasks.entries()) {
       const agent = agentsByKey.get(task.agentKey)
-      const phaseId = task.phaseId ?? inferPlanTaskPhase(task, index)
+      const phaseId = task.phaseId
       let taskId = task.id
       const existingTask = await db.select({ id: workspaceTasks.id }).from(workspaceTasks).where(eq(workspaceTasks.id, taskId)).limit(1)
       if (existingTask.length > 0) {
@@ -729,13 +674,18 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .returning()
 
       // Orchestrator 任务：每个 task 独立 session，不复用
-      const childSession = await ensureAgentChildSession(
-        workspaceId,
-        workspaceRecord?.name ?? parsed.title,
-        user.sub,
-        agent ?? null,
-        task.title,
-      )
+      const [childSession] = await db
+        .insert(sessions)
+        .values({
+          title: agent ? `${parsed.title} / ${agent.name} / ${task.title.slice(0, 24)}` : `${parsed.title} / ${task.title.slice(0, 24)}`,
+          type: 'direct',
+          ownerId: user.sub,
+          workspaceId,
+          workspaceAgentId: agent?.id ?? null,
+          metadata: { orchestratorRunId: runId, orchestratorTaskId: task.id },
+        })
+        .returning()
+      if (!childSession) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '任务会话创建失败')
 
       if (workspaceTask) {
         await db
@@ -751,6 +701,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         title: task.title,
         agentName: agent?.name ?? 'Agent',
       })
+    }
+
+    // 修复 Bug 9: Task ID 重映射后同步更新 phases 中的 taskIds
+    if (taskIdRemap.size > 0 && parsed.phases) {
+      for (const phase of parsed.phases) {
+        if (phase.taskIds) {
+          phase.taskIds = phase.taskIds.map((tid) => taskIdRemap.get(tid) ?? tid)
+        }
+      }
     }
 
     // 构建 ExecutionPlan 并启动 OrchestratorEngine
@@ -784,7 +743,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       }),
       tasks: parsed.tasks.map((t, index) => ({
         id: t.id,
-        phaseId: t.phaseId ?? inferPlanTaskPhase(t, index),
+        phaseId: t.phaseId,
         title: t.title,
         description: t.description,
         agentId: agentsByKey.get(t.agentKey)?.id ?? t.agentKey,
@@ -830,266 +789,88 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     })
 
     const engine = new OrchestratorEngine()
-    engine.startRun({ runId, groupSessionId, workspaceId, plan: executionPlan, childSessions }).catch(() => {})
+    engine.startRun({ runId, groupSessionId, workspaceId, plan: executionPlan, childSessions }).catch(async (err: any) => {
+      logger.error({ err: err?.message, runId }, 'Orchestrator engine start failed')
+      await db.update(orchestratorRuns).set({ status: 'failed' }).where(eq(orchestratorRuns.id, runId))
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        type: 'run.failed',
+        severity: 'error',
+        payload: { error: err?.message || '编排器引擎启动失败' },
+      })
+      const failedPlan = { ...parsed, tasks: parsed.tasks.map((t) => ({ ...t, status: 'failed' as const })) }
+      await db
+        .update(messages)
+        .set({
+          metadata: {
+            ...(card.metadata ?? {}),
+            plan: { ...failedPlan, dispatchResult: { runId, workspaceId, groupSessionId, tasks: taskResults } },
+          },
+        })
+        .where(eq(messages.id, messageId))
+    })
 
     const result: OrchestratorDispatchResult = { runId, workspaceId, groupSessionId, tasks: taskResults }
     await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result)
     return c.json(result)
   })
 
-function buildDemoArtifacts(content: string): DemoArtifact[] {
-  const lower = content.toLowerCase()
-  const artifacts: DemoArtifact[] = []
-  const wantsDeploy = /部署|发布|deploy|release/.test(lower)
-  const wantsPreview = /预览|preview|网页|页面|web/.test(lower)
-  const wantsDiff = /diff|补丁|变更|修改|应用/.test(lower)
-  const wantsFile = /文件|附件|下载|打包|源码|zip|ppt|文档/.test(lower)
-  const wantsWorkflow = /workflow|工作流|流程|编排|pipeline/.test(lower)
 
-  if (wantsWorkflow) {
-    artifacts.push({
-      id: `workflow-${crypto.randomUUID()}`,
-      kind: 'workflow',
-      type: 'workflow',
-      title: 'Agent 协作 Workflow',
-      description: '多 Agent 协作工作流定义，可在聊天流中可视化预览并一键执行。',
-      nodes: [
-        { id: 'input', label: '用户输入', type: 'input' },
-        { id: 'architect', label: '架构师', type: 'agent', agentKey: 'architect', agentName: 'Architect', agentColor: '#6366f1' },
-        { id: 'coder', label: '实现者', type: 'agent', agentKey: 'coder', agentName: 'Coder', agentColor: '#10b981' },
-        { id: 'reviewer', label: '审查者', type: 'agent', agentKey: 'reviewer', agentName: 'Reviewer', agentColor: '#ef4444' },
-        { id: 'output', label: '产出汇总', type: 'output' },
-      ],
-      edges: [
-        { from: 'input', to: 'architect', label: '拆解' },
-        { from: 'architect', to: 'coder', label: '实现' },
-        { from: 'coder', to: 'reviewer', label: '审查' },
-        { from: 'reviewer', to: 'output', label: '汇总' },
-      ],
-    })
-  }
 
-  if (wantsPreview || (!wantsDeploy && !wantsDiff && !wantsFile && !wantsWorkflow)) {
-    artifacts.push({
-      id: `web-${crypto.randomUUID()}`,
-      kind: 'web_preview',
-      type: 'preview',
-      title: 'AgentHub Web Preview',
-      description: '聊天流内联网页预览，可展开后接入 iframe、Sandpack 或真实预览 URL。',
-      url: 'https://agenthub.local/preview/landing-page',
-      previewKind: 'iframe',
-      status: 'ready',
-    })
-  }
-
-  if (wantsDiff) {
-    artifacts.push({
-      id: `diff-${crypto.randomUUID()}`,
-      kind: 'diff',
-      type: 'diff',
-      title: 'UI 变更 Diff',
-      description: '展示 Agent 产出的代码补丁，后续可接”一键应用 Diff”。',
-      filePath: 'apps/web/src/components/chat/SessionList.tsx',
-      language: 'tsx',
-      diff: [
-        'diff --git a/apps/web/src/components/chat/SessionList.tsx b/apps/web/src/components/chat/SessionList.tsx',
-        'index 1234567..abcdefg 100644',
-        '--- a/apps/web/src/components/chat/SessionList.tsx',
-        '+++ b/apps/web/src/components/chat/SessionList.tsx',
-        '@@ -42,7 +42,11 @@ export default function SessionList() {',
-        '-  const sessionTree = useMemo(() => buildSessionTree(sessions), [sessions])',
-        '+  const [query, setQuery] = useState(\”\”)',
-        '+  const [showArchived, setShowArchived] = useState(false)',
-        '+  const sessionTree = useMemo(',
-        '+    () => filterSessionTree(buildSessionTree(sessions), query, showArchived),',
-        '+    [query, sessions, showArchived]',
-        '+  )',
-      ].join('\n'),
-    })
-  }
-
-  if (wantsDeploy) {
-    artifacts.push({
-      id: `deploy-${crypto.randomUUID()}`,
-      kind: 'deploy',
-      type: 'deploy',
-      title: '静态站点部署',
-      description: '部署状态卡片先以 Demo 方式闭环，真实版本可接 Vercel、Netlify 或容器平台。',
-      provider: 'static',
-      status: 'ready',
-      url: 'https://agenthub-preview.local/app',
-      logs: ['Build queued', 'Install dependencies', 'Run production build', 'Upload static assets', 'Preview is ready'],
-    })
-  }
-
-  if (wantsFile) {
-    artifacts.push({
-      id: `file-${crypto.randomUUID()}`,
-      kind: 'file',
-      type: 'file',
-      title: '源码打包附件',
-      description: '用于展示 Agent 回复中的文件附件入口。',
-      path: 'agenthub-preview-source.zip',
-      mimeType: 'application/zip',
-      size: 131072,
-      url: '#',
-    })
-  }
-
-  return artifacts.length ? artifacts : buildDemoArtifacts('预览')
-}
-
-function artifactSummary(artifacts: DemoArtifact[]) {
-  const labels = artifacts.map((artifact) => {
-    if (artifact.type === 'preview') return '网页预览'
-    if (artifact.type === 'diff') return 'Diff 视图'
-    if (artifact.type === 'deploy') return '部署状态'
-    if (artifact.type === 'workflow') return 'Workflow'
-    return '文件附件'
-  })
-  return `已生成 ${labels.join('、')} 卡片，可在聊天流中直接预览和操作。`
-}
-
-function buildAgentDraft(content: string): AgentDraft {
-  const codeAgentType = inferCodeAgentType(content)
-  const runtimeType = codeAgentType ? 'code-agent' : 'llm'
-  const role = inferAgentRole(content)
-  const name = inferAgentName(content, role, codeAgentType)
-  const capabilityTags = inferCapabilityTags(content, role)
-  const toolPermissions = inferToolPermissions(content)
-  const roleType = inferRoleType({ name, role, capabilityTags, roleType: 'custom' })
+function toExecutionAgent(agent: PlanAgent): import('../services/orchestrator/types').ExecutionAgent {
   return {
-    name,
-    role,
-    roleType,
-    description: `${role} Agent，负责${capabilityTags.slice(0, 3).join('、') || '协作任务'}。`,
-    avatar: null,
-    systemPrompt: buildAgentSystemPrompt(role, capabilityTags),
-    roleProfile: null,
-    color: colorForRole(role),
-    modelId: null,
-    runtimeType,
-    codeAgentType: codeAgentType ?? null,
-    capabilityTags,
-    toolPermissions,
-    sandboxPolicy: toolPermissions.includes('workspace:write') ? 'workspace-write' : 'read-only',
-    contextPolicy: 'workspace-aware',
-    autoInvoke: true,
-    approvalRequired: codeAgentType ? false : true,
+    id: agent.key,
+    key: agent.key,
+    name: agent.name,
+    role: agent.role,
+    roleType: agent.roleType,
+    description: agent.description,
+    color: agent.color,
+    systemPrompt: agent.systemPrompt,
+    roleProfile: agent.roleProfile,
+    modelId: agent.modelId,
+    runtimeType: agent.runtimeType ?? 'llm',
+    codeAgentType: agent.codeAgentType ?? undefined,
+    capabilityTags: agent.capabilityTags ?? [],
+    toolPermissions: agent.toolPermissions ?? [],
+    sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
   }
 }
 
-function inferCodeAgentType(content: string): AgentDraft['codeAgentType'] {
-  const lower = content.toLowerCase()
-  if (lower.includes('claude')) return 'claude-code'
-  if (lower.includes('opencode') || lower.includes('open code')) return 'opencode'
-  if (lower.includes('gemini')) return 'gemini'
-  if (lower.includes('codex')) return 'codex'
-  return null
-}
-
-function inferAgentRole(content: string) {
-  const lower = content.toLowerCase()
-  if (/review|审查|测试|质量/.test(lower)) return '审查'
-  if (/research|研究|调研/.test(lower)) return '研究'
-  if (/deploy|部署|发布|运维/.test(lower)) return '部署'
-  if (/front|react|vue|页面|前端|ui/.test(lower)) return '前端实现'
-  if (/backend|server|api|后端|接口/.test(lower)) return '后端实现'
-  if (/architect|架构|规划/.test(lower)) return '规划'
-  return /coder|code|实现|代码/.test(lower) ? '实现' : '协作'
-}
-
-function inferAgentName(content: string, role: string, codeAgentType: AgentDraft['codeAgentType']) {
-  const explicit = /(?:创建|添加|新建)\s*(?:一个)?\s*([A-Za-z][A-Za-z0-9_-]{1,24})\s*(?:Agent|代理|助手)/i.exec(content)?.[1]
-  if (explicit && !['agent', 'coder', 'code'].includes(explicit.toLowerCase())) return explicit
-  const prefix = codeAgentType === 'claude-code' ? 'Claude' : codeAgentType === 'opencode' ? 'OpenCode' : codeAgentType === 'gemini' ? 'Gemini' : codeAgentType === 'codex' ? 'Codex' : ''
-  const suffix = role.includes('前端') ? 'Frontend' : role.includes('后端') ? 'Backend' : role.includes('审查') ? 'Reviewer' : role.includes('部署') ? 'Deploy' : 'Coder'
-  return [prefix, suffix].filter(Boolean).join(' ') || 'Custom Agent'
-}
-
-function inferCapabilityTags(content: string, role: string) {
-  const tags = new Set<string>()
-  const candidates: Array<[RegExp, string]> = [
-    [/react|前端|页面|ui/i, '前端'],
-    [/node|server|api|后端|接口/i, '后端'],
-    [/test|测试|qa/i, '测试'],
-    [/deploy|部署|发布/i, '部署'],
-    [/review|审查|质量/i, '审查'],
-    [/research|研究|调研/i, '研究'],
-    [/workflow|流程|编排/i, '编排'],
-  ]
-  for (const [pattern, tag] of candidates) {
-    if (pattern.test(content)) tags.add(tag)
-  }
-  if (role) tags.add(role)
-  return [...tags].slice(0, 8)
-}
-
-function inferToolPermissions(content: string) {
-  const lower = content.toLowerCase()
-  const permissions = new Set<string>(['chat'])
-  if (/读|读取|read|项目|workspace|文件/.test(lower)) permissions.add('workspace:read')
-  if (/写|修改|实现|代码|write|workspace/.test(lower)) permissions.add('workspace:write')
-  if (/预览|preview|shell/.test(lower)) permissions.add('shell:preview')
-  if (/部署|发布|deploy/.test(lower)) permissions.add('deploy:preview')
-  return [...permissions]
-}
-
-function buildAgentSystemPrompt(role: string, tags: string[]) {
-  return [
-    `你是 AgentHub 中的${role} Agent。`,
-    tags.length ? `你的能力标签是：${tags.join('、')}。` : '',
-    '请基于当前会话上下文给出可执行产出；涉及文件修改、命令执行、部署或密钥时先说明风险并等待用户确认。',
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-function colorForRole(role: string) {
-  if (role.includes('前端')) return '#2563eb'
-  if (role.includes('后端')) return '#0f766e'
-  if (role.includes('审查')) return '#ef4444'
-  if (role.includes('部署')) return '#7c3aed'
-  if (role.includes('研究')) return '#f59e0b'
-  if (role.includes('规划')) return '#6366f1'
-  return '#111827'
-}
-
-function parseAgentDraft(metadata: unknown) {
-  const draft = (metadata as { agentDraft?: unknown } | null)?.agentDraft
-  return normalizeAgentDraftInput(draft)
-}
-
-function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
-  if (!value || typeof value !== 'object') return null
-  const parsed = confirmAgentDraftSchema.shape.draft.safeParse(value)
-  if (!parsed.success || !parsed.data) return null
-  const draft = parsed.data
-  const runtimeType = draft.runtimeType ?? 'llm'
-  const nativeReadOnly = runtimeType === 'mcp'
+function executionPlanToOrchestratorPlan(
+  plan: import('../services/orchestrator/types').ExecutionPlan,
+  planAgents: PlanAgent[],
+): OrchestratorPlan {
   return {
-    name: draft.name.trim(),
-    role: draft.role.trim(),
-    roleType: draft.roleType ?? inferRoleType({
-      name: draft.name,
-      role: draft.role,
-      capabilityTags: draft.capabilityTags ?? [],
-      roleType: 'custom',
-    }),
-    description: draft.description?.trim() ?? '',
-    avatar: draft.avatar ?? null,
-    systemPrompt: draft.systemPrompt?.trim() ?? '',
-    roleProfile: draft.roleProfile ?? null,
-    color: draft.color ?? '#111827',
-    modelId: draft.modelId ?? null,
-    runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
-    capabilityTags: draft.capabilityTags ?? [],
-    toolPermissions: nativeReadOnly ? ['workspace:read', 'skills:read'] : draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
-    sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
-    contextPolicy: draft.contextPolicy ?? 'workspace-aware',
-    autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
+    kind: 'orchestrator_plan',
+    title: plan.title,
+    goal: plan.goal,
+    summary: `我已根据当前 Agent 团队把「${plan.title}」拆成 ${plan.tasks.length} 个子任务。确认后会创建或复用 Agent Group 并分发执行。`,
+    agents: planAgents,
+    phases: plan.phases?.map((p) => ({
+      id: p.id,
+      title: p.title,
+      purpose: p.purpose,
+      taskIds: p.taskIds,
+    })),
+    tasks: plan.tasks.map((t) => ({
+      id: t.id,
+      phaseId: t.phaseId,
+      title: t.title,
+      description: t.description,
+      agentKey: t.agentId,
+      taskType: t.taskType,
+      status: 'pending' as const,
+      dependencies: t.dependencies,
+      parallelGroup: t.parallelGroup,
+      maxRetries: t.maxRetries,
+      fallbackAgentId: t.fallbackAgentId,
+      outputContract: t.outputContract,
+      validation: t.validation,
+      agentSelection: t.agentSelection,
+    })),
   }
 }
 
@@ -1100,93 +881,24 @@ async function buildDynamicOrchestratorPlan(
 ): Promise<OrchestratorPlan> {
   const goal = normalizeOrchestratorGoal(content)
   const planningAgents = agents.length ? agents.map(planAgentFromWorkspaceAgent) : fallbackPlanAgents()
-  const planningRelations = workspaceId ? await loadWorkspaceAgentRelationsForPlanning(workspaceId) : []
 
-  let specPhases: string | undefined
+  let workspacePath: string | null = null
   if (workspaceId) {
-    try {
-      const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
-      if (ws?.projectPath) {
-        await harnessManager.loadFromWorkspace(ws.projectPath)
-        const spec = harnessManager.findBestSpec(goal)
-        if (spec) {
-          specPhases = [
-            `【协作规范：${spec.name}】`,
-            spec.description,
-            '',
-            '请按以下阶段组织任务（每个阶段可映射为 1 个或多个 task）：',
-            ...spec.phases.map((p, i) => {
-              const deps = p.dependsOn?.length ? `（依赖：${p.dependsOn.join('、')}）` : ''
-              return `${i + 1}. ${p.name}：${p.description} ${deps}`
-            }),
-            '【规范结束】',
-          ].join('\n')
-        }
-      }
-    } catch {
-      // Best-effort spec loading; don't block plan generation.
-    }
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    workspacePath = ws?.projectPath ?? null
   }
 
-  try {
-    const generated = await generatePlanWithLlm(goal, planningAgents, specPhases)
-    const normalized = normalizeGeneratedPlan(goal, generated, planningAgents)
-    if (normalized) return applyAgentSelections(normalized, planningRelations)
-  } catch {
-    // Keep task card creation reliable when model credentials are missing or JSON generation fails.
-  }
+  const planner = new Planner()
+  const executionPlan = await planner.createPlan({
+    goal,
+    agents: planningAgents.map(toExecutionAgent),
+    workspacePath,
+    useSpecFirst: false,
+  })
 
-  return applyAgentSelections(buildOrchestratorPlan(content, planningAgents), planningRelations)
-}
-
-function buildOrchestratorPlan(content: string, agents = fallbackPlanAgents()): OrchestratorPlan {
-  const normalizedGoal = normalizeOrchestratorGoal(content)
-  const title = titleFromGoal(normalizedGoal)
-  const selectedAgents = agents.length ? agents.slice(0, Math.max(1, Math.min(agents.length, 4))) : fallbackPlanAgents()
-  const leadAgent = pickAgent(selectedAgents, ['规划', '架构', 'architect', 'plan']) ?? selectedAgents[0]!
-  const buildAgent =
-    pickAgent(selectedAgents, ['实现', '代码', 'coder', 'code', 'build']) ?? selectedAgents[1] ?? selectedAgents[0]!
-  const reviewAgent =
-    pickAgent(selectedAgents, ['审查', 'review', 'test', '风险']) ?? selectedAgents[2] ?? selectedAgents[selectedAgents.length - 1]!
-
-  return {
-    kind: 'orchestrator_plan',
-    title,
-    goal: normalizedGoal,
-    summary: `我已根据当前 Agent 团队把「${title}」拆成 3 个子任务。确认后会创建或复用 Agent Group 并分发执行。`,
-    agents: selectedAgents,
-    phases: [
-      { id: 'analysis', title: '分析', purpose: '梳理目标、边界和验收标准', taskIds: ['plan'] },
-      { id: 'implementation', title: '实现', purpose: '完成核心交付路径', taskIds: ['build'] },
-      { id: 'verification', title: '验证', purpose: '审查风险并补齐测试建议', taskIds: ['review'] },
-    ],
-    tasks: [
-      {
-        id: 'plan',
-        title: '梳理目标与交付范围',
-        description: `围绕「${normalizedGoal}」定义核心目标、交付物、边界、依赖和验收标准。`,
-        agentKey: leadAgent.key,
-        taskType: 'design',
-        status: 'pending',
-      },
-      {
-        id: 'build',
-        title: '实现核心功能与界面',
-        description: '基于拆解结果产出可执行实现方案，优先完成关键路径、组件接入和小步验证。',
-        agentKey: buildAgent.key,
-        taskType: 'code',
-        status: 'pending',
-      },
-      {
-        id: 'review',
-        title: '审查风险与测试建议',
-        description: '检查交互边界、异常状态、测试缺口和交付风险，并给出可直接执行的修复建议。',
-        agentKey: reviewAgent.key,
-        taskType: 'review',
-        status: 'pending',
-      },
-    ],
-  }
+  const plan = executionPlanToOrchestratorPlan(executionPlan, planningAgents)
+  const relations = workspaceId ? await loadWorkspaceAgentRelationsForPlanning(workspaceId) : []
+  return applyAgentSelections(plan, relations)
 }
 
 function normalizeOrchestratorGoal(content: string) {
@@ -1283,316 +995,6 @@ function applyAgentSelections(plan: OrchestratorPlan, relations: Awaited<ReturnT
   }
 }
 
-function pickAgent(agents: PlanAgent[], keywords: string[]) {
-  const lowered = keywords.map((keyword) => keyword.toLowerCase())
-  return agents.find((agent) => {
-    const text = [agent.name, agent.role, agent.description, agent.runtimeType, agent.codeAgentType, ...(agent.capabilityTags ?? [])]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
-    return lowered.some((keyword) => text.includes(keyword))
-  })
-}
-
-async function generatePlanWithLlm(goal: string, agents: PlanAgent[], specPhases?: string) {
-  const agentCatalog = agents.map((agent) => ({
-    key: agent.key,
-    name: agent.name,
-    role: agent.role,
-    roleType: agent.roleType,
-    description: agent.description,
-    roleProfile: agent.roleProfile,
-    runtimeType: agent.runtimeType,
-    codeAgentType: agent.codeAgentType,
-    capabilityTags: agent.capabilityTags ?? [],
-    toolPermissions: agent.toolPermissions ?? [],
-    sandboxPolicy: agent.sandboxPolicy,
-    systemPrompt: agent.systemPrompt,
-  }))
-  const system = [
-    'You are AgentHub Orchestrator.',
-    'Create a concise multi-agent execution plan using only the provided agent keys.',
-    'Return strict JSON only. Do not include Markdown fences or explanations.',
-    'Schema: {"title":string,"summary":string,"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","status":"pending","outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
-    'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
-    specPhases || '',
-  ].filter(Boolean).join('\n')
-  const messagesForPlan = [
-    {
-      role: 'user' as const,
-      content: JSON.stringify(
-        {
-          goal,
-          agents: agentCatalog,
-          language: 'zh-CN',
-        },
-        null,
-        2
-      ),
-    },
-  ]
-
-  let output = ''
-  for await (const delta of streamReply(messagesForPlan, system)) {
-    output += delta
-    if (output.length > 20_000) break
-  }
-
-  const jsonText = extractJsonObject(output)
-  if (!jsonText) return null
-  return JSON.parse(jsonText) as unknown
-}
-
-function normalizeGeneratedPlan(goal: string, generated: unknown, agents: PlanAgent[]): OrchestratorPlan | null {
-  if (!generated || typeof generated !== 'object') return null
-  const candidate = generated as {
-    title?: unknown
-    summary?: unknown
-    phases?: Array<{
-      id?: unknown
-      title?: unknown
-      purpose?: unknown
-      taskIds?: unknown
-    }>
-    tasks?: Array<{
-      id?: unknown
-      phaseId?: unknown
-      title?: unknown
-      description?: unknown
-      agentKey?: unknown
-      taskType?: unknown
-      status?: unknown
-      outputContract?: unknown
-      validation?: unknown
-    }>
-  }
-  if (!Array.isArray(candidate.tasks) || candidate.tasks.length === 0) return null
-
-  const agentKeys = new Set(agents.map((agent) => agent.key))
-  // 原始 task.id（如 task1） → UUID 的映射，用于同步更新 phases 中的引用
-  const rawIdToUuid = new Map<string, string>()
-  const tasks = candidate.tasks
-    .slice(0, 6)
-    .map((task, index): PlanTask | null => {
-      const title = cleanPlanText(task.title)
-      const description = cleanPlanText(task.description)
-      const agentKey = typeof task.agentKey === 'string' && agentKeys.has(task.agentKey) ? task.agentKey : agents[0]?.key
-      if (!title || !description || !agentKey) return null
-      const rawId = slugifyTaskId(cleanPlanText(task.id) || title, index)
-      const id = crypto.randomUUID()
-      rawIdToUuid.set(rawId, id)
-      return {
-        id,
-        phaseId: cleanPlanText(task.phaseId) || undefined,
-        title,
-        description,
-        agentKey,
-        taskType: parsePlanTaskType(task.taskType) ?? inferTaskTypeFromPlanText(`${title} ${description}`),
-        status: task.status === 'running' || task.status === 'done' || task.status === 'failed' ? task.status : 'pending',
-        outputContract: normalizeTaskOutputContract(task.outputContract, id),
-        validation: normalizeTaskValidation(task.validation),
-      }
-    })
-    .filter((task): task is PlanTask => Boolean(task))
-
-  if (!tasks.length) return null
-  const title = cleanPlanText(candidate.title) || titleFromGoal(goal)
-  const phases = normalizePlanPhases(candidate.phases, tasks, rawIdToUuid)
-
-  return {
-    kind: 'orchestrator_plan',
-    title,
-    goal,
-    summary: cleanPlanText(candidate.summary) || `我已根据当前 Agent 团队把「${title}」拆成 ${tasks.length} 个子任务。`,
-    agents,
-    phases,
-    tasks,
-  }
-}
-
-function extractJsonObject(value: string) {
-  const cleaned = value.trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
-  if (cleaned.startsWith('{') && cleaned.endsWith('}')) return cleaned
-  const start = cleaned.indexOf('{')
-  const end = cleaned.lastIndexOf('}')
-  return start >= 0 && end > start ? cleaned.slice(start, end + 1) : null
-}
-
-function cleanPlanText(value: unknown) {
-  return typeof value === 'string' ? value.trim().slice(0, 1200) : ''
-}
-
-function slugifyTaskId(value: string, index: number) {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 32)
-  return slug || `task-${index + 1}`
-}
-
-function titleFromGoal(goal: string) {
-  const cleaned = goal.replace(/[。.!?？\n\r]/g, ' ').trim()
-  return cleaned.length > 18 ? `${cleaned.slice(0, 18)}...` : cleaned || '多 Agent 协作任务'
-}
-
-function normalizePlanPhases(phases: unknown, tasks: PlanTask[], rawIdToUuid?: Map<string, string>): PlanPhase[] {
-  const normalized: PlanPhase[] = []
-  if (Array.isArray(phases)) {
-    for (const phase of phases) {
-      if (!phase || typeof phase !== 'object') continue
-      const item = phase as { id?: unknown; title?: unknown; purpose?: unknown; taskIds?: unknown }
-      const id = cleanPlanText(item.id)
-      if (!id || normalized.some((existing) => existing.id === id)) continue
-      const rawTaskIds = Array.isArray(item.taskIds)
-        ? item.taskIds.filter((taskId): taskId is string => typeof taskId === 'string')
-        : []
-      // 将原始 taskId（如 task1）替换为对应的 UUID
-      const taskIds = rawIdToUuid
-        ? rawTaskIds.map((tid) => rawIdToUuid.get(tid) ?? tid).filter(Boolean) as string[]
-        : rawTaskIds
-      normalized.push({
-        id,
-        title: cleanPlanText(item.title) || phaseTitleFromId(id),
-        purpose: cleanPlanText(item.purpose) || phaseTitleFromId(id),
-        taskIds,
-      })
-    }
-  }
-
-  for (const [index, task] of tasks.entries()) {
-    const phaseId = task.phaseId ?? inferPlanTaskPhase(task, index)
-    task.phaseId = phaseId
-    let phase = normalized.find((item) => item.id === phaseId)
-    if (!phase) {
-      phase = {
-        id: phaseId,
-        title: phaseTitleFromId(phaseId),
-        purpose: phasePurposeFromId(phaseId),
-        taskIds: [],
-      }
-      normalized.push(phase)
-    }
-    if (!phase.taskIds.includes(task.id)) phase.taskIds.push(task.id)
-  }
-
-  return normalized
-}
-
-function inferPlanTaskPhase(task: Pick<PlanTask, 'id' | 'title' | 'description'>, index: number): string {
-  const text = `${task.id} ${task.title} ${task.description}`.toLowerCase()
-  if (/(plan|analysis|scan|read|理解|梳理|分析|调研)/i.test(text)) return 'analysis'
-  if (/(design|方案|架构|设计)/i.test(text)) return 'design'
-  if (/(build|code|implement|实现|开发|修改)/i.test(text)) return 'implementation'
-  if (/(review|test|verify|审查|测试|验证|风险)/i.test(text)) return 'verification'
-  if (/(summary|synthesize|汇总|总结)/i.test(text)) return 'synthesis'
-  return index === 0 ? 'analysis' : 'execution'
-}
-
-function parsePlanTaskType(value: unknown): PlanTask['taskType'] | undefined {
-  if (
-    value === 'read' ||
-    value === 'research' ||
-    value === 'design' ||
-    value === 'code' ||
-    value === 'test' ||
-    value === 'review' ||
-    value === 'synthesize'
-  ) {
-    return value
-  }
-  return undefined
-}
-
-function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutputContract {
-  const fallback: TaskOutputContract = {
-    requiredBlackboardWrites: [{ key: `task_${taskId}_output`, schemaType: 'task_output' }],
-    requiredArtifacts: [],
-    acceptanceCriteria: [],
-  }
-  if (!value || typeof value !== 'object') return fallback
-  const item = value as {
-    requiredBlackboardWrites?: unknown
-    requiredArtifacts?: unknown
-    allowedPaths?: unknown
-    acceptanceCriteria?: unknown
-  }
-  const requiredBlackboardWrites = Array.isArray(item.requiredBlackboardWrites)
-    ? item.requiredBlackboardWrites
-        .map((entry) => {
-          if (!entry || typeof entry !== 'object') return null
-          const candidate = entry as { key?: unknown; schemaType?: unknown }
-          const key = cleanPlanText(candidate.key)
-          const schemaType = parseBlackboardSchemaType(candidate.schemaType)
-          return key && schemaType ? { key, schemaType } : null
-        })
-        .filter((entry): entry is TaskOutputContract['requiredBlackboardWrites'][number] => Boolean(entry))
-    : []
-
-  return {
-    requiredBlackboardWrites: requiredBlackboardWrites.length ? requiredBlackboardWrites : fallback.requiredBlackboardWrites,
-    requiredArtifacts: arrayOfPlanStrings(item.requiredArtifacts).slice(0, 12),
-    allowedPaths: arrayOfPlanStrings(item.allowedPaths).slice(0, 24),
-    acceptanceCriteria: arrayOfPlanStrings(item.acceptanceCriteria).slice(0, 12),
-  }
-}
-
-function normalizeTaskValidation(value: unknown): TaskValidation {
-  if (!value || typeof value !== 'object') return { commands: [], requiresReview: false }
-  const item = value as { commands?: unknown; requiresReview?: unknown }
-  return {
-    commands: arrayOfPlanStrings(item.commands).slice(0, 8),
-    requiresReview: item.requiresReview === true,
-  }
-}
-
-function parseBlackboardSchemaType(value: unknown): TaskOutputContract['requiredBlackboardWrites'][number]['schemaType'] | undefined {
-  if (
-    value === 'fact' ||
-    value === 'decision' ||
-    value === 'risk' ||
-    value === 'artifact_ref' ||
-    value === 'diff_summary' ||
-    value === 'test_result' ||
-    value === 'task_output'
-  ) {
-    return value
-  }
-  return undefined
-}
-
-function arrayOfPlanStrings(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.map((item) => cleanPlanText(item)).filter(Boolean)
-}
-
-function inferTaskTypeFromPlanText(text: string): NonNullable<PlanTask['taskType']> {
-  if (/(review|审查|风险)/i.test(text)) return 'review'
-  if (/(test|verify|测试|验证)/i.test(text)) return 'test'
-  if (/(code|build|implement|实现|开发|修改)/i.test(text)) return 'code'
-  if (/(design|方案|架构|设计|plan|规划)/i.test(text)) return 'design'
-  if (/(research|调研|搜索|资料)/i.test(text)) return 'research'
-  if (/(summary|synthesize|汇总|总结)/i.test(text)) return 'synthesize'
-  return 'read'
-}
-
-function phaseTitleFromId(id: string): string {
-  if (id === 'analysis') return '分析'
-  if (id === 'design') return '设计'
-  if (id === 'implementation') return '实现'
-  if (id === 'verification') return '验证'
-  if (id === 'synthesis') return '汇总'
-  return '执行'
-}
-
-function phasePurposeFromId(id: string): string {
-  if (id === 'analysis') return '理解目标和上下文'
-  if (id === 'design') return '确定方案和边界'
-  if (id === 'implementation') return '完成核心实现'
-  if (id === 'verification') return '验证质量和风险'
-  if (id === 'synthesis') return '汇总协作产出'
-  return '推进当前任务'
-}
 
 function parsePlan(metadata: unknown): OrchestratorPlan | null {
   const plan = (metadata as { plan?: unknown } | null)?.plan
@@ -1676,7 +1078,8 @@ function hasMention(content: string, aliases: string[]) {
     const token = alias.trim()
     if (!token) return false
     const normalized = token.toLowerCase()
-    return lower.includes(`@${normalized}`) || new RegExp(`@\\s*${escapeRegExp(normalized)}\\b`, 'i').test(content)
+    // 修复 Bug 14: 移除 \b 单词边界，因为中文没有单词边界概念
+    return lower.includes(`@${normalized}`) || new RegExp(`@\\s*${escapeRegExp(normalized)}(?:\\s|$|[，。！？.,!?;])`, 'i').test(content)
   })
 }
 
@@ -1744,9 +1147,7 @@ async function runGroupReplies(workspaceId: string, sessionId: string, msg: Mess
   }
 
   const { runAgentReply } = await import('../services/agent-runner')
-  for (const profile of profiles) {
-    await runAgentReply(sessionId, msg, profile)
-  }
+  await Promise.allSettled(profiles.map((profile) => runAgentReply(sessionId, msg, profile)))
 }
 
 async function createWorkspaceGroupSession(
@@ -1764,7 +1165,7 @@ async function createWorkspaceGroupSession(
       workspaceId,
     })
     .returning()
-  if (!session) throw new HTTPException(500, { message: 'Failed to create group session' })
+  if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '群组会话创建失败')
 
   await db.insert(sessionMembers).values([
     { sessionId: session.id, memberType: 'user', memberId: ownerId },
@@ -1772,9 +1173,10 @@ async function createWorkspaceGroupSession(
     ...agents.map((agent) => ({ sessionId: session.id, memberType: 'agent' as const, memberId: agent.id })),
   ])
 
-  for (const agent of agents) {
-    await ensureAgentChildSession(workspaceId, workspaceName, ownerId, agent)
-  }
+  // Note: child sessions are lazily created when tasks are dispatched
+  // (see dispatchPlanToExistingGroup and orchestrator-engine).
+  // Pre-creating them here leads to orphan sessions when the orchestrator
+  // plans do not include every workspace agent.
 
   return session
 }
@@ -1813,7 +1215,7 @@ async function ensureAgentChildSession(
       workspaceAgentId: agent?.id ?? null,
     })
     .returning()
-  if (!created) throw new HTTPException(500, { message: 'Failed to create agent child session' })
+  if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Agent 子会话创建失败')
   return created
 }
 
@@ -1839,11 +1241,11 @@ async function dispatchPlanToExistingGroup(
   ownerId: string,
   plan: OrchestratorPlan
 ): Promise<{ workspaceId: string; groupSessionId: string; agentsByKey: Map<string, typeof workspaceAgents.$inferSelect> }> {
-  if (!session.workspaceId) throw new HTTPException(400, { message: 'Session is not attached to a workspace' })
+  if (!session.workspaceId) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '会话未关联工作区')
 
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
   if (!workspace || workspace.ownerId !== ownerId) {
-    throw new HTTPException(404, { message: 'Workspace not found' })
+    throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '工作区不存在')
   }
 
   const existingAgents = await db
@@ -1904,6 +1306,10 @@ async function dispatchPlanToExistingGroup(
         memberId: agent.id,
       }))
     )
+    // 修复 Bug 10: 为新创建的 agent 创建 child sessions
+    for (const agent of createdAgents) {
+      await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent)
+    }
   }
 
   return { workspaceId: workspace.id, groupSessionId: session.id, agentsByKey }

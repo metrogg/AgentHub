@@ -22,8 +22,8 @@ export const sessions = sqliteTable('sessions', {
   title: text('title').notNull(),
   type: text('type', { enum: ['direct', 'group'] }).notNull().default('direct'),
   ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  workspaceId: text('workspace_id'),
-  workspaceAgentId: text('workspace_agent_id'),
+  workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
+  workspaceAgentId: text('workspace_agent_id').references(() => workspaceAgents.id, { onDelete: 'set null' }),
   metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
   createdAt: now(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
@@ -120,11 +120,11 @@ export interface AgentArtifact {
 export const workspaceTasks = sqliteTable('workspace_tasks', {
   id: id(),
   workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
-  agentId: text('agent_id'),
+  agentId: text('agent_id').references(() => workspaceAgents.id, { onDelete: 'set null' }),
   title: text('title').notNull(),
   description: text('description').notNull().default(''),
   status: text('status', { enum: ['pending', 'running', 'done', 'failed', 'cancelled'] }).notNull().default('pending'),
-  sessionId: text('session_id'),
+  sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
   orderIdx: integer('order_idx').notNull().default(0),
 
   // === 新增字段：DAG 调度支持 ===

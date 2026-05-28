@@ -215,6 +215,93 @@ bun --filter @agenthub/web typecheck
 - **隔离架构**：策略层（sandboxPolicy）→ Git 分支层（Branch-per-Agent）→ OS 层（Codex/Claude Code 自带 Seatbelt/seccomp/Landlock）。
 - **CORS**：动态解析允许来源，开发环境自动放行 `localhost:5173`。
 
+## 日志与错误规范
+
+### 统一错误响应
+
+后端所有 API 错误返回统一格式：
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "SESSION_NOT_FOUND",
+    "message": "会话不存在",
+    "details": { ... },
+    "requestId": "uuid"
+  }
+}
+```
+
+- `code`：机器可识别的错误码（`AppErrorCode`），方便前端分类处理。
+- `message`：面向用户的中文可读消息。
+- `details`：可选的调试上下文（开发环境可能包含 stack）。
+- `requestId`：请求追踪 ID，用于全链路定位问题。
+
+### 错误码体系
+
+错误码定义于 `apps/server/src/lib/error.ts` 的 `AppErrorCodes`，按领域分组：
+
+| 前缀 | 说明 | 示例 |
+|------|------|------|
+| `GENERAL_*` | 通用服务器错误 | `INTERNAL_ERROR`, `TIMEOUT` |
+| `VALIDATION_*` | 请求参数校验 | `VALIDATION_FAILED`, `MISSING_FIELD` |
+| `AUTH_*` | 认证授权（预留） | `UNAUTHORIZED`, `FORBIDDEN` |
+| `SESSION_*` | 会话 | `SESSION_NOT_FOUND`, `SESSION_CREATE_FAILED` |
+| `MESSAGE_*` | 消息 | `MESSAGE_NOT_FOUND`, `MESSAGE_UPDATE_FAILED` |
+| `WORKSPACE_*` | 工作区 | `WORKSPACE_NOT_FOUND`, `WORKSPACE_CREATE_FAILED` |
+| `TASK_*` | 任务 | `TASK_NOT_FOUND`, `TASK_EXECUTION_FAILED` |
+| `AGENT_*` | Agent | `AGENT_NOT_FOUND`, `CODE_AGENT_EXECUTION_FAILED` |
+| `LLM_*` | LLM 服务 | `LLM_REQUEST_FAILED`, `LLM_RATE_LIMITED` |
+| `ORCHESTRATOR_*` | 编排器 | `ORCHESTRATOR_PLAN_FAILED`, `ORCHESTRATOR_RUN_FAILED` |
+| `FILE_*` | 文件/产物 | `FILE_NOT_FOUND`, `DIFF_APPLY_FAILED` |
+
+### 路由中使用 AppError
+
+**禁止**在新增路由中继续使用裸 `HTTPException`。应使用 `AppError`：
+
+```typescript
+import { AppError, AppErrorCodes } from '../lib/error'
+
+// 资源不存在
+throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
+
+// 参数校验失败（带详情）
+throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '参数错误', { field: 'title' })
+
+// 内部错误
+throw AppError.internal(AppErrorCodes.LLM_REQUEST_FAILED, 'LLM 请求失败', { provider: 'openai' })
+```
+
+已有的 `HTTPException` 在 `messages.ts` / `workspaces.ts` 已作为示例完成迁移，其余路由保持兼容（`app.ts` 的 `onError` 会自动包装为 `AppError`）。
+
+### 请求追踪（requestId）
+
+`requestContextMiddleware` 为每个 HTTP 请求注入：
+
+1. **生成 `requestId`**：优先读取请求头 `X-Request-Id`（支持分布式追踪），否则 `crypto.randomUUID()`。
+2. **绑定 child logger**：通过 `c.get('requestContext').logger` 获取带 `requestId` 的 logger，日志自动关联请求。
+3. **响应头回写**：`X-Request-Id` 随响应返回给前端，方便用户报障时定位。
+
+路由中使用：
+
+```typescript
+const { requestId, logger } = c.get('requestContext')
+logger.info({ taskId }, 'Task started')
+```
+
+### 日志级别规范
+
+| 级别 | 使用场景 |
+|------|---------|
+| `fatal` | 进程即将崩溃，无法恢复 |
+| `error` | 业务错误、未捕获异常、外部服务彻底失败 |
+| `warn` | 可恢复的错误、降级、重试、客户端错误（4xx） |
+| `info` | 关键业务事件（请求完成、任务开始/结束、计划生成） |
+| `debug` | 调试信息（WebSocket 消息、工具调用入参出参） |
+
+**禁止**使用 `console.log` / `console.error`（启动阶段 fallback 除外）。统一使用 `apps/server/src/lib/logger.ts` 导出的 pino logger。
+
 ## 核心架构说明
 
 ### Agent Runtime 统一适配层

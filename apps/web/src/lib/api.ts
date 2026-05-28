@@ -7,9 +7,14 @@ interface RequestOptions extends RequestInit {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  public code?: string
+  public requestId?: string
+
+  constructor(public status: number, message: string, code?: string, requestId?: string) {
     super(message)
     this.name = 'ApiError'
+    this.code = code
+    this.requestId = requestId
   }
 }
 
@@ -27,6 +32,35 @@ function isRetryableError(error: unknown): boolean {
 export function friendlyErrorMessage(error: unknown, context?: string): string {
   const prefix = context ? `${context}：` : ''
   if (error instanceof ApiError) {
+    // 根据错误码提供比 HTTP 状态码更精准的中文提示
+    const codeMap: Record<string, string> = {
+      INTERNAL_ERROR: '服务端内部错误，请稍后重试',
+      SERVICE_UNAVAILABLE: '服务暂时不可用，请稍后重试',
+      TIMEOUT: '请求超时，请稍后重试',
+      VALIDATION_FAILED: '请求参数错误',
+      MISSING_FIELD: '缺少必要参数',
+      UNAUTHORIZED: '未登录或登录已过期',
+      FORBIDDEN: '没有权限执行此操作',
+      SESSION_NOT_FOUND: '会话不存在或已被删除',
+      MESSAGE_NOT_FOUND: '消息不存在或已被删除',
+      WORKSPACE_NOT_FOUND: '工作区不存在或已被删除',
+      TASK_NOT_FOUND: '任务不存在或已被删除',
+      AGENT_NOT_FOUND: 'Agent 不存在或已被删除',
+      FILE_NOT_FOUND: '文件不存在',
+      ARTIFACT_NOT_FOUND: '产物不存在',
+      LLM_REQUEST_FAILED: 'AI 服务请求失败，请检查模型配置',
+      LLM_RATE_LIMITED: 'AI 服务请求过于频繁，请稍后重试',
+      MODEL_NOT_CONFIGURED: '模型未配置，请先完成设置',
+      CODE_AGENT_NOT_INSTALLED: '代码 Agent 未安装，请先安装 CLI 工具',
+      CODE_AGENT_CONFIG_INVALID: '代码 Agent 配置错误',
+      ORCHESTRATOR_PLAN_FAILED: '编排计划生成失败，请稍后重试',
+      ORCHESTRATOR_DISPATCH_FAILED: '任务派发失败，请稍后重试',
+      DIFF_APPLY_FAILED: '代码补丁应用失败',
+      DIFF_VALIDATION_FAILED: '代码补丁校验失败',
+    }
+    if (error.code && codeMap[error.code]) {
+      return prefix + codeMap[error.code]
+    }
     if (error.status === 500 && error.message === 'Internal Server Error') {
       return prefix + '服务端暂不可用，请确认后端服务已启动后重试'
     }
@@ -77,7 +111,11 @@ async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt 
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new ApiError(res.status, body?.error ?? body?.message ?? `HTTP ${res.status}`)
+      const errorPayload = body?.error ?? {}
+      const message = typeof errorPayload === 'string' ? errorPayload : (errorPayload.message ?? body?.error ?? body?.message ?? `HTTP ${res.status}`)
+      const code = typeof errorPayload === 'object' ? errorPayload.code : undefined
+      const requestId = typeof errorPayload === 'object' ? errorPayload.requestId : undefined
+      throw new ApiError(res.status, message, code, requestId)
     }
 
     if (res.status === 204) return undefined as T

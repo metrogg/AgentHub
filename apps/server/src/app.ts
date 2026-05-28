@@ -1,7 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger as honoLogger } from 'hono/logger'
-import { HTTPException } from 'hono/http-exception'
 import { existsSync, statSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { env } from './env'
@@ -15,19 +14,20 @@ import { artifactRoutes, serveDeployStatic } from './routes/artifacts'
 import { orchestratorRunRoutes } from './routes/orchestrator-runs'
 import { mobileRoutes } from './routes/mobile'
 import { officeRoutes } from './routes/office'
+import { requestContextMiddleware } from './middleware/request-context'
+import { formatErrorResponse } from './lib/error'
 
 const app = new Hono()
   .use('*', honoLogger())
   .use('*', cors({ origin: resolveCorsOrigin, credentials: true }))
+  .use('*', requestContextMiddleware)
   .onError((err, c) => {
-    if (err instanceof HTTPException) {
-      return c.json({ error: err.message }, err.status)
-    }
     const isDev = env.NODE_ENV !== 'production'
-    const message = err instanceof Error ? err.message : String(err)
-    const stack = isDev && err instanceof Error ? err.stack : undefined
-    console.error(err)
-    return c.json({ error: isDev ? message : 'Internal Server Error', stack }, 500)
+    const requestContext = c.get('requestContext')
+    const requestId = requestContext?.requestId
+    requestContext?.logger.error({ err, requestId }, 'Request error')
+    const { body, status } = formatErrorResponse(err, requestId, isDev)
+    return c.json(body, status as any)
   })
   .get('/health', (c) => c.json({ status: 'ok', version: '0.1.0' }))
 

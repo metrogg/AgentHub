@@ -126,11 +126,17 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     promptMode: 'stdin',
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
+      // 修复 Bug 17: 根据 sandboxPolicy 映射 Claude Code 权限模式
+      const permissionMode = (() => {
+        if (options?.sandboxPolicy === 'read-only') return 'ask'
+        if (options?.sandboxPolicy === 'danger-full-access') return 'ask'
+        return String(cfg['permissionMode'] ?? 'bypassPermissions')
+      })()
       const args: string[] = [
         '-p',
         '--no-session-persistence',
         '--permission-mode',
-        String(cfg['permissionMode'] ?? 'bypassPermissions'),
+        permissionMode,
         '--output-format',
         String(cfg['outputFormat'] ?? 'stream-json'),
         '--include-partial-messages',

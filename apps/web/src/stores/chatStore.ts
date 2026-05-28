@@ -1,11 +1,13 @@
 import { create } from 'zustand'
-import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent, type WorkspaceFull } from '../lib/api'
+import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 let pendingStream: { messageId: string; delta: string; agentId?: string; agentName?: string } | null = null
 let pendingStreamTimer: number | null = null
 const cancelledSessions = new Set<string>()
 const pendingOrchestratorPlans = new Set<string>()
+const messageCache = new Map<string, Message[]>()
+const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
 
 interface ChatState {
   sessions: Session[]
@@ -226,31 +228,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         replyToMessageId,
       })
       set((s) => ({ messages: [...s.messages, msg], pendingAttachments: [], replyingToMessageId: null, replyingToMessage: null }))
-      let dispatchResult: { groupSessionId?: string } | undefined
       if (shouldCreatePlan && !pendingOrchestratorPlans.has(sessionId)) {
         pendingOrchestratorPlans.add(sessionId)
         try {
           const card = await api.createOrchestratorPlan(sessionId, contentForAgent)
           set((s) => ({ messages: [...s.messages, card] }))
-          const result = await api.dispatchOrchestratorPlan(sessionId, card.id)
-          dispatchResult = { groupSessionId: result.groupSessionId }
-          set((s) => ({
-            messages: s.messages.map((message) =>
-              message.id === card.id
-                ? {
-                    ...message,
-                    metadata: {
-                      ...(message.metadata ?? {}),
-                      dispatchResult: result,
-                      plan:
-                        message.metadata && typeof message.metadata.plan === 'object'
-                          ? { ...(message.metadata.plan as Record<string, unknown>), dispatchResult: result }
-                          : message.metadata?.plan,
-                    },
-                  }
-                : message
-            ),
-          }))
           await get().fetchSessions()
           set({ agentTyping: false })
         } finally {
@@ -258,12 +240,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       } else if (!shouldCreatePlan) {
         await get().fetchSessions()
+        set({ agentTyping: false })
       }
-      return dispatchResult
     } catch (error) {
       set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
       throw error
     }
+    return undefined
   },
 
   async editMessage(messageId, content) {

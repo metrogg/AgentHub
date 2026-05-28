@@ -7,15 +7,17 @@ import { join, resolve } from 'node:path'
 let app: { request: (input: string, init?: RequestInit) => Promise<Response> }
 let dbApi: typeof import('../packages/db/src/index')
 let originalFetch: typeof fetch
+let globalMockedFetch: typeof fetch
 
 beforeAll(async () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-smoke-'))
   process.env.DATABASE_URL = join(tempDir, 'agenthub-smoke.db')
-  process.env.LLM_API_KEY = ''
+  process.env.LLM_API_KEY = 'test-key'
   process.env.OPENAI_API_KEY = ''
   process.env.ANTHROPIC_API_KEY = ''
   process.env.ENABLE_LOCAL_CLI_PROBES = 'false'
   process.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
+  process.env.AGENTHUB_SKIP_LEGACY_SCHEMA = '1'
 
   dbApi = await import('../packages/db/src/index')
   migrate(dbApi.db, { migrationsFolder: resolve('packages/db/drizzle') })
@@ -28,6 +30,14 @@ beforeAll(async () => {
 
   ;({ app } = await import('../apps/server/src/app'))
   originalFetch = globalThis.fetch
+  globalMockedFetch = async (input, init) => {
+    const url = String(input)
+    if (url.includes('/chat/completions') || url.includes('/v1/messages')) {
+      return mockSseStream(['Task completed successfully.'])
+    }
+    return originalFetch(input, init)
+  }
+  globalThis.fetch = globalMockedFetch
 })
 
 afterAll(() => {
@@ -44,6 +54,24 @@ function postJson(path: string, body: unknown) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+  })
+}
+
+function mockSseStream(chunks: string[]) {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        const data = JSON.stringify({ choices: [{ delta: { content: chunk } }] })
+        controller.enqueue(encoder.encode(`data: ${data}\n\n`))
+      }
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      controller.close()
+    },
+  })
+  return new Response(stream, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
   })
 }
 
@@ -105,9 +133,19 @@ describe('AgentHub smoke tests', () => {
 
     expect(result.ok).toBe(true)
     expect(result.status).toBe(200)
+
+    globalThis.fetch = globalMockedFetch
   })
 
   test('workspace task dispatch creates a session and marks failed when no LLM key is configured', async () => {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input)
+      if (url.includes('/chat/completions') || url.includes('/v1/messages')) {
+        return new Response(JSON.stringify({ error: { message: 'Invalid API key' } }), { status: 401 })
+      }
+      return originalFetch(input, init)
+    }
+
     const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }>; tasks: Array<{ id: string }> }>(
       await postJson('/api/workspaces', { name: 'Smoke workspace', goal: 'Verify dispatch', template: 'classic' })
     )
@@ -128,6 +166,8 @@ describe('AgentHub smoke tests', () => {
     expect(dispatched.sessionId).toBeTruthy()
     expect(dispatched.task.status).toBe('running')
     await waitForTaskStatus(full.workspace.id, task.id, 'failed')
+
+    globalThis.fetch = globalMockedFetch
   })
 
   test('classic workspace seeds role agents and editable relations', async () => {
@@ -319,7 +359,7 @@ describe('AgentHub smoke tests', () => {
 
   test('orchestrator dispatch returns run id and stores it on the task card', async () => {
     const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
-      await postJson('/api/workspaces', { name: 'Dispatch run workspace', goal: 'Trace dispatch', template: 'classic' })
+      await postJson('/api/workspaces', { name: 'Dispatch run workspace', goal: 'Trace dispatch', template: 'classic', projectPath: process.cwd() })
     )
     const group = await json<{ session: { id: string } }>(
       await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})

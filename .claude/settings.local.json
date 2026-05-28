@@ -4,9 +4,14 @@
       "Bash(bun install *)",
       "Bash(bun pm *)",
       "Bash(bun add *)",
-      "Bash(claude --version)",
-      "Read(//c/Users/wzd/**)",
-      "Bash(claude auth *)"
+      "WebSearch",
+      "WebFetch(domain:langchain-ai.github.io)",
+      "WebFetch(domain:docs.crewai.com)",
+      "WebFetch(domain:microsoft.github.io)",
+      "WebFetch(domain:github.com)",
+      "mcp__plugin_everything-claude-code_exa__web_search_exa",
+      "Bash(sqlite3 *)",
+      "Bash(bun *)"
     ]
   }
 }

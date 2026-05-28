@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { HTTPException } from 'hono/http-exception'
+import { AppError, AppErrorCodes } from '../lib/error'
 import { z } from 'zod'
 import { db, workspaces, workspaceAgents, workspaceAgentRelations, workspaceTasks, sessions, messages, eq, and, desc, asc } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
@@ -17,6 +17,7 @@ import { pickNativeFolder } from '../services/workspace/folder-picker'
 import { loadWorkspaceFull, ensureWorkspace, seedClassicAgents } from '../services/workspace/workspace-queries'
 import { ensureGroupSession } from '../services/workspace/group-session'
 import { workspaceAgentRunProfile, getActiveRunSessionIds } from '../services/workspace/agent-runtime'
+import { taskExecutionService } from '../services/execution/task-execution-service'
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
 
 // ---------- Validation schemas ----------
@@ -130,7 +131,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .insert(workspaces)
       .values({ ownerId: user.sub, name: input.name, goal: input.goal, projectPath })
       .returning()
-    if (!ws) throw new HTTPException(500, { message: 'Failed to create workspace' })
+    if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
 
     if (input.template === 'classic') {
       await seedClassicAgents(ws.id)
@@ -150,8 +151,8 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       selectedPath = selectedPath || (await pickNativeFolder())
     } catch (err) {
       logger.error({ err: err instanceof Error ? err.message : String(err), userId: user.sub }, 'Folder picker failed')
-      if (err instanceof HTTPException) throw err
-      throw new HTTPException(500, { message: '打开文件夹选择器失败' })
+      if (err instanceof AppError) throw err
+      throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, '打开文件夹选择器失败')
     }
     if (!selectedPath) {
       logger.info({ userId: user.sub }, 'Folder picker cancelled by user')
@@ -222,7 +223,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .from(workspaceAgents)
       .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id)))
       .limit(1)
-    if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
 
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1)
 
@@ -254,7 +255,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
         })
         .returning()
 
-      if (!created) throw new HTTPException(500, { message: 'Failed to create session' })
+      if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
       return c.json({ session: created })
     } catch (error) {
       logger.error(
@@ -266,8 +267,8 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
         },
         'Failed to create agent child session',
       )
-      if (error instanceof HTTPException) throw error
-      throw new HTTPException(500, { message: error instanceof Error ? error.message : 'Failed to create session' })
+      if (error instanceof AppError) throw error
+      throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, error instanceof Error ? error.message : '会话创建失败')
     }
   })
 
@@ -336,10 +337,10 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
 
     for (const relation of relations) {
       if (!agentIds.has(relation.sourceAgentId) || !agentIds.has(relation.targetAgentId)) {
-        throw new HTTPException(400, { message: 'Relation agent must belong to the workspace' })
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '关联的 Agent 必须属于当前工作区')
       }
       if (relation.sourceAgentId === relation.targetAgentId) {
-        throw new HTTPException(400, { message: 'Relation source and target must be different agents' })
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '关联的源和目标 Agent 不能相同')
       }
       const key = `${relation.sourceAgentId}:${relation.targetAgentId}:${relation.relationType}`
       if (deduped.has(key)) continue
@@ -398,7 +399,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .set(input)
       .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id)))
       .returning()
-    if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
     await touchWorkspace(id)
     return c.json(agent)
   })
@@ -443,7 +444,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .set({ ...input, updatedAt: new Date() })
       .where(and(eq(workspaceTasks.id, taskId), eq(workspaceTasks.workspaceId, id)))
       .returning()
-    if (!task) throw new HTTPException(404, { message: 'Task not found' })
+    if (!task) throw AppError.fromCode(AppErrorCodes.TASK_NOT_FOUND, '任务不存在')
     await touchWorkspace(id)
     return c.json(task)
   })
@@ -470,7 +471,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .from(workspaceTasks)
       .where(and(eq(workspaceTasks.id, taskId), eq(workspaceTasks.workspaceId, id)))
       .limit(1)
-    if (!task) throw new HTTPException(404, { message: 'Task not found' })
+    if (!task) throw AppError.fromCode(AppErrorCodes.TASK_NOT_FOUND, '任务不存在')
 
     let agent: typeof workspaceAgents.$inferSelect | null = null
     if (task.agentId) {
@@ -492,7 +493,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
           metadata: { hiddenFromSessionTree: true, workspaceTaskId: task.id },
         })
         .returning()
-      if (!session) throw new HTTPException(500, { message: 'Failed to create session' })
+      if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
       sessionId = session.id
     }
 
@@ -506,24 +507,22 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     ].filter(Boolean)
     const prompt = promptLines.join('')
 
-    const [userMsg] = await db
-      .insert(messages)
-      .values({ sessionId, senderId: user.sub, senderType: 'user', type: 'text', content: prompt })
-      .returning()
-
-    await db.update(workspaceTasks).set({ sessionId, status: 'running', updatedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-
-    if (userMsg) {
-      import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined)
-          .then(async (result) => {
-            await db.update(workspaceTasks).set({ status: result.ok ? 'done' : 'failed', updatedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-          })
-          .catch(async (err) => {
-            await db.update(workspaceTasks).set({ status: 'failed', updatedAt: new Date(), errorLog: err?.message || 'Agent execution failed' }).where(eq(workspaceTasks.id, taskId))
-          })
-      })
+    const profile = agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined
+    if (!profile) {
+      throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
     }
+
+    // 使用统一 TaskExecutionService，获得与 Orchestrator 相同的 Git 分支隔离和 artifact 收集
+    taskExecutionService.execute({
+      taskId,
+      sessionId: sessionId!,
+      workspaceId: id,
+      profile,
+      prompt,
+      projectPath: ws.projectPath,
+    }).catch((err) => {
+      logger.error({ err: err?.message, taskId }, 'TaskExecutionService failed')
+    })
 
     await touchWorkspace(id)
     const [updated] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, taskId)).limit(1)
@@ -563,7 +562,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .values({ title: `${ws.name} · 协调汇总`, type: 'group', ownerId: user.sub, workspaceId: id })
       .returning()
     const session = summarySession[0]
-    if (!session) throw new HTTPException(500, { message: 'Failed to create summary session' })
+    if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '总结会话创建失败')
 
     const prompt = [
       `你是 Agent Group 的协调者。下面是各 Agent 的最新产出,请基于真实内容给出:`,

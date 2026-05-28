@@ -79,6 +79,35 @@ export class TaskGraph {
     }
   }
 
+  /**
+   * 当上游任务失败或被取消时，递归把依赖它的 pending 任务标记为 cancelled。
+   * 返回被影响（新标记为 cancelled）的任务列表。
+   */
+  markBlockedByFailedDependencies(): ExecutionTask[] {
+    const blocked: ExecutionTask[] = []
+    const changed = new Set<string>()
+
+    let foundNew = true
+    while (foundNew) {
+      foundNew = false
+      for (const task of this.tasks) {
+        if (this.getStatus(task.id) !== 'pending') continue
+        const hasFailedDep = task.dependencies.some((depId) => {
+          const depStatus = this.getStatus(depId)
+          return depStatus === 'failed' || depStatus === 'cancelled'
+        })
+        if (hasFailedDep && !changed.has(task.id)) {
+          this.setStatus(task.id, 'cancelled')
+          blocked.push(task)
+          changed.add(task.id)
+          foundNew = true
+        }
+      }
+    }
+
+    return blocked
+  }
+
   getExecutionOrder(): string[] {
     const inDegree = new Map<string, number>()
     const adj = new Map<string, string[]>()

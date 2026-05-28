@@ -110,6 +110,19 @@ export class OrchestratorEngine {
         }
 
         currentAttempt++
+        if (currentAttempt > 20) {
+          logger.error({ taskId: currentTask.id, currentAttempt, runId }, 'Task exceeded maximum replan attempts, forcing failure')
+          return {
+            taskId: currentTask.id,
+            agentId: currentTask.agentId,
+            agentName: 'Unknown',
+            status: 'failed',
+            output: '',
+            artifacts: [],
+            error: '任务重试次数超过系统上限（20次），已强制终止。',
+          }
+        }
+
         const replan = this.replanningEngine.handle(currentTask, new Error(result.error || 'Task failed'), currentAttempt, plan)
 
         logger.info({ taskId: currentTask.id, strategy: replan.strategy, reason: replan.reason }, 'Replanning triggered')
@@ -320,6 +333,34 @@ export class OrchestratorEngine {
 
     try {
       const results = await this.scheduler.executePlan(plan, executor)
+
+      // 为因上游失败而被取消的任务写入状态并广播事件
+      for (const result of results) {
+        if (result.status === 'cancelled' && result.error?.includes('上游依赖任务失败')) {
+          const task = plan.tasks.find((t) => t.id === result.taskId)
+          if (task) {
+            await db
+              .update(workspaceTasks)
+              .set({ status: 'cancelled', completedAt: new Date(), errorLog: result.error })
+              .where(eq(workspaceTasks.id, task.id))
+            await emitRunEvent({
+              runId,
+              workspaceId,
+              groupSessionId,
+              taskId: task.id,
+              agentId: task.agentId,
+              type: 'task.cancelled',
+              severity: 'warning',
+              payload: { title: task.title, reason: result.error },
+            })
+            broadcastSessionEvent(groupSessionId, {
+              type: 'task:update',
+              payload: { taskId: task.id, status: 'cancelled', error: result.error },
+            })
+          }
+        }
+      }
+
       const [currentRun] = await db
         .select({ status: orchestratorRuns.status })
         .from(orchestratorRuns)
@@ -331,8 +372,10 @@ export class OrchestratorEngine {
       }
 
       // Task #37: Auto-review chain — code tasks 完成后自动注入 review 任务
+      // 修复 Bug 23: 使用 scheduler 的 run signal，使 auto-review 可被取消
+      const reviewSignal = this.scheduler.getRunSignal(runId) ?? new AbortController().signal
       const reviewResults = await this.injectAutoReviewTasks(
-        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, new AbortController().signal,
+        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, reviewSignal,
       )
       if (reviewResults.length > 0) {
         results.push(...reviewResults)
@@ -549,7 +592,18 @@ export class OrchestratorEngine {
 
     const taskStartTime = Date.now()
     try {
-      const result = await runAgentReply(childInfo.sessionId, userMsg, profile)
+      // 修复 Bug 8: LLM 任务添加超时，防止死锁
+      const TASK_TIMEOUT_MS = 300_000 // 5 分钟
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => reject(new Error(`任务执行超时（${TASK_TIMEOUT_MS / 1000}秒）`)), TASK_TIMEOUT_MS)
+        signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('任务已取消')) }, { once: true })
+      })
+      const result = await Promise.race([runAgentReply(childInfo.sessionId, userMsg, profile), timeoutPromise])
+
+      // 修复 Bug 7: 检查 Agent 执行结果，如果失败则抛出错误
+      if (!result.ok) {
+        throw new Error(result.cancelled ? '任务被取消' : 'Agent 执行失败，请检查日志')
+      }
 
       if (signal.aborted || result.cancelled) {
         await db
@@ -588,13 +642,13 @@ export class OrchestratorEngine {
       const artifacts: Array<Record<string, unknown>> = []
 
       // 收集 Git 变更作为 artifact
+      // 修复 Bug 21: 按文件获取 diff，避免全仓库 diff 重复
       if (branchCtx) {
         try {
-          const diff = await gitBranchManager.collectDiff(branchCtx.projectPath, branchCtx.branch)
           const changedFiles = await gitBranchManager.collectChangedFiles(branchCtx.projectPath, branchCtx.branch)
-
-          if (diff.trim()) {
+          if (changedFiles.length > 0) {
             for (const filePath of changedFiles) {
+              const fileDiff = await gitBranchManager.collectFileDiff(branchCtx.projectPath, filePath, branchCtx.branch)
               const status = await gitBranchManager.getFileStatus(branchCtx.projectPath, filePath, branchCtx.branch)
               artifacts.push({
                 id: `diff-${filePath.replace(/[^a-z0-9]/gi, '-')}`,
@@ -602,7 +656,7 @@ export class OrchestratorEngine {
                 title: `${agent.name} 修改了 ${filePath}`,
                 filePath,
                 status,
-                diff,
+                diff: fileDiff,
                 source: agent.name,
               })
             }
@@ -749,10 +803,14 @@ export class OrchestratorEngine {
         })
       }
 
-      const validationResults = await runTaskValidation({
-        commands: task.validation?.commands ?? [],
-        cwd: branchCtx?.worktreePath ?? childInfo.projectPath ?? process.cwd(),
-      })
+      // 修复 Bug 24: 没有有效项目路径时跳过 validation，避免在服务器 CWD 执行
+      const validationCwd = branchCtx?.worktreePath ?? childInfo.projectPath ?? null
+      const validationResults = validationCwd
+        ? await runTaskValidation({
+            commands: task.validation?.commands ?? [],
+            cwd: validationCwd,
+          })
+        : []
       for (const [index, validation] of validationResults.entries()) {
         const validationKey = `tests/${task.id}/${index + 1}`
         await blackboard.write({

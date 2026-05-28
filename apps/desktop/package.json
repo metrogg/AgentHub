@@ -8,7 +8,7 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "typecheck": "echo \"desktop: no TypeScript\""
+    "typecheck": "node --check scripts/prepare-sidecar.mjs && echo 'desktop: sidecar script OK'"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2"
