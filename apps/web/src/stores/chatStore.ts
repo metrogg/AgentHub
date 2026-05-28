@@ -228,31 +228,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         replyToMessageId,
       })
       set((s) => ({ messages: [...s.messages, msg], pendingAttachments: [], replyingToMessageId: null, replyingToMessage: null }))
-      let dispatchResult: { groupSessionId?: string } | undefined
       if (shouldCreatePlan && !pendingOrchestratorPlans.has(sessionId)) {
         pendingOrchestratorPlans.add(sessionId)
         try {
           const card = await api.createOrchestratorPlan(sessionId, contentForAgent)
           set((s) => ({ messages: [...s.messages, card] }))
-          const result = await api.dispatchOrchestratorPlan(sessionId, card.id)
-          dispatchResult = { groupSessionId: result.groupSessionId }
-          set((s) => ({
-            messages: s.messages.map((message) =>
-              message.id === card.id
-                ? {
-                    ...message,
-                    metadata: {
-                      ...(message.metadata ?? {}),
-                      dispatchResult: result,
-                      plan:
-                        message.metadata && typeof message.metadata.plan === 'object'
-                          ? { ...(message.metadata.plan as Record<string, unknown>), dispatchResult: result }
-                          : message.metadata?.plan,
-                    },
-                  }
-                : message
-            ),
-          }))
           await get().fetchSessions()
           set({ agentTyping: false })
         } finally {
@@ -262,11 +242,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         await get().fetchSessions()
         set({ agentTyping: false })
       }
-      return dispatchResult
     } catch (error) {
       set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
       throw error
     }
+    return undefined
   },
 
   async editMessage(messageId, content) {

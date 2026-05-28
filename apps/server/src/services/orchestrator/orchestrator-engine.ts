@@ -333,6 +333,34 @@ export class OrchestratorEngine {
 
     try {
       const results = await this.scheduler.executePlan(plan, executor)
+
+      // 为因上游失败而被取消的任务写入状态并广播事件
+      for (const result of results) {
+        if (result.status === 'cancelled' && result.error?.includes('上游依赖任务失败')) {
+          const task = plan.tasks.find((t) => t.id === result.taskId)
+          if (task) {
+            await db
+              .update(workspaceTasks)
+              .set({ status: 'cancelled', completedAt: new Date(), errorLog: result.error })
+              .where(eq(workspaceTasks.id, task.id))
+            await emitRunEvent({
+              runId,
+              workspaceId,
+              groupSessionId,
+              taskId: task.id,
+              agentId: task.agentId,
+              type: 'task.cancelled',
+              severity: 'warning',
+              payload: { title: task.title, reason: result.error },
+            })
+            broadcastSessionEvent(groupSessionId, {
+              type: 'task:update',
+              payload: { taskId: task.id, status: 'cancelled', error: result.error },
+            })
+          }
+        }
+      }
+
       const [currentRun] = await db
         .select({ status: orchestratorRuns.status })
         .from(orchestratorRuns)

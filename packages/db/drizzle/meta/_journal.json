@@ -92,6 +92,13 @@
       "when": 1729843200005,
       "tag": "0012_workspace_agent_relations",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1729843200006,
+      "tag": "0013_cleanup_legacy_schema",
+      "breakpoints": true
     }
   ]
 }

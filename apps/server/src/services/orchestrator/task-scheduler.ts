@@ -113,6 +113,20 @@ export class TaskScheduler {
         artifacts: [],
         error: error?.message || 'Unknown error',
       })
+
+      // 上游任务失败后，递归把依赖它的 pending 任务标记为 cancelled
+      const blockedTasks = graph.markBlockedByFailedDependencies()
+      for (const blockedTask of blockedTasks) {
+        results.set(blockedTask.id, {
+          taskId: blockedTask.id,
+          agentId: blockedTask.agentId,
+          agentName: 'Unknown',
+          status: 'cancelled',
+          output: '',
+          artifacts: [],
+          error: '上游依赖任务失败，任务已取消',
+        })
+      }
     } finally {
       release()
     }

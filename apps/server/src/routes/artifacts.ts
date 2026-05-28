@@ -54,8 +54,22 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ deployId: workspaceId, url: deployUrl, status: 'ready' as const })
   })
   .post('/apply-diff', zValidator('json', z.object({ projectPath: z.string(), diff: z.string() })), async (c) => {
+    const user = c.get('user')
     const { projectPath, diff } = c.req.valid('json')
-    if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+    const resolvedPath = resolve(projectPath)
+
+    // 校验 projectPath 是否属于当前用户的 workspace
+    const userWorkspaces = await db.select().from(workspaces).where(eq(workspaces.ownerId, user.sub))
+    const isOwner = userWorkspaces.some(
+      (ws) => ws.projectPath && resolve(ws.projectPath) === resolvedPath,
+    )
+    if (!isOwner) {
+      throw new HTTPException(403, {
+        message: 'Access denied: project path does not belong to current user',
+      })
+    }
+
+    if (!existsSync(resolvedPath) || !statSync(resolvedPath).isDirectory()) {
       throw new HTTPException(400, { message: 'Project path does not exist' })
     }
     const tmpFile = join(tmpdir(), `agenthub-diff-${Date.now()}.patch`)
@@ -63,7 +77,7 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       await writeFile(tmpFile, diff, 'utf8')
       // Validate first
       const check = Bun.spawn(['git', 'apply', '--check', tmpFile], {
-        cwd: projectPath,
+        cwd: resolvedPath,
         stdout: 'pipe',
         stderr: 'pipe',
         env: process.env,
@@ -75,7 +89,7 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       }
       // Apply
       const apply = Bun.spawn(['git', 'apply', tmpFile], {
-        cwd: projectPath,
+        cwd: resolvedPath,
         stdout: 'pipe',
         stderr: 'pipe',
         env: process.env,
@@ -85,11 +99,11 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
         const stderr = await new Response(apply.stderr).text()
         throw new HTTPException(500, { message: `Diff apply failed: ${stderr.trim()}` })
       }
-      logger.info({ projectPath }, 'Diff applied successfully')
+      logger.info({ projectPath: resolvedPath }, 'Diff applied successfully')
       return c.json({ success: true, message: 'Diff applied successfully' })
     } catch (err: any) {
       if (err instanceof HTTPException) throw err
-      logger.error({ err: err?.message, projectPath }, 'Diff apply error')
+      logger.error({ err: err?.message, projectPath: resolvedPath }, 'Diff apply error')
       throw new HTTPException(500, { message: err?.message || 'Failed to apply diff' })
     } finally {
       try { await unlink(tmpFile) } catch {}
@@ -107,9 +121,33 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       throw new HTTPException(400, { message: 'Project path does not exist' })
     }
 
+    const SENSITIVE_PATTERNS = [
+      /^\.env/,
+      /^\.git\//,
+      /^node_modules\//,
+      /^\.vscode\//,
+      /^\.idea\//,
+      /^storage\//,
+      /\/\.env/,
+      /\/\.git\//,
+      /\/node_modules\//,
+      /\/\.vscode\//,
+      /\/\.idea\//,
+      /\/storage\//,
+    ]
+
+    function isSensitivePath(filePath: string): boolean {
+      return SENSITIVE_PATTERNS.some((pattern) => pattern.test(filePath))
+    }
+
     try {
       const zip = new AdmZip()
-      zip.addLocalFolder(ws.projectPath)
+      const projectPath = ws.projectPath
+      const projectPrefix = projectPath.endsWith(sep) ? projectPath : `${projectPath}${sep}`
+      zip.addLocalFolder(projectPath, '', (entry) => {
+        const relativePath = entry.replace(projectPrefix, '')
+        return !isSensitivePath(relativePath)
+      })
       const buffer = zip.toBuffer()
       return new Response(buffer, {
         headers: {

@@ -1,0 +1,11 @@
+{
+  "name": "@agenthub/android",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentHub Android app (Gradle + Kotlin). Not managed by Bun workspaces.",
+  "scripts": {
+    "typecheck": "echo 'android: Gradle project, use ./gradlew build'",
+    "build": "echo 'android: Gradle project, use ./gradlew assembleRelease'",
+    "lint": "echo 'android: Gradle project, use ./gradlew lint'"
+  }
+}

@@ -17,6 +17,7 @@ import { pickNativeFolder } from '../services/workspace/folder-picker'
 import { loadWorkspaceFull, ensureWorkspace, seedClassicAgents } from '../services/workspace/workspace-queries'
 import { ensureGroupSession } from '../services/workspace/group-session'
 import { workspaceAgentRunProfile, getActiveRunSessionIds } from '../services/workspace/agent-runtime'
+import { taskExecutionService } from '../services/execution/task-execution-service'
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
 
 // ---------- Validation schemas ----------
@@ -499,24 +500,22 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     ].filter(Boolean)
     const prompt = promptLines.join('')
 
-    const [userMsg] = await db
-      .insert(messages)
-      .values({ sessionId, senderId: user.sub, senderType: 'user', type: 'text', content: prompt })
-      .returning()
-
-    await db.update(workspaceTasks).set({ sessionId, status: 'running', updatedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-
-    if (userMsg) {
-      import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId!, userMsg, agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined)
-          .then(async (result) => {
-            await db.update(workspaceTasks).set({ status: result.ok ? 'done' : 'failed', updatedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-          })
-          .catch(async (err) => {
-            await db.update(workspaceTasks).set({ status: 'failed', updatedAt: new Date(), errorLog: err?.message || 'Agent execution failed' }).where(eq(workspaceTasks.id, taskId))
-          })
-      })
+    const profile = agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined
+    if (!profile) {
+      throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
     }
+
+    // 使用统一 TaskExecutionService，获得与 Orchestrator 相同的 Git 分支隔离和 artifact 收集
+    taskExecutionService.execute({
+      taskId,
+      sessionId: sessionId!,
+      workspaceId: id,
+      profile,
+      prompt,
+      projectPath: ws.projectPath,
+    }).catch((err) => {
+      logger.error({ err: err?.message, taskId }, 'TaskExecutionService failed')
+    })
 
     await touchWorkspace(id)
     const [updated] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, taskId)).limit(1)
