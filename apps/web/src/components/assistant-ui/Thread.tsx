@@ -684,7 +684,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
         <div className="flex h-full flex-col overflow-hidden">
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-4">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-neutral-950">群聊详情</div>
+              <div className="text-sm font-semibold text-neutral-950">群聊设置</div>
               <div className="mt-1 truncate text-xs text-neutral-500">
                 {workspace?.name ?? 'Agent 群聊'} · {memberCount} 位成员
               </div>
@@ -700,8 +700,177 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
             </button>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
-            <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
+          <div className="min-h-0 flex-1 overflow-y-auto bg-[#FBFBFB] px-6 py-6">
+            <div className="flex flex-col items-center text-center">
+              <div className="relative h-20 w-20">
+                <div className="absolute left-1 top-3 grid h-12 w-12 place-items-center rounded-full bg-neutral-900 text-sm font-semibold text-white ring-4 ring-[#FBFBFB]">
+                  Y
+                </div>
+                {agents.slice(0, 3).map((agent, index) => (
+                  <div
+                    key={agent.id}
+                    className="absolute grid place-items-center overflow-hidden rounded-full text-sm font-semibold text-white ring-4 ring-[#FBFBFB]"
+                    style={{
+                      width: index === 0 ? 48 : 40,
+                      height: index === 0 ? 48 : 40,
+                      right: index === 0 ? 0 : index === 1 ? 10 : 28,
+                      bottom: index === 0 ? 2 : index === 1 ? 0 : 10,
+                      background: agent.color ?? '#2563eb',
+                    }}
+                  >
+                    {agent.avatar ? (
+                      <img src={agent.avatar} alt={agent.name} className="h-full w-full object-cover" />
+                    ) : (
+                      agent.name.slice(0, 1).toUpperCase()
+                    )}
+                  </div>
+                ))}
+              </div>
+              <input
+                data-agenthub-group-title-input="true"
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onBlur={() => void saveGroupTitle()}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return
+                  event.preventDefault()
+                  event.currentTarget.blur()
+                }}
+                disabled={busyAction === 'rename'}
+                className="mt-4 h-9 max-w-[18rem] rounded-lg bg-transparent px-2 text-center text-base font-semibold text-neutral-950 outline-none transition focus:bg-white focus:ring-1 focus:ring-neutral-200 disabled:opacity-60"
+              />
+              <div className="mt-1 max-w-[18rem] truncate text-xs text-neutral-400">
+                {workspace?.projectPath || `${memberCount} 位成员 · AgentHub 群聊`}
+              </div>
+            </div>
+
+            <div className="relative mt-8 grid grid-cols-3 gap-3">
+              <button
+                type="button"
+                onClick={() => setInviteOpen((value) => !value)}
+                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70"
+              >
+                <User className="h-5 w-5" />
+                <span className="text-xs">邀请朋友</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setInviteOpen((value) => !value)}
+                disabled={!workspace || busyAction === 'invite'}
+                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70 disabled:opacity-50"
+              >
+                <Plus className="h-5 w-5" />
+                <span className="text-xs">添加Agent</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => document.querySelector<HTMLInputElement>('[data-agenthub-group-title-input="true"]')?.focus()}
+                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70"
+              >
+                <Pencil className="h-5 w-5" />
+                <span className="text-xs">编辑群信息</span>
+              </button>
+              {inviteOpen && (
+                <div className="absolute left-0 right-0 top-[5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
+                  {inviteCandidates.map((agent) => (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      onClick={() => void inviteAgent(agent)}
+                      disabled={busyAction === 'invite'}
+                      className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition hover:bg-neutral-50 disabled:opacity-60"
+                    >
+                      <span
+                        className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full text-xs font-semibold text-white"
+                        style={{ background: agent.color ?? '#111827' }}
+                      >
+                        {agent.avatar ? (
+                          <img src={agent.avatar} alt={agent.name} className="h-full w-full object-cover" />
+                        ) : (
+                          agent.name.slice(0, 1).toUpperCase()
+                        )}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-neutral-900">{agent.name}</span>
+                        <span className="block truncate text-xs text-neutral-500">{agent.role}</span>
+                      </span>
+                    </button>
+                  ))}
+                  {!inviteCandidates.length && (
+                    <div className="px-3 py-4 text-center text-xs text-neutral-400">没有可添加的 Agent</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-7">
+              <div className="mb-2 px-4 text-xs text-neutral-500">人类</div>
+              <div className="rounded-2xl bg-[#F3F3F3] px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-neutral-900 text-sm font-semibold text-white">Y</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-neutral-950">You</span>
+                      <span className="rounded bg-white px-1.5 py-0.5 text-[11px] text-neutral-500">群主</span>
+                    </div>
+                    <div className="mt-0.5 text-xs text-neutral-400">发起人与决策者</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5">
+              <div className="mb-2 px-4 text-xs text-neutral-500">Agent</div>
+              <div className="overflow-hidden rounded-2xl bg-[#F3F3F3]">
+                {monitorRows.map((row, index) => (
+                  <button
+                    key={row.id}
+                    type="button"
+                    onClick={() => insertComposerMention(row.mentionName)}
+                    className={cn(
+                      'relative flex min-h-[74px] w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-neutral-200/60',
+                      index > 0 && 'border-t border-neutral-200',
+                    )}
+                  >
+                    <span
+                      className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white"
+                      style={{ background: row.color ?? '#2563eb' }}
+                    >
+                      {row.name.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span
+                      className={cn(
+                        'absolute left-11 top-[2.85rem] h-2 w-2 rounded-full ring-2 ring-[#F3F3F3]',
+                        row.active ? 'bg-emerald-500' : 'bg-neutral-300',
+                      )}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium text-neutral-950">{row.name}</span>
+                        <span className="rounded bg-white px-1.5 py-0.5 text-[11px] text-neutral-500">{row.role}</span>
+                      </span>
+                      <span className="mt-1 block truncate text-xs text-neutral-400">
+                        {row.active && row.bubble ? row.bubble : `@${row.mentionName}`}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+                {!monitorRows.length && (
+                  <div className="px-4 py-6 text-center text-xs text-neutral-400">还没有 Agent，点击上方添加。</div>
+                )}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void deleteGroupChat()}
+              disabled={busyAction === 'delete'}
+              className="mt-5 flex h-11 w-full items-center justify-center rounded-xl bg-[#F3F3F3] text-sm font-medium text-red-500 transition hover:bg-red-50 disabled:opacity-60"
+            >
+              {busyAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : '解散群聊'}
+            </button>
+
+            <div className="hidden rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-neutral-500">群聊名称</span>
                 <input
