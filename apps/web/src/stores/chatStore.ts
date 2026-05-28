@@ -260,6 +260,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       } else if (!shouldCreatePlan) {
         await get().fetchSessions()
+        set({ agentTyping: false })
       }
       return dispatchResult
     } catch (error) {

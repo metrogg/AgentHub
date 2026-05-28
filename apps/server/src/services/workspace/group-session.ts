@@ -6,6 +6,7 @@ import {
   eq,
   and,
   asc,
+  desc,
 } from '@agenthub/db'
 import { HTTPException } from 'hono/http-exception'
 import { ensureWorkspace } from './workspace-queries'
@@ -15,6 +16,7 @@ async function findGroupSession(workspaceId: string) {
     .select()
     .from(sessions)
     .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.type, 'group')))
+    .orderBy(desc(sessions.createdAt))
     .limit(1)
   return session ?? null
 }
@@ -35,6 +37,15 @@ async function syncGroupMembers(sessionId: string, workspaceId: string, ownerId:
   const missing = wanted.filter((member) => !keys.has(`${member.memberType}:${member.memberId}`))
   if (missing.length) {
     await db.insert(sessionMembers).values(missing.map((member) => ({ sessionId, ...member })))
+  }
+  // 修复 Bug 3: 删除已不在 workspace 中的幽灵成员
+  const stale = existing.filter((member) => !wanted.some((w) => w.memberType === member.memberType && w.memberId === member.memberId))
+  if (stale.length) {
+    for (const member of stale) {
+      await db.delete(sessionMembers).where(
+        and(eq(sessionMembers.sessionId, sessionId), eq(sessionMembers.memberType, member.memberType), eq(sessionMembers.memberId, member.memberId))
+      )
+    }
   }
 }
 

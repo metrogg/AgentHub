@@ -107,14 +107,24 @@ export class HarnessManager {
 
     // 加载 Skills
     await this.loadYamlFiles<HarnessSkill>(resolve(harnessDir, 'skills'), '.skill.yml', (data, id) => {
+      const parseStringArray = (value: unknown): string[] => {
+        if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string')
+        if (typeof value === 'string') {
+          const trimmed = value.trim()
+          if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+            return trimmed.slice(1, -1).split(',').map((s) => s.trim()).filter(Boolean)
+          }
+        }
+        return []
+      }
       const skill: HarnessSkill = {
         id,
         name: (data.name as string) || id,
         description: (data.description as string) || '',
         version: (data.version as string) || '1.0.0',
         systemPromptTemplate: (data.systemPromptTemplate as string) || (data.system_prompt_template as string) || '',
-        applicableCapabilities: (data.applicableCapabilities as string[]) || (data.applicable_capabilities as string[]) || [],
-        applicableTags: (data.applicableTags as string[]) || (data.applicable_tags as string[]) || [],
+        applicableCapabilities: parseStringArray(data.applicableCapabilities ?? data.applicable_capabilities),
+        applicableTags: parseStringArray(data.applicableTags ?? data.applicable_tags),
       }
       this.skills.set(id, skill)
     })

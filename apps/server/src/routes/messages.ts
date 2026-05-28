@@ -246,7 +246,10 @@ type DispatchMonitor = {
 export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
   .get('/:sessionId', async (c) => {
+    const user = c.get('user')
     const sessionId = c.req.param('sessionId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const list = await db
       .select()
       .from(messages)
@@ -263,7 +266,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ deleted: true })
   })
   .post('/:sessionId/cancel', async (c) => {
+    const user = c.get('user')
     const sessionId = c.req.param('sessionId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const { cancelAgentReply } = await import('../services/agent-runner')
     return c.json({ cancelled: cancelAgentReply(sessionId) })
   })
@@ -383,6 +389,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
   .post('/:sessionId', zValidator('json', sendMessageSchema), async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     const { content, type, metadata } = c.req.valid('json')
     const [msg] = await db
       .insert(messages)
@@ -638,7 +646,14 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       // 复用当前会话绑定的 workspace，不因当前会话不是群聊而另建工作区。
       const existing = await dispatchPlanToExistingGroup(sourceSession, user.sub, parsed)
       workspaceId = existing.workspaceId
-      groupSessionId = existing.groupSessionId ?? sessionId
+      if (sourceSession.type === 'group') {
+        groupSessionId = existing.groupSessionId
+      } else {
+        // 修复 Bug 1: 如果源会话是 direct，必须找到/创建对应的 group session
+        const { ensureGroupSession } = await import('../services/workspace/group-session')
+        const groupSession = await ensureGroupSession(workspaceId, user.sub)
+        groupSessionId = groupSession.id
+      }
       agentsByKey = existing.agentsByKey
       createdAgents = Array.from(agentsByKey.values())
     } else {
@@ -757,6 +772,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       })
     }
 
+    // 修复 Bug 9: Task ID 重映射后同步更新 phases 中的 taskIds
+    if (taskIdRemap.size > 0 && parsed.phases) {
+      for (const phase of parsed.phases) {
+        if (phase.taskIds) {
+          phase.taskIds = phase.taskIds.map((tid) => taskIdRemap.get(tid) ?? tid)
+        }
+      }
+    }
+
     // 构建 ExecutionPlan 并启动 OrchestratorEngine
     const executionRelations = await loadWorkspaceAgentRelationsForPlanning(workspaceId)
 
@@ -834,7 +858,28 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     })
 
     const engine = new OrchestratorEngine()
-    engine.startRun({ runId, groupSessionId, workspaceId, plan: executionPlan, childSessions }).catch(() => {})
+    engine.startRun({ runId, groupSessionId, workspaceId, plan: executionPlan, childSessions }).catch(async (err: any) => {
+      logger.error({ err: err?.message, runId }, 'Orchestrator engine start failed')
+      await db.update(orchestratorRuns).set({ status: 'failed' }).where(eq(orchestratorRuns.id, runId))
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        type: 'run.failed',
+        severity: 'error',
+        payload: { error: err?.message || '编排器引擎启动失败' },
+      })
+      const failedPlan = { ...parsed, tasks: parsed.tasks.map((t) => ({ ...t, status: 'failed' as const })) }
+      await db
+        .update(messages)
+        .set({
+          metadata: {
+            ...(card.metadata ?? {}),
+            plan: { ...failedPlan, dispatchResult: { runId, workspaceId, groupSessionId, tasks: taskResults } },
+          },
+        })
+        .where(eq(messages.id, messageId))
+    })
 
     const result: OrchestratorDispatchResult = { runId, workspaceId, groupSessionId, tasks: taskResults }
     await updatePlanCardDispatchResult(messageId, card.metadata, parsed, result)
@@ -1132,15 +1177,20 @@ async function buildDynamicOrchestratorPlan(
     }
   }
 
+  let planError: string | undefined
   try {
     const generated = await generatePlanWithLlm(goal, planningAgents, specPhases)
     const normalized = normalizeGeneratedPlan(goal, generated, planningAgents)
     if (normalized) return applyAgentSelections(normalized, planningRelations)
-  } catch {
-    // Keep task card creation reliable when model credentials are missing or JSON generation fails.
+  } catch (err: any) {
+    // 修复 Bug 12: 记录 LLM 计划生成失败，不再静默吞掉
+    planError = err?.message || '未知错误'
+    logger.warn({ err: planError, goal }, 'LLM plan generation failed, using fallback plan')
   }
 
-  return applyAgentSelections(buildOrchestratorPlan(content, planningAgents), planningRelations)
+  const fallbackPlan = buildOrchestratorPlan(content, planningAgents)
+  fallbackPlan.summary = `[⚠️ 使用回退计划] ${fallbackPlan.summary}\n\n> 原因为：LLM 计划生成失败（${planError || '未知错误'}），已回退到固定模板（Architect → Coder → Reviewer）。请检查模型配置和 API Key。`
+  return applyAgentSelections(fallbackPlan, planningRelations)
 }
 
 function buildOrchestratorPlan(content: string, agents = fallbackPlanAgents()): OrchestratorPlan {
@@ -1680,7 +1730,8 @@ function hasMention(content: string, aliases: string[]) {
     const token = alias.trim()
     if (!token) return false
     const normalized = token.toLowerCase()
-    return lower.includes(`@${normalized}`) || new RegExp(`@\\s*${escapeRegExp(normalized)}\\b`, 'i').test(content)
+    // 修复 Bug 14: 移除 \b 单词边界，因为中文没有单词边界概念
+    return lower.includes(`@${normalized}`) || new RegExp(`@\\s*${escapeRegExp(normalized)}(?:\\s|$|[，。！？.,!?;])`, 'i').test(content)
   })
 }
 
@@ -1748,9 +1799,7 @@ async function runGroupReplies(workspaceId: string, sessionId: string, msg: Mess
   }
 
   const { runAgentReply } = await import('../services/agent-runner')
-  for (const profile of profiles) {
-    await runAgentReply(sessionId, msg, profile)
-  }
+  await Promise.allSettled(profiles.map((profile) => runAgentReply(sessionId, msg, profile)))
 }
 
 async function createWorkspaceGroupSession(
@@ -1776,9 +1825,10 @@ async function createWorkspaceGroupSession(
     ...agents.map((agent) => ({ sessionId: session.id, memberType: 'agent' as const, memberId: agent.id })),
   ])
 
-  for (const agent of agents) {
-    await ensureAgentChildSession(workspaceId, workspaceName, ownerId, agent)
-  }
+  // Note: child sessions are lazily created when tasks are dispatched
+  // (see dispatchPlanToExistingGroup and orchestrator-engine).
+  // Pre-creating them here leads to orphan sessions when the orchestrator
+  // plans do not include every workspace agent.
 
   return session
 }
@@ -1904,6 +1954,10 @@ async function dispatchPlanToExistingGroup(
         memberId: agent.id,
       }))
     )
+    // 修复 Bug 10: 为新创建的 agent 创建 child sessions
+    for (const agent of createdAgents) {
+      await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent)
+    }
   }
 
   return { workspaceId: workspace.id, groupSessionId: session.id, agentsByKey }

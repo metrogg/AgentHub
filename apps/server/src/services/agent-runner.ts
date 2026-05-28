@@ -111,12 +111,13 @@ export async function runAgentReply(
     .where(and(eq(messages.sessionId, sessionId), eq(messages.isPinned, true)))
     .orderBy(asc(messages.createdAt))
 
+  // 修复 Bug 19: 增加历史消息限制到 50 条，减少上下文丢失
   const recent = await db
     .select()
     .from(messages)
     .where(eq(messages.sessionId, sessionId))
     .orderBy(desc(messages.createdAt))
-    .limit(20)
+    .limit(50)
 
   const seen = new Set<string>()
   const historyAsc: typeof pinned = []
@@ -200,6 +201,11 @@ export async function runAgentReply(
             break
           case 'artifact':
             artifacts.push(chunk.artifact as unknown as Record<string, unknown>)
+            // 修复 Bug 16: 实时广播 artifact 更新
+            broadcast(sessionId, {
+              type: 'message:metadata',
+              payload: { sessionId, messageId: streamMsgId, codeAgentRun: { artifacts } },
+            })
             break
         }
       }

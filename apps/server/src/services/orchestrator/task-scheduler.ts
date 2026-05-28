@@ -76,6 +76,10 @@ export class TaskScheduler {
     }
   }
 
+  getRunSignal(runId: string): AbortSignal | undefined {
+    return this.activeControllers.get(runId)?.signal
+  }
+
   private async runTask(
     task: ExecutionTask,
     graph: TaskGraph,
