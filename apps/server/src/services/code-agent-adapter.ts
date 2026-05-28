@@ -79,6 +79,26 @@ const lastMessageStart = '__AGENTHUB_LAST_MESSAGE_START__'
 const lastMessageEnd = '__AGENTHUB_LAST_MESSAGE_END__'
 let rootEnvCache: Record<string, string> | null = null
 
+function resolveServerProjectRoot() {
+  const candidates = [
+    Bun.env.PROJECT_ROOT?.trim(),
+    process.env.PROJECT_ROOT?.trim(),
+    sourceProjectRoot,
+  ].filter(Boolean) as string[]
+
+  for (const candidate of [...new Set(candidates)]) {
+    const absolute = isAbsolute(candidate) ? candidate : resolve(sourceProjectRoot, candidate)
+    if (!existsSync(absolute) || isRuntimeDataDir(absolute)) continue
+    try {
+      if (statSync(absolute).isDirectory()) return absolute
+    } catch {
+      // Ignore invalid project root candidates.
+    }
+  }
+
+  return sourceProjectRoot
+}
+
 const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
   codex: {
     command: 'codex',
@@ -545,7 +565,8 @@ async function runCodeAgentCommand(
   const addLog = (stream: 'stdout' | 'stderr' | 'event', text: string) => {
     const cleaned = cleanRuntimeLog(text)
     if (!cleaned) return
-    liveLogs.push({ id: `log-${liveLogs.length + 1}`, stream, text: limitOutput(cleaned, 1000) })
+    const normalizedStream = normalizeRuntimeLogStream(stream, cleaned)
+    liveLogs.push({ id: `log-${liveLogs.length + 1}`, stream: normalizedStream, text: limitOutput(cleaned, 1000) })
     emitLiveMetadata()
   }
   const addCommand = (command: string, commandCwd?: string) => {
@@ -1075,6 +1096,22 @@ function cleanRuntimeLog(value: string) {
     .filter(Boolean)
     .filter((line) => !/codex_core::mcp_connection_manager|McpServerConfig|InitializeRequestParams/i.test(line))
     .join('\n')
+}
+
+function normalizeRuntimeLogStream(stream: 'stdout' | 'stderr' | 'event', text: string): 'stdout' | 'stderr' | 'event' {
+  if (stream !== 'stderr') return stream
+  return isProgressLikeRuntimeLog(text) ? 'event' : 'stderr'
+}
+
+function isProgressLikeRuntimeLog(text: string) {
+  const normalized = text.trim()
+  if (!normalized) return true
+  if (/^(->|→)\s*(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)\b/i.test(normalized)) return true
+  if (/^#\s*Todos\b/i.test(normalized)) return true
+  if (/^\[[ xX-]\]\s+/.test(normalized)) return true
+  if (/^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(normalized)) return true
+  if (/^(Warning|Warn|警告)[：:\s]/i.test(normalized)) return true
+  return false
 }
 
 function cleanCommandText(value: string) {

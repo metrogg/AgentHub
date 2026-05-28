@@ -8,21 +8,29 @@ export type SessionGroup = {
 
 export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string>()): SessionGroup[] {
   const childrenByWorkspace = new Map<string, Session[]>()
-  const childIds = new Set<string>()
+  const hiddenIds = new Set<string>()
+  const groupWorkspaceIds = new Set(
+    sessions
+      .filter((session) => session.type === 'group' && session.workspaceId)
+      .map((session) => session.workspaceId!),
+  )
 
   for (const session of sessions) {
-    if (isFixedAgentChildSession(session)) {
+    const visibility = agentSessionVisibility(session, groupWorkspaceIds)
+    if (visibility === 'child') {
       const workspaceId = session.workspaceId
       if (!workspaceId) continue
-      childIds.add(session.id)
+      hiddenIds.add(session.id)
       const children = childrenByWorkspace.get(workspaceId) ?? []
       children.push(session)
       childrenByWorkspace.set(workspaceId, children)
+    } else if (visibility === 'hidden') {
+      hiddenIds.add(session.id)
     }
   }
 
   return sessions
-    .filter((session) => !childIds.has(session.id))
+    .filter((session) => !hiddenIds.has(session.id))
     .map((parent) => {
       const children =
         parent.type === 'group' && parent.workspaceId
@@ -39,11 +47,20 @@ export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string
     .sort((a, b) => comparePinnedGroups(a, b, pinnedIds))
 }
 
-function isFixedAgentChildSession(session: Session) {
-  if (session.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
+function agentSessionVisibility(session: Session, groupWorkspaceIds: Set<string>): 'top' | 'child' | 'hidden' {
+  if (session.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return 'top'
   const metadata = session.metadata ?? {}
-  if (metadata.orchestratorTaskId || metadata.orchestratorRunId || metadata.hiddenFromSessionTree) return false
-  return true
+  if (metadata.orchestratorTaskId || metadata.orchestratorRunId || metadata.hiddenFromSessionTree) return 'hidden'
+  if (metadata.kind === 'agent-direct') return 'top'
+  if (metadata.kind === 'workspace-agent-child') return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
+  if (metadata.kind === 'orchestrator-task') return 'hidden'
+  if (groupWorkspaceIds.has(session.workspaceId)) return 'child'
+  return looksLikeLegacyAgentChildSession(session) ? 'hidden' : 'top'
+}
+
+function looksLikeLegacyAgentChildSession(session: Session) {
+  const title = session.title.trim()
+  return title.includes(' / ') || title.includes(' · ') || title.includes(' 路 ')
 }
 
 export function filterSessionTree(

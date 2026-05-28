@@ -1390,6 +1390,7 @@ function archivedSenderLabel(message: Message) {
 }
 
 function sessionTypeLabel(session: Session) {
+  if (session.metadata?.kind === 'agent-direct') return 'Agent 单聊'
   if (session.type === 'group') return '群聊'
   if (session.workspaceAgentId) return 'Agent 子会话'
   return '普通会话'

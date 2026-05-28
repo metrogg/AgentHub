@@ -26,7 +26,6 @@ import {
 import { agentRolePresets, presetForRole } from '../lib/agentRolePresets'
 import { api, type AgentConfigInput, type ModelCatalogItem, type WorkspaceAgent } from '../lib/api'
 import { useI18n } from '../lib/i18n'
-import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { cn } from '../lib/utils'
 import { useChatStore } from '../stores/chatStore'
 
@@ -116,11 +115,6 @@ export default function AgentConfigPage() {
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null
   const runtimeType = draft.runtimeType ?? 'llm'
-  const modelChoices = filterModelsForCodeAgent(
-    models,
-    runtimeType === 'code-agent' ? draft.codeAgentType : null,
-    draft.modelId ?? null,
-  )
 
   function selectAgent(agent: SavedAgentConfig, replaceUrl = false) {
     setSelectedId(agent.id)

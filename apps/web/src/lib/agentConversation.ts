@@ -70,8 +70,19 @@ export async function startAgentConversation({
   }
 
   if (invitedAgents.length === 1) {
-    const { session } = await api.openWorkspaceAgentSession(workspace.id, invitedAgents[0]!.id)
-    return session
+    const [agent] = agents
+    const [workspaceAgent] = invitedAgents
+    if (!agent || !workspaceAgent) throw new Error('Agent session create failed')
+    return api.createSession({
+      title: agent.name,
+      type: 'direct',
+      workspaceId: workspace.id,
+      workspaceAgentId: workspaceAgent.id,
+      metadata: {
+        kind: 'agent-direct',
+        savedAgentId: agent.id,
+      },
+    })
   }
 
   const { session } = await api.openWorkspaceGroupSession(workspace.id)

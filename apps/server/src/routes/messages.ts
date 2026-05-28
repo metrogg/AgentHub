@@ -1163,6 +1163,7 @@ async function createWorkspaceGroupSession(
       type: 'group',
       ownerId,
       workspaceId,
+      metadata: { kind: 'workspace-agent-group' },
     })
     .returning()
   if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '群组会话创建失败')
@@ -1213,6 +1214,7 @@ async function ensureAgentChildSession(
       ownerId,
       workspaceId,
       workspaceAgentId: agent?.id ?? null,
+      metadata: { kind: 'workspace-agent-child' },
     })
     .returning()
   if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Agent 子会话创建失败')

@@ -39,6 +39,7 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
         ownerId: user.sub,
         workspaceId: input.workspaceId ?? null,
         workspaceAgentId: input.workspaceAgentId ?? null,
+        metadata: input.metadata ?? null,
       })
       .returning()
     if (!session) throw new HTTPException(500, { message: 'Failed to create session' })
@@ -83,6 +84,7 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
       ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId, workspaceAgentId: input.workspaceAgentId ?? null } : {}),
       ...(input.workspaceAgentId !== undefined && input.workspaceId === undefined ? { workspaceAgentId: input.workspaceAgentId } : {}),
+      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       updatedAt: new Date(),
     }
     const [updated] = await db.update(sessions).set(patch).where(eq(sessions.id, id)).returning()

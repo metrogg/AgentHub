@@ -60,6 +60,7 @@ export async function ensureGroupSession(workspaceId: string, ownerId: string) {
         type: 'group',
         ownerId,
         workspaceId,
+        metadata: { kind: 'workspace-agent-group' },
       })
       .returning()
     if (!created) throw new HTTPException(500, { message: 'Failed to create group session' })

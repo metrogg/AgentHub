@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
+import { api, mentionsOrchestrator, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 
 let pendingStream: { messageId: string; delta: string; agentId?: string; agentName?: string } | null = null
@@ -8,6 +9,14 @@ const cancelledSessions = new Set<string>()
 const pendingOrchestratorPlans = new Set<string>()
 const messageCache = new Map<string, Message[]>()
 const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
+const messageCache = new Map<string, Message[]>()
+const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
+
+function updateCachedMessages(sessionId: string, updater: (messages: Message[]) => Message[]) {
+  const cached = messageCache.get(sessionId)
+  if (!cached) return
+  messageCache.set(sessionId, updater(cached))
+}
 
 interface ChatState {
   sessions: Session[]
@@ -27,7 +36,12 @@ interface ChatState {
   sessionsBootstrapped: boolean
 
   fetchSessions: () => Promise<void>
-  createSession: (title?: string, options?: { workspaceId?: string | null; workspaceAgentId?: string | null; type?: 'direct' | 'group' }) => Promise<Session>
+  createSession: (title?: string, options?: {
+    workspaceId?: string | null
+    workspaceAgentId?: string | null
+    type?: 'direct' | 'group'
+    metadata?: Record<string, unknown> | null
+  }) => Promise<Session>
   selectSession: (sessionId: string) => Promise<void>
   setSessionWorkspace: (sessionId: string, workspaceId: string | null) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
@@ -89,6 +103,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       type: options.type ?? 'direct',
       workspaceId: options.workspaceId ?? null,
       workspaceAgentId: options.workspaceAgentId ?? null,
+      metadata: options.metadata ?? null,
     })
     set((s) => ({ sessions: [session, ...s.sessions] }))
     return session
@@ -253,6 +268,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const sessionId = get().currentSessionId
     if (!sessionId) return
     const updated = await api.updateMessage(sessionId, messageId, { content })
+    updateCachedMessages(sessionId, (messages) =>
+      messages.map((message) => (message.id === messageId ? updated : message)),
+    )
     set((s) => ({
       messages: s.messages.map((message) => (message.id === messageId ? updated : message)),
     }))
@@ -267,6 +285,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await api.cancelMessage(sessionId).catch(() => undefined)
     const result = await api.withdrawMessage(sessionId, messageId, { rollback: true })
     const removed = new Set(result.removedMessageIds)
+    updateCachedMessages(sessionId, (messages) => messages.filter((message) => !removed.has(message.id)))
     set((s) => ({ messages: s.messages.filter((message) => !removed.has(message.id)) }))
     return result.rollback
   },
@@ -278,6 +297,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     clearPendingStream()
     set({ agentTyping: true, streamingMessage: null, streamingCodeAgentRun: null })
     const result = await api.regenerateMessage(sessionId, messageId)
+    updateCachedMessages(sessionId, (messages) => messages.filter((message) => message.id !== result.removedMessageId))
     set((s) => ({ messages: s.messages.filter((message) => message.id !== result.removedMessageId) }))
   },
 

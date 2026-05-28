@@ -252,6 +252,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
           ownerId: user.sub,
           workspaceId: id,
           workspaceAgentId: agentId,
+          metadata: { kind: 'workspace-agent-child' },
         })
         .returning()
 
