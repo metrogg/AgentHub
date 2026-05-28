@@ -203,7 +203,7 @@ const zhToEn: Record<string, string> = {
   '有什么可以帮忙的？': 'What can I help with?',
   '创建 Agent、拆解任务，或直接 @ 某个助手开始协作。': 'Create agents, break down tasks, or @ an assistant to start collaborating.',
   '创建 coder 代理': 'Create a coder agent',
-  帮我单开一个跳跃小游戏: 'Help me build a small jumping game',
+  帮我开发一个网页跳跃小游戏: 'Help me build a small jumping game',
   解释架构: 'Explain architecture',
   这个项目的具体技术栈: 'The concrete tech stack of this project',
   '发消息给 AgentHub，@ 可提及 Agent': 'Message AgentHub, @ to mention an agent',
