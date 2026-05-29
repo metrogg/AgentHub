@@ -91,30 +91,7 @@ export class TaskScheduler {
     const taskController = new AbortController()
     const combinedSignal = combineAbortSignals(runSignal, taskController.signal)
 
-    try {
-      const result = await executor(task, combinedSignal)
-
-      if (combinedSignal.aborted) {
-        graph.setStatus(task.id, 'cancelled')
-        results.set(task.id, { ...result, status: 'cancelled' })
-        return
-      }
-
-      graph.setStatus(task.id, result.status === 'done' ? 'done' : 'failed')
-      results.set(task.id, result)
-    } catch (error: any) {
-      graph.setStatus(task.id, 'failed')
-      results.set(task.id, {
-        taskId: task.id,
-        agentId: task.agentId,
-        agentName: 'Unknown',
-        status: 'failed',
-        output: '',
-        artifacts: [],
-        error: error?.message || 'Unknown error',
-      })
-
-      // 上游任务失败后，递归把依赖它的 pending 任务标记为 blocked
+    const recordBlockedResults = () => {
       const blockedTasks = graph.markBlockedByFailedDependencies()
       for (const blockedTask of blockedTasks) {
         results.set(blockedTask.id, {
@@ -127,6 +104,36 @@ export class TaskScheduler {
           error: '上游依赖任务失败，任务被阻塞',
         })
       }
+    }
+
+    try {
+      const result = await executor(task, combinedSignal)
+
+      if (combinedSignal.aborted) {
+        graph.setStatus(task.id, 'cancelled')
+        results.set(task.id, { ...result, status: 'cancelled' })
+        recordBlockedResults()
+        return
+      }
+
+      graph.setStatus(task.id, result.status === 'done' ? 'done' : 'failed')
+      results.set(task.id, result)
+
+      if (result.status !== 'done') {
+        recordBlockedResults()
+      }
+    } catch (error: any) {
+      graph.setStatus(task.id, 'failed')
+      results.set(task.id, {
+        taskId: task.id,
+        agentId: task.agentId,
+        agentName: 'Unknown',
+        status: 'failed',
+        output: '',
+        artifacts: [],
+        error: error?.message || 'Unknown error',
+      })
+      recordBlockedResults()
     } finally {
       release()
     }

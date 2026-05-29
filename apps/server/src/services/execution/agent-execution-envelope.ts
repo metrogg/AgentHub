@@ -45,9 +45,14 @@ export interface AgentExecutionEnvelope {
 /** 默认 env 白名单：只传模型 key、必要 PATH、HOME 等明确字段 */
 export const DEFAULT_ENV_ALLOWLIST = [
   'PATH',
+  'Path',
+  'PATHEXT',
+  'ComSpec',
+  'SystemRoot',
   'HOME',
   'USERPROFILE',
   'APPDATA',
+  'LOCALAPPDATA',
   'TMPDIR',
   'TEMP',
   'TMP',
@@ -107,7 +112,7 @@ export function ensureNoProjectExecutionDir(
 ) {
   if (envelope.projectPath) return null
   const dir = resolve(
-    agentHubUserCacheRoot(),
+    noProjectExecutionRoot(),
     'workspaces',
     'no-project',
     safePathSegment(envelope.runId),
@@ -118,6 +123,16 @@ export function ensureNoProjectExecutionDir(
   return dir
 }
 
+function noProjectExecutionRoot() {
+  const configured =
+    Bun.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
+    Bun.env.AGENTHUB_USER_CACHE_DIR?.trim() ||
+    process.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
+    process.env.AGENTHUB_USER_CACHE_DIR?.trim()
+  if (configured) return resolve(configured, '.AgentHub')
+  return resolve(tmpdir(), '.AgentHub')
+}
+
 export function agentHubUserCacheRoot() {
   const configured =
     Bun.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
@@ -126,24 +141,46 @@ export function agentHubUserCacheRoot() {
     process.env.AGENTHUB_USER_CACHE_DIR?.trim()
   if (configured) {
     const root = resolve(configured, '.AgentHub')
-    mkdirSync(root, { recursive: true })
-    return root
+    if (ensureWritableDir(root)) return root
   }
 
-  const base =
+  const bases =
     platform() === 'win32'
-      ? Bun.env.LOCALAPPDATA?.trim() ||
-        process.env.LOCALAPPDATA?.trim() ||
-        Bun.env.APPDATA?.trim() ||
-        process.env.APPDATA?.trim()
+      ? [
+          Bun.env.LOCALAPPDATA?.trim(),
+          process.env.LOCALAPPDATA?.trim(),
+          Bun.env.APPDATA?.trim(),
+          process.env.APPDATA?.trim(),
+          tmpdir(),
+        ]
       : platform() === 'darwin'
-        ? resolve(homedir(), 'Library', 'Caches')
-        : Bun.env.XDG_CACHE_HOME?.trim() || process.env.XDG_CACHE_HOME?.trim() || resolve(homedir(), '.cache')
-  const root = resolve(base || tmpdir(), '.AgentHub')
+        ? [resolve(homedir(), 'Library', 'Caches'), tmpdir()]
+        : [
+            Bun.env.XDG_CACHE_HOME?.trim(),
+            process.env.XDG_CACHE_HOME?.trim(),
+            resolve(homedir(), '.cache'),
+            tmpdir(),
+          ]
+
+  for (const base of bases.filter(Boolean) as string[]) {
+    const root = resolve(base, '.AgentHub')
+    if (ensureWritableDir(root)) return root
+  }
+
+  const root = resolve(tmpdir(), '.AgentHub')
   mkdirSync(root, { recursive: true })
   return root
 }
 
 function safePathSegment(value: string) {
   return value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'unknown'
+}
+
+function ensureWritableDir(path: string) {
+  try {
+    mkdirSync(path, { recursive: true })
+    return true
+  } catch {
+    return false
+  }
 }
