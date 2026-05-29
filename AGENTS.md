@@ -30,6 +30,7 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 | Monorepo | Bun workspaces (`apps/*`, `packages/*`)                    |
 | 后端框架     | Hono + Bun.serve（HTTP + WebSocket 同一端口）                    |
 | 前端框架     | React 18 + Vite + TypeScript                               |
+<<<<<<< HEAD
 | UI / CSS | Tailwind CSS + Radix UI primitives + `@assistant-ui/react` |
 | 状态管理     | Zustand                                                    |
 | 数据库      | SQLite (`bun:sqlite`) + Drizzle ORM（WAL 模式）                |
@@ -437,3 +438,6 @@ Agent 在执行任务时拥有四种自主行为（`buildAutonomyInstructions()`
 - **WebSocket 事件**：服务端通过 `broadcastSessionEvent` 发送，前端在 `chatStore.handleWSEvent` 中消费。事件类型定义于 `packages/shared/src/constants.ts` 的 `WsEvent`。新增事件：`task_board:plan_ready`、`task_board:task_progress`、`task_board:run_completed`、`task_board:clarification_needed`。
 - **Agent 回复流**：服务端 `agent-runner.ts` 中的 `runAgentReply` 负责调度；LLM 流式输出通过 `message:stream` 事件推送到前端，完成后写入数据库并发送 `message:completed`。
 - **消息路由**：群聊消息统一走 `messages.ts` 的入口路由（intentRouter → @mention / handleSimpleReply / generatePlanAndPushTaskBoard），不再使用已废弃的 `GroupChatManager.conversationLoop()`。
+=======
+| UI / CSS | Tailwind CSS + Radix UI primitives + `@assistant-ui/react`
+>>>>>>> 6cdd406 (docs: 更新弃用注释并改进澄清卡片组件)
