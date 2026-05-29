@@ -1412,7 +1412,7 @@ const Composer: FC = () => {
             name: workspaceNameFromPath(result.projectPath),
             goal: '',
             projectPath: result.projectPath,
-            template: 'classic',
+            template: 'blank',
           })
         ).workspace
       setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
