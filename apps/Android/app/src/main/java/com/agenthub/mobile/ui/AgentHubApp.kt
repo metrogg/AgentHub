@@ -17,7 +17,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.agenthub.mobile.MobileViewModel
 import com.agenthub.mobile.ui.screens.ChatShell
-import com.agenthub.mobile.ui.screens.ConnectScreen
 
 @Composable
 fun AgentHubApp(viewModel: MobileViewModel = viewModel()) {
@@ -39,23 +38,18 @@ fun AgentHubApp(viewModel: MobileViewModel = viewModel()) {
                     .weight(1f)
                     .fillMaxSize(),
             ) {
-                if (state.connection == null) {
-                    ConnectScreen(
-                        connecting = state.connecting,
-                        error = state.error,
-                        onConnect = viewModel::connect,
-                        onScanPairingQr = viewModel::connectWithPairingQr,
-                    )
-                } else {
-                    ChatShell(
-                        state = state,
-                        onDisconnect = viewModel::disconnect,
-                        onRefresh = viewModel::refreshSessions,
-                        onCreateSession = viewModel::createSession,
-                        onSelectSession = viewModel::selectSession,
-                        onSendMessage = viewModel::sendMessage,
-                    )
-                }
+                ChatShell(
+                    state = state,
+                    onDisconnect = viewModel::disconnect,
+                    onRefresh = viewModel::refreshSessions,
+                    onCreateSession = viewModel::createSession,
+                    onSelectSession = viewModel::selectSession,
+                    onSendMessage = viewModel::sendMessage,
+                    onArchiveSession = viewModel::archiveSession,
+                    onUnarchiveSession = viewModel::unarchiveSession,
+                    onDeleteSession = viewModel::deleteSession,
+                    onScanPairingQr = viewModel::connectWithPairingQr,
+                )
             }
         }
     }

@@ -312,6 +312,19 @@ export interface ModelCatalogItem {
   apiKey?: string
 }
 
+export interface WelcomeQuickPrompt {
+  id: string
+  label: string
+  prompt: string
+}
+
+export interface WelcomeQuickPromptsResponse {
+  generatedAt: string
+  items: WelcomeQuickPrompt[]
+  seed: string
+  source: 'llm' | 'fallback'
+}
+
 export interface CodingToolStatus {
   configEnv?: string
   configMessage?: string
@@ -1071,6 +1084,12 @@ export const api = {
     request<AgentDraftConfirmResult>(`/messages/${sessionId}/agent-draft/${messageId}/confirm`, {
       method: 'POST',
       body: JSON.stringify({ draft }),
+    }),
+  getWelcomeQuickPrompts: (seed: string, count = 10) =>
+    request<WelcomeQuickPromptsResponse>('/welcome/quick-prompts', {
+      method: 'POST',
+      body: JSON.stringify({ count, seed }),
+      timeout: 16_000,
     }),
 
   // Settings (map-based)

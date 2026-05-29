@@ -95,6 +95,7 @@ import {
   type OrchestratorPlanTask,
   type SkillSummary,
   type TaskStatus,
+  type WelcomeQuickPrompt,
   type Workspace,
   type WorkspaceAgent,
 } from '../../lib/api'
@@ -117,6 +118,12 @@ import {
 } from '../../lib/workspaceFilters'
 import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
+import {
+  QuickPromptBubbles,
+  createQuickPromptSeed,
+  fallbackWelcomeQuickPrompts,
+  rotateQuickPrompts,
+} from '../chat/QuickPromptBubbles'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
 import { GroupAvatar } from '../chat/GroupAvatar'
 import {
@@ -1120,30 +1127,45 @@ const ThreadWelcome: FC = () => {
 
 const ThreadWelcomeContent: FC = () => {
   const { t } = useI18n()
+  const [quickPrompts, setQuickPrompts] = useState<WelcomeQuickPrompt[]>([])
+  const [quickPromptsLoading, setQuickPromptsLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    const seed = createQuickPromptSeed('thread')
+    setQuickPromptsLoading(true)
+    api
+      .getWelcomeQuickPrompts(seed)
+      .then(({ items }) => {
+        if (!cancelled) setQuickPrompts(items.length ? items : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+      })
+      .catch(() => {
+        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+      })
+      .finally(() => {
+        if (!cancelled) setQuickPromptsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-15rem)] w-full max-w-[var(--thread-max-width)] flex-col justify-center py-10">
-      <div className="mb-24">
+    <div className="mx-auto flex min-h-[calc(100vh-15rem)] w-full max-w-[58rem] flex-col justify-center py-10 text-center">
+      <div>
         <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
           <TypewriterHeading text={t('有什么可以帮忙的？')} />
         </h2>
-        <p className="mt-2 text-base text-neutral-500">
-          {t('创建 Agent、拆解任务，或直接 @ 某个助手开始协作。')}
-        </p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <PromptCard title={t('创建 coder 代理')} text={t('帮我开发一个网页跳跃小游戏')} />
-        <PromptCard title={t('解释架构')} text={t('这个项目的具体技术栈')} />
-      </div>
+      <QuickPromptBubbles
+        className="mt-8"
+        loading={quickPromptsLoading}
+        prompts={quickPrompts}
+        onPick={(prompt) => insertTextIntoComposer(prompt)}
+      />
     </div>
   )
 }
-
-const PromptCard: FC<{ title: string; text: string }> = ({ title, text }) => (
-  <div className="rounded-3xl border border-neutral-200 bg-white px-5 py-4 shadow-sm">
-    <div className="text-sm font-medium text-neutral-950">{title}</div>
-    <div className="mt-1 text-sm text-neutral-500">{text}</div>
-  </div>
-)
 
 const Composer: FC = () => {
   const { sendMode } = useShortcutSettings()

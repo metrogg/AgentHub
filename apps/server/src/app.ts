@@ -14,6 +14,7 @@ import { artifactRoutes, serveDeployStatic } from './routes/artifacts'
 import { orchestratorRunRoutes } from './routes/orchestrator-runs'
 import { mobileRoutes } from './routes/mobile'
 import { officeRoutes } from './routes/office'
+import { welcomeRoutes } from './routes/welcome'
 import { requestContextMiddleware } from './middleware/request-context'
 import { formatErrorResponse } from './lib/error'
 
@@ -42,6 +43,7 @@ const routes = app
   .route('/api/orchestrator-runs', orchestratorRunRoutes)
   .route('/api/mobile', mobileRoutes)
   .route('/api/office', officeRoutes)
+  .route('/api/welcome', welcomeRoutes)
 
 app.get('/deploy/:workspaceId/*', async (c) => {
   const workspaceId = c.req.param('workspaceId')

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { writeFile, unlink } from 'node:fs/promises'
-import { extname, resolve, relative, isAbsolute, join, normalize, sep } from 'node:path'
+import { basename, extname, resolve, relative, isAbsolute, join, normalize, sep } from 'node:path'
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { zValidator } from '@hono/zod-validator'
@@ -10,6 +10,7 @@ import AdmZip from 'adm-zip'
 import { db, workspaces, eq } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
+import { AppError, AppErrorCodes } from '../lib/error'
 
 export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -45,6 +46,40 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
         'X-Frame-Options': 'SAMEORIGIN',
+      },
+    })
+  })
+  .get('/file', async (c) => {
+    const rawPath = c.req.query('path')?.trim()
+    const workspaceId = c.req.query('workspaceId')?.trim()
+    if (!rawPath) {
+      throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, 'Missing file path', { field: 'path' })
+    }
+    if (!workspaceId) {
+      throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, 'Missing workspace id', { field: 'workspaceId' })
+    }
+
+    const filePath = resolve(rawPath)
+    const user = c.get('user')
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
+      throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, 'Workspace not found')
+    }
+
+    const allowedRoot = resolve(ws.projectPath)
+    const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
+    if (filePath !== allowedRoot && !filePath.startsWith(rootWithSep)) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, 'Access denied: path outside workspace')
+    }
+
+    if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+      throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, 'File not found')
+    }
+
+    return new Response(Bun.file(filePath), {
+      headers: {
+        'Content-Type': contentType(filePath),
+        'Content-Disposition': `inline; filename="${encodeURIComponent(basename(filePath))}"`,
       },
     })
   })
@@ -200,6 +235,13 @@ function contentType(filePath: string) {
   if (ext === '.gif') return 'image/gif'
   if (ext === '.ico') return 'image/x-icon'
   if (ext === '.json') return 'application/json; charset=utf-8'
+  if (ext === '.pdf') return 'application/pdf'
+  if (ext === '.doc') return 'application/msword'
+  if (ext === '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  if (ext === '.ppt') return 'application/vnd.ms-powerpoint'
+  if (ext === '.pptx') return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  if (ext === '.xls') return 'application/vnd.ms-excel'
+  if (ext === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   if (ext === '.woff2') return 'font/woff2'
   if (ext === '.woff') return 'font/woff'
   if (ext === '.ttf') return 'font/ttf'

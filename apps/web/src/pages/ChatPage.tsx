@@ -2,10 +2,16 @@ import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'r
 import { useNavigate, useParams } from 'react-router-dom'
 import { workspaceNameFromPath } from '@agenthub/shared'
 import { ArrowUp, AtSign, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
+import {
+  QuickPromptBubbles,
+  createQuickPromptSeed,
+  fallbackWelcomeQuickPrompts,
+  rotateQuickPrompts,
+} from '../components/chat/QuickPromptBubbles'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
 import { readMentionCommand, readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
-import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '../lib/api'
+import { api, friendlyErrorMessage, type SkillSummary, type WelcomeQuickPrompt, type Workspace } from '../lib/api'
 import { agentLibraryChangeEvent, loadAgentLibrary, type SavedAgentConfig } from '../lib/agentLibrary'
 import { useI18n } from '../lib/i18n'
 import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
@@ -133,6 +139,8 @@ function Welcome() {
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [addProjectOpen, setAddProjectOpen] = useState(false)
   const [hint, setHint] = useState('')
+  const [quickPrompts, setQuickPrompts] = useState<WelcomeQuickPrompt[]>([])
+  const [quickPromptsLoading, setQuickPromptsLoading] = useState(true)
   const filteredWorkspaces = workspaces.filter((workspace) => {
     const query = workspaceQuery.trim().toLowerCase()
     if (!query) return true
@@ -144,6 +152,26 @@ function Welcome() {
     syncAgents()
     window.addEventListener(agentLibraryChangeEvent, syncAgents)
     return () => window.removeEventListener(agentLibraryChangeEvent, syncAgents)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const seed = createQuickPromptSeed('home')
+    setQuickPromptsLoading(true)
+    api
+      .getWelcomeQuickPrompts(seed)
+      .then(({ items }) => {
+        if (!cancelled) setQuickPrompts(items.length ? items : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+      })
+      .catch(() => {
+        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+      })
+      .finally(() => {
+        if (!cancelled) setQuickPromptsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -388,26 +416,16 @@ function Welcome() {
   return (
     <div className="agenthub-welcome-root flex h-full flex-col bg-[#F7F7F7]">
       <div className="flex flex-1 flex-col items-center px-8">
-        <section className="mt-[18vh] w-full max-w-[704px]">
+        <section className="mt-[16vh] w-full max-w-[960px] text-center">
           <h2 className="text-2xl font-semibold tracking-normal text-neutral-950">
             <TypewriterHeading text={t('有什么可以帮忙的？')} />
           </h2>
-          <p className="mt-3 text-base text-neutral-500">
-            {t('创建 Agent、拆解任务，或直接 @ 某个助手开始协作。')}
-          </p>
-
-          <div className="mt-24 grid gap-3 sm:grid-cols-2">
-            <PromptCard
-              title={t('开发小游戏')}
-              text={t('帮我简单开发一个跳跃小游戏')}
-              onClick={() => startThread('帮我简单开发一个跳跃小游戏')}
-            />
-            <PromptCard
-              title={t('解释架构')}
-              text={t('这个项目的具体技术栈')}
-              onClick={() => startThread('解释这个项目的具体技术栈，并指出后续可完善的地方')}
-            />
-          </div>
+          <QuickPromptBubbles
+            className="mt-8"
+            loading={quickPromptsLoading}
+            prompts={quickPrompts}
+            onPick={(prompt) => void startThread(prompt)}
+          />
         </section>
 
         <div className="agenthub-welcome-composer-dock mt-auto w-full max-w-[704px] pb-5">
@@ -590,18 +608,6 @@ function Welcome() {
         </div>
       </div>
     </div>
-  )
-}
-
-function PromptCard({ title, text, onClick }: { title: string; text: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="rounded-[22px] border border-neutral-200 bg-white px-5 py-4 text-left shadow-sm transition hover:border-neutral-300"
-    >
-      <div className="text-sm font-medium text-neutral-950">{title}</div>
-      <div className="mt-1 text-sm text-neutral-500">{text}</div>
-    </button>
   )
 }
 
