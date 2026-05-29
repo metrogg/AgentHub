@@ -84,6 +84,9 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 │   │   │       │   └── branch-manager.ts  # 分支生命周期管理
 │   │   │       ├── group-chat/            # @deprecated 旧群聊对话循环（已废弃，工具函数保留）
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 95951ac (docs: 更新架构文档以反映统一消息路由与任务看板)
 │   │   │       │   ├── group-chat-manager.ts # @deprecated conversationLoop / handleMessage
 │   │   │       │   └── index.ts           # @deprecated 导出
 │   │   │       ├── code-agent-adapter.ts  # 代码 Agent CLI 适配（被 CodeAgentRuntime 引用）
@@ -441,6 +444,7 @@ Agent 在执行任务时拥有四种自主行为（`buildAutonomyInstructions()`
 - **前端新增页面**：在 `apps/web/src/pages/` 创建组件，在 `apps/web/src/App.tsx` 中添加 `<Route>`。
 - **WebSocket 事件**：服务端通过 `broadcastSessionEvent` 发送，前端在 `chatStore.handleWSEvent` 中消费。事件类型定义于 `packages/shared/src/constants.ts` 的 `WsEvent`。新增事件：`task_board:plan_ready`、`task_board:task_progress`、`task_board:run_completed`、`task_board:clarification_needed`。
 - **Agent 回复流**：服务端 `agent-runner.ts` 中的 `runAgentReply` 负责调度；LLM 流式输出通过 `message:stream` 事件推送到前端，完成后写入数据库并发送 `message:completed`。
+<<<<<<< HEAD
 - **消息路由**：群聊消息统一走 `messages.ts` 的入口路由（intentRouter → @mention / handleSimpleReply / generatePlanAndPushTaskBoard），不再使用已废弃的 `GroupChatManager.conversationLoop()`。
 =======
 | UI / CSS | Tailwind CSS + Radix UI primitives + `@assistant-ui/react`
@@ -448,3 +452,6 @@ Agent 在执行任务时拥有四种自主行为（`buildAutonomyInstructions()`
 =======
 │   │   │       │   ├── group-chat-manager.ts
 >>>>>>> 9d0b2c7 (docs: 补充 AGENTS.md 中的技术栈和项目结构详情)
+=======
+- **消息路由**：群聊消息统一走 `messages.ts` 的入口路由（intentRouter → @mention / handleSimpleReply / generatePlanAndPushTaskBoard），不再使用已废弃的 `GroupChatManager.conversationLoop()`。
+>>>>>>> 95951ac (docs: 更新架构文档以反映统一消息路由与任务看板)
