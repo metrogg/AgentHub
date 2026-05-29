@@ -885,54 +885,15 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       }
     }
 
-    // === PolicyGuard 评估 + Git 分支隔离 ===
+    // === PolicyGuard 评估 ===
     const policy = PolicyGuard.evaluate({
       roleType: agent.roleType,
       taskType: task.taskType,
     })
-    let branchCtx: import('../git/branch-manager').BranchContext | null = null
-    const projectPath = childInfo.projectPath ?? undefined
-    const needBranch = PolicyGuard.needsBranchIsolation(policy.sandboxPolicy) && projectPath
-
-    if (needBranch) {
-      try {
-        branchCtx = await gitBranchManager.prepareBranch(projectPath, runId, agent.key || agent.id, task.id)
-        logger.info({ branch: branchCtx.branch, agent: agent.name }, 'Agent branch prepared')
-      } catch (err: any) {
-        logger.error({ err: err?.message, projectPath, agent: agent.name }, 'Failed to prepare agent branch')
-        await db
-          .update(workspaceTasks)
-          .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: `Git worktree 创建失败：${err?.message || '未知错误'}` })
-          .where(eq(workspaceTasks.id, task.id))
-        await emitRunEvent({
-          runId,
-          workspaceId,
-          groupSessionId,
-          taskId: task.id,
-          agentId: agent.id,
-          type: 'task.failed',
-          severity: 'error',
-          payload: { title: task.title, error: `Git worktree 创建失败：${err?.message || '未知错误'}` },
-        })
-        broadcastSessionEvent(groupSessionId, {
-          type: WsEvent.TaskUpdate,
-          payload: { taskId: task.id, status: TaskStatus.Failed, error: `Git worktree 创建失败：${err?.message || '未知错误'}`, sessionId: groupSessionId },
-        })
-        return {
-          taskId: task.id,
-          agentId: agent.id,
-          agentName: agent.name,
-          status: TaskStatus.Failed,
-          output: '',
-          artifacts: [],
-          error: `Git worktree 创建失败：${err?.message || '未知错误'}`,
-        }
-      }
-    }
 
     const profile = buildAgentProfileWithWorktree(
       agent,
-      branchCtx?.worktreePath ?? null,
+      null,
       childInfo.projectPath ?? null,
       {
         toolPermissions: policy.toolPermissions,
@@ -968,7 +929,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       .returning()
 
     if (!userMsg) {
-      if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
       return {
         taskId: task.id,
         agentId: agent.id,
@@ -1010,7 +970,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         signal,
         attemptCount,
         existingUserMessageId: userMsg.id,
-        existingBranchContext: branchCtx,
         deferCompletionStatus: true,
       })
 
@@ -1047,7 +1006,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           severity: 'warning',
           payload: { title: task.title, agentName: agent.name, sessionId: childInfo.sessionId },
         })
-        if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
         return {
           taskId: task.id,
           agentId: agent.id,
@@ -1115,8 +1073,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           .set({ clarificationCount: 1 })
           .where(eq(workspaceTasks.id, task.id))
 
-        if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-
         /**
          * Clarification 处理策略：
          * 当前将 Task 标记为 Done，task output 中带有 [AWAITING_CLARIFICATION] 标记。
@@ -1167,7 +1123,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
               { taskId: task.id, reason: rejection.reason, newAgent: fallbackAgent.name },
               'Task rejected and reassigned to suggested agent',
             )
-            if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
             return {
               taskId: task.id,
               agentId: task.agentId,
@@ -1188,7 +1143,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
               { taskId: task.id, reason: rejection.reason, fallbackAgent: fallbackAgent.name },
               'Task rejected and reassigned to fallback agent',
             )
-            if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
             return {
               taskId: task.id,
               agentId: task.agentId,
@@ -1201,7 +1155,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           }
         }
 
-        if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
         return {
           taskId: task.id,
           agentId: task.agentId,
@@ -1291,7 +1244,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             sourceAgentId: agent.id,
             taskId: task.id,
             changedFiles,
-            branchName: branchCtx?.branch,
+            executionPath: execResult.executionPath,
           },
           agentId: agent.id,
           taskId: task.id,
@@ -1356,7 +1309,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       }
 
       // 修复 Bug 24: 没有有效项目路径时跳过 validation，避免在服务器 CWD 执行
-      const validationCwd = branchCtx?.worktreePath ?? childInfo.projectPath ?? null
+      const validationCwd = execResult.executionPath ?? childInfo.projectPath ?? null
       const validationResults = validationCwd
         ? await runTaskValidation({
             commands: task.validation?.commands ?? [],
@@ -1500,8 +1453,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         },
       })
 
-      if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-
       return {
         taskId: task.id,
         agentId: agent.id,
@@ -1552,7 +1503,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         },
       })
 
-      if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
       return {
         taskId: task.id,
         agentId: agent.id,
@@ -1790,27 +1740,36 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       (r) => r.status === TaskStatus.Failed && r.error?.includes('Validation')
     )
     const hasPendingMergeBlockers = failedReviews.length > 0 || failedValidations.length > 0 || conflictReports.length > 0
+    const finalArtifacts = collectResultArtifacts(enrichedResults)
+    const artifactNotice = finalArtifacts.length > 0
+      ? `
+
+---
+📦 **交付产物**
+
+本次运行收集到 ${finalArtifacts.length} 个产物，已在下方产物卡中汇总。可直接打开文件、查看 Diff 或预览网页。
+`
+      : ''
 
     const mergeNotice = hasPendingMergeBlockers
       ? `
 
 ---
-⚠️ **代码尚未合并到主分支**
+⚠️ **交付需复核**
 
-当前代码变更仅存在于隔离分支（Git worktree）中，尚未自动合并回原项目目录。原因：
+Agent 已完成各自工作并写入工作区下的成员执行目录，但仍有以下事项需要复核：
 ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过\n` : ''}${failedValidations.length > 0 ? `- ${failedValidations.length} 个验证任务失败\n` : ''}${conflictReports.length > 0 ? `- 检测到 ${conflictReports.length} 个文件冲突未解决\n` : ''}
-请先解决上述问题后，在「运行历史」页面手动确认应用变更。
+请先查看子对话和产物卡，确认问题后再把需要的文件应用到正式工作区。
 `
       : `
 
 ---
-✅ **代码已审查通过，可手动合并**
+✅ **交付已收口**
 
-所有审查和验证任务已完成。代码变更仍保留在隔离分支中，尚未自动合并。
-如需应用变更，请前往「运行历史」页面手动确认。
+所有已完成任务的产出已汇总到主对话。成员执行细节保留在各自子对话中，文件产物写入工作区下的 Agent 工作目录。
 `
 
-    const finalSummary = summary + mergeNotice
+    const finalSummary = summary + artifactNotice + mergeNotice
 
     // 匹配 workspace 中的 orchestrator agent，避免 senderId 与前端头像对不上
     const orchestratorAgent = plan.agents.find(
@@ -1832,10 +1791,12 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
           agentName: orchestratorAgent?.name ?? 'Orchestrator',
           role: orchestratorAgent?.role ?? 'Coordinator',
           runtimeType: 'llm',
+          artifacts: finalArtifacts,
           orchestratorSummary: {
             dispatchId: runId,
             taskIds: plan.tasks.map((t) => t.id),
             workspaceId,
+            artifactCount: finalArtifacts.length,
             mergeBlocked: hasPendingMergeBlockers,
             failedReviewCount: failedReviews.length,
             failedValidationCount: failedValidations.length,
@@ -1871,6 +1832,33 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
       payload: { sessionId: groupSessionId, message: summaryMsg },
     })
   }
+}
+
+function collectResultArtifacts(results: TaskResult[]) {
+  const artifacts: Array<Record<string, unknown>> = []
+  const seen = new Set<string>()
+
+  for (const result of results) {
+    for (const artifact of result.artifacts ?? []) {
+      if (!artifact || typeof artifact !== 'object') continue
+      const key = [
+        artifact.id,
+        artifact.type ?? artifact.kind,
+        artifact.path ?? artifact.filePath,
+        artifact.url,
+      ].filter(Boolean).join('|')
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      artifacts.push({
+        ...artifact,
+        sourceAgentId: artifact.sourceAgentId ?? result.agentId,
+        sourceAgentName: artifact.sourceAgentName ?? result.agentName,
+      })
+      if (artifacts.length >= 80) return artifacts
+    }
+  }
+
+  return artifacts
 }
 
 function buildAutonomyInstructions(): string {

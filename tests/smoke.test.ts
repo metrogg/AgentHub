@@ -237,6 +237,27 @@ describe('AgentHub smoke tests', () => {
     expect(existsSync(full.workspace.projectPath!)).toBe(true)
   })
 
+  test('agent workdir is seeded from workspace without requiring git', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'agenthub-workdir-'))
+    writeFileSync(join(projectRoot, 'index.html'), '<main>hello</main>')
+    mkdirSync(join(projectRoot, 'node_modules'), { recursive: true })
+    writeFileSync(join(projectRoot, 'node_modules', 'ignored.txt'), 'skip me')
+
+    const { prepareAgentWorkdir } = await import('../apps/server/src/services/execution/agent-workdir')
+    const workdir = prepareAgentWorkdir({
+      projectPath: projectRoot,
+      runId: 'run-1',
+      taskId: 'task-1',
+      agentId: 'coder',
+      agentName: 'Coder',
+      sandboxPolicy: 'workspace-write',
+    })
+
+    expect(workdir?.executionPath).toContain(join('.agenthub', 'workdirs'))
+    expect(existsSync(join(workdir!.executionPath, 'index.html'))).toBe(true)
+    expect(existsSync(join(workdir!.executionPath, 'node_modules', 'ignored.txt'))).toBe(false)
+  })
+
   test('classic workspace seeds role agents and editable relations', async () => {
     const full = await json<{
       workspace: { id: string }

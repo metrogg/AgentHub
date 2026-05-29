@@ -1,8 +1,8 @@
 import { db, messages, workspaceTasks, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { runAgentReply, type AgentRunProfile } from '../agent-runner'
-import { gitBranchManager, type BranchContext } from '../git/branch-manager'
 import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
+import { prepareAgentWorkdir, type AgentWorkdir } from './agent-workdir'
 import { TaskStatus } from '@agenthub/shared'
 
 export interface TaskExecutionInput {
@@ -17,8 +17,8 @@ export interface TaskExecutionInput {
   attemptCount?: number
   /** 外部已创建的 user message（orchestrator 场景），跳过插入 */
   existingUserMessageId?: string
-  /** 外部已准备的 branch context（orchestrator 场景），跳过创建/销毁 */
-  existingBranchContext?: BranchContext | null
+  /** 外部已准备的执行目录（orchestrator 场景），跳过自动分配 */
+  existingWorkdir?: AgentWorkdir | null
   /** Orchestrator 场景需要等 validation / contract 后处理完成后再标记 Done */
   deferCompletionStatus?: boolean
 }
@@ -29,46 +29,40 @@ export interface TaskExecutionOutput {
   artifacts: Array<Record<string, unknown>>
   error?: string
   durationMs: number
-  /** 实际使用的 branch context（供 orchestrator 后处理收集 diff） */
-  branchContext?: BranchContext | null
+  /** 实际执行目录（写入型 Agent 会落在工作区下的 .agenthub/workdirs） */
+  executionPath?: string | null
 }
 
 /**
  * 统一任务执行服务：为单任务 dispatch 和 Orchestrator 子任务提供
- * 相同的 Git 分支隔离、Agent 执行、artifact 收集和清理能力。
+ * 相同的执行目录分配、Agent 执行和 artifact 收集能力。
  */
 export class TaskExecutionService {
   async execute(input: TaskExecutionInput): Promise<TaskExecutionOutput> {
     const { taskId, sessionId, projectPath, profile, prompt, signal, attemptCount = 0 } = input
 
-    // === Git 分支隔离 ===
-    let branchCtx: BranchContext | null = input.existingBranchContext ?? null
-    const needBranch = !input.existingBranchContext && profile.sandboxPolicy !== 'read-only' && projectPath
-
-    if (needBranch) {
-      try {
-        branchCtx = await gitBranchManager.prepareBranch(
-          projectPath!,
-          input.runId ?? 'standalone',
-          profile.name || profile.id,
-          taskId,
-        )
-        logger.info({ branch: branchCtx.branch, agent: profile.name }, 'Agent branch prepared')
-      } catch (err: any) {
-        logger.error({ err: err?.message, projectPath, agent: profile.name }, 'Failed to prepare agent branch')
-        await db
-          .update(workspaceTasks)
-          .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: `Git worktree 创建失败：${err?.message || '未知错误'}` })
-          .where(eq(workspaceTasks.id, taskId))
-        return { status: TaskStatus.Failed, output: '', artifacts: [], error: `Git worktree 创建失败：${err?.message || '未知错误'}`, durationMs: 0 }
-      }
-    }
-
     const runId = input.runId ?? 'standalone'
+    const workdir =
+      input.existingWorkdir ??
+      prepareAgentWorkdir({
+        projectPath,
+        runId,
+        taskId,
+        agentId: profile.id,
+        agentName: profile.name,
+        sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
+      })
+    const executionPath = workdir?.executionPath ?? profile.projectPath ?? projectPath ?? null
+    if (workdir) {
+      logger.info(
+        { executionPath: workdir.executionPath, relativePath: workdir.relativePath, agent: profile.name },
+        'Agent workdir prepared',
+      )
+    }
 
     const executionProfile: AgentRunProfile = {
       ...profile,
-      projectPath: branchCtx?.worktreePath ?? profile.projectPath ?? null,
+      projectPath: executionPath,
       originalProjectPath: profile.projectPath ?? null,
     }
 
@@ -78,7 +72,7 @@ export class TaskExecutionService {
       agentId: profile.id,
       agentName: profile.name,
       projectPath: projectPath ?? null,
-      worktreePath: branchCtx?.worktreePath ?? null,
+      worktreePath: workdir?.executionPath ?? (profile.sandboxPolicy === 'read-only' ? null : executionPath),
       sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
       envAllowlist: DEFAULT_ENV_ALLOWLIST,
     }
@@ -98,7 +92,6 @@ export class TaskExecutionService {
         .returning()
 
       if (!userMsg) {
-        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
         return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
       }
       userMsgId = userMsg.id
@@ -127,8 +120,7 @@ export class TaskExecutionService {
 
       if (signal?.aborted) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
-        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, branchContext: branchCtx }
+        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, executionPath }
       }
 
       if (!result.ok) {
@@ -137,8 +129,7 @@ export class TaskExecutionService {
 
       if (result.cancelled) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
-        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, branchContext: branchCtx }
+        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, executionPath }
       }
 
       // 收集 output
@@ -151,30 +142,6 @@ export class TaskExecutionService {
 
       const output = lastAgentMsg[0]?.content ?? ''
       const artifacts: Array<Record<string, unknown>> = []
-
-      // 收集 Git diff artifact
-      if (branchCtx) {
-        try {
-          const changedFiles = await gitBranchManager.collectChangedFiles(branchCtx.projectPath, branchCtx.branch)
-          if (changedFiles.length > 0) {
-            for (const filePath of changedFiles) {
-              const fileDiff = await gitBranchManager.collectFileDiff(branchCtx.projectPath, filePath, branchCtx.branch)
-              const status = await gitBranchManager.getFileStatus(branchCtx.projectPath, filePath, branchCtx.branch)
-              artifacts.push({
-                id: `diff-${filePath.replace(/[^a-z0-9]/gi, '-')}`,
-                kind: 'diff',
-                title: `${profile.name} 修改了 ${filePath}`,
-                filePath,
-                status,
-                diff: fileDiff,
-                source: profile.name,
-              })
-            }
-          }
-        } catch (err: any) {
-          logger.error({ err: err?.message, taskId }, 'Failed to collect git diff')
-        }
-      }
 
       // 合并 message metadata 中的 artifacts
       const msgArtifacts = (lastAgentMsg[0]?.metadata as Record<string, unknown> | null)?.artifacts as
@@ -195,17 +162,14 @@ export class TaskExecutionService {
           .where(eq(workspaceTasks.id, taskId))
       }
 
-      if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
-
-      return { status: TaskStatus.Done, output, artifacts, durationMs: taskDuration, branchContext: branchCtx }
+      return { status: TaskStatus.Done, output, artifacts, durationMs: taskDuration, executionPath }
     } catch (error: any) {
       const taskDuration = Date.now() - taskStartTime
       await db
         .update(workspaceTasks)
         .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
         .where(eq(workspaceTasks.id, taskId))
-      if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
-      return { status: TaskStatus.Failed, output: '', artifacts: [], error: error?.message || 'Unknown error', durationMs: taskDuration, branchContext: branchCtx }
+      return { status: TaskStatus.Failed, output: '', artifacts: [], error: error?.message || 'Unknown error', durationMs: taskDuration, executionPath }
     }
   }
 }

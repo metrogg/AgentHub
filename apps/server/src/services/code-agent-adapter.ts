@@ -2,6 +2,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   statSync,
   unlinkSync,
@@ -1657,6 +1658,12 @@ function cleanCommandText(value: string) {
 
 async function snapshotWorkspaceFiles(cwd?: string): Promise<Map<string, string>> {
   if (!cwd) return new Map()
+  const gitSnapshot = await snapshotGitWorkspaceFiles(cwd)
+  if (gitSnapshot) return gitSnapshot
+  return scanWorkspaceFiles(cwd)
+}
+
+async function snapshotGitWorkspaceFiles(cwd: string): Promise<Map<string, string> | null> {
   try {
     const proc = Bun.spawn(['git', 'status', '--short', '--untracked-files=all'], {
       cwd,
@@ -1671,11 +1678,67 @@ async function snapshotWorkspaceFiles(cwd?: string): Promise<Map<string, string>
       ]),
       new Response(proc.stdout).text().catch(() => ''),
     ])
-    if (code !== 0) return new Map()
+    if (code !== 0) return null
     return parseGitStatus(stdout)
   } catch {
-    return new Map()
+    return null
   }
+}
+
+function scanWorkspaceFiles(root: string): Map<string, string> {
+  const snapshot = new Map<string, string>()
+
+  const walk = (dir: string, prefix = '') => {
+    let entries: Array<{
+      name: string
+      isDirectory(): boolean
+      isFile(): boolean
+      isSymbolicLink(): boolean
+    }>
+    try {
+      entries = readdirSync(dir, { withFileTypes: true }) as unknown as typeof entries
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      if (shouldSkipSnapshotEntry(entry.name)) continue
+      const absolutePath = resolve(dir, entry.name)
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+      if (entry.isDirectory()) {
+        walk(absolutePath, relativePath)
+        continue
+      }
+      try {
+        const stats = statSync(absolutePath)
+        if (!stats.isFile() && !stats.isSymbolicLink()) continue
+        snapshot.set(relativePath.replace(/\\/g, '/'), `f:${stats.size}:${Math.round(stats.mtimeMs)}`)
+      } catch {
+        continue
+      }
+    }
+  }
+
+  walk(root)
+  return snapshot
+}
+
+function shouldSkipSnapshotEntry(name: string) {
+  const lower = name.toLowerCase()
+  return [
+    '.agenthub',
+    '.git',
+    'node_modules',
+    'dist',
+    'build',
+    '.next',
+    '.vite',
+    'coverage',
+    '.turbo',
+    '.cache',
+    '.idea',
+    '.vscode',
+  ].includes(lower)
 }
 
 function parseGitStatus(output: string) {
@@ -1699,13 +1762,18 @@ async function diffWorkspaceFiles(
   const files: CodeAgentRunMetadata['files'] = []
   for (const [path, status] of after) {
     if (before.get(path) === status) continue
-    const fileStatus = fileStatusFromGitStatus(status)
-    files.push({ path, status: fileStatus, diff: await readGitDiffForFile(cwd, path, fileStatus) })
+    const fileStatus = status.startsWith('f:') ? (before.has(path) ? 'modified' : 'created') : fileStatusFromGitStatus(status)
+    files.push({ path, status: fileStatus, diff: await readWorkspaceDiffForFile(cwd, path, fileStatus) })
+  }
+  for (const [path, status] of before) {
+    if (after.has(path)) continue
+    if (!status.startsWith('f:')) continue
+    files.push({ path, status: 'deleted', diff: undefined })
   }
   return files.slice(0, 80)
 }
 
-async function readGitDiffForFile(
+async function readWorkspaceDiffForFile(
   cwd: string | undefined,
   path: string,
   status: CodeAgentRunMetadata['files'][number]['status'],
@@ -1720,6 +1788,9 @@ async function readGitDiffForFile(
   if (status === 'created' || status === 'untracked') {
     return buildNewFileDiff(cwd, path)
   }
+  if (status === 'modified') {
+    return buildNewFileDiff(cwd, path)
+  }
   return undefined
 }
 
@@ -1732,7 +1803,7 @@ async function enrichFileDiffs(cwd: string | undefined, files: CodeAgentRunMetad
       continue
     }
     const gitPath = normalizeGitPath(cwd, file.path)
-    enriched.push({ ...file, diff: await readGitDiffForFile(cwd, gitPath, file.status) })
+    enriched.push({ ...file, diff: await readWorkspaceDiffForFile(cwd, gitPath, file.status) })
   }
   return enriched
 }
