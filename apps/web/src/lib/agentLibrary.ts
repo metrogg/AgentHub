@@ -268,11 +268,13 @@ function normalizeLibraryState(value: unknown): AgentLibraryState {
 function dedupeSavedAgents(agents: SavedAgentConfig[]) {
   const seen = new Set<string>()
   return agents.filter((agent) => {
+    const runtimeType = (agent.runtimeType ?? 'llm').trim().toLowerCase()
+    const codeAgentType = runtimeType === 'code-agent' ? (agent.codeAgentType ?? '').trim().toLowerCase() : ''
     const key = [
       agent.name.trim().toLowerCase(),
       agent.role.trim().toLowerCase(),
-      (agent.runtimeType ?? 'llm').trim().toLowerCase(),
-      (agent.codeAgentType ?? '').trim().toLowerCase(),
+      runtimeType,
+      codeAgentType,
     ].join('|')
     if (seen.has(key)) return false
     seen.add(key)

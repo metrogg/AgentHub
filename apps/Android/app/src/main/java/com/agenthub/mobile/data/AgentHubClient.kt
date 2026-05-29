@@ -40,7 +40,11 @@ class AgentHubClient(
     }
 
     suspend fun workbench(config: ConnectionConfig): MobileWorkbenchResponse {
-        return get(config, "/mobile/workbench")
+        return runCatching {
+            get<MobileWorkbenchResponse>(config, "/mobile/workbench")
+        }.getOrElse { error ->
+            if (error.isHttpNotFound()) MobileWorkbenchResponse() else throw error
+        }
     }
 
     suspend fun listMessages(config: ConnectionConfig, sessionId: String): List<Message> {
@@ -156,29 +160,35 @@ class AgentHubClient(
     }
 
     suspend fun startOffice(config: ConnectionConfig): MobileWorkbenchOfficeStatus {
-        return post(config, "/office/start", timeoutMillis = 30_000)
+        return post(config, "/office/start", timeoutMillis = 30_000L)
     }
 
     suspend fun openFirewallPort(config: ConnectionConfig): WorkbenchActionResponse {
-        return post(config, "/mobile/firewall/open", timeoutMillis = 60_000)
+        return post(config, "/mobile/firewall/open", timeoutMillis = 60_000L)
     }
 
     suspend fun installCodingTools(config: ConnectionConfig): WorkbenchActionResponse {
-        return post(config, "/coding-tools/cli/install", timeoutMillis = 10 * 60 * 1000)
+        return post(config, "/coding-tools/cli/install", timeoutMillis = 10L * 60 * 1000)
     }
 
     suspend fun repairCodingTools(config: ConnectionConfig): WorkbenchActionResponse {
-        return post(config, "/coding-tools/lifecycle/startup", timeoutMillis = 60_000)
+        return post(config, "/coding-tools/lifecycle/startup", timeoutMillis = 60_000L)
     }
 
     private fun dedupeWorkspaceAgents(agents: List<WorkspaceAgent>): List<AgentContact> {
         val seen = mutableSetOf<String>()
         return agents.mapNotNull { agent ->
+            val runtimeType = agent.runtimeType.trim().lowercase()
+            val codeAgentType = if (runtimeType == "code-agent") {
+                agent.codeAgentType?.trim()?.lowercase().orEmpty()
+            } else {
+                ""
+            }
             val key = listOf(
                 agent.name.trim().lowercase(),
                 agent.role.trim().lowercase(),
-                agent.runtimeType.trim().lowercase(),
-                agent.codeAgentType?.trim()?.lowercase().orEmpty(),
+                runtimeType,
+                codeAgentType,
             ).joinToString("|")
             if (!seen.add(key)) return@mapNotNull null
             AgentContact(

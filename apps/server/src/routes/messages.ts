@@ -1084,6 +1084,7 @@ function toAgentProfile(
   agent: typeof workspaceAgents.$inferSelect,
   projectPath?: string | null,
 ): AgentRunProfile {
+  const runtimeType = normalizeAgentRuntimeType(agent.runtimeType)
   return {
     id: agent.id,
     name: agent.name,
@@ -1091,20 +1092,48 @@ function toAgentProfile(
     description: agent.description,
     color: agent.color,
     modelId: agent.modelId,
-    runtimeType: agent.runtimeType,
-    codeAgentType: agent.codeAgentType ?? undefined,
+    runtimeType,
+    codeAgentType: runtimeType === 'code-agent' ? normalizeAgentCodeAgentType(agent.codeAgentType) : undefined,
     capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: agent.toolPermissions,
-    sandboxPolicy: agent.sandboxPolicy,
-    contextPolicy: agent.contextPolicy,
+    sandboxPolicy: normalizeAgentSandboxPolicy(agent.sandboxPolicy),
+    contextPolicy: normalizeAgentContextPolicy(agent.contextPolicy),
     approvalRequired: agent.approvalRequired,
     systemPrompt: agent.systemPrompt,
     projectPath: projectPath?.trim() || null,
   }
 }
 
-async function profileForDirectSession(session: typeof sessions.$inferSelect) {
-  if (!session.workspaceAgentId) return undefined
+async function profileForDirectSession(
+  session: typeof sessions.$inferSelect,
+): Promise<AgentRunProfile | undefined> {
+  if (!session.workspaceAgentId) {
+    if (!session.workspaceId) return undefined
+    const [workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, session.workspaceId))
+      .limit(1)
+    if (!workspace) return undefined
+    const profile: AgentRunProfile = {
+      id: `workspace:${workspace.id}`,
+      name: workspace.name || 'Workspace Assistant',
+      role: '工作区上下文助手',
+      description: '当前会话已绑定到项目工作区，可读取工作区上下文。',
+      color: '#111827',
+      modelId: null,
+      runtimeType: 'llm',
+      capabilityTags: ['chat', 'workspace:read'],
+      toolPermissions: ['chat', 'workspace:read'],
+      sandboxPolicy: 'read-only',
+      contextPolicy: 'workspace-aware',
+      approvalRequired: false,
+      systemPrompt: `你正在围绕当前项目工作区回复。请优先利用项目上下文回答，必要时明确指出缺少哪些文件或信息。`,
+      projectPath: workspace.projectPath?.trim() || null,
+      originalProjectPath: workspace.projectPath?.trim() || null,
+    }
+    return profile
+  }
   const [agent] = await db
     .select()
     .from(workspaceAgents)
@@ -1119,6 +1148,34 @@ async function profileForDirectSession(session: typeof sessions.$inferSelect) {
     .where(eq(workspaces.id, session.workspaceId))
     .limit(1)
   return toAgentProfile(agent, workspace?.projectPath)
+}
+
+function normalizeAgentRuntimeType(value?: string | null): AgentRunProfile['runtimeType'] {
+  const allowed: AgentRunProfile['runtimeType'][] = ['llm', 'code-agent', 'mcp', 'a2a']
+  return allowed.includes(value as AgentRunProfile['runtimeType'])
+    ? (value as AgentRunProfile['runtimeType'])
+    : 'llm'
+}
+
+function normalizeAgentCodeAgentType(value?: string | null): AgentRunProfile['codeAgentType'] {
+  const allowed: NonNullable<AgentRunProfile['codeAgentType']>[] = ['codex', 'claude-code', 'opencode', 'gemini']
+  return allowed.includes(value as NonNullable<AgentRunProfile['codeAgentType']>)
+    ? (value as NonNullable<AgentRunProfile['codeAgentType']>)
+    : undefined
+}
+
+function normalizeAgentSandboxPolicy(value?: string | null): AgentRunProfile['sandboxPolicy'] {
+  const allowed: AgentRunProfile['sandboxPolicy'][] = ['read-only', 'workspace-write', 'danger-full-access']
+  return allowed.includes(value as AgentRunProfile['sandboxPolicy'])
+    ? (value as AgentRunProfile['sandboxPolicy'])
+    : 'workspace-write'
+}
+
+function normalizeAgentContextPolicy(value?: string | null): AgentRunProfile['contextPolicy'] {
+  const allowed: AgentRunProfile['contextPolicy'][] = ['recent-only', 'pinned-recent', 'workspace-aware']
+  return allowed.includes(value as AgentRunProfile['contextPolicy'])
+    ? (value as AgentRunProfile['contextPolicy'])
+    : 'workspace-aware'
 }
 
 async function createWorkspaceGroupSession(

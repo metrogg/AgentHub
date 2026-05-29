@@ -349,6 +349,8 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
   const name = input.name?.trim()
   const role = input.role?.trim()
   if (!name || !role) return null
+  const runtimeType = normalizeRuntimeType(input.runtimeType)
+  const codeAgentType = runtimeType === 'code-agent' ? normalizeCodeAgentType(input.codeAgentType) : null
   return {
     id: input.id?.trim() || `${name}:${role}`,
     name,
@@ -360,14 +362,14 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     roleProfile: input.roleProfile ?? null,
     color: input.color || '#111827',
     modelId: input.modelId ?? null,
-    runtimeType: normalizeRuntimeType(input.runtimeType),
-    codeAgentType: normalizeCodeAgentType(input.codeAgentType),
+    runtimeType,
+    codeAgentType,
     capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags.filter(isNonEmptyString) : [],
     toolPermissions: Array.isArray(input.toolPermissions) ? input.toolPermissions.filter(isNonEmptyString) : [],
     sandboxPolicy: normalizeSandboxPolicy(input.sandboxPolicy),
     contextPolicy: normalizeContextPolicy(input.contextPolicy),
     autoInvoke: input.autoInvoke ?? true,
-    approvalRequired: input.runtimeType === 'code-agent' ? false : (input.approvalRequired ?? true),
+    approvalRequired: runtimeType === 'code-agent' ? false : (input.approvalRequired ?? true),
   }
 }
 
@@ -520,18 +522,17 @@ async function ensureSavedAgentDirectSession(ownerId: string, agent: SavedAgentC
 }
 
 function sameAgentIdentity(agent: typeof workspaceAgents.$inferSelect, saved: SavedAgentConfig) {
-  return normalizeText(agent.name) === normalizeText(saved.name) &&
-    normalizeText(agent.role) === normalizeText(saved.role) &&
-    normalizeText(agent.runtimeType) === normalizeText(saved.runtimeType ?? 'llm') &&
-    normalizeText(agent.codeAgentType ?? '') === normalizeText(saved.codeAgentType ?? '')
+  return contactDedupeKey(agent) === contactDedupeKey(saved)
 }
 
 function contactDedupeKey(agent: { name: string; role: string; runtimeType?: string | null; codeAgentType?: string | null }) {
+  const runtimeType = normalizeText(agent.runtimeType ?? '')
+  const codeAgentType = runtimeType === 'code-agent' ? normalizeText(agent.codeAgentType ?? '') : ''
   return [
     normalizeText(agent.name),
     normalizeText(agent.role),
-    normalizeText(agent.runtimeType ?? ''),
-    normalizeText(agent.codeAgentType ?? ''),
+    runtimeType,
+    codeAgentType,
   ].join('|')
 }
 

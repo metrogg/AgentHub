@@ -36,7 +36,7 @@ class AgentHubRepository(
             runCatching {
                 client.health(config)
                 val sync = client.sync(config)
-                val workbench = client.workbench(config)
+                val workbench = runCatching { client.workbench(config) }.getOrNull()
                 currentSocket?.cancel()
                 currentSocket = client.openEventSocket(config, socketListener(config))
                 applySync(sync)

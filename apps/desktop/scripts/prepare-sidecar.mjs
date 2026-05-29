@@ -31,6 +31,12 @@ async function stopStaleDevProcesses() {
 
   const script = `
 $root = ${powershellRoot}
+$devPorts = @(5173, 5174, 5175, 8000)
+$portPids = [System.Collections.Generic.HashSet[int]]::new()
+Get-NetTCPConnection -ErrorAction SilentlyContinue |
+  Where-Object { $devPorts -contains $_.LocalPort } |
+  ForEach-Object { [void]$portPids.Add([int]$_.OwningProcess) }
+
 $protected = [System.Collections.Generic.HashSet[int]]::new()
 $cursor = [int]$PID
 while ($cursor -gt 0 -and -not $protected.Contains($cursor)) {
@@ -54,6 +60,7 @@ $targets = Get-CimInstance Win32_Process |
     )
     if (-not $inProject) { return $false }
     if ($_.Name -in @('agenthub-desktop.exe', 'agenthub-server.exe')) { return $true }
+    if ($portPids.Contains([int]$_.ProcessId) -and $_.Name -in @('node.exe', 'bun.exe', 'vite.exe', 'esbuild.exe')) { return $true }
     if ($_.Name -in @('vite.exe') -and $commandLine -match 'apps[\\/]web[\\/]node_modules[\\/]\.bin[\\/]vite\.exe') { return $true }
     if ($_.Name -in @('bun.exe') -and $commandLine -match '--filter\s+@agenthub[\\/]?(web|desktop)' -and $commandLine -match '\s+(dev|tauri:dev)(\s|$)') { return $true }
     if ($commandLine -match 'apps[\\/]desktop[\\/]node_modules[\\/]@tauri-apps[\\/]cli[\\/]tauri\.js"?\s+dev') { return $true }

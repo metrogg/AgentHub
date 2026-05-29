@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.agenthub.desktop",
   "build": {
-    "beforeDevCommand": "bun --filter @agenthub/desktop prepare:sidecar --skip-web-build && bun --filter @agenthub/web dev --host 127.0.0.1",
+    "beforeDevCommand": "bun --filter @agenthub/desktop prepare:sidecar --skip-web-build && bun --filter @agenthub/web dev --host 127.0.0.1 --port 5173 --strictPort",
     "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "bun --filter @agenthub/desktop prepare:sidecar",
     "frontendDist": "resources/web-dist"

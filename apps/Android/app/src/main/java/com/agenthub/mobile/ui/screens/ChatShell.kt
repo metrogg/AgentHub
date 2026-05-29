@@ -60,9 +60,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -78,6 +78,10 @@ import com.agenthub.mobile.data.Message
 import com.agenthub.mobile.data.MobileUiState
 import com.agenthub.mobile.data.Session
 import com.agenthub.mobile.data.AgentContact
+import com.agenthub.mobile.data.MobileWorkbenchCodingToolItem
+import com.agenthub.mobile.data.MobileWorkbenchRunSummary
+import com.agenthub.mobile.data.MobileWorkbenchSkillSummary
+import com.agenthub.mobile.data.MobileWorkbenchWorkspaceSummary
 import com.agenthub.mobile.data.Workspace
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -100,11 +104,11 @@ private val WorkAmber = Color(0xFFF2A23A)
 private val ProfileGreenSoft = Color(0xFFEAF8EF)
 private val ProfileBlue = Color(0xFF2F80ED)
 
-private enum class MobileTab(val label: String, val icon: String) {
-    Messages("聊天", "💬"),
-    Agents("Agent", "👥"),
-    Workbench("工作台", "⬡"),
-    Me("我的", "○"),
+private enum class MobileTab(val label: String, val iconRes: Int) {
+    Messages("聊天", R.drawable.ic_mobile_tab_chat),
+    Agents("Agent通讯录", R.drawable.ic_mobile_tab_agents),
+    Workbench("工作台", R.drawable.ic_mobile_tab_workbench),
+    Me("我的", R.drawable.ic_mobile_tab_me),
 }
 
 @OptIn(ExperimentalAnimationApi::class)
@@ -114,12 +118,17 @@ fun ChatShell(
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
     onCreateSession: () -> Unit,
+    onOpenWorkspaceGroupSession: (String) -> Unit,
     onOpenAgentContact: (AgentContact) -> Unit,
     onSelectSession: (String) -> Unit,
     onSendMessage: (String) -> Unit,
     onArchiveSession: (String) -> Unit,
     onUnarchiveSession: (String) -> Unit,
     onDeleteSession: (String) -> Unit,
+    onStartOffice: () -> Unit,
+    onOpenFirewall: () -> Unit,
+    onInstallCodingTools: () -> Unit,
+    onRepairCodingTools: () -> Unit,
     onScanPairingQr: (String) -> Unit,
 ) {
     var currentTab by remember { mutableStateOf(MobileTab.Messages) }
@@ -221,7 +230,11 @@ fun ChatShell(
                         onOpenAgentContact = onOpenAgentContact,
                         onRefresh = onRefresh,
                     )
-                    MobileTab.Workbench -> WorkbenchScreen(state = state, onRefresh = onRefresh, onCreateSession = onCreateSession)
+                    MobileTab.Workbench -> WorkbenchScreen(
+                        state = state,
+                        onRefresh = onRefresh,
+                        onCreateSession = onCreateSession,
+                    )
                     MobileTab.Me -> ProfileScreen(state = state, onDisconnect = onDisconnect, onScanQr = ::scanQr)
                 }
             }
@@ -687,24 +700,13 @@ private fun TabItem(tab: MobileTab, active: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun TabIcon(tab: MobileTab, active: Boolean) {
-    when (tab) {
-        MobileTab.Messages -> {
-            Image(
-                painter = painterResource(R.drawable.ic_agenthub),
-                contentDescription = null,
-                modifier = Modifier
-                    .size(21.dp)
-                    .alpha(if (active) 1f else 0.72f),
-            )
-        }
-        else -> {
-            Text(
-                text = tab.icon,
-                color = if (active) WeChatGreen else MutedText,
-                fontSize = 17.sp,
-            )
-        }
-    }
+    val tint = if (active) WeChatGreen else MutedText
+    Image(
+        painter = painterResource(tab.iconRes),
+        contentDescription = tab.label,
+        modifier = Modifier.size(21.dp),
+        colorFilter = ColorFilter.tint(tint),
+    )
 }
 
 @Composable
@@ -994,6 +996,528 @@ private fun WorkbenchScreen(state: MobileUiState, onRefresh: () -> Unit, onCreat
             Spacer(modifier = Modifier.height(84.dp))
         }
     }
+}
+
+@Composable
+private fun WorkbenchScreenV2(
+    state: MobileUiState,
+    onRefresh: () -> Unit,
+    onCreateSession: () -> Unit,
+    onOpenWorkspaceGroupSession: (String) -> Unit,
+    onStartOffice: () -> Unit,
+    onOpenFirewall: () -> Unit,
+    onInstallCodingTools: () -> Unit,
+    onRepairCodingTools: () -> Unit,
+) {
+    val workbench = state.workbench
+    val workspaceItems = workbench?.workspaces ?: fallbackWorkbenchWorkspaces(state)
+    val runItems = workbench?.runs.orEmpty()
+    val toolItems = workbench?.codingTools?.items.orEmpty()
+    val skills = workbench?.skills.orEmpty()
+    val activeRuns = runItems.count { it.status in setOf("planning", "running", "synthesizing") }
+    val readyTools = toolItems.count { it.ready }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            FeatureHero(
+                title = "移动工作台",
+                subtitle = if (state.connected) {
+                    "桌面端的工作区、运行历史、Coding Tools、Skills、模型和办公室状态都已同步到手机。"
+                } else {
+                    "连接电脑端后，工作台会同步全部桌面功能入口。"
+                },
+                icon = "WB",
+                action = if (state.workbenchLoading) "同步中" else "同步",
+                onAction = onRefresh,
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricCard("工作区", workspaceItems.size.toString(), Modifier.weight(1f))
+                MetricCard("运行中", activeRuns.toString(), Modifier.weight(1f))
+                MetricCard("就绪工具", "$readyTools/${toolItems.size.coerceAtLeast(1)}", Modifier.weight(1f))
+            }
+        }
+        item { WorkbenchSectionHeader("工作区", "群聊、Agent、任务与项目路径") }
+        if (workspaceItems.isEmpty()) {
+            item { WorkbenchEmptyCard("暂无工作区", "在电脑端创建工作区后，这里会自动出现。") }
+        } else {
+            items(workspaceItems.take(8), key = { it.id }) { workspace ->
+                WorkspaceSummaryCard(
+                    workspace = workspace,
+                    onOpenGroup = { onOpenWorkspaceGroupSession(workspace.id) },
+                )
+            }
+        }
+        item { WorkbenchSectionHeader("运行历史", "Orchestrator 与任务调度状态") }
+        if (runItems.isEmpty()) {
+            item { WorkbenchEmptyCard("暂无运行记录", "从群聊触发 @orchestrator 后，这里会展示最近运行。") }
+        } else {
+            items(runItems.take(5), key = { it.id }) { run ->
+                RunSummaryCard(run = run)
+            }
+        }
+        item { WorkbenchSectionHeader("Coding Tools", "本机 CLI 探测与执行状态") }
+        item {
+            CodingToolsCard(
+                items = toolItems,
+                loading = state.workbenchLoading,
+                onInstall = onInstallCodingTools,
+                onRepair = onRepairCodingTools,
+            )
+        }
+        item { WorkbenchSectionHeader("Skills", "安装与本地发现") }
+        item {
+            SkillsCard(
+                skills = skills,
+                onRefresh = onRefresh,
+            )
+        }
+        item { WorkbenchSectionHeader("模型与运行时", "LLM 连接状态") }
+        item {
+            RuntimeInfoCard(
+                provider = workbench?.runtime?.provider.orEmpty(),
+                model = workbench?.runtime?.model.orEmpty(),
+                source = workbench?.runtime?.source.orEmpty(),
+                apiKeyConfigured = workbench?.runtime?.apiKeyConfigured == true,
+            )
+        }
+        item { WorkbenchSectionHeader("办公室与网络", "Star Office 与局域网连通性") }
+        item {
+            OfficeNetworkCard(
+                officeRunning = workbench?.office?.running == true,
+                officeUrl = workbench?.office?.url.orEmpty(),
+                officeError = workbench?.office?.error,
+                networkMessage = workbench?.connectivity?.message.orEmpty(),
+                onStartOffice = onStartOffice,
+                onOpenFirewall = onOpenFirewall,
+            )
+        }
+        item {
+            QuickEntry("新会话", "从手机端发起一个新的电脑端会话", "+", onCreateSession)
+            Spacer(modifier = Modifier.height(84.dp))
+        }
+    }
+}
+
+@Composable
+private fun WorkbenchSectionHeader(title: String, subtitle: String) {
+    Column(modifier = Modifier.padding(horizontal = 4.dp)) {
+        Text(title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(
+            subtitle,
+            modifier = Modifier.padding(top = 2.dp),
+            color = MutedText,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun WorkbenchEmptyCard(title: String, subtitle: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PanelBackground)
+            .padding(16.dp),
+    ) {
+        Text(title, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+        Text(
+            subtitle,
+            modifier = Modifier.padding(top = 6.dp),
+            color = MutedText,
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+        )
+    }
+}
+
+@Composable
+private fun WorkspaceSummaryCard(
+    workspace: MobileWorkbenchWorkspaceSummary,
+    onOpenGroup: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PanelBackground)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Ink),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    workspace.name.ifBlank { "W" }.take(1).uppercase(),
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    workspace.name.ifBlank { "未命名工作区" },
+                    color = Ink,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    workspace.goal.ifBlank { workspace.projectPath.orEmpty().ifBlank { "暂无目标" } },
+                    modifier = Modifier.padding(top = 3.dp),
+                    color = MutedText,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            TextButton(onClick = onOpenGroup) {
+                Text("群聊", color = WeChatGreen)
+            }
+        }
+        Text(
+            workspace.projectPath.orEmpty().ifBlank { "未绑定项目路径" },
+            color = Color(0xFF666666),
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            WorkbenchChip("Agent ${workspace.agentCount}")
+            WorkbenchChip("任务 ${workspace.taskCount}")
+            WorkbenchChip("会话 ${workspace.sessionCount}")
+        }
+    }
+}
+
+@Composable
+private fun RunSummaryCard(run: MobileWorkbenchRunSummary) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PanelBackground)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    run.workspaceName.ifBlank { "工作区" },
+                    color = Ink,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    run.sessionTitle.ifBlank { run.groupSessionId },
+                    modifier = Modifier.padding(top = 3.dp),
+                    color = MutedText,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            WorkbenchChip(run.status)
+        }
+        Text(
+            "${formatWorkbenchDate(run.createdAt)} · ${run.id.take(8)}",
+            color = Color(0xFF666666),
+            fontSize = 11.sp,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun CodingToolsCard(
+    items: List<MobileWorkbenchCodingToolItem>,
+    loading: Boolean,
+    onInstall: () -> Unit,
+    onRepair: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PanelBackground)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (loading) "同步中..." else "CLI 状态",
+                    color = Ink,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                )
+                Text(
+                    "支持 Codex、Claude Code、OpenCode、Gemini",
+                    modifier = Modifier.padding(top = 3.dp),
+                    color = MutedText,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            WorkbenchChip("${items.count { it.ready }} ready")
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onInstall, modifier = Modifier.weight(1f)) {
+                Text("安装缺失")
+            }
+            Button(
+                onClick = onRepair,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Ink),
+            ) {
+                Text("修复")
+            }
+        }
+        if (items.isEmpty()) {
+            Text("暂无 CLI 探测结果。", color = MutedText, fontSize = 12.sp)
+        } else {
+            items.take(4).forEach { tool ->
+                CodingToolRow(tool = tool)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodingToolRow(tool: MobileWorkbenchCodingToolItem) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFFF7F7F7))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    tool.name,
+                    color = Ink,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    tool.configMessage,
+                    modifier = Modifier.padding(top = 2.dp),
+                    color = MutedText,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            WorkbenchChip(if (tool.ready) "ready" else "not ready")
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            WorkbenchChip(tool.command)
+            if (!tool.version.isNullOrBlank()) WorkbenchChip(tool.version!!)
+            if (!tool.configEnv.isNullOrBlank()) WorkbenchChip(tool.configEnv!!)
+        }
+    }
+}
+
+@Composable
+private fun SkillsCard(skills: List<MobileWorkbenchSkillSummary>, onRefresh: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PanelBackground)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Skills", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("已安装技能与本地发现结果", color = MutedText, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+            }
+            TextButton(onClick = onRefresh) { Text("同步", color = WeChatGreen) }
+        }
+        if (skills.isEmpty()) {
+            Text("暂无技能。可以在电脑端安装后同步到手机查看。", color = MutedText, fontSize = 12.sp)
+        } else {
+            skills.take(5).forEach { skill ->
+                SkillRow(skill = skill)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkillRow(skill: MobileWorkbenchSkillSummary) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFFF7F7F7))
+            .padding(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(ProfileBlue),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("S", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(skill.name, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                skill.description.ifBlank { skill.id },
+                modifier = Modifier.padding(top = 2.dp),
+                color = MutedText,
+                fontSize = 11.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RuntimeInfoCard(
+    provider: String,
+    model: String,
+    source: String,
+    apiKeyConfigured: Boolean,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PanelBackground)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("模型运行时", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("当前 LLM 连接与来源", color = MutedText, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+            }
+            WorkbenchChip(if (apiKeyConfigured) "key" else "no key")
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            WorkbenchChip(provider.ifBlank { "unknown" })
+            WorkbenchChip(model.ifBlank { "未选择模型" })
+            WorkbenchChip(source.ifBlank { "env" })
+        }
+    }
+}
+
+@Composable
+private fun OfficeNetworkCard(
+    officeRunning: Boolean,
+    officeUrl: String,
+    officeError: String?,
+    networkMessage: String,
+    onStartOffice: () -> Unit,
+    onOpenFirewall: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(PanelBackground)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("办公室", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(
+                    if (officeRunning) "Star Office 正在运行" else "Star Office 未启动",
+                    modifier = Modifier.padding(top = 3.dp),
+                    color = if (officeRunning) WeChatGreen else MutedText,
+                    fontSize = 12.sp,
+                )
+            }
+            WorkbenchChip(if (officeRunning) "running" else "stopped")
+        }
+        if (officeUrl.isNotBlank()) {
+            Text(officeUrl, color = MutedText, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (!officeError.isNullOrBlank()) {
+            Text(officeError, color = Color(0xFFB42318), fontSize = 11.sp, lineHeight = 16.sp)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onStartOffice,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = WeChatGreen),
+            ) {
+                Text("启动办公室")
+            }
+            OutlinedButton(onClick = onOpenFirewall, modifier = Modifier.weight(1f)) {
+                Text("开放端口")
+            }
+        }
+        Text(networkMessage, color = MutedText, fontSize = 11.sp, lineHeight = 16.sp)
+    }
+}
+
+@Composable
+private fun WorkbenchChip(text: String) {
+    Text(
+        text = text,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xFFF0F0F0))
+            .padding(horizontal = 9.dp, vertical = 4.dp),
+        color = Ink,
+        fontSize = 10.sp,
+        maxLines = 1,
+    )
+}
+
+private fun fallbackWorkbenchWorkspaces(state: MobileUiState): List<MobileWorkbenchWorkspaceSummary> {
+    val sessionsByWorkspace = state.sessions.groupingBy { it.workspaceId.orEmpty() }.eachCount()
+    val agentsByWorkspace = state.agents.groupingBy { it.workspaceId }.eachCount()
+    return state.workspaces.map { workspace ->
+        MobileWorkbenchWorkspaceSummary(
+            id = workspace.id,
+            name = workspace.name,
+            goal = workspace.goal,
+            projectPath = workspace.projectPath,
+            agentCount = agentsByWorkspace[workspace.id] ?: 0,
+            taskCount = 0,
+            sessionCount = sessionsByWorkspace[workspace.id] ?: 0,
+            activeRunCount = 0,
+            groupSessionId = null,
+            updatedAt = workspace.updatedAt,
+        )
+    }
+}
+
+private fun formatWorkbenchDate(value: String): String {
+    return value.substringBefore('T').ifBlank { value }
 }
 
 @Composable
@@ -1813,9 +2337,15 @@ private fun sessionMatchesContact(session: Session, contact: AgentContact): Bool
 }
 
 private fun AgentContact.uniqueKey(): String {
+    val runtimeType = this.runtimeType.trim().lowercase()
+    val codeAgentType = if (runtimeType == "code-agent") {
+        this.codeAgentType?.trim()?.lowercase().orEmpty()
+    } else {
+        ""
+    }
     return when {
         source == "workspace-agent" && !workspaceAgentId.isNullOrBlank() -> "workspace-agent:$workspaceAgentId"
-        else -> listOf(name.trim().lowercase(), role.trim().lowercase(), runtimeType.trim().lowercase(), codeAgentType?.trim()?.lowercase().orEmpty()).joinToString("|")
+        else -> listOf(name.trim().lowercase(), role.trim().lowercase(), runtimeType, codeAgentType).joinToString("|")
     }
 }
 
