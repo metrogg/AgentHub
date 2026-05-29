@@ -4,14 +4,13 @@ import { workspaceNameFromPath } from '@agenthub/shared'
 import {
   ArrowUp,
   AtSign,
-  ChevronRight,
+  Check,
+  CircleHelp,
   FolderOpen,
   FolderPlus,
-  FolderX,
   Loader2,
   PanelLeft,
   Paperclip,
-  Plus,
   Search,
   Trash2,
 } from 'lucide-react'
@@ -30,6 +29,7 @@ import {
   type SavedAgentConfig,
 } from '../lib/agentLibrary'
 import { useI18n } from '../lib/i18n'
+import { requestSettingsDialog } from '../lib/settingsDialog'
 import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
 import {
   QuickPromptBubbles,
@@ -176,7 +176,6 @@ function Welcome() {
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [openingWorkspaceId, setOpeningWorkspaceId] = useState<string | null>(null)
   const [workspaceQuery, setWorkspaceQuery] = useState('')
-  const [addProjectOpen, setAddProjectOpen] = useState(false)
   const [hint, setHint] = useState('')
   const [quickPrompts, setQuickPrompts] = useState<WelcomeQuickPrompt[]>([])
   const [quickPromptsLoading, setQuickPromptsLoading] = useState(true)
@@ -355,8 +354,18 @@ function Welcome() {
 
     setSubmitting(true)
     try {
-      const session = await createSession(titleFromMessage(trimmed), {
-        workspaceId: selectedWorkspace?.id ?? null,
+      const title = titleFromMessage(trimmed)
+      const workspace =
+        selectedWorkspace ??
+        (
+          await api.createAutoWorkspace({
+            name: title,
+            goal: trimmed,
+            template: 'blank',
+          })
+        ).workspace
+      const session = await createSession(title, {
+        workspaceId: workspace.id,
       })
       await selectSession(session.id)
       navigate(`/chat/${session.id}`)
@@ -415,32 +424,6 @@ function Welcome() {
     }
   }
 
-  async function createBlankWorkspace() {
-    if (workspaceBusy) return
-    setWorkspaceBusy(true)
-    try {
-      const full = await api.createWorkspace({
-        name: '空白工作区',
-        goal: '',
-        projectPath: null,
-        template: 'classic',
-      })
-      setWorkspaces((items) => [
-        full.workspace,
-        ...items.filter((item) => item.id !== full.workspace.id),
-      ])
-      setOpeningWorkspaceId(full.workspace.id)
-      setSelectedWorkspace(full.workspace)
-      setProjectMenuOpen(false)
-      showHint('已创建并选中工作区')
-    } catch (err) {
-      showHint(friendlyErrorMessage(err, '创建空白工作区失败'))
-    } finally {
-      setWorkspaceBusy(false)
-      setOpeningWorkspaceId(null)
-    }
-  }
-
   async function openFolderWorkspace() {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
@@ -476,10 +459,10 @@ function Welcome() {
     }
   }
 
-  function clearWorkspaceContext() {
+  function startNewWorkspace() {
     setSelectedWorkspace(null)
     setProjectMenuOpen(false)
-    showHint('已清除工作区')
+    showHint('将从新工作空间开始')
   }
 
   return (
@@ -584,51 +567,46 @@ function Welcome() {
                   )}
                 </div>
                 <div className="mt-1 border-t border-neutral-200 pt-1.5">
-                  <div className="relative group/new-project">
+                  <div
+                    className={[
+                      'flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50',
+                      selectedWorkspace === null ? 'bg-neutral-100' : '',
+                    ].join(' ')}
+                  >
                     <button
                       type="button"
-                      onClick={() => setAddProjectOpen((open) => !open)}
-                      className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50"
+                      onClick={startNewWorkspace}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
                     >
                       <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
                       <span className="min-w-0 flex-1 truncate text-neutral-900">
-                        {t('添加工作区')}
+                        从新工作空间开始
                       </span>
-                      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
                     </button>
-                    <div
-                      className={[
-                        'absolute bottom-0 left-[calc(100%+0.35rem)] w-56 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl transition group-hover/new-project:visible group-hover/new-project:opacity-100',
-                        addProjectOpen ? 'visible opacity-100' : 'invisible opacity-0',
-                      ].join(' ')}
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        requestSettingsDialog()
+                      }}
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-200 hover:text-neutral-900"
+                      aria-label="前往系统设置"
+                      title="可前往「系统设置」设置默认工作空间存储路径"
                     >
-                      <button
-                        type="button"
-                        onClick={() => void createBlankWorkspace()}
-                        disabled={workspaceBusy}
-                        className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-100 disabled:opacity-60"
-                      >
-                        <Plus className="h-4 w-4 shrink-0 text-neutral-600" />
-                        {t('新建空白工作区')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void openFolderWorkspace()}
-                        disabled={workspaceBusy}
-                        className="flex h-9 w-full items-center gap-2.5 rounded-lg bg-neutral-100 px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-200 disabled:opacity-60"
-                      >
-                        <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                        {t('使用现有文件夹')}
-                      </button>
-                    </div>
+                      <CircleHelp className="h-4 w-4" />
+                    </button>
+                    {selectedWorkspace === null && (
+                      <Check className="h-4 w-4 shrink-0 text-emerald-500" />
+                    )}
                   </div>
                   <button
                     type="button"
-                    onClick={clearWorkspaceContext}
-                    className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50"
+                    onClick={() => void openFolderWorkspace()}
+                    disabled={workspaceBusy}
+                    className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
                   >
-                    <FolderX className="h-4 w-4 shrink-0 text-neutral-600" />
-                    {t('不使用工作区')}
+                    <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                    <span className="min-w-0 flex-1 truncate">{t('打开本地工作空间')}</span>
                   </button>
                 </div>
               </div>
@@ -668,20 +646,31 @@ function Welcome() {
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  disabled
-                  title="暂未实现"
-                  className="grid h-8 w-8 place-items-center rounded-full text-neutral-300"
+                  onClick={() => setProjectMenuOpen((open) => !open)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-3 text-xs text-neutral-700 shadow-sm hover:bg-neutral-50"
+                  aria-label={t('选择工作区')}
+                  title={
+                    selectedWorkspace
+                      ? `${selectedWorkspace.name} · ${selectedWorkspace.projectPath ?? '本地工作空间'}`
+                      : '选择工作空间 · 默认从新工作空间开始'
+                  }
                 >
-                  <Plus className="h-4 w-4" />
+                  <FolderOpen className="h-4 w-4" />
+                  <span className="max-w-[12rem] truncate">
+                    {selectedWorkspace ? selectedWorkspace.name : '选择工作空间'}
+                  </span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setProjectMenuOpen((open) => !open)}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    requestSettingsDialog()
+                  }}
                   className="grid h-8 w-8 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100"
-                  aria-label={t('选择工作区')}
-                  title={selectedWorkspace ? selectedWorkspace.name : t('选择工作区')}
+                  aria-label="前往系统设置"
+                  title="可前往「系统设置」设置默认工作空间存储路径"
                 >
-                  <FolderOpen className="h-4 w-4" />
+                  <CircleHelp className="h-4 w-4" />
                 </button>
                 <button
                   type="button"

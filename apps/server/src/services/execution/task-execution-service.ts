@@ -1,4 +1,4 @@
-import { db, messages, workspaceTasks, eq, desc } from '@agenthub/db'
+import { db, messages, workspaceTasks, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { runAgentReply, type AgentRunProfile } from '../agent-runner'
 import { gitBranchManager, type BranchContext } from '../git/branch-manager'
@@ -145,7 +145,7 @@ export class TaskExecutionService {
       const lastAgentMsg = await db
         .select()
         .from(messages)
-        .where(eq(messages.sessionId, sessionId))
+        .where(and(eq(messages.sessionId, sessionId), eq(messages.senderType, 'agent')))
         .orderBy(desc(messages.createdAt))
         .limit(1)
 

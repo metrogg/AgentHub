@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Check, Loader2, Search, X } from 'lucide-react'
+import { Check, CircleHelp, FolderOpen, FolderPlus, Loader2, Search, X } from 'lucide-react'
+import { workspaceNameFromPath } from '@agenthub/shared'
 import { agentLibraryChangeEvent, loadAgentLibrary, type SavedAgentConfig } from '../../lib/agentLibrary'
 import { defaultConversationTitle, startAgentConversation } from '../../lib/agentConversation'
-import { friendlyErrorMessage } from '../../lib/api'
+import { api, friendlyErrorMessage, type Workspace } from '../../lib/api'
+import { pickWorkspaceFolder } from '../../lib/native'
+import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { cn } from '../../lib/utils'
+import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../../lib/workspaceFilters'
 import { useChatStore } from '../../stores/chatStore'
 
 export const openNewSessionDialogEvent = 'agenthub:open-new-session-dialog'
@@ -13,6 +17,11 @@ export const openNewSessionDialogEvent = 'agenthub:open-new-session-dialog'
 export function requestNewSessionDialog() {
   window.dispatchEvent(new Event(openNewSessionDialogEvent))
 }
+
+type WorkspaceChoice =
+  | { mode: 'new' }
+  | { mode: 'workspace'; workspace: Workspace }
+  | { mode: 'local'; projectPath: string; workspace?: Workspace | null }
 
 export function GlobalNewSessionDialog() {
   const navigate = useNavigate()
@@ -57,12 +66,24 @@ export function GlobalNewSessionDialog() {
     openDialog()
   }, [location.pathname, location.state, navigate])
 
-  async function createAgentSession(selectedAgents: SavedAgentConfig[], title?: string) {
+  async function createAgentSession(
+    selectedAgents: SavedAgentConfig[],
+    title?: string,
+    workspaceChoice: WorkspaceChoice = { mode: 'new' },
+  ) {
     const key = selectedAgents.length === 1 ? selectedAgents[0]!.id : 'group'
     setCreatingChoice(key)
     setCreateError('')
     try {
-      const session = await startAgentConversation({ agents: selectedAgents, title })
+      const workspaceOptions =
+        workspaceChoice.mode === 'workspace'
+          ? { workspaceId: workspaceChoice.workspace.id }
+          : workspaceChoice.mode === 'local'
+            ? workspaceChoice.workspace
+              ? { workspaceId: workspaceChoice.workspace.id }
+              : { projectPath: workspaceChoice.projectPath }
+            : {}
+      const session = await startAgentConversation({ agents: selectedAgents, title, ...workspaceOptions })
       await fetchSessions()
       await selectSession(session.id)
       setOpen(false)
@@ -103,14 +124,27 @@ function NewSessionDialog({
   creatingChoice: string | null
   createError: string
   onClose: () => void
-  onCreateAgent: (agents: SavedAgentConfig[], title?: string) => Promise<void>
+  onCreateAgent: (
+    agents: SavedAgentConfig[],
+    title?: string,
+    workspaceChoice?: WorkspaceChoice,
+  ) => Promise<void>
   onManageAgents: () => void
 }) {
   const [query, setQuery] = useState('')
   const [title, setTitle] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [workspaceChoice, setWorkspaceChoice] = useState<WorkspaceChoice>({ mode: 'new' })
+  const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const selectedAgents = useMemo(() => agents.filter((agent) => selectedIds.has(agent.id)), [agents, selectedIds])
   const groupTitle = defaultConversationTitle(selectedAgents)
+  const filteredWorkspaces = useMemo(() => {
+    const keyword = workspaceQuery.trim().toLowerCase()
+    if (!keyword) return workspaces
+    return workspaces.filter((workspace) => workspaceSearchText(workspace).includes(keyword))
+  }, [workspaceQuery, workspaces])
   const filteredAgents = useMemo(() => {
     const keyword = query.trim().toLowerCase()
     return agents.filter((agent) => {
@@ -133,7 +167,7 @@ function NewSessionDialog({
 
   function handleCreate() {
     if (!selectedAgents.length || creatingChoice) return
-    void onCreateAgent(selectedAgents, title.trim() || groupTitle || undefined)
+    void onCreateAgent(selectedAgents, title.trim() || groupTitle || undefined, workspaceChoice)
   }
 
   function handleClose() {
@@ -146,7 +180,54 @@ function NewSessionDialog({
     setQuery('')
     setTitle('')
     setSelectedIds(new Set())
+    setWorkspaceChoice({ mode: 'new' })
   }, [agents])
+
+  useEffect(() => {
+    let cancelled = false
+    setWorkspaceBusy(true)
+    api
+      .listWorkspaces()
+      .then(({ items }) => {
+        if (!cancelled) setWorkspaces(items.filter(isProjectWorkspace))
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaces([])
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceBusy(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  async function openFolderWorkspace() {
+    if (workspaceBusy) return
+    setWorkspaceBusy(true)
+    try {
+      const nativePath = await pickWorkspaceFolder().catch(() => null)
+      const result = await api.openWorkspaceFolder(nativePath)
+      if (result.cancelled || !result.projectPath) return
+      if (result.workspace) {
+        setWorkspaceChoice({ mode: 'workspace', workspace: result.workspace })
+        setWorkspaces((items) => [
+          result.workspace!,
+          ...items.filter((workspace) => workspace.id !== result.workspace!.id),
+        ])
+      } else {
+        setWorkspaceChoice({ mode: 'local', projectPath: result.projectPath, workspace: null })
+      }
+    } finally {
+      setWorkspaceBusy(false)
+    }
+  }
+
+  function workspaceChoiceLabel() {
+    if (workspaceChoice.mode === 'workspace') return workspaceChoice.workspace.name
+    if (workspaceChoice.mode === 'local') return workspaceNameFromPath(workspaceChoice.projectPath)
+    return '从新工作空间开始'
+  }
 
   return createPortal(
     <div
@@ -246,6 +327,82 @@ function NewSessionDialog({
                   className="h-11 w-full rounded-2xl border border-neutral-200 bg-[#fafafa] px-4 text-sm text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-emerald-400"
                 />
               </label>
+              <div className="mt-4 rounded-2xl border border-neutral-200 bg-[#fafafa] p-2">
+                <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-neutral-500">工作空间</div>
+                    <div className="mt-0.5 truncate text-xs text-neutral-400">
+                      {workspaceChoiceLabel()}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={requestSettingsDialog}
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-200 hover:text-neutral-900"
+                    aria-label="前往系统设置"
+                    title="可前往「系统设置」设置默认工作空间存储路径"
+                  >
+                    <CircleHelp className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="flex h-8 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-2 text-neutral-400">
+                  <Search className="h-3.5 w-3.5 shrink-0" />
+                  <input
+                    value={workspaceQuery}
+                    onChange={(event) => setWorkspaceQuery(event.target.value)}
+                    placeholder="搜索历史工作区"
+                    className="min-w-0 flex-1 bg-transparent text-xs text-neutral-900 outline-none placeholder:text-neutral-400"
+                  />
+                </div>
+                <div className="mt-2 max-h-28 overflow-y-auto">
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceChoice({ mode: 'new' })}
+                    className={cn(
+                      'flex h-9 w-full items-center gap-2 rounded-xl px-2 text-left text-sm hover:bg-white',
+                      workspaceChoice.mode === 'new' && 'bg-white',
+                    )}
+                  >
+                    <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
+                    <span className="min-w-0 flex-1 truncate text-neutral-900">从新工作空间开始</span>
+                    {workspaceChoice.mode === 'new' && <Check className="h-4 w-4 text-emerald-500" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void openFolderWorkspace()}
+                    disabled={workspaceBusy}
+                    className="flex h-9 w-full items-center gap-2 rounded-xl px-2 text-left text-sm text-neutral-900 hover:bg-white disabled:opacity-60"
+                  >
+                    {workspaceBusy ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-neutral-400" />
+                    ) : (
+                      <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">打开本地工作空间</span>
+                  </button>
+                  {filteredWorkspaces.map((workspace) => (
+                    <button
+                      key={workspace.id}
+                      type="button"
+                      onClick={() => setWorkspaceChoice({ mode: 'workspace', workspace })}
+                      className={cn(
+                        'flex min-h-10 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-sm hover:bg-white',
+                        workspaceChoice.mode === 'workspace' &&
+                          workspaceChoice.workspace.id === workspace.id &&
+                          'bg-white',
+                      )}
+                    >
+                      <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-neutral-900">{workspace.name}</span>
+                        <span className="block truncate text-[11px] text-neutral-400">
+                          {workspaceSubtitle(workspace)}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">

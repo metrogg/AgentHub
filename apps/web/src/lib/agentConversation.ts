@@ -44,23 +44,17 @@ export async function startAgentConversation({
         workspaceAgentsList = full.agents
       }
     } else {
-      const full = await api.createWorkspace({
-        name: workspaceTitle,
-        goal: `与 ${agent.name} 单聊`,
-        projectPath: projectPath ?? null,
-        template: 'blank',
-      })
+      const full = await createConversationWorkspace(workspaceTitle, `与 ${agent.name} 单聊`, projectPath)
       workspace = full.workspace
       workspaceAgentsList = []
     }
   } else {
     const workspaceTitle = (title?.trim() || defaultConversationTitle(agents)).slice(0, 80)
-    const full = await api.createWorkspace({
-      name: workspaceTitle,
-      goal: `邀请 ${agents.length} 个 Agent 组成群聊`,
-      projectPath: projectPath ?? null,
-      template: 'blank',
-    })
+    const full = await createConversationWorkspace(
+      workspaceTitle,
+      `邀请 ${agents.length} 个 Agent 组成群聊`,
+      projectPath,
+    )
     workspace = full.workspace
     workspaceAgentsList = []
   }
@@ -125,6 +119,18 @@ export function defaultConversationTitle(agents: SavedAgentConfig[]) {
   if (agents.length === 1) return agents[0]!.name
   const names = agents.slice(0, 3).map((agent) => agent.name).join('、')
   return agents.length > 3 ? `${names} 等 ${agents.length} 位 Agent` : names
+}
+
+function createConversationWorkspace(name: string, goal: string, projectPath?: string | null) {
+  if (projectPath?.trim()) {
+    return api.createWorkspace({
+      name,
+      goal,
+      projectPath,
+      template: 'blank',
+    })
+  }
+  return api.createAutoWorkspace({ name, goal, template: 'blank' })
 }
 
 /**

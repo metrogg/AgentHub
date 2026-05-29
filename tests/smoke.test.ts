@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -211,6 +211,30 @@ describe('AgentHub smoke tests', () => {
     await waitForTaskStatus(full.workspace.id, task.id, 'failed')
 
     globalThis.fetch = globalMockedFetch
+  })
+
+  test('auto workspace creates a local project folder under configured root', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'agenthub-auto-workspace-'))
+    await json<{ success: boolean }>(
+      await postJson('/api/settings', {
+        APP_SETTINGS: JSON.stringify({ workspaceStorageRoot: workspaceRoot }),
+      }),
+    )
+
+    const full = await json<{
+      workspace: { id: string; name: string; projectPath: string | null }
+    }>(
+      await postJson('/api/workspaces/auto', {
+        name: 'Auto workspace smoke',
+        goal: 'Verify automatic folder allocation',
+        template: 'blank',
+      }),
+    )
+
+    expect(full.workspace.id).toBeTruthy()
+    expect(full.workspace.name).toBe('Auto workspace smoke')
+    expect(full.workspace.projectPath?.startsWith(workspaceRoot)).toBe(true)
+    expect(existsSync(full.workspace.projectPath!)).toBe(true)
   })
 
   test('classic workspace seeds role agents and editable relations', async () => {
@@ -1297,5 +1321,5 @@ describe('AgentHub smoke tests', () => {
     await manager.cleanupBranch(branchCtx)
     const afterCleanup = await exec(['show-ref', '--verify', `refs/heads/${branchCtx.branch}`])
     expect(afterCleanup).not.toBe(0)
-  })
+  }, 15_000)
 })

@@ -402,7 +402,7 @@ export async function* streamCodeAgentReply(
       yield buildCodeAgentCompletionMessage(finalResult.metadata, cleanedOutput)
       return
     }
-    yield limitOutput(cleanedOutput || '(Coding Tools 没有返回正文)', 16_000)
+    yield limitOutput(cleanedOutput || '(Coding Tools 没有返回正文)', 32_000)
     return
   }
   if (finalResult.code === 0) return
@@ -784,7 +784,7 @@ async function runCodeAgentCommand(
     liveLogs.push({
       id: `log-${liveLogs.length + 1}`,
       stream: normalizedStream,
-      text: limitOutput(cleaned, 1000),
+      text: limitOutput(cleaned, 4000),
     })
     if (normalizedStream === 'stderr') {
       addStep(
@@ -793,7 +793,7 @@ async function runCodeAgentCommand(
           status: 'failed',
           title: '错误输出',
           subtitle: limitOutput(cleaned.split(/\r?\n/)[0] ?? cleaned, 180),
-          detail: limitOutput(cleaned, 1000),
+          detail: limitOutput(cleaned, 4000),
           stream: normalizedStream,
         },
         `log:${cleaned.slice(0, 500)}`,
@@ -944,6 +944,8 @@ async function runCodeAgentCommand(
           addLog('stdout', chunk)
           for (const command of parseExecutedCommands(stdout))
             addCommand(command.command, command.cwd)
+          for (const file of parseOpencodeFileOperations(stdout))
+            addFile(file.path, file.status)
         }
       }),
       readProcessStream(proc.stderr, (chunk) => {
@@ -1498,20 +1500,52 @@ function parseExecutedCommands(output: string): CodeAgentRunMetadata['commands']
   const seen = new Set<string>()
   const lines = output.split(/\r?\n/)
   for (const line of lines) {
+    // 匹配 Claude/Codex 格式: exec command
     const match = line.match(/^\[?[^\]]*\]?\s*exec\s+(.+?)(?:\s+in\s+(.+))?$/i)
-    if (!match) continue
-    const command = cleanCommandText(match[1] ?? '')
-    const cwd = match[2]?.trim()
-    const key = `${command}\n${cwd ?? ''}`
-    if (!command || seen.has(key)) continue
-    seen.add(key)
-    commands.push({
-      id: `cmd-${commands.length + 1}`,
-      command: limitOutput(command, 500),
-      cwd: cwd ? limitOutput(cwd, 260) : undefined,
-    })
+    if (match) {
+      const command = cleanCommandText(match[1] ?? '')
+      const cwd = match[2]?.trim()
+      const key = `${command}\n${cwd ?? ''}`
+      if (!command || seen.has(key)) continue
+      seen.add(key)
+      commands.push({
+        id: `cmd-${commands.length + 1}`,
+        command: limitOutput(command, 500),
+        cwd: cwd ? limitOutput(cwd, 260) : undefined,
+      })
+      continue
+    }
+    // 匹配 OpenCode 格式: $ command
+    const opencodeMatch = line.match(/^\$\s+(.+)$/)
+    if (opencodeMatch) {
+      const command = cleanCommandText(opencodeMatch[1] ?? '')
+      const key = command
+      if (!command || seen.has(key)) continue
+      seen.add(key)
+      commands.push({
+        id: `cmd-${commands.length + 1}`,
+        command: limitOutput(command, 500),
+      })
+    }
   }
   return commands.slice(0, 60)
+}
+
+function parseOpencodeFileOperations(output: string): Array<{ path: string; status: CodeAgentRunMetadata['files'][number]['status'] }> {
+  const files: Array<{ path: string; status: CodeAgentRunMetadata['files'][number]['status'] }> = []
+  const seen = new Set<string>()
+  const lines = output.split(/\r?\n/)
+  for (const line of lines) {
+    const match = line.match(/^←\s*(Write|Read|Edit|MultiEdit)\s+(.+)$/i)
+    if (!match) continue
+    const action = match[1]?.toLowerCase() ?? ''
+    const path = match[2]?.trim() ?? ''
+    if (!path || seen.has(path)) continue
+    seen.add(path)
+    const status = action === 'write' || action === 'multiedit' ? 'created' : action === 'edit' ? 'modified' : 'created'
+    files.push({ path, status })
+  }
+  return files
 }
 
 function mergeCommands(commands: CodeAgentRunMetadata['commands']) {
@@ -1598,6 +1632,15 @@ function isProgressLikeRuntimeLog(text: string) {
   )
     return true
   if (/^(Warning|Warn|警告)[：:\s]/i.test(normalized)) return true
+  // OpenCode 特有模式：命令前缀、文件操作箭头、版本输出、目录列表
+  if (/^\$\s+/.test(normalized)) return true
+  if (/^←\s*(Write|Read|Edit|MultiEdit|Grep|Glob|Bash)/i.test(normalized)) return true
+  if (/^Python \d+\.\d+\.\d+/.test(normalized)) return true
+  if (/^node v\d+\.\d+\.\d+/i.test(normalized)) return true
+  if (/^Directory:\s/.test(normalized)) return true
+  if (/^Mode\s+LastWriteTime/.test(normalized)) return true
+  if (/^[-a]{3,}\s+\d{4}\/\d{1,2}\/\d{1,2}/.test(normalized)) return true
+  if (normalized === '(no output)') return true
   return false
 }
 
@@ -2456,7 +2499,7 @@ function buildCodeAgentCompletionMessage(metadata: CodeAgentRunMetadata, fallbac
   const files = metadata.files ?? []
   const commands = metadata.commands ?? []
   const visibleFallback = sanitizeCodeAgentFallbackText(fallback)
-  if (!files.length && visibleFallback) return limitOutput(visibleFallback, 4000)
+  if (!files.length && visibleFallback) return limitOutput(visibleFallback, 8000)
 
   const lines = ['Coding Tools 已执行完成。']
   if (metadata.runtime) lines.push(`运行时：${metadata.runtime}`)
