@@ -528,6 +528,7 @@ async function isRuntimeConfigured(
 ) {
   if (modelTarget?.apiKey) return true
   if (readEnv(adapter.envKey)) return true
+  if (type === 'opencode' && !env.ENABLE_LOCAL_CLI_PROBES) return false
   if (type === 'codex' && !modelId) return true
 
   // Check agent's selected model in MODEL_CATALOG first

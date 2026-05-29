@@ -25,6 +25,13 @@ async function seedDefaultUser() {
 
 await seedDefaultUser()
 
+function resolvePortFile() {
+  const configured = Bun.env.AGENTHUB_PORT_FILE?.trim()
+  if (configured) return resolve(configured)
+  const root = Bun.env.PROJECT_ROOT?.trim() || process.cwd()
+  return resolve(root, '.agenthub-port')
+}
+
 let currentPort = env.PORT
 const maxTries = 10
 

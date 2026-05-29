@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev:services": "bun scripts/dev-services.mjs",
     "prepare:sidecar": "bun scripts/prepare-sidecar.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "typecheck": "node --check scripts/prepare-sidecar.mjs && echo 'desktop: sidecar script OK'"
+    "typecheck": "node --check scripts/prepare-sidecar.mjs && node --check scripts/dev-services.mjs && echo 'desktop: sidecar script OK'"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2"
