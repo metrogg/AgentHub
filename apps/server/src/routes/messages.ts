@@ -66,7 +66,12 @@ import {
   normalizeAgentDraftInput,
 } from '../services/agent-draft'
 import { type DemoArtifact, buildDemoArtifacts, artifactSummary } from '../services/artifact-demo'
+<<<<<<< HEAD
 import { intentRouter } from '../services/orchestrator/intent-router'
+=======
+import { GroupChatManager } from '../services/group-chat'
+import { intentRouter, generatePlanCardBackground } from '../services/orchestrator/intent-router'
+>>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
 import { buildAgentProfile } from '../services/agents/profile-builder'
 import {
   createWorkspaceGroupSession,
@@ -440,6 +445,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (msg && !metadata?.skipAgentReply) {
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
       if (session?.type === 'group' && session.workspaceId) {
+<<<<<<< HEAD
         const agentRows = await db
           .select()
           .from(workspaceAgents)
@@ -523,6 +529,50 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           handleSimpleReply(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
             (err: any) =>
               logger.error({ err: err?.message, sessionId }, 'Simple reply failed'),
+=======
+        await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
+        const mentionCount = (content.match(/@\S+/g) || []).length
+        if (mentionCount === 0) {
+          const agentRows = await db
+            .select()
+            .from(workspaceAgents)
+            .where(eq(workspaceAgents.workspaceId, session.workspaceId))
+          const hasOrchestrator = agentRows.some((a) => a.roleType === 'orchestrator')
+          const routeResult = intentRouter.route({
+            content,
+            hasOrchestrator,
+            mentionCount: 0,
+          })
+
+          if (routeResult.decision === 'OrchestratorPlan') {
+            generatePlanCardBackground(sessionId, content, agentRows, session.workspaceId).catch(
+              (err: any) =>
+                logger.error({ err: err?.message, sessionId }, 'Plan card generation failed'),
+            )
+            return c.json(msg)
+          }
+
+          if (routeResult.decision === 'NoOrchestrator') {
+            await db.insert(messages).values({
+              sessionId,
+              senderId: 'system',
+              senderType: 'system',
+              type: 'text',
+              content: '群聊中未配置总指挥（Orchestrator），请 @具体 Agent 或添加总指挥角色。',
+              metadata: { systemEvent: 'no_orchestrator' },
+            })
+            return c.json(msg)
+          }
+        }
+        const groupChatManager = new GroupChatManager()
+        groupChatManager
+          .handleMessage({ workspaceId: session.workspaceId, sessionId, userMsg: msg, content })
+          .catch((err: any) =>
+            logger.error(
+              { err: err?.message, sessionId },
+              'GroupChatManager failed on new message',
+            ),
+>>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
           )
         } else if (routeResult.decision === 'OrchestratorPlan') {
           generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId).catch(

@@ -3015,6 +3015,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
       />
       <CodeAgentProcessTimeline steps={steps} running={data.status === 'running'} />
       {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
+      <CodeAgentOutputReviewCard data={data} />
       {hasDetails && (
         <CodeAgentRunDetails
           changedFiles={changedFiles}

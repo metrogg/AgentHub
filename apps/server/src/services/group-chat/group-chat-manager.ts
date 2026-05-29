@@ -442,8 +442,11 @@ export class GroupChatManager {
       { turns: state.turnCount, reason: state.finishReason },
       'GroupChatManager: conversation loop finished',
     )
+<<<<<<< HEAD
     // ===== 以上代码已弃用，仅供参考 =====
     */
+=======
+>>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
   }
 
   /**

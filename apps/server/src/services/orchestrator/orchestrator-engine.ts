@@ -825,9 +825,96 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         output += delta
         if (output.length > 100) break
       }
+<<<<<<< HEAD
       return output.trim().toUpperCase().includes('YES')
     } catch {
       return false
+=======
+
+      const [currentRun] = await db
+        .select({ status: orchestratorRuns.status })
+        .from(orchestratorRuns)
+        .where(eq(orchestratorRuns.id, runId))
+        .limit(1)
+      if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
+        logger.info({ runId }, 'Orchestrator run cancelled before synthesis')
+        return
+      }
+
+      // Task #37: Auto-review chain — code tasks 完成后自动注入 review 任务
+      // 修复 Bug 23: 使用 scheduler 的 run signal，使 auto-review 可被取消
+      const reviewSignal = this.scheduler.getRunSignal(runId) ?? new AbortController().signal
+      const reviewResults = await this.injectAutoReviewTasks(
+        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, reviewSignal, executor,
+      )
+      if (reviewResults.length > 0) {
+        results.push(...reviewResults)
+      }
+
+      // 冲突检测与解决：遍历所有有 projectPath 的任务目录
+      const projectPaths = new Set<string>()
+      for (const task of plan.tasks) {
+        const path = childSessions.get(task.id)?.projectPath
+        if (path) projectPaths.add(path)
+      }
+
+      const conflictReports: import('./conflict-resolver').ConflictReport[] = []
+      for (const projectPath of projectPaths) {
+        const reports = await this.conflictResolver.detectAndResolve(results, {
+          projectPath,
+          baseBranch: await gitBranchManager.inferBaseBranch(projectPath),
+        })
+        conflictReports.push(...reports)
+      }
+
+      if (conflictReports.length > 0) {
+        for (const report of conflictReports) {
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            type: 'conflict.detected',
+            severity: report.resolution === 'needs-human' ? 'warning' : 'info',
+            payload: {
+              filePath: report.filePath,
+              resolution: report.resolution,
+              agents: report.variants.map((variant) => ({ agentId: variant.agentId, agentName: variant.agentName })),
+            },
+          })
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            type: 'conflict.resolved',
+            severity: report.resolution === 'needs-human' ? 'warning' : 'info',
+            payload: { filePath: report.filePath, resolution: report.resolution, notes: report.notes },
+          })
+        }
+        await db
+          .update(orchestratorRuns)
+          .set({ conflictReport: conflictReports as unknown as import('@agenthub/db').ConflictReport[] })
+          .where(eq(orchestratorRuns.id, runId))
+      }
+
+      await this.synthesizeAndReport(runId, groupSessionId, workspaceId, plan, results, conflictReports)
+    } catch (error: any) {
+      logger.error({ err: error?.message, runId }, 'Scheduler execution failed')
+      await db.update(orchestratorRuns).set({ status: OrchestratorRunStatus.Failed }).where(eq(orchestratorRuns.id, runId))
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        type: 'run.failed',
+        severity: 'error',
+        payload: { error: error?.message || 'Scheduler execution failed' },
+      })
+    } finally {
+      if (OrchestratorEngine.activeEngines.get(runId) === this) {
+        OrchestratorEngine.activeEngines.delete(runId)
+      }
+      // Run 结束，清理黑板内存缓存
+      blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
+>>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
     }
   }
 
@@ -1060,7 +1147,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
       if (execResult.status === TaskStatus.Failed) {
         throw new Error(execResult.error || 'Agent 执行失败')
-<<<<<<< HEAD
       }
 
       const signals = parseAgentAutonomySignals(output)
@@ -1226,10 +1312,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         })
       }
 
-=======
-      }
-
->>>>>>> b1ef3ac (refactor: 统一代码代理元数据与代理配置构建逻辑)
       await executionTracer.log({
         runId,
         sessionId: childInfo.sessionId,
