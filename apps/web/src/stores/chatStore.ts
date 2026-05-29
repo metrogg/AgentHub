@@ -526,16 +526,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (cancelledSessions.has(sessionId)) break
         const { messageId, codeAgentRun } = e.payload as {
           messageId: string
-          codeAgentRun: CodeAgentRunMetadata
+          codeAgentRun: Partial<CodeAgentRunMetadata>
         }
         set((s) => {
           const current = s.streamingMessage
+          const nextCodeAgentRun =
+            s.streamingCodeAgentRun && codeAgentRun
+              ? ({ ...s.streamingCodeAgentRun, ...codeAgentRun } as CodeAgentRunMetadata)
+              : (codeAgentRun as CodeAgentRunMetadata)
           return {
             streamingMessage:
               current?.id === messageId
                 ? current
                 : { id: messageId, content: current?.content ?? '' },
-            streamingCodeAgentRun: codeAgentRun,
+            streamingCodeAgentRun: nextCodeAgentRun,
             agentTyping: false,
           }
         })

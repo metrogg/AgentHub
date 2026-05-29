@@ -1060,6 +1060,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
       if (execResult.status === TaskStatus.Failed) {
         throw new Error(execResult.error || 'Agent 执行失败')
+<<<<<<< HEAD
       }
 
       const signals = parseAgentAutonomySignals(output)
@@ -1225,6 +1226,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         })
       }
 
+=======
+      }
+
+>>>>>>> b1ef3ac (refactor: 统一代码代理元数据与代理配置构建逻辑)
       await executionTracer.log({
         runId,
         sessionId: childInfo.sessionId,
@@ -1470,14 +1475,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         },
       })
 
-      await db
-        .update(workspaceTasks)
-        .set({
-          status: TaskStatus.Done,
-          completedAt: new Date(),
-          artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
-        })
-        .where(eq(workspaceTasks.id, task.id))
+      // TaskExecutionService 已更新 task 状态为 Done
 
       broadcastSessionEvent(groupSessionId, {
         type: WsEvent.TaskUpdate,
@@ -1873,6 +1871,7 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
   }
 }
 
+<<<<<<< HEAD
 function buildAutonomyInstructions(): string {
   return [
     '\n## 自主行为指令',
@@ -1904,6 +1903,10 @@ interface AgentAutonomySignals {
   progressReports: Array<{ percent: number; status: string }>
   helpRequests: Array<{ targetAgent: string; request: string }>
 }
+=======
+async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNamespace: string): Promise<string> {
+  const agent = plan.agents.find((a) => a.id === task.agentId)
+>>>>>>> b1ef3ac (refactor: 统一代码代理元数据与代理配置构建逻辑)
 
 function parseAgentAutonomySignals(output: string): AgentAutonomySignals {
   const result: AgentAutonomySignals = {

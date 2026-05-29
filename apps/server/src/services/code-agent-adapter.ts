@@ -778,6 +778,7 @@ async function runCodeAgentCommand(
         files: liveFiles.slice(0, 80),
         output: liveLogs.map((log) => log.text).join('\n'),
       }),
+      reviewRequired: requiresCodeAgentOutputReview(adapter),
       logs: liveLogs.slice(-80),
       steps: liveSteps.slice(-120),
     })
@@ -987,18 +988,21 @@ async function runCodeAgentCommand(
     }
   }
   const parsed = withExtractedLastMessage({ code, output })
-  const finalMessage =
+  const finalMessage = stripReasoningTags(
     outputFileMessage ||
-    claudeFinalMessage.trim() ||
-    parsed.finalMessage ||
-    extractClaudeResultMessage(parsed.output) ||
-    extractCodexAssistantMessage(parsed.output)
+      claudeFinalMessage.trim() ||
+      parsed.finalMessage ||
+      extractClaudeResultMessage(parsed.output) ||
+      extractCodexAssistantMessage(parsed.output) ||
+      '',
+  )
   const effectiveCode = code === 0 && !finalMessage && isCodeAgentFailureOutput(output) ? 1 : code
   const metadata = await buildCodeAgentRunMetadata({
     adapter,
     code: effectiveCode,
     durationMs: Date.now() - startedAt,
     output: parsed.output,
+    finalMessage: finalMessage || undefined,
     timedOut,
     beforeFiles,
     cwd,
@@ -1008,7 +1012,7 @@ async function runCodeAgentCommand(
     liveLogs,
     liveSteps,
   })
-  return { ...parsed, code: effectiveCode, finalMessage, metadata }
+  return { ...parsed, code: effectiveCode, finalMessage: finalMessage || undefined, metadata }
 }
 
 function buildAsciiSafePrompt(prompt: string) {
@@ -1087,6 +1091,7 @@ async function buildCodeAgentRunMetadata(input: {
   liveToolCalls?: NonNullable<CodeAgentRunMetadata['toolCalls']>
   liveLogs?: NonNullable<CodeAgentRunMetadata['logs']>
   liveSteps?: NonNullable<CodeAgentRunMetadata['steps']>
+  finalMessage?: string
   output: string
   timedOut: boolean
 }): Promise<CodeAgentRunMetadata> {
@@ -1120,6 +1125,8 @@ async function buildCodeAgentRunMetadata(input: {
     files,
     toolCalls: input.liveToolCalls?.slice(0, 120),
     artifacts,
+    finalMessage: input.finalMessage,
+    reviewRequired: requiresCodeAgentOutputReview(input.adapter),
     logs: input.liveLogs?.slice(-80),
     steps: buildFinalRunSteps({
       status,
@@ -1147,6 +1154,7 @@ function emptyCodeAgentRunMetadata(
     files: [],
     toolCalls: [],
     artifacts: [],
+    reviewRequired: requiresCodeAgentOutputReview(adapter),
     steps: [
       {
         id: 'step-1',
@@ -1238,6 +1246,10 @@ function formatMetadataDuration(ms: number) {
 function runtimeTypeForAdapter(adapter: CodeAgentAdapter): CodeAgentType {
   const entry = Object.entries(adapters).find(([, item]) => item === adapter)
   return (entry?.[0] as CodeAgentType | undefined) ?? 'codex'
+}
+
+function requiresCodeAgentOutputReview(adapter: CodeAgentAdapter) {
+  return adapter.command === 'codex' || adapter.command === 'claude'
 }
 
 async function readProcessStream(

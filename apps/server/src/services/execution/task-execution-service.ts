@@ -134,7 +134,7 @@ export class TaskExecutionService {
         }, { once: true })
       })
 
-      const result = await Promise.race([runAgentReply(sessionId, userMsg, executionProfile, envelope), timeoutPromise])
+      const result = await Promise.race([runAgentReply(sessionId, userMsg as MessageRow, executionProfile, envelope), timeoutPromise])
 
       if (signal?.aborted) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))

@@ -66,7 +66,6 @@ import {
   normalizeAgentDraftInput,
 } from '../services/agent-draft'
 import { type DemoArtifact, buildDemoArtifacts, artifactSummary } from '../services/artifact-demo'
-
 import { intentRouter } from '../services/orchestrator/intent-router'
 import { buildAgentProfile } from '../services/agents/profile-builder'
 import {
