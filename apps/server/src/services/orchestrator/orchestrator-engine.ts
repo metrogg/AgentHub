@@ -14,8 +14,10 @@ import { emitRunEvent } from './run-events'
 import { initializeRunLedger } from './run-ledger'
 import { validateTaskOutputContract } from './task-contract'
 import { runTaskValidation } from './task-validation'
-import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
+import type { CollaborationMode, ExecutionPlan, ExecutionTask, TaskResult } from './types'
 import { PolicyGuard } from '../policy-guard'
+import { intentRouter } from './intent-router'
+import { streamReply } from '../llm'
 import { buildAgentProfileWithWorktree } from '../agents/profile-builder'
 import { createOrchestratorChildSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST } from '../execution/agent-execution-envelope'
@@ -359,7 +361,23 @@ export class OrchestratorEngine {
     }
 
     try {
-      const results = await this.scheduler.executePlan(plan, executor)
+      this.scheduler.onPhaseCompleted = (phaseId: string, phaseTitle: string) => {
+        emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          type: 'phase.completed' as any,
+          severity: 'info',
+          payload: { phaseId, phaseTitle },
+        }).catch(() => {})
+        broadcastSessionEvent(groupSessionId, {
+          type: 'phase:completed' as any,
+          payload: { runId, phaseId, phaseTitle, sessionId: groupSessionId },
+        })
+      }
+
+      const mode: CollaborationMode = plan.collaborationMode ?? 'mapreduce'
+      const results = await this.scheduler.executePlan(plan, executor, mode)
 
       // 为因上游失败而被阻塞的任务写入状态并广播事件
       for (const result of results) {
@@ -396,6 +414,132 @@ export class OrchestratorEngine {
       if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
         logger.info({ runId }, 'Orchestrator run cancelled before synthesis')
         return
+      }
+
+      if (mode === 'supervisor') {
+        let supervisorRound = 0
+        const maxRounds = 3
+        const bbSupervisorNs = Blackboard.namespace(workspaceId, runId)
+
+        while (supervisorRound < maxRounds) {
+          supervisorRound++
+
+          const [runCheck] = await db
+            .select({ status: orchestratorRuns.status })
+            .from(orchestratorRuns)
+            .where(eq(orchestratorRuns.id, runId))
+            .limit(1)
+          if (runCheck?.status === OrchestratorRunStatus.Cancelled) break
+
+          const taskOutputs: { taskTitle: string; agentName: string; output: string }[] = []
+          for (const task of plan.tasks) {
+            const taskResult = results.find((r) => r.taskId === task.id)
+            if (!taskResult || taskResult.status !== TaskStatus.Done) continue
+            const agent = plan.agents.find((a) => a.id === task.agentId)
+            try {
+              const entry = await blackboard.read(bbSupervisorNs, `task_${task.id}_output`)
+              if (entry) {
+                const val = entry as { output: string }
+                taskOutputs.push({
+                  taskTitle: task.title,
+                  agentName: agent?.name ?? task.agentId,
+                  output: val.output,
+                })
+              }
+            } catch {
+              // Blackboard read skipped
+            }
+          }
+
+          if (taskOutputs.length === 0) break
+
+          const needMoreTasks = await this.evaluateSupervisorNeed(plan.goal, taskOutputs)
+          if (!needMoreTasks) break
+
+          const supplementPrompt = plan.tasks
+            .filter((t) => results.find((r) => r.taskId === t.id && r.status === TaskStatus.Done))
+            .map((t) => {
+              const found = taskOutputs.find((o) => o.taskTitle === t.title)
+              return `- ${t.title}: ${found?.output?.slice(0, 200) ?? 'completed'}`
+            })
+            .join('\n')
+
+          const supplementGoal = `${plan.goal}\n\n已完成工作:\n${supplementPrompt}\n\n请根据已完成产出，生成 1-2 个补充任务，填补缺失或不足的部分。`
+
+          try {
+            const { buildDynamicOrchestratorPlan } = await import('./plan-generator')
+            const supplementPlan = await buildDynamicOrchestratorPlan(
+              supplementGoal,
+              plan.agents as any,
+              'supplement-' + runId,
+            )
+
+            if (!supplementPlan || !supplementPlan.tasks.length) break
+
+            const newTasks: ExecutionTask[] = []
+            for (const pt of supplementPlan.tasks) {
+              const agent = plan.agents.find((a) => a.key === pt.agentKey)
+              if (!agent) continue
+
+              const task: ExecutionTask = {
+                id: pt.id,
+                title: pt.title,
+                description: pt.description,
+                agentId: agent.id,
+                dependencies: pt.dependencies ?? [],
+                taskType: pt.taskType,
+                parallelGroup: pt.parallelGroup,
+                maxRetries: pt.maxRetries ?? 2,
+                phaseId: pt.phaseId,
+              }
+
+              const childSession = await createOrchestratorChildSession(
+                workspaceId,
+                plan.title,
+                ownerId,
+                agent,
+                task.title,
+              )
+              childSessions.set(task.id, {
+                sessionId: childSession.id,
+                workspaceId,
+                projectPath: childSessions.get(plan.tasks[0]?.id ?? '')?.projectPath,
+              })
+
+              await db.insert(workspaceTasks).values({
+                id: task.id,
+                workspaceId,
+                agentId: task.agentId,
+                title: task.title,
+                description: task.description,
+                status: TaskStatus.Pending,
+                orderIdx: plan.tasks.length,
+                runId,
+                phaseId: task.phaseId,
+                dependencies: task.dependencies,
+                parallelGroup: task.parallelGroup,
+                maxRetries: task.maxRetries,
+              })
+
+              newTasks.push(task)
+            }
+
+            this.scheduler.addTasksToRun(runId, newTasks)
+            plan.tasks.push(...newTasks)
+
+            await emitRunEvent({
+              runId,
+              workspaceId,
+              groupSessionId,
+              type: 'supervisor.inject' as any,
+              severity: 'info',
+              payload: { round: supervisorRound, newTaskIds: newTasks.map((t) => t.id) },
+            })
+          } catch (err: any) {
+            logger.warn({ err: err?.message, runId, round: supervisorRound }, 'Supervisor supplement plan failed')
+            break
+          }
+        }
       }
 
       // Task #37: Auto-review chain — code tasks 完成后自动注入 review 任务
@@ -471,6 +615,33 @@ export class OrchestratorEngine {
       }
       // Run 结束，清理黑板内存缓存
       blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
+    }
+  }
+
+  private async evaluateSupervisorNeed(
+    goal: string,
+    taskOutputs: { taskTitle: string; agentName: string; output: string }[],
+  ): Promise<boolean> {
+    const prompt = `评估以下任务产出是否充分，决定是否需要追加补充任务。
+
+原始目标：${goal}
+
+已完成任务产出：
+${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0, 300)}`).join('\n')}
+
+请只回答 "YES" 或 "NO"：
+- YES：当前产出不够充分，需要追加补充任务（如缺少关键分析维度、遗漏重要方面、深度不够等）
+- NO：当前产出已经充分，无需追加`
+
+    try {
+      let output = ''
+      for await (const delta of streamReply([{ role: 'user', content: prompt }], '你是项目管理者。只回答 YES 或 NO。')) {
+        output += delta
+        if (output.length > 100) break
+      }
+      return output.trim().toUpperCase().includes('YES')
+    } catch {
+      return false
     }
   }
 

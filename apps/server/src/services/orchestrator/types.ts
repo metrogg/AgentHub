@@ -12,6 +12,8 @@ import {
   OrchestratorRunStatus,
 } from '@agenthub/shared'
 
+export type CollaborationMode = 'pipeline' | 'mapreduce' | 'supervisor'
+
 export interface ClarificationQuestion {
   id: string
   question: string
@@ -28,6 +30,7 @@ export interface ExecutionPlan {
   tasks: ExecutionTask[]
   agentRelations?: AgentRelation[]
   clarificationQuestions?: ClarificationQuestion[]
+  collaborationMode?: CollaborationMode
   taskLedger?: TaskLedger
   progressLedger?: ProgressLedger
 }
