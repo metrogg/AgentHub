@@ -33,7 +33,7 @@ async function stopStaleDevProcesses() {
 
   const script = `
 $root = ${powershellRoot}
-$devPorts = @(5173, 5174, 5175, 8000)
+$devPorts = @(5173, 5174, 5175) + (8000..8079)
 $portPids = [System.Collections.Generic.HashSet[int]]::new()
 Get-NetTCPConnection -ErrorAction SilentlyContinue |
   Where-Object { $devPorts -contains $_.LocalPort } |
