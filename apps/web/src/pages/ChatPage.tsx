@@ -13,6 +13,7 @@ import {
   Paperclip,
   Plus,
   Search,
+  Trash2,
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
@@ -394,6 +395,26 @@ function Welcome() {
     }
   }
 
+  async function handleDeleteWorkspace(workspaceId: string, event: React.MouseEvent) {
+    event.stopPropagation()
+    if (workspaceBusy) return
+    const name = workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId
+    if (!window.confirm(`确定要删除工作区「${name}」吗？此操作不可撤销。`)) return
+    setWorkspaceBusy(true)
+    try {
+      await api.deleteWorkspace(workspaceId)
+      setWorkspaces((items) => items.filter((w) => w.id !== workspaceId))
+      if (selectedWorkspace?.id === workspaceId) {
+        setSelectedWorkspace(null)
+      }
+      showHint(`已删除工作区：${name}`)
+    } catch (err) {
+      showHint(friendlyErrorMessage(err, '删除工作区失败'))
+    } finally {
+      setWorkspaceBusy(false)
+    }
+  }
+
   async function createBlankWorkspace() {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
@@ -439,7 +460,7 @@ function Welcome() {
             name: workspaceNameFromPath(result.projectPath),
             goal: '',
             projectPath: result.projectPath,
-            template: 'classic',
+            template: 'blank',
           })
         ).workspace
       setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
@@ -523,7 +544,7 @@ function Welcome() {
                       onClick={() => void selectWorkspace(workspace.id)}
                       disabled={workspaceBusy}
                       className={[
-                        'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
+                        'group/ws flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
                         workspace.id === selectedWorkspace?.id ||
                         workspace.id === openingWorkspaceId
                           ? 'bg-neutral-100'
@@ -537,6 +558,15 @@ function Welcome() {
                           {workspaceSubtitle(workspace)}
                         </span>
                       </span>
+                      <button
+                        type="button"
+                        onClick={(event) => void handleDeleteWorkspace(workspace.id, event)}
+                        disabled={workspaceBusy}
+                        className="hidden h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500 group-hover/ws:inline-flex"
+                        title="删除工作区"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                       {workspace.id === openingWorkspaceId && (
                         <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
                       )}
