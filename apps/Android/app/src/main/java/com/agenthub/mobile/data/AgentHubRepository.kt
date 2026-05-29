@@ -2,6 +2,8 @@ package com.agenthub.mobile.data
 
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,6 +26,7 @@ class AgentHubRepository(
     val uiState: StateFlow<MobileUiState> = _uiState.asStateFlow()
 
     private var currentSocket: WebSocket? = null
+    private var syncJob: Job? = null
 
     fun connect(config: ConnectionConfig) {
         scope.launch {
@@ -32,17 +35,17 @@ class AgentHubRepository(
             }
             runCatching {
                 client.health(config)
-                val sessions = client.listSessions(config)
+                val sync = client.sync(config)
                 currentSocket?.cancel()
                 currentSocket = client.openEventSocket(config, socketListener(config))
+                applySync(sync)
                 _uiState.update {
                     it.copy(
-                        sessions = sessions,
-                        selectedSessionId = it.selectedSessionId,
                         connecting = false,
                         connected = true,
                     )
                 }
+                startSyncLoop(config)
                 _uiState.value.selectedSessionId?.let { selectSession(it) }
             }.onFailure { error ->
                 _uiState.update {
@@ -53,6 +56,8 @@ class AgentHubRepository(
     }
 
     fun disconnect() {
+        syncJob?.cancel()
+        syncJob = null
         currentSocket?.cancel()
         currentSocket = null
         _uiState.update {
@@ -66,8 +71,8 @@ class AgentHubRepository(
             return
         }
         scope.launch {
-            runCatching { client.listSessions(config) }
-                .onSuccess { sessions -> _uiState.update { it.copy(sessions = sessions, error = null) } }
+            runCatching { client.sync(config) }
+                .onSuccess { sync -> applySync(sync) }
                 .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
         }
     }
@@ -116,6 +121,49 @@ class AgentHubRepository(
             runCatching { client.createSession(config, title) }
                 .onSuccess { session ->
                     _uiState.update { it.copy(sessions = listOf(session) + it.sessions) }
+                    refreshSessions()
+                    selectSession(session.id)
+                }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun openWorkspaceAgent(workspaceId: String, agentId: String) {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            runCatching { client.openWorkspaceAgentSession(config, workspaceId, agentId) }
+                .onSuccess { session ->
+                    _uiState.update {
+                        it.copy(
+                            sessions = listOf(session) + it.sessions.filterNot { item -> item.id == session.id },
+                            error = null,
+                        )
+                    }
+                    refreshSessions()
+                    selectSession(session.id)
+                }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun openAgentContact(contact: AgentContact) {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            runCatching { client.openAgentContactSession(config, contact) }
+                .onSuccess { session ->
+                    _uiState.update {
+                        it.copy(
+                            sessions = listOf(session) + it.sessions.filterNot { item -> item.id == session.id },
+                            error = null,
+                        )
+                    }
+                    refreshSessions()
                     selectSession(session.id)
                 }
                 .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
@@ -296,6 +344,62 @@ class AgentHubRepository(
             }
             "message:cancelled" -> _uiState.update {
                 it.copy(streamingMessage = null, streamingCodeAgentRun = null, agentTyping = false)
+            }
+        }
+    }
+
+    private fun applySync(sync: MobileSyncResponse) {
+        _uiState.update { state ->
+            val selectedSessionId = state.selectedSessionId
+                ?.takeIf { id -> sync.sessions.any { session -> session.id == id } }
+            state.copy(
+                sessions = sync.sessions,
+                workspaces = sync.workspaces,
+                agents = sync.agents,
+                contacts = sync.contacts,
+                selectedSessionId = selectedSessionId,
+                messages = if (selectedSessionId == null && state.selectedSessionId != null) emptyList() else state.messages,
+                streamingMessage = if (selectedSessionId == null && state.selectedSessionId != null) null else state.streamingMessage,
+                error = null,
+            )
+        }
+    }
+
+    private fun contactsFromWorkspaceAgents(agents: List<WorkspaceAgent>): List<AgentContact> {
+        val seen = mutableSetOf<String>()
+        return agents.mapNotNull { agent ->
+            val key = listOf(
+                agent.name.trim().lowercase(),
+                agent.role.trim().lowercase(),
+                agent.runtimeType.trim().lowercase(),
+                agent.codeAgentType?.trim()?.lowercase().orEmpty(),
+            ).joinToString("|")
+            if (!seen.add(key)) return@mapNotNull null
+            AgentContact(
+                id = agent.id,
+                source = "workspace-agent",
+                workspaceId = agent.workspaceId,
+                workspaceAgentId = agent.id,
+                name = agent.name,
+                role = agent.role,
+                roleType = agent.roleType,
+                description = agent.description,
+                avatar = agent.avatar,
+                color = agent.color,
+                runtimeType = agent.runtimeType,
+                codeAgentType = agent.codeAgentType,
+                capabilityTags = agent.capabilityTags,
+            )
+        }
+    }
+
+    private fun startSyncLoop(config: ConnectionConfig) {
+        syncJob?.cancel()
+        syncJob = scope.launch {
+            while (_uiState.value.connection == config) {
+                delay(8_000)
+                runCatching { client.sync(config) }
+                    .onSuccess { sync -> applySync(sync) }
             }
         }
     }

@@ -3,11 +3,19 @@ import { networkInterfaces } from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Hono } from 'hono'
+import { inArray } from 'drizzle-orm'
+import { db, sessions, workspaces, workspaceAgents, workspaceTasks, orchestratorRuns, settings, eq, and, desc, asc } from '@agenthub/db'
+import { AppError, AppErrorCodes } from '../lib/error'
 import { env } from '../env'
 import { getRuntimeServerPort } from '../lib/runtime-server'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import { getCodingToolsWorkbenchStatus } from './coding-tools'
+import { getLlmRuntimeStatus } from '../services/llm-client'
+import { globalSkillRegistry } from '../services/skill-registry'
+import { getStarOfficeRuntimeStatus } from '../services/star-office-service'
 
 const PAIRING_TTL_MS = 2 * 60 * 1000
+const AGENT_LIBRARY_SETTING_KEY = 'AGENT_LIBRARY'
 const execFileAsync = promisify(execFile)
 
 interface PairingRecord {
@@ -24,8 +32,50 @@ const mobileEvents: Array<{ type: string; message: string; at: string }> = []
 
 export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('/pair/start', authMiddleware)
+  .use('/agents/*', authMiddleware)
+  .use('/sync', authMiddleware)
+  .use('/workbench', authMiddleware)
   .use('/connectivity', authMiddleware)
   .use('/firewall/open', authMiddleware)
+  .get('/sync', async (c) => {
+    const user = c.get('user')
+    const [sessionList, workspaceList, savedLibrary] = await Promise.all([
+      db.select().from(sessions).where(eq(sessions.ownerId, user.sub)).orderBy(desc(sessions.updatedAt)),
+      db.select().from(workspaces).where(eq(workspaces.ownerId, user.sub)).orderBy(desc(workspaces.updatedAt)),
+      readSavedAgentLibrary(),
+    ])
+    const workspaceIds = workspaceList.map((workspace) => workspace.id)
+    const agentList = workspaceIds.length
+      ? await db
+          .select()
+          .from(workspaceAgents)
+          .where(inArray(workspaceAgents.workspaceId, workspaceIds))
+          .orderBy(asc(workspaceAgents.workspaceId), asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+      : []
+    const contacts = savedLibrary.found
+      ? contactsFromSavedAgents(savedLibrary.agents)
+      : contactsFromWorkspaceAgents(agentList)
+
+    return c.json({
+      sessions: sessionList,
+      workspaces: workspaceList,
+      agents: agentList,
+      contacts,
+    })
+  })
+  .get('/workbench', async (c) => {
+    const user = c.get('user')
+    return c.json(await buildMobileWorkbench(user.sub))
+  })
+  .post('/agents/:agentId/session', async (c) => {
+    const user = c.get('user')
+    const agentId = c.req.param('agentId')
+    const savedLibrary = await readSavedAgentLibrary()
+    const agent = savedLibrary.agents.find((item) => item.id === agentId)
+    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 通讯录未同步或该 Agent 不存在')
+    const session = await ensureSavedAgentDirectSession(user.sub, agent)
+    return c.json({ session })
+  })
   .get('/connectivity', async (c) => {
     return c.json(await mobileConnectivityStatus())
   })
@@ -122,6 +172,277 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
       expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
     })
   })
+
+interface SavedAgentConfig {
+  id: string
+  name: string
+  role: string
+  roleType?: string
+  description?: string
+  avatar?: string | null
+  systemPrompt?: string
+  roleProfile?: Record<string, unknown> | null
+  color?: string
+  modelId?: string | null
+  runtimeType?: string
+  codeAgentType?: string | null
+  capabilityTags?: string[]
+  toolPermissions?: string[]
+  sandboxPolicy?: string
+  contextPolicy?: string
+  autoInvoke?: boolean
+  approvalRequired?: boolean
+}
+
+interface SavedAgentLibrary {
+  found: boolean
+  agents: SavedAgentConfig[]
+}
+
+async function readSavedAgentLibrary(): Promise<SavedAgentLibrary> {
+  const [row] = await db
+    .select()
+    .from(settings)
+    .where(eq(settings.key, AGENT_LIBRARY_SETTING_KEY))
+    .limit(1)
+  if (!row) return { found: false, agents: [] }
+  if (!row.value) return { found: true, agents: [] }
+  try {
+    const parsed = JSON.parse(row.value)
+    const rawAgents: unknown[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.agents) ? parsed.agents : []
+    return {
+      found: true,
+      agents: rawAgents.map(normalizeSavedAgent).filter((agent): agent is SavedAgentConfig => Boolean(agent)),
+    }
+  } catch {
+    return { found: true, agents: [] }
+  }
+}
+
+function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
+  if (!value || typeof value !== 'object') return null
+  const input = value as Partial<SavedAgentConfig>
+  const name = input.name?.trim()
+  const role = input.role?.trim()
+  if (!name || !role) return null
+  return {
+    id: input.id?.trim() || `${name}:${role}`,
+    name,
+    role,
+    roleType: normalizeRoleType(input.roleType),
+    description: input.description?.trim() ?? '',
+    avatar: input.avatar ?? null,
+    systemPrompt: input.systemPrompt?.trim() ?? '',
+    roleProfile: input.roleProfile ?? null,
+    color: input.color || '#111827',
+    modelId: input.modelId ?? null,
+    runtimeType: normalizeRuntimeType(input.runtimeType),
+    codeAgentType: normalizeCodeAgentType(input.codeAgentType),
+    capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags.filter(isNonEmptyString) : [],
+    toolPermissions: Array.isArray(input.toolPermissions) ? input.toolPermissions.filter(isNonEmptyString) : [],
+    sandboxPolicy: normalizeSandboxPolicy(input.sandboxPolicy),
+    contextPolicy: normalizeContextPolicy(input.contextPolicy),
+    autoInvoke: input.autoInvoke ?? true,
+    approvalRequired: input.runtimeType === 'code-agent' ? false : (input.approvalRequired ?? true),
+  }
+}
+
+function contactsFromSavedAgents(agentList: SavedAgentConfig[]) {
+  const seen = new Set<string>()
+  return agentList.flatMap((agent) => {
+    const key = contactDedupeKey(agent)
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [{
+      id: agent.id,
+      source: 'library',
+      workspaceId: null,
+      workspaceAgentId: null,
+      name: agent.name,
+      role: agent.role,
+      roleType: agent.roleType ?? 'custom',
+      description: agent.description ?? '',
+      avatar: agent.avatar ?? null,
+      color: agent.color ?? '#111827',
+      runtimeType: agent.runtimeType ?? 'llm',
+      codeAgentType: agent.codeAgentType ?? null,
+      capabilityTags: agent.capabilityTags ?? [],
+    }]
+  })
+}
+
+function contactsFromWorkspaceAgents(agentList: Array<typeof workspaceAgents.$inferSelect>) {
+  const seen = new Set<string>()
+  return agentList.flatMap((agent) => {
+    const key = contactDedupeKey(agent)
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [{
+      id: agent.id,
+      source: 'workspace-agent',
+      workspaceId: agent.workspaceId,
+      workspaceAgentId: agent.id,
+      name: agent.name,
+      role: agent.role,
+      roleType: agent.roleType,
+      description: agent.description,
+      avatar: agent.avatar,
+      color: agent.color,
+      runtimeType: agent.runtimeType,
+      codeAgentType: agent.codeAgentType,
+      capabilityTags: agent.capabilityTags,
+    }]
+  })
+}
+
+async function ensureSavedAgentDirectSession(ownerId: string, agent: SavedAgentConfig) {
+  const sessionList = await db
+    .select()
+    .from(sessions)
+    .where(and(eq(sessions.ownerId, ownerId), eq(sessions.type, 'direct')))
+    .orderBy(desc(sessions.updatedAt))
+  const existingBySavedId = sessionList.find((session) => {
+    const metadata = session.metadata ?? {}
+    return metadata.kind === 'agent-direct' && metadata.savedAgentId === agent.id
+  })
+  if (existingBySavedId?.workspaceId && existingBySavedId.workspaceAgentId) return existingBySavedId
+
+  const workspaceName = (agent.name.trim() || 'Agent').slice(0, 80)
+  const [existingWorkspace] = await db
+    .select()
+    .from(workspaces)
+    .where(and(eq(workspaces.ownerId, ownerId), eq(workspaces.name, workspaceName)))
+    .limit(1)
+  const workspace = existingWorkspace ?? (await db
+    .insert(workspaces)
+    .values({
+      ownerId,
+      name: workspaceName,
+      goal: `与 ${agent.name} 单聊`,
+      projectPath: null,
+    })
+    .returning())[0]
+  if (!workspace) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
+
+  const workspaceAgentList = await db
+    .select()
+    .from(workspaceAgents)
+    .where(eq(workspaceAgents.workspaceId, workspace.id))
+    .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+  const reusableAgent = workspaceAgentList.find((item) => sameAgentIdentity(item, agent))
+  const workspaceAgent = reusableAgent ?? (await db
+    .insert(workspaceAgents)
+    .values({
+      workspaceId: workspace.id,
+      name: agent.name,
+      role: agent.role,
+      roleType: normalizeRoleType(agent.roleType),
+      description: agent.description ?? '',
+      avatar: agent.avatar ?? null,
+      systemPrompt: agent.systemPrompt ?? '',
+      roleProfile: agent.roleProfile ?? null,
+      color: agent.color ?? '#111827',
+      modelId: agent.modelId ?? null,
+      runtimeType: normalizeRuntimeType(agent.runtimeType),
+      codeAgentType: normalizeRuntimeType(agent.runtimeType) === 'code-agent'
+        ? normalizeCodeAgentType(agent.codeAgentType)
+        : null,
+      capabilityTags: agent.capabilityTags ?? [],
+      toolPermissions: agent.toolPermissions ?? [],
+      sandboxPolicy: normalizeSandboxPolicy(agent.sandboxPolicy),
+      contextPolicy: normalizeContextPolicy(agent.contextPolicy),
+      autoInvoke: agent.autoInvoke ?? true,
+      approvalRequired: normalizeRuntimeType(agent.runtimeType) === 'code-agent'
+        ? false
+        : (agent.approvalRequired ?? true),
+      orderIdx: workspaceAgentList.length,
+    })
+    .returning())[0]
+  if (!workspaceAgent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 创建失败')
+
+  const reusableSession = existingBySavedId ?? sessionList.find((session) =>
+    session.workspaceId === workspace.id &&
+    session.workspaceAgentId === workspaceAgent.id
+  )
+  const metadata = { ...(reusableSession?.metadata ?? {}), kind: 'agent-direct', savedAgentId: agent.id }
+  if (reusableSession) {
+    const [updated] = await db
+      .update(sessions)
+      .set({
+        title: agent.name,
+        workspaceId: workspace.id,
+        workspaceAgentId: workspaceAgent.id,
+        metadata,
+        updatedAt: new Date(),
+      })
+      .where(eq(sessions.id, reusableSession.id))
+      .returning()
+    if (updated) return updated
+  }
+
+  const [created] = await db
+    .insert(sessions)
+    .values({
+      title: agent.name,
+      type: 'direct',
+      ownerId,
+      workspaceId: workspace.id,
+      workspaceAgentId: workspaceAgent.id,
+      metadata,
+    })
+    .returning()
+  if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
+  return created
+}
+
+function sameAgentIdentity(agent: typeof workspaceAgents.$inferSelect, saved: SavedAgentConfig) {
+  return normalizeText(agent.name) === normalizeText(saved.name) &&
+    normalizeText(agent.role) === normalizeText(saved.role) &&
+    normalizeText(agent.runtimeType) === normalizeText(saved.runtimeType ?? 'llm') &&
+    normalizeText(agent.codeAgentType ?? '') === normalizeText(saved.codeAgentType ?? '')
+}
+
+function contactDedupeKey(agent: { name: string; role: string; runtimeType?: string | null; codeAgentType?: string | null }) {
+  return [
+    normalizeText(agent.name),
+    normalizeText(agent.role),
+    normalizeText(agent.runtimeType ?? ''),
+    normalizeText(agent.codeAgentType ?? ''),
+  ].join('|')
+}
+
+function normalizeText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function normalizeRoleType(value?: string | null) {
+  const allowed = ['orchestrator', 'clarifier', 'architect', 'researcher', 'coder', 'verifier', 'reviewer', 'integrator', 'custom']
+  return allowed.includes(value ?? '') ? value! as any : 'custom'
+}
+
+function normalizeRuntimeType(value?: string | null) {
+  const allowed = ['llm', 'code-agent', 'mcp', 'a2a']
+  return allowed.includes(value ?? '') ? value! as any : 'llm'
+}
+
+function normalizeCodeAgentType(value?: string | null) {
+  const allowed = ['codex', 'claude-code', 'opencode', 'gemini']
+  return allowed.includes(value ?? '') ? value! as any : null
+}
+
+function normalizeSandboxPolicy(value?: string | null) {
+  const allowed = ['read-only', 'workspace-write', 'danger-full-access']
+  return allowed.includes(value ?? '') ? value! as any : 'workspace-write'
+}
+
+function normalizeContextPolicy(value?: string | null) {
+  const allowed = ['recent-only', 'pinned-recent', 'workspace-aware']
+  return allowed.includes(value ?? '') ? value! as any : 'workspace-aware'
+}
 
 function getServerPort() {
   return getRuntimeServerPort() ?? Number(env.PORT || 8000)

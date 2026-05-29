@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.agenthub.mobile.data.AgentHubClient
 import com.agenthub.mobile.data.AgentHubRepository
+import com.agenthub.mobile.data.AgentContact
 import com.agenthub.mobile.data.ConnectionConfig
 import com.agenthub.mobile.data.ConnectionStore
 import com.agenthub.mobile.data.MobileUiState
@@ -90,6 +91,10 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
     fun refreshSessions() = repository.refreshSessions()
 
     fun createSession() = repository.createSession()
+
+    fun openWorkspaceAgent(workspaceId: String, agentId: String) = repository.openWorkspaceAgent(workspaceId, agentId)
+
+    fun openAgentContact(contact: AgentContact) = repository.openAgentContact(contact)
 
     fun selectSession(sessionId: String) = repository.selectSession(sessionId)
 

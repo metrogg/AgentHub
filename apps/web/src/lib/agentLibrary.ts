@@ -25,7 +25,9 @@ export interface AgentLibraryState {
 
 export const agentLibraryStorageKey = 'agenthub.agentLibrary'
 export const agentLibraryChangeEvent = 'agenthub:agent-library-change'
+export const agentLibraryServerSettingKey = 'AGENT_LIBRARY'
 const legacyAgentConfigKey = 'agenthub.agentConfig'
+let pendingServerSync: number | null = null
 
 const defaultAgentRoleTypes = [
   'orchestrator',
@@ -82,6 +84,7 @@ export function loadAgentLibraryState(): AgentLibraryState {
         if (!hadOrchestrator || hadLegacyDefaults) {
           saveAgentLibraryState(state)
         }
+        queueAgentLibraryServerSync(state)
         return state
       }
     } catch {
@@ -111,7 +114,22 @@ export function saveAgentLibrary(agents: SavedAgentConfig[]) {
 export function saveAgentLibraryState(state: AgentLibraryState) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(agentLibraryStorageKey, JSON.stringify(state))
+  queueAgentLibraryServerSync(state)
   window.dispatchEvent(new CustomEvent(agentLibraryChangeEvent, { detail: state.agents }))
+}
+
+function queueAgentLibraryServerSync(state: AgentLibraryState) {
+  if (typeof window === 'undefined') return
+  if (pendingServerSync !== null) window.clearTimeout(pendingServerSync)
+  const value = JSON.stringify(state)
+  pendingServerSync = window.setTimeout(() => {
+    pendingServerSync = null
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [agentLibraryServerSettingKey]: value }),
+    }).catch(() => undefined)
+  }, 0)
 }
 
 export function createSavedAgent(

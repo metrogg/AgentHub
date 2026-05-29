@@ -43,6 +43,7 @@ fun AgentHubApp(viewModel: MobileViewModel = viewModel()) {
                     onDisconnect = viewModel::disconnect,
                     onRefresh = viewModel::refreshSessions,
                     onCreateSession = viewModel::createSession,
+                    onOpenAgentContact = viewModel::openAgentContact,
                     onSelectSession = viewModel::selectSession,
                     onSendMessage = viewModel::sendMessage,
                     onArchiveSession = viewModel::archiveSession,

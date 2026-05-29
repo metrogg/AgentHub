@@ -881,10 +881,10 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         *guard = Some(child);
     }
 
-    let url = format!("http://127.0.0.1:{port}");
     if wait_for_health(port, Duration::from_secs(20)) {
         set_startup_status(&window, "ready", "服务已启动", "正在进入 AgentHub...");
-        if let Ok(url) = tauri::Url::parse(&url) {
+        let target_url = frontend_launch_url(port);
+        if let Ok(url) = tauri::Url::parse(&target_url) {
             let _ = window.navigate(url);
         }
     } else {
@@ -997,5 +997,13 @@ fn stop_server(server_state: ServerProcess) {
     if let Some(mut child) = guard.take() {
         let _ = child.kill();
         let _ = child.wait();
+    }
+}
+
+fn frontend_launch_url(port: u16) -> String {
+    if cfg!(debug_assertions) {
+        "http://127.0.0.1:5173".to_string()
+    } else {
+        format!("http://127.0.0.1:{port}")
     }
 }
