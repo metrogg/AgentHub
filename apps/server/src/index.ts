@@ -25,6 +25,13 @@ async function seedDefaultUser() {
 
 await seedDefaultUser()
 
+function resolvePortFile() {
+  const configured = Bun.env.AGENTHUB_PORT_FILE?.trim()
+  if (configured) return resolve(configured)
+  const root = Bun.env.PROJECT_ROOT?.trim() || process.cwd()
+  return resolve(root, '.agenthub-port')
+}
+
 let currentPort = env.PORT
 const maxTries = 10
 
@@ -86,14 +93,16 @@ logger.info(`🚀 AgentHub server listening on http://0.0.0.0:${runtimePort}`)
 setRuntimeServerPort(runtimePort)
 
 // Write actual port to file so Vite dev proxy can read it
-const portFile = resolve(import.meta.dir, '../../../.agenthub-port')
+const portFile = resolvePortFile()
 try {
   writeFileSync(
     portFile,
     JSON.stringify({ port: runtimePort, pid: process.pid, updatedAt: new Date().toISOString() }),
     'utf8',
   )
-} catch {
+  logger.info({ portFile, port: runtimePort }, 'Wrote AgentHub dev port file')
+} catch (err) {
+  logger.warn({ err, portFile }, 'Failed to write AgentHub dev port file')
   // Best-effort; non-critical
 }
 

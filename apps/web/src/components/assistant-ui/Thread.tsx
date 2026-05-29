@@ -99,7 +99,6 @@ import {
   type Workspace,
   type WorkspaceAgent,
 } from '../../lib/api'
-import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
 import {
@@ -131,6 +130,7 @@ import { TypewriterHeading } from '../chat/TypewriterHeading'
 import { GroupAvatar } from '../chat/GroupAvatar'
 import {
   agentLibraryChangeEvent,
+  flushAgentLibraryServerSync,
   loadAgentLibrary,
   saveAgentToLibrary,
   toAgentConfigInput,
@@ -385,6 +385,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
   const selectSession = useChatStore((state) => state.selectSession)
   const agent = agents.find((item) => item.id === session?.workspaceAgentId)
   const [models, setModels] = useState<ModelCatalogItem[]>([])
+  const usesCodingCli = agent?.runtimeType === 'code-agent'
   const [draft, setDraft] = useState({
     role: '',
     description: '',
@@ -392,8 +393,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     modelId: '',
   })
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const modelChoices = filterModelsForCodeAgent(models, agent?.codeAgentType, draft.modelId)
-  const selectedModelName = modelName(draft.modelId || null, models)
+  const modelChoices = models
 
   useEffect(() => {
     if (!open) return
@@ -418,7 +418,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
       modelId: agent?.modelId ?? '',
     })
     setSaveState('idle')
-  }, [agent?.id, agent?.role, agent?.description, agent?.systemPrompt, agent?.modelId])
+  }, [agent?.id, agent?.role, agent?.description, agent?.systemPrompt, agent?.modelId, agent?.runtimeType])
 
   async function saveAgentPatch(
     patch: Partial<Pick<WorkspaceAgent, 'role' | 'description' | 'systemPrompt' | 'modelId'>>,
@@ -428,6 +428,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     try {
       await api.updateWorkspaceAgent(workspace.id, agent.id, patch)
       syncAgentLibraryFromWorkspaceAgent({ ...agent, ...patch })
+      await flushAgentLibraryServerSync()
       if (session?.id) await selectSession(session.id)
       setSaveState('saved')
       window.setTimeout(() => setSaveState('idle'), 1400)
@@ -519,26 +520,34 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                   <AgentQuickSaveState state={saveState} />
                 </div>
 
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-neutral-500">模型</span>
-                  <select
-                    value={draft.modelId}
-                    onChange={(event) => updateModel(event.target.value)}
-                    disabled={saveState === 'saving'}
-                    className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
-                  >
-                    <option value="">使用 Coding Tool 默认模型</option>
-                    {modelChoices.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name || model.modelId}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="mt-1 block text-xs leading-5 text-neutral-400">
-                    Agent 模型会覆盖 Coding Tools 页面里的工具默认模型。当前：
-                    {draft.modelId ? selectedModelName : '跟随工具默认'}
-                  </span>
-                </label>
+                {usesCodingCli ? (
+                  <div className="rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+                    <div className="font-medium text-neutral-900">模型</div>
+                    <div className="mt-1">
+                      模型、Base URL 和 API Key 由 Coding Tools 页面统一管理；这里仅维护 Agent 角色和提示词。
+                    </div>
+                  </div>
+                ) : (
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-neutral-500">模型</span>
+                    <select
+                      value={draft.modelId}
+                      onChange={(event) => updateModel(event.target.value)}
+                      disabled={saveState === 'saving'}
+                      className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
+                    >
+                      <option value="">默认模型</option>
+                      {modelChoices.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.name || model.modelId}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="mt-1 block text-xs leading-5 text-neutral-400">
+                      LLM Agent 可以单独覆盖默认模型。
+                    </span>
+                  </label>
+                )}
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-medium text-neutral-500">角色</span>
@@ -646,12 +655,6 @@ function syncAgentLibraryFromWorkspaceAgent(agent: WorkspaceAgent) {
     },
     matched.id,
   )
-}
-
-function modelName(modelId: string | null, models: ModelCatalogItem[]) {
-  if (!modelId) return '跟随工具默认'
-  const model = models.find((item) => item.id === modelId || item.modelId === modelId)
-  return model?.name || model?.modelId || modelId
 }
 
 const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
@@ -1135,10 +1138,15 @@ const ThreadWelcomeContent: FC = () => {
     api
       .getWelcomeQuickPrompts(seed)
       .then(({ items }) => {
-        if (!cancelled) setQuickPrompts(items.length ? items : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+        if (!cancelled) {
+          const nextPrompts = items.length
+            ? rotateQuickPrompts(items, seed, 10)
+            : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10)
+          setQuickPrompts(nextPrompts)
+        }
       })
       .catch(() => {
-        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10))
       })
       .finally(() => {
         if (!cancelled) setQuickPromptsLoading(false)
@@ -1466,7 +1474,7 @@ const Composer: FC = () => {
           }
         }}
       >
-        <div className="relative rounded-3xl border border-neutral-200 bg-white p-3 shadow-[0_10px_40px_rgba(15,23,42,0.10)] focus-within:border-neutral-300">
+        <div className="relative rounded-3xl border border-neutral-200 bg-white p-3 focus-within:border-neutral-300">
           {menu && (
             <ComposerMenu
               key={menu}
@@ -2979,6 +2987,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
       />
       <CodeAgentProcessTimeline steps={steps} running={data.status === 'running'} />
       {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
+      <CodeAgentOutputReviewCard data={data} />
       {hasDetails && (
         <CodeAgentRunDetails
           changedFiles={changedFiles}
@@ -3232,6 +3241,253 @@ const CodeAgentRunDetails: FC<{
     </div>
   </details>
 )
+
+const CodeAgentOutputReviewCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+  const messageId = useMessage((message) => message.id)
+  const currentSession = useChatStore((state) => state.currentSession)
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
+  )
+  const sendMessageToSession = useChatStore((state) => state.sendMessageToSession)
+  const finalMessage = (data.finalMessage ?? '').trim()
+  const reviewRequired =
+    data.reviewRequired || data.runtime === 'codex' || data.runtime === 'claude-code'
+  const startsExpanded = finalMessage.length <= 1600 && finalMessage.split(/\r?\n/).length <= 14
+  const [expanded, setExpanded] = useState(startsExpanded)
+  const [confirmed, setConfirmed] = useState(false)
+  const [continuing, setContinuing] = useState(false)
+  const [continueError, setContinueError] = useState('')
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setExpanded(startsExpanded)
+    setConfirmed(false)
+    setContinuing(false)
+    setContinueError('')
+    setCopied(false)
+  }, [finalMessage, startsExpanded])
+
+  if (!reviewRequired) return null
+
+  const running = data.status === 'running'
+  const hasFinalMessage = finalMessage.length > 0
+  const preview = expanded ? finalMessage : codeAgentReviewPreview(finalMessage)
+  const hasMore = preview !== finalMessage
+  const lineCount = hasFinalMessage ? finalMessage.split(/\r?\n/).length : 0
+  const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
+  const sourceMetadata =
+    sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
+      ? (sourceMessage.metadata as Record<string, unknown>)
+      : null
+  const sourceAgentName =
+    typeof sourceMetadata?.agentName === 'string' ? sourceMetadata.agentName.trim() : ''
+  const shouldMentionAgent = currentSession?.type === 'group' && sourceAgentName.length > 0
+
+  async function copyFinalMessage() {
+    if (!finalMessage) return
+    try {
+      await navigator.clipboard.writeText(finalMessage)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  async function continueOutput() {
+    if (!messageId || !currentSession?.id || continuing || confirmed) return
+    const continuationPrompt = buildCodeAgentContinuationPrompt({
+      finalMessage,
+      runtimeLabel,
+      agentName: shouldMentionAgent ? sourceAgentName : null,
+    })
+    setContinuing(true)
+    setContinueError('')
+    try {
+      await sendMessageToSession(currentSession.id, continuationPrompt, {
+        displayContent: '继续输出',
+        replyToMessageId: messageId,
+      })
+      setConfirmed(true)
+    } catch (error) {
+      setContinueError(friendlyErrorMessage(error, '继续输出失败'))
+    } finally {
+      setContinuing(false)
+    }
+  }
+
+  return (
+    <div
+      className={cn(
+        'overflow-hidden rounded-lg border bg-white shadow-sm',
+        confirmed ? 'border-emerald-200' : 'border-neutral-200',
+      )}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+        <div className="inline-flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              'grid h-8 w-8 shrink-0 place-items-center rounded-md border',
+              confirmed
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                : running
+                  ? 'border-blue-200 bg-blue-50 text-blue-600'
+                  : hasFinalMessage
+                    ? 'border-neutral-200 bg-neutral-50 text-neutral-600'
+                    : 'border-amber-200 bg-amber-50 text-amber-600',
+            )}
+          >
+            {running ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : confirmed ? (
+              <CheckCircle2 className="h-4 w-4" />
+            ) : hasFinalMessage ? (
+              <FileText className="h-4 w-4" />
+            ) : (
+              <AlertTriangle className="h-4 w-4" />
+            )}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-[13px] font-medium leading-5 text-neutral-900">
+              输出审核
+            </span>
+            <span className="block truncate text-[11px] leading-5 text-neutral-500">
+              {running
+                ? `${runtimeLabel} 正在写入流式输出`
+                : hasFinalMessage
+                  ? `完整终稿 ${lineCount} 行 · ${finalMessage.length.toLocaleString()} 字`
+                  : `${runtimeLabel} 未捕获到完整终稿`}
+            </span>
+          </span>
+        </div>
+        <span
+          className={cn(
+            'inline-flex h-6 items-center rounded-md border px-2 text-[11px] font-medium',
+            confirmed
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : running
+                ? 'border-blue-100 bg-blue-50 text-blue-600'
+                : 'border-neutral-200 bg-neutral-50 text-neutral-500',
+          )}
+        >
+          {confirmed ? '已确认' : running ? '待完成' : '待审核'}
+        </span>
+      </div>
+
+      <div className="border-t border-neutral-100 bg-neutral-50/70 px-3 py-3">
+        {running ? (
+          <div className="rounded-md border border-dashed border-blue-200 bg-white px-3 py-2 text-xs leading-5 text-neutral-500">
+            Claude Code / Codex 的最终正文会在执行结束后锁定到这里，审核时可展开全文确认。
+          </div>
+        ) : hasFinalMessage ? (
+          <>
+            <pre
+              className={cn(
+                'agenthub-readable-code whitespace-pre-wrap break-words rounded-md border border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-800',
+                expanded ? 'max-h-[32rem] overflow-auto' : 'max-h-44 overflow-hidden',
+              )}
+            >
+              {preview}
+            </pre>
+            {hasMore && (
+              <div className="mt-2 text-[11px] leading-5 text-neutral-500">
+                当前为预览，展开后显示完整输出。
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+            本次运行没有返回可锁定的最终正文；过程日志和文件变更仍可在执行明细中查看。
+          </div>
+        )}
+        {!running && (
+          <>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {hasFinalMessage && (
+                <>
+                  <button
+                    type="button"
+                    onClick={copyFinalMessage}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? '已复制' : '复制全文'}
+                  </button>
+                  {hasMore && (
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((value) => !value)}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
+                    >
+                      <ChevronDown
+                        className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
+                      />
+                      {expanded ? '收起全文' : '展开全文'}
+                    </button>
+                  )}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => void continueOutput()}
+                disabled={continuing || confirmed || !currentSession?.id}
+                className={cn(
+                  'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition',
+                  confirmed
+                    ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'bg-neutral-950 text-white hover:bg-neutral-800 disabled:bg-neutral-300 disabled:text-neutral-500',
+                )}
+              >
+                {continuing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : confirmed ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                {confirmed ? '已继续输出' : continuing ? '提交中...' : '确认并继续输出'}
+              </button>
+            </div>
+            {continueError && (
+              <div className="mt-2 text-[11px] leading-5 text-red-500">{continueError}</div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function codeAgentReviewPreview(value: string) {
+  const lines = value.split(/\r?\n/)
+  if (lines.length <= 14 && value.length <= 1600) return value
+  const firstLines = lines.slice(0, 14).join('\n')
+  if (firstLines.length <= 1600) return `${firstLines}\n...`
+  return `${firstLines.slice(0, 1600)}\n...`
+}
+
+function buildCodeAgentContinuationPrompt({
+  finalMessage,
+  runtimeLabel,
+  agentName,
+}: {
+  finalMessage: string
+  runtimeLabel: string
+  agentName: string | null
+}) {
+  const tail = finalMessage.trim()
+  const tailPreview =
+    tail.length > 1200 ? `${tail.slice(-1200).trimStart()}` : tail
+  const prefix = agentName ? `@${agentName} ` : ''
+  const lines = [
+    `${prefix}请继续上一轮 ${runtimeLabel} 的输出，不要重复已经给出的内容。`,
+    '如果上一轮已经结束，请补充剩余结论、验证结果和剩余风险；如果还没结束，请从最后一句之后接着写。',
+  ]
+  if (tailPreview) {
+    lines.push(`上一轮输出末尾：\n${tailPreview}`)
+  }
+  return lines.join('\n\n')
+}
 
 const CodeAgentToolsCard: FC<{
   items: NonNullable<CodeAgentRunMetadata['toolCalls']>

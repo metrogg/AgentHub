@@ -199,10 +199,15 @@ function Welcome() {
     api
       .getWelcomeQuickPrompts(seed)
       .then(({ items }) => {
-        if (!cancelled) setQuickPrompts(items.length ? items : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+        if (!cancelled) {
+          const nextPrompts = items.length
+            ? rotateQuickPrompts(items, seed, 10)
+            : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10)
+          setQuickPrompts(nextPrompts)
+        }
       })
       .catch(() => {
-        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10))
       })
       .finally(() => {
         if (!cancelled) setQuickPromptsLoading(false)
@@ -354,18 +359,12 @@ function Welcome() {
 
     setSubmitting(true)
     try {
-      const title = titleFromMessage(trimmed)
-      const workspace =
-        selectedWorkspace ??
-        (
-          await api.createAutoWorkspace({
-            name: title,
-            goal: trimmed,
-            template: 'blank',
-          })
-        ).workspace
-      const session = await createSession(title, {
-        workspaceId: workspace.id,
+      const workspaceAgentId = selectedWorkspace
+        ? await defaultWorkspaceAgentId(selectedWorkspace.id)
+        : null
+      const session = await createSession(titleFromMessage(trimmed), {
+        workspaceId: selectedWorkspace?.id ?? null,
+        workspaceAgentId,
       })
       await selectSession(session.id)
       navigate(`/chat/${session.id}`)
@@ -377,6 +376,11 @@ function Welcome() {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  async function defaultWorkspaceAgentId(workspaceId: string) {
+    const full = await api.getWorkspace(workspaceId)
+    return full.agents.length === 1 ? full.agents[0]!.id : null
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -483,7 +487,7 @@ function Welcome() {
         <div className="agenthub-welcome-composer-dock mt-auto w-full max-w-[704px] pb-5">
           <form
             onSubmit={handleSubmit}
-            className="relative rounded-[22px] border border-neutral-200 bg-white p-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)]"
+            className="relative rounded-[22px] border border-neutral-200 bg-white p-3"
           >
             {hint && (
               <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">

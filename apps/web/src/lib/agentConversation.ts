@@ -115,6 +115,74 @@ export async function startAgentConversation({
   return session
 }
 
+export async function syncSavedAgentDirectSessions(
+  agent: SavedAgentConfig,
+  previousAgent?: SavedAgentConfig | null,
+) {
+  const { items: sessions } = await api.listSessions()
+  const updatedWorkspaceIds = new Set<string>()
+  const previousIdentity = previousAgent ? normalizeMatchText(previousAgent.name) : ''
+  const previousRole = previousAgent ? normalizeMatchText(previousAgent.role) : ''
+
+  for (const session of sessions) {
+    if (!isDirectWorkspaceAgentSession(session)) continue
+    if (isGeneratedTaskMetadata(session.metadata)) continue
+
+    const metadata = session.metadata ?? {}
+    const savedAgentId = typeof metadata.savedAgentId === 'string' ? metadata.savedAgentId : ''
+    const matchesSavedId = savedAgentId === agent.id || (previousAgent ? savedAgentId === previousAgent.id : false)
+    const matchesLegacySession =
+      previousAgent &&
+      sessionLooksLikeAgentSession(session.title, previousIdentity, previousRole)
+
+    if (!matchesSavedId && !matchesLegacySession) continue
+
+    const workspaceId = session.workspaceId
+    const workspaceAgentId = session.workspaceAgentId
+    if (!workspaceId || !workspaceAgentId) continue
+
+    const full = await api.getWorkspace(workspaceId)
+    const currentWorkspaceAgent =
+      full.agents.find((item) => item.id === workspaceAgentId) ??
+      full.agents.find((item) => sameAgentIdentity(item, agent)) ??
+      (full.agents.length === 1 ? full.agents[0]! : null)
+    if (!currentWorkspaceAgent) continue
+
+    const updatedAgent = await api.updateWorkspaceAgent(
+      full.workspace.id,
+      currentWorkspaceAgent.id,
+      toAgentConfigInput(agent),
+    )
+    updatedWorkspaceIds.add(full.workspace.id)
+
+    if (full.agents.length === 1) {
+      const workspaceName = singleAgentWorkspaceName(agent)
+      if (full.workspace.name !== workspaceName) {
+        await api.updateWorkspace(full.workspace.id, { name: workspaceName })
+      }
+    }
+
+    const nextMetadata: Record<string, unknown> = { ...metadata, kind: 'agent-direct', savedAgentId: agent.id }
+    delete nextMetadata.hiddenFromSessionTree
+    const needsSessionUpdate =
+      session.title !== agent.name ||
+      session.workspaceAgentId !== updatedAgent.id ||
+      session.metadata?.kind !== 'agent-direct' ||
+      session.metadata?.savedAgentId !== agent.id
+
+    if (needsSessionUpdate) {
+      await api.updateSession(session.id, {
+        title: agent.name,
+        workspaceId: full.workspace.id,
+        workspaceAgentId: updatedAgent.id,
+        metadata: nextMetadata,
+      })
+    }
+  }
+
+  return [...updatedWorkspaceIds]
+}
+
 export function defaultConversationTitle(agents: SavedAgentConfig[]) {
   if (agents.length === 1) return agents[0]!.name
   const names = agents.slice(0, 3).map((agent) => agent.name).join('、')
@@ -284,6 +352,20 @@ function findAgentDirectSession(
 
 function singleAgentWorkspaceName(agent: SavedAgentConfig) {
   return (agent.name.trim() || 'Agent').slice(0, 80)
+}
+
+function sameAgentIdentity(agent: WorkspaceAgent, saved: SavedAgentConfig) {
+  return [
+    normalizeMatchText(agent.name),
+    normalizeMatchText(agent.role),
+    normalizeMatchText(agent.runtimeType ?? ''),
+    normalizeMatchText(agent.runtimeType === 'code-agent' ? agent.codeAgentType ?? '' : ''),
+  ].join('|') === [
+    normalizeMatchText(saved.name),
+    normalizeMatchText(saved.role),
+    normalizeMatchText(saved.runtimeType ?? ''),
+    normalizeMatchText(saved.runtimeType === 'code-agent' ? saved.codeAgentType ?? '' : ''),
+  ].join('|')
 }
 
 function findReusableWorkspaceAgent(

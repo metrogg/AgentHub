@@ -10,10 +10,12 @@ const webDistSource = resolve(root, 'apps/web/dist')
 const webDistTarget = resolve(resources, 'web-dist')
 const serverExeSource = resolve(root, 'apps/server/dist/agenthub-server.exe')
 const serverExeTarget = resolve(resources, 'binaries/agenthub-server.exe')
+const portFile = resolve(root, '.agenthub-port')
 const powershellRoot = toPowerShellSingleQuotedString(root)
 const skipWebBuild = process.argv.includes('--skip-web-build')
 
 await stopStaleDevProcesses()
+await rm(portFile, { force: true })
 if (!skipWebBuild) {
   await run('bun', ['--filter', '@agenthub/web', 'build'])
 }
@@ -31,6 +33,12 @@ async function stopStaleDevProcesses() {
 
   const script = `
 $root = ${powershellRoot}
+$devPorts = @(5173, 5174, 5175) + (8000..8079)
+$portPids = [System.Collections.Generic.HashSet[int]]::new()
+Get-NetTCPConnection -ErrorAction SilentlyContinue |
+  Where-Object { $devPorts -contains $_.LocalPort } |
+  ForEach-Object { [void]$portPids.Add([int]$_.OwningProcess) }
+
 $protected = [System.Collections.Generic.HashSet[int]]::new()
 $cursor = [int]$PID
 while ($cursor -gt 0 -and -not $protected.Contains($cursor)) {
@@ -48,14 +56,20 @@ $targets = Get-CimInstance Win32_Process |
       $exe = $exe.Substring(4)
     }
     $commandLine = if ($_.CommandLine) { $_.CommandLine } else { '' }
+    $relativeAgentHubDev = (
+      ($commandLine -match 'apps[\\/]server[\\/]src[\\/]index\.ts') -or
+      ($commandLine -match 'scripts[\\/]dev-services\.mjs') -or
+      ($commandLine -match '--filter\s+@agenthub[\\/]?(web|desktop|server)')
+    )
     $inProject = (
       ($exe -and $exe.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) -or
       ($commandLine.IndexOf($root, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
     )
-    if (-not $inProject) { return $false }
+    if (-not $inProject -and -not $relativeAgentHubDev) { return $false }
     if ($_.Name -in @('agenthub-desktop.exe', 'agenthub-server.exe')) { return $true }
+    if ($portPids.Contains([int]$_.ProcessId) -and $_.Name -in @('node.exe', 'bun.exe', 'vite.exe', 'esbuild.exe')) { return $true }
     if ($_.Name -in @('vite.exe') -and $commandLine -match 'apps[\\/]web[\\/]node_modules[\\/]\.bin[\\/]vite\.exe') { return $true }
-    if ($_.Name -in @('bun.exe') -and $commandLine -match '--filter\s+@agenthub[\\/]?(web|desktop)' -and $commandLine -match '\s+(dev|tauri:dev)(\s|$)') { return $true }
+    if ($_.Name -in @('bun.exe') -and $commandLine -match '--filter\s+@agenthub[\\/]?(web|desktop|server)' -and $commandLine -match '\s+(dev|tauri:dev|start)(\s|$)') { return $true }
     if ($commandLine -match 'apps[\\/]desktop[\\/]node_modules[\\/]@tauri-apps[\\/]cli[\\/]tauri\.js"?\s+dev') { return $true }
     if ($commandLine -match 'apps[\\/]web[\\/]node_modules[\\/]vite[\\/]bin[\\/]vite\.js') { return $true }
     return $false

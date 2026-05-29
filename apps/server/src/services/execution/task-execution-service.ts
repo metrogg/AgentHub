@@ -1,6 +1,7 @@
 import { db, messages, workspaceTasks, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { runAgentReply, type AgentRunProfile, type MessageRow } from '../agent-runner'
+import { gitBranchManager, type BranchContext } from '../git/branch-manager'
 import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
 import { prepareAgentWorkdir, type AgentWorkdir } from './agent-workdir'
 import { TaskStatus } from '@agenthub/shared'
@@ -78,10 +79,20 @@ export class TaskExecutionService {
     }
 
     // 插入 user message（orchestrator 可能已预创建）
-    let userMsgId = input.existingUserMessageId
-    let userMsgRow: MessageRow | null = null
-    if (!userMsgId) {
-      const [userMsg] = await db
+    let userMsg: MessageRow | undefined
+    if (input.existingUserMessageId) {
+      const [existingUserMsg] = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.id, input.existingUserMessageId))
+        .limit(1)
+      if (!existingUserMsg) {
+        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
+        return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Existing user message not found', durationMs: 0 }
+      }
+      userMsg = existingUserMsg as MessageRow
+    } else {
+      const [createdUserMsg] = await db
         .insert(messages)
         .values({
           sessionId,
@@ -92,27 +103,11 @@ export class TaskExecutionService {
         })
         .returning()
 
-      if (!userMsg) {
+      if (!createdUserMsg) {
+        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
         return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
       }
-      userMsgId = userMsg.id
-      userMsgRow = userMsg as MessageRow
-    } else {
-      const [existingUserMsg] = await db
-        .select()
-        .from(messages)
-        .where(eq(messages.id, userMsgId))
-        .limit(1)
-      if (!existingUserMsg) {
-        return {
-          status: TaskStatus.Failed,
-          output: '',
-          artifacts: [],
-          error: 'Existing user message not found for task execution',
-          durationMs: 0,
-        }
-      }
-      userMsgRow = existingUserMsg as MessageRow
+      userMsg = createdUserMsg as MessageRow
     }
 
     // 更新 task 状态
@@ -134,8 +129,12 @@ export class TaskExecutionService {
         }, { once: true })
       })
 
+      const agentUserMsg = userMsg
+      if (!agentUserMsg) {
+        throw new Error('Failed to prepare user message')
+      }
       const result = await Promise.race([
-        runAgentReply(sessionId, userMsgRow as MessageRow, executionProfile, envelope),
+        runAgentReply(sessionId, agentUserMsg, executionProfile, envelope),
         timeoutPromise,
       ])
 
@@ -153,13 +152,18 @@ export class TaskExecutionService {
         return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, executionPath }
       }
 
-      // 收集 output
-      const lastAgentMsg = await db
-        .select()
-        .from(messages)
-        .where(and(eq(messages.sessionId, sessionId), eq(messages.senderType, 'agent')))
-        .orderBy(desc(messages.createdAt))
-        .limit(1)
+      // 收集 output：优先使用 runAgentReply 返回的 agent messageId，避免同毫秒写入时误取 user prompt。
+      let lastAgentMsg = result.messageId
+        ? await db.select().from(messages).where(eq(messages.id, result.messageId)).limit(1)
+        : []
+      if (!lastAgentMsg[0]) {
+        lastAgentMsg = await db
+          .select()
+          .from(messages)
+          .where(and(eq(messages.sessionId, sessionId), eq(messages.senderType, 'agent')))
+          .orderBy(desc(messages.createdAt))
+          .limit(1)
+      }
 
       const output = lastAgentMsg[0]?.content ?? ''
       const artifacts: Array<Record<string, unknown>> = []

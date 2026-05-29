@@ -30,6 +30,8 @@ export interface ExecutionContext {
   signal: AbortSignal
   workspacePath?: string | null
   envelope?: AgentExecutionEnvelope
+  continueSession?: boolean
+  resumeSessionId?: string
 }
 
 export type AgentOutputChunk =

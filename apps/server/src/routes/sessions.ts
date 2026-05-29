@@ -2,7 +2,8 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { createSessionSchema, updateSessionSchema } from '@agenthub/shared'
-import { db, sessions, workspaceAgents, workspaces, eq, desc, and } from '@agenthub/db'
+import { db, sessions, sessionMembers, workspaceAgents, workspaces, eq, desc, and } from '@agenthub/db'
+import { inArray } from 'drizzle-orm'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 
 export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -70,6 +71,9 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
     if (input.workspaceId) {
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, input.workspaceId)).limit(1)
       if (!workspace || workspace.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '工作区不存在')
+      if (session.type === 'group' && input.workspaceId !== session.workspaceId) {
+        await ensureGroupSessionCanMoveToWorkspace(session.id, input.workspaceId)
+      }
       if (input.workspaceAgentId) {
         const [agent] = await db
           .select()
@@ -112,3 +116,30 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
     await db.delete(sessions).where(eq(sessions.id, id))
     return c.json({ success: true })
   })
+
+async function ensureGroupSessionCanMoveToWorkspace(sessionId: string, targetWorkspaceId: string) {
+  const members = await db
+    .select()
+    .from(sessionMembers)
+    .where(eq(sessionMembers.sessionId, sessionId))
+  const memberAgentIds = members
+    .filter((member) => member.memberType === 'agent')
+    .map((member) => member.memberId)
+  if (!memberAgentIds.length) return
+
+  const agents = await db
+    .select({ id: workspaceAgents.id, workspaceId: workspaceAgents.workspaceId })
+    .from(workspaceAgents)
+    .where(inArray(workspaceAgents.id, memberAgentIds))
+  const invalidAgentIds = agents
+    .filter((agent) => agent.workspaceId !== targetWorkspaceId)
+    .map((agent) => agent.id)
+
+  if (invalidAgentIds.length > 0) {
+    throw AppError.fromCode(
+      AppErrorCodes.VALIDATION_FAILED,
+      '不能把群聊移动到不包含其成员 Agent 的工作区',
+      { invalidAgentIds, targetWorkspaceId },
+    )
+  }
+}

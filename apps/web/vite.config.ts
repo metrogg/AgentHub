@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import { readFileSync } from 'fs'
@@ -16,12 +16,53 @@ function resolveProxyTarget(): string {
       typeof parsed.pid === 'number' &&
       isProcessAlive(parsed.pid)
     ) {
-      return `http://localhost:${parsed.port}`
+      return `http://127.0.0.1:${parsed.port}`
     }
   } catch {
     // Port file not found, stale, or from an older build; fall back to the default dev port.
   }
-  return 'http://localhost:8000'
+  return 'http://127.0.0.1:8000'
+}
+
+function resolveWsProxyTarget(): string {
+  if (process.env.VITE_WS_PROXY_TARGET) return process.env.VITE_WS_PROXY_TARGET
+  return resolveProxyTarget().replace(/^http/, 'ws')
+}
+
+function useDynamicProxyTarget(isWebSocket = false): NonNullable<ProxyOptions['configure']> {
+  return (proxy) => {
+    const web = proxy.web.bind(proxy)
+    const ws = proxy.ws.bind(proxy)
+
+    proxy.web = (req, res, options, callback) => {
+      web(
+        req,
+        res,
+        {
+          ...options,
+          target: resolveProxyTarget(),
+          changeOrigin: true,
+        },
+        callback,
+      )
+    }
+
+    if (isWebSocket) {
+      proxy.ws = (req, socket, head, options, callback) => {
+        ws(
+          req,
+          socket,
+          head,
+          {
+            ...options,
+            target: resolveWsProxyTarget(),
+            changeOrigin: true,
+          },
+          callback,
+        )
+      }
+    }
+  }
 }
 
 function isProcessAlive(pid: number) {
@@ -34,7 +75,7 @@ function isProcessAlive(pid: number) {
 }
 
 const apiProxyTarget = resolveProxyTarget()
-const wsProxyTarget = process.env.VITE_WS_PROXY_TARGET ?? apiProxyTarget.replace(/^http/, 'ws')
+const wsProxyTarget = resolveWsProxyTarget()
 
 export default defineConfig({
   plugins: [react()],
@@ -54,10 +95,12 @@ export default defineConfig({
         target: apiProxyTarget,
         changeOrigin: true,
         timeout: 0,
+        configure: useDynamicProxyTarget(),
       },
       '/ws': {
         target: wsProxyTarget,
         ws: true,
+        configure: useDynamicProxyTarget(true),
       },
     },
   },
