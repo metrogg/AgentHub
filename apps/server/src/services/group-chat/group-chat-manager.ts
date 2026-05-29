@@ -2,6 +2,7 @@ import {
   db,
   messages,
   sessions,
+  sessionMembers,
   workspaceAgents,
   workspaces,
   eq,
@@ -9,6 +10,7 @@ import {
   asc,
   desc,
 } from '@agenthub/db'
+import { inArray } from 'drizzle-orm'
 import { logger } from '../../lib/logger'
 import {
   broadcastSessionEvent,
@@ -99,7 +101,8 @@ export class GroupChatManager {
     userMsg: MessageRow
     content: string
   }): Promise<void> {
-    const { workspaceId, sessionId, userMsg, content } = params
+    const { sessionId, userMsg, content } = params
+    const workspaceId = await resolveGroupWorkspaceId(sessionId, params.workspaceId)
 
     const [workspace] = await db
       .select()
@@ -773,6 +776,61 @@ export class GroupChatManager {
 /**
  * 将 workspaceAgents 行转换为 GroupChatAgent
  */
+async function resolveGroupWorkspaceId(sessionId: string, fallbackWorkspaceId: string) {
+  const members = await db
+    .select()
+    .from(sessionMembers)
+    .where(eq(sessionMembers.sessionId, sessionId))
+  const memberAgentIds = members
+    .filter((member) => member.memberType === 'agent')
+    .map((member) => member.memberId)
+
+  if (!memberAgentIds.length) return fallbackWorkspaceId
+
+  const memberAgents = await db
+    .select()
+    .from(workspaceAgents)
+    .where(inArray(workspaceAgents.id, memberAgentIds))
+  const workspaceCounts = new Map<string, number>()
+  for (const agent of memberAgents) {
+    workspaceCounts.set(agent.workspaceId, (workspaceCounts.get(agent.workspaceId) ?? 0) + 1)
+  }
+
+  const bestEntry = [...workspaceCounts.entries()].sort((a, b) => b[1] - a[1])[0]
+  if (!bestEntry) return fallbackWorkspaceId
+  const [bestWorkspaceId, bestCount] = bestEntry
+  if (bestWorkspaceId === fallbackWorkspaceId) return fallbackWorkspaceId
+
+  const fallbackCount = workspaceCounts.get(fallbackWorkspaceId) ?? 0
+  if (bestCount <= fallbackCount) return fallbackWorkspaceId
+
+  const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+  const metadata = session?.metadata && typeof session.metadata === 'object' ? session.metadata : {}
+  await db
+    .update(sessions)
+    .set({
+      workspaceId: bestWorkspaceId,
+      metadata: {
+        ...metadata,
+        agentIds: memberAgents
+          .filter((agent) => agent.workspaceId === bestWorkspaceId)
+          .sort((a, b) => a.orderIdx - b.orderIdx)
+          .map((agent) => agent.id),
+        previousWorkspaceId: fallbackWorkspaceId,
+        repairedWorkspaceMismatchAt: new Date().toISOString(),
+      },
+      updatedAt: new Date(),
+    })
+    .where(eq(sessions.id, sessionId))
+
+  logger.warn(
+    { sessionId, fallbackWorkspaceId, resolvedWorkspaceId: bestWorkspaceId },
+    'GroupChatManager repaired mismatched group workspace from session members',
+  )
+
+  return bestWorkspaceId
+}
+
 function toGroupChatAgent(row: typeof workspaceAgents.$inferSelect): GroupChatAgent {
   return {
     id: row.id,
