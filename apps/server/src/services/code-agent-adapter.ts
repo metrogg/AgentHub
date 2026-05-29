@@ -938,6 +938,7 @@ async function runCodeAgentCommand(
     }
   }
 
+  const heartbeat = setInterval(() => emitLiveMetadata(true), 1000)
   let timedOut = false
   const stopRun = () => killProcessTree(proc)
   const timer = setTimeout(() => {
@@ -950,39 +951,44 @@ async function runCodeAgentCommand(
   signal?.addEventListener('abort', abortRun, { once: true })
   let stdout = ''
   let stderr = ''
-  const [code] = await Promise.all([
-    proc.exited,
-    readProcessStream(proc.stdout, (chunk) => {
-      stdout += chunk
-      if (adapter.command === 'claude') {
-        claudeStdoutBuffer = consumeClaudeStreamJson(chunk, claudeStdoutBuffer, {
-          addFile,
-          addCommand,
-          addToolCall,
-          addLog,
-          onText: (text) => {
-            claudeHasStreamedText = true
-            claudeFinalMessage += text
-            hooks.onText?.(text)
-          },
-          onAssistantText: (text) => {
-            claudeFinalMessage ||= text
-            if (!claudeHasStreamedText) hooks.onText?.(text)
-          },
-        })
-      } else {
-        addLog('stdout', chunk)
-        for (const command of parseExecutedCommands(stdout))
-          addCommand(command.command, command.cwd)
-      }
-    }),
-    readProcessStream(proc.stderr, (chunk) => {
-      stderr += chunk
-      addLog('stderr', chunk)
-    }),
-  ])
-  clearTimeout(timer)
-  signal?.removeEventListener('abort', abortRun)
+  let code = 1
+  try {
+    ;[code] = await Promise.all([
+      proc.exited,
+      readProcessStream(proc.stdout, (chunk) => {
+        stdout += chunk
+        if (adapter.command === 'claude') {
+          claudeStdoutBuffer = consumeClaudeStreamJson(chunk, claudeStdoutBuffer, {
+            addFile,
+            addCommand,
+            addToolCall,
+            addLog,
+            onText: (text) => {
+              claudeHasStreamedText = true
+              claudeFinalMessage += text
+              hooks.onText?.(text)
+            },
+            onAssistantText: (text) => {
+              claudeFinalMessage ||= text
+              if (!claudeHasStreamedText) hooks.onText?.(text)
+            },
+          })
+        } else {
+          addLog('stdout', chunk)
+          for (const command of parseExecutedCommands(stdout))
+            addCommand(command.command, command.cwd)
+        }
+      }),
+      readProcessStream(proc.stderr, (chunk) => {
+        stderr += chunk
+        addLog('stderr', chunk)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+    clearInterval(heartbeat)
+    signal?.removeEventListener('abort', abortRun)
+  }
   const output = [
     stdout.trim(),
     stderr.trim(),
