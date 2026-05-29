@@ -22,7 +22,7 @@ import {
   SkillCommandPanel,
   Thread,
 } from '../components/assistant-ui/Thread'
-import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '../lib/api'
+import { api, friendlyErrorMessage, type SkillSummary, type Workspace, type WelcomeQuickPrompt } from '../lib/api'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
@@ -30,6 +30,12 @@ import {
 } from '../lib/agentLibrary'
 import { useI18n } from '../lib/i18n'
 import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
+import {
+  QuickPromptBubbles,
+  createQuickPromptSeed,
+  rotateQuickPrompts,
+  fallbackWelcomeQuickPrompts,
+} from '../components/chat/QuickPromptBubbles'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
@@ -466,7 +472,7 @@ function Welcome() {
             className="mt-8"
             loading={quickPromptsLoading}
             prompts={quickPrompts}
-            onPick={(prompt) => void startThread(prompt)}
+            onPick={(prompt: string) => void startThread(prompt)}
           />
         </section>
 
@@ -677,26 +683,6 @@ function Welcome() {
         </div>
       </div>
     </div>
-  )
-}
-
-function PromptCard({
-  title,
-  text,
-  onClick,
-}: {
-  title: string
-  text: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="rounded-[22px] border border-neutral-200 bg-white px-5 py-4 text-left shadow-sm transition hover:border-neutral-300"
-    >
-      <div className="text-sm font-medium text-neutral-950">{title}</div>
-      <div className="mt-1 text-sm text-neutral-500">{text}</div>
-    </button>
   )
 }
 
