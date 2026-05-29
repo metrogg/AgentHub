@@ -1,14 +1,25 @@
-import { db, messages, sessions, workspaceAgents, workspaces, eq, and, asc, desc } from '@agenthub/db'
+import {
+  db,
+  messages,
+  sessions,
+  workspaceAgents,
+  workspaces,
+  eq,
+  and,
+  asc,
+  desc,
+} from '@agenthub/db'
 import { logger } from '../../lib/logger'
-import { broadcastSessionEvent, runAgentReply, type AgentRunProfile, type MessageRow } from '../agent-runner'
+import {
+  broadcastSessionEvent,
+  runAgentReply,
+  type AgentRunProfile,
+  type MessageRow,
+} from '../agent-runner'
 import { buildDynamicOrchestratorPlan } from '../orchestrator/plan-generator'
-import type {
-  GroupChatAgent,
-  GroupChatConfig,
-  GroupChatMessage,
-  GroupChatState,
-} from './types'
+import type { GroupChatAgent, GroupChatConfig, GroupChatMessage, GroupChatState } from './types'
 import { DEFAULT_GROUP_CHAT_CONFIG } from './types'
+import { WsEvent } from '@agenthub/shared'
 
 /**
  * 从消息内容中提取 @mention 的 Agent
@@ -46,12 +57,19 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * 查找群聊中的 Orchestrator Agent（按 roleType 或名称匹配）
+ * 查找群聊中的 Orchestrator Agent（按 roleType 优先匹配，回退到名称）
  */
 function findOrchestrator(agents: GroupChatAgent[]): GroupChatAgent | undefined {
+  const byRoleType = agents.find((a) => a.roleType === 'orchestrator')
+  if (byRoleType) return byRoleType
   return agents.find((a) => {
     const text = [a.name, a.role ?? '', ...(a.capabilityTags ?? [])].join(' ').toLowerCase()
-    return text.includes('orchestrator') || text.includes('总指挥') || text.includes('协调') || text.includes('调度')
+    return (
+      text.includes('orchestrator') ||
+      text.includes('总指挥') ||
+      text.includes('协调') ||
+      text.includes('调度')
+    )
   })
 }
 
@@ -83,7 +101,11 @@ export class GroupChatManager {
   }): Promise<void> {
     const { workspaceId, sessionId, userMsg, content } = params
 
-    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    const [workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1)
     if (!workspace) {
       logger.error({ workspaceId }, 'GroupChatManager: workspace not found')
       return
@@ -144,7 +166,8 @@ export class GroupChatManager {
     history: GroupChatMessage[]
     failureCounts: Map<string, number>
   }): Promise<void> {
-    const { workspaceId, sessionId, agents, orchestrator, projectPath, state, failureCounts } = params
+    const { workspaceId, sessionId, agents, orchestrator, projectPath, state, failureCounts } =
+      params
     let { history } = params
 
     // 用户消息加入历史
@@ -162,11 +185,13 @@ export class GroupChatManager {
     // === 确定第一个接收消息的 Agent ===
     const mentioned = extractMentions(params.content, agents)
     let currentAgent: GroupChatAgent | null = null
+    let pendingAgents: GroupChatAgent[] = []
     let turnReason = ''
 
     if (mentioned.length > 0) {
       // 用户 @了特定 Agent
       currentAgent = mentioned[0]!
+      pendingAgents = mentioned.slice(1)
       turnReason = `用户 @${currentAgent.name}`
     } else if (orchestrator) {
       // 无 @mention → Orchestrator 接收
@@ -194,7 +219,11 @@ export class GroupChatManager {
     // 对话循环：当前 Agent 回复 → 检查 @mention → 下一个 Agent
     while (currentAgent && !state.finished && state.turnCount < this.config.maxTotalTurns) {
       // 检查 session 是否还存在
-      const [currentSession] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+      const [currentSession] = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1)
       if (!currentSession) {
         logger.warn({ sessionId }, 'GroupChatManager: session deleted, stopping')
         break
@@ -202,21 +231,27 @@ export class GroupChatManager {
 
       // 跳过失败次数过多的 Agent
       if ((failureCounts.get(currentAgent.id) ?? 0) >= 2) {
-        logger.warn({ agent: currentAgent.name }, 'GroupChatManager: agent exceeded failure limit, skipping')
+        logger.warn(
+          { agent: currentAgent.name },
+          'GroupChatManager: agent exceeded failure limit, skipping',
+        )
         break
       }
 
-      logger.info({ agent: currentAgent.name, reason: turnReason, turn: state.turnCount }, 'GroupChatManager: agent turn')
+      logger.info(
+        { agent: currentAgent.name, reason: turnReason, turn: state.turnCount },
+        'GroupChatManager: agent turn',
+      )
 
       const profile = toAgentProfile(currentAgent, projectPath)
-      const prompt = this.buildAgentPrompt(currentAgent, history)
+      const prompt = this.buildAgentPrompt(currentAgent, history, agents)
 
       state.turnCount++
       state.lastSpeakerId = currentAgent.id
 
       // 广播 Agent 开始发言
       broadcastSessionEvent(sessionId, {
-        type: 'agent:typing',
+        type: WsEvent.AgentTyping,
         payload: {
           sessionId,
           agentId: currentAgent.id,
@@ -252,7 +287,12 @@ export class GroupChatManager {
         const errorContent = errorReply?.content || `${currentAgent.name} 执行失败`
 
         logger.warn(
-          { agent: currentAgent.name, cancelled: result.cancelled, failCount, error: errorContent.slice(0, 200) },
+          {
+            agent: currentAgent.name,
+            cancelled: result.cancelled,
+            failCount,
+            error: errorContent.slice(0, 200),
+          },
           'GroupChatManager: agent reply failed',
         )
 
@@ -277,7 +317,10 @@ export class GroupChatManager {
         // 检查是否所有 Agent 都失败
         const allAgentsFailed = agents.every((a) => (failureCounts.get(a.id) ?? 0) >= 2)
         if (allAgentsFailed) {
-          logger.error({ failureCounts: Object.fromEntries(failureCounts) }, 'GroupChatManager: all agents failed')
+          logger.error(
+            { failureCounts: Object.fromEntries(failureCounts) },
+            'GroupChatManager: all agents failed',
+          )
           state.finished = true
           state.finishReason = 'error'
           await db.insert(messages).values({
@@ -313,13 +356,19 @@ export class GroupChatManager {
       }
       history = [...history, agentGroupMsg]
 
-      // 检查 Agent 回复中是否 @了其他 Agent
+      // 检查 Agent 回复中是否 @了其他 Agent。多个 @ 会按顺序排队执行。
       const replyMentions: GroupChatAgent[] = extractMentions(agentReply.content, agents)
-      const nextAgent = replyMentions.find((a) => a.id !== (currentAgent as GroupChatAgent).id)
+      const queuedIds = new Set(pendingAgents.map((a) => a.id))
+      for (const mentionedAgent of replyMentions) {
+        if (mentionedAgent.id === currentAgent.id || queuedIds.has(mentionedAgent.id)) continue
+        pendingAgents.push(mentionedAgent)
+        queuedIds.add(mentionedAgent.id)
+      }
+      const nextAgent = pendingAgents.shift()
 
       if (nextAgent) {
         currentAgent = nextAgent
-        turnReason = `Agent 主动 @${currentAgent.name}`
+        turnReason = `Agent 派发 @${currentAgent.name}`
         continue
       }
 
@@ -355,37 +404,104 @@ export class GroupChatManager {
     const lower = content.toLowerCase()
     let signals = 0
 
-    const fileRefs = content.match(/[\w./-]+\.(ts|tsx|js|jsx|py|rs|go|java|vue|css|scss|html|sql|json|yaml|yml|toml|md)\b/gi)
+    const fileRefs = content.match(
+      /[\w./-]+\.(ts|tsx|js|jsx|py|rs|go|java|vue|css|scss|html|sql|json|yaml|yml|toml|md)\b/gi,
+    )
     if (fileRefs && new Set(fileRefs.map((f) => f.toLowerCase())).size >= 2) signals += 2
 
     const phasePatterns = [
-      /先.{2,20}然后/, /先.{2,20}再/, /第[一二三四五六七八九十\d]步/,
-      /step\s*\d/i, /first.{5,30}then/i, /首先.{2,20}接着/, /\d+\.\s+\S.{3,}/m,
+      /先.{2,20}然后/,
+      /先.{2,20}再/,
+      /第[一二三四五六七八九十\d]步/,
+      /step\s*\d/i,
+      /first.{5,30}then/i,
+      /首先.{2,20}接着/,
+      /\d+\.\s+\S.{3,}/m,
     ]
     if (phasePatterns.some((p) => p.test(content))) signals += 2
 
     const archKeywords = [
-      '架构', '重构', '系统设计', '整体', '全流程', '端到端', '从零开始',
-      'architecture', 'refactor', 'system design', 'end-to-end', 'full stack',
-      'fullstack', '全栈', '迁移', 'migration',
+      '架构',
+      '重构',
+      '系统设计',
+      '整体',
+      '全流程',
+      '端到端',
+      '从零开始',
+      'architecture',
+      'refactor',
+      'system design',
+      'end-to-end',
+      'full stack',
+      'fullstack',
+      '全栈',
+      '迁移',
+      'migration',
     ]
     if (archKeywords.some((k) => lower.includes(k))) signals += 2
 
     const collabKeywords = [
-      '同时', '并行', '一起', '分别', '各自', '协作',
-      'simultaneously', 'in parallel', 'together', 'respectively',
+      '同时',
+      '并行',
+      '一起',
+      '分别',
+      '各自',
+      '协作',
+      'simultaneously',
+      'in parallel',
+      'together',
+      'respectively',
     ]
     if (collabKeywords.some((k) => lower.includes(k))) signals += 1
 
     const complexVerbs = [
-      '实现', '创建', '搭建', '开发', '构建', '设计',
-      'implement', 'create', 'build', 'develop', 'design',
+      '实现',
+      '创建',
+      '搭建',
+      '开发',
+      '构建',
+      '设计',
+      '制作',
+      '做一个',
+      '生成',
+      'implement',
+      'create',
+      'build',
+      'develop',
+      'design',
+      'make',
+      'generate',
     ]
     const techObjects = [
-      'api', 'ui', '数据库', 'database', '认证', 'auth', '组件',
-      'component', '服务', 'service', '模块', 'module', '页面', 'page',
+      'api',
+      'ui',
+      '数据库',
+      'database',
+      '认证',
+      'auth',
+      '组件',
+      'component',
+      '服务',
+      'service',
+      '模块',
+      'module',
+      '页面',
+      'page',
+      '网站',
+      '网页',
+      'webapp',
+      'web app',
+      'site',
+      'website',
     ]
-    if (complexVerbs.some((v) => lower.includes(v)) && techObjects.some((t) => lower.includes(t))) signals += 1
+    const hasComplexVerb = complexVerbs.some((v) => lower.includes(v))
+    const hasTechObject = techObjects.some((t) => lower.includes(t))
+    if (hasComplexVerb && hasTechObject) signals += 1
+    if (
+      hasComplexVerb &&
+      ['网站', '网页', 'webapp', 'web app', 'site', 'website'].some((t) => lower.includes(t))
+    )
+      signals += 2
 
     if (content.length > 200 && techObjects.some((t) => lower.includes(t))) signals += 1
 
@@ -398,19 +514,50 @@ export class GroupChatManager {
   private buildAgentPrompt(
     agent: GroupChatAgent,
     history: GroupChatMessage[],
+    agents: GroupChatAgent[],
   ): string {
     const recentHistory = history.slice(-10)
     const isCodeAgent = agent.runtimeType === 'code-agent' && agent.codeAgentType
+    const isOrchestrator = agent.roleType === 'orchestrator'
 
     const userGoal = history.find((m) => m.senderType === 'user')?.content || ''
+    const agentDirectory = agents
+      .map((item) => {
+        const runtime = `${item.runtimeType}${item.codeAgentType ? `/${item.codeAgentType}` : ''}`
+        return `- @${item.name}: ${item.role || 'Agent'} (${runtime})`
+      })
+      .join('\n')
 
     const agentWork = recentHistory
       .filter((m) => m.senderType === 'agent' && m.senderId !== agent.id)
-      .map((m) => `${m.senderName}: ${m.content.slice(0, 300)}${m.content.length > 300 ? '...' : ''}`)
+      .map(
+        (m) => `${m.senderName}: ${m.content.slice(0, 300)}${m.content.length > 300 ? '...' : ''}`,
+      )
       .join('\n')
 
     if (isCodeAgent) {
-      const parts = [`任务：${userGoal}`]
+      const parts = [
+        `你是 ${agent.name}（${agent.role || 'Agent'}）。`,
+        agent.systemPrompt ? `\n${agent.systemPrompt}` : '',
+        `\n\n当前群聊 Agent 名单：\n${agentDirectory || '- 无其他 Agent'}`,
+        `\n\n用户原始目标：${userGoal}`,
+      ]
+
+      if (isOrchestrator) {
+        parts.push(
+          [
+            '\n总指挥执行要求：',
+            '- 用户没有 @具体 Agent 时，由你先接收并判断任务复杂度。',
+            '- 复杂任务先制定阶段计划；需要落盘时可以创建或更新 plan.md。',
+            '- 按 Stage 推进：信息收集 -> 设计方案 -> 实现 -> 验收 -> 汇总。',
+            '- 需要其他 Agent 时，在回复中明确 @Agent名，并说明交付物、输入、输出和验收标准。',
+            '- 每一阶段结束时汇总已完成内容、证据、风险和下一步。',
+            '- 不要假装其他 Agent 已完成工作；只有看到群聊历史里对应回复后才能汇总其结果。',
+            '- 禁止只回复 “Understood”“收到”“好的” 这类确认语；你必须给出中文阶段计划或明确派发。',
+            '- 对“做网站/开发页面/webapp”这类复杂任务，第一轮至少派发 @Researcher 做资料收集，或说明为什么不需要。',
+          ].join('\n'),
+        )
+      }
 
       if (agentWork) {
         parts.push(`\n其他 Agent 已完成的工作：\n${agentWork}`)
@@ -422,7 +569,11 @@ export class GroupChatManager {
         parts.push(`\n${lastAgentMsg.senderName} 请求你帮忙：${request}`)
       }
 
-      parts.push(`\n请在当前工作区中完成上述任务。完成后请说明你做了什么。`)
+      parts.push(
+        isOrchestrator
+          ? `\n请输出当前阶段的总指挥回复。如果需要派发任务，请使用 @Agent名。`
+          : `\n请在当前工作区中完成上述任务。完成后请说明你做了什么。`,
+      )
       return parts.join('')
     }
 
@@ -436,6 +587,7 @@ export class GroupChatManager {
     return [
       `你是 ${agent.name}（${agent.role || '助手'}）。`,
       agent.systemPrompt ? `\n${agent.systemPrompt}` : '',
+      `\n\n当前群聊 Agent 名单：\n${agentDirectory || '- 无其他 Agent'}`,
       `\n\n以下是群聊对话历史：\n${historyText}`,
       `\n\n现在轮到你发言。你可以：`,
       `\n- 回答用户问题或执行任务`,
@@ -500,6 +652,7 @@ export class GroupChatManager {
     agents: GroupChatAgent[]
   }): Promise<void> {
     const { workspaceId, sessionId, content, agents } = params
+    const orchestrator = findOrchestrator(agents)
 
     const loadingPlan = {
       kind: 'orchestrator_plan' as const,
@@ -514,11 +667,14 @@ export class GroupChatManager {
       .insert(messages)
       .values({
         sessionId,
-        senderId: 'orchestrator',
+        senderId: orchestrator?.id ?? 'orchestrator',
         senderType: 'agent' as const,
         type: 'task_card',
         content: loadingPlan.summary,
-        metadata: { plan: { ...loadingPlan, messageId: '' } },
+        metadata: {
+          agentName: orchestrator?.name ?? 'Orchestrator',
+          plan: { ...loadingPlan, messageId: '' },
+        },
       })
       .returning()
 
@@ -526,11 +682,19 @@ export class GroupChatManager {
       const loadingPlanWithId = { ...loadingPlan, messageId: loadingCard.id }
       await db
         .update(messages)
-        .set({ metadata: { plan: loadingPlanWithId } })
+        .set({
+          metadata: { agentName: orchestrator?.name ?? 'Orchestrator', plan: loadingPlanWithId },
+        })
         .where(eq(messages.id, loadingCard.id))
       broadcastSessionEvent(sessionId, {
-        type: 'message:completed',
-        payload: { sessionId, message: { ...loadingCard, metadata: { plan: loadingPlanWithId } } },
+        type: WsEvent.MessageCompleted,
+        payload: {
+          sessionId,
+          message: {
+            ...loadingCard,
+            metadata: { agentName: orchestrator?.name ?? 'Orchestrator', plan: loadingPlanWithId },
+          },
+        },
       })
     }
 
@@ -542,18 +706,34 @@ export class GroupChatManager {
           const planWithId = { ...plan, messageId: loadingCard.id }
           await db
             .update(messages)
-            .set({ content: plan.summary, metadata: { plan: planWithId } })
+            .set({
+              content: plan.summary,
+              metadata: { agentName: orchestrator?.name ?? 'Orchestrator', plan: planWithId },
+            })
             .where(eq(messages.id, loadingCard.id))
-          const [updatedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
+          const [updatedCard] = await db
+            .select()
+            .from(messages)
+            .where(eq(messages.id, loadingCard.id))
+            .limit(1)
           if (updatedCard) {
             broadcastSessionEvent(sessionId, {
-              type: 'message:completed',
-              payload: { sessionId, message: { ...updatedCard, metadata: { plan: planWithId } } },
+              type: WsEvent.MessageCompleted,
+              payload: {
+                sessionId,
+                message: {
+                  ...updatedCard,
+                  metadata: { agentName: orchestrator?.name ?? 'Orchestrator', plan: planWithId },
+                },
+              },
             })
           }
         }
       } catch (err: any) {
-        logger.error({ err: err?.message, sessionId }, 'GroupChatManager: Orchestrator plan generation failed')
+        logger.error(
+          { err: err?.message, sessionId },
+          'GroupChatManager: Orchestrator plan generation failed',
+        )
         if (loadingCard) {
           const failedPlan = {
             kind: 'orchestrator_plan' as const,
@@ -565,12 +745,22 @@ export class GroupChatManager {
           }
           await db
             .update(messages)
-            .set({ content: failedPlan.summary, metadata: { plan: { ...failedPlan, messageId: loadingCard.id } } })
+            .set({
+              content: failedPlan.summary,
+              metadata: {
+                agentName: orchestrator?.name ?? 'Orchestrator',
+                plan: { ...failedPlan, messageId: loadingCard.id },
+              },
+            })
             .where(eq(messages.id, loadingCard.id))
-          const [failedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
+          const [failedCard] = await db
+            .select()
+            .from(messages)
+            .where(eq(messages.id, loadingCard.id))
+            .limit(1)
           if (failedCard) {
             broadcastSessionEvent(sessionId, {
-              type: 'message:completed',
+              type: WsEvent.MessageCompleted,
               payload: { sessionId, message: failedCard },
             })
           }
@@ -588,6 +778,7 @@ function toGroupChatAgent(row: typeof workspaceAgents.$inferSelect): GroupChatAg
     id: row.id,
     name: row.name,
     role: row.role,
+    roleType: (row.roleType as GroupChatAgent['roleType']) ?? undefined,
     description: row.description,
     systemPrompt: row.systemPrompt ?? undefined,
     color: row.color ?? undefined,
@@ -613,6 +804,7 @@ function toAgentProfile(agent: GroupChatAgent, projectPath: string | null): Agen
     id: agent.id,
     name: agent.name,
     role: agent.role,
+    roleType: agent.roleType,
     description: agent.description,
     color: agent.color,
     modelId: agent.modelId,

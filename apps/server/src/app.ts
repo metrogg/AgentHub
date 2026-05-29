@@ -17,6 +17,7 @@ import { officeRoutes } from './routes/office'
 import { welcomeRoutes } from './routes/welcome'
 import { requestContextMiddleware } from './middleware/request-context'
 import { formatErrorResponse } from './lib/error'
+import { APP_VERSION } from '@agenthub/shared'
 
 const app = new Hono()
   .use('*', honoLogger())
@@ -30,7 +31,7 @@ const app = new Hono()
     const { body, status } = formatErrorResponse(err, requestId, isDev)
     return c.json(body, status as any)
   })
-  .get('/health', (c) => c.json({ status: 'ok', version: '0.1.0' }))
+  .get('/health', (c) => c.json({ status: 'ok', version: APP_VERSION }))
 
 const routes = app
   .route('/api/sessions', sessionRoutes)

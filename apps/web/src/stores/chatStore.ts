@@ -1,8 +1,22 @@
 import { create } from 'zustand'
-import { api, type ChatAttachment, type CodeAgentRunMetadata, type Message, type Session, type Workspace, type WorkspaceAgent } from '../lib/api'
+import {
+  api,
+  type ChatAttachment,
+  type CodeAgentRunMetadata,
+  type Message,
+  type Session,
+  type Workspace,
+  type WorkspaceAgent,
+} from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
+import { WsEvent, TaskStatus, MessageType, SessionType } from '@agenthub/shared'
 
-let pendingStream: { messageId: string; delta: string; agentId?: string; agentName?: string } | null = null
+let pendingStream: {
+  messageId: string
+  delta: string
+  agentId?: string
+  agentName?: string
+} | null = null
 let pendingStreamTimer: number | null = null
 const cancelledSessions = new Set<string>()
 const messageCache = new Map<string, Message[]>()
@@ -12,6 +26,19 @@ function updateCachedMessages(sessionId: string, updater: (messages: Message[]) 
   const cached = messageCache.get(sessionId)
   if (!cached) return
   messageCache.set(sessionId, updater(cached))
+}
+
+function sessionWorkspaceAgents(session: Session | null | undefined, agents: WorkspaceAgent[]) {
+  if (session?.type !== SessionType.Group) return agents
+  const agentIds = readSessionAgentIds(session)
+  if (!agentIds.length) return agents
+  const allowed = new Set(agentIds)
+  return agents.filter((agent) => allowed.has(agent.id))
+}
+
+function readSessionAgentIds(session: Session | null | undefined) {
+  const value = session?.metadata?.agentIds
+  return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
 }
 
 interface ChatState {
@@ -32,18 +59,24 @@ interface ChatState {
   sessionsBootstrapped: boolean
 
   fetchSessions: () => Promise<void>
-  createSession: (title?: string, options?: {
-    workspaceId?: string | null
-    workspaceAgentId?: string | null
-    type?: 'direct' | 'group'
-    metadata?: Record<string, unknown> | null
-  }) => Promise<Session>
+  createSession: (
+    title?: string,
+    options?: {
+      workspaceId?: string | null
+      workspaceAgentId?: string | null
+      type?: 'direct' | 'group'
+      metadata?: Record<string, unknown> | null
+    },
+  ) => Promise<Session>
   selectSession: (sessionId: string) => Promise<void>
   setSessionWorkspace: (sessionId: string, workspaceId: string | null) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   clearMessages: (sessionId: string) => Promise<void>
   sendMessage: (content: string) => Promise<{ groupSessionId?: string } | undefined>
-  sendMessageToSession: (sessionId: string, content: string) => Promise<{ groupSessionId?: string } | undefined>
+  sendMessageToSession: (
+    sessionId: string,
+    content: string,
+  ) => Promise<{ groupSessionId?: string } | undefined>
   editMessage: (messageId: string, content: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
   regenerateMessage: (messageId: string) => Promise<void>
@@ -96,7 +129,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async createSession(title = '新会话', options = {}) {
     const session = await api.createSession({
       title,
-      type: options.type ?? 'direct',
+      type: options.type ?? SessionType.Direct,
       workspaceId: options.workspaceId ?? null,
       workspaceAgentId: options.workspaceAgentId ?? null,
       metadata: options.metadata ?? null,
@@ -124,10 +157,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentSessionId: sessionId,
       currentSession: optimisticSession ?? state.currentSession,
       currentWorkspace: optimisticSession?.workspaceId
-        ? cachedWorkspace?.workspace ?? (canReuseWorkspace ? state.currentWorkspace : null)
+        ? (cachedWorkspace?.workspace ?? (canReuseWorkspace ? state.currentWorkspace : null))
         : null,
       currentWorkspaceAgents: optimisticSession?.workspaceId
-        ? cachedWorkspace?.agents ?? (canReuseWorkspace ? state.currentWorkspaceAgents : [])
+        ? sessionWorkspaceAgents(
+            optimisticSession,
+            cachedWorkspace?.agents ?? (canReuseWorkspace ? state.currentWorkspaceAgents : []),
+          )
         : [],
       loadingMessages: true,
       messages: cachedMessages ?? [],
@@ -140,7 +176,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
     wsClient.joinSession(sessionId)
     try {
-      const [session, { items }] = await Promise.all([api.getSession(sessionId), api.listMessages(sessionId)])
+      const [session, { items }] = await Promise.all([
+        api.getSession(sessionId),
+        api.listMessages(sessionId),
+      ])
       messageCache.set(sessionId, items)
       if (session.workspaceId) {
         const full = await api.getWorkspace(session.workspaceId)
@@ -149,10 +188,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           agents: full.agents,
         })
         if (get().currentSessionId !== sessionId) return
+        const currentAgents = sessionWorkspaceAgents(session, full.agents)
         set({
           currentSession: session,
           currentWorkspace: full.workspace,
-          currentWorkspaceAgents: full.agents,
+          currentWorkspaceAgents: currentAgents,
           messages: items,
           loadingMessages: false,
         })
@@ -185,8 +225,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       sessions: s.sessions.map((item) => (item.id === session.id ? session : item)),
       currentSession: s.currentSessionId === session.id ? session : s.currentSession,
-      currentWorkspace: s.currentSessionId === session.id ? full?.workspace ?? null : s.currentWorkspace,
-      currentWorkspaceAgents: s.currentSessionId === session.id ? full?.agents ?? [] : s.currentWorkspaceAgents,
+      currentWorkspace:
+        s.currentSessionId === session.id ? (full?.workspace ?? null) : s.currentWorkspace,
+      currentWorkspaceAgents:
+        s.currentSessionId === session.id ? (full?.agents ?? []) : s.currentWorkspaceAgents,
     }))
   },
 
@@ -223,7 +265,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     cancelledSessions.delete(sessionId)
     set({ agentTyping: true })
     const attachments = get().pendingAttachments
-    const contentForAgent = attachments.length ? appendAttachmentNote(content, attachments) : content
+    const contentForAgent = attachments.length
+      ? appendAttachmentNote(content, attachments)
+      : content
     try {
       const replyToMessageId = get().replyingToMessageId
       const msg = await api.sendMessageWithModel(sessionId, {
@@ -268,7 +312,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await api.cancelMessage(sessionId).catch(() => undefined)
     const result = await api.withdrawMessage(sessionId, messageId, { rollback: true })
     const removed = new Set(result.removedMessageIds)
-    updateCachedMessages(sessionId, (messages) => messages.filter((message) => !removed.has(message.id)))
+    updateCachedMessages(sessionId, (messages) =>
+      messages.filter((message) => !removed.has(message.id)),
+    )
     set((s) => ({ messages: s.messages.filter((message) => !removed.has(message.id)) }))
     return result.rollback
   },
@@ -280,8 +326,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     clearPendingStream()
     set({ agentTyping: true, streamingMessage: null, streamingCodeAgentRun: null })
     const result = await api.regenerateMessage(sessionId, messageId)
-    updateCachedMessages(sessionId, (messages) => messages.filter((message) => message.id !== result.removedMessageId))
-    set((s) => ({ messages: s.messages.filter((message) => message.id !== result.removedMessageId) }))
+    updateCachedMessages(sessionId, (messages) =>
+      messages.filter((message) => message.id !== result.removedMessageId),
+    )
+    set((s) => ({
+      messages: s.messages.filter((message) => message.id !== result.removedMessageId),
+    }))
   },
 
   async pinMessage(messageId) {
@@ -308,7 +358,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   removePendingAttachment(id) {
-    set((s) => ({ pendingAttachments: s.pendingAttachments.filter((attachment) => attachment.id !== id) }))
+    set((s) => ({
+      pendingAttachments: s.pendingAttachments.filter((attachment) => attachment.id !== id),
+    }))
   },
 
   clearPendingAttachments() {
@@ -339,11 +391,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (e.payload?.sessionId && e.payload.sessionId !== sessionId) return
 
     switch (e.type) {
-      case 'agent:typing':
+      case WsEvent.AgentTyping:
         if (cancelledSessions.has(sessionId)) break
         set({ agentTyping: true })
         break
-      case 'message:stream': {
+      case WsEvent.MessageStream: {
         if (cancelledSessions.has(sessionId)) break
         const { messageId, delta, agentId, agentName } = e.payload as {
           messageId: string
@@ -351,7 +403,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           agentId?: string
           agentName?: string
         }
-        const commitPendingStream = (pending: { messageId: string; delta: string; agentId?: string; agentName?: string }) => {
+        const commitPendingStream = (pending: {
+          messageId: string
+          delta: string
+          agentId?: string
+          agentName?: string
+        }) => {
           set((s) => {
             const current = s.streamingMessage
             if (current?.id === pending.messageId) {
@@ -405,20 +462,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         break
       }
-      case 'message:metadata': {
+      case WsEvent.MessageMetadata: {
         if (cancelledSessions.has(sessionId)) break
-        const { messageId, codeAgentRun } = e.payload as { messageId: string; codeAgentRun: CodeAgentRunMetadata }
+        const { messageId, codeAgentRun } = e.payload as {
+          messageId: string
+          codeAgentRun: CodeAgentRunMetadata
+        }
         set((s) => {
           const current = s.streamingMessage
           return {
-            streamingMessage: current?.id === messageId ? current : { id: messageId, content: current?.content ?? '' },
+            streamingMessage:
+              current?.id === messageId
+                ? current
+                : { id: messageId, content: current?.content ?? '' },
             streamingCodeAgentRun: codeAgentRun,
             agentTyping: false,
           }
         })
         break
       }
-      case 'message:completed': {
+      case WsEvent.MessageCompleted: {
         const { message } = e.payload as { message: Message }
         cancelledSessions.delete(sessionId)
         clearPendingStream()
@@ -435,12 +498,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
-      case 'message:cancelled':
+      case WsEvent.MessageCancelled:
         cancelledSessions.add(sessionId)
         clearPendingStream()
         set({ streamingMessage: null, streamingCodeAgentRun: null, agentTyping: false })
         break
-      case 'task:update': {
+      case WsEvent.TaskUpdate: {
         const { taskId, status, strategy, agentId } = e.payload as {
           taskId: string
           status: string
@@ -451,9 +514,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((s) => {
           let updated = false
           const newMessages = s.messages.map((msg) => {
-            if (msg.type !== 'task_card' || !msg.metadata || typeof msg.metadata !== 'object') return msg
+            if (
+              msg.type !== MessageType.TaskCard ||
+              !msg.metadata ||
+              typeof msg.metadata !== 'object'
+            )
+              return msg
             const plan = (msg.metadata as Record<string, unknown>).plan as
-              | { tasks?: Array<{ id: string; status?: string; agentKey?: string }>; agents?: Array<{ key: string; id?: string }> }
+              | {
+                  tasks?: Array<{ id: string; status?: string; agentKey?: string }>
+                  agents?: Array<{ key: string; id?: string }>
+                }
               | undefined
             if (!plan || !Array.isArray(plan.tasks)) return msg
             const task = plan.tasks.find((t) => t.id === taskId)
@@ -461,7 +532,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             updated = true
             const nextTasks = plan.tasks.map((t) => {
               if (t.id !== taskId) return t
-              const next: typeof t = { ...t, status: status as 'pending' | 'running' | 'done' | 'failed' }
+              const next: typeof t = {
+                ...t,
+                status: status as 'pending' | 'running' | 'done' | 'failed',
+              }
               if (strategy) (next as Record<string, unknown>).strategy = strategy
               if (agentId) {
                 const matchedAgent = plan.agents?.find((a) => a.id === agentId || a.key === agentId)
@@ -478,7 +552,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
-      case 'blackboard:update': {
+      case WsEvent.BlackboardUpdate: {
         const { taskId, summary, agentName, taskTitle } = e.payload as {
           taskId: string
           summary?: string
@@ -488,9 +562,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((s) => {
           let updated = false
           const newMessages = s.messages.map((msg) => {
-            if (msg.type !== 'task_card' || !msg.metadata || typeof msg.metadata !== 'object') return msg
+            if (
+              msg.type !== MessageType.TaskCard ||
+              !msg.metadata ||
+              typeof msg.metadata !== 'object'
+            )
+              return msg
             const plan = (msg.metadata as Record<string, unknown>).plan as
-              | { tasks?: Array<{ id: string; status?: string; summary?: string; agentName?: string; taskTitle?: string }> }
+              | {
+                  tasks?: Array<{
+                    id: string
+                    status?: string
+                    summary?: string
+                    agentName?: string
+                    taskTitle?: string
+                  }>
+                }
               | undefined
             if (!plan || !Array.isArray(plan.tasks)) return msg
             const task = plan.tasks.find((t) => t.id === taskId)
@@ -500,7 +587,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
               if (t.id !== taskId) return t
               return {
                 ...t,
-                status: (t.status === 'running' ? 'done' : t.status) as typeof t.status,
+                status: (t.status === TaskStatus.Running
+                  ? TaskStatus.Done
+                  : t.status) as typeof t.status,
                 summary: summary ?? t.summary,
                 agentName: agentName ?? t.agentName,
                 taskTitle: taskTitle ?? t.taskTitle,
@@ -515,7 +604,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
-      case 'run:event': {
+      case WsEvent.RunEvent: {
         const event = e.payload as {
           id: string
           runId: string
@@ -526,7 +615,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((s) => {
           let updated = false
           const newMessages = s.messages.map((msg) => {
-            if (msg.type !== 'task_card' || !msg.metadata || typeof msg.metadata !== 'object') return msg
+            if (
+              msg.type !== MessageType.TaskCard ||
+              !msg.metadata ||
+              typeof msg.metadata !== 'object'
+            )
+              return msg
             const dispatchResult = (msg.metadata as Record<string, unknown>).dispatchResult as
               | { runId?: string }
               | undefined
@@ -550,10 +644,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   if (t.id !== taskId) return t
                   const statusMap: Record<string, string> = {
                     'task.started': 'running',
-                    'task.completed': 'done',
-                    'task.failed': 'failed',
-                    'task.cancelled': 'cancelled',
-                    'task.retrying': 'pending',
+                    'task.completed': TaskStatus.Done,
+                    'task.failed': TaskStatus.Failed,
+                    'task.cancelled': TaskStatus.Cancelled,
+                    'task.retrying': TaskStatus.Pending,
                   }
                   return { ...t, status: statusMap[event.type] ?? t.status }
                 })
@@ -582,8 +676,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 }))
 
 function appendAttachmentNote(content: string, attachments: ChatAttachment[]) {
-  const note = attachments.map((attachment) => `- ${attachment.name} (${attachment.mimeType})`).join('\n')
+  const note = attachments
+    .map((attachment) => `- ${attachment.name} (${attachment.mimeType})`)
+    .join('\n')
   return `${content.trim()}\n\n[已附加图片]\n${note}`.trim()
 }
-
-

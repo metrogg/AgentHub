@@ -512,8 +512,13 @@ async function fetchWithRetry(
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new Error(`${label}超时`)), config.timeoutMs)
     const abortFromInput = () => controller.abort(init.signal?.reason ?? new Error(`${label}已中止`))
-    if (init.signal?.aborted) abortFromInput()
-    else init.signal?.addEventListener('abort', abortFromInput, { once: true })
+    if (init.signal?.aborted) {
+      abortFromInput()
+    } else {
+      init.signal?.addEventListener('abort', abortFromInput, { once: true })
+      // 重新检查，防止在 addEventListener 期间 signal 被 abort
+      if (init.signal?.aborted) abortFromInput()
+    }
 
     try {
       const res = await fetch(url, {
@@ -661,23 +666,27 @@ function extractProviderErrorMessage(body: string): string | null {
 
 async function* iterateSseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string, void, unknown> {
   const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
+  try {
+    const decoder = new TextDecoder()
+    let buffer = ''
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
 
-    const lines = buffer.split(/\r?\n/)
-    buffer = lines.pop() ?? ''
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() ?? ''
 
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed.startsWith('data:')) continue
-      const data = trimmed.slice(5).trim()
-      if (data) yield data
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const data = trimmed.slice(5).trim()
+        if (data) yield data
+      }
     }
+  } finally {
+    reader.releaseLock()
   }
 }
 

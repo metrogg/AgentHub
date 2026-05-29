@@ -10,7 +10,7 @@ import {
 import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentArtifact } from '@agenthub/shared'
+import { type AgentArtifact, CodeAgentRunStatus, ArtifactFileStatus } from '@agenthub/shared'
 import { db, settings } from '@agenthub/db'
 import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
@@ -45,6 +45,7 @@ interface CodeAgentRunOptions {
   cwd?: string
   modelId?: string | null
   modelProvider?: string | null
+  agentRoleType?: string
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
   toolConfig?: Record<string, unknown>
@@ -61,6 +62,18 @@ interface CodeAgentModelTarget {
   anthropicBaseUrl?: string
 }
 
+interface CatalogModelEntry {
+  id?: string
+  enabled?: boolean
+  name?: string
+  provider?: string
+  modelId?: string
+  apiEndpoint?: string
+  anthropicEndpoint?: string
+  apiKeyEnv?: string
+  apiKey?: string
+}
+
 interface CodeAgentCommandResult {
   code: number
   output: string
@@ -70,7 +83,7 @@ interface CodeAgentCommandResult {
 
 export interface CodeAgentRunMetadata {
   type: 'code-agent-run'
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
+  status: CodeAgentRunStatus
   runtime: CodeAgentType
   command: string
   cwd?: string
@@ -79,7 +92,7 @@ export interface CodeAgentRunMetadata {
   commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
   files: Array<{
     path: string
-    status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+    status: ArtifactFileStatus
     diff?: string
   }>
   toolCalls?: Array<{ id: string; name: string; label: string; target?: string; detail?: string }>
@@ -88,7 +101,7 @@ export interface CodeAgentRunMetadata {
   steps?: Array<{
     id: string
     kind: 'status' | 'tool' | 'command' | 'file' | 'log'
-    status: 'running' | 'completed' | 'failed'
+    status: CodeAgentRunStatus
     title: string
     subtitle?: string
     detail?: string
@@ -183,14 +196,14 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     promptMode: 'stdin',
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
-      // 修复 Bug 17: 根据 sandboxPolicy 映射 Claude Code 权限模式
       const permissionMode = (() => {
-        if (options?.sandboxPolicy === 'read-only') return 'ask'
-        if (options?.sandboxPolicy === 'danger-full-access') return 'ask'
+        if (options?.sandboxPolicy === 'read-only') return 'plan'
         return String(cfg['permissionMode'] ?? 'bypassPermissions')
       })()
       const args: string[] = [
         '-p',
+        '--input-format',
+        'text',
         '--no-session-persistence',
         '--permission-mode',
         permissionMode,
@@ -205,6 +218,13 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       if (options?.modelId) {
         args.push('--model', options.modelId)
       }
+      if (
+        options?.sandboxPolicy !== 'read-only' &&
+        permissionMode === 'bypassPermissions' &&
+        cfg['skipPermissions'] !== false
+      ) {
+        args.push('--dangerously-skip-permissions')
+      }
       return args
     },
   },
@@ -218,6 +238,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
       const args = ['run']
+      if (options?.cwd) args.push('--dir', options.cwd)
       if (options?.modelId) {
         const provider = options.modelProvider || String(cfg['provider'] ?? 'agenthub')
         const modelId = options.modelId.includes('/')
@@ -225,7 +246,17 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
           : `${provider}/${options.modelId}`
         args.push('--model', modelId)
       }
-      if (cfg['agent']) args.push('--agent', String(cfg['agent']))
+      const agent =
+        typeof cfg['agent'] === 'string' && cfg['agent'].trim()
+          ? cfg['agent'].trim()
+          : options?.sandboxPolicy === 'read-only' ||
+              (options?.agentRoleType ? options.agentRoleType !== 'coder' : false)
+            ? 'plan'
+            : 'build'
+      args.push('--agent', agent)
+      if (options?.sandboxPolicy !== 'read-only' && cfg['skipPermissions'] !== false) {
+        args.push('--dangerously-skip-permissions')
+      }
       args.push(prompt)
       return args
     },
@@ -361,6 +392,7 @@ export async function* streamCodeAgentReply(
     signal,
     toolConfig,
     envelope?.envAllowlist,
+    profile.roleType,
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
       onText: (text) => push(text),
@@ -418,6 +450,11 @@ async function resolveCodeAgentModelTarget(
   const selected = await resolveModelConfig(effectiveModelId)
   if (!selected?.modelId) return null
 
+  if (!selected.apiKey) {
+    const fallback = await resolveConfiguredCatalogModelTarget(type, selected.modelId)
+    if (fallback) return fallback
+  }
+
   const providerKey = safeProviderKey(selected.provider || selected.id)
   const openaiBaseUrl = selected.apiEndpoint?.replace(/\/$/, '')
   const anthropicBaseUrl =
@@ -434,6 +471,47 @@ async function resolveCodeAgentModelTarget(
     openaiBaseUrl,
     anthropicBaseUrl,
   }
+}
+
+async function resolveConfiguredCatalogModelTarget(
+  type: CodeAgentType,
+  avoidModelId?: string,
+): Promise<CodeAgentModelTarget | null> {
+  try {
+    const rows = await db.select().from(settings).where(eq(settings.key, 'MODEL_CATALOG')).limit(1)
+    const parsed = JSON.parse(rows[0]?.value || '[]') as CatalogModelEntry[]
+    if (!Array.isArray(parsed)) return null
+
+    for (const item of parsed) {
+      if (item.enabled === false || !item.modelId?.trim()) continue
+      const apiKey = item.apiKey?.trim() || (item.apiKeyEnv ? readEnv(item.apiKeyEnv) : undefined)
+      if (!apiKey) continue
+      if (avoidModelId && item.modelId === avoidModelId) continue
+
+      const provider = item.provider?.trim() || 'openai'
+      const openaiBaseUrl = item.apiEndpoint?.trim().replace(/\/$/, '')
+      const anthropicBaseUrl =
+        item.anthropicEndpoint?.trim().replace(/\/$/, '') ||
+        (isAnthropicLike(provider, openaiBaseUrl) ? openaiBaseUrl : undefined)
+      const candidate: CodeAgentModelTarget = {
+        catalogId: item.id,
+        provider,
+        providerKey: safeProviderKey(provider || item.id || 'agenthub'),
+        modelId: item.modelId,
+        apiKey,
+        apiKeySource: item.apiKey?.trim() ? 'settings' : item.apiKeyEnv,
+        openaiBaseUrl,
+        anthropicBaseUrl,
+      }
+      if (type === 'claude-code' && !isClaudeCodeModelTarget(candidate)) continue
+      if (type === 'codex' && !candidate.openaiBaseUrl) continue
+      if (type === 'gemini' && !/^(gemini|google)$/i.test(provider)) continue
+      return candidate
+    }
+  } catch {
+    return null
+  }
+  return null
 }
 
 function resolveCodeAgentModelId(
@@ -629,6 +707,7 @@ async function runCodeAgentCommand(
   signal?: AbortSignal,
   toolConfig?: Record<string, unknown>,
   envAllowlist?: string[],
+  agentRoleType?: string,
   hooks: {
     onMetadata?: (metadata: CodeAgentRunMetadata) => void
     onText?: (text: string) => void
@@ -642,11 +721,13 @@ async function runCodeAgentCommand(
         )
       : undefined
   const commandPrompt =
-    process.platform === 'win32' && (adapter.command === 'codex' || adapter.command === 'claude')
+    process.platform === 'win32' &&
+    (adapter.command === 'codex' || adapter.command === 'claude' || adapter.command === 'opencode')
       ? buildAsciiSafePrompt(prompt)
       : prompt
   const args = adapter.buildArgs(commandPrompt, {
     cwd,
+    agentRoleType,
     modelId: modelTarget?.modelId,
     modelProvider: modelTarget?.providerKey,
     outputPath,
@@ -1525,6 +1606,7 @@ function isProgressLikeRuntimeLog(text: string) {
     return true
   if (/^#\s*Todos\b/i.test(normalized)) return true
   if (/^\[[ xX-]\]\s+/.test(normalized)) return true
+  if (/^>\s*[\w.-]+\s*·\s*[\w./:+-]+/i.test(normalized)) return true
   if (
     /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(
       normalized,
@@ -1964,7 +2046,10 @@ function applyModelTargetEnv(
 function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
   const dir = resolve(tmpdir(), 'AgentHub', 'opencode-runtime')
   mkdirSync(dir, { recursive: true })
-  const path = resolve(dir, `${modelTarget.providerKey}-${safeFileName(modelTarget.modelId)}.json`)
+  const path = resolve(
+    dir,
+    `${Date.now()}-${Math.random().toString(36).slice(2)}-${modelTarget.providerKey}-${safeFileName(modelTarget.modelId)}.json`,
+  )
   const baseUrl = modelTarget.openaiBaseUrl ?? modelTarget.anthropicBaseUrl
   const modelRef = `${modelTarget.providerKey}/${modelTarget.modelId}`
   const apiKey = modelTarget.apiKey?.trim() || readEnv('AGENTHUB_MODEL_API_KEY') || ''
@@ -2071,7 +2156,10 @@ function codexRuntimeHome() {
 
 function prepareCodexRuntimeHome(modelTarget?: CodeAgentModelTarget | null) {
   const sourceHome = codexConfigHome()
-  const runtimeHome = codexRuntimeHome()
+  const runtimeHome = resolve(
+    codexRuntimeHome(),
+    `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  )
   mkdirSync(runtimeHome, { recursive: true })
   if (modelTarget) {
     writeFileSync(resolve(runtimeHome, 'config.toml'), buildCodexRuntimeConfig(modelTarget), 'utf8')

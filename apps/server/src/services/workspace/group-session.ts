@@ -1,13 +1,4 @@
-import {
-  db,
-  sessions,
-  sessionMembers,
-  workspaceAgents,
-  eq,
-  and,
-  asc,
-  desc,
-} from '@agenthub/db'
+import { db, sessions, sessionMembers, workspaceAgents, eq, and, asc, desc } from '@agenthub/db'
 import { HTTPException } from 'hono/http-exception'
 import { ensureWorkspace } from './workspace-queries'
 
@@ -21,51 +12,75 @@ async function findGroupSession(workspaceId: string) {
   return session ?? null
 }
 
-async function syncGroupMembers(sessionId: string, workspaceId: string, ownerId: string, selectedAgentIds?: string[]) {
-  // 如果前端传了选中的 agentIds，清理工作区中未选中的旧 agents，只保留选中的
-  if (selectedAgentIds && selectedAgentIds.length > 0) {
-    const allAgents = await db
-      .select()
-      .from(workspaceAgents)
-      .where(eq(workspaceAgents.workspaceId, workspaceId))
-
-    const toDelete = allAgents.filter((a) => !selectedAgentIds.includes(a.id))
-    if (toDelete.length > 0) {
-      for (const agent of toDelete) {
-        await db.delete(workspaceAgents).where(eq(workspaceAgents.id, agent.id))
-      }
-    }
-  }
-
-  const agents = await db
+async function syncGroupMembers(
+  sessionId: string,
+  workspaceId: string,
+  ownerId: string,
+  selectedAgentIds?: string[],
+) {
+  const allAgents = await db
     .select()
     .from(workspaceAgents)
     .where(eq(workspaceAgents.workspaceId, workspaceId))
     .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
 
-  const existing = await db.select().from(sessionMembers).where(eq(sessionMembers.sessionId, sessionId))
+  const selectedAgentIdSet =
+    selectedAgentIds && selectedAgentIds.length > 0 ? new Set(selectedAgentIds) : null
+  const agents = selectedAgentIdSet
+    ? allAgents.filter((agent) => selectedAgentIdSet.has(agent.id))
+    : allAgents
+
+  const existing = await db
+    .select()
+    .from(sessionMembers)
+    .where(eq(sessionMembers.sessionId, sessionId))
   const keys = new Set(existing.map((member) => `${member.memberType}:${member.memberId}`))
   const wanted = [
     { memberType: 'user' as const, memberId: ownerId },
-    { memberType: 'agent' as const, memberId: 'orchestrator' },
     ...agents.map((agent) => ({ memberType: 'agent' as const, memberId: agent.id })),
   ]
+
+  // 添加缺失的成员
   const missing = wanted.filter((member) => !keys.has(`${member.memberType}:${member.memberId}`))
   if (missing.length) {
     await db.insert(sessionMembers).values(missing.map((member) => ({ sessionId, ...member })))
   }
-  // 修复 Bug 3: 删除已不在 workspace 中的幽灵成员
-  const stale = existing.filter((member) => !wanted.some((w) => w.memberType === member.memberType && w.memberId === member.memberId))
+
+  // 删除已不在 wanted 列表中的成员以及历史重复行。
+  const wantedKeys = new Set(wanted.map((member) => `${member.memberType}:${member.memberId}`))
+  const seenKeys = new Set<string>()
+  const stale = existing.filter((member) => {
+    const key = `${member.memberType}:${member.memberId}`
+    if (!wantedKeys.has(key)) return true
+    if (seenKeys.has(key)) return true
+    seenKeys.add(key)
+    return false
+  })
   if (stale.length) {
     for (const member of stale) {
-      await db.delete(sessionMembers).where(
-        and(eq(sessionMembers.sessionId, sessionId), eq(sessionMembers.memberType, member.memberType), eq(sessionMembers.memberId, member.memberId))
-      )
+      await db.delete(sessionMembers).where(eq(sessionMembers.id, member.id))
     }
   }
+
+  await db
+    .update(sessions)
+    .set({
+      metadata: {
+        kind: 'workspace-agent-group',
+        agentIds: agents.map((agent) => agent.id),
+        agentCount: agents.length,
+        memberCount: agents.length + 1,
+      },
+      updatedAt: new Date(),
+    })
+    .where(eq(sessions.id, sessionId))
 }
 
-export async function ensureGroupSession(workspaceId: string, ownerId: string, selectedAgentIds?: string[]) {
+export async function ensureGroupSession(
+  workspaceId: string,
+  ownerId: string,
+  selectedAgentIds?: string[],
+) {
   const ws = await ensureWorkspace(workspaceId, ownerId)
   let session = await findGroupSession(workspaceId)
   if (!session) {
@@ -83,5 +98,6 @@ export async function ensureGroupSession(workspaceId: string, ownerId: string, s
     session = created
   }
   await syncGroupMembers(session.id, workspaceId, ownerId, selectedAgentIds)
-  return session
+  const [refreshed] = await db.select().from(sessions).where(eq(sessions.id, session.id)).limit(1)
+  return refreshed ?? session
 }

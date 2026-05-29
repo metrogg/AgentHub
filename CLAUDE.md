@@ -214,6 +214,36 @@ Covered areas:
   **Note**: Always use `env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` from `src/env.ts` instead of raw `readEnv()` string checks. The `.env` file value overrides the Zod default at runtime.
 - **MCP runtime**: read-only only (`nativeToolRuntime` only exposes read tools).
 
+## Error Handling & Logging
+
+### AppError Convention
+
+All API errors return a unified format:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "SESSION_NOT_FOUND",
+    "message": "会话不存在",
+    "details": { },
+    "requestId": "uuid"
+  }
+}
+```
+
+Error codes are defined in `apps/server/src/lib/error.ts` (`AppErrorCodes`) and grouped by prefix: `GENERAL_*`, `VALIDATION_*`, `AUTH_*`, `SESSION_*`, `MESSAGE_*`, `WORKSPACE_*`, `TASK_*`, `AGENT_*`, `LLM_*`, `ORCHESTRATOR_*`, `FILE_*`.
+
+**Do not use raw `HTTPException` in new routes.** Use `AppError.fromCode()` or `AppError.internal()`. The `app.ts` `onError` handler automatically wraps legacy `HTTPException` into `AppError` for backward compatibility.
+
+### Request Tracing
+
+`requestContextMiddleware` injects a `requestId` per HTTP request (reads `X-Request-Id` header or generates `crypto.randomUUID()`). Access via `c.get('requestContext')` to get the child logger and include `requestId` in responses via `X-Request-Id` header.
+
+### Logger Usage
+
+Use `apps/server/src/lib/logger.ts` (pino). **Do not use `console.log` / `console.error`** (startup fallback only). Levels: `fatal` (process crash), `error` (business errors), `warn` (recoverable / retries), `info` (key business events), `debug` (WebSocket messages, tool I/O).
+
 ## Environment Variables
 
 Key env vars from `apps/server/src/env.ts`:
@@ -222,43 +252,47 @@ Key env vars from `apps/server/src/env.ts`:
 |---|---|---|
 | `DATABASE_URL` | `./storage/agenthub.db` | SQLite file path |
 | `PORT` | `8000` | Server port |
+| `JWT_SECRET` | `dev-secret-change-me...` | JWT signing key |
+| `JWT_EXPIRES_IN` | `7d` | JWT expiry |
+| `CORS_ORIGIN` | `http://localhost:5173` | Allowed CORS origin |
+| `LOG_LEVEL` | `info` | pino log level |
 | `LLM_PROVIDER` | `openai` | Default LLM provider |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | — | Generic LLM config |
+| `LLM_TIMEOUT_MS` | `60000` | LLM request timeout |
+| `LLM_MAX_RETRIES` | `2` | LLM retry count |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | — | OpenAI-specific |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | — | Anthropic-specific |
 | `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | `true` | Code Agent execution switch |
 | `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | `120000` | Code Agent timeout |
 | `AGENTHUB_NATIVE_MAX_TOOL_ROUNDS` | `6` | Max tool rounds for native runtime |
+| `AGENTHUB_WORKSPACE_ROOT` | `.` | Workspace root for Git ops |
+| `AGENTHUB_SKILLS_ROOT` | — | Skills directory |
+| `AGENTHUB_APP_DATA_DIR` / `AGENTHUB_CONFIG_DIR` / `AGENTHUB_LOG_DIR` | — | Desktop data paths |
 | `ENABLE_LOCAL_CLI_PROBES` | `true` | Probe host-installed CLI tools |
+| `ENABLE_CODEX_CHATGPT_AUTH` | `true` | Codex ChatGPT auth |
+| `SYNC_CODEX_CLI_AUTH` | `true` | Sync Codex CLI auth |
+| `CODEX_HOME` | — | Codex home directory |
 
 Web env vars (`.env` or Vite):
 - `VITE_PROXY_TARGET` → backend for dev proxy
 - `VITE_WS_PROXY_TARGET` → WebSocket proxy target
 
-## Docker
-
-```bash
-docker compose up          # server + web
-docker compose --profile agents up  # includes cli-agent container
-```
-
-Server runs migrations automatically on start in Docker.
-
-## Communication Preferences
-
-- **Advisory mode first**: When asked to explain or advise on architecture/design, provide written analysis and explanation first. Do not start building, compiling, or modifying code unless explicitly asked (e.g., user says "MODE: IMPLEMENT").
-- **Focused explanations**: Answer the specific question directly first. Only expand to broader exploration if explicitly requested.
-- **Local-first preference**: Before suggesting Docker, WSL, or remote solutions, verify local environment has required tools. Check PATH and common install locations.
-- **China network context**: For Docker builds, package installations, or downloads, default to domestic mirrors (Tsinghua, Alibaba) and verify mirror persistence after source list modifications.
-- **Git state verification**: Always confirm baseline/reference state is synced with remote before comparisons (e.g., `git fetch origin`). Never assume local branches are up to date.
-
 ## Development Conventions
 
 - ESM throughout the project.
-- TypeScript strict mode + isolatedModules.
-- Code formatting by Prettier.
+- TypeScript strict mode + isolatedModules + `noUncheckedIndexedAccess` + `noImplicitOverride`.
+- Code formatting by Prettier: `semi: false`, `singleQuote: true`, `trailingComma: "all"`, `printWidth: 100`, `tabWidth: 2`, `arrowParens: "always"`.
 - UI language is Chinese; key types and protocol fields remain English.
 - **Frontend (`apps/web`) is maintained by a colleague. Do NOT modify frontend code directly.** If you find frontend issues, report them with file path, line number, root cause, and suggested fix. Only modify frontend when the user explicitly requests it.
+
+### Extending the Codebase
+
+- **New route**: create a Hono Router in `apps/server/src/routes/`, then mount it in `apps/server/src/app.ts` via `.route('/api/xxx', xxxRoutes)`.
+- **New DB table**: define in `packages/db/src/schema.ts` with `sqliteTable` + `relations`, then run `bun run db:generate`.
+- **New shared type**: add Zod schema in `packages/shared/src/schemas/` and export from `packages/shared/src/index.ts`.
+- **New frontend page**: create component in `apps/web/src/pages/` and add `<Route>` in `apps/web/src/App.tsx`.
+- **WebSocket events**: server broadcasts via `broadcastSessionEvent`; frontend consumes in `chatStore.handleWSEvent`. Event types are in `packages/shared/src/constants.ts` (`WsEvent`).
+- **Agent reply flow**: `agent-runner.ts` `runAgentReply()` schedules execution; LLM streams via `message:stream`, completion is persisted and broadcast as `message:completed`.
 
 ## Legacy Code References
 

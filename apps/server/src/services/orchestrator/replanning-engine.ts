@@ -45,6 +45,11 @@ export class ReplanningEngine {
   analyze(task: ExecutionTask, error: Error, _output?: string): FailureAnalysis {
     const msg = error.message.toLowerCase()
 
+    // 超时（特殊处理，因为可能需要更长的 timeout）
+    if (msg.includes('timed out') || msg.includes('deadline exceeded')) {
+      return { category: 'timeout', reason: error.message }
+    }
+
     // 临时错误：超时、限流、连接问题
     if (
       msg.includes('timeout') ||
@@ -56,11 +61,6 @@ export class ReplanningEngine {
       msg.includes('socket hang up')
     ) {
       return { category: 'transient_error', reason: error.message }
-    }
-
-    // 超时（特殊处理，因为可能需要更长的 timeout）
-    if (msg.includes('timed out') || msg.includes('deadline exceeded')) {
-      return { category: 'timeout', reason: error.message }
     }
 
     // 输出格式错误
@@ -96,6 +96,7 @@ export class ReplanningEngine {
           const delayMs = this.calculateBackoff(retryCount)
           return {
             strategy: 'retry_with_backoff',
+            updatedTask: { ...task, retryCount: retryCount + 1 },
             delayMs,
             reason: `临时错误，${delayMs}ms 后第 ${retryCount + 1} 次重试`,
           }
@@ -110,6 +111,7 @@ export class ReplanningEngine {
           const updatedTask: ExecutionTask = {
             ...task,
             timeout: (task.timeout ?? 300000) * 1.5,
+            retryCount: retryCount + 1,
           }
           return {
             strategy: 'local_replan',
@@ -150,6 +152,7 @@ export class ReplanningEngine {
           // 第一次失败时，给一次重试机会
           return {
             strategy: 'retry_with_backoff',
+            updatedTask: { ...task, retryCount: retryCount + 1 },
             delayMs: 1000,
             reason: `首次失败，给予一次重试机会：${analysis.reason}`,
           }

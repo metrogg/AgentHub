@@ -1,10 +1,12 @@
 import type { AgentProfile } from '../runtime/agent-runtime'
+import type { AgentRoleType } from '@agenthub/shared'
 
 /**
  * 群聊中的 Agent 扩展信息
  * 在 AgentProfile 基础上增加群聊协作所需的行为策略
  */
 export interface GroupChatAgent extends AgentProfile {
+  roleType?: AgentRoleType
   /** 回复策略：always=每次都回复, when_mentioned=只有被@时才回复, when_relevant=相关时才回复 */
   responseStrategy: 'always' | 'when_mentioned' | 'when_relevant'
   /** 可以委托给哪些 Agent（by name） */

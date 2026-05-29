@@ -4,6 +4,7 @@ export interface AgentProfile {
   id: string
   name: string
   role?: string
+  roleType?: string
   description?: string
   systemPrompt?: string
   color?: string
@@ -53,7 +54,16 @@ export function isNativeAgentProfile(profile: AgentProfile): boolean {
   if (profile.runtimeType === 'mcp') return true
   const permissions = normalizePermissions(profile.toolPermissions)
   return permissions.some((p) =>
-    ['native', 'tools', 'read-only', 'workspace:read', 'skills:read', 'list_files', 'read_file', 'search_code'].includes(p),
+    [
+      'native',
+      'tools',
+      'read-only',
+      'workspace:read',
+      'skills:read',
+      'list_files',
+      'read_file',
+      'search_code',
+    ].includes(p),
   )
 }
 

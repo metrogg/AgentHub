@@ -296,7 +296,7 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const clearMessages = useChatStore((state) => state.clearMessages)
   const title = groupChatDisplayTitle(session?.title, workspace?.name)
-  const memberCount = agents.length + 2
+  const memberCount = agents.length + 1
 
   async function handleClear() {
     if (!session) return
@@ -661,7 +661,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
   const selectSession = useChatStore((state) => state.selectSession)
   const deleteSession = useChatStore((state) => state.deleteSession)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
-  const memberCount = agents.length + 2
+  const memberCount = agents.length + 1
   const groupTitle = session?.title || workspace?.name || 'Agent 群聊'
   const [titleDraft, setTitleDraft] = useState(groupTitle)
   const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
@@ -729,30 +729,25 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
     }
   }
 
-  const monitorRows: AgentMonitorRowData[] = [
-    {
-      id: 'orchestrator',
-      name: 'Orchestrator',
-      role: '拆解、协调、生成任务卡',
-      color: '#111827',
-      mentionName: 'orchestrator',
-    },
-    ...agents.map((agent) => ({
+  const monitorRows: AgentMonitorRowData[] = agents
+    .map((agent) => ({
       id: agent.id,
       name: agent.name,
       role: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}`,
       color: agent.color,
       mentionName: agent.name,
-    })),
-  ].map((row) => {
-    const live = isStreamingForAgent(streamingMessage, row.id, row.name)
-    const latest = live ? streamingMessage?.content : latestAgentOutput(messages, row.id, row.name)
-    return {
-      ...row,
-      active: live,
-      bubble: latest ? lastOutputSnippet(latest, 20) : '',
-    }
-  })
+    }))
+    .map((row) => {
+      const live = isStreamingForAgent(streamingMessage, row.id, row.name)
+      const latest = live
+        ? streamingMessage?.content
+        : latestAgentOutput(messages, row.id, row.name)
+      return {
+        ...row,
+        active: live,
+        bubble: latest ? lastOutputSnippet(latest, 20) : '',
+      }
+    })
 
   return (
     <div
@@ -1802,20 +1797,18 @@ const ComposerMenu: FC<{
   const [addProjectOpen, setAddProjectOpen] = useState(false)
   const normalizedAgentQuery = agentQuery.trim().toLowerCase()
   const legacyAgents = [
-    { title: '@Orchestrator', desc: '拆解任务并分发到当前群聊', color: '#111827' },
-    { title: '@architect', desc: '架构与任务拆解', color: '#2563eb' },
-    { title: '@coder', desc: '代码实现', color: '#16a34a' },
-    { title: '@reviewer', desc: '审查与边界检查', color: '#ef4444' },
+    { title: '@Orchestrator', desc: '总指挥，规划阶段并调度 Agent 集群', color: '#7c3aed' },
+    { title: '@Researcher', desc: '资料、图片和事实收集', color: '#f59e0b' },
+    { title: '@Designer', desc: '页面结构、视觉方向和内容组织', color: '#6366f1' },
+    { title: '@Builder', desc: '实现、联调和本地验证', color: '#10b981' },
+    { title: '@QA Reviewer', desc: '验收、体验检查和风险审查', color: '#ef4444' },
   ]
   const agentRows = agents.length
-    ? [
-        { title: '@orchestrator', desc: '拆解任务、创建任务卡并协调当前群聊', color: '#111827' },
-        ...agents.map((agent) => ({
-          title: `@${agent.name}`,
-          desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${(agent.capabilityTags ?? []).length ? ` · ${(agent.capabilityTags ?? []).slice(0, 3).join(', ')}` : ''}`,
-          color: agent.color ?? '#111827',
-        })),
-      ]
+    ? agents.map((agent) => ({
+        title: `@${agent.name}`,
+        desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${(agent.capabilityTags ?? []).length ? ` · ${(agent.capabilityTags ?? []).slice(0, 3).join(', ')}` : ''}`,
+        color: agent.color ?? '#111827',
+      }))
     : legacyAgents
   const filteredAgentRows = normalizedAgentQuery
     ? agentRows.filter((item) =>
@@ -4824,23 +4817,12 @@ function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
 }
 
 function mentionAliases(agents: WorkspaceAgent[]) {
-  const aliases = [
-    'orchestrator',
-    'coordinator',
-    'agenthub',
-    '协调器',
-    '调度',
-    'Architect',
-    'Coder',
-    'Researcher',
-    'Reviewer',
-    '规划',
-    '实现',
-    '研究',
-    '审查',
-  ]
+  const aliases: string[] = []
   for (const agent of agents) {
     aliases.push(agent.name, agent.role)
+    if (agent.roleType === 'orchestrator') {
+      aliases.push('orchestrator', 'coordinator', '总指挥', '协调器', '调度')
+    }
   }
   return Array.from(new Set(aliases.filter(Boolean))).sort((a, b) => b.length - a.length)
 }

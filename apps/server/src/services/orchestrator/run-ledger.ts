@@ -1,4 +1,5 @@
 import { db, orchestratorRuns, eq } from '@agenthub/db'
+import { TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 import type { EmitRunEventInput } from './run-events'
 import type {
   ExecutionPlan,
@@ -77,27 +78,27 @@ export async function updateProgressLedgerFromEvent(input: EmitRunEventInput): P
         const phase = taskLedger.phases.find((item) => item.id === phaseId)
         if (phase && !phase.taskIds.includes(taskId)) phase.taskIds.push(taskId)
       }
-      moveTask(progressLedger, taskId, 'pending')
-      setLedgerTaskStatus(taskLedger, taskId, 'pending')
+      moveTask(progressLedger, taskId, TaskStatus.Pending)
+      setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Pending)
       break
     case 'task.started':
-      moveTask(progressLedger, taskId, 'running')
-      setLedgerTaskStatus(taskLedger, taskId, 'running')
+      moveTask(progressLedger, taskId, TaskStatus.Running)
+      setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Running)
       setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       break
     case 'task.completed':
-      moveTask(progressLedger, taskId, 'done')
-      setLedgerTaskStatus(taskLedger, taskId, 'done')
+      moveTask(progressLedger, taskId, TaskStatus.Done)
+      setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Done)
       setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       break
     case 'task.failed':
-      moveTask(progressLedger, taskId, 'failed')
-      setLedgerTaskStatus(taskLedger, taskId, 'failed')
+      moveTask(progressLedger, taskId, TaskStatus.Failed)
+      setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Failed)
       setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       break
     case 'task.cancelled':
-      moveTask(progressLedger, taskId, 'cancelled')
-      setLedgerTaskStatus(taskLedger, taskId, 'cancelled')
+      moveTask(progressLedger, taskId, TaskStatus.Cancelled)
+      setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Cancelled)
       setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       break
     case 'task.retrying':
@@ -145,19 +146,19 @@ export async function updateProgressLedgerFromEvent(input: EmitRunEventInput): P
       })
       break
     case 'run.synthesizing':
-      progressLedger.status = 'synthesizing'
+      progressLedger.status = OrchestratorRunStatus.Synthesizing
       break
     case 'run.completed':
-      progressLedger.status = 'completed'
+      progressLedger.status = OrchestratorRunStatus.Completed
       progressLedger.completedAt = now
       break
     case 'run.cancelled':
       cancelUnfinishedTasks(taskLedger, progressLedger)
-      progressLedger.status = 'cancelled'
+      progressLedger.status = OrchestratorRunStatus.Cancelled
       progressLedger.completedAt = now
       break
     case 'run.failed':
-      progressLedger.status = 'failed'
+      progressLedger.status = OrchestratorRunStatus.Failed
       progressLedger.completedAt = now
       break
   }
@@ -274,13 +275,13 @@ function buildLedgerTask(task: ExecutionTask, phaseId: string): TaskLedger['task
     agentId: task.agentId,
     dependencies: task.dependencies ?? [],
     taskType: task.taskType ?? inferTaskType(task),
-    status: 'pending',
+    status: TaskStatus.Pending,
     outputContract: task.outputContract ?? defaultOutputContract(task),
     validation: task.validation ?? defaultValidation(task),
   }
 }
 
-function moveTask(ledger: ProgressLedger, taskId: string | undefined, status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled') {
+function moveTask(ledger: ProgressLedger, taskId: string | undefined, status: TaskStatus) {
   if (!taskId) return
   ledger.pendingTaskIds = ledger.pendingTaskIds.filter((id) => id !== taskId)
   ledger.runningTaskIds = ledger.runningTaskIds.filter((id) => id !== taskId)
@@ -288,11 +289,11 @@ function moveTask(ledger: ProgressLedger, taskId: string | undefined, status: 'p
   ledger.failedTaskIds = ledger.failedTaskIds.filter((id) => id !== taskId)
   ledger.cancelledTaskIds = ledger.cancelledTaskIds.filter((id) => id !== taskId)
 
-  if (status === 'pending') ledger.pendingTaskIds = pushUnique(ledger.pendingTaskIds, taskId)
-  if (status === 'running') ledger.runningTaskIds = pushUnique(ledger.runningTaskIds, taskId)
-  if (status === 'done') ledger.completedTaskIds = pushUnique(ledger.completedTaskIds, taskId)
-  if (status === 'failed') ledger.failedTaskIds = pushUnique(ledger.failedTaskIds, taskId)
-  if (status === 'cancelled') ledger.cancelledTaskIds = pushUnique(ledger.cancelledTaskIds, taskId)
+  if (status === TaskStatus.Pending) ledger.pendingTaskIds = pushUnique(ledger.pendingTaskIds, taskId)
+  if (status === TaskStatus.Running) ledger.runningTaskIds = pushUnique(ledger.runningTaskIds, taskId)
+  if (status === TaskStatus.Done) ledger.completedTaskIds = pushUnique(ledger.completedTaskIds, taskId)
+  if (status === TaskStatus.Failed) ledger.failedTaskIds = pushUnique(ledger.failedTaskIds, taskId)
+  if (status === TaskStatus.Cancelled) ledger.cancelledTaskIds = pushUnique(ledger.cancelledTaskIds, taskId)
 }
 
 function setLedgerTaskStatus(taskLedger: TaskLedger, taskId: string | undefined, status: TaskLedger['tasks'][number]['status']) {
@@ -314,9 +315,9 @@ function cancelUnfinishedTasks(taskLedger: TaskLedger, progressLedger: ProgressL
     ...progressLedger.blockedTaskIds,
   ])
   for (const task of taskLedger.tasks) {
-    if (task.status === 'pending' || task.status === 'running') {
+    if (task.status === TaskStatus.Pending || task.status === TaskStatus.Running) {
       unfinished.add(task.id)
-      task.status = 'cancelled'
+      task.status = TaskStatus.Cancelled
     }
   }
   progressLedger.pendingTaskIds = progressLedger.pendingTaskIds.filter((id) => !unfinished.has(id))

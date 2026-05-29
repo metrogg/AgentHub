@@ -76,14 +76,14 @@ export function buildDemoArtifacts(content: string): DemoArtifact[] {
       description: '多 Agent 协作工作流定义，可在聊天流中可视化预览并一键执行。',
       nodes: [
         { id: 'input', label: '用户输入', type: 'input' },
-        { id: 'architect', label: '架构师', type: 'agent', agentKey: 'architect', agentName: 'Architect', agentColor: '#6366f1' },
+        { id: 'orchestrator', label: '总指挥', type: 'agent', agentKey: 'orchestrator', agentName: 'Orchestrator', agentColor: '#7c3aed' },
         { id: 'coder', label: '实现者', type: 'agent', agentKey: 'coder', agentName: 'Coder', agentColor: '#10b981' },
         { id: 'reviewer', label: '审查者', type: 'agent', agentKey: 'reviewer', agentName: 'Reviewer', agentColor: '#ef4444' },
         { id: 'output', label: '产出汇总', type: 'output' },
       ],
       edges: [
-        { from: 'input', to: 'architect', label: '拆解' },
-        { from: 'architect', to: 'coder', label: '实现' },
+        { from: 'input', to: 'orchestrator', label: '拆解' },
+        { from: 'orchestrator', to: 'coder', label: '实现' },
         { from: 'coder', to: 'reviewer', label: '审查' },
         { from: 'reviewer', to: 'output', label: '汇总' },
       ],

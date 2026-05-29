@@ -3,6 +3,7 @@ import { logger } from '../../lib/logger'
 import { runAgentReply, type AgentRunProfile } from '../agent-runner'
 import { gitBranchManager, type BranchContext } from '../git/branch-manager'
 import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
+import { TaskStatus } from '@agenthub/shared'
 
 export interface TaskExecutionInput {
   taskId: string
@@ -17,7 +18,7 @@ export interface TaskExecutionInput {
 }
 
 export interface TaskExecutionOutput {
-  status: 'done' | 'failed' | 'cancelled'
+  status: TaskStatus
   output: string
   artifacts: Array<Record<string, unknown>>
   error?: string
@@ -49,9 +50,9 @@ export class TaskExecutionService {
         logger.error({ err: err?.message, projectPath, agent: profile.name }, 'Failed to prepare agent branch')
         await db
           .update(workspaceTasks)
-          .set({ status: 'failed', completedAt: new Date(), errorLog: `Git worktree 创建失败：${err?.message || '未知错误'}` })
+          .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: `Git worktree 创建失败：${err?.message || '未知错误'}` })
           .where(eq(workspaceTasks.id, taskId))
-        return { status: 'failed', output: '', artifacts: [], error: `Git worktree 创建失败：${err?.message || '未知错误'}`, durationMs: 0 }
+        return { status: TaskStatus.Failed, output: '', artifacts: [], error: `Git worktree 创建失败：${err?.message || '未知错误'}`, durationMs: 0 }
       }
     }
 
@@ -88,13 +89,13 @@ export class TaskExecutionService {
 
     if (!userMsg) {
       if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-      return { status: 'failed', output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
+      return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
     }
 
     // 更新 task 状态
     await db
       .update(workspaceTasks)
-      .set({ status: 'running', startedAt: new Date(), retryCount: attemptCount })
+      .set({ status: TaskStatus.Running, startedAt: new Date(), retryCount: attemptCount })
       .where(eq(workspaceTasks.id, taskId))
 
     const taskStartTime = Date.now()
@@ -113,9 +114,9 @@ export class TaskExecutionService {
       const result = await Promise.race([runAgentReply(sessionId, userMsg, executionProfile, envelope), timeoutPromise])
 
       if (signal?.aborted) {
-        await db.update(workspaceTasks).set({ status: 'cancelled', completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
+        await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
         if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-        return { status: 'cancelled', output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime }
+        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime }
       }
 
       if (!result.ok) {
@@ -123,9 +124,9 @@ export class TaskExecutionService {
       }
 
       if (result.cancelled) {
-        await db.update(workspaceTasks).set({ status: 'cancelled', completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
+        await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
         if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-        return { status: 'cancelled', output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime }
+        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime }
       }
 
       // 收集 output
@@ -175,7 +176,7 @@ export class TaskExecutionService {
       await db
         .update(workspaceTasks)
         .set({
-          status: 'done',
+          status: TaskStatus.Done,
           completedAt: new Date(),
           artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
         })
@@ -183,15 +184,15 @@ export class TaskExecutionService {
 
       if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
 
-      return { status: 'done', output, artifacts, durationMs: taskDuration }
+      return { status: TaskStatus.Done, output, artifacts, durationMs: taskDuration }
     } catch (error: any) {
       const taskDuration = Date.now() - taskStartTime
       await db
         .update(workspaceTasks)
-        .set({ status: 'failed', completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
+        .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
         .where(eq(workspaceTasks.id, taskId))
       if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-      return { status: 'failed', output: '', artifacts: [], error: error?.message || 'Unknown error', durationMs: taskDuration }
+      return { status: TaskStatus.Failed, output: '', artifacts: [], error: error?.message || 'Unknown error', durationMs: taskDuration }
     }
   }
 }

@@ -286,10 +286,14 @@ export class Blackboard {
     }
   }
 
-  private readVersionsFromDb(namespace: string, key: string): BlackboardEntry[] {
-    const ns = this.cache.get(namespace)
-    if (!ns) return []
-    return ns.get(key) ?? []
+  private async readVersionsFromDb(namespace: string, key: string): Promise<BlackboardEntry[]> {
+    const rows = await db
+      .select()
+      .from(blackboardEntries)
+      .where(and(eq(blackboardEntries.namespace, namespace), eq(blackboardEntries.key, key)))
+      .orderBy(asc(blackboardEntries.version))
+
+    return rows.map((r) => this.rowToEntry(r))
   }
 
   private rowToEntry(row: typeof blackboardEntries.$inferSelect): BlackboardEntry {

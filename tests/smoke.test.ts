@@ -27,7 +27,6 @@ beforeAll(async () => {
     username: 'You',
     passwordHash: 'test-only',
   })
-
   ;({ app } = await import('../apps/server/src/app'))
   originalFetch = globalThis.fetch
   globalMockedFetch = async (input, init) => {
@@ -77,7 +76,9 @@ function mockSseStream(chunks: string[]) {
 
 async function waitForTaskStatus(workspaceId: string, taskId: string, status: string) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const full = await json<{ tasks: Array<{ id: string; status: string }> }>(await app.request(`/api/workspaces/${workspaceId}`))
+    const full = await json<{ tasks: Array<{ id: string; status: string }> }>(
+      await app.request(`/api/workspaces/${workspaceId}`),
+    )
     const task = full.tasks.find((item) => item.id === taskId)
     if (task?.status === status) return task
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -94,17 +95,17 @@ describe('AgentHub smoke tests', () => {
 
   test('session and message APIs persist a skipped-reply message', async () => {
     const session = await json<{ id: string; title: string }>(
-      await postJson('/api/sessions', { title: 'Smoke chat', type: 'direct' })
+      await postJson('/api/sessions', { title: 'Smoke chat', type: 'direct' }),
     )
     const message = await json<{ id: string; content: string }>(
       await postJson(`/api/messages/${session.id}`, {
         content: 'hello smoke',
         type: 'text',
         metadata: { skipAgentReply: true },
-      })
+      }),
     )
     const list = await json<{ items: Array<{ id: string; content: string }> }>(
-      await app.request(`/api/messages/${session.id}`)
+      await app.request(`/api/messages/${session.id}`),
     )
 
     expect(message.content).toBe('hello smoke')
@@ -117,7 +118,9 @@ describe('AgentHub smoke tests', () => {
       if (url === 'https://mock.local/v1/chat/completions') {
         const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string }
         expect(body.model).toBe('mock-model')
-        return new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }), { status: 200 })
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }), {
+          status: 200,
+        })
       }
       return originalFetch(input, init)
     }
@@ -128,7 +131,7 @@ describe('AgentHub smoke tests', () => {
         apiEndpoint: 'https://mock.local/v1',
         apiKey: 'sk-test-12345678',
         modelId: 'mock-model',
-      })
+      }),
     )
 
     expect(result.ok).toBe(true)
@@ -141,13 +144,23 @@ describe('AgentHub smoke tests', () => {
     globalThis.fetch = async (input, init) => {
       const url = String(input)
       if (url.includes('/chat/completions') || url.includes('/v1/messages')) {
-        return new Response(JSON.stringify({ error: { message: 'Invalid API key' } }), { status: 401 })
+        return new Response(JSON.stringify({ error: { message: 'Invalid API key' } }), {
+          status: 401,
+        })
       }
       return originalFetch(input, init)
     }
 
-    const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }>; tasks: Array<{ id: string }> }>(
-      await postJson('/api/workspaces', { name: 'Smoke workspace', goal: 'Verify dispatch', template: 'classic' })
+    const full = await json<{
+      workspace: { id: string }
+      agents: Array<{ id: string }>
+      tasks: Array<{ id: string }>
+    }>(
+      await postJson('/api/workspaces', {
+        name: 'Smoke workspace',
+        goal: 'Verify dispatch',
+        template: 'classic',
+      }),
     )
     const agentId = full.agents[0]?.id
     expect(agentId).toBeTruthy()
@@ -157,11 +170,12 @@ describe('AgentHub smoke tests', () => {
         title: 'Smoke task',
         description: 'This should fail gracefully without credentials.',
         agentId,
-      })
+      }),
     )
-    const dispatched = await json<{ task: { status: string; sessionId: string | null }; sessionId: string }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/tasks/${task.id}/dispatch`, {})
-    )
+    const dispatched = await json<{
+      task: { status: string; sessionId: string | null }
+      sessionId: string
+    }>(await postJson(`/api/workspaces/${full.workspace.id}/tasks/${task.id}/dispatch`, {}))
 
     expect(dispatched.sessionId).toBeTruthy()
     expect(dispatched.task.status).toBe('running')
@@ -180,16 +194,26 @@ describe('AgentHub smoke tests', () => {
         name: 'Role relation workspace',
         goal: 'Coordinate agents by role',
         template: 'classic',
-      })
+      }),
     )
 
     expect(full.agents.map((agent) => agent.roleType)).toEqual([
       'orchestrator',
+      'researcher',
+      'architect',
       'coder',
       'reviewer',
     ])
+    expect(full.agents.map((agent) => agent.name)).toEqual([
+      'Orchestrator',
+      'Researcher',
+      'Designer',
+      'Builder',
+      'QA Reviewer',
+    ])
     expect(full.agentRelations.map((relation) => relation.relationType)).toContain('handoff_to')
     expect(full.agentRelations.map((relation) => relation.relationType)).toContain('reviewed_by')
+    expect(full.agentRelations.map((relation) => relation.relationType)).toContain('reports_to')
     expect(full.agentRelations.map((relation) => relation.relationType)).toContain('fallback_to')
 
     const coder = full.agents.find((agent) => agent.roleType === 'coder')!
@@ -197,7 +221,12 @@ describe('AgentHub smoke tests', () => {
     const orchestrator = full.agents.find((agent) => agent.roleType === 'orchestrator')!
 
     const replaced = await json<{
-      items: Array<{ sourceAgentId: string; targetAgentId: string; relationType: string; note: string | null }>
+      items: Array<{
+        sourceAgentId: string
+        targetAgentId: string
+        relationType: string
+        note: string | null
+      }>
     }>(
       await app.request(`/api/workspaces/${full.workspace.id}/agent-relations`, {
         method: 'PUT',
@@ -223,7 +252,7 @@ describe('AgentHub smoke tests', () => {
             },
           ],
         }),
-      })
+      }),
     )
 
     expect(replaced.items).toHaveLength(2)
@@ -234,17 +263,93 @@ describe('AgentHub smoke tests', () => {
     const listed = await json<{
       items: Array<{ sourceAgentId: string; targetAgentId: string; relationType: string }>
     }>(await app.request(`/api/workspaces/${full.workspace.id}/agent-relations`))
-    expect(listed.items.map((relation) => relation.relationType).sort()).toEqual(['fallback_to', 'reviewed_by'])
+    expect(listed.items.map((relation) => relation.relationType).sort()).toEqual([
+      'fallback_to',
+      'reviewed_by',
+    ])
+  })
+
+  test('group session sync keeps unselected workspace agents and dedupes members', async () => {
+    const full = await json<{ workspace: { id: string } }>(
+      await postJson('/api/workspaces', {
+        name: 'Group member sync workspace',
+        goal: 'Verify selected group members',
+        template: 'blank',
+      }),
+    )
+
+    const agentInputs = [
+      { name: 'Orchestrator', role: '总指挥', roleType: 'orchestrator' },
+      { name: 'Architect', role: '规划', roleType: 'architect' },
+      { name: 'Coder', role: '实现', roleType: 'coder' },
+    ]
+    const agents = []
+    for (const input of agentInputs) {
+      agents.push(
+        await json<{ id: string }>(
+          await postJson(`/api/workspaces/${full.workspace.id}/agents`, input),
+        ),
+      )
+    }
+
+    const selectedAgentIds = [agents[0]!.id, agents[1]!.id]
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {
+        agentIds: selectedAgentIds,
+      }),
+    )
+
+    await dbApi.db.insert(dbApi.sessionMembers).values([
+      {
+        sessionId: group.session.id,
+        memberType: 'agent',
+        memberId: agents[0]!.id,
+      },
+      {
+        sessionId: group.session.id,
+        memberType: 'agent',
+        memberId: agents[2]!.id,
+      },
+    ])
+
+    await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {
+        agentIds: selectedAgentIds,
+      }),
+    )
+
+    const syncedGroup = await json<{
+      metadata: { agentIds?: string[]; agentCount?: number; memberCount?: number }
+    }>(await app.request(`/api/sessions/${group.session.id}`))
+    expect(syncedGroup.metadata.agentIds?.sort()).toEqual(selectedAgentIds.slice().sort())
+    expect(syncedGroup.metadata.agentCount).toBe(2)
+    expect(syncedGroup.metadata.memberCount).toBe(3)
+
+    const after = await json<{ agents: Array<{ id: string }> }>(
+      await app.request(`/api/workspaces/${full.workspace.id}`),
+    )
+    expect(after.agents.map((agent) => agent.id).sort()).toEqual(
+      agents.map((agent) => agent.id).sort(),
+    )
+
+    const members = await dbApi.db
+      .select()
+      .from(dbApi.sessionMembers)
+      .where(dbApi.eq(dbApi.sessionMembers.sessionId, group.session.id))
+    const memberKeys = members.map((member) => `${member.memberType}:${member.memberId}`).sort()
+    expect(memberKeys).toEqual(
+      ['agent:' + agents[0]!.id, 'agent:' + agents[1]!.id, 'user:default-user'].sort(),
+    )
   })
 
   test('artifact demo endpoint persists inline preview metadata', async () => {
     const session = await json<{ id: string }>(
-      await postJson('/api/sessions', { title: 'Artifact chat', type: 'direct' })
+      await postJson('/api/sessions', { title: 'Artifact chat', type: 'direct' }),
     )
     const message = await json<{ metadata: { artifacts?: Array<{ kind: string }> } }>(
       await postJson(`/api/messages/${session.id}/artifact-demo`, {
         content: '生成网页预览、diff 并部署',
-      })
+      }),
     )
 
     expect(message.metadata.artifacts?.map((artifact) => artifact.kind)).toContain('web_preview')
@@ -253,9 +358,15 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('agent adapter catalog reports main code agent platforms', async () => {
-    const catalog = await json<{ items: Array<{ id: string; command: string; installed: boolean; configured: boolean; executionEnabled: boolean }> }>(
-      await app.request('/api/coding-tools/agent-adapters')
-    )
+    const catalog = await json<{
+      items: Array<{
+        id: string
+        command: string
+        installed: boolean
+        configured: boolean
+        executionEnabled: boolean
+      }>
+    }>(await app.request('/api/coding-tools/agent-adapters'))
 
     expect(catalog.items.map((item) => item.id)).toContain('codex')
     expect(catalog.items.map((item) => item.id)).toContain('claude-code')
@@ -265,15 +376,29 @@ describe('AgentHub smoke tests', () => {
 
   test('agent draft can be confirmed into a workspace agent', async () => {
     const full = await json<{ workspace: { id: string } }>(
-      await postJson('/api/workspaces', { name: 'Agent draft workspace', goal: 'Create agents', template: 'classic' })
+      await postJson('/api/workspaces', {
+        name: 'Agent draft workspace',
+        goal: 'Create agents',
+        template: 'classic',
+      }),
     )
     const group = await json<{ session: { id: string } }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
-    const draftCard = await json<{ id: string; metadata: { agentDraft?: { name: string; runtimeType: string; codeAgentType?: string | null; toolPermissions: string[] } } }>(
+    const draftCard = await json<{
+      id: string
+      metadata: {
+        agentDraft?: {
+          name: string
+          runtimeType: string
+          codeAgentType?: string | null
+          toolPermissions: string[]
+        }
+      }
+    }>(
       await postJson(`/api/messages/${group.session.id}/agent-draft`, {
         content: '创建一个 Codex 前端实现 Agent，允许读取和写入 workspace',
-      })
+      }),
     )
 
     expect(draftCard.metadata.agentDraft?.runtimeType).toBe('code-agent')
@@ -281,12 +406,16 @@ describe('AgentHub smoke tests', () => {
     expect(draftCard.metadata.agentDraft?.toolPermissions).toContain('workspace:read')
     expect(draftCard.metadata.agentDraft?.toolPermissions).toContain('workspace:write')
 
-    const confirmed = await json<{ agent: { id: string; name: string; codeAgentType: string | null } }>(
+    const confirmed = await json<{
+      agent: { id: string; name: string; codeAgentType: string | null }
+    }>(
       await postJson(`/api/messages/${group.session.id}/agent-draft/${draftCard.id}/confirm`, {
         draft: draftCard.metadata.agentDraft,
-      })
+      }),
     )
-    const after = await json<{ agents: Array<{ id: string }> }>(await app.request(`/api/workspaces/${full.workspace.id}`))
+    const after = await json<{ agents: Array<{ id: string }> }>(
+      await app.request(`/api/workspaces/${full.workspace.id}`),
+    )
 
     expect(confirmed.agent.codeAgentType).toBe('codex')
     expect(after.agents.map((agent) => agent.id)).toContain(confirmed.agent.id)
@@ -294,9 +423,11 @@ describe('AgentHub smoke tests', () => {
     const confirmedAgain = await json<{ agent: { id: string } }>(
       await postJson(`/api/messages/${group.session.id}/agent-draft/${draftCard.id}/confirm`, {
         draft: draftCard.metadata.agentDraft,
-      })
+      }),
     )
-    const afterAgain = await json<{ agents: Array<{ id: string }> }>(await app.request(`/api/workspaces/${full.workspace.id}`))
+    const afterAgain = await json<{ agents: Array<{ id: string }> }>(
+      await app.request(`/api/workspaces/${full.workspace.id}`),
+    )
 
     expect(confirmedAgain.agent.id).toBe(confirmed.agent.id)
     expect(afterAgain.agents.length).toBe(after.agents.length)
@@ -304,12 +435,15 @@ describe('AgentHub smoke tests', () => {
 
   test('agent draft request in direct chat returns a group prompt instead of creating an agent', async () => {
     const session = await json<{ id: string }>(
-      await postJson('/api/sessions', { title: 'Direct agent builder', type: 'direct' })
+      await postJson('/api/sessions', { title: 'Direct agent builder', type: 'direct' }),
     )
-    const prompt = await json<{ content: string; metadata: { agentDraftStatus?: string; agentDraft?: unknown } }>(
+    const prompt = await json<{
+      content: string
+      metadata: { agentDraftStatus?: string; agentDraft?: unknown }
+    }>(
       await postJson(`/api/messages/${session.id}/agent-draft`, {
         content: '创建一个 Codex 前端实现 Agent',
-      })
+      }),
     )
 
     expect(prompt.content).toContain('Agent Group')
@@ -319,10 +453,14 @@ describe('AgentHub smoke tests', () => {
 
   test('orchestrator plan includes agent selection rationale', async () => {
     const full = await json<{ workspace: { id: string } }>(
-      await postJson('/api/workspaces', { name: 'Routed plan workspace', goal: 'Explain routing', template: 'classic' })
+      await postJson('/api/workspaces', {
+        name: 'Routed plan workspace',
+        goal: 'Explain routing',
+        template: 'classic',
+      }),
     )
     const group = await json<{ session: { id: string } }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
 
     const loadingCard = await json<{
@@ -344,7 +482,7 @@ describe('AgentHub smoke tests', () => {
     }>(
       await postJson(`/api/messages/${group.session.id}/orchestrator-plan`, {
         content: '@orchestrator implement a small UI change and review it',
-      })
+      }),
     )
 
     // 后端异步生成 plan，轮询等待结果
@@ -353,7 +491,9 @@ describe('AgentHub smoke tests', () => {
       const tasks = card.metadata.plan?.tasks ?? []
       if (tasks.length > 0) break
       await new Promise((r) => setTimeout(r, 50))
-      const refreshed = await json<{ items: Array<typeof card> }>(await app.request(`/api/messages/${group.session.id}`))
+      const refreshed = await json<{ items: Array<typeof card> }>(
+        await app.request(`/api/messages/${group.session.id}`),
+      )
       const found = refreshed.items.find((m) => m.id === loadingCard.id)
       if (found) card = found
     }
@@ -363,7 +503,9 @@ describe('AgentHub smoke tests', () => {
     expect(tasks.every((task) => task.agentSelection?.selectedAgentKey)).toBe(true)
     expect(tasks.every((task) => task.agentSelection?.rationale.length)).toBe(true)
     // 只要 plan 中有需要审查的 task（code/test/verify），就检查 reviewerAgentKey
-    const reviewableTask = tasks.find((task) => ['code', 'test', 'verify'].includes(task.taskType ?? ''))
+    const reviewableTask = tasks.find((task) =>
+      ['code', 'test', 'verify'].includes(task.taskType ?? ''),
+    )
     if (reviewableTask) {
       expect(reviewableTask.agentSelection?.reviewerAgentKey).toBeTruthy()
     }
@@ -371,10 +513,15 @@ describe('AgentHub smoke tests', () => {
 
   test('orchestrator dispatch returns run id and stores it on the task card', async () => {
     const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
-      await postJson('/api/workspaces', { name: 'Dispatch run workspace', goal: 'Trace dispatch', template: 'classic', projectPath: process.cwd() })
+      await postJson('/api/workspaces', {
+        name: 'Dispatch run workspace',
+        goal: 'Trace dispatch',
+        template: 'classic',
+        projectPath: process.cwd(),
+      }),
     )
     const group = await json<{ session: { id: string } }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
     const plan = {
       kind: 'orchestrator_plan',
@@ -404,7 +551,9 @@ describe('AgentHub smoke tests', () => {
           dependencies: [],
           maxRetries: 0,
           outputContract: {
-            requiredBlackboardWrites: [{ key: 'task_trace-task_output', schemaType: 'task_output' }],
+            requiredBlackboardWrites: [
+              { key: 'task_trace-task_output', schemaType: 'task_output' },
+            ],
             requiredArtifacts: [],
             allowedPaths: ['apps/web/src/**'],
             acceptanceCriteria: ['validation command passes'],
@@ -430,7 +579,10 @@ describe('AgentHub smoke tests', () => {
     expect(card?.id).toBeTruthy()
 
     const dispatched = await json<{ runId: string; workspaceId: string; groupSessionId: string }>(
-      await postJson(`/api/messages/${group.session.id}/orchestrator-plan/${card!.id}/dispatch`, {})
+      await postJson(
+        `/api/messages/${group.session.id}/orchestrator-plan/${card!.id}/dispatch`,
+        {},
+      ),
     )
 
     expect(dispatched.runId).toBeTruthy()
@@ -442,7 +594,9 @@ describe('AgentHub smoke tests', () => {
       .from(dbApi.messages)
       .where(dbApi.eq(dbApi.messages.id, card!.id))
       .limit(1)
-    const metadata = updatedCard?.metadata as { plan?: { dispatchResult?: { runId?: string } } } | null
+    const metadata = updatedCard?.metadata as {
+      plan?: { dispatchResult?: { runId?: string } }
+    } | null
     expect(metadata?.plan?.dispatchResult?.runId).toBe(dispatched.runId)
 
     const [runRecord] = await dbApi.db
@@ -458,7 +612,11 @@ describe('AgentHub smoke tests', () => {
           id: string
           phaseId: string
           status: string
-          outputContract?: { requiredArtifacts?: string[]; allowedPaths?: string[]; acceptanceCriteria?: string[] }
+          outputContract?: {
+            requiredArtifacts?: string[]
+            allowedPaths?: string[]
+            acceptanceCriteria?: string[]
+          }
           validation?: { commands?: string[]; requiresReview?: boolean }
         }>
       }
@@ -484,15 +642,19 @@ describe('AgentHub smoke tests', () => {
     expect(runPlan?.progressLedger?.completedTaskIds).toEqual([])
 
     const events = await json<{ items: Array<{ type: string; payload: Record<string, unknown> }> }>(
-      await app.request(`/api/orchestrator-runs/${dispatched.runId}/events`)
+      await app.request(`/api/orchestrator-runs/${dispatched.runId}/events`),
     )
     expect(events.items.map((event) => event.type)).toContain('run.started')
     expect(events.items.map((event) => event.type)).toContain('plan.created')
     expect(events.items.find((event) => event.type === 'plan.created')?.payload.taskCount).toBe(1)
 
     await waitForTaskStatus(dispatched.workspaceId, 'trace-task', 'done')
-    const blackboardEntries = await json<{ items: Array<{ key: string; value: { schemaType: string; summary: string; output: string } }> }>(
-      await app.request(`/api/orchestrator-runs/${dispatched.runId}/blackboard?schemaType=task_output`)
+    const blackboardEntries = await json<{
+      items: Array<{ key: string; value: { schemaType: string; summary: string; output: string } }>
+    }>(
+      await app.request(
+        `/api/orchestrator-runs/${dispatched.runId}/blackboard?schemaType=task_output`,
+      ),
     )
     expect(blackboardEntries.items).toHaveLength(1)
     expect(blackboardEntries.items[0]!.key).toBe('task_trace-task_output')
@@ -500,8 +662,15 @@ describe('AgentHub smoke tests', () => {
     expect(blackboardEntries.items[0]!.value.summary).toBeTruthy()
     expect(blackboardEntries.items[0]!.value.output).toBeTruthy()
 
-    const testResults = await json<{ items: Array<{ key: string; value: { schemaType: string; command: string; status: string; outputSummary: string } }> }>(
-      await app.request(`/api/orchestrator-runs/${dispatched.runId}/blackboard?schemaType=test_result`)
+    const testResults = await json<{
+      items: Array<{
+        key: string
+        value: { schemaType: string; command: string; status: string; outputSummary: string }
+      }>
+    }>(
+      await app.request(
+        `/api/orchestrator-runs/${dispatched.runId}/blackboard?schemaType=test_result`,
+      ),
     )
     expect(testResults.items).toHaveLength(1)
     expect(testResults.items[0]!.key).toBe('tests/trace-task/1')
@@ -517,7 +686,14 @@ describe('AgentHub smoke tests', () => {
       { id: 'a', title: 'A', description: '', agentId: '1', dependencies: [], maxRetries: 2 },
       { id: 'b', title: 'B', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
       { id: 'c', title: 'C', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
-      { id: 'd', title: 'D', description: '', agentId: '1', dependencies: ['b', 'c'], maxRetries: 2 },
+      {
+        id: 'd',
+        title: 'D',
+        description: '',
+        agentId: '1',
+        dependencies: ['b', 'c'],
+        maxRetries: 2,
+      },
     ]
     const graph = new TaskGraph(tasks)
 
@@ -547,7 +723,8 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('agent router explains selected coder with reviewer and fallback relations', async () => {
-    const { selectAgentForTask } = await import('../apps/server/src/services/orchestrator/agent-router')
+    const { selectAgentForTask } =
+      await import('../apps/server/src/services/orchestrator/agent-router')
     const agents = [
       {
         id: 'architect',
@@ -609,7 +786,8 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('task validation skips commands outside the safe allowlist', async () => {
-    const { runTaskValidation } = await import('../apps/server/src/services/orchestrator/task-validation')
+    const { runTaskValidation } =
+      await import('../apps/server/src/services/orchestrator/task-validation')
     const results = await runTaskValidation({ commands: ['echo unsafe'] })
 
     expect(results).toHaveLength(1)
@@ -619,7 +797,8 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('task output contract enforces allowed paths and required artifacts', async () => {
-    const { validateTaskOutputContract } = await import('../apps/server/src/services/orchestrator/task-contract')
+    const { validateTaskOutputContract } =
+      await import('../apps/server/src/services/orchestrator/task-contract')
     const baseTask = {
       id: 'code-task',
       title: 'Code task',
@@ -628,7 +807,9 @@ describe('AgentHub smoke tests', () => {
       dependencies: [],
       maxRetries: 0,
       outputContract: {
-        requiredBlackboardWrites: [{ key: 'task_code-task_output', schemaType: 'task_output' as const }],
+        requiredBlackboardWrites: [
+          { key: 'task_code-task_output', schemaType: 'task_output' as const },
+        ],
         requiredArtifacts: ['diff'],
         allowedPaths: ['apps/web/src/**'],
       },
@@ -659,7 +840,8 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('ConflictResolver detects file conflicts across agents', async () => {
-    const { ConflictResolver } = await import('../apps/server/src/services/orchestrator/conflict-resolver')
+    const { ConflictResolver } =
+      await import('../apps/server/src/services/orchestrator/conflict-resolver')
     const resolver = new ConflictResolver()
     const results = [
       {
@@ -687,10 +869,14 @@ describe('AgentHub smoke tests', () => {
 
   test('orchestrator run events are persisted and exposed in order', async () => {
     const full = await json<{ workspace: { id: string } }>(
-      await postJson('/api/workspaces', { name: 'Run events workspace', goal: 'Trace events', template: 'classic' })
+      await postJson('/api/workspaces', {
+        name: 'Run events workspace',
+        goal: 'Trace events',
+        template: 'classic',
+      }),
     )
     const group = await json<{ session: { id: string } }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
     const [run] = await dbApi.db
       .insert(dbApi.orchestratorRuns)
@@ -722,7 +908,12 @@ describe('AgentHub smoke tests', () => {
     })
 
     const events = await json<{
-      items: Array<{ type: string; payload: Record<string, unknown>; taskId: string | null; agentId: string | null }>
+      items: Array<{
+        type: string
+        payload: Record<string, unknown>
+        taskId: string | null
+        agentId: string | null
+      }>
     }>(await app.request(`/api/orchestrator-runs/${run!.id}/events`))
 
     expect(events.items.map((event) => event.type)).toEqual(['run.started', 'task.started'])
@@ -733,10 +924,14 @@ describe('AgentHub smoke tests', () => {
 
   test('orchestrator run can be cancelled and marks unfinished tasks', async () => {
     const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
-      await postJson('/api/workspaces', { name: 'Cancel run workspace', goal: 'Cancel run', template: 'classic' })
+      await postJson('/api/workspaces', {
+        name: 'Cancel run workspace',
+        goal: 'Cancel run',
+        template: 'classic',
+      }),
     )
     const group = await json<{ session: { id: string } }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
     const agentId = full.agents[0]!.id
     const runId = crypto.randomUUID()
@@ -767,7 +962,8 @@ describe('AgentHub smoke tests', () => {
         },
       ],
     }
-    const { initializeRunLedger } = await import('../apps/server/src/services/orchestrator/run-ledger')
+    const { initializeRunLedger } =
+      await import('../apps/server/src/services/orchestrator/run-ledger')
     await dbApi.db.insert(dbApi.orchestratorRuns).values({
       id: runId,
       workspaceId: full.workspace.id,
@@ -786,9 +982,10 @@ describe('AgentHub smoke tests', () => {
       runId,
     })
 
-    const cancelled = await json<{ run: { id: string; status: string }; activeRunCancelled: boolean }>(
-      await postJson(`/api/orchestrator-runs/${runId}/cancel`, {})
-    )
+    const cancelled = await json<{
+      run: { id: string; status: string }
+      activeRunCancelled: boolean
+    }>(await postJson(`/api/orchestrator-runs/${runId}/cancel`, {}))
     expect(cancelled.run.id).toBe(runId)
     expect(cancelled.run.status).toBe('cancelled')
     expect(cancelled.activeRunCancelled).toBe(false)
@@ -798,7 +995,9 @@ describe('AgentHub smoke tests', () => {
       .from(dbApi.orchestratorRuns)
       .where(dbApi.eq(dbApi.orchestratorRuns.id, runId))
       .limit(1)
-    const runPlan = runRecord?.plan as { progressLedger?: { status: string; cancelledTaskIds: string[] } } | null
+    const runPlan = runRecord?.plan as {
+      progressLedger?: { status: string; cancelledTaskIds: string[] }
+    } | null
     expect(runRecord?.status).toBe('cancelled')
     expect(runPlan?.progressLedger?.status).toBe('cancelled')
     expect(runPlan?.progressLedger?.cancelledTaskIds).toContain('cancel-task')
@@ -811,17 +1010,21 @@ describe('AgentHub smoke tests', () => {
     expect(taskRecord?.status).toBe('cancelled')
 
     const events = await json<{ items: Array<{ type: string }> }>(
-      await app.request(`/api/orchestrator-runs/${runId}/events`)
+      await app.request(`/api/orchestrator-runs/${runId}/events`),
     )
     expect(events.items.map((event) => event.type)).toContain('run.cancelled')
   })
 
   test('run events update the persisted progress ledger', async () => {
     const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
-      await postJson('/api/workspaces', { name: 'Ledger workspace', goal: 'Trace ledger', template: 'classic' })
+      await postJson('/api/workspaces', {
+        name: 'Ledger workspace',
+        goal: 'Trace ledger',
+        template: 'classic',
+      }),
     )
     const group = await json<{ session: { id: string } }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
 
     const plan = {
@@ -829,7 +1032,9 @@ describe('AgentHub smoke tests', () => {
       title: 'Ledger run',
       goal: 'Track progress ledger',
       agents: [{ id: full.agents[0]!.id, key: 'architect', name: 'Architect', role: 'Plan' }],
-      phases: [{ id: 'analysis', title: 'Analysis', purpose: 'Understand scope', taskIds: ['scan'] }],
+      phases: [
+        { id: 'analysis', title: 'Analysis', purpose: 'Understand scope', taskIds: ['scan'] },
+      ],
       tasks: [
         {
           id: 'scan',
@@ -842,7 +1047,8 @@ describe('AgentHub smoke tests', () => {
         },
       ],
     }
-    const { initializeRunLedger } = await import('../apps/server/src/services/orchestrator/run-ledger')
+    const { initializeRunLedger } =
+      await import('../apps/server/src/services/orchestrator/run-ledger')
     const planWithLedger = initializeRunLedger(plan)
     const [run] = await dbApi.db
       .insert(dbApi.orchestratorRuns)
@@ -890,7 +1096,11 @@ describe('AgentHub smoke tests', () => {
       groupSessionId: group.session.id,
       type: 'run.replanned',
       severity: 'warning',
-      payload: { strategy: 'local_replan', reason: 'Need a narrower scan', changedTaskIds: ['scan'] },
+      payload: {
+        strategy: 'local_replan',
+        reason: 'Need a narrower scan',
+        changedTaskIds: ['scan'],
+      },
     })
 
     const [updatedRun] = await dbApi.db
@@ -921,10 +1131,14 @@ describe('AgentHub smoke tests', () => {
 
   test('typed blackboard entries are validated and exposed through run detail API', async () => {
     const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
-      await postJson('/api/workspaces', { name: 'Typed blackboard workspace', goal: 'Trace typed entries', template: 'classic' })
+      await postJson('/api/workspaces', {
+        name: 'Typed blackboard workspace',
+        goal: 'Trace typed entries',
+        template: 'classic',
+      }),
     )
     const group = await json<{ session: { id: string } }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {})
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
     const [run] = await dbApi.db
       .insert(dbApi.orchestratorRuns)
@@ -932,7 +1146,13 @@ describe('AgentHub smoke tests', () => {
         workspaceId: full.workspace.id,
         groupSessionId: group.session.id,
         status: 'running',
-        plan: { runId: 'typed-run', title: 'Typed run', goal: 'Trace typed entries', agents: [], tasks: [] },
+        plan: {
+          runId: 'typed-run',
+          title: 'Typed run',
+          goal: 'Trace typed entries',
+          agents: [],
+          tasks: [],
+        },
       })
       .returning()
     expect(run?.id).toBeTruthy()
@@ -953,7 +1173,7 @@ describe('AgentHub smoke tests', () => {
         },
         agentId: full.agents[0]!.id,
         taskId: 'scan',
-      })
+      }),
     ).rejects.toThrow(/Invalid blackboard entry/)
 
     const ref = await blackboard.write({
@@ -974,7 +1194,12 @@ describe('AgentHub smoke tests', () => {
     expect(ref.version).toBe(1)
 
     const body = await json<{
-      items: Array<{ key: string; value: { schemaType: string; summary: string; fact?: string }; agentId: string | null; taskId: string | null }>
+      items: Array<{
+        key: string
+        value: { schemaType: string; summary: string; fact?: string }
+        agentId: string | null
+        taskId: string | null
+      }>
     }>(await app.request(`/api/orchestrator-runs/${run!.id}/blackboard?schemaType=fact`))
 
     expect(body.items).toHaveLength(1)
@@ -1013,7 +1238,11 @@ describe('AgentHub smoke tests', () => {
     // 在 worktree 中创建变更（模拟 Agent 在独立工作目录中工作）
     writeFileSync(join(branchCtx.worktreePath, 'new-file.ts'), 'export const x = 1')
     const worktreeExec = (args: string[]) => {
-      const proc = Bun.spawn(['git', ...args], { cwd: branchCtx.worktreePath, stdout: 'pipe', stderr: 'pipe' })
+      const proc = Bun.spawn(['git', ...args], {
+        cwd: branchCtx.worktreePath,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
       return proc.exited
     }
     await worktreeExec(['add', '.'])

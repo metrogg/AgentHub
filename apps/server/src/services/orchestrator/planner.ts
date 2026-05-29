@@ -2,6 +2,7 @@ import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
 import { harnessManager } from '../harness'
 import { initializeRunLedger } from './run-ledger'
+import { ROLE_PRESETS } from '@agenthub/shared'
 import type { ClarificationQuestion, ExecutionAgent, ExecutionPlan, ExecutionTask, TaskOutputContract, TaskValidation } from './types'
 
 export interface PlannerInput {
@@ -108,20 +109,21 @@ export class Planner {
     const needsResearch = researchTriggers.some((t) => lower.includes(t))
     if (!needsResearch) return agents
 
-    // 动态构造 researcher agent
+    const preset = ROLE_PRESETS.researcher
     const researcher: ExecutionAgent = {
       id: `researcher-${crypto.randomUUID().slice(0, 8)}`,
       key: 'researcher',
-      name: 'Researcher',
-      role: '资料研究',
+      name: preset.name,
+      role: preset.role,
       roleType: 'researcher',
-      description: '补充资料、比较方案、阅读上下文并标记不确定点。',
-      color: '#f59e0b',
-      runtimeType: 'llm',
-      capabilityTags: ['research', 'sources', 'analysis'],
-      toolPermissions: ['chat', 'workspace:read', 'skills:read'],
-      sandboxPolicy: 'read-only',
-      systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点，给出来源和置信度。',
+      description: preset.description,
+      color: preset.color,
+      runtimeType: preset.runtimeType,
+      codeAgentType: preset.codeAgentType ?? undefined,
+      capabilityTags: preset.capabilityTags,
+      toolPermissions: preset.toolPermissions,
+      sandboxPolicy: preset.sandboxPolicy,
+      systemPrompt: preset.systemPrompt,
     }
 
     logger.info({ goal: goal.slice(0, 80) }, 'Planner dynamically injected Researcher')

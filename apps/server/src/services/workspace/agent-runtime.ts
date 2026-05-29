@@ -1,12 +1,14 @@
 import { db, workspaceTasks, eq } from '@agenthub/db'
 import { getActiveRunSessionIds, type AgentRunProfile } from '../agent-runner'
 import { cleanProjectPath } from './utils'
+import { TaskStatus } from '@agenthub/shared'
 
 export function workspaceAgentRunProfile(
   agent: {
     id: string
     name: string
     role: string
+    roleType?: string | null
     description: string | null
     systemPrompt: string
     color: string | null
@@ -19,12 +21,13 @@ export function workspaceAgentRunProfile(
     contextPolicy: string
     approvalRequired: boolean
   },
-  projectPath?: string | null
+  projectPath?: string | null,
 ): AgentRunProfile {
   return {
     id: agent.id,
     name: agent.name,
     role: agent.role ?? undefined,
+    roleType: agent.roleType ?? undefined,
     description: agent.description ?? undefined,
     systemPrompt: agent.systemPrompt,
     color: agent.color ?? undefined,
@@ -43,7 +46,7 @@ export function workspaceAgentRunProfile(
 export async function markWorkspaceTaskAfterRun(taskId: string, ok: boolean) {
   await db
     .update(workspaceTasks)
-    .set({ status: ok ? 'done' : 'failed', updatedAt: new Date() })
+    .set({ status: ok ? TaskStatus.Done : TaskStatus.Failed, updatedAt: new Date() })
     .where(eq(workspaceTasks.id, taskId))
 }
 

@@ -1,4 +1,27 @@
-const API_BASE = '/api'
+import {
+  SessionType,
+  SenderType,
+  MessageType,
+  TaskStatus,
+  AgentRoleType,
+  AgentRelationType,
+  OrchestratorRunStatus,
+  ExecutionLogType,
+  BlackboardSchemaType,
+  SandboxPolicy,
+  RuntimeType,
+  ContextPolicy,
+  CodeAgentType,
+  CodeAgentRunStatus,
+  ArtifactFileStatus,
+  AppErrorCodes,
+  API_BASE_PATH,
+  TaskType,
+  OrchestratorRunEventType,
+  OrchestratorRunEventSeverity,
+} from '@agenthub/shared'
+
+const API_BASE = API_BASE_PATH
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_RETRIES = 2
 
@@ -39,29 +62,29 @@ export function friendlyErrorMessage(error: unknown, context?: string): string {
   if (error instanceof ApiError) {
     // 根据错误码提供比 HTTP 状态码更精准的中文提示
     const codeMap: Record<string, string> = {
-      INTERNAL_ERROR: '服务端内部错误，请稍后重试',
-      SERVICE_UNAVAILABLE: '服务暂时不可用，请稍后重试',
-      TIMEOUT: '请求超时，请稍后重试',
-      VALIDATION_FAILED: '请求参数错误',
-      MISSING_FIELD: '缺少必要参数',
-      UNAUTHORIZED: '未登录或登录已过期',
-      FORBIDDEN: '没有权限执行此操作',
-      SESSION_NOT_FOUND: '会话不存在或已被删除',
-      MESSAGE_NOT_FOUND: '消息不存在或已被删除',
-      WORKSPACE_NOT_FOUND: '工作区不存在或已被删除',
-      TASK_NOT_FOUND: '任务不存在或已被删除',
-      AGENT_NOT_FOUND: 'Agent 不存在或已被删除',
-      FILE_NOT_FOUND: '文件不存在',
-      ARTIFACT_NOT_FOUND: '产物不存在',
-      LLM_REQUEST_FAILED: 'AI 服务请求失败，请检查模型配置',
-      LLM_RATE_LIMITED: 'AI 服务请求过于频繁，请稍后重试',
-      MODEL_NOT_CONFIGURED: '模型未配置，请先完成设置',
-      CODE_AGENT_NOT_INSTALLED: '代码 Agent 未安装，请先安装 CLI 工具',
-      CODE_AGENT_CONFIG_INVALID: '代码 Agent 配置错误',
-      ORCHESTRATOR_PLAN_FAILED: '编排计划生成失败，请稍后重试',
-      ORCHESTRATOR_DISPATCH_FAILED: '任务派发失败，请稍后重试',
-      DIFF_APPLY_FAILED: '代码补丁应用失败',
-      DIFF_VALIDATION_FAILED: '代码补丁校验失败',
+      [AppErrorCodes.INTERNAL_ERROR]: '服务端内部错误，请稍后重试',
+      [AppErrorCodes.SERVICE_UNAVAILABLE]: '服务暂时不可用，请稍后重试',
+      [AppErrorCodes.TIMEOUT]: '请求超时，请稍后重试',
+      [AppErrorCodes.VALIDATION_FAILED]: '请求参数错误',
+      [AppErrorCodes.MISSING_FIELD]: '缺少必要参数',
+      [AppErrorCodes.UNAUTHORIZED]: '未登录或登录已过期',
+      [AppErrorCodes.FORBIDDEN]: '没有权限执行此操作',
+      [AppErrorCodes.SESSION_NOT_FOUND]: '会话不存在或已被删除',
+      [AppErrorCodes.MESSAGE_NOT_FOUND]: '消息不存在或已被删除',
+      [AppErrorCodes.WORKSPACE_NOT_FOUND]: '工作区不存在或已被删除',
+      [AppErrorCodes.TASK_NOT_FOUND]: '任务不存在或已被删除',
+      [AppErrorCodes.AGENT_NOT_FOUND]: 'Agent 不存在或已被删除',
+      [AppErrorCodes.FILE_NOT_FOUND]: '文件不存在',
+      [AppErrorCodes.ARTIFACT_NOT_FOUND]: '产物不存在',
+      [AppErrorCodes.LLM_REQUEST_FAILED]: 'AI 服务请求失败，请检查模型配置',
+      [AppErrorCodes.LLM_RATE_LIMITED]: 'AI 服务请求过于频繁，请稍后重试',
+      [AppErrorCodes.MODEL_NOT_CONFIGURED]: '模型未配置，请先完成设置',
+      [AppErrorCodes.CODE_AGENT_NOT_INSTALLED]: '代码 Agent 未安装，请先安装 CLI 工具',
+      [AppErrorCodes.CODE_AGENT_CONFIG_INVALID]: '代码 Agent 配置错误',
+      [AppErrorCodes.ORCHESTRATOR_PLAN_FAILED]: '编排计划生成失败，请稍后重试',
+      [AppErrorCodes.ORCHESTRATOR_DISPATCH_FAILED]: '任务派发失败，请稍后重试',
+      [AppErrorCodes.DIFF_APPLY_FAILED]: '代码补丁应用失败',
+      [AppErrorCodes.DIFF_VALIDATION_FAILED]: '代码补丁校验失败',
     }
     if (error.code && codeMap[error.code]) {
       return prefix + codeMap[error.code]
@@ -160,7 +183,7 @@ export interface Session {
   id: string
   ownerId: string
   title: string
-  type: 'direct' | 'group'
+  type: SessionType
   workspaceId?: string | null
   workspaceAgentId?: string | null
   metadata?: Record<string, unknown> | null
@@ -183,8 +206,8 @@ export interface Message {
   id: string
   sessionId: string
   senderId: string
-  senderType: 'user' | 'agent' | 'system'
-  type: string
+  senderType: SenderType
+  type: MessageType
   content: string
   metadata: Record<string, unknown> | null
   isPinned?: boolean
@@ -210,7 +233,7 @@ export type AgentArtifact =
       source?: string
       createdAt?: string
       filePath: string
-      status?: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+      status?: ArtifactFileStatus
       language?: string
       diff: string
     }
@@ -268,7 +291,7 @@ export type AgentArtifact =
 
 export interface CodeAgentRunMetadata {
   type: 'code-agent-run'
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out'
+  status: CodeAgentRunStatus
   runtime: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   command: string
   cwd?: string
@@ -350,7 +373,7 @@ export interface CodingToolStatusResponse {
 }
 
 export interface AgentAdapterCatalogItem {
-  id: 'codex' | 'claude-code' | 'opencode' | 'gemini'
+  id: CodeAgentType
   name: string
   command: string
   envKey: string
@@ -583,35 +606,19 @@ export interface WorkspaceAgent {
   roleProfile?: Record<string, unknown> | null
   color: string
   modelId: string | null
-  runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
-  codeAgentType: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  runtimeType: RuntimeType
+  codeAgentType: CodeAgentType | null
   capabilityTags: string[]
   toolPermissions: string[]
-  sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
-  contextPolicy: 'recent-only' | 'pinned-recent' | 'workspace-aware'
+  sandboxPolicy: SandboxPolicy
+  contextPolicy: ContextPolicy
   autoInvoke: boolean
   approvalRequired: boolean
   orderIdx: number
   createdAt: string
 }
 
-export type AgentRoleType =
-  | 'orchestrator'
-  | 'clarifier'
-  | 'architect'
-  | 'researcher'
-  | 'coder'
-  | 'verifier'
-  | 'reviewer'
-  | 'integrator'
-  | 'custom'
-
-export type AgentRelationType =
-  | 'handoff_to'
-  | 'reviewed_by'
-  | 'fallback_to'
-  | 'reports_to'
-  | 'blocks'
+// AgentRoleType and AgentRelationType imported from @agenthub/shared
 
 export interface WorkspaceAgentRelation {
   id: string
@@ -690,7 +697,7 @@ export interface AgentDraftConfirmResult {
   message: Message
 }
 
-export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
+// TaskStatus imported from @agenthub/shared
 
 export interface WorkspaceTask {
   id: string
@@ -736,7 +743,7 @@ export interface OrchestratorPlanTask {
   title: string
   description: string
   agentKey: string
-  taskType?: 'read' | 'research' | 'design' | 'code' | 'test' | 'review' | 'synthesize'
+  taskType?: TaskType
   status?: TaskStatus
   outputContract?: OrchestratorTaskOutputContract
   validation?: OrchestratorTaskValidation
@@ -826,13 +833,7 @@ export interface OrchestratorProgressLedger {
   updatedAt: string
 }
 
-export type OrchestratorRunStatus =
-  | 'planning'
-  | 'running'
-  | 'synthesizing'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
+// OrchestratorRunStatus imported from @agenthub/shared
 
 export interface OrchestratorRunListItem {
   id: string
@@ -855,14 +856,7 @@ export interface ExecutionLog {
   sessionId: string
   agentId: string
   taskId: string | null
-  type:
-    | 'llm_call'
-    | 'tool_call'
-    | 'blackboard_read'
-    | 'blackboard_write'
-    | 'error'
-    | 'task_start'
-    | 'task_end'
+  type: ExecutionLogType
   input: unknown | null
   output: unknown | null
   durationMs: number | null
@@ -870,32 +864,9 @@ export interface ExecutionLog {
   createdAt: string
 }
 
-export type OrchestratorRunEventSeverity = 'debug' | 'info' | 'warning' | 'error'
+// OrchestratorRunEventSeverity imported from @agenthub/shared
 
-export type OrchestratorRunEventType =
-  | 'run.started'
-  | 'plan.created'
-  | 'plan.validated'
-  | 'approval.requested'
-  | 'approval.granted'
-  | 'phase.started'
-  | 'task.queued'
-  | 'task.started'
-  | 'task.stream'
-  | 'blackboard.written'
-  | 'artifact.created'
-  | 'task.completed'
-  | 'task.failed'
-  | 'task.cancelled'
-  | 'task.retrying'
-  | 'task.reassigned'
-  | 'run.replanned'
-  | 'conflict.detected'
-  | 'conflict.resolved'
-  | 'run.synthesizing'
-  | 'run.completed'
-  | 'run.cancelled'
-  | 'run.failed'
+// OrchestratorRunEventType imported from @agenthub/shared
 
 export interface OrchestratorRunEvent {
   id: string
@@ -910,14 +881,7 @@ export interface OrchestratorRunEvent {
   createdAt: string
 }
 
-export type BlackboardSchemaType =
-  | 'fact'
-  | 'decision'
-  | 'risk'
-  | 'artifact_ref'
-  | 'diff_summary'
-  | 'test_result'
-  | 'task_output'
+// BlackboardSchemaType imported from @agenthub/shared
 
 export interface TypedBlackboardValue {
   schemaType: BlackboardSchemaType
@@ -968,13 +932,35 @@ export interface OrchestratorDispatchResult {
   tasks: Array<{ taskId: string; sessionId: string; title: string; agentName: string }>
 }
 
+export {
+  SessionType,
+  SenderType,
+  MessageType,
+  TaskStatus,
+  OrchestratorRunStatus,
+  ExecutionLogType,
+  BlackboardSchemaType,
+  SandboxPolicy,
+  RuntimeType,
+  ContextPolicy,
+  CodeAgentType,
+  CodeAgentRunStatus,
+  ArtifactFileStatus,
+  AppErrorCodes,
+} from '@agenthub/shared'
+
+export type {
+  AgentRoleType,
+  AgentRelationType,
+} from '@agenthub/shared'
+
 export const api = {
   // Sessions
   listSessions: () => request<{ items: Session[] }>('/sessions'),
   getSession: (id: string) => request<Session>(`/sessions/${id}`),
   createSession: (data: {
     title: string
-    type?: 'direct' | 'group'
+    type?: SessionType
     workspaceId?: string | null
     workspaceAgentId?: string | null
     metadata?: Record<string, unknown> | null
@@ -993,7 +979,7 @@ export const api = {
 
   // Messages
   listMessages: (sessionId: string) => request<{ items: Message[] }>(`/messages/${sessionId}`),
-  sendMessage: (sessionId: string, data: { content: string; type?: string }) =>
+  sendMessage: (sessionId: string, data: { content: string; type?: MessageType }) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
       body: JSON.stringify({ content: data.content, type: data.type ?? 'text' }),
@@ -1004,7 +990,7 @@ export const api = {
     data: {
       content: string
       modelId?: string
-      type?: string
+      type?: MessageType
       skipAgentReply?: boolean
       attachments?: ChatAttachment[]
       displayContent?: string
@@ -1015,7 +1001,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({
         content: data.content,
-        type: data.type ?? 'text',
+        type: (data.type ?? 'text') as MessageType,
         metadata: {
           ...(data.modelId ? { modelId: data.modelId } : {}),
           ...(data.skipAgentReply ? { skipAgentReply: true } : {}),
