@@ -93,10 +93,50 @@ export class GroupChatManager {
 
   /**
    * 处理群聊消息的入口
-   * @deprecated 此方法已弃用。群聊消息现在走 messages.ts 中的统一路由：
-   *   - intentRouter 识别简单/复杂意图
-   *   - 简单消息 → handleSimpleReply()
-   *   - 复杂任务 → generatePlanAndPushTaskBoard()
+   *
+   * @deprecated 自 Orchestrator Engine 引入后，`GroupChatManager` 的对话循环模式已被弃用。
+   *
+   * ### 新旧架构对比
+   *
+   * **旧架构 (GroupChatManager)**：
+   * - 基于 `@mention` 的路由：用户 @某个 Agent → 该 Agent 回复 → 回复中再 @其他 Agent → 循环
+   * - 所有逻辑集中在 `GroupChatManager.conversationLoop()` 中，耦合度高
+   * - 无 DAG 依赖调度、无并发执行、无失败降级
+   *
+   * **新架构 (messages.ts 统一路由)**：
+   * - `intentRouter` 首先识别消息意图（简单问答 vs 复杂任务）
+   * - 简单消息 → `handleSimpleReply()`：直接派发给单个 Agent 回复
+   * - 复杂任务 → `generatePlanAndPushTaskBoard()`：通过 Orchestrator Engine 生成 Task DAG、
+   *   并发调度、支持重试降级、自动聚合产物
+   *
+   * ### 迁移示例
+   *
+   * ```typescript
+   * // 旧写法（不要再用）
+   * const manager = new GroupChatManager(config)
+   * await manager.handleMessage({
+   *   workspaceId: 'ws-xxx',
+   *   sessionId: 'sess-xxx',
+   *   userMsg: messageRow,
+   *   content: '请帮我构建一个 React 应用',
+   * })
+   *
+   * // 新写法 — 直接走 messages.ts 的统一路由即可，无需手动实例化 GroupChatManager
+   * // 前端发送一条普通的 POST /api/messages/:sessionId 请求，
+   * // 服务端 messages.ts 路由会自动完成意图识别 → 派发 → 调度 → 聚合
+   * // 无需额外代码
+   * ```
+   *
+   * ### 关键差异
+   *
+   * | 维度       | GroupChatManager (旧) | messages.ts 统一路由 (新)      |
+   * | ---------- | --------------------- | ------------------------------ |
+   * | 意图识别   | 无，纯 @mention 路由   | intentRouter 自动分类          |
+   * | 任务调度   | 串行对话循环          | DAG 并发调度 (TaskScheduler)    |
+   * | 失败处理   | 简单跳过              | 重试 + 降级 (FallbackEngine)    |
+   * | 产物聚合   | 无                    | LLM 智能聚合 (Synthesizer)     |
+   * | 代码冲突   | 无                    | 自动检测 + 3-way merge          |
+   * | 调用方式   | 手动 new + 调用       | 自动，通过 HTTP 路由触发        |
    */
   async handleMessage(params: {
     workspaceId: string
@@ -159,10 +199,13 @@ export class GroupChatManager {
 
   /**
    * 核心对话循环
-   * @deprecated 请使用 messages.ts 中的统一路由入口。
-   *   - 简单消息走 handleSimpleReply()
-   *   - 复杂任务走 generatePlanAndPushTaskBoard()
-   *   此方法仅供代码参考，不再被实际调用。
+   *
+   * @deprecated 随 `handleMessage()` 一同弃用。参见 {@link handleMessage} 的迁移指南。
+   *
+   * 此方法内部的旧代码已完全注释，仅供参考历史实现。
+   * 新架构请使用 `messages.ts` 统一路由：
+   *   - 简单消息走 `handleSimpleReply()`
+   *   - 复杂任务走 `generatePlanAndPushTaskBoard()` → Orchestrator DAG 调度
    */
   private async conversationLoop(params: {
     workspaceId: string
