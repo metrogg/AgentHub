@@ -134,7 +134,7 @@ export function createSavedAgent(
     color: input.color ?? '#111827',
     modelId: input.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? 'claude-code') : null,
+    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? 'codex') : null,
     capabilityTags: input.capabilityTags ?? [],
     toolPermissions: input.toolPermissions ?? [],
     sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
@@ -271,7 +271,10 @@ function upgradeDefaultAgentPresets(agents: SavedAgentConfig[]) {
         id: agent.id,
         modelId: agent.modelId ?? preset.modelId,
         runtimeType: agent.runtimeType ?? preset.runtimeType,
-        codeAgentType: agent.codeAgentType ?? preset.codeAgentType,
+        codeAgentType:
+          agent.codeAgentType === 'claude-code' && !agent.modelId?.trim()
+            ? preset.codeAgentType
+            : (agent.codeAgentType ?? preset.codeAgentType),
         createdAt: agent.createdAt,
         updatedAt: new Date().toISOString(),
       }) ?? agent

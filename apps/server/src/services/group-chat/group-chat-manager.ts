@@ -553,6 +553,8 @@ export class GroupChatManager {
             '- 需要其他 Agent 时，在回复中明确 @Agent名，并说明交付物、输入、输出和验收标准。',
             '- 每一阶段结束时汇总已完成内容、证据、风险和下一步。',
             '- 不要假装其他 Agent 已完成工作；只有看到群聊历史里对应回复后才能汇总其结果。',
+            '- 禁止只回复 “Understood”“收到”“好的” 这类确认语；你必须给出中文阶段计划或明确派发。',
+            '- 对“做网站/开发页面/webapp”这类复杂任务，第一轮至少派发 @Researcher 做资料收集，或说明为什么不需要。',
           ].join('\n'),
         )
       }
@@ -802,6 +804,7 @@ function toAgentProfile(agent: GroupChatAgent, projectPath: string | null): Agen
     id: agent.id,
     name: agent.name,
     role: agent.role,
+    roleType: agent.roleType,
     description: agent.description,
     color: agent.color,
     modelId: agent.modelId,

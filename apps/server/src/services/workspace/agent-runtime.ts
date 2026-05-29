@@ -8,6 +8,7 @@ export function workspaceAgentRunProfile(
     id: string
     name: string
     role: string
+    roleType?: string | null
     description: string | null
     systemPrompt: string
     color: string | null
@@ -20,12 +21,13 @@ export function workspaceAgentRunProfile(
     contextPolicy: string
     approvalRequired: boolean
   },
-  projectPath?: string | null
+  projectPath?: string | null,
 ): AgentRunProfile {
   return {
     id: agent.id,
     name: agent.name,
     role: agent.role ?? undefined,
+    roleType: agent.roleType ?? undefined,
     description: agent.description ?? undefined,
     systemPrompt: agent.systemPrompt,
     color: agent.color ?? undefined,
