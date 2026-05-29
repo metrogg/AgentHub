@@ -31,6 +31,9 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 | 后端框架     | Hono + Bun.serve（HTTP + WebSocket 同一端口）                    |
 | 前端框架     | React 18 + Vite + TypeScript                               |
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 9d0b2c7 (docs: 补充 AGENTS.md 中的技术栈和项目结构详情)
 | UI / CSS | Tailwind CSS + Radix UI primitives + `@assistant-ui/react` |
 | 状态管理     | Zustand                                                    |
 | 数据库      | SQLite (`bun:sqlite`) + Drizzle ORM（WAL 模式）                |
@@ -80,6 +83,7 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 │   │   │       ├── git/                   # Git 分支隔离
 │   │   │       │   └── branch-manager.ts  # 分支生命周期管理
 │   │   │       ├── group-chat/            # @deprecated 旧群聊对话循环（已废弃，工具函数保留）
+<<<<<<< HEAD
 │   │   │       │   ├── group-chat-manager.ts # @deprecated conversationLoop / handleMessage
 │   │   │       │   └── index.ts           # @deprecated 导出
 │   │   │       ├── code-agent-adapter.ts  # 代码 Agent CLI 适配（被 CodeAgentRuntime 引用）
@@ -441,3 +445,6 @@ Agent 在执行任务时拥有四种自主行为（`buildAutonomyInstructions()`
 =======
 | UI / CSS | Tailwind CSS + Radix UI primitives + `@assistant-ui/react`
 >>>>>>> 6cdd406 (docs: 更新弃用注释并改进澄清卡片组件)
+=======
+│   │   │       │   ├── group-chat-manager.ts
+>>>>>>> 9d0b2c7 (docs: 补充 AGENTS.md 中的技术栈和项目结构详情)
