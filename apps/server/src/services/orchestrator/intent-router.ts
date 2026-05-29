@@ -82,11 +82,17 @@ export class IntentRouter {
     const techObjects = [
       'api','ui','数据库','database','认证','auth','组件','component','服务',
       'service','模块','module','页面','page','网站','网页','webapp','web app','site','website',
+      '游戏','小游戏','game','应用','app','工具','tool',
     ]
     const hasComplexVerb = complexVerbs.some((v) => lower.includes(v))
     const hasTechObject = techObjects.some((t) => lower.includes(t))
     if (hasComplexVerb && hasTechObject) signals += 1
-    if (hasComplexVerb && ['网站','网页','webapp','web app','site','website'].some((t) => lower.includes(t)))
+    if (
+      hasComplexVerb &&
+      ['网站','网页','webapp','web app','site','website','游戏','小游戏','game','应用','app'].some((t) =>
+        lower.includes(t),
+      )
+    )
       signals += 2
 
     if (content.length > 200 && techObjects.some((t) => lower.includes(t))) signals += 1
@@ -163,11 +169,75 @@ export async function generatePlanCardBackground(
     }
   } catch (err: any) {
     logger.error({ err: err?.message, sessionId }, 'IntentRouter: plan card generation failed')
-    const failedPlan = { kind: 'orchestrator_plan' as const, title: '计划生成失败', goal: '分析任务时出错，请稍后重试', summary: '分析任务时出错，请稍后重试', tasks: [], agents: [] }
+    const failedPlan = buildFallbackPlanCard(content, agents)
     await db.update(messages).set({ content: failedPlan.summary, metadata: { agentName: orchestratorAgent?.name ?? 'Orchestrator', plan: { ...failedPlan, messageId: loadingCard.id } } }).where(eq(messages.id, loadingCard.id))
     const [failedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
     if (failedCard) {
       broadcastSessionEvent(sessionId, { type: WsEvent.MessageCompleted, payload: { sessionId, message: failedCard } })
     }
+  }
+}
+
+function buildFallbackPlanCard(content: string, agents: any[]) {
+  const planAgents = agents.slice(0, Math.max(1, Math.min(agents.length, 3))).map((agent: any) => ({
+    key: agent.id,
+    name: agent.name ?? 'Agent',
+    role: agent.role ?? '协作成员',
+    roleType: agent.roleType,
+    color: agent.color ?? '#6366f1',
+    systemPrompt: agent.systemPrompt ?? '',
+    description: agent.description,
+    roleProfile: agent.roleProfile ?? null,
+    modelId: agent.modelId ?? null,
+    runtimeType: agent.runtimeType ?? 'llm',
+    codeAgentType: agent.codeAgentType ?? null,
+    capabilityTags: agent.capabilityTags ?? [],
+    toolPermissions: agent.toolPermissions ?? [],
+    sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
+  }))
+  const [first, second = first, third = second] = planAgents
+  const goal =
+    content
+      .replace(/@orchestrator/gi, '')
+      .replace(/@协调器/g, '')
+      .trim() || '完成多 Agent 协作任务'
+  const taskId1 = crypto.randomUUID()
+  const taskId2 = crypto.randomUUID()
+  const taskId3 = crypto.randomUUID()
+
+  return {
+    kind: 'orchestrator_plan' as const,
+    title: '默认三阶段计划',
+    goal,
+    summary: '计划生成失败，已切换为默认三阶段方案，可先审阅后再分派。',
+    agents: planAgents,
+    tasks: first
+      ? [
+          {
+            id: taskId1,
+            title: '梳理目标与交付范围',
+            description: `围绕「${goal}」明确目标、边界、关键交付物和验收标准。`,
+            agentKey: first.key,
+            dependencies: [],
+            maxRetries: 2,
+          },
+          {
+            id: taskId2,
+            title: '完成核心实现',
+            description: '基于范围说明完成主要实现，并留下可检查的文件产物。',
+            agentKey: second!.key,
+            dependencies: [taskId1],
+            maxRetries: 2,
+          },
+          {
+            id: taskId3,
+            title: '审查与收口',
+            description: '检查产物质量、风险、测试缺口和后续建议，给出最终汇报。',
+            agentKey: third!.key,
+            dependencies: [taskId2],
+            maxRetries: 2,
+          },
+        ]
+      : [],
   }
 }

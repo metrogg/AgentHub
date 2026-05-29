@@ -1,6 +1,6 @@
 import { db, messages, workspaceTasks, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
-import { runAgentReply, type AgentRunProfile } from '../agent-runner'
+import { runAgentReply, type AgentRunProfile, type MessageRow } from '../agent-runner'
 import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
 import { prepareAgentWorkdir, type AgentWorkdir } from './agent-workdir'
 import { TaskStatus } from '@agenthub/shared'
@@ -79,6 +79,7 @@ export class TaskExecutionService {
 
     // 插入 user message（orchestrator 可能已预创建）
     let userMsgId = input.existingUserMessageId
+    let userMsgRow: MessageRow | null = null
     if (!userMsgId) {
       const [userMsg] = await db
         .insert(messages)
@@ -95,6 +96,23 @@ export class TaskExecutionService {
         return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
       }
       userMsgId = userMsg.id
+      userMsgRow = userMsg as MessageRow
+    } else {
+      const [existingUserMsg] = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.id, userMsgId))
+        .limit(1)
+      if (!existingUserMsg) {
+        return {
+          status: TaskStatus.Failed,
+          output: '',
+          artifacts: [],
+          error: 'Existing user message not found for task execution',
+          durationMs: 0,
+        }
+      }
+      userMsgRow = existingUserMsg as MessageRow
     }
 
     // 更新 task 状态
@@ -116,7 +134,10 @@ export class TaskExecutionService {
         }, { once: true })
       })
 
-      const result = await Promise.race([runAgentReply(sessionId, { id: userMsgId } as any, executionProfile, envelope), timeoutPromise])
+      const result = await Promise.race([
+        runAgentReply(sessionId, userMsgRow as MessageRow, executionProfile, envelope),
+        timeoutPromise,
+      ])
 
       if (signal?.aborted) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))

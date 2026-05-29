@@ -72,6 +72,24 @@ function ensureLegacySchema(database: Database) {
   ensureColumn(database, 'workspace_tasks', 'started_at', 'ALTER TABLE workspace_tasks ADD COLUMN started_at integer')
   ensureColumn(database, 'workspace_tasks', 'completed_at', 'ALTER TABLE workspace_tasks ADD COLUMN completed_at integer')
   ensureColumn(database, 'workspace_tasks', 'error_log', 'ALTER TABLE workspace_tasks ADD COLUMN error_log text')
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'progress_percent',
+    'ALTER TABLE workspace_tasks ADD COLUMN progress_percent integer DEFAULT 0',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'progress_status',
+    'ALTER TABLE workspace_tasks ADD COLUMN progress_status text',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'clarification_count',
+    'ALTER TABLE workspace_tasks ADD COLUMN clarification_count integer DEFAULT 0',
+  )
 
   ensureColumn(
     database,
@@ -88,6 +106,36 @@ function ensureLegacySchema(database: Database) {
       workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
       state TEXT NOT NULL,
       updated_at INTEGER NOT NULL
+    )`,
+  )
+
+  ensureTable(
+    database,
+    'task_clarifications',
+    `CREATE TABLE task_clarifications (
+      id TEXT PRIMARY KEY NOT NULL,
+      run_id TEXT NOT NULL REFERENCES orchestrator_runs(id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      question TEXT NOT NULL,
+      options TEXT,
+      answer TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at INTEGER NOT NULL,
+      answered_at INTEGER
+    )`,
+  )
+
+  ensureTable(
+    database,
+    'orchestrator_run_controls',
+    `CREATE TABLE orchestrator_run_controls (
+      id TEXT PRIMARY KEY NOT NULL,
+      run_id TEXT NOT NULL REFERENCES orchestrator_runs(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,
+      target_task_id TEXT,
+      reason TEXT,
+      created_at INTEGER NOT NULL
     )`,
   )
 }

@@ -67,7 +67,7 @@ import {
 } from '../services/agent-draft'
 import { type DemoArtifact, buildDemoArtifacts, artifactSummary } from '../services/artifact-demo'
 
-import { intentRouter } from '../services/orchestrator/intent-router'
+import { generatePlanCardBackground, intentRouter } from '../services/orchestrator/intent-router'
 import { buildAgentProfile } from '../services/agents/profile-builder'
 import {
   createWorkspaceGroupSession,
@@ -1601,93 +1601,7 @@ async function generatePlanAndPushTaskBoard(
   agents: any[],
   workspaceId: string,
 ): Promise<void> {
-  const [placeholderMsg] = await db
-    .insert(messages)
-    .values({
-      sessionId,
-      senderId: 'system',
-      senderType: 'system',
-      type: 'text',
-      content: '🔍 正在分析任务，生成执行计划...',
-      metadata: { systemEvent: 'plan_generating' },
-    })
-    .returning()
-
-  if (!placeholderMsg) return
-
-  broadcastSessionEvent(sessionId, {
-    type: WsEvent.MessageCompleted,
-    payload: { sessionId, message: placeholderMsg },
-  })
-
-  try {
-    const plan = await buildDynamicOrchestratorPlan(content, agents, workspaceId)
-    const runId = randomUUID()
-
-    await db.insert(orchestratorRuns).values({
-      id: runId,
-      workspaceId,
-      groupSessionId: sessionId,
-      planMessageId: placeholderMsg.id,
-      status: 'planning',
-      plan: plan as unknown as Record<string, unknown>,
-    })
-
-    await emitRunEvent({
-      runId,
-      workspaceId,
-      groupSessionId: sessionId,
-      type: 'plan.created',
-      payload: { title: plan.title, goal: plan.goal, taskCount: plan.tasks.length },
-    })
-
-    await db
-      .update(messages)
-      .set({ content: `✅ 执行计划已生成：${plan.summary}` })
-      .where(eq(messages.id, placeholderMsg.id))
-
-    broadcastSessionEvent(sessionId, {
-      type: WsEvent.TaskBoardPlanReady,
-      payload: { runId, plan, sessionId },
-    })
-  } catch (err: any) {
-    logger.error({ err: err?.message, sessionId }, 'Plan generation failed, using fallback plan')
-
-    await db
-      .update(messages)
-      .set({ content: '⚠️ 计划生成失败，使用默认方案：架构师 → 实现者 → 审查者' })
-      .where(eq(messages.id, placeholderMsg.id))
-
-    const fallbackPlan = buildSimpleFallbackPlan(agents, content)
-    const runId = randomUUID()
-
-    await db.insert(orchestratorRuns).values({
-      id: runId,
-      workspaceId,
-      groupSessionId: sessionId,
-      planMessageId: placeholderMsg.id,
-      status: 'planning',
-      plan: fallbackPlan as unknown as Record<string, unknown>,
-    })
-
-    await emitRunEvent({
-      runId,
-      workspaceId,
-      groupSessionId: sessionId,
-      type: 'plan.created',
-      payload: {
-        title: fallbackPlan.title,
-        goal: fallbackPlan.goal,
-        taskCount: fallbackPlan.tasks.length,
-        isFallback: true,
-      },
-    })
-
-    broadcastSessionEvent(sessionId, {
-      type: WsEvent.TaskBoardPlanReady,
-      payload: { runId, plan: fallbackPlan, sessionId },
-    })
-  }
+  await generatePlanCardBackground(sessionId, content, agents, workspaceId)
 }
 
 function buildSimpleFallbackPlan(agents: any[], content?: string): OrchestratorPlan {

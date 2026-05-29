@@ -11,7 +11,12 @@ import {
 import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { type AgentArtifact, CodeAgentRunStatus, ArtifactFileStatus, type CodeAgentRunMetadata } from '@agenthub/shared'
+import {
+  type AgentArtifact,
+  CodeAgentRunStatus,
+  ArtifactFileStatus,
+  type CodeAgentRunMetadata,
+} from '@agenthub/shared'
 import { db, settings } from '@agenthub/db'
 import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
@@ -81,7 +86,6 @@ interface CodeAgentCommandResult {
   finalMessage?: string
   metadata: CodeAgentRunMetadata
 }
-
 
 export interface CodeAgentMetadataChunk {
   kind: 'code-agent-metadata'
@@ -164,10 +168,8 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     promptMode: 'stdin',
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
-      const permissionMode = (() => {
-        if (options?.sandboxPolicy === 'read-only') return 'plan'
-        return String(cfg['permissionMode'] ?? 'bypassPermissions')
-      })()
+      const permissionMode = resolveClaudePermissionMode(options?.sandboxPolicy, cfg)
+      const outputFormat = String(cfg['outputFormat'] ?? 'stream-json')
       const args: string[] = [
         '-p',
         '--input-format',
@@ -176,16 +178,22 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         '--permission-mode',
         permissionMode,
         '--output-format',
-        String(cfg['outputFormat'] ?? 'stream-json'),
-        '--include-partial-messages',
-        '--verbose',
+        outputFormat,
       ]
+      if (outputFormat === 'stream-json') {
+        args.push('--verbose', '--include-partial-messages')
+      }
       if (cfg['maxTurns']) {
         args.push('--max-turns', String(cfg['maxTurns']))
       }
       if (options?.modelId) {
         args.push('--model', options.modelId)
       }
+      if (typeof cfg['settings'] === 'string' && cfg['settings'].trim()) {
+        args.push('--settings', cfg['settings'].trim())
+      }
+      const addDirs = normalizeStringList(cfg['addDir'] ?? cfg['addDirs'])
+      for (const dir of addDirs) args.push('--add-dir', dir)
       if (
         options?.sandboxPolicy !== 'read-only' &&
         permissionMode === 'bypassPermissions' &&
@@ -692,8 +700,7 @@ async function runCodeAgentCommand(
         )
       : undefined
   const commandPrompt =
-    process.platform === 'win32' &&
-    (adapter.command === 'codex' || adapter.command === 'claude')
+    process.platform === 'win32' && (adapter.command === 'codex' || adapter.command === 'claude')
       ? buildAsciiSafePrompt(prompt)
       : prompt
   const args = adapter.buildArgs(commandPrompt, {
@@ -729,6 +736,7 @@ async function runCodeAgentCommand(
   let claudeStdoutBuffer = ''
   let claudeFinalMessage = ''
   let claudeHasStreamedText = false
+  let claudeAssistantSnapshot = ''
   const closeRunningSteps = (status: 'completed' | 'failed' = 'completed') => {
     for (const step of liveSteps) {
       if (step.status === 'running') step.status = status
@@ -873,6 +881,25 @@ async function runCodeAgentCommand(
     }
     emitLiveMetadata()
   }
+  const claudeStreamHandlers = {
+    addFile,
+    addCommand,
+    addToolCall,
+    addLog,
+    onText: (text: string) => {
+      claudeHasStreamedText = true
+      claudeFinalMessage += text
+      hooks.onText?.(text)
+    },
+    onAssistantText: (text: string) => {
+      const previous = claudeAssistantSnapshot
+      claudeAssistantSnapshot = text
+      claudeFinalMessage = text
+      if (claudeHasStreamedText) return
+      const delta = previous && text.startsWith(previous) ? text.slice(previous.length) : text
+      if (delta) hooks.onText?.(delta)
+    },
+  }
 
   addStep(
     {
@@ -929,38 +956,33 @@ async function runCodeAgentCommand(
       readProcessStream(proc.stdout, (chunk) => {
         stdout += chunk
         if (adapter.command === 'claude') {
-          claudeStdoutBuffer = consumeClaudeStreamJson(chunk, claudeStdoutBuffer, {
-            addFile,
-            addCommand,
-            addToolCall,
-            addLog,
-            onText: (text) => {
-              claudeHasStreamedText = true
-              claudeFinalMessage += text
-              hooks.onText?.(text)
-            },
-            onAssistantText: (text) => {
-              claudeFinalMessage ||= text
-              if (!claudeHasStreamedText) hooks.onText?.(text)
-            },
-          })
+          claudeStdoutBuffer = consumeClaudeStreamJson(
+            chunk,
+            claudeStdoutBuffer,
+            claudeStreamHandlers,
+          )
         } else {
           addLog('stdout', chunk)
           for (const command of parseExecutedCommands(stdout))
             addCommand(command.command, command.cwd)
-          for (const file of parseOpencodeFileOperations(stdout))
-            addFile(file.path, file.status)
+          for (const file of parseOpencodeFileOperations(stdout)) addFile(file.path, file.status)
         }
       }),
       readProcessStream(proc.stderr, (chunk) => {
         stderr += chunk
         addLog('stderr', chunk)
+        if (adapter.command === 'opencode') {
+          for (const file of parseOpencodeFileOperations(stderr)) addFile(file.path, file.status)
+        }
       }),
     ])
   } finally {
     clearTimeout(timer)
     clearInterval(heartbeat)
     signal?.removeEventListener('abort', abortRun)
+  }
+  if (adapter.command === 'claude' && claudeStdoutBuffer.trim()) {
+    claudeStdoutBuffer = consumeClaudeStreamJson('\n', claudeStdoutBuffer, claudeStreamHandlers)
   }
   const output = [
     stdout.trim(),
@@ -1260,14 +1282,7 @@ function extractClaudeResultMessage(output: string) {
       continue
     }
     if (payload?.type === 'result') {
-      const text =
-        typeof payload.result === 'string'
-          ? payload.result
-          : typeof payload.error === 'string'
-            ? payload.error
-            : typeof payload.message === 'string'
-              ? payload.message
-              : ''
+      const text = extractClaudePayloadText(payload)
       if (text) resultMessages.push(text)
     }
     if (payload?.type === 'assistant') {
@@ -1280,14 +1295,7 @@ function extractClaudeResultMessage(output: string) {
         streamText.push(delta.text)
     }
     if (payload?.type === 'error') {
-      const text =
-        typeof payload.message === 'string'
-          ? payload.message
-          : typeof payload.error === 'string'
-            ? payload.error
-            : typeof payload.detail === 'string'
-              ? payload.detail
-              : ''
+      const text = extractClaudePayloadText(payload)
       if (text) errorMessages.push(text)
     }
   }
@@ -1311,6 +1319,58 @@ function extractClaudeContentText(content: unknown): string {
     })
     .join('')
     .trim()
+}
+
+function extractClaudePayloadText(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return ''
+  const value = payload as Record<string, unknown>
+  const candidates = [
+    value.result,
+    value.message,
+    value.content,
+    value.text,
+    value.error,
+    value.stderr,
+    value.stdout,
+  ]
+  for (const candidate of candidates) {
+    const text = extractClaudeValueText(candidate)
+    if (text) return text
+  }
+  return ''
+}
+
+function extractClaudeValueText(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value)) return extractClaudeContentText(value)
+  if (!value || typeof value !== 'object') return ''
+  const record = value as Record<string, unknown>
+  if (record.type === 'text' && typeof record.text === 'string') return record.text.trim()
+  for (const key of ['message', 'text', 'content', 'result']) {
+    const nested = extractClaudeValueText(record[key])
+    if (nested) return nested
+  }
+  return ''
+}
+
+function isClaudeResultError(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return false
+  const value = payload as Record<string, unknown>
+  if (value.is_error === true || value.error === true) return true
+  const subtype = typeof value.subtype === 'string' ? value.subtype : ''
+  const status = typeof value.status === 'string' ? value.status : ''
+  return /error|failed|failure|cancel|timeout/i.test(`${subtype} ${status}`)
+}
+
+function summarizeClaudeSystemEvent(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return null
+  const value = payload as Record<string, unknown>
+  const subtype = typeof value.subtype === 'string' ? value.subtype : ''
+  if (!subtype) return null
+  if (subtype === 'init') return `Claude Code 初始化：${String(value.cwd || 'workspace')}`
+  if (subtype === 'compact') return 'Claude Code 已压缩上下文'
+  if (subtype === 'error') return extractClaudePayloadText(value) || 'Claude Code 系统事件：error'
+  return `Claude Code 系统事件：${subtype}`
 }
 
 function parseClaudeJsonLine(
@@ -1339,6 +1399,12 @@ function parseClaudeJsonLine(
     return
   }
 
+  if (payload.type === 'system') {
+    const summary = summarizeClaudeSystemEvent(payload)
+    if (summary) handlers.addLog('event', summary)
+    return
+  }
+
   if (payload.type === 'stream_event') {
     const event = payload.event
     const block = event?.content_block
@@ -1358,29 +1424,16 @@ function parseClaudeJsonLine(
   }
 
   if (payload.type === 'result' && payload.subtype) {
+    const isError = isClaudeResultError(payload)
     const message =
-      typeof payload.result === 'string'
-        ? payload.result
-        : typeof payload.error === 'string'
-          ? payload.error
-          : typeof payload.message === 'string'
-            ? payload.message
-            : payload.is_error
-              ? 'Claude Code 执行失败'
-              : 'Claude Code 执行完成'
-    handlers.addLog(payload.is_error ? 'stderr' : 'event', message)
+      extractClaudePayloadText(payload) ||
+      (isError ? 'Claude Code 执行失败' : 'Claude Code 执行完成')
+    handlers.addLog(isError ? 'stderr' : 'event', message)
     return
   }
 
   if (payload.type === 'error') {
-    const message =
-      typeof payload.message === 'string'
-        ? payload.message
-        : typeof payload.error === 'string'
-          ? payload.error
-          : typeof payload.detail === 'string'
-            ? payload.detail
-            : 'Claude Code 执行失败'
+    const message = extractClaudePayloadText(payload) || 'Claude Code 执行失败'
     handlers.addLog('stderr', message)
   }
 }
@@ -1396,13 +1449,20 @@ function recordClaudeToolUse(
 ) {
   const name = String(block.name ?? '')
   const input: Record<string, unknown> =
-    block.input && typeof block.input === 'object' ? block.input : {}
+    block.input && typeof block.input === 'object'
+      ? block.input
+      : block.params && typeof block.params === 'object'
+        ? block.params
+        : {}
   if (name) handlers.addToolCall(name, input)
   if (name === 'Bash' && typeof input.command === 'string') {
-    handlers.addCommand(input.command)
+    handlers.addCommand(input.command, typeof input.cwd === 'string' ? input.cwd : undefined)
     return
   }
-  if ((name === 'Edit' || name === 'MultiEdit') && typeof input.file_path === 'string') {
+  if (
+    (name === 'Edit' || name === 'MultiEdit' || name === 'NotebookEdit') &&
+    typeof input.file_path === 'string'
+  ) {
     handlers.addFile(input.file_path, 'modified')
     return
   }
@@ -1535,7 +1595,9 @@ function parseExecutedCommands(output: string): CodeAgentRunMetadata['commands']
   return commands.slice(0, 60)
 }
 
-function parseOpencodeFileOperations(output: string): Array<{ path: string; status: CodeAgentRunMetadata['files'][number]['status'] }> {
+function parseOpencodeFileOperations(
+  output: string,
+): Array<{ path: string; status: CodeAgentRunMetadata['files'][number]['status'] }> {
   const files: Array<{ path: string; status: CodeAgentRunMetadata['files'][number]['status'] }> = []
   const seen = new Set<string>()
   const lines = output.split(/\r?\n/)
@@ -1543,10 +1605,16 @@ function parseOpencodeFileOperations(output: string): Array<{ path: string; stat
     const match = line.match(/^←\s*(Write|Read|Edit|MultiEdit)\s+(.+)$/i)
     if (!match) continue
     const action = match[1]?.toLowerCase() ?? ''
+    if (action === 'read') continue
     const path = match[2]?.trim() ?? ''
     if (!path || seen.has(path)) continue
     seen.add(path)
-    const status = action === 'write' || action === 'multiedit' ? 'created' : action === 'edit' ? 'modified' : 'created'
+    const status =
+      action === 'write' || action === 'multiedit'
+        ? 'created'
+        : action === 'edit'
+          ? 'modified'
+          : 'created'
     files.push({ path, status })
   }
   return files
@@ -1648,8 +1716,7 @@ function isProgressLikeRuntimeLog(text: string) {
   if (/^[✓✔]\s+/.test(normalized)) return true
   if (/^[•·]\s+/.test(normalized)) return true
   if (/^>\s*[\w.-]+\s*·\s*[\w./:+-]+/i.test(normalized)) return true
-  if (/\b(Explore|Plan|Analyze|Review|Build|Write|Read)\b.*\bAgent\b/i.test(normalized))
-    return true
+  if (/\b(Explore|Plan|Analyze|Review|Build|Write|Read)\b.*\bAgent\b/i.test(normalized)) return true
   if (
     /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(
       normalized,
@@ -1682,9 +1749,19 @@ function cleanCommandText(value: string) {
 
 async function snapshotWorkspaceFiles(cwd?: string): Promise<Map<string, string>> {
   if (!cwd) return new Map()
+  if (shouldScanWorkspaceFiles(cwd)) return scanWorkspaceFiles(cwd)
   const gitSnapshot = await snapshotGitWorkspaceFiles(cwd)
   if (gitSnapshot) return gitSnapshot
   return scanWorkspaceFiles(cwd)
+}
+
+function shouldScanWorkspaceFiles(cwd: string) {
+  const normalized = cwd.replace(/\\/g, '/').toLowerCase()
+  return (
+    normalized.includes('/.agenthub/workdirs/') ||
+    normalized.includes('/.agenthub/workspaces/') ||
+    normalized.includes('/storage/workspaces/')
+  )
 }
 
 async function snapshotGitWorkspaceFiles(cwd: string): Promise<Map<string, string> | null> {
@@ -1736,7 +1813,10 @@ function scanWorkspaceFiles(root: string): Map<string, string> {
       try {
         const stats = statSync(absolutePath)
         if (!stats.isFile() && !stats.isSymbolicLink()) continue
-        snapshot.set(relativePath.replace(/\\/g, '/'), `f:${stats.size}:${Math.round(stats.mtimeMs)}`)
+        snapshot.set(
+          relativePath.replace(/\\/g, '/'),
+          `f:${stats.size}:${Math.round(stats.mtimeMs)}`,
+        )
       } catch {
         continue
       }
@@ -1786,8 +1866,16 @@ async function diffWorkspaceFiles(
   const files: CodeAgentRunMetadata['files'] = []
   for (const [path, status] of after) {
     if (before.get(path) === status) continue
-    const fileStatus = status.startsWith('f:') ? (before.has(path) ? 'modified' : 'created') : fileStatusFromGitStatus(status)
-    files.push({ path, status: fileStatus, diff: await readWorkspaceDiffForFile(cwd, path, fileStatus) })
+    const fileStatus = status.startsWith('f:')
+      ? before.has(path)
+        ? 'modified'
+        : 'created'
+      : fileStatusFromGitStatus(status)
+    files.push({
+      path,
+      status: fileStatus,
+      diff: await readWorkspaceDiffForFile(cwd, path, fileStatus),
+    })
   }
   for (const [path, status] of before) {
     if (after.has(path)) continue
@@ -2161,12 +2249,7 @@ function normalizeWindowsProcessEnv(base: Record<string, string>, allowedKeys: S
   if (process.platform !== 'win32') return
 
   const pathValue =
-    base.Path ||
-    base.PATH ||
-    Bun.env.Path ||
-    Bun.env.PATH ||
-    process.env.Path ||
-    process.env.PATH
+    base.Path || base.PATH || Bun.env.Path || Bun.env.PATH || process.env.Path || process.env.PATH
   if (pathValue && (allowedKeys.has('Path') || allowedKeys.has('PATH'))) {
     base.Path = pathValue
     base.PATH = pathValue
@@ -2478,6 +2561,82 @@ function toCodexSandbox(sandboxPolicy?: AgentRunProfile['sandboxPolicy']) {
   return 'workspace-write'
 }
 
+type ClaudePermissionMode =
+  | 'default'
+  | 'acceptEdits'
+  | 'plan'
+  | 'auto'
+  | 'dontAsk'
+  | 'bypassPermissions'
+
+function resolveClaudePermissionMode(
+  sandboxPolicy?: AgentRunProfile['sandboxPolicy'],
+  cfg: Record<string, unknown> = {},
+): ClaudePermissionMode {
+  if (sandboxPolicy === 'read-only') return 'plan'
+
+  const configured =
+    readStringConfig(cfg, 'permissionMode') ??
+    readStringConfig(cfg, 'permission-mode') ??
+    readStringConfig(cfg, 'permissions')
+  if (configured) {
+    const normalized = normalizeClaudePermissionMode(configured)
+    if (normalized) return normalized
+  }
+
+  if (cfg['skipPermissions'] === true || cfg['dangerouslySkipPermissions'] === true) {
+    return 'bypassPermissions'
+  }
+
+  return 'acceptEdits'
+}
+
+function normalizeClaudePermissionMode(value: string): ClaudePermissionMode | null {
+  const normalized = value
+    .trim()
+    .replace(/[\s_-]+/g, '')
+    .toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'default') return 'default'
+  if (normalized === 'acceptedits' || normalized === 'accept') return 'acceptEdits'
+  if (normalized === 'plan' || normalized === 'readonly' || normalized === 'read') return 'plan'
+  if (normalized === 'auto') return 'auto'
+  if (normalized === 'dontask' || normalized === 'dontprompt') return 'dontAsk'
+  if (
+    normalized === 'bypasspermissions' ||
+    normalized === 'bypass' ||
+    normalized === 'danger' ||
+    normalized === 'dangerfullaccess' ||
+    normalized === 'skippermissions'
+  ) {
+    return 'bypassPermissions'
+  }
+  return null
+}
+
+function normalizeStringList(value: unknown): string[] {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[,\n;]/)
+      : []
+  const result: string[] = []
+  const seen = new Set<string>()
+  for (const item of rawItems) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    result.push(trimmed)
+  }
+  return result
+}
+
+function readStringConfig(cfg: Record<string, unknown>, key: string) {
+  const value = cfg[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
 function withExtractedLastMessage(result: { code: number; output: string }): {
   code: number
   output: string
@@ -2626,11 +2785,17 @@ function sanitizeCodeAgentFallbackText(value: string) {
     .filter(Boolean)
     .filter((line) => !/^(Read|Write|Edit|Bash|TodoWrite|Task|Grep|Glob)\b/i.test(line))
     .filter((line) => !/^(node|npm|bun|git|powershell|cmd)(\.exe)?\s/i.test(line))
-    .filter((line) => !/CommandNotFoundException|ObjectNotFound|CategoryInfo|FullyQualifiedErrorId/i.test(line))
+    .filter(
+      (line) =>
+        !/CommandNotFoundException|ObjectNotFound|CategoryInfo|FullyQualifiedErrorId/i.test(line),
+    )
     .join('\n')
     .trim()
   if (!cleaned) return ''
-  const paragraphs = cleaned.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean)
+  const paragraphs = cleaned
+    .split(/\n{2,}/)
+    .map((item) => item.trim())
+    .filter(Boolean)
   return paragraphs.at(-1) ?? cleaned
 }
 
@@ -2675,7 +2840,11 @@ function friendlyCodeAgentError(output: string) {
   if (/Coding Tools timed out after/i.test(output)) {
     return 'Coding Tools 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。'
   }
-  if (/CommandNotFoundException|ObjectNotFound: \(node:String\)|node.*not recognized|无法将.*node|找不到.*node/i.test(output)) {
+  if (
+    /CommandNotFoundException|ObjectNotFound: \(node:String\)|node.*not recognized|无法将.*node|找不到.*node/i.test(
+      output,
+    )
+  ) {
     return 'OpenCode 已启动，但执行环境里找不到 node 命令。已补充 Windows Path/ComSpec/SystemRoot 等环境变量透传；请重启 dev server 后再试。如果仍失败，请确认本机 Node.js 已安装并在系统 Path 中。'
   }
   if (/invalid function arguments json|string, tool_call_id/i.test(output)) {
@@ -2715,4 +2884,13 @@ function quoteForSh(value: string) {
 function limitOutput(output: string, max: number) {
   if (output.length <= max) return output
   return `${output.slice(0, max)}\n... 输出已截断 ...`
+}
+
+export const __codeAgentAdapterTestHooks = {
+  buildClaudeArgs: adapters['claude-code'].buildArgs,
+  consumeClaudeStreamJson,
+  extractClaudeResultMessage,
+  normalizeStringList,
+  parseClaudeJsonLine,
+  resolveClaudePermissionMode,
 }
