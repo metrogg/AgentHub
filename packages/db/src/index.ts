@@ -80,6 +80,16 @@ function ensureLegacySchema(database: Database) {
     "ALTER TABLE workspace_agents ADD COLUMN role_type text DEFAULT 'custom' NOT NULL",
   )
   ensureColumn(database, 'workspace_agents', 'role_profile', 'ALTER TABLE workspace_agents ADD COLUMN role_profile text')
+
+  ensureTable(
+    database,
+    'workspace_states',
+    `CREATE TABLE workspace_states (
+      workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+      state TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  )
 }
 
 function ensureColumn(database: Database, table: string, column: string, statement: string) {
