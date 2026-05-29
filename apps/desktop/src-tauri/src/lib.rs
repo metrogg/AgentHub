@@ -753,28 +753,21 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         }
     }
 
-    if cfg!(debug_assertions) && health_check(8000) {
+    if cfg!(debug_assertions) {
         let dev_port_file = workspace_root_from_manifest().map(|root| root.join(".agenthub-port"));
-        if let Some(port_file) = dev_port_file.as_ref() {
-            let _ = fs::write(
-                port_file,
-                format!(
-                    r#"{{"port":{},"pid":{},"updatedAt":"desktop-dev-reuse"}}"#,
-                    8000,
-                    std::process::id()
-                ),
-            );
+        let reusable_dev_port = dev_port_file
+            .as_ref()
+            .and_then(|port_file| read_dev_port_file(port_file))
+            .or_else(|| health_check(8000).then_some(8000));
+
+        if let Some(port) = reusable_dev_port {
+            let detail = format!("正在连接本地 AgentHub dev server...\n端口: {port}");
+            set_startup_status(&window, "ready", "开发服务已就绪", &detail);
+            if let Ok(url) = tauri::Url::parse(&frontend_launch_url(port)) {
+                let _ = window.navigate(url);
+            }
+            return;
         }
-        set_startup_status(
-            &window,
-            "ready",
-            "开发服务已就绪",
-            "正在连接本地 AgentHub dev server...",
-        );
-        if let Ok(url) = tauri::Url::parse(&frontend_launch_url(8000)) {
-            let _ = window.navigate(url);
-        }
-        return;
     }
 
     set_startup_status(
@@ -858,7 +851,9 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
     };
 
     let workspace_root = workspace_root_from_manifest();
-    let dev_port_file = workspace_root.as_ref().map(|root| root.join(".agenthub-port"));
+    let dev_port_file = workspace_root
+        .as_ref()
+        .map(|root| root.join(".agenthub-port"));
     if let Some(port_file) = dev_port_file.as_ref() {
         let _ = fs::write(
             port_file,
@@ -983,6 +978,17 @@ fn workspace_root_from_manifest() -> Option<PathBuf> {
 fn find_available_port(start: u16, count: u16) -> Option<u16> {
     (start..start.saturating_add(count))
         .find(|port| TcpListener::bind(("127.0.0.1", *port)).is_ok())
+}
+
+fn read_dev_port_file(path: &Path) -> Option<u16> {
+    let raw = fs::read_to_string(path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let port = parsed.get("port")?.as_u64()?;
+    if port == 0 || port > u16::MAX as u64 {
+        return None;
+    }
+    let port = port as u16;
+    health_check(port).then_some(port)
 }
 
 fn wait_for_health(port: u16, timeout: Duration) -> bool {
