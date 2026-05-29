@@ -23,6 +23,8 @@ import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
 
+const TASK_TIMEOUT_MS = 300_000
+
 interface ChildSessionInfo {
   sessionId: string
   workspaceId: string
@@ -112,15 +114,30 @@ export class OrchestratorEngine {
     const executor: TaskExecutor = async (task, signal) => {
       let currentTask = task
       let currentAttempt = 0
+      const taskExecutionStartedAt = Date.now()
 
       while (true) {
+        const elapsed = Date.now() - taskExecutionStartedAt
+        if (elapsed > 5 * TASK_TIMEOUT_MS) {
+          logger.error({ taskId: currentTask.id, elapsedMs: elapsed, runId }, 'Task exceeded total time limit, forcing failure')
+          return {
+            taskId: currentTask.id,
+            agentId: currentTask.agentId,
+            agentName: 'Unknown',
+            status: TaskStatus.Failed,
+            output: '',
+            artifacts: [],
+            error: `任务执行总耗时超过系统上限（${5 * TASK_TIMEOUT_MS / 1000}秒），已强制终止。`,
+          }
+        }
+
         const result = await this.executeTask(currentTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, currentAttempt)
         if (result.status === TaskStatus.Done || result.status === TaskStatus.Cancelled) {
           return result
         }
 
         currentAttempt++
-        if (currentAttempt > 20) {
+        if (currentAttempt > 5) {
           logger.error({ taskId: currentTask.id, currentAttempt, runId }, 'Task exceeded maximum replan attempts, forcing failure')
           return {
             taskId: currentTask.id,
@@ -129,7 +146,7 @@ export class OrchestratorEngine {
             status: TaskStatus.Failed,
             output: '',
             artifacts: [],
-            error: '任务重试次数超过系统上限（20次），已强制终止。',
+            error: '任务重试次数超过系统上限（5次），已强制终止。',
           }
         }
 
@@ -385,7 +402,7 @@ export class OrchestratorEngine {
       // 修复 Bug 23: 使用 scheduler 的 run signal，使 auto-review 可被取消
       const reviewSignal = this.scheduler.getRunSignal(runId) ?? new AbortController().signal
       const reviewResults = await this.injectAutoReviewTasks(
-        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, reviewSignal,
+        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, reviewSignal, executor,
       )
       if (reviewResults.length > 0) {
         results.push(...reviewResults)
@@ -1005,6 +1022,7 @@ export class OrchestratorEngine {
   /**
    * Auto-review chain: Coder -> Verifier -> Reviewer
    * 为 code 类型且 requiresReview 的已完成任务自动注入验证和审查任务
+   * 所有 verify/review 任务作为 DAG 节点并行调度
    */
   private async injectAutoReviewTasks(
     plan: ExecutionPlan,
@@ -1015,6 +1033,7 @@ export class OrchestratorEngine {
     workspaceId: string,
     ownerId: string,
     signal: AbortSignal,
+    executor: TaskExecutor,
   ): Promise<TaskResult[]> {
     const chainResults: TaskResult[] = []
     const codeTasksNeedingReview = plan.tasks.filter((task) => {
@@ -1037,14 +1056,15 @@ export class OrchestratorEngine {
         return text.includes('review') || text.includes('审查')
       }) ?? plan.agents.find((a) => a.id !== firstCodeTask.agentId) ?? plan.agents[0]
 
+    const autoReviewTasks: ExecutionTask[] = []
+
     for (const codeTask of codeTasksNeedingReview) {
-      const codeResult = results.find((r) => r.taskId === codeTask.id)
-      if (!codeResult) continue
+      let verifyTaskId: string | null = null
 
       // === Step 1: Verifier ===
       if (verifierAgent) {
-        const verifyTaskId = `verify-${codeTask.id}`
-        if (!plan.tasks.some((t) => t.id === verifyTaskId)) {
+        verifyTaskId = `verify-${codeTask.id}`
+        if (!plan.tasks.some((t) => t.id === verifyTaskId) && !autoReviewTasks.some((t) => t.id === verifyTaskId)) {
           const verifyTask: ExecutionTask = {
             id: verifyTaskId,
             title: `验证 ${codeTask.title}`,
@@ -1076,6 +1096,7 @@ export class OrchestratorEngine {
           })
 
           plan.tasks.push(verifyTask)
+          autoReviewTasks.push(verifyTask)
 
           await emitRunEvent({
             runId,
@@ -1087,41 +1108,21 @@ export class OrchestratorEngine {
             severity: 'info',
             payload: { title: verifyTask.title, reason: 'Auto-verify after code task', parentTaskId: codeTask.id },
           })
-
-          const verifyResult = await this.executeTask(verifyTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, 0)
-          chainResults.push(verifyResult)
-
-          logger.info({ verifyTaskId, codeTaskId: codeTask.id, status: verifyResult.status }, 'Auto-verify task completed')
-
-          // If verification failed, skip reviewer and mark as blocked
-          if (verifyResult.status !== 'done') {
-            await emitRunEvent({
-              runId,
-              workspaceId,
-              groupSessionId,
-              taskId: codeTask.id,
-              agentId: codeTask.agentId,
-              type: 'task.failed',
-              severity: 'warning',
-              payload: { title: codeTask.title, reason: 'Verification failed, skipping review', verifyTaskId },
-            })
-            continue
-          }
         }
       }
 
-      // === Step 2: Reviewer (only if verifier passed or no verifier) ===
+      // === Step 2: Reviewer (depends on verifier if present, otherwise code task) ===
       if (!reviewerAgent) continue
 
       const reviewTaskId = `review-${codeTask.id}`
-      if (plan.tasks.some((t) => t.id === reviewTaskId)) continue
+      if (plan.tasks.some((t) => t.id === reviewTaskId) || autoReviewTasks.some((t) => t.id === reviewTaskId)) continue
 
       const reviewTask: ExecutionTask = {
         id: reviewTaskId,
         title: `审查 ${codeTask.title}`,
         description: `审查「${codeTask.title}」的代码变更质量、安全性和最佳实践。关注：代码风格一致性、潜在bug、安全漏洞、性能问题。`,
         agentId: reviewerAgent.id,
-        dependencies: [codeTask.id],
+        dependencies: verifyTaskId ? [verifyTaskId] : [codeTask.id],
         taskType: 'review',
         maxRetries: 1,
       }
@@ -1142,11 +1143,12 @@ export class OrchestratorEngine {
         status: 'pending',
         orderIdx: plan.tasks.length,
         runId,
-        dependencies: [codeTask.id],
+        dependencies: verifyTaskId ? [verifyTaskId] : [codeTask.id],
         maxRetries: 1,
       })
 
       plan.tasks.push(reviewTask)
+      autoReviewTasks.push(reviewTask)
 
       await emitRunEvent({
         runId,
@@ -1158,11 +1160,41 @@ export class OrchestratorEngine {
         severity: 'info',
         payload: { title: reviewTask.title, reason: 'Auto-review after code task', parentTaskId: codeTask.id },
       })
+    }
 
-      const reviewResult = await this.executeTask(reviewTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, 0)
-      chainResults.push(reviewResult)
+    // 通过 DAG 调度器并行执行所有 auto-review 任务
+    if (autoReviewTasks.length > 0) {
+      const autoReviewPlan: ExecutionPlan = {
+        runId,
+        title: `Auto-Review: ${plan.title}`,
+        goal: plan.goal,
+        agents: plan.agents,
+        tasks: autoReviewTasks,
+      }
 
-      logger.info({ reviewTaskId, codeTaskId: codeTask.id, status: reviewResult.status }, 'Auto-review task completed')
+      const reviewResults = await this.scheduler.executePlan(autoReviewPlan, executor)
+
+      for (const result of reviewResults) {
+        chainResults.push(result)
+
+        const codeTaskId = result.taskId.replace(/^(verify-|review-)/, '')
+        const codeTask = codeTasksNeedingReview.find((t) => t.id === codeTaskId)
+
+        if (result.taskId.startsWith('verify-') && result.status !== 'done') {
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: codeTaskId,
+            agentId: codeTask?.agentId ?? '',
+            type: 'task.failed',
+            severity: 'warning',
+            payload: { title: codeTask?.title ?? '', reason: 'Verification failed, skipping review', verifyTaskId: result.taskId },
+          })
+        }
+
+        logger.info({ taskId: result.taskId, codeTaskId, status: result.status }, 'Auto-review task completed')
+      }
     }
 
     return chainResults
