@@ -134,7 +134,11 @@ export class TaskExecutionService {
         }, { once: true })
       })
 
+<<<<<<< HEAD
       const result = await Promise.race([runAgentReply(sessionId, userMsg as MessageRow, executionProfile, envelope), timeoutPromise])
+=======
+      const result = await Promise.race([runAgentReply(sessionId, userMsg, executionProfile, envelope), timeoutPromise])
+>>>>>>> 907ff42 (fixed：这条链路收住了：task-execution-service.ts (line 88) 现在会读取完整的既有 user message，并优先按 runAgentReply 的 messageId 取 Agent 输出，之前那个把 prompt 里的 [CLARIFY] 示例当成回复的误判没了；code-agent-adapter.ts (line 531) 也把 OpenCode 在 ENABLE_LOCAL_CLI_PROBES=false 时的误用路径堵上了。OPENAI_API_KEY 本身还是正规环境变量来源，这次 401 的根因是 LLM_API_KEY 回退被拿去驱动了不该驱动的运行时。)
 
       if (signal?.aborted) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
