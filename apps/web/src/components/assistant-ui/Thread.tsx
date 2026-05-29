@@ -36,6 +36,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleHelp,
   Clock3,
   Copy,
   Download,
@@ -44,7 +45,6 @@ import {
   FileText,
   FolderOpen,
   FolderPlus,
-  FolderX,
   GitBranch,
   Globe2,
   ImagePlus,
@@ -111,6 +111,7 @@ import {
   pickWorkspaceFolder,
 } from '../../lib/native'
 import { sendModeShouldSubmit, shouldInsertNewline, useShortcutSettings } from '../../lib/shortcuts'
+import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { cn } from '../../lib/utils'
 import {
   isProjectWorkspace,
@@ -1380,11 +1381,10 @@ const Composer: FC = () => {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
     try {
-      const full = await api.createWorkspace({
-        name: '空白工作区',
+      const full = await api.createAutoWorkspace({
+        name: '新工作空间',
         goal: '',
-        projectPath: null,
-        template: 'classic',
+        template: 'blank',
       })
       setWorkspaces((items) => [
         full.workspace,
@@ -1439,16 +1439,6 @@ const Composer: FC = () => {
     }
   }
 
-  function clearWorkspaceContext() {
-    if (currentSessionId) {
-      void setSessionWorkspace(currentSessionId, null)
-        .then(fetchSessions)
-        .catch((err) => showHint(friendlyErrorMessage(err, '清除工作区失败')))
-    }
-    setMenu(null)
-    showHint('已清除工作区')
-  }
-
   function syncComposerTextFromInput() {
     const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
     setComposerText(input?.value ?? '')
@@ -1499,7 +1489,6 @@ const Composer: FC = () => {
               onOpenWorkspace={(workspaceId) => void openWorkspace(workspaceId)}
               onCreateBlankWorkspace={() => void createBlankWorkspace()}
               onOpenFolderWorkspace={() => void openFolderFromComposer()}
-              onClearWorkspace={clearWorkspaceContext}
               onPlanMode={(next) => {
                 setPlanMode(next)
                 showHint(next ? '已开启计划模式' : '已关闭计划模式')
@@ -1782,7 +1771,6 @@ const ComposerMenu: FC<{
   onOpenWorkspace: (workspaceId: string) => void
   onCreateBlankWorkspace: () => void
   onOpenFolderWorkspace: () => void
-  onClearWorkspace: () => void
   onPlanMode: (enabled: boolean) => void
   onPick: (value: string) => void
   onClose: () => void
@@ -1798,13 +1786,11 @@ const ComposerMenu: FC<{
   onOpenWorkspace,
   onCreateBlankWorkspace,
   onOpenFolderWorkspace,
-  onClearWorkspace,
   onPlanMode,
   onPick,
   onClose,
 }) => {
   const [workspaceQuery, setWorkspaceQuery] = useState('')
-  const [addProjectOpen, setAddProjectOpen] = useState(false)
   const normalizedAgentQuery = agentQuery.trim().toLowerCase()
   const legacyAgents = [
     { title: '@Orchestrator', desc: '总指挥，规划阶段并调度 Agent 集群', color: '#7c3aed' },
@@ -1977,51 +1963,36 @@ const ComposerMenu: FC<{
             )}
           </div>
           <div className="mt-1 border-t border-neutral-200 pt-1.5">
-            <div className="relative group/new-project">
+            <div className="mb-1 flex items-center justify-between gap-2 px-2">
+              <span className="text-xs font-medium text-neutral-400">工作空间来源</span>
               <button
                 type="button"
-                onClick={() => setAddProjectOpen((open) => !open)}
-                className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50"
+                onClick={requestSettingsDialog}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+                aria-label="前往系统设置"
+                title="可前往「系统设置」设置默认工作空间存储路径"
               >
-                <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
-                <span className="min-w-0 flex-1 truncate text-neutral-900">添加工作区</span>
-                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                <CircleHelp className="h-4 w-4" />
               </button>
-              <div
-                className={cn(
-                  'agenthub-menu-flyout absolute bottom-0 left-[calc(100%+0.35rem)] w-56 -translate-x-1 scale-95 rounded-2xl border border-neutral-200 bg-white p-1.5 opacity-0 shadow-xl transition group-hover/new-project:visible group-hover/new-project:translate-x-0 group-hover/new-project:scale-100 group-hover/new-project:opacity-100',
-                  addProjectOpen
-                    ? 'visible translate-x-0 scale-100 opacity-100'
-                    : 'invisible opacity-0',
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={onCreateBlankWorkspace}
-                  disabled={workspaceBusy}
-                  className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-100 disabled:opacity-60"
-                >
-                  <Plus className="h-4 w-4 shrink-0 text-neutral-600" />
-                  新建空白工作区
-                </button>
-                <button
-                  type="button"
-                  onClick={onOpenFolderWorkspace}
-                  disabled={workspaceBusy}
-                  className="flex h-9 w-full items-center gap-2.5 rounded-lg bg-neutral-100 px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-200 disabled:opacity-60"
-                >
-                  <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                  使用现有文件夹
-                </button>
-              </div>
             </div>
             <button
               type="button"
-              onClick={onClearWorkspace}
-              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50"
+              onClick={onCreateBlankWorkspace}
+              disabled={workspaceBusy}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
             >
-              <FolderX className="h-4 w-4 shrink-0 text-neutral-600" />
-              不使用工作区
+              <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
+              <span className="min-w-0 flex-1 truncate">从新工作空间开始</span>
+              {!currentWorkspaceId && <Check className="h-4 w-4 shrink-0 text-emerald-500" />}
+            </button>
+            <button
+              type="button"
+              onClick={onOpenFolderWorkspace}
+              disabled={workspaceBusy}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
+            >
+              <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+              <span className="min-w-0 flex-1 truncate">打开本地工作空间</span>
             </button>
           </div>
         </div>
@@ -3000,6 +2971,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
   const commands = data.commands ?? []
   const toolCalls = data.toolCalls ?? []
   const logs = data.logs ?? []
+  const eventCount = logs.filter((log) => displayLogStream(log) === 'event').length
   const steps = useMemo(() => codeAgentProcessSteps(data), [data])
   const hasDetails =
     toolCalls.length > 0 || commands.length > 0 || changedFiles.length > 0 || logs.length > 0
@@ -3009,6 +2981,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
       <CodeAgentStatusCard
         data={data}
         commandCount={commands.length}
+        eventCount={eventCount}
         fileCount={changedFiles.length}
         toolCount={toolCalls.length}
       />
@@ -3032,9 +3005,10 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
 const CodeAgentStatusCard: FC<{
   commandCount: number
   data: CodeAgentRunMetadata
+  eventCount: number
   fileCount: number
   toolCount: number
-}> = ({ commandCount, data, fileCount, toolCount }) => {
+}> = ({ commandCount, data, eventCount, fileCount, toolCount }) => {
   const statusTone =
     data.status === 'running'
       ? 'text-blue-600'
@@ -3077,6 +3051,11 @@ const CodeAgentStatusCard: FC<{
             icon={<FileText className="h-3.5 w-3.5" />}
             label="文件"
             value={fileCount}
+          />
+          <CodeAgentMiniStat
+            icon={<ListTodo className="h-3.5 w-3.5" />}
+            label="事件"
+            value={eventCount}
           />
         </div>
       </div>
@@ -3724,6 +3703,10 @@ function isProgressLikeCodeAgentLog(text: string) {
     ) ||
     /^#\s*Todos\b/i.test(normalized) ||
     /^\[[ xX-]\]\s+/.test(normalized) ||
+    /^[✓✔]\s+/.test(normalized) ||
+    /^[•·]\s+/.test(normalized) ||
+    /^>\s*[\w.-]+\s*·\s*[\w./:+-]+/i.test(normalized) ||
+    /\b(Explore|Plan|Analyze|Review|Build|Write|Read)\b.*\bAgent\b/i.test(normalized) ||
     /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(
       normalized,
     ) ||

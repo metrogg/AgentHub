@@ -14,7 +14,7 @@ const TASK_ROLE_MATCH: Record<NonNullable<ExecutionTask['taskType']>, string[]> 
   test: ['verifier', 'reviewer', 'coder'],
   verify: ['verifier'],
   review: ['reviewer'],
-  synthesize: ['integrator', 'architect'],
+  synthesize: ['integrator', 'orchestrator', 'architect'],
 }
 
 const TASK_TAG_MATCH: Record<NonNullable<ExecutionTask['taskType']>, string[]> = {

@@ -88,8 +88,8 @@ export function buildGroupChatAgent(
 }
 
 /**
- * 构建带 worktree 路径覆盖的 AgentRunProfile。
- * 用于 orchestrator 场景：projectPath 被 worktree 路径覆盖，原始路径存入 originalProjectPath。
+ * 构建带执行目录覆盖的 AgentRunProfile。
+ * 参数名保留 worktreePath 兼容旧调用；当前也可传普通 Agent 工作目录。
  */
 export function buildAgentProfileWithWorktree(
   agent: AgentRow,

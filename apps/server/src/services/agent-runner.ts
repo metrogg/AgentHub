@@ -247,7 +247,7 @@ async function _runAgentReply(
               codeAgentRun = chunk.metadata as Record<string, unknown>
               broadcast(sessionId, {
                 type: 'message:metadata',
-                payload: { sessionId, messageId: streamMsgId, codeAgentRun: chunk.metadata },
+                payload: { sessionId, messageId: streamMsgId, agentId, agentName, codeAgentRun: chunk.metadata },
               })
             }
             break
@@ -256,7 +256,7 @@ async function _runAgentReply(
             // 修复 Bug 16: 实时广播 artifact 更新
             broadcast(sessionId, {
               type: 'message:metadata',
-              payload: { sessionId, messageId: streamMsgId, codeAgentRun: { artifacts } },
+              payload: { sessionId, messageId: streamMsgId, agentId, agentName, codeAgentRun: { artifacts } },
             })
             break
         }

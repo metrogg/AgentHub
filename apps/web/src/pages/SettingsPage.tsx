@@ -85,6 +85,7 @@ interface AppSettings {
   gitAuthor: string
   gitEmail: string
   envVars: Array<{ id: string; key: string; value: string }>
+  workspaceStorageRoot: string
   worktreeRoot: string
   isolateWorktrees: boolean
   browserProvider: string
@@ -163,7 +164,8 @@ const defaultAppSettings: AppSettings = {
     { id: 'openai', key: 'OPENAI_API_KEY', value: '' },
     { id: 'anthropic', key: 'ANTHROPIC_API_KEY', value: '' },
   ],
-  worktreeRoot: 'F:\\Learning\\AgentHub\\.worktrees',
+  workspaceStorageRoot: '',
+  worktreeRoot: '',
   isolateWorktrees: true,
   browserProvider: '内置浏览器',
   browserViewport: '1440x900',
@@ -530,6 +532,38 @@ function SettingsContent({
     showActionMessage(t('已打开数据目录'))
   }
 
+  function resolvedWorkspaceRoot() {
+    const configured = settings.workspaceStorageRoot.trim()
+    if (configured) return configured
+    const base = settings.dataPath.trim()
+    if (!base) return 'workspaces'
+    const separator = base.includes('\\') ? '\\' : '/'
+    return `${base.replace(/[\\/]+$/, '')}${separator}workspaces`
+  }
+
+  async function openWorkspaceRoot() {
+    await openPathWithFallback(resolvedWorkspaceRoot())
+    showActionMessage(t('已打开默认工作空间目录'))
+  }
+
+  async function changeWorkspaceRoot() {
+    const path = isDesktopApp()
+      ? await pickWorkspaceFolder()
+      : window.prompt(t('请输入默认工作空间存储路径'), resolvedWorkspaceRoot())
+    if (!path) {
+      showActionMessage(t('已取消选择'))
+      return
+    }
+    patchSettings({ workspaceStorageRoot: path })
+    showActionMessage(t('默认工作空间存储路径已更新'))
+  }
+
+  async function createWorkspaceRoot() {
+    const result = await api.ensureStorageDirectory(resolvedWorkspaceRoot())
+    patchSettings({ workspaceStorageRoot: result.path })
+    showActionMessage(t('默认工作空间目录已创建'))
+  }
+
   async function openConfiguredPath(path: string | undefined, successMessage: string) {
     if (!path) throw new Error(t('路径尚未就绪'))
     await openPathWithFallback(path)
@@ -612,6 +646,40 @@ function SettingsContent({
               <div className="flex flex-wrap gap-2">
                 <button type="button" disabled={busyAction === 'debug-dir'} onClick={() => void runAction('debug-dir', openDebugDirectory)} className="settings-soft-button">{t('打开调试目录')}</button>
                 <button type="button" disabled={busyAction === 'general-info'} onClick={() => void runAction('general-info', refreshGeneralInfo)} className="settings-soft-button">{t('刷新状态')}</button>
+              </div>
+            </InsetPanel>
+          </SettingsSection>
+          <SettingsSection
+            title="默认工作空间存储路径"
+            desc="未选择工作空间直接开始对话时，会在这里自动创建新的本地文件夹。"
+          >
+            <InsetPanel>
+              <InfoRow label="当前路径" value={resolvedWorkspaceRoot()} />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busyAction === 'workspace-root'}
+                  onClick={() => void runAction('workspace-root', openWorkspaceRoot)}
+                  className="settings-soft-button"
+                >
+                  {t('打开目录')}
+                </button>
+                <button
+                  type="button"
+                  disabled={busyAction === 'workspace-root'}
+                  onClick={() => void runAction('workspace-root', changeWorkspaceRoot)}
+                  className="settings-soft-button"
+                >
+                  {t('更改位置')}
+                </button>
+                <button
+                  type="button"
+                  disabled={busyAction === 'workspace-root'}
+                  onClick={() => void runAction('workspace-root', createWorkspaceRoot)}
+                  className="settings-soft-button"
+                >
+                  {t('创建目录')}
+                </button>
               </div>
             </InsetPanel>
           </SettingsSection>

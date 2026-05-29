@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -232,6 +232,52 @@ describe('AgentHub smoke tests', () => {
     await waitForTaskStatus(full.workspace.id, task.id, 'failed')
 
     globalThis.fetch = globalMockedFetch
+  })
+
+  test('auto workspace creates a local project folder under configured root', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'agenthub-auto-workspace-'))
+    await json<{ success: boolean }>(
+      await postJson('/api/settings', {
+        APP_SETTINGS: JSON.stringify({ workspaceStorageRoot: workspaceRoot }),
+      }),
+    )
+
+    const full = await json<{
+      workspace: { id: string; name: string; projectPath: string | null }
+    }>(
+      await postJson('/api/workspaces/auto', {
+        name: 'Auto workspace smoke',
+        goal: 'Verify automatic folder allocation',
+        template: 'blank',
+      }),
+    )
+
+    expect(full.workspace.id).toBeTruthy()
+    expect(full.workspace.name).toBe('Auto workspace smoke')
+    expect(full.workspace.projectPath?.startsWith(workspaceRoot)).toBe(true)
+    expect(existsSync(full.workspace.projectPath!)).toBe(true)
+  })
+
+  test('agent workdir is seeded from workspace without requiring git', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'agenthub-workdir-'))
+    writeFileSync(join(projectRoot, 'index.html'), '<main>hello</main>')
+    mkdirSync(join(projectRoot, 'node_modules'), { recursive: true })
+    writeFileSync(join(projectRoot, 'node_modules', 'ignored.txt'), 'skip me')
+
+    const { prepareAgentWorkdir } =
+      await import('../apps/server/src/services/execution/agent-workdir')
+    const workdir = prepareAgentWorkdir({
+      projectPath: projectRoot,
+      runId: 'run-1',
+      taskId: 'task-1',
+      agentId: 'coder',
+      agentName: 'Coder',
+      sandboxPolicy: 'workspace-write',
+    })
+
+    expect(workdir?.executionPath).toContain(join('.agenthub', 'workdirs'))
+    expect(existsSync(join(workdir!.executionPath, 'index.html'))).toBe(true)
+    expect(existsSync(join(workdir!.executionPath, 'node_modules', 'ignored.txt'))).toBe(false)
   })
 
   test('classic workspace seeds role agents and editable relations', async () => {
@@ -1268,6 +1314,107 @@ describe('AgentHub smoke tests', () => {
     expect(body.items[0]!.taskId).toBe('scan')
   })
 
+  test('Claude Code adapter follows official headless CLI contracts', async () => {
+    const { __codeAgentAdapterTestHooks } =
+      await import('../apps/server/src/services/code-agent-adapter')
+
+    const args = __codeAgentAdapterTestHooks.buildClaudeArgs('hello', {
+      sandboxPolicy: 'workspace-write',
+      modelId: 'claude-sonnet-4',
+      toolConfig: {
+        settings: 'C:/agenthub/claude-settings.json',
+        addDirs: ['C:/project/shared', 'C:/project/design'],
+      },
+    })
+    expect(args).toContain('--permission-mode')
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('acceptEdits')
+    expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json')
+    expect(args).toContain('--verbose')
+    expect(args).toContain('--include-partial-messages')
+    expect(args).toContain('--settings')
+    expect(args).toContain('C:/agenthub/claude-settings.json')
+    expect(args.filter((item) => item === '--add-dir')).toHaveLength(2)
+
+    const readOnlyArgs = __codeAgentAdapterTestHooks.buildClaudeArgs('hello', {
+      sandboxPolicy: 'read-only',
+      toolConfig: { permissionMode: 'bypassPermissions', skipPermissions: true },
+    })
+    expect(readOnlyArgs[readOnlyArgs.indexOf('--permission-mode') + 1]).toBe('plan')
+    expect(readOnlyArgs).not.toContain('--dangerously-skip-permissions')
+
+    const dangerArgs = __codeAgentAdapterTestHooks.buildClaudeArgs('hello', {
+      sandboxPolicy: 'danger-full-access',
+      toolConfig: { permissionMode: 'bypassPermissions' },
+    })
+    expect(dangerArgs[dangerArgs.indexOf('--permission-mode') + 1]).toBe('bypassPermissions')
+    expect(dangerArgs).toContain('--dangerously-skip-permissions')
+  })
+
+  test('Claude Code stream-json parser records tools, files, commands, and final text', async () => {
+    const { __codeAgentAdapterTestHooks } =
+      await import('../apps/server/src/services/code-agent-adapter')
+    const commands: Array<{ command: string; cwd?: string }> = []
+    const files: Array<{ path: string; status: string }> = []
+    const toolCalls: Array<{ name: string; input?: Record<string, unknown> }> = []
+    const logs: Array<{ stream: string; text: string }> = []
+    let text = ''
+    const handlers = {
+      addCommand: (command: string, cwd?: string) => commands.push({ command, cwd }),
+      addFile: (path: string, status: any) => files.push({ path, status }),
+      addToolCall: (name: string, input?: Record<string, unknown>) =>
+        toolCalls.push({ name, input }),
+      addLog: (stream: any, logText: string) => logs.push({ stream, text: logText }),
+      onText: (chunk: string) => {
+        text += chunk
+      },
+    }
+
+    const lines = [
+      { type: 'system', subtype: 'init', cwd: 'C:/project' },
+      {
+        type: 'stream_event',
+        event: {
+          content_block: {
+            type: 'tool_use',
+            name: 'Bash',
+            input: { command: 'bun test', cwd: 'C:/project' },
+          },
+        },
+      },
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'Write', input: { file_path: 'src/report.md' } },
+            { type: 'text', text: '完成' },
+          ],
+        },
+      },
+      { type: 'result', subtype: 'success', result: '全部完成' },
+    ].map((line) => JSON.stringify(line))
+    let buffer = __codeAgentAdapterTestHooks.consumeClaudeStreamJson(
+      `${lines[0]}\n${lines[1]!.slice(0, 30)}`,
+      '',
+      handlers,
+    )
+    buffer = __codeAgentAdapterTestHooks.consumeClaudeStreamJson(
+      `${lines[1]!.slice(30)}\n${lines[2]}\n${lines[3]}`,
+      buffer,
+      handlers,
+    )
+    buffer = __codeAgentAdapterTestHooks.consumeClaudeStreamJson('\n', buffer, handlers)
+
+    expect(commands).toEqual([{ command: 'bun test', cwd: 'C:/project' }])
+    expect(files).toEqual([{ path: 'src/report.md', status: 'created' }])
+    expect(toolCalls.map((item) => item.name)).toEqual(['Bash', 'Write'])
+    expect(text).toBe('完成')
+    expect(logs.map((item) => item.text)).toContain('全部完成')
+    expect(buffer).toBe('')
+    expect(__codeAgentAdapterTestHooks.extractClaudeResultMessage(lines.join('\n'))).toBe(
+      '全部完成',
+    )
+  })
+
   test('GitBranchManager prepares and cleans up agent branches', async () => {
     const { GitBranchManager } = await import('../apps/server/src/services/git/branch-manager')
     const gitDir = mkdtempSync(join(tmpdir(), 'agenthub-git-'))
@@ -1318,5 +1465,5 @@ describe('AgentHub smoke tests', () => {
     await manager.cleanupBranch(branchCtx)
     const afterCleanup = await exec(['show-ref', '--verify', `refs/heads/${branchCtx.branch}`])
     expect(afterCleanup).not.toBe(0)
-  })
+  }, 15_000)
 })

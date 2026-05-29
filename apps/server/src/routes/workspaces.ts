@@ -19,6 +19,7 @@ import { ensureGroupSession } from '../services/workspace/group-session'
 import { workspaceAgentRunProfile, getActiveRunSessionIds } from '../services/workspace/agent-runtime'
 import { taskExecutionService } from '../services/execution/task-execution-service'
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
+import { createAutoWorkspaceFolder } from '../services/workspace/auto-workspace'
 import { TaskStatus } from '@agenthub/shared'
 
 // ---------- Validation schemas ----------
@@ -27,6 +28,12 @@ const createWorkspaceSchema = z.object({
   name: z.string().min(1).max(120),
   goal: z.string().max(2000).default(''),
   projectPath: z.string().max(1000).nullable().optional(),
+  template: z.enum(['blank', 'classic']).optional(),
+})
+
+const createAutoWorkspaceSchema = z.object({
+  name: z.string().max(120).optional(),
+  goal: z.string().max(2000).default(''),
   template: z.enum(['blank', 'classic']).optional(),
 })
 
@@ -173,6 +180,30 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       await seedClassicAgents(ws.id)
     }
     ensureHarnessPresets(projectPath)
+    return c.json(await loadWorkspaceFull(ws.id, user.sub))
+  })
+
+  // Create with a generated local folder when no project path is chosen yet
+  .post('/auto', zValidator('json', createAutoWorkspaceSchema), async (c) => {
+    const user = c.get('user')
+    const input = c.req.valid('json')
+    const folder = await createAutoWorkspaceFolder(input.name ?? input.goal ?? null)
+    const workspaceName = (input.name?.trim() || folder.folderName).slice(0, 120)
+    const [ws] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: user.sub,
+        name: workspaceName,
+        goal: input.goal,
+        projectPath: folder.projectPath,
+      })
+      .returning()
+    if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
+
+    if (input.template === 'classic') {
+      await seedClassicAgents(ws.id)
+    }
+    ensureHarnessPresets(folder.projectPath)
     return c.json(await loadWorkspaceFull(ws.id, user.sub))
   })
 

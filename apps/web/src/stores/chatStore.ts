@@ -821,7 +821,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               phaseId: t.phaseId || '',
               title: t.title || '',
               description: t.description || '',
-              agentName: t.agentKey || t.agentId || '',
+              agentName: t.agentName || t.agentKey || t.agentId || '',
               status: 'pending' as const,
               dependencies: t.dependencies || [],
             })),
