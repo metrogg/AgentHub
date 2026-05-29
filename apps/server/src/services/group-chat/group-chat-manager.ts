@@ -22,6 +22,7 @@ import { buildDynamicOrchestratorPlan } from '../orchestrator/plan-generator'
 import type { GroupChatAgent, GroupChatConfig, GroupChatMessage, GroupChatState } from './types'
 import { DEFAULT_GROUP_CHAT_CONFIG } from './types'
 import { WsEvent } from '@agenthub/shared'
+import { buildGroupChatAgent, buildAgentProfile } from '../agents/profile-builder'
 
 /**
  * 从消息内容中提取 @mention 的 Agent
@@ -217,6 +218,7 @@ export class GroupChatManager {
     // 如果是复杂任务且由 Orchestrator 接收，额外生成计划卡片
     if (currentAgent === orchestrator && this.isComplexTask(params.content)) {
       this.triggerOrchestratorPlan({ workspaceId, sessionId, content: params.content, agents })
+      return
     }
 
     // 对话循环：当前 Agent 回复 → 检查 @mention → 下一个 Agent
@@ -832,48 +834,12 @@ async function resolveGroupWorkspaceId(sessionId: string, fallbackWorkspaceId: s
 }
 
 function toGroupChatAgent(row: typeof workspaceAgents.$inferSelect): GroupChatAgent {
-  return {
-    id: row.id,
-    name: row.name,
-    role: row.role,
-    roleType: (row.roleType as GroupChatAgent['roleType']) ?? undefined,
-    description: row.description,
-    systemPrompt: row.systemPrompt ?? undefined,
-    color: row.color ?? undefined,
-    modelId: row.modelId,
-    runtimeType: (row.runtimeType as AgentRunProfile['runtimeType']) ?? 'llm',
-    codeAgentType: (row.codeAgentType as AgentRunProfile['codeAgentType']) ?? undefined,
-    capabilityTags: row.capabilityTags ?? [],
-    toolPermissions: row.toolPermissions ?? [],
-    sandboxPolicy: (row.sandboxPolicy as AgentRunProfile['sandboxPolicy']) ?? 'workspace-write',
-    contextPolicy: 'workspace-aware',
-    approvalRequired: false,
-    responseStrategy: 'when_relevant',
-    canDelegateTo: [],
-    maxConsecutiveTurns: 3,
-  }
+  return buildGroupChatAgent(row)
 }
 
 /**
  * 将 GroupChatAgent 转换为 AgentRunProfile（给 agent-runner 使用）
  */
 function toAgentProfile(agent: GroupChatAgent, projectPath: string | null): AgentRunProfile {
-  return {
-    id: agent.id,
-    name: agent.name,
-    role: agent.role,
-    roleType: agent.roleType,
-    description: agent.description,
-    color: agent.color,
-    modelId: agent.modelId,
-    runtimeType: agent.runtimeType,
-    codeAgentType: agent.codeAgentType,
-    capabilityTags: agent.capabilityTags,
-    toolPermissions: agent.toolPermissions,
-    sandboxPolicy: agent.sandboxPolicy,
-    contextPolicy: agent.contextPolicy,
-    approvalRequired: agent.approvalRequired,
-    systemPrompt: agent.systemPrompt,
-    projectPath: projectPath?.trim() || null,
-  }
+  return buildAgentProfile(agent, projectPath)
 }

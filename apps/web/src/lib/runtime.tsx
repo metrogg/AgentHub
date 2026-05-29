@@ -7,7 +7,8 @@ import {
   type ThreadMessageLike,
 } from '@assistant-ui/react'
 import { useChatStore } from '../stores/chatStore'
-import type { AgentArtifact, ChatAttachment, CodeAgentRunMetadata, Message } from './api'
+import type { AgentArtifact, ChatAttachment, Message } from './api'
+import type { CodeAgentRunMetadata } from '@agenthub/shared'
 
 function toThreadMessage(message: Message): ThreadMessageLike {
   const role: ThreadMessageLike['role'] =

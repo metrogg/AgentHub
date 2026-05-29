@@ -10,7 +10,7 @@ import {
 import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { type AgentArtifact, CodeAgentRunStatus, ArtifactFileStatus } from '@agenthub/shared'
+import { type AgentArtifact, CodeAgentRunStatus, ArtifactFileStatus, type CodeAgentRunMetadata } from '@agenthub/shared'
 import { db, settings } from '@agenthub/db'
 import { eq } from 'drizzle-orm'
 import type { AgentRunProfile, MessageRow } from './agent-runner'
@@ -81,39 +81,6 @@ interface CodeAgentCommandResult {
   metadata: CodeAgentRunMetadata
 }
 
-export interface CodeAgentRunMetadata {
-  type: 'code-agent-run'
-  status: CodeAgentRunStatus
-  runtime: CodeAgentType
-  command: string
-  cwd?: string
-  durationMs: number
-  exitCode: number
-  commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
-  files: Array<{
-    path: string
-    status: ArtifactFileStatus
-    diff?: string
-  }>
-  toolCalls?: Array<{ id: string; name: string; label: string; target?: string; detail?: string }>
-  artifacts?: AgentArtifact[]
-  logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
-  steps?: Array<{
-    id: string
-    kind: 'status' | 'tool' | 'command' | 'file' | 'log'
-    status: CodeAgentRunStatus
-    title: string
-    subtitle?: string
-    detail?: string
-    toolName?: string
-    command?: string
-    path?: string
-    fileStatus?: CodeAgentRunMetadata['files'][number]['status']
-    stream?: 'stdout' | 'stderr' | 'event'
-    createdAt?: number
-  }>
-  diagnostics?: string
-}
 
 export interface CodeAgentMetadataChunk {
   kind: 'code-agent-metadata'

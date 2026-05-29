@@ -2,13 +2,14 @@ import { create } from 'zustand'
 import {
   api,
   type ChatAttachment,
-  type CodeAgentRunMetadata,
+
   type Message,
   type Session,
   type Workspace,
   type WorkspaceAgent,
 } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
+import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { WsEvent, TaskStatus, MessageType, SessionType } from '@agenthub/shared'
 
 let pendingStream: {

@@ -88,7 +88,6 @@ import {
   friendlyErrorMessage,
   type AgentArtifact,
   type ChatAttachment,
-  type CodeAgentRunMetadata,
   type ModelCatalogItem,
   type OrchestratorDispatchResult,
   type OrchestratorPlan,
@@ -100,6 +99,8 @@ import {
   type WorkspaceAgent,
 } from '../../lib/api'
 import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
+import type { CodeAgentRunMetadata } from '@agenthub/shared'
+import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
 import {
   downloadExternalUrl,
   isDesktopApp,
@@ -3030,7 +3031,7 @@ const CodeAgentStatusCard: FC<{
               {codeAgentStatusLabel(data.status)} · {formatRunDuration(data.durationMs)}
             </div>
             <div className="mt-0.5 truncate text-[11px] text-neutral-400">
-              {runtimeLabel(data.runtime)} · {data.command}
+              {codeAgentRuntimeLabel(data.runtime)} · {data.command}
             </div>
           </div>
         </div>
@@ -3467,7 +3468,7 @@ function codeAgentProcessSteps(data: CodeAgentRunMetadata): CodeAgentRunStep[] {
     status:
       data.status === 'running' ? 'running' : data.status === 'completed' ? 'completed' : 'failed',
     title: codeAgentStatusLabel(data.status),
-    subtitle: `${runtimeLabel(data.runtime)} · ${formatRunDuration(data.durationMs)}`,
+    subtitle: `${codeAgentRuntimeLabel(data.runtime)} · ${formatRunDuration(data.durationMs)}`,
   })
 
   for (const item of (data.toolCalls ?? []).slice(-20)) {
@@ -4123,13 +4124,6 @@ function codeAgentStatusLabel(status: CodeAgentRunMetadata['status']) {
   return '执行失败'
 }
 
-function runtimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
-  if (runtime === 'claude-code') return 'Claude Code'
-  if (runtime === 'opencode') return 'OpenCode'
-  if (runtime === 'gemini') return 'Gemini CLI'
-  return 'Codex'
-}
-
 function groupChatDisplayTitle(sessionTitle?: string | null, workspaceName?: string | null) {
   const normalized = (sessionTitle || workspaceName || 'Agent 群聊').trim()
   const withoutSuffix = normalized.replace(/\s*\/\s*Agent Group\s*$/i, '').trim()
@@ -4772,12 +4766,6 @@ function codeAgentLogoSrc(runtime: CodeAgentRunMetadata['runtime']) {
   return '/codex-color.svg'
 }
 
-function codeAgentRuntimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
-  if (runtime === 'claude-code') return 'Claude Code'
-  if (runtime === 'opencode') return 'OpenCode'
-  if (runtime === 'gemini') return 'Gemini CLI'
-  return 'Codex'
-}
 
 const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
   <button

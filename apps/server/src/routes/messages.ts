@@ -66,6 +66,11 @@ import {
 } from '../services/agent-draft'
 import { type DemoArtifact, buildDemoArtifacts, artifactSummary } from '../services/artifact-demo'
 import { GroupChatManager } from '../services/group-chat'
+import { buildAgentProfile } from '../services/agents/profile-builder'
+import {
+  createWorkspaceGroupSession,
+  ensureAgentChildSession,
+} from '../services/workspace/session-manager'
 
 const orchestratorPlanSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -1084,23 +1089,7 @@ function toAgentProfile(
   agent: typeof workspaceAgents.$inferSelect,
   projectPath?: string | null,
 ): AgentRunProfile {
-  return {
-    id: agent.id,
-    name: agent.name,
-    role: agent.role,
-    description: agent.description,
-    color: agent.color,
-    modelId: agent.modelId,
-    runtimeType: agent.runtimeType,
-    codeAgentType: agent.codeAgentType ?? undefined,
-    capabilityTags: agent.capabilityTags ?? [],
-    toolPermissions: agent.toolPermissions,
-    sandboxPolicy: agent.sandboxPolicy,
-    contextPolicy: agent.contextPolicy,
-    approvalRequired: agent.approvalRequired,
-    systemPrompt: agent.systemPrompt,
-    projectPath: projectPath?.trim() || null,
-  }
+  return buildAgentProfile(agent, projectPath)
 }
 
 async function profileForDirectSession(session: typeof sessions.$inferSelect) {
@@ -1119,95 +1108,6 @@ async function profileForDirectSession(session: typeof sessions.$inferSelect) {
     .where(eq(workspaces.id, session.workspaceId))
     .limit(1)
   return toAgentProfile(agent, workspace?.projectPath)
-}
-
-async function createWorkspaceGroupSession(
-  workspaceId: string,
-  workspaceName: string,
-  ownerId: string,
-  agents: Array<typeof workspaceAgents.$inferSelect>,
-) {
-  const [session] = await db
-    .insert(sessions)
-    .values({
-      title: `${workspaceName} / Agent Group`,
-      type: 'group',
-      ownerId,
-      workspaceId,
-      metadata: { kind: 'workspace-agent-group' },
-    })
-    .returning()
-  if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '群组会话创建失败')
-
-  await db
-    .insert(sessionMembers)
-    .values([
-      { sessionId: session.id, memberType: 'user', memberId: ownerId },
-      ...agents.map((agent) => ({
-        sessionId: session.id,
-        memberType: 'agent' as const,
-        memberId: agent.id,
-      })),
-    ])
-
-  // Note: child sessions are lazily created when tasks are dispatched
-  // (see dispatchPlanToExistingGroup and orchestrator-engine).
-  // Pre-creating them here leads to orphan sessions when the orchestrator
-  // plans do not include every workspace agent.
-
-  return session
-}
-
-async function ensureAgentChildSession(
-  workspaceId: string,
-  workspaceName: string,
-  ownerId: string,
-  agent: typeof workspaceAgents.$inferSelect | null,
-  taskTitle?: string,
-) {
-  if (agent) {
-    const existingSessions = await db
-      .select()
-      .from(sessions)
-      .where(
-        and(
-          eq(sessions.ownerId, ownerId),
-          eq(sessions.type, 'direct'),
-          eq(sessions.workspaceId, workspaceId),
-          eq(sessions.workspaceAgentId, agent.id),
-        ),
-      )
-      .orderBy(desc(sessions.updatedAt))
-    const fixedSession = existingSessions.find(
-      (session) => !isGeneratedTaskSession(session.metadata),
-    )
-    if (fixedSession) return fixedSession
-  }
-
-  const [created] = await db
-    .insert(sessions)
-    .values({
-      title: agent
-        ? `${workspaceName} / ${agent.name}`
-        : `${workspaceName} / ${taskTitle?.slice(0, 24) || 'Agent'}`,
-      type: 'direct',
-      ownerId,
-      workspaceId,
-      workspaceAgentId: agent?.id ?? null,
-      metadata: { kind: 'workspace-agent-child' },
-    })
-    .returning()
-  if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Agent 子会话创建失败')
-  return created
-}
-
-function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {
-  return Boolean(
-    metadata?.orchestratorTaskId ||
-    metadata?.orchestratorRunId ||
-    metadata?.hiddenFromSessionTree ||
-    metadata?.kind === 'orchestrator-task',
-  )
 }
 
 async function ensureWorkspaceAgentChildSessions(workspaceId: string, ownerId: string) {

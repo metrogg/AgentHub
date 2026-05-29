@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { HTTPException } from 'hono/http-exception'
+import { AppError, AppErrorCodes } from '../lib/error'
 import { createSessionSchema, updateSessionSchema } from '@agenthub/shared'
 import { db, sessions, workspaceAgents, workspaces, eq, desc, and } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
@@ -21,14 +21,14 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
     const input = c.req.valid('json')
     if (input.workspaceId) {
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, input.workspaceId)).limit(1)
-      if (!workspace || workspace.ownerId !== user.sub) throw new HTTPException(404, { message: 'Workspace not found' })
+      if (!workspace || workspace.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '工作区不存在')
       if (input.workspaceAgentId) {
         const [agent] = await db
           .select()
           .from(workspaceAgents)
           .where(and(eq(workspaceAgents.id, input.workspaceAgentId), eq(workspaceAgents.workspaceId, input.workspaceId)))
           .limit(1)
-        if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+        if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
       }
     }
     const [session] = await db
@@ -42,7 +42,7 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
         metadata: input.metadata ?? null,
       })
       .returning()
-    if (!session) throw new HTTPException(500, { message: 'Failed to create session' })
+    if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
     return c.json(session)
   })
   .get('/:id', async (c) => {
@@ -54,7 +54,7 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
       .where(eq(sessions.id, id))
       .limit(1)
     if (!session || session.ownerId !== user.sub) {
-      throw new HTTPException(404, { message: 'Session not found' })
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     }
     return c.json(session)
   })
@@ -64,19 +64,19 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
     const input = c.req.valid('json')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1)
     if (!session || session.ownerId !== user.sub) {
-      throw new HTTPException(404, { message: 'Session not found' })
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     }
 
     if (input.workspaceId) {
       const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, input.workspaceId)).limit(1)
-      if (!workspace || workspace.ownerId !== user.sub) throw new HTTPException(404, { message: 'Workspace not found' })
+      if (!workspace || workspace.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '工作区不存在')
       if (input.workspaceAgentId) {
         const [agent] = await db
           .select()
           .from(workspaceAgents)
           .where(and(eq(workspaceAgents.id, input.workspaceAgentId), eq(workspaceAgents.workspaceId, input.workspaceId)))
           .limit(1)
-        if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+        if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
       }
     }
 
@@ -88,7 +88,7 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
       updatedAt: new Date(),
     }
     const [updated] = await db.update(sessions).set(patch).where(eq(sessions.id, id)).returning()
-    if (!updated) throw new HTTPException(500, { message: 'Failed to update session' })
+    if (!updated) throw AppError.internal(AppErrorCodes.INTERNAL_ERROR, '会话更新失败')
     return c.json(updated)
   })
   .delete('/:id', async (c) => {
@@ -96,7 +96,7 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     const [session] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1)
     if (!session || session.ownerId !== user.sub) {
-      throw new HTTPException(404, { message: 'Session not found' })
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     }
     // 删除群聊时级联删除 workspace 下的所有子会话（direct sessions）
     // 避免删除群聊后旧子话题仍残留在 sidebar 中
@@ -110,10 +110,5 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
       )
     }
     await db.delete(sessions).where(eq(sessions.id, id))
-    return c.body(null, 204)
-  })
-  .delete('/all', async (c) => {
-    const user = c.get('user')
-    await db.delete(sessions).where(eq(sessions.ownerId, user.sub))
-    return c.json({ deleted: true })
+    return c.json({ success: true })
   })

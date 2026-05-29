@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { writeFile, unlink } from 'node:fs/promises'
 import { basename, extname, resolve, relative, isAbsolute, join, normalize, sep } from 'node:path'
 import { Hono } from 'hono'
-import { HTTPException } from 'hono/http-exception'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import AdmZip from 'adm-zip'
@@ -17,12 +16,12 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
   .get('/preview-file', async (c) => {
     const rawPath = c.req.query('path')?.trim()
     const workspaceId = c.req.query('workspaceId')?.trim()
-    if (!rawPath) throw new HTTPException(400, { message: 'Missing preview path' })
+    if (!rawPath) throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少预览路径', { field: 'path' })
 
     const filePath = resolve(rawPath)
     const ext = extname(filePath).toLowerCase()
     if (ext !== '.html' && ext !== '.htm') {
-      throw new HTTPException(400, { message: 'Only HTML files can be previewed' })
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '仅支持 HTML 文件预览')
     }
 
     // 基于 workspace 的 projectPath 做安全校验
@@ -33,13 +32,13 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
         const allowedRoot = resolve(ws.projectPath)
         const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
         if (filePath !== allowedRoot && !filePath.startsWith(rootWithSep)) {
-          throw new HTTPException(403, { message: 'Access denied: path outside workspace' })
+          throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
         }
       }
     }
 
     if (!existsSync(filePath) || !statSync(filePath).isFile()) {
-      throw new HTTPException(404, { message: 'Preview file not found' })
+      throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, '预览文件不存在')
     }
 
     return new Response(readFileSync(filePath), {
@@ -87,9 +86,9 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const { workspaceId } = c.req.valid('json')
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
-    if (!ws || ws.ownerId !== user.sub) throw new HTTPException(404, { message: 'Workspace not found' })
-    if (!ws.projectPath) throw new HTTPException(400, { message: 'Workspace has no project path' })
-    if (!existsSync(ws.projectPath)) throw new HTTPException(400, { message: 'Project path does not exist' })
+    if (!ws || ws.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '工作区不存在')
+    if (!ws.projectPath) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '工作区未设置项目路径')
+    if (!existsSync(ws.projectPath)) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '项目路径不存在')
 
     const deployUrl = `${new URL(c.req.url).origin}/deploy/${workspaceId}/`
     logger.info({ workspaceId, projectPath: ws.projectPath, deployUrl }, 'Static deployment created')
@@ -102,15 +101,15 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     // 后端根据 workspaceId 获取 projectPath，禁止前端传任意路径
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
     if (!ws || ws.ownerId !== user.sub) {
-      throw new HTTPException(403, { message: 'Access denied: workspace not found' })
+      throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '工作区不存在')
     }
     if (!ws.projectPath) {
-      throw new HTTPException(400, { message: 'Workspace has no project path' })
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '工作区未设置项目路径')
     }
 
     const resolvedPath = resolve(ws.projectPath)
     if (!existsSync(resolvedPath) || !statSync(resolvedPath).isDirectory()) {
-      throw new HTTPException(400, { message: 'Project path does not exist' })
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '项目路径不存在')
     }
     const tmpFile = join(tmpdir(), `agenthub-diff-${Date.now()}.patch`)
     try {
@@ -125,7 +124,7 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       const checkCode = await check.exited
       if (checkCode !== 0) {
         const stderr = await new Response(check.stderr).text()
-        throw new HTTPException(400, { message: `Diff validation failed: ${stderr.trim()}` })
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Diff 验证失败: ${stderr.trim()}`)
       }
       // Apply
       const apply = Bun.spawn(['git', 'apply', tmpFile], {
@@ -137,14 +136,14 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       const applyCode = await apply.exited
       if (applyCode !== 0) {
         const stderr = await new Response(apply.stderr).text()
-        throw new HTTPException(500, { message: `Diff apply failed: ${stderr.trim()}` })
+        throw AppError.internal(AppErrorCodes.INTERNAL_ERROR, `Diff 应用失败: ${stderr.trim()}`)
       }
       logger.info({ projectPath: resolvedPath }, 'Diff applied successfully')
       return c.json({ success: true, message: 'Diff applied successfully' })
     } catch (err: any) {
-      if (err instanceof HTTPException) throw err
+      if (err instanceof AppError) throw err
       logger.error({ err: err?.message, projectPath: resolvedPath }, 'Diff apply error')
-      throw new HTTPException(500, { message: err?.message || 'Failed to apply diff' })
+      throw AppError.internal(AppErrorCodes.INTERNAL_ERROR, err?.message || 'Diff 应用失败')
     } finally {
       try { await unlink(tmpFile) } catch {}
     }
@@ -152,13 +151,13 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
   .get('/zip-download', async (c) => {
     const user = c.get('user')
     const workspaceId = c.req.query('workspaceId')?.trim()
-    if (!workspaceId) throw new HTTPException(400, { message: 'Missing workspaceId' })
+    if (!workspaceId) throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少 workspaceId', { field: 'workspaceId' })
 
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
-    if (!ws || ws.ownerId !== user.sub) throw new HTTPException(404, { message: 'Workspace not found' })
-    if (!ws.projectPath) throw new HTTPException(400, { message: 'Workspace has no project path' })
+    if (!ws || ws.ownerId !== user.sub) throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '工作区不存在')
+    if (!ws.projectPath) throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '工作区未设置项目路径')
     if (!existsSync(ws.projectPath) || !statSync(ws.projectPath).isDirectory()) {
-      throw new HTTPException(400, { message: 'Project path does not exist' })
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '项目路径不存在')
     }
 
     const SENSITIVE_PATTERNS = [
@@ -197,7 +196,7 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       })
     } catch (err: any) {
       logger.error({ err: err?.message, workspaceId }, 'Failed to create zip')
-      throw new HTTPException(500, { message: 'Failed to create zip archive' })
+      throw AppError.internal(AppErrorCodes.INTERNAL_ERROR, 'ZIP 压缩失败')
     }
   })
 

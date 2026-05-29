@@ -2,6 +2,7 @@ import { db, messages, workspaceTasks, orchestratorRuns, sessions, eq, and, desc
 import { logger } from '../../lib/logger'
 import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
+import { taskExecutionService } from '../execution/task-execution-service'
 import { blackboard, Blackboard, type BlackboardRef } from '../blackboard'
 import { executionTracer } from '../execution-tracer'
 import { Planner } from './planner'
@@ -15,6 +16,8 @@ import { validateTaskOutputContract } from './task-contract'
 import { runTaskValidation } from './task-validation'
 import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
 import { PolicyGuard } from '../policy-guard'
+import { buildAgentProfileWithWorktree } from '../agents/profile-builder'
+import { createOrchestratorChildSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST } from '../execution/agent-execution-envelope'
 import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 
@@ -210,7 +213,7 @@ export class OrchestratorEngine {
         if (replan.strategy === 'task_split' && replan.newTasks && replan.newTasks.length > 0) {
           for (const newTask of replan.newTasks) {
             const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
-            const childSession = await ensureChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+            const childSession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
             await db.insert(workspaceTasks).values({
               id: newTask.id,
               workspaceId,
@@ -261,7 +264,7 @@ export class OrchestratorEngine {
             if (tasksToAdd.length > 0) {
               for (const newTask of tasksToAdd) {
                 const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
-                const childSession = await ensureChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+                const childSession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
                 await db.insert(workspaceTasks).values({
                   id: newTask.id,
                   workspaceId,
@@ -553,23 +556,17 @@ export class OrchestratorEngine {
       }
     }
 
-    const profile = {
-      id: agent.id,
-      name: agent.name,
-      role: agent.role,
-      description: agent.description,
-      color: agent.color,
-      modelId: agent.modelId,
-      runtimeType: agent.runtimeType,
-      codeAgentType: agent.codeAgentType,
-      capabilityTags: agent.capabilityTags,
-      toolPermissions: policy.toolPermissions,
-      sandboxPolicy: policy.sandboxPolicy,
-      contextPolicy: 'workspace-aware' as const,
-      approvalRequired: policy.approvalRequired,
-      projectPath: branchCtx?.worktreePath ?? childInfo.projectPath ?? null,
-      originalProjectPath: childInfo.projectPath ?? null,
-    }
+    const profile = buildAgentProfileWithWorktree(
+      agent,
+      branchCtx?.worktreePath ?? null,
+      childInfo.projectPath ?? null,
+      {
+        toolPermissions: policy.toolPermissions,
+        sandboxPolicy: policy.sandboxPolicy,
+        contextPolicy: 'workspace-aware',
+        approvalRequired: policy.approvalRequired,
+      },
+    )
 
     const bbNamespace = Blackboard.namespace(workspaceId, runId)
 
@@ -584,6 +581,7 @@ export class OrchestratorEngine {
 
     const prompt = await buildTaskPrompt(task, plan, bbNamespace)
 
+    // 插入 user message
     const [userMsg] = await db
       .insert(messages)
       .values({
@@ -607,11 +605,7 @@ export class OrchestratorEngine {
       }
     }
 
-    await db
-      .update(workspaceTasks)
-      .set({ status: TaskStatus.Running, startedAt: new Date(), retryCount: attemptCount })
-      .where(eq(workspaceTasks.id, task.id))
-
+    // 发送 orchestrator 特有的事件
     await emitRunEvent({
       runId,
       workspaceId,
@@ -629,37 +623,27 @@ export class OrchestratorEngine {
 
     const taskStartTime = Date.now()
 
-    // 构造 AgentExecutionEnvelope，强制追踪每次执行上下文
-    const envelope: import('../execution/agent-execution-envelope').AgentExecutionEnvelope = {
-      runId,
-      taskId: task.id,
-      agentId: agent.id,
-      agentName: agent.name,
-      projectPath: childInfo.projectPath ?? null,
-      worktreePath: branchCtx?.worktreePath ?? null,
-      sandboxPolicy: policy.sandboxPolicy,
-      envAllowlist: DEFAULT_ENV_ALLOWLIST,
-    }
-
     try {
-      // 修复 Bug 8: LLM 任务添加超时，防止死锁
-      const TASK_TIMEOUT_MS = 300_000 // 5 分钟
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        const timer = setTimeout(() => reject(new Error(`任务执行超时（${TASK_TIMEOUT_MS / 1000}秒）`)), TASK_TIMEOUT_MS)
-        signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('任务已取消')) }, { once: true })
+      // 委托给 TaskExecutionService 执行核心逻辑
+      const execResult = await taskExecutionService.execute({
+        taskId: task.id,
+        sessionId: childInfo.sessionId,
+        workspaceId,
+        profile,
+        prompt,
+        projectPath: childInfo.projectPath ?? undefined,
+        runId,
+        signal,
+        attemptCount,
+        existingUserMessageId: userMsg.id,
+        existingBranchContext: branchCtx,
       })
-      const result = await Promise.race([runAgentReply(childInfo.sessionId, userMsg, profile, envelope), timeoutPromise])
 
-      // 修复 Bug 7: 检查 Agent 执行结果，如果失败则抛出错误
-      if (!result.ok) {
-        throw new Error(result.cancelled ? '任务被取消' : 'Agent 执行失败，请检查日志')
-      }
+      const output = execResult.output
+      const artifacts = execResult.artifacts
+      const taskDuration = execResult.durationMs
 
-      if (signal.aborted || result.cancelled) {
-        await db
-          .update(workspaceTasks)
-          .set({ status: TaskStatus.Cancelled, completedAt: new Date() })
-          .where(eq(workspaceTasks.id, task.id))
+      if (execResult.status === TaskStatus.Cancelled) {
         await emitRunEvent({
           runId,
           workspaceId,
@@ -681,48 +665,10 @@ export class OrchestratorEngine {
         }
       }
 
-      const lastAgentMsg = await db
-        .select()
-        .from(messages)
-        .where(eq(messages.sessionId, childInfo.sessionId))
-        .orderBy(desc(messages.createdAt))
-        .limit(1)
-
-      const output = lastAgentMsg[0]?.content ?? ''
-      const artifacts: Array<Record<string, unknown>> = []
-
-      // 收集 Git 变更作为 artifact
-      // 修复 Bug 21: 按文件获取 diff，避免全仓库 diff 重复
-      if (branchCtx) {
-        try {
-          const changedFiles = await gitBranchManager.collectChangedFiles(branchCtx.projectPath, branchCtx.branch)
-          if (changedFiles.length > 0) {
-            for (const filePath of changedFiles) {
-              const fileDiff = await gitBranchManager.collectFileDiff(branchCtx.projectPath, filePath, branchCtx.branch)
-              const status = await gitBranchManager.getFileStatus(branchCtx.projectPath, filePath, branchCtx.branch)
-              artifacts.push({
-                id: `diff-${filePath.replace(/[^a-z0-9]/gi, '-')}`,
-                kind: 'diff',
-                title: `${agent.name} 修改了 ${filePath}`,
-                filePath,
-                status,
-                diff: fileDiff,
-                source: agent.name,
-              })
-            }
-          }
-        } catch (err: any) {
-          logger.error({ err: err?.message, taskId: task.id }, 'Failed to collect git diff')
-        }
+      if (execResult.status === TaskStatus.Failed) {
+        throw new Error(execResult.error || 'Agent 执行失败')
       }
 
-      // 合并已有 artifacts
-      const msgArtifacts = (lastAgentMsg[0]?.metadata as Record<string, unknown> | null)?.artifacts as Array<Record<string, unknown>> | undefined
-      if (msgArtifacts) {
-        artifacts.push(...msgArtifacts)
-      }
-
-      const taskDuration = Date.now() - taskStartTime
       await executionTracer.log({
         runId,
         sessionId: childInfo.sessionId,
@@ -968,14 +914,7 @@ export class OrchestratorEngine {
         },
       })
 
-      await db
-        .update(workspaceTasks)
-        .set({
-          status: TaskStatus.Done,
-          completedAt: new Date(),
-          artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
-        })
-        .where(eq(workspaceTasks.id, task.id))
+      // TaskExecutionService 已更新 task 状态为 Done
 
       broadcastSessionEvent(groupSessionId, {
         type: WsEvent.TaskUpdate,
@@ -1018,10 +957,15 @@ export class OrchestratorEngine {
         type: 'error',
         output: { taskTitle: task.title, error: error?.message, durationMs: Date.now() - taskStartTime },
       })
-      await db
-        .update(workspaceTasks)
-        .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
-        .where(eq(workspaceTasks.id, task.id))
+      // TaskExecutionService 已更新 task 状态，此处只处理 post-processing 错误
+      // 如果是 post-processing 错误，需要手动更新状态
+      const existingTask = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, task.id)).limit(1)
+      if (existingTask[0]?.status !== TaskStatus.Failed) {
+        await db
+          .update(workspaceTasks)
+          .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
+          .where(eq(workspaceTasks.id, task.id))
+      }
 
       broadcastSessionEvent(groupSessionId, {
         type: WsEvent.TaskUpdate,
@@ -1111,7 +1055,7 @@ export class OrchestratorEngine {
             maxRetries: 1,
           }
 
-          const verifySession = await ensureChildSession(workspaceId, plan.title, ownerId, verifierAgent, verifyTask.title)
+          const verifySession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, verifierAgent, verifyTask.title)
           childSessions.set(verifyTaskId, {
             sessionId: verifySession.id,
             workspaceId,
@@ -1182,7 +1126,7 @@ export class OrchestratorEngine {
         maxRetries: 1,
       }
 
-      const reviewSession = await ensureChildSession(workspaceId, plan.title, ownerId, reviewerAgent, reviewTask.title)
+      const reviewSession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, reviewerAgent, reviewTask.title)
       childSessions.set(reviewTaskId, {
         sessionId: reviewSession.id,
         workspaceId,
@@ -1333,31 +1277,6 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
       payload: { sessionId: groupSessionId, message: summaryMsg },
     })
   }
-}
-
-async function ensureChildSession(
-  workspaceId: string,
-  workspaceName: string,
-  ownerId: string,
-  agent: { id: string; name: string } | null,
-  taskTitle?: string
-) {
-  // Orchestrator 场景下不复用已有 session，每个任务独立上下文
-  const [created] = await db
-    .insert(sessions)
-    .values({
-      title: agent ? `${workspaceName} / ${agent.name} / ${taskTitle?.slice(0, 24) || 'Task'}` : `${workspaceName} / ${taskTitle?.slice(0, 24) || 'Agent'}`,
-      type: 'direct',
-      ownerId,
-      workspaceId,
-      workspaceAgentId: agent?.id ?? null,
-      metadata: {
-        kind: 'orchestrator-task',
-      },
-    })
-    .returning()
-  if (!created) throw new Error('Failed to create agent child session')
-  return created
 }
 
 async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNamespace: string): Promise<string> {

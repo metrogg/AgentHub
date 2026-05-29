@@ -1,46 +1,17 @@
 import { db, workspaceTasks, eq } from '@agenthub/db'
 import { getActiveRunSessionIds, type AgentRunProfile } from '../agent-runner'
+import { buildAgentProfile, type AgentRow } from '../agents/profile-builder'
 import { cleanProjectPath } from './utils'
 import { TaskStatus } from '@agenthub/shared'
 
+/**
+ * @deprecated 使用 buildAgentProfile 代替。保留向后兼容。
+ */
 export function workspaceAgentRunProfile(
-  agent: {
-    id: string
-    name: string
-    role: string
-    roleType?: string | null
-    description: string | null
-    systemPrompt: string
-    color: string | null
-    modelId: string | null
-    runtimeType: string
-    codeAgentType: string | null
-    capabilityTags: string[]
-    toolPermissions: string[]
-    sandboxPolicy: string
-    contextPolicy: string
-    approvalRequired: boolean
-  },
+  agent: AgentRow,
   projectPath?: string | null,
 ): AgentRunProfile {
-  return {
-    id: agent.id,
-    name: agent.name,
-    role: agent.role ?? undefined,
-    roleType: agent.roleType ?? undefined,
-    description: agent.description ?? undefined,
-    systemPrompt: agent.systemPrompt,
-    color: agent.color ?? undefined,
-    modelId: agent.modelId,
-    runtimeType: agent.runtimeType as AgentRunProfile['runtimeType'],
-    codeAgentType: (agent.codeAgentType ?? undefined) as AgentRunProfile['codeAgentType'],
-    capabilityTags: agent.capabilityTags,
-    toolPermissions: agent.toolPermissions,
-    sandboxPolicy: agent.sandboxPolicy as AgentRunProfile['sandboxPolicy'],
-    contextPolicy: agent.contextPolicy as AgentRunProfile['contextPolicy'],
-    approvalRequired: agent.approvalRequired,
-    projectPath: cleanProjectPath(projectPath),
-  }
+  return buildAgentProfile(agent, cleanProjectPath(projectPath))
 }
 
 export async function markWorkspaceTaskAfterRun(taskId: string, ok: boolean) {
