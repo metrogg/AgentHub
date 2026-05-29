@@ -35,6 +35,8 @@ import {
   type WorkspaceTask,
 } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { runtimeLabel, codeAgentLabel, sandboxLabel } from '../lib/agentDisplay'
+import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { pickWorkspaceFolder } from '../lib/native'
 import { agentRolePresets } from '../lib/agentRolePresets'
 import { cn } from '../lib/utils'
@@ -1290,34 +1292,6 @@ function modelName(modelId: string | null, models: ModelCatalogItem[]) {
   return model?.name || model?.modelId || modelId
 }
 
-function runtimeLabel(value: WorkspaceAgent['runtimeType']) {
-  const map: Record<WorkspaceAgent['runtimeType'], string> = {
-    llm: 'LLM Agent',
-    'code-agent': 'Coding Tools',
-    mcp: 'Native Read-only',
-    a2a: 'A2A Agent',
-  }
-  return map[value]
-}
-
-function codeAgentLabel(value: NonNullable<WorkspaceAgent['codeAgentType']>) {
-  const map: Record<NonNullable<WorkspaceAgent['codeAgentType']>, string> = {
-    codex: 'Codex CLI',
-    'claude-code': 'Claude Code',
-    opencode: 'OpenCode',
-    gemini: 'Gemini CLI',
-  }
-  return map[value]
-}
-
-function sandboxLabel(value: WorkspaceAgent['sandboxPolicy']) {
-  const map: Record<WorkspaceAgent['sandboxPolicy'], string> = {
-    'read-only': '只读',
-    'workspace-write': '工作区写入',
-    'danger-full-access': '完全访问',
-  }
-  return map[value]
-}
 
 function TaskRow({
   task,

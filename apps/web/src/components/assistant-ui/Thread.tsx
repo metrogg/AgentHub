@@ -83,12 +83,12 @@ import {
 } from 'react'
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
+import { ClarificationCard } from '@/components/ClarificationCard'
 import {
   api,
   friendlyErrorMessage,
   type AgentArtifact,
   type ChatAttachment,
-  type CodeAgentRunMetadata,
   type ModelCatalogItem,
   type OrchestratorDispatchResult,
   type OrchestratorPlan,
@@ -99,6 +99,9 @@ import {
   type Workspace,
   type WorkspaceAgent,
 } from '../../lib/api'
+import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
+import type { CodeAgentRunMetadata } from '@agenthub/shared'
+import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
 import {
   downloadExternalUrl,
   isDesktopApp,
@@ -117,8 +120,8 @@ import {
 } from '../../lib/workspaceFilters'
 import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
-import {
-  QuickPromptBubbles,
+import { TaskBoard } from '@/components/TaskBoard'
+import { QuickPromptBubbles,
   createQuickPromptSeed,
   fallbackWelcomeQuickPrompts,
   rotateQuickPrompts,
@@ -2276,9 +2279,11 @@ const AssistantMessage: FC = () => {
                 by_name: {
                   agent_avatar: AgentAvatarPart,
                   orchestrator_plan: OrchestratorPlanCard,
+                  task_board: TaskBoardCard,
                   code_agent_run: CodeAgentRunCard,
                   agent_artifacts: AgentArtifactsCard,
                   chat_attachments: ChatAttachmentsPart,
+                  clarification_card: ClarificationCardWrapper,
                 },
               },
             }}
@@ -2310,6 +2315,21 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
 }
 
 const AgentAvatarPart: FC<{ data: { runtime?: CodeAgentRunMetadata['runtime'] } }> = () => null
+
+function ClarificationCardWrapper({ data }: { data: any }) {
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const sessionId = currentSessionId || ''
+
+  return (
+    <ClarificationCard
+      question={data?.question || ''}
+      options={data?.options}
+      messageId={data?.messageId || ''}
+      taskId={data?.taskId || ''}
+      sessionId={sessionId}
+    />
+  )
+}
 
 function requestArtifactPreview(item: ArtifactPreviewItem) {
   window.dispatchEvent(new CustomEvent<ArtifactPreviewItem>(artifactPreviewEvent, { detail: item }))
@@ -3038,7 +3058,7 @@ const CodeAgentStatusCard: FC<{
               {codeAgentStatusLabel(data.status)} · {formatRunDuration(data.durationMs)}
             </div>
             <div className="mt-0.5 truncate text-[11px] text-neutral-400">
-              {runtimeLabel(data.runtime)} · {data.command}
+              {codeAgentRuntimeLabel(data.runtime)} · {data.command}
             </div>
           </div>
         </div>
@@ -3475,7 +3495,7 @@ function codeAgentProcessSteps(data: CodeAgentRunMetadata): CodeAgentRunStep[] {
     status:
       data.status === 'running' ? 'running' : data.status === 'completed' ? 'completed' : 'failed',
     title: codeAgentStatusLabel(data.status),
-    subtitle: `${runtimeLabel(data.runtime)} · ${formatRunDuration(data.durationMs)}`,
+    subtitle: `${codeAgentRuntimeLabel(data.runtime)} · ${formatRunDuration(data.durationMs)}`,
   })
 
   for (const item of (data.toolCalls ?? []).slice(-20)) {
@@ -4131,13 +4151,6 @@ function codeAgentStatusLabel(status: CodeAgentRunMetadata['status']) {
   return '执行失败'
 }
 
-function runtimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
-  if (runtime === 'claude-code') return 'Claude Code'
-  if (runtime === 'opencode') return 'OpenCode'
-  if (runtime === 'gemini') return 'Gemini CLI'
-  return 'Codex'
-}
-
 function groupChatDisplayTitle(sessionTitle?: string | null, workspaceName?: string | null) {
   const normalized = (sessionTitle || workspaceName || 'Agent 群聊').trim()
   const withoutSuffix = normalized.replace(/\s*\/\s*Agent Group\s*$/i, '').trim()
@@ -4172,6 +4185,38 @@ function absoluteEditorPath(filePath: string, cwd?: string) {
   const root = cwd?.trim()
   if (!root || (!/^[a-zA-Z]:[\\/]/.test(root) && !root.startsWith('/'))) return null
   return `${root.replace(/[\\/]+$/, '')}/${trimmed.replace(/^[\\/]+/, '')}`
+}
+
+function TaskBoardCard({ data: _data }: { data: any }) {
+  const taskBoard = useChatStore((s) => s.taskBoard)
+
+  if (!taskBoard) {
+    return (
+      <div className="my-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+        <div className="flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+          <span className="text-sm text-gray-500">正在生成执行计划...</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="my-3 border border-gray-200 rounded-xl overflow-hidden max-h-[600px]">
+      <TaskBoard
+        data={taskBoard}
+        onCancel={() => {
+          fetch(`/api/orchestrator-runs/${taskBoard.runId}/cancel`, { method: 'POST' }).catch(console.error)
+        }}
+        onRetryFailed={() => {
+          const failedTasks = taskBoard.tasks.filter((t) => t.status === 'failed')
+          for (const task of failedTasks) {
+            fetch(`/api/orchestrator-runs/${taskBoard.runId}/retry-task/${task.id}`, { method: 'POST' }).catch(console.error)
+          }
+        }}
+      />
+    </div>
+  )
 }
 
 const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
@@ -4710,9 +4755,51 @@ const BranchPicker: FC = () => (
 )
 
 const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
+  const messageId = useMessage((message) => message.id)
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((m) => m.id === messageId),
+  )
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
+
+  // 尝试匹配发送者 workspace agent（优先 senderId，其次 metadata.agentName）
+  const senderId = sourceMessage?.senderId ??
+    (messageId === streamingMessage?.id ? streamingMessage?.agentId : undefined)
+  const senderName =
+    sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
+      ? (sourceMessage.metadata as Record<string, unknown>).agentName as string | undefined
+      : undefined
+  const senderAgent = workspaceAgents.find(
+    (a) =>
+      a.id === senderId ||
+      (senderName && a.name.toLowerCase() === senderName.toLowerCase()),
+  )
+
   const runtime = useMessage((message) =>
     role === 'assistant' ? codeAgentRuntimeFromParts(message.content) : null,
   )
+
+  // 优先显示 workspace agent 头像
+  if (role === 'assistant' && senderAgent) {
+    return (
+      <div
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm font-semibold text-white shadow-sm"
+        style={{ background: senderAgent.color ?? '#111827' }}
+      >
+        {senderAgent.avatar ? (
+          <img
+            src={senderAgent.avatar}
+            alt={senderAgent.name}
+            className="h-full w-full rounded-full object-cover"
+            decoding="async"
+            draggable={false}
+          />
+        ) : (
+          senderAgent.name.slice(0, 1).toUpperCase()
+        )}
+      </div>
+    )
+  }
 
   if (role === 'assistant' && runtime) {
     return (
@@ -4780,12 +4867,6 @@ function codeAgentLogoSrc(runtime: CodeAgentRunMetadata['runtime']) {
   return '/codex-color.svg'
 }
 
-function codeAgentRuntimeLabel(runtime: CodeAgentRunMetadata['runtime']) {
-  if (runtime === 'claude-code') return 'Claude Code'
-  if (runtime === 'opencode') return 'OpenCode'
-  if (runtime === 'gemini') return 'Gemini CLI'
-  return 'Codex'
-}
 
 const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
   <button

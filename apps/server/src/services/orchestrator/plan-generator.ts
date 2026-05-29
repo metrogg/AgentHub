@@ -11,7 +11,7 @@ import {
 } from '@agenthub/shared'
 import { Planner } from './planner'
 import { selectAgentForTask } from './agent-router'
-import type { ExecutionPlan, TaskOutputContract, TaskValidation } from './types'
+import type { CollaborationMode, ExecutionPlan, TaskOutputContract, TaskValidation } from './types'
 
 type PlanAgent = {
   key: string
@@ -68,6 +68,7 @@ export type OrchestratorPlan = {
   agents: PlanAgent[]
   phases?: PlanPhase[]
   tasks: PlanTask[]
+  collaborationMode?: CollaborationMode
 }
 
 export interface PlanningAgentInput {
@@ -248,6 +249,7 @@ function executionPlanToOrchestratorPlan(
       outputContract: t.outputContract,
       validation: t.validation,
     })),
+    collaborationMode: plan.collaborationMode,
   }
 }
 

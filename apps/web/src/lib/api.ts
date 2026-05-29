@@ -12,7 +12,6 @@ import {
   RuntimeType,
   ContextPolicy,
   CodeAgentType,
-  CodeAgentRunStatus,
   ArtifactFileStatus,
   AppErrorCodes,
   API_BASE_PATH,
@@ -288,40 +287,6 @@ export type AgentArtifact =
       }>
       edges: Array<{ from: string; to: string; label?: string }>
     }
-
-export interface CodeAgentRunMetadata {
-  type: 'code-agent-run'
-  status: CodeAgentRunStatus
-  runtime: 'codex' | 'claude-code' | 'opencode' | 'gemini'
-  command: string
-  cwd?: string
-  durationMs: number
-  exitCode: number
-  commands: Array<{ id: string; command: string; cwd?: string; output?: string }>
-  files: Array<{
-    path: string
-    status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked'
-    diff?: string
-  }>
-  toolCalls?: Array<{ id: string; name: string; label: string; target?: string; detail?: string }>
-  artifacts?: AgentArtifact[]
-  logs?: Array<{ id: string; stream: 'stdout' | 'stderr' | 'event'; text: string }>
-  steps?: Array<{
-    id: string
-    kind: 'status' | 'tool' | 'command' | 'file' | 'log'
-    status: 'running' | 'completed' | 'failed'
-    title: string
-    subtitle?: string
-    detail?: string
-    toolName?: string
-    command?: string
-    path?: string
-    fileStatus?: CodeAgentRunMetadata['files'][number]['status']
-    stream?: 'stdout' | 'stderr' | 'event'
-    createdAt?: number
-  }>
-  diagnostics?: string
-}
 
 export interface ModelCatalogItem {
   id: string

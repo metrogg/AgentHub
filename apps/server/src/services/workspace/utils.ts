@@ -2,7 +2,7 @@ import { statSync, existsSync, cpSync } from 'node:fs'
 import { isAbsolute, normalize, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { logger } from '../../lib/logger'
-import { HTTPException } from 'hono/http-exception'
+import { AppError, AppErrorCodes } from '../../lib/error'
 import { db, workspaces, eq } from '@agenthub/db'
 import { workspaceNameFromPath } from '@agenthub/shared'
 
@@ -20,7 +20,7 @@ export function ensureProjectDirectory(value?: string | null) {
   } catch {
     // Fall through to a consistent API error below.
   }
-  throw new HTTPException(400, { message: '项目文件夹不存在或不是目录' })
+  throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '项目文件夹不存在或不是目录')
 }
 
 export { workspaceNameFromPath }

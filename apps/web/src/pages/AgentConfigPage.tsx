@@ -29,6 +29,7 @@ import { syncSavedAgentDirectSessions } from '../lib/agentConversation'
 import { agentRolePresets, presetForRole } from '../lib/agentRolePresets'
 import { api, type AgentConfigInput, type ModelCatalogItem, type WorkspaceAgent } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { runtimeLabel, sandboxLabel } from '../lib/agentDisplay'
 import { cn } from '../lib/utils'
 import { useChatStore } from '../stores/chatStore'
 
@@ -768,16 +769,6 @@ function relationLabel(relationType: SavedAgentRelation['relationType']) {
   return 'blocks'
 }
 
-function runtimeLabel(value: WorkspaceAgent['runtimeType']) {
-  if (value === 'code-agent') return 'Coding Tools'
-  return 'LLM Agent'
-}
-
-function sandboxLabel(value: WorkspaceAgent['sandboxPolicy']) {
-  if (value === 'read-only') return '只读'
-  if (value === 'danger-full-access') return '完全访问'
-  return '工作区写入'
-}
 
 function modelName(modelId: string | null, models: ModelCatalogItem[]) {
   if (!modelId) return '默认模型'

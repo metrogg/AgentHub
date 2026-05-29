@@ -15,6 +15,12 @@ export interface TaskExecutionInput {
   runId?: string
   signal?: AbortSignal
   attemptCount?: number
+  /** 外部已创建的 user message（orchestrator 场景），跳过插入 */
+  existingUserMessageId?: string
+  /** 外部已准备的 branch context（orchestrator 场景），跳过创建/销毁 */
+  existingBranchContext?: BranchContext | null
+  /** Orchestrator 场景需要等 validation / contract 后处理完成后再标记 Done */
+  deferCompletionStatus?: boolean
 }
 
 export interface TaskExecutionOutput {
@@ -23,6 +29,8 @@ export interface TaskExecutionOutput {
   artifacts: Array<Record<string, unknown>>
   error?: string
   durationMs: number
+  /** 实际使用的 branch context（供 orchestrator 后处理收集 diff） */
+  branchContext?: BranchContext | null
 }
 
 /**
@@ -34,8 +42,8 @@ export class TaskExecutionService {
     const { taskId, sessionId, projectPath, profile, prompt, signal, attemptCount = 0 } = input
 
     // === Git 分支隔离 ===
-    let branchCtx: BranchContext | null = null
-    const needBranch = profile.sandboxPolicy !== 'read-only' && projectPath
+    let branchCtx: BranchContext | null = input.existingBranchContext ?? null
+    const needBranch = !input.existingBranchContext && profile.sandboxPolicy !== 'read-only' && projectPath
 
     if (needBranch) {
       try {
@@ -75,21 +83,25 @@ export class TaskExecutionService {
       envAllowlist: DEFAULT_ENV_ALLOWLIST,
     }
 
-    // 插入 user message
-    const [userMsg] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: 'user',
-        senderType: 'user',
-        type: 'text',
-        content: prompt,
-      })
-      .returning()
+    // 插入 user message（orchestrator 可能已预创建）
+    let userMsgId = input.existingUserMessageId
+    if (!userMsgId) {
+      const [userMsg] = await db
+        .insert(messages)
+        .values({
+          sessionId,
+          senderId: 'user',
+          senderType: 'user',
+          type: 'text',
+          content: prompt,
+        })
+        .returning()
 
-    if (!userMsg) {
-      if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-      return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
+      if (!userMsg) {
+        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
+        return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
+      }
+      userMsgId = userMsg.id
     }
 
     // 更新 task 状态
@@ -111,12 +123,12 @@ export class TaskExecutionService {
         }, { once: true })
       })
 
-      const result = await Promise.race([runAgentReply(sessionId, userMsg, executionProfile, envelope), timeoutPromise])
+      const result = await Promise.race([runAgentReply(sessionId, { id: userMsgId } as any, executionProfile, envelope), timeoutPromise])
 
       if (signal?.aborted) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-        if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime }
+        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
+        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, branchContext: branchCtx }
       }
 
       if (!result.ok) {
@@ -125,8 +137,8 @@ export class TaskExecutionService {
 
       if (result.cancelled) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-        if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime }
+        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
+        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, branchContext: branchCtx }
       }
 
       // 收集 output
@@ -172,27 +184,28 @@ export class TaskExecutionService {
 
       const taskDuration = Date.now() - taskStartTime
 
-      // 更新 task 状态
-      await db
-        .update(workspaceTasks)
-        .set({
-          status: TaskStatus.Done,
-          completedAt: new Date(),
-          artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
-        })
-        .where(eq(workspaceTasks.id, taskId))
+      if (!input.deferCompletionStatus) {
+        await db
+          .update(workspaceTasks)
+          .set({
+            status: TaskStatus.Done,
+            completedAt: new Date(),
+            artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
+          })
+          .where(eq(workspaceTasks.id, taskId))
+      }
 
-      if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
+      if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
 
-      return { status: TaskStatus.Done, output, artifacts, durationMs: taskDuration }
+      return { status: TaskStatus.Done, output, artifacts, durationMs: taskDuration, branchContext: branchCtx }
     } catch (error: any) {
       const taskDuration = Date.now() - taskStartTime
       await db
         .update(workspaceTasks)
         .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
         .where(eq(workspaceTasks.id, taskId))
-      if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
-      return { status: TaskStatus.Failed, output: '', artifacts: [], error: error?.message || 'Unknown error', durationMs: taskDuration }
+      if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
+      return { status: TaskStatus.Failed, output: '', artifacts: [], error: error?.message || 'Unknown error', durationMs: taskDuration, branchContext: branchCtx }
     }
   }
 }

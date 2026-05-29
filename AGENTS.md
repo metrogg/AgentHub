@@ -4,13 +4,23 @@
 
 ## 项目概述
 
-AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可以单独与 AI Agent 对话，也可以通过 `@orchestrator` 协调多个 Agent（架构师、实现者、审查者等）共同完成任务。项目为**字节跳动 AI 全栈挑战赛**参赛作品。
+AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可以单独与 AI Agent 对话，也可以通过 Orchestrator 协调多个 Agent（架构师、实现者、审查者、研究员等）共同完成任务。项目为**字节跳动 AI 全栈挑战赛**参赛作品。
 
 核心交互范式：
 
 - **单聊（Direct）**：用户与一个 Agent 一对一对话。
 - **群聊（Group）**：Workspace 级别的 Agent Group，支持 `@Agent名` 指定回复对象。
-- **协调器（Orchestrator）**：通过 `@orchestrator` 触发任务拆解，自动创建 Workspace、分配 Agent、分发子任务，支持 DAG 依赖调度、并发执行、失败降级和代码冲突处理。
+- **协调器（Orchestrator）**：`@orchestrator` 或系统自动判断复杂意图后触发，异步生成 Task DAG → 用户审阅 → 分发执行。支持并发调度、失败降级、Agent 自主提问/拒绝/进度报告、代码冲突处理。
+- **实时任务看板（TaskBoard）**：在 `WorkspaceChatPage` 中展示 DAG 任务树，实时更新状态、进度条、Run 生命周期。
+
+核心执行路径（统一路由）：
+
+```
+用户发消息 → intentRouter 判断意图
+  ├── 简单问答 → handleSimpleReply() → Orchestrator 单 Agent 直接回复
+  ├── 复杂任务 → generatePlanAndPushTaskBoard() → 异步生成 Task DAG → WebSocket 推送 task_board:plan_ready
+  └── @Agent名  → 直接路由到指定 Agent 回复
+```
 
 ## 技术栈
 
@@ -33,13 +43,13 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 ├── apps/
 │   ├── server/          # Hono REST API + WebSocket 服务端
 │   │   ├── src/
-│   │   │   ├── index.ts           # 入口：种子默认用户、启动 Bun.serve
+│   │   │   ├── index.ts           # 入口：种子默认用户、启动 Bun.serve、恢复未完成 Run
 │   │   │   ├── app.ts             # Hono 应用：CORS、错误处理、路由挂载
 │   │   │   ├── env.ts             # Zod 校验的环境变量配置
 │   │   │   ├── middleware/auth.ts # 单用户模式（无鉴权，注入默认用户）
 │   │   │   ├── routes/            # API 路由（Hono sub-routers）
 │   │   │   │   ├── sessions.ts
-│   │   │   │   ├── messages.ts    # 核心：消息、编排计划、Agent 草案、产物演示
+│   │   │   │   ├── messages.ts    # 核心：统一消息路由（@mention / simpleReply / orchestratorPlan）
 │   │   │   │   ├── workspaces.ts  # 核心：Workspace、Agent、任务、派发、汇总
 │   │   │   │   ├── settings.ts
 │   │   │   │   ├── coding-tools.ts# Codex / Claude Code / OpenCode 适配
@@ -49,26 +59,29 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 │   │   │       ├── agent-runner.ts        # WebSocket 房间管理 + Agent 回复流
 │   │   │       ├── llm-client.ts          # 多供应商 LLM 流式客户端
 │   │   │       ├── llm.ts                 # 薄封装
-│   │   │       ├── runtime/               # Agent Runtime 统一适配层（新）
+│   │   │       ├── runtime/               # Agent Runtime 统一适配层
 │   │   │       │   ├── agent-runtime.ts   # 统一接口定义
 │   │   │       │   ├── runtime-registry.ts# Runtime 注册中心
 │   │   │       │   ├── llm-runtime.ts     # LLM 对话 Runtime
 │   │   │       │   ├── native-tool-runtime.ts # 原生只读工具 Runtime
 │   │   │       │   ├── code-agent-runtime.ts  # Code Agent Runtime
 │   │   │       │   └── index.ts
-│   │   │       ├── orchestrator/          # Orchestrator 引擎（新）
-│   │   │       │   ├── orchestrator-engine.ts # 总控引擎
-│   │   │       │   ├── planner.ts         # Task DAG 生成器
+│   │   │       ├── orchestrator/          # Orchestrator 引擎
+│   │   │       │   ├── orchestrator-engine.ts # 总控引擎：dispatch、resumeRun、Agent 自主性
+│   │   │       │   ├── planner.ts         # Task DAG 生成器（异步）
 │   │   │       │   ├── task-scheduler.ts  # 并发调度引擎
 │   │   │       │   ├── task-graph.ts      # DAG 工具类
 │   │   │       │   ├── synthesizer.ts     # LLM 智能聚合
 │   │   │       │   ├── conflict-resolver.ts # 代码冲突检测与解决
 │   │   │       │   ├── fallback-engine.ts # 失败降级引擎
-│   │   │       │   ├── types.ts           # 共享类型定义
+│   │   │       │   ├── types.ts           # 共享类型定义（含 ClarificationRequest、AgentAutonomySignals）
 │   │   │       │   └── index.ts
-│   │   │       ├── git/                   # Git 分支隔离（新）
+│   │   │       ├── git/                   # Git 分支隔离
 │   │   │       │   └── branch-manager.ts  # 分支生命周期管理
-│   │   │       ├── code-agent-adapter.ts  # 代码 Agent CLI 适配（保留，被 CodeAgentRuntime 引用）
+│   │   │       ├── group-chat/            # @deprecated 旧群聊对话循环（已废弃，工具函数保留）
+│   │   │       │   ├── group-chat-manager.ts # @deprecated conversationLoop / handleMessage
+│   │   │       │   └── index.ts           # @deprecated 导出
+│   │   │       ├── code-agent-adapter.ts  # 代码 Agent CLI 适配（被 CodeAgentRuntime 引用）
 │   │   │       ├── tool-registry.ts
 │   │   │       ├── skill-registry.ts
 │   │   │       └── codex-auth.ts
@@ -79,25 +92,29 @@ AgentHub 是一个**多 Agent 协作平台**（IM 式群聊交互），用户可
 │       ├── tailwind.config.js
 │       └── src/
 │           ├── main.tsx
-│           ├── App.tsx            # React Router 路由定义
+│           ├── App.tsx            # React Router 路由定义（含 /workspace/:workspaceId/chat/:sessionId）
 │           ├── pages/             # 页面级组件
+│           │   └── WorkspaceChatPage.tsx  # 左聊天 + 右 TaskBoard 布局
 │           ├── components/        # 业务组件
-│           ├── stores/            # Zustand 状态（chatStore、workspaceStore）
+│           │   ├── TaskBoard.tsx          # 实时任务看板（DAG 展示 + 进度条 + 状态图标）
+│           │   └── ClarificationCard.tsx  # Agent 提问交互卡片
+│           ├── stores/            # Zustand 状态（chatStore.taskBoard）
 │           └── lib/
 │               ├── api.ts         # 前端 API 客户端（含类型定义）
-│               └── ws.ts          # WebSocket 客户端（自动重连）
+│               ├── ws.ts          # WebSocket 客户端（自动重连）
+│               └── runtime.tsx    # 消息类型映射（含 task_board / clarification）
 ├── packages/
 │   ├── db/              # Drizzle ORM 数据库层
 │   │   ├── src/
 │   │   │   ├── index.ts           # SQLite 连接（WAL + foreign_keys）
-│   │   │   ├── schema.ts          # 全量表定义（users/sessions/messages/workspaces/...）
-│   │   │   │                       # workspace_tasks 已扩展 DAG 字段
-│   │   │   │                       # 新增 orchestrator_runs 表
+│   │   │   ├── schema.ts          # 全量表定义
+│   │   │   │                       # workspace_tasks 已扩展 DAG + 进度 + 澄清字段
+│   │   │   │                       # orchestrator_runs / task_clarifications / orchestrator_run_controls
 │   │   │   └── migrate.ts         # 迁移执行脚本
 │   │   └── drizzle.config.ts
 │   └── shared/          # 前后端共享的 Zod schemas 与常量
 │       └── src/
-│           ├── constants.ts
+│           ├── constants.ts       # WsEvent 含 task_board:* 系列、MessageType.TaskBoard
 │           └── schemas/
 ├── tests/
 │   └── smoke.test.ts    # 冒烟测试（bun:test）
@@ -165,10 +182,14 @@ bun --filter @agenthub/web typecheck
   - `users` / `sessions`（`direct` | `group`）/ `messages`
   - `workspaces` / `workspace_agents` / `workspace_tasks`
   - `session_members` / `settings`
-  - `orchestrator_runs`（新增：记录 Orchestrator 调度生命周期）
-- **workspace\_tasks 扩展字段**（支持 DAG 调度）：
-  - `run_id`, `dependencies` (JSON), `parallel_group`, `max_retries`, `attempt_count`
+  - `orchestrator_runs` — 记录 Orchestrator 调度生命周期
+  - `task_clarifications` — Agent 向用户提问的记录（问题、选项、回答）
+  - `orchestrator_run_controls` — 用户对 Run 的控制操作（暂停/恢复/取消/重试/跳过）
+- **workspace\_tasks 扩展字段**（支持 DAG 调度 + 进度 + 自主性）：
+  - `run_id`, `dependencies` (JSON), `parallel_group`, `max_retries`, `retry_count`
   - `fallback_agent_id`, `artifacts` (JSON), `started_at`, `completed_at`, `error_log`
+  - `progress_percent` (integer, 0-100), `progress_status` (text), `clarification_count` (integer)
+  - `phase_id`, `input_refs` (JSON), `output_key`, `timeout`
 - **特性**：启用 `PRAGMA journal_mode = WAL;` 与 `PRAGMA foreign_keys = ON;`。
 - **连接逻辑**：`packages/db/src/index.ts` 会根据 `PROJECT_ROOT` 锚定数据库文件位置，确保在 monorepo 任意目录启动都能找到同一数据库。
 
@@ -305,6 +326,24 @@ logger.info({ taskId }, 'Task started')
 
 ## 核心架构说明
 
+### 统一消息路由（架构重构）
+
+旧架构存在两条执行路径（GroupChatManager.conversationLoop + OrchestratorEngine），现已统一为**单一入口路由**：
+
+```
+POST /api/messages/:sessionId（群聊）
+  → intentRouter.route() 判断意图
+    ├── @mention → 提取 @Agent名，路由到指定 Agent 回复
+    ├── 简单问答 → handleSimpleReply() → Orchestrator 单 Agent 直接回复
+    ├── 复杂任务 → generatePlanAndPushTaskBoard() → 异步 LLM 生成 Plan → WS 推送 task_board:plan_ready
+    └── 无 Orchestrator → 系统提示消息
+```
+
+关键函数（`apps/server/src/routes/messages.ts`）：
+- `handleSimpleReply()` — 简单消息直接派发给 Orchestrator 回复
+- `generatePlanAndPushTaskBoard()` — 后台异步生成 Plan，先插占位消息，完成/失败后 WS 推送
+- `buildSimpleFallbackPlan()` — Plan 生成失败时的固定模板降级（Architect → Coder → Reviewer）
+
 ### Agent Runtime 统一适配层
 
 所有 Agent 执行通过 `AgentRuntime` 接口统一：
@@ -325,18 +364,58 @@ interface AgentRuntime {
 ### Orchestrator Engine
 
 ```
-IntentClassifier（可选）→ Planner → TaskScheduler → Synthesizer
+intentRouter → Planner（异步）→ TaskBoard 展示 → 用户确认分发 → TaskScheduler → Synthesizer
+                                    ↓                      ↓
+                              FallbackEngine        ConflictResolver
                                     ↓
-                              FallbackEngine
-                                    ↓
-                              ConflictResolver
+                              Agent 自主性（CLARIFY / REJECT / PROGRESS / HELP）
 ```
 
-- **Planner**：调用 LLM 生成 Task DAG（带依赖关系），失败则回退到固定模板（Architect → Coder → Reviewer）。
+- **Planner**：异步调用 LLM 生成 Task DAG（带依赖关系），失败则回退到固定模板（Architect → Coder → Reviewer）。HTTP 立即返回，WS 推送 `task_board:plan_ready`。
 - **TaskScheduler**：DAG 分层执行，同层任务并发（默认 max 3），支持超时检测。
 - **Synthesizer**：LLM 智能聚合各 Agent 产出，消除重复、标注贡献者、指出风险。
 - **ConflictResolver**：收集各 Agent 分支的 diff，尝试自动合并；冲突时调用 LLM 做 3-way merge。
 - **FallbackEngine**：任务失败时支持重试、降级到 fallback Agent、Orchestrator 接管。
+- **Run 持久化与恢复**：`resumeRun()` 在服务重启时从 DB 恢复未完成的 Run，将 running 任务重置为 pending 继续调度。
+
+### Task 上下文隔离（Blackboard 模式）
+
+每个 Task 不再接收全量群聊历史，而是通过结构化 Blackboard 传递上下文：
+
+- `buildTaskPrompt()` 注入：用户总目标 + 任务描述 + 输出契约 + 上游 Task 的 Blackboard 条目（每条截断 500 字符）+ 关键决策
+- 每个 Task 使用独立的 child session 执行 `runAgentReply`
+- 上游输出通过 `inputRefs` / `outputKey` 精确引用
+
+### Agent 自主性
+
+Agent 在执行任务时拥有四种自主行为（`buildAutonomyInstructions()` 注入到 prompt）：
+
+| 信号                | 用途           | 触发行为                                          |
+| ----------------- | ------------ | --------------------------------------------- |
+| `[CLARIFY]`       | 向用户提问        | 插入 `task_clarifications` 记录 + WS 推送 + 群聊展示 |
+| `[REJECT]`        | 拒绝任务，建议其他Agent | 自动查找 fallback Agent 重新执行                      |
+| `[PROGRESS: N%]`  | 报告进度         | 更新 `progress_percent` + WS 推送 `task_board:task_progress` |
+| `[HELP agentName]` | 请求其他Agent帮助  | 记录到日志，可触发跨 Agent 协作                           |
+
+解析逻辑：`parseAgentAutonomySignals()` 在 `orchestrator-engine.ts` 的 `executeTask()` 中调用。
+
+### 实时任务看板（TaskBoard）
+
+**后端事件**（`packages/shared/src/constants.ts` 的 `WsEvent`）：
+
+| 事件                                  | 触发时机       |
+| ----------------------------------- | ---------- |
+| `task_board:plan_ready`             | 异步 Plan 生成完成 |
+| `task_board:task_progress`          | Agent 报告进度  |
+| `task_board:run_completed`          | Run 完成/失败/取消 |
+| `task_board:clarification_needed`   | Agent 提问    |
+
+**前端组件**：
+- `TaskBoard.tsx` — 阶段/任务树展示 + 状态图标（pending→Clock / running→Loader2 / done→CheckCircle2 / failed→XCircle / blocked→Ban）+ 进度条（<30%红 / <70%黄 / ≥70%绿）
+- `ClarificationCard.tsx` — Agent 提问的交互卡片（选项按钮 + 自由文本）
+- `WorkspaceChatPage.tsx` — 左侧聊天流 + 右侧 TaskBoard 面板（w-96，仅在有活跃 taskBoard 时显示）
+
+**状态管理**：`chatStore.taskBoard` 存储完整的 Run 状态（phases、tasks、进度、生命周期），通过 WS 事件实时更新。
 
 ### Git 分支隔离
 
@@ -351,11 +430,10 @@ IntentClassifier（可选）→ Planner → TaskScheduler → Synthesizer
 
 ## 开发约定
 
-- **前端ui（`apps/web`）由同事负责维护，不要直接修改界面ui。** 发现界面问题时，报告文件路径、行号、根因和修复建议，由用户与同事沟通后决定是否修改。仅在用户明确要求时才修改ui代码。
 - **新增路由**：在 `apps/server/src/routes/` 创建 Hono Router，然后在 `apps/server/src/app.ts` 中通过 `.route('/api/xxx', xxxRoutes)` 挂载。
 - **新增数据库表**：在 `packages/db/src/schema.ts` 中定义，使用 `sqliteTable` + `relations`，然后执行 `bun run db:generate`。
 - **前后端共享类型**：在 `packages/shared/src/schemas/` 中新增 Zod schema，并在 `packages/shared/src/index.ts` 导出。
 - **前端新增页面**：在 `apps/web/src/pages/` 创建组件，在 `apps/web/src/App.tsx` 中添加 `<Route>`。
-- **WebSocket 事件**：服务端通过 `broadcastSessionEvent` 发送，前端在 `chatStore.handleWSEvent` 中消费。常用事件类型定义于 `packages/shared/src/constants.ts` 的 `WsEvent`。新增事件：`task:update`。
+- **WebSocket 事件**：服务端通过 `broadcastSessionEvent` 发送，前端在 `chatStore.handleWSEvent` 中消费。事件类型定义于 `packages/shared/src/constants.ts` 的 `WsEvent`。新增事件：`task_board:plan_ready`、`task_board:task_progress`、`task_board:run_completed`、`task_board:clarification_needed`。
 - **Agent 回复流**：服务端 `agent-runner.ts` 中的 `runAgentReply` 负责调度；LLM 流式输出通过 `message:stream` 事件推送到前端，完成后写入数据库并发送 `message:completed`。
-
+- **消息路由**：群聊消息统一走 `messages.ts` 的入口路由（intentRouter → @mention / handleSimpleReply / generatePlanAndPushTaskBoard），不再使用已废弃的 `GroupChatManager.conversationLoop()`。

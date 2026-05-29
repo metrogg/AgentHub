@@ -5,7 +5,7 @@ import { env } from './env'
 import { logger } from './lib/logger'
 import { setRuntimeServerPort } from './lib/runtime-server'
 import { joinRoom, cleanupWebSocket } from './services/agent-runner'
-import { db, users, eq } from '@agenthub/db'
+import { db, users, eq, orchestratorRuns } from '@agenthub/db'
 import { DEFAULT_USER } from './middleware/auth'
 import { WsEvent } from '@agenthub/shared'
 
@@ -112,12 +112,16 @@ if (process.stdin) {
   process.stdin.on('end', shutdown)
 }
 
-function resolvePortFile() {
-  const explicitPortFile = Bun.env.AGENTHUB_PORT_FILE?.trim()
-  if (explicitPortFile) return resolve(explicitPortFile)
+import { OrchestratorEngine } from './services/orchestrator/orchestrator-engine'
 
-  const projectRoot = Bun.env.PROJECT_ROOT?.trim()
-  return projectRoot
-    ? resolve(projectRoot, '.agenthub-port')
-    : resolve(import.meta.dir, '../../../.agenthub-port')
+const runningRuns = await db.query.orchestratorRuns.findMany({
+  where: eq(orchestratorRuns.status, 'running'),
+})
+for (const run of runningRuns) {
+  OrchestratorEngine.resumeRun(run.id).catch((err) => {
+    logger.error({ err, runId: run.id }, '[Recovery] Failed to resume run')
+  })
+}
+if (runningRuns.length > 0) {
+  logger.info({ count: runningRuns.length }, '[Recovery] Resuming unfinished orchestrator runs')
 }

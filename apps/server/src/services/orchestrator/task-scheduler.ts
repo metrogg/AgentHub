@@ -1,21 +1,28 @@
 import { logger } from '../../lib/logger'
 import { Semaphore } from '../concurrency'
 import { TaskGraph } from './task-graph'
-import type { ExecutionPlan, ExecutionTask, TaskResult } from './types'
+import type { CollaborationMode, ExecutionPlan, ExecutionTask, TaskResult } from './types'
 
 export type TaskExecutor = (task: ExecutionTask, signal: AbortSignal) => Promise<TaskResult>
 
 export class TaskScheduler {
   private semaphore = new Semaphore(3)
+  private aborted = false
+  private additionalTasks: ExecutionTask[] = []
   private activeControllers = new Map<string, AbortController>()
   private activeGraphs = new Map<string, TaskGraph>()
   private activePlans = new Map<string, ExecutionPlan>()
+  public onPhaseCompleted?: (phaseId: string, phaseTitle: string) => void
 
   setConcurrency(n: number) {
     this.semaphore = new Semaphore(Math.max(1, Math.min(n, 10)))
   }
 
-  async executePlan(plan: ExecutionPlan, executor: TaskExecutor): Promise<TaskResult[]> {
+  async executePlan(
+    plan: ExecutionPlan,
+    executor: TaskExecutor,
+    collaborationMode?: CollaborationMode,
+  ): Promise<TaskResult[]> {
     const graph = new TaskGraph(plan.tasks)
     this.activeGraphs.set(plan.runId, graph)
     this.activePlans.set(plan.runId, plan)
@@ -26,12 +33,39 @@ export class TaskScheduler {
       throw new Error('Execution plan contains circular dependencies')
     }
 
+    if (collaborationMode === 'pipeline') {
+      this.setConcurrency(1)
+    } else {
+      this.setConcurrency(3)
+    }
+
     const results = new Map<string, TaskResult>()
     const runController = new AbortController()
     this.activeControllers.set(plan.runId, runController)
 
     try {
       while (!graph.allDone() && !runController.signal.aborted) {
+        if (collaborationMode === 'pipeline' && plan.phases && plan.phases.length > 0) {
+          const activePhase = plan.phases.find((phase) =>
+            phase.taskIds.some((taskId) => {
+              const status = graph.getStatus(taskId)
+              return status !== 'done' && status !== 'failed' && status !== 'blocked'
+            }),
+          )
+          if (activePhase) {
+            this.onPhaseCompleted?.(activePhase.id, activePhase.title)
+          }
+        }
+
+        if (collaborationMode === 'supervisor' && this.additionalTasks.length > 0) {
+          for (const task of this.additionalTasks) {
+            graph.setStatus(task.id, 'pending')
+          }
+          graph.addTasks(this.additionalTasks)
+          plan.tasks.push(...this.additionalTasks)
+          this.additionalTasks = []
+        }
+
         const readyTasks = graph.getReadyTasks()
         const runningCount = graph.getRunningTasks().length
         if (runningCount < readyTasks.length) {

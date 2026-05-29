@@ -99,6 +99,13 @@
       "when": 1729843200006,
       "tag": "0013_cleanup_legacy_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1780065211703,
+      "tag": "0014_task_clarifications_and_controls",
+      "breakpoints": true
     }
   ]
 }

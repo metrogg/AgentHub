@@ -3,7 +3,7 @@ import { streamReply } from '../llm'
 import { harnessManager } from '../harness'
 import { initializeRunLedger } from './run-ledger'
 import { ROLE_PRESETS } from '@agenthub/shared'
-import type { ClarificationQuestion, ExecutionAgent, ExecutionPlan, ExecutionTask, TaskOutputContract, TaskValidation } from './types'
+import type { ClarificationQuestion, CollaborationMode, ExecutionAgent, ExecutionPlan, ExecutionTask, TaskOutputContract, TaskValidation } from './types'
 
 export interface PlannerInput {
   goal: string
@@ -163,6 +163,43 @@ export class Planner {
     return tags
   }
 
+  private inferMode(goal: string, tasks: Array<{ description?: string; taskType?: string }>, phases?: Array<{ taskIds?: string[] }>): CollaborationMode {
+    const lower = goal.toLowerCase()
+
+    const pipelineSignals = [
+      '先', '然后', '接着', '最后', '第一步', '第二步', '第三步', '第四步',
+      'step 1', 'step 2', 'step 3', 'step 4',
+      'first', 'then', 'finally', 'next',
+      '流水线', 'pipeline', '工序',
+      '依赖', 'depends on',
+    ]
+    let pipelineScore = pipelineSignals.filter((s) => lower.includes(s)).length
+    if (phases && phases.length >= 3) pipelineScore += 2
+
+    const supervisorSignals = [
+      '调研', '研究', '探索', '分析', '不确定',
+      '发现', '寻找', '评估', '判断',
+      'research', 'explore', 'investigate', 'discover', 'evaluate',
+      '深度', '全面', 'deep',
+    ]
+    let supervisorScore = supervisorSignals.filter((s) => lower.includes(s)).length
+
+    const mapReduceSignals = [
+      '同时', '并行', '分别', '各自', '独立',
+      'simultaneously', 'in parallel', 'respectively', 'independently',
+      '汇总', '合并', '整合', '综合',
+      'synthesize', 'merge', 'aggregate', 'combine',
+    ]
+    let mapReduceScore = mapReduceSignals.filter((s) => lower.includes(s)).length
+    if (phases && phases.length <= 1) mapReduceScore += 1
+    const codeTasks = tasks.filter((t) => t.taskType === 'code')
+    if (codeTasks.length >= 2 && !pipelineSignals.some((s) => lower.includes(s))) mapReduceScore += 2
+
+    if (supervisorScore > pipelineScore && supervisorScore > mapReduceScore) return 'supervisor'
+    if (pipelineScore > supervisorScore && pipelineScore >= mapReduceScore) return 'pipeline'
+    return 'mapreduce'
+  }
+
   private async generateSpec(goal: string, agents: ExecutionAgent[], workspacePath?: string | null): Promise<ProjectSpec> {
     const prompt = `请为以下项目生成一份架构规格说明（Spec）。
 
@@ -248,12 +285,17 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       'You are AgentHub Orchestrator.',
       'Create a concise multi-agent execution plan using only the provided agent keys.',
       'Return strict JSON only. Do not include Markdown fences or explanations.',
-      'Schema: {"title":string,"summary":string,"clarificationQuestions":[{"id":string,"question":string,"options":string[]}],"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
+      'Schema: {"collaborationMode":"pipeline|mapreduce|supervisor","title":string,"summary":string,"clarificationQuestions":[{"id":string,"question":string,"options":string[]}],"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
       'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
       'If tasks can run in parallel, put them in the same parallelGroup.',
       'Dependencies should reference task ids, not agent keys.',
       'Each task must include its output contract: what files/interfaces it will produce, so downstream tasks know what to depend on.',
       'If the goal is ambiguous or missing critical details (tech stack, scope, constraints, data sources, auth method, UI framework, etc.), include 1-3 clarificationQuestions. Each question should have 2-4 options. If the goal is clear enough, return an empty array.',
+      'Analyze the task structure and choose the best collaboration mode:',
+      '- "pipeline": tasks have clear sequential dependencies (design → code → review), each stage feeds into the next',
+      '- "mapreduce": multiple workers can run in parallel on independent sub-problems, then a synthesizer merges results',
+      '- "supervisor": the task is exploratory; the orchestrator needs to monitor intermediate results and dynamically assign follow-up work',
+      'Add "collaborationMode" field to the output.',
       specBlock,
       specPhases || '',
     ].filter(Boolean).join('\n')
@@ -284,6 +326,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
   ): ExecutionPlan | null {
     if (!generated || typeof generated !== 'object') return null
     const candidate = generated as {
+      collaborationMode?: unknown
       title?: unknown
       summary?: unknown
       phases?: Array<{
@@ -380,6 +423,11 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       }
     }
 
+    const mode = (typeof candidate.collaborationMode === 'string' &&
+      ['pipeline', 'mapreduce', 'supervisor'].includes(candidate.collaborationMode))
+      ? candidate.collaborationMode as CollaborationMode
+      : this.inferMode(goal, tasks, phases)
+
     return {
       runId,
       title: cleanPlanText(candidate.title) || titleFromGoal(goal),
@@ -387,6 +435,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       agents,
       tasks,
       phases: phases.length > 0 ? phases : undefined,
+      collaborationMode: mode,
       clarificationQuestions: clarificationQuestions.length > 0 ? clarificationQuestions : undefined,
     }
   }
@@ -505,7 +554,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         })
       }
 
-      return { runId, title, goal, agents: selectedAgents, tasks }
+      return { runId, title, goal, agents: selectedAgents, tasks, collaborationMode: 'mapreduce' }
     }
 
     // 无 Spec 时的经典三阶段 fallback，支持 Coder 专业化匹配
@@ -558,7 +607,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       },
     ]
 
-    return { runId, title, goal, agents: selectedAgents, tasks }
+    return { runId, title, goal, agents: selectedAgents, tasks, collaborationMode: 'pipeline' }
   }
 }
 

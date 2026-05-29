@@ -18,10 +18,10 @@ import {
   type AgentRunProfile,
   type MessageRow,
 } from '../agent-runner'
-import { buildDynamicOrchestratorPlan } from '../orchestrator/plan-generator'
 import type { GroupChatAgent, GroupChatConfig, GroupChatMessage, GroupChatState } from './types'
 import { DEFAULT_GROUP_CHAT_CONFIG } from './types'
 import { WsEvent } from '@agenthub/shared'
+import { buildGroupChatAgent, buildAgentProfile } from '../agents/profile-builder'
 
 /**
  * 从消息内容中提取 @mention 的 Agent
@@ -80,10 +80,9 @@ function findOrchestrator(agents: GroupChatAgent[]): GroupChatAgent | undefined 
  *
  * 核心职责：
  * 1. 接收用户消息，决定谁来回复
- * 2. 无 @mention → Orchestrator 接收
- * 3. @mention → 特定 Agent 接收
- * 4. Agent 回复中的 @mention 自动路由到下一个 Agent
- * 5. 复杂任务额外生成 Orchestrator 计划卡片
+ * 2. @mention → 特定 Agent 接收
+ * 3. Agent 回复中的 @mention 自动路由到下一个 Agent
+ * 4. 无 @mention 有 Orchestrator → Orchestrator 进入对话循环
  */
 export class GroupChatManager {
   private config: GroupChatConfig
@@ -94,6 +93,50 @@ export class GroupChatManager {
 
   /**
    * 处理群聊消息的入口
+   *
+   * @deprecated 自 Orchestrator Engine 引入后，`GroupChatManager` 的对话循环模式已被弃用。
+   *
+   * ### 新旧架构对比
+   *
+   * **旧架构 (GroupChatManager)**：
+   * - 基于 `@mention` 的路由：用户 @某个 Agent → 该 Agent 回复 → 回复中再 @其他 Agent → 循环
+   * - 所有逻辑集中在 `GroupChatManager.conversationLoop()` 中，耦合度高
+   * - 无 DAG 依赖调度、无并发执行、无失败降级
+   *
+   * **新架构 (messages.ts 统一路由)**：
+   * - `intentRouter` 首先识别消息意图（简单问答 vs 复杂任务）
+   * - 简单消息 → `handleSimpleReply()`：直接派发给单个 Agent 回复
+   * - 复杂任务 → `generatePlanAndPushTaskBoard()`：通过 Orchestrator Engine 生成 Task DAG、
+   *   并发调度、支持重试降级、自动聚合产物
+   *
+   * ### 迁移示例
+   *
+   * ```typescript
+   * // 旧写法（不要再用）
+   * const manager = new GroupChatManager(config)
+   * await manager.handleMessage({
+   *   workspaceId: 'ws-xxx',
+   *   sessionId: 'sess-xxx',
+   *   userMsg: messageRow,
+   *   content: '请帮我构建一个 React 应用',
+   * })
+   *
+   * // 新写法 — 直接走 messages.ts 的统一路由即可，无需手动实例化 GroupChatManager
+   * // 前端发送一条普通的 POST /api/messages/:sessionId 请求，
+   * // 服务端 messages.ts 路由会自动完成意图识别 → 派发 → 调度 → 聚合
+   * // 无需额外代码
+   * ```
+   *
+   * ### 关键差异
+   *
+   * | 维度       | GroupChatManager (旧) | messages.ts 统一路由 (新)      |
+   * | ---------- | --------------------- | ------------------------------ |
+   * | 意图识别   | 无，纯 @mention 路由   | intentRouter 自动分类          |
+   * | 任务调度   | 串行对话循环          | DAG 并发调度 (TaskScheduler)    |
+   * | 失败处理   | 简单跳过              | 重试 + 降级 (FallbackEngine)    |
+   * | 产物聚合   | 无                    | LLM 智能聚合 (Synthesizer)     |
+   * | 代码冲突   | 无                    | 自动检测 + 3-way merge          |
+   * | 调用方式   | 手动 new + 调用       | 自动，通过 HTTP 路由触发        |
    */
   async handleMessage(params: {
     workspaceId: string
@@ -156,6 +199,13 @@ export class GroupChatManager {
 
   /**
    * 核心对话循环
+   *
+   * @deprecated 随 `handleMessage()` 一同弃用。参见 {@link handleMessage} 的迁移指南。
+   *
+   * 此方法内部的旧代码已完全注释，仅供参考历史实现。
+   * 新架构请使用 `messages.ts` 统一路由：
+   *   - 简单消息走 `handleSimpleReply()`
+   *   - 复杂任务走 `generatePlanAndPushTaskBoard()` → Orchestrator DAG 调度
    */
   private async conversationLoop(params: {
     workspaceId: string
@@ -169,6 +219,14 @@ export class GroupChatManager {
     history: GroupChatMessage[]
     failureCounts: Map<string, number>
   }): Promise<void> {
+    console.warn(
+      '[GroupChatManager] conversationLoop() is deprecated. Use unified routing in messages.ts',
+    )
+    return
+
+    /*
+    // ===== 以下代码已弃用，仅供参考 =====
+
     const { workspaceId, sessionId, agents, orchestrator, projectPath, state, failureCounts } =
       params
     let { history } = params
@@ -192,31 +250,17 @@ export class GroupChatManager {
     let turnReason = ''
 
     if (mentioned.length > 0) {
-      // 用户 @了特定 Agent
       currentAgent = mentioned[0]!
       pendingAgents = mentioned.slice(1)
       turnReason = `用户 @${currentAgent.name}`
     } else if (orchestrator) {
-      // 无 @mention → Orchestrator 接收
       currentAgent = orchestrator
-      turnReason = '总指挥接收（无 @mention）'
-    } else {
-      // 无 Orchestrator 且无 @mention
-      logger.warn({ sessionId }, 'GroupChatManager: no orchestrator and no @mention, skipping')
-      await db.insert(messages).values({
-        sessionId,
-        senderId: 'system',
-        senderType: 'system',
-        type: 'text',
-        content: '群聊中未配置总指挥（Orchestrator），请 @具体 Agent 或添加总指挥角色。',
-        metadata: { systemEvent: 'no_orchestrator' },
-      })
-      return
+      turnReason = '总指挥接收'
     }
 
-    // 如果是复杂任务且由 Orchestrator 接收，额外生成计划卡片
-    if (currentAgent === orchestrator && this.isComplexTask(params.content)) {
-      this.triggerOrchestratorPlan({ workspaceId, sessionId, content: params.content, agents })
+    if (!currentAgent) {
+      logger.warn({ sessionId }, 'GroupChatManager: no agent to reply')
+      return
     }
 
     // 对话循环：当前 Agent 回复 → 检查 @mention → 下一个 Agent
@@ -398,117 +442,8 @@ export class GroupChatManager {
       { turns: state.turnCount, reason: state.finishReason },
       'GroupChatManager: conversation loop finished',
     )
-  }
-
-  /**
-   * 判断任务是否复杂（是否需要生成结构化计划卡片）
-   */
-  private isComplexTask(content: string): boolean {
-    const lower = content.toLowerCase()
-    let signals = 0
-
-    const fileRefs = content.match(
-      /[\w./-]+\.(ts|tsx|js|jsx|py|rs|go|java|vue|css|scss|html|sql|json|yaml|yml|toml|md)\b/gi,
-    )
-    if (fileRefs && new Set(fileRefs.map((f) => f.toLowerCase())).size >= 2) signals += 2
-
-    const phasePatterns = [
-      /先.{2,20}然后/,
-      /先.{2,20}再/,
-      /第[一二三四五六七八九十\d]步/,
-      /step\s*\d/i,
-      /first.{5,30}then/i,
-      /首先.{2,20}接着/,
-      /\d+\.\s+\S.{3,}/m,
-    ]
-    if (phasePatterns.some((p) => p.test(content))) signals += 2
-
-    const archKeywords = [
-      '架构',
-      '重构',
-      '系统设计',
-      '整体',
-      '全流程',
-      '端到端',
-      '从零开始',
-      'architecture',
-      'refactor',
-      'system design',
-      'end-to-end',
-      'full stack',
-      'fullstack',
-      '全栈',
-      '迁移',
-      'migration',
-    ]
-    if (archKeywords.some((k) => lower.includes(k))) signals += 2
-
-    const collabKeywords = [
-      '同时',
-      '并行',
-      '一起',
-      '分别',
-      '各自',
-      '协作',
-      'simultaneously',
-      'in parallel',
-      'together',
-      'respectively',
-    ]
-    if (collabKeywords.some((k) => lower.includes(k))) signals += 1
-
-    const complexVerbs = [
-      '实现',
-      '创建',
-      '搭建',
-      '开发',
-      '构建',
-      '设计',
-      '制作',
-      '做一个',
-      '生成',
-      'implement',
-      'create',
-      'build',
-      'develop',
-      'design',
-      'make',
-      'generate',
-    ]
-    const techObjects = [
-      'api',
-      'ui',
-      '数据库',
-      'database',
-      '认证',
-      'auth',
-      '组件',
-      'component',
-      '服务',
-      'service',
-      '模块',
-      'module',
-      '页面',
-      'page',
-      '网站',
-      '网页',
-      'webapp',
-      'web app',
-      'site',
-      'website',
-    ]
-    const hasComplexVerb = complexVerbs.some((v) => lower.includes(v))
-    const hasTechObject = techObjects.some((t) => lower.includes(t))
-    if (hasComplexVerb && hasTechObject) signals += 1
-    if (
-      hasComplexVerb &&
-      ['网站', '网页', 'webapp', 'web app', 'site', 'website'].some((t) => lower.includes(t))
-    )
-      signals += 2
-
-    if (content.length > 200 && techObjects.some((t) => lower.includes(t))) signals += 1
-
-    return signals >= 3
+    // ===== 以上代码已弃用，仅供参考 =====
+    */
   }
 
   /**
@@ -644,133 +579,6 @@ export class GroupChatManager {
     if (!msg) return null
     return { id: msg.id, content: msg.content, createdAt: new Date(msg.createdAt) }
   }
-
-  /**
-   * 触发 Orchestrator 计划生成（复杂任务时调用）
-   */
-  private async triggerOrchestratorPlan(params: {
-    workspaceId: string
-    sessionId: string
-    content: string
-    agents: GroupChatAgent[]
-  }): Promise<void> {
-    const { workspaceId, sessionId, content, agents } = params
-    const orchestrator = findOrchestrator(agents)
-
-    const loadingPlan = {
-      kind: 'orchestrator_plan' as const,
-      title: '计划生成中',
-      goal: '正在分析任务并制定执行计划，请稍候...',
-      summary: '正在分析任务并制定执行计划，请稍候...',
-      tasks: [],
-      agents: [],
-    }
-
-    const [loadingCard] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: orchestrator?.id ?? 'orchestrator',
-        senderType: 'agent' as const,
-        type: 'task_card',
-        content: loadingPlan.summary,
-        metadata: {
-          agentName: orchestrator?.name ?? 'Orchestrator',
-          plan: { ...loadingPlan, messageId: '' },
-        },
-      })
-      .returning()
-
-    if (loadingCard) {
-      const loadingPlanWithId = { ...loadingPlan, messageId: loadingCard.id }
-      await db
-        .update(messages)
-        .set({
-          metadata: { agentName: orchestrator?.name ?? 'Orchestrator', plan: loadingPlanWithId },
-        })
-        .where(eq(messages.id, loadingCard.id))
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: {
-          sessionId,
-          message: {
-            ...loadingCard,
-            metadata: { agentName: orchestrator?.name ?? 'Orchestrator', plan: loadingPlanWithId },
-          },
-        },
-      })
-    }
-
-    // 后台异步生成完整计划
-    ;(async () => {
-      try {
-        const plan = await buildDynamicOrchestratorPlan(content, agents, workspaceId)
-        if (loadingCard) {
-          const planWithId = { ...plan, messageId: loadingCard.id }
-          await db
-            .update(messages)
-            .set({
-              content: plan.summary,
-              metadata: { agentName: orchestrator?.name ?? 'Orchestrator', plan: planWithId },
-            })
-            .where(eq(messages.id, loadingCard.id))
-          const [updatedCard] = await db
-            .select()
-            .from(messages)
-            .where(eq(messages.id, loadingCard.id))
-            .limit(1)
-          if (updatedCard) {
-            broadcastSessionEvent(sessionId, {
-              type: WsEvent.MessageCompleted,
-              payload: {
-                sessionId,
-                message: {
-                  ...updatedCard,
-                  metadata: { agentName: orchestrator?.name ?? 'Orchestrator', plan: planWithId },
-                },
-              },
-            })
-          }
-        }
-      } catch (err: any) {
-        logger.error(
-          { err: err?.message, sessionId },
-          'GroupChatManager: Orchestrator plan generation failed',
-        )
-        if (loadingCard) {
-          const failedPlan = {
-            kind: 'orchestrator_plan' as const,
-            title: '计划生成失败',
-            goal: '分析任务时出错，请稍后重试',
-            summary: '分析任务时出错，请稍后重试',
-            tasks: [],
-            agents: [],
-          }
-          await db
-            .update(messages)
-            .set({
-              content: failedPlan.summary,
-              metadata: {
-                agentName: orchestrator?.name ?? 'Orchestrator',
-                plan: { ...failedPlan, messageId: loadingCard.id },
-              },
-            })
-            .where(eq(messages.id, loadingCard.id))
-          const [failedCard] = await db
-            .select()
-            .from(messages)
-            .where(eq(messages.id, loadingCard.id))
-            .limit(1)
-          if (failedCard) {
-            broadcastSessionEvent(sessionId, {
-              type: WsEvent.MessageCompleted,
-              payload: { sessionId, message: failedCard },
-            })
-          }
-        }
-      }
-    })()
-  }
 }
 
 /**
@@ -832,48 +640,12 @@ async function resolveGroupWorkspaceId(sessionId: string, fallbackWorkspaceId: s
 }
 
 function toGroupChatAgent(row: typeof workspaceAgents.$inferSelect): GroupChatAgent {
-  return {
-    id: row.id,
-    name: row.name,
-    role: row.role,
-    roleType: (row.roleType as GroupChatAgent['roleType']) ?? undefined,
-    description: row.description,
-    systemPrompt: row.systemPrompt ?? undefined,
-    color: row.color ?? undefined,
-    modelId: row.modelId,
-    runtimeType: (row.runtimeType as AgentRunProfile['runtimeType']) ?? 'llm',
-    codeAgentType: (row.codeAgentType as AgentRunProfile['codeAgentType']) ?? undefined,
-    capabilityTags: row.capabilityTags ?? [],
-    toolPermissions: row.toolPermissions ?? [],
-    sandboxPolicy: (row.sandboxPolicy as AgentRunProfile['sandboxPolicy']) ?? 'workspace-write',
-    contextPolicy: 'workspace-aware',
-    approvalRequired: false,
-    responseStrategy: 'when_relevant',
-    canDelegateTo: [],
-    maxConsecutiveTurns: 3,
-  }
+  return buildGroupChatAgent(row)
 }
 
 /**
  * 将 GroupChatAgent 转换为 AgentRunProfile（给 agent-runner 使用）
  */
 function toAgentProfile(agent: GroupChatAgent, projectPath: string | null): AgentRunProfile {
-  return {
-    id: agent.id,
-    name: agent.name,
-    role: agent.role,
-    roleType: agent.roleType,
-    description: agent.description,
-    color: agent.color,
-    modelId: agent.modelId,
-    runtimeType: agent.runtimeType,
-    codeAgentType: agent.codeAgentType,
-    capabilityTags: agent.capabilityTags,
-    toolPermissions: agent.toolPermissions,
-    sandboxPolicy: agent.sandboxPolicy,
-    contextPolicy: agent.contextPolicy,
-    approvalRequired: agent.approvalRequired,
-    systemPrompt: agent.systemPrompt,
-    projectPath: projectPath?.trim() || null,
-  }
+  return buildAgentProfile(agent, projectPath)
 }

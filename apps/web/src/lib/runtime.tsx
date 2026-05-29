@@ -7,7 +7,8 @@ import {
   type ThreadMessageLike,
 } from '@assistant-ui/react'
 import { useChatStore } from '../stores/chatStore'
-import type { AgentArtifact, ChatAttachment, CodeAgentRunMetadata, Message } from './api'
+import type { AgentArtifact, ChatAttachment, Message } from './api'
+import type { CodeAgentRunMetadata } from '@agenthub/shared'
 
 function toThreadMessage(message: Message): ThreadMessageLike {
   const role: ThreadMessageLike['role'] =
@@ -24,6 +25,18 @@ function toThreadMessage(message: Message): ThreadMessageLike {
           messageId: message.id,
           dispatchResult: (message.metadata as { dispatchResult?: unknown }).dispatchResult,
         }
+      : null
+  const taskBoard =
+    message.type === 'task_board' && message.metadata && 'plan' in (message.metadata as Record<string, unknown>)
+      ? {
+          ...((message.metadata as Record<string, unknown>).plan as Record<string, unknown>),
+          runId: (message.metadata as Record<string, unknown>).runId as string,
+          messageId: message.id,
+        }
+      : null
+  const clarification =
+    message.metadata && 'clarificationTaskId' in (message.metadata as Record<string, unknown>)
+      ? { ...(message.metadata as Record<string, unknown>), messageId: message.id }
       : null
   const agentName =
     message.senderType === 'agent' && message.metadata && typeof message.metadata.agentName === 'string'
@@ -53,9 +66,13 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   return {
     id: message.id,
     role,
-    content: plan
-      ? [{ type: 'data', name: 'orchestrator_plan', data: plan }]
-      : codeAgentRun
+    content: clarification
+      ? [{ type: 'data', name: 'clarification_card', data: clarification }]
+      : taskBoard
+      ? [{ type: 'data', name: 'task_board', data: taskBoard }]
+      : plan
+        ? [{ type: 'data', name: 'orchestrator_plan', data: plan }]
+        : codeAgentRun
         ? [
             ...avatarPart,
             { type: 'text', text },

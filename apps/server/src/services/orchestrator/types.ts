@@ -12,6 +12,8 @@ import {
   OrchestratorRunStatus,
 } from '@agenthub/shared'
 
+export type CollaborationMode = 'pipeline' | 'mapreduce' | 'supervisor'
+
 export interface ClarificationQuestion {
   id: string
   question: string
@@ -28,6 +30,7 @@ export interface ExecutionPlan {
   tasks: ExecutionTask[]
   agentRelations?: AgentRelation[]
   clarificationQuestions?: ClarificationQuestion[]
+  collaborationMode?: CollaborationMode
   taskLedger?: TaskLedger
   progressLedger?: ProgressLedger
 }
@@ -173,4 +176,41 @@ export interface SchedulerCallbacks {
   onTaskRetry(task: ExecutionTask, attempt: number): void | Promise<void>
   onTaskFallback(task: ExecutionTask, fallbackAgentId: string): void | Promise<void>
   onTaskFailed(task: ExecutionTask, error: Error): void | Promise<void>
+}
+
+export interface ClarificationRequest {
+  taskId: string
+  agentId: string
+  question: string
+  options?: string[]
+  createdAt: string
+  status: 'pending' | 'answered' | 'timeout'
+  answer?: string
+}
+
+export interface TaskProgress {
+  taskId: string
+  agentId: string
+  percent: number
+  status: string
+  detail?: string
+  updatedAt: string
+}
+
+export interface HelpRequest {
+  taskId: string
+  agentId: string
+  targetAgentId: string
+  request: string
+  createdAt: string
+  status: 'pending' | 'fulfilled' | 'rejected'
+  result?: string
+}
+
+export interface AgentCapabilities {
+  canAskClarification: boolean
+  canRejectTask: boolean
+  canReportProgress: boolean
+  canRequestHelp: boolean
+  canDelegateSubtask: boolean
 }
