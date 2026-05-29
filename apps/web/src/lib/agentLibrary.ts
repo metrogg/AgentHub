@@ -1,3 +1,4 @@
+import { api } from './api'
 import type { AgentConfigInput, AgentRelationType } from './api'
 import { defaultAgentRelations, inferRoleType, presetForRole } from './agentRolePresets'
 
@@ -104,11 +105,11 @@ export function loadAgentLibraryState(): AgentLibraryState {
 
 export function saveAgentLibrary(agents: SavedAgentConfig[]) {
   const current = loadAgentLibraryState()
-  saveAgentLibraryState({
+  saveAgentLibraryState(normalizeLibraryState({
     schemaVersion: 2,
     agents,
     relations: pruneRelations(current.relations, agents),
-  })
+  }))
 }
 
 export function saveAgentLibraryState(state: AgentLibraryState) {
@@ -124,11 +125,7 @@ function queueAgentLibraryServerSync(state: AgentLibraryState) {
   const value = JSON.stringify(state)
   pendingServerSync = window.setTimeout(() => {
     pendingServerSync = null
-    fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ [agentLibraryServerSettingKey]: value }),
-    }).catch(() => undefined)
+    void api.saveSettings({ [agentLibraryServerSettingKey]: value }).catch(() => undefined)
   }, 0)
 }
 
@@ -250,6 +247,7 @@ function normalizeLibraryState(value: unknown): AgentLibraryState {
     ? (parsed.agents.map(normalizeSavedAgent).filter(Boolean) as SavedAgentConfig[])
     : defaultAgentConfigs
   agents = upgradeDefaultAgentPresets(agents)
+  agents = dedupeSavedAgents(agents)
 
   // 迁移：如果缺少 orchestrator，自动添加
   const hasOrchestrator = agents.some((a) => (a.roleType ?? inferRoleType(a)) === 'orchestrator')
@@ -265,6 +263,21 @@ function normalizeLibraryState(value: unknown): AgentLibraryState {
     : buildDefaultSavedRelations(agents)
   const pruned = pruneRelations(relations, agents)
   return { schemaVersion: 2, agents, relations: pruned }
+}
+
+function dedupeSavedAgents(agents: SavedAgentConfig[]) {
+  const seen = new Set<string>()
+  return agents.filter((agent) => {
+    const key = [
+      agent.name.trim().toLowerCase(),
+      agent.role.trim().toLowerCase(),
+      (agent.runtimeType ?? 'llm').trim().toLowerCase(),
+      (agent.codeAgentType ?? '').trim().toLowerCase(),
+    ].join('|')
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function upgradeDefaultAgentPresets(agents: SavedAgentConfig[]) {

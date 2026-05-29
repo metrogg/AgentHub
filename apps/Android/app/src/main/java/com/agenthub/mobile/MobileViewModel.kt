@@ -88,11 +88,18 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun refreshSessions() = repository.refreshSessions()
+    fun refreshAll() {
+        repository.refreshSessions()
+        repository.refreshWorkbench()
+    }
+
+    fun refreshSessions() = refreshAll()
 
     fun createSession() = repository.createSession()
 
     fun openWorkspaceAgent(workspaceId: String, agentId: String) = repository.openWorkspaceAgent(workspaceId, agentId)
+
+    fun openWorkspaceGroupSession(workspaceId: String) = repository.openWorkspaceGroupSession(workspaceId)
 
     fun openAgentContact(contact: AgentContact) = repository.openAgentContact(contact)
 
@@ -115,6 +122,14 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deleteSession(sessionId: String) = repository.deleteSession(sessionId)
+
+    fun startOffice() = repository.startOffice()
+
+    fun openFirewallPort() = repository.openFirewallPort()
+
+    fun installCodingTools() = repository.installCodingTools()
+
+    fun repairCodingTools() = repository.repairCodingTools()
 
     private fun isAndroidEmulatorHost(url: String): Boolean {
         return Regex("^https?://10\\.0\\.2\\.2(?::\\d+)?(?:/.*)?$", RegexOption.IGNORE_CASE).matches(url)

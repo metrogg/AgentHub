@@ -79,7 +79,6 @@ import com.agenthub.mobile.data.MobileUiState
 import com.agenthub.mobile.data.Session
 import com.agenthub.mobile.data.AgentContact
 import com.agenthub.mobile.data.Workspace
-import com.agenthub.mobile.data.WorkspaceAgent
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import java.net.URLEncoder
@@ -1803,24 +1802,6 @@ private fun contactAvatarLabel(contact: AgentContact): String {
     val avatar = contact.avatar?.trim().orEmpty()
     if (avatar.isNotBlank() && avatar.length <= 4 && !avatar.startsWith("http", ignoreCase = true)) return avatar
     return contact.name.ifBlank { "A" }.take(1).uppercase()
-}
-
-private fun agentToContact(agent: WorkspaceAgent): AgentContact? {
-    return AgentContact(
-        id = agent.id,
-        source = "workspace-agent",
-        workspaceId = agent.workspaceId,
-        workspaceAgentId = agent.id,
-        name = agent.name,
-        role = agent.role,
-        roleType = agent.roleType,
-        description = agent.description,
-        avatar = agent.avatar,
-        color = agent.color,
-        runtimeType = agent.runtimeType,
-        codeAgentType = agent.codeAgentType,
-        capabilityTags = agent.capabilityTags,
-    )
 }
 
 private fun sessionMatchesContact(session: Session, contact: AgentContact): Boolean {

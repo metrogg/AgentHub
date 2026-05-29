@@ -31,14 +31,18 @@ class AgentHubRepository(
     fun connect(config: ConnectionConfig) {
         scope.launch {
             _uiState.update {
-                it.copy(connection = config, connecting = true, error = null)
+                it.copy(connection = config, connecting = true, error = null, workbenchLoading = true)
             }
             runCatching {
                 client.health(config)
                 val sync = client.sync(config)
+                val workbench = client.workbench(config)
                 currentSocket?.cancel()
                 currentSocket = client.openEventSocket(config, socketListener(config))
                 applySync(sync)
+                _uiState.update {
+                    it.copy(workbench = workbench, workbenchLoading = false)
+                }
                 _uiState.update {
                     it.copy(
                         connecting = false,
@@ -49,7 +53,7 @@ class AgentHubRepository(
                 _uiState.value.selectedSessionId?.let { selectSession(it) }
             }.onFailure { error ->
                 _uiState.update {
-                    it.copy(connecting = false, connected = false, error = error.message ?: "连接失败")
+                    it.copy(connecting = false, connected = false, workbenchLoading = false, error = error.message ?: "连接失败")
                 }
             }
         }
@@ -74,6 +78,27 @@ class AgentHubRepository(
             runCatching { client.sync(config) }
                 .onSuccess { sync -> applySync(sync) }
                 .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun refreshWorkbench() {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            _uiState.update { it.copy(workbenchLoading = true) }
+            runCatching { client.workbench(config) }
+                .onSuccess { workbench ->
+                    _uiState.update {
+                        it.copy(workbench = workbench, workbenchLoading = false, error = null)
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(workbenchLoading = false, error = error.message)
+                    }
+                }
         }
     }
 
@@ -143,6 +168,28 @@ class AgentHubRepository(
                         )
                     }
                     refreshSessions()
+                    selectSession(session.id)
+                }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun openWorkspaceGroupSession(workspaceId: String) {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            runCatching { client.openWorkspaceGroupSession(config, workspaceId) }
+                .onSuccess { session ->
+                    _uiState.update {
+                        it.copy(
+                            sessions = listOf(session) + it.sessions.filterNot { item -> item.id == session.id },
+                            error = null,
+                        )
+                    }
+                    refreshSessions()
+                    refreshWorkbench()
                     selectSession(session.id)
                 }
                 .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
@@ -257,6 +304,81 @@ class AgentHubRepository(
         }
     }
 
+    fun startOffice() {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            _uiState.update { it.copy(workbenchLoading = true) }
+            runCatching { client.startOffice(config) }
+                .onSuccess { office ->
+                    _uiState.update {
+                        it.copy(
+                            workbench = it.workbench?.copy(office = office),
+                            workbenchLoading = false,
+                            error = null,
+                        )
+                    }
+                    refreshWorkbench()
+                }
+                .onFailure { error -> _uiState.update { it.copy(workbenchLoading = false, error = error.message) } }
+        }
+    }
+
+    fun openFirewallPort() {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            _uiState.update { it.copy(workbenchLoading = true) }
+            runCatching { client.openFirewallPort(config) }
+                .onSuccess { action ->
+                    _uiState.update {
+                        it.copy(
+                            workbenchLoading = false,
+                            error = if (action.ok) null else action.message,
+                        )
+                    }
+                    refreshWorkbench()
+                }
+                .onFailure { error -> _uiState.update { it.copy(workbenchLoading = false, error = error.message) } }
+        }
+    }
+
+    fun installCodingTools() {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            _uiState.update { it.copy(workbenchLoading = true) }
+            runCatching { client.installCodingTools(config) }
+                .onSuccess {
+                    _uiState.update { it.copy(workbenchLoading = false, error = null) }
+                    refreshWorkbench()
+                }
+                .onFailure { error -> _uiState.update { it.copy(workbenchLoading = false, error = error.message) } }
+        }
+    }
+
+    fun repairCodingTools() {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            _uiState.update { it.copy(workbenchLoading = true) }
+            runCatching { client.repairCodingTools(config) }
+                .onSuccess {
+                    _uiState.update { it.copy(workbenchLoading = false, error = null) }
+                    refreshWorkbench()
+                }
+                .onFailure { error -> _uiState.update { it.copy(workbenchLoading = false, error = error.message) } }
+        }
+    }
+
     private fun socketListener(config: ConnectionConfig) = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             _uiState.update { it.copy(connected = true, connecting = false, error = null) }
@@ -361,34 +483,6 @@ class AgentHubRepository(
                 messages = if (selectedSessionId == null && state.selectedSessionId != null) emptyList() else state.messages,
                 streamingMessage = if (selectedSessionId == null && state.selectedSessionId != null) null else state.streamingMessage,
                 error = null,
-            )
-        }
-    }
-
-    private fun contactsFromWorkspaceAgents(agents: List<WorkspaceAgent>): List<AgentContact> {
-        val seen = mutableSetOf<String>()
-        return agents.mapNotNull { agent ->
-            val key = listOf(
-                agent.name.trim().lowercase(),
-                agent.role.trim().lowercase(),
-                agent.runtimeType.trim().lowercase(),
-                agent.codeAgentType?.trim()?.lowercase().orEmpty(),
-            ).joinToString("|")
-            if (!seen.add(key)) return@mapNotNull null
-            AgentContact(
-                id = agent.id,
-                source = "workspace-agent",
-                workspaceId = agent.workspaceId,
-                workspaceAgentId = agent.id,
-                name = agent.name,
-                role = agent.role,
-                roleType = agent.roleType,
-                description = agent.description,
-                avatar = agent.avatar,
-                color = agent.color,
-                runtimeType = agent.runtimeType,
-                codeAgentType = agent.codeAgentType,
-                capabilityTags = agent.capabilityTags,
             )
         }
     }

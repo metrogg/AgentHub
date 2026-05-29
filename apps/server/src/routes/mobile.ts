@@ -199,6 +199,130 @@ interface SavedAgentLibrary {
   agents: SavedAgentConfig[]
 }
 
+async function buildMobileWorkbench(ownerId: string) {
+  const [workspaceList, savedLibrary, runtime, codingTools, skills, office, connectivity] = await Promise.all([
+    db.select().from(workspaces).where(eq(workspaces.ownerId, ownerId)).orderBy(desc(workspaces.updatedAt)),
+    readSavedAgentLibrary(),
+    getLlmRuntimeStatus(),
+    getCodingToolsWorkbenchStatus(),
+    globalSkillRegistry.listSkills(),
+    getStarOfficeRuntimeStatus(),
+    mobileConnectivityStatus(),
+  ])
+
+  const workspaceIds = workspaceList.map((workspace) => workspace.id)
+  const [agentList, taskList, sessionList, runList] = await Promise.all([
+    workspaceIds.length
+      ? db.select().from(workspaceAgents).where(inArray(workspaceAgents.workspaceId, workspaceIds))
+      : Promise.resolve([] as Array<typeof workspaceAgents.$inferSelect>),
+    workspaceIds.length
+      ? db.select().from(workspaceTasks).where(inArray(workspaceTasks.workspaceId, workspaceIds))
+      : Promise.resolve([] as Array<typeof workspaceTasks.$inferSelect>),
+    workspaceIds.length
+      ? db.select().from(sessions).where(inArray(sessions.workspaceId, workspaceIds))
+      : Promise.resolve([] as Array<typeof sessions.$inferSelect>),
+    workspaceIds.length
+      ? db
+          .select({
+            id: orchestratorRuns.id,
+            workspaceId: orchestratorRuns.workspaceId,
+            groupSessionId: orchestratorRuns.groupSessionId,
+            status: orchestratorRuns.status,
+            createdAt: orchestratorRuns.createdAt,
+            updatedAt: orchestratorRuns.updatedAt,
+            workspaceName: workspaces.name,
+            sessionTitle: sessions.title,
+          })
+          .from(orchestratorRuns)
+          .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
+          .leftJoin(sessions, eq(sessions.id, orchestratorRuns.groupSessionId))
+          .where(and(eq(workspaces.ownerId, ownerId), inArray(orchestratorRuns.workspaceId, workspaceIds)))
+          .orderBy(desc(orchestratorRuns.createdAt))
+      : Promise.resolve([] as Array<{
+          id: string
+          workspaceId: string
+          groupSessionId: string
+          status: string
+          createdAt: Date
+          updatedAt: Date
+          workspaceName: string | null
+          sessionTitle: string | null
+        }>),
+  ])
+
+  const agentCountByWorkspace = countBy(agentList, (agent) => agent.workspaceId)
+  const taskCountByWorkspace = countBy(taskList, (task) => task.workspaceId)
+  const sessionCountByWorkspace = countBy(sessionList, (session) => session.workspaceId ?? '')
+  const activeRunCountByWorkspace = countBy(
+    runList.filter((run) => ['planning', 'running', 'synthesizing'].includes(run.status)),
+    (run) => run.workspaceId,
+  )
+  const latestRunByWorkspace = new Map<string, typeof runList[number]>()
+  for (const run of runList) {
+    if (!latestRunByWorkspace.has(run.workspaceId)) latestRunByWorkspace.set(run.workspaceId, run)
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    runtime,
+    codingTools,
+    skills: skills.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      rootPath: skill.rootPath,
+      skillPath: skill.skillPath,
+      source: skill.source,
+    })),
+    office,
+    connectivity: {
+      port: connectivity.port,
+      localAddresses: connectivity.localAddresses,
+      baseUrls: connectivity.baseUrls,
+      message: connectivity.message,
+    },
+    workspaces: workspaceList.map((workspace) => {
+      const latestRun = latestRunByWorkspace.get(workspace.id)
+      return {
+        id: workspace.id,
+        name: workspace.name,
+        goal: workspace.goal,
+        projectPath: workspace.projectPath,
+        agentCount: agentCountByWorkspace.get(workspace.id) ?? 0,
+        taskCount: taskCountByWorkspace.get(workspace.id) ?? 0,
+        sessionCount: sessionCountByWorkspace.get(workspace.id) ?? 0,
+        activeRunCount: activeRunCountByWorkspace.get(workspace.id) ?? 0,
+        groupSessionId: latestRun?.groupSessionId ?? null,
+        updatedAt: workspace.updatedAt instanceof Date ? workspace.updatedAt.toISOString() : String(workspace.updatedAt ?? ''),
+      }
+    }),
+    runs: runList.slice(0, 20).map((run) => ({
+      id: run.id,
+      workspaceId: run.workspaceId,
+      workspaceName: run.workspaceName ?? '',
+      groupSessionId: run.groupSessionId,
+      sessionTitle: run.sessionTitle ?? '',
+      status: run.status,
+      createdAt: run.createdAt instanceof Date ? run.createdAt.toISOString() : String(run.createdAt ?? ''),
+      updatedAt: run.updatedAt instanceof Date ? run.updatedAt.toISOString() : String(run.updatedAt ?? ''),
+    })),
+    savedAgentLibrary: {
+      found: savedLibrary.found,
+      count: savedLibrary.agents.length,
+    },
+  }
+}
+
+function countBy<T>(items: T[], keyOf: (item: T) => string) {
+  const map = new Map<string, number>()
+  for (const item of items) {
+    const key = keyOf(item)
+    if (!key) continue
+    map.set(key, (map.get(key) ?? 0) + 1)
+  }
+  return map
+}
+
 async function readSavedAgentLibrary(): Promise<SavedAgentLibrary> {
   const [row] = await db
     .select()
