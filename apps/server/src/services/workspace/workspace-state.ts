@@ -62,14 +62,9 @@ export async function loadWorkspaceState(workspaceId: string): Promise<Workspace
       .where(eq(workspaceStates.workspaceId, workspaceId))
       .limit(1)
     if (!row?.state) return null
-<<<<<<< HEAD
     const parsed = JSON.parse(row.state) as Record<string, unknown>
     const state = migrateState(parsed)
     state.workspaceId = workspaceId
-=======
-    const state = migrateState(row.state as Record<string, unknown>)
-    state.workspaceId = workspaceId // 确保一致性
->>>>>>> 7c29e1f (feat(workspace): 添加工作空间状态管理服务)
     return state
   } catch (err: any) {
     logger.warn({ workspaceId, err: err?.message }, 'Failed to load workspace state')
@@ -83,29 +78,18 @@ export async function saveWorkspaceState(state: WorkspaceState): Promise<void> {
       ...state,
       lastUpdatedAt: new Date().toISOString(),
     }
-<<<<<<< HEAD
     const stateJson = JSON.stringify(updated)
-=======
->>>>>>> 7c29e1f (feat(workspace): 添加工作空间状态管理服务)
     await db
       .insert(workspaceStates)
       .values({
         workspaceId: state.workspaceId,
-<<<<<<< HEAD
         state: stateJson,
-=======
-        state: updated as unknown as Record<string, unknown>,
->>>>>>> 7c29e1f (feat(workspace): 添加工作空间状态管理服务)
         updatedAt: new Date(),
       })
       .onConflictDoUpdate({
         target: workspaceStates.workspaceId,
         set: {
-<<<<<<< HEAD
           state: stateJson,
-=======
-          state: updated as unknown as Record<string, unknown>,
->>>>>>> 7c29e1f (feat(workspace): 添加工作空间状态管理服务)
           updatedAt: new Date(),
         },
       })
