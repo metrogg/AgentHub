@@ -199,11 +199,21 @@ describe('AgentHub smoke tests', () => {
 
     expect(full.agents.map((agent) => agent.roleType)).toEqual([
       'orchestrator',
+      'researcher',
+      'architect',
       'coder',
       'reviewer',
     ])
+    expect(full.agents.map((agent) => agent.name)).toEqual([
+      'Orchestrator',
+      'Researcher',
+      'Designer',
+      'Builder',
+      'QA Reviewer',
+    ])
     expect(full.agentRelations.map((relation) => relation.relationType)).toContain('handoff_to')
     expect(full.agentRelations.map((relation) => relation.relationType)).toContain('reviewed_by')
+    expect(full.agentRelations.map((relation) => relation.relationType)).toContain('reports_to')
     expect(full.agentRelations.map((relation) => relation.relationType)).toContain('fallback_to')
 
     const coder = full.agents.find((agent) => agent.roleType === 'coder')!
@@ -307,6 +317,13 @@ describe('AgentHub smoke tests', () => {
         agentIds: selectedAgentIds,
       }),
     )
+
+    const syncedGroup = await json<{
+      metadata: { agentIds?: string[]; agentCount?: number; memberCount?: number }
+    }>(await app.request(`/api/sessions/${group.session.id}`))
+    expect(syncedGroup.metadata.agentIds?.sort()).toEqual(selectedAgentIds.slice().sort())
+    expect(syncedGroup.metadata.agentCount).toBe(2)
+    expect(syncedGroup.metadata.memberCount).toBe(3)
 
     const after = await json<{ agents: Array<{ id: string }> }>(
       await app.request(`/api/workspaces/${full.workspace.id}`),

@@ -1,12 +1,33 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { workspaceNameFromPath } from '@agenthub/shared'
-import { ArrowUp, AtSign, ChevronRight, FolderOpen, FolderPlus, FolderX, Loader2, PanelLeft, Paperclip, Plus, Search } from 'lucide-react'
+import {
+  ArrowUp,
+  AtSign,
+  ChevronRight,
+  FolderOpen,
+  FolderPlus,
+  FolderX,
+  Loader2,
+  PanelLeft,
+  Paperclip,
+  Plus,
+  Search,
+} from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
-import { readMentionCommand, readSlashCommand, SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
+import {
+  readMentionCommand,
+  readSlashCommand,
+  SkillCommandPanel,
+  Thread,
+} from '../components/assistant-ui/Thread'
 import { api, friendlyErrorMessage, type SkillSummary, type Workspace } from '../lib/api'
-import { agentLibraryChangeEvent, loadAgentLibrary, type SavedAgentConfig } from '../lib/agentLibrary'
+import {
+  agentLibraryChangeEvent,
+  loadAgentLibrary,
+  type SavedAgentConfig,
+} from '../lib/agentLibrary'
 import { useI18n } from '../lib/i18n'
 import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
@@ -60,10 +81,13 @@ export default function ChatPage() {
         <div
           className={[
             'h-full w-[340px] transform-gpu will-change-transform',
-            sidebarCollapsed ? 'pointer-events-none -translate-x-full opacity-0' : 'translate-x-0 opacity-100',
+            sidebarCollapsed
+              ? 'pointer-events-none -translate-x-full opacity-0'
+              : 'translate-x-0 opacity-100',
           ].join(' ')}
           style={{
-            transition: 'opacity 300ms cubic-bezier(0.4,0,0.2,1), transform 300ms cubic-bezier(0.4,0,0.2,1)',
+            transition:
+              'opacity 300ms cubic-bezier(0.4,0,0.2,1), transform 300ms cubic-bezier(0.4,0,0.2,1)',
           }}
         >
           <SessionList onCollapse={desktop ? undefined : toggleSidebar} />
@@ -71,7 +95,10 @@ export default function ChatPage() {
       </div>
       <main
         className="relative min-w-0 flex-1"
-        style={{ ['--agenthub-thread-header-left-offset' as string]: desktop || sidebarCollapsed ? '3rem' : '0rem' }}
+        style={{
+          ['--agenthub-thread-header-left-offset' as string]:
+            desktop || sidebarCollapsed ? '3rem' : '0rem',
+        }}
       >
         {(desktop || sidebarCollapsed) && (
           <button
@@ -81,7 +108,12 @@ export default function ChatPage() {
             aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
             title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
           >
-            <PanelLeft className={['h-4 w-4 transition-transform', sidebarCollapsed ? 'rotate-180' : ''].join(' ')} />
+            <PanelLeft
+              className={[
+                'h-4 w-4 transition-transform',
+                sidebarCollapsed ? 'rotate-180' : '',
+              ].join(' ')}
+            />
           </button>
         )}
         {sessionId && threadReady ? (
@@ -120,9 +152,15 @@ function Welcome() {
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skillPanelOpen, setSkillPanelOpen] = useState(false)
   const [skillQuery, setSkillQuery] = useState('')
-  const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(null)
+  const [skillCommandRange, setSkillCommandRange] = useState<{ start: number; end: number } | null>(
+    null,
+  )
   const [mentionPanelOpen, setMentionPanelOpen] = useState(false)
-  const [mentionRange, setMentionRange] = useState<{ start: number; end: number; query: string } | null>(null)
+  const [mentionRange, setMentionRange] = useState<{
+    start: number
+    end: number
+    query: string
+  } | null>(null)
   const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
@@ -314,7 +352,9 @@ function Welcome() {
     setOpeningWorkspaceId(workspaceId)
     showHint('正在选择工作区...')
     try {
-      const workspace = workspaces.find((item) => item.id === workspaceId) ?? (await api.getWorkspace(workspaceId)).workspace
+      const workspace =
+        workspaces.find((item) => item.id === workspaceId) ??
+        (await api.getWorkspace(workspaceId)).workspace
       setSelectedWorkspace(workspace)
       setProjectMenuOpen(false)
       showHint(`已选择工作区：${workspace.name}`)
@@ -330,8 +370,16 @@ function Welcome() {
     if (workspaceBusy) return
     setWorkspaceBusy(true)
     try {
-      const full = await api.createWorkspace({ name: '空白工作区', goal: '', projectPath: null, template: 'classic' })
-      setWorkspaces((items) => [full.workspace, ...items.filter((item) => item.id !== full.workspace.id)])
+      const full = await api.createWorkspace({
+        name: '空白工作区',
+        goal: '',
+        projectPath: null,
+        template: 'classic',
+      })
+      setWorkspaces((items) => [
+        full.workspace,
+        ...items.filter((item) => item.id !== full.workspace.id),
+      ])
       setOpeningWorkspaceId(full.workspace.id)
       setSelectedWorkspace(full.workspace)
       setProjectMenuOpen(false)
@@ -415,7 +463,11 @@ function Welcome() {
             onSubmit={handleSubmit}
             className="relative rounded-[22px] border border-neutral-200 bg-white p-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)]"
           >
-            {hint && <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">{hint}</div>}
+            {hint && (
+              <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
+                {hint}
+              </div>
+            )}
             {skillPanelOpen && (
               <SkillCommandPanel
                 query={skillQuery}
@@ -454,15 +506,22 @@ function Welcome() {
                       disabled={workspaceBusy}
                       className={[
                         'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
-                        (workspace.id === selectedWorkspace?.id || workspace.id === openingWorkspaceId) ? 'bg-neutral-100' : '',
+                        workspace.id === selectedWorkspace?.id ||
+                        workspace.id === openingWorkspaceId
+                          ? 'bg-neutral-100'
+                          : '',
                       ].join(' ')}
                     >
                       <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-neutral-900">{workspace.name}</span>
-                        <span className="block truncate text-[11px] text-neutral-400">{workspaceSubtitle(workspace)}</span>
+                        <span className="block truncate text-[11px] text-neutral-400">
+                          {workspaceSubtitle(workspace)}
+                        </span>
                       </span>
-                      {workspace.id === openingWorkspaceId && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />}
+                      {workspace.id === openingWorkspaceId && (
+                        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
+                      )}
                     </button>
                   ))}
                   {!workspaceBusy && filteredWorkspaces.length === 0 && (
@@ -470,7 +529,11 @@ function Welcome() {
                       {t('没有匹配的工作区')}
                     </div>
                   )}
-                  {workspaceBusy && <div className="px-2.5 py-2 text-xs text-neutral-400">{t('正在处理工作区...')}</div>}
+                  {workspaceBusy && (
+                    <div className="px-2.5 py-2 text-xs text-neutral-400">
+                      {t('正在处理工作区...')}
+                    </div>
+                  )}
                 </div>
                 <div className="mt-1 border-t border-neutral-200 pt-1.5">
                   <div className="relative group/new-project">
@@ -480,7 +543,9 @@ function Welcome() {
                       className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-neutral-50"
                     >
                       <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
-                      <span className="min-w-0 flex-1 truncate text-neutral-900">{t('添加工作区')}</span>
+                      <span className="min-w-0 flex-1 truncate text-neutral-900">
+                        {t('添加工作区')}
+                      </span>
                       <ChevronRight className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
                     </button>
                     <div
@@ -553,7 +618,12 @@ function Welcome() {
             />
             <div className="flex items-center justify-between pt-2">
               <div className="flex items-center gap-1">
-                <button type="button" disabled title="暂未实现" className="grid h-8 w-8 place-items-center rounded-full text-neutral-300">
+                <button
+                  type="button"
+                  disabled
+                  title="暂未实现"
+                  className="grid h-8 w-8 place-items-center rounded-full text-neutral-300"
+                >
                   <Plus className="h-4 w-4" />
                 </button>
                 <button
@@ -565,7 +635,12 @@ function Welcome() {
                 >
                   <FolderOpen className="h-4 w-4" />
                 </button>
-                <button type="button" disabled title="暂未实现" className="grid h-8 w-8 place-items-center rounded-full text-neutral-300">
+                <button
+                  type="button"
+                  disabled
+                  title="暂未实现"
+                  className="grid h-8 w-8 place-items-center rounded-full text-neutral-300"
+                >
                   <Paperclip className="h-4 w-4" />
                 </button>
                 <button
@@ -593,7 +668,15 @@ function Welcome() {
   )
 }
 
-function PromptCard({ title, text, onClick }: { title: string; text: string; onClick: () => void }) {
+function PromptCard({
+  title,
+  text,
+  onClick,
+}: {
+  title: string
+  text: string
+  onClick: () => void
+}) {
   return (
     <button
       onClick={onClick}
@@ -617,22 +700,16 @@ function WelcomeMentionPanel({
   query: string
 }) {
   const normalizedQuery = query.trim().toLowerCase()
-  const rows = [
-    {
-      color: '#111827',
-      desc: '拆解任务并协调 Agent 群聊',
-      name: 'Orchestrator',
-      value: '@orchestrator',
-    },
-    ...agents.map((agent) => ({
-      color: agent.color ?? '#111827',
-      desc: [agent.role, agent.description].filter(Boolean).join(' · ') || 'Agent',
-      name: agent.name,
-      value: `@${agent.name}`,
-    })),
-  ]
+  const rows = agents.map((agent) => ({
+    color: agent.color ?? '#111827',
+    desc: [agent.role, agent.description].filter(Boolean).join(' · ') || 'Agent',
+    name: agent.name,
+    value: `@${agent.name}`,
+  }))
   const filteredRows = normalizedQuery
-    ? rows.filter((row) => `${row.value} ${row.name} ${row.desc}`.toLowerCase().includes(normalizedQuery))
+    ? rows.filter((row) =>
+        `${row.value} ${row.name} ${row.desc}`.toLowerCase().includes(normalizedQuery),
+      )
     : rows
 
   return (
@@ -641,9 +718,7 @@ function WelcomeMentionPanel({
       onMouseDown={(event) => event.preventDefault()}
     >
       <div className="flex items-center justify-between px-3 pb-1 pt-1">
-        <div className="text-xs text-neutral-400">
-          {query ? `匹配：${query}` : '提及 Agent'}
-        </div>
+        <div className="text-xs text-neutral-400">{query ? `匹配：${query}` : '提及 Agent'}</div>
         <button
           type="button"
           onClick={onClose}
@@ -685,4 +760,3 @@ function WelcomeMentionPanel({
 function titleFromMessage(message: string) {
   return message.length > 18 ? `${message.slice(0, 18)}...` : message
 }
-

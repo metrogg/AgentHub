@@ -183,14 +183,14 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     promptMode: 'stdin',
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
-      // 修复 Bug 17: 根据 sandboxPolicy 映射 Claude Code 权限模式
       const permissionMode = (() => {
-        if (options?.sandboxPolicy === 'read-only') return 'ask'
-        if (options?.sandboxPolicy === 'danger-full-access') return 'ask'
+        if (options?.sandboxPolicy === 'read-only') return 'plan'
         return String(cfg['permissionMode'] ?? 'bypassPermissions')
       })()
       const args: string[] = [
         '-p',
+        '--input-format',
+        'text',
         '--no-session-persistence',
         '--permission-mode',
         permissionMode,
@@ -205,6 +205,13 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       if (options?.modelId) {
         args.push('--model', options.modelId)
       }
+      if (
+        options?.sandboxPolicy !== 'read-only' &&
+        permissionMode === 'bypassPermissions' &&
+        cfg['skipPermissions'] !== false
+      ) {
+        args.push('--dangerously-skip-permissions')
+      }
       return args
     },
   },
@@ -218,6 +225,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
       const args = ['run']
+      if (options?.cwd) args.push('--dir', options.cwd)
       if (options?.modelId) {
         const provider = options.modelProvider || String(cfg['provider'] ?? 'agenthub')
         const modelId = options.modelId.includes('/')
@@ -225,7 +233,16 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
           : `${provider}/${options.modelId}`
         args.push('--model', modelId)
       }
-      if (cfg['agent']) args.push('--agent', String(cfg['agent']))
+      const agent =
+        typeof cfg['agent'] === 'string' && cfg['agent'].trim()
+          ? cfg['agent'].trim()
+          : options?.sandboxPolicy === 'read-only'
+            ? 'plan'
+            : 'build'
+      args.push('--agent', agent)
+      if (options?.sandboxPolicy !== 'read-only' && cfg['skipPermissions'] !== false) {
+        args.push('--dangerously-skip-permissions')
+      }
       args.push(prompt)
       return args
     },

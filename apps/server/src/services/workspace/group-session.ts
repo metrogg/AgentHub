@@ -61,6 +61,19 @@ async function syncGroupMembers(
       await db.delete(sessionMembers).where(eq(sessionMembers.id, member.id))
     }
   }
+
+  await db
+    .update(sessions)
+    .set({
+      metadata: {
+        kind: 'workspace-agent-group',
+        agentIds: agents.map((agent) => agent.id),
+        agentCount: agents.length,
+        memberCount: agents.length + 1,
+      },
+      updatedAt: new Date(),
+    })
+    .where(eq(sessions.id, sessionId))
 }
 
 export async function ensureGroupSession(
@@ -85,5 +98,6 @@ export async function ensureGroupSession(
     session = created
   }
   await syncGroupMembers(session.id, workspaceId, ownerId, selectedAgentIds)
-  return session
+  const [refreshed] = await db.select().from(sessions).where(eq(sessions.id, session.id)).limit(1)
+  return refreshed ?? session
 }

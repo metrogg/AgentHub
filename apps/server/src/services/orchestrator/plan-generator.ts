@@ -1,5 +1,14 @@
 import { db, workspaceAgents, workspaceAgentRelations, workspaces, eq } from '@agenthub/db'
-import { ROLE_PRESETS, AgentRoleType, RuntimeType, CodeAgentType, SandboxPolicy, TaskStatus, TaskType } from '@agenthub/shared'
+import {
+  DEFAULT_CODE_TEAM_ROLE_TYPES,
+  ROLE_PRESETS,
+  AgentRoleType,
+  RuntimeType,
+  CodeAgentType,
+  SandboxPolicy,
+  TaskStatus,
+  TaskType,
+} from '@agenthub/shared'
 import { Planner } from './planner'
 import { selectAgentForTask } from './agent-router'
 import type { ExecutionPlan, TaskOutputContract, TaskValidation } from './types'
@@ -115,8 +124,7 @@ function normalizeOrchestratorGoal(content: string) {
 }
 
 function fallbackPlanAgents(): PlanAgent[] {
-  const fallbackKeys: Array<Exclude<keyof typeof ROLE_PRESETS, 'custom'>> = ['orchestrator', 'coder', 'reviewer']
-  return fallbackKeys.map((key) => {
+  return DEFAULT_CODE_TEAM_ROLE_TYPES.map((key) => {
     const preset = ROLE_PRESETS[key]
     return {
       key,
@@ -138,17 +146,17 @@ function planAgentFromInput(agent: PlanningAgentInput): PlanAgent {
     key: agent.id,
     name: agent.name,
     role: agent.role || '助手',
-    roleType: agent.roleType as PlanAgent['roleType'] ?? undefined,
+    roleType: (agent.roleType as PlanAgent['roleType']) ?? undefined,
     description: agent.description ?? undefined,
     roleProfile: agent.roleProfile ?? null,
     color: agent.color ?? undefined,
     systemPrompt: agent.systemPrompt ?? undefined,
     modelId: agent.modelId ?? undefined,
-    runtimeType: agent.runtimeType as PlanAgent['runtimeType'] ?? 'llm',
-    codeAgentType: agent.codeAgentType as PlanAgent['codeAgentType'] ?? undefined,
+    runtimeType: (agent.runtimeType as PlanAgent['runtimeType']) ?? 'llm',
+    codeAgentType: (agent.codeAgentType as PlanAgent['codeAgentType']) ?? undefined,
     capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: agent.toolPermissions ?? [],
-    sandboxPolicy: agent.sandboxPolicy as PlanAgent['sandboxPolicy'] ?? 'workspace-write',
+    sandboxPolicy: (agent.sandboxPolicy as PlanAgent['sandboxPolicy']) ?? 'workspace-write',
   }
 }
 

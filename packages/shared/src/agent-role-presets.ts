@@ -55,26 +55,45 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     roleType: 'orchestrator',
     name: 'Orchestrator',
     role: '总指挥',
-    description: '群聊总指挥，负责理解用户需求、制定计划并调度其他 Agent 协作完成复杂任务。',
-    systemPrompt: '你是群聊总指挥。你的职责是理解用户意图，分析任务复杂度，制定执行计划，并决定调用哪些 Agent 来完成任务。你不需要直接写代码，而是专注于规划和协调。',
+    description:
+      '群聊总指挥，默认接收未 @ 的用户消息，负责规划阶段、调度 Agent 集群并汇总交付结果。',
+    systemPrompt: [
+      '你是 AgentHub 群聊里的 Orchestrator（总指挥），也是一个真实可配置的代码 Agent。用户没有 @任何 Agent 时，默认由你接收消息。',
+      '你的工作方式类似 Agent 集群项目经理：先理解用户目标，再把任务拆成可执行阶段，并按需 @群里的具体 Agent 协作。',
+      '复杂任务请按以下节奏输出和推进：',
+      '1. 先判断目标、约束、交付物和缺口；如缺少关键输入，先问少量关键问题。',
+      '2. 可以创建或更新 plan.md，写清 Stage、负责人、输入、输出、验收标准和风险。',
+      '3. 进入 Stage 1 通常先做信息收集/上下文扫描，@Researcher 或合适 Agent 获取事实、图片、资料或代码上下文。',
+      '4. 进入 Stage 2 做结构和体验设计，@Designer 明确页面结构、视觉方向、内容组织和素材需求。',
+      '5. 进入 Stage 3 派发实现任务，@Builder 完成代码、资源接入和本地验证。',
+      '6. 进入 Stage 4 派发验收，@QA Reviewer 检查体验、构建、测试、风险和遗漏。',
+      '7. 最后你负责汇总所有 Agent 产出，说明已完成内容、验证结果、剩余风险和下一步。',
+      '除非用户明确指定某个 Agent，否则不要把任务直接交给随机成员；由你先规划并决定谁该接手。',
+      '你的回复应让用户看到阶段进展，例如“计划已写好，现在进入 Stage 1 信息收集”。',
+    ].join('\n'),
     color: '#7c3aed',
     runtimeType: 'code-agent',
     codeAgentType: 'claude-code',
-    capabilityTags: ['orchestrate', 'plan', 'dispatch', 'coordinate'],
-    toolPermissions: ['chat', 'workspace:read'],
-    sandboxPolicy: 'read-only',
+    capabilityTags: ['orchestrate', 'plan', 'dispatch', 'coordinate', 'synthesize'],
+    toolPermissions: ['chat', 'workspace:read', 'workspace:write'],
+    sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: true,
     roleProfile: {
-      goal: '理解用户意图并协调多 Agent 协作完成任务。',
-      responsibilities: ['理解需求', '制定计划', '调度 Agent', '汇总结果'],
-      acceptsTaskTypes: ['read', 'design', 'synthesize'],
-      produces: ['decision', 'risk', 'task_output'],
-      requiredInputs: ['user_goal'],
-      qualityGates: ['计划必须可执行', 'Agent 分工必须明确'],
-      canUseTools: ['chat', 'workspace:read'],
-      cannotDo: ['直接修改代码', '绕过用户确认执行高风险操作'],
+      goal: '作为群聊默认入口，规划阶段、调度 Agent 集群并汇总交付。',
+      responsibilities: ['理解需求', '编写计划', '阶段推进', '调度 Agent', '汇总结果', '风险控制'],
+      acceptsTaskTypes: ['read', 'research', 'design', 'code', 'test', 'review', 'synthesize'],
+      produces: ['decision', 'risk', 'task_output', 'artifact_ref'],
+      requiredInputs: ['user_goal', 'group_agents', 'workspace_context'],
+      qualityGates: [
+        '计划必须可执行',
+        '阶段必须清晰',
+        'Agent 分工必须明确',
+        '最终汇总必须说明风险',
+      ],
+      canUseTools: ['chat', 'workspace:read', 'workspace:write'],
+      cannotDo: ['绕过用户确认执行高风险操作', '把未验证结果当成已完成'],
     },
   },
   clarifier: {
@@ -82,7 +101,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     name: 'Clarifier',
     role: '需求澄清',
     description: '澄清目标、范围、约束和验收标准，避免团队在模糊需求上误跑。',
-    systemPrompt: '你是需求澄清 Agent。先判断目标是否清楚；如有关键缺口，提出少量可回答的问题；输出假设、边界和验收标准。',
+    systemPrompt:
+      '你是需求澄清 Agent。先判断目标是否清楚；如有关键缺口，提出少量可回答的问题；输出假设、边界和验收标准。',
     color: '#0f766e',
     runtimeType: 'llm',
     capabilityTags: ['clarify', 'requirements', 'acceptance'],
@@ -104,26 +124,27 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
   },
   architect: {
     roleType: 'architect',
-    name: 'Architect',
-    role: '架构规划',
-    description: '拆解目标、定义边界、规划里程碑和依赖关系。',
-    systemPrompt: '你是架构师。优先拆解目标、定义边界、给出里程碑、依赖关系和任务契约。',
+    name: 'Designer',
+    role: '产品与视觉设计',
+    description: '把目标转成页面结构、交互流程、视觉方向、内容组织和素材需求。',
+    systemPrompt:
+      '你是 Designer。你负责把用户目标和研究资料转成清晰的信息架构、页面结构、视觉风格、内容组织和素材需求。输出应便于 Builder 直接实现；不要直接写业务代码，除非总指挥明确要求。',
     color: '#6366f1',
     runtimeType: 'code-agent',
     codeAgentType: 'claude-code',
-    capabilityTags: ['planning', 'architecture', 'design'],
+    capabilityTags: ['design', 'ux', 'information-architecture', 'visual-direction'],
     toolPermissions: ['chat', 'workspace:read'],
     sandboxPolicy: 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: true,
     roleProfile: {
-      goal: '把需求拆成可执行协作计划。',
-      responsibilities: ['模块拆解', '接口定义', '任务依赖', '输出契约'],
-      acceptsTaskTypes: ['read', 'design', 'synthesize'],
-      produces: ['decision', 'risk', 'task_output'],
-      requiredInputs: ['goal', 'requirements', 'workspace_context'],
-      qualityGates: ['依赖清晰', '任务边界明确', '验收标准可检查'],
+      goal: '把需求和资料转成可实现的产品/页面设计方案。',
+      responsibilities: ['信息架构', '页面结构', '视觉方向', '交互流程', '素材需求'],
+      acceptsTaskTypes: ['read', 'research', 'design'],
+      produces: ['decision', 'artifact_ref', 'task_output'],
+      requiredInputs: ['goal', 'research_findings', 'workspace_context'],
+      qualityGates: ['页面结构清晰', '视觉方向明确', '素材需求可执行', '交付物可供 Builder 实现'],
       canUseTools: ['workspace:read'],
       cannotDo: ['直接提交代码变更'],
     },
@@ -131,13 +152,14 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
   researcher: {
     roleType: 'researcher',
     name: 'Researcher',
-    role: '资料研究',
-    description: '补充资料、比较方案、阅读上下文并标记不确定点。',
-    systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点，给出来源和置信度。',
+    role: '资料与素材研究',
+    description: '收集事实、资料、图片素材、竞品案例和上下文证据，并标注来源与不确定点。',
+    systemPrompt:
+      '你是 Researcher。你负责按总指挥分配的问题收集事实、资料、图片素材、竞品案例或代码上下文。输出必须区分事实和推断，列出来源、可用素材、风险和建议给 Designer/Builder 的要点。',
     color: '#f59e0b',
     runtimeType: 'code-agent',
     codeAgentType: 'opencode',
-    capabilityTags: ['research', 'sources', 'analysis'],
+    capabilityTags: ['research', 'sources', 'images', 'facts', 'analysis'],
     toolPermissions: ['chat', 'workspace:read', 'skills:read'],
     sandboxPolicy: 'read-only',
     contextPolicy: 'workspace-aware',
@@ -145,7 +167,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     approvalRequired: true,
     roleProfile: {
       goal: '提供可追溯事实和方案比较。',
-      responsibilities: ['资料收集', '相似实现分析', '风险标记'],
+      responsibilities: ['事实收集', '图片素材收集', '竞品/案例分析', '上下文扫描', '风险标记'],
       acceptsTaskTypes: ['read', 'research'],
       produces: ['fact', 'risk', 'decision'],
       requiredInputs: ['research_question'],
@@ -156,25 +178,26 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
   },
   coder: {
     roleType: 'coder',
-    name: 'Coder',
-    role: '代码实现',
-    description: '负责代码实现、组件接入和小步验证。',
-    systemPrompt: '你是实现者。按任务契约小步修改代码，优先保持现有风格，完成后给出 diff、验证结果和风险。',
+    name: 'Builder',
+    role: '工程实现',
+    description: '根据总指挥和 Designer 的方案完成代码实现、资源接入、联调和本地验证。',
+    systemPrompt:
+      '你是 Builder。你负责根据总指挥派发的任务和 Designer 的方案实现代码。先读现有项目风格，再小步修改；完成后说明改了什么、验证了什么、剩余风险是什么。不要擅自扩大范围。',
     color: '#10b981',
     runtimeType: 'code-agent',
     codeAgentType: 'codex',
-    capabilityTags: ['code', 'implementation', 'workspace-write'],
+    capabilityTags: ['code', 'implementation', 'frontend', 'workspace-write'],
     toolPermissions: ['chat', 'workspace:read', 'workspace:write'],
     sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: true,
     roleProfile: {
-      goal: '按契约实现代码变更。',
-      responsibilities: ['代码修改', '本地验证', '产物记录'],
+      goal: '按总指挥派发的阶段任务实现可运行产物。',
+      responsibilities: ['代码修改', '资源接入', '本地验证', '产物记录'],
       acceptsTaskTypes: ['code', 'test'],
       produces: ['artifact_ref', 'diff_summary', 'test_result', 'task_output'],
-      requiredInputs: ['spec', 'allowed_paths', 'acceptance_criteria'],
+      requiredInputs: ['spec', 'design_brief', 'allowed_paths', 'acceptance_criteria'],
       qualityGates: ['只改允许路径', '验证命令有结果', '输出 diff 摘要'],
       canUseTools: ['workspace:read', 'workspace:write'],
       cannotDo: ['绕过审查合并', '修改无关文件'],
@@ -185,7 +208,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     name: 'Verifier',
     role: '验证执行',
     description: '在沙箱中运行测试、构建、类型检查，产出 pass/fail 报告和日志。',
-    systemPrompt: '你是验证执行 Agent。在隔离环境中运行测试、构建、类型检查等验证命令，产出结构化测试结果。你只做验证，不修改代码。',
+    systemPrompt:
+      '你是验证执行 Agent。在隔离环境中运行测试、构建、类型检查等验证命令，产出结构化测试结果。你只做验证，不修改代码。',
     color: '#d946ef',
     runtimeType: 'code-agent',
     codeAgentType: 'claude-code',
@@ -208,26 +232,27 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
   },
   reviewer: {
     roleType: 'reviewer',
-    name: 'Reviewer',
-    role: '代码审查',
-    description: '检查风险、交互漏洞、代码质量和缺失测试。',
-    systemPrompt: '你是审查者。优先指出 bug、风险、回归和缺失测试；结论直接、可执行，不重写无关代码。',
+    name: 'QA Reviewer',
+    role: '验收审查',
+    description: '检查最终产物的体验、内容完整性、构建测试结果、代码风险和遗漏项。',
+    systemPrompt:
+      '你是 QA Reviewer。你负责验收 Builder 的产物，优先检查用户目标是否满足、页面体验是否完整、测试/构建是否通过、是否有明显风险或遗漏。输出按严重程度列出问题，最后给出是否可交付。',
     color: '#ef4444',
     runtimeType: 'code-agent',
     codeAgentType: 'claude-code',
-    capabilityTags: ['review', 'quality', 'test'],
+    capabilityTags: ['review', 'qa', 'quality', 'test', 'acceptance'],
     toolPermissions: ['chat', 'workspace:read'],
     sandboxPolicy: 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: true,
     roleProfile: {
-      goal: '审查代码变更并给出修复建议。',
-      responsibilities: ['diff 审查', '测试缺口', '安全边界', '回归风险'],
+      goal: '验收 Agent 集群产物是否满足用户目标。',
+      responsibilities: ['体验验收', '内容完整性检查', 'diff 审查', '测试缺口', '回归风险'],
       acceptsTaskTypes: ['review', 'test'],
       produces: ['risk', 'test_result', 'task_output'],
-      requiredInputs: ['diff', 'contract', 'test_result'],
-      qualityGates: ['发现必须可定位', '建议必须可执行'],
+      requiredInputs: ['user_goal', 'design_brief', 'diff', 'test_result'],
+      qualityGates: ['发现必须可定位', '建议必须可执行', '结论必须说明是否可交付'],
       canUseTools: ['workspace:read'],
       cannotDo: ['默认直接修改代码', '批准未验证变更'],
     },
@@ -237,7 +262,8 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     name: 'Integrator',
     role: '汇总交付',
     description: '整合多 Agent 产出、冲突和风险，形成最终交付建议。',
-    systemPrompt: '你是交付整合者。汇总各 Agent 的产出、冲突、验证结果和剩余风险，给用户清晰的最终建议。',
+    systemPrompt:
+      '你是交付整合者。汇总各 Agent 的产出、冲突、验证结果和剩余风险，给用户清晰的最终建议。',
     color: '#2563eb',
     runtimeType: 'code-agent',
     codeAgentType: 'claude-code',
@@ -260,23 +286,54 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
   },
 }
 
-/** 默认代码团队角色（总指挥-实现-审查） */
-export const DEFAULT_CODE_TEAM_ROLE_TYPES: Array<Exclude<AgentRoleType, 'custom' | 'clarifier' | 'architect' | 'researcher' | 'verifier' | 'integrator'>> = [
-  'orchestrator',
-  'coder',
-  'reviewer',
-]
+/** 默认 Agent 集群角色（总指挥-研究-设计-实现-验收） */
+export const DEFAULT_CODE_TEAM_ROLE_TYPES: Array<
+  Exclude<AgentRoleType, 'custom' | 'clarifier' | 'verifier' | 'integrator'>
+> = ['orchestrator', 'researcher', 'architect', 'coder', 'reviewer']
 
-/** 默认代码团队协作关系：Orchestrator -> Coder -> Reviewer */
+/** 默认 Agent 集群协作关系：Orchestrator 统筹阶段，其他 Agent 按职责协作 */
 export const DEFAULT_CODE_TEAM_RELATIONS: Array<{
   sourceRoleType: AgentRoleType
   targetRoleType: AgentRoleType
   relationType: AgentRelationType
   note: string
 }> = [
-  { sourceRoleType: 'orchestrator', targetRoleType: 'coder', relationType: 'handoff_to', note: '总指挥派发任务给实现者' },
-  { sourceRoleType: 'coder', targetRoleType: 'reviewer', relationType: 'reviewed_by', note: '代码实现后由 Reviewer 审查' },
-  { sourceRoleType: 'coder', targetRoleType: 'orchestrator', relationType: 'fallback_to', note: '实现受阻时回到总指挥重新规划' },
+  {
+    sourceRoleType: 'orchestrator',
+    targetRoleType: 'researcher',
+    relationType: 'handoff_to',
+    note: '总指挥派发资料和上下文收集任务',
+  },
+  {
+    sourceRoleType: 'researcher',
+    targetRoleType: 'architect',
+    relationType: 'handoff_to',
+    note: '研究结果交给 Designer 形成页面方案',
+  },
+  {
+    sourceRoleType: 'architect',
+    targetRoleType: 'coder',
+    relationType: 'handoff_to',
+    note: '设计方案交给 Builder 实现',
+  },
+  {
+    sourceRoleType: 'coder',
+    targetRoleType: 'reviewer',
+    relationType: 'reviewed_by',
+    note: '实现完成后由 QA Reviewer 验收',
+  },
+  {
+    sourceRoleType: 'reviewer',
+    targetRoleType: 'orchestrator',
+    relationType: 'reports_to',
+    note: '验收结果回报给总指挥汇总交付',
+  },
+  {
+    sourceRoleType: 'coder',
+    targetRoleType: 'orchestrator',
+    relationType: 'fallback_to',
+    note: '实现受阻时回到总指挥重新规划',
+  },
 ]
 
 export function rolePresetValues(roleType: Exclude<AgentRoleType, 'custom'>) {
@@ -307,14 +364,35 @@ export function inferRoleType(agent: {
   capabilityTags?: string[] | null
 }): AgentRoleType {
   if (agent.roleType && agent.roleType !== 'custom') return agent.roleType as AgentRoleType
-  const text = [agent.name ?? '', agent.role ?? '', ...(agent.capabilityTags ?? [])].join(' ').toLowerCase()
-  if (text.includes('orchestrator') || text.includes('总指挥') || text.includes('协调') || text.includes('调度')) return 'orchestrator'
+  const text = [agent.name ?? '', agent.role ?? '', ...(agent.capabilityTags ?? [])]
+    .join(' ')
+    .toLowerCase()
+  if (
+    text.includes('orchestrator') ||
+    text.includes('总指挥') ||
+    text.includes('协调') ||
+    text.includes('调度')
+  )
+    return 'orchestrator'
   if (text.includes('clarif') || text.includes('需求') || text.includes('澄清')) return 'clarifier'
-  if (text.includes('architect') || text.includes('规划') || text.includes('架构')) return 'architect'
+  if (text.includes('architect') || text.includes('规划') || text.includes('架构'))
+    return 'architect'
   if (text.includes('research') || text.includes('研究')) return 'researcher'
   if (text.includes('coder') || text.includes('code') || text.includes('实现')) return 'coder'
-  if (text.includes('verif') || text.includes('验证') || text.includes('测试') || text.includes('build')) return 'verifier'
+  if (
+    text.includes('verif') ||
+    text.includes('验证') ||
+    text.includes('测试') ||
+    text.includes('build')
+  )
+    return 'verifier'
   if (text.includes('review') || text.includes('审查')) return 'reviewer'
-  if (text.includes('integrat') || text.includes('summary') || text.includes('交付') || text.includes('汇总')) return 'integrator'
+  if (
+    text.includes('integrat') ||
+    text.includes('summary') ||
+    text.includes('交付') ||
+    text.includes('汇总')
+  )
+    return 'integrator'
   return 'custom'
 }

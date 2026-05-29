@@ -24,19 +24,26 @@ import {
 } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import { loadAgentLibrary, toAgentConfigInput, type SavedAgentConfig } from '../lib/agentLibrary'
-import { api, friendlyErrorMessage, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type TaskStatus, type WorkspaceAgent, type WorkspaceTask } from '../lib/api'
+import {
+  api,
+  friendlyErrorMessage,
+  type AgentConfigInput,
+  type ModelCatalogItem,
+  type SkillSummary,
+  type TaskStatus,
+  type WorkspaceAgent,
+  type WorkspaceTask,
+} from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { pickWorkspaceFolder } from '../lib/native'
+import { agentRolePresets } from '../lib/agentRolePresets'
 import { cn } from '../lib/utils'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
-const agentPresets = [
-  { name: 'Architect', role: '规划', color: '#6366f1', systemPrompt: '你是架构师。优先拆解目标、定义边界、给出里程碑与依赖关系。' },
-  { name: 'Coder', role: '实现', color: '#10b981', systemPrompt: '你是实现者。负责代码实现、组件接入和小步验证。先理解上下文，再小步迭代。' },
-  { name: 'Researcher', role: '研究', color: '#f59e0b', systemPrompt: '你是研究员。补充资料、比较方案、标记不确定点。给出参考来源。' },
-  { name: 'Reviewer', role: '审查', color: '#ef4444', systemPrompt: '你是审查者。检查风险、交互漏洞和缺失的测试。直接、克制、不绕弯。' },
-]
+const agentPresets = agentRolePresets.filter((preset) =>
+  ['orchestrator', 'researcher', 'architect', 'coder', 'reviewer'].includes(preset.roleType),
+)
 
 const defaultAgentDraft: AgentConfigInput = {
   name: '',
@@ -145,7 +152,7 @@ export default function AgentWorldPage() {
 
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === currentId) ?? null,
-    [currentId, workspaces]
+    [currentId, workspaces],
   )
   const agentMap = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents])
   const pendingCount = tasks.filter((task) => task.status === 'pending').length
@@ -177,14 +184,12 @@ export default function AgentWorldPage() {
       }
       const workspace =
         result.workspace ??
-        (
-          await createWorkspace({
-            name: workspaceNameFromPath(result.projectPath) || '项目文件夹',
-            goal,
-            projectPath: result.projectPath,
-            template: 'classic',
-          })
-        )
+        (await createWorkspace({
+          name: workspaceNameFromPath(result.projectPath) || '项目文件夹',
+          goal,
+          projectPath: result.projectPath,
+          template: 'classic',
+        }))
       await fetchList()
       await selectWorkspace(workspace.id)
       if (!result.workspace && goal) {
@@ -328,7 +333,12 @@ export default function AgentWorldPage() {
               aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
               title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
             >
-              <PanelLeft className={cn('h-4 w-4 transition-transform duration-300', sidebarCollapsed && 'rotate-180')} />
+              <PanelLeft
+                className={cn(
+                  'h-4 w-4 transition-transform duration-300',
+                  sidebarCollapsed && 'rotate-180',
+                )}
+              />
             </button>
             <span className="text-sm font-semibold">AgentHub</span>
             <span className="text-sm text-neutral-300">/</span>
@@ -386,7 +396,9 @@ export default function AgentWorldPage() {
                         </div>
                         <select
                           value={currentId ?? ''}
-                          onChange={(event) => event.target.value && selectWorkspace(event.target.value)}
+                          onChange={(event) =>
+                            event.target.value && selectWorkspace(event.target.value)
+                          }
                           className="h-8 max-w-xs rounded-full border border-neutral-200 bg-white px-3 text-xs text-neutral-600 outline-none transition hover:border-neutral-300"
                         >
                           {workspaces.map((workspace) => (
@@ -401,18 +413,26 @@ export default function AgentWorldPage() {
                           disabled={openingFolder}
                           className="inline-flex h-8 items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:text-neutral-300"
                         >
-                          {openingFolder ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
+                          {openingFolder ? (
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <FolderOpen className="h-3.5 w-3.5" />
+                          )}
                           {openingFolder ? t('正在打开...') : t('打开项目')}
                         </button>
                       </div>
                       <input
                         value={workspaceDraft.name}
-                        onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, name: event.target.value }))}
+                        onChange={(event) =>
+                          setWorkspaceDraft((draft) => ({ ...draft, name: event.target.value }))
+                        }
                         className="mt-4 block w-full max-w-3xl bg-transparent text-3xl font-semibold tracking-normal outline-none"
                       />
                       <textarea
                         value={workspaceDraft.goal}
-                        onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, goal: event.target.value }))}
+                        onChange={(event) =>
+                          setWorkspaceDraft((draft) => ({ ...draft, goal: event.target.value }))
+                        }
                         className="mt-3 h-16 w-full max-w-4xl resize-none bg-transparent text-sm leading-7 text-neutral-500 outline-none placeholder:text-neutral-300"
                         placeholder={t('协作目标，可选')}
                       />
@@ -420,7 +440,12 @@ export default function AgentWorldPage() {
                         <FolderOpen className="h-4 w-4 shrink-0 text-neutral-400" />
                         <input
                           value={workspaceDraft.projectPath}
-                          onChange={(event) => setWorkspaceDraft((draft) => ({ ...draft, projectPath: event.target.value }))}
+                          onChange={(event) =>
+                            setWorkspaceDraft((draft) => ({
+                              ...draft,
+                              projectPath: event.target.value,
+                            }))
+                          }
                           className="h-10 min-w-0 flex-1 bg-transparent outline-none placeholder:text-neutral-300"
                           placeholder={t('项目文件夹路径，Agent 集群会在这里运行')}
                         />
@@ -496,20 +521,39 @@ export default function AgentWorldPage() {
                     </Panel>
 
                     <Panel title="任务编排">
-                      <form onSubmit={addTaskFromForm} className="grid gap-3 rounded-2xl border border-neutral-200 p-4 md:grid-cols-[minmax(0,1fr)_220px]">
-                        <Field placeholder={t('任务标题')} value={newTask.title} onChange={(title) => setNewTask((v) => ({ ...v, title }))} />
+                      <form
+                        onSubmit={addTaskFromForm}
+                        className="grid gap-3 rounded-2xl border border-neutral-200 p-4 md:grid-cols-[minmax(0,1fr)_220px]"
+                      >
+                        <Field
+                          placeholder={t('任务标题')}
+                          value={newTask.title}
+                          onChange={(title) => setNewTask((v) => ({ ...v, title }))}
+                        />
                         <select
                           value={newTask.agentId}
-                          onChange={(event) => setNewTask((v) => ({ ...v, agentId: event.target.value }))}
+                          onChange={(event) =>
+                            setNewTask((v) => ({ ...v, agentId: event.target.value }))
+                          }
                           className="h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none focus:border-neutral-400"
                         >
                           <option value="">{t('未指定 Agent')}</option>
                           {agents.map((agent) => (
-                            <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
+                            <option key={agent.id} value={agent.id}>
+                              {agent.name} / {agent.role}
+                            </option>
                           ))}
                         </select>
-                        <Field className="md:col-span-2" placeholder={t('任务说明，可写交付物、约束、依赖')} value={newTask.description} onChange={(description) => setNewTask((v) => ({ ...v, description }))} />
-                        <button type="submit" className="h-10 rounded-xl bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 md:col-span-2">
+                        <Field
+                          className="md:col-span-2"
+                          placeholder={t('任务说明，可写交付物、约束、依赖')}
+                          value={newTask.description}
+                          onChange={(description) => setNewTask((v) => ({ ...v, description }))}
+                        />
+                        <button
+                          type="submit"
+                          className="h-10 rounded-xl bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 md:col-span-2"
+                        >
                           {t('添加任务')}
                         </button>
                       </form>
@@ -558,23 +602,27 @@ export default function AgentWorldPage() {
 
                     <Panel title="会话入口">
                       <div className="space-y-2">
-                        {tasks.filter((task) => task.sessionId).map((task) => {
-                          const agent = task.agentId ? agentMap.get(task.agentId) : undefined
-                          return (
-                            <button
-                              key={task.id}
-                              type="button"
-                              onClick={() => openTaskSession(task)}
-                              className="flex w-full items-center justify-between gap-3 rounded-xl border border-neutral-200 px-3 py-3 text-left text-sm transition hover:bg-neutral-50"
-                            >
-                              <span className="min-w-0">
-                                <span className="block truncate font-medium">{task.title}</span>
-                                <span className="block truncate text-xs text-neutral-400">{agent ? `${agent.name} / ${agent.role}` : t('未指定 Agent')}</span>
-                              </span>
-                              <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
-                            </button>
-                          )
-                        })}
+                        {tasks
+                          .filter((task) => task.sessionId)
+                          .map((task) => {
+                            const agent = task.agentId ? agentMap.get(task.agentId) : undefined
+                            return (
+                              <button
+                                key={task.id}
+                                type="button"
+                                onClick={() => openTaskSession(task)}
+                                className="flex w-full items-center justify-between gap-3 rounded-xl border border-neutral-200 px-3 py-3 text-left text-sm transition hover:bg-neutral-50"
+                              >
+                                <span className="min-w-0">
+                                  <span className="block truncate font-medium">{task.title}</span>
+                                  <span className="block truncate text-xs text-neutral-400">
+                                    {agent ? `${agent.name} / ${agent.role}` : t('未指定 Agent')}
+                                  </span>
+                                </span>
+                                <ArrowRight className="h-4 w-4 shrink-0 text-neutral-400" />
+                              </button>
+                            )
+                          })}
                         {!tasks.some((task) => task.sessionId) && (
                           <div className="rounded-xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-400">
                             {t('分派任务后，这里会出现每个 Agent 的独立会话入口。')}
@@ -585,9 +633,18 @@ export default function AgentWorldPage() {
 
                     <Panel title="协作规则">
                       <div className="space-y-3 text-xs leading-5 text-neutral-500">
-                        <Rule title="并行" text="每个任务会创建一个独立聊天会话，方便多个 Agent 同时推进。" />
-                        <Rule title="汇总" text="群聊汇总会读取已分派任务的最新 Agent 输出，生成统一行动方案。" />
-                        <Rule title="可追踪" text="任务状态、会话入口、Agent 分工都保存在工作区中。" />
+                        <Rule
+                          title="并行"
+                          text="每个任务会创建一个独立聊天会话，方便多个 Agent 同时推进。"
+                        />
+                        <Rule
+                          title="汇总"
+                          text="群聊汇总会读取已分派任务的最新 Agent 输出，生成统一行动方案。"
+                        />
+                        <Rule
+                          title="可追踪"
+                          text="任务状态、会话入口、Agent 分工都保存在工作区中。"
+                        />
                       </div>
                     </Panel>
                   </aside>
@@ -606,10 +663,10 @@ export default function AgentWorldPage() {
         <AgentDialog
           mode={agentDialogMode}
           draft={agentDraft}
-                models={models}
-                skills={skills}
-                libraryAgents={libraryAgents}
-                saving={savingAgent}
+          models={models}
+          skills={skills}
+          libraryAgents={libraryAgents}
+          saving={savingAgent}
           onChange={(patch) => setAgentDraft((draft) => ({ ...draft, ...patch }))}
           onClose={closeAgentDialog}
           onSubmit={saveAgentFromDialog}
@@ -646,8 +703,12 @@ function freshAgentDraft(overrides: Partial<AgentConfigInput> = {}): AgentConfig
   return {
     ...defaultAgentDraft,
     ...overrides,
-    capabilityTags: overrides.capabilityTags ? [...overrides.capabilityTags] : [...(defaultAgentDraft.capabilityTags ?? [])],
-    toolPermissions: overrides.toolPermissions ? [...overrides.toolPermissions] : [...(defaultAgentDraft.toolPermissions ?? [])],
+    capabilityTags: overrides.capabilityTags
+      ? [...overrides.capabilityTags]
+      : [...(defaultAgentDraft.capabilityTags ?? [])],
+    toolPermissions: overrides.toolPermissions
+      ? [...overrides.toolPermissions]
+      : [...(defaultAgentDraft.toolPermissions ?? [])],
   }
 }
 
@@ -690,12 +751,23 @@ function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
     toolPermissions: nativeReadOnly
       ? ['workspace:read', 'skills:read']
       : hasSkillTags
-        ? Array.from(new Set([...(draft.toolPermissions?.length ? draft.toolPermissions : ['chat']), 'skills:read']))
-      : draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
+        ? Array.from(
+            new Set([
+              ...(draft.toolPermissions?.length ? draft.toolPermissions : ['chat']),
+              'skills:read',
+            ]),
+          )
+        : draft.toolPermissions?.length
+          ? draft.toolPermissions
+          : ['chat'],
     sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
+    approvalRequired: nativeReadOnly
+      ? true
+      : runtimeType === 'code-agent'
+        ? false
+        : (draft.approvalRequired ?? true),
   }
 }
 
@@ -719,7 +791,15 @@ function MiniStat({ value, label }: { value: number; label: string }) {
   )
 }
 
-function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+function Panel({
+  title,
+  action,
+  children,
+}: {
+  title: string
+  action?: ReactNode
+  children: ReactNode
+}) {
   const { t } = useI18n()
   return (
     <section className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
@@ -754,7 +834,9 @@ function PresetButtons({
       >
         <option value="">{t('从配置库套用')}</option>
         {libraryAgents.map((agent) => (
-          <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
+          <option key={agent.id} value={agent.id}>
+            {agent.name} / {agent.role}
+          </option>
         ))}
       </select>
       {agentPresets.slice(0, 2).map((preset) => (
@@ -793,12 +875,17 @@ function AgentCard({
 }) {
   const { t } = useI18n()
   const modelLabel = modelName(agent.modelId, models)
-  const visibleTags = agent.capabilityTags.length ? agent.capabilityTags.slice(0, 3) : [runtimeLabel(agent.runtimeType)]
+  const visibleTags = agent.capabilityTags.length
+    ? agent.capabilityTags.slice(0, 3)
+    : [runtimeLabel(agent.runtimeType)]
 
   return (
     <article className="rounded-xl border border-neutral-200 bg-white p-3 transition hover:border-neutral-300 hover:shadow-sm">
       <div className="flex items-start gap-2.5">
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-white" style={{ background: agent.color }}>
+        <div
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-white"
+          style={{ background: agent.color }}
+        >
           <Bot className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
@@ -833,10 +920,17 @@ function AgentCard({
 
       <div className="mt-3 flex flex-wrap gap-1.5">
         <AgentPill>{t(modelLabel)}</AgentPill>
-        <AgentPill>{agent.codeAgentType ? codeAgentLabel(agent.codeAgentType) : runtimeLabel(agent.runtimeType)}</AgentPill>
+        <AgentPill>
+          {agent.codeAgentType
+            ? codeAgentLabel(agent.codeAgentType)
+            : runtimeLabel(agent.runtimeType)}
+        </AgentPill>
         <AgentPill>{t(sandboxLabel(agent.sandboxPolicy))}</AgentPill>
         {visibleTags.map((tag) => (
-          <span key={tag} className="inline-flex h-6 items-center rounded-full bg-neutral-100 px-2 text-xs text-neutral-600">
+          <span
+            key={tag}
+            className="inline-flex h-6 items-center rounded-full bg-neutral-100 px-2 text-xs text-neutral-600"
+          >
             {tag}
           </span>
         ))}
@@ -891,7 +985,8 @@ function AgentDialog({
     runtimeType === 'code-agent' ? draft.codeAgentType : null,
     draft.modelId ?? null,
   )
-  const selectClass = 'h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300'
+  const selectClass =
+    'h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300'
 
   return (
     <div
@@ -941,14 +1036,24 @@ function AgentDialog({
                 >
                   <option value="">{t('选择一个已保存 Agent 配置')}</option>
                   {libraryAgents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>{agent.name} / {agent.role}</option>
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name} / {agent.role}
+                    </option>
                   ))}
                 </select>
               </label>
             </div>
           )}
-          <Field placeholder={t('名称，如 Designer')} value={draft.name} onChange={(name) => onChange({ name })} />
-          <Field placeholder={t('角色，如 设计')} value={draft.role} onChange={(role) => onChange({ role })} />
+          <Field
+            placeholder={t('名称，如 Designer')}
+            value={draft.name}
+            onChange={(name) => onChange({ name })}
+          />
+          <Field
+            placeholder={t('角色，如 设计')}
+            value={draft.role}
+            onChange={(role) => onChange({ role })}
+          />
           <textarea
             value={draft.description ?? ''}
             onChange={(event) => onChange({ description: event.target.value })}
@@ -962,7 +1067,8 @@ function AgentDialog({
               const nextRuntime = event.target.value as WorkspaceAgent['runtimeType']
               onChange({
                 runtimeType: nextRuntime,
-                codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+                codeAgentType:
+                  nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
                 ...(nextRuntime === 'mcp'
                   ? {
                       toolPermissions: ['workspace:read', 'skills:read'],
@@ -986,7 +1092,11 @@ function AgentDialog({
           </select>
           <select
             value={runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : ''}
-            onChange={(event) => onChange({ codeAgentType: (event.target.value || null) as WorkspaceAgent['codeAgentType'] })}
+            onChange={(event) =>
+              onChange({
+                codeAgentType: (event.target.value || null) as WorkspaceAgent['codeAgentType'],
+              })
+            }
             disabled={runtimeType !== 'code-agent'}
             className={selectClass}
           >
@@ -996,7 +1106,11 @@ function AgentDialog({
             <option value="opencode">OpenCode</option>
             <option value="gemini">Gemini CLI</option>
           </select>
-          <select value={draft.modelId ?? ''} onChange={(event) => onChange({ modelId: event.target.value || null })} className={selectClass}>
+          <select
+            value={draft.modelId ?? ''}
+            onChange={(event) => onChange({ modelId: event.target.value || null })}
+            className={selectClass}
+          >
             <option value="">{t('自动模型')}</option>
             {modelChoices.map((model) => (
               <option key={model.id} value={model.id}>
@@ -1004,20 +1118,48 @@ function AgentDialog({
               </option>
             ))}
           </select>
-          <select value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(event) => onChange({ sandboxPolicy: event.target.value as WorkspaceAgent['sandboxPolicy'] })} className={selectClass}>
+          <select
+            value={draft.sandboxPolicy ?? 'workspace-write'}
+            onChange={(event) =>
+              onChange({ sandboxPolicy: event.target.value as WorkspaceAgent['sandboxPolicy'] })
+            }
+            className={selectClass}
+          >
             <option value="read-only">{t('只读权限')}</option>
             <option value="workspace-write">{t('工作区写入')}</option>
             <option value="danger-full-access">{t('完全访问')}</option>
           </select>
-          <select value={draft.contextPolicy ?? 'workspace-aware'} onChange={(event) => onChange({ contextPolicy: event.target.value as WorkspaceAgent['contextPolicy'] })} className={selectClass}>
+          <select
+            value={draft.contextPolicy ?? 'workspace-aware'}
+            onChange={(event) =>
+              onChange({ contextPolicy: event.target.value as WorkspaceAgent['contextPolicy'] })
+            }
+            className={selectClass}
+          >
             <option value="recent-only">{t('仅最近上下文')}</option>
             <option value="pinned-recent">{t('固定与最近上下文')}</option>
             <option value="workspace-aware">{t('工作区上下文')}</option>
           </select>
-          <Field placeholder={t('颜色，如 #111827')} value={draft.color ?? '#111827'} onChange={(color) => onChange({ color })} />
-          <Field placeholder={t('能力标签，逗号分隔')} value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => onChange({ capabilityTags: splitList(value) })} />
-          <Field placeholder={t('工具权限，逗号分隔')} value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => onChange({ toolPermissions: splitList(value) })} />
-          <SkillPicker skills={skills} selected={draft.capabilityTags ?? []} onChange={(next) => onChange({ capabilityTags: next })} />
+          <Field
+            placeholder={t('颜色，如 #111827')}
+            value={draft.color ?? '#111827'}
+            onChange={(color) => onChange({ color })}
+          />
+          <Field
+            placeholder={t('能力标签，逗号分隔')}
+            value={(draft.capabilityTags ?? []).join(', ')}
+            onChange={(value) => onChange({ capabilityTags: splitList(value) })}
+          />
+          <Field
+            placeholder={t('工具权限，逗号分隔')}
+            value={(draft.toolPermissions ?? []).join(', ')}
+            onChange={(value) => onChange({ toolPermissions: splitList(value) })}
+          />
+          <SkillPicker
+            skills={skills}
+            selected={draft.capabilityTags ?? []}
+            onChange={(next) => onChange({ capabilityTags: next })}
+          />
           <textarea
             value={draft.systemPrompt ?? ''}
             onChange={(event) => onChange({ systemPrompt: event.target.value })}
@@ -1026,11 +1168,19 @@ function AgentDialog({
           />
 
           <label className="flex h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
-            <input type="checkbox" checked={draft.autoInvoke ?? true} onChange={(event) => onChange({ autoInvoke: event.target.checked })} />
+            <input
+              type="checkbox"
+              checked={draft.autoInvoke ?? true}
+              onChange={(event) => onChange({ autoInvoke: event.target.checked })}
+            />
             {t('允许 Orchestrator 自动调用')}
           </label>
           <label className="flex h-10 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
-            <input type="checkbox" checked={draft.approvalRequired ?? true} onChange={(event) => onChange({ approvalRequired: event.target.checked })} />
+            <input
+              type="checkbox"
+              checked={draft.approvalRequired ?? true}
+              onChange={(event) => onChange({ approvalRequired: event.target.checked })}
+            />
             {t('高风险操作需要确认')}
           </label>
         </div>
@@ -1067,7 +1217,9 @@ function SkillPicker({
   onChange: (next: string[]) => void
 }) {
   const { t } = useI18n()
-  const selectedIds = new Set(selected.filter((tag) => tag.startsWith('skill:')).map((tag) => tag.slice(6)))
+  const selectedIds = new Set(
+    selected.filter((tag) => tag.startsWith('skill:')).map((tag) => tag.slice(6)),
+  )
 
   function toggle(skillId: string) {
     const next = new Set(selected)
@@ -1081,7 +1233,9 @@ function SkillPicker({
     <div className="md:col-span-2">
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-sm font-medium text-neutral-700">Skills</span>
-        <span className="text-xs text-neutral-400">{selectedIds.size} {t('已绑定')}</span>
+        <span className="text-xs text-neutral-400">
+          {selectedIds.size} {t('已绑定')}
+        </span>
       </div>
       <div className="max-h-48 overflow-auto rounded-xl border border-neutral-200 bg-white p-2">
         {skills.length ? (
@@ -1095,23 +1249,33 @@ function SkillPicker({
                   onClick={() => toggle(skill.id)}
                   className={cn(
                     'rounded-lg border p-3 text-left transition',
-                    active ? 'border-emerald-300 bg-emerald-50' : 'border-neutral-200 bg-white hover:border-neutral-300'
+                    active
+                      ? 'border-emerald-300 bg-emerald-50'
+                      : 'border-neutral-200 bg-white hover:border-neutral-300',
                   )}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="truncate text-sm font-medium text-neutral-900">{skill.name}</div>
+                    <div className="truncate text-sm font-medium text-neutral-900">
+                      {skill.name}
+                    </div>
                     {active && <Check className="h-4 w-4 text-emerald-600" />}
                   </div>
-                  <div className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">{skill.description || skill.id}</div>
+                  <div className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">
+                    {skill.description || skill.id}
+                  </div>
                 </button>
               )
             })}
           </div>
         ) : (
-          <div className="px-3 py-8 text-center text-sm text-neutral-400">{t('暂无可用 skills')}</div>
+          <div className="px-3 py-8 text-center text-sm text-neutral-400">
+            {t('暂无可用 skills')}
+          </div>
         )}
       </div>
-      <div className="mt-2 text-xs text-neutral-400">{t('绑定后会写入 `skill:xxx` 标签，并自动参与上下文注入。')}</div>
+      <div className="mt-2 text-xs text-neutral-400">
+        {t('绑定后会写入 `skill:xxx` 标签，并自动参与上下文注入。')}
+      </div>
     </div>
   )
 }
@@ -1165,7 +1329,14 @@ function TaskRow({
   agent?: WorkspaceAgent
   agents: WorkspaceAgent[]
   busy: boolean
-  onPatch: (patch: Partial<{ title: string; description: string; agentId: string | null; status: TaskStatus }>) => void
+  onPatch: (
+    patch: Partial<{
+      title: string
+      description: string
+      agentId: string | null
+      status: TaskStatus
+    }>,
+  ) => void
   onDispatch: () => void
   onOpen: () => void
   onDelete: () => void
@@ -1180,7 +1351,11 @@ function TaskRow({
           className="mt-1 text-neutral-400 hover:text-neutral-900"
           aria-label={t('切换任务状态')}
         >
-          {task.status === 'done' ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Circle className="h-5 w-5" />}
+          {task.status === 'done' ? (
+            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+          ) : (
+            <Circle className="h-5 w-5" />
+          )}
         </button>
         <div className="min-w-0 flex-1">
           <input
@@ -1202,7 +1377,9 @@ function TaskRow({
         >
           <option value="">{t('未指定')}</option>
           {agents.map((item) => (
-            <option key={item.id} value={item.id}>{item.name} / {item.role}</option>
+            <option key={item.id} value={item.id}>
+              {item.name} / {item.role}
+            </option>
           ))}
         </select>
       </div>
@@ -1215,7 +1392,11 @@ function TaskRow({
         </div>
         <div className="flex items-center gap-2">
           {task.sessionId && (
-            <button type="button" onClick={onOpen} className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm hover:bg-neutral-50">
+            <button
+              type="button"
+              onClick={onOpen}
+              className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm hover:bg-neutral-50"
+            >
               <MessageSquare className="h-4 w-4" />
               {t('打开会话')}
             </button>
@@ -1229,7 +1410,11 @@ function TaskRow({
             {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             {task.status === 'failed' ? t('重试') : task.sessionId ? t('重新分派') : t('分派')}
           </button>
-          <button type="button" onClick={onDelete} className="grid h-9 w-9 place-items-center rounded-xl text-neutral-300 hover:bg-red-50 hover:text-red-500">
+          <button
+            type="button"
+            onClick={onDelete}
+            className="grid h-9 w-9 place-items-center rounded-xl text-neutral-300 hover:bg-red-50 hover:text-red-500"
+          >
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
@@ -1254,7 +1439,10 @@ function Field({
       value={value}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
-      className={cn('h-10 rounded-xl border border-neutral-200 px-3 text-sm outline-none placeholder:text-neutral-300 focus:border-neutral-400', className)}
+      className={cn(
+        'h-10 rounded-xl border border-neutral-200 px-3 text-sm outline-none placeholder:text-neutral-300 focus:border-neutral-400',
+        className,
+      )}
     />
   )
 }

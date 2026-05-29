@@ -15,11 +15,11 @@ export interface AgentRolePreset extends AgentConfigInput {
 const roleToLabel: Record<Exclude<AgentRoleType, 'custom'>, string> = {
   orchestrator: '总指挥',
   clarifier: '需求澄清',
-  architect: '架构规划',
-  researcher: '资料研究',
-  coder: '代码实现',
+  architect: '产品与视觉设计',
+  researcher: '资料与素材研究',
+  coder: '工程实现',
   verifier: '验证执行',
-  reviewer: '代码审查',
+  reviewer: '验收审查',
   integrator: '汇总交付',
 }
 
@@ -62,7 +62,9 @@ export function presetForRole(roleType?: AgentRoleType) {
   return agentRolePresets.find((preset) => preset.roleType === roleType)
 }
 
-export function inferRoleType(input: Partial<Pick<AgentConfigInput, 'name' | 'role' | 'capabilityTags' | 'roleType'>>): AgentRoleType {
+export function inferRoleType(
+  input: Partial<Pick<AgentConfigInput, 'name' | 'role' | 'capabilityTags' | 'roleType'>>,
+): AgentRoleType {
   return sharedInferRoleType({
     roleType: input.roleType,
     name: input.name,
