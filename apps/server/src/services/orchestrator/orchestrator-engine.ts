@@ -1445,17 +1445,25 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
 
     const finalSummary = summary + mergeNotice
 
+    // 匹配 workspace 中的 orchestrator agent，避免 senderId 与前端头像对不上
+    const orchestratorAgent = plan.agents.find(
+      (a) =>
+        a.roleType === 'orchestrator' ||
+        a.key === 'orchestrator' ||
+        a.name.toLowerCase().includes('orchestrator'),
+    )
+
     const [summaryMsg] = await db
       .insert(messages)
       .values({
         sessionId: groupSessionId,
-        senderId: 'orchestrator',
+        senderId: orchestratorAgent?.id ?? 'orchestrator',
         senderType: 'agent',
         type: 'text',
         content: finalSummary,
         metadata: {
-          agentName: 'Orchestrator',
-          role: 'Coordinator',
+          agentName: orchestratorAgent?.name ?? 'Orchestrator',
+          role: orchestratorAgent?.role ?? 'Coordinator',
           runtimeType: 'llm',
           orchestratorSummary: {
             dispatchId: runId,

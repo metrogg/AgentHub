@@ -4696,9 +4696,51 @@ const BranchPicker: FC = () => (
 )
 
 const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
+  const messageId = useMessage((message) => message.id)
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((m) => m.id === messageId),
+  )
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
+
+  // 尝试匹配发送者 workspace agent（优先 senderId，其次 metadata.agentName）
+  const senderId = sourceMessage?.senderId ??
+    (messageId === streamingMessage?.id ? streamingMessage?.agentId : undefined)
+  const senderName =
+    sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
+      ? (sourceMessage.metadata as Record<string, unknown>).agentName as string | undefined
+      : undefined
+  const senderAgent = workspaceAgents.find(
+    (a) =>
+      a.id === senderId ||
+      (senderName && a.name.toLowerCase() === senderName.toLowerCase()),
+  )
+
   const runtime = useMessage((message) =>
     role === 'assistant' ? codeAgentRuntimeFromParts(message.content) : null,
   )
+
+  // 优先显示 workspace agent 头像
+  if (role === 'assistant' && senderAgent) {
+    return (
+      <div
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm font-semibold text-white shadow-sm"
+        style={{ background: senderAgent.color ?? '#111827' }}
+      >
+        {senderAgent.avatar ? (
+          <img
+            src={senderAgent.avatar}
+            alt={senderAgent.name}
+            className="h-full w-full rounded-full object-cover"
+            decoding="async"
+            draggable={false}
+          />
+        ) : (
+          senderAgent.name.slice(0, 1).toUpperCase()
+        )}
+      </div>
+    )
+  }
 
   if (role === 'assistant' && runtime) {
     return (

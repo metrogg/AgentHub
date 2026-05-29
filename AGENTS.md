@@ -351,7 +351,6 @@ IntentClassifier（可选）→ Planner → TaskScheduler → Synthesizer
 
 ## 开发约定
 
-- **前端ui（`apps/web`）由同事负责维护，不要直接修改界面ui。** 发现界面问题时，报告文件路径、行号、根因和修复建议，由用户与同事沟通后决定是否修改。仅在用户明确要求时才修改ui代码。
 - **新增路由**：在 `apps/server/src/routes/` 创建 Hono Router，然后在 `apps/server/src/app.ts` 中通过 `.route('/api/xxx', xxxRoutes)` 挂载。
 - **新增数据库表**：在 `packages/db/src/schema.ts` 中定义，使用 `sqliteTable` + `relations`，然后执行 `bun run db:generate`。
 - **前后端共享类型**：在 `packages/shared/src/schemas/` 中新增 Zod schema，并在 `packages/shared/src/index.ts` 导出。

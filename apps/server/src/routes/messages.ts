@@ -579,12 +579,25 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     }
 
+    // 若 workspace 中存在名字匹配的 agent，使用其真实 id
+    let artifactAgentId = 'artifact-agent'
+    if (session.workspaceId) {
+      const wsAgents = await db
+        .select()
+        .from(workspaceAgents)
+        .where(eq(workspaceAgents.workspaceId, session.workspaceId))
+      const matched = wsAgents.find(
+        (a) => a.name.toLowerCase().includes('artifact') || a.role.toLowerCase().includes('产物'),
+      )
+      if (matched) artifactAgentId = matched.id
+    }
+
     const artifacts = buildDemoArtifacts(content)
     const [card] = await db
       .insert(messages)
       .values({
         sessionId,
-        senderId: 'artifact-agent',
+        senderId: artifactAgentId,
         senderType: 'agent',
         type: 'text',
         content: artifactSummary(artifacts),
@@ -606,12 +619,27 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
+    // 查找 workspace 中可能的 builder agent
+    let builderAgentId = 'agent-builder'
+    if (session.workspaceId) {
+      const wsAgents = await db
+        .select()
+        .from(workspaceAgents)
+        .where(eq(workspaceAgents.workspaceId, session.workspaceId))
+      const matched = wsAgents.find(
+        (a) =>
+          a.name.toLowerCase().includes('builder') ||
+          a.role.toLowerCase().includes('构建'),
+      )
+      if (matched) builderAgentId = matched.id
+    }
+
     if (session.type !== 'group' || !session.workspaceId) {
       const [prompt] = await db
         .insert(messages)
         .values({
           sessionId,
-          senderId: 'agent-builder',
+          senderId: builderAgentId,
           senderType: 'agent',
           type: 'text',
           content:
@@ -628,7 +656,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .insert(messages)
       .values({
         sessionId,
-        senderId: 'agent-builder',
+        senderId: builderAgentId,
         senderType: 'agent',
         type: 'task_card',
         content: `已生成 ${draft.name} Agent 草案。确认后会加入当前 Agent Group。`,
