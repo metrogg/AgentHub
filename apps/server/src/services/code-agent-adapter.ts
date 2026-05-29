@@ -1889,8 +1889,31 @@ function fileStatusFromGitStatus(status: string): CodeAgentRunMetadata['files'][
 function buildHostCommand(command: string, args: string[]) {
   if (process.platform !== 'win32') return [command, ...args]
   if (command === 'codex') return [windowsCodexCommand(), ...args]
+  if (command === 'opencode') {
+    const direct = windowsOpencodeNodeDirect(args)
+    if (direct) return direct
+  }
   // Windows 上直接传数组参数，避免 cmd.exe /c 的 8192 字符命令行长度限制
   return [windowsCliCommand(command), ...args]
+}
+
+function windowsOpencodeNodeDirect(args: string[]): string[] | null {
+  const nodeExe = process.execPath
+  // Strategy 1: npm global install
+  const npmShim = windowsNpmShim('opencode')
+  if (npmShim && existsSync(npmShim)) {
+    const npmDir = dirname(npmShim)
+    const binPath = resolve(npmDir, 'node_modules', 'opencode-ai', 'bin', 'opencode')
+    if (existsSync(binPath)) return [nodeExe, binPath, ...args]
+  }
+  // Strategy 2: find opencode.cmd in PATH and infer node_modules location
+  for (const candidate of windowsPathCommandCandidates('opencode')) {
+    if (existsSync(candidate) && candidate.endsWith('.cmd')) {
+      const binPath = resolve(dirname(candidate), 'node_modules', 'opencode-ai', 'bin', 'opencode')
+      if (existsSync(binPath)) return [nodeExe, binPath, ...args]
+    }
+  }
+  return null
 }
 
 function windowsCodexCommand() {
