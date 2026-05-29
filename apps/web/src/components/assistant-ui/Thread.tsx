@@ -99,7 +99,6 @@ import {
   type Workspace,
   type WorkspaceAgent,
 } from '../../lib/api'
-import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
 import {
   downloadExternalUrl,
   isDesktopApp,
@@ -128,6 +127,7 @@ import { TypewriterHeading } from '../chat/TypewriterHeading'
 import { GroupAvatar } from '../chat/GroupAvatar'
 import {
   agentLibraryChangeEvent,
+  flushAgentLibraryServerSync,
   loadAgentLibrary,
   saveAgentToLibrary,
   toAgentConfigInput,
@@ -382,6 +382,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
   const selectSession = useChatStore((state) => state.selectSession)
   const agent = agents.find((item) => item.id === session?.workspaceAgentId)
   const [models, setModels] = useState<ModelCatalogItem[]>([])
+  const usesCodingCli = agent?.runtimeType === 'code-agent'
   const [draft, setDraft] = useState({
     role: '',
     description: '',
@@ -389,8 +390,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     modelId: '',
   })
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const modelChoices = filterModelsForCodeAgent(models, agent?.codeAgentType, draft.modelId)
-  const selectedModelName = modelName(draft.modelId || null, models)
+  const modelChoices = models
 
   useEffect(() => {
     if (!open) return
@@ -415,7 +415,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
       modelId: agent?.modelId ?? '',
     })
     setSaveState('idle')
-  }, [agent?.id, agent?.role, agent?.description, agent?.systemPrompt, agent?.modelId])
+  }, [agent?.id, agent?.role, agent?.description, agent?.systemPrompt, agent?.modelId, agent?.runtimeType])
 
   async function saveAgentPatch(
     patch: Partial<Pick<WorkspaceAgent, 'role' | 'description' | 'systemPrompt' | 'modelId'>>,
@@ -425,6 +425,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     try {
       await api.updateWorkspaceAgent(workspace.id, agent.id, patch)
       syncAgentLibraryFromWorkspaceAgent({ ...agent, ...patch })
+      await flushAgentLibraryServerSync()
       if (session?.id) await selectSession(session.id)
       setSaveState('saved')
       window.setTimeout(() => setSaveState('idle'), 1400)
@@ -516,26 +517,34 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                   <AgentQuickSaveState state={saveState} />
                 </div>
 
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-neutral-500">模型</span>
-                  <select
-                    value={draft.modelId}
-                    onChange={(event) => updateModel(event.target.value)}
-                    disabled={saveState === 'saving'}
-                    className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
-                  >
-                    <option value="">使用 Coding Tool 默认模型</option>
-                    {modelChoices.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name || model.modelId}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="mt-1 block text-xs leading-5 text-neutral-400">
-                    Agent 模型会覆盖 Coding Tools 页面里的工具默认模型。当前：
-                    {draft.modelId ? selectedModelName : '跟随工具默认'}
-                  </span>
-                </label>
+                {usesCodingCli ? (
+                  <div className="rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+                    <div className="font-medium text-neutral-900">模型</div>
+                    <div className="mt-1">
+                      模型、Base URL 和 API Key 由 Coding Tools 页面统一管理；这里仅维护 Agent 角色和提示词。
+                    </div>
+                  </div>
+                ) : (
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-neutral-500">模型</span>
+                    <select
+                      value={draft.modelId}
+                      onChange={(event) => updateModel(event.target.value)}
+                      disabled={saveState === 'saving'}
+                      className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
+                    >
+                      <option value="">默认模型</option>
+                      {modelChoices.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.name || model.modelId}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="mt-1 block text-xs leading-5 text-neutral-400">
+                      LLM Agent 可以单独覆盖默认模型。
+                    </span>
+                  </label>
+                )}
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-medium text-neutral-500">角色</span>
@@ -643,12 +652,6 @@ function syncAgentLibraryFromWorkspaceAgent(agent: WorkspaceAgent) {
     },
     matched.id,
   )
-}
-
-function modelName(modelId: string | null, models: ModelCatalogItem[]) {
-  if (!modelId) return '跟随工具默认'
-  const model = models.find((item) => item.id === modelId || item.modelId === modelId)
-  return model?.name || model?.modelId || modelId
 }
 
 const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
@@ -1132,10 +1135,15 @@ const ThreadWelcomeContent: FC = () => {
     api
       .getWelcomeQuickPrompts(seed)
       .then(({ items }) => {
-        if (!cancelled) setQuickPrompts(items.length ? items : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+        if (!cancelled) {
+          const nextPrompts = items.length
+            ? rotateQuickPrompts(items, seed, 10)
+            : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10)
+          setQuickPrompts(nextPrompts)
+        }
       })
       .catch(() => {
-        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10))
       })
       .finally(() => {
         if (!cancelled) setQuickPromptsLoading(false)

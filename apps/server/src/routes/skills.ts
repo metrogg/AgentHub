@@ -189,7 +189,6 @@ function splitCommand(input: string) {
 
 async function runNpxSkillsAdd(packageRef: string, extraArgs: string[]) {
   const args = [
-    'npx',
     '--yes',
     'skills@latest',
     'add',
@@ -197,17 +196,13 @@ async function runNpxSkillsAdd(packageRef: string, extraArgs: string[]) {
     ...extraArgs.filter((arg) => !['--yes', '-y'].includes(arg)),
     '-y',
   ]
+  const command = buildNpxCommand(args)
   try {
-    const proc = Bun.spawn(buildHostCommand(args), {
+    const proc = Bun.spawn(command.argv, {
       cwd: projectRoot,
       stdout: 'pipe',
       stderr: 'pipe',
-      env: {
-        ...process.env,
-        CI: '1',
-        NO_COLOR: '1',
-        FORCE_COLOR: '0',
-      },
+      env: buildChildProcessEnv(),
     })
     const timer = setTimeout(() => {
       try {
@@ -224,22 +219,125 @@ async function runNpxSkillsAdd(packageRef: string, extraArgs: string[]) {
     clearTimeout(timer)
     return { code, output: [stdout, stderr].filter(Boolean).join('\n').trim() }
   } catch (error: any) {
-    return { code: 127, output: error?.message || 'npx skills failed to start.' }
+    return {
+      code: 127,
+      output: [error?.message || 'npx skills failed to start.', command.hint].filter(Boolean).join('\n'),
+    }
   }
 }
 
-function buildHostCommand(args: string[]) {
-  if (process.platform !== 'win32') return args
-  return [getWindowsCommandShell(), '/d', '/s', '/c', args.map(quoteForCmd).join(' ')]
+function buildNpxCommand(args: string[]) {
+  if (process.platform !== 'win32') {
+    return { argv: [findExecutable('npx') || 'npx', ...args] }
+  }
+
+  const nodeExe = findExecutable('node')
+  const npxCli = findNpxCliJs()
+  if (nodeExe && npxCli) {
+    return { argv: [nodeExe, npxCli, ...args] }
+  }
+
+  const npxExe = findExecutable('npx.exe')
+  if (npxExe) return { argv: [npxExe, ...args] }
+
+  const npxCommand = findExecutable('npx')
+  return {
+    argv: [npxCommand || 'npx', ...args],
+    hint:
+      '未找到可直接执行的 node.exe 与 npx-cli.js。请确认 Node.js 已安装，并且 node / npx 位于系统 PATH 中。',
+  }
 }
 
-function getWindowsCommandShell() {
-  return process.env.ComSpec || `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\cmd.exe`
+function findNpxCliJs() {
+  const candidates = new Set<string>()
+  const npmExecPath = stringEnv('npm_execpath')
+  if (npmExecPath) {
+    candidates.add(resolve(dirname(npmExecPath), 'npx-cli.js'))
+    candidates.add(resolve(dirname(npmExecPath), 'npm-cli.js', '..', 'npx-cli.js'))
+  }
+
+  for (const executable of ['npx', 'npx.cmd', 'npm', 'npm.cmd']) {
+    const path = findExecutable(executable)
+    if (!path) continue
+    candidates.add(resolve(dirname(path), 'node_modules', 'npm', 'bin', 'npx-cli.js'))
+    candidates.add(resolve(dirname(path), '..', 'node_modules', 'npm', 'bin', 'npx-cli.js'))
+  }
+
+  for (const dir of getExecutableSearchDirs()) {
+    candidates.add(resolve(dir, 'node_modules', 'npm', 'bin', 'npx-cli.js'))
+    candidates.add(resolve(dirname(dir), 'node_modules', 'npm', 'bin', 'npx-cli.js'))
+  }
+
+  return [...candidates].find((candidate) => existsSync(candidate)) || null
 }
 
-function quoteForCmd(value: string) {
-  if (/^[A-Za-z0-9_./:@-]+$/.test(value)) return value
-  return `"${value.replace(/"/g, '\\"')}"`
+function findExecutable(command: string) {
+  const hasPathSeparator = command.includes('/') || command.includes('\\')
+  const hasExtension = /\.[^\\/]+$/.test(command)
+  const names =
+    process.platform === 'win32' && !hasExtension
+      ? getWindowsExecutableExtensions().map((extension) => `${command}${extension}`)
+      : [command]
+
+  const dirs = hasPathSeparator ? [''] : getExecutableSearchDirs()
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = hasPathSeparator ? resolve(command) : resolve(dir, name)
+      if (existsSync(candidate)) return candidate
+    }
+  }
+
+  return null
+}
+
+function getExecutableSearchDirs() {
+  const pathValue = stringEnv('Path') || stringEnv('PATH') || stringEnv('path') || ''
+  const dirs = pathValue.split(delimiter).filter(Boolean)
+  if (process.platform !== 'win32') return dirs
+
+  const programFiles = stringEnv('ProgramFiles') || 'C:\\Program Files'
+  const programFilesX86 = stringEnv('ProgramFiles(x86)')
+  for (const base of [programFiles, programFilesX86]) {
+    if (base) dirs.push(resolve(base, 'nodejs'))
+  }
+  return [...new Set(dirs)]
+}
+
+function getWindowsExecutableExtensions() {
+  const pathExt = stringEnv('PATHEXT') || '.COM;.EXE;.BAT;.CMD'
+  return pathExt
+    .split(';')
+    .map((extension) => extension.trim())
+    .filter(Boolean)
+}
+
+function buildChildProcessEnv() {
+  const childEnv: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === 'string') childEnv[key] = value
+  }
+
+  const pathValue = childEnv.Path || childEnv.PATH || childEnv.path
+  if (pathValue) {
+    childEnv.Path = pathValue
+    childEnv.PATH = pathValue
+  }
+
+  if (process.platform === 'win32') {
+    childEnv.SystemRoot ||= 'C:\\Windows'
+    childEnv.ComSpec ||= resolve(childEnv.SystemRoot, 'System32', 'cmd.exe')
+    childEnv.PATHEXT ||= '.COM;.EXE;.BAT;.CMD'
+  }
+
+  childEnv.CI = '1'
+  childEnv.NO_COLOR = '1'
+  childEnv.FORCE_COLOR = '0'
+  return childEnv
+}
+
+function stringEnv(key: string) {
+  const value = process.env[key]
+  return typeof value === 'string' ? value : ''
 }
 
 function normalizeSkillhubItem(value: any) {

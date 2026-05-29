@@ -10,10 +10,12 @@ const webDistSource = resolve(root, 'apps/web/dist')
 const webDistTarget = resolve(resources, 'web-dist')
 const serverExeSource = resolve(root, 'apps/server/dist/agenthub-server.exe')
 const serverExeTarget = resolve(resources, 'binaries/agenthub-server.exe')
+const portFile = resolve(root, '.agenthub-port')
 const powershellRoot = toPowerShellSingleQuotedString(root)
 const skipWebBuild = process.argv.includes('--skip-web-build')
 
 await stopStaleDevProcesses()
+await rm(portFile, { force: true })
 if (!skipWebBuild) {
   await run('bun', ['--filter', '@agenthub/web', 'build'])
 }
@@ -31,7 +33,7 @@ async function stopStaleDevProcesses() {
 
   const script = `
 $root = ${powershellRoot}
-$devPorts = @(5173, 5174, 5175, 8000)
+$devPorts = @(5173, 5174, 5175) + (8000..8079)
 $portPids = [System.Collections.Generic.HashSet[int]]::new()
 Get-NetTCPConnection -ErrorAction SilentlyContinue |
   Where-Object { $devPorts -contains $_.LocalPort } |

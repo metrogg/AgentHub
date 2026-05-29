@@ -830,7 +830,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             color: agent.color,
             modelId: agent.modelId ?? null,
             runtimeType: agent.runtimeType ?? 'llm',
-            codeAgentType: agent.codeAgentType ?? null,
+            codeAgentType: agent.runtimeType === 'code-agent' ? agent.codeAgentType ?? null : null,
             capabilityTags: agent.capabilityTags ?? [],
             toolPermissions: agent.toolPermissions ?? [],
             sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
@@ -1115,6 +1115,18 @@ async function profileForDirectSession(
       .where(eq(workspaces.id, session.workspaceId))
       .limit(1)
     if (!workspace) return undefined
+    const agentList = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.workspaceId, workspace.id))
+      .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+    if (agentList.length === 1 && agentList[0]) {
+      await db
+        .update(sessions)
+        .set({ workspaceAgentId: agentList[0].id, updatedAt: new Date() })
+        .where(eq(sessions.id, session.id))
+      return toAgentProfile(agentList[0], workspace.projectPath)
+    }
     const profile: AgentRunProfile = {
       id: `workspace:${workspace.id}`,
       name: workspace.name || 'Workspace Assistant',

@@ -834,6 +834,18 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
     };
 
     let workspace_root = workspace_root_from_manifest();
+    let dev_port_file = workspace_root.as_ref().map(|root| root.join(".agenthub-port"));
+    if let Some(port_file) = dev_port_file.as_ref() {
+        let _ = fs::write(
+            port_file,
+            format!(
+                r#"{{"port":{},"pid":{},"updatedAt":"desktop-startup"}}"#,
+                port,
+                std::process::id()
+            ),
+        );
+    }
+
     let star_office_root = workspace_root
         .as_ref()
         .map(|root| root.join("storage").join("Star-Office-UI"))
@@ -853,6 +865,9 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
 
     if let Some(root) = workspace_root.as_ref() {
         command.env("PROJECT_ROOT", root);
+    }
+    if let Some(port_file) = dev_port_file.as_ref() {
+        command.env("AGENTHUB_PORT_FILE", port_file);
     }
     if let Some(root) = star_office_root.as_ref() {
         command.env("AGENTHUB_STAR_OFFICE_ROOT", root);

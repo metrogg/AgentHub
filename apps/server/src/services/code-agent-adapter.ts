@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type AgentArtifact, CodeAgentRunStatus, ArtifactFileStatus } from '@agenthub/shared'
 import { db, settings } from '@agenthub/db'
@@ -37,7 +37,7 @@ interface CodeAgentAdapter {
   displayName: string
   envKey: string
   docsHint: string
-  promptMode: 'argument' | 'stdin'
+  promptMode: 'argument' | 'stdin' | 'file'
   buildArgs: (prompt: string, options?: CodeAgentRunOptions) => string[]
 }
 
@@ -49,6 +49,7 @@ interface CodeAgentRunOptions {
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
   toolConfig?: Record<string, unknown>
+  promptFile?: string
 }
 
 interface CodeAgentModelTarget {
@@ -234,7 +235,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     envKey: 'DEEPSEEK_API_KEY',
     docsHint:
       'OpenCode 会使用本机配置；如果 Agent 绑定了 provider/model，会通过 --model 传给 OpenCode。',
-    promptMode: 'argument',
+    promptMode: 'file',
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
       const args = ['run']
@@ -258,6 +259,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         args.push('--dangerously-skip-permissions')
       }
       args.push(prompt)
+      if (options?.promptFile) args.push('--file', options.promptFile)
       return args
     },
   },
@@ -328,7 +330,8 @@ export async function* streamCodeAgentReply(
   const toolConfig = await resolveToolConfig(type)
   const modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
   const runtimeModelTarget = normalizeCodeAgentModelTarget(type, modelTarget)
-  const configured = await isRuntimeConfigured(type, adapter, profile.modelId, modelTarget)
+  const effectiveModelId = runtimeModelTarget?.modelId ?? null
+  const configured = await isRuntimeConfigured(type, adapter, effectiveModelId, runtimeModelTarget)
   const executionEnabled = await getBooleanSetting(
     'AGENTHUB_ENABLE_CODE_AGENT_EXECUTION',
     env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION,
@@ -345,7 +348,7 @@ export async function* streamCodeAgentReply(
       `- 命令：\`${adapter.command}\``,
       `- 沙箱：${profile.sandboxPolicy ?? 'workspace-write'}`,
       `- 项目目录：${cwdInfo.label}`,
-      `- 模型档案：${runtimeModelTarget ? `${runtimeModelTarget.provider}/${runtimeModelTarget.modelId}` : profile.modelId ? '未找到或未启用' : '自动模型'}`,
+      `- 模型档案：${runtimeModelTarget ? `${runtimeModelTarget.provider}/${runtimeModelTarget.modelId}` : '自动模型'}`,
       `- 运行凭据：${configured ? '可由模型管理注入' : '未检测到'}`,
       `- 安装状态：${installed ? '已安装' : '未安装'}`,
       `- 执行开关：${executionEnabled ? '已启用' : '已禁用'}\``,
@@ -445,10 +448,10 @@ export async function* streamCodeAgentReply(
 
 async function resolveCodeAgentModelTarget(
   type: CodeAgentType,
-  modelId?: string | null,
+  agentModelId?: string | null,
   toolConfig?: Record<string, unknown>,
 ): Promise<CodeAgentModelTarget | null> {
-  const effectiveModelId = resolveCodeAgentModelId(modelId, toolConfig)
+  const effectiveModelId = resolveCodeAgentModelId(agentModelId, toolConfig)
   if (!effectiveModelId) return null
 
   const selected = await resolveModelConfig(effectiveModelId)
@@ -518,15 +521,10 @@ async function resolveConfiguredCatalogModelTarget(
   return null
 }
 
-function resolveCodeAgentModelId(
-  agentModelId?: string | null,
-  toolConfig?: Record<string, unknown>,
-) {
-  const fromAgent = agentModelId?.trim()
-  if (fromAgent) return fromAgent
-
+function resolveCodeAgentModelId(agentModelId?: string | null, toolConfig?: Record<string, unknown>) {
+  const fromAgent = typeof agentModelId === 'string' ? agentModelId.trim() : ''
   const fromTool = typeof toolConfig?.['modelId'] === 'string' ? toolConfig['modelId'].trim() : ''
-  return fromTool || null
+  return fromAgent || fromTool || null
 }
 
 function normalizeCodeAgentModelTarget(
@@ -717,6 +715,7 @@ async function runCodeAgentCommand(
     onText?: (text: string) => void
   } = {},
 ): Promise<CodeAgentCommandResult> {
+  cwd = cwd?.trim() || undefined
   const outputPath =
     adapter.command === 'codex'
       ? join(
@@ -724,11 +723,15 @@ async function runCodeAgentCommand(
           `agenthub-code-agent-${Date.now()}-${Math.random().toString(36).slice(2)}.md`,
         )
       : undefined
+  const promptFile =
+    adapter.promptMode === 'file' ? writeCodeAgentPromptFile(adapter.command, prompt) : undefined
   const commandPrompt =
-    process.platform === 'win32' &&
-    (adapter.command === 'codex' || adapter.command === 'claude')
-      ? buildAsciiSafePrompt(prompt)
-      : prompt
+    adapter.promptMode === 'file'
+      ? buildFileBackedPrompt(promptFile)
+      : process.platform === 'win32' &&
+          (adapter.command === 'codex' || adapter.command === 'claude')
+        ? buildAsciiSafePrompt(prompt)
+        : prompt
   const args = adapter.buildArgs(commandPrompt, {
     cwd,
     agentRoleType,
@@ -737,9 +740,12 @@ async function runCodeAgentCommand(
     outputPath,
     sandboxPolicy,
     toolConfig,
+    promptFile,
   })
 
   if (signal?.aborted) {
+    cleanupTempFile(outputPath)
+    cleanupTempFile(promptFile)
     return {
       code: 130,
       output: 'Coding Tools 执行已取消。',
@@ -1007,6 +1013,13 @@ async function runCodeAgentCommand(
       // Best-effort cleanup.
     }
   }
+  if (promptFile && existsSync(promptFile)) {
+    try {
+      unlinkSync(promptFile)
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
   const parsed = withExtractedLastMessage({ code, output })
   const finalMessage =
     outputFileMessage ||
@@ -1041,6 +1054,35 @@ function buildAsciiSafePrompt(prompt: string) {
     'JSON_STRING:',
     jsonStringifyAscii(prompt),
   ].join('\n')
+}
+
+function buildFileBackedPrompt(promptFile?: string) {
+  const fileName = promptFile ? basename(promptFile) : 'task-prompt.md'
+  return [
+    'Read the attached prompt file and follow it exactly.',
+    `The attached file is ${fileName}.`,
+    'Use it as the full task specification and conversation context.',
+  ].join('\n')
+}
+
+function writeCodeAgentPromptFile(command: string, prompt: string) {
+  const dir = resolve(tmpdir(), 'AgentHub', 'code-agent-prompts')
+  mkdirSync(dir, { recursive: true })
+  const path = resolve(
+    dir,
+    `${Date.now()}-${Math.random().toString(36).slice(2)}-${safeFileName(command)}.md`,
+  )
+  writeFileSync(path, prompt, 'utf8')
+  return path
+}
+
+function cleanupTempFile(path?: string) {
+  if (!path || !existsSync(path)) return
+  try {
+    unlinkSync(path)
+  } catch {
+    // Best-effort cleanup.
+  }
 }
 
 function jsonStringifyAscii(value: string) {
@@ -2067,10 +2109,24 @@ function normalizeWindowsProcessEnv(base: Record<string, string>, allowedKeys: S
     base.PATH = pathValue
   }
 
-  const passthrough = ['PATHEXT', 'ComSpec', 'SystemRoot', 'LOCALAPPDATA'] as const
+  const passthrough = [
+    'PATHEXT',
+    'ComSpec',
+    'SystemRoot',
+    'USERPROFILE',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'TEMP',
+    'TMP',
+  ] as const
   for (const key of passthrough) {
     const value = base[key] || Bun.env[key] || process.env[key]
     if (value && allowedKeys.has(key)) base[key] = value
+  }
+
+  if (!base.HOME && allowedKeys.has('HOME')) {
+    const home = base.USERPROFILE || Bun.env.USERPROFILE || process.env.USERPROFILE
+    if (home) base.HOME = home
   }
 }
 
@@ -2113,7 +2169,11 @@ function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
     dir,
     `${Date.now()}-${Math.random().toString(36).slice(2)}-${modelTarget.providerKey}-${safeFileName(modelTarget.modelId)}.json`,
   )
-  const baseUrl = modelTarget.openaiBaseUrl ?? modelTarget.anthropicBaseUrl
+  const useAnthropicSdk = isAnthropicLike(modelTarget.provider, modelTarget.anthropicBaseUrl)
+  const rawBaseUrl = useAnthropicSdk
+    ? modelTarget.anthropicBaseUrl ?? modelTarget.openaiBaseUrl
+    : modelTarget.openaiBaseUrl ?? modelTarget.anthropicBaseUrl
+  const baseUrl = useAnthropicSdk ? normalizeAnthropicOpencodeBaseUrl(rawBaseUrl) : rawBaseUrl
   const modelRef = `${modelTarget.providerKey}/${modelTarget.modelId}`
   const apiKey = modelTarget.apiKey?.trim() || readEnv('AGENTHUB_MODEL_API_KEY') || ''
   writeFileSync(
@@ -2125,7 +2185,6 @@ function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
         small_model: modelRef,
         provider: {
           [modelTarget.providerKey]: {
-            npm: '@ai-sdk/openai-compatible',
             name: modelTarget.provider,
             options: {
               baseURL: baseUrl,
@@ -2134,6 +2193,9 @@ function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
             models: {
               [modelTarget.modelId]: {},
             },
+            ...(useAnthropicSdk
+              ? { npm: '@ai-sdk/anthropic' }
+              : { npm: '@ai-sdk/openai-compatible' }),
           },
         },
       },
@@ -2143,6 +2205,14 @@ function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
     'utf8',
   )
   return path
+}
+
+function normalizeAnthropicOpencodeBaseUrl(baseUrl?: string) {
+  const normalized = baseUrl?.trim().replace(/\/+$/, '')
+  if (!normalized) return normalized
+  if (/\/v\d+(?:\/)?$/i.test(normalized)) return normalized
+  if (/\/v\d+\/messages$/i.test(normalized)) return normalized.replace(/\/messages$/i, '')
+  return `${normalized}/v1`
 }
 
 function isProviderMatching(envKey: string, provider?: string, baseUrl?: string) {
@@ -2572,6 +2642,9 @@ function friendlyCodeAgentError(output: string) {
   }
   if (/CommandNotFoundException|ObjectNotFound: \(node:String\)|node.*not recognized|无法将.*node|找不到.*node/i.test(output)) {
     return 'OpenCode 已启动，但执行环境里找不到 node 命令。已补充 Windows Path/ComSpec/SystemRoot 等环境变量透传；请重启 dev server 后再试。如果仍失败，请确认本机 Node.js 已安装并在系统 Path 中。'
+  }
+  if (/The command line is too long/i.test(output)) {
+    return 'OpenCode startup failed because the prompt was passed through the Windows command line length limit. AgentHub now writes the full prompt to a temporary Markdown file and attaches it to OpenCode; restart the dev server and retry.'
   }
   if (/invalid function arguments json|string, tool_call_id/i.test(output)) {
     return [

@@ -185,7 +185,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
       '你是 Builder。你负责根据总指挥派发的任务和 Designer 的方案实现代码。先读现有项目风格，再小步修改；完成后说明改了什么、验证了什么、剩余风险是什么。不要擅自扩大范围。',
     color: '#10b981',
     runtimeType: 'code-agent',
-    codeAgentType: 'codex',
+    codeAgentType: 'opencode',
     capabilityTags: ['code', 'implementation', 'frontend', 'workspace-write'],
     toolPermissions: ['chat', 'workspace:read', 'workspace:write'],
     sandboxPolicy: 'workspace-write',

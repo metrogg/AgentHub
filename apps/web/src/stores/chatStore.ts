@@ -1,12 +1,14 @@
 import { create } from 'zustand'
 import {
   api,
+  type AgentConfigInput,
   type ChatAttachment,
   type CodeAgentRunMetadata,
   type Message,
   type Session,
   type Workspace,
   type WorkspaceAgent,
+  type WorkspaceFull,
 } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 import { WsEvent, TaskStatus, MessageType, SessionType } from '@agenthub/shared'
@@ -214,8 +216,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async setSessionWorkspace(sessionId, workspaceId) {
-    const session = await api.updateSession(sessionId, { workspaceId, workspaceAgentId: null })
-    const full = workspaceId ? await api.getWorkspace(workspaceId) : null
+    const state = get()
+    const currentSession =
+      state.currentSession?.id === sessionId
+        ? state.currentSession
+        : state.sessions.find((item) => item.id === sessionId) ?? null
+
+    let workspaceAgentId: string | null = null
+    let full: WorkspaceFull | null = null
+    if (workspaceId) {
+      full = await api.getWorkspace(workspaceId)
+      if (currentSession?.type === SessionType.Direct && currentSession.workspaceAgentId) {
+        const currentAgent =
+          state.currentWorkspaceAgents.find((item) => item.id === currentSession.workspaceAgentId) ??
+          null
+        workspaceAgentId =
+          full.agents.find((item) => item.id === currentSession.workspaceAgentId)?.id ??
+          full.agents.find((item) => sameAgentIdentity(item, currentAgent))?.id ??
+          null
+
+        if (!workspaceAgentId && currentAgent) {
+          const created = await api.addWorkspaceAgent(workspaceId, workspaceAgentToConfigInput(currentAgent))
+          full = { ...full, agents: [...full.agents, created] }
+          workspaceAgentId = created.id
+        } else if (!workspaceAgentId && full.agents.length === 1) {
+          workspaceAgentId = full.agents[0]!.id
+        }
+      } else if (full.agents.length === 1) {
+        workspaceAgentId = full.agents[0]!.id
+      }
+    }
+
+    const session = await api.updateSession(sessionId, { workspaceId, workspaceAgentId })
     if (workspaceId && full) {
       workspaceDetailsCache.set(workspaceId, {
         workspace: full.workspace,
@@ -674,6 +706,47 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return wsClient.on((e) => get().handleWSEvent(e))
   },
 }))
+
+function sameAgentIdentity(agent: WorkspaceAgent, current: WorkspaceAgent | null) {
+  if (!current) return false
+  return [
+    normalizeMatchText(agent.name),
+    normalizeMatchText(agent.role),
+    normalizeMatchText(agent.runtimeType ?? ''),
+    normalizeMatchText(agent.runtimeType === 'code-agent' ? agent.codeAgentType ?? '' : ''),
+  ].join('|') === [
+    normalizeMatchText(current.name),
+    normalizeMatchText(current.role),
+    normalizeMatchText(current.runtimeType ?? ''),
+    normalizeMatchText(current.runtimeType === 'code-agent' ? current.codeAgentType ?? '' : ''),
+  ].join('|')
+}
+
+function workspaceAgentToConfigInput(agent: WorkspaceAgent): AgentConfigInput {
+  return {
+    name: agent.name,
+    role: agent.role,
+    roleType: agent.roleType ?? 'custom',
+    description: agent.description ?? '',
+    avatar: agent.avatar ?? null,
+    systemPrompt: agent.systemPrompt ?? '',
+    roleProfile: agent.roleProfile ?? null,
+    color: agent.color ?? '#111827',
+    modelId: agent.modelId ?? null,
+    runtimeType: agent.runtimeType,
+    codeAgentType: agent.codeAgentType,
+    capabilityTags: [...agent.capabilityTags],
+    toolPermissions: [...agent.toolPermissions],
+    sandboxPolicy: agent.sandboxPolicy,
+    contextPolicy: agent.contextPolicy,
+    autoInvoke: agent.autoInvoke,
+    approvalRequired: agent.approvalRequired,
+  }
+}
+
+function normalizeMatchText(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase()
+}
 
 function appendAttachmentNote(content: string, attachments: ChatAttachment[]) {
   const note = attachments

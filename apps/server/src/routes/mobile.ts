@@ -431,59 +431,72 @@ async function ensureSavedAgentDirectSession(ownerId: string, agent: SavedAgentC
     const metadata = session.metadata ?? {}
     return metadata.kind === 'agent-direct' && metadata.savedAgentId === agent.id
   })
-  if (existingBySavedId?.workspaceId && existingBySavedId.workspaceAgentId) return existingBySavedId
-
   const workspaceName = (agent.name.trim() || 'Agent').slice(0, 80)
-  const [existingWorkspace] = await db
-    .select()
-    .from(workspaces)
-    .where(and(eq(workspaces.ownerId, ownerId), eq(workspaces.name, workspaceName)))
-    .limit(1)
-  const workspace = existingWorkspace ?? (await db
-    .insert(workspaces)
-    .values({
-      ownerId,
-      name: workspaceName,
-      goal: `与 ${agent.name} 单聊`,
-      projectPath: null,
-    })
-    .returning())[0]
+  let workspace: typeof workspaces.$inferSelect | undefined
+  if (existingBySavedId?.workspaceId) {
+    ;[workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(and(eq(workspaces.id, existingBySavedId.workspaceId), eq(workspaces.ownerId, ownerId)))
+      .limit(1)
+  }
+  if (!workspace) {
+    const [existingWorkspace] = await db
+      .select()
+      .from(workspaces)
+      .where(and(eq(workspaces.ownerId, ownerId), eq(workspaces.name, workspaceName)))
+      .limit(1)
+    workspace = existingWorkspace ?? (await db
+      .insert(workspaces)
+      .values({
+        ownerId,
+        name: workspaceName,
+        goal: `与 ${agent.name} 单聊`,
+        projectPath: null,
+      })
+      .returning())[0]
+  }
   if (!workspace) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
+  if (workspace.name !== workspaceName) {
+    const [renamed] = await db
+      .update(workspaces)
+      .set({ name: workspaceName, updatedAt: new Date() })
+      .where(eq(workspaces.id, workspace.id))
+      .returning()
+    workspace = renamed ?? workspace
+  }
 
   const workspaceAgentList = await db
     .select()
     .from(workspaceAgents)
     .where(eq(workspaceAgents.workspaceId, workspace.id))
     .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
-  const reusableAgent = workspaceAgentList.find((item) => sameAgentIdentity(item, agent))
-  const workspaceAgent = reusableAgent ?? (await db
-    .insert(workspaceAgents)
-    .values({
-      workspaceId: workspace.id,
-      name: agent.name,
-      role: agent.role,
-      roleType: normalizeRoleType(agent.roleType),
-      description: agent.description ?? '',
-      avatar: agent.avatar ?? null,
-      systemPrompt: agent.systemPrompt ?? '',
-      roleProfile: agent.roleProfile ?? null,
-      color: agent.color ?? '#111827',
-      modelId: agent.modelId ?? null,
-      runtimeType: normalizeRuntimeType(agent.runtimeType),
-      codeAgentType: normalizeRuntimeType(agent.runtimeType) === 'code-agent'
-        ? normalizeCodeAgentType(agent.codeAgentType)
-        : null,
-      capabilityTags: agent.capabilityTags ?? [],
-      toolPermissions: agent.toolPermissions ?? [],
-      sandboxPolicy: normalizeSandboxPolicy(agent.sandboxPolicy),
-      contextPolicy: normalizeContextPolicy(agent.contextPolicy),
-      autoInvoke: agent.autoInvoke ?? true,
-      approvalRequired: normalizeRuntimeType(agent.runtimeType) === 'code-agent'
-        ? false
-        : (agent.approvalRequired ?? true),
-      orderIdx: workspaceAgentList.length,
-    })
-    .returning())[0]
+  const preferredAgent = existingBySavedId?.workspaceAgentId
+    ? workspaceAgentList.find((item) => item.id === existingBySavedId.workspaceAgentId)
+    : null
+  let workspaceAgent =
+    preferredAgent ??
+    workspaceAgentList.find((item) => sameAgentIdentity(item, agent)) ??
+    null
+  const agentValues = savedAgentWorkspaceValues(agent)
+  if (workspaceAgent) {
+    const [updatedAgent] = await db
+      .update(workspaceAgents)
+      .set(agentValues)
+      .where(and(eq(workspaceAgents.id, workspaceAgent.id), eq(workspaceAgents.workspaceId, workspace.id)))
+      .returning()
+    workspaceAgent = updatedAgent ?? workspaceAgent
+  } else {
+    const [createdAgent] = await db
+      .insert(workspaceAgents)
+      .values({
+        ...agentValues,
+        workspaceId: workspace.id,
+        orderIdx: workspaceAgentList.length,
+      })
+      .returning()
+    workspaceAgent = createdAgent ?? null
+  }
   if (!workspaceAgent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 创建失败')
 
   const reusableSession = existingBySavedId ?? sessionList.find((session) =>
@@ -519,6 +532,29 @@ async function ensureSavedAgentDirectSession(ownerId: string, agent: SavedAgentC
     .returning()
   if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
   return created
+}
+
+function savedAgentWorkspaceValues(agent: SavedAgentConfig) {
+  const runtimeType = normalizeRuntimeType(agent.runtimeType)
+  return {
+    name: agent.name,
+    role: agent.role,
+    roleType: normalizeRoleType(agent.roleType),
+    description: agent.description ?? '',
+    avatar: agent.avatar ?? null,
+    systemPrompt: agent.systemPrompt ?? '',
+    roleProfile: agent.roleProfile ?? null,
+    color: agent.color ?? '#111827',
+    modelId: agent.modelId ?? null,
+    runtimeType,
+    codeAgentType: runtimeType === 'code-agent' ? normalizeCodeAgentType(agent.codeAgentType) : null,
+    capabilityTags: agent.capabilityTags ?? [],
+    toolPermissions: agent.toolPermissions ?? [],
+    sandboxPolicy: normalizeSandboxPolicy(agent.sandboxPolicy),
+    contextPolicy: normalizeContextPolicy(agent.contextPolicy),
+    autoInvoke: agent.autoInvoke ?? true,
+    approvalRequired: runtimeType === 'code-agent' ? false : (agent.approvalRequired ?? true),
+  }
 }
 
 function sameAgentIdentity(agent: typeof workspaceAgents.$inferSelect, saved: SavedAgentConfig) {

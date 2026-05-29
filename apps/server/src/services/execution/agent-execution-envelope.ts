@@ -1,10 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { homedir, platform, tmpdir } from 'node:os'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const serviceDir = dirname(fileURLToPath(import.meta.url))
-const projectRoot = resolve(serviceDir, '../../../..')
+import { resolve } from 'node:path'
 
 /**
  * AgentExecutionEnvelope — 每次 Agent 执行的强制上下文信封。
@@ -115,26 +111,29 @@ export function ensureNoProjectExecutionDir(
   envelope: Pick<AgentExecutionEnvelope, 'runId' | 'taskId' | 'agentId' | 'agentName' | 'projectPath'>,
 ) {
   if (envelope.projectPath) return null
-  const dir = resolve(
-    noProjectExecutionRoot(),
+  const segments = [
     'workspaces',
     'no-project',
     safePathSegment(envelope.runId),
     safePathSegment(envelope.taskId),
     `${safePathSegment(envelope.agentName)}-${safePathSegment(envelope.agentId)}`,
-  )
-  mkdirSync(dir, { recursive: true })
-  return dir
+  ]
+
+  const roots = [noProjectExecutionRoot(), agentHubUserCacheRoot(), resolve(tmpdir(), '.AgentHub')]
+  for (const root of [...new Set(roots)]) {
+    const dir = resolve(root, ...segments)
+    try {
+      mkdirSync(dir, { recursive: true })
+      return dir
+    } catch {
+      // Try the next writable cache root.
+    }
+  }
+  return null
 }
 
 function noProjectExecutionRoot() {
-  const configured =
-    Bun.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
-    Bun.env.AGENTHUB_USER_CACHE_DIR?.trim() ||
-    process.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
-    process.env.AGENTHUB_USER_CACHE_DIR?.trim()
-  if (configured) return resolve(configured, '.AgentHub')
-  return resolve(projectRoot, 'storage', '.AgentHub')
+  return agentHubUserCacheRoot()
 }
 
 export function agentHubUserCacheRoot() {

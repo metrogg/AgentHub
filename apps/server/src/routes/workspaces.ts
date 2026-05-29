@@ -101,6 +101,7 @@ function normalizeAgentCreateDefaults(input: z.infer<typeof createAgentSchema>):
   if (input.runtimeType === 'mcp') {
     return {
       ...input,
+      modelId: null,
       codeAgentType: null,
       toolPermissions: ['workspace:read', 'skills:read'],
       sandboxPolicy: 'read-only',
@@ -111,9 +112,13 @@ function normalizeAgentCreateDefaults(input: z.infer<typeof createAgentSchema>):
 }
 
 /** 更新 Agent 时只填充显式为 null 的字段，不覆盖已有配置 */
-function normalizeAgentUpdateDefaults(input: z.infer<typeof updateAgentSchema>): z.infer<typeof updateAgentSchema> {
+function normalizeAgentUpdateDefaults(
+  input: z.infer<typeof updateAgentSchema>,
+  currentRuntimeType?: string | null,
+): z.infer<typeof updateAgentSchema> {
   const result = { ...input }
-  if (input.runtimeType === 'code-agent') {
+  const nextRuntimeType = input.runtimeType ?? currentRuntimeType
+  if (nextRuntimeType === 'code-agent') {
     if (input.codeAgentType === null) {
       result.codeAgentType = 'codex'
     }
@@ -124,7 +129,11 @@ function normalizeAgentUpdateDefaults(input: z.infer<typeof updateAgentSchema>):
       result.approvalRequired = false
     }
   }
-  if (input.runtimeType === 'mcp') {
+  if (input.runtimeType === 'llm' && currentRuntimeType === 'code-agent' && input.modelId === undefined) {
+    result.modelId = null
+  }
+  if (nextRuntimeType === 'mcp') {
+    result.modelId = null
     result.codeAgentType = null
     result.toolPermissions = ['workspace:read', 'skills:read']
     result.sandboxPolicy = 'read-only'
@@ -422,7 +431,13 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const id = c.req.param('id')
     const agentId = c.req.param('agentId')
     await ensureWorkspace(id, user.sub)
-    const input = normalizeAgentUpdateDefaults(c.req.valid('json'))
+    const [current] = await db
+      .select({ runtimeType: workspaceAgents.runtimeType })
+      .from(workspaceAgents)
+      .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id)))
+      .limit(1)
+    if (!current) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 涓嶅瓨鍦?')
+    const input = normalizeAgentUpdateDefaults(c.req.valid('json'), current.runtimeType)
     const [agent] = await db
       .update(workspaceAgents)
       .set(input)
