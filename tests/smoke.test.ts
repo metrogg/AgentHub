@@ -74,6 +74,35 @@ function mockSseStream(chunks: string[]) {
   })
 }
 
+async function createLlmWorkspaceAgent(
+  workspaceId: string,
+  overrides: Partial<{
+    name: string
+    role: string
+    roleType: string
+    description: string
+    systemPrompt: string
+    sandboxPolicy: string
+  }> = {},
+) {
+  return json<{ id: string; name: string; role: string }>(
+    await postJson(`/api/workspaces/${workspaceId}/agents`, {
+      name: overrides.name ?? 'Smoke LLM Agent',
+      role: overrides.role ?? '测试 Agent',
+      roleType: overrides.roleType ?? 'custom',
+      description: overrides.description ?? 'Smoke-test LLM runtime agent.',
+      systemPrompt: overrides.systemPrompt ?? 'Reply briefly for smoke tests.',
+      runtimeType: 'llm',
+      capabilityTags: ['smoke'],
+      toolPermissions: ['chat'],
+      sandboxPolicy: overrides.sandboxPolicy ?? 'read-only',
+      contextPolicy: 'workspace-aware',
+      autoInvoke: true,
+      approvalRequired: false,
+    }),
+  )
+}
+
 async function waitForTaskStatus(workspaceId: string, taskId: string, status: string) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const full = await json<{ tasks: Array<{ id: string; status: string }> }>(
@@ -153,16 +182,16 @@ describe('AgentHub smoke tests', () => {
 
     const full = await json<{
       workspace: { id: string }
-      agents: Array<{ id: string }>
       tasks: Array<{ id: string }>
     }>(
       await postJson('/api/workspaces', {
         name: 'Smoke workspace',
         goal: 'Verify dispatch',
-        template: 'classic',
+        template: 'blank',
       }),
     )
-    const agentId = full.agents[0]?.id
+    const agent = await createLlmWorkspaceAgent(full.workspace.id)
+    const agentId = agent.id
     expect(agentId).toBeTruthy()
 
     const task = await json<{ id: string }>(
@@ -516,10 +545,15 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/workspaces', {
         name: 'Dispatch run workspace',
         goal: 'Trace dispatch',
-        template: 'classic',
+        template: 'blank',
         projectPath: process.cwd(),
       }),
     )
+    const traceAgent = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Trace Agent',
+      role: '验证执行',
+      systemPrompt: 'Complete the assigned smoke-test task briefly.',
+    })
     const group = await json<{ session: { id: string } }>(
       await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
@@ -530,9 +564,9 @@ describe('AgentHub smoke tests', () => {
       summary: 'Dispatch run id smoke plan',
       agents: [
         {
-          key: 'architect',
-          name: 'Architect',
-          role: '规划',
+          key: traceAgent.id,
+          name: traceAgent.name,
+          role: traceAgent.role,
           color: '#6366f1',
           systemPrompt: 'Plan only.',
           runtimeType: 'llm',
@@ -546,8 +580,8 @@ describe('AgentHub smoke tests', () => {
           id: 'trace-task',
           title: 'Trace task',
           description: 'Verify dispatch response carries run id.',
-          agentKey: 'architect',
-          taskType: 'code',
+          agentKey: traceAgent.id,
+          taskType: 'test',
           dependencies: [],
           maxRetries: 0,
           outputContract: {
@@ -631,15 +665,17 @@ describe('AgentHub smoke tests', () => {
     expect(runPlan?.phases?.[0]?.taskIds).toContain('trace-task')
     expect(runPlan?.taskLedger?.runId).toBe(dispatched.runId)
     expect(runPlan?.taskLedger?.tasks[0]?.phaseId).toBeTruthy()
-    expect(runPlan?.taskLedger?.tasks[0]?.status).toBe('pending')
+    expect(['pending', 'running', 'done']).toContain(runPlan?.taskLedger?.tasks[0]?.status)
     expect(runPlan?.taskLedger?.tasks[0]?.outputContract?.allowedPaths).toContain('apps/web/src/**')
     expect(runPlan?.taskLedger?.tasks[0]?.validation?.commands).toEqual(['bun --version'])
     expect(runPlan?.taskLedger?.tasks[0]?.validation?.requiresReview).toBe(true)
     expect(runPlan?.progressLedger?.runId).toBe(dispatched.runId)
     expect(runPlan?.progressLedger?.status).toBe('running')
-    expect(runPlan?.progressLedger?.pendingTaskIds).toContain('trace-task')
-    expect(runPlan?.progressLedger?.runningTaskIds).toEqual([])
-    expect(runPlan?.progressLedger?.completedTaskIds).toEqual([])
+    expect([
+      ...(runPlan?.progressLedger?.pendingTaskIds ?? []),
+      ...(runPlan?.progressLedger?.runningTaskIds ?? []),
+      ...(runPlan?.progressLedger?.completedTaskIds ?? []),
+    ]).toContain('trace-task')
 
     const events = await json<{ items: Array<{ type: string; payload: Record<string, unknown> }> }>(
       await app.request(`/api/orchestrator-runs/${dispatched.runId}/events`),

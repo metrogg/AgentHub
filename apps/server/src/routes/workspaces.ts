@@ -541,6 +541,11 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
     }
 
+    await db
+      .update(workspaceTasks)
+      .set({ sessionId: sessionId!, status: TaskStatus.Running, startedAt: new Date(), updatedAt: new Date() })
+      .where(eq(workspaceTasks.id, taskId))
+
     // 使用统一 TaskExecutionService，获得与 Orchestrator 相同的 Git 分支隔离和 artifact 收集
     taskExecutionService.execute({
       taskId,

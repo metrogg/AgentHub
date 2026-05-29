@@ -19,6 +19,8 @@ export interface TaskExecutionInput {
   existingUserMessageId?: string
   /** 外部已准备的 branch context（orchestrator 场景），跳过创建/销毁 */
   existingBranchContext?: BranchContext | null
+  /** Orchestrator 场景需要等 validation / contract 后处理完成后再标记 Done */
+  deferCompletionStatus?: boolean
 }
 
 export interface TaskExecutionOutput {
@@ -182,15 +184,16 @@ export class TaskExecutionService {
 
       const taskDuration = Date.now() - taskStartTime
 
-      // 更新 task 状态
-      await db
-        .update(workspaceTasks)
-        .set({
-          status: TaskStatus.Done,
-          completedAt: new Date(),
-          artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
-        })
-        .where(eq(workspaceTasks.id, taskId))
+      if (!input.deferCompletionStatus) {
+        await db
+          .update(workspaceTasks)
+          .set({
+            status: TaskStatus.Done,
+            completedAt: new Date(),
+            artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
+          })
+          .where(eq(workspaceTasks.id, taskId))
+      }
 
       if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
 

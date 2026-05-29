@@ -825,6 +825,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         attemptCount,
         existingUserMessageId: userMsg.id,
         existingBranchContext: branchCtx,
+        deferCompletionStatus: true,
       })
 
       const output = execResult.output
@@ -1102,7 +1103,14 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         },
       })
 
-      // TaskExecutionService 已更新 task 状态为 Done
+      await db
+        .update(workspaceTasks)
+        .set({
+          status: TaskStatus.Done,
+          completedAt: new Date(),
+          artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
+        })
+        .where(eq(workspaceTasks.id, task.id))
 
       broadcastSessionEvent(groupSessionId, {
         type: WsEvent.TaskUpdate,

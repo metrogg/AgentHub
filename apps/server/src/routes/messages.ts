@@ -1222,9 +1222,16 @@ async function dispatchPlanToExistingGroup(
     }
     const name = agent.name.toLowerCase()
     const role = agent.role.toLowerCase()
+    const roleType = agent.roleType.toLowerCase()
     const matched = plan.agents.find((item) => {
       const key = item.key.toLowerCase()
-      return name === item.name.toLowerCase() || name.includes(key) || role.includes(key)
+      return (
+        name === item.name.toLowerCase() ||
+        name.includes(key) ||
+        role.includes(key) ||
+        roleType === key ||
+        (item.roleType ? roleType === item.roleType : false)
+      )
     })
     if (matched) agentsByKey.set(matched.key, agent)
   }
