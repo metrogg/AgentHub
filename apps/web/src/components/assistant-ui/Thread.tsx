@@ -99,7 +99,6 @@ import {
   type Workspace,
   type WorkspaceAgent,
 } from '../../lib/api'
-import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
 import {
@@ -3263,6 +3262,173 @@ const CodeAgentRunDetails: FC<{
     </div>
   </details>
 )
+
+const CodeAgentOutputReviewCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+  const finalMessage = (data.finalMessage ?? '').trim()
+  const reviewRequired =
+    data.reviewRequired || data.runtime === 'codex' || data.runtime === 'claude-code'
+  const startsExpanded = finalMessage.length <= 1600 && finalMessage.split(/\r?\n/).length <= 14
+  const [expanded, setExpanded] = useState(startsExpanded)
+  const [confirmed, setConfirmed] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setExpanded(startsExpanded)
+    setConfirmed(false)
+    setCopied(false)
+  }, [finalMessage, startsExpanded])
+
+  if (!reviewRequired) return null
+
+  const running = data.status === 'running'
+  const hasFinalMessage = finalMessage.length > 0
+  const preview = expanded ? finalMessage : codeAgentReviewPreview(finalMessage)
+  const hasMore = preview !== finalMessage
+  const lineCount = hasFinalMessage ? finalMessage.split(/\r?\n/).length : 0
+  const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
+
+  async function copyFinalMessage() {
+    if (!finalMessage) return
+    try {
+      await navigator.clipboard.writeText(finalMessage)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <div
+      className={cn(
+        'overflow-hidden rounded-lg border bg-white shadow-sm',
+        confirmed ? 'border-emerald-200' : 'border-neutral-200',
+      )}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+        <div className="inline-flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              'grid h-8 w-8 shrink-0 place-items-center rounded-md border',
+              confirmed
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                : running
+                  ? 'border-blue-200 bg-blue-50 text-blue-600'
+                  : hasFinalMessage
+                    ? 'border-neutral-200 bg-neutral-50 text-neutral-600'
+                    : 'border-amber-200 bg-amber-50 text-amber-600',
+            )}
+          >
+            {running ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : confirmed ? (
+              <CheckCircle2 className="h-4 w-4" />
+            ) : hasFinalMessage ? (
+              <FileText className="h-4 w-4" />
+            ) : (
+              <AlertTriangle className="h-4 w-4" />
+            )}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-[13px] font-medium leading-5 text-neutral-900">
+              输出审核
+            </span>
+            <span className="block truncate text-[11px] leading-5 text-neutral-500">
+              {running
+                ? `${runtimeLabel} 正在写入流式输出`
+                : hasFinalMessage
+                  ? `完整终稿 ${lineCount} 行 · ${finalMessage.length.toLocaleString()} 字`
+                  : `${runtimeLabel} 未捕获到完整终稿`}
+            </span>
+          </span>
+        </div>
+        <span
+          className={cn(
+            'inline-flex h-6 items-center rounded-md border px-2 text-[11px] font-medium',
+            confirmed
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : running
+                ? 'border-blue-100 bg-blue-50 text-blue-600'
+                : 'border-neutral-200 bg-neutral-50 text-neutral-500',
+          )}
+        >
+          {confirmed ? '已确认' : running ? '待完成' : '待审核'}
+        </span>
+      </div>
+
+      <div className="border-t border-neutral-100 bg-neutral-50/70 px-3 py-3">
+        {running ? (
+          <div className="rounded-md border border-dashed border-blue-200 bg-white px-3 py-2 text-xs leading-5 text-neutral-500">
+            Claude Code / Codex 的最终正文会在执行结束后锁定到这里，审核时可展开全文确认。
+          </div>
+        ) : hasFinalMessage ? (
+          <>
+            <pre
+              className={cn(
+                'agenthub-readable-code whitespace-pre-wrap break-words rounded-md border border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-800',
+                expanded ? 'max-h-[32rem] overflow-auto' : 'max-h-44 overflow-hidden',
+              )}
+            >
+              {preview}
+            </pre>
+            {hasMore && (
+              <div className="mt-2 text-[11px] leading-5 text-neutral-500">
+                当前为预览，展开后显示完整输出。
+              </div>
+            )}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={copyFinalMessage}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
+              >
+                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? '已复制' : '复制全文'}
+              </button>
+              {hasMore && (
+                <button
+                  type="button"
+                  onClick={() => setExpanded((value) => !value)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
+                >
+                  <ChevronDown
+                    className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
+                  />
+                  {expanded ? '收起全文' : '展开全文'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setConfirmed(true)}
+                className={cn(
+                  'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition',
+                  confirmed
+                    ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'bg-neutral-950 text-white hover:bg-neutral-800',
+                )}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {confirmed ? '已确认审核' : '确认已审核'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+            本次运行没有返回可锁定的最终正文；过程日志和文件变更仍可在执行明细中查看。
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function codeAgentReviewPreview(value: string) {
+  const lines = value.split(/\r?\n/)
+  if (lines.length <= 14 && value.length <= 1600) return value
+  const firstLines = lines.slice(0, 14).join('\n')
+  if (firstLines.length <= 1600) return `${firstLines}\n...`
+  return `${firstLines.slice(0, 1600)}\n...`
+}
 
 const CodeAgentToolsCard: FC<{
   items: NonNullable<CodeAgentRunMetadata['toolCalls']>

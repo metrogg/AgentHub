@@ -36,7 +36,6 @@ import {
 } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { runtimeLabel, codeAgentLabel, sandboxLabel } from '../lib/agentDisplay'
-import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { pickWorkspaceFolder } from '../lib/native'
 import { agentRolePresets } from '../lib/agentRolePresets'
 import { cn } from '../lib/utils'

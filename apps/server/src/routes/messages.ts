@@ -66,17 +66,8 @@ import {
   normalizeAgentDraftInput,
 } from '../services/agent-draft'
 import { type DemoArtifact, buildDemoArtifacts, artifactSummary } from '../services/artifact-demo'
-<<<<<<< HEAD
-<<<<<<< HEAD
-import { intentRouter } from '../services/orchestrator/intent-router'
-=======
-import { GroupChatManager } from '../services/group-chat'
-import { intentRouter, generatePlanCardBackground } from '../services/orchestrator/intent-router'
->>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
-=======
 
 import { intentRouter } from '../services/orchestrator/intent-router'
->>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
 import { buildAgentProfile } from '../services/agents/profile-builder'
 import {
   createWorkspaceGroupSession,
@@ -450,10 +441,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (msg && !metadata?.skipAgentReply) {
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
       if (session?.type === 'group' && session.workspaceId) {
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
         const agentRows = await db
           .select()
           .from(workspaceAgents)
@@ -461,7 +448,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           .orderBy(asc(workspaceAgents.orderIdx))
 
         const hasOrchestrator = agentRows.some((a) => a.roleType === 'orchestrator')
-<<<<<<< HEAD
         const mentionCount = (content.match(/@\S+/g) || []).length
 
         if (mentionCount > 0) {
@@ -538,98 +524,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           handleSimpleReply(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
             (err: any) =>
               logger.error({ err: err?.message, sessionId }, 'Simple reply failed'),
-=======
-        await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
-=======
->>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
-        const mentionCount = (content.match(/@\S+/g) || []).length
-
-        if (mentionCount > 0) {
-          const mentionPattern = /@(\S+)/g
-          let match
-          const mentionedNames: string[] = []
-          while ((match = mentionPattern.exec(content)) !== null) {
-            mentionedNames.push(match[1]!.toLowerCase())
-          }
-
-          const matchedAgents = agentRows.filter(a => {
-            const nameLower = a.name.toLowerCase()
-            const roleLower = (a.role || '').toLowerCase()
-            return mentionedNames.some(n => 
-              nameLower === n || nameLower.includes(n) || roleLower === n || roleLower.includes(n)
-            )
-          })
-
-          if (matchedAgents.length > 0) {
-            const targetAgent = matchedAgents[0]!
-            await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
-            const [workspace] = await db
-              .select()
-              .from(workspaces)
-              .where(eq(workspaces.id, session.workspaceId))
-              .limit(1)
-            const profile = toAgentProfile(targetAgent, workspace?.projectPath)
-            runAgentReply(sessionId, msg, profile).catch((err: any) =>
-              logger.error({ err: err?.message, sessionId }, '@mention agent reply failed'),
-            )
-          } else {
-            const orchestrator = agentRows.find(a => a.roleType === 'orchestrator')
-            if (orchestrator) {
-              await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
-              const [workspace] = await db
-                .select()
-                .from(workspaces)
-                .where(eq(workspaces.id, session.workspaceId))
-                .limit(1)
-              const profile = toAgentProfile(orchestrator, workspace?.projectPath)
-              runAgentReply(sessionId, msg, profile).catch((err: any) =>
-                logger.error({ err: err?.message, sessionId }, '@mention fallback orchestrator reply failed'),
-              )
-            } else {
-              await db.insert(messages).values({
-                sessionId,
-                senderId: 'system',
-                senderType: 'system',
-                type: 'text',
-                content: '⚠️ 未找到指定的 Agent，也未配置 Orchestrator。',
-                metadata: { systemEvent: 'no_orchestrator' },
-              })
-            }
-          }
-          return c.json(msg)
-        }
-<<<<<<< HEAD
-        const groupChatManager = new GroupChatManager()
-        groupChatManager
-          .handleMessage({ workspaceId: session.workspaceId, sessionId, userMsg: msg, content })
-          .catch((err: any) =>
-            logger.error(
-              { err: err?.message, sessionId },
-              'GroupChatManager failed on new message',
-            ),
->>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
-=======
-
-        if (!hasOrchestrator) {
-          await db.insert(messages).values({
-            sessionId,
-            senderId: 'system',
-            senderType: 'system',
-            type: 'text',
-            content:
-              '⚠️ 群聊中未配置 Orchestrator。请添加一个 Orchestrator Agent 或使用 @Agent名 指定回复对象。',
-            metadata: { systemEvent: 'no_orchestrator' },
-          })
-          return c.json(msg)
-        }
-
-        const routeResult = intentRouter.route({ content, hasOrchestrator, mentionCount: 0 })
-
-        if (routeResult.decision === 'ConversationLoop') {
-          handleSimpleReply(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
-            (err: any) =>
-              logger.error({ err: err?.message, sessionId }, 'Simple reply failed'),
->>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
           )
         } else if (routeResult.decision === 'OrchestratorPlan') {
           generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId).catch(
@@ -1148,7 +1042,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             color: agent.color,
             modelId: agent.modelId ?? null,
             runtimeType: agent.runtimeType ?? 'llm',
-            codeAgentType: agent.runtimeType === 'code-agent' ? agent.codeAgentType ?? null : null,
+            codeAgentType: agent.codeAgentType ?? null,
             capabilityTags: agent.capabilityTags ?? [],
             toolPermissions: agent.toolPermissions ?? [],
             sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
@@ -1432,48 +1326,8 @@ function toAgentProfile(
   return buildAgentProfile(agent, projectPath)
 }
 
-async function profileForDirectSession(
-  session: typeof sessions.$inferSelect,
-): Promise<AgentRunProfile | undefined> {
-  if (!session.workspaceAgentId) {
-    if (!session.workspaceId) return undefined
-    const [workspace] = await db
-      .select()
-      .from(workspaces)
-      .where(eq(workspaces.id, session.workspaceId))
-      .limit(1)
-    if (!workspace) return undefined
-    const agentList = await db
-      .select()
-      .from(workspaceAgents)
-      .where(eq(workspaceAgents.workspaceId, workspace.id))
-      .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
-    if (agentList.length === 1 && agentList[0]) {
-      await db
-        .update(sessions)
-        .set({ workspaceAgentId: agentList[0].id, updatedAt: new Date() })
-        .where(eq(sessions.id, session.id))
-      return toAgentProfile(agentList[0], workspace.projectPath)
-    }
-    const profile: AgentRunProfile = {
-      id: `workspace:${workspace.id}`,
-      name: workspace.name || 'Workspace Assistant',
-      role: '工作区上下文助手',
-      description: '当前会话已绑定到项目工作区，可读取工作区上下文。',
-      color: '#111827',
-      modelId: null,
-      runtimeType: 'llm',
-      capabilityTags: ['chat', 'workspace:read'],
-      toolPermissions: ['chat', 'workspace:read'],
-      sandboxPolicy: 'read-only',
-      contextPolicy: 'workspace-aware',
-      approvalRequired: false,
-      systemPrompt: `你正在围绕当前项目工作区回复。请优先利用项目上下文回答，必要时明确指出缺少哪些文件或信息。`,
-      projectPath: workspace.projectPath?.trim() || null,
-      originalProjectPath: workspace.projectPath?.trim() || null,
-    }
-    return profile
-  }
+async function profileForDirectSession(session: typeof sessions.$inferSelect) {
+  if (!session.workspaceAgentId) return undefined
   const [agent] = await db
     .select()
     .from(workspaceAgents)
