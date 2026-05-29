@@ -1,13 +1,4 @@
-import {
-  db,
-  sessions,
-  sessionMembers,
-  workspaceAgents,
-  eq,
-  and,
-  asc,
-  desc,
-} from '@agenthub/db'
+import { db, sessions, sessionMembers, workspaceAgents, eq, and, asc, desc } from '@agenthub/db'
 import { HTTPException } from 'hono/http-exception'
 import { ensureWorkspace } from './workspace-queries'
 
@@ -21,24 +12,32 @@ async function findGroupSession(workspaceId: string) {
   return session ?? null
 }
 
-async function syncGroupMembers(sessionId: string, workspaceId: string, ownerId: string, selectedAgentIds?: string[]) {
+async function syncGroupMembers(
+  sessionId: string,
+  workspaceId: string,
+  ownerId: string,
+  selectedAgentIds?: string[],
+) {
   const allAgents = await db
     .select()
     .from(workspaceAgents)
     .where(eq(workspaceAgents.workspaceId, workspaceId))
     .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
 
-  // 确定哪些 agents 应该作为群聊成员
-  let wantedAgents = allAgents
-  if (selectedAgentIds && selectedAgentIds.length > 0) {
-    wantedAgents = allAgents.filter((a) => selectedAgentIds.includes(a.id))
-  }
+  const selectedAgentIdSet =
+    selectedAgentIds && selectedAgentIds.length > 0 ? new Set(selectedAgentIds) : null
+  const agents = selectedAgentIdSet
+    ? allAgents.filter((agent) => selectedAgentIdSet.has(agent.id))
+    : allAgents
 
-  const existing = await db.select().from(sessionMembers).where(eq(sessionMembers.sessionId, sessionId))
+  const existing = await db
+    .select()
+    .from(sessionMembers)
+    .where(eq(sessionMembers.sessionId, sessionId))
   const keys = new Set(existing.map((member) => `${member.memberType}:${member.memberId}`))
   const wanted = [
     { memberType: 'user' as const, memberId: ownerId },
-    ...wantedAgents.map((agent) => ({ memberType: 'agent' as const, memberId: agent.id })),
+    ...agents.map((agent) => ({ memberType: 'agent' as const, memberId: agent.id })),
   ]
 
   // 添加缺失的成员
@@ -47,18 +46,28 @@ async function syncGroupMembers(sessionId: string, workspaceId: string, ownerId:
     await db.insert(sessionMembers).values(missing.map((member) => ({ sessionId, ...member })))
   }
 
-  // 删除已不在 wanted 列表中的成员（幽灵成员清理）
-  const stale = existing.filter((member) => !wanted.some((w) => w.memberType === member.memberType && w.memberId === member.memberId))
+  // 删除已不在 wanted 列表中的成员以及历史重复行。
+  const wantedKeys = new Set(wanted.map((member) => `${member.memberType}:${member.memberId}`))
+  const seenKeys = new Set<string>()
+  const stale = existing.filter((member) => {
+    const key = `${member.memberType}:${member.memberId}`
+    if (!wantedKeys.has(key)) return true
+    if (seenKeys.has(key)) return true
+    seenKeys.add(key)
+    return false
+  })
   if (stale.length) {
     for (const member of stale) {
-      await db.delete(sessionMembers).where(
-        and(eq(sessionMembers.sessionId, sessionId), eq(sessionMembers.memberType, member.memberType), eq(sessionMembers.memberId, member.memberId))
-      )
+      await db.delete(sessionMembers).where(eq(sessionMembers.id, member.id))
     }
   }
 }
 
-export async function ensureGroupSession(workspaceId: string, ownerId: string, selectedAgentIds?: string[]) {
+export async function ensureGroupSession(
+  workspaceId: string,
+  ownerId: string,
+  selectedAgentIds?: string[],
+) {
   const ws = await ensureWorkspace(workspaceId, ownerId)
   let session = await findGroupSession(workspaceId)
   if (!session) {
