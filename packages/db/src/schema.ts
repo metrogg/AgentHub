@@ -39,6 +39,12 @@ export const workspaces = sqliteTable('workspaces', {
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })
 
+export const workspaceStates = sqliteTable('workspace_states', {
+  workspaceId: text('workspace_id').notNull().primaryKey(),
+  state: text('state', { mode: 'json' }).notNull(),
+  updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+})
+
 export const workspaceAgents = sqliteTable(
   'workspace_agents',
   {
