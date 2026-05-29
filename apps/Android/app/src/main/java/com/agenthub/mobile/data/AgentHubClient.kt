@@ -39,6 +39,10 @@ class AgentHubClient(
         return post(config, "/sessions", CreateSessionRequest(title = title))
     }
 
+    suspend fun deleteSession(config: ConnectionConfig, sessionId: String) {
+        request<Unit>(config, "/sessions/$sessionId") { it.delete() }
+    }
+
     suspend fun sendMessage(
         config: ConnectionConfig,
         sessionId: String,
@@ -99,6 +103,7 @@ class AgentHubClient(
             if (!response.isSuccessful) {
                 throw IOException(responseBody.ifBlank { "HTTP ${response.code}" })
             }
+            if (response.code == 204 || responseBody.isBlank()) return@withContext Unit as T
             json.decodeFromString(responseBody)
         }
     }

@@ -1132,6 +1132,105 @@
     background: transparent;
   }
 
+  @keyframes agenthub-quick-prompt-drift {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+    to {
+      transform: translate3d(-50%, 0, 0);
+    }
+  }
+
+  .agenthub-quick-prompt-shell {
+    width: min(100%, 58rem);
+    margin-inline: auto;
+    overflow: hidden;
+    padding-block: 0.35rem;
+    mask-image: linear-gradient(90deg, transparent 0%, #000 8%, #000 92%, transparent 100%);
+  }
+
+  .agenthub-quick-prompt-row {
+    overflow: visible;
+    padding-block: 0.35rem;
+  }
+
+  .agenthub-quick-prompt-track {
+    display: flex;
+    width: max-content;
+    min-width: 200%;
+    animation: agenthub-quick-prompt-drift 42s linear infinite;
+    will-change: transform;
+  }
+
+  .agenthub-quick-prompt-row-reverse .agenthub-quick-prompt-track {
+    animation-direction: reverse;
+    animation-duration: 48s;
+  }
+
+  .agenthub-quick-prompt-shell:hover .agenthub-quick-prompt-track,
+  .agenthub-quick-prompt-shell:focus-within .agenthub-quick-prompt-track {
+    animation-play-state: paused;
+  }
+
+  .agenthub-quick-prompt-group {
+    display: flex;
+    gap: 0.65rem;
+    min-width: 50%;
+    padding-inline: 0.325rem;
+  }
+
+  .agenthub-quick-prompt-bubble {
+    display: inline-flex;
+    min-height: 2.65rem;
+    max-width: 34rem;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in srgb, var(--agenthub-app-border, #e5e5e0) 68%, transparent);
+    background: color-mix(in srgb, var(--agenthub-app-panel, #ffffff) 78%, var(--agenthub-app-panel-muted, #f7f7f7));
+    padding: 0.55rem 1rem;
+    color: var(--agenthub-app-text, #111111);
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    text-align: center;
+    white-space: nowrap;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+    transition:
+      background-color 160ms ease,
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
+  }
+
+  .agenthub-quick-prompt-bubble:hover,
+  .agenthub-quick-prompt-bubble:focus-visible,
+  .agenthub-quick-prompt-bubble-active {
+    z-index: 1;
+    border-color: color-mix(in srgb, var(--agenthub-app-border, #e5e5e0) 95%, var(--agenthub-accent, #171717));
+    background: var(--agenthub-app-panel, #ffffff);
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.1);
+    outline: none;
+    transform: scale(1.055);
+  }
+
+  .agenthub-quick-prompt-bubble:disabled {
+    cursor: default;
+    opacity: 0.72;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .agenthub-quick-prompt-shell {
+      overflow-x: auto;
+      mask-image: none;
+    }
+
+    .agenthub-quick-prompt-track {
+      animation: none;
+    }
+  }
+
   .agenthub-chat-shell .bg-white,
   .agenthub-thread-root .bg-white {
     background-color: var(--agenthub-app-panel, #ffffff);
