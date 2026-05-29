@@ -546,6 +546,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .values({
         sessionId,
         senderId: 'artifact-agent',
+        senderId: 'artifact-agent',
         senderType: 'agent',
         type: 'text',
         content: artifactSummary(artifacts),
@@ -573,6 +574,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .values({
           sessionId,
           senderId: 'agent-builder',
+          senderId: 'agent-builder',
           senderType: 'agent',
           type: 'text',
           content:
@@ -589,6 +591,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .insert(messages)
       .values({
         sessionId,
+        senderId: 'agent-builder',
         senderId: 'agent-builder',
         senderType: 'agent',
         type: 'task_card',
@@ -1102,6 +1105,24 @@ function toAgentProfile(
     systemPrompt: agent.systemPrompt,
     projectPath: projectPath?.trim() || null,
   }
+  const runtimeType = normalizeAgentRuntimeType(agent.runtimeType)
+  return {
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    description: agent.description,
+    color: agent.color,
+    modelId: agent.modelId,
+    runtimeType,
+    codeAgentType: runtimeType === 'code-agent' ? normalizeAgentCodeAgentType(agent.codeAgentType) : undefined,
+    capabilityTags: agent.capabilityTags ?? [],
+    toolPermissions: agent.toolPermissions,
+    sandboxPolicy: normalizeAgentSandboxPolicy(agent.sandboxPolicy),
+    contextPolicy: normalizeAgentContextPolicy(agent.contextPolicy),
+    approvalRequired: agent.approvalRequired,
+    systemPrompt: agent.systemPrompt,
+    projectPath: projectPath?.trim() || null,
+  }
 }
 
 async function profileForDirectSession(
@@ -1115,18 +1136,6 @@ async function profileForDirectSession(
       .where(eq(workspaces.id, session.workspaceId))
       .limit(1)
     if (!workspace) return undefined
-    const agentList = await db
-      .select()
-      .from(workspaceAgents)
-      .where(eq(workspaceAgents.workspaceId, workspace.id))
-      .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
-    if (agentList.length === 1 && agentList[0]) {
-      await db
-        .update(sessions)
-        .set({ workspaceAgentId: agentList[0].id, updatedAt: new Date() })
-        .where(eq(sessions.id, session.id))
-      return toAgentProfile(agentList[0], workspace.projectPath)
-    }
     const profile: AgentRunProfile = {
       id: `workspace:${workspace.id}`,
       name: workspace.name || 'Workspace Assistant',
@@ -1160,6 +1169,123 @@ async function profileForDirectSession(
     .where(eq(workspaces.id, session.workspaceId))
     .limit(1)
   return toAgentProfile(agent, workspace?.projectPath)
+}
+
+function normalizeAgentRuntimeType(value?: string | null): AgentRunProfile['runtimeType'] {
+  const allowed: AgentRunProfile['runtimeType'][] = ['llm', 'code-agent', 'mcp', 'a2a']
+  return allowed.includes(value as AgentRunProfile['runtimeType'])
+    ? (value as AgentRunProfile['runtimeType'])
+    : 'llm'
+}
+
+function normalizeAgentCodeAgentType(value?: string | null): AgentRunProfile['codeAgentType'] {
+  const allowed: NonNullable<AgentRunProfile['codeAgentType']>[] = ['codex', 'claude-code', 'opencode', 'gemini']
+  return allowed.includes(value as NonNullable<AgentRunProfile['codeAgentType']>)
+    ? (value as NonNullable<AgentRunProfile['codeAgentType']>)
+    : undefined
+}
+
+function normalizeAgentSandboxPolicy(value?: string | null): AgentRunProfile['sandboxPolicy'] {
+  const allowed: AgentRunProfile['sandboxPolicy'][] = ['read-only', 'workspace-write', 'danger-full-access']
+  return allowed.includes(value as AgentRunProfile['sandboxPolicy'])
+    ? (value as AgentRunProfile['sandboxPolicy'])
+    : 'workspace-write'
+}
+
+function normalizeAgentContextPolicy(value?: string | null): AgentRunProfile['contextPolicy'] {
+  const allowed: AgentRunProfile['contextPolicy'][] = ['recent-only', 'pinned-recent', 'workspace-aware']
+  return allowed.includes(value as AgentRunProfile['contextPolicy'])
+    ? (value as AgentRunProfile['contextPolicy'])
+    : 'workspace-aware'
+}
+
+async function createWorkspaceGroupSession(
+  workspaceId: string,
+  workspaceName: string,
+  ownerId: string,
+  agents: Array<typeof workspaceAgents.$inferSelect>,
+) {
+  const [session] = await db
+    .insert(sessions)
+    .values({
+      title: `${workspaceName} / Agent Group`,
+      type: 'group',
+      ownerId,
+      workspaceId,
+      metadata: { kind: 'workspace-agent-group' },
+    })
+    .returning()
+  if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '群组会话创建失败')
+
+  await db
+    .insert(sessionMembers)
+    .values([
+      { sessionId: session.id, memberType: 'user', memberId: ownerId },
+      ...agents.map((agent) => ({
+        sessionId: session.id,
+        memberType: 'agent' as const,
+        memberId: agent.id,
+      })),
+    ])
+
+  // Note: child sessions are lazily created when tasks are dispatched
+  // (see dispatchPlanToExistingGroup and orchestrator-engine).
+  // Pre-creating them here leads to orphan sessions when the orchestrator
+  // plans do not include every workspace agent.
+
+  return session
+}
+
+async function ensureAgentChildSession(
+  workspaceId: string,
+  workspaceName: string,
+  ownerId: string,
+  agent: typeof workspaceAgents.$inferSelect | null,
+  taskTitle?: string,
+) {
+  if (agent) {
+    const existingSessions = await db
+      .select()
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.ownerId, ownerId),
+          eq(sessions.type, 'direct'),
+          eq(sessions.workspaceId, workspaceId),
+          eq(sessions.workspaceAgentId, agent.id),
+        ),
+      )
+      .orderBy(desc(sessions.updatedAt))
+    const fixedSession = existingSessions.find(
+      (session) => !isGeneratedTaskSession(session.metadata),
+    )
+    if (fixedSession) return fixedSession
+  }
+
+  const [created] = await db
+    .insert(sessions)
+    .values({
+      title: agent
+        ? `${workspaceName} / ${agent.name}`
+        : `${workspaceName} / ${taskTitle?.slice(0, 24) || 'Agent'}`,
+      type: 'direct',
+      ownerId,
+      workspaceId,
+      workspaceAgentId: agent?.id ?? null,
+      metadata: { kind: 'workspace-agent-child' },
+    })
+    .returning()
+  if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Agent 子会话创建失败')
+  return created
+}
+
+function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {
+  return Boolean(
+    metadata?.orchestratorTaskId ||
+    metadata?.orchestratorRunId ||
+    metadata?.hiddenFromSessionTree ||
+    metadata?.kind === 'orchestrator-task',
+  )
 }
 
 function normalizeAgentRuntimeType(value?: string | null): AgentRunProfile['runtimeType'] {
@@ -1359,6 +1485,7 @@ async function dispatchPlanToExistingGroup(
     const role = agent.role.toLowerCase()
     const matched = plan.agents.find((item) => {
       const key = item.key.toLowerCase()
+      return name === item.name.toLowerCase() || name.includes(key) || role.includes(key)
       return name === item.name.toLowerCase() || name.includes(key) || role.includes(key)
     })
     if (matched) agentsByKey.set(matched.key, agent)
