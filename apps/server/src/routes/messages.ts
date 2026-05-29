@@ -67,11 +67,16 @@ import {
 } from '../services/agent-draft'
 import { type DemoArtifact, buildDemoArtifacts, artifactSummary } from '../services/artifact-demo'
 <<<<<<< HEAD
+<<<<<<< HEAD
 import { intentRouter } from '../services/orchestrator/intent-router'
 =======
 import { GroupChatManager } from '../services/group-chat'
 import { intentRouter, generatePlanCardBackground } from '../services/orchestrator/intent-router'
 >>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
+=======
+
+import { intentRouter } from '../services/orchestrator/intent-router'
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
 import { buildAgentProfile } from '../services/agents/profile-builder'
 import {
   createWorkspaceGroupSession,
@@ -446,6 +451,9 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
       if (session?.type === 'group' && session.workspaceId) {
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
         const agentRows = await db
           .select()
           .from(workspaceAgents)
@@ -453,6 +461,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           .orderBy(asc(workspaceAgents.orderIdx))
 
         const hasOrchestrator = agentRows.some((a) => a.roleType === 'orchestrator')
+<<<<<<< HEAD
         const mentionCount = (content.match(/@\S+/g) || []).length
 
         if (mentionCount > 0) {
@@ -531,39 +540,65 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
               logger.error({ err: err?.message, sessionId }, 'Simple reply failed'),
 =======
         await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
+=======
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
         const mentionCount = (content.match(/@\S+/g) || []).length
-        if (mentionCount === 0) {
-          const agentRows = await db
-            .select()
-            .from(workspaceAgents)
-            .where(eq(workspaceAgents.workspaceId, session.workspaceId))
-          const hasOrchestrator = agentRows.some((a) => a.roleType === 'orchestrator')
-          const routeResult = intentRouter.route({
-            content,
-            hasOrchestrator,
-            mentionCount: 0,
+
+        if (mentionCount > 0) {
+          const mentionPattern = /@(\S+)/g
+          let match
+          const mentionedNames: string[] = []
+          while ((match = mentionPattern.exec(content)) !== null) {
+            mentionedNames.push(match[1]!.toLowerCase())
+          }
+
+          const matchedAgents = agentRows.filter(a => {
+            const nameLower = a.name.toLowerCase()
+            const roleLower = (a.role || '').toLowerCase()
+            return mentionedNames.some(n => 
+              nameLower === n || nameLower.includes(n) || roleLower === n || roleLower.includes(n)
+            )
           })
 
-          if (routeResult.decision === 'OrchestratorPlan') {
-            generatePlanCardBackground(sessionId, content, agentRows, session.workspaceId).catch(
-              (err: any) =>
-                logger.error({ err: err?.message, sessionId }, 'Plan card generation failed'),
+          if (matchedAgents.length > 0) {
+            const targetAgent = matchedAgents[0]!
+            await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
+            const [workspace] = await db
+              .select()
+              .from(workspaces)
+              .where(eq(workspaces.id, session.workspaceId))
+              .limit(1)
+            const profile = toAgentProfile(targetAgent, workspace?.projectPath)
+            runAgentReply(sessionId, msg, profile).catch((err: any) =>
+              logger.error({ err: err?.message, sessionId }, '@mention agent reply failed'),
             )
-            return c.json(msg)
+          } else {
+            const orchestrator = agentRows.find(a => a.roleType === 'orchestrator')
+            if (orchestrator) {
+              await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
+              const [workspace] = await db
+                .select()
+                .from(workspaces)
+                .where(eq(workspaces.id, session.workspaceId))
+                .limit(1)
+              const profile = toAgentProfile(orchestrator, workspace?.projectPath)
+              runAgentReply(sessionId, msg, profile).catch((err: any) =>
+                logger.error({ err: err?.message, sessionId }, '@mention fallback orchestrator reply failed'),
+              )
+            } else {
+              await db.insert(messages).values({
+                sessionId,
+                senderId: 'system',
+                senderType: 'system',
+                type: 'text',
+                content: '⚠️ 未找到指定的 Agent，也未配置 Orchestrator。',
+                metadata: { systemEvent: 'no_orchestrator' },
+              })
+            }
           }
-
-          if (routeResult.decision === 'NoOrchestrator') {
-            await db.insert(messages).values({
-              sessionId,
-              senderId: 'system',
-              senderType: 'system',
-              type: 'text',
-              content: '群聊中未配置总指挥（Orchestrator），请 @具体 Agent 或添加总指挥角色。',
-              metadata: { systemEvent: 'no_orchestrator' },
-            })
-            return c.json(msg)
-          }
+          return c.json(msg)
         }
+<<<<<<< HEAD
         const groupChatManager = new GroupChatManager()
         groupChatManager
           .handleMessage({ workspaceId: session.workspaceId, sessionId, userMsg: msg, content })
@@ -573,6 +608,28 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
               'GroupChatManager failed on new message',
             ),
 >>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
+=======
+
+        if (!hasOrchestrator) {
+          await db.insert(messages).values({
+            sessionId,
+            senderId: 'system',
+            senderType: 'system',
+            type: 'text',
+            content:
+              '⚠️ 群聊中未配置 Orchestrator。请添加一个 Orchestrator Agent 或使用 @Agent名 指定回复对象。',
+            metadata: { systemEvent: 'no_orchestrator' },
+          })
+          return c.json(msg)
+        }
+
+        const routeResult = intentRouter.route({ content, hasOrchestrator, mentionCount: 0 })
+
+        if (routeResult.decision === 'ConversationLoop') {
+          handleSimpleReply(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
+            (err: any) =>
+              logger.error({ err: err?.message, sessionId }, 'Simple reply failed'),
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
           )
         } else if (routeResult.decision === 'OrchestratorPlan') {
           generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId).catch(

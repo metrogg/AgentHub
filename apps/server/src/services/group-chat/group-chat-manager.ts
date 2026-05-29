@@ -93,6 +93,7 @@ export class GroupChatManager {
 
   /**
    * 处理群聊消息的入口
+<<<<<<< HEAD
    *
    * @deprecated 自 Orchestrator Engine 引入后，`GroupChatManager` 的对话循环模式已被弃用。
    *
@@ -137,6 +138,12 @@ export class GroupChatManager {
    * | 产物聚合   | 无                    | LLM 智能聚合 (Synthesizer)     |
    * | 代码冲突   | 无                    | 自动检测 + 3-way merge          |
    * | 调用方式   | 手动 new + 调用       | 自动，通过 HTTP 路由触发        |
+=======
+   * @deprecated 此方法已弃用。群聊消息现在走 messages.ts 中的统一路由：
+   *   - intentRouter 识别简单/复杂意图
+   *   - 简单消息 → handleSimpleReply()
+   *   - 复杂任务 → generatePlanAndPushTaskBoard()
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
    */
   async handleMessage(params: {
     workspaceId: string
@@ -199,6 +206,7 @@ export class GroupChatManager {
 
   /**
    * 核心对话循环
+<<<<<<< HEAD
    *
    * @deprecated 随 `handleMessage()` 一同弃用。参见 {@link handleMessage} 的迁移指南。
    *
@@ -206,6 +214,12 @@ export class GroupChatManager {
    * 新架构请使用 `messages.ts` 统一路由：
    *   - 简单消息走 `handleSimpleReply()`
    *   - 复杂任务走 `generatePlanAndPushTaskBoard()` → Orchestrator DAG 调度
+=======
+   * @deprecated 请使用 messages.ts 中的统一路由入口。
+   *   - 简单消息走 handleSimpleReply()
+   *   - 复杂任务走 generatePlanAndPushTaskBoard()
+   *   此方法仅供代码参考，不再被实际调用。
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
    */
   private async conversationLoop(params: {
     workspaceId: string
@@ -443,10 +457,15 @@ export class GroupChatManager {
       'GroupChatManager: conversation loop finished',
     )
 <<<<<<< HEAD
+<<<<<<< HEAD
     // ===== 以上代码已弃用，仅供参考 =====
     */
 =======
 >>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
+=======
+    // ===== 以上代码已弃用，仅供参考 =====
+    */
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
   }
 
   /**

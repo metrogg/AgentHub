@@ -802,6 +802,7 @@ export class OrchestratorEngine {
         return { ...result, error: replan.reason }
       }
     }
+<<<<<<< HEAD
   }
 
   private async evaluateSupervisorNeed(
@@ -1088,6 +1089,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
 >>>>>>> 67a6346 (feat(orchestration): 统一多Agent编排流程，新增IntentRouter)
     }
+=======
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
   }
 
   private async evaluateSupervisorNeed(
@@ -2160,6 +2163,9 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
 function buildAutonomyInstructions(): string {
   return [
     '\n## 自主行为指令',
@@ -2184,6 +2190,7 @@ function buildAutonomyInstructions(): string {
     '注意：正常执行时不需要使用以上格式，直接输出工作成果即可。只有当你确实需要澄清、拒绝、报告进度或求助时才使用。',
   ].join('\n')
 }
+<<<<<<< HEAD
 
 interface AgentAutonomySignals {
   clarifications: Array<{ question: string; options?: string[] }>
@@ -2204,6 +2211,24 @@ function parseAgentAutonomySignals(output: string): AgentAutonomySignals {
     helpRequests: [],
   }
 
+=======
+
+interface AgentAutonomySignals {
+  clarifications: Array<{ question: string; options?: string[] }>
+  rejections: Array<{ reason: string; suggestedAgent?: string }>
+  progressReports: Array<{ percent: number; status: string }>
+  helpRequests: Array<{ targetAgent: string; request: string }>
+}
+
+function parseAgentAutonomySignals(output: string): AgentAutonomySignals {
+  const result: AgentAutonomySignals = {
+    clarifications: [],
+    rejections: [],
+    progressReports: [],
+    helpRequests: [],
+  }
+
+>>>>>>> e4e6b4c (feat: 引入统一执行流、任务看板与Agent自主性)
   const clarifyRegex = /\[CLARIFY\]\s*(.+?)(?=\[CLARIFY\]|\[REJECT\]|\[PROGRESS|\[HELP|$)/gs
   let match
   while ((match = clarifyRegex.exec(output)) !== null) {
