@@ -431,6 +431,10 @@ export async function* streamCodeAgentReply(
 
   const cleanedOutput = stripReasoningTags(stripToolNoise(finalResult.output))
   if (finalResult.code === 0 && !streamedText) {
+    if (adapter.command === 'opencode') {
+      yield buildCodeAgentCompletionMessage(finalResult.metadata, cleanedOutput)
+      return
+    }
     yield limitOutput(cleanedOutput || '(Coding Tools 没有返回正文)', 16_000)
     return
   }
@@ -722,7 +726,7 @@ async function runCodeAgentCommand(
       : undefined
   const commandPrompt =
     process.platform === 'win32' &&
-    (adapter.command === 'codex' || adapter.command === 'claude' || adapter.command === 'opencode')
+    (adapter.command === 'codex' || adapter.command === 'claude')
       ? buildAsciiSafePrompt(prompt)
       : prompt
   const args = adapter.buildArgs(commandPrompt, {
@@ -1575,8 +1579,7 @@ function fileStatusLabelForLog(status: CodeAgentRunMetadata['files'][number]['st
 }
 
 function cleanRuntimeLog(value: string) {
-  return value
-    .replace(/\u001b\[[0-9;]*m/g, '')
+  return stripTerminalControls(value)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -1585,6 +1588,14 @@ function cleanRuntimeLog(value: string) {
         !/codex_core::mcp_connection_manager|McpServerConfig|InitializeRequestParams/i.test(line),
     )
     .join('\n')
+}
+
+function stripTerminalControls(value: string) {
+  return value
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+    .replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/g, '')
 }
 
 function normalizeRuntimeLogStream(
@@ -2022,6 +2033,7 @@ async function mergedEnv(
     }
   }
 
+  normalizeWindowsProcessEnv(base, allowedKeys)
   applyModelTargetEnv(base, adapter, modelTarget)
 
   if (adapter?.command === 'opencode' && modelTarget) {
@@ -2032,6 +2044,28 @@ async function mergedEnv(
   const runtimeHome = prepareCodexRuntimeHome(modelTarget)
   base.CODEX_HOME = runtimeHome
   return base
+}
+
+function normalizeWindowsProcessEnv(base: Record<string, string>, allowedKeys: Set<string>) {
+  if (process.platform !== 'win32') return
+
+  const pathValue =
+    base.Path ||
+    base.PATH ||
+    Bun.env.Path ||
+    Bun.env.PATH ||
+    process.env.Path ||
+    process.env.PATH
+  if (pathValue && (allowedKeys.has('Path') || allowedKeys.has('PATH'))) {
+    base.Path = pathValue
+    base.PATH = pathValue
+  }
+
+  const passthrough = ['PATHEXT', 'ComSpec', 'SystemRoot', 'LOCALAPPDATA'] as const
+  for (const key of passthrough) {
+    const value = base[key] || Bun.env[key] || process.env[key]
+    if (value && allowedKeys.has(key)) base[key] = value
+  }
 }
 
 function applyModelTargetEnv(
@@ -2370,14 +2404,14 @@ function extractCodexAssistantMessage(output: string) {
 }
 
 function isCodeAgentFailureOutput(output: string) {
-  return /ERROR:|stream error|exceeded retry limit|unexpected status|Unauthorized|Missing bearer|invalid function arguments|Error loading config\.toml|No such file or directory/i.test(
+  return /ERROR:|stream error|exceeded retry limit|unexpected status|Unauthorized|Missing bearer|invalid function arguments|Error loading config\.toml|No such file or directory|CommandNotFoundException|ObjectNotFound: \(node:String\)|not recognized as an internal or external command|无法将.*识别为|找不到.*命令/i.test(
     output,
   )
 }
 
 function stripToolNoise(output: string) {
   const withoutBlocks = stripCodexPromptEcho(stripLastMessageBlock(output))
-  return withoutBlocks
+  return stripTerminalControls(withoutBlocks)
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
     .filter((line) => {
@@ -2445,6 +2479,50 @@ function formatCodeAgentFailure(adapter: CodeAgentAdapter, result: CodeAgentComm
   )
 }
 
+function buildCodeAgentCompletionMessage(metadata: CodeAgentRunMetadata, fallback: string) {
+  const files = metadata.files ?? []
+  const commands = metadata.commands ?? []
+  const visibleFallback = sanitizeCodeAgentFallbackText(fallback)
+  if (!files.length && visibleFallback) return limitOutput(visibleFallback, 4000)
+
+  const lines = ['Coding Tools 已执行完成。']
+  if (metadata.runtime) lines.push(`运行时：${metadata.runtime}`)
+  if (files.length > 0) {
+    lines.push('')
+    lines.push('变更文件：')
+    for (const file of files.slice(0, 12)) {
+      lines.push(`- ${file.status}：${file.path}`)
+    }
+  }
+  if (commands.length > 0) {
+    lines.push('')
+    lines.push('执行过的命令：')
+    for (const command of commands.slice(0, 8)) {
+      lines.push(`- ${command.command}`)
+    }
+  }
+  if (!files.length && !commands.length) {
+    lines.push('')
+    lines.push('没有检测到文件变更或可展示的最终正文。详细过程可展开运行卡片查看。')
+  }
+  return lines.join('\n')
+}
+
+function sanitizeCodeAgentFallbackText(value: string) {
+  const cleaned = stripTerminalControls(value)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^(Read|Write|Edit|Bash|TodoWrite|Task|Grep|Glob)\b/i.test(line))
+    .filter((line) => !/^(node|npm|bun|git|powershell|cmd)(\.exe)?\s/i.test(line))
+    .filter((line) => !/CommandNotFoundException|ObjectNotFound|CategoryInfo|FullyQualifiedErrorId/i.test(line))
+    .join('\n')
+    .trim()
+  if (!cleaned) return ''
+  const paragraphs = cleaned.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean)
+  return paragraphs.at(-1) ?? cleaned
+}
+
 function cleanDiagnosticOutput(output: string) {
   const claudeMessage = extractClaudeResultMessage(output)
   const cleanedLines = stripToolNoise(stripLastMessageBlock(output))
@@ -2485,6 +2563,9 @@ function friendlyCodeAgentError(output: string) {
   }
   if (/Coding Tools timed out after/i.test(output)) {
     return 'Coding Tools 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。'
+  }
+  if (/CommandNotFoundException|ObjectNotFound: \(node:String\)|node.*not recognized|无法将.*node|找不到.*node/i.test(output)) {
+    return 'OpenCode 已启动，但执行环境里找不到 node 命令。已补充 Windows Path/ComSpec/SystemRoot 等环境变量透传；请重启 dev server 后再试。如果仍失败，请确认本机 Node.js 已安装并在系统 Path 中。'
   }
   if (/invalid function arguments json|string, tool_call_id/i.test(output)) {
     return [
