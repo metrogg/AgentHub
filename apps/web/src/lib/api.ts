@@ -499,6 +499,48 @@ export interface MobilePairStartResult {
   localAddresses: string[]
 }
 
+export interface MobileConnectivityStatus {
+  port: number
+  localAddresses: string[]
+  baseUrls: string[]
+  networkProfiles: Array<{
+    name: string
+    interfaceAlias: string
+    networkCategory: string
+    ipv4Connectivity: string
+  }>
+  firewall: {
+    ruleName: string
+    allowed: boolean
+    supported: boolean
+    message: string
+    rules: Array<{
+      displayName: string
+      enabled: boolean
+      direction: string
+      action: string
+      profile: string
+    }>
+  }
+  activePairings: Array<{
+    baseUrl: string
+    baseUrls: string[]
+    expiresAt: string
+  }>
+  recentEvents: Array<{
+    type: string
+    message: string
+    at: string
+  }>
+  message: string
+}
+
+export interface MobileFirewallAction {
+  ok: boolean
+  message: string
+  diagnostics: MobileConnectivityStatus
+}
+
 export interface SettingsGeneralInfo {
   debug: {
     enabled: boolean
@@ -1032,6 +1074,10 @@ export const api = {
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
   startMobilePairing: () =>
     request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
+  getMobileConnectivity: () =>
+    request<MobileConnectivityStatus>('/mobile/connectivity'),
+  openMobileFirewall: () =>
+    request<MobileFirewallAction>('/mobile/firewall/open', { method: 'POST', timeout: 12_000 }),
   getStarOfficeStatus: () => request<StarOfficeStatus>('/office/status'),
   startStarOffice: () =>
     request<StarOfficeStatus>('/office/start', { method: 'POST', timeout: 15_000 }),

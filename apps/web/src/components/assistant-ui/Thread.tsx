@@ -1131,7 +1131,7 @@ const ThreadWelcomeContent: FC = () => {
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <PromptCard title={t('创建 coder 代理')} text={t('帮我单开一个跳跃小游戏')} />
+        <PromptCard title={t('创建 coder 代理')} text={t('帮我开发一个网页跳跃小游戏')} />
         <PromptCard title={t('解释架构')} text={t('这个项目的具体技术栈')} />
       </div>
     </div>

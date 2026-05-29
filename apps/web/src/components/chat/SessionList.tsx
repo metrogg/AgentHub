@@ -30,7 +30,7 @@ import {
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import { api, friendlyErrorMessage, type Session } from '../../lib/api'
+import { api, friendlyErrorMessage, type Session, type WorkspaceAgent } from '../../lib/api'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
@@ -92,6 +92,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const [hint, setHint] = useState('')
   const [groupMemberCounts, setGroupMemberCounts] = useState<Record<string, number>>({})
+  const [groupWorkspaceAgents, setGroupWorkspaceAgents] = useState<Record<string, WorkspaceAgent[]>>({})
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
   const groupWorkspaceIds = useMemo(
@@ -132,6 +133,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const activeSession = sessions.find((session) => session.id === sessionId)
   const routeTab = activeTabFromPath(location.pathname, activeSession, groupWorkspaceIds)
   const activeTab = tabOverride ?? routeTab
+  const isAgentConfigRoute = location.pathname === '/agent-config'
   const activeAgentConfigId = new URLSearchParams(location.search).get('agentId')
   const agentDirectSessionsBySavedId = useMemo(() => {
     const byAgentId = new Map<string, Session>()
@@ -143,16 +145,14 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     }
     return byAgentId
   }, [groupWorkspaceIds, sessions])
-  const filteredLibraryAgents = useMemo(() => {
-    const keyword = agentQuery.trim().toLowerCase()
-    if (!keyword) return libraryAgents
-    return libraryAgents.filter((agent) =>
-      [agent.name, agent.role, agent.description, ...(agent.capabilityTags ?? [])]
-        .join(' ')
-        .toLowerCase()
-        .includes(keyword),
-    )
-  }, [agentQuery, libraryAgents])
+  const filteredLibraryAgents = useMemo(
+    () => filterAgents(libraryAgents, agentQuery),
+    [agentQuery, libraryAgents],
+  )
+  const messageTabAgents = useMemo(
+    () => filterAgents(libraryAgents, query),
+    [libraryAgents, query],
+  )
 
   useEffect(() => {
     if (sessionsBootstrapped || loadingSessions) return
@@ -163,14 +163,14 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     const workspaceIds = groupWorkspaceKey
       .split('|')
       .map((id) => id.trim())
-      .filter((id) => id && groupMemberCounts[id] === undefined)
+      .filter((id) => id && groupMemberCounts[id] === undefined && groupWorkspaceAgents[id] === undefined)
     if (!workspaceIds.length) return
 
     let cancelled = false
     void Promise.allSettled(
       workspaceIds.map(async (workspaceId) => {
         const full = await api.getWorkspace(workspaceId)
-        return [workspaceId, full.agents.length + 2] as const
+        return [workspaceId, full.agents] as const
       }),
     ).then((results) => {
       if (cancelled) return
@@ -180,7 +180,17 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           const result = results[index]
           const workspaceId = workspaceIds[index]
           if (!workspaceId) continue
-          next[workspaceId] = result?.status === 'fulfilled' ? result.value[1] : -1
+          next[workspaceId] = result?.status === 'fulfilled' ? result.value[1].length + 2 : -1
+        }
+        return next
+      })
+      setGroupWorkspaceAgents((current) => {
+        const next = { ...current }
+        for (let index = 0; index < results.length; index += 1) {
+          const result = results[index]
+          const workspaceId = workspaceIds[index]
+          if (!workspaceId) continue
+          next[workspaceId] = result?.status === 'fulfilled' ? result.value[1] : []
         }
         return next
       })
@@ -189,7 +199,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     return () => {
       cancelled = true
     }
-  }, [groupMemberCounts, groupWorkspaceKey])
+  }, [groupMemberCounts, groupWorkspaceAgents, groupWorkspaceKey])
 
   useEffect(() => {
     setTabOverride(null)
@@ -376,6 +386,20 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     }
   }
 
+  async function openWorkspaceAgentChildSession(workspaceId: string, agent: WorkspaceAgent) {
+    if (openingAgentId) return
+    setOpeningAgentId(agent.id)
+    try {
+      const { session } = await api.openWorkspaceAgentSession(workspaceId, agent.id)
+      await fetchSessions()
+      await openExistingSession(session)
+    } catch (error) {
+      showHint(friendlyErrorMessage(error, `打开 ${agent.name} 子会话失败`))
+    } finally {
+      setOpeningAgentId(null)
+    }
+  }
+
   return (
     <aside className="agenthub-session-sidebar flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
       <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#FBFBFB] py-3">
@@ -405,7 +429,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             label="Agent"
             onClick={() => {
               setTabOverride('agents')
-              if (!sessionId) navigate('/agent-config')
             }}
           />
           <DockButton
@@ -565,6 +588,71 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             </div>
           </div>
         )}
+        {!showArchived && (
+          <div className="mb-3">
+            <div className="mb-1 flex items-center justify-between px-2 text-xs text-neutral-400">
+              <span>Agent 私聊</span>
+              <button
+                type="button"
+                onClick={() => setTabOverride('agents')}
+                className="rounded-md px-1.5 py-0.5 text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
+              >
+                全部
+              </button>
+            </div>
+            {messageTabAgents.length > 0 ? (
+              <div className="space-y-0.5 px-2">
+                {messageTabAgents.map((agent) => {
+                  const agentSession = agentDirectSessionsBySavedId.get(agent.id)
+                  const active = agentSession?.id === sessionId
+                  const opening = openingAgentId === agent.id
+                  return (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      onClick={() => void openAgentSession(agent)}
+                      disabled={opening}
+                      className={cn(
+                        'flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left transition disabled:opacity-60',
+                        active
+                          ? 'bg-[#F7F7F7] text-neutral-950 shadow-sm'
+                          : 'text-neutral-700 hover:bg-[#F7F7F7]',
+                      )}
+                      title={agent.name}
+                    >
+                      <span
+                        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
+                        style={{ background: agent.color }}
+                      >
+                        {agent.name.slice(0, 1).toUpperCase()}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{agent.name}</span>
+                        <span className="block truncate text-[10px] text-neutral-400">
+                          {agentSession ? relativeTime(agentSession.updatedAt, language) : agent.role || '未开始'}
+                        </span>
+                      </span>
+                      {opening ? (
+                        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
+                      ) : (
+                        <MessageCircle className={cn('h-3.5 w-3.5 shrink-0', active ? 'text-neutral-700' : 'text-neutral-300')} />
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={addAgent}
+                className="mx-2 flex h-10 w-[calc(100%-1rem)] items-center justify-center gap-2 rounded-xl border border-dashed border-neutral-200 bg-white text-xs text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
+              >
+                <UserPlus className="h-3.5 w-3.5" />
+                添加 Agent
+              </button>
+            )}
+          </div>
+        )}
         <div className="mb-1 px-2 text-xs text-neutral-400">{t('群聊')}</div>
         {sessionTree.length === 0 ? (
           <div className="px-2 py-4 text-xs text-neutral-400">
@@ -573,14 +661,23 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
         ) : (
           <ul className="space-y-1">
             {sessionTree.map((item) => {
-              const hasChildren = item.children.length > 0
               const workspaceId = item.parent.workspaceId
+              const isGroupParent = item.parent.type === 'group' && Boolean(workspaceId)
+              const workspaceAgents = isGroupParent && workspaceId ? groupWorkspaceAgents[workspaceId] ?? [] : []
+              const stableChildAgentIds = new Set(
+                item.children
+                  .filter(isStableAgentChildSession)
+                  .map((child) => child.workspaceAgentId)
+                  .filter((id): id is string => Boolean(id)),
+              )
+              const missingAgentChildren =
+                isGroupParent ? workspaceAgents.filter((agent) => !stableChildAgentIds.has(agent.id)) : []
+              const hasChildren = item.children.length > 0 || missingAgentChildren.length > 0
               const expanded = Boolean(workspaceId && expandedWorkspaces.has(workspaceId))
               const childActive = item.children.some((child) => child.id === sessionId)
               const active = sessionId === item.parent.id
               const pinned = pinnedIds.has(item.parent.id)
               const archived = archivedIds.has(item.parent.id)
-              const isGroupParent = item.parent.type === 'group' && Boolean(workspaceId)
               const groupTitle = isGroupParent ? groupSessionDisplayTitle(item.parent.title) : ''
               const memberCount = isGroupParent
                 ? groupMemberCount(item.parent, item.children.length, groupMemberCounts[workspaceId ?? ''])
@@ -721,39 +818,54 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
 
                   {hasChildren && expanded && (
                     <ul className="ml-4 space-y-1 border-l border-neutral-200 pl-2">
-                      {item.children.map((child) => (
-                        <li
-                          key={child.id}
-                          onClick={() => void openExistingSession(child)}
-                          className={cn(
-                            'group/child flex cursor-pointer items-center gap-1 rounded-lg transition',
-                            sessionId === child.id ? 'bg-[#F7F7F7] shadow-sm' : 'hover:bg-[#F7F7F7]',
-                          )}
-                        >
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void openExistingSession(child)
-                            }}
+                      {item.children.map((child) => {
+                        const childAgent = workspaceAgents.find((agent) => agent.id === child.workspaceAgentId)
+                        const childTitle = childAgent?.name ?? childSessionTitle(child, item.parent)
+                        return (
+                          <li
+                            key={child.id}
+                            onClick={() => void openExistingSession(child)}
                             className={cn(
-                              'flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition',
-                              sessionId === child.id ? 'text-neutral-950' : 'text-neutral-500 hover:text-neutral-800'
+                              'group/child flex cursor-pointer items-center gap-1 rounded-lg transition',
+                              sessionId === child.id ? 'bg-[#F7F7F7] shadow-sm' : 'hover:bg-[#F7F7F7]',
                             )}
                           >
-                            {pinnedIds.has(child.id) ? (
-                              <Pin className="h-3 w-3 shrink-0 fill-neutral-700 text-neutral-700" />
-                            ) : (
-                              <History className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
-                            )}
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate">{sessionDisplayTitle(childSessionTitle(child, item.parent), t)}</span>
-                              <span className="block truncate text-[10px] text-neutral-400">{relativeTime(child.updatedAt, language)}</span>
-                            </span>
-                            {openingSessionId === child.id && (
-                              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-300" />
-                            )}
-                          </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void openExistingSession(child)
+                              }}
+                              className={cn(
+                                'flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition',
+                                sessionId === child.id ? 'text-neutral-950' : 'text-neutral-500 hover:text-neutral-800'
+                              )}
+                            >
+                              {childAgent ? (
+                                <span className="relative h-5 w-5 shrink-0">
+                                  <span
+                                    className="grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold text-white"
+                                    style={{ background: childAgent.color }}
+                                  >
+                                    {childAgent.name.slice(0, 1).toUpperCase()}
+                                  </span>
+                                  {pinnedIds.has(child.id) && (
+                                    <Pin className="absolute -right-1 -top-1 h-2.5 w-2.5 fill-neutral-700 text-neutral-700" />
+                                  )}
+                                </span>
+                              ) : pinnedIds.has(child.id) ? (
+                                <Pin className="h-3 w-3 shrink-0 fill-neutral-700 text-neutral-700" />
+                              ) : (
+                                <History className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate">{sessionDisplayTitle(childTitle, t)}</span>
+                                <span className="block truncate text-[10px] text-neutral-400">{relativeTime(child.updatedAt, language)}</span>
+                              </span>
+                              {openingSessionId === child.id && (
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-300" />
+                              )}
+                            </button>
                           <button
                             type="button"
                             onClick={(event) => togglePin(event, child)}
@@ -788,7 +900,48 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                             <Trash2 className="h-3 w-3" />
                           </button>
                         </li>
-                      ))}
+                        )
+                      })}
+                      {missingAgentChildren.map((agent) => {
+                        const opening = openingAgentId === agent.id
+                        return (
+                          <li
+                            key={`agent-${agent.id}`}
+                            onClick={() => {
+                              if (workspaceId) void openWorkspaceAgentChildSession(workspaceId, agent)
+                            }}
+                            className="group/child flex cursor-pointer items-center gap-1 rounded-lg transition hover:bg-[#F7F7F7]"
+                          >
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                if (workspaceId) void openWorkspaceAgentChildSession(workspaceId, agent)
+                              }}
+                              disabled={opening}
+                              className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-neutral-500 transition hover:text-neutral-800 disabled:opacity-60"
+                            >
+                              <span
+                                className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-semibold text-white"
+                                style={{ background: agent.color }}
+                              >
+                                {agent.name.slice(0, 1).toUpperCase()}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate">{agent.name}</span>
+                                <span className="block truncate text-[10px] text-neutral-400">
+                                  {agent.role || '未开始子会话'}
+                                </span>
+                              </span>
+                              {opening ? (
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-300" />
+                              ) : (
+                                <MessageCircle className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
+                              )}
+                            </button>
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </li>
@@ -820,7 +973,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           </button>
 
           <div className="mb-2 flex items-center justify-between px-1 text-xs text-neutral-500">
-            <span>Agent 私聊</span>
+            <span>{isAgentConfigRoute ? 'Agent 配置' : 'Agent 私聊'}</span>
             <span>{filteredLibraryAgents.length}</span>
           </div>
 
@@ -840,8 +993,14 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                 >
                   <button
                     type="button"
-                    onClick={() => void openAgentSession(agent)}
-                    disabled={opening}
+                    onClick={() => {
+                      if (isAgentConfigRoute) {
+                        navigate(`/agent-config?agentId=${encodeURIComponent(agent.id)}`)
+                        return
+                      }
+                      void openAgentSession(agent)
+                    }}
+                    disabled={!isAgentConfigRoute && opening}
                     className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-left disabled:opacity-60"
                   >
                     <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white" style={{ background: agent.color }}>
@@ -850,27 +1009,35 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-neutral-950">{agent.name}</div>
                       <div className="mt-0.5 truncate text-xs text-neutral-500">
-                        {agentSession ? relativeTime(agentSession.updatedAt, language) : agent.role || '未开始私聊'}
+                        {isAgentConfigRoute
+                          ? agent.role || agent.description || '未设置角色'
+                          : agentSession
+                            ? relativeTime(agentSession.updatedAt, language)
+                            : agent.role || '未开始私聊'}
                       </div>
                     </div>
-                    {opening ? (
+                    {isAgentConfigRoute ? (
+                      <Settings2 className={cn('h-4 w-4 shrink-0', configActive ? 'text-neutral-700' : 'text-neutral-300')} />
+                    ) : opening ? (
                       <Loader2 className="h-4 w-4 shrink-0 animate-spin text-neutral-400" />
                     ) : (
                       <MessageCircle className={cn('h-4 w-4 shrink-0', active ? 'text-neutral-700' : 'text-neutral-300')} />
                     )}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/agent-config?agentId=${encodeURIComponent(agent.id)}`)}
-                    className={cn(
-                      'mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-400 hover:bg-white hover:text-neutral-900',
-                      configActive || active ? 'opacity-100' : 'opacity-0 group-hover/agent:opacity-100',
-                    )}
-                    title="Agent 配置"
-                    aria-label="Agent 配置"
-                  >
-                    <Settings2 className="h-4 w-4" />
-                  </button>
+                  {!isAgentConfigRoute && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/agent-config?agentId=${encodeURIComponent(agent.id)}`)}
+                      className={cn(
+                        'mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-400 hover:bg-white hover:text-neutral-900',
+                        configActive || active ? 'opacity-100' : 'opacity-0 group-hover/agent:opacity-100',
+                      )}
+                      title="Agent 配置"
+                      aria-label="Agent 配置"
+                    >
+                      <Settings2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               )
             })}
@@ -1080,6 +1247,23 @@ function AccountAvatar({ name, avatar }: AccountProfile) {
       {(name.trim().slice(0, 1) || 'Y').toUpperCase()}
     </span>
   )
+}
+
+function filterAgents(agents: SavedAgentConfig[], query: string) {
+  const keyword = query.trim().toLowerCase()
+  if (!keyword) return agents
+  return agents.filter((agent) =>
+    [agent.name, agent.role, agent.description, ...(agent.capabilityTags ?? [])]
+      .join(' ')
+      .toLowerCase()
+      .includes(keyword),
+  )
+}
+
+function isStableAgentChildSession(session: Session) {
+  if (session.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
+  const metadata = session.metadata ?? {}
+  return metadata.kind !== 'orchestrator-task' && !metadata.hiddenFromSessionTree
 }
 
 function isPrivateAgentSession(session: Session | null | undefined, groupWorkspaceIds: Set<string>) {
