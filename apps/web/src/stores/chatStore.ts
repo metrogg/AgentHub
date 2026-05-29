@@ -58,6 +58,32 @@ interface ChatState {
   replyingToMessageId: string | null
   replyingToMessage: Message | null
   sessionsBootstrapped: boolean
+  taskBoard: {
+    runId: string
+    title: string
+    goal: string
+    collaborationMode: string
+    phases: Array<{
+      id: string
+      title: string
+      purpose: string
+      taskIds: string[]
+      status: 'pending' | 'active' | 'completed'
+    }>
+    tasks: Array<{
+      id: string
+      phaseId: string
+      title: string
+      description: string
+      agentName: string
+      status: 'pending' | 'running' | 'done' | 'failed' | 'blocked' | 'cancelled'
+      progress?: number
+      progressStatus?: string
+      dependencies: string[]
+    }>
+    status: 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
+    sessionId: string
+  } | null
 
   fetchSessions: () => Promise<void>
   createSession: (
@@ -116,6 +142,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   replyingToMessageId: null,
   replyingToMessage: null,
   sessionsBootstrapped: false,
+  taskBoard: null,
 
   async fetchSessions() {
     set({ loadingSessions: true })
@@ -663,7 +690,132 @@ export const useChatStore = create<ChatState>((set, get) => ({
               metadata: { ...(msg.metadata as Record<string, unknown>), plan: nextPlan },
             }
           })
-          return updated ? { messages: newMessages } : s
+
+          let nextTaskBoard = s.taskBoard
+          if (nextTaskBoard && nextTaskBoard.runId === event.runId) {
+            if (
+              event.type === 'task.started' ||
+              event.type === 'task.completed' ||
+              event.type === 'task.failed' ||
+              event.type === 'task.cancelled' ||
+              event.type === 'task.retrying'
+            ) {
+              const taskId = event.taskId
+              if (taskId) {
+                const statusMap: Record<string, string> = {
+                  'task.started': 'running',
+                  'task.completed': 'done',
+                  'task.failed': 'failed',
+                  'task.cancelled': 'cancelled',
+                  'task.retrying': 'pending',
+                }
+                const nextStatus = statusMap[event.type]
+                if (nextStatus) {
+                  nextTaskBoard = {
+                    ...nextTaskBoard,
+                    tasks: nextTaskBoard.tasks.map((t) =>
+                      t.id === taskId ? { ...t, status: nextStatus as any } : t
+                    ),
+                    phases: nextTaskBoard.phases.map((p) =>
+                      p.taskIds.includes(taskId) && nextStatus === 'running'
+                        ? { ...p, status: 'active' as const }
+                        : p.taskIds.includes(taskId) && (nextStatus === 'done' || nextStatus === 'failed' || nextStatus === 'cancelled')
+                          ? {
+                              ...p,
+                              status: p.taskIds.every((tid) => {
+                                const t = nextTaskBoard!.tasks.find((x) => x.id === tid)
+                                return t && (t.status === 'done' || t.status === 'failed' || t.status === 'cancelled')
+                              })
+                                ? ('completed' as const)
+                                : p.status,
+                            }
+                          : p
+                    ),
+                  }
+                }
+              }
+            }
+            if (event.type === 'run.completed') nextTaskBoard = { ...nextTaskBoard, status: 'completed' }
+            if (event.type === 'run.failed') nextTaskBoard = { ...nextTaskBoard, status: 'failed' }
+            if (event.type === 'run.cancelled') nextTaskBoard = { ...nextTaskBoard, status: 'cancelled' }
+            if (event.type === 'run.synthesizing') nextTaskBoard = { ...nextTaskBoard, status: 'synthesizing' }
+          }
+
+          if (updated || nextTaskBoard !== s.taskBoard) {
+            return { messages: newMessages, taskBoard: nextTaskBoard }
+          }
+          return { messages: newMessages }
+        })
+        break
+      }
+      case WsEvent.TaskBoardPlanReady: {
+        const { runId, plan, sessionId } = e.payload as {
+          runId: string
+          plan: Record<string, unknown>
+          sessionId: string
+        }
+        const phases = (plan.phases as any[]) || []
+        const tasks = (plan.tasks as any[]) || []
+        set((state) => ({
+          ...state,
+          taskBoard: {
+            runId,
+            title: (plan.title as string) || '',
+            goal: (plan.goal as string) || '',
+            collaborationMode: (plan.collaborationMode as string) || 'mapreduce',
+            phases: phases.map((p: any) => ({
+              id: p.id,
+              title: p.title || '',
+              purpose: p.purpose || '',
+              taskIds: p.taskIds || [],
+              status: 'pending' as const,
+            })),
+            tasks: tasks.map((t: any) => ({
+              id: t.id,
+              phaseId: t.phaseId || '',
+              title: t.title || '',
+              description: t.description || '',
+              agentName: t.agentKey || t.agentId || '',
+              status: 'pending' as const,
+              dependencies: t.dependencies || [],
+            })),
+            status: 'planning' as const,
+            sessionId,
+          },
+        }))
+        break
+      }
+      case WsEvent.TaskBoardTaskProgress: {
+        const { taskId, percent, status } = e.payload as {
+          taskId: string
+          percent: number
+          status: string
+        }
+        set((state) => {
+          if (!state.taskBoard) return state
+          return {
+            ...state,
+            taskBoard: {
+              ...state.taskBoard,
+              tasks: state.taskBoard.tasks.map((t) =>
+                t.id === taskId ? { ...t, progress: percent, progressStatus: status } : t
+              ),
+            },
+          }
+        })
+        break
+      }
+      case WsEvent.TaskBoardRunCompleted: {
+        const { runId, status } = e.payload as { runId: string; status: string }
+        set((state) => {
+          if (!state.taskBoard || state.taskBoard.runId !== runId) return state
+          return {
+            ...state,
+            taskBoard: {
+              ...state.taskBoard,
+              status: status as any,
+            },
+          }
         })
         break
       }

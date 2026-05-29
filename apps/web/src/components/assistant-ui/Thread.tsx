@@ -83,6 +83,7 @@ import {
 } from 'react'
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
+import { ClarificationCard } from '@/components/ClarificationCard'
 import {
   api,
   friendlyErrorMessage,
@@ -119,8 +120,8 @@ import {
 } from '../../lib/workspaceFilters'
 import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
-import {
-  QuickPromptBubbles,
+import { TaskBoard } from '@/components/TaskBoard'
+import { QuickPromptBubbles,
   createQuickPromptSeed,
   fallbackWelcomeQuickPrompts,
   rotateQuickPrompts,
@@ -2269,9 +2270,11 @@ const AssistantMessage: FC = () => {
                 by_name: {
                   agent_avatar: AgentAvatarPart,
                   orchestrator_plan: OrchestratorPlanCard,
+                  task_board: TaskBoardCard,
                   code_agent_run: CodeAgentRunCard,
                   agent_artifacts: AgentArtifactsCard,
                   chat_attachments: ChatAttachmentsPart,
+                  clarification_card: ClarificationCardWrapper,
                 },
               },
             }}
@@ -2303,6 +2306,21 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
 }
 
 const AgentAvatarPart: FC<{ data: { runtime?: CodeAgentRunMetadata['runtime'] } }> = () => null
+
+function ClarificationCardWrapper({ data }: { data: any }) {
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const sessionId = currentSessionId || ''
+
+  return (
+    <ClarificationCard
+      question={data?.question || ''}
+      options={data?.options}
+      messageId={data?.messageId || ''}
+      taskId={data?.taskId || ''}
+      sessionId={sessionId}
+    />
+  )
+}
 
 function requestArtifactPreview(item: ArtifactPreviewItem) {
   window.dispatchEvent(new CustomEvent<ArtifactPreviewItem>(artifactPreviewEvent, { detail: item }))
@@ -4158,6 +4176,38 @@ function absoluteEditorPath(filePath: string, cwd?: string) {
   const root = cwd?.trim()
   if (!root || (!/^[a-zA-Z]:[\\/]/.test(root) && !root.startsWith('/'))) return null
   return `${root.replace(/[\\/]+$/, '')}/${trimmed.replace(/^[\\/]+/, '')}`
+}
+
+function TaskBoardCard({ data: _data }: { data: any }) {
+  const taskBoard = useChatStore((s) => s.taskBoard)
+
+  if (!taskBoard) {
+    return (
+      <div className="my-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+        <div className="flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+          <span className="text-sm text-gray-500">正在生成执行计划...</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="my-3 border border-gray-200 rounded-xl overflow-hidden max-h-[600px]">
+      <TaskBoard
+        data={taskBoard}
+        onCancel={() => {
+          fetch(`/api/orchestrator-runs/${taskBoard.runId}/cancel`, { method: 'POST' }).catch(console.error)
+        }}
+        onRetryFailed={() => {
+          const failedTasks = taskBoard.tasks.filter((t) => t.status === 'failed')
+          for (const task of failedTasks) {
+            fetch(`/api/orchestrator-runs/${taskBoard.runId}/retry-task/${task.id}`, { method: 'POST' }).catch(console.error)
+          }
+        }}
+      />
+    </div>
+  )
 }
 
 const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {

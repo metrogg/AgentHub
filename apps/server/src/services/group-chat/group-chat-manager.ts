@@ -93,6 +93,10 @@ export class GroupChatManager {
 
   /**
    * 处理群聊消息的入口
+   * @deprecated 此方法已弃用。群聊消息现在走 messages.ts 中的统一路由：
+   *   - intentRouter 识别简单/复杂意图
+   *   - 简单消息 → handleSimpleReply()
+   *   - 复杂任务 → generatePlanAndPushTaskBoard()
    */
   async handleMessage(params: {
     workspaceId: string
@@ -155,6 +159,10 @@ export class GroupChatManager {
 
   /**
    * 核心对话循环
+   * @deprecated 请使用 messages.ts 中的统一路由入口。
+   *   - 简单消息走 handleSimpleReply()
+   *   - 复杂任务走 generatePlanAndPushTaskBoard()
+   *   此方法仅供代码参考，不再被实际调用。
    */
   private async conversationLoop(params: {
     workspaceId: string
@@ -168,6 +176,14 @@ export class GroupChatManager {
     history: GroupChatMessage[]
     failureCounts: Map<string, number>
   }): Promise<void> {
+    console.warn(
+      '[GroupChatManager] conversationLoop() is deprecated. Use unified routing in messages.ts',
+    )
+    return
+
+    /*
+    // ===== 以下代码已弃用，仅供参考 =====
+
     const { workspaceId, sessionId, agents, orchestrator, projectPath, state, failureCounts } =
       params
     let { history } = params
@@ -383,6 +399,8 @@ export class GroupChatManager {
       { turns: state.turnCount, reason: state.finishReason },
       'GroupChatManager: conversation loop finished',
     )
+    // ===== 以上代码已弃用，仅供参考 =====
+    */
   }
 
   /**

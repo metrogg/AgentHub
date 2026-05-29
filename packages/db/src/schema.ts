@@ -156,6 +156,10 @@ export const workspaceTasks = sqliteTable(
   completedAt: ts('completed_at'),
   errorLog: text('error_log'),
 
+  progressPercent: integer('progress_percent').default(0),
+  progressStatus: text('progress_status'),
+  clarificationCount: integer('clarification_count').default(0),
+
   createdAt: now(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 },
@@ -237,6 +241,28 @@ export const orchestratorRunEvents = sqliteTable('orchestrator_run_events', {
   type: text('type').notNull(),
   payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
   severity: text('severity', { enum: ['debug', 'info', 'warning', 'error'] }).notNull().default('info'),
+  createdAt: now(),
+})
+
+export const taskClarifications = sqliteTable('task_clarifications', {
+  id: id(),
+  runId: text('run_id').notNull().references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
+  taskId: text('task_id').notNull(),
+  agentId: text('agent_id').notNull(),
+  question: text('question').notNull(),
+  options: text('options', { mode: 'json' }).$type<string[]>(),
+  answer: text('answer'),
+  status: text('status', { enum: ['pending', 'answered', 'timeout'] }).notNull().default('pending'),
+  createdAt: now(),
+  answeredAt: ts('answered_at'),
+})
+
+export const orchestratorRunControls = sqliteTable('orchestrator_run_controls', {
+  id: id(),
+  runId: text('run_id').notNull().references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
+  action: text('action', { enum: ['pause', 'resume', 'cancel', 'retry_all_failed', 'skip_task'] }).notNull(),
+  targetTaskId: text('target_task_id'),
+  reason: text('reason'),
   createdAt: now(),
 })
 

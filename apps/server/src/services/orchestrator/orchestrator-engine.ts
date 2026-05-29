@@ -1,4 +1,4 @@
-import { db, messages, workspaceTasks, orchestratorRuns, sessions, eq, and, desc } from '@agenthub/db'
+import { db, messages, workspaceTasks, orchestratorRuns, taskClarifications, sessions, workspaces, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
@@ -46,6 +46,167 @@ export class OrchestratorEngine {
     if (!engine) return false
     engine.scheduler.cancelRun(runId)
     return true
+  }
+
+  static async resumeRun(runId: string): Promise<void> {
+    const run = await db.query.orchestratorRuns.findFirst({
+      where: eq(orchestratorRuns.id, runId),
+    })
+    if (!run || run.status !== 'running') {
+      console.warn(`[OrchestratorEngine] Cannot resume run ${runId}: status=${run?.status}`)
+      return
+    }
+
+    const engine = new OrchestratorEngine()
+
+    const plan = run.plan as ExecutionPlan
+
+    const allTasks = await db.query.workspaceTasks.findMany({
+      where: eq(workspaceTasks.runId, runId),
+    })
+
+    for (const task of allTasks) {
+      if (task.status === 'running') {
+        await db
+          .update(workspaceTasks)
+          .set({ status: 'pending' })
+          .where(eq(workspaceTasks.id, task.id))
+      }
+    }
+
+    const [workspaceRecord] = await db
+      .select({ projectPath: workspaces.projectPath })
+      .from(workspaces)
+      .where(eq(workspaces.id, run.workspaceId))
+      .limit(1)
+    const projectPath = workspaceRecord?.projectPath ?? null
+
+    const childSessions = new Map<string, ChildSessionInfo>()
+    for (const task of allTasks) {
+      if (task.sessionId) {
+        childSessions.set(task.id, {
+          sessionId: task.sessionId,
+          workspaceId: run.workspaceId,
+          projectPath,
+        })
+      }
+    }
+
+    const [groupSessionRecord] = await db
+      .select({ ownerId: sessions.ownerId })
+      .from(sessions)
+      .where(eq(sessions.id, run.groupSessionId))
+      .limit(1)
+    const ownerId = groupSessionRecord?.ownerId ?? 'user'
+
+    OrchestratorEngine.activeEngines.set(runId, engine)
+
+    const pendingTasks = plan.tasks.filter((t) => {
+      const dbTask = allTasks.find((dt) => dt.id === t.id)
+      return dbTask && dbTask.status === 'pending'
+    })
+
+    if (pendingTasks.length === 0) {
+      await engine.synthesizeAndReport(runId, run.groupSessionId, run.workspaceId, plan, [])
+      return
+    }
+
+    const executor = engine.createTaskExecutor(runId, run.groupSessionId, run.workspaceId, plan, childSessions, ownerId)
+    const mode: CollaborationMode = plan.collaborationMode ?? 'mapreduce'
+
+    try {
+      engine.scheduler.onPhaseCompleted = (phaseId: string, phaseTitle: string) => {
+        emitRunEvent({
+          runId,
+          workspaceId: run.workspaceId,
+          groupSessionId: run.groupSessionId,
+          type: 'phase.completed' as any,
+          severity: 'info',
+          payload: { phaseId, phaseTitle },
+        }).catch(() => {})
+        broadcastSessionEvent(run.groupSessionId, {
+          type: 'phase:completed' as any,
+          payload: { runId, phaseId, phaseTitle, sessionId: run.groupSessionId },
+        })
+      }
+
+      const results = await engine.scheduler.executePlan(
+        { ...plan, tasks: pendingTasks },
+        executor,
+        mode,
+      )
+
+      for (const result of results) {
+        if (result.status === 'blocked') {
+          const task = plan.tasks.find((t) => t.id === result.taskId)
+          if (task) {
+            await db
+              .update(workspaceTasks)
+              .set({ status: 'blocked', completedAt: new Date(), errorLog: result.error })
+              .where(eq(workspaceTasks.id, task.id))
+            await emitRunEvent({
+              runId,
+              workspaceId: run.workspaceId,
+              groupSessionId: run.groupSessionId,
+              taskId: task.id,
+              agentId: task.agentId,
+              type: 'task.failed',
+              severity: 'warning',
+              payload: { title: task.title, error: result.error, reason: 'blocked_by_dependency' },
+            })
+            broadcastSessionEvent(run.groupSessionId, {
+              type: WsEvent.TaskUpdate,
+              payload: { taskId: task.id, status: 'blocked', error: result.error, sessionId: run.groupSessionId },
+            })
+          }
+        }
+      }
+
+      const [currentRun] = await db
+        .select({ status: orchestratorRuns.status })
+        .from(orchestratorRuns)
+        .where(eq(orchestratorRuns.id, runId))
+        .limit(1)
+      if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
+        logger.info({ runId }, 'Orchestrator run cancelled before synthesis (resumed)')
+        broadcastSessionEvent(run.groupSessionId, {
+          type: 'task_board:run_completed',
+          payload: {
+            runId,
+            status: OrchestratorRunStatus.Cancelled,
+          },
+        })
+        return
+      }
+
+      await engine.synthesizeAndReport(runId, run.groupSessionId, run.workspaceId, plan, results)
+    } catch (error: any) {
+      logger.error({ err: error?.message, runId }, 'Resumed scheduler execution failed')
+      await db
+        .update(orchestratorRuns)
+        .set({ status: OrchestratorRunStatus.Failed })
+        .where(eq(orchestratorRuns.id, runId))
+      broadcastSessionEvent(run.groupSessionId, {
+        type: 'task_board:run_completed',
+        payload: {
+          runId,
+          status: OrchestratorRunStatus.Failed,
+        },
+      })
+      await emitRunEvent({
+        runId,
+        workspaceId: run.workspaceId,
+        groupSessionId: run.groupSessionId,
+        type: 'run.failed',
+        severity: 'error',
+        payload: { error: error?.message || 'Resumed scheduler execution failed' },
+      })
+    } finally {
+      if (OrchestratorEngine.activeEngines.get(runId) === engine) {
+        OrchestratorEngine.activeEngines.delete(runId)
+      }
+      blackboard.clearNamespace(Blackboard.namespace(run.workspaceId, runId))
+    }
   }
 
   async retryTask(params: {
@@ -113,7 +274,289 @@ export class OrchestratorEngine {
     const [groupSessionRecord] = await db.select().from(sessions).where(eq(sessions.id, groupSessionId)).limit(1)
     const ownerId = groupSessionRecord?.ownerId ?? 'user'
 
-    const executor: TaskExecutor = async (task, signal) => {
+    const executor = this.createTaskExecutor(runId, groupSessionId, workspaceId, plan, childSessions, ownerId)
+
+    try {
+      this.scheduler.onPhaseCompleted = (phaseId: string, phaseTitle: string) => {
+        emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          type: 'phase.completed' as any,
+          severity: 'info',
+          payload: { phaseId, phaseTitle },
+        }).catch(() => {})
+        broadcastSessionEvent(groupSessionId, {
+          type: 'phase:completed' as any,
+          payload: { runId, phaseId, phaseTitle, sessionId: groupSessionId },
+        })
+      }
+
+      const mode: CollaborationMode = plan.collaborationMode ?? 'mapreduce'
+      const results = await this.scheduler.executePlan(plan, executor, mode)
+
+      // 为因上游失败而被阻塞的任务写入状态并广播事件
+      for (const result of results) {
+        if (result.status === 'blocked') {
+          const task = plan.tasks.find((t) => t.id === result.taskId)
+          if (task) {
+            await db
+              .update(workspaceTasks)
+              .set({ status: 'blocked', completedAt: new Date(), errorLog: result.error })
+              .where(eq(workspaceTasks.id, task.id))
+            await emitRunEvent({
+              runId,
+              workspaceId,
+              groupSessionId,
+              taskId: task.id,
+              agentId: task.agentId,
+              type: 'task.failed',
+              severity: 'warning',
+              payload: { title: task.title, error: result.error, reason: 'blocked_by_dependency' },
+            })
+            broadcastSessionEvent(groupSessionId, {
+              type: WsEvent.TaskUpdate,
+              payload: { taskId: task.id, status: 'blocked', error: result.error, sessionId: groupSessionId },
+            })
+          }
+        }
+      }
+
+      const [currentRun] = await db
+        .select({ status: orchestratorRuns.status })
+        .from(orchestratorRuns)
+        .where(eq(orchestratorRuns.id, runId))
+        .limit(1)
+      if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
+        logger.info({ runId }, 'Orchestrator run cancelled before synthesis')
+        broadcastSessionEvent(groupSessionId, {
+          type: 'task_board:run_completed',
+          payload: {
+            runId,
+            status: OrchestratorRunStatus.Cancelled,
+          },
+        })
+        return
+      }
+
+      if (mode === 'supervisor') {
+        let supervisorRound = 0
+        const maxRounds = 3
+        const bbSupervisorNs = Blackboard.namespace(workspaceId, runId)
+
+        while (supervisorRound < maxRounds) {
+          supervisorRound++
+
+          const [runCheck] = await db
+            .select({ status: orchestratorRuns.status })
+            .from(orchestratorRuns)
+            .where(eq(orchestratorRuns.id, runId))
+            .limit(1)
+          if (runCheck?.status === OrchestratorRunStatus.Cancelled) break
+
+          const taskOutputs: { taskTitle: string; agentName: string; output: string }[] = []
+          for (const task of plan.tasks) {
+            const taskResult = results.find((r) => r.taskId === task.id)
+            if (!taskResult || taskResult.status !== TaskStatus.Done) continue
+            const agent = plan.agents.find((a) => a.id === task.agentId)
+            try {
+              const entry = await blackboard.read(bbSupervisorNs, `task_${task.id}_output`)
+              if (entry) {
+                const val = entry as { output: string }
+                taskOutputs.push({
+                  taskTitle: task.title,
+                  agentName: agent?.name ?? task.agentId,
+                  output: val.output,
+                })
+              }
+            } catch {
+              // Blackboard read skipped
+            }
+          }
+
+          if (taskOutputs.length === 0) break
+
+          const needMoreTasks = await this.evaluateSupervisorNeed(plan.goal, taskOutputs)
+          if (!needMoreTasks) break
+
+          const supplementPrompt = plan.tasks
+            .filter((t) => results.find((r) => r.taskId === t.id && r.status === TaskStatus.Done))
+            .map((t) => {
+              const found = taskOutputs.find((o) => o.taskTitle === t.title)
+              return `- ${t.title}: ${found?.output?.slice(0, 200) ?? 'completed'}`
+            })
+            .join('\n')
+
+          const supplementGoal = `${plan.goal}\n\n已完成工作:\n${supplementPrompt}\n\n请根据已完成产出，生成 1-2 个补充任务，填补缺失或不足的部分。`
+
+          try {
+            const { buildDynamicOrchestratorPlan } = await import('./plan-generator')
+            const supplementPlan = await buildDynamicOrchestratorPlan(
+              supplementGoal,
+              plan.agents as any,
+              'supplement-' + runId,
+            )
+
+            if (!supplementPlan || !supplementPlan.tasks.length) break
+
+            const newTasks: ExecutionTask[] = []
+            for (const pt of supplementPlan.tasks) {
+              const agent = plan.agents.find((a) => a.key === pt.agentKey)
+              if (!agent) continue
+
+              const task: ExecutionTask = {
+                id: pt.id,
+                title: pt.title,
+                description: pt.description,
+                agentId: agent.id,
+                dependencies: pt.dependencies ?? [],
+                taskType: pt.taskType,
+                parallelGroup: pt.parallelGroup,
+                maxRetries: pt.maxRetries ?? 2,
+                phaseId: pt.phaseId,
+              }
+
+              const childSession = await createOrchestratorChildSession(
+                workspaceId,
+                plan.title,
+                ownerId,
+                agent,
+                task.title,
+              )
+              childSessions.set(task.id, {
+                sessionId: childSession.id,
+                workspaceId,
+                projectPath: childSessions.get(plan.tasks[0]?.id ?? '')?.projectPath,
+              })
+
+              await db.insert(workspaceTasks).values({
+                id: task.id,
+                workspaceId,
+                agentId: task.agentId,
+                title: task.title,
+                description: task.description,
+                status: TaskStatus.Pending,
+                orderIdx: plan.tasks.length,
+                runId,
+                phaseId: task.phaseId,
+                dependencies: task.dependencies,
+                parallelGroup: task.parallelGroup,
+                maxRetries: task.maxRetries,
+              })
+
+              newTasks.push(task)
+            }
+
+            this.scheduler.addTasksToRun(runId, newTasks)
+            plan.tasks.push(...newTasks)
+
+            await emitRunEvent({
+              runId,
+              workspaceId,
+              groupSessionId,
+              type: 'supervisor.inject' as any,
+              severity: 'info',
+              payload: { round: supervisorRound, newTaskIds: newTasks.map((t) => t.id) },
+            })
+          } catch (err: any) {
+            logger.warn({ err: err?.message, runId, round: supervisorRound }, 'Supervisor supplement plan failed')
+            break
+          }
+        }
+      }
+
+      // Task #37: Auto-review chain — code tasks 完成后自动注入 review 任务
+      // 修复 Bug 23: 使用 scheduler 的 run signal，使 auto-review 可被取消
+      const reviewSignal = this.scheduler.getRunSignal(runId) ?? new AbortController().signal
+      const reviewResults = await this.injectAutoReviewTasks(
+        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, reviewSignal, executor,
+      )
+      if (reviewResults.length > 0) {
+        results.push(...reviewResults)
+      }
+
+      // 冲突检测与解决：遍历所有有 projectPath 的任务目录
+      const projectPaths = new Set<string>()
+      for (const task of plan.tasks) {
+        const path = childSessions.get(task.id)?.projectPath
+        if (path) projectPaths.add(path)
+      }
+
+      const conflictReports: import('./conflict-resolver').ConflictReport[] = []
+      for (const projectPath of projectPaths) {
+        const reports = await this.conflictResolver.detectAndResolve(results, {
+          projectPath,
+          baseBranch: await gitBranchManager.inferBaseBranch(projectPath),
+        })
+        conflictReports.push(...reports)
+      }
+
+      if (conflictReports.length > 0) {
+        for (const report of conflictReports) {
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            type: 'conflict.detected',
+            severity: report.resolution === 'needs-human' ? 'warning' : 'info',
+            payload: {
+              filePath: report.filePath,
+              resolution: report.resolution,
+              agents: report.variants.map((variant) => ({ agentId: variant.agentId, agentName: variant.agentName })),
+            },
+          })
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            type: 'conflict.resolved',
+            severity: report.resolution === 'needs-human' ? 'warning' : 'info',
+            payload: { filePath: report.filePath, resolution: report.resolution, notes: report.notes },
+          })
+        }
+        await db
+          .update(orchestratorRuns)
+          .set({ conflictReport: conflictReports as unknown as import('@agenthub/db').ConflictReport[] })
+          .where(eq(orchestratorRuns.id, runId))
+      }
+
+      await this.synthesizeAndReport(runId, groupSessionId, workspaceId, plan, results, conflictReports)
+    } catch (error: any) {
+      logger.error({ err: error?.message, runId }, 'Scheduler execution failed')
+      await db.update(orchestratorRuns).set({ status: OrchestratorRunStatus.Failed }).where(eq(orchestratorRuns.id, runId))
+      broadcastSessionEvent(groupSessionId, {
+        type: 'task_board:run_completed',
+        payload: {
+          runId,
+          status: OrchestratorRunStatus.Failed,
+        },
+      })
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        type: 'run.failed',
+        severity: 'error',
+        payload: { error: error?.message || 'Scheduler execution failed' },
+      })
+    } finally {
+      if (OrchestratorEngine.activeEngines.get(runId) === this) {
+        OrchestratorEngine.activeEngines.delete(runId)
+      }
+      // Run 结束，清理黑板内存缓存
+      blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
+    }
+  }
+
+  private createTaskExecutor(
+    runId: string,
+    groupSessionId: string,
+    workspaceId: string,
+    plan: ExecutionPlan,
+    childSessions: Map<string, ChildSessionInfo>,
+    ownerId: string,
+  ): TaskExecutor {
+    return async (task, signal) => {
       let currentTask = task
       let currentAttempt = 0
       const taskExecutionStartedAt = Date.now()
@@ -359,263 +802,6 @@ export class OrchestratorEngine {
         return { ...result, error: replan.reason }
       }
     }
-
-    try {
-      this.scheduler.onPhaseCompleted = (phaseId: string, phaseTitle: string) => {
-        emitRunEvent({
-          runId,
-          workspaceId,
-          groupSessionId,
-          type: 'phase.completed' as any,
-          severity: 'info',
-          payload: { phaseId, phaseTitle },
-        }).catch(() => {})
-        broadcastSessionEvent(groupSessionId, {
-          type: 'phase:completed' as any,
-          payload: { runId, phaseId, phaseTitle, sessionId: groupSessionId },
-        })
-      }
-
-      const mode: CollaborationMode = plan.collaborationMode ?? 'mapreduce'
-      const results = await this.scheduler.executePlan(plan, executor, mode)
-
-      // 为因上游失败而被阻塞的任务写入状态并广播事件
-      for (const result of results) {
-        if (result.status === 'blocked') {
-          const task = plan.tasks.find((t) => t.id === result.taskId)
-          if (task) {
-            await db
-              .update(workspaceTasks)
-              .set({ status: 'blocked', completedAt: new Date(), errorLog: result.error })
-              .where(eq(workspaceTasks.id, task.id))
-            await emitRunEvent({
-              runId,
-              workspaceId,
-              groupSessionId,
-              taskId: task.id,
-              agentId: task.agentId,
-              type: 'task.failed',
-              severity: 'warning',
-              payload: { title: task.title, error: result.error, reason: 'blocked_by_dependency' },
-            })
-            broadcastSessionEvent(groupSessionId, {
-              type: WsEvent.TaskUpdate,
-              payload: { taskId: task.id, status: 'blocked', error: result.error, sessionId: groupSessionId },
-            })
-          }
-        }
-      }
-
-      const [currentRun] = await db
-        .select({ status: orchestratorRuns.status })
-        .from(orchestratorRuns)
-        .where(eq(orchestratorRuns.id, runId))
-        .limit(1)
-      if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
-        logger.info({ runId }, 'Orchestrator run cancelled before synthesis')
-        return
-      }
-
-      if (mode === 'supervisor') {
-        let supervisorRound = 0
-        const maxRounds = 3
-        const bbSupervisorNs = Blackboard.namespace(workspaceId, runId)
-
-        while (supervisorRound < maxRounds) {
-          supervisorRound++
-
-          const [runCheck] = await db
-            .select({ status: orchestratorRuns.status })
-            .from(orchestratorRuns)
-            .where(eq(orchestratorRuns.id, runId))
-            .limit(1)
-          if (runCheck?.status === OrchestratorRunStatus.Cancelled) break
-
-          const taskOutputs: { taskTitle: string; agentName: string; output: string }[] = []
-          for (const task of plan.tasks) {
-            const taskResult = results.find((r) => r.taskId === task.id)
-            if (!taskResult || taskResult.status !== TaskStatus.Done) continue
-            const agent = plan.agents.find((a) => a.id === task.agentId)
-            try {
-              const entry = await blackboard.read(bbSupervisorNs, `task_${task.id}_output`)
-              if (entry) {
-                const val = entry as { output: string }
-                taskOutputs.push({
-                  taskTitle: task.title,
-                  agentName: agent?.name ?? task.agentId,
-                  output: val.output,
-                })
-              }
-            } catch {
-              // Blackboard read skipped
-            }
-          }
-
-          if (taskOutputs.length === 0) break
-
-          const needMoreTasks = await this.evaluateSupervisorNeed(plan.goal, taskOutputs)
-          if (!needMoreTasks) break
-
-          const supplementPrompt = plan.tasks
-            .filter((t) => results.find((r) => r.taskId === t.id && r.status === TaskStatus.Done))
-            .map((t) => {
-              const found = taskOutputs.find((o) => o.taskTitle === t.title)
-              return `- ${t.title}: ${found?.output?.slice(0, 200) ?? 'completed'}`
-            })
-            .join('\n')
-
-          const supplementGoal = `${plan.goal}\n\n已完成工作:\n${supplementPrompt}\n\n请根据已完成产出，生成 1-2 个补充任务，填补缺失或不足的部分。`
-
-          try {
-            const { buildDynamicOrchestratorPlan } = await import('./plan-generator')
-            const supplementPlan = await buildDynamicOrchestratorPlan(
-              supplementGoal,
-              plan.agents as any,
-              'supplement-' + runId,
-            )
-
-            if (!supplementPlan || !supplementPlan.tasks.length) break
-
-            const newTasks: ExecutionTask[] = []
-            for (const pt of supplementPlan.tasks) {
-              const agent = plan.agents.find((a) => a.key === pt.agentKey)
-              if (!agent) continue
-
-              const task: ExecutionTask = {
-                id: pt.id,
-                title: pt.title,
-                description: pt.description,
-                agentId: agent.id,
-                dependencies: pt.dependencies ?? [],
-                taskType: pt.taskType,
-                parallelGroup: pt.parallelGroup,
-                maxRetries: pt.maxRetries ?? 2,
-                phaseId: pt.phaseId,
-              }
-
-              const childSession = await createOrchestratorChildSession(
-                workspaceId,
-                plan.title,
-                ownerId,
-                agent,
-                task.title,
-              )
-              childSessions.set(task.id, {
-                sessionId: childSession.id,
-                workspaceId,
-                projectPath: childSessions.get(plan.tasks[0]?.id ?? '')?.projectPath,
-              })
-
-              await db.insert(workspaceTasks).values({
-                id: task.id,
-                workspaceId,
-                agentId: task.agentId,
-                title: task.title,
-                description: task.description,
-                status: TaskStatus.Pending,
-                orderIdx: plan.tasks.length,
-                runId,
-                phaseId: task.phaseId,
-                dependencies: task.dependencies,
-                parallelGroup: task.parallelGroup,
-                maxRetries: task.maxRetries,
-              })
-
-              newTasks.push(task)
-            }
-
-            this.scheduler.addTasksToRun(runId, newTasks)
-            plan.tasks.push(...newTasks)
-
-            await emitRunEvent({
-              runId,
-              workspaceId,
-              groupSessionId,
-              type: 'supervisor.inject' as any,
-              severity: 'info',
-              payload: { round: supervisorRound, newTaskIds: newTasks.map((t) => t.id) },
-            })
-          } catch (err: any) {
-            logger.warn({ err: err?.message, runId, round: supervisorRound }, 'Supervisor supplement plan failed')
-            break
-          }
-        }
-      }
-
-      // Task #37: Auto-review chain — code tasks 完成后自动注入 review 任务
-      // 修复 Bug 23: 使用 scheduler 的 run signal，使 auto-review 可被取消
-      const reviewSignal = this.scheduler.getRunSignal(runId) ?? new AbortController().signal
-      const reviewResults = await this.injectAutoReviewTasks(
-        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, reviewSignal, executor,
-      )
-      if (reviewResults.length > 0) {
-        results.push(...reviewResults)
-      }
-
-      // 冲突检测与解决：遍历所有有 projectPath 的任务目录
-      const projectPaths = new Set<string>()
-      for (const task of plan.tasks) {
-        const path = childSessions.get(task.id)?.projectPath
-        if (path) projectPaths.add(path)
-      }
-
-      const conflictReports: import('./conflict-resolver').ConflictReport[] = []
-      for (const projectPath of projectPaths) {
-        const reports = await this.conflictResolver.detectAndResolve(results, {
-          projectPath,
-          baseBranch: await gitBranchManager.inferBaseBranch(projectPath),
-        })
-        conflictReports.push(...reports)
-      }
-
-      if (conflictReports.length > 0) {
-        for (const report of conflictReports) {
-          await emitRunEvent({
-            runId,
-            workspaceId,
-            groupSessionId,
-            type: 'conflict.detected',
-            severity: report.resolution === 'needs-human' ? 'warning' : 'info',
-            payload: {
-              filePath: report.filePath,
-              resolution: report.resolution,
-              agents: report.variants.map((variant) => ({ agentId: variant.agentId, agentName: variant.agentName })),
-            },
-          })
-          await emitRunEvent({
-            runId,
-            workspaceId,
-            groupSessionId,
-            type: 'conflict.resolved',
-            severity: report.resolution === 'needs-human' ? 'warning' : 'info',
-            payload: { filePath: report.filePath, resolution: report.resolution, notes: report.notes },
-          })
-        }
-        await db
-          .update(orchestratorRuns)
-          .set({ conflictReport: conflictReports as unknown as import('@agenthub/db').ConflictReport[] })
-          .where(eq(orchestratorRuns.id, runId))
-      }
-
-      await this.synthesizeAndReport(runId, groupSessionId, workspaceId, plan, results, conflictReports)
-    } catch (error: any) {
-      logger.error({ err: error?.message, runId }, 'Scheduler execution failed')
-      await db.update(orchestratorRuns).set({ status: OrchestratorRunStatus.Failed }).where(eq(orchestratorRuns.id, runId))
-      await emitRunEvent({
-        runId,
-        workspaceId,
-        groupSessionId,
-        type: 'run.failed',
-        severity: 'error',
-        payload: { error: error?.message || 'Scheduler execution failed' },
-      })
-    } finally {
-      if (OrchestratorEngine.activeEngines.get(runId) === this) {
-        OrchestratorEngine.activeEngines.delete(runId)
-      }
-      // Run 结束，清理黑板内存缓存
-      blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
-    }
   }
 
   private async evaluateSupervisorNeed(
@@ -767,7 +953,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       input: { taskTitle: task.title, attemptCount },
     })
 
-    const prompt = await buildTaskPrompt(task, plan, bbNamespace)
+    const prompt = await buildTaskPrompt(task, plan, blackboard, bbNamespace)
 
     // 插入 user message
     const [userMsg] = await db
@@ -832,6 +1018,24 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       const artifacts = execResult.artifacts
       const taskDuration = execResult.durationMs
 
+      const progressMatches = output.match(/\[PROGRESS:\s*(\d+)%\]\s*(.*)/g)
+      if (progressMatches) {
+        const lastProgress = progressMatches[progressMatches.length - 1]!
+        const match = lastProgress.match(/\[PROGRESS:\s*(\d+)%\]\s*(.*)/)
+        if (match) {
+          const percent = parseInt(match[1]!, 10)
+          const status = match[2]?.trim() || ''
+          await db
+            .update(workspaceTasks)
+            .set({ progressPercent: percent, progressStatus: status })
+            .where(eq(workspaceTasks.id, task.id))
+          broadcastSessionEvent(groupSessionId, {
+            type: 'task_board:task_progress',
+            payload: { taskId: task.id, percent, status },
+          })
+        }
+      }
+
       if (execResult.status === TaskStatus.Cancelled) {
         await emitRunEvent({
           runId,
@@ -856,6 +1060,169 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
       if (execResult.status === TaskStatus.Failed) {
         throw new Error(execResult.error || 'Agent 执行失败')
+      }
+
+      const signals = parseAgentAutonomySignals(output)
+
+      if (signals.clarifications.length > 0) {
+        const clarification = signals.clarifications[0]!
+
+        await db.insert(taskClarifications).values({
+          id: crypto.randomUUID(),
+          runId,
+          taskId: task.id,
+          agentId: agent.id,
+          question: clarification.question,
+          options: clarification.options,
+          status: 'pending',
+          createdAt: new Date(),
+        })
+
+        const clarMsg = await db
+          .insert(messages)
+          .values({
+            sessionId: groupSessionId,
+            senderId: agent.id,
+            senderType: 'system',
+            type: 'text',
+            content: `❓ **${agent.name} 需要确认**：${clarification.question}`,
+            metadata: {
+              clarificationTaskId: task.id,
+              clarificationOptions: clarification.options,
+              clarificationStatus: 'pending',
+              agentName: agent.name,
+            },
+            createdAt: new Date(),
+          })
+          .returning()
+
+        broadcastSessionEvent(groupSessionId, {
+          type: 'task_board:clarification_needed',
+          payload: {
+            taskId: task.id,
+            agentId: task.agentId,
+            question: clarification.question,
+            options: clarification.options,
+            messageId: clarMsg[0]?.id,
+            runId,
+          },
+        })
+
+        logger.info({ taskId: task.id, question: clarification.question }, 'Agent requested clarification')
+
+        await db
+          .update(workspaceTasks)
+          .set({ clarificationCount: 1 })
+          .where(eq(workspaceTasks.id, task.id))
+
+        if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
+
+        /**
+         * Clarification 处理策略：
+         * 当前将 Task 标记为 Done，task output 中带有 [AWAITING_CLARIFICATION] 标记。
+         * 下游 synthesizer 应识别此标记，而非将任务产出视为最终结果。
+         *
+         * 用户通过群聊回答后，后续消息中包含 clarification metadata，
+         * Orchestrator 会检测并将回答注入新的 task rerun 流程。
+         *
+         * TODO (@agenthub/issue-32): 实现 task 暂停/恢复机制
+         * 1. Session 层：在 messages 路由中监听用户回答消息中的 clarification metadata
+         * 2. Engine 层：为 paused task 提供 rerun 入口，注入用户回答作为上下文
+         * 3. Scheduler 层：支持 paused 状态的 task，等待用户回答后重新调度执行
+         * 参考 issue #32
+         */
+        return {
+          taskId: task.id,
+          agentId: task.agentId,
+          agentName: agent.name,
+          status: TaskStatus.Done,
+          output: `[AWAITING_CLARIFICATION] ${clarification.question}`,
+          artifacts: [],
+        }
+      }
+
+      if (signals.rejections.length > 0) {
+        const rejection = signals.rejections[0]!
+
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          taskId: task.id,
+          type: 'task.reassigned' as any,
+          severity: 'warning',
+          payload: {
+            reason: rejection.reason,
+            suggestedAgent: rejection.suggestedAgent,
+          },
+        })
+
+        if (rejection.suggestedAgent) {
+          const fallbackAgent = plan.agents.find(
+            (a) => a.key === rejection.suggestedAgent || a.name === rejection.suggestedAgent,
+          )
+          if (fallbackAgent && fallbackAgent.id !== task.agentId) {
+            task.agentId = fallbackAgent.id
+            logger.info(
+              { taskId: task.id, reason: rejection.reason, newAgent: fallbackAgent.name },
+              'Task rejected and reassigned to suggested agent',
+            )
+            if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
+            return {
+              taskId: task.id,
+              agentId: task.agentId,
+              agentName: agent.name,
+              status: TaskStatus.Failed,
+              output: '',
+              error: `Agent rejected task: ${rejection.reason} — reassigned to ${fallbackAgent.name}`,
+              artifacts: [],
+            }
+          }
+        }
+
+        if (task.fallbackAgentId) {
+          const fallbackAgent = plan.agents.find((a) => a.id === task.fallbackAgentId)
+          if (fallbackAgent && fallbackAgent.id !== task.agentId) {
+            task.agentId = fallbackAgent.id
+            logger.info(
+              { taskId: task.id, reason: rejection.reason, fallbackAgent: fallbackAgent.name },
+              'Task rejected and reassigned to fallback agent',
+            )
+            if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
+            return {
+              taskId: task.id,
+              agentId: task.agentId,
+              agentName: agent.name,
+              status: TaskStatus.Failed,
+              output: '',
+              error: `Agent rejected task: ${rejection.reason} — reassigned to fallback ${fallbackAgent.name}`,
+              artifacts: [],
+            }
+          }
+        }
+
+        if (branchCtx) await gitBranchManager.cleanupBranch(branchCtx)
+        return {
+          taskId: task.id,
+          agentId: task.agentId,
+          agentName: agent.name,
+          status: TaskStatus.Failed,
+          output: '',
+          error: `Agent rejected task: ${rejection.reason}`,
+          artifacts: [],
+        }
+      }
+
+      if (signals.progressReports.length > 0) {
+        const lastProgress = signals.progressReports[signals.progressReports.length - 1]!
+        await db
+          .update(workspaceTasks)
+          .set({ progressPercent: lastProgress.percent, progressStatus: lastProgress.status })
+          .where(eq(workspaceTasks.id, task.id))
+        broadcastSessionEvent(groupSessionId, {
+          type: 'task_board:task_progress',
+          payload: { taskId: task.id, percent: lastProgress.percent, status: lastProgress.status },
+        })
       }
 
       await executionTracer.log({
@@ -1483,6 +1850,14 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
       .set({ status: 'completed', summaryMessageId: summaryMsg?.id ?? null })
       .where(eq(orchestratorRuns.id, runId))
 
+    broadcastSessionEvent(groupSessionId, {
+      type: 'task_board:run_completed',
+      payload: {
+        runId,
+        status: 'completed',
+      },
+    })
+
     await emitRunEvent({
       runId,
       workspaceId,
@@ -1498,71 +1873,186 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
   }
 }
 
-async function buildTaskPrompt(task: ExecutionTask, plan: ExecutionPlan, bbNamespace: string): Promise<string> {
-  const agent = plan.agents.find((a) => a.id === task.agentId)
+function buildAutonomyInstructions(): string {
+  return [
+    '\n## 自主行为指令',
+    '作为智能 Agent，你在执行任务时拥有以下自主权：',
+    '',
+    '1. **提问权**：如果任务描述不够清晰、缺少关键信息，请向用户提问。',
+    '   回复格式：`[CLARIFY] 你的问题`',
+    '   示例：`[CLARIFY] 网站需要支持移动端响应式吗？请选择：A) 需要 B) 不需要`',
+    '',
+    '2. **拒绝权**：如果任务明显超出你的能力范围，可以拒绝并建议其他 Agent。',
+    '   回复格式：`[REJECT] 拒绝原因 | 建议Agent: agentName`',
+    '   示例：`[REJECT] 我的专长是代码审查，不适合前端开发 | 建议Agent: Coder`',
+    '',
+    '3. **进度报告**：执行长任务时，请定期报告进度。',
+    '   回复格式：`[PROGRESS: N%] 当前状态`',
+    '   示例：`[PROGRESS: 60%] HTML结构已完成，正在编写CSS样式`',
+    '',
+    '4. **求助权**：遇到无法独立解决的问题时，可请求其他 Agent 帮助。',
+    '   回复格式：`[HELP agentName] 请求内容`',
+    '   示例：`[HELP Designer] 需要配色方案建议，主色调应该用什么？`',
+    '',
+    '注意：正常执行时不需要使用以上格式，直接输出工作成果即可。只有当你确实需要澄清、拒绝、报告进度或求助时才使用。',
+  ].join('\n')
+}
 
-  // 从黑板读取上游任务的产出，作为上下文注入
-  let upstreamContext = ''
-  if (task.dependencies.length > 0) {
-    const upstreamEntries = await blackboard.query({
-      namespace: bbNamespace,
-      keyPattern: 'task_%_output',
-    })
-    const relevant = upstreamEntries.filter((e) => {
-      const depId = e.key.replace(/^task_/, '').replace(/_output$/, '')
-      return task.dependencies.includes(depId)
-    })
+interface AgentAutonomySignals {
+  clarifications: Array<{ question: string; options?: string[] }>
+  rejections: Array<{ reason: string; suggestedAgent?: string }>
+  progressReports: Array<{ percent: number; status: string }>
+  helpRequests: Array<{ targetAgent: string; request: string }>
+}
 
-    if (relevant.length > 0) {
-      upstreamContext =
-        '\n\n【前置依赖产出】\n' +
-        relevant
-          .map((e) => {
-            const val = e.value as {
-              output: string
-              summary?: TaskOutputSummary | string
-              summaryData?: TaskOutputSummary
-              agentName: string
-              taskTitle: string
-              artifacts?: Array<{ type?: string; diff?: string; filePath?: string; path?: string }>
-            }
-            // 优先使用结构化摘要，信息密度更高；回退到截断原文
-            let text = `--- 来自 ${val.agentName}（${val.taskTitle}）---\n`
-            const summaryData = val.summaryData ?? (typeof val.summary === 'object' ? val.summary : undefined)
-            if (summaryData) {
-              text += formatSummary(summaryData)
-            } else {
-              text += (val.output || '').slice(0, 4000)
-            }
-            const codeArtifacts = val.artifacts?.filter((a) => isArtifactKind(a, 'diff') || isArtifactKind(a, 'file')) ?? []
-            if (codeArtifacts.length > 0) {
-              text +=
-                '\n\n[代码变更]\n' +
-                codeArtifacts
-                  .map((a) => {
-                    if (isArtifactKind(a, 'diff') && a.diff) return `\`\`\`diff\n// ${a.filePath || 'unknown'}\n${a.diff.slice(0, 3000)}\n\`\`\``
-                    return `// ${a.path || a.filePath || 'unknown'}`
-                  })
-                  .join('\n\n')
-            }
-            return text
-          })
-          .join('\n\n') +
-        '\n【前置依赖结束】\n'
+function parseAgentAutonomySignals(output: string): AgentAutonomySignals {
+  const result: AgentAutonomySignals = {
+    clarifications: [],
+    rejections: [],
+    progressReports: [],
+    helpRequests: [],
+  }
+
+  const clarifyRegex = /\[CLARIFY\]\s*(.+?)(?=\[CLARIFY\]|\[REJECT\]|\[PROGRESS|\[HELP|$)/gs
+  let match
+  while ((match = clarifyRegex.exec(output)) !== null) {
+    const question = match[1]?.trim()
+    if (question) {
+      const optionsMatch = question.match(/^(.+?)\s*[（(]?([A-Z])\)\s*(.+?)(?:\s+[（(]?[A-Z]\)|$)/)
+      if (optionsMatch) {
+        const allOptions = question.match(/[（(]?([A-Z])\)\s*(.+?)(?=\s+[（(]?[A-Z]\)|$)/g)
+        result.clarifications.push({
+          question: question.split(/[（(]?[A-Z]\)/)[0]?.trim() || question,
+          options: allOptions?.map(o => o.replace(/^[（(]?[A-Z]\)\s*/, '').trim()),
+        })
+      } else {
+        result.clarifications.push({ question })
+      }
     }
   }
 
-  return [
-    agent ? `你是 ${agent.name}(${agent.role})。${agent.systemPrompt || ''}` : '你是 AgentHub 协作 Agent。',
-    `\n协作目标: ${plan.goal}`,
-    `\n当前子任务: ${task.title}`,
-    `\n任务说明: ${task.description}`,
-    task.dependencies.length ? `\n前置依赖任务: ${task.dependencies.join(', ')}` : '',
-    upstreamContext,
-    '\n请先给出简短工作计划，再产出结果。遇到需要其他 Agent 配合的内容，请在结尾用「需协作:」列出。',
-  ]
-    .filter(Boolean)
-    .join('')
+  const rejectRegex = /\[REJECT\]\s*(.+?)(?=\[CLARIFY\]|\[REJECT\]|\[PROGRESS|\[HELP|$)/gs
+  while ((match = rejectRegex.exec(output)) !== null) {
+    const content = match[1]?.trim()
+    if (content) {
+      const parts = content.split('|').map(s => s.trim())
+      const reason = parts[0] || content
+      const suggestedPart = parts.find(p => p.includes('建议Agent:') || p.includes('建议agent:'))
+      const suggestedAgent = suggestedPart?.split(':')[1]?.trim()
+      result.rejections.push({ reason, suggestedAgent })
+    }
+  }
+
+  const progressRegex = /\[PROGRESS:\s*(\d+)%\]\s*(.*?)(?=\[CLARIFY\]|\[REJECT\]|\[PROGRESS|\[HELP|$)/g
+  while ((match = progressRegex.exec(output)) !== null) {
+    const percent = parseInt(match[1]!, 10)
+    const status = match[2]?.trim() || ''
+    result.progressReports.push({ percent, status })
+  }
+
+  const helpRegex = /\[HELP\s+(\S+)\]\s*(.+?)(?=\[CLARIFY\]|\[REJECT\]|\[PROGRESS|\[HELP|$)/gs
+  while ((match = helpRegex.exec(output)) !== null) {
+    result.helpRequests.push({
+      targetAgent: match[1] || '',
+      request: match[2]?.trim() || '',
+    })
+  }
+
+  return result
+}
+
+async function buildTaskPrompt(
+  task: ExecutionTask,
+  plan: ExecutionPlan,
+  blackboard: Blackboard,
+  bbNamespace: string,
+): Promise<string> {
+  const parts: string[] = []
+
+  parts.push(`# 项目总目标\n${plan.goal}\n`)
+
+  parts.push(`# 你的任务：${task.title}\n${task.description}\n`)
+
+  if (task.outputContract) {
+    parts.push('# 交付要求')
+    if (task.outputContract.acceptanceCriteria && task.outputContract.acceptanceCriteria.length > 0) {
+      parts.push('验收标准：')
+      for (const criteria of task.outputContract.acceptanceCriteria) {
+        parts.push(`- ${criteria}`)
+      }
+    }
+    if (task.outputContract.requiredArtifacts && task.outputContract.requiredArtifacts.length > 0) {
+      parts.push(`需要产出：${task.outputContract.requiredArtifacts.join('、')}`)
+    }
+    parts.push('')
+  }
+
+  if (task.dependencies && task.dependencies.length > 0) {
+    parts.push('# 上游 Agent 的产出\n')
+    for (const depId of task.dependencies) {
+      const depTask = plan.tasks.find((t) => t.id === depId)
+      if (!depTask) continue
+
+      const depAgent = plan.agents.find((a) => a.id === depTask.agentId)
+      const agentName = depAgent?.name || depTask.agentId
+
+      try {
+        const entries = await blackboard.query({
+          namespace: bbNamespace,
+          keyPattern: `task_${depId}%`,
+          limit: 10,
+        })
+
+        if (entries.length > 0) {
+          parts.push(`## ${agentName} 完成了 "${depTask.title}"`)
+          for (const entry of entries) {
+            const summary =
+              typeof entry.value === 'object' && entry.value !== null && 'summary' in entry.value
+                ? String((entry.value as Record<string, unknown>).summary).slice(0, 500)
+                : JSON.stringify(entry.value).slice(0, 500)
+            parts.push(`- ${summary}`)
+          }
+          parts.push('')
+        }
+      } catch {
+        // Blackboard read may fail; skip upstream context gracefully
+      }
+    }
+  }
+
+  try {
+    const decisions = await blackboard.query({
+      namespace: bbNamespace,
+      keyPattern: 'decisions/%',
+      limit: 10,
+    })
+    if (decisions.length > 0) {
+      parts.push('# 关键决策\n')
+      for (const d of decisions) {
+        const val =
+          typeof d.value === 'object'
+            ? JSON.stringify(d.value).slice(0, 200)
+            : String(d.value).slice(0, 200)
+        parts.push(`- ${val}`)
+      }
+      parts.push('')
+    }
+  } catch {
+    // Skip decisions if unavailable
+  }
+
+  const agentProfile = plan.agents.find((a) => a.id === task.agentId)
+  if (agentProfile?.systemPrompt) {
+    parts.push(`# 角色说明\n${agentProfile.systemPrompt.slice(0, 1000)}\n`)
+  }
+
+  parts.push('请先给出简短工作计划，再产出结果。遇到需要其他 Agent 配合的内容，请在结尾用「需协作:」列出。')
+
+  if (agentProfile) {
+    parts.push(buildAutonomyInstructions())
+  }
+
+  return parts.join('\n\n')
 }
 
 interface TaskOutputSummary {

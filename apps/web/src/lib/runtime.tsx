@@ -26,6 +26,18 @@ function toThreadMessage(message: Message): ThreadMessageLike {
           dispatchResult: (message.metadata as { dispatchResult?: unknown }).dispatchResult,
         }
       : null
+  const taskBoard =
+    message.type === 'task_board' && message.metadata && 'plan' in (message.metadata as Record<string, unknown>)
+      ? {
+          ...((message.metadata as Record<string, unknown>).plan as Record<string, unknown>),
+          runId: (message.metadata as Record<string, unknown>).runId as string,
+          messageId: message.id,
+        }
+      : null
+  const clarification =
+    message.metadata && 'clarificationTaskId' in (message.metadata as Record<string, unknown>)
+      ? { ...(message.metadata as Record<string, unknown>), messageId: message.id }
+      : null
   const agentName =
     message.senderType === 'agent' && message.metadata && typeof message.metadata.agentName === 'string'
       ? message.metadata.agentName
@@ -54,9 +66,13 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   return {
     id: message.id,
     role,
-    content: plan
-      ? [{ type: 'data', name: 'orchestrator_plan', data: plan }]
-      : codeAgentRun
+    content: clarification
+      ? [{ type: 'data', name: 'clarification_card', data: clarification }]
+      : taskBoard
+      ? [{ type: 'data', name: 'task_board', data: taskBoard }]
+      : plan
+        ? [{ type: 'data', name: 'orchestrator_plan', data: plan }]
+        : codeAgentRun
         ? [
             ...avatarPart,
             { type: 'text', text },

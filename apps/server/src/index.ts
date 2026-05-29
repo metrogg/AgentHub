@@ -5,7 +5,7 @@ import { env } from './env'
 import { logger } from './lib/logger'
 import { setRuntimeServerPort } from './lib/runtime-server'
 import { joinRoom, cleanupWebSocket } from './services/agent-runner'
-import { db, users, eq } from '@agenthub/db'
+import { db, users, eq, orchestratorRuns } from '@agenthub/db'
 import { DEFAULT_USER } from './middleware/auth'
 import { WsEvent } from '@agenthub/shared'
 
@@ -108,4 +108,18 @@ process.on('SIGTERM', shutdown)
 // On Windows, detect parent process death via stdin close
 if (process.stdin) {
   process.stdin.on('end', shutdown)
+}
+
+import { OrchestratorEngine } from './services/orchestrator/orchestrator-engine'
+
+const runningRuns = await db.query.orchestratorRuns.findMany({
+  where: eq(orchestratorRuns.status, 'running'),
+})
+for (const run of runningRuns) {
+  OrchestratorEngine.resumeRun(run.id).catch((err) => {
+    logger.error({ err, runId: run.id }, '[Recovery] Failed to resume run')
+  })
+}
+if (runningRuns.length > 0) {
+  logger.info({ count: runningRuns.length }, '[Recovery] Resuming unfinished orchestrator runs')
 }

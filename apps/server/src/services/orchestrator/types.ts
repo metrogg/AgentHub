@@ -177,3 +177,40 @@ export interface SchedulerCallbacks {
   onTaskFallback(task: ExecutionTask, fallbackAgentId: string): void | Promise<void>
   onTaskFailed(task: ExecutionTask, error: Error): void | Promise<void>
 }
+
+export interface ClarificationRequest {
+  taskId: string
+  agentId: string
+  question: string
+  options?: string[]
+  createdAt: string
+  status: 'pending' | 'answered' | 'timeout'
+  answer?: string
+}
+
+export interface TaskProgress {
+  taskId: string
+  agentId: string
+  percent: number
+  status: string
+  detail?: string
+  updatedAt: string
+}
+
+export interface HelpRequest {
+  taskId: string
+  agentId: string
+  targetAgentId: string
+  request: string
+  createdAt: string
+  status: 'pending' | 'fulfilled' | 'rejected'
+  result?: string
+}
+
+export interface AgentCapabilities {
+  canAskClarification: boolean
+  canRejectTask: boolean
+  canReportProgress: boolean
+  canRequestHelp: boolean
+  canDelegateSubtask: boolean
+}
