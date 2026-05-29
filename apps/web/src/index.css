@@ -1078,24 +1078,6 @@
     overflow: hidden;
   }
 
-  .agenthub-chat-shell .agenthub-welcome-root::after {
-    content: '';
-    position: absolute;
-    inset: auto 0 0;
-    height: 11rem;
-    pointer-events: none;
-    background: linear-gradient(
-      to bottom,
-      transparent 0%,
-      color-mix(in srgb, var(--agenthub-app-bg, #f7f7f7) 42%, transparent) 34%,
-      color-mix(in srgb, var(--agenthub-app-bg, #f7f7f7) 88%, transparent) 68%,
-      var(--agenthub-app-bg, #f7f7f7) 100%
-    );
-    backdrop-filter: blur(10px);
-    mask-image: linear-gradient(to bottom, transparent 0%, black 32%, black 100%);
-    z-index: 0;
-  }
-
   .agenthub-chat-shell .agenthub-welcome-root > * {
     position: relative;
     z-index: 1;
@@ -1119,13 +1101,7 @@
 
   .agenthub-composer-dock {
     position: relative;
-    background: linear-gradient(
-      to top,
-      var(--agenthub-app-bg, #f7f7f7) 0%,
-      color-mix(in srgb, var(--agenthub-app-bg, #f7f7f7) 92%, transparent) 54%,
-      transparent 100%
-    );
-    backdrop-filter: blur(10px);
+    background: transparent;
   }
 
   .agenthub-welcome-composer-dock {

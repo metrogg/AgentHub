@@ -50,6 +50,8 @@ interface CodeAgentRunOptions {
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
   toolConfig?: Record<string, unknown>
   promptFile?: string
+  sessionId?: string
+  continueSession?: boolean
 }
 
 interface CodeAgentModelTarget {
@@ -63,23 +65,17 @@ interface CodeAgentModelTarget {
   anthropicBaseUrl?: string
 }
 
-interface CatalogModelEntry {
-  id?: string
-  enabled?: boolean
-  name?: string
-  provider?: string
-  modelId?: string
-  apiEndpoint?: string
-  anthropicEndpoint?: string
-  apiKeyEnv?: string
-  apiKey?: string
-}
-
 interface CodeAgentCommandResult {
   code: number
   output: string
   finalMessage?: string
   metadata: CodeAgentRunMetadata
+  sessionId?: string
+}
+
+interface CodeAgentRuntimeOptions {
+  ignoreModelEnv?: boolean
+  skipLocalCodexConfig?: boolean
 }
 
 
@@ -172,7 +168,6 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         '-p',
         '--input-format',
         'text',
-        '--no-session-persistence',
         '--permission-mode',
         permissionMode,
         '--output-format',
@@ -180,6 +175,14 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         '--include-partial-messages',
         '--verbose',
       ]
+      // 支持会话恢复：如果有 sessionId，使用 --session-id 保持会话连续性
+      if (options?.sessionId) {
+        args.push('--session-id', options.sessionId)
+      }
+      // 如果是继续输出，使用 --continue 参数
+      if (options?.continueSession) {
+        args.push('--continue')
+      }
       if (cfg['maxTurns']) {
         args.push('--max-turns', String(cfg['maxTurns']))
       }
@@ -225,7 +228,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       if (options?.sandboxPolicy !== 'read-only' && cfg['skipPermissions'] !== false) {
         args.push('--dangerously-skip-permissions')
       }
-      args.push(prompt)
+      args.push(options?.promptFile ? buildFileBackedPrompt(options.promptFile) : prompt)
       if (options?.promptFile) args.push('--file', options.promptFile)
       return args
     },
@@ -255,14 +258,15 @@ export async function* streamCodeAgentReply(
   history: Array<{ senderType: string; content: string }>,
   signal?: AbortSignal,
   envelope?: AgentExecutionEnvelope,
+  continueSession?: boolean,
 ): AsyncGenerator<CodeAgentReplyChunk, void, unknown> {
-  const type = profile.codeAgentType
+  let type = profile.codeAgentType
   if (!type) {
     yield '这个 Agent 配置为 Coding Tools，但还没有绑定 CLI。'
     return
   }
 
-  const adapter = adapters[type]
+  let adapter = adapters[type]
   if (!adapter) {
     yield `不支持的 Coding Tools 绑定：${type}。`
     return
@@ -293,10 +297,46 @@ export async function* streamCodeAgentReply(
     { capabilityTags: profile.capabilityTags, limit: 3 },
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
-  const installed = await isCommandInstalled(adapter.command)
   const toolConfig = await resolveToolConfig(type)
-  const modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
-  const runtimeModelTarget = normalizeCodeAgentModelTarget(type, modelTarget)
+  const requestedModelId = resolveCodeAgentModelId(profile.modelId, toolConfig)
+  let modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+  if (
+    !modelTarget &&
+    requestedModelId &&
+    (type === 'opencode' || !isNativeCodeAgentModelIdCompatible(type, requestedModelId))
+  ) {
+    modelTarget = await resolveRuntimeModelTarget(requestedModelId)
+  }
+  let runtimeModelTarget = normalizeCodeAgentModelTarget(type, modelTarget)
+  let installed = await isCommandInstalled(adapter.command)
+  let ignoreModelEnv = false
+  let skipLocalCodexConfig = false
+  if (shouldRouteModelThroughOpenCode(type, modelTarget, runtimeModelTarget, requestedModelId)) {
+    const opencodeTarget = modelTarget ?? (await resolveRuntimeModelTarget(requestedModelId))
+    const opencodeAdapter = adapters.opencode
+    const opencodeInstalled = await isCommandInstalled(opencodeAdapter.command)
+    const opencodeConfigured =
+      opencodeInstalled && opencodeTarget
+        ? await isRuntimeConfigured('opencode', opencodeAdapter, opencodeTarget.modelId, opencodeTarget)
+        : false
+    if (opencodeInstalled && opencodeConfigured && opencodeTarget) {
+      type = 'opencode'
+      adapter = opencodeAdapter
+      runtimeModelTarget = opencodeTarget
+      modelTarget = opencodeTarget
+      installed = opencodeInstalled
+    } else {
+      yield buildIncompatibleCodeAgentModelMessage({
+        requestedModelId,
+        selectedRuntime: type,
+        selectedRuntimeName: adapter.displayName,
+        modelTarget: opencodeTarget ?? modelTarget,
+        opencodeInstalled,
+        opencodeConfigured,
+      })
+      return
+    }
+  }
   const effectiveModelId = runtimeModelTarget?.modelId ?? null
   const configured = await isRuntimeConfigured(type, adapter, effectiveModelId, runtimeModelTarget)
   const executionEnabled = await getBooleanSetting(
@@ -363,10 +403,12 @@ export async function* streamCodeAgentReply(
     toolConfig,
     envelope?.envAllowlist,
     profile.roleType,
+    { ignoreModelEnv, skipLocalCodexConfig },
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
       onText: (text) => push(text),
     },
+    continueSession,
   )
     .then((value) => {
       result = value
@@ -391,7 +433,12 @@ export async function* streamCodeAgentReply(
   const finalResult = result as CodeAgentCommandResult | null
   if (!finalResult) return
 
-  yield { kind: 'code-agent-metadata', metadata: finalResult.metadata }
+  // 将 session ID 包含在 metadata 中，用于会话恢复
+  const metadataWithSession = finalResult.sessionId
+    ? { ...finalResult.metadata, sessionId: finalResult.sessionId }
+    : finalResult.metadata
+
+  yield { kind: 'code-agent-metadata', metadata: metadataWithSession }
 
   const finalMessage = stripReasoningTags(finalResult.finalMessage?.trim() || '')
   if (finalResult.code === 0 && finalMessage && !streamedText) {
@@ -405,7 +452,7 @@ export async function* streamCodeAgentReply(
       yield buildCodeAgentCompletionMessage(finalResult.metadata, cleanedOutput)
       return
     }
-    yield limitOutput(cleanedOutput || '(Coding Tools 没有返回正文)', 16_000)
+    yield limitFinalOutput(cleanedOutput || '(Coding Tools 没有返回正文)')
     return
   }
   if (finalResult.code === 0) return
@@ -418,105 +465,141 @@ async function resolveCodeAgentModelTarget(
   agentModelId?: string | null,
   toolConfig?: Record<string, unknown>,
 ): Promise<CodeAgentModelTarget | null> {
-  const effectiveModelId = resolveCodeAgentModelId(agentModelId, toolConfig)
-  if (!effectiveModelId) return null
+  for (const candidate of resolveCodeAgentModelCandidates(agentModelId, toolConfig)) {
+    const selected = await resolveModelConfig(candidate)
+    if (!selected?.modelId) continue
 
-  const selected = await resolveModelConfig(effectiveModelId)
-  if (!selected?.modelId) return null
+    const providerKey = safeProviderKey(selected.provider || selected.id)
+    const openaiBaseUrl = selected.apiEndpoint?.replace(/\/$/, '')
+    const anthropicBaseUrl =
+      selected.anthropicEndpoint?.replace(/\/$/, '') ||
+      (isAnthropicLike(selected.provider, selected.apiEndpoint) ? openaiBaseUrl : undefined)
 
-  if (!selected.apiKey) {
-    const fallback = await resolveConfiguredCatalogModelTarget(type, selected.modelId)
-    if (fallback) return fallback
+    return {
+      catalogId: selected.id,
+      provider: selected.provider,
+      providerKey,
+      modelId: selected.modelId,
+      apiKey: selected.apiKey,
+      apiKeySource: selected.apiKeySource,
+      openaiBaseUrl,
+      anthropicBaseUrl,
+    }
   }
 
-  const providerKey = safeProviderKey(selected.provider || selected.id)
-  const openaiBaseUrl = selected.apiEndpoint?.replace(/\/$/, '')
-  const anthropicBaseUrl =
-    selected.anthropicEndpoint?.replace(/\/$/, '') ||
-    (isAnthropicLike(selected.provider, selected.apiEndpoint) ? openaiBaseUrl : undefined)
-
-  return {
-    catalogId: selected.id,
-    provider: selected.provider,
-    providerKey,
-    modelId: selected.modelId,
-    apiKey: selected.apiKey,
-    apiKeySource: selected.apiKeySource,
-    openaiBaseUrl,
-    anthropicBaseUrl,
-  }
+  return null
 }
 
-async function resolveConfiguredCatalogModelTarget(
-  type: CodeAgentType,
-  avoidModelId?: string,
-): Promise<CodeAgentModelTarget | null> {
+async function resolveRuntimeModelTarget(modelId?: string | null): Promise<CodeAgentModelTarget | null> {
+  const effectiveModelId = modelId?.trim()
+  if (!effectiveModelId) return null
+
   try {
-    const rows = await db.select().from(settings).where(eq(settings.key, 'MODEL_CATALOG')).limit(1)
-    const parsed = JSON.parse(rows[0]?.value || '[]') as CatalogModelEntry[]
-    if (!Array.isArray(parsed)) return null
+    const runtime = await resolveLlmRuntimeConfig(effectiveModelId)
+    const provider = runtime.provider?.trim() || 'openai'
+    const baseUrl = runtime.baseUrl?.trim().replace(/\/$/, '')
+    const anthropicBaseUrl = isAnthropicLike(provider, baseUrl) ? baseUrl : undefined
+    const openaiBaseUrl = anthropicBaseUrl ? undefined : baseUrl
 
-    for (const item of parsed) {
-      if (item.enabled === false || !item.modelId?.trim()) continue
-      const apiKey = item.apiKey?.trim() || (item.apiKeyEnv ? readEnv(item.apiKeyEnv) : undefined)
-      if (!apiKey) continue
-      if (avoidModelId && item.modelId === avoidModelId) continue
-
-      const provider = item.provider?.trim() || 'openai'
-      const openaiBaseUrl = item.apiEndpoint?.trim().replace(/\/$/, '')
-      const anthropicBaseUrl =
-        item.anthropicEndpoint?.trim().replace(/\/$/, '') ||
-        (isAnthropicLike(provider, openaiBaseUrl) ? openaiBaseUrl : undefined)
-      const candidate: CodeAgentModelTarget = {
-        catalogId: item.id,
-        provider,
-        providerKey: safeProviderKey(provider || item.id || 'agenthub'),
-        modelId: item.modelId,
-        apiKey,
-        apiKeySource: item.apiKey?.trim() ? 'settings' : item.apiKeyEnv,
-        openaiBaseUrl,
-        anthropicBaseUrl,
-      }
-      if (type === 'claude-code' && !isClaudeCodeModelTarget(candidate)) continue
-      if (type === 'codex' && !candidate.openaiBaseUrl) continue
-      if (type === 'gemini' && !/^(gemini|google)$/i.test(provider)) continue
-      return candidate
+    return {
+      provider,
+      providerKey: safeProviderKey(provider),
+      modelId: runtime.model?.trim() || effectiveModelId,
+      apiKey: runtime.apiKey ?? undefined,
+      apiKeySource: runtime.apiKeySource ?? undefined,
+      openaiBaseUrl,
+      anthropicBaseUrl,
     }
   } catch {
     return null
   }
-  return null
 }
 
 function resolveCodeAgentModelId(agentModelId?: string | null, toolConfig?: Record<string, unknown>) {
+  return resolveCodeAgentModelCandidates(agentModelId, toolConfig)[0] ?? null
+}
+
+function resolveCodeAgentModelCandidates(
+  agentModelId?: string | null,
+  toolConfig?: Record<string, unknown>,
+) {
   const fromAgent = typeof agentModelId === 'string' ? agentModelId.trim() : ''
   const fromTool = typeof toolConfig?.['modelId'] === 'string' ? toolConfig['modelId'].trim() : ''
-  return fromAgent || fromTool || null
+  return [...new Set([fromAgent, fromTool].filter(Boolean))]
 }
 
 function normalizeCodeAgentModelTarget(
   type: CodeAgentType,
   modelTarget?: CodeAgentModelTarget | null,
 ) {
-  if (type !== 'claude-code') return modelTarget ?? null
   if (!modelTarget) return null
-  return isClaudeCodeModelTarget(modelTarget) ? modelTarget : null
+  if (type === 'claude-code') return isClaudeCodeModelTarget(modelTarget) ? modelTarget : null
+  if (type === 'codex') return isCodexModelTarget(modelTarget) ? modelTarget : null
+  if (type === 'gemini') return isGeminiModelTarget(modelTarget) ? modelTarget : null
+  return modelTarget
+}
+
+function shouldRouteModelThroughOpenCode(
+  type: CodeAgentType,
+  modelTarget?: CodeAgentModelTarget | null,
+  runtimeModelTarget?: CodeAgentModelTarget | null,
+  requestedModelId?: string | null,
+) {
+  if (type === 'opencode') return false
+  if (modelTarget && !runtimeModelTarget) return true
+  if (
+    !modelTarget &&
+    requestedModelId &&
+    !isNativeCodeAgentModelIdCompatible(type, requestedModelId)
+  ) {
+    return true
+  }
+  return false
+}
+
+function isNativeCodeAgentModelIdCompatible(type: CodeAgentType, modelId?: string | null) {
+  const normalized = modelId?.trim().toLowerCase()
+  if (!normalized || type === 'opencode') return true
+  if (type === 'claude-code') return /\b(claude|sonnet|opus|haiku)\b/i.test(normalized)
+  if (type === 'gemini') return /\bgemini\b|\bgoogle\b/i.test(normalized)
+  if (type === 'codex') {
+    return /^(gpt|o[1-9](?:\b|-)|chatgpt|codex|computer-use|openai\/)/i.test(normalized)
+  }
+  return true
 }
 
 function isClaudeCodeModelTarget(modelTarget: CodeAgentModelTarget) {
-  const modelId = modelTarget.modelId.trim()
-  if (modelTarget.anthropicBaseUrl) return true
-  if (!/\b(claude|sonnet|opus|haiku)\b/i.test(modelId)) return false
-
   const provider = modelTarget.provider.trim().toLowerCase()
   const providerKey = modelTarget.providerKey.trim().toLowerCase()
   const endpoint = (modelTarget.anthropicBaseUrl || modelTarget.openaiBaseUrl || '').toLowerCase()
+  if (modelTarget.anthropicBaseUrl) return true
   return (
     provider.includes('anthropic') ||
     provider.includes('claude') ||
     providerKey.includes('anthropic') ||
     providerKey.includes('claude') ||
-    endpoint.includes('anthropic.com')
+    endpoint.includes('anthropic.com') ||
+    endpoint.includes('/anthropic')
+  )
+}
+
+function isCodexModelTarget(modelTarget: CodeAgentModelTarget) {
+  const provider = modelTarget.provider.trim().toLowerCase()
+  const providerKey = modelTarget.providerKey.trim().toLowerCase()
+  const endpoint = (modelTarget.openaiBaseUrl || modelTarget.anthropicBaseUrl || '').toLowerCase()
+  return provider === 'openai' || providerKey === 'openai' || endpoint.includes('api.openai.com')
+}
+
+function isGeminiModelTarget(modelTarget: CodeAgentModelTarget) {
+  const provider = modelTarget.provider.trim().toLowerCase()
+  const providerKey = modelTarget.providerKey.trim().toLowerCase()
+  const modelId = modelTarget.modelId.trim().toLowerCase()
+  return (
+    provider.includes('gemini') ||
+    provider.includes('google') ||
+    providerKey.includes('gemini') ||
+    providerKey.includes('google') ||
+    modelId.includes('gemini')
   )
 }
 
@@ -580,6 +663,43 @@ function codeAgentBlockerText(options: {
   ].filter(Boolean)
   if (!blockers.length) return '当前配置已满足自动执行条件。'
   return `当前阻塞项：${blockers.join('、')}。`
+}
+
+function buildIncompatibleCodeAgentModelMessage(options: {
+  requestedModelId?: string | null
+  selectedRuntime: CodeAgentType
+  selectedRuntimeName: string
+  modelTarget?: CodeAgentModelTarget | null
+  opencodeInstalled: boolean
+  opencodeConfigured: boolean
+}) {
+  const modelLabel =
+    options.modelTarget?.modelId ?? options.requestedModelId?.trim() ?? '当前选中模型'
+  const providerLabel = options.modelTarget
+    ? `${options.modelTarget.provider}/${options.modelTarget.modelId}`
+    : modelLabel
+  const runtimeLabel = options.selectedRuntimeName || options.selectedRuntime
+  const blockers = [
+    !options.opencodeInstalled ? 'OpenCode 未安装或不在 PATH' : '',
+    options.opencodeInstalled && !options.opencodeConfigured
+      ? 'OpenCode 缺少该模型档案可用的 API Key/Base URL'
+      : '',
+    !options.modelTarget ? '未找到可注入 OpenCode 的模型档案' : '',
+  ].filter(Boolean)
+
+  return [
+    `**${runtimeLabel} 未启动**`,
+    '',
+    `Agent 选择的模型 \`${modelLabel}\` 不是 ${runtimeLabel} 可直接运行的原生模型。为避免再次触发 unsupported_vendor，AgentHub 没有把它交给 ${runtimeLabel}。`,
+    '',
+    `- 选中模型：${providerLabel}`,
+    `- 自动改投 OpenCode：${options.opencodeInstalled && options.opencodeConfigured ? '可用' : '不可用'}`,
+    blockers.length ? `- 阻塞项：${blockers.join('、')}` : '',
+    '',
+    '请把该 Agent 的 Coding Tools 改为 OpenCode，或把 Agent 模型换成当前 CLI 原生支持的模型；OpenCode 安装并配置好后会自动接管这类非原生模型。',
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 function buildCodeAgentPrompt(
@@ -678,10 +798,12 @@ async function runCodeAgentCommand(
   toolConfig?: Record<string, unknown>,
   envAllowlist?: string[],
   agentRoleType?: string,
+  runtimeOptions: CodeAgentRuntimeOptions = {},
   hooks: {
     onMetadata?: (metadata: CodeAgentRunMetadata) => void
     onText?: (text: string) => void
   } = {},
+  continueSession?: boolean,
 ): Promise<CodeAgentCommandResult> {
   cwd = cwd?.trim() || undefined
   const outputPath =
@@ -693,11 +815,14 @@ async function runCodeAgentCommand(
       : undefined
   const promptFile =
     adapter.promptMode === 'file' ? writeCodeAgentPromptFile(adapter.command, prompt) : undefined
-  const commandPrompt =
-    process.platform === 'win32' &&
-    (adapter.command === 'codex' || adapter.command === 'claude')
+  const commandPrompt = promptFile
+    ? buildFileBackedPrompt(promptFile)
+    : process.platform === 'win32' &&
+        (adapter.command === 'codex' || adapter.command === 'claude')
       ? buildAsciiSafePrompt(prompt)
       : prompt
+  // 生成或获取 session ID 用于会话恢复
+  const sessionId = continueSession ? undefined : crypto.randomUUID()
   const args = adapter.buildArgs(commandPrompt, {
     cwd,
     agentRoleType,
@@ -707,6 +832,8 @@ async function runCodeAgentCommand(
     sandboxPolicy,
     toolConfig,
     promptFile,
+    sessionId,
+    continueSession,
   })
 
   if (signal?.aborted) {
@@ -734,6 +861,7 @@ async function runCodeAgentCommand(
   let claudeStdoutBuffer = ''
   let claudeFinalMessage = ''
   let claudeHasStreamedText = false
+  let claudeSessionId: string | undefined
   const closeRunningSteps = (status: 'completed' | 'failed' = 'completed') => {
     for (const step of liveSteps) {
       if (step.status === 'running') step.status = status
@@ -897,7 +1025,7 @@ async function runCodeAgentCommand(
 
   const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
     cwd,
-    env: await mergedEnv(adapter, modelTarget, envAllowlist),
+    env: await mergedEnv(adapter, modelTarget, envAllowlist, runtimeOptions),
     stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -944,6 +1072,9 @@ async function runCodeAgentCommand(
             onAssistantText: (text) => {
               claudeFinalMessage ||= text
               if (!claudeHasStreamedText) hooks.onText?.(text)
+            },
+            onSessionId: (sessionId) => {
+              claudeSessionId = sessionId
             },
           })
         } else {
@@ -1012,7 +1143,13 @@ async function runCodeAgentCommand(
     liveLogs,
     liveSteps,
   })
-  return { ...parsed, code: effectiveCode, finalMessage: finalMessage || undefined, metadata }
+  return {
+    ...parsed,
+    code: effectiveCode,
+    finalMessage: finalMessage || undefined,
+    metadata,
+    sessionId: claudeSessionId,
+  }
 }
 
 function buildAsciiSafePrompt(prompt: string) {
@@ -1248,8 +1385,8 @@ function runtimeTypeForAdapter(adapter: CodeAgentAdapter): CodeAgentType {
   return (entry?.[0] as CodeAgentType | undefined) ?? 'codex'
 }
 
-function requiresCodeAgentOutputReview(adapter: CodeAgentAdapter) {
-  return adapter.command === 'codex' || adapter.command === 'claude'
+function requiresCodeAgentOutputReview(_adapter: CodeAgentAdapter) {
+  return false
 }
 
 async function readProcessStream(
@@ -1282,6 +1419,7 @@ function consumeClaudeStreamJson(
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
     onText: (text: string) => void
     onAssistantText?: (text: string) => void
+    onSessionId?: (sessionId: string) => void
   },
 ) {
   const combined = previousBuffer + chunk
@@ -1369,6 +1507,7 @@ function parseClaudeJsonLine(
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
     onText: (text: string) => void
     onAssistantText?: (text: string) => void
+    onSessionId?: (sessionId: string) => void
   },
 ) {
   const trimmed = line.trim()
@@ -1383,6 +1522,10 @@ function parseClaudeJsonLine(
 
   if (payload.type === 'system' && payload.subtype === 'init') {
     handlers.addLog('event', `Claude Code 初始化：${payload.cwd || 'workspace'}`)
+    // 捕获 session_id 用于会话恢复
+    if (payload.session_id && typeof payload.session_id === 'string') {
+      handlers.onSessionId?.(payload.session_id)
+    }
     return
   }
 
@@ -2032,6 +2175,7 @@ async function mergedEnv(
   adapter?: CodeAgentAdapter,
   modelTarget?: CodeAgentModelTarget | null,
   allowlist?: string[],
+  runtimeOptions: CodeAgentRuntimeOptions = {},
 ): Promise<Record<string, string>> {
   const allowedKeys = new Set(allowlist?.length ? allowlist : DEFAULT_ENV_ALLOWLIST)
   const base: Record<string, string> = {}
@@ -2061,15 +2205,32 @@ async function mergedEnv(
 
   normalizeWindowsProcessEnv(base, allowedKeys)
   applyModelTargetEnv(base, adapter, modelTarget)
+  if (runtimeOptions.ignoreModelEnv) removeModelEnv(base, adapter)
 
   if (adapter?.command === 'opencode' && modelTarget) {
     base.OPENCODE_CONFIG = prepareOpencodeRuntimeConfig(modelTarget)
   }
   if (adapter?.command !== 'codex') return base
 
-  const runtimeHome = prepareCodexRuntimeHome(modelTarget)
+  const runtimeHome = prepareCodexRuntimeHome(modelTarget, runtimeOptions.skipLocalCodexConfig)
   base.CODEX_HOME = runtimeHome
   return base
+}
+
+function removeModelEnv(base: Record<string, string>, adapter?: CodeAgentAdapter) {
+  if (!adapter) return
+  if (adapter.command === 'claude') {
+    delete base.ANTHROPIC_MODEL
+    delete base.CLAUDE_CODE_MODEL
+    return
+  }
+  if (adapter.command === 'codex') {
+    delete base.OPENAI_MODEL
+    return
+  }
+  if (adapter.command === 'gemini') {
+    delete base.GEMINI_MODEL
+  }
 }
 
 function normalizeWindowsProcessEnv(base: Record<string, string>, allowedKeys: Set<string>) {
@@ -2251,7 +2412,10 @@ function codexRuntimeHome() {
   )
 }
 
-function prepareCodexRuntimeHome(modelTarget?: CodeAgentModelTarget | null) {
+function prepareCodexRuntimeHome(
+  modelTarget?: CodeAgentModelTarget | null,
+  skipLocalConfig = false,
+) {
   const sourceHome = codexConfigHome()
   const runtimeHome = resolve(
     codexRuntimeHome(),
@@ -2260,7 +2424,7 @@ function prepareCodexRuntimeHome(modelTarget?: CodeAgentModelTarget | null) {
   mkdirSync(runtimeHome, { recursive: true })
   if (modelTarget) {
     writeFileSync(resolve(runtimeHome, 'config.toml'), buildCodexRuntimeConfig(modelTarget), 'utf8')
-  } else {
+  } else if (!skipLocalConfig) {
     syncCodexRuntimeFile(sourceHome, runtimeHome, 'config.toml')
   }
   syncCodexRuntimeFile(sourceHome, runtimeHome, 'auth.json')
@@ -2393,7 +2557,7 @@ function isAnthropicLike(provider?: string, baseUrl?: string) {
   return (
     normalized === 'anthropic' ||
     normalized === 'claude' ||
-    Boolean(baseUrl?.includes('anthropic.com'))
+    Boolean(baseUrl?.includes('anthropic.com') || baseUrl?.includes('/anthropic'))
   )
 }
 
@@ -2523,7 +2687,7 @@ function buildCodeAgentCompletionMessage(metadata: CodeAgentRunMetadata, fallbac
   const files = metadata.files ?? []
   const commands = metadata.commands ?? []
   const visibleFallback = sanitizeCodeAgentFallbackText(fallback)
-  if (!files.length && visibleFallback) return limitOutput(visibleFallback, 4000)
+  if (!files.length && visibleFallback) return limitFinalOutput(visibleFallback)
 
   const lines = ['Coding Tools 已执行完成。']
   if (metadata.runtime) lines.push(`运行时：${metadata.runtime}`)
@@ -2595,10 +2759,16 @@ function cleanDiagnosticOutput(output: string) {
 }
 
 function friendlyCodeAgentError(output: string) {
+  if (/issue with the selected model|may not exist|Run --model to pick a different model/i.test(output)) {
+    return [
+      '当前 Coding Tools 使用的模型名称不被该 CLI 端点接受。',
+      'AgentHub 会在执行前拦截非原生模型并尝试改用 OpenCode；如果仍看到这个错误，通常是本机 CLI 配置里残留了不兼容模型。请清理该 CLI 的本机 model 配置，或把这个 Agent 的 Coding Tools 改为 OpenCode。',
+    ].join('\n')
+  }
   if (/unsupported_vendor|specified model is not supported at this endpoint/i.test(output)) {
     return [
-      'Claude Code 已经使用 Anthropic 兼容端点发起请求，但该端点拒绝了当前模型名。',
-      '请检查模型档案里的 Anthropic 端点和 modelId 是否是该端点支持的精确组合；例如 DeepSeek 的 Anthropic 兼容端点可能不接受当前填写的 deepseek-v4-pro。',
+      'Claude Code 使用的端点拒绝了当前模型名。Claude Code 只能稳定运行 Claude/Anthropic 原生模型，非原生模型应交给 OpenCode。',
+      '请把这个 Agent 的 Coding Tools 改为 OpenCode，或把 Agent 模型换成 Claude Code 原生支持的 Claude/Sonnet/Opus/Haiku 模型。',
     ].join('\n')
   }
   if (/Coding Tools timed out after/i.test(output)) {
@@ -2642,6 +2812,10 @@ function quoteForSh(value: string) {
 }
 
 function limitOutput(output: string, max: number) {
-  if (output.length <= max) return output
+  if (max <= 0 || output.length <= max) return output
   return `${output.slice(0, max)}\n... 输出已截断 ...`
+}
+
+function limitFinalOutput(output: string) {
+  return limitOutput(output, env.AGENTHUB_CODE_AGENT_OUTPUT_LIMIT)
 }

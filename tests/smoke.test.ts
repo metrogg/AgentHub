@@ -32,7 +32,7 @@ beforeAll(async () => {
   globalMockedFetch = async (input, init) => {
     const url = String(input)
     if (url.includes('/chat/completions') || url.includes('/v1/messages')) {
-      return mockSseStream(['Task completed successfully.'])
+      return mockLlmResponse(url, init)
     }
     return originalFetch(input, init)
   }
@@ -72,6 +72,27 @@ function mockSseStream(chunks: string[]) {
     status: 200,
     headers: { 'content-type': 'text/event-stream' },
   })
+}
+
+function mockLlmResponse(url: string, init?: RequestInit) {
+  const body = parseRequestJson(init)
+  if (body.stream === false) {
+    if (url.includes('/v1/messages')) {
+      return Response.json({ content: [{ type: 'text', text: 'Task completed successfully.' }] })
+    }
+    return Response.json({ choices: [{ message: { content: 'Task completed successfully.' } }] })
+  }
+  return mockSseStream(['Task completed successfully.'])
+}
+
+function parseRequestJson(init?: RequestInit): Record<string, unknown> {
+  if (typeof init?.body !== 'string') return {}
+  try {
+    const parsed = JSON.parse(init.body)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
 }
 
 async function createLlmWorkspaceAgent(

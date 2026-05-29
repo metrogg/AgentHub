@@ -1484,7 +1484,7 @@ const Composer: FC = () => {
           }
         }}
       >
-        <div className="relative rounded-3xl border border-neutral-200 bg-white p-3 shadow-[0_10px_40px_rgba(15,23,42,0.10)] focus-within:border-neutral-300">
+        <div className="relative rounded-3xl border border-neutral-200 bg-white p-3 focus-within:border-neutral-300">
           {menu && (
             <ComposerMenu
               key={menu}
@@ -3264,17 +3264,27 @@ const CodeAgentRunDetails: FC<{
 )
 
 const CodeAgentOutputReviewCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+  const messageId = useMessage((message) => message.id)
+  const currentSession = useChatStore((state) => state.currentSession)
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
+  )
+  const sendMessageToSession = useChatStore((state) => state.sendMessageToSession)
   const finalMessage = (data.finalMessage ?? '').trim()
   const reviewRequired =
     data.reviewRequired || data.runtime === 'codex' || data.runtime === 'claude-code'
   const startsExpanded = finalMessage.length <= 1600 && finalMessage.split(/\r?\n/).length <= 14
   const [expanded, setExpanded] = useState(startsExpanded)
   const [confirmed, setConfirmed] = useState(false)
+  const [continuing, setContinuing] = useState(false)
+  const [continueError, setContinueError] = useState('')
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     setExpanded(startsExpanded)
     setConfirmed(false)
+    setContinuing(false)
+    setContinueError('')
     setCopied(false)
   }, [finalMessage, startsExpanded])
 
@@ -3286,6 +3296,13 @@ const CodeAgentOutputReviewCard: FC<{ data: CodeAgentRunMetadata }> = ({ data })
   const hasMore = preview !== finalMessage
   const lineCount = hasFinalMessage ? finalMessage.split(/\r?\n/).length : 0
   const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
+  const sourceMetadata =
+    sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
+      ? (sourceMessage.metadata as Record<string, unknown>)
+      : null
+  const sourceAgentName =
+    typeof sourceMetadata?.agentName === 'string' ? sourceMetadata.agentName.trim() : ''
+  const shouldMentionAgent = currentSession?.type === 'group' && sourceAgentName.length > 0
 
   async function copyFinalMessage() {
     if (!finalMessage) return
@@ -3295,6 +3312,28 @@ const CodeAgentOutputReviewCard: FC<{ data: CodeAgentRunMetadata }> = ({ data })
       window.setTimeout(() => setCopied(false), 1400)
     } catch {
       setCopied(false)
+    }
+  }
+
+  async function continueOutput() {
+    if (!messageId || !currentSession?.id || continuing || confirmed) return
+    const continuationPrompt = buildCodeAgentContinuationPrompt({
+      finalMessage,
+      runtimeLabel,
+      agentName: shouldMentionAgent ? sourceAgentName : null,
+    })
+    setContinuing(true)
+    setContinueError('')
+    try {
+      await sendMessageToSession(currentSession.id, continuationPrompt, {
+        displayContent: '继续输出',
+        replyToMessageId: messageId,
+      })
+      setConfirmed(true)
+    } catch (error) {
+      setContinueError(friendlyErrorMessage(error, '继续输出失败'))
+    } finally {
+      setContinuing(false)
     }
   }
 
@@ -3376,46 +3415,64 @@ const CodeAgentOutputReviewCard: FC<{ data: CodeAgentRunMetadata }> = ({ data })
                 当前为预览，展开后显示完整输出。
               </div>
             )}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={copyFinalMessage}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
-              >
-                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                {copied ? '已复制' : '复制全文'}
-              </button>
-              {hasMore && (
-                <button
-                  type="button"
-                  onClick={() => setExpanded((value) => !value)}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
-                >
-                  <ChevronDown
-                    className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
-                  />
-                  {expanded ? '收起全文' : '展开全文'}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setConfirmed(true)}
-                className={cn(
-                  'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition',
-                  confirmed
-                    ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'bg-neutral-950 text-white hover:bg-neutral-800',
-                )}
-              >
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                {confirmed ? '已确认审核' : '确认已审核'}
-              </button>
-            </div>
           </>
         ) : (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
             本次运行没有返回可锁定的最终正文；过程日志和文件变更仍可在执行明细中查看。
           </div>
+        )}
+        {!running && (
+          <>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {hasFinalMessage && (
+                <>
+                  <button
+                    type="button"
+                    onClick={copyFinalMessage}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? '已复制' : '复制全文'}
+                  </button>
+                  {hasMore && (
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((value) => !value)}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
+                    >
+                      <ChevronDown
+                        className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
+                      />
+                      {expanded ? '收起全文' : '展开全文'}
+                    </button>
+                  )}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => void continueOutput()}
+                disabled={continuing || confirmed || !currentSession?.id}
+                className={cn(
+                  'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition',
+                  confirmed
+                    ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'bg-neutral-950 text-white hover:bg-neutral-800 disabled:bg-neutral-300 disabled:text-neutral-500',
+                )}
+              >
+                {continuing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : confirmed ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                {confirmed ? '已继续输出' : continuing ? '提交中...' : '确认并继续输出'}
+              </button>
+            </div>
+            {continueError && (
+              <div className="mt-2 text-[11px] leading-5 text-red-500">{continueError}</div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -3428,6 +3485,29 @@ function codeAgentReviewPreview(value: string) {
   const firstLines = lines.slice(0, 14).join('\n')
   if (firstLines.length <= 1600) return `${firstLines}\n...`
   return `${firstLines.slice(0, 1600)}\n...`
+}
+
+function buildCodeAgentContinuationPrompt({
+  finalMessage,
+  runtimeLabel,
+  agentName,
+}: {
+  finalMessage: string
+  runtimeLabel: string
+  agentName: string | null
+}) {
+  const tail = finalMessage.trim()
+  const tailPreview =
+    tail.length > 1200 ? `${tail.slice(-1200).trimStart()}` : tail
+  const prefix = agentName ? `@${agentName} ` : ''
+  const lines = [
+    `${prefix}请继续上一轮 ${runtimeLabel} 的输出，不要重复已经给出的内容。`,
+    '如果上一轮已经结束，请补充剩余结论、验证结果和剩余风险；如果还没结束，请从最后一句之后接着写。',
+  ]
+  if (tailPreview) {
+    lines.push(`上一轮输出末尾：\n${tailPreview}`)
+  }
+  return lines.join('\n\n')
 }
 
 const CodeAgentToolsCard: FC<{

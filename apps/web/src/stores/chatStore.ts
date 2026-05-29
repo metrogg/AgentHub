@@ -101,10 +101,20 @@ interface ChatState {
   setSessionWorkspace: (sessionId: string, workspaceId: string | null) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   clearMessages: (sessionId: string) => Promise<void>
-  sendMessage: (content: string) => Promise<{ groupSessionId?: string } | undefined>
+  sendMessage: (
+    content: string,
+    options?: {
+      displayContent?: string
+      replyToMessageId?: string | null
+    },
+  ) => Promise<{ groupSessionId?: string } | undefined>
   sendMessageToSession: (
     sessionId: string,
     content: string,
+    options?: {
+      displayContent?: string
+      replyToMessageId?: string | null
+    },
   ) => Promise<{ groupSessionId?: string } | undefined>
   editMessage: (messageId: string, content: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
@@ -315,13 +325,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  async sendMessage(content) {
+  async sendMessage(content, options) {
     const sessionId = get().currentSessionId
     if (!sessionId) return undefined
-    return get().sendMessageToSession(sessionId, content)
+    return get().sendMessageToSession(sessionId, content, options)
   },
 
-  async sendMessageToSession(sessionId, content) {
+  async sendMessageToSession(sessionId, content, options) {
     cancelledSessions.delete(sessionId)
     set({ agentTyping: true })
     const attachments = get().pendingAttachments
@@ -329,11 +339,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ? appendAttachmentNote(content, attachments)
       : content
     try {
-      const replyToMessageId = get().replyingToMessageId
+      const replyToMessageId = options?.replyToMessageId ?? get().replyingToMessageId
       const msg = await api.sendMessageWithModel(sessionId, {
         content: contentForAgent,
         attachments,
-        displayContent: attachments.length ? content : undefined,
+        displayContent: options?.displayContent ?? (attachments.length ? content : undefined),
         replyToMessageId,
       })
       set((s) => ({

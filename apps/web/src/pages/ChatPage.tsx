@@ -514,7 +514,7 @@ function Welcome() {
         <div className="agenthub-welcome-composer-dock mt-auto w-full max-w-[704px] pb-5">
           <form
             onSubmit={handleSubmit}
-            className="relative rounded-[22px] border border-neutral-200 bg-white p-3 shadow-[0_18px_60px_rgba(15,23,42,0.12)]"
+            className="relative rounded-[22px] border border-neutral-200 bg-white p-3"
           >
             {hint && (
               <div className="absolute -top-9 left-4 rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
