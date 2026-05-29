@@ -231,13 +231,13 @@ function NewSessionDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 px-4 backdrop-blur-md"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-4 backdrop-blur-md"
       role="dialog"
       aria-modal="true"
       onMouseDown={handleClose}
     >
       <div
-        className="agenthub-portal-theme flex h-[78vh] max-h-[660px] min-h-[520px] w-full max-w-[760px] flex-col overflow-hidden rounded-[28px] border border-neutral-200/80 bg-[#f7f7f5] shadow-[0_28px_100px_rgba(15,23,42,0.28)]"
+        className="agenthub-portal-theme flex h-[calc(100vh-2rem)] min-h-0 w-[calc(100vw-2rem)] max-w-[960px] flex-col overflow-hidden rounded-[24px] border border-neutral-200/80 bg-[#f7f7f5] shadow-[0_28px_100px_rgba(15,23,42,0.28)] sm:h-[82vh] sm:max-h-[760px] sm:min-h-[520px]"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="relative flex h-16 shrink-0 items-center justify-center border-b border-neutral-200/80 bg-[#f7f7f5]/95">
@@ -253,8 +253,8 @@ function NewSessionDialog({
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[1.08fr_0.92fr]">
-          <div className="flex min-h-0 flex-col border-r border-neutral-200/80 bg-[#f7f7f5] px-5 py-4">
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(240px,320px)_minmax(0,1fr)] overflow-hidden">
+          <div className="flex min-h-0 min-w-0 flex-col border-r border-neutral-200/80 bg-[#f7f7f5] px-5 py-4">
             <div className="flex h-10 items-center gap-2 rounded-2xl border border-emerald-400/40 bg-white px-3 text-neutral-400 shadow-sm">
               <Search className="h-4 w-4 shrink-0" />
               <input
@@ -312,10 +312,20 @@ function NewSessionDialog({
                 </div>
               )}
             </div>
+
+            <div className="shrink-0 border-t border-neutral-200/70 pt-3">
+              <button
+                type="button"
+                onClick={onManageAgents}
+                className="text-xs text-neutral-400 transition hover:text-neutral-700"
+              >
+                管理 Agent
+              </button>
+            </div>
           </div>
 
-          <div className="flex min-h-0 flex-col bg-white">
-            <div className="border-b border-neutral-200/80 px-6 py-5">
+          <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white">
+            <div className="shrink-0 border-b border-neutral-200/80 px-5 py-4">
               <div className="text-sm font-semibold text-neutral-950">已选成员</div>
               <div className="mt-1 text-xs text-neutral-500">选择后即可创建群聊，标题会用于工作区和会话列表。</div>
               <label className="mt-4 block">
@@ -327,7 +337,7 @@ function NewSessionDialog({
                   className="h-11 w-full rounded-2xl border border-neutral-200 bg-[#fafafa] px-4 text-sm text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-emerald-400"
                 />
               </label>
-              <div className="mt-4 rounded-2xl border border-neutral-200 bg-[#fafafa] p-2">
+              <div className="mt-4 min-w-0 rounded-2xl border border-neutral-200 bg-[#fafafa] p-2">
                 <div className="mb-2 flex items-center justify-between gap-2 px-1">
                   <div className="min-w-0">
                     <div className="text-xs font-medium text-neutral-500">工作空间</div>
@@ -354,7 +364,7 @@ function NewSessionDialog({
                     className="min-w-0 flex-1 bg-transparent text-xs text-neutral-900 outline-none placeholder:text-neutral-400"
                   />
                 </div>
-                <div className="mt-2 max-h-28 overflow-y-auto">
+                <div className="mt-2 max-h-28 overflow-y-auto pr-1">
                   <button
                     type="button"
                     onClick={() => setWorkspaceChoice({ mode: 'new' })}
@@ -407,13 +417,13 @@ function NewSessionDialog({
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
               {selectedAgents.length ? (
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-3">
                   {selectedAgents.map((agent) => (
                     <button
                       key={agent.id}
                       type="button"
                       onClick={() => toggleAgent(agent)}
-                      className="group flex items-center gap-3 rounded-2xl border border-neutral-200 bg-[#fafafa] px-3 py-3 text-left transition hover:border-neutral-300 hover:bg-white"
+                      className="group flex min-w-0 items-center gap-3 rounded-2xl border border-neutral-200 bg-[#fafafa] px-3 py-3 text-left transition hover:border-neutral-300 hover:bg-white"
                     >
                       <span
                         className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl text-sm font-semibold text-white shadow-sm"
@@ -435,8 +445,8 @@ function NewSessionDialog({
               )}
             </div>
 
-            <div className="flex h-20 shrink-0 items-center justify-end gap-3 border-t border-neutral-200/80 bg-white px-6">
-              {createError && <div className="mr-auto max-w-[50%] truncate text-xs text-red-500">{createError}</div>}
+            <div className="flex min-h-20 shrink-0 flex-wrap items-center justify-end gap-3 border-t border-neutral-200/80 bg-white px-5 py-4">
+              {createError && <div className="mr-auto max-w-full truncate text-xs text-red-500">{createError}</div>}
               <button
                 type="button"
                 onClick={handleCreate}
@@ -456,14 +466,6 @@ function NewSessionDialog({
             </div>
           </div>
         </div>
-
-        <button
-          type="button"
-          onClick={onManageAgents}
-          className="absolute bottom-3 left-6 text-xs text-neutral-400 hover:text-neutral-700"
-        >
-          管理 Agent
-        </button>
       </div>
     </div>,
     document.body,

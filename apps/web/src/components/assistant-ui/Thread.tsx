@@ -2963,6 +2963,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
   const commands = data.commands ?? []
   const toolCalls = data.toolCalls ?? []
   const logs = data.logs ?? []
+  const eventCount = logs.filter((log) => displayLogStream(log) === 'event').length
   const steps = useMemo(() => codeAgentProcessSteps(data), [data])
   const hasDetails =
     toolCalls.length > 0 || commands.length > 0 || changedFiles.length > 0 || logs.length > 0
@@ -2972,6 +2973,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
       <CodeAgentStatusCard
         data={data}
         commandCount={commands.length}
+        eventCount={eventCount}
         fileCount={changedFiles.length}
         toolCount={toolCalls.length}
       />
@@ -2994,9 +2996,10 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
 const CodeAgentStatusCard: FC<{
   commandCount: number
   data: CodeAgentRunMetadata
+  eventCount: number
   fileCount: number
   toolCount: number
-}> = ({ commandCount, data, fileCount, toolCount }) => {
+}> = ({ commandCount, data, eventCount, fileCount, toolCount }) => {
   const statusTone =
     data.status === 'running'
       ? 'text-blue-600'
@@ -3039,6 +3042,11 @@ const CodeAgentStatusCard: FC<{
             icon={<FileText className="h-3.5 w-3.5" />}
             label="文件"
             value={fileCount}
+          />
+          <CodeAgentMiniStat
+            icon={<ListTodo className="h-3.5 w-3.5" />}
+            label="事件"
+            value={eventCount}
           />
         </div>
       </div>
@@ -3439,6 +3447,10 @@ function isProgressLikeCodeAgentLog(text: string) {
     ) ||
     /^#\s*Todos\b/i.test(normalized) ||
     /^\[[ xX-]\]\s+/.test(normalized) ||
+    /^[✓✔]\s+/.test(normalized) ||
+    /^[•·]\s+/.test(normalized) ||
+    /^>\s*[\w.-]+\s*·\s*[\w./:+-]+/i.test(normalized) ||
+    /\b(Explore|Plan|Analyze|Review|Build|Write|Read)\b.*\bAgent\b/i.test(normalized) ||
     /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(
       normalized,
     ) ||

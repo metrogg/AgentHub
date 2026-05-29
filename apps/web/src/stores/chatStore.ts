@@ -495,14 +495,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const { messageId, codeAgentRun } = e.payload as {
           messageId: string
           codeAgentRun: CodeAgentRunMetadata
+          agentId?: string
+          agentName?: string
         }
         set((s) => {
           const current = s.streamingMessage
           return {
             streamingMessage:
               current?.id === messageId
-                ? current
-                : { id: messageId, content: current?.content ?? '' },
+                ? {
+                    ...current,
+                    agentId: current.agentId ?? e.payload.agentId,
+                    agentName: current.agentName ?? e.payload.agentName,
+                  }
+                : {
+                    id: messageId,
+                    content: current?.content ?? '',
+                    agentId: e.payload.agentId,
+                    agentName: e.payload.agentName,
+                  },
             streamingCodeAgentRun: codeAgentRun,
             agentTyping: false,
           }

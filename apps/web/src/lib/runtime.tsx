@@ -143,13 +143,25 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
       const streamingAvatarPart = streamingCodeAgentRun
         ? [{ type: 'data' as const, name: 'agent_avatar', data: { runtime: streamingCodeAgentRun.runtime } }]
         : []
+      const streamingRuntimeLabel = streamingCodeAgentRun
+        ? `代码 Agent / ${String(streamingCodeAgentRun.runtime ?? 'cli')}`
+        : null
+      const streamingSenderLabel = [streamingMessage.agentName, streamingRuntimeLabel]
+        .filter(Boolean)
+        .join(' · ')
+      const streamingText =
+        streamingSenderLabel && streamingMessage.content.trim()
+          ? `**${streamingSenderLabel}**\n\n${streamingMessage.content}`
+          : streamingSenderLabel
+            ? `**${streamingSenderLabel}**`
+            : streamingMessage.content
       list.push({
         id: streamingMessage.id,
         role: 'assistant',
         content: streamingCodeAgentRun
           ? [
               ...streamingAvatarPart,
-              ...(streamingMessage.content.trim() ? [{ type: 'text' as const, text: streamingMessage.content }] : []),
+              ...(streamingText.trim() ? [{ type: 'text' as const, text: streamingText }] : []),
               { type: 'data', name: 'code_agent_run', data: streamingCodeAgentRun },
               ...(streamingCodeAgentRun.artifacts?.length
                 ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: streamingCodeAgentRun.artifacts } }]

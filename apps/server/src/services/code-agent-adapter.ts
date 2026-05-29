@@ -217,8 +217,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       const agent =
         typeof cfg['agent'] === 'string' && cfg['agent'].trim()
           ? cfg['agent'].trim()
-          : options?.sandboxPolicy === 'read-only' ||
-              (options?.agentRoleType ? options.agentRoleType !== 'coder' : false)
+          : options?.sandboxPolicy === 'read-only'
             ? 'plan'
             : 'build'
       args.push('--agent', agent)
@@ -781,18 +780,22 @@ async function runCodeAgentCommand(
   const addLog = (stream: 'stdout' | 'stderr' | 'event', text: string) => {
     const cleaned = cleanRuntimeLog(text)
     if (!cleaned) return
-    const normalizedStream = normalizeRuntimeLogStream(stream, cleaned)
+    const normalizedStream =
+      adapter.command === 'opencode'
+        ? normalizeOpencodeRuntimeLogStream(stream, cleaned)
+        : normalizeRuntimeLogStream(stream, cleaned)
     liveLogs.push({
       id: `log-${liveLogs.length + 1}`,
       stream: normalizedStream,
       text: limitOutput(cleaned, 4000),
     })
-    if (normalizedStream === 'stderr') {
+    if (normalizedStream === 'stderr' || normalizedStream === 'event') {
+      const isError = normalizedStream === 'stderr'
       addStep(
         {
           kind: 'log',
-          status: 'failed',
-          title: '错误输出',
+          status: isError ? 'failed' : 'completed',
+          title: isError ? '错误输出' : '过程输出',
           subtitle: limitOutput(cleaned.split(/\r?\n/)[0] ?? cleaned, 180),
           detail: limitOutput(cleaned, 4000),
           stream: normalizedStream,
@@ -1610,8 +1613,25 @@ function normalizeRuntimeLogStream(
   stream: 'stdout' | 'stderr' | 'event',
   text: string,
 ): 'stdout' | 'stderr' | 'event' {
-  if (stream !== 'stderr') return stream
-  return isProgressLikeRuntimeLog(text) ? 'event' : 'stderr'
+  if (stream === 'event') return stream
+  if (isProgressLikeRuntimeLog(text)) return 'event'
+  return stream
+}
+
+function normalizeOpencodeRuntimeLogStream(
+  stream: 'stdout' | 'stderr' | 'event',
+  text: string,
+): 'stdout' | 'stderr' | 'event' {
+  if (stream === 'event') return stream
+  if (isProgressLikeRuntimeLog(text)) return 'event'
+  if (stream === 'stderr' && !isLikelyRuntimeErrorLog(text)) return 'event'
+  return stream
+}
+
+function isLikelyRuntimeErrorLog(text: string) {
+  return /\b(error|failed|failure|exception|fatal|panic|traceback|timeout|timed out|denied|unauthorized|not found|cannot|can't)\b/i.test(
+    text,
+  )
 }
 
 function isProgressLikeRuntimeLog(text: string) {
@@ -1625,7 +1645,11 @@ function isProgressLikeRuntimeLog(text: string) {
     return true
   if (/^#\s*Todos\b/i.test(normalized)) return true
   if (/^\[[ xX-]\]\s+/.test(normalized)) return true
+  if (/^[✓✔]\s+/.test(normalized)) return true
+  if (/^[•·]\s+/.test(normalized)) return true
   if (/^>\s*[\w.-]+\s*·\s*[\w./:+-]+/i.test(normalized)) return true
+  if (/\b(Explore|Plan|Analyze|Review|Build|Write|Read)\b.*\bAgent\b/i.test(normalized))
+    return true
   if (
     /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(
       normalized,
