@@ -74,7 +74,7 @@ docs/        — Product docs, design records and competition materials
 
 ### Server (`apps/server`)
 
-- **Entry**: `src/index.ts` — seeds default user, starts Bun.serve with HTTP + WebSocket upgrade, auto-increments port if occupied
+- **Entry**: `src/index.ts` — seeds default user, recovers unfinished Orchestrator runs, starts Bun.serve with HTTP + WebSocket upgrade, auto-increments port if occupied
 - **Routes**: `src/routes/` — Hono routers mounted at `/api/sessions`, `/api/messages`, `/api/settings`, `/api/workspaces`, `/api/coding-tools`, `/api/skills`, `/api/artifacts`, `/api/orchestrator-runs`
   - `DELETE /api/sessions/all` — bulk delete all sessions and their messages for the current user
 - **LLM**: `src/services/llm-client.ts` — multi-provider streaming client (OpenAI-compatible + Anthropic). Config resolved from DB `settings` table first, then env vars. `src/services/llm.ts` is the thin wrapper used by agent runners.
@@ -96,19 +96,52 @@ All agent execution goes through a unified `AgentRuntime` interface:
 
 `agent-runner.ts` resolves the runtime via `runtimeRegistry.resolveForProfile(profile)` and streams chunks through the WebSocket room.
 
+### Unified Message Routing (`src/routes/messages.ts`)
+
+**Architecture overhaul**: The old dual-path architecture (GroupChatManager.conversationLoop + OrchestratorEngine) has been consolidated into a single routing entry point in `messages.ts`:
+
+```
+POST /api/messages/:sessionId (group chat)
+  → intentRouter.route() classifies intent
+    ├── @mention → extract @AgentName, route to specific agent
+    ├── simple query → handleSimpleReply() → Orchestrator replies directly
+    ├── complex task → generatePlanAndPushTaskBoard() → async LLM plan generation → WS push task_board:plan_ready
+    └── no Orchestrator → system hint message
+```
+
+Key functions:
+- `handleSimpleReply()` — dispatches simple messages to the Orchestrator agent for a direct reply (marked with `isOrchestratorHandoff: true`)
+- `generatePlanAndPushTaskBoard()` — inserts a placeholder message, calls `buildDynamicOrchestratorPlan()` in background, broadcasts `WsEvent.TaskBoardPlanReady` on success or `buildSimpleFallbackPlan()` on failure
+- `buildSimpleFallbackPlan()` — fixed 3-phase template fallback (Architect → Coder → Reviewer) when LLM plan generation fails
+
 ### Orchestrator Engine (`src/services/orchestrator/`)
 
-Multi-agent task orchestration with DAG scheduling:
+Multi-agent task orchestration with DAG scheduling and agent autonomy:
 
-- `orchestrator-engine.ts` — master controller: `dispatch()` → build DAG → schedule → auto-review → conflict resolve → synthesize. `injectAutoReviewTasks()` auto-creates Reviewer tasks for code tasks with `requiresReview: true`.
-- `planner.ts` — LLM-based task DAG generator with **Spec-first planning**: generates a `ProjectSpec` (module decomposition, interface contracts, data flow) before task breakdown, then derives tasks from the spec. Includes fallback templates. Generates `clarificationQuestions` when goal is ambiguous.
-- `types.ts` — `ExecutionPlan`, `ClarificationQuestion`, `ExecutionTask`, `TaskOutputContract`, `TaskValidation`, `TaskLedger`, `ProgressLedger`
+- `orchestrator-engine.ts` — master controller:
+  - `dispatch()` → build DAG → schedule → auto-review → conflict resolve → synthesize
+  - `static resumeRun(runId)` — recovers unfinished runs after server restart: queries DB, resets running tasks to pending, rebuilds TaskGraph, continues scheduling
+  - `injectAutoReviewTasks()` — auto-creates Reviewer tasks for code tasks with `requiresReview: true`
+  - `buildTaskPrompt()` — **context isolation**: injects only user goal + task description + output contract + upstream Blackboard entries (500 char truncation each) + key decisions. No full chat history.
+  - `buildAutonomyInstructions()` — appends agent autonomy markers to each task prompt (`[CLARIFY]`, `[REJECT]`, `[PROGRESS: N%]`, `[HELP agentName]`)
+  - `parseAgentAutonomySignals()` — regex parser for agent output signals, drives CLARIFY/REJECT/PROGRESS/HELP logic
+- `planner.ts` — LLM-based task DAG generator with **Spec-first planning**. Now runs **asynchronously**: HTTP returns immediately, plan is generated in background and pushed via WebSocket. Includes fallback templates. Generates `clarificationQuestions` when goal is ambiguous.
+- `types.ts` — `ExecutionPlan`, `ClarificationQuestion`, `ExecutionTask`, `TaskOutputContract`, `TaskValidation`, `TaskLedger`, `ProgressLedger`, `ClarificationRequest`, `AgentAutonomySignals`
 - `input-guardrails.ts` — security guardrails: pattern matching for dangerous operations (rm -rf, .env deletion, force push, etc.)
 - `task-graph.ts` — DAG utilities (topological sort, cycle detection)
 - `task-scheduler.ts` — concurrent executor (max 3 parallel), dependency-aware
 - `synthesizer.ts` — LLM-based intelligent aggregation of agent outputs
 - `conflict-resolver.ts` — detects file conflicts across agent diffs, auto-merge or LLM 3-way merge
-- `replanning-engine.ts` — dynamic failure recovery: retry with backoff, agent substitution, local replan, task split, escalation to user, global replan
+- `fallback-engine.ts` — task failure handling: retry, downgrade to fallback agent, orchestrator takeover
+
+**Agent Autonomy**: Agents can exercise four autonomous behaviors during task execution:
+
+| Signal | Purpose | Behavior |
+|---|---|---|
+| `[CLARIFY]` | Ask user for clarification | Inserts `task_clarifications` record + WS push + group chat display |
+| `[REJECT]` | Reject task, suggest alternative agent | Auto-finds fallback agent and re-executes |
+| `[PROGRESS: N%]` | Report progress | Updates `progress_percent` + WS push `task_board:task_progress` |
+| `[HELP agentName]` | Request help from another agent | Logged; can trigger cross-agent collaboration |
 
 **Intent Router**: `chatStore.ts` `shouldRouteToOrchestratorPlan()` uses `assessIntentComplexity()` to auto-route complex messages (multi-file, multi-phase, architecture keywords) to orchestrator without explicit `@orchestrator`.
 
@@ -126,28 +159,62 @@ Triggered via `POST /messages/:sessionId/orchestrator-plan/:messageId/dispatch` 
 
 Applies to `workspace-write` and `danger-full-access` sandbox policies. `read-only` agents do not create branches.
 
-### Multi-Agent Orchestration Flow
+### Multi-Agent Orchestration Flow (Unified)
 
 ```
-User: "@orchestrator write a login page" (or complex message auto-routed by Intent Router)
-  → messages.ts: createOrchestratorPlan() → LLM generates ExecutionPlan (task card shown in chat)
-  → If ambiguous: plan includes clarificationQuestions (Clarifier)
-  → User confirms plan → POST .../dispatch → OrchestratorEngine.dispatch()
+User: "@orchestrator make a Shenzhen Tech University intro website"
+  → messages.ts: intentRouter.route() → decision: OrchestratorPlan
+  → generatePlanAndPushTaskBoard()
+    1. Insert placeholder system message "🔍 正在分析任务..."
+    2. Background: call buildDynamicOrchestratorPlan() → LLM generates Task DAG
+    3. On success: broadcast WsEvent.TaskBoardPlanReady (with runId + plan)
+    4. On failure: buildSimpleFallbackPlan() → broadcast TaskBoardPlanReady with fallback
+  → Frontend renders TaskBoard in WorkspaceChatPage (left chat + right task panel)
+  → User clicks "分发执行" → POST .../dispatch → OrchestratorEngine.dispatch()
     1. Create workspace + agents + group session
-    2. Insert orchestratorRuns record
+    2. Insert orchestratorRuns record (status: running)
     3. Planner → TaskGraph → topological order
     4. TaskScheduler: execute tasks by dependency layer (max 3 concurrent)
     5. For each task:
-       - Create child session
+       - buildTaskPrompt() → structured context (goal + task + contract + Blackboard entries)
+       - Create child session for context isolation
        - Git branch isolation (if non read-only)
-       - AgentRuntime.execute() → stream reply (history trimmed for group sessions)
-       - Collect diff artifact
-       - Write output to Blackboard
+       - AgentRuntime.execute() → Agent stream reply
+       - parseAgentAutonomySignals() → handle [CLARIFY]/[REJECT]/[PROGRESS]/[HELP]
+       - Collect diff artifact, write output to Blackboard
        - If code task with requiresReview: auto-inject Reviewer task
+       - Broadcast task_board:task_progress for progress updates
     6. ConflictResolver: detect & resolve file conflicts
     7. Synthesizer: LLM aggregate → post summary to group chat
-    8. Cleanup Blackboard namespace
+    8. Broadcast task_board:run_completed
+    9. Cleanup Blackboard namespace
+
+Server restart recovery:
+  index.ts → query orchestrator_runs WHERE status='running'
+  → OrchestratorEngine.resumeRun(runId) for each
+    → Reset running tasks to pending → rebuild TaskGraph → continue scheduling
 ```
+
+### Task Board & Real-Time UI
+
+The task board replaces the old static Plan Card with a real-time visual DAG display:
+
+**WebSocket events** (`packages/shared/src/constants.ts` `WsEvent`):
+
+| Event | Trigger |
+|---|---|
+| `task_board:plan_ready` | Async plan generation complete |
+| `task_board:task_progress` | Agent reports `[PROGRESS: N%]` |
+| `task_board:run_completed` | Run completes/fails/cancelled |
+| `task_board:clarification_needed` | Agent asks `[CLARIFY]` |
+
+**Frontend components**:
+
+- `TaskBoard.tsx` — left-right layout panel: phases + tasks tree, status icons (Clock/Loader2(animate-spin)/CheckCircle2/XCircle/Ban), progress bar with dynamic colors (<30% red, <70% yellow, ≥70% green)
+- `ClarificationCard.tsx` — interactive card for agent questions: option buttons + free text input, submits answer via API
+- `WorkspaceChatPage.tsx` (`/workspace/:workspaceId/chat/:sessionId`) — left chat (`Thread`) + right TaskBoard panel (w-96, only shown when `taskBoard` is active)
+
+**State management**: `chatStore.taskBoard` stores full run state (runId, phases, tasks with progress, lifecycle status), updated via WebSocket events.
 
 ### Database (`packages/db`)
 
@@ -156,12 +223,16 @@ SQLite with WAL mode. Key tables:
 - `users`, `sessions` (direct/group, with `metadata` JSON), `messages`, `session_members`, `settings`
 - `workspaces`, `workspace_agents`, `workspace_tasks`
 - `orchestrator_runs` — tracks orchestrator dispatch lifecycle (planning → running → synthesizing → completed/failed). `planMessageId` and `summaryMessageId` reference `messages.id` with `onDelete: 'set null'`.
+- `task_clarifications` — records agent clarification questions to the user (question, options, answer, status: pending/answered/timeout)
+- `orchestrator_run_controls` — logs user control actions on runs (pause/resume/cancel/retry_all_failed/skip_task)
 - `blackboard_entries` — namespaced key-value store with versioning
 - `execution_logs` — tracing records for agent runs and tool calls. `sessionId` references `sessions.id` with `onDelete: 'cascade'`.
 
-`workspace_tasks` extended fields for DAG scheduling:
-- `run_id`, `dependencies` (JSON array), `parallel_group`, `max_retries`, `attempt_count`
+`workspace_tasks` extended fields for DAG scheduling + progress + autonomy:
+- `run_id`, `phase_id`, `dependencies` (JSON array), `parallel_group`, `max_retries`, `retry_count`, `timeout`
 - `fallback_agent_id`, `artifacts` (JSON), `started_at`, `completed_at`, `error_log`
+- `progress_percent` (integer 0-100), `progress_status` (text), `clarification_count` (integer)
+- `input_refs` (JSON, Blackboard input references), `output_key` (Blackboard output key)
 
 DB file defaults to `./storage/agenthub.db`.
 
@@ -170,10 +241,14 @@ DB file defaults to `./storage/agenthub.db`.
 - Vite dev server proxies `/api` → `:8000` and `/ws` → `ws://:8000`
 - Path alias: `@` → `./src`
 - State managed via Zustand stores in `src/stores/` (chatStore, workspaceStore)
-- Routing: React Router with pages: Chat, AgentConfig, AgentWorld, Office, SkillsMarket, OrchestratorRuns, ExecutionLogs, CodingTools, Settings
+  - `chatStore.taskBoard` — real-time task board state (phases, tasks, progress, run lifecycle)
+- Routing: React Router with pages: Chat, AgentConfig, AgentWorld, Office, SkillsMarket, OrchestratorRuns, ExecutionLogs, CodingTools, Settings, WorkspaceChatPage (`/workspace/:workspaceId/chat/:sessionId`)
 - Desktop integration: `src/lib/native.ts` detects Tauri runtime; `src/components/DesktopAppMenu.tsx` renders native menu when in desktop mode
 - API client: `src/lib/api.ts` — typed wrapper around `fetch` for all backend endpoints
-- **Orchestrator Plan Card** (`Thread.tsx`): `OrchestratorPlanCard` renders plan with task list, contract details, clarification questions, diff viewer, and conflict resolution UI. Uses `useMessage` + `useChatStore` for live metadata updates via WebSocket `run:event`.
+- **TaskBoard** (`TaskBoard.tsx`): Real-time DAG task visualization panel with status icons, progress bars (color-coded by percentage), and run lifecycle controls (cancel/retry). Replaces the old static OrchestratorPlanCard.
+- **ClarificationCard** (`ClarificationCard.tsx`): Interactive card rendered in chat when an agent asks a `[CLARIFY]` question. Provides option buttons + free text input with API submission.
+- **Thread.tsx**: Registers `task_board` and `clarification` message parts via `MessagePrimitive.Parts`. Preserves backward compatibility with old `orchestrator_plan` Plan Cards.
+- **runtime.tsx**: `toThreadMessage()` detects `task_board` type messages and extracts plan + runId for rendering.
 
 ### Desktop (`apps/desktop`)
 
@@ -291,11 +366,14 @@ Web env vars (`.env` or Vite):
 - **New DB table**: define in `packages/db/src/schema.ts` with `sqliteTable` + `relations`, then run `bun run db:generate`.
 - **New shared type**: add Zod schema in `packages/shared/src/schemas/` and export from `packages/shared/src/index.ts`.
 - **New frontend page**: create component in `apps/web/src/pages/` and add `<Route>` in `apps/web/src/App.tsx`.
-- **WebSocket events**: server broadcasts via `broadcastSessionEvent`; frontend consumes in `chatStore.handleWSEvent`. Event types are in `packages/shared/src/constants.ts` (`WsEvent`).
+- **WebSocket events**: server broadcasts via `broadcastSessionEvent`; frontend consumes in `chatStore.handleWSEvent`. Event types are in `packages/shared/src/constants.ts` (`WsEvent`). New events: `task_board:plan_ready`, `task_board:task_progress`, `task_board:run_completed`, `task_board:clarification_needed`.
 - **Agent reply flow**: `agent-runner.ts` `runAgentReply()` schedules execution; LLM streams via `message:stream`, completion is persisted and broadcast as `message:completed`.
 
 ## Legacy Code References
 
-The following files are still present and internally referenced by the new Runtime layer, but their primary logic has been migrated:
+The following files are still present and internally referenced by the new Runtime layer, but their primary logic has been migrated or deprecated:
+
 - `src/services/code-agent-adapter.ts` — referenced by `CodeAgentRuntime`
 - `src/services/native-agent-loop.ts` — referenced by `NativeToolRuntime`
+- `src/services/group-chat/group-chat-manager.ts` — **@deprecated**. `conversationLoop()` and `handleMessage()` are no longer called. Group chat messages now route through the unified entry in `messages.ts`. Utility functions (`extractMentions`, `escapeRegExp`, `findOrchestrator`) are preserved for reference.
+- `src/services/group-chat/index.ts` — **@deprecated** export of `GroupChatManager`, kept for backward compatibility only.
