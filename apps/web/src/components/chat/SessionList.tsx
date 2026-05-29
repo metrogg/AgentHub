@@ -1,3 +1,4 @@
+import QRCode from 'qrcode'
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -19,6 +20,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  QrCode,
   Search,
   Settings2,
   Trash2,
@@ -30,7 +32,7 @@ import {
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
-import { api, friendlyErrorMessage, type Session, type WorkspaceAgent } from '../../lib/api'
+import { api, friendlyErrorMessage, type MobileConnectivityStatus, type Session, type WorkspaceAgent } from '../../lib/api'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,
@@ -104,6 +106,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [agentQuery, setAgentQuery] = useState('')
   const [quickCreateOpen, setQuickCreateOpen] = useState(false)
+  const [mobilePairingOpen, setMobilePairingOpen] = useState(false)
   const [tabOverride, setTabOverride] = useState<SidebarTab | null>(null)
   const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
@@ -438,7 +441,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   }
 
   return (
-    <aside className="agenthub-session-sidebar flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
+    <>
+      <aside className="agenthub-session-sidebar flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
       <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#FBFBFB] py-3">
         <button
           type="button"
@@ -484,9 +488,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           />
         </div>
 
-        <div className="flex flex-col items-center gap-2">
-          <DockButton icon={Settings2} label="Settings" onClick={requestSettingsDialog} />
-        </div>
+          <div className="flex flex-col items-center gap-2">
+            <DockButton icon={QrCode} label="扫码连接" onClick={() => setMobilePairingOpen(true)} />
+            <DockButton icon={Settings2} label="Settings" onClick={requestSettingsDialog} />
+          </div>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col bg-[#FBFBFB]">
@@ -1235,7 +1240,9 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           onConfirm={confirmDeleteSession}
         />
       )}
-    </aside>
+      </aside>
+      <MobilePairingDialog open={mobilePairingOpen} onClose={() => setMobilePairingOpen(false)} />
+    </>
   )
 }
 
@@ -1376,6 +1383,135 @@ function DockButton({
     >
       <Icon className="h-5 w-5" />
     </button>
+  )
+}
+
+function MobilePairingDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [qrDataUrl, setQrDataUrl] = useState('')
+  const [connectivity, setConnectivity] = useState<MobileConnectivityStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [pairingStartedAt, setPairingStartedAt] = useState<number | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  const latestEvent = connectivity?.recentEvents?.[0]
+  const connected = Boolean(
+    latestEvent?.type === 'pairing.confirmed' &&
+      pairingStartedAt !== null &&
+      Date.parse(latestEvent.at) >= pairingStartedAt,
+  )
+  const statusLabel = connected ? '已连接' : failed ? '生成失败' : qrDataUrl ? '等待扫码' : loading ? '生成中' : '准备生成'
+
+  async function refreshConnectivity() {
+    try {
+      const result = await api.getMobileConnectivity()
+      setConnectivity(result)
+    } catch {
+      // 保持安静，只在状态上体现结果
+    }
+  }
+
+  async function createPairingCode() {
+    if (loading) return
+    const startedAt = Date.now()
+    setLoading(true)
+    setFailed(false)
+    setPairingStartedAt(startedAt)
+    try {
+      const result = await api.startMobilePairing()
+      const dataUrl = await QRCode.toDataURL(result.qrPayload, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        scale: 7,
+        color: {
+          dark: '#171717',
+          light: '#ffffff',
+        },
+      })
+      setQrDataUrl(dataUrl)
+      await refreshConnectivity()
+    } catch {
+      setFailed(true)
+      setQrDataUrl('')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return
+    setQrDataUrl('')
+    setConnectivity(null)
+    setFailed(false)
+    setPairingStartedAt(null)
+    void createPairingCode()
+    void refreshConnectivity()
+    const timer = window.setInterval(() => {
+      void refreshConnectivity()
+    }, 2500)
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  if (!open || typeof document === 'undefined') return null
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/20 px-4 py-6 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="mobile-pairing-title"
+      onMouseDown={onClose}
+    >
+      <div
+        className="w-full max-w-[420px] max-h-[calc(100vh-3rem)] overflow-y-auto rounded-[24px] border border-neutral-200 bg-[#FBFBFB] p-4 shadow-[0_28px_90px_rgba(15,23,42,0.18)]"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-neutral-950">
+            <QrCode className="h-4 w-4 text-neutral-500" />
+            <span id="mobile-pairing-title">手机扫码连接</span>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-400 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
+            aria-label="关闭"
+            title="关闭"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-neutral-200 bg-white p-4">
+          <div className="grid place-items-center rounded-2xl border border-dashed border-neutral-200 bg-[#F7F7F7] p-4">
+            {qrDataUrl ? (
+              <img src={qrDataUrl} alt="移动端配对二维码" className="h-56 w-56 rounded-xl bg-white p-2" />
+            ) : (
+              <div className="grid h-56 w-56 place-items-center rounded-xl text-neutral-400">
+                {loading ? <Loader2 className="h-10 w-10 animate-spin" /> : <QrCode className="h-10 w-10" />}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 flex items-center justify-center">
+            <span
+              className={cn(
+                'inline-flex h-7 items-center rounded-full px-3 text-xs font-medium',
+                connected
+                  ? 'bg-emerald-50 text-emerald-700'
+                  : failed
+                    ? 'bg-rose-50 text-rose-700'
+                    : 'bg-neutral-100 text-neutral-600',
+              )}
+            >
+              {loading ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+              {statusLabel}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   )
 }
 

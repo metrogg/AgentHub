@@ -39,6 +39,11 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
+        viewModelScope.launch {
+            connectionStore.archivedSessionIds.collect { ids ->
+                repository.setArchivedSessionIds(ids)
+            }
+        }
     }
 
     fun connect(baseUrl: String, authToken: String?) {
@@ -89,6 +94,22 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
     fun selectSession(sessionId: String) = repository.selectSession(sessionId)
 
     fun sendMessage(content: String) = repository.sendMessage(content)
+
+    fun archiveSession(sessionId: String) {
+        repository.archiveSession(sessionId)
+        viewModelScope.launch {
+            connectionStore.saveArchivedSessionIds(uiState.value.archivedSessionIds)
+        }
+    }
+
+    fun unarchiveSession(sessionId: String) {
+        repository.unarchiveSession(sessionId)
+        viewModelScope.launch {
+            connectionStore.saveArchivedSessionIds(uiState.value.archivedSessionIds)
+        }
+    }
+
+    fun deleteSession(sessionId: String) = repository.deleteSession(sessionId)
 
     private fun isAndroidEmulatorHost(url: String): Boolean {
         return Regex("^https?://10\\.0\\.2\\.2(?::\\d+)?(?:/.*)?$", RegexOption.IGNORE_CASE).matches(url)

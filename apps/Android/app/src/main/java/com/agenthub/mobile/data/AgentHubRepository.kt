@@ -46,7 +46,7 @@ class AgentHubRepository(
                 _uiState.value.selectedSessionId?.let { selectSession(it) }
             }.onFailure { error ->
                 _uiState.update {
-                    it.copy(connecting = false, connected = false, error = error.message ?: "Connection failed")
+                    it.copy(connecting = false, connected = false, error = error.message ?: "连接失败")
                 }
             }
         }
@@ -61,7 +61,10 @@ class AgentHubRepository(
     }
 
     fun refreshSessions() {
-        val config = _uiState.value.connection ?: return
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
         scope.launch {
             runCatching { client.listSessions(config) }
                 .onSuccess { sessions -> _uiState.update { it.copy(sessions = sessions, error = null) } }
@@ -100,8 +103,15 @@ class AgentHubRepository(
         _uiState.update { it.copy(connecting = false, error = message) }
     }
 
+    fun setArchivedSessionIds(ids: Set<String>) {
+        _uiState.update { it.copy(archivedSessionIds = ids) }
+    }
+
     fun createSession(title: String = "新会话") {
-        val config = _uiState.value.connection ?: return
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
         scope.launch {
             runCatching { client.createSession(config, title) }
                 .onSuccess { session ->
@@ -113,9 +123,18 @@ class AgentHubRepository(
     }
 
     fun selectSession(sessionId: String) {
-        val config = _uiState.value.connection ?: return
+        val config = _uiState.value.connection ?: run {
+            setError("离线状态下无法打开会话，请先扫码连接电脑端")
+            return
+        }
         _uiState.update {
-            it.copy(selectedSessionId = sessionId, messages = emptyList(), streamingMessage = null, agentTyping = false)
+            it.copy(
+                selectedSessionId = sessionId,
+                messages = emptyList(),
+                streamingMessage = null,
+                streamingCodeAgentRun = null,
+                agentTyping = false,
+            )
         }
         currentSocket?.let { client.joinSession(it, sessionId) }
         scope.launch {
@@ -126,7 +145,10 @@ class AgentHubRepository(
     }
 
     fun sendMessage(content: String) {
-        val config = _uiState.value.connection ?: return
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
         val sessionId = _uiState.value.selectedSessionId ?: return
         val trimmed = content.trim()
         if (trimmed.isBlank()) return
@@ -146,6 +168,44 @@ class AgentHubRepository(
             }.onFailure { error ->
                 _uiState.update { it.copy(agentTyping = false, error = error.message) }
             }
+        }
+    }
+
+    fun archiveSession(sessionId: String) {
+        _uiState.update { state ->
+            state.copy(
+                archivedSessionIds = state.archivedSessionIds + sessionId,
+                selectedSessionId = state.selectedSessionId.takeUnless { it == sessionId },
+                messages = if (state.selectedSessionId == sessionId) emptyList() else state.messages,
+                streamingMessage = if (state.selectedSessionId == sessionId) null else state.streamingMessage,
+            )
+        }
+    }
+
+    fun unarchiveSession(sessionId: String) {
+        _uiState.update { it.copy(archivedSessionIds = it.archivedSessionIds - sessionId) }
+    }
+
+    fun deleteSession(sessionId: String) {
+        val config = _uiState.value.connection ?: run {
+            setError("离线状态下无法删除会话，请先扫码连接电脑端")
+            return
+        }
+        scope.launch {
+            runCatching { client.deleteSession(config, sessionId) }
+                .onSuccess {
+                    _uiState.update { state ->
+                        state.copy(
+                            sessions = state.sessions.filterNot { it.id == sessionId },
+                            archivedSessionIds = state.archivedSessionIds - sessionId,
+                            selectedSessionId = state.selectedSessionId.takeUnless { it == sessionId },
+                            messages = if (state.selectedSessionId == sessionId) emptyList() else state.messages,
+                            streamingMessage = if (state.selectedSessionId == sessionId) null else state.streamingMessage,
+                            error = null,
+                        )
+                    }
+                }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
         }
     }
 
@@ -199,6 +259,28 @@ class AgentHubRepository(
                     state.copy(streamingMessage = next, agentTyping = true)
                 }
             }
+            "message:metadata" -> {
+                val messageId = payload["messageId"]?.jsonPrimitive?.content ?: return
+                val codeAgentRun = payload["codeAgentRun"] as? kotlinx.serialization.json.JsonObject ?: return
+                _uiState.update { state ->
+                    val current = state.streamingMessage
+                    val next = if (current?.id == messageId) {
+                        current
+                    } else {
+                        Message(
+                            id = messageId,
+                            sessionId = currentSessionId.orEmpty(),
+                            senderType = "agent",
+                            content = current?.content.orEmpty(),
+                        )
+                    }
+                    state.copy(
+                        streamingMessage = next,
+                        streamingCodeAgentRun = codeAgentRun,
+                        agentTyping = true,
+                    )
+                }
+            }
             "message:completed" -> {
                 val messageElement = payload["message"] ?: return
                 val message = json.decodeFromJsonElement<Message>(messageElement)
@@ -206,13 +288,14 @@ class AgentHubRepository(
                     it.copy(
                         messages = it.messages.filterNot { item -> item.id == message.id } + message,
                         streamingMessage = null,
+                        streamingCodeAgentRun = null,
                         agentTyping = false,
                     )
                 }
                 refreshSessions()
             }
             "message:cancelled" -> _uiState.update {
-                it.copy(streamingMessage = null, agentTyping = false)
+                it.copy(streamingMessage = null, streamingCodeAgentRun = null, agentTyping = false)
             }
         }
     }
