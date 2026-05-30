@@ -119,7 +119,6 @@ import {
 } from '../../lib/workspaceFilters'
 import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
-import { TaskBoard } from '@/components/TaskBoard'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
@@ -230,6 +229,7 @@ export const Thread: FC = () => {
   const isAgentDirectSession = sessionKind === 'agent-direct'
   const isWorkspaceChildSession = sessionKind === 'workspace-agent-child'
   const taskBoard = useChatStore((s) => s.taskBoard)
+  const agentActivity = useChatStore((s) => s.agentActivity)
   const visibleTaskBoard =
     taskBoard &&
     taskBoard.sessionId === currentSession?.id &&
@@ -239,6 +239,13 @@ export const Thread: FC = () => {
   const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
   const agentTabs = useChatStore((s) => s.agentTabs)
   const selectAgentTab = useChatStore((s) => s.selectAgentTab)
+  const planningActivity =
+    isGroupSession &&
+    selectedAgentTab === null &&
+    agentActivity?.sessionId === currentSession?.id &&
+    agentActivity.phase === 'planning'
+      ? agentActivity
+      : null
   const isOrchestratorTaskChild = sessionKind === 'orchestrator-task'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
@@ -274,9 +281,9 @@ export const Thread: FC = () => {
               agentName={
                 currentSession?.workspaceAgentId
                   ? (useChatStore
-                    .getState()
-                    .currentWorkspaceAgents.find((a) => a.id === currentSession?.workspaceAgentId)
-                    ?.name ?? 'Agent')
+                      .getState()
+                      .currentWorkspaceAgents.find((a) => a.id === currentSession?.workspaceAgentId)
+                      ?.name ?? 'Agent')
                   : 'Agent'
               }
               onBack={() => selectAgentTab(null)}
@@ -295,6 +302,15 @@ export const Thread: FC = () => {
             <ThreadPrimitive.Messages
               components={{ UserMessage, AssistantMessage, SystemMessage }}
             />
+            {isGroupSession &&
+              selectedAgentTab === null &&
+              (visibleTaskBoard || planningActivity) && (
+                <TeamExecutionPanel
+                  taskBoard={visibleTaskBoard}
+                  agentTabs={agentTabs}
+                  activity={planningActivity}
+                />
+              )}
             <ThreadPrimitive.If empty={false}>
               <div className="min-h-28" />
             </ThreadPrimitive.If>
@@ -413,15 +429,15 @@ const OrchestratorChildHeader: FC<{ agentName: string; onBack: () => void }> = (
         type="button"
         onClick={onBack}
         className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-        title="返回团长视角"
-        aria-label="返回团长视角"
+        title="返回主对话"
+        aria-label="返回主对话"
       >
         <ChevronLeft className="h-5 w-5" />
       </button>
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="text-sm truncate">
           <span className="font-medium text-neutral-700">{agentName}</span>
-          <span className="text-neutral-400 ml-1.5 text-xs">子对话</span>
+          <span className="ml-1.5 text-xs text-neutral-400">成员对话</span>
         </span>
       </div>
     </header>
@@ -439,10 +455,10 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({ taskBoard, agentTabs }) =
   const failedCount = agentTabs.filter((t) => t.status === 'failed').length
 
   return (
-    <div className="shrink-0 px-6 py-2.5 border-b border-neutral-100 bg-gradient-to-r from-blue-50 to-indigo-50">
+    <div className="shrink-0 border-b border-neutral-100 bg-white px-6 py-2.5">
       <div className="flex items-center gap-2 text-xs">
-        <span className="text-base">👥</span>
-        <span className="font-semibold text-neutral-700">团长视角</span>
+        <Bot className="h-4 w-4 text-blue-600" />
+        <span className="font-semibold text-neutral-700">主对话</span>
         <span className="text-neutral-400">·</span>
         <span className="text-neutral-500">
           {taskBoard.goal
@@ -473,6 +489,202 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({ taskBoard, agentTabs }) =
           </span>
         )}
         <span className="text-xs text-neutral-400">共 {agentTabs.length} 个 Agent</span>
+      </div>
+    </div>
+  )
+}
+
+type LiveTaskBoard = NonNullable<ReturnType<typeof useChatStore.getState>['taskBoard']>
+type LiveAgentActivity = NonNullable<ReturnType<typeof useChatStore.getState>['agentActivity']>
+
+interface TeamExecutionPanelProps {
+  taskBoard: LiveTaskBoard | null
+  agentTabs: ReturnType<typeof useChatStore.getState>['agentTabs']
+  activity: LiveAgentActivity | null
+}
+
+const runStatusLabel: Record<string, string> = {
+  planning: '规划中',
+  running: '执行中',
+  synthesizing: '汇总中',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+}
+
+const taskStatusLabel: Record<string, string> = {
+  pending: '等待',
+  running: '执行中',
+  done: '已完成',
+  failed: '失败',
+  blocked: '受阻',
+  cancelled: '已取消',
+}
+
+function taskStatusClass(status: string) {
+  if (status === 'running') return 'border-blue-200 bg-blue-50 text-blue-700'
+  if (status === 'done') return 'border-green-200 bg-green-50 text-green-700'
+  if (status === 'failed' || status === 'blocked') return 'border-red-200 bg-red-50 text-red-700'
+  return 'border-neutral-200 bg-white text-neutral-500'
+}
+
+function taskStatusIcon(status: string) {
+  if (status === 'running') return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+  if (status === 'done') return <CheckCircle2 className="h-4 w-4 text-green-600" />
+  if (status === 'failed' || status === 'blocked')
+    return <XCircle className="h-4 w-4 text-red-600" />
+  return <Clock3 className="h-4 w-4 text-neutral-400" />
+}
+
+const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs, activity }) => {
+  const selectAgentTab = useChatStore((state) => state.selectAgentTab)
+
+  if (!taskBoard) {
+    return (
+      <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
+        <div className="flex items-start gap-3">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
+            <Loader2 className="h-4 w-4 animate-spin" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-neutral-900">
+                {activity?.agentName ?? 'Orchestrator'} 正在规划
+              </span>
+              <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-xs text-blue-700">
+                等待任务拆解
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-neutral-600">
+              正在调用模型分析目标、成员能力和任务依赖。计划生成后会在这里展开任务、成员状态和子对话入口。
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const tasks = taskBoard.tasks
+  const runningTasks = tasks.filter((task) => task.status === 'running')
+  const doneCount = tasks.filter((task) => task.status === 'done').length
+  const failedCount = tasks.filter(
+    (task) => task.status === 'failed' || task.status === 'blocked',
+  ).length
+  const artifactCount = tasks.reduce(
+    (total, task) => total + (task.artifactCount ?? task.artifacts?.length ?? 0),
+    0,
+  )
+  const completedLike =
+    doneCount + failedCount + tasks.filter((task) => task.status === 'cancelled').length
+  const progress = tasks.length > 0 ? Math.round((completedLike / tasks.length) * 100) : 0
+  const visibleTasks = [
+    ...runningTasks,
+    ...tasks.filter((task) => task.status === 'pending'),
+    ...tasks.filter((task) => task.status === 'done'),
+    ...tasks.filter((task) => task.status === 'failed' || task.status === 'blocked'),
+  ].slice(0, 6)
+
+  return (
+    <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-neutral-200 bg-white shadow-sm">
+      <div className="border-b border-neutral-100 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <ListTodo className="h-4 w-4 text-blue-600" />
+              <h3 className="truncate text-sm font-semibold text-neutral-900">
+                {taskBoard.title || '团队任务'}
+              </h3>
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
+                {runStatusLabel[taskBoard.status] ?? taskBoard.status}
+              </span>
+            </div>
+            {taskBoard.goal && (
+              <p className="mt-1 line-clamp-2 text-sm text-neutral-600">{taskBoard.goal}</p>
+            )}
+          </div>
+          <div className="shrink-0 text-right text-xs text-neutral-500">
+            <div>
+              {doneCount}/{tasks.length} 完成
+            </div>
+            <div>{agentTabs.length || tasks.length} 个成员任务</div>
+          </div>
+        </div>
+
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-neutral-100">
+          <div
+            className="h-full rounded-full bg-blue-600 transition-all duration-500"
+            style={{ width: `${Math.max(4, progress)}%` }}
+          />
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          <span className="rounded-full border border-neutral-200 px-2 py-1 text-neutral-600">
+            {runningTasks.length} 执行中
+          </span>
+          <span className="rounded-full border border-green-200 bg-green-50 px-2 py-1 text-green-700">
+            {doneCount} 已完成
+          </span>
+          {failedCount > 0 && (
+            <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-red-700">
+              {failedCount} 异常
+            </span>
+          )}
+          <span className="rounded-full border border-neutral-200 px-2 py-1 text-neutral-600">
+            {artifactCount} 个产物
+          </span>
+        </div>
+      </div>
+
+      <div className="divide-y divide-neutral-100">
+        {visibleTasks.map((task) => {
+          const tab = agentTabs.find((item) => item.taskId === task.id)
+          const canOpenChild = Boolean(tab?.childSessionId || task.childSessionId)
+          const artifacts = task.artifactCount ?? task.artifacts?.length ?? 0
+          return (
+            <div key={task.id} className="flex items-start gap-3 p-3">
+              <div className="mt-0.5">{taskStatusIcon(task.status)}</div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-sm font-medium text-neutral-800">
+                    {task.title}
+                  </span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[11px] ${taskStatusClass(task.status)}`}
+                  >
+                    {taskStatusLabel[task.status] ?? task.status}
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                  <span>{task.agentName || 'Agent'}</span>
+                  {task.progressStatus && <span className="truncate">{task.progressStatus}</span>}
+                  {artifacts > 0 && (
+                    <span className="inline-flex items-center gap-1 text-neutral-600">
+                      <FileText className="h-3.5 w-3.5" />
+                      {artifacts} 个产物
+                    </span>
+                  )}
+                </div>
+                {task.outputSummary && (
+                  <p className="mt-1 line-clamp-2 text-xs text-neutral-600">{task.outputSummary}</p>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={!canOpenChild}
+                onClick={() => canOpenChild && selectAgentTab(task.id)}
+                className={cn(
+                  'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition',
+                  canOpenChild
+                    ? 'border-neutral-200 bg-white text-neutral-700 hover:border-blue-200 hover:text-blue-700'
+                    : 'cursor-not-allowed border-neutral-100 bg-neutral-50 text-neutral-400',
+                )}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                子对话
+              </button>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -521,7 +733,14 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
       modelId: agent?.modelId ?? '',
     })
     setSaveState('idle')
-  }, [agent?.id, agent?.role, agent?.description, agent?.systemPrompt, agent?.modelId, agent?.runtimeType])
+  }, [
+    agent?.id,
+    agent?.role,
+    agent?.description,
+    agent?.systemPrompt,
+    agent?.modelId,
+    agent?.runtimeType,
+  ])
 
   async function saveAgentPatch(
     patch: Partial<Pick<WorkspaceAgent, 'role' | 'description' | 'systemPrompt' | 'modelId'>>,
@@ -627,7 +846,8 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                   <div className="rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
                     <div className="font-medium text-neutral-900">模型</div>
                     <div className="mt-1">
-                      模型、Base URL 和 API Key 由 Coding Tools 页面统一管理；这里仅维护 Agent 角色和提示词。
+                      模型、Base URL 和 API Key 由 Coding Tools 页面统一管理；这里仅维护 Agent
+                      角色和提示词。
                     </div>
                   </div>
                 ) : (
@@ -1890,216 +2110,216 @@ const ComposerMenu: FC<{
   onPick,
   onClose,
 }) => {
-    const [workspaceQuery, setWorkspaceQuery] = useState('')
-    const normalizedAgentQuery = agentQuery.trim().toLowerCase()
-    const legacyAgents = [
-      { title: '@Orchestrator', desc: '总指挥，规划阶段并调度 Agent 集群', color: '#7c3aed' },
-      { title: '@Researcher', desc: '资料、图片和事实收集', color: '#f59e0b' },
-      { title: '@Designer', desc: '页面结构、视觉方向和内容组织', color: '#6366f1' },
-      { title: '@Builder', desc: '实现、联调和本地验证', color: '#10b981' },
-      { title: '@QA Reviewer', desc: '验收、体验检查和风险审查', color: '#ef4444' },
-    ]
-    const agentRows = agents.length
-      ? agents.map((agent) => ({
+  const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const normalizedAgentQuery = agentQuery.trim().toLowerCase()
+  const legacyAgents = [
+    { title: '@Orchestrator', desc: '总指挥，规划阶段并调度 Agent 集群', color: '#7c3aed' },
+    { title: '@Researcher', desc: '资料、图片和事实收集', color: '#f59e0b' },
+    { title: '@Designer', desc: '页面结构、视觉方向和内容组织', color: '#6366f1' },
+    { title: '@Builder', desc: '实现、联调和本地验证', color: '#10b981' },
+    { title: '@QA Reviewer', desc: '验收、体验检查和风险审查', color: '#ef4444' },
+  ]
+  const agentRows = agents.length
+    ? agents.map((agent) => ({
         title: `@${agent.name}`,
         desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${(agent.capabilityTags ?? []).length ? ` · ${(agent.capabilityTags ?? []).slice(0, 3).join(', ')}` : ''}`,
         color: agent.color ?? '#111827',
       }))
-      : legacyAgents
-    const filteredAgentRows = normalizedAgentQuery
-      ? agentRows.filter((item) =>
+    : legacyAgents
+  const filteredAgentRows = normalizedAgentQuery
+    ? agentRows.filter((item) =>
         `${item.title} ${item.desc}`.toLowerCase().includes(normalizedAgentQuery),
       )
-      : agentRows
-    const plugins = [
-      { title: 'Documents', icon: FileText, color: 'text-blue-500', value: '@documents' },
-      { title: 'Spreadsheets', icon: Sheet, color: 'text-emerald-600', value: '@spreadsheets' },
-      {
-        title: 'Presentations',
-        icon: Presentation,
-        color: 'text-amber-500',
-        value: '@presentations',
-      },
-      { title: '浏览器', icon: Globe2, color: 'text-sky-500', value: '@browser' },
-    ]
-    const filteredWorkspaces = workspaces.filter((workspace) => {
-      const query = workspaceQuery.trim().toLowerCase()
-      if (!query) return true
-      return workspaceSearchText(workspace).includes(query)
-    })
+    : agentRows
+  const plugins = [
+    { title: 'Documents', icon: FileText, color: 'text-blue-500', value: '@documents' },
+    { title: 'Spreadsheets', icon: Sheet, color: 'text-emerald-600', value: '@spreadsheets' },
+    {
+      title: 'Presentations',
+      icon: Presentation,
+      color: 'text-amber-500',
+      value: '@presentations',
+    },
+    { title: '浏览器', icon: Globe2, color: 'text-sky-500', value: '@browser' },
+  ]
+  const filteredWorkspaces = workspaces.filter((workspace) => {
+    const query = workspaceQuery.trim().toLowerCase()
+    if (!query) return true
+    return workspaceSearchText(workspace).includes(query)
+  })
 
-    return (
-      <div
-        className={cn(
-          'agenthub-menu-popover absolute bottom-[4.5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl',
-          'left-3',
-          type === 'workspace' ? 'w-80' : 'w-64',
-        )}
-      >
-        {type === 'tools' && (
-          <div className="relative group/tools">
-            <button
-              type="button"
-              onClick={() => onPlanMode(!planMode)}
-              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
+  return (
+    <div
+      className={cn(
+        'agenthub-menu-popover absolute bottom-[4.5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl',
+        'left-3',
+        type === 'workspace' ? 'w-80' : 'w-64',
+      )}
+    >
+      {type === 'tools' && (
+        <div className="relative group/tools">
+          <button
+            type="button"
+            onClick={() => onPlanMode(!planMode)}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
+          >
+            <ListTodo className="h-4 w-4 text-neutral-500" />
+            <span className="flex-1 text-neutral-900">计划模式</span>
+            <span
+              className={cn(
+                'relative h-4 w-8 rounded-full transition',
+                planMode ? 'bg-neutral-900' : 'bg-neutral-200',
+              )}
             >
-              <ListTodo className="h-4 w-4 text-neutral-500" />
-              <span className="flex-1 text-neutral-900">计划模式</span>
               <span
                 className={cn(
-                  'relative h-4 w-8 rounded-full transition',
-                  planMode ? 'bg-neutral-900' : 'bg-neutral-200',
+                  'absolute top-0.5 h-3 w-3 rounded-full bg-white transition',
+                  planMode ? 'left-4' : 'left-0.5',
+                )}
+              />
+            </span>
+          </button>
+          <div className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
+            <Blocks className="h-4 w-4 text-neutral-500" />
+            <span className="flex-1 text-neutral-900">插件</span>
+            <ChevronRight className="h-4 w-4 text-neutral-400" />
+          </div>
+          <div className="agenthub-menu-flyout invisible absolute bottom-0 left-[calc(100%+0.5rem)] w-52 -translate-x-1 scale-95 rounded-2xl border border-neutral-200 bg-white p-2 opacity-0 shadow-xl transition group-hover/tools:visible group-hover/tools:translate-x-0 group-hover/tools:scale-100 group-hover/tools:opacity-100">
+            <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">4 个已装插件</div>
+            {plugins.map((item) => {
+              const Icon = item.icon
+              return (
+                <button
+                  key={item.title}
+                  type="button"
+                  onClick={() => {
+                    onPick(item.value)
+                    onClose()
+                  }}
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left hover:bg-neutral-100"
+                >
+                  <Icon className={cn('h-4 w-4', item.color)} />
+                  <span className="text-neutral-900">{item.title}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+      {type === 'agents' && (
+        <div className="max-h-72 overflow-y-auto">
+          {agentQuery !== '' && (
+            <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">
+              {filteredAgentRows.length ? `匹配：${agentQuery}` : `没有匹配：${agentQuery}`}
+            </div>
+          )}
+          {filteredAgentRows.map((item) => (
+            <MenuRow
+              key={item.title}
+              title={item.title}
+              desc={item.desc}
+              color={item.color}
+              onClick={() => {
+                onPick(item.title)
+                onClose()
+              }}
+            />
+          ))}
+          {filteredAgentRows.length === 0 && (
+            <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
+              没有匹配的 Agent
+            </div>
+          )}
+        </div>
+      )}
+      {type === 'workspace' && (
+        <div className="p-1">
+          <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
+            <Search className="h-4 w-4 shrink-0" />
+            <input
+              value={workspaceQuery}
+              onChange={(event) => setWorkspaceQuery(event.target.value)}
+              autoFocus
+              className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
+              placeholder="搜索工作区"
+            />
+          </div>
+          <div className="max-h-44 space-y-1 overflow-y-auto py-1">
+            {filteredWorkspaces.map((workspace) => (
+              <button
+                key={workspace.id}
+                type="button"
+                onClick={() => onOpenWorkspace(workspace.id)}
+                disabled={workspaceBusy}
+                className={cn(
+                  'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
+                  (workspace.id === currentWorkspaceId || workspace.id === openingWorkspaceId) &&
+                    'bg-neutral-100',
                 )}
               >
-                <span
-                  className={cn(
-                    'absolute top-0.5 h-3 w-3 rounded-full bg-white transition',
-                    planMode ? 'left-4' : 'left-0.5',
-                  )}
-                />
-              </span>
-            </button>
-            <div className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
-              <Blocks className="h-4 w-4 text-neutral-500" />
-              <span className="flex-1 text-neutral-900">插件</span>
-              <ChevronRight className="h-4 w-4 text-neutral-400" />
-            </div>
-            <div className="agenthub-menu-flyout invisible absolute bottom-0 left-[calc(100%+0.5rem)] w-52 -translate-x-1 scale-95 rounded-2xl border border-neutral-200 bg-white p-2 opacity-0 shadow-xl transition group-hover/tools:visible group-hover/tools:translate-x-0 group-hover/tools:scale-100 group-hover/tools:opacity-100">
-              <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">4 个已装插件</div>
-              {plugins.map((item) => {
-                const Icon = item.icon
-                return (
-                  <button
-                    key={item.title}
-                    type="button"
-                    onClick={() => {
-                      onPick(item.value)
-                      onClose()
-                    }}
-                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left hover:bg-neutral-100"
-                  >
-                    <Icon className={cn('h-4 w-4', item.color)} />
-                    <span className="text-neutral-900">{item.title}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        )}
-        {type === 'agents' && (
-          <div className="max-h-72 overflow-y-auto">
-            {agentQuery !== '' && (
-              <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">
-                {filteredAgentRows.length ? `匹配：${agentQuery}` : `没有匹配：${agentQuery}`}
-              </div>
-            )}
-            {filteredAgentRows.map((item) => (
-              <MenuRow
-                key={item.title}
-                title={item.title}
-                desc={item.desc}
-                color={item.color}
-                onClick={() => {
-                  onPick(item.title)
-                  onClose()
-                }}
-              />
-            ))}
-            {filteredAgentRows.length === 0 && (
-              <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
-                没有匹配的 Agent
-              </div>
-            )}
-          </div>
-        )}
-        {type === 'workspace' && (
-          <div className="p-1">
-            <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
-              <Search className="h-4 w-4 shrink-0" />
-              <input
-                value={workspaceQuery}
-                onChange={(event) => setWorkspaceQuery(event.target.value)}
-                autoFocus
-                className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-                placeholder="搜索工作区"
-              />
-            </div>
-            <div className="max-h-44 space-y-1 overflow-y-auto py-1">
-              {filteredWorkspaces.map((workspace) => (
-                <button
-                  key={workspace.id}
-                  type="button"
-                  onClick={() => onOpenWorkspace(workspace.id)}
-                  disabled={workspaceBusy}
-                  className={cn(
-                    'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
-                    (workspace.id === currentWorkspaceId || workspace.id === openingWorkspaceId) &&
-                    'bg-neutral-100',
-                  )}
-                >
-                  <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-neutral-900">{workspace.name}</span>
-                    <span className="block truncate text-[11px] text-neutral-400">
-                      {workspaceSubtitle(workspace)}
-                    </span>
-                  </span>
-                  {workspace.id === openingWorkspaceId ? (
-                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
-                  ) : (
-                    workspace.id === currentWorkspaceId && (
-                      <ChevronDown className="h-4 w-4 shrink-0 text-neutral-300" />
-                    )
-                  )}
-                </button>
-              ))}
-              {!workspaceBusy && filteredWorkspaces.length === 0 && (
-                <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
-                  没有匹配的工作区
-                </div>
-              )}
-              {workspaceBusy && (
-                <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理工作区...</div>
-              )}
-            </div>
-            <div className="mt-1 border-t border-neutral-200 pt-1.5">
-              <div className="mb-1 flex items-center justify-between gap-2 px-2">
-                <span className="text-xs font-medium text-neutral-400">工作空间来源</span>
-                <button
-                  type="button"
-                  onClick={requestSettingsDialog}
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
-                  aria-label="前往系统设置"
-                  title="可前往「系统设置」设置默认工作空间存储路径"
-                >
-                  <CircleHelp className="h-4 w-4" />
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={onCreateBlankWorkspace}
-                disabled={workspaceBusy}
-                className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
-              >
-                <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
-                <span className="min-w-0 flex-1 truncate">从新工作空间开始</span>
-                {!currentWorkspaceId && <Check className="h-4 w-4 shrink-0 text-emerald-500" />}
-              </button>
-              <button
-                type="button"
-                onClick={onOpenFolderWorkspace}
-                disabled={workspaceBusy}
-                className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
-              >
                 <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                <span className="min-w-0 flex-1 truncate">打开本地工作空间</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-neutral-900">{workspace.name}</span>
+                  <span className="block truncate text-[11px] text-neutral-400">
+                    {workspaceSubtitle(workspace)}
+                  </span>
+                </span>
+                {workspace.id === openingWorkspaceId ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
+                ) : (
+                  workspace.id === currentWorkspaceId && (
+                    <ChevronDown className="h-4 w-4 shrink-0 text-neutral-300" />
+                  )
+                )}
+              </button>
+            ))}
+            {!workspaceBusy && filteredWorkspaces.length === 0 && (
+              <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
+                没有匹配的工作区
+              </div>
+            )}
+            {workspaceBusy && (
+              <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理工作区...</div>
+            )}
+          </div>
+          <div className="mt-1 border-t border-neutral-200 pt-1.5">
+            <div className="mb-1 flex items-center justify-between gap-2 px-2">
+              <span className="text-xs font-medium text-neutral-400">工作空间来源</span>
+              <button
+                type="button"
+                onClick={requestSettingsDialog}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+                aria-label="前往系统设置"
+                title="可前往「系统设置」设置默认工作空间存储路径"
+              >
+                <CircleHelp className="h-4 w-4" />
               </button>
             </div>
+            <button
+              type="button"
+              onClick={onCreateBlankWorkspace}
+              disabled={workspaceBusy}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
+            >
+              <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
+              <span className="min-w-0 flex-1 truncate">从新工作空间开始</span>
+              {!currentWorkspaceId && <Check className="h-4 w-4 shrink-0 text-emerald-500" />}
+            </button>
+            <button
+              type="button"
+              onClick={onOpenFolderWorkspace}
+              disabled={workspaceBusy}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
+            >
+              <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+              <span className="min-w-0 flex-1 truncate">打开本地工作空间</span>
+            </button>
           </div>
-        )}
-      </div>
-    )
-  }
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function readSlashCommand(text: string, cursor: number) {
   const before = text.slice(0, cursor)
@@ -3090,7 +3310,7 @@ const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
       </div>
       <div className="mt-4 text-sm font-semibold text-neutral-950">{item.title}</div>
       <div className="mt-2 text-xs leading-5 text-neutral-500">
-        {item.description ?? '这个产物会在右侧预览栏保持上下文，后续可接入更完整的图形化查看器。'}
+        {item.description ?? '这个产物当前显示结构化摘要和关联信息。'}
       </div>
     </div>
   </div>
@@ -3608,8 +3828,7 @@ function buildCodeAgentContinuationPrompt({
   agentName: string | null
 }) {
   const tail = finalMessage.trim()
-  const tailPreview =
-    tail.length > 1200 ? `${tail.slice(-1200).trimStart()}` : tail
+  const tailPreview = tail.length > 1200 ? `${tail.slice(-1200).trimStart()}` : tail
   const prefix = agentName ? `@${agentName} ` : ''
   const lines = [
     `${prefix}请继续上一轮 ${runtimeLabel} 的输出，不要重复已经给出的内容。`,
@@ -4012,29 +4231,33 @@ const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
 
 const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> }> = ({
   artifact,
-}) => (
-  <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2">
-    <div className="flex items-center gap-2">
-      <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] leading-6 text-neutral-800" title={artifact.path}>
-          {artifact.path}
+}) => {
+  const item = previewItemFromArtifact(artifact)
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2">
+      <div className="flex items-center gap-2">
+        <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] leading-6 text-neutral-800" title={artifact.path}>
+            {artifact.path}
+          </div>
+          <div className="mt-0.5 text-xs text-neutral-400">
+            {artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}
+          </div>
         </div>
-        <div className="mt-0.5 text-xs text-neutral-400">
-          {artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}
-        </div>
+        <button
+          type="button"
+          onClick={() => requestArtifactPreview(item)}
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
+          title={previewActionLabel(item)}
+        >
+          {previewActionIcon(item)}
+          {previewActionLabel(item)}
+        </button>
       </div>
-      <button
-        type="button"
-        onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
-        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
-      >
-        <Monitor className="h-3.5 w-3.5" />
-        预览
-      </button>
     </div>
-  </div>
-)
+  )
+}
 
 const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> }> = ({
   artifact,
@@ -4075,8 +4298,8 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
           onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
           className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
         >
-          <Monitor className="h-3.5 w-3.5" />
-          在右侧预览
+          <GitBranch className="h-3.5 w-3.5" />
+          查看 Diff
         </button>
       </div>
       {open && <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" />}
@@ -4170,7 +4393,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
           type="button"
           onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
           className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
-          title="右侧预览"
+          title="预览网页"
         >
           <Monitor className="h-3.5 w-3.5" />
         </button>
@@ -4216,7 +4439,7 @@ const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy'
           type="button"
           onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
           className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100"
-          title="右侧预览"
+          title="预览部署"
         >
           <Monitor className="h-3.5 w-3.5" />
         </button>
@@ -4249,9 +4472,9 @@ const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workf
         type="button"
         onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
         className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-indigo-500 hover:bg-indigo-50"
-        title="右侧预览"
+        title="查看流程"
       >
-        <Monitor className="h-3.5 w-3.5" />
+        <GitBranch className="h-3.5 w-3.5" />
       </button>
     </div>
     <div className="border-t border-indigo-100 bg-indigo-50/40 px-3 py-3">
@@ -4407,15 +4630,31 @@ function previewKindLabel(item: ArtifactPreviewItem) {
   return '文件预览'
 }
 
+function previewActionLabel(item: ArtifactPreviewItem) {
+  if (item.kind === 'web') return '预览网页'
+  if (item.kind === 'deploy') return '预览部署'
+  if (item.kind === 'image') return '查看图片'
+  if (item.kind === 'diff') return '查看 Diff'
+  if (item.kind === 'workflow') return '查看流程'
+  return '查看文件'
+}
+
+function previewActionIcon(item: ArtifactPreviewItem) {
+  if (item.kind === 'web' || item.kind === 'deploy') return <Monitor className="h-3.5 w-3.5" />
+  if (item.kind === 'image') return <ImagePlus className="h-3.5 w-3.5" />
+  if (item.kind === 'diff' || item.kind === 'workflow') return <GitBranch className="h-3.5 w-3.5" />
+  return <FileText className="h-3.5 w-3.5" />
+}
+
 function previewFileHint(item: ArtifactPreviewItem) {
   const lower = (item.mimeType || item.path || item.title).toLowerCase()
   if (/\.(docx?|pptx?|xlsx?|pdf)$/.test(lower)) {
-    return '文档类产物会在这里显示可读预览。当前先保留文件信息，后续接入文档渲染器即可直接翻页查看。'
+    return '文档类产物当前展示文件信息，可从产物卡打开文件查看。'
   }
   if (/\.(html?|svg)$/.test(lower)) {
     return '这个文件可以作为网页预览打开。若 Agent 提供 URL，会自动切换为内嵌网页视图。'
   }
-  return '这个产物暂无可嵌入的预览地址，先展示文件信息和上下文。'
+  return '这个产物当前展示文件信息，可从产物卡打开文件查看。'
 }
 
 function previewIcon(item: ArtifactPreviewItem) {
@@ -4553,35 +4792,19 @@ function TaskBoardCard({ data }: { data: any }) {
   const liveTaskBoard = useChatStore((s) => s.taskBoard)
   const taskBoard = liveTaskBoard?.runId === data?.runId ? liveTaskBoard : data
 
-  if (!taskBoard) {
-    return (
-      <div className="my-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
-        <div className="flex items-center gap-2">
-          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-          <span className="text-sm text-gray-500">正在生成执行计划...</span>
+  return (
+    <div className="not-prose my-3 rounded-lg border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-900">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
+          <ListTodo className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold">{taskBoard?.title || '团队执行计划已生成'}</div>
+          <p className="mt-0.5 text-xs leading-5 text-blue-700">
+            任务状态、成员对话和产物统一在右侧任务看板与左侧成员栏查看，这里不再重复展示旧任务卡片。
+          </p>
         </div>
       </div>
-    )
-  }
-
-  return (
-    <div className="my-3 border border-gray-200 rounded-xl overflow-hidden max-h-[600px]">
-      <TaskBoard
-        data={taskBoard}
-        onCancel={() => {
-          fetch(`/api/orchestrator-runs/${taskBoard.runId}/cancel`, { method: 'POST' }).catch(
-            console.error,
-          )
-        }}
-        onRetryFailed={() => {
-          const failedTasks = taskBoard.tasks.filter((t: any) => t.status === 'failed')
-          for (const task of failedTasks) {
-            fetch(`/api/orchestrator-runs/${taskBoard.runId}/retry-task/${task.id}`, {
-              method: 'POST',
-            }).catch(console.error)
-          }
-        }}
-      />
     </div>
   )
 }
@@ -4672,7 +4895,9 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
   const senderName =
     sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
       ? ((sourceMessage.metadata as Record<string, unknown>).agentName as string | undefined)
-      : undefined
+      : messageId === streamingMessage?.id
+        ? streamingMessage.agentName
+        : undefined
   const senderAgent = workspaceAgents.find(
     (a) => a.id === senderId || (senderName && a.name.toLowerCase() === senderName.toLowerCase()),
   )

@@ -5,7 +5,7 @@ export const messageSchema = z.object({
   sessionId: z.string(),
   senderId: z.string(),
   senderType: z.enum(['user', 'agent', 'system']),
-  type: z.enum(['text', 'markdown', 'code', 'diff', 'image', 'file', 'task_card']),
+  type: z.enum(['text', 'markdown', 'code', 'diff', 'image', 'file', 'task_card', 'task_board']),
   content: z.string(),
   metadata: z.record(z.unknown()).optional(),
   createdAt: z.string(),

@@ -20,10 +20,10 @@ import { useNavigate } from 'react-router-dom'
 import SessionList from '../components/chat/SessionList'
 import {
   api,
+  type AgUiRunEvent,
   type OrchestratorRunListItem,
   type ExecutionLog,
   type ConflictReportItem,
-  type OrchestratorRunEvent,
   type OrchestratorProgressLedger,
   type OrchestratorTaskLedger,
   type TypedBlackboardEntry,
@@ -41,7 +41,7 @@ export default function OrchestratorRunsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [logs, setLogs] = useState<ExecutionLog[]>([])
   const [conflicts, setConflicts] = useState<ConflictReportItem[]>([])
-  const [events, setEvents] = useState<OrchestratorRunEvent[]>([])
+  const [events, setEvents] = useState<AgUiRunEvent[]>([])
   const [blackboardEntries, setBlackboardEntries] = useState<TypedBlackboardEntry[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null)
@@ -52,11 +52,15 @@ export default function OrchestratorRunsPage() {
 
   const selectedRun = useMemo(
     () => runs.find((r) => r.id === selectedRunId) ?? null,
-    [runs, selectedRunId]
+    [runs, selectedRunId],
   )
-  const selectedPlan = selectedRun?.plan && typeof selectedRun.plan === 'object'
-    ? (selectedRun.plan as { taskLedger?: OrchestratorTaskLedger; progressLedger?: OrchestratorProgressLedger })
-    : null
+  const selectedPlan =
+    selectedRun?.plan && typeof selectedRun.plan === 'object'
+      ? (selectedRun.plan as {
+          taskLedger?: OrchestratorTaskLedger
+          progressLedger?: OrchestratorProgressLedger
+        })
+      : null
   const taskLedger = selectedPlan?.taskLedger ?? null
   const progressLedger = selectedPlan?.progressLedger ?? null
 
@@ -82,7 +86,7 @@ export default function OrchestratorRunsPage() {
       const [logsResult, conflictsResult, eventsResult, blackboardResult] = await Promise.all([
         api.getOrchestratorRunLogs(runId),
         api.getOrchestratorRunConflicts(runId),
-        api.getOrchestratorRunEvents(runId),
+        api.getAgUiRunEvents(runId),
         api.getOrchestratorRunBlackboard(runId),
       ])
       setLogs(logsResult.items)
@@ -124,7 +128,11 @@ export default function OrchestratorRunsPage() {
     }
   }
 
-  async function resolveConflict(runId: string, filePath: string, resolution: 'approved' | 'rejected' | 'overridden') {
+  async function resolveConflict(
+    runId: string,
+    filePath: string,
+    resolution: 'approved' | 'rejected' | 'overridden',
+  ) {
     setMessage('')
     try {
       await api.resolveOrchestratorConflict(runId, {
@@ -162,7 +170,7 @@ export default function OrchestratorRunsPage() {
       (r) =>
         r.workspaceName.toLowerCase().includes(keyword) ||
         r.sessionTitle.toLowerCase().includes(keyword) ||
-        r.status.includes(keyword)
+        r.status.includes(keyword),
     )
   }, [runs, query])
 
@@ -183,7 +191,9 @@ export default function OrchestratorRunsPage() {
             <GitBranch className="h-4 w-4 text-indigo-600" />
             <span className="text-sm font-semibold">编排运行历史</span>
             <span className="text-sm text-neutral-300">/</span>
-            <span className="truncate text-sm text-neutral-500">Orchestrator 多 Agent 协作执行记录</span>
+            <span className="truncate text-sm text-neutral-500">
+              Orchestrator 多 Agent 协作执行记录
+            </span>
           </div>
           <button
             type="button"
@@ -210,7 +220,9 @@ export default function OrchestratorRunsPage() {
                   />
                 </div>
                 {message && (
-                  <div className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs leading-5 text-red-600">{message}</div>
+                  <div className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs leading-5 text-red-600">
+                    {message}
+                  </div>
                 )}
               </div>
 
@@ -236,7 +248,7 @@ export default function OrchestratorRunsPage() {
                         onClick={() => setSelectedRunId(run.id)}
                         className={cn(
                           'flex w-full items-start gap-3 px-4 py-3 text-left transition',
-                          selectedRunId === run.id ? 'bg-indigo-50/60' : 'hover:bg-neutral-50'
+                          selectedRunId === run.id ? 'bg-indigo-50/60' : 'hover:bg-neutral-50',
                         )}
                       >
                         <StatusIcon status={run.status} />
@@ -249,7 +261,9 @@ export default function OrchestratorRunsPage() {
                               {relativeTime(run.createdAt, language)}
                             </span>
                           </div>
-                          <div className="mt-0.5 truncate text-xs text-neutral-500">{run.sessionTitle}</div>
+                          <div className="mt-0.5 truncate text-xs text-neutral-500">
+                            {run.sessionTitle}
+                          </div>
                           <div className="mt-1.5 flex items-center gap-2">
                             <StatusBadge status={run.status} />
                             {Array.isArray(run.conflictReport) && run.conflictReport.length > 0 && (
@@ -275,7 +289,9 @@ export default function OrchestratorRunsPage() {
                   <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
                     <div className="flex items-start justify-between gap-4">
                       <div>
-                        <h2 className="text-lg font-semibold tracking-normal">{selectedRun.workspaceName}</h2>
+                        <h2 className="text-lg font-semibold tracking-normal">
+                          {selectedRun.workspaceName}
+                        </h2>
                         <p className="mt-1 text-sm text-neutral-500">{selectedRun.sessionTitle}</p>
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
@@ -304,11 +320,15 @@ export default function OrchestratorRunsPage() {
                       <InfoRow label="会话" value={selectedRun.sessionTitle} />
                       <InfoRow
                         label="创建时间"
-                        value={new Date(selectedRun.createdAt).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US')}
+                        value={new Date(selectedRun.createdAt).toLocaleString(
+                          language === 'zh' ? 'zh-CN' : 'en-US',
+                        )}
                       />
                       <InfoRow
                         label="更新时间"
-                        value={new Date(selectedRun.updatedAt).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US')}
+                        value={new Date(selectedRun.updatedAt).toLocaleString(
+                          language === 'zh' ? 'zh-CN' : 'en-US',
+                        )}
                       />
                       <InfoRow
                         label="任务数"
@@ -334,30 +354,55 @@ export default function OrchestratorRunsPage() {
                       </div>
                       <div className="grid gap-3 lg:grid-cols-3">
                         {taskLedger.phases.map((phase) => {
-                          const phaseTasks = taskLedger.tasks.filter((task) => task.phaseId === phase.id)
-                          const done = phaseTasks.filter((task) => progressLedger.completedTaskIds.includes(task.id)).length
-                          const running = phaseTasks.some((task) => progressLedger.runningTaskIds.includes(task.id))
-                          const failed = phaseTasks.some((task) => progressLedger.failedTaskIds.includes(task.id))
-                          const contractCount = phaseTasks.filter((task) => task.outputContract).length
-                          const validationCount = phaseTasks.filter((task) => task.validation?.commands?.length).length
+                          const phaseTasks = taskLedger.tasks.filter(
+                            (task) => task.phaseId === phase.id,
+                          )
+                          const done = phaseTasks.filter((task) =>
+                            progressLedger.completedTaskIds.includes(task.id),
+                          ).length
+                          const running = phaseTasks.some((task) =>
+                            progressLedger.runningTaskIds.includes(task.id),
+                          )
+                          const failed = phaseTasks.some((task) =>
+                            progressLedger.failedTaskIds.includes(task.id),
+                          )
+                          const contractCount = phaseTasks.filter(
+                            (task) => task.outputContract,
+                          ).length
+                          const validationCount = phaseTasks.filter(
+                            (task) => task.validation?.commands?.length,
+                          ).length
                           return (
-                            <div key={phase.id} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3">
+                            <div
+                              key={phase.id}
+                              className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3"
+                            >
                               <div className="flex items-center justify-between gap-2">
-                                <span className="truncate text-sm font-medium text-neutral-800">{phase.title}</span>
-                                <span className={cn(
-                                  'rounded px-1.5 py-0.5 text-[11px]',
-                                  failed
-                                    ? 'bg-red-50 text-red-700'
+                                <span className="truncate text-sm font-medium text-neutral-800">
+                                  {phase.title}
+                                </span>
+                                <span
+                                  className={cn(
+                                    'rounded px-1.5 py-0.5 text-[11px]',
+                                    failed
+                                      ? 'bg-red-50 text-red-700'
+                                      : running
+                                        ? 'bg-indigo-50 text-indigo-700'
+                                        : done === phaseTasks.length && phaseTasks.length > 0
+                                          ? 'bg-emerald-50 text-emerald-700'
+                                          : 'bg-neutral-100 text-neutral-500',
+                                  )}
+                                >
+                                  {failed
+                                    ? 'failed'
                                     : running
-                                      ? 'bg-indigo-50 text-indigo-700'
-                                      : done === phaseTasks.length && phaseTasks.length > 0
-                                        ? 'bg-emerald-50 text-emerald-700'
-                                        : 'bg-neutral-100 text-neutral-500',
-                                )}>
-                                  {failed ? 'failed' : running ? 'running' : `${done}/${phaseTasks.length}`}
+                                      ? 'running'
+                                      : `${done}/${phaseTasks.length}`}
                                 </span>
                               </div>
-                              <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">{phase.purpose}</p>
+                              <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">
+                                {phase.purpose}
+                              </p>
                               {(contractCount > 0 || validationCount > 0) && (
                                 <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
                                   {contractCount > 0 && (
@@ -375,7 +420,9 @@ export default function OrchestratorRunsPage() {
                               {phaseTasks.length > 0 && (
                                 <div className="mt-2 space-y-1.5">
                                   {phaseTasks.map((task) => {
-                                    const taskStatus = progressLedger.completedTaskIds.includes(task.id)
+                                    const taskStatus = progressLedger.completedTaskIds.includes(
+                                      task.id,
+                                    )
                                       ? 'completed'
                                       : progressLedger.runningTaskIds.includes(task.id)
                                         ? 'running'
@@ -386,31 +433,57 @@ export default function OrchestratorRunsPage() {
                                             : progressLedger.blockedTaskIds.includes(task.id)
                                               ? 'blocked'
                                               : 'pending'
-                                    const canRetry = taskStatus === 'failed' || taskStatus === 'cancelled'
+                                    const canRetry =
+                                      taskStatus === 'failed' || taskStatus === 'cancelled'
                                     return (
-                                      <div key={task.id} className="flex items-center justify-between gap-2 rounded bg-white px-2 py-1">
+                                      <div
+                                        key={task.id}
+                                        className="flex items-center justify-between gap-2 rounded bg-white px-2 py-1"
+                                      >
                                         <div className="flex items-center gap-2 min-w-0">
-                                          <span className={cn('h-1.5 w-1.5 rounded-full shrink-0',
-                                            taskStatus === 'completed' ? 'bg-emerald-500' :
-                                            taskStatus === 'running' ? 'bg-indigo-500' :
-                                            taskStatus === 'failed' ? 'bg-red-500' :
-                                            taskStatus === 'cancelled' ? 'bg-orange-400' :
-                                            taskStatus === 'blocked' ? 'bg-neutral-400' : 'bg-neutral-300',
-                                          )} />
-                                          <span className="truncate text-[11px] text-neutral-700">{task.title}</span>
+                                          <span
+                                            className={cn(
+                                              'h-1.5 w-1.5 rounded-full shrink-0',
+                                              taskStatus === 'completed'
+                                                ? 'bg-emerald-500'
+                                                : taskStatus === 'running'
+                                                  ? 'bg-indigo-500'
+                                                  : taskStatus === 'failed'
+                                                    ? 'bg-red-500'
+                                                    : taskStatus === 'cancelled'
+                                                      ? 'bg-orange-400'
+                                                      : taskStatus === 'blocked'
+                                                        ? 'bg-neutral-400'
+                                                        : 'bg-neutral-300',
+                                            )}
+                                          />
+                                          <span className="truncate text-[11px] text-neutral-700">
+                                            {task.title}
+                                          </span>
                                         </div>
                                         <div className="flex items-center gap-1.5 shrink-0">
-                                          <span className={cn('text-[10px] font-medium',
-                                            taskStatus === 'completed' ? 'text-emerald-600' :
-                                            taskStatus === 'failed' ? 'text-red-600' :
-                                            taskStatus === 'cancelled' ? 'text-orange-500' :
-                                            taskStatus === 'running' ? 'text-indigo-600' :
-                                            'text-neutral-500',
-                                          )}>{taskStatus}</span>
+                                          <span
+                                            className={cn(
+                                              'text-[10px] font-medium',
+                                              taskStatus === 'completed'
+                                                ? 'text-emerald-600'
+                                                : taskStatus === 'failed'
+                                                  ? 'text-red-600'
+                                                  : taskStatus === 'cancelled'
+                                                    ? 'text-orange-500'
+                                                    : taskStatus === 'running'
+                                                      ? 'text-indigo-600'
+                                                      : 'text-neutral-500',
+                                            )}
+                                          >
+                                            {taskStatus}
+                                          </span>
                                           {canRetry && selectedRun && (
                                             <button
                                               type="button"
-                                              onClick={() => void retryTask(selectedRun.id, task.id)}
+                                              onClick={() =>
+                                                void retryTask(selectedRun.id, task.id)
+                                              }
                                               disabled={retryingTaskId === task.id}
                                               className="inline-flex items-center gap-1 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
                                             >
@@ -437,7 +510,9 @@ export default function OrchestratorRunsPage() {
 
                   {/* Validation / Test Results Panel */}
                   {(() => {
-                    const testResults = blackboardEntries.filter((e) => e.value.schemaType === 'test_result')
+                    const testResults = blackboardEntries.filter(
+                      (e) => e.value.schemaType === 'test_result',
+                    )
                     if (testResults.length === 0) return null
                     return (
                       <div className="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
@@ -452,22 +527,44 @@ export default function OrchestratorRunsPage() {
                         </div>
                         <div className="space-y-2">
                           {testResults.map((entry) => {
-                            const val = entry.value as unknown as { command: string; status: 'passed' | 'failed' | 'skipped'; outputSummary: string }
+                            const val = entry.value as unknown as {
+                              command: string
+                              status: 'passed' | 'failed' | 'skipped'
+                              outputSummary: string
+                            }
                             const statusConfig = {
-                              passed: { icon: CheckCircle2, className: 'text-emerald-600 bg-emerald-50' },
+                              passed: {
+                                icon: CheckCircle2,
+                                className: 'text-emerald-600 bg-emerald-50',
+                              },
                               failed: { icon: XCircle, className: 'text-red-600 bg-red-50' },
-                              skipped: { icon: AlertTriangle, className: 'text-amber-600 bg-amber-50' },
+                              skipped: {
+                                icon: AlertTriangle,
+                                className: 'text-amber-600 bg-amber-50',
+                              },
                             }
                             const cfg = statusConfig[val.status] ?? statusConfig.skipped
                             const StatusIcon = cfg.icon
                             return (
-                              <div key={`${entry.key}:${entry.version}`} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3">
+                              <div
+                                key={`${entry.key}:${entry.version}`}
+                                className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3"
+                              >
                                 <div className="flex items-start justify-between gap-3">
                                   <div className="min-w-0 flex-1">
                                     <div className="flex items-center gap-2">
-                                      <StatusIcon className={cn('h-4 w-4', cfg.className.split(' ')[0])} />
-                                      <span className="text-xs font-medium text-neutral-800">{val.command}</span>
-                                      <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium', cfg.className)}>
+                                      <StatusIcon
+                                        className={cn('h-4 w-4', cfg.className.split(' ')[0])}
+                                      />
+                                      <span className="text-xs font-medium text-neutral-800">
+                                        {val.command}
+                                      </span>
+                                      <span
+                                        className={cn(
+                                          'rounded px-1.5 py-0.5 text-[10px] font-medium',
+                                          cfg.className,
+                                        )}
+                                      >
                                         {val.status}
                                       </span>
                                     </div>
@@ -508,14 +605,24 @@ export default function OrchestratorRunsPage() {
                     ) : (
                       <div className="grid gap-3 lg:grid-cols-2">
                         {blackboardEntries.slice(0, 10).map((entry) => (
-                          <div key={`${entry.key}:${entry.version}`} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3">
+                          <div
+                            key={`${entry.key}:${entry.version}`}
+                            className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3"
+                          >
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
                                 <div className="flex items-center gap-2">
-                                  <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-medium', blackboardTone(entry).badgeClass)}>
+                                  <span
+                                    className={cn(
+                                      'rounded px-1.5 py-0.5 text-[11px] font-medium',
+                                      blackboardTone(entry).badgeClass,
+                                    )}
+                                  >
                                     {blackboardTypeLabel(entry.value.schemaType)}
                                   </span>
-                                  <span className="truncate font-mono text-[11px] text-neutral-400">{entry.key}</span>
+                                  <span className="truncate font-mono text-[11px] text-neutral-400">
+                                    {entry.key}
+                                  </span>
                                 </div>
                                 <div className="mt-2 line-clamp-2 text-xs leading-5 text-neutral-700">
                                   {entry.value.summary || blackboardEntryDetail(entry)}
@@ -529,9 +636,19 @@ export default function OrchestratorRunsPage() {
                               </span>
                             </div>
                             <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-neutral-500">
-                              {entry.taskId && <span className="rounded bg-white px-1.5 py-0.5">task:{entry.taskId.slice(0, 8)}</span>}
-                              {entry.agentId && <span className="rounded bg-white px-1.5 py-0.5">agent:{entry.agentId.slice(0, 8)}</span>}
-                              <span className="rounded bg-white px-1.5 py-0.5">v{entry.version}</span>
+                              {entry.taskId && (
+                                <span className="rounded bg-white px-1.5 py-0.5">
+                                  task:{entry.taskId.slice(0, 8)}
+                                </span>
+                              )}
+                              {entry.agentId && (
+                                <span className="rounded bg-white px-1.5 py-0.5">
+                                  agent:{entry.agentId.slice(0, 8)}
+                                </span>
+                              )}
+                              <span className="rounded bg-white px-1.5 py-0.5">
+                                v{entry.version}
+                              </span>
                               {typeof entry.value.confidence === 'number' && (
                                 <span className="rounded bg-white px-1.5 py-0.5">
                                   conf:{Math.round(entry.value.confidence * 100)}%
@@ -569,25 +686,54 @@ export default function OrchestratorRunsPage() {
                       </div>
                     ) : (
                       <ol className="relative space-y-3 before:absolute before:left-[0.8125rem] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-neutral-200">
-                        {events.map((event) => (
-                          <li key={event.id} className="relative flex gap-3">
-                            <div className={cn('z-10 grid h-7 w-7 shrink-0 place-items-center rounded-full border bg-white', eventTone(event).dotClass)}>
+                        {events.map((event, index) => (
+                          <li
+                            key={`${event.type}:${event.timestamp ?? index}:${index}`}
+                            className="relative flex gap-3"
+                          >
+                            <div
+                              className={cn(
+                                'z-10 grid h-7 w-7 shrink-0 place-items-center rounded-full border bg-white',
+                                eventTone(event).dotClass,
+                              )}
+                            >
                               <TimelineIcon event={event} />
                             </div>
                             <div className="min-w-0 flex-1 rounded-lg border border-neutral-100 bg-[#fbfbf8] px-3 py-2">
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
-                                  <div className="text-xs font-semibold text-neutral-800">{eventTitle(event)}</div>
-                                  <div className="mt-0.5 text-xs leading-5 text-neutral-500">{eventSummary(event)}</div>
+                                  <div className="text-xs font-semibold text-neutral-800">
+                                    {eventTitle(event)}
+                                  </div>
+                                  <div className="mt-0.5 text-xs leading-5 text-neutral-500">
+                                    {eventSummary(event)}
+                                  </div>
                                 </div>
                                 <span className="shrink-0 text-[11px] text-neutral-400">
-                                  {relativeTime(event.createdAt, language)}
+                                  {relativeTime(agUiEventDate(event), language)}
                                 </span>
                               </div>
                               <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] text-neutral-500">
-                                {event.taskId && <span className="rounded bg-white px-1.5 py-0.5">task:{event.taskId.slice(0, 8)}</span>}
-                                {event.agentId && <span className="rounded bg-white px-1.5 py-0.5">agent:{event.agentId.slice(0, 8)}</span>}
-                                <span className={cn('rounded px-1.5 py-0.5', eventTone(event).badgeClass)}>{event.severity}</span>
+                                {agUiTaskId(event) && (
+                                  <span className="rounded bg-white px-1.5 py-0.5">
+                                    task:{agUiTaskId(event)!.slice(0, 8)}
+                                  </span>
+                                )}
+                                {event.runId && (
+                                  <span className="rounded bg-white px-1.5 py-0.5">
+                                    run:{event.runId.slice(0, 8)}
+                                  </span>
+                                )}
+                                {event.name && (
+                                  <span
+                                    className={cn(
+                                      'rounded px-1.5 py-0.5',
+                                      eventTone(event).badgeClass,
+                                    )}
+                                  >
+                                    {event.name}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </li>
@@ -609,11 +755,19 @@ export default function OrchestratorRunsPage() {
                       <div className="space-y-4">
                         {conflicts.map((c, idx) => {
                           const isResolving = resolvingConflictFile === c.filePath
-                          const canAct = c.resolution === 'needs-human' || c.resolution === 'llm-resolved' || c.resolution === 'auto-merged'
+                          const canAct =
+                            c.resolution === 'needs-human' ||
+                            c.resolution === 'llm-resolved' ||
+                            c.resolution === 'auto-merged'
                           return (
-                            <div key={idx} className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-4">
+                            <div
+                              key={idx}
+                              className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-4"
+                            >
                               <div className="flex items-center justify-between gap-2">
-                                <span className="truncate font-mono text-xs text-neutral-600">{c.filePath}</span>
+                                <span className="truncate font-mono text-xs text-neutral-600">
+                                  {c.filePath}
+                                </span>
                                 <ConflictResolutionBadge resolution={c.resolution} />
                               </div>
                               {c.notes && (
@@ -621,12 +775,21 @@ export default function OrchestratorRunsPage() {
                               )}
                               {c.variants.length > 0 && (
                                 <div className="mt-3 space-y-2">
-                                  <div className="text-[11px] font-medium text-neutral-500">各 Agent 修改：</div>
+                                  <div className="text-[11px] font-medium text-neutral-500">
+                                    各 Agent 修改：
+                                  </div>
                                   {c.variants.map((v, vidx) => (
-                                    <div key={vidx} className="rounded border border-neutral-200 bg-white">
+                                    <div
+                                      key={vidx}
+                                      className="rounded border border-neutral-200 bg-white"
+                                    >
                                       <div className="flex items-center gap-2 border-b border-neutral-100 px-2 py-1.5">
-                                        <span className="text-xs font-medium text-neutral-700">{v.agentName}</span>
-                                        <span className="text-[10px] text-neutral-400">{v.agentId.slice(0, 8)}</span>
+                                        <span className="text-xs font-medium text-neutral-700">
+                                          {v.agentName}
+                                        </span>
+                                        <span className="text-[10px] text-neutral-400">
+                                          {v.agentId.slice(0, 8)}
+                                        </span>
                                       </div>
                                       {v.diff && (
                                         <div className="max-h-40 overflow-auto p-2">
@@ -639,7 +802,9 @@ export default function OrchestratorRunsPage() {
                               )}
                               {c.mergedContent && (
                                 <div className="mt-3">
-                                  <div className="text-[11px] font-medium text-emerald-700">合并结果</div>
+                                  <div className="text-[11px] font-medium text-emerald-700">
+                                    合并结果
+                                  </div>
                                   <pre className="mt-1 max-h-40 overflow-auto rounded border border-emerald-100 bg-emerald-50/40 p-2 text-[11px] leading-4 text-neutral-700">
                                     {c.mergedContent.slice(0, 1200)}
                                     {c.mergedContent.length > 1200 && '...'}
@@ -676,7 +841,13 @@ export default function OrchestratorRunsPage() {
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={() => void resolveConflict(selectedRun.id, c.filePath, 'rejected')}
+                                        onClick={() =>
+                                          void resolveConflict(
+                                            selectedRun.id,
+                                            c.filePath,
+                                            'rejected',
+                                          )
+                                        }
                                         className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-medium text-red-700 hover:bg-red-100"
                                       >
                                         <XCircle className="h-3.5 w-3.5" />
@@ -685,14 +856,18 @@ export default function OrchestratorRunsPage() {
                                     </div>
                                   ) : (
                                     <div className="space-y-2 rounded-lg border border-neutral-200 bg-white p-3">
-                                      <label className="block text-[11px] font-medium text-neutral-700">最终合并内容</label>
+                                      <label className="block text-[11px] font-medium text-neutral-700">
+                                        最终合并内容
+                                      </label>
                                       <textarea
                                         value={resolveMergedContent}
                                         onChange={(e) => setResolveMergedContent(e.target.value)}
                                         rows={4}
                                         className="w-full rounded-md border border-neutral-200 bg-neutral-50 p-2 text-[11px] leading-4 text-neutral-700 outline-none focus:border-neutral-400"
                                       />
-                                      <label className="block text-[11px] font-medium text-neutral-700">备注</label>
+                                      <label className="block text-[11px] font-medium text-neutral-700">
+                                        备注
+                                      </label>
                                       <input
                                         value={resolveNotes}
                                         onChange={(e) => setResolveNotes(e.target.value)}
@@ -702,7 +877,13 @@ export default function OrchestratorRunsPage() {
                                       <div className="flex flex-wrap gap-2 pt-1">
                                         <button
                                           type="button"
-                                          onClick={() => void resolveConflict(selectedRun.id, c.filePath, 'overridden')}
+                                          onClick={() =>
+                                            void resolveConflict(
+                                              selectedRun.id,
+                                              c.filePath,
+                                              'overridden',
+                                            )
+                                          }
                                           className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-neutral-950 px-3 text-xs font-medium text-white hover:bg-neutral-800"
                                         >
                                           保存决议
@@ -766,7 +947,9 @@ export default function OrchestratorRunsPage() {
                             <LogTypeIcon type={log.type} />
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-medium text-neutral-700">{logTypeLabel(log.type)}</span>
+                                <span className="text-xs font-medium text-neutral-700">
+                                  {logTypeLabel(log.type)}
+                                </span>
                                 <span className="shrink-0 text-[11px] text-neutral-400">
                                   {log.agentId.slice(0, 8)}
                                 </span>
@@ -814,89 +997,132 @@ function StatusIcon({ status }: { status: OrchestratorRunListItem['status'] }) {
   }
 }
 
-function TimelineIcon({ event }: { event: OrchestratorRunEvent }) {
-  if (event.type.includes('failed')) return <XCircle className="h-3.5 w-3.5 text-red-500" />
-  if (event.type.includes('completed')) return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-  if (event.type.includes('conflict')) return <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-  if (event.type.includes('artifact')) return <FileDiff className="h-3.5 w-3.5 text-blue-500" />
-  if (event.type.includes('blackboard')) return <GitBranch className="h-3.5 w-3.5 text-emerald-500" />
-  if (event.type.includes('task')) return <PlayCircle className="h-3.5 w-3.5 text-indigo-500" />
-  if (event.type.includes('synthesizing')) return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+function TimelineIcon({ event }: { event: AgUiRunEvent }) {
+  if (event.type === 'RUN_ERROR') return <XCircle className="h-3.5 w-3.5 text-red-500" />
+  if (event.type === 'RUN_FINISHED')
+    return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+  if (event.type === 'STEP_STARTED') return <PlayCircle className="h-3.5 w-3.5 text-indigo-500" />
+  if (event.type === 'STEP_FINISHED')
+    return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+  if (event.name?.includes('artifact')) return <FileDiff className="h-3.5 w-3.5 text-blue-500" />
+  if (event.name?.includes('blackboard'))
+    return <GitBranch className="h-3.5 w-3.5 text-emerald-500" />
+  if (event.name?.includes('run.status'))
+    return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+  if (event.name?.includes('task.status'))
+    return <PlayCircle className="h-3.5 w-3.5 text-indigo-500" />
   return <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
 }
 
-function eventTone(event: OrchestratorRunEvent) {
-  if (event.severity === 'error') {
+function eventTone(event: AgUiRunEvent) {
+  const status = payloadText(event.value?.status) || event.type
+  if (event.type === 'RUN_ERROR' || status === 'failed') {
     return { dotClass: 'border-red-100 text-red-500', badgeClass: 'bg-red-50 text-red-700' }
   }
-  if (event.severity === 'warning') {
+  if (status === 'cancelled' || status === 'blocked') {
     return { dotClass: 'border-amber-100 text-amber-500', badgeClass: 'bg-amber-50 text-amber-700' }
   }
-  if (event.severity === 'debug') {
-    return { dotClass: 'border-neutral-100 text-neutral-500', badgeClass: 'bg-neutral-100 text-neutral-600' }
+  if (event.type === 'RUN_FINISHED' || status === 'done' || status === 'completed') {
+    return {
+      dotClass: 'border-emerald-100 text-emerald-500',
+      badgeClass: 'bg-emerald-50 text-emerald-700',
+    }
   }
-  return { dotClass: 'border-indigo-100 text-indigo-500', badgeClass: 'bg-indigo-50 text-indigo-700' }
+  return {
+    dotClass: 'border-indigo-100 text-indigo-500',
+    badgeClass: 'bg-indigo-50 text-indigo-700',
+  }
 }
 
-function eventTitle(event: OrchestratorRunEvent) {
-  const map: Record<OrchestratorRunEvent['type'], string> = {
-    'run.started': '运行开始',
-    'plan.created': '计划已创建',
-    'plan.validated': '计划已校验',
-    'approval.requested': '等待确认',
-    'approval.granted': '确认通过',
-    'phase.started': '阶段开始',
-    'task.queued': '任务入队',
-    'task.started': '任务开始',
-    'task.stream': '任务输出',
-    'blackboard.written': '黑板写入',
-    'artifact.created': '产物生成',
-    'task.completed': '任务完成',
-    'task.failed': '任务失败',
-    'task.cancelled': '任务取消',
-    'task.retrying': '任务重试',
-    'task.reassigned': '任务改派',
-    'run.replanned': '运行重规划',
-    'conflict.detected': '检测到冲突',
-    'conflict.resolved': '冲突处理',
-    'run.synthesizing': '正在汇总',
-    'run.completed': '运行完成',
-    'run.cancelled': '运行取消',
-    'run.failed': '运行失败',
-  }
-  return map[event.type] ?? event.type
+function eventTitle(event: AgUiRunEvent) {
+  if (event.type === 'RUN_STARTED') return '运行开始'
+  if (event.type === 'RUN_FINISHED')
+    return payloadText(event.result?.status) === 'cancelled' ? '运行取消' : '运行完成'
+  if (event.type === 'RUN_ERROR') return '运行失败'
+  if (event.type === 'STEP_STARTED') return '成员任务开始'
+  if (event.type === 'STEP_FINISHED') return '成员任务结束'
+  if (event.name === 'agenthub.task.status')
+    return taskStatusTitle(payloadText(event.value?.status))
+  if (event.name === 'agenthub.artifact.created') return '产物生成'
+  if (event.name === 'agenthub.blackboard.written') return '黑板写入'
+  if (event.name === 'agenthub.run.status') return runStatusTitle(payloadText(event.value?.status))
+  return event.name ?? event.type
 }
 
-function eventSummary(event: OrchestratorRunEvent) {
-  const payload = event.payload ?? {}
-  const title = payloadText(payload.title)
-  const taskTitle = payloadText(payload.taskTitle)
-  const agentName = payloadText(payload.agentName)
-  const filePath = payloadText(payload.filePath)
-  const reason = payloadText(payload.reason)
-  const error = payloadText(payload.error)
-  const summary = payloadText(payload.summary)
+function eventSummary(event: AgUiRunEvent) {
+  const value = event.value ?? {}
+  const taskTitle = payloadText(value.taskTitle)
+  const agentName = payloadText(value.agentName)
+  const summary = payloadText(value.summary)
+  const status = payloadText(value.status)
 
-  if (event.type === 'plan.created') {
-    const taskCount = payloadText(payload.taskCount)
-    const agentCount = payloadText(payload.agentCount)
-    return `计划包含 ${taskCount || '-'} 个任务，${agentCount || '-'} 个 Agent。`
+  if (event.type === 'STEP_STARTED')
+    return event.stepName ? `${event.stepName} 开始执行。` : '成员任务开始执行。'
+  if (event.type === 'STEP_FINISHED')
+    return event.stepName ? `${event.stepName} 执行结束。` : '成员任务执行结束。'
+  if (event.type === 'RUN_STARTED') return 'Orchestrator 已进入执行链路。'
+  if (event.type === 'RUN_FINISHED')
+    return status === 'cancelled' ? '本次运行已取消。' : '本次运行已完成。'
+  if (event.type === 'RUN_ERROR') return event.message || '运行失败。'
+  if (event.name === 'agenthub.task.status') {
+    const prefix = agentName || 'Agent'
+    if (status === 'running') return `${prefix} 正在处理${taskTitle ? `：${taskTitle}` : '任务'}。`
+    if (status === 'done') return `${prefix} 完成${taskTitle ? `：${taskTitle}` : '任务'}。`
+    if (status === 'failed') return `${prefix} 执行失败。`
+    if (status === 'pending') return `${taskTitle || '任务'} 已入队等待执行。`
+    if (status === 'cancelled') return `${taskTitle || '任务'} 已取消。`
   }
-  if (event.type === 'task.started') return `${agentName || 'Agent'} 开始处理${title ? `：${title}` : '任务'}。`
-  if (event.type === 'task.completed') return `${agentName || 'Agent'} 完成${title ? `：${title}` : '任务'}。`
-  if (event.type === 'task.failed') return error || `${agentName || 'Agent'} 执行失败。`
-  if (event.type === 'task.retrying') return reason || '任务将按退避策略重试。'
-  if (event.type === 'task.reassigned') return reason || '任务已改派给备用 Agent。'
-  if (event.type === 'run.replanned') return reason || 'Orchestrator 已调整执行计划。'
-  if (event.type === 'blackboard.written') return summary || `${taskTitle || '任务'} 写入了共享黑板。`
-  if (event.type === 'artifact.created') return `${agentName || 'Agent'} 生成了${payloadText(payload.artifactKind) || '产物'}${filePath ? `：${filePath}` : ''}。`
-  if (event.type === 'conflict.detected') return filePath ? `文件 ${filePath} 存在多 Agent 修改。` : '检测到多 Agent 变更冲突。'
-  if (event.type === 'conflict.resolved') return filePath ? `文件 ${filePath} 的冲突处理结果：${payloadText(payload.resolution) || '-'}` : '冲突已处理。'
-  if (event.type === 'run.synthesizing') return '所有可用任务结果已进入汇总阶段。'
-  if (event.type === 'run.completed') return payloadText(payload.summaryMessageId) ? '最终汇总消息已写入群聊。' : '运行已结束。'
-  if (event.type === 'run.cancelled') return '用户已取消本次运行，未完成任务已停止调度。'
-  if (event.type === 'run.failed') return error || '运行失败。'
-  return title || reason || error || summary || event.type
+  if (event.name === 'agenthub.artifact.created') {
+    const artifact = asRecord(value.artifact)
+    const filePath =
+      payloadText(value.filePath) || payloadText(artifact?.filePath) || payloadText(artifact?.path)
+    const title = payloadText(value.title) || payloadText(artifact?.title)
+    return `${title || taskTitle || '产物'}${filePath ? `：${filePath}` : ''}`
+  }
+  if (event.name === 'agenthub.blackboard.written')
+    return summary || `${taskTitle || '任务'} 写入了共享黑板。`
+  if (event.name === 'agenthub.run.status') return summary || runStatusTitle(status)
+  return event.name ?? event.type
+}
+
+function taskStatusTitle(status: string) {
+  const map: Record<string, string> = {
+    pending: '任务入队',
+    running: '任务执行中',
+    done: '任务完成',
+    failed: '任务失败',
+    cancelled: '任务取消',
+    blocked: '任务受阻',
+  }
+  return map[status] ?? '任务状态更新'
+}
+
+function runStatusTitle(status: string) {
+  const map: Record<string, string> = {
+    planning: '规划中',
+    running: '运行中',
+    synthesizing: '正在汇总',
+    completed: '运行完成',
+    failed: '运行失败',
+    cancelled: '运行取消',
+  }
+  return map[status] ?? '运行状态更新'
+}
+
+function agUiTaskId(event: AgUiRunEvent) {
+  return payloadText(event.value?.taskId)
+}
+
+function agUiEventDate(event: AgUiRunEvent) {
+  return typeof event.timestamp === 'number' && Number.isFinite(event.timestamp)
+    ? new Date(event.timestamp)
+    : new Date()
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
 }
 
 function payloadText(value: unknown) {
@@ -944,8 +1170,12 @@ function blackboardEntryDetail(entry: TypedBlackboardEntry) {
     return filePath ? `${title || '产物'} · ${filePath}` : title
   }
   if (value.schemaType === 'diff_summary') {
-    const changedFiles = Array.isArray(value.changedFiles) ? value.changedFiles.filter((item): item is string => typeof item === 'string') : []
-    return changedFiles.length > 0 ? changedFiles.slice(0, 3).join(', ') : payloadText(value.branchName)
+    const changedFiles = Array.isArray(value.changedFiles)
+      ? value.changedFiles.filter((item): item is string => typeof item === 'string')
+      : []
+    return changedFiles.length > 0
+      ? changedFiles.slice(0, 3).join(', ')
+      : payloadText(value.branchName)
   }
   if (value.schemaType === 'decision') return payloadText(value.decision)
   if (value.schemaType === 'risk') return payloadText(value.risk)
@@ -956,7 +1186,13 @@ function blackboardEntryDetail(entry: TypedBlackboardEntry) {
   return ''
 }
 
-function StatusBadge({ status, large = false }: { status: OrchestratorRunListItem['status']; large?: boolean }) {
+function StatusBadge({
+  status,
+  large = false,
+}: {
+  status: OrchestratorRunListItem['status']
+  large?: boolean
+}) {
   const map: Record<string, { text: string; className: string }> = {
     planning: { text: '规划中', className: 'bg-amber-50 text-amber-700' },
     running: { text: '运行中', className: 'bg-indigo-50 text-indigo-700' },
@@ -971,7 +1207,7 @@ function StatusBadge({ status, large = false }: { status: OrchestratorRunListIte
       className={cn(
         'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
         cfg.className,
-        large && 'px-3 py-1 text-sm'
+        large && 'px-3 py-1 text-sm',
       )}
     >
       {cfg.text}
@@ -1033,7 +1269,12 @@ function ConflictResolutionBadge({ resolution }: { resolution: ConflictReportIte
   }
   const cfg = map[resolution] ?? { text: resolution, className: 'bg-neutral-100 text-neutral-600' }
   return (
-    <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium', cfg.className)}>
+    <span
+      className={cn(
+        'inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium',
+        cfg.className,
+      )}
+    >
       {cfg.text}
     </span>
   )
@@ -1088,7 +1329,9 @@ function EmptyDetail() {
           <GitBranch className="h-5 w-5" />
         </div>
         <div className="mt-4 text-sm font-semibold">选择一个运行记录</div>
-        <p className="mt-2 text-xs leading-5 text-neutral-500">左侧列表展示所有 Orchestrator 运行历史，点击可查看详情、冲突报告和执行日志。</p>
+        <p className="mt-2 text-xs leading-5 text-neutral-500">
+          左侧列表展示所有 Orchestrator 运行历史，点击可查看详情、冲突报告和执行日志。
+        </p>
       </div>
     </div>
   )

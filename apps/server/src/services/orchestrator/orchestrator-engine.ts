@@ -1,6 +1,17 @@
 import { readdirSync, statSync, existsSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
-import { db, messages, workspaceTasks, orchestratorRuns, taskClarifications, sessions, workspaces, eq, and, desc } from '@agenthub/db'
+import {
+  db,
+  messages,
+  workspaceTasks,
+  orchestratorRuns,
+  taskClarifications,
+  sessions,
+  workspaces,
+  eq,
+  and,
+  desc,
+} from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
@@ -14,9 +25,15 @@ import { ConflictResolver } from './conflict-resolver'
 import { ReplanningEngine } from './replanning-engine'
 import { emitRunEvent } from './run-events'
 import { initializeRunLedger } from './run-ledger'
-import { validateTaskOutputContract } from './task-contract'
-import { runTaskValidation } from './task-validation'
-import type { CollaborationMode, ExecutionAgent, ExecutionPlan, ExecutionTask, TaskResult } from './types'
+import { validateTaskOutputContract, type TaskContractResult } from './task-contract'
+import { runTaskValidation, type TaskValidationResult } from './task-validation'
+import type {
+  CollaborationMode,
+  ExecutionAgent,
+  ExecutionPlan,
+  ExecutionTask,
+  TaskResult,
+} from './types'
 import { PolicyGuard } from '../policy-guard'
 import { intentRouter } from './intent-router'
 import { streamReply } from '../llm'
@@ -34,6 +51,31 @@ interface ChildSessionInfo {
   sessionId: string
   workspaceId: string
   projectPath?: string | null
+}
+
+interface TaskResultReport {
+  schemaType: 'task_result_report'
+  runId: string
+  taskId: string
+  taskTitle: string
+  agentId: string
+  agentName: string
+  status: TaskStatus
+  summary: string
+  outputRef?: BlackboardRef
+  childSessionId: string
+  artifactCount: number
+  artifacts: Array<Record<string, unknown>>
+  validationStatus: 'passed' | 'failed' | 'skipped' | 'not_run'
+  validationResults: Array<
+    Pick<TaskValidationResult, 'command' | 'status' | 'durationMs' | 'outputSummary'>
+  >
+  contractStatus: TaskContractResult['status']
+  contractViolations: TaskContractResult['violations']
+  durationMs: number
+  blackboardKeys: string[]
+  completedAt: string
+  error?: string
 }
 
 export class OrchestratorEngine {
@@ -114,7 +156,14 @@ export class OrchestratorEngine {
       return
     }
 
-    const executor = engine.createTaskExecutor(runId, run.groupSessionId, run.workspaceId, plan, childSessions, ownerId)
+    const executor = engine.createTaskExecutor(
+      runId,
+      run.groupSessionId,
+      run.workspaceId,
+      plan,
+      childSessions,
+      ownerId,
+    )
     const mode: CollaborationMode = plan.collaborationMode ?? 'mapreduce'
 
     try {
@@ -156,10 +205,6 @@ export class OrchestratorEngine {
               type: 'task.failed',
               severity: 'warning',
               payload: { title: task.title, error: result.error, reason: 'blocked_by_dependency' },
-            })
-            broadcastSessionEvent(run.groupSessionId, {
-              type: WsEvent.TaskUpdate,
-              payload: { taskId: task.id, status: 'blocked', error: result.error, sessionId: run.groupSessionId },
             })
           }
         }
@@ -243,7 +288,13 @@ export class OrchestratorEngine {
       .where(eq(orchestratorRuns.id, runId))
       .limit(1)
 
-    const plan = (runRow?.plan as ExecutionPlan | undefined) ?? { runId, title: '', goal: '', agents: [], tasks: [task] }
+    const plan = (runRow?.plan as ExecutionPlan | undefined) ?? {
+      runId,
+      title: '',
+      goal: '',
+      agents: [],
+      tasks: [task],
+    }
     const [groupSession] = await db
       .select({ ownerId: sessions.ownerId })
       .from(sessions)
@@ -251,7 +302,12 @@ export class OrchestratorEngine {
       .limit(1)
 
     const result = await this.executeTask(
-      task, plan, childSessions, runId, groupSessionId, workspaceId,
+      task,
+      plan,
+      childSessions,
+      runId,
+      groupSessionId,
+      workspaceId,
       this.scheduler.getRunSignal(runId) ?? new AbortController().signal,
       0,
       groupSession?.ownerId ?? 'user',
@@ -260,7 +316,11 @@ export class OrchestratorEngine {
     return result
   }
 
-  async createPlan(goal: string, agents: ExecutionPlan['agents'], workspacePath?: string | null): Promise<ExecutionPlan> {
+  async createPlan(
+    goal: string,
+    agents: ExecutionPlan['agents'],
+    workspacePath?: string | null,
+  ): Promise<ExecutionPlan> {
     return this.planner.createPlan({ goal, agents, workspacePath })
   }
 
@@ -277,13 +337,27 @@ export class OrchestratorEngine {
 
     await db
       .update(orchestratorRuns)
-      .set({ status: OrchestratorRunStatus.Running, plan: plan as unknown as Record<string, unknown> })
+      .set({
+        status: OrchestratorRunStatus.Running,
+        plan: plan as unknown as Record<string, unknown>,
+      })
       .where(eq(orchestratorRuns.id, runId))
 
-    const [groupSessionRecord] = await db.select().from(sessions).where(eq(sessions.id, groupSessionId)).limit(1)
+    const [groupSessionRecord] = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, groupSessionId))
+      .limit(1)
     const ownerId = groupSessionRecord?.ownerId ?? 'user'
 
-    const executor = this.createTaskExecutor(runId, groupSessionId, workspaceId, plan, childSessions, ownerId)
+    const executor = this.createTaskExecutor(
+      runId,
+      groupSessionId,
+      workspaceId,
+      plan,
+      childSessions,
+      ownerId,
+    )
 
     try {
       this.scheduler.onPhaseCompleted = (phaseId: string, phaseTitle: string) => {
@@ -322,10 +396,6 @@ export class OrchestratorEngine {
               type: 'task.failed',
               severity: 'warning',
               payload: { title: task.title, error: result.error, reason: 'blocked_by_dependency' },
-            })
-            broadcastSessionEvent(groupSessionId, {
-              type: WsEvent.TaskUpdate,
-              payload: { taskId: task.id, status: 'blocked', error: result.error, sessionId: groupSessionId },
             })
           }
         }
@@ -510,7 +580,10 @@ export class OrchestratorEngine {
               payload: { round: supervisorRound, newTaskIds: newTasks.map((t) => t.id) },
             })
           } catch (err: any) {
-            logger.warn({ err: err?.message, runId, round: supervisorRound }, 'Supervisor supplement plan failed')
+            logger.warn(
+              { err: err?.message, runId, round: supervisorRound },
+              'Supervisor supplement plan failed',
+            )
             break
           }
         }
@@ -520,7 +593,15 @@ export class OrchestratorEngine {
       // 修复 Bug 23: 使用 scheduler 的 run signal，使 auto-review 可被取消
       const reviewSignal = this.scheduler.getRunSignal(runId) ?? new AbortController().signal
       const reviewResults = await this.injectAutoReviewTasks(
-        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, reviewSignal, executor,
+        plan,
+        results,
+        childSessions,
+        runId,
+        groupSessionId,
+        workspaceId,
+        ownerId,
+        reviewSignal,
+        executor,
       )
       if (reviewResults.length > 0) {
         results.push(...reviewResults)
@@ -528,7 +609,14 @@ export class OrchestratorEngine {
 
       // Task #8: Follow-up task detection — 团长动态交接，根据产出物类型自动创建后续任务
       const followUpResults = await this.detectAndExecuteFollowUpTasks(
-        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, executor,
+        plan,
+        results,
+        childSessions,
+        runId,
+        groupSessionId,
+        workspaceId,
+        ownerId,
+        executor,
       )
       if (followUpResults.length > 0) {
         results.push(...followUpResults)
@@ -561,7 +649,10 @@ export class OrchestratorEngine {
             payload: {
               filePath: report.filePath,
               resolution: report.resolution,
-              agents: report.variants.map((variant) => ({ agentId: variant.agentId, agentName: variant.agentName })),
+              agents: report.variants.map((variant) => ({
+                agentId: variant.agentId,
+                agentName: variant.agentName,
+              })),
             },
           })
           await emitRunEvent({
@@ -570,19 +661,35 @@ export class OrchestratorEngine {
             groupSessionId,
             type: 'conflict.resolved',
             severity: report.resolution === 'needs-human' ? 'warning' : 'info',
-            payload: { filePath: report.filePath, resolution: report.resolution, notes: report.notes },
+            payload: {
+              filePath: report.filePath,
+              resolution: report.resolution,
+              notes: report.notes,
+            },
           })
         }
         await db
           .update(orchestratorRuns)
-          .set({ conflictReport: conflictReports as unknown as import('@agenthub/db').ConflictReport[] })
+          .set({
+            conflictReport: conflictReports as unknown as import('@agenthub/db').ConflictReport[],
+          })
           .where(eq(orchestratorRuns.id, runId))
       }
 
-      await this.synthesizeAndReport(runId, groupSessionId, workspaceId, plan, results, conflictReports)
+      await this.synthesizeAndReport(
+        runId,
+        groupSessionId,
+        workspaceId,
+        plan,
+        results,
+        conflictReports,
+      )
     } catch (error: any) {
       logger.error({ err: error?.message, runId }, 'Scheduler execution failed')
-      await db.update(orchestratorRuns).set({ status: OrchestratorRunStatus.Failed }).where(eq(orchestratorRuns.id, runId))
+      await db
+        .update(orchestratorRuns)
+        .set({ status: OrchestratorRunStatus.Failed })
+        .where(eq(orchestratorRuns.id, runId))
       broadcastSessionEvent(groupSessionId, {
         type: 'task_board:run_completed',
         payload: {
@@ -623,7 +730,10 @@ export class OrchestratorEngine {
       while (true) {
         const elapsed = Date.now() - taskExecutionStartedAt
         if (elapsed > 5 * TASK_TIMEOUT_MS) {
-          logger.error({ taskId: currentTask.id, elapsedMs: elapsed, runId }, 'Task exceeded total time limit, forcing failure')
+          logger.error(
+            { taskId: currentTask.id, elapsedMs: elapsed, runId },
+            'Task exceeded total time limit, forcing failure',
+          )
           return {
             taskId: currentTask.id,
             agentId: currentTask.agentId,
@@ -631,18 +741,31 @@ export class OrchestratorEngine {
             status: TaskStatus.Failed,
             output: '',
             artifacts: [],
-            error: `任务执行总耗时超过系统上限（${5 * TASK_TIMEOUT_MS / 1000}秒），已强制终止。`,
+            error: `任务执行总耗时超过系统上限（${(5 * TASK_TIMEOUT_MS) / 1000}秒），已强制终止。`,
           }
         }
 
-        const result = await this.executeTask(currentTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, currentAttempt, ownerId)
+        const result = await this.executeTask(
+          currentTask,
+          plan,
+          childSessions,
+          runId,
+          groupSessionId,
+          workspaceId,
+          signal,
+          currentAttempt,
+          ownerId,
+        )
         if (result.status === TaskStatus.Done || result.status === TaskStatus.Cancelled) {
           return result
         }
 
         currentAttempt++
         if (currentAttempt > 5) {
-          logger.error({ taskId: currentTask.id, currentAttempt, runId }, 'Task exceeded maximum replan attempts, forcing failure')
+          logger.error(
+            { taskId: currentTask.id, currentAttempt, runId },
+            'Task exceeded maximum replan attempts, forcing failure',
+          )
           return {
             taskId: currentTask.id,
             agentId: currentTask.agentId,
@@ -654,9 +777,17 @@ export class OrchestratorEngine {
           }
         }
 
-        const replan = this.replanningEngine.handle(currentTask, new Error(result.error || 'Task failed'), currentAttempt, plan)
+        const replan = this.replanningEngine.handle(
+          currentTask,
+          new Error(result.error || 'Task failed'),
+          currentAttempt,
+          plan,
+        )
 
-        logger.info({ taskId: currentTask.id, strategy: replan.strategy, reason: replan.reason }, 'Replanning triggered')
+        logger.info(
+          { taskId: currentTask.id, strategy: replan.strategy, reason: replan.reason },
+          'Replanning triggered',
+        )
 
         if (replan.strategy === 'retry_with_backoff') {
           const delayMs = replan.delayMs ?? 1000
@@ -673,11 +804,10 @@ export class OrchestratorEngine {
           await new Promise((r) => setTimeout(r, delayMs))
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
-            await db.update(workspaceTasks).set({ status: TaskStatus.Pending, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
-            broadcastSessionEvent(groupSessionId, {
-              type: WsEvent.TaskUpdate,
-              payload: { taskId: currentTask.id, status: TaskStatus.Pending, attempt: currentAttempt, strategy: 'retry', sessionId: groupSessionId },
-            })
+            await db
+              .update(workspaceTasks)
+              .set({ status: TaskStatus.Pending, errorLog: replan.reason })
+              .where(eq(workspaceTasks.id, currentTask.id))
           }
           continue
         }
@@ -694,15 +824,23 @@ export class OrchestratorEngine {
             agentId: currentTask.agentId,
             type: 'task.reassigned',
             severity: 'warning',
-            payload: { fromAgentId: previousAgentId, toAgentId: currentTask.agentId, reason: replan.reason },
+            payload: {
+              fromAgentId: previousAgentId,
+              toAgentId: currentTask.agentId,
+              reason: replan.reason,
+            },
           })
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
-            await db.update(workspaceTasks).set({ agentId: currentTask.agentId, status: TaskStatus.Pending, retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
-            broadcastSessionEvent(groupSessionId, {
-              type: WsEvent.TaskUpdate,
-              payload: { taskId: currentTask.id, status: TaskStatus.Pending, agentId: currentTask.agentId, strategy: 'agent_substitution', sessionId: groupSessionId },
-            })
+            await db
+              .update(workspaceTasks)
+              .set({
+                agentId: currentTask.agentId,
+                status: TaskStatus.Pending,
+                retryCount: 0,
+                errorLog: replan.reason,
+              })
+              .where(eq(workspaceTasks.id, currentTask.id))
           }
           continue
         }
@@ -718,15 +856,18 @@ export class OrchestratorEngine {
             agentId: currentTask.agentId,
             type: 'run.replanned',
             severity: 'warning',
-            payload: { strategy: 'local_replan', reason: replan.reason, changedTaskIds: [currentTask.id] },
+            payload: {
+              strategy: 'local_replan',
+              reason: replan.reason,
+              changedTaskIds: [currentTask.id],
+            },
           })
           const childInfo = childSessions.get(currentTask.id)
           if (childInfo) {
-            await db.update(workspaceTasks).set({ status: TaskStatus.Pending, retryCount: 0, errorLog: replan.reason }).where(eq(workspaceTasks.id, currentTask.id))
-            broadcastSessionEvent(groupSessionId, {
-              type: WsEvent.TaskUpdate,
-              payload: { taskId: currentTask.id, status: TaskStatus.Pending, strategy: 'local_replan', sessionId: groupSessionId },
-            })
+            await db
+              .update(workspaceTasks)
+              .set({ status: TaskStatus.Pending, retryCount: 0, errorLog: replan.reason })
+              .where(eq(workspaceTasks.id, currentTask.id))
           }
           continue
         }
@@ -758,7 +899,11 @@ export class OrchestratorEngine {
               parallelGroup: newTask.parallelGroup,
               maxRetries: newTask.maxRetries ?? 2,
             })
-            childSessions.set(newTask.id, { sessionId: childSession.id, workspaceId, projectPath: childSessions.get(currentTask.id)?.projectPath })
+            childSessions.set(newTask.id, {
+              sessionId: childSession.id,
+              workspaceId,
+              projectPath: childSessions.get(currentTask.id)?.projectPath,
+            })
             await emitRunEvent({
               runId,
               workspaceId,
@@ -789,17 +934,32 @@ export class OrchestratorEngine {
             agentId: currentTask.agentId,
             type: 'run.replanned',
             severity: 'warning',
-            payload: { strategy: 'task_split', reason: replan.reason, changedTaskIds: replan.newTasks.map((t) => t.id) },
+            payload: {
+              strategy: 'task_split',
+              reason: replan.reason,
+              changedTaskIds: replan.newTasks.map((t) => t.id),
+            },
           })
           this.scheduler.addTasksToRun(runId, replan.newTasks)
-          logger.info({ taskId: currentTask.id, newTaskCount: replan.newTasks.length }, 'Task split into subtasks')
-          return { ...result, status: TaskStatus.Failed, error: `任务已拆分为子任务: ${replan.reason}` }
+          logger.info(
+            { taskId: currentTask.id, newTaskCount: replan.newTasks.length },
+            'Task split into subtasks',
+          )
+          return {
+            ...result,
+            status: TaskStatus.Failed,
+            error: `任务已拆分为子任务: ${replan.reason}`,
+          }
         }
 
         if (replan.strategy === 'global_replan') {
           try {
             const workspacePath = childSessions.get(currentTask.id)?.projectPath ?? undefined
-            const newPlan = await this.planner.createPlan({ goal: plan.goal, agents: plan.agents, workspacePath })
+            const newPlan = await this.planner.createPlan({
+              goal: plan.goal,
+              agents: plan.agents,
+              workspacePath,
+            })
             const existingIds = new Set(plan.tasks.map((t) => t.id))
             const tasksToAdd = newPlan.tasks.filter((t) => !existingIds.has(t.id))
             if (tasksToAdd.length > 0) {
@@ -829,7 +989,11 @@ export class OrchestratorEngine {
                   parallelGroup: newTask.parallelGroup,
                   maxRetries: newTask.maxRetries ?? 2,
                 })
-                childSessions.set(newTask.id, { sessionId: childSession.id, workspaceId, projectPath: childSessions.get(currentTask.id)?.projectPath })
+                childSessions.set(newTask.id, {
+                  sessionId: childSession.id,
+                  workspaceId,
+                  projectPath: childSessions.get(currentTask.id)?.projectPath,
+                })
                 await emitRunEvent({
                   runId,
                   workspaceId,
@@ -860,9 +1024,16 @@ export class OrchestratorEngine {
                 agentId: currentTask.agentId,
                 type: 'run.replanned',
                 severity: 'warning',
-                payload: { strategy: 'global_replan', reason: replan.reason, changedTaskIds: tasksToAdd.map((t) => t.id) },
+                payload: {
+                  strategy: 'global_replan',
+                  reason: replan.reason,
+                  changedTaskIds: tasksToAdd.map((t) => t.id),
+                },
               })
-              logger.info({ taskId: currentTask.id, addedCount: tasksToAdd.length }, 'Global replan added new tasks')
+              logger.info(
+                { taskId: currentTask.id, addedCount: tasksToAdd.length },
+                'Global replan added new tasks',
+              )
               continue
             }
           } catch (err: any) {
@@ -889,7 +1060,11 @@ export class OrchestratorEngine {
             agentId: currentTask.agentId,
             type: 'run.replanned',
             severity: 'warning',
-            payload: { strategy: 'escalate_to_user', reason: replan.reason, changedTaskIds: [currentTask.id] },
+            payload: {
+              strategy: 'escalate_to_user',
+              reason: replan.reason,
+              changedTaskIds: [currentTask.id],
+            },
           })
         }
 
@@ -919,7 +1094,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
     try {
       let output = ''
-      for await (const delta of streamReply([{ role: 'user', content: prompt }], '你是项目管理者。只回答 YES 或 NO。')) {
+      for await (const delta of streamReply(
+        [{ role: 'user', content: prompt }],
+        '你是项目管理者。只回答 YES 或 NO。',
+      )) {
         output += delta
         if (output.length > 100) break
       }
@@ -986,7 +1164,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       childInfo = {
         sessionId: repairedSession.id,
         workspaceId,
-        projectPath: childInfo?.projectPath ?? childSessions.values().next().value?.projectPath ?? null,
+        projectPath:
+          childInfo?.projectPath ?? childSessions.values().next().value?.projectPath ?? null,
       }
       childSessions.set(task.id, childInfo)
       await db
@@ -1062,12 +1241,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       taskId: task.id,
       agentId: agent.id,
       type: 'task.started',
-      payload: { title: task.title, agentName: agent.name, attempt: attemptCount, sessionId: childInfo.sessionId },
-    })
-
-    broadcastSessionEvent(groupSessionId, {
-      type: WsEvent.TaskUpdate,
-      payload: { taskId: task.id, status: TaskStatus.Running, sessionId: groupSessionId },
+      payload: {
+        title: task.title,
+        agentName: agent.name,
+        attempt: attemptCount,
+        sessionId: childInfo.sessionId,
+      },
     })
 
     const taskStartTime = Date.now()
@@ -1084,8 +1263,19 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     })
     let lastAgentOutput = ''
     let lastArtifacts: Array<Record<string, unknown>> = []
+    let lastSummary: TaskOutputSummary | undefined
+    let lastOutputRef: BlackboardRef | undefined
+    let lastValidationResults: TaskValidationResult[] = []
+    let lastContractResult: TaskContractResult | undefined
+    let lastBlackboardKeys: string[] = []
 
-    const GIT_IGNORE_PATTERNS = [/^\.git\//, /^\.git$/, /^node_modules\//, /^\.agenthub\//, /^\.env$/]
+    const GIT_IGNORE_PATTERNS = [
+      /^\.git\//,
+      /^\.git$/,
+      /^node_modules\//,
+      /^\.agenthub\//,
+      /^\.env$/,
+    ]
     const beforeDirs: string[] = []
     if (childInfo.projectPath && existsSync(childInfo.projectPath)) {
       beforeDirs.push(childInfo.projectPath)
@@ -1130,7 +1320,11 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       if (execPath && existsSync(execPath) && !afterDirs.includes(execPath)) {
         afterDirs.push(execPath)
       }
-      if (childInfo.projectPath && existsSync(childInfo.projectPath) && !afterDirs.includes(childInfo.projectPath)) {
+      if (
+        childInfo.projectPath &&
+        existsSync(childInfo.projectPath) &&
+        !afterDirs.includes(childInfo.projectPath)
+      ) {
         afterDirs.push(childInfo.projectPath)
       }
       if (existsSync(defaultWorkDir) && !afterDirs.includes(defaultWorkDir)) {
@@ -1139,7 +1333,11 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       const seenArtifactPaths = new Set(
         artifacts
           .filter((a) => typeof a === 'object' && a !== null)
-          .map((a) => (a as Record<string, unknown>).filePath ?? (a as Record<string, unknown>).path as string | undefined)
+          .map(
+            (a) =>
+              (a as Record<string, unknown>).filePath ??
+              ((a as Record<string, unknown>).path as string | undefined),
+          )
           .filter(Boolean) as string[],
       )
       for (const dir of afterDirs) {
@@ -1259,7 +1457,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           },
         })
 
-        logger.info({ taskId: task.id, question: clarification.question }, 'Agent requested clarification')
+        logger.info(
+          { taskId: task.id, question: clarification.question },
+          'Agent requested clarification',
+        )
 
         await db
           .update(workspaceTasks)
@@ -1382,6 +1583,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
       // 生成结构化摘要（接口契约），供下游任务高效引用
       const summary = await summarizeTaskOutput(output, artifacts, agent.name, task.title)
+      lastSummary = summary
 
       // 写入黑板：任务产出（含结构化摘要）
       const outputRef = await blackboard.write({
@@ -1404,6 +1606,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         taskId: task.id,
         tags: ['task_output', `agent_${agent.id}`],
       })
+      lastOutputRef = outputRef
 
       for (const [index, decision] of summary.decisions.entries()) {
         await blackboard.write({
@@ -1463,7 +1666,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       })
 
       for (const artifact of artifacts) {
-        const artifactId = typeof artifact.id === 'string' && artifact.id ? artifact.id : `artifact-${task.id}`
+        const artifactId =
+          typeof artifact.id === 'string' && artifact.id ? artifact.id : `artifact-${task.id}`
         const artifactKind = String(artifact.kind ?? artifact.type ?? 'artifact')
         const artifactTitle = String(artifact.title ?? artifactId)
         await blackboard.write({
@@ -1478,7 +1682,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             artifactId,
             artifactKind,
             title: artifactTitle,
-            filePath: typeof artifact.filePath === 'string' ? artifact.filePath : typeof artifact.path === 'string' ? artifact.path : undefined,
+            filePath:
+              typeof artifact.filePath === 'string'
+                ? artifact.filePath
+                : typeof artifact.path === 'string'
+                  ? artifact.path
+                  : undefined,
           },
           agentId: agent.id,
           taskId: task.id,
@@ -1496,7 +1705,14 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             artifactKind,
             title: artifactTitle,
             filePath: artifact.filePath ?? artifact.path,
+            url: artifact.url,
+            size: artifact.size,
+            source: 'task',
+            taskTitle: task.title,
+            childSessionId: childInfo.sessionId,
+            artifact,
             agentName: agent.name,
+            agentId: agent.id,
           },
         })
       }
@@ -1509,6 +1725,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             cwd: validationCwd,
           })
         : []
+      lastValidationResults = validationResults
       for (const [index, validation] of validationResults.entries()) {
         const validationKey = `tests/${task.id}/${index + 1}`
         await blackboard.write({
@@ -1551,21 +1768,40 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         throw new Error(`Validation failed: ${failedValidation.command}`)
       }
 
+      const writtenBlackboardKeys = [
+        `task_${task.id}_output`,
+        ...summary.decisions.map((_, index) => `decisions/${task.id}/${index + 1}`),
+        ...(changedFiles.length > 0 ? [`diffs/${task.id}`] : []),
+        ...artifacts.map((artifact) => {
+          const artifactId =
+            typeof artifact.id === 'string' && artifact.id ? artifact.id : `artifact-${task.id}`
+          return `artifacts/${artifactId}`
+        }),
+        ...validationResults.map((_, index) => `tests/${task.id}/${index + 1}`),
+      ]
+      lastBlackboardKeys = writtenBlackboardKeys
       const contractResult = validateTaskOutputContract({
         task,
         artifacts,
-        writtenBlackboardKeys: [
-          `task_${task.id}_output`,
-          ...summary.decisions.map((_, index) => `decisions/${task.id}/${index + 1}`),
-          ...(changedFiles.length > 0 ? [`diffs/${task.id}`] : []),
-          ...artifacts.map((artifact) => {
-            const artifactId = typeof artifact.id === 'string' && artifact.id ? artifact.id : `artifact-${task.id}`
-            return `artifacts/${artifactId}`
-          }),
-          ...validationResults.map((_, index) => `tests/${task.id}/${index + 1}`),
-        ],
+        writtenBlackboardKeys,
       })
+      lastContractResult = contractResult
       if (contractResult.status === 'failed') {
+        const failureReport = buildTaskResultReport({
+          runId,
+          task,
+          agent,
+          status: TaskStatus.Failed,
+          summary,
+          outputRef,
+          artifacts,
+          validationResults,
+          contractResult,
+          durationMs: Date.now() - taskStartTime,
+          childSessionId: childInfo.sessionId,
+          blackboardKeys: writtenBlackboardKeys,
+          error: `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`,
+        })
         await blackboard.write({
           namespace: bbNamespace,
           key: `risks/${task.id}/contract`,
@@ -1577,7 +1813,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             taskId: task.id,
             risk: contractResult.violations.map((violation) => violation.message).join('\n'),
             severity: 'high',
-            mitigation: 'Review the task output contract, allowed paths, and produced artifacts before accepting this task.',
+            mitigation:
+              'Review the task output contract, allowed paths, and produced artifacts before accepting this task.',
           },
           agentId: agent.id,
           taskId: task.id,
@@ -1596,9 +1833,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             agentName: agent.name,
             error: `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`,
             violations: contractResult.violations,
+            ...taskResultReportEventPayload(failureReport),
           },
         })
-        throw new Error(`Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`)
+        throw new Error(
+          `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`,
+        )
       }
 
       // 广播黑板更新到群聊会话
@@ -1625,6 +1865,21 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         })
         .where(eq(workspaceTasks.id, task.id))
 
+      const taskResultReport = buildTaskResultReport({
+        runId,
+        task,
+        agent,
+        status: TaskStatus.Done,
+        summary,
+        outputRef,
+        artifacts,
+        validationResults,
+        contractResult,
+        durationMs: taskDuration,
+        childSessionId: childInfo.sessionId,
+        blackboardKeys: writtenBlackboardKeys,
+      })
+
       const [agentResultMessage] = await db
         .insert(messages)
         .values({
@@ -1641,6 +1896,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             orchestratorTaskId: task.id,
             childSessionId: childInfo.sessionId,
             taskResult: true,
+            taskResultReport,
+            taskStatus: TaskStatus.Done,
             outputRef,
             artifacts,
           },
@@ -1653,11 +1910,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           payload: { sessionId: groupSessionId, message: agentResultMessage },
         })
       }
-
-      broadcastSessionEvent(groupSessionId, {
-        type: WsEvent.TaskUpdate,
-        payload: { taskId: task.id, status: TaskStatus.Done, sessionId: groupSessionId, agentId: agent.id, agentName: agent.name },
-      })
 
       await emitRunEvent({
         runId,
@@ -1672,6 +1924,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           sessionId: childInfo.sessionId,
           durationMs: taskDuration,
           artifactCount: artifacts.length,
+          ...taskResultReportEventPayload(taskResultReport),
         },
       })
 
@@ -1685,28 +1938,50 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         outputRef,
       }
     } catch (error: any) {
+      const failureReport = buildTaskResultReport({
+        runId,
+        task,
+        agent,
+        status: TaskStatus.Failed,
+        summary: lastSummary,
+        outputRef: lastOutputRef,
+        artifacts: lastArtifacts,
+        validationResults: lastValidationResults,
+        contractResult: lastContractResult,
+        durationMs: Date.now() - taskStartTime,
+        childSessionId: childInfo.sessionId,
+        blackboardKeys: lastBlackboardKeys,
+        error: error?.message || 'Unknown error',
+      })
       await executionTracer.log({
         runId,
         sessionId: childInfo.sessionId,
         agentId: agent.id,
         taskId: task.id,
         type: 'error',
-        output: { taskTitle: task.title, error: error?.message, durationMs: Date.now() - taskStartTime },
+        output: {
+          taskTitle: task.title,
+          error: error?.message,
+          durationMs: Date.now() - taskStartTime,
+        },
       })
       // TaskExecutionService 已更新 task 状态，此处只处理 post-processing 错误
       // 如果是 post-processing 错误，需要手动更新状态
-      const existingTask = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, task.id)).limit(1)
+      const existingTask = await db
+        .select()
+        .from(workspaceTasks)
+        .where(eq(workspaceTasks.id, task.id))
+        .limit(1)
       if (existingTask[0]?.status !== TaskStatus.Failed) {
         await db
           .update(workspaceTasks)
-          .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
+          .set({
+            status: TaskStatus.Failed,
+            completedAt: new Date(),
+            errorLog: error?.message || 'Unknown error',
+          })
           .where(eq(workspaceTasks.id, task.id))
       }
-
-      broadcastSessionEvent(groupSessionId, {
-        type: WsEvent.TaskUpdate,
-        payload: { taskId: task.id, status: TaskStatus.Failed, sessionId: groupSessionId, agentId: agent.id, agentName: agent.name, error: error?.message || 'Unknown error' },
-      })
 
       await emitRunEvent({
         runId,
@@ -1722,6 +1997,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           sessionId: childInfo.sessionId,
           error: error?.message || 'Unknown error',
           durationMs: Date.now() - taskStartTime,
+          ...taskResultReportEventPayload(failureReport),
         },
       })
 
@@ -1747,6 +2023,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             childSessionId: childInfo.sessionId,
             taskResult: true,
             taskStatus: TaskStatus.Failed,
+            taskResultReport: failureReport,
             artifacts: lastArtifacts,
           },
         })
@@ -1799,16 +2076,25 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     if (codeTasksNeedingReview.length === 0) return chainResults
 
     // Find verifier agent (prefer roleType='verifier')
-    const verifierAgent = plan.agents.find((a) => a.roleType === 'verifier')
-      ?? plan.agents.find((a) => a.capabilityTags.some((t) => ['verify', 'test', 'build'].includes(t.toLowerCase())))
+    const verifierAgent =
+      plan.agents.find((a) => a.roleType === 'verifier') ??
+      plan.agents.find((a) =>
+        a.capabilityTags.some((t) => ['verify', 'test', 'build'].includes(t.toLowerCase())),
+      )
 
     // Find reviewer agent (prefer roleType='reviewer')
     const firstCodeTask = codeTasksNeedingReview[0]!
-    const reviewerAgent = plan.agents.find((a) => a.roleType === 'reviewer')
-      ?? plan.agents.find((a) => {
-        const text = [a.name, a.role, a.description, ...(a.capabilityTags ?? [])].filter(Boolean).join(' ').toLowerCase()
+    const reviewerAgent =
+      plan.agents.find((a) => a.roleType === 'reviewer') ??
+      plan.agents.find((a) => {
+        const text = [a.name, a.role, a.description, ...(a.capabilityTags ?? [])]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
         return text.includes('review') || text.includes('审查')
-      }) ?? plan.agents.find((a) => a.id !== firstCodeTask.agentId) ?? plan.agents[0]
+      }) ??
+      plan.agents.find((a) => a.id !== firstCodeTask.agentId) ??
+      plan.agents[0]
 
     const autoReviewTasks: ExecutionTask[] = []
 
@@ -1818,7 +2104,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       // === Step 1: Verifier ===
       if (verifierAgent) {
         verifyTaskId = `verify-${codeTask.id}`
-        if (!plan.tasks.some((t) => t.id === verifyTaskId) && !autoReviewTasks.some((t) => t.id === verifyTaskId)) {
+        if (
+          !plan.tasks.some((t) => t.id === verifyTaskId) &&
+          !autoReviewTasks.some((t) => t.id === verifyTaskId)
+        ) {
           const verifyTask: ExecutionTask = {
             id: verifyTaskId,
             title: `验证 ${codeTask.title}`,
@@ -1890,7 +2179,11 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       if (!reviewerAgent) continue
 
       const reviewTaskId = `review-${codeTask.id}`
-      if (plan.tasks.some((t) => t.id === reviewTaskId) || autoReviewTasks.some((t) => t.id === reviewTaskId)) continue
+      if (
+        plan.tasks.some((t) => t.id === reviewTaskId) ||
+        autoReviewTasks.some((t) => t.id === reviewTaskId)
+      )
+        continue
 
       const reviewTask: ExecutionTask = {
         id: reviewTaskId,
@@ -1985,11 +2278,18 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             agentId: codeTask?.agentId ?? '',
             type: 'task.failed',
             severity: 'warning',
-            payload: { title: codeTask?.title ?? '', reason: 'Verification failed, skipping review', verifyTaskId: result.taskId },
+            payload: {
+              title: codeTask?.title ?? '',
+              reason: 'Verification failed, skipping review',
+              verifyTaskId: result.taskId,
+            },
           })
         }
 
-        logger.info({ taskId: result.taskId, codeTaskId, status: result.status }, 'Auto-review task completed')
+        logger.info(
+          { taskId: result.taskId, codeTaskId, status: result.status },
+          'Auto-review task completed',
+        )
       }
     }
 
@@ -2068,7 +2368,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       },
     })
 
-    logger.info({ runId, followUpCount: followUpTasks.length }, 'Detected follow-up tasks, dispatching')
+    logger.info(
+      { runId, followUpCount: followUpTasks.length },
+      'Detected follow-up tasks, dispatching',
+    )
 
     const followUpPlan: ExecutionPlan = {
       runId,
@@ -2109,24 +2412,73 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     }
     if (filePaths.length === 0) return newTasks
 
-    const extSet = (fp: string) => fp.includes('.') ? (fp.split('.').pop() ?? '') : ''
+    const extSet = (fp: string) => (fp.includes('.') ? (fp.split('.').pop() ?? '') : '')
 
     const codeExtensions = new Set([
-      'html', 'css', 'js', 'ts', 'jsx', 'tsx', 'py', 'java', 'go', 'rs', 'cpp', 'c',
-      'rb', 'php', 'swift', 'kt', 'dart', 'vue', 'svelte', 'json', 'yaml', 'yml',
-      'toml', 'xml', 'scss', 'less', 'sass', 'lua', 'r', 'm', 'mm', 'sh', 'bash',
-      'ps1', 'bat', 'cmd', 'sql', 'graphql', 'proto', 'tf', 'hcl',
+      'html',
+      'css',
+      'js',
+      'ts',
+      'jsx',
+      'tsx',
+      'py',
+      'java',
+      'go',
+      'rs',
+      'cpp',
+      'c',
+      'rb',
+      'php',
+      'swift',
+      'kt',
+      'dart',
+      'vue',
+      'svelte',
+      'json',
+      'yaml',
+      'yml',
+      'toml',
+      'xml',
+      'scss',
+      'less',
+      'sass',
+      'lua',
+      'r',
+      'm',
+      'mm',
+      'sh',
+      'bash',
+      'ps1',
+      'bat',
+      'cmd',
+      'sql',
+      'graphql',
+      'proto',
+      'tf',
+      'hcl',
     ])
 
     const docExtensions = new Set(['md', 'markdown', 'mdx', 'txt', 'rst', 'adoc', 'org'])
 
     const isTestFile = (fp: string): boolean => {
       const name = fp.split('/').pop() ?? fp
-      return name.includes('.test.') || name.includes('_test.') || name.includes('.spec.') ||
-        name.includes('_spec.') || fp.includes('/test_') || fp.startsWith('test/') ||
-        fp.startsWith('tests/') || fp.startsWith('spec/') || fp.startsWith('__tests__/') ||
-        name.endsWith('_test.py') || name.endsWith('_test.go') || name.endsWith('_test.rb') ||
-        name.endsWith('_spec.rb') || name.endsWith('Test.java') || name.endsWith('Tests.java')
+      return (
+        name.includes('.test.') ||
+        name.includes('_test.') ||
+        name.includes('.spec.') ||
+        name.includes('_spec.') ||
+        fp.includes('/test_') ||
+        fp.startsWith('test/') ||
+        fp.startsWith('tests/') ||
+        fp.startsWith('spec/') ||
+        fp.startsWith('__tests__/') ||
+        name.endsWith('_test.py') ||
+        name.endsWith('_test.go') ||
+        name.endsWith('_test.rb') ||
+        name.endsWith('_spec.rb') ||
+        name.endsWith('Test.java') ||
+        name.endsWith('Tests.java')
+      )
     }
 
     const hasCodeFiles = filePaths.some((fp) => codeExtensions.has(extSet(fp)))
@@ -2145,7 +2497,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
     // Rule 1: 代码文件产出 + 无 QA 任务 → 创建 QA 审查任务
     if (hasCodeFiles && !taskExistsForRun(['qa', '测试', '审查'])) {
-      const qaAgent = findFollowUpAgent(plan, completedTask.agentId, ['reviewer', 'verifier'], ['qa', 'test', 'review', '测试', '审查'])
+      const qaAgent = findFollowUpAgent(
+        plan,
+        completedTask.agentId,
+        ['reviewer', 'verifier'],
+        ['qa', 'test', 'review', '测试', '审查'],
+      )
       if (qaAgent) {
         const task = await this.createFollowUpTask({
           prefix: 'qa',
@@ -2154,7 +2511,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           description: `对「${completedTask.title}」产出的代码文件进行质量审查。检查：代码规范、边界情况、错误处理、异常安全、性能问题。`,
           agent: qaAgent,
           taskType: 'review',
-          plan, childSessions, runId, groupSessionId, workspaceId, ownerId,
+          plan,
+          childSessions,
+          runId,
+          groupSessionId,
+          workspaceId,
+          ownerId,
         })
         if (task) newTasks.push(task)
       }
@@ -2162,7 +2524,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
     // Rule 2: Markdown 文档产出 + 无编辑任务 → 创建润色任务
     if (hasDocFiles && !taskExistsForRun(['润色', '编辑', '校对', 'polish', 'edit'])) {
-      const editorAgent = findFollowUpAgent(plan, completedTask.agentId, ['reviewer', 'integrator', 'custom'], ['edit', 'polish', '文档', '写作', 'write', '润色', '校对'])
+      const editorAgent = findFollowUpAgent(
+        plan,
+        completedTask.agentId,
+        ['reviewer', 'integrator', 'custom'],
+        ['edit', 'polish', '文档', '写作', 'write', '润色', '校对'],
+      )
       if (editorAgent) {
         const task = await this.createFollowUpTask({
           prefix: 'polish',
@@ -2171,7 +2538,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           description: `对「${completedTask.title}」产出的文档进行润色和校对。检查：逻辑连贯性、表述清晰度、格式一致性、错别字和语法。`,
           agent: editorAgent,
           taskType: 'review',
-          plan, childSessions, runId, groupSessionId, workspaceId, ownerId,
+          plan,
+          childSessions,
+          runId,
+          groupSessionId,
+          workspaceId,
+          ownerId,
         })
         if (task) newTasks.push(task)
       }
@@ -2179,7 +2551,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
     // Rule 3: 代码 + 测试文件产出 + 无 Reviewer 任务 → 创建 Reviewer 任务
     if (hasCodeFiles && hasTestFiles && !taskExistsForRun(['review', '审查', 'code review'])) {
-      const reviewerAgent = findFollowUpAgent(plan, completedTask.agentId, ['reviewer', 'verifier'], ['review', '审查', 'code review'])
+      const reviewerAgent = findFollowUpAgent(
+        plan,
+        completedTask.agentId,
+        ['reviewer', 'verifier'],
+        ['review', '审查', 'code review'],
+      )
       if (reviewerAgent) {
         const task = await this.createFollowUpTask({
           prefix: 'review',
@@ -2188,7 +2565,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           description: `审查「${completedTask.title}」的代码变更和测试覆盖率。关注：代码风格一致性、架构合理性、潜在安全漏洞、测试充分度。`,
           agent: reviewerAgent,
           taskType: 'review',
-          plan, childSessions, runId, groupSessionId, workspaceId, ownerId,
+          plan,
+          childSessions,
+          runId,
+          groupSessionId,
+          workspaceId,
+          ownerId,
         })
         if (task) newTasks.push(task)
       }
@@ -2211,7 +2593,20 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     workspaceId: string
     ownerId: string
   }): Promise<ExecutionTask | null> {
-    const { prefix, parentTask, title, description, agent, taskType, plan, childSessions, runId, groupSessionId, workspaceId, ownerId } = params
+    const {
+      prefix,
+      parentTask,
+      title,
+      description,
+      agent,
+      taskType,
+      plan,
+      childSessions,
+      runId,
+      groupSessionId,
+      workspaceId,
+      ownerId,
+    } = params
 
     const taskId = `${prefix}-${parentTask.id}`
 
@@ -2281,7 +2676,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       },
     })
 
-    logger.info({ taskId: task.id, parentTaskId: parentTask.id, agentName: agent.name }, 'Follow-up task created via rule engine')
+    logger.info(
+      { taskId: task.id, parentTaskId: parentTask.id, agentName: agent.name },
+      'Follow-up task created via rule engine',
+    )
 
     return task
   }
@@ -2294,7 +2692,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     results: TaskResult[],
     conflictReports: import('./conflict-resolver').ConflictReport[] = [],
   ) {
-    await db.update(orchestratorRuns).set({ status: 'synthesizing' }).where(eq(orchestratorRuns.id, runId))
+    await db
+      .update(orchestratorRuns)
+      .set({ status: 'synthesizing' })
+      .where(eq(orchestratorRuns.id, runId))
     await emitRunEvent({
       runId,
       workspaceId,
@@ -2309,31 +2710,50 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
     // 从黑板读取所有产物，供 Synthesizer 使用（替代直接从 results 读取）
     const bbNamespace = Blackboard.namespace(workspaceId, runId)
-    const typedBlackboardEntries = await blackboard.query({ namespace: bbNamespace, orderBy: 'asc' })
-    const bbResults = typedBlackboardEntries.filter((entry) => entry.key.startsWith('task_') && entry.key.endsWith('_output'))
+    const typedBlackboardEntries = await blackboard.query({
+      namespace: bbNamespace,
+      orderBy: 'asc',
+    })
+    const bbResults = typedBlackboardEntries.filter(
+      (entry) => entry.key.startsWith('task_') && entry.key.endsWith('_output'),
+    )
     const enrichedResults: TaskResult[] = results.map((r) => {
       const bbEntry = bbResults.find((e) => e.key === `task_${r.taskId}_output`)
       if (bbEntry) {
         const val = bbEntry.value as { output: string; artifacts: Array<Record<string, unknown>> }
-        return { ...r, output: val.output, artifacts: val.artifacts, outputRef: { namespace: bbNamespace, key: bbEntry.key, version: bbEntry.version } }
+        return {
+          ...r,
+          output: val.output,
+          artifacts: val.artifacts,
+          outputRef: { namespace: bbNamespace, key: bbEntry.key, version: bbEntry.version },
+        }
       }
       return r
     })
 
-    const summary = await this.synthesizer.synthesize(plan, enrichedResults, conflictReports, typedBlackboardEntries)
+    const summary = await this.synthesizer.synthesize(
+      plan,
+      enrichedResults,
+      conflictReports,
+      typedBlackboardEntries,
+    )
 
     // 检查是否有失败、阻塞或缺失结果，最终状态必须反映真实执行情况。
     const failedReviews = enrichedResults.filter(
-      (r) => r.taskId.startsWith('review-') && (r.status === TaskStatus.Failed || r.status === TaskStatus.Blocked)
+      (r) =>
+        r.taskId.startsWith('review-') &&
+        (r.status === TaskStatus.Failed || r.status === TaskStatus.Blocked),
     )
     const failedValidations = enrichedResults.filter(
-      (r) => r.status === TaskStatus.Failed && r.error?.includes('Validation')
+      (r) => r.status === TaskStatus.Failed && r.error?.includes('Validation'),
     )
     const failedTasks = enrichedResults.filter((r) => r.status === TaskStatus.Failed)
     const blockedTasks = enrichedResults.filter((r) => r.status === TaskStatus.Blocked)
     const cancelledTasks = enrichedResults.filter((r) => r.status === TaskStatus.Cancelled)
     const skippedTasks = enrichedResults.filter((r) => r.status === TaskStatus.Skipped)
-    const missingTasks = plan.tasks.filter((task) => !enrichedResults.some((r) => r.taskId === task.id))
+    const missingTasks = plan.tasks.filter(
+      (task) => !enrichedResults.some((r) => r.taskId === task.id),
+    )
     const hasBlockingFailures =
       failedTasks.length > 0 ||
       blockedTasks.length > 0 ||
@@ -2341,16 +2761,31 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       skippedTasks.length > 0 ||
       missingTasks.length > 0 ||
       conflictReports.length > 0
-    const finalArtifacts = collectResultArtifacts(enrichedResults)
-    const artifactNotice = finalArtifacts.length > 0
-      ? `
+    const successfulResults = enrichedResults.filter((result) => result.status === TaskStatus.Done)
+    const unsuccessfulResults = enrichedResults.filter(
+      (result) => result.status !== TaskStatus.Done,
+    )
+    const finalArtifacts = collectResultArtifacts(successfulResults)
+    const diagnosticArtifacts = collectResultArtifacts(unsuccessfulResults)
+    const artifactNotice =
+      finalArtifacts.length > 0
+        ? `
 
 ---
 📦 **交付产物**
 
-本次运行收集到 ${finalArtifacts.length} 个产物，已在下方产物卡中汇总。可直接打开文件、查看 Diff 或预览网页。
+本次运行收集到 ${finalArtifacts.length} 个已通过任务产物，已在下方产物卡中汇总。可直接打开文件、查看 Diff 或预览网页。
+${diagnosticArtifacts.length > 0 ? `\n另有 ${diagnosticArtifacts.length} 个未通过任务的中间产物保留在对应成员消息中，仅用于排查，不作为本次正式交付。` : ''}
 `
-      : ''
+        : diagnosticArtifacts.length > 0
+          ? `
+
+---
+🧭 **中间产物**
+
+本次运行产生了 ${diagnosticArtifacts.length} 个中间产物，但相关任务未通过校验或被阻塞。这些内容保留在对应成员消息中用于排查，不作为正式交付。
+`
+          : ''
 
     const taskById = new Map(plan.tasks.map((task) => [task.id, task]))
     const issueLines = [
@@ -2413,7 +2848,7 @@ ${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.leng
       const ext = fileName.split('.').pop()?.toLowerCase() ?? ''
       return {
         name: fileName,
-        size: (rec.size as number) ?? 0,
+        size: typeof rec.size === 'number' ? rec.size : undefined,
         type: ext,
       }
     })
@@ -2430,7 +2865,9 @@ ${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.leng
       ? OrchestratorRunStatus.Failed
       : OrchestratorRunStatus.Completed
     const deliveryStatus = hasBlockingFailures
-      ? completedTaskCount > 0 ? 'partial' : 'failed'
+      ? completedTaskCount > 0
+        ? 'partial'
+        : 'failed'
       : 'completed'
 
     const [summaryMsg] = await db
@@ -2446,18 +2883,22 @@ ${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.leng
           role: orchestratorAgent?.role ?? 'Coordinator',
           runtimeType: 'llm',
           artifacts: finalArtifacts,
-          file_card: fileArtifacts.length > 0 ? {
-            files: fileArtifacts.map((a) => {
-              const rec = a as Record<string, unknown>
-              const fileName = (rec.title as string) ?? (rec.path as string)?.split('/').pop() ?? 'unknown'
-              return {
-                fileName,
-                filePath: (rec.path as string) ?? fileName,
-                fileSize: rec.size as number | undefined,
-                runId,
-              }
-            }),
-          } : undefined,
+          file_card:
+            fileArtifacts.length > 0
+              ? {
+                  files: fileArtifacts.map((a) => {
+                    const rec = a as Record<string, unknown>
+                    const fileName =
+                      (rec.title as string) ?? (rec.path as string)?.split('/').pop() ?? 'unknown'
+                    return {
+                      fileName,
+                      filePath: (rec.path as string) ?? fileName,
+                      fileSize: rec.size as number | undefined,
+                      runId,
+                    }
+                  }),
+                }
+              : undefined,
           orchestratorSummary: {
             dispatchId: runId,
             taskIds: plan.tasks.map((t) => t.id),
@@ -2610,13 +3051,16 @@ function formatDuration(ms: number) {
   return `${minutes}分${seconds.toString().padStart(2, '0')}秒`
 }
 
-function extractQAResult(results: TaskResult[]): { passed: boolean; critical: number; major: number; minor: number } | undefined {
+function extractQAResult(
+  results: TaskResult[],
+): { passed: boolean; critical: number; major: number; minor: number } | undefined {
   const qaTasks = results.filter(
     (r) =>
       r.taskId.toLowerCase().includes('qa') ||
       r.taskId.toLowerCase().includes('review') ||
       r.taskId.toLowerCase().includes('test') ||
-      (r.agentName && (r.agentName.toLowerCase().includes('qa') || r.agentName.toLowerCase().includes('测试')))
+      (r.agentName &&
+        (r.agentName.toLowerCase().includes('qa') || r.agentName.toLowerCase().includes('测试'))),
   )
   if (qaTasks.length === 0) return undefined
 
@@ -2651,7 +3095,9 @@ function collectResultArtifacts(results: TaskResult[]) {
         artifact.type ?? artifact.kind,
         artifact.path ?? artifact.filePath,
         artifact.url,
-      ].filter(Boolean).join('|')
+      ]
+        .filter(Boolean)
+        .join('|')
       if (!key || seen.has(key)) continue
       seen.add(key)
       artifacts.push({
@@ -2716,7 +3162,7 @@ function parseAgentAutonomySignals(output: string): AgentAutonomySignals {
         const allOptions = question.match(/[（(]?([A-Z])\)\s*(.+?)(?=\s+[（(]?[A-Z]\)|$)/g)
         result.clarifications.push({
           question: question.split(/[（(]?[A-Z]\)/)[0]?.trim() || question,
-          options: allOptions?.map(o => o.replace(/^[（(]?[A-Z]\)\s*/, '').trim()),
+          options: allOptions?.map((o) => o.replace(/^[（(]?[A-Z]\)\s*/, '').trim()),
         })
       } else {
         result.clarifications.push({ question })
@@ -2728,15 +3174,16 @@ function parseAgentAutonomySignals(output: string): AgentAutonomySignals {
   while ((match = rejectRegex.exec(output)) !== null) {
     const content = match[1]?.trim()
     if (content) {
-      const parts = content.split('|').map(s => s.trim())
+      const parts = content.split('|').map((s) => s.trim())
       const reason = parts[0] || content
-      const suggestedPart = parts.find(p => p.includes('建议Agent:') || p.includes('建议agent:'))
+      const suggestedPart = parts.find((p) => p.includes('建议Agent:') || p.includes('建议agent:'))
       const suggestedAgent = suggestedPart?.split(':')[1]?.trim()
       result.rejections.push({ reason, suggestedAgent })
     }
   }
 
-  const progressRegex = /\[PROGRESS:\s*(\d+)%\]\s*(.*?)(?=\[CLARIFY\]|\[REJECT\]|\[PROGRESS|\[HELP|$)/g
+  const progressRegex =
+    /\[PROGRESS:\s*(\d+)%\]\s*(.*?)(?=\[CLARIFY\]|\[REJECT\]|\[PROGRESS|\[HELP|$)/g
   while ((match = progressRegex.exec(output)) !== null) {
     const percent = parseInt(match[1]!, 10)
     const status = match[2]?.trim() || ''
@@ -2768,7 +3215,10 @@ async function buildTaskPrompt(
 
   if (task.outputContract) {
     parts.push('# 交付要求')
-    if (task.outputContract.acceptanceCriteria && task.outputContract.acceptanceCriteria.length > 0) {
+    if (
+      task.outputContract.acceptanceCriteria &&
+      task.outputContract.acceptanceCriteria.length > 0
+    ) {
       parts.push('验收标准：')
       for (const criteria of task.outputContract.acceptanceCriteria) {
         parts.push(`- ${criteria}`)
@@ -2839,7 +3289,9 @@ async function buildTaskPrompt(
     parts.push(`# 角色说明\n${agentProfile.systemPrompt.slice(0, 1000)}\n`)
   }
 
-  parts.push('请先给出简短工作计划，再产出结果。遇到需要其他 Agent 配合的内容，请在结尾用「需协作:」列出。')
+  parts.push(
+    '请先给出简短工作计划，再产出结果。遇到需要其他 Agent 配合的内容，请在结尾用「需协作:」列出。',
+  )
 
   if (agentProfile) {
     parts.push(buildAutonomyInstructions())
@@ -2899,6 +3351,76 @@ function buildAgentGroupResultContent(
   return lines.join('\n')
 }
 
+export function buildTaskResultReport(params: {
+  runId: string
+  task: ExecutionTask
+  agent: ExecutionAgent
+  status: TaskStatus
+  summary?: TaskOutputSummary
+  outputRef?: BlackboardRef
+  artifacts: Array<Record<string, unknown>>
+  validationResults: TaskValidationResult[]
+  contractResult?: TaskContractResult
+  durationMs: number
+  childSessionId: string
+  blackboardKeys: string[]
+  error?: string
+}): TaskResultReport {
+  const validationStatus =
+    params.validationResults.length === 0
+      ? 'not_run'
+      : params.validationResults.some((result) => result.status === 'failed')
+        ? 'failed'
+        : params.validationResults.some((result) => result.status === 'passed')
+          ? 'passed'
+          : 'skipped'
+
+  return {
+    schemaType: 'task_result_report',
+    runId: params.runId,
+    taskId: params.task.id,
+    taskTitle: params.task.title,
+    agentId: params.agent.id,
+    agentName: params.agent.name,
+    status: params.status,
+    summary: params.summary?.brief?.trim() || params.error || '任务已完成。',
+    outputRef: params.outputRef,
+    childSessionId: params.childSessionId,
+    artifactCount: params.artifacts.length,
+    artifacts: params.artifacts,
+    validationStatus,
+    validationResults: params.validationResults.map((result) => ({
+      command: result.command,
+      status: result.status,
+      durationMs: result.durationMs,
+      outputSummary: result.outputSummary,
+    })),
+    contractStatus: params.contractResult?.status ?? 'passed',
+    contractViolations: params.contractResult?.violations ?? [],
+    durationMs: params.durationMs,
+    blackboardKeys: params.blackboardKeys,
+    completedAt: new Date().toISOString(),
+    ...(params.error ? { error: params.error } : {}),
+  }
+}
+
+export function taskResultReportEventPayload(report: TaskResultReport): Record<string, unknown> {
+  return {
+    taskResultReport: report,
+    artifactCount: report.artifactCount,
+    childSessionId: report.childSessionId,
+    outputRef: report.outputRef,
+    summary: report.summary,
+    validationStatus: report.validationStatus,
+    validationResults: report.validationResults,
+    contractStatus: report.contractStatus,
+    contractViolations: report.contractViolations,
+    blackboardKeys: report.blackboardKeys,
+    durationMs: report.durationMs,
+    error: report.error,
+  }
+}
+
 function buildAgentGroupFailureContent(
   agentName: string,
   taskTitle: string,
@@ -2935,7 +3457,9 @@ async function summarizeTaskOutput(
   }
 
   // 从 artifacts 提取文件变更
-  const codeArtifacts = artifacts.filter((a) => isArtifactKind(a, 'diff') || isArtifactKind(a, 'file'))
+  const codeArtifacts = artifacts.filter(
+    (a) => isArtifactKind(a, 'diff') || isArtifactKind(a, 'file'),
+  )
   const filesCreated: string[] = []
   const filesModified: string[] = []
   for (const a of codeArtifacts) {
@@ -2957,7 +3481,11 @@ async function summarizeTaskOutput(
   if (output.length < 4000) {
     const lines = output.split('\n')
     const decisions = lines
-      .filter((l) => /^[\s]*[-*]\s+(决定|采用|选择|使用|方案|设计|决策)/i.test(l) || /^(决定|采用|选择|使用|方案|设计|决策)/i.test(l))
+      .filter(
+        (l) =>
+          /^[\s]*[-*]\s+(决定|采用|选择|使用|方案|设计|决策)/i.test(l) ||
+          /^(决定|采用|选择|使用|方案|设计|决策)/i.test(l),
+      )
       .map((l) => l.trim().replace(/^[\s]*[-*]\s*/, ''))
       .slice(0, 6)
     const interfaces: Array<{ file: string; name: string; signature: string }> = []
@@ -3003,7 +3531,10 @@ ${artifactFiles || '无'}
   "brief": "200字以内的任务总结"
 }`
     let llmOutput = ''
-    for await (const delta of streamReply([{ role: 'user', content: prompt }], '你是代码分析助手，擅长从文本中提取结构化信息。')) {
+    for await (const delta of streamReply(
+      [{ role: 'user', content: prompt }],
+      '你是代码分析助手，擅长从文本中提取结构化信息。',
+    )) {
       llmOutput += delta
       if (llmOutput.length > 6000) break
     }
@@ -3020,7 +3551,10 @@ ${artifactFiles || '无'}
       }
     }
   } catch (err: any) {
-    logger.warn({ err: err?.message, agentName, taskTitle }, 'Failed to summarize task output via LLM')
+    logger.warn(
+      { err: err?.message, agentName, taskTitle },
+      'Failed to summarize task output via LLM',
+    )
   }
 
   // 回退：返回基于 artifacts 的摘要
@@ -3035,7 +3569,11 @@ ${artifactFiles || '无'}
 }
 
 function extractJsonObject(value: string) {
-  const cleaned = value.trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+  const cleaned = value
+    .trim()
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim()
   if (cleaned.startsWith('{') && cleaned.endsWith('}')) return cleaned
   const start = cleaned.indexOf('{')
   const end = cleaned.lastIndexOf('}')

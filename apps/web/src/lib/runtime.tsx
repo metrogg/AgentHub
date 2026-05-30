@@ -46,15 +46,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     typeof message.metadata.agentName === 'string'
       ? message.metadata.agentName
       : null
-  const runtimeLabel =
-    message.senderType === 'agent' && message.metadata?.runtimeType === 'code-agent'
-      ? `代码 Agent / ${String(message.metadata.codeAgentType ?? 'cli')}`
-      : message.senderType === 'agent' &&
-          typeof message.metadata?.runtimeType === 'string' &&
-          message.metadata.runtimeType !== 'llm'
-        ? String(message.metadata.runtimeType).toUpperCase()
-        : null
-  const senderLabel = [agentName, runtimeLabel].filter(Boolean).join(' · ')
+  const senderLabel = agentName
   const displayContent =
     message.senderType === 'user' && typeof message.metadata?.displayContent === 'string'
       ? message.metadata.displayContent
@@ -184,12 +176,7 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
             },
           ]
         : []
-      const streamingRuntimeLabel = streamingCodeAgentRun
-        ? `代码 Agent / ${String(streamingCodeAgentRun.runtime ?? 'cli')}`
-        : null
-      const streamingSenderLabel = [streamingMessage.agentName, streamingRuntimeLabel]
-        .filter(Boolean)
-        .join(' · ')
+      const streamingSenderLabel = streamingMessage.agentName ?? null
       const streamingText =
         streamingSenderLabel && streamingMessage.content.trim()
           ? `**${streamingSenderLabel}**\n\n${streamingMessage.content}`

@@ -11,7 +11,7 @@ class WSClient {
   private ws: WebSocket | null = null
   private listeners = new Set<Listener>()
   private reconnectTimer: number | null = null
-  private currentSessionId: string | null = null
+  private currentSessionIds = new Set<string>()
 
   connect() {
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
@@ -22,8 +22,8 @@ class WSClient {
     this.ws = new WebSocket(url)
 
     this.ws.onopen = () => {
-      if (this.currentSessionId) {
-        this.joinSession(this.currentSessionId)
+      for (const sessionId of this.currentSessionIds) {
+        this.sendJoin(sessionId)
       }
     }
 
@@ -55,12 +55,22 @@ class WSClient {
   }
 
   joinSession(sessionId: string) {
-    this.currentSessionId = sessionId
+    this.joinSessions([sessionId])
+  }
+
+  joinSessions(sessionIds: string[]) {
+    this.currentSessionIds = new Set(sessionIds.filter(Boolean))
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: WsEvent.SessionJoin, payload: { sessionId } }))
+      for (const sessionId of this.currentSessionIds) {
+        this.sendJoin(sessionId)
+      }
     } else {
       this.connect()
     }
+  }
+
+  private sendJoin(sessionId: string) {
+    this.ws?.send(JSON.stringify({ type: WsEvent.SessionJoin, payload: { sessionId } }))
   }
 
   on(listener: Listener) {
@@ -75,7 +85,7 @@ class WSClient {
     }
     this.ws?.close()
     this.ws = null
-    this.currentSessionId = null
+    this.currentSessionIds.clear()
   }
 }
 

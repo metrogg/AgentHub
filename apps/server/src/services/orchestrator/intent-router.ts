@@ -87,9 +87,10 @@ export class IntentRouter {
     const hasComplexVerb = complexVerbs.some((v) => lower.includes(v))
     const hasTechObject = techObjects.some((t) => lower.includes(t))
     if (hasComplexVerb && hasTechObject) signals += 1
+    if (hasWorkRequestSignal(lower)) signals += 3
     if (
       hasComplexVerb &&
-      ['网站','网页','webapp','web app','site','website','游戏','小游戏','game','应用','app'].some((t) =>
+      ['官网','网站','网页','webapp','web app','site','website','游戏','小游戏','game','应用','app'].some((t) =>
         lower.includes(t),
       )
     )
@@ -122,3 +123,57 @@ export class IntentRouter {
 }
 
 export const intentRouter = new IntentRouter()
+
+function hasWorkRequestSignal(lower: string): boolean {
+  const workVerbs = [
+    '开发',
+    '搭建',
+    '构建',
+    '创建',
+    '制作',
+    '设计',
+    '实现',
+    '生成',
+    '输出',
+    '调研',
+    '分析',
+    '整理',
+    '撰写',
+    '写一份',
+    '写个',
+    '做一个',
+    '做个',
+    'build',
+    'create',
+    'develop',
+    'design',
+    'implement',
+    'generate',
+    'research',
+    'analyze',
+  ]
+  const deliverables = [
+    '官网',
+    '网站',
+    '网页',
+    '页面',
+    'html',
+    'pdf',
+    '文档',
+    '报告',
+    'ppt',
+    '幻灯片',
+    '应用',
+    'app',
+    '工具',
+    '游戏',
+    '原型',
+    'demo',
+    'website',
+    'web page',
+    'document',
+    'report',
+  ]
+  return workVerbs.some((verb) => lower.includes(verb)) &&
+    deliverables.some((item) => lower.includes(item))
+}

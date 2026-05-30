@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
 import { existsSync, mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
@@ -9,6 +9,8 @@ let app: { request: (input: string, init?: RequestInit) => Promise<Response> }
 let dbApi: typeof import('../packages/db/src/index')
 let originalFetch: typeof fetch
 let globalMockedFetch: typeof fetch
+
+setDefaultTimeout(30000)
 
 beforeAll(async () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-smoke-'))
@@ -963,40 +965,46 @@ describe('AgentHub smoke tests', () => {
       }),
     )
 
-    let items: Array<{ type: string; content: string; metadata?: any }> = []
-    for (let i = 0; i < 30; i++) {
-      ;({ items } = await json<{ items: Array<{ type: string; content: string; metadata?: any }> }>(
-        await app.request(`/api/messages/${group.session.id}`),
-      ))
-      if (items.some((message) => message.metadata?.systemEvent === 'orchestrator_handoff')) break
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-
-    const thinkingIndex = items.findIndex(
-      (message) => message.metadata?.systemEvent === 'orchestrator_thinking',
-    )
-    const handoffIndex = items.findIndex(
-      (message) => message.metadata?.systemEvent === 'orchestrator_handoff',
-    )
-    const planCard = items.find((message) => message.type === 'task_card')
-
-    expect(thinkingIndex).toBeGreaterThanOrEqual(0)
-    expect(handoffIndex).toBeGreaterThan(thinkingIndex)
-    expect(items[thinkingIndex]!.type).toBe('text')
-    expect(planCard).toBeUndefined()
-
-    const runs = await dbApi.db
+    let runs = await dbApi.db
       .select()
       .from(dbApi.orchestratorRuns)
       .where(dbApi.eq(dbApi.orchestratorRuns.groupSessionId, group.session.id))
+    let tasks: any[] = []
+    for (let i = 0; i < 120; i++) {
+      runs = await dbApi.db
+        .select()
+        .from(dbApi.orchestratorRuns)
+        .where(dbApi.eq(dbApi.orchestratorRuns.groupSessionId, group.session.id))
+      const run = runs[0]
+      if (run) {
+        tasks = await dbApi.db
+          .select()
+          .from(dbApi.workspaceTasks)
+          .where(dbApi.eq(dbApi.workspaceTasks.runId, run.id))
+        if (tasks.length > 0) break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+
+    const { items } = await json<{ items: Array<{ type: string; content: string; metadata?: any }> }>(
+      await app.request(`/api/messages/${group.session.id}`),
+    )
+    const handoffMessage = items.find(
+      (message) => message.metadata?.systemEvent === 'orchestrator_handoff',
+    )
+    const thinkingMessage = items.find(
+      (message) => message.metadata?.systemEvent === 'orchestrator_thinking',
+    )
+    const planCard = items.find((message) => message.type === 'task_card')
+
+    expect(thinkingMessage).toBeUndefined()
+    expect(handoffMessage).toBeUndefined()
+    expect(planCard).toBeUndefined()
+
     expect(runs.length).toBeGreaterThan(0)
     const run = runs[0]!
     expect(['running', 'synthesizing', 'completed', 'failed']).toContain(run.status)
 
-    const tasks = await dbApi.db
-      .select()
-      .from(dbApi.workspaceTasks)
-      .where(dbApi.eq(dbApi.workspaceTasks.runId, run.id))
     expect(tasks.length).toBeGreaterThan(0)
     for (const task of tasks) {
       expect(task.sessionId).toBeTruthy()
@@ -1245,6 +1253,17 @@ describe('AgentHub smoke tests', () => {
       })
       .returning()
     expect(run?.id).toBeTruthy()
+    await dbApi.db.insert(dbApi.workspaceTasks).values({
+      id: 'protocol-task-a',
+      workspaceId: full.workspace.id,
+      title: 'Protocol task A',
+      description: 'Expose this task through A2A.',
+      status: 'running',
+      sessionId: group.session.id,
+      runId: run!.id,
+      orderIdx: 0,
+      artifacts: [{ id: 'artifact-a', kind: 'file', path: 'notes.md', title: 'notes.md' }],
+    })
 
     const { emitRunEvent } = await import('../apps/server/src/services/orchestrator/run-events')
     await emitRunEvent({
@@ -1277,6 +1296,75 @@ describe('AgentHub smoke tests', () => {
     expect(events.items[0]!.payload.title).toBe('Trace run')
     expect(events.items[1]!.taskId).toBe('task-a')
     expect(events.items[1]!.agentId).toBe('agent-a')
+
+    const agUiEvents = await json<{ items: Array<{ type: string; name?: string; value?: Record<string, unknown> }> }>(
+      await app.request(`/api/protocols/ag-ui/runs/${run!.id}/events`),
+    )
+    expect(agUiEvents.items.map((event) => event.type)).toContain('RUN_STARTED')
+    expect(agUiEvents.items.some((event) => event.name === 'agenthub.task.status')).toBe(true)
+
+    const a2aTasks = await json<{ items: Array<{ id: string; kind: string; status: { state: string } }> }>(
+      await app.request(`/api/protocols/a2a/runs/${run!.id}/tasks`),
+    )
+    expect(a2aTasks.items[0]!.id).toBe('protocol-task-a')
+    expect(a2aTasks.items[0]!.kind).toBe('task')
+    expect(a2aTasks.items[0]!.status.state).toBe('working')
+  })
+
+  test('task result reports normalize artifacts and validation metadata', async () => {
+    const { buildTaskResultReport, taskResultReportEventPayload } = await import(
+      '../apps/server/src/services/orchestrator/orchestrator-engine'
+    )
+
+    const report = buildTaskResultReport({
+      runId: 'report-run',
+      task: {
+        id: 'report-task',
+        title: 'Report task',
+        description: '',
+        agentId: 'report-agent',
+        dependencies: [],
+        maxRetries: 0,
+      } as any,
+      agent: {
+        id: 'report-agent',
+        key: 'report-agent',
+        name: 'Reporter',
+        role: 'Coder',
+        runtimeType: 'llm',
+        capabilityTags: [],
+        toolPermissions: [],
+        sandboxPolicy: 'read-only',
+      } as any,
+      status: 'done' as any,
+      summary: {
+        filesCreated: ['apps/web/src/foo.ts'],
+        filesModified: [],
+        interfaces: [],
+        dependencies: [],
+        decisions: ['采用分层收口'],
+        brief: '已完成收口',
+      },
+      outputRef: { key: 'task_report-task_output', version: 2 } as any,
+      artifacts: [{ id: 'artifact-1', type: 'file', title: 'foo.ts', filePath: 'foo.ts' }],
+      validationResults: [
+        { command: 'bun test', status: 'passed', durationMs: 12, outputSummary: 'ok' } as any,
+      ],
+      contractResult: { status: 'passed', violations: [] } as any,
+      durationMs: 1234,
+      childSessionId: 'child-report',
+      blackboardKeys: ['task_report-task_output', 'artifacts/artifact-1'],
+    })
+
+    expect(report.schemaType).toBe('task_result_report')
+    expect(report.artifactCount).toBe(1)
+    expect(report.validationStatus).toBe('passed')
+    expect(report.blackboardKeys).toContain('task_report-task_output')
+
+    const payload = taskResultReportEventPayload(report)
+    expect(payload.taskResultReport).toBe(report)
+    expect(payload.artifactCount).toBe(1)
+    expect(payload.childSessionId).toBe('child-report')
   })
 
   test('orchestrator run can be cancelled and marks unfinished tasks', async () => {

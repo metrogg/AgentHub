@@ -1,4 +1,4 @@
-import { statSync, existsSync, cpSync } from 'node:fs'
+import { statSync, existsSync, cpSync, mkdirSync } from 'node:fs'
 import { isAbsolute, normalize, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { logger } from '../../lib/logger'
@@ -44,19 +44,36 @@ export function touchWorkspace(id: string) {
 
 const serviceDir = dirname(fileURLToPath(import.meta.url))
 const presetAgenthubDir = resolve(serviceDir, '../../../../../.agenthub')
+const presetAgenthubEntries = ['rules', 'skills', 'specs'] as const
 
 export function ensureHarnessPresets(projectPath: string | null | undefined) {
   if (!projectPath) return
   const targetDir = resolve(projectPath, '.agenthub')
-  if (existsSync(targetDir)) return
   if (!existsSync(presetAgenthubDir)) {
     logger.warn('Preset .agenthub/ not found at repo root, skipping copy')
     return
   }
   try {
-    cpSync(presetAgenthubDir, targetDir, { recursive: true, force: false })
-    logger.info({ targetDir }, 'Copied preset .agenthub/ to workspace')
+    mkdirSync(targetDir, { recursive: true })
+    const copiedEntries: string[] = []
+    const missingEntries: string[] = []
+
+    for (const entry of presetAgenthubEntries) {
+      const source = resolve(presetAgenthubDir, entry)
+      const target = resolve(targetDir, entry)
+      if (!existsSync(source)) {
+        missingEntries.push(entry)
+        continue
+      }
+      if (existsSync(target)) continue
+      cpSync(source, target, { recursive: true, force: false })
+      copiedEntries.push(entry)
+    }
+
+    if (copiedEntries.length > 0) {
+      logger.info({ targetDir, copiedEntries, missingEntries }, 'Copied preset .agenthub entries to workspace')
+    }
   } catch (err: any) {
-    logger.warn({ err: err?.message, targetDir }, 'Failed to copy preset .agenthub/ to workspace')
+    logger.warn({ err: err?.message, targetDir }, 'Failed to copy preset .agenthub entries to workspace')
   }
 }

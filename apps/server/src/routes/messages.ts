@@ -541,32 +541,18 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     }
 
-    // 若 workspace 中存在名字匹配的 agent，使用其真实 id
-    let artifactAgentId = 'artifact-agent'
-    if (session.workspaceId) {
-      const wsAgents = await db
-        .select()
-        .from(workspaceAgents)
-        .where(eq(workspaceAgents.workspaceId, session.workspaceId))
-      const matched = wsAgents.find(
-        (a) => a.name.toLowerCase().includes('artifact') || a.role.toLowerCase().includes('产物'),
-      )
-      if (matched) artifactAgentId = matched.id
-    }
-
     const artifacts = buildDemoArtifacts(content)
     const [card] = await db
       .insert(messages)
       .values({
         sessionId,
-        senderId: artifactAgentId,
-        senderType: 'agent',
+        senderId: 'system',
+        senderType: 'system',
         type: 'text',
         content: artifactSummary(artifacts),
         metadata: {
-          agentName: 'Artifact Agent',
+          systemEvent: 'artifact_demo',
           role: '产物预览',
-          runtimeType: 'llm',
           artifacts,
         },
       })
@@ -581,30 +567,17 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
-    // 查找 workspace 中可能的 builder agent
-    let builderAgentId = 'agent-builder'
-    if (session.workspaceId) {
-      const wsAgents = await db
-        .select()
-        .from(workspaceAgents)
-        .where(eq(workspaceAgents.workspaceId, session.workspaceId))
-      const matched = wsAgents.find(
-        (a) => a.name.toLowerCase().includes('builder') || a.role.toLowerCase().includes('构建'),
-      )
-      if (matched) builderAgentId = matched.id
-    }
-
     if (session.type !== 'group' || !session.workspaceId) {
       const [prompt] = await db
         .insert(messages)
         .values({
           sessionId,
-          senderId: builderAgentId,
-          senderType: 'agent',
+          senderId: 'system',
+          senderType: 'system',
           type: 'text',
           content:
             '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和Agent 联系人列表。',
-          metadata: { agentDraftStatus: 'requires_group' },
+          metadata: { systemEvent: 'agent_draft_requires_group', agentDraftStatus: 'requires_group' },
         })
         .returning()
       if (!prompt) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 群组提示创建失败')
@@ -616,11 +589,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .insert(messages)
       .values({
         sessionId,
-        senderId: builderAgentId,
-        senderType: 'agent',
+        senderId: 'system',
+        senderType: 'system',
         type: 'task_card',
         content: `已生成 ${draft.name} Agent 草案。确认后会加入当前 Agent Group。`,
-        metadata: { agentDraft: draft, agentDraftStatus: 'draft' },
+        metadata: { systemEvent: 'agent_draft_created', agentDraft: draft, agentDraftStatus: 'draft' },
       })
       .returning()
     if (!card) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 草案创建失败')
@@ -1069,6 +1042,7 @@ async function startPlanRunInExistingGroup(params: {
       outputContract: normalizeTaskOutputContract(t.outputContract, t.id),
       validation: normalizeTaskValidation(t.validation),
       agentSelection: t.agentSelection,
+      childSessionId: childSessions.get(t.id)?.sessionId ?? null,
     })),
   }
   const executionPlan = initializeRunLedger(rawExecutionPlan)
@@ -1126,48 +1100,6 @@ async function startPlanRunInExistingGroup(params: {
     },
   })
 
-  const handoffLines = executionPlan.tasks
-    .slice(0, 5)
-    .map((task) => {
-      const agent = executionPlan.agents.find((a) => a.id === task.agentId)
-      return `- ${agent?.name ?? 'Agent'}：${task.title}`
-    })
-  const [handoffMessage] = await db
-    .insert(messages)
-    .values({
-      sessionId,
-      senderId:
-        executionPlan.agents.find((a) => a.roleType === 'orchestrator')?.id ?? 'orchestrator',
-      senderType: 'agent',
-      type: 'text',
-      content: [
-        `我已经完成拆解，接下来由 ${executionPlan.tasks.length} 个任务按依赖自动推进。`,
-        '',
-        ...handoffLines,
-        executionPlan.tasks.length > handoffLines.length
-          ? `- 其余 ${executionPlan.tasks.length - handoffLines.length} 个任务会在看板里继续更新`
-          : '',
-        '',
-        '成员 Agent 完成后会直接在群聊里汇报各自的产出，我最后再统一收口。',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-      metadata: {
-        agentName:
-          executionPlan.agents.find((a) => a.roleType === 'orchestrator')?.name ?? 'Orchestrator',
-        systemEvent: 'orchestrator_handoff',
-        runId,
-      },
-    })
-    .returning()
-
-  if (handoffMessage) {
-    broadcastSessionEvent(sessionId, {
-      type: WsEvent.MessageCompleted,
-      payload: { sessionId, message: handoffMessage },
-    })
-  }
-
   const engine = new OrchestratorEngine()
   engine
     .startRun({ runId, groupSessionId: sessionId, workspaceId, plan: executionPlan, childSessions })
@@ -1202,12 +1134,11 @@ async function generatePlanAndPushTaskBoard(
       .insert(messages)
       .values({
         sessionId,
-        senderId: orchestratorAgent?.id ?? 'orchestrator',
-        senderType: 'agent',
+        senderId: 'system',
+        senderType: 'system',
         type: 'text',
         content: `请求被安全策略拦截：${guardrails.violations.join('；')}`,
         metadata: {
-          agentName: orchestratorAgent?.name ?? 'Orchestrator',
           systemEvent: 'orchestrator_blocked',
           riskLevel: guardrails.riskLevel,
           violations: guardrails.violations,
@@ -1223,27 +1154,15 @@ async function generatePlanAndPushTaskBoard(
     return
   }
 
-  const [thinkingMessage] = await db
-    .insert(messages)
-    .values({
+  broadcastSessionEvent(sessionId, {
+    type: WsEvent.AgentTyping,
+    payload: {
       sessionId,
-      senderId: orchestratorAgent?.id ?? 'orchestrator',
-      senderType: 'agent',
-      type: 'text',
-      content: '我来先判断目标、成员能力和任务依赖，然后直接协调团队开始处理。',
-      metadata: {
-        agentName: orchestratorAgent?.name ?? 'Orchestrator',
-        systemEvent: 'orchestrator_thinking',
-      },
-    })
-    .returning()
-
-  if (thinkingMessage) {
-    broadcastSessionEvent(sessionId, {
-      type: WsEvent.MessageCompleted,
-      payload: { sessionId, message: thinkingMessage },
-    })
-  }
+      agentId: orchestratorAgent?.id ?? 'orchestrator',
+      agentName: orchestratorAgent?.name ?? 'Orchestrator',
+      phase: 'planning',
+    },
+  })
 
   let plan: OrchestratorPlan
   try {
@@ -1259,7 +1178,7 @@ async function generatePlanAndPushTaskBoard(
 function buildSimpleFallbackPlan(agents: any[], content?: string): OrchestratorPlan {
   const goal = normalizeFallbackGoal(content)
   const planAgents: PlanAgent[] = agents.length
-    ? agents.slice(0, Math.max(1, Math.min(agents.length, 3))).map((a: any) => ({
+    ? agents.slice(0, Math.max(1, Math.min(agents.length, 6))).map((a: any) => ({
         key: a.id,
         name: a.name,
         role: a.role ?? '助手',
@@ -1291,9 +1210,22 @@ function buildSimpleFallbackPlan(agents: any[], content?: string): OrchestratorP
         }
       })
 
-  const architect = planAgents[0]!
-  const coder = planAgents[1] ?? planAgents[0]!
-  const reviewer = planAgents[2] ?? planAgents[0]!
+  const workerAgents = planAgents.filter((agent) => agent.roleType !== 'orchestrator')
+  const executionAgents = workerAgents.length ? workerAgents : planAgents
+  const architect =
+    executionAgents.find((agent) => agent.roleType === 'architect') ??
+    executionAgents.find((agent) => /design|设计|产品|视觉/i.test(`${agent.name} ${agent.role}`)) ??
+    executionAgents[0]!
+  const coder =
+    executionAgents.find((agent) => agent.roleType === 'coder') ??
+    executionAgents.find((agent) => /builder|coder|code|工程|实现/i.test(`${agent.name} ${agent.role}`)) ??
+    executionAgents[1] ??
+    executionAgents[0]!
+  const reviewer =
+    executionAgents.find((agent) => agent.roleType === 'reviewer') ??
+    executionAgents.find((agent) => /qa|review|test|验收|审查/i.test(`${agent.name} ${agent.role}`)) ??
+    executionAgents[2] ??
+    executionAgents[executionAgents.length - 1]!
 
   const taskId1 = randomUUID()
   const taskId2 = randomUUID()

@@ -1,4 +1,14 @@
-import { Loader2, CheckCircle2, XCircle, Clock, AlertTriangle, Ban } from 'lucide-react'
+import {
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  AlertTriangle,
+  Ban,
+  FileText,
+  MessagesSquare,
+  ShieldCheck,
+} from 'lucide-react'
 
 interface TaskBoardTask {
   id: string
@@ -10,6 +20,13 @@ interface TaskBoardTask {
   progress?: number
   progressStatus?: string
   dependencies: string[]
+  childSessionId?: string | null
+  artifactCount?: number
+  artifacts?: Array<{ artifactId?: string; id?: string; title?: string; filePath?: string }>
+  outputSummary?: string
+  validationStatus?: 'passed' | 'failed' | 'skipped' | 'not_run'
+  contractStatus?: 'passed' | 'failed'
+  resultError?: string
 }
 
 interface TaskBoardPhase {
@@ -81,6 +98,23 @@ function RunStatusBadge({ status }: { status: string }) {
       {labels[status] || status}
     </span>
   )
+}
+
+function validationLabel(status?: TaskBoardTask['validationStatus']) {
+  const labels: Record<string, string> = {
+    passed: '校验通过',
+    failed: '校验失败',
+    skipped: '校验跳过',
+    not_run: '未校验',
+  }
+  return status ? labels[status] || status : ''
+}
+
+function validationClass(status?: TaskBoardTask['validationStatus']) {
+  if (status === 'passed') return 'border-green-200 bg-green-50 text-green-700'
+  if (status === 'failed') return 'border-red-200 bg-red-50 text-red-700'
+  if (status === 'skipped') return 'border-amber-200 bg-amber-50 text-amber-700'
+  return 'border-gray-200 bg-white text-gray-500'
 }
 
 export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
@@ -169,57 +203,105 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
                   {phaseTasks.filter((t) => t.status === 'done').length}/{phaseTasks.length}
                 </span>
               </div>
-              {phase.purpose && (
-                <p className="text-xs text-gray-500 mb-2">{phase.purpose}</p>
-              )}
+              {phase.purpose && <p className="text-xs text-gray-500 mb-2">{phase.purpose}</p>}
 
               <div className="space-y-2">
                 {phaseTasks.map((task) => {
-                  const progressColor = task.progress !== undefined
-                    ? task.progress < 30 ? 'bg-red-500' : task.progress < 70 ? 'bg-yellow-500' : 'bg-green-500'
-                    : 'bg-blue-500'
+                  const progressColor =
+                    task.progress !== undefined
+                      ? task.progress < 30
+                        ? 'bg-red-500'
+                        : task.progress < 70
+                          ? 'bg-yellow-500'
+                          : 'bg-green-500'
+                      : 'bg-blue-500'
+                  const artifactCount = task.artifactCount ?? task.artifacts?.length ?? 0
+                  const hasResultLine =
+                    artifactCount > 0 ||
+                    Boolean(task.outputSummary) ||
+                    Boolean(task.validationStatus) ||
+                    Boolean(task.childSessionId) ||
+                    Boolean(task.resultError)
                   return (
-                  <div
-                    key={task.id}
-                    className={`flex items-start gap-2 p-2 rounded-lg text-xs transition-colors ${
-                      task.status === 'running'
-                        ? 'bg-blue-50 border border-blue-200'
-                        : task.status === 'failed'
-                          ? 'bg-red-50 border border-red-200'
-                          : 'bg-gray-50'
-                    }`}
-                  >
-                    <StatusIcon status={task.status} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`font-medium truncate ${
-                            task.status === 'failed' ? 'text-red-700' : 'text-gray-700'
-                          }`}
-                        >
-                          {task.title}
-                        </span>
-                      </div>
-                      <span className="text-gray-400">{task.agentName}</span>
-
-                      {task.status === 'running' && task.progress !== undefined && (
-                        <div className="mt-1.5">
-                          <div className="w-full bg-gray-200 rounded-full h-1.5">
-                            <div
-                              className={`${progressColor} h-1.5 rounded-full transition-all duration-500`}
-                              style={{
-                                width: `${Math.min(100, Math.max(0, task.progress))}%`,
-                              }}
-                            />
-                          </div>
-                          {task.progressStatus && (
-                            <p className="text-gray-400 mt-0.5 truncate">{task.progressStatus}</p>
-                          )}
+                    <div
+                      key={task.id}
+                      className={`flex items-start gap-2 p-2 rounded-lg text-xs transition-colors ${
+                        task.status === 'running'
+                          ? 'bg-blue-50 border border-blue-200'
+                          : task.status === 'failed'
+                            ? 'bg-red-50 border border-red-200'
+                            : 'bg-gray-50'
+                      }`}
+                    >
+                      <StatusIcon status={task.status} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`font-medium truncate ${
+                              task.status === 'failed' ? 'text-red-700' : 'text-gray-700'
+                            }`}
+                          >
+                            {task.title}
+                          </span>
                         </div>
-                      )}
+                        <span className="text-gray-400">{task.agentName}</span>
+
+                        {task.status === 'running' && task.progress !== undefined && (
+                          <div className="mt-1.5">
+                            <div className="w-full bg-gray-200 rounded-full h-1.5">
+                              <div
+                                className={`${progressColor} h-1.5 rounded-full transition-all duration-500`}
+                                style={{
+                                  width: `${Math.min(100, Math.max(0, task.progress))}%`,
+                                }}
+                              />
+                            </div>
+                            {task.progressStatus && (
+                              <p className="text-gray-400 mt-0.5 truncate">{task.progressStatus}</p>
+                            )}
+                          </div>
+                        )}
+
+                        {hasResultLine && (
+                          <div className="mt-2 space-y-1.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {artifactCount > 0 && (
+                                <span className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-600">
+                                  <FileText className="h-3 w-3" />
+                                  {artifactCount} 产物
+                                </span>
+                              )}
+                              {task.validationStatus && (
+                                <span
+                                  className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${validationClass(task.validationStatus)}`}
+                                >
+                                  <ShieldCheck className="h-3 w-3" />
+                                  {validationLabel(task.validationStatus)}
+                                </span>
+                              )}
+                              {task.childSessionId && (
+                                <span className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700">
+                                  <MessagesSquare className="h-3 w-3" />
+                                  成员对话
+                                </span>
+                              )}
+                            </div>
+                            {task.outputSummary && (
+                              <p className="line-clamp-2 text-[11px] leading-4 text-gray-500">
+                                {task.outputSummary}
+                              </p>
+                            )}
+                            {task.resultError && (
+                              <p className="line-clamp-2 text-[11px] leading-4 text-red-600">
+                                {task.resultError}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )})}
+                  )
+                })}
               </div>
             </div>
           )

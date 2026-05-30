@@ -59,10 +59,11 @@ function agentSessionVisibility(
     return 'top'
   const metadata = session.metadata ?? {}
   if (metadata.kind === 'agent-direct') return 'top'
+  if (metadata.kind === 'orchestrator-task')
+    return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
   if (metadata.hiddenFromSessionTree) return 'hidden'
   if (metadata.kind === 'workspace-agent-child')
-    return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
-  if (metadata.kind === 'orchestrator-task') return 'hidden'
+    return groupWorkspaceIds.has(session.workspaceId) ? 'hidden' : 'top'
   if (groupWorkspaceIds.has(session.workspaceId)) return 'child'
   return looksLikeLegacyAgentChildSession(session) ? 'hidden' : 'top'
 }

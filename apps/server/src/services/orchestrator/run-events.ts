@@ -1,7 +1,9 @@
 import { db, orchestratorRunEvents, asc, eq } from '@agenthub/db'
+import { WsEvent } from '@agenthub/shared'
 import { broadcastSessionEvent } from '../agent-runner'
 import { logger } from '../../lib/logger'
 import { updateProgressLedgerFromEvent } from './run-ledger'
+import { buildAgUiEventsFromRunEvent } from '../protocols'
 
 export type OrchestratorRunEventType =
   | 'run.started'
@@ -65,13 +67,19 @@ export async function emitRunEvent(input: EmitRunEventInput): Promise<Orchestrat
   try {
     await updateProgressLedgerFromEvent(input)
   } catch (err: any) {
-    logger.warn({ err: err?.message, runId: input.runId, eventType: input.type }, 'Failed to update progress ledger')
+    logger.warn(
+      { err: err?.message, runId: input.runId, eventType: input.type },
+      'Failed to update progress ledger',
+    )
   }
 
-  broadcastSessionEvent(input.groupSessionId, {
-    type: 'run:event',
-    payload: event,
-  })
+  const agUiEvents = buildAgUiEventsFromRunEvent(input)
+  for (const agUiEvent of agUiEvents) {
+    broadcastSessionEvent(input.groupSessionId, {
+      type: WsEvent.AgUiEvent,
+      payload: agUiEvent,
+    })
+  }
 
   return event
 }

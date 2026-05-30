@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, parse, resolve } from 'node:path'
 import { db, eq, settings as settingsTable } from '@agenthub/db'
 import { env } from '../../env'
 import { logger } from '../../lib/logger'
@@ -46,8 +46,15 @@ export async function createAutoWorkspaceFolder(seed?: string | null): Promise<A
 async function ensureWorkspaceStorageRoot() {
   const candidates = await workspaceStorageRootCandidates()
   for (const candidate of candidates) {
+    if (!isCandidateRootAvailable(candidate)) {
+      logger.warn(
+        { root: candidate },
+        'Workspace storage root unavailable, trying next candidate',
+      )
+      continue
+    }
     try {
-      await mkdir(candidate, { recursive: true })
+      await ensureDirectory(candidate)
       return candidate
     } catch (error: any) {
       logger.warn(
@@ -58,6 +65,46 @@ async function ensureWorkspaceStorageRoot() {
   }
 
   throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '默认工作空间存储路径不可用')
+}
+
+function isCandidateRootAvailable(candidate: string) {
+  if (process.platform !== 'win32') return true
+  const { root } = parse(candidate)
+  if (!root) return true
+  return isDirectory(root)
+}
+
+async function ensureDirectory(candidate: string) {
+  if (process.platform !== 'win32') {
+    await mkdir(candidate, { recursive: true })
+    return
+  }
+
+  const { root } = parse(candidate)
+  if (!root) {
+    await mkdir(candidate, { recursive: true })
+    return
+  }
+
+  let current = root
+  for (const segment of candidate.slice(root.length).split(/[\\/]+/).filter(Boolean)) {
+    current = join(current, segment)
+    if (isDirectory(current)) continue
+    try {
+      await mkdir(current)
+    } catch (error: any) {
+      if (error?.code === 'EEXIST' && isDirectory(current)) continue
+      throw error
+    }
+  }
+}
+
+function isDirectory(path: string) {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 async function workspaceStorageRootCandidates() {
