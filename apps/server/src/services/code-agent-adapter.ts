@@ -525,7 +525,7 @@ function resolveCodeAgentModelCandidates(
 ) {
   const fromAgent = typeof agentModelId === 'string' ? agentModelId.trim() : ''
   const fromTool = typeof toolConfig?.['modelId'] === 'string' ? toolConfig['modelId'].trim() : ''
-  return [...new Set([fromAgent, fromTool].filter(Boolean))]
+  return [...new Set([fromTool, fromAgent].filter(Boolean))]
 }
 
 function normalizeCodeAgentModelTarget(
@@ -2344,23 +2344,9 @@ function windowsBunShim(command: string) {
 
 async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, unknown>> {
   try {
-    const rows = await db
-      .select()
-      .from(settings)
-      .where(eq(settings.key, 'CODING_TOOLS_CONFIG'))
-      .limit(1)
-    const raw = rows[0]?.value
-    if (!raw) return {}
-    const parsed = JSON.parse(raw) as Array<{
-      id: string
-      config?: Record<string, unknown>
-      provider?: string
-      agent?: string
-      modelId?: string
-      baseUrl?: string
-      apiKeyEnv?: string
-      protocol?: string
-    }>
+    const rows = await db.select().from(settings)
+    const map = Object.fromEntries(rows.map((row) => [row.key, row.value]))
+    const parsed = parseCodingToolsConfig(map.CODING_TOOLS_CONFIG)
     const tool = parsed.find((t) => t.id === toolId)
     const config = { ...(tool?.config ?? {}) }
     // 兼容前端直接保存的扁平字段
@@ -2370,9 +2356,53 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
     if (tool?.baseUrl) config.baseUrl = tool.baseUrl
     if (tool?.apiKeyEnv) config.apiKeyEnv = tool.apiKeyEnv
     if (tool?.protocol) config.protocol = tool.protocol
+    const catalogModelId = resolveCodeAgentCatalogModelId(toolId, map.MODEL_CATALOG)
+    if (catalogModelId) config.modelId = catalogModelId
     return config
   } catch {
     return {}
+  }
+}
+
+function parseCodingToolsConfig(raw?: string) {
+  if (!raw) {
+    return [] as Array<{
+      id: string
+      config?: Record<string, unknown>
+      provider?: string
+      agent?: string
+      modelId?: string
+      baseUrl?: string
+      apiKeyEnv?: string
+      protocol?: string
+    }>
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function resolveCodeAgentCatalogModelId(toolId: CodeAgentType, rawCatalog?: string) {
+  if (!rawCatalog) return null
+  try {
+    const catalog = JSON.parse(rawCatalog) as Array<{
+      id?: unknown
+      enabled?: unknown
+      modelId?: unknown
+    }>
+    const item = catalog.find(
+      (entry) =>
+        entry?.id === `code-agent-${toolId}` &&
+        entry.enabled !== false &&
+        typeof entry.modelId === 'string' &&
+        entry.modelId.trim(),
+    )
+    return typeof item?.id === 'string' ? item.id : null
+  } catch {
+    return null
   }
 }
 
@@ -2957,7 +2987,7 @@ function stripReasoningTags(output: string) {
 }
 
 function formatCodeAgentFailure(adapter: CodeAgentAdapter, result: CodeAgentCommandResult) {
-  const friendly = friendlyCodeAgentError(result.output)
+  const friendly = friendlyCodeAgentError(adapter, result.output)
   return [`**${adapter.displayName} 执行失败**`, '', friendly, '', `退出码：${result.code}`].join(
     '\n',
   )
@@ -3044,43 +3074,41 @@ function cleanDiagnosticOutput(output: string) {
   return limitOutput(cleaned, 2000)
 }
 
-function friendlyCodeAgentError(output: string) {
+function friendlyCodeAgentError(adapter: CodeAgentAdapter, output: string) {
+  const runtimeName = adapter.displayName
+  if (/model.*not found|does not exist|404|unknown model/i.test(output)) {
+    return `${runtimeName} 已启动，但当前模型或 Base URL 不可用。请检查模型名称和供应商地址。`
+  }
   if (/issue with the selected model|may not exist|Run --model to pick a different model/i.test(output)) {
     return [
-      '当前 Coding Tools 使用的模型名称不被该 CLI 端点接受。',
-      'AgentHub 会在执行前拦截非原生模型并尝试改用 OpenCode；如果仍看到这个错误，通常是本机 CLI 配置里残留了不兼容模型。请清理该 CLI 的本机 model 配置，或把这个 Agent 的 Coding Tools 改为 OpenCode。',
+      `${runtimeName} 使用的模型名称不被当前端点接受。`,
+      '请检查 Coding Tools 默认模型、Agent 模型覆盖，以及本机 CLI 配置里是否残留了不兼容模型。',
     ].join('\n')
   }
   if (/unsupported_vendor|specified model is not supported at this endpoint/i.test(output)) {
     return [
-      'Claude Code 使用的端点拒绝了当前模型名。Claude Code 只能稳定运行 Claude/Anthropic 原生模型，非原生模型应交给 OpenCode。',
-      '请把这个 Agent 的 Coding Tools 改为 OpenCode，或把 Agent 模型换成 Claude Code 原生支持的 Claude/Sonnet/Opus/Haiku 模型。',
+      `${runtimeName} 使用的端点拒绝了当前模型名。`,
+      '请清空 Agent 模型覆盖以跟随 Coding Tools 默认配置，或把模型换成该端点明确支持的名称。',
     ].join('\n')
   }
   if (/Coding Tools timed out after/i.test(output)) {
-    return 'Coding Tools 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。'
+    return `${runtimeName} 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或提高 Coding Tools 超时时间。`
   }
   if (
     /CommandNotFoundException|ObjectNotFound: \(node:String\)|node.*not recognized|无法将.*node|找不到.*node/i.test(
       output,
     )
   ) {
-    return 'OpenCode 已启动，但执行环境里找不到 node 命令。已补充 Windows Path/ComSpec/SystemRoot 等环境变量透传；请重启 dev server 后再试。如果仍失败，请确认本机 Node.js 已安装并在系统 Path 中。'
+    return `${runtimeName} 已启动，但执行环境里找不到 node 命令。已补充 Windows Path/ComSpec/SystemRoot 等环境变量透传；请重启 dev server 后再试。如果仍失败，请确认本机 Node.js 已安装并在系统 Path 中。`
   }
   if (/invalid function arguments json|string, tool_call_id/i.test(output)) {
-    return [
-      'Codex CLI 已启动，但当前模型生成了无效的工具调用参数，供应商接口拒绝了这次请求。',
-      '这通常不是工作区路径问题。建议切换到更兼容 Codex 工具调用的模型，或把这个 Agent 临时改为 OpenCode / Claude Code 执行。',
-    ].join('\n')
+    return `${runtimeName} 已启动，但当前模型生成了无效的工具调用参数，供应商接口拒绝了这次请求。请检查当前模型是否兼容该 CLI 的工具调用协议。`
   }
   if (/401 Unauthorized|Missing bearer|basic authentication/i.test(output)) {
-    return 'Codex CLI 已启动，但供应商鉴权失败。请检查本机 API Key、Base URL 和模型是否匹配。'
+    return `${runtimeName} 已启动，但供应商鉴权失败。请检查本机 API Key、Base URL 和模型是否匹配。`
   }
   if (/wire_api = "chat" is no longer supported/i.test(output)) {
-    return '当前 Codex CLI 不支持这个 provider 配置里的 wire_api=chat。请使用已降级的 Codex CLI，或切换到支持 Responses 的 OpenAI 端点。'
-  }
-  if (/model.*not found|does not exist|404|unknown model/i.test(output)) {
-    return 'Codex CLI 已启动，但当前模型或 Base URL 不可用。请检查模型名称和供应商地址。'
+    return `当前 ${runtimeName} 不支持这个 provider 配置里的 wire_api=chat。请检查 CLI 和供应商 API 协议。`
   }
   if (/No such file or directory|cannot find the path|系统找不到指定的路径/i.test(output)) {
     return 'Coding Tools 已启动，但项目目录不存在。请重新打开或选择正确的工作区文件夹。'
@@ -3116,6 +3144,19 @@ export const __codeAgentAdapterTestHooks = {
   },
   consumeClaudeStreamJson,
   extractClaudeResultMessage,
+  async resolveEffectiveModelTarget(type: CodeAgentType, agentModelId?: string | null) {
+    const toolConfig = await resolveToolConfig(type)
+    const requestedModelId = resolveCodeAgentModelId(agentModelId, toolConfig)
+    let modelTarget = await resolveCodeAgentModelTarget(type, agentModelId, toolConfig)
+    if (
+      !modelTarget &&
+      requestedModelId &&
+      (type === 'opencode' || !isNativeCodeAgentModelIdCompatible(type, requestedModelId))
+    ) {
+      modelTarget = await resolveRuntimeModelTarget(requestedModelId)
+    }
+    return normalizeCodeAgentModelTarget(type, modelTarget)
+  },
   hasIncompatibleCodeAgentModel(
     type: CodeAgentType,
     modelTarget?: any,

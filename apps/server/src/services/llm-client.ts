@@ -199,15 +199,19 @@ function withDebugSettings(config: LlmRuntimeConfig, map: Record<string, string>
 
 function pickSettingsCandidate(map: Record<string, string>, selectedModelId?: string): ProviderCandidate | null {
   const catalog = parseCatalog(map.MODEL_CATALOG)
-  const activeId = clean(selectedModelId) ?? clean(map.ACTIVE_MODEL_ID)
-  const selected = activeId
+  const selectedId = clean(selectedModelId)
+  const activeId = clean(map.ACTIVE_MODEL_ID)
+  const selected = selectedId
+    ? catalog.find((item) => (item.id === selectedId || item.modelId === selectedId) && item.enabled !== false)
+    : undefined
+  const active = activeId
     ? catalog.find((item) => (item.id === activeId || item.modelId === activeId) && item.enabled !== false)
     : undefined
   const firstConfigured = catalog.find((item) => {
     if (item.enabled === false || !clean(item.modelId)) return false
     return Boolean(configuredApiKey(item).value)
   })
-  const item = selected ?? firstConfigured
+  const item = selected ?? active ?? firstConfigured
 
   if (item?.modelId) {
     const key = configuredApiKey(item)

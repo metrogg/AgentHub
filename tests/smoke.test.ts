@@ -1365,6 +1365,76 @@ describe('AgentHub smoke tests', () => {
     ).toBe(false)
   })
 
+  test('Claude Code model resolution prefers active code-agent catalog over stale overrides', async () => {
+    await postJson('/api/settings', {
+      ACTIVE_MODEL_ID: 'code-agent-claude-code',
+      MODEL_CATALOG: JSON.stringify([
+        {
+          id: 'deepseek',
+          enabled: true,
+          provider: 'deepseek',
+          modelId: 'deepseek-v4-pro',
+          apiEndpoint: 'https://api.deepseek.com',
+          anthropicEndpoint: 'https://api.deepseek.com/anthropic',
+          apiKey: 'deepseek-key',
+        },
+        {
+          id: 'code-agent-claude-code',
+          enabled: true,
+          provider: 'anthropic',
+          modelId: 'mimo-v2.5-pro',
+          apiEndpoint: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+          anthropicEndpoint: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+          apiKey: 'mimo-key',
+        },
+      ]),
+      CODING_TOOLS_CONFIG: JSON.stringify([
+        {
+          id: 'claude-code',
+          command: 'claude',
+          modelId: 'deepseek-v4-pro',
+          baseUrl: 'https://api.deepseek.com/anthropic',
+          protocol: 'anthropic-messages',
+        },
+      ]),
+    })
+
+    const { resolveLlmRuntimeConfig } = await import('../apps/server/src/services/llm-client')
+    const { __codeAgentAdapterTestHooks } =
+      await import('../apps/server/src/services/code-agent-adapter')
+
+    const runtime = await resolveLlmRuntimeConfig('deleted-model-id')
+    expect(runtime.model).toBe('mimo-v2.5-pro')
+
+    const target = await __codeAgentAdapterTestHooks.resolveEffectiveModelTarget(
+      'claude-code',
+      'deepseek',
+    )
+    expect(target?.catalogId).toBe('code-agent-claude-code')
+    expect(target?.modelId).toBe('mimo-v2.5-pro')
+    expect(target?.anthropicBaseUrl).toBe('https://token-plan-cn.xiaomimimo.com/anthropic')
+  })
+
+  test('Agent runner merges incremental code-agent metadata instead of overwriting', async () => {
+    const { __agentRunnerTestHooks } = await import('../apps/server/src/services/agent-runner')
+    const merged = __agentRunnerTestHooks.mergeCodeAgentRunMetadata(
+      {
+        type: 'code-agent-run',
+        status: 'running',
+        runtime: 'claude-code',
+        command: 'claude',
+        exitCode: 0,
+        artifacts: [],
+      },
+      { sessionId: 'session-123', artifacts: [{ kind: 'file' }] },
+    )
+
+    expect(merged.runtime).toBe('claude-code')
+    expect(merged.command).toBe('claude')
+    expect(merged.sessionId).toBe('session-123')
+    expect(Array.isArray(merged.artifacts)).toBe(true)
+  })
+
   test('Claude Code stream-json parser records tools, files, commands, and final text', async () => {
     const { __codeAgentAdapterTestHooks } =
       await import('../apps/server/src/services/code-agent-adapter')

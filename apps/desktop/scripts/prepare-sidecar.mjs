@@ -12,6 +12,7 @@ const serverExeSource = resolve(root, 'apps/server/dist/agenthub-server.exe')
 const serverExeTarget = resolve(resources, 'binaries/agenthub-server.exe')
 const portFile = resolve(root, '.agenthub-port')
 const powershellRoot = toPowerShellSingleQuotedString(root)
+const cleanupStartedAt = toPowerShellSingleQuotedString(new Date().toISOString())
 const skipWebBuild = process.argv.includes('--skip-web-build')
 
 await stopStaleDevProcesses()
@@ -33,6 +34,7 @@ async function stopStaleDevProcesses() {
 
   const script = `
 $root = ${powershellRoot}
+$cleanupStartedAt = [DateTime]::Parse(${cleanupStartedAt}).ToLocalTime()
 $devPorts = @(5173, 5174, 5175) + (8000..8079)
 $portPids = [System.Collections.Generic.HashSet[int]]::new()
 Get-NetTCPConnection -ErrorAction SilentlyContinue |
@@ -66,6 +68,10 @@ $targets = Get-CimInstance Win32_Process |
       ($commandLine.IndexOf($root, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
     )
     if (-not $inProject -and -not $relativeAgentHubDev) { return $false }
+    if ($_.CreationDate) {
+      $createdAt = [System.Management.ManagementDateTimeConverter]::ToDateTime($_.CreationDate)
+      if ($createdAt -ge $cleanupStartedAt.AddSeconds(-2)) { return $false }
+    }
     if ($_.Name -in @('agenthub-desktop.exe', 'agenthub-server.exe')) { return $true }
     if ($portPids.Contains([int]$_.ProcessId) -and $_.Name -in @('node.exe', 'bun.exe', 'vite.exe', 'esbuild.exe')) { return $true }
     if ($_.Name -in @('vite.exe') -and $commandLine -match 'apps[\\/]web[\\/]node_modules[\\/]\.bin[\\/]vite\.exe') { return $true }

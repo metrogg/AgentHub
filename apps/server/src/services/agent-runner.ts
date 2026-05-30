@@ -94,6 +94,16 @@ export function broadcastSessionEvent(sessionId: string, data: unknown) {
   broadcast(sessionId, data)
 }
 
+function mergeCodeAgentRunMetadata(
+  current: Record<string, unknown> | null,
+  patch: Record<string, unknown>,
+) {
+  return {
+    ...(current ?? {}),
+    ...patch,
+  }
+}
+
 export function cancelAgentReply(sessionId: string) {
   const run = activeRuns.get(sessionId)
   if (!run) return false
@@ -244,19 +254,23 @@ async function _runAgentReply(
             break
           case 'metadata':
             if (chunk.metadata && typeof chunk.metadata === 'object') {
-              codeAgentRun = chunk.metadata as Record<string, unknown>
+              codeAgentRun = mergeCodeAgentRunMetadata(
+                codeAgentRun,
+                chunk.metadata as Record<string, unknown>,
+              )
               broadcast(sessionId, {
                 type: 'message:metadata',
-                payload: { sessionId, messageId: streamMsgId, agentId, agentName, codeAgentRun: chunk.metadata },
+                payload: { sessionId, messageId: streamMsgId, agentId, agentName, codeAgentRun },
               })
             }
             break
           case 'artifact':
             artifacts.push(chunk.artifact as unknown as Record<string, unknown>)
+            codeAgentRun = mergeCodeAgentRunMetadata(codeAgentRun, { artifacts })
             // 修复 Bug 16: 实时广播 artifact 更新
             broadcast(sessionId, {
               type: 'message:metadata',
-              payload: { sessionId, messageId: streamMsgId, agentId, agentName, codeAgentRun: { artifacts } },
+              payload: { sessionId, messageId: streamMsgId, agentId, agentName, codeAgentRun },
             })
             break
         }
@@ -371,6 +385,10 @@ function looksLikeAgentFailure(content: string) {
     /Model returned an empty response/i.test(content) ||
     /模型返回了空响应/.test(content)
   )
+}
+
+export const __agentRunnerTestHooks = {
+  mergeCodeAgentRunMetadata,
 }
 
 async function withUserProfileContext(profile: AgentRunProfile): Promise<AgentRunProfile> {
