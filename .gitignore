@@ -65,6 +65,7 @@ packages/*/storage/
 .agenthub-*
 .AgentHub/
 !.agenthub.example
+debug/llm/
 
 # Logs
 *.log

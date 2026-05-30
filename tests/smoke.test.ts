@@ -1348,6 +1348,21 @@ describe('AgentHub smoke tests', () => {
     })
     expect(dangerArgs[dangerArgs.indexOf('--permission-mode') + 1]).toBe('bypassPermissions')
     expect(dangerArgs).toContain('--dangerously-skip-permissions')
+
+    const deepseekAnthropicTarget = {
+      provider: 'deepseek',
+      providerKey: 'deepseek',
+      modelId: 'deepseek-v4-pro',
+      anthropicBaseUrl: 'https://api.deepseek.com/anthropic',
+    }
+    expect(
+      __codeAgentAdapterTestHooks.hasIncompatibleCodeAgentModel(
+        'claude-code',
+        deepseekAnthropicTarget,
+        deepseekAnthropicTarget,
+        'deepseek-v4-pro',
+      ),
+    ).toBe(false)
   })
 
   test('Claude Code stream-json parser records tools, files, commands, and final text', async () => {

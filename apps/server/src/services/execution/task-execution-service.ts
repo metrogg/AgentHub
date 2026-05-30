@@ -1,7 +1,6 @@
 import { db, messages, workspaceTasks, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { runAgentReply, type AgentRunProfile, type MessageRow } from '../agent-runner'
-import { gitBranchManager, type BranchContext } from '../git/branch-manager'
 import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
 import { prepareAgentWorkdir, type AgentWorkdir } from './agent-workdir'
 import { TaskStatus } from '@agenthub/shared'
@@ -87,7 +86,6 @@ export class TaskExecutionService {
         .where(eq(messages.id, input.existingUserMessageId))
         .limit(1)
       if (!existingUserMsg) {
-        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
         return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Existing user message not found', durationMs: 0 }
       }
       userMsg = existingUserMsg as MessageRow
@@ -104,7 +102,6 @@ export class TaskExecutionService {
         .returning()
 
       if (!createdUserMsg) {
-        if (branchCtx && !input.existingBranchContext) await gitBranchManager.cleanupBranch(branchCtx)
         return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
       }
       userMsg = createdUserMsg as MessageRow

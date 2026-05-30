@@ -176,6 +176,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         '--output-format',
         outputFormat,
         '--verbose',
+        '--include-partial-messages',
       ]
       // 支持会话恢复：如果有 sessionId，使用 --session-id 保持会话连续性
       if (options?.sessionId) {
@@ -314,39 +315,27 @@ export async function* streamCodeAgentReply(
     modelTarget = await resolveRuntimeModelTarget(requestedModelId)
   }
   let runtimeModelTarget = normalizeCodeAgentModelTarget(type, modelTarget)
-  // 如果端点兼容但模型 ID 不兼容 CLI（如 mimo-v2.5-pro 对 Claude Code），
-  // 清除 runtimeModelTarget 以避免传递不兼容的 --model 参数，让 CLI 使用默认模型
-  if (runtimeModelTarget && !isNativeCodeAgentModelIdCompatible(type, runtimeModelTarget.modelId)) {
+  // Claude Code can run third-party Anthropic-compatible endpoints whose model names
+  // do not contain claude/sonnet/opus/haiku, such as DeepSeek or MiMo /anthropic routes.
+  // Keep those targets once the endpoint has passed isClaudeCodeModelTarget.
+  if (
+    runtimeModelTarget &&
+    type !== 'claude-code' &&
+    !isNativeCodeAgentModelIdCompatible(type, runtimeModelTarget.modelId)
+  ) {
     runtimeModelTarget = null
   }
   let installed = await isCommandInstalled(adapter.command)
   let ignoreModelEnv = false
   let skipLocalCodexConfig = false
-  if (shouldRouteModelThroughOpenCode(type, modelTarget, runtimeModelTarget, requestedModelId)) {
-    const opencodeTarget = modelTarget ?? (await resolveRuntimeModelTarget(requestedModelId))
-    const opencodeAdapter = adapters.opencode
-    const opencodeInstalled = await isCommandInstalled(opencodeAdapter.command)
-    const opencodeConfigured =
-      opencodeInstalled && opencodeTarget
-        ? await isRuntimeConfigured('opencode', opencodeAdapter, opencodeTarget.modelId, opencodeTarget)
-        : false
-    if (opencodeInstalled && opencodeConfigured && opencodeTarget) {
-      type = 'opencode'
-      adapter = opencodeAdapter
-      runtimeModelTarget = opencodeTarget
-      modelTarget = opencodeTarget
-      installed = opencodeInstalled
-    } else {
-      yield buildIncompatibleCodeAgentModelMessage({
-        requestedModelId,
-        selectedRuntime: type,
-        selectedRuntimeName: adapter.displayName,
-        modelTarget: opencodeTarget ?? modelTarget,
-        opencodeInstalled,
-        opencodeConfigured,
-      })
-      return
-    }
+  if (hasIncompatibleCodeAgentModel(type, modelTarget, runtimeModelTarget, requestedModelId)) {
+    yield buildIncompatibleCodeAgentModelMessage({
+      requestedModelId,
+      selectedRuntime: type,
+      selectedRuntimeName: adapter.displayName,
+      modelTarget,
+    })
+    return
   }
   const effectiveModelId = runtimeModelTarget?.modelId ?? null
   const configured = await isRuntimeConfigured(type, adapter, effectiveModelId, runtimeModelTarget)
@@ -550,7 +539,7 @@ function normalizeCodeAgentModelTarget(
   return modelTarget
 }
 
-function shouldRouteModelThroughOpenCode(
+function hasIncompatibleCodeAgentModel(
   type: CodeAgentType,
   modelTarget?: CodeAgentModelTarget | null,
   runtimeModelTarget?: CodeAgentModelTarget | null,
@@ -639,8 +628,7 @@ async function isRuntimeConfigured(
     const llmStatus = await getLlmRuntimeStatus()
     if (!llmStatus.apiKeyConfigured) return false
     if (type === 'claude-code') {
-      if (llmStatus.provider === 'anthropic' || llmStatus.baseUrl?.includes('anthropic.com'))
-        return true
+      if (isAnthropicLike(llmStatus.provider, llmStatus.baseUrl)) return true
       if (llmStatus.apiKeySource === 'ANTHROPIC_API_KEY') return true
     }
     if (type === 'gemini') {
@@ -681,8 +669,6 @@ function buildIncompatibleCodeAgentModelMessage(options: {
   selectedRuntime: CodeAgentType
   selectedRuntimeName: string
   modelTarget?: CodeAgentModelTarget | null
-  opencodeInstalled: boolean
-  opencodeConfigured: boolean
 }) {
   const modelLabel =
     options.modelTarget?.modelId ?? options.requestedModelId?.trim() ?? '当前选中模型'
@@ -690,13 +676,6 @@ function buildIncompatibleCodeAgentModelMessage(options: {
     ? `${options.modelTarget.provider}/${options.modelTarget.modelId}`
     : modelLabel
   const runtimeLabel = options.selectedRuntimeName || options.selectedRuntime
-  const blockers = [
-    !options.opencodeInstalled ? 'OpenCode 未安装或不在 PATH' : '',
-    options.opencodeInstalled && !options.opencodeConfigured
-      ? 'OpenCode 缺少该模型档案可用的 API Key/Base URL'
-      : '',
-    !options.modelTarget ? '未找到可注入 OpenCode 的模型档案' : '',
-  ].filter(Boolean)
 
   return [
     `**${runtimeLabel} 未启动**`,
@@ -704,10 +683,8 @@ function buildIncompatibleCodeAgentModelMessage(options: {
     `Agent 选择的模型 \`${modelLabel}\` 不是 ${runtimeLabel} 可直接运行的原生模型。为避免再次触发 unsupported_vendor，AgentHub 没有把它交给 ${runtimeLabel}。`,
     '',
     `- 选中模型：${providerLabel}`,
-    `- 自动改投 OpenCode：${options.opencodeInstalled && options.opencodeConfigured ? '可用' : '不可用'}`,
-    blockers.length ? `- 阻塞项：${blockers.join('、')}` : '',
     '',
-    '请把该 Agent 的 Coding Tools 改为 OpenCode，或把 Agent 模型换成当前 CLI 原生支持的模型；OpenCode 安装并配置好后会自动接管这类非原生模型。',
+    '请把该 Agent 的模型换成当前 CLI 支持的模型，或手动把 Agent 的 Coding Tools 改为你想使用的运行时。AgentHub 不会自动把已选运行时改切到 OpenCode。',
   ]
     .filter(Boolean)
     .join('\n')
@@ -872,6 +849,7 @@ async function runCodeAgentCommand(
   let claudeStdoutBuffer = ''
   let claudeFinalMessage = ''
   let claudeHasStreamedText = false
+  let claudeAssistantSnapshot = ''
   let claudeSessionId: string | undefined
   const closeRunningSteps = (status: 'completed' | 'failed' = 'completed') => {
     for (const step of liveSteps) {
@@ -1031,10 +1009,19 @@ async function runCodeAgentCommand(
     onAssistantText: (text: string) => {
       const previous = claudeAssistantSnapshot
       claudeAssistantSnapshot = text
-      claudeFinalMessage = text
-      if (claudeHasStreamedText) return
+      if (claudeHasStreamedText) {
+        if (!claudeFinalMessage.trim()) claudeFinalMessage = text
+        return
+      }
       const delta = previous && text.startsWith(previous) ? text.slice(previous.length) : text
+      claudeFinalMessage =
+        previous && text.startsWith(previous)
+          ? text
+          : [claudeFinalMessage.trimEnd(), text].filter(Boolean).join('\n\n')
       if (delta) hooks.onText?.(delta)
+    },
+    onSessionId: (sessionId: string) => {
+      claudeSessionId = sessionId
     },
   }
 
@@ -1093,24 +1080,7 @@ async function runCodeAgentCommand(
       readProcessStream(proc.stdout, (chunk) => {
         stdout += chunk
         if (adapter.command === 'claude') {
-          claudeStdoutBuffer = consumeClaudeStreamJson(chunk, claudeStdoutBuffer, {
-            addFile,
-            addCommand,
-            addToolCall,
-            addLog,
-            onText: (text) => {
-              claudeHasStreamedText = true
-              claudeFinalMessage += text
-              hooks.onText?.(text)
-            },
-            onAssistantText: (text) => {
-              claudeFinalMessage ||= text
-              if (!claudeHasStreamedText) hooks.onText?.(text)
-            },
-            onSessionId: (sessionId) => {
-              claudeSessionId = sessionId
-            },
-          })
+          claudeStdoutBuffer = consumeClaudeStreamJson(chunk, claudeStdoutBuffer, claudeStreamHandlers)
         } else {
           addLog('stdout', chunk)
           for (const command of parseExecutedCommands(stdout))
@@ -3138,4 +3108,20 @@ function limitOutput(output: string, max: number) {
 
 function limitFinalOutput(output: string) {
   return limitOutput(output, env.AGENTHUB_CODE_AGENT_OUTPUT_LIMIT)
+}
+
+export const __codeAgentAdapterTestHooks = {
+  buildClaudeArgs(prompt: string, options: Partial<CodeAgentRunOptions> = {}) {
+    return adapters['claude-code'].buildArgs(prompt, options as CodeAgentRunOptions)
+  },
+  consumeClaudeStreamJson,
+  extractClaudeResultMessage,
+  hasIncompatibleCodeAgentModel(
+    type: CodeAgentType,
+    modelTarget?: any,
+    runtimeModelTarget?: any,
+    requestedModelId?: string | null,
+  ) {
+    return hasIncompatibleCodeAgentModel(type, modelTarget, runtimeModelTarget, requestedModelId)
+  },
 }
