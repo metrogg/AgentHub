@@ -11,12 +11,19 @@ import type { AgentArtifact, ChatAttachment, Message } from './api'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 
 function toThreadMessage(message: Message): ThreadMessageLike {
+  if (message.senderType === 'system') {
+    return {
+      id: message.id,
+      role: 'system' as const,
+      content: [{ type: 'text' as const, text: message.content }],
+      createdAt: message.createdAt ? new Date(message.createdAt) : undefined,
+    }
+  }
+
   const role: ThreadMessageLike['role'] =
     message.senderType === 'agent'
       ? 'assistant'
-      : message.senderType === 'system'
-        ? 'system'
-        : 'user'
+      : 'user'
 
   const plan =
     message.type === 'task_card' && message.metadata && 'plan' in message.metadata
@@ -37,6 +44,10 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const clarification =
     message.metadata && 'clarificationTaskId' in (message.metadata as Record<string, unknown>)
       ? { ...(message.metadata as Record<string, unknown>), messageId: message.id }
+      : null
+  const deliveryReport =
+    message.metadata && 'delivery_report' in (message.metadata as Record<string, unknown>)
+      ? (message.metadata as Record<string, unknown>).delivery_report
       : null
   const agentName =
     message.senderType === 'agent' && message.metadata && typeof message.metadata.agentName === 'string'
@@ -63,6 +74,10 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const attachmentPart = attachments.length ? [{ type: 'data' as const, name: 'chat_attachments', data: { items: attachments } }] : []
   const avatarPart = readAgentAvatarPart(message.metadata, codeAgentRun)
 
+  const deliveryReportPart = deliveryReport
+    ? [{ type: 'data' as const, name: 'delivery_report', data: deliveryReport }]
+    : []
+
   return {
     id: message.id,
     role,
@@ -79,8 +94,9 @@ function toThreadMessage(message: Message): ThreadMessageLike {
             ...attachmentPart,
             { type: 'data', name: 'code_agent_run', data: codeAgentRun },
             ...artifactPart,
+            ...deliveryReportPart,
           ]
-        : [...avatarPart, { type: 'text', text }, ...attachmentPart, ...artifactPart],
+        : [...avatarPart, { type: 'text', text }, ...attachmentPart, ...artifactPart, ...deliveryReportPart],
     createdAt: new Date(message.createdAt),
   }
 }

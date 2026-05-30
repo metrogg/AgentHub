@@ -68,6 +68,7 @@ import {
   Trash2,
   User,
   X,
+  XCircle,
 } from 'lucide-react'
 import {
   type ClipboardEvent,
@@ -84,6 +85,9 @@ import {
 import { useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import { ClarificationCard } from '@/components/ClarificationCard'
+import DeliveryReport from '@/components/DeliveryReport'
+import type { DeliveryReportData } from '@/components/DeliveryReport'
+import { FileCard } from '@/components/FileCard'
 import {
   api,
   friendlyErrorMessage,
@@ -121,7 +125,8 @@ import {
 import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { TaskBoard } from '@/components/TaskBoard'
-import { QuickPromptBubbles,
+import {
+  QuickPromptBubbles,
   createQuickPromptSeed,
   fallbackWelcomeQuickPrompts,
   rotateQuickPrompts,
@@ -230,6 +235,11 @@ export const Thread: FC = () => {
   const sessionKind = classifyAgentSession(currentSession, sessions)
   const isAgentDirectSession = sessionKind === 'agent-direct'
   const isWorkspaceChildSession = sessionKind === 'workspace-agent-child'
+  const taskBoard = useChatStore((s) => s.taskBoard)
+  const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
+  const agentTabs = useChatStore((s) => s.agentTabs)
+  const selectAgentTab = useChatStore((s) => s.selectAgentTab)
+  const isOrchestratorTaskChild = sessionKind === 'orchestrator-task'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
@@ -256,11 +266,29 @@ export const Thread: FC = () => {
     >
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          {isGroupSession && (
+          {isGroupSession && !isOrchestratorTaskChild && (
             <GroupChatHeader onToggleDetails={() => setGroupDetailsOpen((open) => !open)} />
           )}
-          {!isGroupSession && (isAgentDirectSession || isWorkspaceChildSession) && (
-            <AgentChatHeader onToggleDetails={() => setChildDetailsOpen((open) => !open)} />
+          {isOrchestratorTaskChild && (
+            <OrchestratorChildHeader
+              agentName={
+                currentSession?.workspaceAgentId
+                  ? (useChatStore
+                      .getState()
+                      .currentWorkspaceAgents.find((a) => a.id === currentSession?.workspaceAgentId)
+                      ?.name ?? 'Agent')
+                  : 'Agent'
+              }
+              onBack={() => selectAgentTab(null)}
+            />
+          )}
+          {!isGroupSession &&
+            !isOrchestratorTaskChild &&
+            (isAgentDirectSession || isWorkspaceChildSession) && (
+              <AgentChatHeader onToggleDetails={() => setChildDetailsOpen((open) => !open)} />
+            )}
+          {isGroupSession && taskBoard && selectedAgentTab === null && (
+            <LeaderViewBanner taskBoard={taskBoard} agentTabs={agentTabs} />
           )}
           <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
             <ThreadWelcome />
@@ -372,6 +400,81 @@ const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
         <MoreHorizontal className="h-5 w-5" />
       </button>
     </header>
+  )
+}
+
+const OrchestratorChildHeader: FC<{ agentName: string; onBack: () => void }> = ({
+  agentName,
+  onBack,
+}) => {
+  return (
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+      <button
+        type="button"
+        onClick={onBack}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+        title="返回团长视角"
+        aria-label="返回团长视角"
+      >
+        <ChevronLeft className="h-5 w-5" />
+      </button>
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="text-sm truncate">
+          <span className="font-medium text-neutral-700">{agentName}</span>
+          <span className="text-neutral-400 ml-1.5 text-xs">子对话</span>
+        </span>
+      </div>
+    </header>
+  )
+}
+
+interface LeaderViewBannerProps {
+  taskBoard: NonNullable<ReturnType<typeof useChatStore.getState>['taskBoard']>
+  agentTabs: ReturnType<typeof useChatStore.getState>['agentTabs']
+}
+
+const LeaderViewBanner: FC<LeaderViewBannerProps> = ({ taskBoard, agentTabs }) => {
+  const runningCount = agentTabs.filter((t) => t.status === 'running').length
+  const doneCount = agentTabs.filter((t) => t.status === 'done').length
+  const failedCount = agentTabs.filter((t) => t.status === 'failed').length
+
+  return (
+    <div className="shrink-0 px-6 py-2.5 border-b border-neutral-100 bg-gradient-to-r from-blue-50 to-indigo-50">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-base">👥</span>
+        <span className="font-semibold text-neutral-700">团长视角</span>
+        <span className="text-neutral-400">·</span>
+        <span className="text-neutral-500">
+          {taskBoard.goal
+            ? taskBoard.goal.slice(0, 40) + (taskBoard.goal.length > 40 ? '...' : '')
+            : '任务执行中'}
+        </span>
+      </div>
+      <div className="flex items-center gap-3 mt-1 ml-7">
+        {runningCount > 0 && (
+          <span className="inline-flex items-center gap-1 text-xs text-blue-600">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
+            </span>
+            {runningCount} 执行中
+          </span>
+        )}
+        {doneCount > 0 && (
+          <span className="inline-flex items-center gap-1 text-xs text-green-600">
+            <CheckCircle2 className="w-3 h-3" />
+            {doneCount} 已完成
+          </span>
+        )}
+        {failedCount > 0 && (
+          <span className="inline-flex items-center gap-1 text-xs text-red-600">
+            <XCircle className="w-3 h-3" />
+            {failedCount} 失败
+          </span>
+        )}
+        <span className="text-xs text-neutral-400">共 {agentTabs.length} 个 Agent</span>
+      </div>
+    </div>
   )
 }
 
@@ -2254,6 +2357,8 @@ const AssistantMessage: FC = () => {
                   agent_artifacts: AgentArtifactsCard,
                   chat_attachments: ChatAttachmentsPart,
                   clarification_card: ClarificationCardWrapper,
+                  file_card: FileCardMessage,
+                  delivery_report: DeliveryReportMessage,
                 },
               },
             }}
@@ -2299,6 +2404,37 @@ function ClarificationCardWrapper({ data }: { data: any }) {
       sessionId={sessionId}
     />
   )
+}
+
+interface FileCardEntry {
+  fileName: string
+  filePath: string
+  fileSize?: number
+  runId: string
+}
+
+function FileCardMessage({ data }: { data?: { files?: FileCardEntry[] } | null }) {
+  const files = data?.files
+  if (!files || files.length === 0) return null
+
+  return (
+    <div className="not-prose mt-3 space-y-2">
+      {files.map((file) => (
+        <FileCard
+          key={file.fileName}
+          fileName={file.fileName}
+          filePath={file.filePath}
+          fileSize={file.fileSize}
+          runId={file.runId}
+        />
+      ))}
+    </div>
+  )
+}
+
+function DeliveryReportMessage({ data }: { data?: DeliveryReportData | null }) {
+  if (!data) return null
+  return <DeliveryReport data={data} />
 }
 
 function requestArtifactPreview(item: ArtifactPreviewItem) {
@@ -4436,12 +4572,16 @@ function TaskBoardCard({ data: _data }: { data: any }) {
       <TaskBoard
         data={taskBoard}
         onCancel={() => {
-          fetch(`/api/orchestrator-runs/${taskBoard.runId}/cancel`, { method: 'POST' }).catch(console.error)
+          fetch(`/api/orchestrator-runs/${taskBoard.runId}/cancel`, { method: 'POST' }).catch(
+            console.error,
+          )
         }}
         onRetryFailed={() => {
           const failedTasks = taskBoard.tasks.filter((t) => t.status === 'failed')
           for (const task of failedTasks) {
-            fetch(`/api/orchestrator-runs/${taskBoard.runId}/retry-task/${task.id}`, { method: 'POST' }).catch(console.error)
+            fetch(`/api/orchestrator-runs/${taskBoard.runId}/retry-task/${task.id}`, {
+              method: 'POST',
+            }).catch(console.error)
           }
         }}
       />
@@ -4709,7 +4849,7 @@ const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
                   onClick={() => navigate(`/chat/${result.tasks[0].sessionId}`)}
                   className="inline-flex h-8 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
                 >
-                  查看首个子会话
+                  查看任务会话
                 </button>
               )}
             </div>
@@ -4986,23 +5126,20 @@ const BranchPicker: FC = () => (
 
 const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
   const messageId = useMessage((message) => message.id)
-  const sourceMessage = useChatStore((state) =>
-    state.messages.find((m) => m.id === messageId),
-  )
+  const sourceMessage = useChatStore((state) => state.messages.find((m) => m.id === messageId))
   const streamingMessage = useChatStore((state) => state.streamingMessage)
   const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
 
   // 尝试匹配发送者 workspace agent（优先 senderId，其次 metadata.agentName）
-  const senderId = sourceMessage?.senderId ??
+  const senderId =
+    sourceMessage?.senderId ??
     (messageId === streamingMessage?.id ? streamingMessage?.agentId : undefined)
   const senderName =
     sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
-      ? (sourceMessage.metadata as Record<string, unknown>).agentName as string | undefined
+      ? ((sourceMessage.metadata as Record<string, unknown>).agentName as string | undefined)
       : undefined
   const senderAgent = workspaceAgents.find(
-    (a) =>
-      a.id === senderId ||
-      (senderName && a.name.toLowerCase() === senderName.toLowerCase()),
+    (a) => a.id === senderId || (senderName && a.name.toLowerCase() === senderName.toLowerCase()),
   )
 
   const runtime = useMessage((message) =>
@@ -5096,7 +5233,6 @@ function codeAgentLogoSrc(runtime: CodeAgentRunMetadata['runtime']) {
   if (runtime === 'gemini') return '/gemini-color.svg'
   return '/codex-color.svg'
 }
-
 
 const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
   <button

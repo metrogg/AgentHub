@@ -1,3 +1,5 @@
+import { readdirSync, statSync, existsSync } from 'node:fs'
+import { join, relative, sep } from 'node:path'
 import { db, messages, workspaceTasks, orchestratorRuns, taskClarifications, sessions, workspaces, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
@@ -14,13 +16,13 @@ import { emitRunEvent } from './run-events'
 import { initializeRunLedger } from './run-ledger'
 import { validateTaskOutputContract } from './task-contract'
 import { runTaskValidation } from './task-validation'
-import type { CollaborationMode, ExecutionPlan, ExecutionTask, TaskResult } from './types'
+import type { CollaborationMode, ExecutionAgent, ExecutionPlan, ExecutionTask, TaskResult } from './types'
 import { PolicyGuard } from '../policy-guard'
 import { intentRouter } from './intent-router'
 import { streamReply } from '../llm'
 import { buildAgentProfileWithWorktree } from '../agents/profile-builder'
 import { createOrchestratorChildSession } from '../workspace/session-manager'
-import { DEFAULT_ENV_ALLOWLIST } from '../execution/agent-execution-envelope'
+import { DEFAULT_ENV_ALLOWLIST, resolveDefaultWorkDir } from '../execution/agent-execution-envelope'
 import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
@@ -475,6 +477,14 @@ export class OrchestratorEngine {
         results.push(...reviewResults)
       }
 
+      // Task #8: Follow-up task detection — 团长动态交接，根据产出物类型自动创建后续任务
+      const followUpResults = await this.detectAndExecuteFollowUpTasks(
+        plan, results, childSessions, runId, groupSessionId, workspaceId, ownerId, executor,
+      )
+      if (followUpResults.length > 0) {
+        results.push(...followUpResults)
+      }
+
       // 冲突检测与解决：遍历所有有 projectPath 的任务目录
       const projectPaths = new Set<string>()
       for (const task of plan.tasks) {
@@ -891,9 +901,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       taskType: task.taskType,
     })
 
+    const defaultCwd = childInfo.projectPath ? null : resolveDefaultWorkDir(runId)
     const profile = buildAgentProfileWithWorktree(
       agent,
-      null,
+      defaultCwd,
       childInfo.projectPath ?? null,
       {
         toolPermissions: policy.toolPermissions,
@@ -957,6 +968,23 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
     const taskStartTime = Date.now()
 
+    const GIT_IGNORE_PATTERNS = [/^\.git\//, /^\.git$/, /^node_modules\//, /^\.agenthub\//, /^\.env$/]
+    const beforeDirs: string[] = []
+    if (childInfo.projectPath && existsSync(childInfo.projectPath)) {
+      beforeDirs.push(childInfo.projectPath)
+    }
+    const defaultWorkDir = resolveDefaultWorkDir(runId)
+    if (existsSync(defaultWorkDir)) {
+      beforeDirs.push(defaultWorkDir)
+    }
+    const beforeFiles = new Map<string, ScannedFile>()
+    for (const dir of beforeDirs) {
+      for (const f of scanDirectoryFiles(dir, GIT_IGNORE_PATTERNS)) {
+        const key = `${dir}::${f.path}`
+        beforeFiles.set(key, f)
+      }
+    }
+
     try {
       // 委托给 TaskExecutionService 执行核心逻辑
       const execResult = await taskExecutionService.execute({
@@ -976,6 +1004,44 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       const output = execResult.output
       const artifacts = execResult.artifacts
       const taskDuration = execResult.durationMs
+
+      const afterDirs: string[] = []
+      const execPath = execResult.executionPath
+      if (execPath && existsSync(execPath) && !afterDirs.includes(execPath)) {
+        afterDirs.push(execPath)
+      }
+      if (childInfo.projectPath && existsSync(childInfo.projectPath) && !afterDirs.includes(childInfo.projectPath)) {
+        afterDirs.push(childInfo.projectPath)
+      }
+      if (existsSync(defaultWorkDir) && !afterDirs.includes(defaultWorkDir)) {
+        afterDirs.push(defaultWorkDir)
+      }
+      const seenArtifactPaths = new Set(
+        artifacts
+          .filter((a) => typeof a === 'object' && a !== null)
+          .map((a) => (a as Record<string, unknown>).filePath ?? (a as Record<string, unknown>).path as string | undefined)
+          .filter(Boolean) as string[],
+      )
+      for (const dir of afterDirs) {
+        const afterFiles = scanDirectoryFiles(dir, GIT_IGNORE_PATTERNS)
+        const newFiles = computeNewFiles(beforeFiles, afterFiles)
+        for (const f of newFiles) {
+          if (seenArtifactPaths.has(f.path)) continue
+          if (f.path.endsWith('.patch') || f.path.endsWith('.diff')) continue
+          seenArtifactPaths.add(f.path)
+          artifacts.push({
+            id: `file-${task.id}-${f.path.replace(/[^a-zA-Z0-9._-]/g, '-')}`,
+            type: 'file',
+            title: f.path.split('/').pop() ?? f.path,
+            description: f.path,
+            path: f.path,
+            status: 'created',
+            size: f.size,
+            source: dir,
+            createdAt: new Date().toISOString(),
+          })
+        }
+      }
 
       const progressMatches = output.match(/\[PROGRESS:\s*(\d+)%\]\s*(.*)/g)
       if (progressMatches) {
@@ -1696,6 +1762,275 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     return chainResults
   }
 
+  /**
+   * Task #8: 团长动态交接 — 根据已完成任务的产出物类型，自动创建后续任务
+   *
+   * 规则引擎（非 LLM），按以下规则决策：
+   * 1. 代码文件产出 + 无 QA 任务 → 创建 QA 审查任务
+   * 2. Markdown 文档产出 + 无编辑任务 → 创建润色/校对任务
+   * 3. 代码 + 测试文件产出 + 无 Reviewer 任务 → 创建 Reviewer 任务
+   *
+   * 去重：已有同类 follow-up 任务则跳过
+   */
+  private async detectAndExecuteFollowUpTasks(
+    plan: ExecutionPlan,
+    results: TaskResult[],
+    childSessions: Map<string, ChildSessionInfo>,
+    runId: string,
+    groupSessionId: string,
+    workspaceId: string,
+    ownerId: string,
+    executor: TaskExecutor,
+  ): Promise<TaskResult[]> {
+    const followUpTasks: ExecutionTask[] = []
+
+    for (const result of results) {
+      if (result.status !== TaskStatus.Done || result.artifacts.length === 0) continue
+      const completedTask = plan.tasks.find((t) => t.id === result.taskId)
+      if (!completedTask) continue
+
+      const newTasks = await this.buildFollowUpTasks(
+        completedTask,
+        result.artifacts,
+        plan,
+        childSessions,
+        runId,
+        groupSessionId,
+        workspaceId,
+        ownerId,
+      )
+      followUpTasks.push(...newTasks)
+    }
+
+    if (followUpTasks.length === 0) return []
+
+    this.scheduler.addTasksToRun(runId, followUpTasks)
+
+    broadcastSessionEvent(groupSessionId, {
+      type: 'task_board:plan_ready',
+      payload: {
+        runId,
+        plan: {
+          runId,
+          title: plan.title,
+          goal: plan.goal,
+          collaborationMode: plan.collaborationMode || 'mapreduce',
+          phases: plan.phases || [],
+          tasks: plan.tasks.map((t) => ({
+            id: t.id,
+            phaseId: t.phaseId || '',
+            title: t.title,
+            description: t.description,
+            agentId: t.agentId,
+            agentKey: plan.agents.find((a) => a.id === t.agentId)?.key || t.agentId,
+            agentName: plan.agents.find((a) => a.id === t.agentId)?.name || t.agentId,
+            dependencies: t.dependencies || [],
+            taskType: t.taskType,
+            childSessionId: childSessions.get(t.id)?.sessionId ?? null,
+          })),
+          agents: plan.agents,
+        },
+        sessionId: groupSessionId,
+      },
+    })
+
+    logger.info({ runId, followUpCount: followUpTasks.length }, 'Detected follow-up tasks, dispatching')
+
+    const followUpPlan: ExecutionPlan = {
+      runId,
+      title: `Follow-up: ${plan.title}`,
+      goal: plan.goal,
+      agents: plan.agents,
+      tasks: followUpTasks,
+    }
+
+    const followUpResults = await this.scheduler.executePlan(followUpPlan, executor)
+
+    for (const fr of followUpResults) {
+      logger.info({ taskId: fr.taskId, status: fr.status }, 'Follow-up task completed')
+    }
+
+    return followUpResults
+  }
+
+  private async buildFollowUpTasks(
+    completedTask: ExecutionTask,
+    artifacts: Array<Record<string, unknown>>,
+    plan: ExecutionPlan,
+    childSessions: Map<string, ChildSessionInfo>,
+    runId: string,
+    groupSessionId: string,
+    workspaceId: string,
+    ownerId: string,
+  ): Promise<ExecutionTask[]> {
+    const newTasks: ExecutionTask[] = []
+
+    const filePaths: string[] = []
+    for (const artifact of artifacts) {
+      if (!artifact || typeof artifact !== 'object') continue
+      const rec = artifact as Record<string, unknown>
+      const fp = (rec.filePath as string) ?? (rec.path as string) ?? (rec.title as string) ?? ''
+      if (!fp) continue
+      filePaths.push(fp.toLowerCase())
+    }
+    if (filePaths.length === 0) return newTasks
+
+    const extSet = (fp: string) => fp.includes('.') ? (fp.split('.').pop() ?? '') : ''
+
+    const codeExtensions = new Set([
+      'html', 'css', 'js', 'ts', 'jsx', 'tsx', 'py', 'java', 'go', 'rs', 'cpp', 'c',
+      'rb', 'php', 'swift', 'kt', 'dart', 'vue', 'svelte', 'json', 'yaml', 'yml',
+      'toml', 'xml', 'scss', 'less', 'sass', 'lua', 'r', 'm', 'mm', 'sh', 'bash',
+      'ps1', 'bat', 'cmd', 'sql', 'graphql', 'proto', 'tf', 'hcl',
+    ])
+
+    const docExtensions = new Set(['md', 'markdown', 'mdx', 'txt', 'rst', 'adoc', 'org'])
+
+    const isTestFile = (fp: string): boolean => {
+      const name = fp.split('/').pop() ?? fp
+      return name.includes('.test.') || name.includes('_test.') || name.includes('.spec.') ||
+        name.includes('_spec.') || fp.includes('/test_') || fp.startsWith('test/') ||
+        fp.startsWith('tests/') || fp.startsWith('spec/') || fp.startsWith('__tests__/') ||
+        name.endsWith('_test.py') || name.endsWith('_test.go') || name.endsWith('_test.rb') ||
+        name.endsWith('_spec.rb') || name.endsWith('Test.java') || name.endsWith('Tests.java')
+    }
+
+    const hasCodeFiles = filePaths.some((fp) => codeExtensions.has(extSet(fp)))
+    const hasDocFiles = filePaths.some((fp) => docExtensions.has(extSet(fp)))
+    const hasTestFiles = filePaths.some((fp) => isTestFile(fp))
+
+    const taskExistsForRun = (keywords: string[]): boolean => {
+      return plan.tasks.some((t) => {
+        if (t.id.startsWith('qa-') || t.id.startsWith('polish-') || t.id.startsWith('review-')) {
+          return keywords.some((kw) => t.title.toLowerCase().includes(kw))
+        }
+        const combined = (t.title + ' ' + t.description).toLowerCase()
+        return keywords.some((kw) => combined.includes(kw))
+      })
+    }
+
+    // Rule 1: 代码文件产出 + 无 QA 任务 → 创建 QA 审查任务
+    if (hasCodeFiles && !taskExistsForRun(['qa', '测试', '审查'])) {
+      const qaAgent = findFollowUpAgent(plan, completedTask.agentId, ['reviewer', 'verifier'], ['qa', 'test', 'review', '测试', '审查'])
+      if (qaAgent) {
+        const task = await this.createFollowUpTask({
+          prefix: 'qa',
+          parentTask: completedTask,
+          title: `QA 审查 ${completedTask.title}`,
+          description: `对「${completedTask.title}」产出的代码文件进行质量审查。检查：代码规范、边界情况、错误处理、异常安全、性能问题。`,
+          agent: qaAgent,
+          taskType: 'review',
+          plan, childSessions, runId, groupSessionId, workspaceId, ownerId,
+        })
+        if (task) newTasks.push(task)
+      }
+    }
+
+    // Rule 2: Markdown 文档产出 + 无编辑任务 → 创建润色任务
+    if (hasDocFiles && !taskExistsForRun(['润色', '编辑', '校对', 'polish', 'edit'])) {
+      const editorAgent = findFollowUpAgent(plan, completedTask.agentId, ['reviewer', 'integrator', 'custom'], ['edit', 'polish', '文档', '写作', 'write', '润色', '校对'])
+      if (editorAgent) {
+        const task = await this.createFollowUpTask({
+          prefix: 'polish',
+          parentTask: completedTask,
+          title: `润色 ${completedTask.title}`,
+          description: `对「${completedTask.title}」产出的文档进行润色和校对。检查：逻辑连贯性、表述清晰度、格式一致性、错别字和语法。`,
+          agent: editorAgent,
+          taskType: 'review',
+          plan, childSessions, runId, groupSessionId, workspaceId, ownerId,
+        })
+        if (task) newTasks.push(task)
+      }
+    }
+
+    // Rule 3: 代码 + 测试文件产出 + 无 Reviewer 任务 → 创建 Reviewer 任务
+    if (hasCodeFiles && hasTestFiles && !taskExistsForRun(['review', '审查', 'code review'])) {
+      const reviewerAgent = findFollowUpAgent(plan, completedTask.agentId, ['reviewer', 'verifier'], ['review', '审查', 'code review'])
+      if (reviewerAgent) {
+        const task = await this.createFollowUpTask({
+          prefix: 'review',
+          parentTask: completedTask,
+          title: `代码审查 ${completedTask.title}`,
+          description: `审查「${completedTask.title}」的代码变更和测试覆盖率。关注：代码风格一致性、架构合理性、潜在安全漏洞、测试充分度。`,
+          agent: reviewerAgent,
+          taskType: 'review',
+          plan, childSessions, runId, groupSessionId, workspaceId, ownerId,
+        })
+        if (task) newTasks.push(task)
+      }
+    }
+
+    return newTasks
+  }
+
+  private async createFollowUpTask(params: {
+    prefix: string
+    parentTask: ExecutionTask
+    title: string
+    description: string
+    agent: ExecutionAgent
+    taskType: string
+    plan: ExecutionPlan
+    childSessions: Map<string, ChildSessionInfo>
+    runId: string
+    groupSessionId: string
+    workspaceId: string
+    ownerId: string
+  }): Promise<ExecutionTask | null> {
+    const { prefix, parentTask, title, description, agent, taskType, plan, childSessions, runId, groupSessionId, workspaceId, ownerId } = params
+
+    const taskId = `${prefix}-${parentTask.id}`
+
+    if (plan.tasks.some((t) => t.id === taskId)) return null
+
+    const task: ExecutionTask = {
+      id: taskId,
+      title,
+      description,
+      agentId: agent.id,
+      dependencies: [],
+      taskType: taskType as ExecutionTask['taskType'],
+      maxRetries: 1,
+    }
+
+    const childSession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, agent, task.title)
+    childSessions.set(taskId, {
+      sessionId: childSession.id,
+      workspaceId,
+      projectPath: childSessions.get(parentTask.id)?.projectPath,
+    })
+
+    await db.insert(workspaceTasks).values({
+      id: taskId,
+      workspaceId,
+      agentId: agent.id,
+      title: task.title,
+      description: task.description,
+      status: TaskStatus.Pending,
+      orderIdx: plan.tasks.length,
+      runId,
+      dependencies: task.dependencies,
+      maxRetries: task.maxRetries,
+    })
+
+    plan.tasks.push(task)
+
+    await emitRunEvent({
+      runId,
+      workspaceId,
+      groupSessionId,
+      taskId: task.id,
+      agentId: agent.id,
+      type: 'task.queued',
+      severity: 'info',
+      payload: { title: task.title, reason: `团长动态交接: 基于 "${parentTask.title}" 产出自动创建`, parentTaskId: parentTask.id },
+    })
+
+    logger.info({ taskId: task.id, parentTaskId: parentTask.id, agentName: agent.name }, 'Follow-up task created via rule engine')
+
+    return task
+  }
+
   private async synthesizeAndReport(
     runId: string,
     groupSessionId: string,
@@ -1771,6 +2106,11 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
 
     const finalSummary = summary + artifactNotice + mergeNotice
 
+    const fileArtifacts = finalArtifacts.filter((a) => {
+      const t = (a as Record<string, unknown>).type
+      return t === 'file'
+    })
+
     // 匹配 workspace 中的 orchestrator agent，避免 senderId 与前端头像对不上
     const orchestratorAgent = plan.agents.find(
       (a) =>
@@ -1778,6 +2118,27 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
         a.key === 'orchestrator' ||
         a.name.toLowerCase().includes('orchestrator'),
     )
+
+    const qaResult = extractQAResult(enrichedResults)
+    const deliveryFiles = finalArtifacts.map((a) => {
+      const rec = a as Record<string, unknown>
+      const fileName = (rec.title as string) ?? (rec.path as string)?.split('/').pop() ?? 'unknown'
+      const ext = fileName.split('.').pop()?.toLowerCase() ?? ''
+      return {
+        name: fileName,
+        size: (rec.size as number) ?? 0,
+        type: ext,
+      }
+    })
+    const deliveryChecklist = plan.tasks.map((t) => {
+      const result = enrichedResults.find((r) => r.taskId === t.id)
+      return {
+        item: t.title,
+        done: result?.status === TaskStatus.Done,
+      }
+    })
+
+    const runStatus = hasPendingMergeBlockers ? 'partial' : 'completed'
 
     const [summaryMsg] = await db
       .insert(messages)
@@ -1792,6 +2153,18 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
           role: orchestratorAgent?.role ?? 'Coordinator',
           runtimeType: 'llm',
           artifacts: finalArtifacts,
+          file_card: fileArtifacts.length > 0 ? {
+            files: fileArtifacts.map((a) => {
+              const rec = a as Record<string, unknown>
+              const fileName = (rec.title as string) ?? (rec.path as string)?.split('/').pop() ?? 'unknown'
+              return {
+                fileName,
+                filePath: (rec.path as string) ?? fileName,
+                fileSize: rec.size as number | undefined,
+                runId,
+              }
+            }),
+          } : undefined,
           orchestratorSummary: {
             dispatchId: runId,
             taskIds: plan.tasks.map((t) => t.id),
@@ -1801,6 +2174,13 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
             failedReviewCount: failedReviews.length,
             failedValidationCount: failedValidations.length,
             unresolvedConflictCount: conflictReports.length,
+          },
+          delivery_report: {
+            status: runStatus,
+            runId,
+            qaResult,
+            files: deliveryFiles,
+            checklist: deliveryChecklist,
           },
         },
       })
@@ -1832,6 +2212,35 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
       payload: { sessionId: groupSessionId, message: summaryMsg },
     })
   }
+}
+
+function extractQAResult(results: TaskResult[]): { passed: boolean; critical: number; major: number; minor: number } | undefined {
+  const qaTasks = results.filter(
+    (r) =>
+      r.taskId.toLowerCase().includes('qa') ||
+      r.taskId.toLowerCase().includes('review') ||
+      r.taskId.toLowerCase().includes('test') ||
+      (r.agentName && (r.agentName.toLowerCase().includes('qa') || r.agentName.toLowerCase().includes('测试')))
+  )
+  if (qaTasks.length === 0) return undefined
+
+  let critical = 0
+  let major = 0
+  let minor = 0
+  let passed = true
+
+  for (const qa of qaTasks) {
+    if (qa.status === TaskStatus.Failed) passed = false
+    const output = qa.output ?? ''
+    const crMatch = output.match(/严重[：:]\s*(\d+)/)
+    const majorMatch = output.match(/主要[：:]\s*(\d+)/)
+    const minorMatch = output.match(/次要[：:]\s*(\d+)/)
+    if (crMatch) critical += parseInt(crMatch[1] ?? '0', 10)
+    if (majorMatch) major += parseInt(majorMatch[1] ?? '0', 10)
+    if (minorMatch) minor += parseInt(minorMatch[1] ?? '0', 10)
+  }
+
+  return { passed, critical, major, minor }
 }
 
 function collectResultArtifacts(results: TaskResult[]) {
@@ -2192,4 +2601,83 @@ function extractJsonObject(value: string) {
 
 function isArtifactKind(a: Record<string, unknown>, kind: string): boolean {
   return (a.kind as string | undefined) === kind || (a.type as string | undefined) === kind
+}
+
+interface ScannedFile {
+  path: string
+  size: number
+  mtimeMs: number
+}
+
+function scanDirectoryFiles(dir: string, ignorePatterns: RegExp[] = []): ScannedFile[] {
+  const results: ScannedFile[] = []
+  if (!existsSync(dir)) return results
+
+  const rootWithSep = dir.endsWith(sep) ? dir : `${dir}${sep}`
+
+  function walk(currentDir: string) {
+    let entries: string[]
+    try {
+      entries = readdirSync(currentDir)
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry === '.' || entry === '..') continue
+      const fullPath = join(currentDir, entry)
+      const relPath = relative(rootWithSep, fullPath).replace(/\\/g, '/')
+      if (ignorePatterns.some((p) => p.test(relPath) || p.test(entry))) continue
+
+      let stat
+      try {
+        stat = statSync(fullPath)
+      } catch {
+        continue
+      }
+      if (stat.isFile()) {
+        results.push({ path: relPath, size: stat.size, mtimeMs: stat.mtimeMs })
+      } else if (stat.isDirectory()) {
+        walk(fullPath)
+      }
+    }
+  }
+
+  walk(dir)
+  return results
+}
+
+function computeNewFiles(before: Map<string, ScannedFile>, after: ScannedFile[]): ScannedFile[] {
+  return after.filter((f) => {
+    const prev = before.get(f.path)
+    if (!prev) return true
+    return f.mtimeMs > prev.mtimeMs + 1000
+  })
+}
+
+/**
+ * Task #8: 为 follow-up 任务匹配合适的 Agent
+ * 优先按 roleType 匹配，其次按 capabilityTags，最后按名称/描述
+ * 排除已完成任务的原 Agent，避免自己审查自己
+ */
+function findFollowUpAgent(
+  plan: ExecutionPlan,
+  excludeAgentId: string,
+  preferredRoleTypes: string[],
+  capabilityKeywords: string[],
+): ExecutionAgent | undefined {
+  const candidates = plan.agents.filter((a) => a.id !== excludeAgentId)
+
+  const byRoleType = candidates.find((a) => preferredRoleTypes.includes(a.roleType ?? ''))
+  if (byRoleType) return byRoleType
+
+  const byCapability = candidates.find((a) =>
+    a.capabilityTags.some((tag) => capabilityKeywords.some((kw) => tag.toLowerCase().includes(kw))),
+  )
+  if (byCapability) return byCapability
+
+  const byName = candidates.find((a) => {
+    const text = [a.name, a.role, a.description ?? ''].join(' ').toLowerCase()
+    return capabilityKeywords.some((kw) => text.includes(kw))
+  })
+  return byName
 }

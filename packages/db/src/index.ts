@@ -31,20 +31,60 @@ export type DB = typeof db
 export const migrationsPath = resolve(PROJECT_ROOT, 'packages/db/drizzle')
 
 function ensureLegacySchema(database: Database) {
-  ensureColumn(database, 'sessions', 'workspace_id', 'ALTER TABLE sessions ADD COLUMN workspace_id text')
-  ensureColumn(database, 'sessions', 'workspace_agent_id', 'ALTER TABLE sessions ADD COLUMN workspace_agent_id text')
+  ensureColumn(
+    database,
+    'sessions',
+    'workspace_id',
+    'ALTER TABLE sessions ADD COLUMN workspace_id text',
+  )
+  ensureColumn(
+    database,
+    'sessions',
+    'workspace_agent_id',
+    'ALTER TABLE sessions ADD COLUMN workspace_agent_id text',
+  )
   ensureColumn(database, 'sessions', 'metadata', 'ALTER TABLE sessions ADD COLUMN metadata text')
 
-  ensureColumn(database, 'session_members', 'joined_at', 'ALTER TABLE session_members ADD COLUMN joined_at integer')
-  if (hasColumn(database, 'session_members', 'created_at') && hasColumn(database, 'session_members', 'joined_at')) {
-    database.exec('UPDATE session_members SET joined_at = created_at WHERE joined_at IS NULL AND created_at IS NOT NULL')
+  ensureColumn(
+    database,
+    'session_members',
+    'joined_at',
+    'ALTER TABLE session_members ADD COLUMN joined_at integer',
+  )
+  if (
+    hasColumn(database, 'session_members', 'created_at') &&
+    hasColumn(database, 'session_members', 'joined_at')
+  ) {
+    database.exec(
+      'UPDATE session_members SET joined_at = created_at WHERE joined_at IS NULL AND created_at IS NOT NULL',
+    )
   }
 
-  ensureColumn(database, 'messages', 'is_pinned', 'ALTER TABLE messages ADD COLUMN is_pinned integer DEFAULT 0 NOT NULL')
-  ensureColumn(database, 'messages', 'reply_to_message_id', 'ALTER TABLE messages ADD COLUMN reply_to_message_id text')
+  ensureColumn(
+    database,
+    'messages',
+    'is_pinned',
+    'ALTER TABLE messages ADD COLUMN is_pinned integer DEFAULT 0 NOT NULL',
+  )
+  ensureColumn(
+    database,
+    'messages',
+    'reply_to_message_id',
+    'ALTER TABLE messages ADD COLUMN reply_to_message_id text',
+  )
 
-  ensureColumn(database, 'workspace_tasks', 'run_id', 'ALTER TABLE workspace_tasks ADD COLUMN run_id text')
-  ensureColumn(database, 'workspace_tasks', 'phase_id', 'ALTER TABLE workspace_tasks ADD COLUMN phase_id text')
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'run_id',
+    'ALTER TABLE workspace_tasks ADD COLUMN run_id text',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'phase_id',
+    'ALTER TABLE workspace_tasks ADD COLUMN phase_id text',
+  )
   ensureColumn(
     database,
     'workspace_tasks',
@@ -57,21 +97,66 @@ function ensureLegacySchema(database: Database) {
     'input_refs',
     "ALTER TABLE workspace_tasks ADD COLUMN input_refs text DEFAULT '[]' NOT NULL",
   )
-  ensureColumn(database, 'workspace_tasks', 'output_key', 'ALTER TABLE workspace_tasks ADD COLUMN output_key text')
-  ensureColumn(database, 'workspace_tasks', 'parallel_group', 'ALTER TABLE workspace_tasks ADD COLUMN parallel_group text')
-  ensureColumn(database, 'workspace_tasks', 'max_retries', 'ALTER TABLE workspace_tasks ADD COLUMN max_retries integer DEFAULT 3 NOT NULL')
-  ensureColumn(database, 'workspace_tasks', 'retry_count', 'ALTER TABLE workspace_tasks ADD COLUMN retry_count integer DEFAULT 0 NOT NULL')
-  ensureColumn(database, 'workspace_tasks', 'timeout', 'ALTER TABLE workspace_tasks ADD COLUMN timeout integer DEFAULT 300000 NOT NULL')
-  ensureColumn(database, 'workspace_tasks', 'fallback_agent_id', 'ALTER TABLE workspace_tasks ADD COLUMN fallback_agent_id text')
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'output_key',
+    'ALTER TABLE workspace_tasks ADD COLUMN output_key text',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'parallel_group',
+    'ALTER TABLE workspace_tasks ADD COLUMN parallel_group text',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'max_retries',
+    'ALTER TABLE workspace_tasks ADD COLUMN max_retries integer DEFAULT 3 NOT NULL',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'retry_count',
+    'ALTER TABLE workspace_tasks ADD COLUMN retry_count integer DEFAULT 0 NOT NULL',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'timeout',
+    'ALTER TABLE workspace_tasks ADD COLUMN timeout integer DEFAULT 300000 NOT NULL',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'fallback_agent_id',
+    'ALTER TABLE workspace_tasks ADD COLUMN fallback_agent_id text',
+  )
   ensureColumn(
     database,
     'workspace_tasks',
     'artifacts',
     "ALTER TABLE workspace_tasks ADD COLUMN artifacts text DEFAULT '[]' NOT NULL",
   )
-  ensureColumn(database, 'workspace_tasks', 'started_at', 'ALTER TABLE workspace_tasks ADD COLUMN started_at integer')
-  ensureColumn(database, 'workspace_tasks', 'completed_at', 'ALTER TABLE workspace_tasks ADD COLUMN completed_at integer')
-  ensureColumn(database, 'workspace_tasks', 'error_log', 'ALTER TABLE workspace_tasks ADD COLUMN error_log text')
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'started_at',
+    'ALTER TABLE workspace_tasks ADD COLUMN started_at integer',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'completed_at',
+    'ALTER TABLE workspace_tasks ADD COLUMN completed_at integer',
+  )
+  ensureColumn(
+    database,
+    'workspace_tasks',
+    'error_log',
+    'ALTER TABLE workspace_tasks ADD COLUMN error_log text',
+  )
   ensureColumn(
     database,
     'workspace_tasks',
@@ -97,7 +182,12 @@ function ensureLegacySchema(database: Database) {
     'role_type',
     "ALTER TABLE workspace_agents ADD COLUMN role_type text DEFAULT 'custom' NOT NULL",
   )
-  ensureColumn(database, 'workspace_agents', 'role_profile', 'ALTER TABLE workspace_agents ADD COLUMN role_profile text')
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'role_profile',
+    'ALTER TABLE workspace_agents ADD COLUMN role_profile text',
+  )
 
   ensureTable(
     database,
@@ -159,7 +249,9 @@ function ensureTable(database: Database, table: string, statement: string) {
 }
 
 function tableExists(database: Database, table: string) {
-  const row = database.query('SELECT name FROM sqlite_master WHERE type = ? AND name = ?').get('table', table)
+  const row = database
+    .query('SELECT name FROM sqlite_master WHERE type = ? AND name = ?')
+    .get('table', table)
   return Boolean(row)
 }
 

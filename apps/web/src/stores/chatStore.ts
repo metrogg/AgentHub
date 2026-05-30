@@ -44,6 +44,65 @@ function readSessionAgentIds(session: Session | null | undefined) {
   return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
 }
 
+function getRoleIcon(agentName: string, taskTitle: string): string {
+  const lower = `${agentName} ${taskTitle}`.toLowerCase()
+  if (lower.includes('架构') || lower.includes('architect')) return '🏗️'
+  if (lower.includes('码') || lower.includes('码农') || lower.includes('coder') || lower.includes('dev') || lower.includes('工程') || lower.includes('engineer') || lower.includes('前端') || lower.includes('后端')) return '💻'
+  if (lower.includes('审查') || lower.includes('review') || lower.includes('qa') || lower.includes('测试') || lower.includes('test')) return '🔍'
+  if (lower.includes('产品') || lower.includes('pm') || lower.includes('经理')) return '📋'
+  if (lower.includes('设计') || lower.includes('ui') || lower.includes('ux')) return '🎨'
+  if (lower.includes('研究') || lower.includes('调研') || lower.includes('research')) return '🔬'
+  if (lower.includes('文档') || lower.includes('写') || lower.includes('writer')) return '📝'
+  if (lower.includes('部署') || lower.includes('deploy') || lower.includes('ops')) return '🚀'
+  return '🤖'
+}
+
+function updateAgentTabsFromTaskBoard(
+  currentTabs: AgentTab[],
+  taskBoard: ChatState['taskBoard'],
+  event: { type: string; taskId?: string | null; payload?: Record<string, unknown> },
+): AgentTab[] {
+  if (!taskBoard) return currentTabs
+  const taskId = event.taskId
+  if (!taskId) return currentTabs
+
+  const task = taskBoard.tasks.find((t) => t.id === taskId)
+  if (!task) return currentTabs
+
+  const tabIndex = currentTabs.findIndex((t) => t.agentName === task.agentName)
+  if (tabIndex === -1) {
+    const newTab: AgentTab = {
+      agentId: task.id,
+      agentName: task.agentName,
+      roleIcon: getRoleIcon(task.agentName, task.title),
+      status: task.status === 'running' ? 'running' : task.status === 'done' ? 'done' : task.status === 'failed' ? 'failed' : 'pending',
+      childSessionId: (event.payload?.sessionId as string) ?? null,
+    }
+    return [...currentTabs, newTab]
+  }
+
+  return currentTabs.map((tab, i) => {
+    if (i !== tabIndex) return tab
+    const sessionId = (event.payload?.sessionId as string) ?? tab.childSessionId
+    const status: AgentTab['status'] =
+      task.status === 'running' ? 'running'
+      : task.status === 'done' ? 'done'
+      : task.status === 'failed' ? 'failed'
+      : 'pending'
+    return { ...tab, status, childSessionId: sessionId }
+  })
+}
+
+interface AgentTab {
+  agentId: string
+  agentName: string
+  roleIcon: string
+  status: 'pending' | 'running' | 'done' | 'failed'
+  childSessionId: string | null
+  progress?: number
+  progressStatus?: string
+}
+
 interface ChatState {
   sessions: Session[]
   currentSession: Session | null
@@ -86,6 +145,11 @@ interface ChatState {
     status: 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
     sessionId: string
   } | null
+  previewUrl: string | null
+  previewFileType: 'html' | 'markdown' | 'image' | null
+  previewFileName: string | null
+  selectedAgentTab: string | null
+  agentTabs: AgentTab[]
 
   fetchSessions: () => Promise<void>
   createSession: (
@@ -126,6 +190,8 @@ interface ChatState {
   clearPendingAttachments: () => void
   cancelRun: () => Promise<void>
   setReplyingTo: (messageId: string | null) => void
+  setPreviewUrl: (url: string | null, fileType?: 'html' | 'markdown' | 'image' | null, fileName?: string | null) => void
+  selectAgentTab: (agentId: string | null) => void
   handleWSEvent: (e: WSEvent) => void
   initWebSocket: () => () => void
 }
@@ -155,6 +221,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   replyingToMessage: null,
   sessionsBootstrapped: false,
   taskBoard: null,
+  previewUrl: null,
+  previewFileType: null,
+  previewFileName: null,
+  selectedAgentTab: null,
+  agentTabs: [],
 
   async fetchSessions() {
     set({ loadingSessions: true })
@@ -455,10 +526,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ replyingToMessageId: messageId, replyingToMessage: msg })
   },
 
+  setPreviewUrl(url, fileType = null, fileName = null) {
+    set({ previewUrl: url, previewFileType: fileType, previewFileName: fileName })
+  },
+
+  selectAgentTab(agentId: string | null) {
+    const { agentTabs, currentSessionId: groupSessionId } = get()
+    if (agentId === null) {
+      set({ selectedAgentTab: null })
+      if (groupSessionId) {
+        get().selectSession(groupSessionId)
+      }
+      return
+    }
+    const tab = agentTabs.find((t) => t.agentId === agentId)
+    if (!tab || !tab.childSessionId) return
+    set({ selectedAgentTab: agentId })
+    get().selectSession(tab.childSessionId)
+  },
+
   handleWSEvent(e) {
     const sessionId = get().currentSessionId
     if (!sessionId) return
-    if (e.payload?.sessionId && e.payload.sessionId !== sessionId) return
+    if (e.payload?.sessionId && e.payload.sessionId !== sessionId) {
+      const isTaskBoardEvent = e.type?.startsWith('task_board:') || e.type === 'run:event'
+      if (!isTaskBoardEvent) return
+    }
 
     switch (e.type) {
       case WsEvent.AgentTyping:
@@ -788,7 +881,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
 
           if (updated || nextTaskBoard !== s.taskBoard) {
-            return { messages: newMessages, taskBoard: nextTaskBoard }
+            const nextAgentTabs = updateAgentTabsFromTaskBoard(s.agentTabs, nextTaskBoard, event)
+            return { messages: newMessages, taskBoard: nextTaskBoard, agentTabs: nextAgentTabs }
           }
           return { messages: newMessages }
         })
@@ -802,8 +896,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         const phases = (plan.phases as any[]) || []
         const tasks = (plan.tasks as any[]) || []
+        const taskBoardTasks = tasks.map((t: any) => ({
+          id: t.id,
+          phaseId: t.phaseId || '',
+          title: t.title || '',
+          description: t.description || '',
+          agentName: t.agentName || t.agentKey || t.agentId || '',
+          status: 'pending' as const,
+          dependencies: t.dependencies || [],
+          childSessionId: t.childSessionId ?? null,
+        }))
+        const seenAgents = new Map<string, AgentTab>()
+        for (const t of taskBoardTasks) {
+          if (!t.agentName || seenAgents.has(t.agentName)) continue
+          seenAgents.set(t.agentName, {
+            agentId: t.id,
+            agentName: t.agentName,
+            roleIcon: getRoleIcon(t.agentName, t.title),
+            status: 'pending',
+            childSessionId: t.childSessionId ?? null,
+          })
+        }
         set((state) => ({
           ...state,
+          agentTabs: Array.from(seenAgents.values()),
+          selectedAgentTab: state.taskBoard?.runId !== runId ? null : state.selectedAgentTab,
           taskBoard: {
             runId,
             title: (plan.title as string) || '',
@@ -816,15 +933,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               taskIds: p.taskIds || [],
               status: 'pending' as const,
             })),
-            tasks: tasks.map((t: any) => ({
-              id: t.id,
-              phaseId: t.phaseId || '',
-              title: t.title || '',
-              description: t.description || '',
-              agentName: t.agentName || t.agentKey || t.agentId || '',
-              status: 'pending' as const,
-              dependencies: t.dependencies || [],
-            })),
+            tasks: taskBoardTasks,
             status: 'planning' as const,
             sessionId,
           },
@@ -839,14 +948,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         set((state) => {
           if (!state.taskBoard) return state
+          const nextTasks = state.taskBoard.tasks.map((t) =>
+            t.id === taskId ? { ...t, progress: percent, progressStatus: status } : t
+          )
+          const nextAgentTabs = state.agentTabs.map((tab) => {
+            const task = nextTasks.find((t) => t.id === tab.agentId)
+            if (task) {
+              return { ...tab, progress: percent, progressStatus: status }
+            }
+            return tab
+          })
           return {
             ...state,
-            taskBoard: {
-              ...state.taskBoard,
-              tasks: state.taskBoard.tasks.map((t) =>
-                t.id === taskId ? { ...t, progress: percent, progressStatus: status } : t
-              ),
-            },
+            taskBoard: { ...state.taskBoard, tasks: nextTasks },
+            agentTabs: nextAgentTabs,
           }
         })
         break

@@ -64,11 +64,15 @@ export class GitBranchManager {
   }
 
   async prepareBranch(
-    projectPath: string,
+    projectPath: string | null | undefined,
     runId: string,
     agentKey: string,
     taskId: string
-  ): Promise<BranchContext> {
+  ): Promise<BranchContext | null> {
+    if (!projectPath) {
+      logger.info({ runId, agentKey, taskId }, 'No project path, skipping branch isolation, using default workdir')
+      return null
+    }
     const release = await projectLock.acquire(projectPath)
     try {
       return await this._prepareBranchUnsafe(projectPath, runId, agentKey, taskId)
