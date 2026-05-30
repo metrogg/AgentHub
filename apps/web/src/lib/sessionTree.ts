@@ -6,7 +6,10 @@ export type SessionGroup = {
   latestUpdatedAt: string
 }
 
-export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string>()): SessionGroup[] {
+export function buildSessionTree(
+  sessions: Session[],
+  pinnedIds = new Set<string>(),
+): SessionGroup[] {
   const childrenByWorkspace = new Map<string, Session[]>()
   const hiddenIds = new Set<string>()
   const groupWorkspaceIds = new Set(
@@ -39,7 +42,8 @@ export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string
             )
           : []
       const latestUpdatedAt = [parent, ...children].reduce(
-        (latest, session) => (Date.parse(session.updatedAt) > Date.parse(latest) ? session.updatedAt : latest),
+        (latest, session) =>
+          Date.parse(session.updatedAt) > Date.parse(latest) ? session.updatedAt : latest,
         parent.updatedAt,
       )
       return { parent, children, latestUpdatedAt }
@@ -47,13 +51,18 @@ export function buildSessionTree(sessions: Session[], pinnedIds = new Set<string
     .sort((a, b) => comparePinnedGroups(a, b, pinnedIds))
 }
 
-function agentSessionVisibility(session: Session, groupWorkspaceIds: Set<string>): 'top' | 'child' | 'hidden' {
-  if (session.type !== SessionType.Direct || !session.workspaceId || !session.workspaceAgentId) return 'top'
+function agentSessionVisibility(
+  session: Session,
+  groupWorkspaceIds: Set<string>,
+): 'top' | 'child' | 'hidden' {
+  if (session.type !== SessionType.Direct || !session.workspaceId || !session.workspaceAgentId)
+    return 'top'
   const metadata = session.metadata ?? {}
   if (metadata.kind === 'agent-direct') return 'top'
   if (metadata.hiddenFromSessionTree) return 'hidden'
-  if (metadata.kind === 'workspace-agent-child') return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
-  if (metadata.kind === 'orchestrator-task') return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
+  if (metadata.kind === 'workspace-agent-child')
+    return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
+  if (metadata.kind === 'orchestrator-task') return 'hidden'
   if (groupWorkspaceIds.has(session.workspaceId)) return 'child'
   return looksLikeLegacyAgentChildSession(session) ? 'hidden' : 'top'
 }
@@ -74,9 +83,12 @@ export function filterSessionTree(
     .map((group) => {
       const parentArchived = archivedIds.has(group.parent.id)
       const children = group.children.filter(
-        (child) => archivedIds.has(child.id) === showArchived && sessionMatchesQuery(child, keyword, group.parent),
+        (child) =>
+          archivedIds.has(child.id) === showArchived &&
+          sessionMatchesQuery(child, keyword, group.parent),
       )
-      const parentVisible = parentArchived === showArchived && sessionMatchesQuery(group.parent, keyword)
+      const parentVisible =
+        parentArchived === showArchived && sessionMatchesQuery(group.parent, keyword)
       if (!parentVisible && !children.length) return null
       return {
         ...group,
@@ -84,7 +96,8 @@ export function filterSessionTree(
         latestUpdatedAt: [parentVisible ? group.parent : null, ...children]
           .filter((item): item is Session => Boolean(item))
           .reduce(
-            (latest, session) => (Date.parse(session.updatedAt) > Date.parse(latest) ? session.updatedAt : latest),
+            (latest, session) =>
+              Date.parse(session.updatedAt) > Date.parse(latest) ? session.updatedAt : latest,
             group.latestUpdatedAt,
           ),
       }
@@ -94,7 +107,13 @@ export function filterSessionTree(
 
 function sessionMatchesQuery(session: Session, query: string, parent?: Session) {
   if (!query) return true
-  return [session.title, session.type, session.workspaceId ?? '', session.workspaceAgentId ?? '', parent?.title ?? '']
+  return [
+    session.title,
+    session.type,
+    session.workspaceId ?? '',
+    session.workspaceAgentId ?? '',
+    parent?.title ?? '',
+  ]
     .join(' ')
     .toLowerCase()
     .includes(query)

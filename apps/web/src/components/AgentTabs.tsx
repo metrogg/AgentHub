@@ -1,0 +1,129 @@
+import { CheckCircle2, XCircle, Clock } from 'lucide-react'
+
+export interface AgentTab {
+  agentId: string
+  agentName: string
+  roleIcon: string
+  status: 'pending' | 'running' | 'done' | 'failed'
+  childSessionId: string | null
+  progress?: number
+  progressStatus?: string
+}
+
+interface AgentTabsProps {
+  tabs: AgentTab[]
+  selectedTab: string | null
+  onSelect: (agentId: string | null) => void
+  activeAgentCount: number
+  runStatus: string
+}
+
+function StatusIndicator({ status }: { status: AgentTab['status'] }) {
+  switch (status) {
+    case 'running':
+      return (
+        <span className="relative flex h-2.5 w-2.5">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
+        </span>
+      )
+    case 'done':
+      return <CheckCircle2 className="w-4 h-4 text-green-500" />
+    case 'failed':
+      return <XCircle className="w-4 h-4 text-red-500" />
+    default:
+      return <Clock className="w-4 h-4 text-gray-400" />
+  }
+}
+
+export function AgentTabs({ tabs, selectedTab, onSelect, activeAgentCount, runStatus }: AgentTabsProps) {
+  const statusLabels: Record<string, string> = {
+    planning: '规划中',
+    running: '执行中',
+    synthesizing: '汇总中',
+    completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }
+
+  return (
+    <div className="flex flex-col h-full w-48 flex-shrink-0 border-r border-gray-200 bg-gray-50/80">
+      <div
+        onClick={() => onSelect(null)}
+        className={`cursor-pointer px-3 py-3 border-b border-gray-200 transition-colors ${
+          selectedTab === null
+            ? 'bg-blue-50 border-l-2 border-l-blue-500'
+            : 'hover:bg-gray-100 border-l-2 border-l-transparent'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-base">👥</span>
+          <span className="text-sm font-medium text-gray-900 truncate">团长视角</span>
+        </div>
+        <div className="flex items-center gap-2 mt-1">
+          <span className="text-[11px] text-gray-500">
+            {statusLabels[runStatus] || runStatus}
+          </span>
+          {activeAgentCount > 0 && (
+            <span className="text-[11px] text-blue-600 font-medium">
+              {activeAgentCount} 活跃
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {tabs.map((tab) => {
+          const isSelected = selectedTab === tab.agentId
+          const isDisabled = !tab.childSessionId
+
+          return (
+            <div
+              key={tab.agentId}
+              onClick={() => {
+                if (!isDisabled) onSelect(tab.agentId)
+              }}
+              className={`cursor-pointer px-3 py-2.5 transition-colors border-l-2 ${
+                isSelected
+                  ? 'bg-blue-50 border-l-blue-500'
+                  : 'border-l-transparent hover:bg-gray-100'
+              } ${isDisabled ? 'opacity-60' : ''}`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-sm flex-shrink-0">{tab.roleIcon}</span>
+                <span className="text-sm font-medium text-gray-800 truncate">{tab.agentName}</span>
+                <span className="flex-shrink-0 ml-auto">
+                  <StatusIndicator status={tab.status} />
+                </span>
+              </div>
+
+              {tab.status === 'running' && tab.progress !== undefined && (
+                <div className="mt-1.5 ml-6">
+                  <div className="w-full bg-gray-200 rounded-full h-1">
+                    <div
+                      className="bg-blue-500 h-1 rounded-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, Math.max(0, tab.progress))}%` }}
+                    />
+                  </div>
+                  {tab.progressStatus && (
+                    <p className="text-[10px] text-gray-400 mt-0.5 truncate">{tab.progressStatus}</p>
+                  )}
+                </div>
+              )}
+
+              {isDisabled && tab.status === 'pending' && (
+                <p className="text-[10px] text-gray-400 mt-0.5 ml-6">等待分配</p>
+              )}
+            </div>
+          )
+        })}
+
+        {tabs.length === 0 && (
+          <div className="p-3 text-center text-xs text-gray-400">
+            暂无 Agent
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

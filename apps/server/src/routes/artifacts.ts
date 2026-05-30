@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { writeFile, unlink } from 'node:fs/promises'
 import { basename, extname, resolve, relative, isAbsolute, join, normalize, sep } from 'node:path'
@@ -10,6 +10,7 @@ import { db, workspaces, eq } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 import { AppError, AppErrorCodes } from '../lib/error'
+import { resolveDefaultWorkDir } from '../services/execution/agent-execution-envelope'
 
 export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -81,6 +82,87 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
         'Content-Disposition': `inline; filename="${encodeURIComponent(basename(filePath))}"`,
       },
     })
+  })
+  .get('/:runId/download', async (c) => {
+    const runId = c.req.param('runId')
+    if (!runId) throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少 runId', { field: 'runId' })
+
+    const workDir = resolveDefaultWorkDir(runId)
+    if (!existsSync(workDir) || !statSync(workDir).isDirectory()) {
+      throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, '工作目录不存在')
+    }
+
+    function collectFiles(dir: string, basePath = ''): { relPath: string; absPath: string }[] {
+      const entries = readdirSync(dir, { withFileTypes: true })
+      const results: { relPath: string; absPath: string }[] = []
+      for (const entry of entries) {
+        const rel = basePath ? `${basePath}/${entry.name}` : entry.name
+        const abs = join(dir, entry.name)
+        if (entry.isDirectory()) {
+          results.push(...collectFiles(abs, rel))
+        } else if (entry.isFile()) {
+          results.push({ relPath: rel, absPath: abs })
+        }
+      }
+      return results
+    }
+
+    const files = collectFiles(workDir)
+    if (files.length === 0) {
+      throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, '工作目录为空，没有可下载的产物')
+    }
+
+    const zip = new AdmZip()
+    for (const file of files) {
+      zip.addLocalFile(file.absPath, '', file.relPath)
+    }
+
+    const buffer = zip.toBuffer()
+    return new Response(buffer, {
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(`agenthub-artifacts-${runId}`)}.zip"`,
+      },
+    })
+  })
+  .get('/:runId/:filename', async (c) => {
+    const runId = c.req.param('runId')
+    const rawFilename = c.req.param('filename')
+    const download = c.req.query('download') === 'true'
+
+    if (!runId || !rawFilename) {
+      throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少 runId 或 filename')
+    }
+
+    const filename = decodeURIComponent(rawFilename).replace(/\\/g, '/').replace(/\.\.+/g, '.')
+    if (filename.includes('..') || filename.startsWith('/')) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '文件名包含非法路径')
+    }
+
+    const workDir = resolveDefaultWorkDir(runId)
+    const filePath = join(workDir, filename)
+    const resolved = resolve(filePath)
+    if (!resolved.startsWith(resolve(workDir))) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作目录范围内')
+    }
+
+    if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+      throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, '文件不存在')
+    }
+
+    const fileStat = statSync(filePath)
+    const headers: Record<string, string> = {
+      'Content-Type': contentType(filePath),
+      'Content-Length': String(fileStat.size),
+    }
+
+    if (download) {
+      headers['Content-Disposition'] = `attachment; filename="${encodeURIComponent(basename(filename))}"`
+    } else {
+      headers['Content-Disposition'] = `inline; filename="${encodeURIComponent(basename(filename))}"`
+    }
+
+    return new Response(Bun.file(filePath), { headers })
   })
   .post('/deploy-static', zValidator('json', z.object({ workspaceId: z.string() })), async (c) => {
     const user = c.get('user')

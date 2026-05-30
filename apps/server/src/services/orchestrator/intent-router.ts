@@ -11,6 +11,12 @@ export interface RouteResult {
   reason: string
 }
 
+export enum ComplexityLevel {
+  SIMPLE = 'SIMPLE',
+  MODERATE = 'MODERATE',
+  COMPLEX = 'COMPLEX',
+}
+
 export class IntentRouter {
   private defaultSignalsThreshold: number
 
@@ -35,14 +41,14 @@ export class IntentRouter {
       return { decision: 'NoOrchestrator', reason: '群聊中未配置 Orchestrator' }
     }
 
-    if (this.assessComplexity(content, threshold)) {
+    if (this.hasOrchestratorSignals(content, threshold)) {
       return { decision: 'OrchestratorPlan', reason: '检测到复杂任务，生成编排计划' }
     }
 
     return { decision: 'ConversationLoop', reason: 'Orchestrator 直接回复' }
   }
 
-  assessComplexity(content: string, threshold?: number): boolean {
+  hasOrchestratorSignals(content: string, threshold?: number): boolean {
     const lower = content.toLowerCase()
     let signals = 0
 
@@ -98,6 +104,28 @@ export class IntentRouter {
     if (content.length > 200 && techObjects.some((t) => lower.includes(t))) signals += 1
 
     return signals >= (threshold ?? this.defaultSignalsThreshold)
+  }
+
+  assessComplexity(content: string): ComplexityLevel {
+    const lower = content.toLowerCase()
+
+    const simpleKeywords = [
+      'one page', '一个页面', 'single page', 'snake', '贪吃蛇', 'calculator', '计算器',
+      'todo', '待办', 'single html', '单个html', 'just do it', '直接做',
+    ]
+    if (simpleKeywords.some((k) => lower.includes(k))) {
+      return ComplexityLevel.SIMPLE
+    }
+
+    const complexKeywords = [
+      'multiple', 'system', 'auth', 'authentication', 'database',
+      '微服务', '系统', '用户管理', '架构', '多页面', 'full stack', 'fullstack',
+    ]
+    if (complexKeywords.some((k) => lower.includes(k))) {
+      return ComplexityLevel.COMPLEX
+    }
+
+    return ComplexityLevel.MODERATE
   }
 }
 

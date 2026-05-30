@@ -67,7 +67,11 @@ import {
 } from '../services/agent-draft'
 import { type DemoArtifact, buildDemoArtifacts, artifactSummary } from '../services/artifact-demo'
 
-import { generatePlanCardBackground, intentRouter } from '../services/orchestrator/intent-router'
+import {
+  generatePlanCardBackground,
+  intentRouter,
+  ComplexityLevel,
+} from '../services/orchestrator/intent-router'
 import { buildAgentProfile } from '../services/agents/profile-builder'
 import {
   createWorkspaceGroupSession,
@@ -355,11 +359,12 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           mentionedNames.push(match[1]!.toLowerCase())
         }
 
-        const matchedAgents = agentRows.filter(a => {
+        const matchedAgents = agentRows.filter((a) => {
           const nameLower = a.name.toLowerCase()
           const roleLower = (a.role || '').toLowerCase()
-          return mentionedNames.some(n => 
-            nameLower === n || nameLower.includes(n) || roleLower === n || roleLower.includes(n)
+          return mentionedNames.some(
+            (n) =>
+              nameLower === n || nameLower.includes(n) || roleLower === n || roleLower.includes(n),
           )
         })
 
@@ -373,10 +378,13 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             .limit(1)
           const profile = toAgentProfile(targetAgent, workspace?.projectPath)
           runAgentReply(sessionId, previousUser, profile).catch((err: any) =>
-            logger.error({ err: err?.message, sessionId }, '@mention agent reply failed on regenerate'),
+            logger.error(
+              { err: err?.message, sessionId },
+              '@mention agent reply failed on regenerate',
+            ),
           )
         } else {
-          const orchestrator = agentRows.find(a => a.roleType === 'orchestrator')
+          const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
           if (orchestrator) {
             await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
             const [workspace] = await db
@@ -386,7 +394,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
               .limit(1)
             const profile = toAgentProfile(orchestrator, workspace?.projectPath)
             runAgentReply(sessionId, previousUser, profile).catch((err: any) =>
-              logger.error({ err: err?.message, sessionId }, '@mention fallback orchestrator reply failed on regenerate'),
+              logger.error(
+                { err: err?.message, sessionId },
+                '@mention fallback orchestrator reply failed on regenerate',
+              ),
             )
           }
         }
@@ -401,12 +412,28 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
       if (routeResult.decision === 'ConversationLoop') {
         handleSimpleReply(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
-          (err: any) => logger.error({ err: err?.message, sessionId }, 'Simple reply failed on regenerate'),
+          (err: any) =>
+            logger.error({ err: err?.message, sessionId }, 'Simple reply failed on regenerate'),
         )
       } else if (routeResult.decision === 'OrchestratorPlan') {
-        generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId).catch(
-          (err: any) => logger.error({ err: err?.message, sessionId }, 'Plan generation failed on regenerate'),
-        )
+        const complexity = intentRouter.assessComplexity(content)
+        if (complexity === ComplexityLevel.SIMPLE) {
+          dispatchSimpleTask(sessionId, content, agentRows, session.workspaceId!, user.sub).catch(
+            (err: any) =>
+              logger.error(
+                { err: err?.message, sessionId },
+                'Simple task dispatch failed on regenerate',
+              ),
+          )
+        } else {
+          generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId).catch(
+            (err: any) =>
+              logger.error(
+                { err: err?.message, sessionId },
+                'Plan generation failed on regenerate',
+              ),
+          )
+        }
       }
     } else {
       const profile = await profileForDirectSession(session)
@@ -458,11 +485,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             mentionedNames.push(match[1]!.toLowerCase())
           }
 
-          const matchedAgents = agentRows.filter(a => {
+          const matchedAgents = agentRows.filter((a) => {
             const nameLower = a.name.toLowerCase()
             const roleLower = (a.role || '').toLowerCase()
-            return mentionedNames.some(n => 
-              nameLower === n || nameLower.includes(n) || roleLower === n || roleLower.includes(n)
+            return mentionedNames.some(
+              (n) =>
+                nameLower === n ||
+                nameLower.includes(n) ||
+                roleLower === n ||
+                roleLower.includes(n),
             )
           })
 
@@ -479,7 +510,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
               logger.error({ err: err?.message, sessionId }, '@mention agent reply failed'),
             )
           } else {
-            const orchestrator = agentRows.find(a => a.roleType === 'orchestrator')
+            const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
             if (orchestrator) {
               await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
               const [workspace] = await db
@@ -489,7 +520,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
                 .limit(1)
               const profile = toAgentProfile(orchestrator, workspace?.projectPath)
               runAgentReply(sessionId, msg, profile).catch((err: any) =>
-                logger.error({ err: err?.message, sessionId }, '@mention fallback orchestrator reply failed'),
+                logger.error(
+                  { err: err?.message, sessionId },
+                  '@mention fallback orchestrator reply failed',
+                ),
               )
             } else {
               await db.insert(messages).values({
@@ -522,14 +556,24 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
         if (routeResult.decision === 'ConversationLoop') {
           handleSimpleReply(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
-            (err: any) =>
-              logger.error({ err: err?.message, sessionId }, 'Simple reply failed'),
+            (err: any) => logger.error({ err: err?.message, sessionId }, 'Simple reply failed'),
           )
         } else if (routeResult.decision === 'OrchestratorPlan') {
-          generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId).catch(
-            (err: any) =>
-              logger.error({ err: err?.message, sessionId }, 'Plan generation background task failed'),
-          )
+          const complexity = intentRouter.assessComplexity(content)
+          if (complexity === ComplexityLevel.SIMPLE) {
+            dispatchSimpleTask(sessionId, content, agentRows, session.workspaceId!, user.sub).catch(
+              (err: any) =>
+                logger.error({ err: err?.message, sessionId }, 'Simple task dispatch failed'),
+            )
+          } else {
+            generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId).catch(
+              (err: any) =>
+                logger.error(
+                  { err: err?.message, sessionId },
+                  'Plan generation background task failed',
+                ),
+            )
+          }
         }
       } else {
         const profile = session ? await profileForDirectSession(session) : undefined
@@ -665,7 +709,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           payload: { runId, plan, sessionId },
         })
       } catch (err: any) {
-        logger.error({ err: err?.message, sessionId }, 'Orchestrator plan generation failed, using fallback')
+        logger.error(
+          { err: err?.message, sessionId },
+          'Orchestrator plan generation failed, using fallback',
+        )
         const fallbackPlan = buildSimpleFallbackPlan(agentList, content)
         const runId = randomUUID()
 
@@ -683,7 +730,12 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           workspaceId: session.workspaceId!,
           groupSessionId: sessionId,
           type: 'plan.created',
-          payload: { title: fallbackPlan.title, goal: fallbackPlan.goal, taskCount: fallbackPlan.tasks.length, isFallback: true },
+          payload: {
+            title: fallbackPlan.title,
+            goal: fallbackPlan.goal,
+            taskCount: fallbackPlan.tasks.length,
+            isFallback: true,
+          },
         })
 
         const planWithId = { ...fallbackPlan, messageId: loadingCard.id }
@@ -772,9 +824,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .from(workspaceAgents)
         .where(eq(workspaceAgents.workspaceId, session.workspaceId))
       const matched = wsAgents.find(
-        (a) =>
-          a.name.toLowerCase().includes('builder') ||
-          a.role.toLowerCase().includes('构建'),
+        (a) => a.name.toLowerCase().includes('builder') || a.role.toLowerCase().includes('构建'),
       )
       if (matched) builderAgentId = matched.id
     }
@@ -1132,6 +1182,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             kind: 'orchestrator-task',
             orchestratorRunId: runId,
             orchestratorTaskId: task.id,
+            hiddenFromSessionTree: true,
           },
         })
         .returning()
@@ -1259,6 +1310,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             agentName: executionPlan.agents.find((a) => a.id === t.agentId)?.name || t.agentId,
             dependencies: t.dependencies || [],
             taskType: t.taskType,
+            childSessionId: childSessions.get(t.id)?.sessionId ?? null,
           })),
           agents: executionPlan.agents,
         },
@@ -1595,6 +1647,242 @@ async function handleSimpleReply(
   await runAgentReply(sessionId, agentUserMsg, profile)
 }
 
+async function dispatchSimpleTask(
+  sessionId: string,
+  content: string,
+  agents: any[],
+  workspaceId: string,
+  ownerId: string,
+): Promise<void> {
+  logger.info({ sessionId, workspaceId }, 'Dispatching simple task')
+
+  const [insertedSimpleMessage] = await db
+    .insert(messages)
+    .values({
+      sessionId,
+      senderId: 'system',
+      senderType: 'system',
+      type: 'text',
+      content: '🤖 Orchestrator 正在为您协调 Agent 团队...',
+      metadata: { systemEvent: 'simple_task_dispatch' },
+    })
+    .returning()
+
+  broadcastSessionEvent(sessionId, {
+    type: WsEvent.MessageCompleted,
+    payload: { message: insertedSimpleMessage },
+  })
+
+  const plan = buildSimpleFallbackPlan(agents, content)
+  const runId = crypto.randomUUID()
+
+  await db.insert(orchestratorRuns).values({
+    id: runId,
+    workspaceId,
+    groupSessionId: sessionId,
+    status: 'running',
+    plan: plan as unknown as Record<string, unknown>,
+  })
+
+  await emitRunEvent({
+    runId,
+    workspaceId,
+    groupSessionId: sessionId,
+    type: 'run.started',
+    payload: { title: plan.title, goal: plan.goal },
+  })
+
+  const [workspaceRecord] = await db
+    .select()
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1)
+  const projectPath = workspaceRecord?.projectPath ?? null
+
+  const agentRows = await db
+    .select()
+    .from(workspaceAgents)
+    .where(eq(workspaceAgents.workspaceId, workspaceId))
+
+  const agentsByKey = new Map<string, typeof workspaceAgents.$inferSelect>()
+  for (const agent of agentRows) {
+    const matched = plan.agents.find(
+      (pa) =>
+        pa.key === agent.id ||
+        agent.name.toLowerCase() === pa.name.toLowerCase() ||
+        agent.role.toLowerCase().includes(pa.key.toLowerCase()) ||
+        agent.roleType === pa.key,
+    )
+    if (matched) agentsByKey.set(matched.key, agent)
+  }
+
+  const childSessions = new Map<
+    string,
+    { sessionId: string; workspaceId: string; projectPath?: string | null }
+  >()
+
+  for (const [index, task] of plan.tasks.entries()) {
+    const agent = agentsByKey.get(task.agentKey)
+
+    const [workspaceTask] = await db
+      .insert(workspaceTasks)
+      .values({
+        id: task.id,
+        workspaceId,
+        agentId: agent?.id ?? null,
+        title: task.title,
+        description: task.description,
+        status: 'pending',
+        orderIdx: index,
+        runId,
+        phaseId: task.phaseId,
+        dependencies: task.dependencies ?? [],
+        parallelGroup: task.parallelGroup,
+        maxRetries: task.maxRetries ?? 2,
+      })
+      .returning()
+
+    const [childSession] = await db
+      .insert(sessions)
+      .values({
+        title: agent
+          ? `${plan.title} / ${agent.name} / ${task.title.slice(0, 24)}`
+          : `${plan.title} / ${task.title.slice(0, 24)}`,
+        type: 'direct',
+        ownerId,
+        workspaceId,
+        workspaceAgentId: agent?.id ?? null,
+        metadata: {
+          kind: 'orchestrator-task',
+          orchestratorRunId: runId,
+          orchestratorTaskId: task.id,
+          hiddenFromSessionTree: true,
+        },
+      })
+      .returning()
+
+    if (workspaceTask && childSession) {
+      await db
+        .update(workspaceTasks)
+        .set({ sessionId: childSession.id })
+        .where(eq(workspaceTasks.id, workspaceTask.id))
+    }
+
+    if (childSession) {
+      childSessions.set(task.id, {
+        sessionId: childSession.id,
+        workspaceId,
+        projectPath,
+      })
+    }
+  }
+
+  const executionRelations = await loadWorkspaceAgentRelationsForPlanning(workspaceId)
+
+  const executionPlan: ExecutionPlan = {
+    runId,
+    title: plan.title,
+    goal: plan.goal,
+    phases: plan.phases,
+    agentRelations: executionRelations,
+    agents: plan.agents.map((a) => {
+      const dbAgent = agentsByKey.get(a.key)
+      return {
+        id: dbAgent?.id ?? a.key,
+        key: a.key,
+        name: a.name,
+        role: a.role,
+        roleType: dbAgent?.roleType ?? a.roleType,
+        description: a.description,
+        color: a.color,
+        systemPrompt: a.systemPrompt,
+        roleProfile: dbAgent?.roleProfile ?? a.roleProfile,
+        modelId: a.modelId,
+        runtimeType: a.runtimeType ?? 'llm',
+        codeAgentType: a.codeAgentType ?? undefined,
+        capabilityTags: a.capabilityTags ?? [],
+        toolPermissions: a.toolPermissions ?? [],
+        sandboxPolicy: a.sandboxPolicy ?? 'workspace-write',
+      }
+    }),
+    tasks: plan.tasks.map((t) => ({
+      id: t.id,
+      phaseId: t.phaseId,
+      title: t.title,
+      description: t.description,
+      agentId: agentsByKey.get(t.agentKey)?.id ?? t.agentKey,
+      taskType: t.taskType,
+      dependencies: t.dependencies ?? [],
+      parallelGroup: t.parallelGroup,
+      maxRetries: t.maxRetries ?? 2,
+      fallbackAgentId: t.fallbackAgentId,
+      outputContract: normalizeTaskOutputContract(t.outputContract, t.id),
+      validation: normalizeTaskValidation(t.validation),
+      agentSelection: t.agentSelection,
+    })),
+  }
+
+  const initializedPlan = initializeRunLedger(executionPlan)
+
+  await db
+    .update(orchestratorRuns)
+    .set({ plan: initializedPlan as unknown as Record<string, unknown> })
+    .where(eq(orchestratorRuns.id, runId))
+
+  broadcastSessionEvent(sessionId, {
+    type: 'task_board:plan_ready',
+    payload: {
+      runId,
+      plan: {
+        runId,
+        title: initializedPlan.title,
+        goal: initializedPlan.goal,
+        collaborationMode: initializedPlan.collaborationMode || 'mapreduce',
+        phases: initializedPlan.phases || [],
+        tasks: initializedPlan.tasks.map((t) => ({
+          id: t.id,
+          phaseId: t.phaseId || '',
+          title: t.title,
+          description: t.description,
+          agentId: t.agentId,
+          agentKey: initializedPlan.agents.find((a) => a.id === t.agentId)?.key || t.agentId,
+          agentName: initializedPlan.agents.find((a) => a.id === t.agentId)?.name || t.agentId,
+          dependencies: t.dependencies || [],
+          taskType: t.taskType,
+          childSessionId: childSessions.get(t.id)?.sessionId ?? null,
+        })),
+        agents: initializedPlan.agents,
+      },
+      sessionId,
+    },
+  })
+
+  const engine = new OrchestratorEngine()
+  engine
+    .startRun({
+      runId,
+      groupSessionId: sessionId,
+      workspaceId,
+      plan: initializedPlan,
+      childSessions,
+    })
+    .catch(async (err: any) => {
+      logger.error({ err: err?.message, runId }, 'Simple task orchestrator engine start failed')
+      await db
+        .update(orchestratorRuns)
+        .set({ status: 'failed' })
+        .where(eq(orchestratorRuns.id, runId))
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId: sessionId,
+        type: 'run.failed',
+        severity: 'error',
+        payload: { error: err?.message || '简单任务编排引擎启动失败' },
+      })
+    })
+}
+
 async function generatePlanAndPushTaskBoard(
   sessionId: string,
   content: string,
@@ -1691,3 +1979,5 @@ function normalizeFallbackGoal(content?: string): string {
       .trim() || '完成多 Agent 协作任务'
   )
 }
+
+

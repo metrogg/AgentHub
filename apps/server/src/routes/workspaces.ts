@@ -20,7 +20,7 @@ import { workspaceAgentRunProfile, getActiveRunSessionIds } from '../services/wo
 import { taskExecutionService } from '../services/execution/task-execution-service'
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
 import { createAutoWorkspaceFolder } from '../services/workspace/auto-workspace'
-import { TaskStatus } from '@agenthub/shared'
+import { TaskStatus, TEAM_TEMPLATES, rolePresetValues, type AgentRoleType } from '@agenthub/shared'
 
 // ---------- Validation schemas ----------
 
@@ -44,6 +44,12 @@ const updateWorkspaceSchema = z.object({
 })
 
 const openWorkspaceFolderSchema = z.object({
+  projectPath: z.string().max(1000).nullable().optional(),
+})
+
+const createFromTemplateSchema = z.object({
+  templateId: z.string().min(1),
+  name: z.string().max(120).optional(),
   projectPath: z.string().max(1000).nullable().optional(),
 })
 
@@ -196,6 +202,106 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     }
     ensureHarnessPresets(folder.projectPath)
     return c.json(await loadWorkspaceFull(ws.id, user.sub))
+  })
+
+  // Create workspace from team template
+  .post('/create-from-template', zValidator('json', createFromTemplateSchema), async (c) => {
+    const user = c.get('user')
+    const input = c.req.valid('json')
+
+    const template = TEAM_TEMPLATES.find((t) => t.id === input.templateId)
+    if (!template) {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '模板不存在', { templateId: input.templateId })
+    }
+
+    const projectPath = ensureProjectDirectory(input.projectPath?.trim() || null)
+    const wsName = (input.name?.trim() || template.name).slice(0, 120)
+
+    const [ws] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: user.sub,
+        name: wsName,
+        goal: template.defaultGoal,
+        projectPath,
+      })
+      .returning()
+    if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
+
+    const agentValues = template.agents.map((agent, index) => {
+      if (agent.roleType !== 'custom') {
+        const preset = rolePresetValues(agent.roleType)
+        return {
+          workspaceId: ws.id,
+          name: agent.name,
+          role: agent.role,
+          roleType: agent.roleType,
+          description: preset.description,
+          systemPrompt: agent.systemPrompt,
+          roleProfile: preset.roleProfile,
+          color: preset.color,
+          runtimeType: preset.runtimeType,
+          codeAgentType: preset.codeAgentType,
+          capabilityTags: preset.capabilityTags,
+          toolPermissions: agent.toolPermissions,
+          sandboxPolicy: agent.sandboxPolicy,
+          contextPolicy: preset.contextPolicy,
+          autoInvoke: preset.autoInvoke,
+          approvalRequired: preset.approvalRequired,
+          orderIdx: index,
+        }
+      }
+      return {
+        workspaceId: ws.id,
+        name: agent.name,
+        role: agent.role,
+        roleType: agent.roleType,
+        description: '',
+        systemPrompt: agent.systemPrompt,
+        color: '#6366f1',
+        runtimeType: 'llm' as const,
+        codeAgentType: null as 'codex' | 'claude-code' | 'opencode' | 'gemini' | null,
+        capabilityTags: [] as string[],
+        toolPermissions: agent.toolPermissions,
+        sandboxPolicy: agent.sandboxPolicy,
+        contextPolicy: 'workspace-aware' as const,
+        autoInvoke: true,
+        approvalRequired: true,
+        orderIdx: index,
+      }
+    })
+
+    const createdAgents = await db.insert(workspaceAgents).values(agentValues).returning()
+
+    const nameToId = new Map(createdAgents.map((a) => [a.name, a.id]))
+    const relationValues = template.relations.flatMap((rel) => {
+      const sourceId = nameToId.get(rel.from)
+      const targetId = nameToId.get(rel.to)
+      if (!sourceId || !targetId) return []
+      return [
+        {
+          workspaceId: ws.id,
+          sourceAgentId: sourceId,
+          targetAgentId: targetId,
+          relationType: rel.type,
+          note: null as string | null,
+        },
+      ]
+    })
+
+    let createdRelations: typeof workspaceAgentRelations.$inferSelect[] = []
+    if (relationValues.length) {
+      createdRelations = await db.insert(workspaceAgentRelations).values(relationValues).returning()
+    }
+
+    ensureHarnessPresets(projectPath)
+    await touchWorkspace(ws.id)
+
+    return c.json({
+      workspace: ws,
+      agents: createdAgents,
+      relations: createdRelations,
+    })
   })
 
   // Open a native folder picker

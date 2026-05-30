@@ -61,16 +61,14 @@ export async function createWorkspaceGroupSession(
     .returning()
   if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '群组会话创建失败')
 
-  await db
-    .insert(sessionMembers)
-    .values([
-      { sessionId: session.id, memberType: 'user' as const, memberId: ownerId },
-      ...agents.map((agent) => ({
-        sessionId: session.id,
-        memberType: 'agent' as const,
-        memberId: agent.id,
-      })),
-    ])
+  await db.insert(sessionMembers).values([
+    { sessionId: session.id, memberType: 'user' as const, memberId: ownerId },
+    ...agents.map((agent) => ({
+      sessionId: session.id,
+      memberType: 'agent' as const,
+      memberId: agent.id,
+    })),
+  ])
 
   return session
 }
@@ -149,10 +147,11 @@ export async function createOrchestratorChildSession(
       ownerId,
       workspaceId,
       workspaceAgentId: agent?.id ?? null,
-      metadata: { kind: 'orchestrator-task' },
+      metadata: { kind: 'orchestrator-task', hiddenFromSessionTree: true },
     })
     .returning()
-  if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Orchestrator 子会话创建失败')
+  if (!created)
+    throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Orchestrator 子会话创建失败')
   return created
 }
 

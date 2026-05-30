@@ -75,6 +75,12 @@ export const DEFAULT_ENV_ALLOWLIST = [
   'NODE_ENV',
 ]
 
+export function resolveDefaultWorkDir(runId: string): string {
+  const dir = resolve(projectRoot, 'storage', '.agenthub', 'workspaces', runId)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
 export function validateEnvelope(envelope: AgentExecutionEnvelope): void {
   if (!envelope.runId) throw new Error('AgentExecutionEnvelope.runId is required')
   if (!envelope.taskId) throw new Error('AgentExecutionEnvelope.taskId is required')
@@ -99,7 +105,7 @@ export function buildExecutionCwd(envelope: AgentExecutionEnvelope): {
     return { cwd: path, label: path ?? '(只读模式，无项目目录)', valid: true }
   }
 
-  const wt = envelope.worktreePath ?? ensureNoProjectExecutionDir(envelope)
+  const wt = envelope.worktreePath ?? (envelope.projectPath ? null : resolveDefaultWorkDir(envelope.runId))
   if (!wt) {
     return {
       cwd: undefined,
