@@ -456,11 +456,50 @@ export class OrchestratorEngine {
                 maxRetries: task.maxRetries,
               })
 
+              await emitRunEvent({
+                runId,
+                workspaceId,
+                groupSessionId,
+                taskId: task.id,
+                agentId: task.agentId,
+                type: 'task.queued',
+                severity: 'info',
+                payload: {
+                  strategy: 'supervisor_supplement',
+                  title: task.title,
+                  description: task.description,
+                  phaseId: task.phaseId,
+                  taskType: task.taskType,
+                  agentName: agent.name,
+                  agentId: task.agentId,
+                  childSessionId: childSession.id,
+                  dependencies: task.dependencies ?? [],
+                  round: supervisorRound,
+                },
+              })
+
               newTasks.push(task)
             }
 
-            this.scheduler.addTasksToRun(runId, newTasks)
-            plan.tasks.push(...newTasks)
+            for (const newTask of newTasks) {
+              if (!plan.tasks.some((existing) => existing.id === newTask.id)) {
+                plan.tasks.push(newTask)
+              }
+            }
+
+            const supplementResults = await this.scheduler.executePlan(
+              {
+                runId,
+                title: `Supervisor supplement: ${plan.title}`,
+                goal: plan.goal,
+                agents: plan.agents,
+                phases: plan.phases,
+                tasks: newTasks,
+              },
+              executor,
+              mode,
+            )
+            results.push(...supplementResults)
 
             await emitRunEvent({
               runId,
@@ -728,7 +767,18 @@ export class OrchestratorEngine {
               agentId: newTask.agentId,
               type: 'task.queued',
               severity: 'warning',
-              payload: { strategy: 'task_split', title: newTask.title, phaseId: newTask.phaseId, reason: replan.reason },
+              payload: {
+                strategy: 'task_split',
+                title: newTask.title,
+                description: newTask.description,
+                phaseId: newTask.phaseId,
+                taskType: newTask.taskType,
+                agentName: newAgent?.name ?? newTask.agentId,
+                agentId: newTask.agentId,
+                childSessionId: childSession.id,
+                dependencies: newTask.dependencies ?? [],
+                reason: replan.reason,
+              },
             })
           }
           await emitRunEvent({
@@ -788,7 +838,17 @@ export class OrchestratorEngine {
                   agentId: newTask.agentId,
                   type: 'task.queued',
                   severity: 'warning',
-                  payload: { strategy: 'global_replan', title: newTask.title, phaseId: newTask.phaseId },
+                  payload: {
+                    strategy: 'global_replan',
+                    title: newTask.title,
+                    description: newTask.description,
+                    phaseId: newTask.phaseId,
+                    taskType: newTask.taskType,
+                    agentName: newAgent?.name ?? newTask.agentId,
+                    agentId: newTask.agentId,
+                    childSessionId: childSession.id,
+                    dependencies: newTask.dependencies ?? [],
+                  },
                 })
               }
               this.scheduler.addTasksToRun(runId, tasksToAdd)
@@ -1766,6 +1826,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             agentId: verifierAgent.id,
             dependencies: [codeTask.id],
             taskType: 'test',
+            phaseId: codeTask.phaseId ?? 'verification',
             maxRetries: 1,
           }
 
@@ -1794,6 +1855,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             sessionId: verifySession.id,
             orderIdx: plan.tasks.length,
             runId,
+            phaseId: verifyTask.phaseId,
             dependencies: [codeTask.id],
             maxRetries: 1,
           })
@@ -1809,7 +1871,17 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             agentId: verifierAgent.id,
             type: 'task.queued',
             severity: 'info',
-            payload: { title: verifyTask.title, reason: 'Auto-verify after code task', parentTaskId: codeTask.id },
+            payload: {
+              title: verifyTask.title,
+              description: verifyTask.description,
+              phaseId: verifyTask.phaseId ?? codeTask.phaseId ?? 'verification',
+              taskType: verifyTask.taskType,
+              agentName: verifierAgent.name,
+              agentId: verifierAgent.id,
+              childSessionId: verifySession.id,
+              reason: 'Auto-verify after code task',
+              parentTaskId: codeTask.id,
+            },
           })
         }
       }
@@ -1827,6 +1899,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         agentId: reviewerAgent.id,
         dependencies: verifyTaskId ? [verifyTaskId] : [codeTask.id],
         taskType: 'review',
+        phaseId: codeTask.phaseId ?? 'verification',
         maxRetries: 1,
       }
 
@@ -1855,6 +1928,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         sessionId: reviewSession.id,
         orderIdx: plan.tasks.length,
         runId,
+        phaseId: reviewTask.phaseId,
         dependencies: verifyTaskId ? [verifyTaskId] : [codeTask.id],
         maxRetries: 1,
       })
@@ -1870,7 +1944,17 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         agentId: reviewerAgent.id,
         type: 'task.queued',
         severity: 'info',
-        payload: { title: reviewTask.title, reason: 'Auto-review after code task', parentTaskId: codeTask.id },
+        payload: {
+          title: reviewTask.title,
+          description: reviewTask.description,
+          phaseId: reviewTask.phaseId ?? codeTask.phaseId ?? 'verification',
+          taskType: reviewTask.taskType,
+          agentName: reviewerAgent.name,
+          agentId: reviewerAgent.id,
+          childSessionId: reviewSession.id,
+          reason: 'Auto-review after code task',
+          parentTaskId: codeTask.id,
+        },
       })
     }
 
@@ -2140,6 +2224,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       agentId: agent.id,
       dependencies: [],
       taskType: taskType as ExecutionTask['taskType'],
+      phaseId: parentTask.phaseId ?? 'followup',
       maxRetries: 1,
     }
 
@@ -2168,6 +2253,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       sessionId: childSession.id,
       orderIdx: plan.tasks.length,
       runId,
+      phaseId: task.phaseId,
       dependencies: task.dependencies,
       maxRetries: task.maxRetries,
     })
@@ -2182,7 +2268,17 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       agentId: agent.id,
       type: 'task.queued',
       severity: 'info',
-      payload: { title: task.title, reason: `团长动态交接: 基于 "${parentTask.title}" 产出自动创建`, parentTaskId: parentTask.id },
+      payload: {
+        title: task.title,
+        description: task.description,
+        phaseId: task.phaseId ?? parentTask.phaseId ?? 'followup',
+        taskType: task.taskType,
+        agentName: agent.name,
+        agentId: agent.id,
+        childSessionId: childSession.id,
+        reason: `团长动态交接: 基于 "${parentTask.title}" 产出自动创建`,
+        parentTaskId: parentTask.id,
+      },
     })
 
     logger.info({ taskId: task.id, parentTaskId: parentTask.id, agentName: agent.name }, 'Follow-up task created via rule engine')

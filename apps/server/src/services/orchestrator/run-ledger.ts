@@ -62,21 +62,43 @@ export async function updateProgressLedgerFromEvent(input: EmitRunEventInput): P
     case 'task.queued':
       if (taskId && !taskLedger.tasks.some((task) => task.id === taskId)) {
         const phaseId = payloadText(payload.phaseId) ?? progressLedger.currentPhaseId ?? 'execution'
-        const task = buildLedgerTask(
-          {
-            id: taskId,
-            phaseId,
-            title: payloadText(payload.title) ?? taskId,
-            description: payloadText(payload.description) ?? '',
-            agentId: input.agentId ?? '',
-            dependencies: [],
-            maxRetries: 2,
-          },
+        const agentId = input.agentId ?? payloadText(payload.agentId) ?? ''
+        const queuedTask: ExecutionTask = {
+          id: taskId,
           phaseId,
-        )
+          title: payloadText(payload.title) ?? taskId,
+          description: payloadText(payload.description) ?? '',
+          agentId,
+          dependencies: arrayOfStrings(payload.dependencies),
+          taskType: payloadText(payload.taskType) as ExecutionTask['taskType'],
+          maxRetries: typeof payload.maxRetries === 'number' ? payload.maxRetries : 2,
+        }
+        const task = buildLedgerTask(queuedTask, phaseId)
+        if (!plan.tasks.some((item) => item.id === taskId)) plan.tasks.push(queuedTask)
+        let planPhase = plan.phases?.find((item) => item.id === phaseId)
+        if (!planPhase) {
+          planPhase = {
+            id: phaseId,
+            title: titleFromPhaseId(phaseId),
+            purpose: purposeFromPhaseId(phaseId),
+            taskIds: [],
+          }
+          plan.phases = [...(plan.phases ?? []), planPhase]
+        }
+        if (!planPhase.taskIds.includes(taskId)) planPhase.taskIds.push(taskId)
         taskLedger.tasks.push(task)
-        const phase = taskLedger.phases.find((item) => item.id === phaseId)
+        let phase = taskLedger.phases.find((item) => item.id === phaseId)
+        if (!phase) {
+          phase = {
+            id: phaseId,
+            title: titleFromPhaseId(phaseId),
+            purpose: purposeFromPhaseId(phaseId),
+            taskIds: [],
+          }
+          taskLedger.phases.push(phase)
+        }
         if (phase && !phase.taskIds.includes(taskId)) phase.taskIds.push(taskId)
+        addAgentAssignment(taskLedger, agentId, taskId)
       }
       moveTask(progressLedger, taskId, TaskStatus.Pending)
       setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Pending)
@@ -117,7 +139,12 @@ export async function updateProgressLedgerFromEvent(input: EmitRunEventInput): P
         reason: payloadText(payload.reason),
         at: now,
       })
-      updateLedgerTaskAgent(taskLedger, taskId, payloadText(payload.toAgentId) ?? input.agentId ?? undefined)
+      reassignLedgerTaskAgent(
+        taskLedger,
+        taskId,
+        payloadText(payload.fromAgentId),
+        payloadText(payload.toAgentId) ?? input.agentId ?? undefined,
+      )
       break
     case 'blackboard.written': {
       const key = payloadText(payload.key)
@@ -302,10 +329,30 @@ function setLedgerTaskStatus(taskLedger: TaskLedger, taskId: string | undefined,
   if (task) task.status = status
 }
 
-function updateLedgerTaskAgent(taskLedger: TaskLedger, taskId: string | undefined, agentId: string | undefined) {
+function reassignLedgerTaskAgent(
+  taskLedger: TaskLedger,
+  taskId: string | undefined,
+  fromAgentId: string | undefined,
+  agentId: string | undefined,
+) {
   if (!taskId || !agentId) return
   const task = taskLedger.tasks.find((item) => item.id === taskId)
   if (task) task.agentId = agentId
+  if (fromAgentId) {
+    const previous = taskLedger.agentAssignments.find((item) => item.agentId === fromAgentId)
+    if (previous) previous.taskIds = previous.taskIds.filter((id) => id !== taskId)
+  }
+  addAgentAssignment(taskLedger, agentId, taskId)
+}
+
+function addAgentAssignment(taskLedger: TaskLedger, agentId: string | undefined, taskId: string | undefined) {
+  if (!agentId || !taskId) return
+  let assignment = taskLedger.agentAssignments.find((item) => item.agentId === agentId)
+  if (!assignment) {
+    assignment = { agentId, taskIds: [] }
+    taskLedger.agentAssignments.push(assignment)
+  }
+  if (!assignment.taskIds.includes(taskId)) assignment.taskIds.push(taskId)
 }
 
 function cancelUnfinishedTasks(taskLedger: TaskLedger, progressLedger: ProgressLedger) {
