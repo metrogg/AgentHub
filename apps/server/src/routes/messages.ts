@@ -326,6 +326,20 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
               nameLower === n || nameLower.includes(n) || roleLower === n || roleLower.includes(n),
           )
         })
+        const mentionedOrchestrator =
+          matchedAgents.some((agent) => agent.roleType === 'orchestrator') ||
+          mentionedNames.some((name) => /^(orchestrator|协调器|总指挥)$/i.test(name))
+
+        if (mentionedOrchestrator && intentRouter.hasOrchestratorSignals(content)) {
+          generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
+            (err: any) =>
+              logger.error(
+                { err: err?.message, sessionId },
+                '@orchestrator plan generation failed on regenerate',
+              ),
+          )
+          return c.json({ removedMessageId: message.id })
+        }
 
         if (matchedAgents.length > 0) {
           const targetAgent = matchedAgents[0]!
@@ -334,7 +348,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             .from(workspaces)
             .where(eq(workspaces.id, session.workspaceId))
             .limit(1)
-          const profile = toAgentProfile(targetAgent, workspace?.projectPath)
+          const profile =
+            targetAgent.roleType === 'orchestrator'
+              ? toCoordinatorProfile(targetAgent, workspace?.projectPath)
+              : toAgentProfile(targetAgent, workspace?.projectPath)
           runAgentReply(sessionId, previousUser, profile).catch((err: any) =>
             logger.error(
               { err: err?.message, sessionId },
@@ -349,7 +366,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
               .from(workspaces)
               .where(eq(workspaces.id, session.workspaceId))
               .limit(1)
-            const profile = toAgentProfile(orchestrator, workspace?.projectPath)
+            const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
             runAgentReply(sessionId, previousUser, profile).catch((err: any) =>
               logger.error(
                 { err: err?.message, sessionId },
@@ -442,6 +459,17 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
                 roleLower.includes(n),
             )
           })
+          const mentionedOrchestrator =
+            matchedAgents.some((agent) => agent.roleType === 'orchestrator') ||
+            mentionedNames.some((name) => /^(orchestrator|协调器|总指挥)$/i.test(name))
+
+          if (mentionedOrchestrator && intentRouter.hasOrchestratorSignals(content)) {
+            generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
+              (err: any) =>
+                logger.error({ err: err?.message, sessionId }, '@orchestrator plan generation failed'),
+            )
+            return c.json(msg)
+          }
 
           if (matchedAgents.length > 0) {
             const targetAgent = matchedAgents[0]!
@@ -450,7 +478,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
               .from(workspaces)
               .where(eq(workspaces.id, session.workspaceId))
               .limit(1)
-            const profile = toAgentProfile(targetAgent, workspace?.projectPath)
+            const profile =
+              targetAgent.roleType === 'orchestrator'
+                ? toCoordinatorProfile(targetAgent, workspace?.projectPath)
+                : toAgentProfile(targetAgent, workspace?.projectPath)
             runAgentReply(sessionId, msg, profile).catch((err: any) =>
               logger.error({ err: err?.message, sessionId }, '@mention agent reply failed'),
             )
@@ -462,7 +493,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
                 .from(workspaces)
                 .where(eq(workspaces.id, session.workspaceId))
                 .limit(1)
-              const profile = toAgentProfile(orchestrator, workspace?.projectPath)
+              const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
               runAgentReply(sessionId, msg, profile).catch((err: any) =>
                 logger.error(
                   { err: err?.message, sessionId },
@@ -664,6 +695,19 @@ function toAgentProfile(
   return buildAgentProfile(agent, projectPath)
 }
 
+function toCoordinatorProfile(
+  agent: typeof workspaceAgents.$inferSelect,
+  projectPath?: string | null,
+): AgentRunProfile {
+  return {
+    ...buildAgentProfile(agent, projectPath),
+    runtimeType: 'llm',
+    codeAgentType: undefined,
+    sandboxPolicy: 'read-only',
+    toolPermissions: ['chat', 'workspace:read'],
+  }
+}
+
 async function profileForDirectSession(session: typeof sessions.$inferSelect) {
   if (!session.workspaceAgentId) return undefined
   const [agent] = await db
@@ -835,7 +879,7 @@ async function handleSimpleReply(
     .where(eq(workspaces.id, workspaceId))
     .limit(1)
 
-  const profile = toAgentProfile(orchestrator, workspace?.projectPath)
+  const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
 
   const agentUserMsg: MessageRow = {
     id: randomUUID(),
