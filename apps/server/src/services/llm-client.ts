@@ -139,19 +139,26 @@ function defaultModel(provider: string): string {
   return isAnthropicProvider(provider) ? env.ANTHROPIC_MODEL : env.OPENAI_MODEL
 }
 
-function providerEnvApiKey(provider: string): { value?: string; source?: string } {
+function isOpenAiProvider(provider: string, baseUrl?: string): boolean {
+  const normalized = normalizeProvider(provider)
+  return normalized === 'openai' || Boolean(baseUrl?.includes('api.openai.com'))
+}
+
+function providerEnvApiKey(provider: string, baseUrl?: string): { value?: string; source?: string } {
   const normalized = normalizeProvider(provider)
   const directName = `${normalized.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}_API_KEY`
   const direct = readEnv(directName)
   if (direct) return { value: direct, source: directName }
 
-  if (isAnthropicProvider(provider)) {
+  if (isAnthropicProvider(provider, baseUrl)) {
     const value = clean(env.ANTHROPIC_API_KEY)
     return value ? { value, source: 'ANTHROPIC_API_KEY' } : {}
   }
 
-  const openAiValue = clean(env.OPENAI_API_KEY)
-  if (openAiValue) return { value: openAiValue, source: 'OPENAI_API_KEY' }
+  if (isOpenAiProvider(provider, baseUrl)) {
+    const openAiValue = clean(env.OPENAI_API_KEY)
+    if (openAiValue) return { value: openAiValue, source: 'OPENAI_API_KEY' }
+  }
 
   const generic = clean(env.LLM_API_KEY)
   return generic ? { value: generic, source: 'LLM_API_KEY' } : {}
@@ -160,7 +167,7 @@ function providerEnvApiKey(provider: string): { value?: string; source?: string 
 function normalizeConfig(candidate: ProviderCandidate, source: 'settings' | 'env'): LlmRuntimeConfig {
   const provider = normalizeProvider(candidate.provider)
   const baseUrl = (clean(candidate.baseUrl) ?? defaultBaseUrl(provider)).replace(/\/$/, '')
-  const fallbackKey = providerEnvApiKey(provider)
+  const fallbackKey = providerEnvApiKey(provider, baseUrl)
   const apiKey = clean(candidate.apiKey) ?? fallbackKey.value ?? null
 
   return {
@@ -194,7 +201,7 @@ function pickSettingsCandidate(map: Record<string, string>, selectedModelId?: st
   const catalog = parseCatalog(map.MODEL_CATALOG)
   const activeId = clean(selectedModelId) ?? clean(map.ACTIVE_MODEL_ID)
   const selected = activeId
-    ? catalog.find((item) => item.id === activeId && item.enabled !== false)
+    ? catalog.find((item) => (item.id === activeId || item.modelId === activeId) && item.enabled !== false)
     : undefined
   const firstConfigured = catalog.find((item) => {
     if (item.enabled === false || !clean(item.modelId)) return false
@@ -651,7 +658,13 @@ async function formatHttpError(label: string, res: Response, config: LlmRuntimeC
   })
   const providerMessage = extractProviderErrorMessage(body)
   const details = providerMessage || body || `HTTP ${res.status}`
-  return `${label}失败，状态码 ${res.status}：${redactSensitive(details.slice(0, 500), [config.apiKey])}`
+  const source = [
+    `provider=${config.provider}`,
+    `model=${config.model}`,
+    `baseUrl=${config.baseUrl}`,
+    `apiKeySource=${config.apiKeySource ?? 'unknown'}`,
+  ].join(', ')
+  return `${label} failed with status ${res.status} (${source}): ${redactSensitive(details.slice(0, 500), [config.apiKey])}`
 }
 
 function extractProviderErrorMessage(body: string): string | null {

@@ -3,8 +3,8 @@ import { homedir, platform, tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const serviceDir = dirname(fileURLToPath(import.meta.url))
-const projectRoot = resolve(serviceDir, '../../../..')
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const projectRoot = resolve(__dirname, '../../../..')
 
 /**
  * AgentExecutionEnvelope — 每次 Agent 执行的强制上下文信封。
@@ -140,7 +140,7 @@ function noProjectExecutionRoot() {
     process.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
     process.env.AGENTHUB_USER_CACHE_DIR?.trim()
   if (configured) return resolve(configured, '.AgentHub')
-  return resolve(projectRoot, 'storage', '.AgentHub')
+  return agentHubUserCacheRoot()
 }
 
 export function agentHubUserCacheRoot() {

@@ -1,12 +1,14 @@
 import { create } from 'zustand'
 import {
   api,
+  type AgentConfigInput,
   type ChatAttachment,
 
   type Message,
   type Session,
   type Workspace,
   type WorkspaceAgent,
+  type WorkspaceFull,
 } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
@@ -163,10 +165,20 @@ interface ChatState {
   setSessionWorkspace: (sessionId: string, workspaceId: string | null) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   clearMessages: (sessionId: string) => Promise<void>
-  sendMessage: (content: string) => Promise<{ groupSessionId?: string } | undefined>
+  sendMessage: (
+    content: string,
+    options?: {
+      displayContent?: string
+      replyToMessageId?: string | null
+    },
+  ) => Promise<{ groupSessionId?: string } | undefined>
   sendMessageToSession: (
     sessionId: string,
     content: string,
+    options?: {
+      displayContent?: string
+      replyToMessageId?: string | null
+    },
   ) => Promise<{ groupSessionId?: string } | undefined>
   editMessage: (messageId: string, content: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
@@ -313,8 +325,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async setSessionWorkspace(sessionId, workspaceId) {
-    const session = await api.updateSession(sessionId, { workspaceId, workspaceAgentId: null })
-    const full = workspaceId ? await api.getWorkspace(workspaceId) : null
+    const state = get()
+    const currentSession =
+      state.currentSession?.id === sessionId
+        ? state.currentSession
+        : state.sessions.find((item) => item.id === sessionId) ?? null
+
+    let workspaceAgentId: string | null = null
+    let full: WorkspaceFull | null = null
+    if (workspaceId) {
+      full = await api.getWorkspace(workspaceId)
+      if (currentSession?.type === SessionType.Direct && currentSession.workspaceAgentId) {
+        const currentAgent =
+          state.currentWorkspaceAgents.find((item) => item.id === currentSession.workspaceAgentId) ??
+          null
+        workspaceAgentId =
+          full.agents.find((item) => item.id === currentSession.workspaceAgentId)?.id ??
+          full.agents.find((item) => sameAgentIdentity(item, currentAgent))?.id ??
+          null
+
+        if (!workspaceAgentId && currentAgent) {
+          const created = await api.addWorkspaceAgent(workspaceId, workspaceAgentToConfigInput(currentAgent))
+          full = { ...full, agents: [...full.agents, created] }
+          workspaceAgentId = created.id
+        } else if (!workspaceAgentId && full.agents.length === 1) {
+          workspaceAgentId = full.agents[0]!.id
+        }
+      } else if (full.agents.length === 1) {
+        workspaceAgentId = full.agents[0]!.id
+      }
+    }
+
+    const session = await api.updateSession(sessionId, { workspaceId, workspaceAgentId })
     if (workspaceId && full) {
       workspaceDetailsCache.set(workspaceId, {
         workspace: full.workspace,
@@ -354,13 +396,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  async sendMessage(content) {
+  async sendMessage(content, options) {
     const sessionId = get().currentSessionId
     if (!sessionId) return undefined
-    return get().sendMessageToSession(sessionId, content)
+    return get().sendMessageToSession(sessionId, content, options)
   },
 
-  async sendMessageToSession(sessionId, content) {
+  async sendMessageToSession(sessionId, content, options) {
     cancelledSessions.delete(sessionId)
     set({ agentTyping: true })
     const attachments = get().pendingAttachments
@@ -368,11 +410,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ? appendAttachmentNote(content, attachments)
       : content
     try {
-      const replyToMessageId = get().replyingToMessageId
+      const replyToMessageId = options?.replyToMessageId ?? get().replyingToMessageId
       const msg = await api.sendMessageWithModel(sessionId, {
         content: contentForAgent,
         attachments,
-        displayContent: attachments.length ? content : undefined,
+        displayContent: options?.displayContent ?? (attachments.length ? content : undefined),
         replyToMessageId,
       })
       set((s) => ({
@@ -587,27 +629,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (cancelledSessions.has(sessionId)) break
         const { messageId, codeAgentRun } = e.payload as {
           messageId: string
-          codeAgentRun: CodeAgentRunMetadata
-          agentId?: string
-          agentName?: string
+          codeAgentRun: Partial<CodeAgentRunMetadata>
         }
         set((s) => {
           const current = s.streamingMessage
+          const nextCodeAgentRun =
+            s.streamingCodeAgentRun && codeAgentRun
+              ? ({ ...s.streamingCodeAgentRun, ...codeAgentRun } as CodeAgentRunMetadata)
+              : (codeAgentRun as CodeAgentRunMetadata)
           return {
             streamingMessage:
               current?.id === messageId
-                ? {
-                    ...current,
-                    agentId: current.agentId ?? e.payload.agentId,
-                    agentName: current.agentName ?? e.payload.agentName,
-                  }
-                : {
-                    id: messageId,
-                    content: current?.content ?? '',
-                    agentId: e.payload.agentId,
-                    agentName: e.payload.agentName,
-                  },
-            streamingCodeAgentRun: codeAgentRun,
+                ? current
+                : { id: messageId, content: current?.content ?? '' },
+            streamingCodeAgentRun: nextCodeAgentRun,
             agentTyping: false,
           }
         })
@@ -953,6 +988,47 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return wsClient.on((e) => get().handleWSEvent(e))
   },
 }))
+
+function sameAgentIdentity(agent: WorkspaceAgent, current: WorkspaceAgent | null) {
+  if (!current) return false
+  return [
+    normalizeMatchText(agent.name),
+    normalizeMatchText(agent.role),
+    normalizeMatchText(agent.runtimeType ?? ''),
+    normalizeMatchText(agent.runtimeType === 'code-agent' ? agent.codeAgentType ?? '' : ''),
+  ].join('|') === [
+    normalizeMatchText(current.name),
+    normalizeMatchText(current.role),
+    normalizeMatchText(current.runtimeType ?? ''),
+    normalizeMatchText(current.runtimeType === 'code-agent' ? current.codeAgentType ?? '' : ''),
+  ].join('|')
+}
+
+function workspaceAgentToConfigInput(agent: WorkspaceAgent): AgentConfigInput {
+  return {
+    name: agent.name,
+    role: agent.role,
+    roleType: agent.roleType ?? 'custom',
+    description: agent.description ?? '',
+    avatar: agent.avatar ?? null,
+    systemPrompt: agent.systemPrompt ?? '',
+    roleProfile: agent.roleProfile ?? null,
+    color: agent.color ?? '#111827',
+    modelId: agent.modelId ?? null,
+    runtimeType: agent.runtimeType,
+    codeAgentType: agent.codeAgentType,
+    capabilityTags: [...agent.capabilityTags],
+    toolPermissions: [...agent.toolPermissions],
+    sandboxPolicy: agent.sandboxPolicy,
+    contextPolicy: agent.contextPolicy,
+    autoInvoke: agent.autoInvoke,
+    approvalRequired: agent.approvalRequired,
+  }
+}
+
+function normalizeMatchText(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase()
+}
 
 function appendAttachmentNote(content: string, attachments: ChatAttachment[]) {
   const note = attachments

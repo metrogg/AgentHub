@@ -103,7 +103,6 @@ import {
   type Workspace,
   type WorkspaceAgent,
 } from '../../lib/api'
-import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
 import {
@@ -136,6 +135,7 @@ import { TypewriterHeading } from '../chat/TypewriterHeading'
 import { GroupAvatar } from '../chat/GroupAvatar'
 import {
   agentLibraryChangeEvent,
+  flushAgentLibraryServerSync,
   loadAgentLibrary,
   saveAgentToLibrary,
   toAgentConfigInput,
@@ -274,9 +274,9 @@ export const Thread: FC = () => {
               agentName={
                 currentSession?.workspaceAgentId
                   ? (useChatStore
-                      .getState()
-                      .currentWorkspaceAgents.find((a) => a.id === currentSession?.workspaceAgentId)
-                      ?.name ?? 'Agent')
+                    .getState()
+                    .currentWorkspaceAgents.find((a) => a.id === currentSession?.workspaceAgentId)
+                    ?.name ?? 'Agent')
                   : 'Agent'
               }
               onBack={() => selectAgentTab(null)}
@@ -488,6 +488,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
   const selectSession = useChatStore((state) => state.selectSession)
   const agent = agents.find((item) => item.id === session?.workspaceAgentId)
   const [models, setModels] = useState<ModelCatalogItem[]>([])
+  const usesCodingCli = agent?.runtimeType === 'code-agent'
   const [draft, setDraft] = useState({
     role: '',
     description: '',
@@ -495,8 +496,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     modelId: '',
   })
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const modelChoices = filterModelsForCodeAgent(models, agent?.codeAgentType, draft.modelId)
-  const selectedModelName = modelName(draft.modelId || null, models)
+  const modelChoices = models
 
   useEffect(() => {
     if (!open) return
@@ -521,7 +521,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
       modelId: agent?.modelId ?? '',
     })
     setSaveState('idle')
-  }, [agent?.id, agent?.role, agent?.description, agent?.systemPrompt, agent?.modelId])
+  }, [agent?.id, agent?.role, agent?.description, agent?.systemPrompt, agent?.modelId, agent?.runtimeType])
 
   async function saveAgentPatch(
     patch: Partial<Pick<WorkspaceAgent, 'role' | 'description' | 'systemPrompt' | 'modelId'>>,
@@ -531,6 +531,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     try {
       await api.updateWorkspaceAgent(workspace.id, agent.id, patch)
       syncAgentLibraryFromWorkspaceAgent({ ...agent, ...patch })
+      await flushAgentLibraryServerSync()
       if (session?.id) await selectSession(session.id)
       setSaveState('saved')
       window.setTimeout(() => setSaveState('idle'), 1400)
@@ -622,26 +623,34 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                   <AgentQuickSaveState state={saveState} />
                 </div>
 
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-neutral-500">模型</span>
-                  <select
-                    value={draft.modelId}
-                    onChange={(event) => updateModel(event.target.value)}
-                    disabled={saveState === 'saving'}
-                    className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
-                  >
-                    <option value="">使用 Coding Tool 默认模型</option>
-                    {modelChoices.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name || model.modelId}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="mt-1 block text-xs leading-5 text-neutral-400">
-                    Agent 模型会覆盖 Coding Tools 页面里的工具默认模型。当前：
-                    {draft.modelId ? selectedModelName : '跟随工具默认'}
-                  </span>
-                </label>
+                {usesCodingCli ? (
+                  <div className="rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+                    <div className="font-medium text-neutral-900">模型</div>
+                    <div className="mt-1">
+                      模型、Base URL 和 API Key 由 Coding Tools 页面统一管理；这里仅维护 Agent 角色和提示词。
+                    </div>
+                  </div>
+                ) : (
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-neutral-500">模型</span>
+                    <select
+                      value={draft.modelId}
+                      onChange={(event) => updateModel(event.target.value)}
+                      disabled={saveState === 'saving'}
+                      className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
+                    >
+                      <option value="">默认模型</option>
+                      {modelChoices.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.name || model.modelId}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="mt-1 block text-xs leading-5 text-neutral-400">
+                      LLM Agent 可以单独覆盖默认模型。
+                    </span>
+                  </label>
+                )}
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-medium text-neutral-500">角色</span>
@@ -749,12 +758,6 @@ function syncAgentLibraryFromWorkspaceAgent(agent: WorkspaceAgent) {
     },
     matched.id,
   )
-}
-
-function modelName(modelId: string | null, models: ModelCatalogItem[]) {
-  if (!modelId) return '跟随工具默认'
-  const model = models.find((item) => item.id === modelId || item.modelId === modelId)
-  return model?.name || model?.modelId || modelId
 }
 
 const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
@@ -1238,13 +1241,15 @@ const ThreadWelcomeContent: FC = () => {
     api
       .getWelcomeQuickPrompts(seed)
       .then(({ items }) => {
-        if (!cancelled)
-          setQuickPrompts(
-            items.length ? items : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed),
-          )
+        if (!cancelled) {
+          const nextPrompts = items.length
+            ? rotateQuickPrompts(items, seed, 10)
+            : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10)
+          setQuickPrompts(nextPrompts)
+        }
       })
       .catch(() => {
-        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed))
+        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10))
       })
       .finally(() => {
         if (!cancelled) setQuickPromptsLoading(false)
@@ -1572,7 +1577,7 @@ const Composer: FC = () => {
           }
         }}
       >
-        <div className="relative rounded-3xl border border-neutral-200 bg-white p-3 shadow-[0_10px_40px_rgba(15,23,42,0.10)] focus-within:border-neutral-300">
+        <div className="relative rounded-3xl border border-neutral-200 bg-white p-3 focus-within:border-neutral-300">
           {menu && (
             <ComposerMenu
               key={menu}
@@ -1888,216 +1893,216 @@ const ComposerMenu: FC<{
   onPick,
   onClose,
 }) => {
-  const [workspaceQuery, setWorkspaceQuery] = useState('')
-  const normalizedAgentQuery = agentQuery.trim().toLowerCase()
-  const legacyAgents = [
-    { title: '@Orchestrator', desc: '总指挥，规划阶段并调度 Agent 集群', color: '#7c3aed' },
-    { title: '@Researcher', desc: '资料、图片和事实收集', color: '#f59e0b' },
-    { title: '@Designer', desc: '页面结构、视觉方向和内容组织', color: '#6366f1' },
-    { title: '@Builder', desc: '实现、联调和本地验证', color: '#10b981' },
-    { title: '@QA Reviewer', desc: '验收、体验检查和风险审查', color: '#ef4444' },
-  ]
-  const agentRows = agents.length
-    ? agents.map((agent) => ({
+    const [workspaceQuery, setWorkspaceQuery] = useState('')
+    const normalizedAgentQuery = agentQuery.trim().toLowerCase()
+    const legacyAgents = [
+      { title: '@Orchestrator', desc: '总指挥，规划阶段并调度 Agent 集群', color: '#7c3aed' },
+      { title: '@Researcher', desc: '资料、图片和事实收集', color: '#f59e0b' },
+      { title: '@Designer', desc: '页面结构、视觉方向和内容组织', color: '#6366f1' },
+      { title: '@Builder', desc: '实现、联调和本地验证', color: '#10b981' },
+      { title: '@QA Reviewer', desc: '验收、体验检查和风险审查', color: '#ef4444' },
+    ]
+    const agentRows = agents.length
+      ? agents.map((agent) => ({
         title: `@${agent.name}`,
         desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${(agent.capabilityTags ?? []).length ? ` · ${(agent.capabilityTags ?? []).slice(0, 3).join(', ')}` : ''}`,
         color: agent.color ?? '#111827',
       }))
-    : legacyAgents
-  const filteredAgentRows = normalizedAgentQuery
-    ? agentRows.filter((item) =>
+      : legacyAgents
+    const filteredAgentRows = normalizedAgentQuery
+      ? agentRows.filter((item) =>
         `${item.title} ${item.desc}`.toLowerCase().includes(normalizedAgentQuery),
       )
-    : agentRows
-  const plugins = [
-    { title: 'Documents', icon: FileText, color: 'text-blue-500', value: '@documents' },
-    { title: 'Spreadsheets', icon: Sheet, color: 'text-emerald-600', value: '@spreadsheets' },
-    {
-      title: 'Presentations',
-      icon: Presentation,
-      color: 'text-amber-500',
-      value: '@presentations',
-    },
-    { title: '浏览器', icon: Globe2, color: 'text-sky-500', value: '@browser' },
-  ]
-  const filteredWorkspaces = workspaces.filter((workspace) => {
-    const query = workspaceQuery.trim().toLowerCase()
-    if (!query) return true
-    return workspaceSearchText(workspace).includes(query)
-  })
+      : agentRows
+    const plugins = [
+      { title: 'Documents', icon: FileText, color: 'text-blue-500', value: '@documents' },
+      { title: 'Spreadsheets', icon: Sheet, color: 'text-emerald-600', value: '@spreadsheets' },
+      {
+        title: 'Presentations',
+        icon: Presentation,
+        color: 'text-amber-500',
+        value: '@presentations',
+      },
+      { title: '浏览器', icon: Globe2, color: 'text-sky-500', value: '@browser' },
+    ]
+    const filteredWorkspaces = workspaces.filter((workspace) => {
+      const query = workspaceQuery.trim().toLowerCase()
+      if (!query) return true
+      return workspaceSearchText(workspace).includes(query)
+    })
 
-  return (
-    <div
-      className={cn(
-        'agenthub-menu-popover absolute bottom-[4.5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl',
-        'left-3',
-        type === 'workspace' ? 'w-80' : 'w-64',
-      )}
-    >
-      {type === 'tools' && (
-        <div className="relative group/tools">
-          <button
-            type="button"
-            onClick={() => onPlanMode(!planMode)}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
-          >
-            <ListTodo className="h-4 w-4 text-neutral-500" />
-            <span className="flex-1 text-neutral-900">计划模式</span>
-            <span
-              className={cn(
-                'relative h-4 w-8 rounded-full transition',
-                planMode ? 'bg-neutral-900' : 'bg-neutral-200',
-              )}
+    return (
+      <div
+        className={cn(
+          'agenthub-menu-popover absolute bottom-[4.5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 text-sm shadow-xl',
+          'left-3',
+          type === 'workspace' ? 'w-80' : 'w-64',
+        )}
+      >
+        {type === 'tools' && (
+          <div className="relative group/tools">
+            <button
+              type="button"
+              onClick={() => onPlanMode(!planMode)}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50"
             >
+              <ListTodo className="h-4 w-4 text-neutral-500" />
+              <span className="flex-1 text-neutral-900">计划模式</span>
               <span
                 className={cn(
-                  'absolute top-0.5 h-3 w-3 rounded-full bg-white transition',
-                  planMode ? 'left-4' : 'left-0.5',
-                )}
-              />
-            </span>
-          </button>
-          <div className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
-            <Blocks className="h-4 w-4 text-neutral-500" />
-            <span className="flex-1 text-neutral-900">插件</span>
-            <ChevronRight className="h-4 w-4 text-neutral-400" />
-          </div>
-          <div className="agenthub-menu-flyout invisible absolute bottom-0 left-[calc(100%+0.5rem)] w-52 -translate-x-1 scale-95 rounded-2xl border border-neutral-200 bg-white p-2 opacity-0 shadow-xl transition group-hover/tools:visible group-hover/tools:translate-x-0 group-hover/tools:scale-100 group-hover/tools:opacity-100">
-            <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">4 个已装插件</div>
-            {plugins.map((item) => {
-              const Icon = item.icon
-              return (
-                <button
-                  key={item.title}
-                  type="button"
-                  onClick={() => {
-                    onPick(item.value)
-                    onClose()
-                  }}
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left hover:bg-neutral-100"
-                >
-                  <Icon className={cn('h-4 w-4', item.color)} />
-                  <span className="text-neutral-900">{item.title}</span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-      {type === 'agents' && (
-        <div className="max-h-72 overflow-y-auto">
-          {agentQuery !== '' && (
-            <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">
-              {filteredAgentRows.length ? `匹配：${agentQuery}` : `没有匹配：${agentQuery}`}
-            </div>
-          )}
-          {filteredAgentRows.map((item) => (
-            <MenuRow
-              key={item.title}
-              title={item.title}
-              desc={item.desc}
-              color={item.color}
-              onClick={() => {
-                onPick(item.title)
-                onClose()
-              }}
-            />
-          ))}
-          {filteredAgentRows.length === 0 && (
-            <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
-              没有匹配的 Agent
-            </div>
-          )}
-        </div>
-      )}
-      {type === 'workspace' && (
-        <div className="p-1">
-          <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
-            <Search className="h-4 w-4 shrink-0" />
-            <input
-              value={workspaceQuery}
-              onChange={(event) => setWorkspaceQuery(event.target.value)}
-              autoFocus
-              className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
-              placeholder="搜索工作区"
-            />
-          </div>
-          <div className="max-h-44 space-y-1 overflow-y-auto py-1">
-            {filteredWorkspaces.map((workspace) => (
-              <button
-                key={workspace.id}
-                type="button"
-                onClick={() => onOpenWorkspace(workspace.id)}
-                disabled={workspaceBusy}
-                className={cn(
-                  'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
-                  (workspace.id === currentWorkspaceId || workspace.id === openingWorkspaceId) &&
-                    'bg-neutral-100',
+                  'relative h-4 w-8 rounded-full transition',
+                  planMode ? 'bg-neutral-900' : 'bg-neutral-200',
                 )}
               >
-                <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-neutral-900">{workspace.name}</span>
-                  <span className="block truncate text-[11px] text-neutral-400">
-                    {workspaceSubtitle(workspace)}
-                  </span>
-                </span>
-                {workspace.id === openingWorkspaceId ? (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
-                ) : (
-                  workspace.id === currentWorkspaceId && (
-                    <ChevronDown className="h-4 w-4 shrink-0 text-neutral-300" />
-                  )
-                )}
-              </button>
-            ))}
-            {!workspaceBusy && filteredWorkspaces.length === 0 && (
-              <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
-                没有匹配的工作区
+                <span
+                  className={cn(
+                    'absolute top-0.5 h-3 w-3 rounded-full bg-white transition',
+                    planMode ? 'left-4' : 'left-0.5',
+                  )}
+                />
+              </span>
+            </button>
+            <div className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-neutral-50">
+              <Blocks className="h-4 w-4 text-neutral-500" />
+              <span className="flex-1 text-neutral-900">插件</span>
+              <ChevronRight className="h-4 w-4 text-neutral-400" />
+            </div>
+            <div className="agenthub-menu-flyout invisible absolute bottom-0 left-[calc(100%+0.5rem)] w-52 -translate-x-1 scale-95 rounded-2xl border border-neutral-200 bg-white p-2 opacity-0 shadow-xl transition group-hover/tools:visible group-hover/tools:translate-x-0 group-hover/tools:scale-100 group-hover/tools:opacity-100">
+              <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">4 个已装插件</div>
+              {plugins.map((item) => {
+                const Icon = item.icon
+                return (
+                  <button
+                    key={item.title}
+                    type="button"
+                    onClick={() => {
+                      onPick(item.value)
+                      onClose()
+                    }}
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left hover:bg-neutral-100"
+                  >
+                    <Icon className={cn('h-4 w-4', item.color)} />
+                    <span className="text-neutral-900">{item.title}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+        {type === 'agents' && (
+          <div className="max-h-72 overflow-y-auto">
+            {agentQuery !== '' && (
+              <div className="px-3 pb-1 pt-1 text-xs text-neutral-400">
+                {filteredAgentRows.length ? `匹配：${agentQuery}` : `没有匹配：${agentQuery}`}
               </div>
             )}
-            {workspaceBusy && (
-              <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理工作区...</div>
+            {filteredAgentRows.map((item) => (
+              <MenuRow
+                key={item.title}
+                title={item.title}
+                desc={item.desc}
+                color={item.color}
+                onClick={() => {
+                  onPick(item.title)
+                  onClose()
+                }}
+              />
+            ))}
+            {filteredAgentRows.length === 0 && (
+              <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
+                没有匹配的 Agent
+              </div>
             )}
           </div>
-          <div className="mt-1 border-t border-neutral-200 pt-1.5">
-            <div className="mb-1 flex items-center justify-between gap-2 px-2">
-              <span className="text-xs font-medium text-neutral-400">工作空间来源</span>
+        )}
+        {type === 'workspace' && (
+          <div className="p-1">
+            <div className="flex h-9 items-center gap-2 px-2 text-neutral-400">
+              <Search className="h-4 w-4 shrink-0" />
+              <input
+                value={workspaceQuery}
+                onChange={(event) => setWorkspaceQuery(event.target.value)}
+                autoFocus
+                className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
+                placeholder="搜索工作区"
+              />
+            </div>
+            <div className="max-h-44 space-y-1 overflow-y-auto py-1">
+              {filteredWorkspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  type="button"
+                  onClick={() => onOpenWorkspace(workspace.id)}
+                  disabled={workspaceBusy}
+                  className={cn(
+                    'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-neutral-50 disabled:opacity-60',
+                    (workspace.id === currentWorkspaceId || workspace.id === openingWorkspaceId) &&
+                    'bg-neutral-100',
+                  )}
+                >
+                  <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-neutral-900">{workspace.name}</span>
+                    <span className="block truncate text-[11px] text-neutral-400">
+                      {workspaceSubtitle(workspace)}
+                    </span>
+                  </span>
+                  {workspace.id === openingWorkspaceId ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
+                  ) : (
+                    workspace.id === currentWorkspaceId && (
+                      <ChevronDown className="h-4 w-4 shrink-0 text-neutral-300" />
+                    )
+                  )}
+                </button>
+              ))}
+              {!workspaceBusy && filteredWorkspaces.length === 0 && (
+                <div className="rounded-xl border border-dashed border-neutral-200 px-3 py-5 text-center text-xs text-neutral-400">
+                  没有匹配的工作区
+                </div>
+              )}
+              {workspaceBusy && (
+                <div className="px-2.5 py-2 text-xs text-neutral-400">正在处理工作区...</div>
+              )}
+            </div>
+            <div className="mt-1 border-t border-neutral-200 pt-1.5">
+              <div className="mb-1 flex items-center justify-between gap-2 px-2">
+                <span className="text-xs font-medium text-neutral-400">工作空间来源</span>
+                <button
+                  type="button"
+                  onClick={requestSettingsDialog}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+                  aria-label="前往系统设置"
+                  title="可前往「系统设置」设置默认工作空间存储路径"
+                >
+                  <CircleHelp className="h-4 w-4" />
+                </button>
+              </div>
               <button
                 type="button"
-                onClick={requestSettingsDialog}
-                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
-                aria-label="前往系统设置"
-                title="可前往「系统设置」设置默认工作空间存储路径"
+                onClick={onCreateBlankWorkspace}
+                disabled={workspaceBusy}
+                className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
               >
-                <CircleHelp className="h-4 w-4" />
+                <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
+                <span className="min-w-0 flex-1 truncate">从新工作空间开始</span>
+                {!currentWorkspaceId && <Check className="h-4 w-4 shrink-0 text-emerald-500" />}
+              </button>
+              <button
+                type="button"
+                onClick={onOpenFolderWorkspace}
+                disabled={workspaceBusy}
+                className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
+              >
+                <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
+                <span className="min-w-0 flex-1 truncate">打开本地工作空间</span>
               </button>
             </div>
-            <button
-              type="button"
-              onClick={onCreateBlankWorkspace}
-              disabled={workspaceBusy}
-              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
-            >
-              <FolderPlus className="h-4 w-4 shrink-0 text-neutral-600" />
-              <span className="min-w-0 flex-1 truncate">从新工作空间开始</span>
-              {!currentWorkspaceId && <Check className="h-4 w-4 shrink-0 text-emerald-500" />}
-            </button>
-            <button
-              type="button"
-              onClick={onOpenFolderWorkspace}
-              disabled={workspaceBusy}
-              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-60"
-            >
-              <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
-              <span className="min-w-0 flex-1 truncate">打开本地工作空间</span>
-            </button>
           </div>
-        </div>
-      )}
-    </div>
-  )
-}
+        )}
+      </div>
+    )
+  }
 
 export function readSlashCommand(text: string, cursor: number) {
   const before = text.slice(0, cursor)
@@ -3118,6 +3123,7 @@ const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
       />
       <CodeAgentProcessTimeline steps={steps} running={data.status === 'running'} />
       {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
+      <CodeAgentOutputReviewCard data={data} />
       {hasDetails && (
         <CodeAgentRunDetails
           changedFiles={changedFiles}
@@ -3371,6 +3377,253 @@ const CodeAgentRunDetails: FC<{
     </div>
   </details>
 )
+
+const CodeAgentOutputReviewCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+  const messageId = useMessage((message) => message.id)
+  const currentSession = useChatStore((state) => state.currentSession)
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
+  )
+  const sendMessageToSession = useChatStore((state) => state.sendMessageToSession)
+  const finalMessage = (data.finalMessage ?? '').trim()
+  const reviewRequired =
+    data.reviewRequired || data.runtime === 'codex' || data.runtime === 'claude-code'
+  const startsExpanded = finalMessage.length <= 1600 && finalMessage.split(/\r?\n/).length <= 14
+  const [expanded, setExpanded] = useState(startsExpanded)
+  const [confirmed, setConfirmed] = useState(false)
+  const [continuing, setContinuing] = useState(false)
+  const [continueError, setContinueError] = useState('')
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setExpanded(startsExpanded)
+    setConfirmed(false)
+    setContinuing(false)
+    setContinueError('')
+    setCopied(false)
+  }, [finalMessage, startsExpanded])
+
+  if (!reviewRequired) return null
+
+  const running = data.status === 'running'
+  const hasFinalMessage = finalMessage.length > 0
+  const preview = expanded ? finalMessage : codeAgentReviewPreview(finalMessage)
+  const hasMore = preview !== finalMessage
+  const lineCount = hasFinalMessage ? finalMessage.split(/\r?\n/).length : 0
+  const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
+  const sourceMetadata =
+    sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
+      ? (sourceMessage.metadata as Record<string, unknown>)
+      : null
+  const sourceAgentName =
+    typeof sourceMetadata?.agentName === 'string' ? sourceMetadata.agentName.trim() : ''
+  const shouldMentionAgent = currentSession?.type === 'group' && sourceAgentName.length > 0
+
+  async function copyFinalMessage() {
+    if (!finalMessage) return
+    try {
+      await navigator.clipboard.writeText(finalMessage)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  async function continueOutput() {
+    if (!messageId || !currentSession?.id || continuing || confirmed) return
+    const continuationPrompt = buildCodeAgentContinuationPrompt({
+      finalMessage,
+      runtimeLabel,
+      agentName: shouldMentionAgent ? sourceAgentName : null,
+    })
+    setContinuing(true)
+    setContinueError('')
+    try {
+      await sendMessageToSession(currentSession.id, continuationPrompt, {
+        displayContent: '继续输出',
+        replyToMessageId: messageId,
+      })
+      setConfirmed(true)
+    } catch (error) {
+      setContinueError(friendlyErrorMessage(error, '继续输出失败'))
+    } finally {
+      setContinuing(false)
+    }
+  }
+
+  return (
+    <div
+      className={cn(
+        'overflow-hidden rounded-lg border bg-white shadow-sm',
+        confirmed ? 'border-emerald-200' : 'border-neutral-200',
+      )}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+        <div className="inline-flex min-w-0 items-center gap-2">
+          <span
+            className={cn(
+              'grid h-8 w-8 shrink-0 place-items-center rounded-md border',
+              confirmed
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                : running
+                  ? 'border-blue-200 bg-blue-50 text-blue-600'
+                  : hasFinalMessage
+                    ? 'border-neutral-200 bg-neutral-50 text-neutral-600'
+                    : 'border-amber-200 bg-amber-50 text-amber-600',
+            )}
+          >
+            {running ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : confirmed ? (
+              <CheckCircle2 className="h-4 w-4" />
+            ) : hasFinalMessage ? (
+              <FileText className="h-4 w-4" />
+            ) : (
+              <AlertTriangle className="h-4 w-4" />
+            )}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-[13px] font-medium leading-5 text-neutral-900">
+              输出审核
+            </span>
+            <span className="block truncate text-[11px] leading-5 text-neutral-500">
+              {running
+                ? `${runtimeLabel} 正在写入流式输出`
+                : hasFinalMessage
+                  ? `完整终稿 ${lineCount} 行 · ${finalMessage.length.toLocaleString()} 字`
+                  : `${runtimeLabel} 未捕获到完整终稿`}
+            </span>
+          </span>
+        </div>
+        <span
+          className={cn(
+            'inline-flex h-6 items-center rounded-md border px-2 text-[11px] font-medium',
+            confirmed
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : running
+                ? 'border-blue-100 bg-blue-50 text-blue-600'
+                : 'border-neutral-200 bg-neutral-50 text-neutral-500',
+          )}
+        >
+          {confirmed ? '已确认' : running ? '待完成' : '待审核'}
+        </span>
+      </div>
+
+      <div className="border-t border-neutral-100 bg-neutral-50/70 px-3 py-3">
+        {running ? (
+          <div className="rounded-md border border-dashed border-blue-200 bg-white px-3 py-2 text-xs leading-5 text-neutral-500">
+            Claude Code / Codex 的最终正文会在执行结束后锁定到这里，审核时可展开全文确认。
+          </div>
+        ) : hasFinalMessage ? (
+          <>
+            <pre
+              className={cn(
+                'agenthub-readable-code whitespace-pre-wrap break-words rounded-md border border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-800',
+                expanded ? 'max-h-[32rem] overflow-auto' : 'max-h-44 overflow-hidden',
+              )}
+            >
+              {preview}
+            </pre>
+            {hasMore && (
+              <div className="mt-2 text-[11px] leading-5 text-neutral-500">
+                当前为预览，展开后显示完整输出。
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+            本次运行没有返回可锁定的最终正文；过程日志和文件变更仍可在执行明细中查看。
+          </div>
+        )}
+        {!running && (
+          <>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {hasFinalMessage && (
+                <>
+                  <button
+                    type="button"
+                    onClick={copyFinalMessage}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? '已复制' : '复制全文'}
+                  </button>
+                  {hasMore && (
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((value) => !value)}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
+                    >
+                      <ChevronDown
+                        className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
+                      />
+                      {expanded ? '收起全文' : '展开全文'}
+                    </button>
+                  )}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => void continueOutput()}
+                disabled={continuing || confirmed || !currentSession?.id}
+                className={cn(
+                  'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition',
+                  confirmed
+                    ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'bg-neutral-950 text-white hover:bg-neutral-800 disabled:bg-neutral-300 disabled:text-neutral-500',
+                )}
+              >
+                {continuing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : confirmed ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                {confirmed ? '已继续输出' : continuing ? '提交中...' : '确认并继续输出'}
+              </button>
+            </div>
+            {continueError && (
+              <div className="mt-2 text-[11px] leading-5 text-red-500">{continueError}</div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function codeAgentReviewPreview(value: string) {
+  const lines = value.split(/\r?\n/)
+  if (lines.length <= 14 && value.length <= 1600) return value
+  const firstLines = lines.slice(0, 14).join('\n')
+  if (firstLines.length <= 1600) return `${firstLines}\n...`
+  return `${firstLines.slice(0, 1600)}\n...`
+}
+
+function buildCodeAgentContinuationPrompt({
+  finalMessage,
+  runtimeLabel,
+  agentName,
+}: {
+  finalMessage: string
+  runtimeLabel: string
+  agentName: string | null
+}) {
+  const tail = finalMessage.trim()
+  const tailPreview =
+    tail.length > 1200 ? `${tail.slice(-1200).trimStart()}` : tail
+  const prefix = agentName ? `@${agentName} ` : ''
+  const lines = [
+    `${prefix}请继续上一轮 ${runtimeLabel} 的输出，不要重复已经给出的内容。`,
+    '如果上一轮已经结束，请补充剩余结论、验证结果和剩余风险；如果还没结束，请从最后一句之后接着写。',
+  ]
+  if (tailPreview) {
+    lines.push(`上一轮输出末尾：\n${tailPreview}`)
+  }
+  return lines.join('\n\n')
+}
 
 const CodeAgentToolsCard: FC<{
   items: NonNullable<CodeAgentRunMetadata['toolCalls']>

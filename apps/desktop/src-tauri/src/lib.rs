@@ -753,6 +753,23 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         }
     }
 
+    if cfg!(debug_assertions) {
+        let dev_port_file = workspace_root_from_manifest().map(|root| root.join(".agenthub-port"));
+        let reusable_dev_port = dev_port_file
+            .as_ref()
+            .and_then(|port_file| read_dev_port_file(port_file))
+            .or_else(|| health_check(8000).then_some(8000));
+
+        if let Some(port) = reusable_dev_port {
+            let detail = format!("正在连接本地 AgentHub dev server...\n端口: {port}");
+            set_startup_status(&window, "ready", "开发服务已就绪", &detail);
+            if let Ok(url) = tauri::Url::parse(&frontend_launch_url(port)) {
+                let _ = window.navigate(url);
+            }
+            return;
+        }
+    }
+
     set_startup_status(
         &window,
         "starting",
@@ -834,6 +851,20 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
     };
 
     let workspace_root = workspace_root_from_manifest();
+    let dev_port_file = workspace_root
+        .as_ref()
+        .map(|root| root.join(".agenthub-port"));
+    if let Some(port_file) = dev_port_file.as_ref() {
+        let _ = fs::write(
+            port_file,
+            format!(
+                r#"{{"port":{},"pid":{},"updatedAt":"desktop-startup"}}"#,
+                port,
+                std::process::id()
+            ),
+        );
+    }
+
     let star_office_root = workspace_root
         .as_ref()
         .map(|root| root.join("storage").join("Star-Office-UI"))
@@ -853,6 +884,9 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
 
     if let Some(root) = workspace_root.as_ref() {
         command.env("PROJECT_ROOT", root);
+    }
+    if let Some(port_file) = dev_port_file.as_ref() {
+        command.env("AGENTHUB_PORT_FILE", port_file);
     }
     if let Some(root) = star_office_root.as_ref() {
         command.env("AGENTHUB_STAR_OFFICE_ROOT", root);
@@ -881,10 +915,10 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         *guard = Some(child);
     }
 
-    let url = format!("http://127.0.0.1:{port}");
     if wait_for_health(port, Duration::from_secs(20)) {
         set_startup_status(&window, "ready", "服务已启动", "正在进入 AgentHub...");
-        if let Ok(url) = tauri::Url::parse(&url) {
+        let target_url = frontend_launch_url(port);
+        if let Ok(url) = tauri::Url::parse(&target_url) {
             let _ = window.navigate(url);
         }
     } else {
@@ -946,6 +980,17 @@ fn find_available_port(start: u16, count: u16) -> Option<u16> {
         .find(|port| TcpListener::bind(("127.0.0.1", *port)).is_ok())
 }
 
+fn read_dev_port_file(path: &Path) -> Option<u16> {
+    let raw = fs::read_to_string(path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let port = parsed.get("port")?.as_u64()?;
+    if port == 0 || port > u16::MAX as u64 {
+        return None;
+    }
+    let port = port as u16;
+    health_check(port).then_some(port)
+}
+
 fn wait_for_health(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -997,5 +1042,13 @@ fn stop_server(server_state: ServerProcess) {
     if let Some(mut child) = guard.take() {
         let _ = child.kill();
         let _ = child.wait();
+    }
+}
+
+fn frontend_launch_url(port: u16) -> String {
+    if cfg!(debug_assertions) {
+        "http://127.0.0.1:5173".to_string()
+    } else {
+        format!("http://127.0.0.1:{port}")
     }
 }

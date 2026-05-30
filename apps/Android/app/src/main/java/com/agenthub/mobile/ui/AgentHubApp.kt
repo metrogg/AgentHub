@@ -41,13 +41,19 @@ fun AgentHubApp(viewModel: MobileViewModel = viewModel()) {
                 ChatShell(
                     state = state,
                     onDisconnect = viewModel::disconnect,
-                    onRefresh = viewModel::refreshSessions,
+                    onRefresh = viewModel::refreshAll,
                     onCreateSession = viewModel::createSession,
+                    onOpenWorkspaceGroupSession = viewModel::openWorkspaceGroupSession,
+                    onOpenAgentContact = viewModel::openAgentContact,
                     onSelectSession = viewModel::selectSession,
                     onSendMessage = viewModel::sendMessage,
                     onArchiveSession = viewModel::archiveSession,
                     onUnarchiveSession = viewModel::unarchiveSession,
                     onDeleteSession = viewModel::deleteSession,
+                    onStartOffice = viewModel::startOffice,
+                    onOpenFirewall = viewModel::openFirewallPort,
+                    onInstallCodingTools = viewModel::installCodingTools,
+                    onRepairCodingTools = viewModel::repairCodingTools,
                     onScanPairingQr = viewModel::connectWithPairingQr,
                 )
             }

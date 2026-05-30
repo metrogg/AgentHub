@@ -15,7 +15,9 @@ import {
 } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import {
+  agentLibraryChangeEvent,
   createSavedAgent,
+  flushAgentLibraryServerSync,
   loadAgentLibraryState,
   saveAgentLibraryState,
   saveAgentToLibrary,
@@ -23,6 +25,7 @@ import {
   type SavedAgentRelation,
   type SavedAgentConfig,
 } from '../lib/agentLibrary'
+import { syncSavedAgentDirectSessions } from '../lib/agentConversation'
 import { agentRolePresets, presetForRole } from '../lib/agentRolePresets'
 import { api, type AgentConfigInput, type ModelCatalogItem, type WorkspaceAgent } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -66,10 +69,23 @@ export default function AgentConfigPage() {
   const selectSession = useChatStore((state) => state.selectSession)
 
   useEffect(() => {
-    const library = loadAgentLibraryState()
-    const loaded = library.agents
-    setRelations(library.relations)
+    const syncLibrary = () => {
+      const library = loadAgentLibraryState()
+      const loaded = library.agents
+      setRelations(library.relations)
+      setAgents(loaded)
+      const requestedId = searchParams.get('agentId')
+      const current = selectedId ? loaded.find((agent) => agent.id === selectedId) ?? null : null
+      const first = loaded.find((agent) => agent.id === requestedId) ?? current ?? loaded[0] ?? null
+      if (first) {
+        setSelectedId(first.id)
+        setDraft(toAgentConfigInput(first))
+        if (!requestedId) setSearchParams({ agentId: first.id }, { replace: true })
+      }
+    }
+
     if (searchParams.get('newAgent') === '1') {
+      const library = loadAgentLibraryState()
       const next = createSavedAgent({
         name: 'New Agent',
         role: '协作',
@@ -77,24 +93,22 @@ export default function AgentConfigPage() {
         systemPrompt: '你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。',
         color: '#111827',
       })
-      const updated = [next, ...loaded]
+      const updated = [next, ...library.agents]
       setAgents(updated)
+      setRelations(library.relations)
       saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations: library.relations })
       setSelectedId(next.id)
       setDraft(toAgentConfigInput(next))
       setSearchParams({ agentId: next.id }, { replace: true })
+      void flushAgentLibraryServerSync().catch(toastSaveFailed)
       toastSaved()
-      return
+    } else {
+      syncLibrary()
     }
-    setAgents(loaded)
-    const requestedId = searchParams.get('agentId')
-    const first = loaded.find((agent) => agent.id === requestedId) ?? loaded[0]
-    if (first) {
-      setSelectedId(first.id)
-      setDraft(toAgentConfigInput(first))
-      if (!requestedId) setSearchParams({ agentId: first.id }, { replace: true })
-    }
-  }, [])
+
+    window.addEventListener(agentLibraryChangeEvent, syncLibrary)
+    return () => window.removeEventListener(agentLibraryChangeEvent, syncLibrary)
+  }, [searchParams, selectedId])
 
   useEffect(() => {
     const requestedId = searchParams.get('agentId')
@@ -116,6 +130,20 @@ export default function AgentConfigPage() {
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null
   const runtimeType = draft.runtimeType ?? 'llm'
+  const modelCompatibilityMessage = (() => {
+    const modelId = draft.modelId ?? null
+    const codeAgentType = draft.codeAgentType ?? null
+    const model = modelId ? models.find((item) => item.id === modelId || item.modelId === modelId) : null
+    if (!modelId) return '留空时跟随 Coding Tools 页面里的默认模型、Base URL 和 API Key。'
+    if (!model) return '将优先使用当前 Agent 保存的模型覆盖；若模型目录缺失该项，会回退到 Coding Tools 默认配置。'
+    if (codeAgentType === 'claude-code' && !/claude|sonnet|opus|haiku|anthropic/i.test(`${model.provider} ${model.modelId} ${model.apiEndpoint ?? ''} ${model.anthropicEndpoint ?? ''}`)) {
+      return 'Claude Code 需要 Anthropic/Claude 兼容模型；当前选择可能会被运行时回退。'
+    }
+    if (codeAgentType === 'gemini' && !/gemini|google/i.test(`${model.provider} ${model.modelId}`)) {
+      return 'Gemini CLI 需要 Gemini/Google 兼容模型；当前选择可能会被运行时回退。'
+    }
+    return 'Code Agent 会优先使用这个模型覆盖，并把对应 Base URL / API Key 注入到 Coding Tools。'
+  })()
 
   function selectAgent(agent: SavedAgentConfig, replaceUrl = false) {
     setSelectedId(agent.id)
@@ -123,40 +151,51 @@ export default function AgentConfigPage() {
     setSearchParams({ agentId: agent.id }, { replace: replaceUrl })
   }
 
-  function createAgent() {
-    const next = createSavedAgent({
-      name: 'New Agent',
-      role: '协作',
-      description: '描述这个 Agent 的职责、产出和适合处理的任务。',
-      systemPrompt: '你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。',
-      color: '#111827',
-      runtimeType: 'code-agent',
-      codeAgentType: 'codex',
-    })
-    const updated = [next, ...agents]
-    setAgents(updated)
-    saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations })
-    selectAgent(next)
-    toastSaved()
+  async function createAgent() {
+    try {
+      const next = createSavedAgent({
+        name: 'New Agent',
+        role: '协作',
+        description: '描述这个 Agent 的职责、产出和适合处理的任务。',
+        systemPrompt: '你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。',
+        color: '#111827',
+        runtimeType: 'code-agent',
+        codeAgentType: 'codex',
+      })
+      const updated = [next, ...agents]
+      setAgents(updated)
+      saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations })
+      selectAgent(next)
+      await flushAgentLibraryServerSync()
+      toastSaved()
+    } catch (error) {
+      toastSaveFailed(error)
+    }
   }
 
-  function duplicateAgent() {
+  async function duplicateAgent() {
     if (!selectedAgent) return
-    const next = createSavedAgent({
-      ...toAgentConfigInput(selectedAgent),
-      name: `${selectedAgent.name} Copy`,
-    })
-    const updated = [next, ...agents]
-    setAgents(updated)
-    saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations })
-    selectAgent(next)
-    toastSaved()
+    try {
+      const next = createSavedAgent({
+        ...toAgentConfigInput(selectedAgent),
+        name: `${selectedAgent.name} Copy`,
+      })
+      const updated = [next, ...agents]
+      setAgents(updated)
+      saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations })
+      selectAgent(next)
+      await flushAgentLibraryServerSync()
+      toastSaved()
+    } catch (error) {
+      toastSaveFailed(error)
+    }
   }
 
   async function saveDraft(event?: FormEvent) {
     event?.preventDefault()
     const normalized = normalizeDraft(draft)
     if (!normalized.name || !normalized.role) return
+    const previousAgent = selectedAgent
     const updated = saveAgentToLibrary(agents, normalized, selectedId ?? undefined)
     setAgents(updated)
     setRelations((current) => saveLibrary(updated, current))
@@ -165,23 +204,34 @@ export default function AgentConfigPage() {
       setSelectedId(current.id)
       setDraft(toAgentConfigInput(current))
     }
-    await syncCurrentWorkspaceAgent(normalized)
-    toastSaved()
+    try {
+      await flushAgentLibraryServerSync()
+      if (current) await syncSavedAgentDirectSessions(current, previousAgent)
+      await syncCurrentWorkspaceAgent(normalized)
+      toastSaved()
+    } catch (error) {
+      toastSaveFailed(error)
+    }
   }
 
-  function deleteAgent() {
+  async function deleteAgent() {
     if (!selectedAgent) return
     const confirmed = window.confirm(`删除 Agent「${selectedAgent.name}」？已加入工作区的成员不会被自动删除。`)
     if (!confirmed) return
-    const updated = agents.filter((agent) => agent.id !== selectedAgent.id)
-    const nextRelations = relations.filter((relation) => relation.sourceAgentId !== selectedAgent.id && relation.targetAgentId !== selectedAgent.id)
-    setAgents(updated)
-    setRelations(nextRelations)
-    saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations: nextRelations })
-    const next = updated[0] ?? null
-    setSelectedId(next?.id ?? null)
-    setDraft(next ? toAgentConfigInput(next) : emptyDraft)
-    toastSaved()
+    try {
+      const updated = agents.filter((agent) => agent.id !== selectedAgent.id)
+      const nextRelations = relations.filter((relation) => relation.sourceAgentId !== selectedAgent.id && relation.targetAgentId !== selectedAgent.id)
+      setAgents(updated)
+      setRelations(nextRelations)
+      saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations: nextRelations })
+      const next = updated[0] ?? null
+      setSelectedId(next?.id ?? null)
+      setDraft(next ? toAgentConfigInput(next) : emptyDraft)
+      await flushAgentLibraryServerSync()
+      toastSaved()
+    } catch (error) {
+      toastSaveFailed(error)
+    }
   }
 
   async function applyAssistantPatch(event: FormEvent) {
@@ -199,8 +249,14 @@ export default function AgentConfigPage() {
     setRelations((current) => saveLibrary(updated, current))
     const current = selectedId ? updated.find((agent) => agent.id === selectedId) : updated[0]
     if (current) setSelectedId(current.id)
-    await syncCurrentWorkspaceAgent(nextDraft)
-    toastSaved()
+    try {
+      await flushAgentLibraryServerSync()
+      if (current) await syncSavedAgentDirectSessions(current, selectedAgent)
+      await syncCurrentWorkspaceAgent(nextDraft)
+      toastSaved()
+    } catch (error) {
+      toastSaveFailed(error)
+    }
   }
 
   async function syncCurrentWorkspaceAgent(nextDraft: AgentConfigInput) {
@@ -268,6 +324,11 @@ export default function AgentConfigPage() {
     window.setTimeout(() => setSaved(false), 1400)
   }
 
+  function toastSaveFailed(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || '')
+    window.alert(`Agent 配置保存到服务端失败，请检查后端/客户端连接后重试。${message ? `\n${message}` : ''}`)
+  }
+
   function applyRolePreset(roleType: string) {
     const preset = presetForRole(roleType as WorkspaceAgent['roleType'])
     if (!preset) {
@@ -283,7 +344,7 @@ export default function AgentConfigPage() {
     })
   }
 
-  function updateSelectedRelation(relationType: SavedAgentRelation['relationType'], targetAgentId: string) {
+  async function updateSelectedRelation(relationType: SavedAgentRelation['relationType'], targetAgentId: string) {
     if (!selectedAgent) return
     const next = relations.filter((relation) => !(relation.sourceAgentId === selectedAgent.id && relation.relationType === relationType))
     if (targetAgentId && targetAgentId !== selectedAgent.id) {
@@ -300,7 +361,12 @@ export default function AgentConfigPage() {
     }
     setRelations(next)
     saveAgentLibraryState({ schemaVersion: 2, agents, relations: next })
-    toastSaved()
+    try {
+      await flushAgentLibraryServerSync()
+      toastSaved()
+    } catch (error) {
+      toastSaveFailed(error)
+    }
   }
 
   return (
@@ -403,7 +469,7 @@ export default function AgentConfigPage() {
                         <option value="gemini">Gemini CLI</option>
                       </SelectField>
                       <SelectField label="Agent 模型覆盖" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
-                        <option value="">使用 Coding Tool 默认模型</option>
+                        <option value="">{runtimeType === 'code-agent' ? '跟随 Coding Tools 默认模型' : '使用默认模型'}</option>
                         {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
                       </SelectField>
                       <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
@@ -423,7 +489,7 @@ export default function AgentConfigPage() {
 
                     {runtimeType === 'code-agent' && (
                       <div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
-                        {modelCompatibilityText(draft.codeAgentType ?? null, draft.modelId ?? null, models)}
+                        {modelCompatibilityMessage}
                       </div>
                     )}
 
@@ -449,7 +515,10 @@ export default function AgentConfigPage() {
                   <aside className="space-y-4">
                     <InfoPanel title="能力卡">
                       <InfoRow label={t('运行时')} value={runtimeLabel(runtimeType)} />
-                      <InfoRow label={t('模型')} value={t(modelName(draft.modelId ?? null, models))} />
+                      <InfoRow
+                        label={t('模型')}
+                        value={t(modelName(draft.modelId ?? null, models))}
+                      />
                       <InfoRow label={t('权限')} value={t(sandboxLabel(draft.sandboxPolicy ?? 'workspace-write'))} />
                       <InfoRow label="可接任务" value={presetForRole(draft.roleType)?.acceptsTaskTypes.join(', ') || '自定义'} />
                       <InfoRow label="主要产出" value={presetForRole(draft.roleType)?.produces.join(', ') || '自定义'} />
@@ -702,26 +771,9 @@ function relationLabel(relationType: SavedAgentRelation['relationType']) {
 
 
 function modelName(modelId: string | null, models: ModelCatalogItem[]) {
-  if (!modelId) return '跟随 Coding Tool 默认模型'
+  if (!modelId) return '默认模型'
   const model = models.find((item) => item.id === modelId || item.modelId === modelId)
   return model?.name || model?.modelId || modelId
-}
-
-function modelCompatibilityText(
-  tool: WorkspaceAgent['codeAgentType'],
-  modelId: string | null,
-  models: ModelCatalogItem[],
-) {
-  const model = modelId ? models.find((item) => item.id === modelId || item.modelId === modelId) : null
-  if (!tool) return '未绑定 Coding Tool。'
-  if (!model) return '未选择模型时会使用模型管理里的默认启用模型，并在执行时注入到 Coding Tool。'
-  if (tool === 'claude-code' && !model.anthropicEndpoint && model.provider !== 'anthropic') {
-    return 'Claude Code 需要 Anthropic 协议入口；该模型未配置 Anthropic 端点，执行时可能无法接入。'
-  }
-  if (tool === 'opencode') {
-    return `OpenCode 会使用 ${model.provider}/${model.modelId} 生成临时 opencode 配置。`
-  }
-  return `${tool} 会使用模型档案「${model.name || model.modelId}」的 Key、Base URL 和模型 ID。`
 }
 
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {

@@ -1,3 +1,4 @@
+import { api } from './api'
 import type { AgentConfigInput, AgentRelationType } from './api'
 import { defaultAgentRelations, inferRoleType, presetForRole } from './agentRolePresets'
 
@@ -25,7 +26,12 @@ export interface AgentLibraryState {
 
 export const agentLibraryStorageKey = 'agenthub.agentLibrary'
 export const agentLibraryChangeEvent = 'agenthub:agent-library-change'
+export const agentLibrarySyncErrorEvent = 'agenthub:agent-library-sync-error'
+export const agentLibraryServerSettingKey = 'AGENT_LIBRARY'
 const legacyAgentConfigKey = 'agenthub.agentConfig'
+let pendingServerSync: number | null = null
+let pendingServerSyncState: AgentLibraryState | null = null
+let serverReconcilePromise: Promise<AgentLibraryState> | null = null
 
 const defaultAgentRoleTypes = [
   'orchestrator',
@@ -80,7 +86,7 @@ export function loadAgentLibraryState(): AgentLibraryState {
             })
           : false
         if (!hadOrchestrator || hadLegacyDefaults) {
-          saveAgentLibraryState(state)
+          writeAgentLibraryStateToStorage(state)
         }
         return state
       }
@@ -95,23 +101,128 @@ export function loadAgentLibraryState(): AgentLibraryState {
     agents: initial,
     relations: buildDefaultSavedRelations(initial),
   })
-  saveAgentLibraryState(state)
   return state
 }
 
 export function saveAgentLibrary(agents: SavedAgentConfig[]) {
   const current = loadAgentLibraryState()
-  saveAgentLibraryState({
+  saveAgentLibraryState(normalizeLibraryState({
     schemaVersion: 2,
     agents,
     relations: pruneRelations(current.relations, agents),
-  })
+  }))
 }
 
 export function saveAgentLibraryState(state: AgentLibraryState) {
+  const normalized = normalizeLibraryState(state)
+  writeAgentLibraryStateToStorage(normalized)
+  queueAgentLibraryServerSync(normalized)
+}
+
+export async function reconcileAgentLibraryWithServer(
+  settingsMap?: Record<string, string>,
+): Promise<AgentLibraryState> {
+  if (typeof window === 'undefined') return defaultAgentLibrary
+  if (serverReconcilePromise) return serverReconcilePromise
+
+  serverReconcilePromise = (async () => {
+    const local = readStoredAgentLibraryState()
+    const settings = settingsMap ?? await api.getSettings()
+    const server = parseAgentLibraryValue(settings[agentLibraryServerSettingKey])
+
+    if (server) {
+      if (!local || shouldPreferServerLibrary(server, local)) {
+        writeAgentLibraryStateToStorage(server)
+        return server
+      }
+      await syncAgentLibraryStateToServer(local)
+      return local
+    }
+
+    const next = local ?? loadAgentLibraryState()
+    writeAgentLibraryStateToStorage(next)
+    await syncAgentLibraryStateToServer(next)
+    return next
+  })()
+
+  try {
+    return await serverReconcilePromise
+  } finally {
+    serverReconcilePromise = null
+  }
+}
+
+export async function flushAgentLibraryServerSync() {
+  if (typeof window === 'undefined') return
+  const state = pendingServerSyncState
+  if (!state) return
+  if (pendingServerSync !== null) {
+    window.clearTimeout(pendingServerSync)
+    pendingServerSync = null
+  }
+  pendingServerSyncState = null
+  await syncAgentLibraryStateToServer(state)
+}
+
+export async function syncAgentLibraryStateToServer(state: AgentLibraryState) {
+  const normalized = normalizeLibraryState(state)
+  await api.saveSettings({ [agentLibraryServerSettingKey]: JSON.stringify(normalized) })
+}
+
+function writeAgentLibraryStateToStorage(state: AgentLibraryState) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(agentLibraryStorageKey, JSON.stringify(state))
   window.dispatchEvent(new CustomEvent(agentLibraryChangeEvent, { detail: state.agents }))
+}
+
+function queueAgentLibraryServerSync(state: AgentLibraryState) {
+  if (typeof window === 'undefined') return
+  if (pendingServerSync !== null) window.clearTimeout(pendingServerSync)
+  pendingServerSyncState = state
+  pendingServerSync = window.setTimeout(() => {
+    pendingServerSync = null
+    const next = pendingServerSyncState
+    pendingServerSyncState = null
+    if (!next) return
+    void syncAgentLibraryStateToServer(next).catch((error) => {
+      window.dispatchEvent(new CustomEvent(agentLibrarySyncErrorEvent, { detail: error }))
+    })
+  }, 0)
+}
+
+function readStoredAgentLibraryState(): AgentLibraryState | null {
+  if (typeof window === 'undefined') return null
+  return parseAgentLibraryValue(window.localStorage.getItem(agentLibraryStorageKey))
+}
+
+function parseAgentLibraryValue(value?: string | null): AgentLibraryState | null {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed)
+      ? normalizeLibraryState({ agents: parsed })
+      : Array.isArray(parsed?.agents)
+        ? normalizeLibraryState(parsed)
+        : null
+  } catch {
+    return null
+  }
+}
+
+function shouldPreferServerLibrary(server: AgentLibraryState, local: AgentLibraryState) {
+  if (JSON.stringify(server) === JSON.stringify(local)) return true
+  return latestLibraryTime(server) >= latestLibraryTime(local)
+}
+
+function latestLibraryTime(state: AgentLibraryState) {
+  const values = [
+    ...state.agents.flatMap((agent) => [agent.updatedAt, agent.createdAt]),
+    ...state.relations.flatMap((relation) => [relation.updatedAt, relation.createdAt]),
+  ]
+  return values.reduce((latest, value) => {
+    const time = Date.parse(value)
+    return Number.isFinite(time) ? Math.max(latest, time) : latest
+  }, 0)
 }
 
 export function createSavedAgent(
@@ -134,7 +245,7 @@ export function createSavedAgent(
     color: input.color ?? '#111827',
     modelId: input.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? 'codex') : null,
+    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
     capabilityTags: input.capabilityTags ?? [],
     toolPermissions: input.toolPermissions ?? [],
     sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
@@ -158,7 +269,7 @@ export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
     color: agent.color ?? '#111827',
     modelId: agent.modelId ?? null,
     runtimeType: agent.runtimeType ?? 'llm',
-    codeAgentType: agent.runtimeType === 'code-agent' ? (agent.codeAgentType ?? 'codex') : null,
+    codeAgentType: agent.runtimeType === 'code-agent' ? (agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null,
     capabilityTags: [...(agent.capabilityTags ?? [])],
     toolPermissions: [...(agent.toolPermissions ?? [])],
     sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
@@ -211,7 +322,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     color: input.color || '#111827',
     modelId: input.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? 'codex') : null,
+    codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
     capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags : [],
     toolPermissions:
       Array.isArray(input.toolPermissions) && input.toolPermissions.length
@@ -232,6 +343,7 @@ function normalizeLibraryState(value: unknown): AgentLibraryState {
     ? (parsed.agents.map(normalizeSavedAgent).filter(Boolean) as SavedAgentConfig[])
     : defaultAgentConfigs
   agents = upgradeDefaultAgentPresets(agents)
+  agents = dedupeSavedAgents(agents)
 
   // 迁移：如果缺少 orchestrator，自动添加
   const hasOrchestrator = agents.some((a) => (a.roleType ?? inferRoleType(a)) === 'orchestrator')
@@ -249,6 +361,31 @@ function normalizeLibraryState(value: unknown): AgentLibraryState {
   return { schemaVersion: 2, agents, relations: pruned }
 }
 
+function defaultCodeAgentTypeFor(
+  input: Partial<Pick<AgentConfigInput, 'roleType' | 'name' | 'role' | 'capabilityTags'>>,
+) {
+  const roleType = input.roleType ?? inferRoleType(input)
+  const preset = roleType === 'custom' ? undefined : presetForRole(roleType)
+  return preset?.codeAgentType ?? 'codex'
+}
+
+function dedupeSavedAgents(agents: SavedAgentConfig[]) {
+  const seen = new Set<string>()
+  return agents.filter((agent) => {
+    const runtimeType = (agent.runtimeType ?? 'llm').trim().toLowerCase()
+    const codeAgentType = runtimeType === 'code-agent' ? (agent.codeAgentType ?? '').trim().toLowerCase() : ''
+    const key = [
+      agent.name.trim().toLowerCase(),
+      agent.role.trim().toLowerCase(),
+      runtimeType,
+      codeAgentType,
+    ].join('|')
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 function upgradeDefaultAgentPresets(agents: SavedAgentConfig[]) {
   const defaultNamesByRole: Record<string, string[]> = {
     orchestrator: ['Orchestrator'],
@@ -263,6 +400,7 @@ function upgradeDefaultAgentPresets(agents: SavedAgentConfig[]) {
     const preset = roleType === 'custom' ? undefined : presetForRole(roleType)
     const defaultNames = defaultNamesByRole[roleType] ?? []
     if (!preset || !defaultNames.includes(agent.name)) return agent
+    if (hasUserEditedAgent(agent)) return agent
 
     return (
       normalizeSavedAgent({
@@ -271,15 +409,27 @@ function upgradeDefaultAgentPresets(agents: SavedAgentConfig[]) {
         id: agent.id,
         modelId: agent.modelId ?? preset.modelId,
         runtimeType: agent.runtimeType ?? preset.runtimeType,
-        codeAgentType:
-          agent.codeAgentType === 'claude-code' && !agent.modelId?.trim()
-            ? preset.codeAgentType
-            : (agent.codeAgentType ?? preset.codeAgentType),
+        codeAgentType: shouldUsePresetCodeAgentType(agent, preset)
+          ? preset.codeAgentType
+          : (agent.codeAgentType ?? preset.codeAgentType),
         createdAt: agent.createdAt,
-        updatedAt: new Date().toISOString(),
+        updatedAt: agent.updatedAt,
       }) ?? agent
     )
   })
+}
+
+function hasUserEditedAgent(agent: SavedAgentConfig) {
+  const created = Date.parse(agent.createdAt)
+  const updated = Date.parse(agent.updatedAt)
+  if (!Number.isFinite(created) || !Number.isFinite(updated)) return true
+  return Math.abs(updated - created) > 1000
+}
+
+function shouldUsePresetCodeAgentType(agent: SavedAgentConfig, preset: NonNullable<ReturnType<typeof presetForRole>>) {
+  if (preset.runtimeType !== 'code-agent') return false
+  if (!agent.codeAgentType) return true
+  return false
 }
 
 function normalizeSavedRelation(value: unknown): SavedAgentRelation | null {

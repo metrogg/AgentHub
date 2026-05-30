@@ -36,7 +36,6 @@ import {
 } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { runtimeLabel, codeAgentLabel, sandboxLabel } from '../lib/agentDisplay'
-import { filterModelsForCodeAgent } from '../lib/modelCompatibility'
 import { pickWorkspaceFolder } from '../lib/native'
 import { agentRolePresets } from '../lib/agentRolePresets'
 import { cn } from '../lib/utils'
@@ -875,7 +874,8 @@ function AgentCard({
   onDelete: () => void
 }) {
   const { t } = useI18n()
-  const modelLabel = modelName(agent.modelId, models)
+  const modelLabel =
+    agent.runtimeType === 'code-agent' ? '由 Coding Tools 控制' : modelName(agent.modelId, models)
   const visibleTags = agent.capabilityTags.length
     ? agent.capabilityTags.slice(0, 3)
     : [runtimeLabel(agent.runtimeType)]
@@ -981,11 +981,8 @@ function AgentDialog({
 }) {
   const { t } = useI18n()
   const runtimeType = draft.runtimeType ?? 'llm'
-  const modelChoices = filterModelsForCodeAgent(
-    models,
-    runtimeType === 'code-agent' ? draft.codeAgentType : null,
-    draft.modelId ?? null,
-  )
+  const usesCodingCli = runtimeType === 'code-agent'
+  const modelChoices = usesCodingCli ? [] : models
   const selectClass =
     'h-10 rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400 disabled:bg-neutral-50 disabled:text-neutral-300'
 
@@ -1068,6 +1065,7 @@ function AgentDialog({
               const nextRuntime = event.target.value as WorkspaceAgent['runtimeType']
               onChange({
                 runtimeType: nextRuntime,
+                modelId: draft.modelId ?? null,
                 codeAgentType:
                   nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
                 ...(nextRuntime === 'mcp'
@@ -1107,18 +1105,24 @@ function AgentDialog({
             <option value="opencode">OpenCode</option>
             <option value="gemini">Gemini CLI</option>
           </select>
-          <select
-            value={draft.modelId ?? ''}
-            onChange={(event) => onChange({ modelId: event.target.value || null })}
-            className={selectClass}
-          >
-            <option value="">{t('自动模型')}</option>
-            {modelChoices.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.name || model.modelId}
-              </option>
-            ))}
-          </select>
+          {usesCodingCli ? (
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
+              {t('模型由 Coding Tools 页面统一管理，这里只能切换 Coding CLI。')}
+            </div>
+          ) : (
+            <select
+              value={draft.modelId ?? ''}
+              onChange={(event) => onChange({ modelId: event.target.value || null })}
+              className={selectClass}
+            >
+              <option value="">{t('自动模型')}</option>
+              {modelChoices.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name || model.modelId}
+                </option>
+              ))}
+            </select>
+          )}
           <select
             value={draft.sandboxPolicy ?? 'workspace-write'}
             onChange={(event) =>

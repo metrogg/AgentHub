@@ -79,7 +79,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: false,
     roleProfile: {
       goal: '作为群聊默认入口，规划阶段、调度 Agent 集群并汇总交付。',
       responsibilities: ['理解需求', '编写计划', '阶段推进', '调度 Agent', '汇总结果', '风险控制'],
@@ -110,7 +110,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     sandboxPolicy: 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: false,
     roleProfile: {
       goal: '把模糊用户目标转成可规划任务。',
       responsibilities: ['澄清目标', '整理约束', '定义验收标准'],
@@ -137,7 +137,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     sandboxPolicy: 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: false,
     roleProfile: {
       goal: '把需求和资料转成可实现的产品/页面设计方案。',
       responsibilities: ['信息架构', '页面结构', '视觉方向', '交互流程', '素材需求'],
@@ -164,7 +164,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     sandboxPolicy: 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: false,
     roleProfile: {
       goal: '提供可追溯事实和方案比较。',
       responsibilities: ['事实收集', '图片素材收集', '竞品/案例分析', '上下文扫描', '风险标记'],
@@ -185,13 +185,13 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
       '你是 Builder。你负责根据总指挥派发的任务和 Designer 的方案实现代码。先读现有项目风格，再小步修改；完成后说明改了什么、验证了什么、剩余风险是什么。不要擅自扩大范围。',
     color: '#10b981',
     runtimeType: 'code-agent',
-    codeAgentType: 'codex',
+    codeAgentType: 'opencode',
     capabilityTags: ['code', 'implementation', 'frontend', 'workspace-write'],
     toolPermissions: ['chat', 'workspace:read', 'workspace:write'],
     sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: false,
     roleProfile: {
       goal: '按总指挥派发的阶段任务实现可运行产物。',
       responsibilities: ['代码修改', '资源接入', '本地验证', '产物记录'],
@@ -218,7 +218,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     sandboxPolicy: 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: false,
     roleProfile: {
       goal: '可靠地验证代码变更是否通过自动化检查。',
       responsibilities: ['运行测试', '执行构建', '类型检查', '输出结构化结果'],
@@ -245,7 +245,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     sandboxPolicy: 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: false,
     roleProfile: {
       goal: '验收 Agent 集群产物是否满足用户目标。',
       responsibilities: ['体验验收', '内容完整性检查', 'diff 审查', '测试缺口', '回归风险'],
@@ -272,7 +272,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     sandboxPolicy: 'read-only',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
-    approvalRequired: true,
+    approvalRequired: false,
     roleProfile: {
       goal: '把协作过程整理成用户可决策的交付结果。',
       responsibilities: ['最终汇总', '风险说明', '合并建议'],

@@ -237,6 +237,35 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
     }
   })
 
+export async function getCodingToolsWorkbenchStatus() {
+  const statuses = new Map((await probeTools(probes)).map((item) => [item.id, item]))
+  const executionEnabled = await getBooleanSetting(
+    'AGENTHUB_ENABLE_CODE_AGENT_EXECUTION',
+    env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION,
+  )
+  return {
+    platform: process.platform,
+    localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES,
+    executionEnabled,
+    items: agentAdapters.map((adapter) => {
+      const status = statuses.get(adapter.id)
+      const installed = Boolean(status?.installed)
+      const configured = Boolean(status?.configured)
+      return {
+        ...adapter,
+        installed,
+        configured,
+        version: status?.version ?? null,
+        configEnv: status?.configEnv ?? adapter.envKey,
+        configMessage: status?.configMessage ?? 'CLI 探测状态不可用。',
+        executionEnabled,
+        ready: installed && configured && executionEnabled,
+        readiness: adapterReadiness({ installed, configured, executionEnabled }),
+      }
+    }),
+  }
+}
+
 async function ensureCodingToolsStartupLifecycle() {
   const [settingsChanged, repairedAgents] = await Promise.all([
     ensureDefaultCodingToolSettings(),

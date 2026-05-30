@@ -172,6 +172,20 @@ async function _runAgentReply(
   const isGroupSession = await checkIsGroupSession(sessionId)
   const trimmedHistory = isGroupSession ? trimHistoryForHandoff(historyAsc) : historyAsc
 
+  // 检测是否是继续输出：如果用户回复了一条 agent 消息，且该消息包含 codeAgentRun.sessionId，则为继续输出
+  let isContinueSession = false
+  if (userMsg.replyToMessageId && profile?.runtimeType === 'code-agent') {
+    const repliedTo = historyAsc.find((m) => m.id === userMsg.replyToMessageId)
+    if (repliedTo?.metadata && typeof repliedTo.metadata === 'object') {
+      const metadata = repliedTo.metadata as Record<string, unknown>
+      const codeAgentRun = metadata.codeAgentRun as Record<string, unknown> | undefined
+      if (codeAgentRun?.sessionId && typeof codeAgentRun.sessionId === 'string') {
+        isContinueSession = true
+        logger.info({ sessionId, replyToMessageId: userMsg.replyToMessageId, claudeSessionId: codeAgentRun.sessionId }, 'Continuing Claude Code session')
+      }
+    }
+  }
+
   const streamMsgId = crypto.randomUUID()
 
   broadcast(sessionId, {
@@ -195,16 +209,18 @@ async function _runAgentReply(
         const preview = repliedTo.content.slice(0, 200)
         return `[回复 ${repliedTo.senderType === 'user' ? '用户' : 'Agent'}: ${preview}${repliedTo.content.length > 200 ? '...' : ''}]\n${userMsg.content}`
       })()
-      const historyWithReply = trimmedHistory.map((m) => {
-        if (!m.replyToMessageId) return { senderType: m.senderType, content: m.content }
-        const repliedTo = trimmedHistory.find((x) => x.id === m.replyToMessageId)
-        if (!repliedTo) return { senderType: m.senderType, content: m.content }
-        const preview = repliedTo.content.slice(0, 200)
-        return {
-          senderType: m.senderType,
-          content: `[回复 ${repliedTo.senderType === 'user' ? '用户' : 'Agent'}: ${preview}${repliedTo.content.length > 200 ? '...' : ''}]\n${m.content}`,
-        }
-      })
+      const historyWithReply = trimmedHistory
+        .filter((m) => m.id !== userMsg.id)
+        .map((m) => {
+          if (!m.replyToMessageId) return { senderType: m.senderType, content: m.content }
+          const repliedTo = trimmedHistory.find((x) => x.id === m.replyToMessageId)
+          if (!repliedTo) return { senderType: m.senderType, content: m.content }
+          const preview = repliedTo.content.slice(0, 200)
+          return {
+            senderType: m.senderType,
+            content: `[回复 ${repliedTo.senderType === 'user' ? '用户' : 'Agent'}: ${preview}${repliedTo.content.length > 200 ? '...' : ''}]\n${m.content}`,
+          }
+        })
       const ctx = {
         sessionId,
         prompt: promptWithReply,
@@ -213,6 +229,7 @@ async function _runAgentReply(
         signal: run.controller.signal,
         workspacePath: profileWithUserMemory.projectPath ?? null,
         envelope,
+        continueSession: isContinueSession,
       }
 
       for await (const chunk of runtime.execute(ctx)) {

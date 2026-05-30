@@ -17,6 +17,25 @@ const QUICK_PROMPT_SYSTEM = [
   '必须只输出 JSON，不要输出 Markdown、解释、编号、代码块或多余文本。',
 ].join('\n')
 
+const QUICK_PROMPT_ANGLES = [
+  '移动端与桌面端协同',
+  '代码重构和架构边界',
+  '接口错误排查',
+  'Agent 群聊任务分工',
+  '模型选择和提示词调优',
+  '产品交互细节打磨',
+  '学习路线和知识迁移',
+  '办公文档与会议整理',
+  '轻量小游戏或创意 demo',
+  '性能优化和资源占用',
+  '测试策略和验收标准',
+  '自动化脚本与工具链',
+  '项目启动前的技术方案',
+  '用户画像和个人记忆配置',
+  '工作区文件和产物预览',
+  'PR、提交信息和代码审查',
+]
+
 export const welcomeRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
   .post('/quick-prompts', async (c) => {
@@ -32,7 +51,7 @@ export const welcomeRoutes = new Hono<{ Variables: AuthVariables }>()
     let items: QuickPromptItem[] = []
 
     try {
-      items = await generateQuickPrompts(seed, count)
+      items = seededShuffle(await generateQuickPrompts(seed, count), `${seed}:generated-order`).slice(0, count)
     } catch (error: any) {
       source = 'fallback'
       logger.warn({ err: error?.message || String(error) }, 'Failed to generate welcome quick prompts')
@@ -78,10 +97,12 @@ async function generateQuickPrompts(seed: string, count: number): Promise<QuickP
 }
 
 function buildQuickPromptInstruction(seed: string, count: number) {
+  const angles = seededShuffle(QUICK_PROMPT_ANGLES, seed).slice(0, Math.min(6, count))
   return [
     `请生成 ${count} 个简体中文快速对话问题。`,
     `变化种子：${seed}`,
     `生成时间：${new Date().toISOString()}`,
+    `本次必须优先参考这些差异化切入点：${angles.join('、')}。`,
     '',
     '输出限制：',
     '- 只返回一个 JSON 对象，格式为 {"items":[{"label":"...","prompt":"..."}]}。',
@@ -153,6 +174,14 @@ function fallbackQuickPrompts(seed: string, count: number): QuickPromptItem[] {
     ['如何排查接口 500', '请给我一套排查接口 500 错误的步骤，从日志到数据库逐层检查。'],
     ['把想法变成任务卡', '把一个模糊想法整理成任务卡，包含目标、范围、验收标准。'],
     ['解释一个复杂概念', '请用类比、例子和一句话总结，解释一个复杂技术概念。'],
+    ['优化一个移动端底栏', '请从图标、文字、触控区域和视觉状态四个角度，优化一个移动端底栏。'],
+    ['设计 Agent 工作监控栏', '帮我设计一个右侧 Agent 工作监控栏，包含状态、最近输出和快捷配置。'],
+    ['帮我写一段 PR 描述', '请把一组改动整理成 PR 描述，包含背景、改动、验证和风险。'],
+    ['给我一套模型切换策略', '帮我设计一套 Agent 和 Coding Tools 共用的模型切换策略。'],
+    ['压缩一个复杂需求', '把一个复杂需求压缩成 5 条可执行任务，并标注优先级。'],
+    ['做一个启动检查清单', '给我一份应用启动失败的检查清单，覆盖端口、数据库、构建和权限。'],
+    ['规划一个文件预览面板', '设计一个能预览 HTML、图片、文档和 diff 的右侧面板信息架构。'],
+    ['写一个调试复盘模板', '给我一个调试复盘模板，用来记录现象、假设、验证过程和结论。'],
   ] as const
   return seededShuffle(pool, seed)
     .slice(0, count)

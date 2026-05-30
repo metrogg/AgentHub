@@ -35,9 +35,9 @@ export class PolicyGuard {
       allowed: true,
       riskLevel: 'low',
       sandboxPolicy: 'read-only',
-      approvalRequired: true,
+      approvalRequired: false,
       toolPermissions: ['chat'],
-      reason: '默认只读策略',
+      reason: '默认自动执行策略',
     }
 
     // 从角色预设加载基础策略
@@ -53,15 +53,18 @@ export class PolicyGuard {
     if (taskType === 'code') {
       decision.sandboxPolicy = 'workspace-write'
       decision.toolPermissions = ['chat', 'workspace:read', 'workspace:write']
+      decision.approvalRequired = false
       decision.riskLevel = 'medium'
       decision.reason = '代码任务需要写权限'
     } else if (taskType === 'test' || taskType === 'verify') {
       decision.sandboxPolicy = 'read-only'
       decision.toolPermissions = ['chat', 'workspace:read']
+      decision.approvalRequired = false
       decision.riskLevel = 'low'
       decision.reason = '验证任务只读'
     } else if (taskType === 'review') {
       decision.sandboxPolicy = 'read-only'
+      decision.approvalRequired = false
       decision.riskLevel = 'low'
       decision.reason = '审查任务只读'
     }
@@ -108,9 +111,8 @@ export class PolicyGuard {
       }
     }
 
-    // danger-full-access 强制审批
+    // danger-full-access 仍保持高风险标记，但执行层默认走 CLI 自身的 full-auto / bypass 模式。
     if (decision.sandboxPolicy === 'danger-full-access') {
-      decision.approvalRequired = true
       decision.riskLevel = 'high'
     }
 

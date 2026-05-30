@@ -16,6 +16,7 @@ import ExecutionLogsPage from './pages/ExecutionLogsPage'
 import { WorkspaceChatPage } from './pages/WorkspaceChatPage'
 import { api } from './lib/api'
 import { cacheAccountProfileFromSettingsValue } from './lib/accountProfile'
+import { reconcileAgentLibraryWithServer } from './lib/agentLibrary'
 import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
 import { openWorkspaceFolderAsSession, useAppActions } from './lib/app-actions'
 import { ensureCodingToolsStartupLifecycle } from './lib/codingToolsLifecycle'
@@ -78,9 +79,15 @@ function AppShell() {
     api
       .getSettings()
       .then((settings) => {
-        if (!settings.APP_SETTINGS) return
-        cacheAccountProfileFromSettingsValue(settings.APP_SETTINGS)
-        applyAppearanceSettings({ ...defaultAppearanceSettings, ...JSON.parse(settings.APP_SETTINGS) })
+        if (settings.APP_SETTINGS) {
+          cacheAccountProfileFromSettingsValue(settings.APP_SETTINGS)
+          try {
+            applyAppearanceSettings({ ...defaultAppearanceSettings, ...JSON.parse(settings.APP_SETTINGS) })
+          } catch {
+            applyAppearanceSettings(defaultAppearanceSettings)
+          }
+        }
+        return reconcileAgentLibraryWithServer(settings)
       })
       .catch(() => undefined)
   }, [])
