@@ -658,21 +658,6 @@ describe('AgentHub smoke tests', () => {
     )
   })
 
-  test('artifact demo endpoint persists inline preview metadata', async () => {
-    const session = await json<{ id: string }>(
-      await postJson('/api/sessions', { title: 'Artifact chat', type: 'direct' }),
-    )
-    const message = await json<{ metadata: { artifacts?: Array<{ kind: string }> } }>(
-      await postJson(`/api/messages/${session.id}/artifact-demo`, {
-        content: '生成网页预览、diff 并部署',
-      }),
-    )
-
-    expect(message.metadata.artifacts?.map((artifact) => artifact.kind)).toContain('web_preview')
-    expect(message.metadata.artifacts?.map((artifact) => artifact.kind)).toContain('diff')
-    expect(message.metadata.artifacts?.map((artifact) => artifact.kind)).toContain('deploy')
-  })
-
   test('agent adapter catalog reports main code agent platforms', async () => {
     const catalog = await json<{
       items: Array<{

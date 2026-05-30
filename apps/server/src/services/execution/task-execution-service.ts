@@ -3,8 +3,10 @@ import { logger } from '../../lib/logger'
 import { runAgentReply, type AgentRunProfile, type MessageRow } from '../agent-runner'
 import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
 import { prepareAgentWorkdir, type AgentWorkdir } from './agent-workdir'
-import { TaskStatus } from '@agenthub/shared'
+import { TaskStatus, type TaskType } from '@agenthub/shared'
 import { env } from '../../env'
+
+const STRICT_TASK_TYPES = new Set<TaskType>(['code', 'test', 'verify'])
 
 export interface TaskExecutionInput {
   taskId: string
@@ -12,6 +14,7 @@ export interface TaskExecutionInput {
   workspaceId: string
   profile: AgentRunProfile
   prompt: string
+  taskType?: TaskType | undefined
   projectPath?: string | null
   runId?: string
   signal?: AbortSignal
@@ -29,9 +32,14 @@ export interface TaskExecutionOutput {
   output: string
   artifacts: Array<Record<string, unknown>>
   error?: string
+  warning?: string
   durationMs: number
   /** 实际执行目录（写入型 Agent 会落在工作区下的 .agenthub/workdirs） */
   executionPath?: string | null
+}
+
+export const __taskExecutionTestHooks = {
+  shouldAcceptPartialExecution,
 }
 
 /**
@@ -179,6 +187,25 @@ export class TaskExecutionService {
 
       if (!result.ok) {
         const error = output.trim() || 'Agent 执行失败，请检查日志'
+        const partialAccepted = shouldAcceptPartialExecution(input.taskType, artifacts)
+        if (partialAccepted) {
+          await db
+            .update(workspaceTasks)
+            .set({
+              status: TaskStatus.Done,
+              completedAt: new Date(),
+              artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
+            })
+            .where(eq(workspaceTasks.id, taskId))
+          return {
+            status: TaskStatus.Done,
+            output,
+            artifacts,
+            warning: error,
+            durationMs: taskDuration,
+            executionPath,
+          }
+        }
         await db
           .update(workspaceTasks)
           .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error.slice(0, 2000) })
@@ -210,3 +237,12 @@ export class TaskExecutionService {
 }
 
 export const taskExecutionService = new TaskExecutionService()
+
+export function shouldAcceptPartialExecution(
+  taskType: TaskType | undefined,
+  artifacts: Array<Record<string, unknown>>,
+) {
+  if (!taskType) return false
+  if (artifacts.length === 0) return false
+  return !STRICT_TASK_TYPES.has(taskType)
+}

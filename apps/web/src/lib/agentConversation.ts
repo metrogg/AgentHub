@@ -343,7 +343,6 @@ function findAgentDirectSession(
       if (session.workspaceAgentId && session.workspaceAgentId !== workspaceAgentId) return false
       if (isGeneratedTaskMetadata(session.metadata)) return false
       const metadata = session.metadata ?? {}
-      if (metadata.kind === 'workspace-agent-child') return true
       if (metadata.kind && metadata.kind !== 'agent-direct') return false
       return sessionLooksLikeAgentSession(session.title, agentName, agentRole)
     }) ?? null

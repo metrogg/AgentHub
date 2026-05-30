@@ -305,6 +305,8 @@ export const __codeAgentAdapterTestHooks = {
     adapters.opencode.buildArgs(prompt, options),
   consumeClaudeStreamJson,
   extractClaudeResultMessage,
+  friendlyCodeAgentError: (output: string, displayName = 'Coding Tools') =>
+    friendlyCodeAgentError(output, { displayName } as CodeAgentAdapter),
 }
 
 export function isCodeAgentProfile(profile?: AgentRunProfile) {
@@ -1375,6 +1377,8 @@ async function buildCodeAgentRunMetadata(input: {
     toolCalls: input.liveToolCalls?.slice(0, 120),
     artifacts: dedupeArtifacts(artifacts).slice(0, 80),
     finalMessage: input.finalMessage,
+    partialSuccess,
+    warning: partialSuccess ? friendlyCodeAgentError(input.output, input.adapter) : undefined,
     reviewRequired: requiresCodeAgentOutputReview(input.adapter),
     logs: input.liveLogs?.slice(-80),
     steps: buildFinalRunSteps({
@@ -1383,6 +1387,7 @@ async function buildCodeAgentRunMetadata(input: {
       commands,
       files,
       liveSteps: input.liveSteps ?? [],
+      partialSuccess,
     }),
     diagnostics: diagnostics || undefined,
   }
@@ -1403,6 +1408,7 @@ function emptyCodeAgentRunMetadata(
     files: [],
     toolCalls: [],
     artifacts: [],
+    partialSuccess: false,
     reviewRequired: requiresCodeAgentOutputReview(adapter),
     steps: [
       {
@@ -1426,8 +1432,9 @@ function buildFinalRunSteps(input: {
   commands: CodeAgentRunMetadata['commands']
   files: CodeAgentRunMetadata['files']
   liveSteps: NonNullable<CodeAgentRunMetadata['steps']>
+  partialSuccess?: boolean
 }): NonNullable<CodeAgentRunMetadata['steps']> {
-  const finalStepStatus = input.status === 'completed' ? 'completed' : 'failed'
+  const finalStepStatus = input.status === 'completed' || input.partialSuccess ? 'completed' : 'failed'
   const steps: NonNullable<CodeAgentRunMetadata['steps']> = input.liveSteps.map((step) => ({
     ...step,
     status: step.status === 'running' ? finalStepStatus : step.status,

@@ -8,12 +8,10 @@ import {
   CheckCircle2,
   Circle,
   FolderOpen,
-  GitBranch,
   MessageSquare,
   PanelLeft,
   Pencil,
   Plus,
-  Play,
   RefreshCw,
   Settings2,
   Sparkles,
@@ -83,8 +81,6 @@ export default function AgentWorldPage() {
     addTask,
     updateTask,
     deleteTask,
-    dispatchTask,
-    summarize,
     openGroupSession,
   } = useWorkspaceStore()
   const [agentDialogMode, setAgentDialogMode] = useState<'create' | 'edit' | null>(null)
@@ -98,7 +94,6 @@ export default function AgentWorldPage() {
   const [savingGoal, setSavingGoal] = useState(false)
   const [savingAgent, setSavingAgent] = useState(false)
   const [openingFolder, setOpeningFolder] = useState(false)
-  const [busyTaskId, setBusyTaskId] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
@@ -282,30 +277,6 @@ export default function AgentWorldPage() {
     toast('已添加任务')
   }
 
-  async function dispatch(task: WorkspaceTask, openAfterDispatch = true) {
-    setBusyTaskId(task.id)
-    try {
-      const sessionId = await dispatchTask(task.id)
-      if (sessionId && openAfterDispatch) navigate(`/chat/${sessionId}`)
-      if (sessionId && !openAfterDispatch) toast('任务已分派')
-    } finally {
-      setBusyTaskId(null)
-    }
-  }
-
-  async function dispatchAll() {
-    const runnable = tasks.filter((task) => !task.sessionId)
-    for (const task of runnable) {
-      await dispatch(task, false)
-    }
-    if (!runnable.length) toast('所有任务都已分派')
-  }
-
-  async function openSummary() {
-    const sessionId = await summarize()
-    if (sessionId) navigate(`/chat/${sessionId}`)
-  }
-
   async function enterGroupChat() {
     const sessionId = await openGroupSession()
     if (sessionId) navigate(`/chat/${sessionId}`)
@@ -352,15 +323,6 @@ export default function AgentWorldPage() {
             >
               <RefreshCw className={cn('h-4 w-4', loadingList && 'animate-spin')} />
               {t('刷新')}
-            </button>
-            <button
-              type="button"
-              onClick={openSummary}
-              disabled={!currentId || !tasks.length}
-              className="inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-200"
-            >
-              <GitBranch className="h-4 w-4" />
-              {t('群聊汇总')}
             </button>
             <button
               type="button"
@@ -451,25 +413,16 @@ export default function AgentWorldPage() {
                         />
                       </label>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={saveGoal}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={saveGoal}
                         className="inline-flex h-10 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 text-sm font-medium shadow-sm transition hover:bg-neutral-50"
-                      >
-                        <Pencil className="h-4 w-4" />
-                        {savingGoal ? t('保存中') : t('保存')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={dispatchAll}
-                        disabled={!tasks.length}
-                        className="inline-flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-200"
-                      >
-                        <Play className="h-4 w-4" />
-                        {t('一键分派')}
-                      </button>
-                    </div>
+                        >
+                          <Pencil className="h-4 w-4" />
+                          {savingGoal ? t('保存中') : t('保存')}
+                        </button>
+                      </div>
                   </div>
                 </div>
                 <div className="mt-6 grid gap-3 sm:grid-cols-4">
@@ -565,16 +518,14 @@ export default function AgentWorldPage() {
                             task={task}
                             agent={task.agentId ? agentMap.get(task.agentId) : undefined}
                             agents={agents}
-                            busy={busyTaskId === task.id}
                             onPatch={(patch) => updateTask(task.id, patch)}
-                            onDispatch={() => dispatch(task)}
                             onOpen={() => openTaskSession(task)}
                             onDelete={() => deleteTask(task.id)}
                           />
                         ))}
                         {!tasks.length && (
                           <div className="rounded-2xl border border-dashed border-neutral-200 p-8 text-center text-sm text-neutral-400">
-                            {t('还没有任务。添加任务后即可为每个 Agent 创建独立会话。')}
+                            {t('还没有任务。这里用于查看 Orchestrator 生成的任务，也可以手动补充备忘。')}
                           </div>
                         )}
                       </div>
@@ -584,20 +535,11 @@ export default function AgentWorldPage() {
                   <aside className="space-y-4">
                     <Panel title="群聊状态">
                       <div className="grid grid-cols-3 gap-2">
-                        <MiniStat value={pendingCount} label="待分派" />
+                        <MiniStat value={pendingCount} label="待执行" />
                         <MiniStat value={runningCount} label="推进中" />
                         <MiniStat value={doneCount} label="完成" />
                         <MiniStat value={failedCount} label="失败" />
                       </div>
-                      <button
-                        type="button"
-                        onClick={openSummary}
-                        disabled={!tasks.length}
-                        className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
-                      >
-                        <MessageSquare className="h-4 w-4" />
-                        {t('汇总所有会话')}
-                      </button>
                     </Panel>
 
                     <Panel title="会话入口">
@@ -625,7 +567,7 @@ export default function AgentWorldPage() {
                           })}
                         {!tasks.some((task) => task.sessionId) && (
                           <div className="rounded-xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-400">
-                            {t('分派任务后，这里会出现每个 Agent 的独立会话入口。')}
+                            {t('Orchestrator 执行后，这里会出现每个 Agent 的任务会话入口。')}
                           </div>
                         )}
                       </div>
@@ -639,7 +581,7 @@ export default function AgentWorldPage() {
                         />
                         <Rule
                           title="汇总"
-                          text="群聊汇总会读取已分派任务的最新 Agent 输出，生成统一行动方案。"
+                          text="群聊会读取 Orchestrator 任务链路里的 Agent 产出，生成统一行动方案。"
                         />
                         <Rule
                           title="可追踪"
@@ -1296,16 +1238,13 @@ function TaskRow({
   task,
   agent,
   agents,
-  busy,
   onPatch,
-  onDispatch,
   onOpen,
   onDelete,
 }: {
   task: WorkspaceTask
   agent?: WorkspaceAgent
   agents: WorkspaceAgent[]
-  busy: boolean
   onPatch: (
     patch: Partial<{
       title: string
@@ -1314,7 +1253,6 @@ function TaskRow({
       status: TaskStatus
     }>,
   ) => void
-  onDispatch: () => void
   onOpen: () => void
   onDelete: () => void
 }) {
@@ -1380,15 +1318,6 @@ function TaskRow({
           )}
           <button
             type="button"
-            onClick={onDispatch}
-            disabled={busy}
-            className="inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:bg-neutral-200"
-          >
-            {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            {task.status === 'failed' ? t('重试') : task.sessionId ? t('重新分派') : t('分派')}
-          </button>
-          <button
-            type="button"
             onClick={onDelete}
             className="grid h-9 w-9 place-items-center rounded-xl text-neutral-300 hover:bg-red-50 hover:text-red-500"
           >
@@ -1442,7 +1371,7 @@ function nextStatus(status: TaskStatus): TaskStatus {
 }
 
 function statusLabel(status: TaskStatus) {
-  if (status === 'pending') return '待分派'
+  if (status === 'pending') return '待执行'
   if (status === 'running') return '进行中'
   if (status === 'failed') return '失败'
   return '已完成'

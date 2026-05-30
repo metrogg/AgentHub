@@ -62,8 +62,6 @@ function agentSessionVisibility(
   if (isOrchestratorTaskMetadata(metadata))
     return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
   if (metadata.hiddenFromSessionTree) return 'hidden'
-  if (metadata.kind === 'workspace-agent-child') return 'hidden'
-  if (looksLikeLegacyAgentChildSession(session)) return 'hidden'
   if (groupWorkspaceIds.has(session.workspaceId)) return 'hidden'
   return 'top'
 }
@@ -74,11 +72,6 @@ function isOrchestratorTaskMetadata(metadata: Record<string, unknown>) {
       metadata.orchestratorTaskId ||
       metadata.orchestratorRunId,
   )
-}
-
-function looksLikeLegacyAgentChildSession(session: Session) {
-  const title = session.title.trim()
-  return title.includes(' / ') || title.includes(' · ') || title.includes(' 路 ')
 }
 
 export function filterSessionTree(

@@ -33,6 +33,8 @@ export const codeAgentRunMetadataSchema = z.object({
   })).optional(),
   artifacts: z.array(z.any()).optional(),
   finalMessage: z.string().optional(),
+  partialSuccess: z.boolean().optional(),
+  warning: z.string().optional(),
   reviewRequired: z.boolean().optional(),
   logs: z.array(z.object({
     id: z.string(),

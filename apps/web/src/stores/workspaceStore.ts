@@ -39,8 +39,6 @@ interface WorkspaceState {
     data: Partial<{ title: string; description: string; agentId: string | null; status: TaskStatus }>
   ) => Promise<void>
   deleteTask: (taskId: string) => Promise<void>
-  dispatchTask: (taskId: string) => Promise<string | null>
-  summarize: () => Promise<string | null>
   openGroupSession: () => Promise<string | null>
 }
 
@@ -160,21 +158,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!id) return
     await api.deleteWorkspaceTask(id, taskId)
     set((s) => ({ tasks: s.tasks.filter((t) => t.id !== taskId) }))
-  },
-
-  async dispatchTask(taskId) {
-    const id = get().currentId
-    if (!id) return null
-    const { task, sessionId } = await api.dispatchWorkspaceTask(id, taskId)
-    set((s) => ({ tasks: s.tasks.map((t) => (t.id === taskId ? task : t)) }))
-    return sessionId
-  },
-
-  async summarize() {
-    const id = get().currentId
-    if (!id) return null
-    const { sessionId } = await api.workspaceSummary(id)
-    return sessionId
   },
 
   async openGroupSession() {

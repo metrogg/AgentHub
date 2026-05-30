@@ -205,29 +205,22 @@ type PreviewActionItem = {
 
 function classifyAgentSession(
   session: ReturnType<typeof useChatStore.getState>['currentSession'],
-  sessions: ReturnType<typeof useChatStore.getState>['sessions'],
 ) {
   if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId)
     return 'regular'
   const metadata = session.metadata ?? {}
   if (metadata.kind === 'agent-direct') return 'agent-direct'
-  if (metadata.kind === 'workspace-agent-child') return 'workspace-agent-child'
   if (metadata.orchestratorTaskId || metadata.orchestratorRunId || metadata.hiddenFromSessionTree) {
     return 'orchestrator-task'
   }
-  const hasGroupParent = sessions.some(
-    (item) => item.type === 'group' && item.workspaceId === session.workspaceId,
-  )
-  return hasGroupParent ? 'workspace-agent-child' : 'agent-direct'
+  return 'agent-direct'
 }
 
 export const Thread: FC = () => {
   const currentSession = useChatStore((state) => state.currentSession)
-  const sessions = useChatStore((state) => state.sessions)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
-  const sessionKind = classifyAgentSession(currentSession, sessions)
+  const sessionKind = classifyAgentSession(currentSession)
   const isAgentDirectSession = sessionKind === 'agent-direct'
-  const isWorkspaceChildSession = sessionKind === 'workspace-agent-child'
   const taskBoard = useChatStore((s) => s.taskBoard)
   const agentActivity = useChatStore((s) => s.agentActivity)
   const visibleTaskBoard =
@@ -291,7 +284,7 @@ export const Thread: FC = () => {
           )}
           {!isGroupSession &&
             !isOrchestratorTaskChild &&
-            (isAgentDirectSession || isWorkspaceChildSession) && (
+            isAgentDirectSession && (
               <AgentChatHeader onToggleDetails={() => setChildDetailsOpen((open) => !open)} />
             )}
           {isGroupSession && visibleTaskBoard && selectedAgentTab === null && (
@@ -327,7 +320,7 @@ export const Thread: FC = () => {
           />
         )}
       </div>
-      {!isGroupSession && (isAgentDirectSession || isWorkspaceChildSession) && (
+      {!isGroupSession && isAgentDirectSession && (
         <WorkspaceChildSessionDrawer
           open={childDetailsOpen}
           onClose={() => setChildDetailsOpen(false)}
@@ -2125,20 +2118,11 @@ const ComposerMenu: FC<{
 }) => {
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const normalizedAgentQuery = agentQuery.trim().toLowerCase()
-  const legacyAgents = [
-    { title: '@Orchestrator', desc: '总指挥，规划阶段并调度 Agent 集群', color: '#7c3aed' },
-    { title: '@Researcher', desc: '资料、图片和事实收集', color: '#f59e0b' },
-    { title: '@Designer', desc: '页面结构、视觉方向和内容组织', color: '#6366f1' },
-    { title: '@Builder', desc: '实现、联调和本地验证', color: '#10b981' },
-    { title: '@QA Reviewer', desc: '验收、体验检查和风险审查', color: '#ef4444' },
-  ]
-  const agentRows = agents.length
-    ? agents.map((agent) => ({
-        title: `@${agent.name}`,
-        desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${(agent.capabilityTags ?? []).length ? ` · ${(agent.capabilityTags ?? []).slice(0, 3).join(', ')}` : ''}`,
-        color: agent.color ?? '#111827',
-      }))
-    : legacyAgents
+  const agentRows = agents.map((agent) => ({
+    title: `@${agent.name}`,
+    desc: `${agent.role} · ${agent.runtimeType}${agent.codeAgentType ? `/${agent.codeAgentType}` : ''}${(agent.capabilityTags ?? []).length ? ` · ${(agent.capabilityTags ?? []).slice(0, 3).join(', ')}` : ''}`,
+    color: agent.color ?? '#111827',
+  }))
   const filteredAgentRows = normalizedAgentQuery
     ? agentRows.filter((item) =>
         `${item.title} ${item.desc}`.toLowerCase().includes(normalizedAgentQuery),
@@ -3428,7 +3412,7 @@ const CodeAgentStatusCard: FC<{
       ? 'text-blue-600'
       : data.status === 'completed'
         ? 'text-neutral-500'
-        : data.status === 'timed-out'
+        : data.partialSuccess || data.status === 'timed-out'
           ? 'text-amber-600'
           : 'text-red-600'
 
@@ -3438,16 +3422,21 @@ const CodeAgentStatusCard: FC<{
         <div className={cn('inline-flex min-w-0 items-center gap-2', statusTone)}>
           {data.status === 'running' ? (
             <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          ) : data.partialSuccess ? (
+            <AlertTriangle className="h-4 w-4 shrink-0" />
           ) : (
             <Clock3 className="h-4 w-4 shrink-0" />
           )}
           <div className="min-w-0">
             <div className="truncate font-medium">
-              {codeAgentStatusLabel(data.status)} · {formatRunDuration(data.durationMs)}
+              {codeAgentStatusLabel(data.status, Boolean(data.partialSuccess))} · {formatRunDuration(data.durationMs)}
             </div>
             <div className="mt-0.5 truncate text-[11px] text-neutral-400">
               {codeAgentRuntimeLabel(data.runtime)} · {data.command}
             </div>
+            {data.warning && (
+              <div className="mt-1 truncate text-[11px] text-amber-700">{data.warning}</div>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
@@ -3971,8 +3960,12 @@ function codeAgentProcessSteps(data: CodeAgentRunMetadata): CodeAgentRunStep[] {
     id: 'fallback-status',
     kind: 'status',
     status:
-      data.status === 'running' ? 'running' : data.status === 'completed' ? 'completed' : 'failed',
-    title: codeAgentStatusLabel(data.status),
+      data.status === 'running'
+        ? 'running'
+        : data.status === 'completed' || data.partialSuccess
+          ? 'completed'
+          : 'failed',
+    title: codeAgentStatusLabel(data.status, Boolean(data.partialSuccess)),
     subtitle: `${codeAgentRuntimeLabel(data.runtime)} · ${formatRunDuration(data.durationMs)}`,
   })
 
@@ -4026,7 +4019,11 @@ function isCodeAgentStep(value: unknown): value is CodeAgentRunStep {
       step.kind === 'command' ||
       step.kind === 'file' ||
       step.kind === 'log') &&
-    (step.status === 'running' || step.status === 'completed' || step.status === 'failed')
+    (step.status === 'running' ||
+      step.status === 'completed' ||
+      step.status === 'failed' ||
+      step.status === 'cancelled' ||
+      step.status === 'timed-out')
   )
 }
 
@@ -4044,7 +4041,8 @@ function codeAgentStepKindLabel(step: CodeAgentRunStep) {
 
 function codeAgentStepIcon(step: CodeAgentRunStep): ReactNode {
   if (step.status === 'running') return <Loader2 className="h-4 w-4 animate-spin" />
-  if (step.status === 'failed') return <AlertTriangle className="h-4 w-4" />
+  if (step.status === 'failed' || step.status === 'cancelled' || step.status === 'timed-out')
+    return <AlertTriangle className="h-4 w-4" />
   if (step.kind === 'command') return <TerminalSquare className="h-4 w-4" />
   if (step.kind === 'file')
     return step.fileStatus === 'created' ? <FilePlusIcon /> : <FileText className="h-4 w-4" />
@@ -4641,11 +4639,12 @@ function formatRunDuration(ms: number) {
   return `${minutes}m ${seconds}s`
 }
 
-function codeAgentStatusLabel(status: CodeAgentRunMetadata['status']) {
+function codeAgentStatusLabel(status: CodeAgentRunMetadata['status'], partialSuccess = false) {
   if (status === 'running') return '正在执行'
   if (status === 'completed') return '执行完成'
   if (status === 'cancelled') return '已停止'
   if (status === 'timed-out') return '已超时'
+  if (partialSuccess) return '已产出，需复核'
   return '执行失败'
 }
 

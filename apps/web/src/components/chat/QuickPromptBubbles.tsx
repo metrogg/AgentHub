@@ -1,14 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Loader2 } from 'lucide-react'
 import type { WelcomeQuickPrompt } from '../../lib/api'
 import { cn } from '../../lib/utils'
-
-const placeholderPrompts: WelcomeQuickPrompt[] = [
-  { id: 'placeholder-1', label: '正在生成快速问题', prompt: '' },
-  { id: 'placeholder-2', label: '为这次打开换一组灵感', prompt: '' },
-  { id: 'placeholder-3', label: '稍等一下', prompt: '' },
-  { id: 'placeholder-4', label: '准备好就能开聊', prompt: '' },
-]
 
 export function createQuickPromptSeed(scope: string) {
   const random =
@@ -44,18 +36,16 @@ export function QuickPromptBubbles({
   prompts: WelcomeQuickPrompt[]
 }) {
   const [activeId, setActiveId] = useState<string | null>(null)
-  const displayPrompts = prompts.length ? prompts : loading ? placeholderPrompts : []
   const promptRows = useMemo(
     () => [
-      displayPrompts.filter((_, index) => index % 2 === 0),
-      displayPrompts.filter((_, index) => index % 2 === 1),
+      prompts.filter((_, index) => index % 2 === 0),
+      prompts.filter((_, index) => index % 2 === 1),
     ].filter((row) => row.length > 0),
-    [displayPrompts],
+    [prompts],
   )
-  const disabled = !prompts.length && loading
 
   function pickPrompt(prompt: WelcomeQuickPrompt) {
-    if (disabled || !prompt.prompt.trim()) return
+    if (!prompt.prompt.trim()) return
     setActiveId(prompt.id)
     window.setTimeout(() => setActiveId(null), 520)
     onPick(prompt.prompt)
@@ -83,18 +73,13 @@ export function QuickPromptBubbles({
                     key={`${prompt.id}-${group}-${index}`}
                     type="button"
                     tabIndex={group === 1 ? -1 : 0}
-                    disabled={disabled}
                     onClick={() => pickPrompt(prompt)}
                     className={cn(
                       'agenthub-quick-prompt-bubble',
-                      (activeId === prompt.id || (!disabled && group === 0 && index === 0 && loading)) &&
-                        'agenthub-quick-prompt-bubble-active',
+                      activeId === prompt.id && 'agenthub-quick-prompt-bubble-active',
                     )}
                     aria-label={`快速对话：${prompt.label}`}
                   >
-                    {loading && !prompts.length && index === 0 && group === 0 && (
-                      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                    )}
                     <span>{prompt.label}</span>
                   </button>
                 ))}

@@ -132,12 +132,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   )
   const messageSessions = useMemo(
     () =>
-      sessions.filter(
-        (session) =>
-          !isPrivateAgentSession(session, groupWorkspaceIds) &&
-          !looksLikeLegacyAgentSession(session, libraryAgents, groupWorkspaceIds),
-      ),
-    [groupWorkspaceIds, libraryAgents, sessions],
+      sessions.filter((session) => !isPrivateAgentSession(session, groupWorkspaceIds)),
+    [groupWorkspaceIds, sessions],
   )
   const baseSessionTree = useMemo(
     () => buildSessionTree(messageSessions, pinnedIds),
@@ -1498,7 +1494,6 @@ function isPrivateAgentSession(
   if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
   const metadata = session.metadata ?? {}
   if (metadata.kind === 'agent-direct') return true
-  if (metadata.kind === 'workspace-agent-child') return false
   if (metadata.kind === 'orchestrator-task' || metadata.hiddenFromSessionTree) return false
   return !groupWorkspaceIds.has(session.workspaceId)
 }
@@ -1506,50 +1501,6 @@ function isPrivateAgentSession(
 function readSavedAgentId(session: Session) {
   const savedAgentId = session.metadata?.savedAgentId
   return typeof savedAgentId === 'string' ? savedAgentId : null
-}
-
-function looksLikeLegacyAgentSession(
-  session: Session,
-  agents: SavedAgentConfig[],
-  groupWorkspaceIds: Set<string>,
-) {
-  if (session.type !== 'direct' || !session.workspaceId) return false
-  const metadata = session.metadata ?? {}
-  if (metadata.kind || metadata.hiddenFromSessionTree) return false
-  if (groupWorkspaceIds.has(session.workspaceId) && session.workspaceAgentId) return false
-
-  const titleParts = session.title
-    .split('/')
-    .map((part) => normalizeSessionText(part))
-    .filter(Boolean)
-  if (titleParts.length < 2) return false
-
-  const aliases = new Set(
-    [
-      'architect',
-      'coder',
-      'researcher',
-      'reviewer',
-      'designer',
-      'builder',
-      'qa reviewer',
-      '规划',
-      '实现',
-      '研究',
-      '审查',
-      '设计',
-      '总指挥',
-      '验收',
-      ...agents.flatMap((agent) =>
-        [agent.name, agent.role].map((part) => normalizeSessionText(part)),
-      ),
-    ].filter(Boolean),
-  )
-  return titleParts.some((part) => aliases.has(part))
-}
-
-function normalizeSessionText(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 function childSessionTitle(session: Session, parent: Session) {
