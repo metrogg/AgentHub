@@ -36,6 +36,7 @@ export interface ExecutionContext {
 
 export type AgentOutputChunk =
   | { kind: 'text'; text: string }
+  | { kind: 'reasoning'; text: string }
   | { kind: 'artifact'; artifact: AgentArtifact }
   | { kind: 'metadata'; metadata: Record<string, unknown> }
 
