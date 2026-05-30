@@ -21,7 +21,7 @@ import { PolicyGuard } from '../policy-guard'
 import { intentRouter } from './intent-router'
 import { streamReply } from '../llm'
 import { buildAgentProfileWithWorktree } from '../agents/profile-builder'
-import { ensureAgentChildSession } from '../workspace/session-manager'
+import { ensureOrchestratorTaskSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST, resolveDefaultWorkDir } from '../execution/agent-execution-envelope'
 import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 import { env } from '../../env'
@@ -425,12 +425,14 @@ export class OrchestratorEngine {
                 phaseId: pt.phaseId,
               }
 
-              const childSession = await ensureAgentChildSession(
+              const childSession = await ensureOrchestratorTaskSession(
                 workspaceId,
                 plan.title,
                 ownerId,
                 agent,
                 task.title,
+                runId,
+                task.id,
               )
               childSessions.set(task.id, {
                 sessionId: childSession.id,
@@ -693,7 +695,15 @@ export class OrchestratorEngine {
         if (replan.strategy === 'task_split' && replan.newTasks && replan.newTasks.length > 0) {
           for (const newTask of replan.newTasks) {
             const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
-            const childSession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+            const childSession = await ensureOrchestratorTaskSession(
+              workspaceId,
+              plan.title,
+              ownerId,
+              newAgent ?? null,
+              newTask.title,
+              runId,
+              newTask.id,
+            )
             await db.insert(workspaceTasks).values({
               id: newTask.id,
               workspaceId,
@@ -745,7 +755,15 @@ export class OrchestratorEngine {
             if (tasksToAdd.length > 0) {
               for (const newTask of tasksToAdd) {
                 const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
-                const childSession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+                const childSession = await ensureOrchestratorTaskSession(
+                  workspaceId,
+                  plan.title,
+                  ownerId,
+                  newAgent ?? null,
+                  newTask.title,
+                  runId,
+                  newTask.id,
+                )
                 await db.insert(workspaceTasks).values({
                   id: newTask.id,
                   workspaceId,
@@ -896,12 +914,14 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     }
 
     if (shouldRepairChildSession) {
-      const repairedSession = await ensureAgentChildSession(
+      const repairedSession = await ensureOrchestratorTaskSession(
         workspaceId,
         plan.title || 'Agent Group',
         ownerId,
         agent,
         task.title,
+        runId,
+        task.id,
       )
       childInfo = {
         sessionId: repairedSession.id,
@@ -1749,7 +1769,15 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             maxRetries: 1,
           }
 
-          const verifySession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, verifierAgent, verifyTask.title)
+          const verifySession = await ensureOrchestratorTaskSession(
+            workspaceId,
+            plan.title,
+            ownerId,
+            verifierAgent,
+            verifyTask.title,
+            runId,
+            verifyTaskId,
+          )
           childSessions.set(verifyTaskId, {
             sessionId: verifySession.id,
             workspaceId,
@@ -1802,7 +1830,15 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         maxRetries: 1,
       }
 
-      const reviewSession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, reviewerAgent, reviewTask.title)
+      const reviewSession = await ensureOrchestratorTaskSession(
+        workspaceId,
+        plan.title,
+        ownerId,
+        reviewerAgent,
+        reviewTask.title,
+        runId,
+        reviewTaskId,
+      )
       childSessions.set(reviewTaskId, {
         sessionId: reviewSession.id,
         workspaceId,
@@ -2107,7 +2143,15 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       maxRetries: 1,
     }
 
-    const childSession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, agent, task.title)
+    const childSession = await ensureOrchestratorTaskSession(
+      workspaceId,
+      plan.title,
+      ownerId,
+      agent,
+      task.title,
+      runId,
+      taskId,
+    )
     childSessions.set(taskId, {
       sessionId: childSession.id,
       workspaceId,

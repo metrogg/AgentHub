@@ -1005,8 +1005,8 @@ describe('AgentHub smoke tests', () => {
         .from(dbApi.sessions)
         .where(dbApi.eq(dbApi.sessions.id, task.sessionId!))
         .limit(1)
-      expect(taskSession?.metadata?.kind).toBe('workspace-agent-child')
-      expect(taskSession?.metadata?.hiddenFromSessionTree).toBeUndefined()
+      expect(taskSession?.metadata?.kind).toBe('orchestrator-task')
+      expect(taskSession?.metadata?.hiddenFromSessionTree).toBe(true)
     }
 
     const childSessions = await dbApi.db
@@ -1015,8 +1015,9 @@ describe('AgentHub smoke tests', () => {
       .where(
         dbApi.eq(dbApi.sessions.workspaceAgentId, builder.id),
       )
-    expect(childSessions.some((session) => session.metadata?.kind === 'workspace-agent-child')).toBe(true)
-    expect(childSessions.some((session) => session.metadata?.hiddenFromSessionTree)).toBe(false)
+    expect(childSessions.some((session) => session.metadata?.kind === 'orchestrator-task')).toBe(true)
+    expect(childSessions.every((session) => session.metadata?.kind === 'orchestrator-task')).toBe(true)
+    expect(childSessions.every((session) => session.metadata?.hiddenFromSessionTree === true)).toBe(true)
 
     let childMessageCount = 0
     for (let i = 0; i < 30; i++) {
