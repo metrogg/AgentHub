@@ -1390,3 +1390,5 @@ function normalizeFallbackGoal(content?: string): string {
       .trim() || '完成多 Agent 协作任务'
   )
 }
+
+

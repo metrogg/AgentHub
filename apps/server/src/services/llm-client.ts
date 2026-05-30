@@ -64,6 +64,10 @@ interface StreamOptions {
   system?: string
 }
 
+export type LlmStreamChunk =
+  | { type: 'text-delta'; text: string }
+  | { type: 'reasoning-delta'; text: string }
+
 interface TestConnectionInput {
   provider?: string
   apiEndpoint?: string
@@ -314,11 +318,22 @@ export async function getLlmRuntimeStatus(selectedModelId?: string) {
 export function createLlmClient(config: LlmRuntimeConfig) {
   return {
     stream(options: StreamOptions) {
-      if (isAnthropicProvider(config.provider, config.baseUrl)) {
-        return streamAnthropic(options, config)
-      }
-      return streamOpenAICompatible(options, config)
+      return textOnlyStream(this.streamParts(options))
     },
+    streamParts(options: StreamOptions) {
+      if (isAnthropicProvider(config.provider, config.baseUrl)) {
+        return streamAnthropicParts(options, config)
+      }
+      return streamOpenAICompatibleParts(options, config)
+    },
+  }
+}
+
+async function* textOnlyStream(
+  chunks: AsyncGenerator<LlmStreamChunk, void, unknown>,
+): AsyncGenerator<string, void, unknown> {
+  for await (const chunk of chunks) {
+    if (chunk.type === 'text-delta') yield chunk.text
   }
 }
 
@@ -412,10 +427,10 @@ async function testOpenAICompatibleMessage(config: LlmRuntimeConfig) {
   )
 }
 
-async function* streamOpenAICompatible(
+async function* streamOpenAICompatibleParts(
   options: StreamOptions,
   config: LlmRuntimeConfig
-): AsyncGenerator<string, void, unknown> {
+): AsyncGenerator<LlmStreamChunk, void, unknown> {
   assertApiKey(config)
   const res = await fetchWithRetry(
     `${config.baseUrl}/chat/completions`,
@@ -444,18 +459,21 @@ async function* streamOpenAICompatible(
     if (data === '[DONE]') continue
     try {
       const parsed = JSON.parse(data)
-      const delta = parsed?.choices?.[0]?.delta?.content ?? parsed?.choices?.[0]?.message?.content
-      if (typeof delta === 'string' && delta) yield delta
+      const value = parsed?.choices?.[0]?.delta ?? parsed?.choices?.[0]?.message
+      const reasoning = readReasoningDelta(value)
+      if (reasoning) yield { type: 'reasoning-delta', text: reasoning }
+      const delta = value?.content
+      if (typeof delta === 'string' && delta) yield { type: 'text-delta', text: delta }
     } catch {
       // Ignore malformed SSE chunks.
     }
   }
 }
 
-async function* streamAnthropic(
+async function* streamAnthropicParts(
   options: StreamOptions,
   config: LlmRuntimeConfig
-): AsyncGenerator<string, void, unknown> {
+): AsyncGenerator<LlmStreamChunk, void, unknown> {
   assertApiKey(config)
   const res = await fetchWithRetry(
     `${config.baseUrl}/v1/messages`,
@@ -482,12 +500,45 @@ async function* streamAnthropic(
   for await (const data of iterateSseData(res.body)) {
     try {
       const parsed = JSON.parse(data)
-      const delta = parsed?.delta?.text
-      if (typeof delta === 'string' && delta) yield delta
+      const delta = parsed?.delta
+      if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string' && delta.thinking) {
+        yield { type: 'reasoning-delta', text: delta.thinking }
+        continue
+      }
+      if (typeof delta?.thinking === 'string' && delta.thinking) {
+        yield { type: 'reasoning-delta', text: delta.thinking }
+        continue
+      }
+      if (typeof delta?.text === 'string' && delta.text) yield { type: 'text-delta', text: delta.text }
     } catch {
       // Ignore malformed SSE chunks.
     }
   }
+}
+
+function readReasoningDelta(value: unknown): string {
+  if (!value || typeof value !== 'object') return ''
+  const record = value as Record<string, unknown>
+  for (const key of ['reasoning_content', 'reasoning', 'reasoning_text', 'thinking']) {
+    const field = record[key]
+    if (typeof field === 'string' && field) return field
+  }
+  const details = record.reasoning_details
+  if (Array.isArray(details)) {
+    return details
+      .map((item) => {
+        if (typeof item === 'string') return item
+        if (!item || typeof item !== 'object') return ''
+        const detail = item as Record<string, unknown>
+        return typeof detail.text === 'string'
+          ? detail.text
+          : typeof detail.content === 'string'
+            ? detail.content
+            : ''
+      })
+      .join('')
+  }
+  return ''
 }
 
 function buildHeaders(config: LlmRuntimeConfig): Record<string, string> {

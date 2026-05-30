@@ -46,6 +46,8 @@ export const WsEvent = {
   MessageCompleted: 'message:completed',
   MessageMetadata: 'message:metadata',
   MessageCancelled: 'message:cancelled',
+  MessagePartUpdated: 'message.part.updated',
+  MessagePartDelta: 'message.part.delta',
   TaskUpdate: 'task:update',
   BlackboardUpdate: 'blackboard:update',
   RunEvent: 'run:event',
