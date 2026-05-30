@@ -1036,6 +1036,74 @@ describe('AgentHub smoke tests', () => {
     expect(childMessageCount).toBeGreaterThan(0)
   })
 
+  test('task.queued events persist dynamic tasks into the run ledger and plan', async () => {
+    const { initializeRunLedger, updateProgressLedgerFromEvent } = await import(
+      '../apps/server/src/services/orchestrator/run-ledger'
+    )
+    const full = await json<{ workspace: { id: string } }>(
+      await postJson('/api/workspaces', {
+        name: 'Dynamic task ledger workspace',
+        goal: 'Track dynamic tasks',
+        template: 'blank',
+      }),
+    )
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
+    )
+
+    const runId = crypto.randomUUID()
+    const initialPlan = initializeRunLedger({
+      runId,
+      title: 'Dynamic task test',
+      goal: 'Ensure queued tasks are durable',
+      phases: [{ id: 'analysis', title: '分析', purpose: '理解目标', taskIds: [] }],
+      agents: [],
+      tasks: [],
+    })
+    await dbApi.db.insert(dbApi.orchestratorRuns).values({
+      id: runId,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      status: 'running',
+      plan: initialPlan as any,
+    })
+
+    await updateProgressLedgerFromEvent({
+      runId,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      taskId: 'dynamic-review',
+      agentId: 'reviewer-agent',
+      type: 'task.queued',
+      payload: {
+        phaseId: 'verification',
+        title: '复核动态产物',
+        description: '检查动态追加任务是否可恢复。',
+        taskType: 'review',
+        dependencies: ['worker-task'],
+      },
+    })
+
+    const [run] = await dbApi.db
+      .select()
+      .from(dbApi.orchestratorRuns)
+      .where(dbApi.eq(dbApi.orchestratorRuns.id, runId))
+      .limit(1)
+    const plan = run!.plan as any
+    expect(plan.tasks.some((task: any) => task.id === 'dynamic-review')).toBe(true)
+    expect(plan.phases.find((phase: any) => phase.id === 'verification')?.taskIds).toContain(
+      'dynamic-review',
+    )
+    expect(plan.taskLedger.tasks.find((task: any) => task.id === 'dynamic-review')?.status).toBe(
+      'pending',
+    )
+    expect(
+      plan.taskLedger.agentAssignments.find((item: any) => item.agentId === 'reviewer-agent')
+        ?.taskIds,
+    ).toContain('dynamic-review')
+    expect(plan.progressLedger.pendingTaskIds).toContain('dynamic-review')
+  })
+
   test('task validation skips commands outside the safe allowlist', async () => {
     const { runTaskValidation } =
       await import('../apps/server/src/services/orchestrator/task-validation')

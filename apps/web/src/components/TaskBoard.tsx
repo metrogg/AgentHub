@@ -88,8 +88,10 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
 
   const getPhaseTasks = (phaseId: string) => tasks.filter((t) => t.phaseId === phaseId)
 
-  const getPhaseStatus = (phaseId: string): 'pending' | 'active' | 'completed' => {
-    const phaseTasks = getPhaseTasks(phaseId)
+  const getPhaseStatus = (phase: TaskBoardPhase): 'pending' | 'active' | 'completed' => {
+    if (phase.status === 'completed') return 'completed'
+    if (phase.status === 'active') return 'active'
+    const phaseTasks = getPhaseTasks(phase.id)
     if (phaseTasks.length === 0) return 'pending'
     const allDone = phaseTasks.every((t) => t.status === 'done')
     if (allDone) return 'completed'
@@ -148,7 +150,7 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
         {phases.map((phase) => {
           const phaseTasks = getPhaseTasks(phase.id)
-          const phaseStatus = getPhaseStatus(phase.id)
+          const phaseStatus = getPhaseStatus(phase)
 
           return (
             <div key={phase.id} className="bg-white rounded-lg border border-gray-200 p-3">

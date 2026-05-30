@@ -84,6 +84,32 @@ function getRoleIcon(agentName: string, taskTitle: string): string {
   return '🤖'
 }
 
+function phaseTitleFromId(phaseId: string) {
+  const map: Record<string, string> = {
+    analysis: '分析',
+    design: '设计',
+    implementation: '实现',
+    verification: '验证',
+    synthesis: '汇总',
+    followup: '跟进',
+    execution: '执行',
+  }
+  return map[phaseId] || '动态任务'
+}
+
+function phasePurposeFromId(phaseId: string) {
+  const map: Record<string, string> = {
+    analysis: '理解目标、上下文和依赖',
+    design: '确定方案、边界和产物契约',
+    implementation: '执行具体实现与产出',
+    verification: '验证结果、审查风险与质量门禁',
+    synthesis: '汇总所有产出并形成收口结果',
+    followup: '根据已有产物生成后续任务',
+    execution: '执行中动态补充的任务',
+  }
+  return map[phaseId] || '动态注入的任务阶段'
+}
+
 function updateAgentTabsFromTaskBoard(
   currentTabs: AgentTab[],
   taskBoard: ChatState['taskBoard'],
@@ -120,6 +146,27 @@ function updateAgentTabsFromTaskBoard(
       : 'pending'
     return { ...tab, status, childSessionId: sessionId, taskTitle: task.title, agentName: task.agentName }
   })
+}
+
+function isTaskBoardSession(
+  sessionId: string,
+  taskBoard: ChatState['taskBoard'],
+  agentTabs: AgentTab[],
+) {
+  return Boolean(
+    taskBoard &&
+      (taskBoard.sessionId === sessionId ||
+        agentTabs.some((tab) => tab.childSessionId === sessionId)),
+  )
+}
+
+function selectedTaskForSession(
+  sessionId: string,
+  taskBoard: ChatState['taskBoard'],
+  agentTabs: AgentTab[],
+) {
+  if (taskBoard?.sessionId === sessionId) return null
+  return agentTabs.find((tab) => tab.childSessionId === sessionId)?.taskId ?? null
 }
 
 interface AgentTab {
@@ -169,6 +216,7 @@ interface ChatState {
       description: string
       agentId: string
       agentName: string
+      taskType?: string
       status: 'pending' | 'running' | 'done' | 'failed' | 'blocked' | 'cancelled'
       progress?: number
       progressStatus?: string
@@ -286,6 +334,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     clearPendingStream()
     cancelledSessions.delete(sessionId)
     const state = get()
+    const keepTaskBoard = isTaskBoardSession(sessionId, state.taskBoard, state.agentTabs)
     const optimisticSession =
       state.sessions.find((session) => session.id === sessionId) ??
       (state.currentSession?.id === sessionId ? state.currentSession : null)
@@ -317,9 +366,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       agentTyping: false,
       replyingToMessageId: null,
       replyingToMessage: null,
-      taskBoard: state.taskBoard?.sessionId === sessionId ? state.taskBoard : null,
-      agentTabs: state.taskBoard?.sessionId === sessionId ? state.agentTabs : [],
-      selectedAgentTab: state.taskBoard?.sessionId === sessionId ? state.selectedAgentTab : null,
+      taskBoard: keepTaskBoard ? state.taskBoard : null,
+      agentTabs: keepTaskBoard ? state.agentTabs : [],
+      selectedAgentTab: keepTaskBoard
+        ? selectedTaskForSession(sessionId, state.taskBoard, state.agentTabs)
+        : null,
     })
     wsClient.joinSession(sessionId)
     try {
@@ -592,9 +643,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectAgentTab(taskId: string | null) {
-    const { agentTabs, currentSessionId: groupSessionId } = get()
+    const { agentTabs, currentSessionId, taskBoard } = get()
     if (taskId === null) {
       set({ selectedAgentTab: null })
+      const groupSessionId = taskBoard?.sessionId ?? currentSessionId
       if (groupSessionId) {
         get().selectSession(groupSessionId)
       }
@@ -841,6 +893,93 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((s) => {
           let nextTaskBoard = s.taskBoard
           if (nextTaskBoard && nextTaskBoard.runId === event.runId) {
+            if (event.type === 'task.queued') {
+              const taskId = event.taskId
+              if (taskId) {
+                const payload = (event.payload ?? {}) as Record<string, unknown>
+                const phaseId =
+                  typeof payload.phaseId === 'string' && payload.phaseId.trim()
+                    ? payload.phaseId.trim()
+                    : nextTaskBoard.phases[0]?.id ?? 'execution'
+                const title =
+                  typeof payload.title === 'string' && payload.title.trim()
+                    ? payload.title.trim()
+                    : taskId
+                const description =
+                  typeof payload.description === 'string' && payload.description.trim()
+                    ? payload.description.trim()
+                    : ''
+                const agentId =
+                  typeof payload.agentId === 'string' && payload.agentId.trim()
+                    ? payload.agentId.trim()
+                    : taskId
+                const agentName =
+                  typeof payload.agentName === 'string' && payload.agentName.trim()
+                    ? payload.agentName.trim()
+                    : agentId
+                const taskType =
+                  typeof payload.taskType === 'string' && payload.taskType.trim()
+                    ? payload.taskType.trim()
+                    : undefined
+                const childSessionId =
+                  typeof payload.childSessionId === 'string' && payload.childSessionId.trim()
+                    ? payload.childSessionId.trim()
+                    : null
+                const dependencies = Array.isArray(payload.dependencies)
+                  ? payload.dependencies.filter((dep): dep is string => typeof dep === 'string')
+                  : []
+
+                const nextTask = {
+                  id: taskId,
+                  phaseId,
+                  title,
+                  description,
+                  agentId,
+                  agentName,
+                  taskType,
+                  status: 'pending' as const,
+                  progress: undefined,
+                  progressStatus: undefined,
+                  dependencies,
+                  childSessionId,
+                }
+
+                const phaseExists = nextTaskBoard.phases.some((phase) => phase.id === phaseId)
+                const nextPhases = phaseExists
+                  ? nextTaskBoard.phases.map((phase) =>
+                      phase.id === phaseId && !phase.taskIds.includes(taskId)
+                        ? {
+                            ...phase,
+                            status: phase.status === 'pending' ? ('active' as const) : phase.status,
+                            taskIds: [...phase.taskIds, taskId],
+                          }
+                        : phase,
+                    )
+                  : [
+                      ...nextTaskBoard.phases,
+                      {
+                        id: phaseId,
+                        title: phaseTitleFromId(phaseId),
+                        purpose: phasePurposeFromId(phaseId),
+                        taskIds: [taskId],
+                        status: 'active' as const,
+                      },
+                    ]
+                const existingTaskIndex = nextTaskBoard.tasks.findIndex((task) => task.id === taskId)
+                const nextTasks =
+                  existingTaskIndex >= 0
+                    ? nextTaskBoard.tasks.map((task) =>
+                        task.id === taskId ? { ...task, ...nextTask } : task,
+                      )
+                    : [...nextTaskBoard.tasks, nextTask]
+
+                nextTaskBoard = {
+                  ...nextTaskBoard,
+                  tasks: nextTasks,
+                  phases: nextPhases,
+                }
+              }
+            }
             if (
               event.type === 'task.started' ||
               event.type === 'task.completed' ||
@@ -859,12 +998,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 }
                 const nextStatus = statusMap[event.type]
                 if (nextStatus) {
+                  const updatedTasks = nextTaskBoard.tasks.map((t) =>
+                    t.id === taskId ? { ...t, status: nextStatus as any } : t,
+                  )
                   nextTaskBoard = {
                     ...nextTaskBoard,
                     status: nextStatus === 'running' ? 'running' : nextTaskBoard.status,
-                    tasks: nextTaskBoard.tasks.map((t) =>
-                      t.id === taskId ? { ...t, status: nextStatus as any } : t
-                    ),
+                    tasks: updatedTasks,
                     phases: nextTaskBoard.phases.map((p) =>
                       p.taskIds.includes(taskId) && nextStatus === 'running'
                         ? { ...p, status: 'active' as const }
@@ -872,7 +1012,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                           ? {
                               ...p,
                               status: p.taskIds.every((tid) => {
-                                const t = nextTaskBoard!.tasks.find((x) => x.id === tid)
+                                const t = updatedTasks.find((x) => x.id === tid)
                                 return t && (t.status === 'done' || t.status === 'failed' || t.status === 'cancelled')
                               })
                                 ? ('completed' as const)
