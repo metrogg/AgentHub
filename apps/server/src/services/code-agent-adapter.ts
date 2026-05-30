@@ -175,6 +175,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         permissionMode,
         '--output-format',
         outputFormat,
+        '--verbose',
       ]
       // 支持会话恢复：如果有 sessionId，使用 --session-id 保持会话连续性
       if (options?.sessionId) {
@@ -313,6 +314,11 @@ export async function* streamCodeAgentReply(
     modelTarget = await resolveRuntimeModelTarget(requestedModelId)
   }
   let runtimeModelTarget = normalizeCodeAgentModelTarget(type, modelTarget)
+  // 如果端点兼容但模型 ID 不兼容 CLI（如 mimo-v2.5-pro 对 Claude Code），
+  // 清除 runtimeModelTarget 以避免传递不兼容的 --model 参数，让 CLI 使用默认模型
+  if (runtimeModelTarget && !isNativeCodeAgentModelIdCompatible(type, runtimeModelTarget.modelId)) {
+    runtimeModelTarget = null
+  }
   let installed = await isCommandInstalled(adapter.command)
   let ignoreModelEnv = false
   let skipLocalCodexConfig = false
