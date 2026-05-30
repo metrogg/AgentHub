@@ -2,6 +2,10 @@ import { mkdirSync } from 'node:fs'
 import { homedir, platform, tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 
+const projectRoot = resolve(
+  Bun.env.PROJECT_ROOT?.trim() || process.env.PROJECT_ROOT?.trim() || process.cwd(),
+)
+
 /**
  * AgentExecutionEnvelope — 每次 Agent 执行的强制上下文信封。
  *

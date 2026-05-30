@@ -28,6 +28,7 @@ import {
   resolveModelConfig,
 } from './llm-client'
 import { env } from '../env'
+import { logger } from '../lib/logger'
 import { getBooleanSetting } from './settings-helper'
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
 import {
@@ -58,8 +59,6 @@ interface CodeAgentRunOptions {
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
   toolConfig?: Record<string, unknown>
   promptFile?: string
-  sessionId?: string
-  continueSession?: boolean
 }
 
 interface CodeAgentModelTarget {
@@ -274,6 +273,7 @@ export async function* streamCodeAgentReply(
   signal?: AbortSignal,
   envelope?: AgentExecutionEnvelope,
   continueSession?: boolean,
+  resumeSessionId?: string,
 ): AsyncGenerator<CodeAgentReplyChunk, void, unknown> {
   let type = profile.codeAgentType
   if (!type) {
@@ -417,6 +417,7 @@ export async function* streamCodeAgentReply(
       onText: (text) => push(text),
     },
     continueSession,
+    resumeSessionId,
   )
     .then((value) => {
       result = value
@@ -538,7 +539,7 @@ function resolveCodeAgentModelCandidates(
 ) {
   const fromAgent = typeof agentModelId === 'string' ? agentModelId.trim() : ''
   const fromTool = typeof toolConfig?.['modelId'] === 'string' ? toolConfig['modelId'].trim() : ''
-  return fromTool || null
+  return [...new Set([fromAgent, fromTool].filter(Boolean))]
 }
 
 function normalizeCodeAgentModelTarget(
@@ -550,27 +551,6 @@ function normalizeCodeAgentModelTarget(
   if (type === 'codex') return isCodexModelTarget(modelTarget) ? modelTarget : null
   if (type === 'gemini') return isGeminiModelTarget(modelTarget) ? modelTarget : null
   return modelTarget
-}
-
-async function resolveRuntimeModelTarget(
-  modelId?: string | null,
-): Promise<CodeAgentModelTarget | null> {
-  const config = await resolveLlmRuntimeConfig(modelId ?? undefined)
-  if (!config.model) return null
-
-  const provider = config.provider || 'openai'
-  const openaiBaseUrl = config.baseUrl?.replace(/\/$/, '')
-  const anthropicBaseUrl = isAnthropicLike(provider, openaiBaseUrl) ? openaiBaseUrl : undefined
-
-  return {
-    provider,
-    providerKey: safeProviderKey(provider),
-    modelId: config.model,
-    apiKey: config.apiKey ?? undefined,
-    apiKeySource: config.apiKeySource ?? undefined,
-    openaiBaseUrl,
-    anthropicBaseUrl,
-  }
 }
 
 function hasIncompatibleCodeAgentModel(
@@ -671,9 +651,9 @@ async function isRuntimeConfigured(
     }
     if (type === 'opencode') return true
   } catch (err: any) {
-    console.error(
-      `[isRuntimeConfigured] getLlmRuntimeStatus failed for ${type}:`,
-      err?.message || String(err),
+    logger.warn(
+      { err: err?.message || String(err), runtime: type },
+      'Failed to inspect LLM runtime status for code agent',
     )
   }
 
@@ -828,6 +808,7 @@ async function runCodeAgentCommand(
     onText?: (text: string) => void
   } = {},
   continueSession?: boolean,
+  resumeSessionId?: string,
 ): Promise<CodeAgentCommandResult> {
   cwd = cwd?.trim() || undefined
   const outputPath =
@@ -845,14 +826,12 @@ async function runCodeAgentCommand(
       ? buildAsciiSafePrompt(prompt)
       : prompt
   // 生成或获取 session ID 用于会话恢复
-  const sessionId = continueSession ? undefined : crypto.randomUUID()
+  const sessionId = resumeSessionId || (!continueSession ? crypto.randomUUID() : undefined)
   const args = adapter.buildArgs(commandPrompt, {
     cwd,
     agentRoleType,
     modelId: modelTarget?.modelId,
     modelProvider: modelTarget?.providerKey,
-    sessionId: resumeSessionId,
-    continueSession,
     outputPath,
     sandboxPolicy,
     toolConfig,
@@ -888,7 +867,6 @@ async function runCodeAgentCommand(
   let claudeSessionId: string | undefined
   let claudeHasStreamedText = false
   let claudeAssistantSnapshot = ''
-  let claudeSessionId: string | undefined
   const closeRunningSteps = (status: 'completed' | 'failed' = 'completed') => {
     for (const step of liveSteps) {
       if (step.status === 'running') step.status = status
