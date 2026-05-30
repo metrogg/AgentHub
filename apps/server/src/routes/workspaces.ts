@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { z } from 'zod'
-import { db, workspaces, workspaceAgents, workspaceAgentRelations, workspaceTasks, sessions, messages, eq, and, desc, asc } from '@agenthub/db'
+import { db, workspaces, workspaceAgents, workspaceAgentRelations, workspaceTasks, sessions, eq, and, desc, asc } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 
@@ -15,13 +15,11 @@ import {
 } from '../services/workspace/utils'
 import { pickNativeFolder } from '../services/workspace/folder-picker'
 import { loadWorkspaceFull, ensureWorkspace, seedClassicAgents } from '../services/workspace/workspace-queries'
-import { ensureGroupSession } from '../services/workspace/group-session'
-import { ensureAgentChildSession } from '../services/workspace/session-manager'
-import { workspaceAgentRunProfile, getActiveRunSessionIds } from '../services/workspace/agent-runtime'
-import { taskExecutionService } from '../services/execution/task-execution-service'
+import { ensureGroupSession } from '../services/workspace/session-manager'
+import { getActiveRunSessionIds } from '../services/workspace/agent-runtime'
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
 import { createAutoWorkspaceFolder } from '../services/workspace/auto-workspace'
-import { TaskStatus, TEAM_TEMPLATES, rolePresetValues, type AgentRoleType } from '@agenthub/shared'
+import { TEAM_TEMPLATES, rolePresetValues, type AgentRoleType } from '@agenthub/shared'
 
 // ---------- Validation schemas ----------
 
@@ -427,7 +425,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
           ownerId: user.sub,
           workspaceId: id,
           workspaceAgentId: agentId,
-          metadata: { kind: 'workspace-agent-child' },
+          metadata: { kind: 'agent-direct' },
         })
         .returning()
 
@@ -639,127 +637,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     await db.delete(workspaceTasks).where(and(eq(workspaceTasks.id, taskId), eq(workspaceTasks.workspaceId, id)))
     await touchWorkspace(id)
     return c.body(null, 204)
-  })
-
-  // Dispatch task
-  .post('/:id/tasks/:taskId/dispatch', async (c) => {
-    const user = c.get('user')
-    const id = c.req.param('id')
-    const taskId = c.req.param('taskId')
-    const ws = await ensureWorkspace(id, user.sub)
-
-    const [task] = await db
-      .select()
-      .from(workspaceTasks)
-      .where(and(eq(workspaceTasks.id, taskId), eq(workspaceTasks.workspaceId, id)))
-      .limit(1)
-    if (!task) throw AppError.fromCode(AppErrorCodes.TASK_NOT_FOUND, '任务不存在')
-
-    let agent: typeof workspaceAgents.$inferSelect | null = null
-    if (task.agentId) {
-      const [a] = await db.select().from(workspaceAgents).where(eq(workspaceAgents.id, task.agentId)).limit(1)
-      agent = a ?? null
-    }
-
-    let sessionId = task.sessionId
-    if (!sessionId) {
-      const session = await ensureAgentChildSession(id, ws.name, user.sub, agent, task.title)
-      sessionId = session.id
-    }
-
-    const promptLines = [
-      agent ? `你是 ${agent.name}(${agent.role})。${agent.systemPrompt}` : '你是一个 Agent Group 中的协作 Agent。',
-      ws.goal ? `\n协作组目标:${ws.goal}` : '',
-      ws.projectPath ? `\n项目文件夹:${ws.projectPath}` : '',
-      `\n你被分配的任务:${task.title}`,
-      task.description ? `\n任务详情:${task.description}` : '',
-      '\n请先给出独立的工作计划,再开始推进;遇到需要其他角色配合的事,请在结尾用「需协作:」列出。',
-    ].filter(Boolean)
-    const prompt = promptLines.join('')
-
-    const profile = agent ? workspaceAgentRunProfile(agent, ws.projectPath) : undefined
-    if (!profile) {
-      throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
-    }
-
-    await db
-      .update(workspaceTasks)
-      .set({ sessionId: sessionId!, status: TaskStatus.Running, startedAt: new Date(), updatedAt: new Date() })
-      .where(eq(workspaceTasks.id, taskId))
-
-    // 使用统一 TaskExecutionService，获得与 Orchestrator 相同的 Git 分支隔离和 artifact 收集
-    taskExecutionService.execute({
-      taskId,
-      sessionId: sessionId!,
-      workspaceId: id,
-      profile,
-      prompt,
-      projectPath: ws.projectPath,
-    }).catch((err) => {
-      logger.error({ err: err?.message, taskId }, 'TaskExecutionService failed')
-    })
-
-    await touchWorkspace(id)
-    const [updated] = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, taskId)).limit(1)
-    return c.json({ task: updated, sessionId })
-  })
-
-  // Summary
-  .post('/:id/summary', async (c) => {
-    const user = c.get('user')
-    const id = c.req.param('id')
-    const ws = await ensureWorkspace(id, user.sub)
-
-    const taskList = await db.select().from(workspaceTasks).where(eq(workspaceTasks.workspaceId, id)).orderBy(asc(workspaceTasks.orderIdx))
-    const agentList = await db.select().from(workspaceAgents).where(eq(workspaceAgents.workspaceId, id))
-    const agentMap = new Map(agentList.map((a) => [a.id, a]))
-
-    const sections: string[] = []
-    for (const t of taskList) {
-      const agent = t.agentId ? agentMap.get(t.agentId) : null
-      const heading = `### ${agent?.name ?? '未指派'}(${agent?.role ?? '-'}) · ${t.title} [${t.status}]`
-      if (!t.sessionId) {
-        sections.push(`${heading}\n(尚未派发)`)
-        continue
-      }
-      const [lastAgentMsg] = await db
-        .select()
-        .from(messages)
-        .where(and(eq(messages.sessionId, t.sessionId), eq(messages.senderType, 'agent')))
-        .orderBy(desc(messages.createdAt))
-        .limit(1)
-      const body = lastAgentMsg?.content?.trim() || '(暂无 agent 回复)'
-      sections.push(`${heading}\n${body}`)
-    }
-
-    const summarySession = await db
-      .insert(sessions)
-      .values({ title: `${ws.name} / 协调汇总`, type: 'group', ownerId: user.sub, workspaceId: id })
-      .returning()
-    const session = summarySession[0]
-    if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '总结会话创建失败')
-
-    const prompt = [
-      `你是 Agent Group 的协调者。下面是各 Agent 的最新产出,请基于真实内容给出:`,
-      `1) 整体进展评估  2) 不一致或风险点  3) 下一步统一行动方案与分派建议。`,
-      `\n协作组目标:${ws.goal || '(未填写)'}`,
-      ws.projectPath ? `\n项目文件夹:${ws.projectPath}` : '',
-      `\n各 Agent 当前最新产出:\n\n${sections.join('\n\n')}`,
-    ].join('')
-
-    const [msg] = await db
-      .insert(messages)
-      .values({ sessionId: session.id, senderId: user.sub, senderType: 'user', type: 'text', content: prompt })
-      .returning()
-
-    if (msg) {
-      import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(session.id, msg).catch(() => {})
-      })
-    }
-
-    await touchWorkspace(id)
-    return c.json({ sessionId: session.id })
   })
 
 function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {

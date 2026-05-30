@@ -15,7 +15,7 @@ import {
 import { logger } from '../../lib/logger'
 import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
-import { taskExecutionService } from '../execution/task-execution-service'
+import { shouldAcceptPartialExecution, taskExecutionService } from '../execution/task-execution-service'
 import { blackboard, Blackboard, type BlackboardRef } from '../blackboard'
 import { executionTracer } from '../execution-tracer'
 import { Planner } from './planner'
@@ -1299,6 +1299,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         workspaceId,
         profile,
         prompt,
+        taskType: task.taskType,
         projectPath: childInfo.projectPath ?? undefined,
         runId,
         signal,
@@ -1407,7 +1408,9 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         }
       }
 
-      if (execResult.status === TaskStatus.Failed) {
+      const partialAcceptedAfterScan =
+        execResult.status === TaskStatus.Failed && shouldAcceptPartialExecution(task.taskType, artifacts)
+      if (execResult.status === TaskStatus.Failed && !partialAcceptedAfterScan) {
         throw new Error(execResult.error || 'Agent 执行失败')
       }
 

@@ -971,11 +971,6 @@ export const api = {
     request<Message>(`/messages/${sessionId}/${messageId}/pin`, { method: 'PATCH' }),
   unpinMessage: (sessionId: string, messageId: string) =>
     request<Message>(`/messages/${sessionId}/${messageId}/unpin`, { method: 'PATCH' }),
-  createArtifactDemo: (sessionId: string, content: string) =>
-    request<Message>(`/messages/${sessionId}/artifact-demo`, {
-      method: 'POST',
-      body: JSON.stringify({ content }),
-    }),
   createAgentDraft: (sessionId: string, content: string) =>
     request<Message>(`/messages/${sessionId}/agent-draft`, {
       method: 'POST',
@@ -1192,13 +1187,6 @@ export const api = {
     }),
   deleteWorkspaceTask: (id: string, taskId: string) =>
     request<void>(`/workspaces/${id}/tasks/${taskId}`, { method: 'DELETE' }),
-  dispatchWorkspaceTask: (id: string, taskId: string) =>
-    request<{ task: WorkspaceTask; sessionId: string }>(
-      `/workspaces/${id}/tasks/${taskId}/dispatch`,
-      { method: 'POST' },
-    ),
-  workspaceSummary: (id: string) =>
-    request<{ sessionId: string }>(`/workspaces/${id}/summary`, { method: 'POST' }),
   openWorkspaceGroupSession: (id: string, agentIds?: string[]) =>
     request<{ session: Session }>(`/workspaces/${id}/group-session`, {
       method: 'POST',

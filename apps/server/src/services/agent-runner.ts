@@ -27,6 +27,10 @@ export interface AgentRunResult {
   messageId?: string
 }
 
+export const __agentRunnerTestHooks = {
+  looksLikeAgentFailure,
+}
+
 const sessionRooms = new Map<string, Set<ServerWebSocket<unknown>>>()
 const activeRuns = new Map<string, { cancelled: boolean; controller: AbortController }>()
 const runLocks = new Map<string, Promise<void>>()
@@ -366,6 +370,7 @@ function looksLikeAgentFailure(content: string) {
     /\n\s*\[Error:/i.test(content) ||
     /^\s*\[错误[：:]/i.test(content) ||
     /\n\s*\[错误[：:]/i.test(content) ||
+    /^\s*\*\*.*执行失败\*\*/i.test(content) ||
     /API key is not configured/i.test(content) ||
     /API Key 未配置/.test(content) ||
     /Model returned an empty response/i.test(content) ||

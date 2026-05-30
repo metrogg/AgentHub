@@ -1,5 +1,4 @@
 import type { AgentRunProfile } from '../agent-runner'
-import type { GroupChatAgent } from '../group-chat/types'
 
 /**
  * 最小化的 Agent DB 行类型，兼容 workspaceAgents.$inferSelect 和 planner 生成的 agent 对象。
@@ -65,25 +64,6 @@ export function buildAgentProfile(
     contextPolicy: (overrides?.contextPolicy ?? agent.contextPolicy ?? 'workspace-aware') as AgentRunProfile['contextPolicy'],
     approvalRequired: overrides?.approvalRequired ?? agent.approvalRequired ?? false,
     projectPath: projectPath?.trim() || null,
-  }
-}
-
-/**
- * 构建 GroupChatAgent（在 AgentRunProfile 基础上增加群聊协作字段）。
- *
- * 替代 group-chat-manager.ts:toGroupChatAgent。
- */
-export function buildGroupChatAgent(
-  agent: AgentRow,
-  projectPath?: string | null,
-): GroupChatAgent {
-  const profile = buildAgentProfile(agent, projectPath)
-  return {
-    ...profile,
-    roleType: (agent.roleType ?? undefined) as GroupChatAgent['roleType'],
-    responseStrategy: 'when_relevant',
-    canDelegateTo: [],
-    maxConsecutiveTurns: 3,
   }
 }
 

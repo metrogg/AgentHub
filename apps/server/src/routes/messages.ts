@@ -8,8 +8,6 @@ import { join } from 'node:path'
 import { unlink, writeFile } from 'node:fs/promises'
 import {
   sendMessageSchema,
-  ROLE_PRESETS,
-  DEFAULT_CODE_TEAM_ROLE_TYPES,
   AgentRoleType,
   RuntimeType,
   CodeAgentType,
@@ -63,18 +61,10 @@ import {
   parseAgentDraft,
   normalizeAgentDraftInput,
 } from '../services/agent-draft'
-import { type DemoArtifact, buildDemoArtifacts, artifactSummary } from '../services/artifact-demo'
 
 import { intentRouter } from '../services/orchestrator/intent-router'
 import { buildAgentProfile } from '../services/agents/profile-builder'
-import {
-  ensureAgentChildSession,
-  ensureOrchestratorTaskSession,
-} from '../services/workspace/session-manager'
-
-const artifactDemoSchema = z.object({
-  content: z.string().min(1).max(10000),
-})
+import { ensureOrchestratorTaskSession } from '../services/workspace/session-manager'
 
 const agentDraftSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -83,8 +73,6 @@ const agentDraftSchema = z.object({
 const updateMessageSchema = z.object({
   content: z.string().min(1).max(10000),
 })
-
-// PLAN_AGENTS removed: fallback now uses unified ROLE_PRESETS from @agenthub/shared
 
 type PlanAgent = {
   key: string
@@ -532,34 +520,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     }
     return c.json(msg)
   })
-  .post('/:sessionId/artifact-demo', zValidator('json', artifactDemoSchema), async (c) => {
-    const user = c.get('user')
-    const sessionId = c.req.param('sessionId')
-    const { content } = c.req.valid('json')
-    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub) {
-      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
-    }
-
-    const artifacts = buildDemoArtifacts(content)
-    const [card] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: 'system',
-        senderType: 'system',
-        type: 'text',
-        content: artifactSummary(artifacts),
-        metadata: {
-          systemEvent: 'artifact_demo',
-          role: '产物预览',
-          artifacts,
-        },
-      })
-      .returning()
-    if (!card) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, '产物卡片创建失败')
-    return c.json(card)
-  })
   .post('/:sessionId/agent-draft', zValidator('json', agentDraftSchema), async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
@@ -676,17 +636,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         memberType: 'agent',
         memberId: agent.id,
       })
-      const [workspace] = await db
-        .select()
-        .from(workspaces)
-        .where(eq(workspaces.id, session.workspaceId))
-        .limit(1)
-      await ensureAgentChildSession(
-        session.workspaceId,
-        workspace?.name ?? 'Agent Group',
-        user.sub,
-        agent,
-      )
       await db
         .update(workspaces)
         .set({ updatedAt: new Date() })
@@ -1164,114 +1113,31 @@ async function generatePlanAndPushTaskBoard(
     },
   })
 
-  let plan: OrchestratorPlan
   try {
-    plan = await buildDynamicOrchestratorPlan(content, agents, workspaceId)
+    const plan = await buildDynamicOrchestratorPlan(content, agents, workspaceId)
+    await startPlanRunInExistingGroup({ sessionId, plan, workspaceId, ownerId })
   } catch (err: any) {
-    logger.warn({ err: err?.message, sessionId }, 'Dynamic plan failed, falling back to simple orchestration')
-    plan = buildSimpleFallbackPlan(agents, content)
-  }
-
-  await startPlanRunInExistingGroup({ sessionId, plan, workspaceId, ownerId })
-}
-
-function buildSimpleFallbackPlan(agents: any[], content?: string): OrchestratorPlan {
-  const goal = normalizeFallbackGoal(content)
-  const planAgents: PlanAgent[] = agents.length
-    ? agents.slice(0, Math.max(1, Math.min(agents.length, 6))).map((a: any) => ({
-        key: a.id,
-        name: a.name,
-        role: a.role ?? '助手',
-        roleType: a.roleType,
-        color: a.color ?? '#6366f1',
-        systemPrompt: a.systemPrompt ?? '',
-        description: a.description,
-        roleProfile: a.roleProfile ?? null,
-        modelId: a.modelId ?? null,
-        runtimeType: a.runtimeType ?? 'llm',
-        codeAgentType: a.codeAgentType ?? null,
-        capabilityTags: a.capabilityTags ?? [],
-        toolPermissions: a.toolPermissions ?? [],
-        sandboxPolicy: a.sandboxPolicy ?? 'workspace-write',
-      }))
-    : DEFAULT_CODE_TEAM_ROLE_TYPES.slice(0, 3).map((key) => {
-        const preset = ROLE_PRESETS[key]
-        return {
-          key,
-          name: preset.name,
-          role: preset.role,
-          color: preset.color,
-          systemPrompt: preset.systemPrompt,
-          runtimeType: preset.runtimeType as RuntimeType,
-          roleType: key,
-          capabilityTags: preset.capabilityTags ?? [],
-          toolPermissions: preset.toolPermissions ?? [],
-          sandboxPolicy: (preset.sandboxPolicy ?? 'workspace-write') as SandboxPolicy,
-        }
+    const message = err?.message || '模型没有返回可执行的任务计划'
+    logger.warn({ err: message, sessionId }, 'Dynamic orchestrator plan failed')
+    const [failedMessage] = await db
+      .insert(messages)
+      .values({
+        sessionId,
+        senderId: 'system',
+        senderType: 'system',
+        type: 'text',
+        content: `Orchestrator 规划失败：${message}`,
+        metadata: {
+          systemEvent: 'orchestrator_plan_failed',
+          error: message,
+        },
       })
-
-  const workerAgents = planAgents.filter((agent) => agent.roleType !== 'orchestrator')
-  const executionAgents = workerAgents.length ? workerAgents : planAgents
-  const architect =
-    executionAgents.find((agent) => agent.roleType === 'architect') ??
-    executionAgents.find((agent) => /design|设计|产品|视觉/i.test(`${agent.name} ${agent.role}`)) ??
-    executionAgents[0]!
-  const coder =
-    executionAgents.find((agent) => agent.roleType === 'coder') ??
-    executionAgents.find((agent) => /builder|coder|code|工程|实现/i.test(`${agent.name} ${agent.role}`)) ??
-    executionAgents[1] ??
-    executionAgents[0]!
-  const reviewer =
-    executionAgents.find((agent) => agent.roleType === 'reviewer') ??
-    executionAgents.find((agent) => /qa|review|test|验收|审查/i.test(`${agent.name} ${agent.role}`)) ??
-    executionAgents[2] ??
-    executionAgents[executionAgents.length - 1]!
-
-  const taskId1 = randomUUID()
-  const taskId2 = randomUUID()
-  const taskId3 = randomUUID()
-
-  return {
-    kind: 'orchestrator_plan',
-    title: '默认三阶段计划',
-    goal,
-    summary: '⚠️ AI 计划生成失败，使用默认方案：架构师 → 实现者 → 审查者',
-    agents: planAgents,
-    tasks: [
-      {
-        id: taskId1,
-        title: '梳理架构与交付范围',
-        description: `围绕「${goal}」定义核心目标、交付物、边界和验收标准`,
-        agentKey: architect.key,
-        dependencies: [],
-        maxRetries: 2,
-      },
-      {
-        id: taskId2,
-        title: '实现核心功能',
-        description: '根据架构设计产出可执行实现方案，完成关键路径开发',
-        agentKey: coder.key,
-        dependencies: [taskId1],
-        maxRetries: 2,
-      },
-      {
-        id: taskId3,
-        title: '审查风险与测试建议',
-        description: '检查交互边界、异常状态、测试缺口和交付风险，给出可直接执行的修复建议',
-        agentKey: reviewer.key,
-        dependencies: [taskId2],
-        maxRetries: 2,
-      },
-    ],
+      .returning()
+    if (failedMessage) {
+      broadcastSessionEvent(sessionId, {
+        type: WsEvent.MessageCompleted,
+        payload: { sessionId, message: failedMessage },
+      })
+    }
   }
-}
-
-function normalizeFallbackGoal(content?: string): string {
-  if (!content) return '完成多 Agent 协作任务'
-  return (
-    content
-      .replace(/@orchestrator/gi, '')
-      .replace(/@协调器/g, '')
-      .trim() || '完成多 Agent 协作任务'
-  )
 }

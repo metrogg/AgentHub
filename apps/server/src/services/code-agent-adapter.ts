@@ -266,6 +266,8 @@ export const __codeAgentAdapterTestHooks = {
     adapters.opencode.buildArgs(prompt, options),
   consumeClaudeStreamJson,
   extractClaudeResultMessage,
+  friendlyCodeAgentError: (output: string, displayName = 'Coding Tools') =>
+    friendlyCodeAgentError(output, { displayName } as CodeAgentAdapter),
 }
 
 export function isCodeAgentProfile(profile?: AgentRunProfile) {
@@ -1312,6 +1314,7 @@ async function buildCodeAgentRunMetadata(input: {
       : input.code === 130
         ? 'cancelled'
         : 'failed'
+  const partialSuccess = status === 'failed' && files.length > 0 && !input.timedOut
   return {
     type: 'code-agent-run',
     status,
@@ -1325,6 +1328,8 @@ async function buildCodeAgentRunMetadata(input: {
     toolCalls: input.liveToolCalls?.slice(0, 120),
     artifacts,
     finalMessage: input.finalMessage,
+    partialSuccess,
+    warning: partialSuccess ? friendlyCodeAgentError(input.output, input.adapter) : undefined,
     reviewRequired: requiresCodeAgentOutputReview(input.adapter),
     logs: input.liveLogs?.slice(-80),
     steps: buildFinalRunSteps({
@@ -1333,6 +1338,7 @@ async function buildCodeAgentRunMetadata(input: {
       commands,
       files,
       liveSteps: input.liveSteps ?? [],
+      partialSuccess,
     }),
     diagnostics: diagnostics || undefined,
   }
@@ -1353,6 +1359,7 @@ function emptyCodeAgentRunMetadata(
     files: [],
     toolCalls: [],
     artifacts: [],
+    partialSuccess: false,
     reviewRequired: requiresCodeAgentOutputReview(adapter),
     steps: [
       {
@@ -1376,8 +1383,9 @@ function buildFinalRunSteps(input: {
   commands: CodeAgentRunMetadata['commands']
   files: CodeAgentRunMetadata['files']
   liveSteps: NonNullable<CodeAgentRunMetadata['steps']>
+  partialSuccess?: boolean
 }): NonNullable<CodeAgentRunMetadata['steps']> {
-  const finalStepStatus = input.status === 'completed' ? 'completed' : 'failed'
+  const finalStepStatus = input.status === 'completed' || input.partialSuccess ? 'completed' : 'failed'
   const steps: NonNullable<CodeAgentRunMetadata['steps']> = input.liveSteps.map((step) => ({
     ...step,
     status: step.status === 'running' ? finalStepStatus : step.status,
@@ -3009,9 +3017,17 @@ function stripReasoningTags(output: string) {
 
 function formatCodeAgentFailure(adapter: CodeAgentAdapter, result: CodeAgentCommandResult) {
   const friendly = friendlyCodeAgentError(result.output, adapter)
-  return [`**${adapter.displayName} 执行失败**`, '', friendly, '', `退出码：${result.code}`].join(
-    '\n',
-  )
+  const hasProducedFiles = (result.metadata.files ?? []).length > 0
+  const heading = hasProducedFiles
+    ? `**${adapter.displayName} 已结束，但带有警告**`
+    : `**${adapter.displayName} 执行失败**`
+  const lines = [heading, '', friendly]
+  if (hasProducedFiles) {
+    lines.push('', `已产出 ${result.metadata.files.length} 个文件/变更，退出码：${result.code}`)
+  } else {
+    lines.push('', `退出码：${result.code}`)
+  }
+  return lines.join('\n')
 }
 
 function buildCodeAgentCompletionMessage(metadata: CodeAgentRunMetadata, fallback: string) {
@@ -3135,7 +3151,17 @@ function friendlyCodeAgentError(output: string, adapter?: CodeAgentAdapter) {
   if (/wire_api = "chat" is no longer supported/i.test(output)) {
     return `当前 ${cliName} 不支持这个 provider 配置里的 wire_api=chat。请使用已降级的 Codex CLI，或切换到支持 Responses 的 OpenAI 端点。`
   }
-  if (/model.*not found|does not exist|404|unknown model/i.test(output)) {
+  if (/webfetch failed|web fetch failed|fetch failed|status code 404|http 404|GET .*404/i.test(output)) {
+    return `${cliName} 已启动，但网页抓取失败。请检查目标网址是否可访问；如果已经生成了文件，产物会保留在工作目录中。`
+  }
+  if (
+    /(?:model|模型|base url|endpoint).*?(?:not found|does not exist|unknown model|404)/i.test(
+      output,
+    ) ||
+    /issue with the selected model|may not exist|Run --model to pick a different model/i.test(
+      output,
+    )
+  ) {
     return `${cliName} 已启动，但当前模型或 Base URL 不可用。请检查模型名称和供应商地址。`
   }
   if (/No such file or directory|cannot find the path|系统找不到指定的路径/i.test(output)) {

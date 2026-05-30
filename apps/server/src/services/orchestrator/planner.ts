@@ -81,6 +81,7 @@ export class Planner {
       }
     }
 
+    let planningError: unknown
     try {
       const generated = await this.generateWithLlm(
         goal,
@@ -93,14 +94,19 @@ export class Planner {
       )
       const normalized = this.normalizeGeneratedPlan(runId, goal, generated, agents)
       if (normalized) return initializeRunLedger({ ...normalized, agentRelations })
+      planningError = new Error('Planner returned an invalid or empty plan')
     } catch (error: any) {
-      logger.warn({ err: error?.message }, 'Planner LLM generation failed, using fallback')
+      planningError = error
     }
 
-    return initializeRunLedger({
-      ...this.buildFallbackPlan(runId, goal, agents, spec),
-      agentRelations,
-    })
+    const message =
+      planningError instanceof Error
+        ? planningError.message
+        : typeof planningError === 'string'
+          ? planningError
+          : 'unknown planner error'
+    logger.warn({ err: message }, 'Planner LLM generation failed')
+    throw new Error(`规划生成失败：${message}`)
   }
 
   private formatSpecPhases(spec: import('../harness').HarnessSpec): string {
@@ -202,43 +208,6 @@ export class Planner {
         .toLowerCase()
       return lowered.some((keyword) => text.includes(keyword))
     })
-  }
-
-  /**
-   * Coder 专业化：根据目标判断任务类型，给 build task 添加 specialist 标签
-   */
-  private inferSpecialistTags(goal: string): string[] {
-    const lower = goal.toLowerCase()
-    const tags: string[] = []
-    if (
-      lower.includes('react') ||
-      lower.includes('vue') ||
-      lower.includes('frontend') ||
-      lower.includes('ui') ||
-      lower.includes('页面') ||
-      lower.includes('组件')
-    ) {
-      tags.push('frontend')
-    }
-    if (
-      lower.includes('api') ||
-      lower.includes('backend') ||
-      lower.includes('server') ||
-      lower.includes('数据库') ||
-      lower.includes('db')
-    ) {
-      tags.push('backend')
-    }
-    if (
-      lower.includes('docker') ||
-      lower.includes('ci') ||
-      lower.includes('deploy') ||
-      lower.includes('k8s') ||
-      lower.includes('devops')
-    ) {
-      tags.push('devops')
-    }
-    return tags
   }
 
   private inferMode(
@@ -668,124 +637,6 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     if (id === 'verification') return '验证质量和风险'
     if (id === 'synthesis') return '汇总协作产出'
     return '推进当前任务'
-  }
-
-  private buildFallbackPlan(
-    runId: string,
-    goal: string,
-    agents: ExecutionAgent[],
-    spec?: ProjectSpec,
-  ): ExecutionPlan {
-    const title = titleFromGoal(goal)
-    const selectedAgents = agents.length
-      ? agents.slice(0, Math.max(1, Math.min(agents.length, 6)))
-      : []
-    const workerAgents = selectedAgents.filter((agent) => agent.roleType !== 'orchestrator')
-    const executionAgents = workerAgents.length ? workerAgents : selectedAgents
-
-    // 如果有 Spec，按模块生成 fallback 任务
-    if (spec && spec.modules.length > 0) {
-      const tasks: ExecutionTask[] = []
-      const moduleToTaskId = new Map<string, string>()
-
-      for (let i = 0; i < spec.modules.length; i++) {
-        const m = spec.modules[i]!
-        const taskId = crypto.randomUUID()
-        moduleToTaskId.set(m.name, taskId)
-        // 根据模块职责匹配 Agent
-        const keywords = [m.name, ...m.responsibility.split(/\s+/)]
-        const matched =
-          this.pickAgent(executionAgents, keywords) ?? executionAgents[i % executionAgents.length]!
-        tasks.push({
-          id: taskId,
-          title: `实现模块：${m.name}`,
-          description: `${m.responsibility}\n需暴露接口：${m.interfaces.join('、') || '无'}\n技术栈：${spec.techStack}`,
-          agentId: matched.id,
-          taskType: 'code',
-          dependencies: m.dependsOn
-            .map((dep) => moduleToTaskId.get(dep))
-            .filter((d): d is string => Boolean(d)),
-          maxRetries: 2,
-        })
-      }
-
-      // 如果只有一个模块，追加 review 任务
-      if (tasks.length === 1 && selectedAgents.length > 1) {
-        const reviewer =
-          this.pickAgent(executionAgents, ['验收', '审查', 'review', 'test', 'qa']) ??
-          executionAgents[executionAgents.length - 1]!
-        const reviewId = crypto.randomUUID()
-        tasks.push({
-          id: reviewId,
-          title: '审查与测试',
-          description: `检查「${goal}」的交互边界、异常状态和测试缺口。`,
-          agentId: reviewer.id,
-          taskType: 'review',
-          dependencies: [tasks[0]!.id],
-          maxRetries: 2,
-        })
-      }
-
-      return { runId, title, goal, agents: selectedAgents, tasks, collaborationMode: 'mapreduce' }
-    }
-
-    // 无 Spec 时的经典三阶段 fallback，支持 Coder 专业化匹配
-    const leadAgent =
-      this.pickAgent(executionAgents, ['设计', '架构', 'architect', 'designer', 'plan']) ??
-      executionAgents[0]!
-
-    // 尝试 specialist 匹配，如果没有则回退到通用 coder
-    const specialistTags = this.inferSpecialistTags(goal)
-    const buildAgent =
-      (specialistTags.length > 0
-        ? this.pickAgent(executionAgents, [...specialistTags, 'coder', 'code'])
-        : undefined) ??
-      this.pickAgent(executionAgents, ['实现', '代码', 'coder', 'code', 'build', 'builder']) ??
-      executionAgents[1] ??
-      executionAgents[0]!
-
-    const reviewAgent =
-      this.pickAgent(executionAgents, ['验收', '审查', 'review', 'test', 'qa', '风险']) ??
-      executionAgents[2] ??
-      executionAgents[executionAgents.length - 1]!
-
-    const planId = crypto.randomUUID()
-    const buildId = crypto.randomUUID()
-    const reviewId = crypto.randomUUID()
-
-    const specialistHint =
-      specialistTags.length > 0 ? `（专长方向: ${specialistTags.join(', ')}）` : ''
-    const tasks: ExecutionTask[] = [
-      {
-        id: planId,
-        title: '梳理目标与交付范围',
-        description: `围绕「${goal}」定义核心目标、交付物、边界、依赖和验收标准。`,
-        agentId: leadAgent.id,
-        taskType: 'design',
-        dependencies: [],
-        maxRetries: 2,
-      },
-      {
-        id: buildId,
-        title: `实现核心功能与界面${specialistHint}`,
-        description: `基于拆解结果产出可执行实现方案，优先完成关键路径、组件接入和小步验证。${specialistHint}`,
-        agentId: buildAgent.id,
-        taskType: 'code',
-        dependencies: [planId],
-        maxRetries: 2,
-      },
-      {
-        id: reviewId,
-        title: '审查风险与测试建议',
-        description: '检查交互边界、异常状态、测试缺口和交付风险，并给出可直接执行的修复建议。',
-        agentId: reviewAgent.id,
-        taskType: 'review',
-        dependencies: [buildId],
-        maxRetries: 2,
-      },
-    ]
-
-    return { runId, title, goal, agents: selectedAgents, tasks, collaborationMode: 'pipeline' }
   }
 
   private selectExecutionAgent(

@@ -1,7 +1,5 @@
 import { db, workspaceAgents, workspaceAgentRelations, workspaces, eq } from '@agenthub/db'
 import {
-  DEFAULT_CODE_TEAM_ROLE_TYPES,
-  ROLE_PRESETS,
   AgentRoleType,
   RuntimeType,
   CodeAgentType,
@@ -94,7 +92,10 @@ export async function buildDynamicOrchestratorPlan(
   workspaceId?: string | null,
 ): Promise<OrchestratorPlan> {
   const goal = normalizeOrchestratorGoal(content)
-  const planningAgents = agents.length ? agents.map(planAgentFromInput) : fallbackPlanAgents()
+  if (!agents.length) {
+    throw new Error('当前群聊没有可调度的 Agent，请先添加成员后再发起编排')
+  }
+  const planningAgents = agents.map(planAgentFromInput)
 
   let workspacePath: string | null = null
   if (workspaceId) {
@@ -127,24 +128,6 @@ function normalizeOrchestratorGoal(content: string) {
       .replace(/@协调器/g, '')
       .trim() || '完成一个多 Agent 协作任务'
   )
-}
-
-function fallbackPlanAgents(): PlanAgent[] {
-  return DEFAULT_CODE_TEAM_ROLE_TYPES.map((key) => {
-    const preset = ROLE_PRESETS[key]
-    return {
-      key,
-      name: preset.name,
-      role: preset.role,
-      color: preset.color,
-      systemPrompt: preset.systemPrompt,
-      runtimeType: preset.runtimeType,
-      roleType: key,
-      capabilityTags: preset.capabilityTags,
-      toolPermissions: preset.toolPermissions,
-      sandboxPolicy: preset.sandboxPolicy,
-    }
-  })
 }
 
 function planAgentFromInput(agent: PlanningAgentInput): PlanAgent {
