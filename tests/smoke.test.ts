@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { Database } from 'bun:sqlite'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
 import { existsSync, mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -18,6 +19,8 @@ beforeAll(async () => {
   process.env.ENABLE_LOCAL_CLI_PROBES = 'false'
   process.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
   process.env.AGENTHUB_SKIP_LEGACY_SCHEMA = '1'
+  Bun.env.ENABLE_LOCAL_CLI_PROBES = 'false'
+  Bun.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
 
   dbApi = await import('../packages/db/src/index')
   migrate(dbApi.db, { migrationsFolder: resolve('packages/db/drizzle') })
@@ -143,6 +146,63 @@ describe('AgentHub smoke tests', () => {
     expect(body.version).toBe('0.1.0')
   })
 
+  test('database enforces collaboration foreign keys', () => {
+    const sqlite = new Database(process.env.DATABASE_URL!)
+    sqlite.exec('PRAGMA foreign_keys = ON;')
+
+    const foreignKeys = (table: string) =>
+      sqlite
+        .query(`PRAGMA foreign_key_list(${table})`)
+        .all()
+        .map((row) => {
+          const fk = row as { from: string; table: string; to: string; on_delete: string }
+          return `${fk.from}->${fk.table}.${fk.to}:${fk.on_delete}`
+        })
+
+    expect(foreignKeys('sessions')).toContain('workspace_id->workspaces.id:SET NULL')
+    expect(foreignKeys('sessions')).toContain('workspace_agent_id->workspace_agents.id:SET NULL')
+    expect(foreignKeys('workspace_tasks')).toContain('session_id->sessions.id:SET NULL')
+    expect(foreignKeys('workspace_tasks')).toContain('run_id->orchestrator_runs.id:CASCADE')
+    expect(foreignKeys('workspace_tasks')).toContain('agent_id->workspace_agents.id:SET NULL')
+    expect(foreignKeys('execution_logs')).toContain('run_id->orchestrator_runs.id:CASCADE')
+
+    const now = Date.now()
+    const workspaceId = 'integrity-workspace'
+    sqlite
+      .query(
+        `INSERT INTO workspaces (id, owner_id, name, goal, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(workspaceId, 'default-user', 'Integrity workspace', '', now, now)
+
+    let rejected = false
+    try {
+      sqlite
+        .query(
+          `INSERT INTO workspace_tasks (
+            id, workspace_id, title, description, status, session_id, run_id,
+            order_idx, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          'integrity-task',
+          workspaceId,
+          'Invalid task',
+          'Should be rejected by DB constraints',
+          'pending',
+          'missing-session',
+          'missing-run',
+          0,
+          now,
+          now,
+        )
+    } catch {
+      rejected = true
+    }
+    expect(rejected).toBe(true)
+    sqlite.close()
+  })
+
   test('session and message APIs persist a skipped-reply message', async () => {
     const session = await json<{ id: string; title: string }>(
       await postJson('/api/sessions', { title: 'Smoke chat', type: 'direct' }),
@@ -160,6 +220,164 @@ describe('AgentHub smoke tests', () => {
 
     expect(message.content).toBe('hello smoke')
     expect(list.items.map((item) => item.id)).toContain(message.id)
+  })
+
+  test('development reset clears application data and reseeds the default user', async () => {
+    const now = new Date()
+    const workspaceId = 'reset-workspace'
+    const sessionId = 'reset-session'
+    const agentId = 'reset-workspace-agent'
+    const reviewerId = 'reset-reviewer-agent'
+    const runId = 'reset-run'
+    const taskId = 'reset-task'
+    const legacyAgentId = 'reset-legacy-agent'
+
+    await dbApi.db.insert(dbApi.workspaces).values({
+      id: workspaceId,
+      ownerId: 'default-user',
+      name: 'Reset workspace',
+      goal: 'Reset smoke data',
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.sessions).values({
+      id: sessionId,
+      title: 'Reset group',
+      type: 'group',
+      ownerId: 'default-user',
+      workspaceId,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.workspaceAgents).values([
+      { id: agentId, workspaceId, name: 'Reset Agent', role: 'Coder', createdAt: now },
+      { id: reviewerId, workspaceId, name: 'Reset Reviewer', role: 'Reviewer', createdAt: now },
+    ])
+    await dbApi.db.insert(dbApi.workspaceAgentRelations).values({
+      workspaceId,
+      sourceAgentId: agentId,
+      targetAgentId: reviewerId,
+      relationType: 'reviewed_by',
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.orchestratorRuns).values({
+      id: runId,
+      workspaceId,
+      groupSessionId: sessionId,
+      status: 'running',
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.workspaceTasks).values({
+      id: taskId,
+      workspaceId,
+      agentId,
+      title: 'Reset task',
+      description: 'Reset smoke task',
+      status: 'running',
+      sessionId,
+      runId,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.messages).values({
+      sessionId,
+      senderId: 'default-user',
+      senderType: 'user',
+      type: 'text',
+      content: 'reset me',
+      createdAt: now,
+    })
+    await dbApi.db.insert(dbApi.sessionMembers).values({
+      sessionId,
+      memberId: agentId,
+      memberType: 'agent',
+      joinedAt: now,
+    })
+    await dbApi.db.insert(dbApi.workspaceStates).values({
+      workspaceId,
+      state: '{}',
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.blackboardEntries).values({
+      namespace: runId,
+      key: 'reset',
+      value: { ok: true },
+      agentId,
+      taskId,
+      createdAt: now,
+    })
+    await dbApi.db.insert(dbApi.taskClarifications).values({
+      runId,
+      taskId,
+      agentId,
+      question: 'Reset?',
+      createdAt: now,
+    })
+    await dbApi.db.insert(dbApi.orchestratorRunControls).values({
+      runId,
+      action: 'pause',
+      createdAt: now,
+    })
+    await dbApi.db.insert(dbApi.executionLogs).values({
+      runId,
+      sessionId,
+      agentId,
+      taskId,
+      type: 'task_start',
+      createdAt: now,
+    })
+    await dbApi.db.insert(dbApi.agents).values({
+      id: legacyAgentId,
+      name: 'Legacy Agent',
+      provider: 'openai',
+      model: 'mock-model',
+      createdAt: now,
+    })
+    await dbApi.db.insert(dbApi.tasks).values({
+      sessionId,
+      agentId: legacyAgentId,
+      title: 'Legacy task',
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.settings).values({
+      key: 'RESET_SMOKE',
+      value: 'dirty',
+      updatedAt: now,
+    })
+
+    await json<{ success: boolean }>(
+      await postJson('/api/settings/reset-all-data', { confirm: 'RESET_AGENTHUB_DATA' }),
+    )
+
+    const emptyTables = [
+      dbApi.sessions,
+      dbApi.messages,
+      dbApi.sessionMembers,
+      dbApi.workspaces,
+      dbApi.workspaceStates,
+      dbApi.workspaceAgents,
+      dbApi.workspaceAgentRelations,
+      dbApi.workspaceTasks,
+      dbApi.orchestratorRuns,
+      dbApi.orchestratorRunEvents,
+      dbApi.taskClarifications,
+      dbApi.orchestratorRunControls,
+      dbApi.blackboardEntries,
+      dbApi.executionLogs,
+      dbApi.agents,
+      dbApi.tasks,
+      dbApi.settings,
+    ]
+
+    for (const table of emptyTables) {
+      expect(await dbApi.db.select().from(table)).toHaveLength(0)
+    }
+    const userRows = await dbApi.db.select().from(dbApi.users)
+    expect(userRows).toHaveLength(1)
+    expect(userRows[0]?.id).toBe('default-user')
   })
 
   test('settings model test can be mocked without real credentials', async () => {
@@ -1277,6 +1495,24 @@ describe('AgentHub smoke tests', () => {
     })
     expect(dangerArgs[dangerArgs.indexOf('--permission-mode') + 1]).toBe('bypassPermissions')
     expect(dangerArgs).toContain('--dangerously-skip-permissions')
+  })
+
+  test('OpenCode adapter keeps prompt message before attached prompt file', async () => {
+    const { __codeAgentAdapterTestHooks } =
+      await import('../apps/server/src/services/code-agent-adapter')
+
+    const args = __codeAgentAdapterTestHooks.buildOpencodeArgs('Read attached task prompt', {
+      cwd: 'C:/project',
+      modelId: 'deepseek-chat',
+      modelProvider: 'deepseek',
+      sandboxPolicy: 'read-only',
+      promptFile: 'C:/tmp/agenthub-task.md',
+    })
+
+    expect(args[0]).toBe('run')
+    expect(args).toContain('--file')
+    expect(args[args.indexOf('--file') + 1]).toBe('C:/tmp/agenthub-task.md')
+    expect(args.indexOf('Read attached task prompt')).toBeLessThan(args.indexOf('--file'))
   })
 
   test('Claude Code stream-json parser records tools, files, commands, and final text', async () => {

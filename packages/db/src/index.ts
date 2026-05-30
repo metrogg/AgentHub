@@ -16,6 +16,7 @@ const rawUrl = desktopDataDir
   ? `${desktopDataDir.replace(/[\\/]+$/, '')}\\data\\agenthub.db`
   : (process.env.DATABASE_URL ?? './storage/agenthub.db')
 const dbPath = absolutePath(rawUrl)
+export const databasePath = dbPath
 
 mkdirSync(pathDirname(dbPath), { recursive: true })
 

@@ -1012,6 +1012,15 @@ async function startPlanRunInExistingGroup(params: {
   const runId = crypto.randomUUID()
   const taskIdRemap = new Map<string, string>()
 
+  await db.insert(orchestratorRuns).values({
+    id: runId,
+    workspaceId,
+    groupSessionId: sessionId,
+    planMessageId: planMessageId ?? undefined,
+    status: 'running',
+    plan: null,
+  })
+
   for (const [index, task] of plan.tasks.entries()) {
     const agent = agentsByKey.get(task.agentKey)
     let taskId = task.id
@@ -1111,14 +1120,10 @@ async function startPlanRunInExistingGroup(params: {
   }
   const executionPlan = initializeRunLedger(rawExecutionPlan)
 
-  await db.insert(orchestratorRuns).values({
-    id: runId,
-    workspaceId,
-    groupSessionId: sessionId,
-    planMessageId: planMessageId ?? undefined,
-    status: 'running',
-    plan: executionPlan as unknown as Record<string, unknown>,
-  })
+  await db
+    .update(orchestratorRuns)
+    .set({ plan: executionPlan as unknown as Record<string, unknown>, updatedAt: new Date() })
+    .where(eq(orchestratorRuns.id, runId))
 
   await emitRunEvent({
     runId,

@@ -87,14 +87,14 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
   .get('/status', async (c) => {
     const items = await probeTools(probes)
-    return c.json({ platform: process.platform, localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES, items })
+    return c.json({ platform: process.platform, localCliProbesEnabled: localCliProbesEnabled(), items })
   })
   .get('/agent-adapters', async (c) => {
     const statuses = new Map((await probeTools(probes)).map((item) => [item.id, item]))
     const executionEnabled = await getBooleanSetting('AGENTHUB_ENABLE_CODE_AGENT_EXECUTION', env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION)
     return c.json({
       platform: process.platform,
-      localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES,
+      localCliProbesEnabled: localCliProbesEnabled(),
       executionEnabled,
       items: agentAdapters.map((adapter) => {
         const status = statuses.get(adapter.id)
@@ -139,7 +139,7 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
       command: isSafeCommand(tool.command) ? tool.command : '',
     }))
     const items = await probeTools(customProbes)
-    return c.json({ platform: process.platform, localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES, items })
+    return c.json({ platform: process.platform, localCliProbesEnabled: localCliProbesEnabled(), items })
   })
   .post('/cli/install', async (c) => {
     return c.json(await installAllCliTools(), 200)
@@ -245,7 +245,7 @@ export async function getCodingToolsWorkbenchStatus() {
   )
   return {
     platform: process.platform,
-    localCliProbesEnabled: env.ENABLE_LOCAL_CLI_PROBES,
+    localCliProbesEnabled: localCliProbesEnabled(),
     executionEnabled,
     items: agentAdapters.map((adapter) => {
       const status = statuses.get(adapter.id)
@@ -572,7 +572,7 @@ async function probeToolWithBudget(probe: ToolProbe) {
 
 async function probeTool(probe: ToolProbe) {
   const configEnv = configEnvName(probe)
-  if (!env.ENABLE_LOCAL_CLI_PROBES) {
+  if (!localCliProbesEnabled()) {
     return {
       id: probe.id,
       command: probe.command,
@@ -585,6 +585,12 @@ async function probeTool(probe: ToolProbe) {
   }
 
   return probeToolDirect(probe)
+}
+
+function localCliProbesEnabled() {
+  const raw = process.env.ENABLE_LOCAL_CLI_PROBES
+  if (raw !== undefined) return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase())
+  return env.ENABLE_LOCAL_CLI_PROBES
 }
 
 async function probeToolDirect(probe: ToolProbe, { skipCache = false } = {}) {

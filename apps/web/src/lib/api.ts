@@ -966,6 +966,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  resetAllApplicationData: (confirm = 'RESET_AGENTHUB_DATA') =>
+    request<{ success: boolean; message: string; preserved: string[] }>('/settings/reset-all-data', {
+      method: 'POST',
+      body: JSON.stringify({ confirm }),
+    }),
   getRuntimeInfo: () =>
     request<{
       git: { runtime: string; path: string; ok: boolean; message: string }

@@ -106,6 +106,20 @@
       "when": 1780065211703,
       "tag": "0014_task_clarifications_and_controls",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1780135000000,
+      "tag": "0015_collaboration_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1780136000000,
+      "tag": "0016_workspace_states",
+      "breakpoints": true
     }
   ]
 }

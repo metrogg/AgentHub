@@ -620,6 +620,16 @@ function SettingsContent({
     showActionMessage(t('已恢复默认设置'))
   }
 
+  function clearLocalApplicationState() {
+    if (typeof window === 'undefined') return
+    const keys: string[] = []
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index)
+      if (key?.startsWith('agenthub:') || key?.startsWith('agenthub.')) keys.push(key)
+    }
+    for (const key of keys) window.localStorage.removeItem(key)
+  }
+
   switch (section) {
     case '通用':
       return (
@@ -765,6 +775,39 @@ function SettingsContent({
           </SettingsSection>
           <SettingsSection title="重置所有设置" desc="清除当前配置并重新进入初始引导">
             <button type="button" onClick={resetAllSettings} className="settings-danger-button">{t('重置所有设置')}</button>
+          </SettingsSection>
+          <SettingsSection
+            title="开发重置"
+            desc="清空会话、消息、工作区、Agent、任务、编排运行、黑板、设置和本地界面偏好，恢复到第一次启动的应用状态；不会删除磁盘上的项目目录。"
+          >
+            <InsetPanel>
+              <Notice tone="warning">{t('此操作不可恢复，仅建议在开发调试或清理脏数据时使用。')}</Notice>
+              <button
+                type="button"
+                disabled={busyAction === 'reset-all-data'}
+                onClick={() => {
+                  const phrase = window.prompt('请输入 RESET_AGENTHUB_DATA 确认清空全部应用数据')
+                  if (phrase !== 'RESET_AGENTHUB_DATA') {
+                    showActionMessage('已取消重置')
+                    return
+                  }
+                  void runAction('reset-all-data', async () => {
+                    await api.resetAllApplicationData(phrase)
+                    clearLocalApplicationState()
+                    showActionMessage('应用数据已清空，页面即将刷新')
+                    window.setTimeout(() => window.location.reload(), 800)
+                  })
+                }}
+                className="settings-danger-button"
+              >
+                {busyAction === 'reset-all-data' ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+                {busyAction === 'reset-all-data' ? t('重置中...') : t('清空全部应用数据')}
+              </button>
+            </InsetPanel>
           </SettingsSection>
         </SettingsStack>
       )
