@@ -276,6 +276,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       // OpenCode's --file is an array option; keep it after the message so it
       // does not consume the prompt text as another file path.
       if (options?.promptFile) args.push('--file', options.promptFile)
+      args.push(options?.promptFile ? buildFileBackedPrompt(options.promptFile) : prompt)
       return args
     },
   },
@@ -292,6 +293,13 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       return args
     },
   },
+}
+
+export const __codeAgentAdapterTestHooks = {
+  buildClaudeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
+    adapters['claude-code'].buildArgs(prompt, options),
+  consumeClaudeStreamJson,
+  extractClaudeResultMessage,
 }
 
 export function isCodeAgentProfile(profile?: AgentRunProfile) {
