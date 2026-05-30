@@ -4,10 +4,32 @@ import { existsSync } from 'node:fs'
 import { mkdir, readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { db, eq, settings } from '@agenthub/db'
+import {
+  agents,
+  blackboardEntries,
+  db,
+  eq,
+  executionLogs,
+  messages,
+  orchestratorRunControls,
+  orchestratorRunEvents,
+  orchestratorRuns,
+  sessionMembers,
+  sessions,
+  settings,
+  taskClarifications,
+  tasks,
+  users,
+  workspaceAgentRelations,
+  workspaceAgents,
+  workspaceStates,
+  workspaceTasks,
+  workspaces,
+} from '@agenthub/db'
 import { env } from '../env'
+import { AppError, AppErrorCodes } from '../lib/error'
 import { logger } from '../lib/logger'
-import { authMiddleware, type AuthVariables } from '../middleware/auth'
+import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/auth'
 import { testLlmConnection } from '../services/llm-client'
 
 const execFileAsync = promisify(execFile)
@@ -109,6 +131,23 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!opened.ok) return c.json(opened, 500)
     return c.json({ ok: true, message: '已打开路径' })
   })
+  .post('/reset-all-data', async (c) => {
+    const input: { confirm?: string } = await c.req.json<{ confirm?: string }>().catch(() => ({}))
+    if (input.confirm !== 'RESET_AGENTHUB_DATA') {
+      throw AppError.fromCode(
+        AppErrorCodes.VALIDATION_FAILED,
+        '确认短语不正确，已取消重置',
+      )
+    }
+
+    await resetAllApplicationData()
+    logger.warn({ userId: c.get('user').sub }, 'All AgentHub application data has been reset')
+    return c.json({
+      success: true,
+      message: '已清空应用数据并重新创建默认用户',
+      preserved: ['本地项目目录', '数据库迁移记录'],
+    })
+  })
   .post('/test-model', async (c) => {
     const input = await c.req.json<{
       provider?: string
@@ -121,6 +160,35 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
 
     return c.json(await testLlmConnection(input), 200)
   })
+
+async function resetAllApplicationData() {
+  await db.transaction(async (tx) => {
+    await tx.delete(executionLogs)
+    await tx.delete(orchestratorRunControls)
+    await tx.delete(taskClarifications)
+    await tx.delete(orchestratorRunEvents)
+    await tx.delete(workspaceTasks)
+    await tx.delete(blackboardEntries)
+    await tx.delete(tasks)
+    await tx.delete(messages)
+    await tx.delete(sessionMembers)
+    await tx.delete(orchestratorRuns)
+    await tx.delete(sessions)
+    await tx.delete(workspaceAgentRelations)
+    await tx.delete(workspaceAgents)
+    await tx.delete(workspaceStates)
+    await tx.delete(workspaces)
+    await tx.delete(agents)
+    await tx.delete(settings)
+    await tx.delete(users)
+    await tx.insert(users).values({
+      id: DEFAULT_USER.sub,
+      email: DEFAULT_USER.email,
+      username: DEFAULT_USER.username,
+      passwordHash: '',
+    })
+  })
+}
 
 async function detectRuntime(command: string, args: string[]) {
   const version = await runCommand(command, args)

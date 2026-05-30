@@ -40,7 +40,7 @@ export const workspaces = sqliteTable('workspaces', {
 })
 
 export const workspaceStates = sqliteTable('workspace_states', {
-  workspaceId: text('workspace_id').notNull().primaryKey(),
+  workspaceId: text('workspace_id').notNull().primaryKey().references(() => workspaces.id, { onDelete: 'cascade' }),
   state: text('state').notNull(),
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })
@@ -141,7 +141,7 @@ export const workspaceTasks = sqliteTable(
   orderIdx: integer('order_idx').notNull().default(0),
 
   // === 新增字段：DAG 调度支持 ===
-  runId: text('run_id'),
+  runId: text('run_id').references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
   phaseId: text('phase_id'), // 所属阶段（粗粒度规划）
   dependencies: text('dependencies', { mode: 'json' }).$type<string[]>().notNull().default([]),
   inputRefs: text('input_refs', { mode: 'json' }).$type<Array<{ namespace: string; key: string; version: number }>>().notNull().default([]),
@@ -150,7 +150,7 @@ export const workspaceTasks = sqliteTable(
   maxRetries: integer('max_retries').notNull().default(3),
   retryCount: integer('retry_count').notNull().default(0),
   timeout: integer('timeout').notNull().default(300000), // 5分钟
-  fallbackAgentId: text('fallback_agent_id'),
+  fallbackAgentId: text('fallback_agent_id').references(() => workspaceAgents.id, { onDelete: 'set null' }),
   artifacts: text('artifacts', { mode: 'json' }).$type<AgentArtifact[]>().notNull().default([]),
   startedAt: ts('started_at'),
   completedAt: ts('completed_at'),
@@ -166,6 +166,8 @@ export const workspaceTasks = sqliteTable(
 (table) => ({
   workspaceIdIdx: index('workspace_tasks_workspace_id_idx').on(table.workspaceId),
   runIdIdx: index('workspace_tasks_run_id_idx').on(table.runId),
+  sessionIdIdx: index('workspace_tasks_session_id_idx').on(table.sessionId),
+  agentIdIdx: index('workspace_tasks_agent_id_idx').on(table.agentId),
 }))
 
 export const sessionMembers = sqliteTable(
@@ -335,7 +337,7 @@ export const executionLogs = sqliteTable(
   'execution_logs',
   {
     id: id(),
-    runId: text('run_id').notNull(),
+    runId: text('run_id').notNull().references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
     sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
     agentId: text('agent_id').notNull(),
     taskId: text('task_id'),

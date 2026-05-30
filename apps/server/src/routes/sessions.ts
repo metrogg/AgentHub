@@ -95,6 +95,11 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!updated) throw AppError.internal(AppErrorCodes.INTERNAL_ERROR, '会话更新失败')
     return c.json(updated)
   })
+  .delete('/all', async (c) => {
+    const user = c.get('user')
+    await db.delete(sessions).where(eq(sessions.ownerId, user.sub))
+    return c.json({ deleted: true })
+  })
   .delete('/:id', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
