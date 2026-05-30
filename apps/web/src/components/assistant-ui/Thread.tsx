@@ -1226,6 +1226,29 @@ const ThreadWelcome: FC = () => {
   )
 }
 
+const fallbackWelcomeQuickPrompts: WelcomeQuickPrompt[] = [
+  {
+    id: 'fallback-plan',
+    label: 'Plan a task',
+    prompt: 'Help me break this task into clear steps and identify risks.',
+  },
+  {
+    id: 'fallback-review',
+    label: 'Review code',
+    prompt: 'Review the current implementation and point out bugs or missing tests.',
+  },
+  {
+    id: 'fallback-build',
+    label: 'Build feature',
+    prompt: 'Implement this feature end to end and verify it works.',
+  },
+  {
+    id: 'fallback-debug',
+    label: 'Debug issue',
+    prompt: 'Investigate this issue, find the root cause, and propose a fix.',
+  },
+]
+
 const ThreadWelcomeContent: FC = () => {
   const { t } = useI18n()
   const [quickPrompts, setQuickPrompts] = useState<WelcomeQuickPrompt[]>([])
@@ -2349,6 +2372,7 @@ const AssistantMessage: FC = () => {
                   task_board: TaskBoardCard,
                   code_agent_run: CodeAgentRunCard,
                   agent_artifacts: AgentArtifactsCard,
+                  agent_reasoning: AgentReasoningPart,
                   chat_attachments: ChatAttachmentsPart,
                   clarification_card: ClarificationCardWrapper,
                   file_card: FileCardMessage,
@@ -2379,6 +2403,21 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
         <i />
         <i />
       </span>
+    </div>
+  )
+}
+
+const AgentReasoningPart: FC<{ data: { text: string; running?: boolean } }> = ({ data }) => {
+  const text = data.text.trim()
+  if (!text) return null
+
+  return (
+    <div className="not-prose mb-3 rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-xs leading-6 text-amber-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
+      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-amber-700">
+        <CircleHelp className="h-3.5 w-3.5" />
+        {data.running ? 'Thinking' : 'Reasoning'}
+      </div>
+      <div className="whitespace-pre-wrap break-words">{text}</div>
     </div>
   )
 }
@@ -4722,7 +4761,7 @@ function closeUnterminatedCodeFence(text: string) {
 const MarkdownText: FC = () => (
   <MarkdownTextPrimitive
     remarkPlugins={[remarkGfm]}
-    smooth={false}
+    smooth
     preprocess={closeUnterminatedCodeFence}
     components={{
       pre: CodePre,

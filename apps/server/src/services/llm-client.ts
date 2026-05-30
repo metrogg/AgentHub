@@ -316,16 +316,17 @@ export async function getLlmRuntimeStatus(selectedModelId?: string) {
 }
 
 export function createLlmClient(config: LlmRuntimeConfig) {
+  const streamParts = (options: StreamOptions) => {
+    if (isAnthropicProvider(config.provider, config.baseUrl)) {
+      return streamAnthropicParts(options, config)
+    }
+    return streamOpenAICompatibleParts(options, config)
+  }
   return {
     stream(options: StreamOptions) {
-      return textOnlyStream(this.streamParts(options))
+      return textOnlyStream(streamParts(options))
     },
-    streamParts(options: StreamOptions) {
-      if (isAnthropicProvider(config.provider, config.baseUrl)) {
-        return streamAnthropicParts(options, config)
-      }
-      return streamOpenAICompatibleParts(options, config)
-    },
+    streamParts,
   }
 }
 

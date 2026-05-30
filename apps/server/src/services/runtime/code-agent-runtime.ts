@@ -35,6 +35,7 @@ export class CodeAgentRuntime implements AgentRuntime {
         signal,
         ctx.envelope,
         ctx.continueSession,
+        ctx.resumeSessionId,
       )) {
         if (signal?.aborted) break
         // 捕获 session ID 从 metadata chunk

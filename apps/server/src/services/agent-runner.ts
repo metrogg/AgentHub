@@ -104,6 +104,35 @@ function mergeCodeAgentRunMetadata(
   }
 }
 
+type StreamPartType = 'text' | 'reasoning'
+type StreamPartStatus = 'streaming' | 'completed'
+
+function streamPart(
+  input: {
+    agentId: string
+    agentName: string
+    id: string
+    messageId: string
+    sessionId: string
+    status: StreamPartStatus
+    text: string
+    type: StreamPartType
+  },
+) {
+  const now = new Date().toISOString()
+  return {
+    id: input.id,
+    messageId: input.messageId,
+    sessionId: input.sessionId,
+    type: input.type,
+    text: input.text,
+    status: input.status,
+    agentId: input.agentId,
+    agentName: input.agentName,
+    updatedAt: now,
+  }
+}
+
 export function cancelAgentReply(sessionId: string) {
   const run = activeRuns.get(sessionId)
   if (!run) return false
@@ -184,6 +213,7 @@ async function _runAgentReply(
 
   // 检测是否是继续输出：如果用户回复了一条 agent 消息，且该消息包含 codeAgentRun.sessionId，则为继续输出
   let isContinueSession = false
+  let resumeSessionId: string | undefined
   if (userMsg.replyToMessageId && profile?.runtimeType === 'code-agent') {
     const repliedTo = historyAsc.find((m) => m.id === userMsg.replyToMessageId)
     if (repliedTo?.metadata && typeof repliedTo.metadata === 'object') {
@@ -191,12 +221,15 @@ async function _runAgentReply(
       const codeAgentRun = metadata.codeAgentRun as Record<string, unknown> | undefined
       if (codeAgentRun?.sessionId && typeof codeAgentRun.sessionId === 'string') {
         isContinueSession = true
+        resumeSessionId = codeAgentRun.sessionId
         logger.info({ sessionId, replyToMessageId: userMsg.replyToMessageId, claudeSessionId: codeAgentRun.sessionId }, 'Continuing Claude Code session')
       }
     }
   }
 
   const streamMsgId = crypto.randomUUID()
+  const textPartId = crypto.randomUUID()
+  const reasoningPartId = crypto.randomUUID()
 
   broadcast(sessionId, {
     type: WsEvent.AgentTyping,
@@ -204,9 +237,47 @@ async function _runAgentReply(
   })
 
   let fullContent = ''
+  let fullReasoning = ''
   let failed = false
   let codeAgentRun: Record<string, unknown> | null = null
   const artifacts: Array<Record<string, unknown>> = []
+  const startedParts = new Set<StreamPartType>()
+
+  const partIdFor = (type: StreamPartType) => (type === 'reasoning' ? reasoningPartId : textPartId)
+  const emitPartUpdated = (type: StreamPartType, text: string, status: StreamPartStatus) => {
+    startedParts.add(type)
+    const part = streamPart({
+      agentId,
+      agentName,
+      id: partIdFor(type),
+      messageId: streamMsgId,
+      sessionId,
+      status,
+      text,
+      type,
+    })
+    broadcast(sessionId, {
+      type: WsEvent.MessagePartUpdated,
+      payload: { sessionId, messageId: streamMsgId, part },
+    })
+  }
+  const emitPartDelta = (type: StreamPartType, delta: string) => {
+    if (!delta) return
+    if (!startedParts.has(type)) emitPartUpdated(type, '', 'streaming')
+    broadcast(sessionId, {
+      type: WsEvent.MessagePartDelta,
+      payload: {
+        sessionId,
+        messageId: streamMsgId,
+        partId: partIdFor(type),
+        type,
+        field: 'text',
+        delta,
+        agentId,
+        agentName,
+      },
+    })
+  }
 
   try {
     if (profile) {
@@ -240,6 +311,7 @@ async function _runAgentReply(
         workspacePath: profileWithUserMemory.projectPath ?? null,
         envelope,
         continueSession: isContinueSession,
+        resumeSessionId,
       }
 
       for await (const chunk of runtime.execute(ctx)) {
@@ -247,10 +319,15 @@ async function _runAgentReply(
         switch (chunk.kind) {
           case 'text':
             fullContent += chunk.text
+            emitPartDelta('text', chunk.text)
             broadcast(sessionId, {
               type: WsEvent.MessageStream,
               payload: { sessionId, messageId: streamMsgId, delta: chunk.text, agentId, agentName },
             })
+            break
+          case 'reasoning':
+            fullReasoning += chunk.text
+            emitPartDelta('reasoning', chunk.text)
             break
           case 'metadata':
             if (chunk.metadata && typeof chunk.metadata === 'object') {
@@ -277,7 +354,7 @@ async function _runAgentReply(
       }
     } else {
       // 无 profile 时回退到默认 LLM
-      const { streamReply } = await import('./llm')
+      const { streamReplyParts } = await import('./llm')
       const { DEFAULT_AGENT_INSTRUCTIONS } = await import('./llm-client')
       const llmMessages = historyAsc.map((m) => {
         let content = m.content
@@ -295,12 +372,23 @@ async function _runAgentReply(
       })
       const userContext = await userProfileSystemContext()
       const systemContext = userContext ? `${DEFAULT_AGENT_INSTRUCTIONS}\n\n${userContext}` : undefined
-      for await (const delta of streamReply(llmMessages, systemContext, undefined, run.controller.signal)) {
+      for await (const chunk of streamReplyParts(
+        llmMessages,
+        systemContext,
+        undefined,
+        run.controller.signal,
+      )) {
         if (run.cancelled) break
-        fullContent += delta
+        if (chunk.type === 'reasoning-delta') {
+          fullReasoning += chunk.text
+          emitPartDelta('reasoning', chunk.text)
+          continue
+        }
+        fullContent += chunk.text
+        emitPartDelta('text', chunk.text)
         broadcast(sessionId, {
           type: WsEvent.MessageStream,
-          payload: { sessionId, messageId: streamMsgId, delta, agentId, agentName },
+          payload: { sessionId, messageId: streamMsgId, delta: chunk.text, agentId, agentName },
         })
       }
     }
@@ -336,6 +424,40 @@ async function _runAgentReply(
     })
   }
 
+  const finalParts = [
+    streamPart({
+      agentId,
+      agentName,
+      id: textPartId,
+      messageId: streamMsgId,
+      sessionId,
+      status: 'completed',
+      text: fullContent,
+      type: 'text',
+    }),
+    ...(fullReasoning.trim()
+      ? [
+          streamPart({
+            agentId,
+            agentName,
+            id: reasoningPartId,
+            messageId: streamMsgId,
+            sessionId,
+            status: 'completed',
+            text: fullReasoning.trim(),
+            type: 'reasoning',
+          }),
+        ]
+      : []),
+  ]
+
+  for (const part of finalParts) {
+    broadcast(sessionId, {
+      type: WsEvent.MessagePartUpdated,
+      payload: { sessionId, messageId: streamMsgId, part },
+    })
+  }
+
   const [agentMsg] = await db
     .insert(messages)
     .values({
@@ -356,8 +478,15 @@ async function _runAgentReply(
             projectPath: profile.projectPath ?? null,
             codeAgentRun,
             artifacts: codeAgentRun?.artifacts ?? artifacts,
+            parts: finalParts,
+            ...(fullReasoning.trim() ? { reasoning: fullReasoning.trim() } : {}),
           }
-        : null,
+        : fullReasoning.trim()
+          ? {
+              parts: finalParts,
+              reasoning: fullReasoning.trim(),
+            }
+          : null,
     })
     .returning()
 

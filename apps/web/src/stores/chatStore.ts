@@ -23,10 +23,72 @@ const cancelledSessions = new Set<string>()
 const messageCache = new Map<string, Message[]>()
 const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
 
+type StreamingPartType = 'text' | 'reasoning'
+
+interface StreamingPart {
+  id: string
+  messageId: string
+  sessionId: string
+  type: StreamingPartType
+  text: string
+  deltaText: string
+  status: 'streaming' | 'completed'
+  agentId?: string
+  agentName?: string
+  updatedAt?: string
+}
+
 function updateCachedMessages(sessionId: string, updater: (messages: Message[]) => Message[]) {
   const cached = messageCache.get(sessionId)
   if (!cached) return
   messageCache.set(sessionId, sortMessages(updater(cached)))
+}
+
+function upsertStreamingPart(parts: StreamingPart[], incoming: StreamingPart) {
+  const exists = parts.some((part) => part.id === incoming.id)
+  return exists
+    ? parts.map((part) => (part.id === incoming.id ? { ...part, ...incoming } : part))
+    : [...parts, incoming]
+}
+
+function applyPartDelta(
+  parts: StreamingPart[],
+  payload: {
+    agentId?: string
+    agentName?: string
+    delta: string
+    field?: string
+    messageId: string
+    partId: string
+    sessionId: string
+    type?: StreamingPartType
+  },
+) {
+  const base = parts.find((part) => part.id === payload.partId)
+  const type = payload.type ?? base?.type ?? 'text'
+  const next: StreamingPart = {
+    id: payload.partId,
+    messageId: payload.messageId,
+    sessionId: payload.sessionId,
+    type,
+    text: base?.text ?? '',
+    deltaText: `${base?.deltaText ?? ''}${payload.delta}`,
+    status: 'streaming',
+    agentId: payload.agentId ?? base?.agentId,
+    agentName: payload.agentName ?? base?.agentName,
+    updatedAt: new Date().toISOString(),
+  }
+  if (payload.field === 'text' || !payload.field) {
+    next.text = `${base?.text ?? ''}${payload.delta}`
+  }
+  return upsertStreamingPart(parts, next)
+}
+
+function composeStreamingText(parts: StreamingPart[], messageId: string) {
+  return parts
+    .filter((part) => part.messageId === messageId && part.type === 'text')
+    .map((part) => part.text || part.deltaText)
+    .join('')
 }
 
 function messageTime(message: Message): number {
@@ -136,6 +198,7 @@ interface ChatState {
   currentSessionId: string | null
   messages: Message[]
   streamingMessage: { id: string; content: string; agentId?: string; agentName?: string } | null
+  streamingParts: StreamingPart[]
   streamingCodeAgentRun: CodeAgentRunMetadata | null
   pendingAttachments: ChatAttachment[]
   loadingSessions: boolean
@@ -190,10 +253,20 @@ interface ChatState {
   setSessionWorkspace: (sessionId: string, workspaceId: string | null) => Promise<void>
   deleteSession: (sessionId: string) => Promise<void>
   clearMessages: (sessionId: string) => Promise<void>
-  sendMessage: (content: string) => Promise<{ groupSessionId?: string } | undefined>
+  sendMessage: (
+    content: string,
+    options?: {
+      displayContent?: string
+      replyToMessageId?: string | null
+    },
+  ) => Promise<{ groupSessionId?: string } | undefined>
   sendMessageToSession: (
     sessionId: string,
     content: string,
+    options?: {
+      displayContent?: string
+      replyToMessageId?: string | null
+    },
   ) => Promise<{ groupSessionId?: string } | undefined>
   editMessage: (messageId: string, content: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
@@ -227,6 +300,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentSessionId: null,
   messages: [],
   streamingMessage: null,
+  streamingParts: [],
   streamingCodeAgentRun: null,
   pendingAttachments: [],
   loadingSessions: false,
@@ -294,6 +368,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       loadingMessages: true,
       messages: cachedMessages ? sortMessages(cachedMessages) : [],
       streamingMessage: null,
+      streamingParts: [],
       streamingCodeAgentRun: null,
       pendingAttachments: [],
       agentTyping: false,
@@ -372,6 +447,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentWorkspaceAgents: s.currentSessionId === sessionId ? [] : s.currentWorkspaceAgents,
       messages: s.currentSessionId === sessionId ? [] : s.messages,
       streamingMessage: s.currentSessionId === sessionId ? null : s.streamingMessage,
+      streamingParts: s.currentSessionId === sessionId ? [] : s.streamingParts,
       streamingCodeAgentRun: s.currentSessionId === sessionId ? null : s.streamingCodeAgentRun,
       agentTyping: s.currentSessionId === sessionId ? false : s.agentTyping,
     }))
@@ -380,17 +456,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   async clearMessages(sessionId) {
     await api.clearMessages(sessionId)
     if (get().currentSessionId === sessionId) {
-      set({ messages: [], streamingMessage: null, streamingCodeAgentRun: null, agentTyping: false })
+      set({
+        messages: [],
+        streamingMessage: null,
+        streamingParts: [],
+        streamingCodeAgentRun: null,
+        agentTyping: false,
+      })
     }
   },
 
-  async sendMessage(content) {
+  async sendMessage(content, options) {
     const sessionId = get().currentSessionId
     if (!sessionId) return undefined
-    return get().sendMessageToSession(sessionId, content)
+    return get().sendMessageToSession(sessionId, content, options)
   },
 
-  async sendMessageToSession(sessionId, content) {
+  async sendMessageToSession(sessionId, content, options) {
     cancelledSessions.delete(sessionId)
     set({ agentTyping: true })
     const attachments = get().pendingAttachments
@@ -438,6 +520,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messages: s.messages.filter((message) => message.id !== optimisticId),
         agentTyping: false,
         streamingMessage: null,
+        streamingParts: [],
         streamingCodeAgentRun: null,
       }))
       throw error
@@ -462,7 +545,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!sessionId) return null
     cancelledSessions.add(sessionId)
     clearPendingStream()
-    set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
+    set({ agentTyping: false, streamingMessage: null, streamingParts: [], streamingCodeAgentRun: null })
     await api.cancelMessage(sessionId).catch(() => undefined)
     const result = await api.withdrawMessage(sessionId, messageId, { rollback: true })
     const removed = new Set(result.removedMessageIds)
@@ -478,7 +561,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!sessionId) return
     cancelledSessions.delete(sessionId)
     clearPendingStream()
-    set({ agentTyping: true, streamingMessage: null, streamingCodeAgentRun: null })
+    set({ agentTyping: true, streamingMessage: null, streamingParts: [], streamingCodeAgentRun: null })
     const result = await api.regenerateMessage(sessionId, messageId)
     updateCachedMessages(sessionId, (messages) =>
       messages.filter((message) => message.id !== result.removedMessageId),
@@ -526,7 +609,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!sessionId) return
     cancelledSessions.add(sessionId)
     clearPendingStream()
-    set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
+    set({ agentTyping: false, streamingMessage: null, streamingParts: [], streamingCodeAgentRun: null })
     await api.cancelMessage(sessionId).catch(() => undefined)
   },
 
@@ -571,6 +654,78 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (cancelledSessions.has(sessionId)) break
         set({ agentTyping: true })
         break
+      case WsEvent.MessagePartUpdated: {
+        if (cancelledSessions.has(sessionId)) break
+        const { part } = e.payload as { part: StreamingPart }
+        if (!part?.id || !part.messageId) break
+        set((s) => {
+          const nextParts = upsertStreamingPart(s.streamingParts, {
+            ...part,
+            deltaText: part.deltaText ?? part.text ?? '',
+          })
+          const liveText = composeStreamingText(nextParts, part.messageId)
+          const current = s.streamingMessage
+          return {
+            streamingParts: nextParts,
+            streamingMessage:
+              current?.id === part.messageId
+                ? { ...current, content: liveText, agentId: part.agentId ?? current.agentId, agentName: part.agentName ?? current.agentName }
+                : {
+                    id: part.messageId,
+                    content: liveText,
+                    agentId: part.agentId,
+                    agentName: part.agentName,
+                  },
+            agentTyping: false,
+          }
+        })
+        break
+      }
+      case WsEvent.MessagePartDelta: {
+        if (cancelledSessions.has(sessionId)) break
+        const { messageId, partId, delta, agentId, agentName, field, type } = e.payload as {
+          agentId?: string
+          agentName?: string
+          delta: string
+          field?: string
+          messageId: string
+          partId: string
+          type?: StreamingPartType
+        }
+        set((s) => {
+          const nextParts = applyPartDelta(s.streamingParts, {
+            agentId,
+            agentName,
+            delta,
+            field,
+            messageId,
+            partId,
+            sessionId,
+            type,
+          })
+          const liveText = composeStreamingText(nextParts, messageId)
+          const current = s.streamingMessage
+          return {
+            streamingParts: nextParts,
+            streamingMessage:
+              current?.id === messageId
+                ? {
+                    ...current,
+                    content: liveText,
+                    agentId: agentId ?? current.agentId,
+                    agentName: agentName ?? current.agentName,
+                  }
+                : {
+                    id: messageId,
+                    content: liveText,
+                    agentId,
+                    agentName,
+                  },
+            agentTyping: false,
+          }
+        })
+        break
+      }
       case WsEvent.MessageStream: {
         if (cancelledSessions.has(sessionId)) break
         const { messageId, delta, agentId, agentName } = e.payload as {
@@ -579,40 +734,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
           agentId?: string
           agentName?: string
         }
-        const commitPendingStream = (pending: {
-          messageId: string
-          delta: string
-          agentId?: string
-          agentName?: string
-        }) => {
+        if (get().streamingParts.some((part) => part.messageId === messageId)) {
           set((s) => {
             const current = s.streamingMessage
-            if (current?.id === pending.messageId) {
-              return {
-                streamingMessage: {
-                  id: pending.messageId,
-                  content: current.content + pending.delta,
-                  agentId: pending.agentId ?? current.agentId,
-                  agentName: pending.agentName ?? current.agentName,
-                },
-              }
-            }
+            const liveText = composeStreamingText(s.streamingParts, messageId)
             return {
-              streamingMessage: {
-                id: pending.messageId,
-                content: pending.delta,
-                agentId: pending.agentId,
-                agentName: pending.agentName,
-              },
-              agentTyping: false,
+              streamingMessage:
+                current?.id === messageId
+                  ? {
+                      ...current,
+                      content: liveText,
+                      agentId: agentId ?? current.agentId,
+                      agentName: agentName ?? current.agentName,
+                    }
+                  : {
+                      id: messageId,
+                      content: liveText,
+                      agentId,
+                      agentName,
+                    },
             }
           })
+          break
         }
-
         if (pendingStream && pendingStream.messageId !== messageId) {
           const previous = pendingStream
           clearPendingStream()
-          commitPendingStream(previous)
+          set({
+            streamingMessage: {
+              id: previous.messageId,
+              content: previous.delta,
+              agentId: previous.agentId,
+              agentName: previous.agentName,
+            },
+          })
         }
 
         if (pendingStream && pendingStream.messageId === messageId) {
@@ -633,8 +788,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
             pendingStreamTimer = null
             if (!pending) return
 
-            commitPendingStream(pending)
-          }, 32)
+            set((s) => {
+              const current = s.streamingMessage
+              if (current?.id === pending.messageId) {
+                return {
+                  streamingMessage: {
+                    id: pending.messageId,
+                    content: current.content + pending.delta,
+                    agentId: pending.agentId ?? current.agentId,
+                    agentName: pending.agentName ?? current.agentName,
+                  },
+                }
+              }
+              return {
+                streamingMessage: {
+                  id: pending.messageId,
+                  content: pending.delta,
+                  agentId: pending.agentId,
+                  agentName: pending.agentName,
+                },
+                agentTyping: false,
+              }
+            })
+          }, 16)
         }
         break
       }
@@ -677,6 +853,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return {
             messages: upsertMessage(s.messages, message),
             streamingMessage: null,
+            streamingParts: [],
             streamingCodeAgentRun: null,
             agentTyping: false,
           }
@@ -686,7 +863,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case WsEvent.MessageCancelled:
         cancelledSessions.add(sessionId)
         clearPendingStream()
-        set({ streamingMessage: null, streamingCodeAgentRun: null, agentTyping: false })
+        set({ streamingMessage: null, streamingParts: [], streamingCodeAgentRun: null, agentTyping: false })
         break
       case WsEvent.TaskUpdate: {
         const { taskId, status, strategy, agentId } = e.payload as {

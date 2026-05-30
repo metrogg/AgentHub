@@ -51,6 +51,8 @@ interface CodeAgentRunOptions {
   cwd?: string
   modelId?: string | null
   modelProvider?: string | null
+  sessionId?: string
+  continueSession?: boolean
   agentRoleType?: string
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
@@ -261,15 +263,6 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
   },
 }
 
-export const __codeAgentAdapterTestHooks = {
-  buildClaudeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
-    adapters['claude-code'].buildArgs(prompt, options),
-  buildOpencodeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
-    adapters.opencode.buildArgs(prompt, options),
-  consumeClaudeStreamJson,
-  extractClaudeResultMessage,
-}
-
 export function isCodeAgentProfile(profile?: AgentRunProfile) {
   return profile?.runtimeType === 'code-agent' && Boolean(profile.codeAgentType)
 }
@@ -340,7 +333,7 @@ export async function* streamCodeAgentReply(
   ) {
     runtimeModelTarget = null
   }
-  let installed = await isCommandInstalled(adapter.command)
+  const installed = await isCommandInstalled(adapter.command)
   let ignoreModelEnv = false
   let skipLocalCodexConfig = false
   if (hasIncompatibleCodeAgentModel(type, modelTarget, runtimeModelTarget, requestedModelId)) {
@@ -545,7 +538,7 @@ function resolveCodeAgentModelCandidates(
 ) {
   const fromAgent = typeof agentModelId === 'string' ? agentModelId.trim() : ''
   const fromTool = typeof toolConfig?.['modelId'] === 'string' ? toolConfig['modelId'].trim() : ''
-  return [...new Set([fromTool, fromAgent].filter(Boolean))]
+  return fromTool || null
 }
 
 function normalizeCodeAgentModelTarget(
@@ -557,6 +550,27 @@ function normalizeCodeAgentModelTarget(
   if (type === 'codex') return isCodexModelTarget(modelTarget) ? modelTarget : null
   if (type === 'gemini') return isGeminiModelTarget(modelTarget) ? modelTarget : null
   return modelTarget
+}
+
+async function resolveRuntimeModelTarget(
+  modelId?: string | null,
+): Promise<CodeAgentModelTarget | null> {
+  const config = await resolveLlmRuntimeConfig(modelId ?? undefined)
+  if (!config.model) return null
+
+  const provider = config.provider || 'openai'
+  const openaiBaseUrl = config.baseUrl?.replace(/\/$/, '')
+  const anthropicBaseUrl = isAnthropicLike(provider, openaiBaseUrl) ? openaiBaseUrl : undefined
+
+  return {
+    provider,
+    providerKey: safeProviderKey(provider),
+    modelId: config.model,
+    apiKey: config.apiKey ?? undefined,
+    apiKeySource: config.apiKeySource ?? undefined,
+    openaiBaseUrl,
+    anthropicBaseUrl,
+  }
 }
 
 function hasIncompatibleCodeAgentModel(
@@ -837,6 +851,8 @@ async function runCodeAgentCommand(
     agentRoleType,
     modelId: modelTarget?.modelId,
     modelProvider: modelTarget?.providerKey,
+    sessionId: resumeSessionId,
+    continueSession,
     outputPath,
     sandboxPolicy,
     toolConfig,
@@ -869,6 +885,7 @@ async function runCodeAgentCommand(
   let lastMetadataAt = 0
   let claudeStdoutBuffer = ''
   let claudeFinalMessage = ''
+  let claudeSessionId: string | undefined
   let claudeHasStreamedText = false
   let claudeAssistantSnapshot = ''
   let claudeSessionId: string | undefined
@@ -3162,6 +3179,9 @@ function limitFinalOutput(output: string) {
 export const __codeAgentAdapterTestHooks = {
   buildClaudeArgs(prompt: string, options: Partial<CodeAgentRunOptions> = {}) {
     return adapters['claude-code'].buildArgs(prompt, options as CodeAgentRunOptions)
+  },
+  buildOpencodeArgs(prompt: string, options: Partial<CodeAgentRunOptions> = {}) {
+    return adapters.opencode.buildArgs(prompt, options as CodeAgentRunOptions)
   },
   consumeClaudeStreamJson,
   extractClaudeResultMessage,

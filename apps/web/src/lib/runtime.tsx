@@ -67,6 +67,10 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const artifactPart = artifacts.length
     ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: artifacts } }]
     : []
+  const reasoningText = readReasoningText(message.metadata)
+  const reasoningPart = reasoningText
+    ? [{ type: 'data' as const, name: 'agent_reasoning', data: { text: reasoningText, running: false } }]
+    : []
   const attachments = readChatAttachments(message.metadata?.attachments)
   const attachmentPart = attachments.length
     ? [{ type: 'data' as const, name: 'chat_attachments', data: { items: attachments } }]
@@ -87,6 +91,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
         : codeAgentRun
             ? [
                 ...avatarPart,
+                ...reasoningPart,
                 { type: 'text', text },
                 ...attachmentPart,
                 { type: 'data', name: 'code_agent_run', data: codeAgentRun },
@@ -95,6 +100,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
               ]
             : [
                 ...avatarPart,
+                ...reasoningPart,
                 { type: 'text', text },
                 ...attachmentPart,
                 ...artifactPart,
@@ -161,10 +167,29 @@ function readAgentAvatarPart(
   return [{ type: 'data' as const, name: 'agent_avatar', data: { runtime } }]
 }
 
+function readReasoningText(metadata: Message['metadata']) {
+  if (!metadata || typeof metadata !== 'object') return ''
+  if (typeof metadata.reasoning === 'string') return metadata.reasoning
+  const parts = metadata.parts
+  if (!Array.isArray(parts)) return ''
+  return parts
+    .filter((part): part is { text: string; type: string } => {
+      return (
+        Boolean(part) &&
+        typeof part === 'object' &&
+        (part as { type?: unknown }).type === 'reasoning' &&
+        typeof (part as { text?: unknown }).text === 'string'
+      )
+    })
+    .map((part) => part.text)
+    .join('')
+}
+
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const messages = useChatStore((state) => state.messages)
   const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const streamingParts = useChatStore((state) => state.streamingParts)
   const streamingCodeAgentRun = useChatStore((state) => state.streamingCodeAgentRun)
   const agentTyping = useChatStore((state) => state.agentTyping)
   const currentSessionId = useChatStore((state) => state.currentSessionId)
@@ -175,6 +200,15 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
     const list = messages.map(toThreadMessage)
 
     if (streamingMessage) {
+      const liveParts = streamingParts.filter((part) => part.messageId === streamingMessage.id)
+      const liveTextParts = liveParts.filter((part) => part.type === 'text')
+      const liveText = liveTextParts.length
+        ? liveTextParts.map((part) => part.text || part.deltaText).join('')
+        : streamingMessage.content
+      const liveReasoning = liveParts
+        .filter((part) => part.type === 'reasoning')
+        .map((part) => part.text || part.deltaText)
+        .join('')
       const streamingAvatarPart = streamingCodeAgentRun
         ? [
             {
@@ -191,17 +225,27 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
         .filter(Boolean)
         .join(' · ')
       const streamingText =
-        streamingSenderLabel && streamingMessage.content.trim()
-          ? `**${streamingSenderLabel}**\n\n${streamingMessage.content}`
+        streamingSenderLabel && liveText.trim()
+          ? `**${streamingSenderLabel}**\n\n${liveText}`
           : streamingSenderLabel
             ? `**${streamingSenderLabel}**`
-            : streamingMessage.content
+            : liveText
+      const streamingReasoningPart = liveReasoning.trim()
+        ? [
+            {
+              type: 'data' as const,
+              name: 'agent_reasoning',
+              data: { text: liveReasoning, running: true },
+            },
+          ]
+        : []
       list.push({
         id: streamingMessage.id,
         role: 'assistant',
         content: streamingCodeAgentRun
           ? [
               ...streamingAvatarPart,
+              ...streamingReasoningPart,
               ...(streamingText.trim() ? [{ type: 'text' as const, text: streamingText }] : []),
               { type: 'data', name: 'code_agent_run', data: streamingCodeAgentRun },
               ...(streamingCodeAgentRun.artifacts?.length
@@ -214,7 +258,10 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
                   ]
                 : []),
             ]
-          : [{ type: 'text', text: streamingMessage.content }],
+          : [
+              ...streamingReasoningPart,
+              ...(streamingText.trim() ? [{ type: 'text' as const, text: streamingText }] : []),
+            ],
         status: { type: 'running' },
       })
     } else if (agentTyping) {
@@ -227,7 +274,7 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
     }
 
     return list
-  }, [agentTyping, messages, streamingCodeAgentRun, streamingMessage])
+  }, [agentTyping, messages, streamingCodeAgentRun, streamingMessage, streamingParts])
 
   const runtime = useExternalStoreRuntime({
     isRunning: agentTyping || streamingMessage !== null,
