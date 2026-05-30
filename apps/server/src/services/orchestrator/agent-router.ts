@@ -17,7 +17,7 @@ const TASK_ROLE_MATCH: Record<NonNullable<ExecutionTask['taskType']>, string[]> 
   test: ['verifier', 'reviewer', 'coder'],
   verify: ['verifier'],
   review: ['reviewer'],
-  synthesize: ['integrator', 'orchestrator', 'architect'],
+  synthesize: ['integrator', 'architect', 'reviewer'],
 }
 
 const TASK_TAG_MATCH: Record<NonNullable<ExecutionTask['taskType']>, string[]> = {
@@ -39,11 +39,10 @@ export function selectAgentForTask(input: SelectAgentInput): AgentSelection {
   }
 
   const taskType = task.taskType ?? inferTaskType(`${task.title} ${task.description}`)
-  const workerCandidates =
-    taskType === 'synthesize'
-      ? candidates
-      : candidates.filter((agent) => agent.roleType !== 'orchestrator')
-  const candidatePool = workerCandidates.length ? workerCandidates : candidates
+  const candidatePool = candidates.filter((agent) => agent.roleType !== 'orchestrator')
+  if (!candidatePool.length) {
+    return { selectedAgentKey: '', score: 0, rationale: ['No executable worker agents'] }
+  }
 
   const scored = candidatePool
     .filter((agent) => isEligible(agent, taskType))
@@ -52,9 +51,9 @@ export function selectAgentForTask(input: SelectAgentInput): AgentSelection {
 
   const selected = scored[0] ?? scoreAgent(candidatePool[0]!, task, relations)
   const reviewer =
-    findRelatedAgent(selected.agent, 'reviewed_by', agents, relations) ??
-    agents.find((agent) => agent.roleType === 'reviewer')
-  const fallback = findRelatedAgent(selected.agent, 'fallback_to', agents, relations)
+    findRelatedAgent(selected.agent, 'reviewed_by', candidatePool, relations) ??
+    candidatePool.find((agent) => agent.roleType === 'reviewer')
+  const fallback = findRelatedAgent(selected.agent, 'fallback_to', candidatePool, relations)
 
   return {
     selectedAgentKey: selected.agent.key,

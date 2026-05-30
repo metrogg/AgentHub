@@ -96,6 +96,13 @@ export async function buildDynamicOrchestratorPlan(
     throw new Error('当前群聊没有可调度的 Agent，请先添加成员后再发起编排')
   }
   const planningAgents = agents.map(planAgentFromInput)
+  const orchestratorAgent =
+    planningAgents.find((agent) => agent.roleType === 'orchestrator') ??
+    planningAgents.find((agent) => agent.name.toLowerCase().includes('orchestrator'))
+  const workerPlanningAgents = planningAgents.filter((agent) => agent.roleType !== 'orchestrator')
+  if (!workerPlanningAgents.length) {
+    throw new Error('当前群聊只有 Orchestrator，没有可执行任务的 Agent')
+  }
 
   let workspacePath: string | null = null
   if (workspaceId) {
@@ -104,19 +111,16 @@ export async function buildDynamicOrchestratorPlan(
   }
 
   const planner = new Planner()
-  const orchestratorAgent =
-    planningAgents.find((agent) => agent.roleType === 'orchestrator') ??
-    planningAgents.find((agent) => agent.name.toLowerCase().includes('orchestrator'))
   const executionPlan = await planner.createPlan({
     goal,
-    agents: planningAgents.map(toExecutionAgent),
+    agents: workerPlanningAgents.map(toExecutionAgent),
     workspacePath,
     useSpecFirst: false,
     plannerModelId: orchestratorAgent?.modelId,
     plannerSystemPrompt: orchestratorAgent?.systemPrompt,
   })
 
-  const plan = executionPlanToOrchestratorPlan(executionPlan, planningAgents)
+  const plan = executionPlanToOrchestratorPlan(executionPlan, workerPlanningAgents)
   const relations = workspaceId ? await loadWorkspaceAgentRelationsForPlanning(workspaceId) : []
   return applyAgentSelections(plan, relations)
 }

@@ -88,6 +88,7 @@ export class IntentRouter {
     const hasTechObject = techObjects.some((t) => lower.includes(t))
     if (hasComplexVerb && hasTechObject) signals += 1
     if (hasWorkRequestSignal(lower)) signals += 3
+    if (hasConcreteBuildRequestSignal(lower)) signals += 3
     if (
       hasComplexVerb &&
       ['官网','网站','网页','webapp','web app','site','website','游戏','小游戏','game','应用','app'].some((t) =>
@@ -176,4 +177,29 @@ function hasWorkRequestSignal(lower: string): boolean {
   ]
   return workVerbs.some((verb) => lower.includes(verb)) &&
     deliverables.some((item) => lower.includes(item))
+}
+
+function hasConcreteBuildRequestSignal(lower: string): boolean {
+  const buildPhrases = [
+    '开发一个',
+    '开发个',
+    '做一个',
+    '做个',
+    '写一个',
+    '写个',
+    '实现一个',
+    '实现个',
+    '创建一个',
+    '创建个',
+    '搭建一个',
+    '搭建个',
+    'build a',
+    'create a',
+    'make a',
+    'implement a',
+  ]
+  if (!buildPhrases.some((phrase) => lower.includes(phrase))) return false
+  const casualQuestionHints = ['吗', '么', '如何', '怎么', '?', '？']
+  if (casualQuestionHints.some((hint) => lower.includes(hint)) && lower.length < 28) return false
+  return lower.trim().length >= 6
 }

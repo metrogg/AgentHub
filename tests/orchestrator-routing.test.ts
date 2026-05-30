@@ -56,6 +56,8 @@ describe('orchestrator routing', () => {
       '帮我开发一个深圳技术大学的学校官网',
       '对目前全球AI主流编程工具进行调研分析，并输出一份PDF文档和一个HTML网页',
       '写个介绍深圳技术大学的网站',
+      '开发一个坦克大战',
+      '做个俄罗斯方块',
     ]
 
     for (const content of samples) {
@@ -86,5 +88,22 @@ describe('orchestrator routing', () => {
     })
 
     expect(selection.selectedAgentKey).toBe('builder')
+  })
+
+  test('does not assign synthesis tasks to orchestrator either', () => {
+    const selection = selectAgentForTask({
+      task: {
+        id: 'task-synthesize',
+        title: '汇总交付结果',
+        description: '整合各 Agent 的产出并给出最终交付说明',
+        agentId: 'orchestrator',
+        taskType: 'synthesize',
+        dependencies: [],
+        maxRetries: 1,
+      },
+      agents,
+    })
+
+    expect(selection.selectedAgentKey).not.toBe('orchestrator')
   })
 })
