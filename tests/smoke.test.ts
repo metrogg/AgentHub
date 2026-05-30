@@ -1656,6 +1656,24 @@ describe('AgentHub smoke tests', () => {
     expect(args.indexOf('Read attached task prompt')).toBeLessThan(args.indexOf('--file'))
   })
 
+  test('OpenCode adapter keeps prompt message before attached prompt file', async () => {
+    const { __codeAgentAdapterTestHooks } =
+      await import('../apps/server/src/services/code-agent-adapter')
+
+    const args = __codeAgentAdapterTestHooks.buildOpencodeArgs('Read attached task prompt', {
+      cwd: 'C:/project',
+      modelId: 'deepseek-chat',
+      modelProvider: 'deepseek',
+      sandboxPolicy: 'read-only',
+      promptFile: 'C:/tmp/agenthub-task.md',
+    })
+
+    expect(args[0]).toBe('run')
+    expect(args).toContain('--file')
+    expect(args[args.indexOf('--file') + 1]).toBe('C:/tmp/agenthub-task.md')
+    expect(args.indexOf('Read attached task prompt')).toBeLessThan(args.indexOf('--file'))
+  })
+
   test('Claude Code stream-json parser records tools, files, commands, and final text', async () => {
     const { __codeAgentAdapterTestHooks } =
       await import('../apps/server/src/services/code-agent-adapter')
