@@ -4,6 +4,7 @@ import { runAgentReply, type AgentRunProfile, type MessageRow } from '../agent-r
 import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
 import { prepareAgentWorkdir, type AgentWorkdir } from './agent-workdir'
 import { TaskStatus } from '@agenthub/shared'
+import { env } from '../../env'
 
 export interface TaskExecutionInput {
   taskId: string
@@ -42,6 +43,12 @@ export class TaskExecutionService {
     const { taskId, sessionId, projectPath, profile, prompt, signal, attemptCount = 0 } = input
 
     const runId = input.runId ?? 'standalone'
+    const requestedSandboxPolicy = profile.sandboxPolicy ?? 'workspace-write'
+    const executionSandboxPolicy =
+      profile.runtimeType === 'code-agent' && requestedSandboxPolicy === 'read-only'
+        ? 'workspace-write'
+        : requestedSandboxPolicy
+
     const workdir =
       input.existingWorkdir ??
       prepareAgentWorkdir({
@@ -50,7 +57,7 @@ export class TaskExecutionService {
         taskId,
         agentId: profile.id,
         agentName: profile.name,
-        sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
+        sandboxPolicy: executionSandboxPolicy,
       })
     const executionPath = workdir?.executionPath ?? profile.projectPath ?? projectPath ?? null
     if (workdir) {
@@ -64,6 +71,7 @@ export class TaskExecutionService {
       ...profile,
       projectPath: executionPath,
       originalProjectPath: profile.projectPath ?? null,
+      sandboxPolicy: executionSandboxPolicy,
     }
 
     const envelope: import('./agent-execution-envelope').AgentExecutionEnvelope = {
@@ -72,8 +80,8 @@ export class TaskExecutionService {
       agentId: profile.id,
       agentName: profile.name,
       projectPath: projectPath ?? null,
-      worktreePath: workdir?.executionPath ?? (profile.sandboxPolicy === 'read-only' ? null : executionPath),
-      sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
+      worktreePath: workdir?.executionPath ?? (executionSandboxPolicy === 'read-only' ? null : executionPath),
+      sandboxPolicy: executionSandboxPolicy,
       envAllowlist: DEFAULT_ENV_ALLOWLIST,
     }
 
@@ -115,7 +123,7 @@ export class TaskExecutionService {
 
     const taskStartTime = Date.now()
     try {
-      const TASK_TIMEOUT_MS = 300_000
+      const TASK_TIMEOUT_MS = env.AGENTHUB_CODE_AGENT_TIMEOUT_MS
       const effectiveSignal = signal ?? new AbortController().signal
 
       const timeoutPromise = new Promise<never>((_, reject) => {

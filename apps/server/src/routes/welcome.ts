@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { logger } from '../lib/logger'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { streamReply } from '../services/llm'
+import { env } from '../env'
 
 interface QuickPromptItem {
   id: string
@@ -11,30 +12,22 @@ interface QuickPromptItem {
 }
 
 const QUICK_PROMPT_COUNT = 10
+const QUICK_PROMPT_TIMEOUT_MS = 45_000
+const QUICK_PROMPT_CACHE_TTL_MS = 120_000
 const QUICK_PROMPT_SYSTEM = [
   '你是 AgentHub 桌面端欢迎页的快速对话生成器。',
   '你的任务是生成一组可点击的短问题气泡，让用户能立刻开始一次有价值的对话。',
   '必须只输出 JSON，不要输出 Markdown、解释、编号、代码块或多余文本。',
 ].join('\n')
 
-const QUICK_PROMPT_ANGLES = [
-  '移动端与桌面端协同',
-  '代码重构和架构边界',
-  '接口错误排查',
-  'Agent 群聊任务分工',
-  '模型选择和提示词调优',
-  '产品交互细节打磨',
-  '学习路线和知识迁移',
-  '办公文档与会议整理',
-  '轻量小游戏或创意 demo',
-  '性能优化和资源占用',
-  '测试策略和验收标准',
-  '自动化脚本与工具链',
-  '项目启动前的技术方案',
-  '用户画像和个人记忆配置',
-  '工作区文件和产物预览',
-  'PR、提交信息和代码审查',
-]
+const quickPromptCache = new Map<
+  string,
+  { expiresAt: number; generatedAt: string; items: QuickPromptItem[]; seed: string }
+>()
+const quickPromptInflight = new Map<
+  string,
+  Promise<{ generatedAt: string; items: QuickPromptItem[]; seed: string }>
+>()
 
 export const welcomeRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -47,32 +40,85 @@ export const welcomeRoutes = new Hono<{ Variables: AuthVariables }>()
       ? body.count
       : QUICK_PROMPT_COUNT
     const count = Math.min(12, Math.max(6, Math.floor(requestedCount)))
-    let source: 'llm' | 'fallback' = 'llm'
+    let source: 'llm' | 'unavailable' = 'unavailable'
     let items: QuickPromptItem[] = []
+    let generatedAt = new Date().toISOString()
 
-    try {
-      items = seededShuffle(await generateQuickPrompts(seed, count), `${seed}:generated-order`).slice(0, count)
-    } catch (error: any) {
-      source = 'fallback'
-      logger.warn({ err: error?.message || String(error) }, 'Failed to generate welcome quick prompts')
-    }
-
-    if (items.length < 6) {
-      source = 'fallback'
-      items = fallbackQuickPrompts(seed, count)
+    if (env.AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS) {
+      try {
+        const generated = await getDynamicQuickPrompts(seed, count)
+        source = 'llm'
+        items = generated.items
+        generatedAt = generated.generatedAt
+      } catch (error: any) {
+        logger.warn(
+          { err: error?.message || String(error) },
+          'Dynamic welcome quick prompts unavailable',
+        )
+      }
     }
 
     return c.json({
-      generatedAt: new Date().toISOString(),
+      generatedAt,
       items,
       seed,
       source,
     })
   })
 
+async function getDynamicQuickPrompts(seed: string, count: number) {
+  const cacheKey = `count:${count}`
+  const cached = quickPromptCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return {
+      generatedAt: cached.generatedAt,
+      items: seededShuffle(cached.items, `${seed}:cached-order`).slice(0, count),
+      seed,
+    }
+  }
+
+  const existing = quickPromptInflight.get(cacheKey)
+  if (existing) {
+    const result = await existing
+    return {
+      generatedAt: result.generatedAt,
+      items: seededShuffle(result.items, `${seed}:inflight-order`).slice(0, count),
+      seed,
+    }
+  }
+
+  const pending = (async () => {
+    const generatedAt = new Date().toISOString()
+    const items = seededShuffle(
+      await generateQuickPrompts(seed, count),
+      `${seed}:generated-order`,
+    ).slice(0, count)
+    if (items.length < 6) {
+      throw new Error('模型没有返回足够的快速对话问题')
+    }
+    quickPromptCache.set(cacheKey, {
+      expiresAt: Date.now() + QUICK_PROMPT_CACHE_TTL_MS,
+      generatedAt,
+      items,
+      seed,
+    })
+    return { generatedAt, items, seed }
+  })()
+
+  quickPromptInflight.set(cacheKey, pending)
+  try {
+    return await pending
+  } finally {
+    quickPromptInflight.delete(cacheKey)
+  }
+}
+
 async function generateQuickPrompts(seed: string, count: number): Promise<QuickPromptItem[]> {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(new Error('快速对话生成超时')), 14_000)
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`快速对话生成超时（${QUICK_PROMPT_TIMEOUT_MS / 1000}秒）`)),
+    QUICK_PROMPT_TIMEOUT_MS,
+  )
   let text = ''
 
   try {
@@ -97,19 +143,17 @@ async function generateQuickPrompts(seed: string, count: number): Promise<QuickP
 }
 
 function buildQuickPromptInstruction(seed: string, count: number) {
-  const angles = seededShuffle(QUICK_PROMPT_ANGLES, seed).slice(0, Math.min(6, count))
   return [
     `请生成 ${count} 个简体中文快速对话问题。`,
     `变化种子：${seed}`,
     `生成时间：${new Date().toISOString()}`,
-    `本次必须优先参考这些差异化切入点：${angles.join('、')}。`,
     '',
     '输出限制：',
     '- 只返回一个 JSON 对象，格式为 {"items":[{"label":"...","prompt":"..."}]}。',
     '- items 数量必须刚好等于请求数量。',
     '- label 是气泡上展示的短问题，8-32 个汉字左右，可以混入少量英文技术名词，不要 emoji，不要引号，不要编号。',
     '- prompt 是点击后发送给模型的完整用户问题，12-90 个汉字左右，必须能独立触发一次对话。',
-    '- 主题必须多样：至少 2 个代码/项目问题，2 个学习/解释问题，2 个效率/办公问题，1 个 AI/技术趋势问题，1 个轻松创意问题。',
+    '- 主题必须由你动态构思，覆盖代码/项目、学习/解释、效率/办公、AI/技术趋势、轻松创意等不同类型。',
     '- 不要编造实时新闻、价格、赛事、政策等需要联网核验的信息。',
     '- 每次生成都要参考变化种子，避免固定模板、避免重复上一次常见示例。',
   ].join('\n')
@@ -158,38 +202,6 @@ function normalizePromptText(value: unknown) {
 
 function clampText(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value
-}
-
-function fallbackQuickPrompts(seed: string, count: number): QuickPromptItem[] {
-  const pool = [
-    ['帮我拆解一个小工具需求', '帮我把一个小工具需求拆成可执行的开发步骤，并指出风险点。'],
-    ['这个项目适合怎么重构', '请从架构、状态管理和测试三个角度，分析一个项目适合怎样重构。'],
-    ['解释一下前端构建流程', '用通俗语言解释前端从源码到上线的构建流程。'],
-    ['给我一个学习路线', '请根据我的目标生成一份 7 天学习路线，并每天给一个练习。'],
-    ['帮我整理会议纪要', '给我一个清晰的会议纪要模板，包含待办、负责人和截止时间。'],
-    ['写一封更自然的邮件', '帮我把一封工作邮件改得更自然、礼貌、简洁。'],
-    ['最近 AI 开发该关注什么', '不依赖实时新闻，概括最近 AI 开发者值得关注的长期趋势。'],
-    ['设计一个轻量小游戏', '帮我设计一个 10 分钟能开局的轻量小游戏玩法。'],
-    ['帮我写代码审查清单', '给我一份适合日常项目的代码审查清单，按优先级排列。'],
-    ['如何排查接口 500', '请给我一套排查接口 500 错误的步骤，从日志到数据库逐层检查。'],
-    ['把想法变成任务卡', '把一个模糊想法整理成任务卡，包含目标、范围、验收标准。'],
-    ['解释一个复杂概念', '请用类比、例子和一句话总结，解释一个复杂技术概念。'],
-    ['优化一个移动端底栏', '请从图标、文字、触控区域和视觉状态四个角度，优化一个移动端底栏。'],
-    ['设计 Agent 工作监控栏', '帮我设计一个右侧 Agent 工作监控栏，包含状态、最近输出和快捷配置。'],
-    ['帮我写一段 PR 描述', '请把一组改动整理成 PR 描述，包含背景、改动、验证和风险。'],
-    ['给我一套模型切换策略', '帮我设计一套 Agent 和 Coding Tools 共用的模型切换策略。'],
-    ['压缩一个复杂需求', '把一个复杂需求压缩成 5 条可执行任务，并标注优先级。'],
-    ['做一个启动检查清单', '给我一份应用启动失败的检查清单，覆盖端口、数据库、构建和权限。'],
-    ['规划一个文件预览面板', '设计一个能预览 HTML、图片、文档和 diff 的右侧面板信息架构。'],
-    ['写一个调试复盘模板', '给我一个调试复盘模板，用来记录现象、假设、验证过程和结论。'],
-  ] as const
-  return seededShuffle(pool, seed)
-    .slice(0, count)
-    .map(([label, prompt]) => ({
-      id: `fallback-${stableHash(`${seed}:${label}`)}`,
-      label,
-      prompt,
-    }))
 }
 
 function seededShuffle<T>(items: readonly T[], seed: string) {

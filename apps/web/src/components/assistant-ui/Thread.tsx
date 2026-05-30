@@ -124,7 +124,6 @@ import { TaskBoard } from '@/components/TaskBoard'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
-  fallbackWelcomeQuickPrompts,
   rotateQuickPrompts,
 } from '../chat/QuickPromptBubbles'
 import { TypewriterHeading } from '../chat/TypewriterHeading'

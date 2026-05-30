@@ -42,11 +42,22 @@ export function validateTaskOutputContract(params: {
 
   const writtenKeys = new Set(params.writtenBlackboardKeys ?? [])
   for (const required of contract.requiredBlackboardWrites ?? []) {
-    if (required.key && !writtenKeys.has(required.key)) {
+    if (required.schemaType === 'task_output') {
+      const canonicalKey = `task_${params.task.id}_output`
+      if (writtenKeys.has(canonicalKey)) continue
+    } else if (required.key && writtenKeys.has(required.key)) {
+      continue
+    }
+    if (required.key) {
       violations.push({
         type: 'missing_blackboard_write',
         message: `Required blackboard write "${required.key}" was not produced.`,
         expected: required.key,
+      })
+    } else {
+      violations.push({
+        type: 'missing_blackboard_write',
+        message: 'Required blackboard write was not produced.',
       })
     }
   }

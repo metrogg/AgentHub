@@ -855,6 +855,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 if (nextStatus) {
                   nextTaskBoard = {
                     ...nextTaskBoard,
+                    status: nextStatus === 'running' ? 'running' : nextTaskBoard.status,
                     tasks: nextTaskBoard.tasks.map((t) =>
                       t.id === taskId ? { ...t, status: nextStatus as any } : t
                     ),
@@ -952,7 +953,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => {
           if (!state.taskBoard) return state
           const nextTasks = state.taskBoard.tasks.map((t) =>
-            t.id === taskId ? { ...t, progress: percent, progressStatus: status } : t
+            t.id === taskId
+              ? { ...t, status: 'running' as const, progress: percent, progressStatus: status }
+              : t
           )
           const nextAgentTabs = state.agentTabs.map((tab) => {
             const task = nextTasks.find((t) => t.id === tab.agentId)

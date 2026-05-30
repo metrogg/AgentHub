@@ -310,7 +310,7 @@ export interface WelcomeQuickPromptsResponse {
   generatedAt: string
   items: WelcomeQuickPrompt[]
   seed: string
-  source: 'llm' | 'fallback'
+  source: 'llm' | 'unavailable'
 }
 
 export interface CodingToolStatus {
@@ -956,7 +956,7 @@ export const api = {
     request<WelcomeQuickPromptsResponse>('/welcome/quick-prompts', {
       method: 'POST',
       body: JSON.stringify({ count, seed }),
-      timeout: 16_000,
+      timeout: 50_000,
     }),
 
   // Settings (map-based)
