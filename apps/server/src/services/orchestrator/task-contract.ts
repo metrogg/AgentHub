@@ -111,10 +111,10 @@ function isSafeRelativeArtifactPath(value: string): boolean {
 
 function shouldEnforceAllowedPath(
   task: Pick<ExecutionTask, 'taskType'>,
-  artifact: Record<string, unknown>,
+  _artifact: Record<string, unknown>,
 ): boolean {
   const strictTaskTypes = new Set(['code', 'test', 'verify'])
-  return artifactKind(artifact) === 'diff' || Boolean(task.taskType && strictTaskTypes.has(task.taskType))
+  return Boolean(task.taskType && strictTaskTypes.has(task.taskType))
 }
 
 function matchPathPattern(filePath: string, pattern: string): boolean {

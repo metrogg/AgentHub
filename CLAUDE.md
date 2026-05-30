@@ -1,379 +1,227 @@
-# CLAUDE.md
+# AgentHub Development Guide
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is for Claude Code and other coding agents working inside this repository. For product context, also read `README.md` and `docs/当前多Agent协作架构.md`.
 
-## Project Overview
+## Product Definition
 
-AgentHub is a multi-agent collaboration platform where users can chat with AI agents individually or orchestrate teams of agents (Architect, Coder, Reviewer, Researcher) to work on tasks together. Built for the ByteDance AI Full-Stack Challenge competition.
+AgentHub is an IM-style multi-agent collaboration platform. The expected behavior is:
 
-## Tech Stack
+1. The user starts from a group chat.
+2. Orchestrator reasons about the request and creates a dynamic task DAG.
+3. Multiple agents receive concrete tasks in their own child conversations.
+4. The main group chat shows orchestration progress, member reports, artifacts, and final synthesis.
+5. Users can open child conversations to inspect each agent's real execution trace.
 
-- **Runtime**: Bun (>=1.1.0) — used for both server and package scripts
-- **Monorepo**: Bun workspaces (`apps/*`, `packages/*`)
-- **Server**: Hono framework on Bun.serve with WebSocket support
-- **Frontend**: React 18 + Vite + Tailwind CSS + Zustand (state) + Radix UI (primitives) + assistant-ui
-- **Database**: SQLite via `bun:sqlite` + Drizzle ORM (WAL mode)
-- **LLM**: Custom streaming client supporting OpenAI-compatible and Anthropic APIs
-- **Desktop**: Tauri v2 + Rust + Bun compiled sidecar
-- **Shared**: Zod schemas + constants shared between server and web
+Do not implement fixed scenario templates as the core path. The platform must stay general-purpose first.
 
-## Common Commands
+## Stack
+
+- Runtime: Bun >= 1.1.0
+- Monorepo: Bun workspaces under `apps/*` and `packages/*`
+- Server: Hono on `Bun.serve`, HTTP and WebSocket on one port
+- Web: React 18 + Vite + TypeScript
+- UI: Tailwind CSS + Radix UI + `@assistant-ui/react`
+- State: Zustand
+- DB: SQLite via `bun:sqlite` + Drizzle ORM
+- LLM: OpenAI-compatible and Anthropic-compatible streaming client
+- Code agents: Codex CLI, Claude Code, OpenCode, Gemini CLI
+
+## Commands
 
 ```bash
-# Install dependencies
 bun install
-
-# Run everything (server + web in parallel)
 bun run dev
-
-# Run individually
-bun run dev:server    # Server on :8000 with --watch
-bun run dev:web       # Vite dev server on :5173
-bun run dev:desktop   # Tauri dev with sidecar
-
-# Build
-bun run build
-bun run build:desktop
-
-# Typecheck all packages
+bun run dev:server
+bun run dev:web
 bun run typecheck
-
-# Typecheck a single package
 bun --filter @agenthub/server typecheck
 bun --filter @agenthub/web typecheck
-
-# Lint
-bun run lint
-
-# Test
-bun test              # Run all tests
-bun test tests/smoke.test.ts   # Run a single test file
-
-# Database
-bun run db:generate   # Generate Drizzle migrations
-bun run db:migrate    # Run migrations
-bun run db:studio     # Open Drizzle Studio
-
-# Desktop sidecar preparation
-bun --filter @agenthub/desktop prepare:sidecar
+bun test
+bun test tests/orchestrator-routing.test.ts
 ```
 
-## Architecture
+## Current Architecture
 
-```
-apps/
-  server/    — Hono REST API + WebSocket server (Bun.serve)
-  web/       — React SPA (Vite, proxies /api and /ws to server)
-  desktop/   — Tauri v2 shell with Rust + server sidecar
-packages/
-  db/        — Drizzle ORM schema, migrations, SQLite connection
-  shared/    — Zod validation schemas, shared constants/types
-tests/       — Smoke tests (Bun test runner)
-docs/        — Product docs, design records and competition materials
-```
+### Message Routing
 
-### Server (`apps/server`)
+Main entry: `apps/server/src/routes/messages.ts`.
 
-- **Entry**: `src/index.ts` — seeds default user, recovers unfinished Orchestrator runs, starts Bun.serve with HTTP + WebSocket upgrade, auto-increments port if occupied
-- **Routes**: `src/routes/` — Hono routers mounted at `/api/sessions`, `/api/messages`, `/api/settings`, `/api/workspaces`, `/api/coding-tools`, `/api/skills`, `/api/artifacts`, `/api/orchestrator-runs`
-  - `DELETE /api/sessions/all` — bulk delete all sessions and their messages for the current user
-- **LLM**: `src/services/llm-client.ts` — multi-provider streaming client (OpenAI-compatible + Anthropic). Config resolved from DB `settings` table first, then env vars. `src/services/llm.ts` is the thin wrapper used by agent runners.
-- **Agent Runner**: `src/services/agent-runner.ts` — manages WebSocket rooms per session, routes execution through `RuntimeRegistry`, broadcasts `message:stream` / `message:completed` / `message:cancelled` events
-- **Auth**: `src/middleware/auth.ts` — JWT-based, single-user mode with a seeded default user (`default-user`)
-- **Env**: `src/env.ts` — Zod-validated env config. Key vars: `DATABASE_URL`, `LLM_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, `LLM_PROVIDER`, `PORT`, `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION`
-- **Blackboard**: `src/services/blackboard.ts` — namespaced key-value store for agent task outputs with versioning, tagging, and pub/sub. Used by the orchestrator to share state between tasks.
-- **Execution Tracer**: `src/services/execution-tracer.ts` — records agent runs, tool calls, blackboard operations, errors, and token usage into `execution_logs` table.
-
-### Agent Runtime Layer (`src/services/runtime/`)
-
-All agent execution goes through a unified `AgentRuntime` interface:
-
-- `agent-runtime.ts` — interface definition (`AgentProfile`, `ExecutionContext`, `AgentOutputChunk`)
-- `runtime-registry.ts` — maps `profile.runtimeType` to the correct runtime (`llm` | `code-agent` | `mcp`)
-- `llm-runtime.ts` — standard LLM chat (wraps `streamReply`)
-- `code-agent-runtime.ts` — Codex / Claude Code / OpenCode CLI adapter
-- `native-tool-runtime.ts` — LLM + read-only tool loop (OpenAI function calling / Anthropic tool_use)
-
-`agent-runner.ts` resolves the runtime via `runtimeRegistry.resolveForProfile(profile)` and streams chunks through the WebSocket room.
-
-### Unified Message Routing (`src/routes/messages.ts`)
-
-**Architecture overhaul**: The old dual-path architecture (GroupChatManager.conversationLoop + OrchestratorEngine) has been consolidated into a single routing entry point in `messages.ts`:
-
-```
-POST /api/messages/:sessionId (group chat)
-  → intentRouter.route() classifies intent
-    ├── @mention → extract @AgentName, route to specific agent
-    ├── simple query → handleSimpleReply() → Orchestrator replies directly
-    ├── complex task → generatePlanAndPushTaskBoard() → async LLM plan generation → WS push task_board:plan_ready
-    └── no Orchestrator → system hint message
+```text
+POST /api/messages/:sessionId
+  -> direct chat: run target agent
+  -> group simple chat: Orchestrator replies directly
+  -> group complex task: create dynamic plan + task board
+  -> dispatch: OrchestratorEngine.dispatch()
 ```
 
-Key functions:
-- `handleSimpleReply()` — dispatches simple messages to the Orchestrator agent for a direct reply (marked with `isOrchestratorHandoff: true`)
-- `generatePlanAndPushTaskBoard()` — inserts a placeholder message, calls `buildDynamicOrchestratorPlan()` in background, broadcasts `WsEvent.TaskBoardPlanReady` on success or `buildSimpleFallbackPlan()` on failure
-- `buildSimpleFallbackPlan()` — fixed 3-phase template fallback (Architect → Coder → Reviewer) when LLM plan generation fails
+Old `GroupChatManager` is deprecated. Do not reintroduce it as the active group path.
 
-### Orchestrator Engine (`src/services/orchestrator/`)
+### Orchestrator
 
-Multi-agent task orchestration with DAG scheduling and agent autonomy:
+Core files:
 
-- `orchestrator-engine.ts` — master controller:
-  - `dispatch()` → build DAG → schedule → auto-review → conflict resolve → synthesize
-  - `static resumeRun(runId)` — recovers unfinished runs after server restart: queries DB, resets running tasks to pending, rebuilds TaskGraph, continues scheduling
-  - `injectAutoReviewTasks()` — auto-creates Reviewer tasks for code tasks with `requiresReview: true`
-  - `buildTaskPrompt()` — **context isolation**: injects only user goal + task description + output contract + upstream Blackboard entries (500 char truncation each) + key decisions. No full chat history.
-  - `buildAutonomyInstructions()` — appends agent autonomy markers to each task prompt (`[CLARIFY]`, `[REJECT]`, `[PROGRESS: N%]`, `[HELP agentName]`)
-  - `parseAgentAutonomySignals()` — regex parser for agent output signals, drives CLARIFY/REJECT/PROGRESS/HELP logic
-- `planner.ts` — LLM-based task DAG generator with **Spec-first planning**. Now runs **asynchronously**: HTTP returns immediately, plan is generated in background and pushed via WebSocket. Includes fallback templates. Generates `clarificationQuestions` when goal is ambiguous.
-- `types.ts` — `ExecutionPlan`, `ClarificationQuestion`, `ExecutionTask`, `TaskOutputContract`, `TaskValidation`, `TaskLedger`, `ProgressLedger`, `ClarificationRequest`, `AgentAutonomySignals`
-- `input-guardrails.ts` — security guardrails: pattern matching for dangerous operations (rm -rf, .env deletion, force push, etc.)
-- `task-graph.ts` — DAG utilities (topological sort, cycle detection)
-- `task-scheduler.ts` — concurrent executor (max 3 parallel), dependency-aware
-- `synthesizer.ts` — LLM-based intelligent aggregation of agent outputs
-- `conflict-resolver.ts` — detects file conflicts across agent diffs, auto-merge or LLM 3-way merge
-- `fallback-engine.ts` — task failure handling: retry, downgrade to fallback agent, orchestrator takeover
+- `apps/server/src/services/orchestrator/orchestrator-engine.ts`
+- `apps/server/src/services/orchestrator/planner.ts`
+- `apps/server/src/services/orchestrator/task-scheduler.ts`
+- `apps/server/src/services/orchestrator/task-graph.ts`
+- `apps/server/src/services/orchestrator/synthesizer.ts`
+- `apps/server/src/services/orchestrator/run-events.ts`
 
-**Agent Autonomy**: Agents can exercise four autonomous behaviors during task execution:
+Execution flow:
 
-| Signal | Purpose | Behavior |
-|---|---|---|
-| `[CLARIFY]` | Ask user for clarification | Inserts `task_clarifications` record + WS push + group chat display |
-| `[REJECT]` | Reject task, suggest alternative agent | Auto-finds fallback agent and re-executes |
-| `[PROGRESS: N%]` | Report progress | Updates `progress_percent` + WS push `task_board:task_progress` |
-| `[HELP agentName]` | Request help from another agent | Logged; can trigger cross-agent collaboration |
-
-**Intent Router**: `chatStore.ts` `shouldRouteToOrchestratorPlan()` uses `assessIntentComplexity()` to auto-route complex messages (multi-file, multi-phase, architecture keywords) to orchestrator without explicit `@orchestrator`.
-
-**Handoff Context Trimming**: `agent-runner.ts` `trimHistoryForHandoff()` trims group session history to pinned + last 3 messages + context summary, reducing token consumption.
-
-Triggered via `POST /messages/:sessionId/orchestrator-plan/:messageId/dispatch` in `messages.ts`.
-
-### Git Branch Isolation (`src/services/git/`)
-
-- `branch-manager.ts` — per-agent task branch lifecycle:
-  - `prepareBranch()` → `git stash` → `git checkout -b agenthub/{runId}/{agentKey}/{taskId}`
-  - `collectDiff()` → `git diff main...branch`
-  - `tryMerge()` → merge multiple agent branches to detect conflicts
-  - `cleanupBranch()` → delete branch + pop stash
-
-Applies to `workspace-write` and `danger-full-access` sandbox policies. `read-only` agents do not create branches.
-
-### Multi-Agent Orchestration Flow (Unified)
-
-```
-User: "@orchestrator make a Shenzhen Tech University intro website"
-  → messages.ts: intentRouter.route() → decision: OrchestratorPlan
-  → generatePlanAndPushTaskBoard()
-    1. Insert placeholder system message "🔍 正在分析任务..."
-    2. Background: call buildDynamicOrchestratorPlan() → LLM generates Task DAG
-    3. On success: broadcast WsEvent.TaskBoardPlanReady (with runId + plan)
-    4. On failure: buildSimpleFallbackPlan() → broadcast TaskBoardPlanReady with fallback
-  → Frontend renders TaskBoard in WorkspaceChatPage (left chat + right task panel)
-  → User clicks "分发执行" → POST .../dispatch → OrchestratorEngine.dispatch()
-    1. Create workspace + agents + group session
-    2. Insert orchestratorRuns record (status: running)
-    3. Planner → TaskGraph → topological order
-    4. TaskScheduler: execute tasks by dependency layer (max 3 concurrent)
-    5. For each task:
-       - buildTaskPrompt() → structured context (goal + task + contract + Blackboard entries)
-       - Create child session for context isolation
-       - Git branch isolation (if non read-only)
-       - AgentRuntime.execute() → Agent stream reply
-       - parseAgentAutonomySignals() → handle [CLARIFY]/[REJECT]/[PROGRESS]/[HELP]
-       - Collect diff artifact, write output to Blackboard
-       - If code task with requiresReview: auto-inject Reviewer task
-       - Broadcast task_board:task_progress for progress updates
-    6. ConflictResolver: detect & resolve file conflicts
-    7. Synthesizer: LLM aggregate → post summary to group chat
-    8. Broadcast task_board:run_completed
-    9. Cleanup Blackboard namespace
-
-Server restart recovery:
-  index.ts → query orchestrator_runs WHERE status='running'
-  → OrchestratorEngine.resumeRun(runId) for each
-    → Reset running tasks to pending → rebuild TaskGraph → continue scheduling
+```text
+OrchestratorEngine.dispatch()
+  -> Planner produces ExecutionPlan
+  -> workspace_tasks + orchestrator_runs persist run state
+  -> ensureOrchestratorTaskSession() creates child sessions
+  -> TaskScheduler executes dependency layers
+  -> TaskExecutionService runs each agent
+  -> blackboard stores summaries, decisions, artifact refs
+  -> .agenthub/handoff materializes readable upstream artifacts
+  -> main group chat receives task result messages
+  -> Synthesizer writes final summary
 ```
 
-### Task Board & Real-Time UI
+### Session Tree Rules
 
-The task board replaces the old static Plan Card with a real-time visual DAG display:
+Core files:
 
-**WebSocket events** (`packages/shared/src/constants.ts` `WsEvent`):
+- `apps/web/src/lib/sessionTree.ts`
+- `apps/web/src/components/chat/SessionList.tsx`
+- `apps/web/src/stores/chatStore.ts`
+- `apps/web/src/lib/ws.ts`
 
-| Event | Trigger |
-|---|---|
-| `task_board:plan_ready` | Async plan generation complete |
-| `task_board:task_progress` | Agent reports `[PROGRESS: N%]` |
-| `task_board:run_completed` | Run completes/fails/cancelled |
-| `task_board:clarification_needed` | Agent asks `[CLARIFY]` |
+Rules:
 
-**Frontend components**:
+- `direct + metadata.kind === "agent-direct"` belongs in the global Agent private chat list.
+- `group` belongs in the group chat list.
+- `direct + metadata.kind === "orchestrator-task"` is a real task child conversation under a group.
+- `workspace-agent-child` is legacy and should not appear as the current group child UX.
+- Do not fabricate "missing member" child sessions in the group tree. Only show real task child sessions.
 
-- `TaskBoard.tsx` — left-right layout panel: phases + tasks tree, status icons (Clock/Loader2(animate-spin)/CheckCircle2/XCircle/Ban), progress bar with dynamic colors (<30% red, <70% yellow, ≥70% green)
-- `ClarificationCard.tsx` — interactive card for agent questions: option buttons + free text input, submits answer via API
-- `WorkspaceChatPage.tsx` (`/workspace/:workspaceId/chat/:sessionId`) — left chat (`Thread`) + right TaskBoard panel (w-96, only shown when `taskBoard` is active)
+### Workspace And Workdirs
 
-**State management**: `chatStore.taskBoard` stores full run state (runId, phases, tasks with progress, lifecycle status), updated via WebSocket events.
+Current default design is not branch-per-agent. The active path is a normal local project directory plus AgentHub-managed subdirectories:
 
-### Database (`packages/db`)
-
-SQLite with WAL mode. Key tables:
-
-- `users`, `sessions` (direct/group, with `metadata` JSON), `messages`, `session_members`, `settings`
-- `workspaces`, `workspace_agents`, `workspace_tasks`
-- `orchestrator_runs` — tracks orchestrator dispatch lifecycle (planning → running → synthesizing → completed/failed). `planMessageId` and `summaryMessageId` reference `messages.id` with `onDelete: 'set null'`.
-- `task_clarifications` — records agent clarification questions to the user (question, options, answer, status: pending/answered/timeout)
-- `orchestrator_run_controls` — logs user control actions on runs (pause/resume/cancel/retry_all_failed/skip_task)
-- `blackboard_entries` — namespaced key-value store with versioning
-- `execution_logs` — tracing records for agent runs and tool calls. `sessionId` references `sessions.id` with `onDelete: 'cascade'`.
-
-`workspace_tasks` extended fields for DAG scheduling + progress + autonomy:
-- `run_id`, `phase_id`, `dependencies` (JSON array), `parallel_group`, `max_retries`, `retry_count`, `timeout`
-- `fallback_agent_id`, `artifacts` (JSON), `started_at`, `completed_at`, `error_log`
-- `progress_percent` (integer 0-100), `progress_status` (text), `clarification_count` (integer)
-- `input_refs` (JSON, Blackboard input references), `output_key` (Blackboard output key)
-
-DB file defaults to `./storage/agenthub.db`.
-
-### Web (`apps/web`)
-
-- Vite dev server proxies `/api` → `:8000` and `/ws` → `ws://:8000`
-- Path alias: `@` → `./src`
-- State managed via Zustand stores in `src/stores/` (chatStore, workspaceStore)
-  - `chatStore.taskBoard` — real-time task board state (phases, tasks, progress, run lifecycle)
-- Routing: React Router with pages: Chat, AgentConfig, AgentWorld, Office, SkillsMarket, OrchestratorRuns, ExecutionLogs, CodingTools, Settings, WorkspaceChatPage (`/workspace/:workspaceId/chat/:sessionId`)
-- Desktop integration: `src/lib/native.ts` detects Tauri runtime; `src/components/DesktopAppMenu.tsx` renders native menu when in desktop mode
-- API client: `src/lib/api.ts` — typed wrapper around `fetch` for all backend endpoints
-- **TaskBoard** (`TaskBoard.tsx`): Real-time DAG task visualization panel with status icons, progress bars (color-coded by percentage), and run lifecycle controls (cancel/retry). Replaces the old static OrchestratorPlanCard.
-- **ClarificationCard** (`ClarificationCard.tsx`): Interactive card rendered in chat when an agent asks a `[CLARIFY]` question. Provides option buttons + free text input with API submission.
-- **Thread.tsx**: Registers `task_board` and `clarification` message parts via `MessagePrimitive.Parts`. Preserves backward compatibility with old `orchestrator_plan` Plan Cards.
-- **runtime.tsx**: `toThreadMessage()` detects `task_board` type messages and extracts plan + runId for rendering.
-
-### Desktop (`apps/desktop`)
-
-- Tauri v2 Rust shell in `src-tauri/`
-- Sidecar: `apps/server` compiled to `agenthub-server.exe`, placed in `src-tauri/resources/binaries/`
-- Startup flow: splash screen → find port 8000-8079 → spawn server sidecar → wait for `/health` → load web UI
-- Desktop commands: `pick_workspace_folder`, `open_in_editor`, `notify_user`, `desktop_info`, `open_desktop_window`
-- Data paths on Windows: `%APPDATA%\com.agenthub.desktop\{data,config,logs}`
-- Prepare sidecar: `bun --filter @agenthub/desktop prepare:sidecar`
-
-### Shared (`packages/shared`)
-
-- Zod schemas for API validation and types: `auth.ts`, `session.ts`, `message.ts`, `task.ts`, `agent.ts`, `artifact.ts`
-- Shared constants in `constants.ts`
-
-## Testing
-
-Smoke tests live in `tests/smoke.test.ts` and use Bun's built-in test runner. They spin up the Hono app in-memory with a temporary SQLite database.
-
-Covered areas:
-- Health endpoint, session/message CRUD
-- Settings model test mocking
-- Workspace task dispatch and failure handling
-- Agent draft confirmation
-- TaskGraph DAG topology sort and cycle detection
-- ConflictResolver multi-agent file conflict detection
-- GitBranchManager branch lifecycle
-
-## Security & Runtime Policy
-
-- **Auth**: Single-user mode (`default-user` injected by auth middleware). No production login flow.
-- **API Key protection**: `llm-client.ts` redacts Bearer tokens and `sk-*` / `sess-*` patterns from logs.
-- **Code Agent sandbox** (three-tier):
-  - `read-only`: no branch created, agent only reads files
-  - `workspace-write`: isolated Git branch per task, diff collected after execution
-  - `danger-full-access`: same branch isolation, but allows broader operations
-- **`AGENTHUB_ENABLE_CODE_AGENT_EXECUTION`**: default is `true`. Actual restrictions enforced by `sandboxPolicy`.
-  **Note**: Always use `env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` from `src/env.ts` instead of raw `readEnv()` string checks. The `.env` file value overrides the Zod default at runtime.
-- **MCP runtime**: read-only only (`nativeToolRuntime` only exposes read tools).
-
-## Error Handling & Logging
-
-### AppError Convention
-
-All API errors return a unified format:
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "SESSION_NOT_FOUND",
-    "message": "会话不存在",
-    "details": { },
-    "requestId": "uuid"
-  }
-}
+```text
+{projectRoot}/.agenthub/
+  workdirs/{runId}/{agentName}/{taskId}/
+  handoff/{runId}/{taskId}/
 ```
 
-Error codes are defined in `apps/server/src/lib/error.ts` (`AppErrorCodes`) and grouped by prefix: `GENERAL_*`, `VALIDATION_*`, `AUTH_*`, `SESSION_*`, `MESSAGE_*`, `WORKSPACE_*`, `TASK_*`, `AGENT_*`, `LLM_*`, `ORCHESTRATOR_*`, `FILE_*`.
+Important files:
 
-**Do not use raw `HTTPException` in new routes.** Use `AppError.fromCode()` or `AppError.internal()`. The `app.ts` `onError` handler automatically wraps legacy `HTTPException` into `AppError` for backward compatibility.
+- `apps/server/src/services/execution/agent-workdir.ts`
+- `apps/server/src/services/execution/agent-execution-envelope.ts`
+- `apps/server/src/services/execution/task-execution-service.ts`
 
-### Request Tracing
+Rules:
 
-`requestContextMiddleware` injects a `requestId` per HTTP request (reads `X-Request-Id` header or generates `crypto.randomUUID()`). Access via `c.get('requestContext')` to get the child logger and include `requestId` in responses via `X-Request-Id` header.
+- Write-capable agents execute in `.agenthub/workdirs/...`.
+- Read-only agents may read the project root.
+- Upstream artifacts that can be reused by downstream agents are copied into `.agenthub/handoff/...`.
+- Downstream prompts must prefer `handoffPath`.
+- If a blackboard entry only has `filePath` or `path`, treat it as an upstream record, not as proof that the file exists in the current workdir.
 
-### Logger Usage
+### Runtime Layer
 
-Use `apps/server/src/lib/logger.ts` (pino). **Do not use `console.log` / `console.error`** (startup fallback only). Levels: `fatal` (process crash), `error` (business errors), `warn` (recoverable / retries), `info` (key business events), `debug` (WebSocket messages, tool I/O).
+Core files:
 
-## Environment Variables
+- `apps/server/src/services/runtime/agent-runtime.ts`
+- `apps/server/src/services/runtime/runtime-registry.ts`
+- `apps/server/src/services/runtime/llm-runtime.ts`
+- `apps/server/src/services/runtime/code-agent-runtime.ts`
+- `apps/server/src/services/runtime/native-tool-runtime.ts`
+- `apps/server/src/services/code-agent-adapter.ts`
 
-Key env vars from `apps/server/src/env.ts`:
+When reporting CLI errors, use the actual adapter display name. For example, an OpenCode failure must not say "Codex CLI started".
 
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `./storage/agenthub.db` | SQLite file path |
-| `PORT` | `8000` | Server port |
-| `JWT_SECRET` | `dev-secret-change-me...` | JWT signing key |
-| `JWT_EXPIRES_IN` | `7d` | JWT expiry |
-| `CORS_ORIGIN` | `http://localhost:5173` | Allowed CORS origin |
-| `LOG_LEVEL` | `info` | pino log level |
-| `LLM_PROVIDER` | `openai` | Default LLM provider |
-| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | — | Generic LLM config |
-| `LLM_TIMEOUT_MS` | `60000` | LLM request timeout |
-| `LLM_MAX_RETRIES` | `2` | LLM retry count |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | — | OpenAI-specific |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | — | Anthropic-specific |
-| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | `true` | Code Agent execution switch |
-| `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | `120000` | Code Agent timeout |
-| `AGENTHUB_NATIVE_MAX_TOOL_ROUNDS` | `6` | Max tool rounds for native runtime |
-| `AGENTHUB_WORKSPACE_ROOT` | `.` | Workspace root for Git ops |
-| `AGENTHUB_SKILLS_ROOT` | — | Skills directory |
-| `AGENTHUB_APP_DATA_DIR` / `AGENTHUB_CONFIG_DIR` / `AGENTHUB_LOG_DIR` | — | Desktop data paths |
-| `ENABLE_LOCAL_CLI_PROBES` | `true` | Probe host-installed CLI tools |
-| `ENABLE_CODEX_CHATGPT_AUTH` | `true` | Codex ChatGPT auth |
-| `SYNC_CODEX_CLI_AUTH` | `true` | Sync Codex CLI auth |
-| `CODEX_HOME` | — | Codex home directory |
+If a CLI generated files but failed later, report it as a failed task with partial artifacts retained. Do not say the task produced nothing.
 
-Web env vars (`.env` or Vite):
-- `VITE_PROXY_TARGET` → backend for dev proxy
-- `VITE_WS_PROXY_TARGET` → WebSocket proxy target
+## Data Model
 
-## Development Conventions
+Important tables:
 
-- ESM throughout the project.
-- TypeScript strict mode + isolatedModules + `noUncheckedIndexedAccess` + `noImplicitOverride`.
-- Code formatting by Prettier: `semi: false`, `singleQuote: true`, `trailingComma: "all"`, `printWidth: 100`, `tabWidth: 2`, `arrowParens: "always"`.
-- UI language is Chinese; key types and protocol fields remain English.
-- **Frontend (`apps/web`) is maintained by a colleague. Do NOT modify frontend code directly.** If you find frontend issues, report them with file path, line number, root cause, and suggested fix. Only modify frontend when the user explicitly requests it.
+- `sessions`: direct/group conversations and metadata kind.
+- `messages`: chat messages and task result metadata.
+- `workspaces`: local project workspaces.
+- `workspace_agents`: group members.
+- `workspace_tasks`: DAG tasks, progress, artifacts, child session IDs.
+- `orchestrator_runs`: orchestration lifecycle.
+- `blackboard_entries`: structured handoff state between agents.
+- `execution_logs`: execution traces.
+- `settings`: model/provider and app settings.
 
-### Extending the Codebase
+## Frontend Notes
 
-- **New route**: create a Hono Router in `apps/server/src/routes/`, then mount it in `apps/server/src/app.ts` via `.route('/api/xxx', xxxRoutes)`.
-- **New DB table**: define in `packages/db/src/schema.ts` with `sqliteTable` + `relations`, then run `bun run db:generate`.
-- **New shared type**: add Zod schema in `packages/shared/src/schemas/` and export from `packages/shared/src/index.ts`.
-- **New frontend page**: create component in `apps/web/src/pages/` and add `<Route>` in `apps/web/src/App.tsx`.
-- **WebSocket events**: server broadcasts via `broadcastSessionEvent`; frontend consumes in `chatStore.handleWSEvent`. Event types are in `packages/shared/src/constants.ts` (`WsEvent`). New events: `task_board:plan_ready`, `task_board:task_progress`, `task_board:run_completed`, `task_board:clarification_needed`.
-- **Agent reply flow**: `agent-runner.ts` `runAgentReply()` schedules execution; LLM streams via `message:stream`, completion is persisted and broadcast as `message:completed`.
+Key components:
 
-## Legacy Code References
+- `Thread.tsx`: message rendering and task board message parts.
+- `TaskBoard.tsx`: DAG task progress, child conversation links, artifacts.
+- `SessionList.tsx`: left navigation and group child tree.
+- `WorkspaceChatPage.tsx`: chat page layout.
+- `GlobalNewSessionDialog.tsx`: new private/group chat flow and workspace selection.
 
-The following files are still present and internally referenced by the new Runtime layer, but their primary logic has been migrated or deprecated:
+Design constraints:
 
-- `src/services/code-agent-adapter.ts` — referenced by `CodeAgentRuntime`
-- `src/services/native-agent-loop.ts` — referenced by `NativeToolRuntime`
-- `src/services/group-chat/group-chat-manager.ts` — **@deprecated**. `conversationLoop()` and `handleMessage()` are no longer called. Group chat messages now route through the unified entry in `messages.ts`. Utility functions (`extractMentions`, `escapeRegExp`, `findOrchestrator`) are preserved for reference.
-- `src/services/group-chat/index.ts` — **@deprecated** export of `GroupChatManager`, kept for backward compatibility only.
+- Keep the UI IM-like, not a landing page.
+- The first screen should be usable chat/workspace UI.
+- Do not place group child placeholders under the group list.
+- Running state must be visible before the final message appears.
+- Child conversation links should open the actual `orchestrator-task` session.
+
+## Environment
+
+Common environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | SQLite database path |
+| `PORT` | server start port |
+| `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | default model config |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` | OpenAI-compatible config |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL` | Anthropic config |
+| `ENABLE_LOCAL_CLI_PROBES` | probe local CLIs |
+| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | enable Code Agent execution |
+| `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | Code Agent timeout; dev default should be 600000 |
+| `AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS` | model-generated quick prompts |
+
+## Error Handling
+
+- Use `AppError` and `AppErrorCodes` in new routes.
+- Do not add raw `HTTPException` in new code.
+- Use `apps/server/src/lib/logger.ts`; avoid `console.log`.
+- Include request/run/task IDs in logs when available.
+
+## Testing Expectations
+
+For routing or orchestration changes, run:
+
+```bash
+bun --filter @agenthub/server typecheck
+bun --filter @agenthub/web typecheck
+bun test tests/orchestrator-routing.test.ts
+```
+
+Broader changes should also run:
+
+```bash
+bun test
+```
+
+## Deprecated Or Risky Areas
+
+- `workspace-agent-child`: legacy child session design. Keep hidden from current group UX.
+- Static fallback plan templates: avoid as normal UX. Prefer model-generated dynamic plans.
+- Branch-per-agent docs: old design. Git utilities may remain, but current default execution is workdir + handoff.
+- Old static quick prompt fallback: user does not want static prompt content.
+- `GroupChatManager`: deprecated path; do not route new group behavior through it.
+
+## Coding Style
+
+- ESM throughout.
+- TypeScript strict mode.
+- Prefer existing patterns and small scoped edits.
+- Use structured parsing/data models instead of string hacks when possible.
+- Keep Chinese UI copy concise and explicit.
+- Do not revert unrelated user changes.

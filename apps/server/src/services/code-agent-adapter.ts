@@ -3298,9 +3298,9 @@ function friendlyCodeAgentError(adapter: CodeAgentAdapter, output: string) {
     return `当前 ${runtimeName} 不支持这个 provider 配置里的 wire_api=chat。请检查 CLI 和供应商 API 协议。`
   }
   if (/No such file or directory|cannot find the path|系统找不到指定的路径/i.test(output)) {
-    return 'Coding Tools 已启动，但项目目录不存在。请重新打开或选择正确的工作区文件夹。'
+    return `${cliName} 已启动，但项目目录不存在。请重新打开或选择正确的工作区文件夹。`
   }
-  return 'Coding Tools 已启动，但 CLI 执行过程返回了错误。'
+  return `${cliName} 已启动，但 CLI 执行过程返回了错误。`
 }
 
 function quoteForCmd(value: string) {

@@ -152,7 +152,7 @@ export async function ensureOrchestratorTaskSession(
       .orderBy(desc(sessions.updatedAt))
     const matched = existingSessions.find((session) => {
       const metadata = session.metadata ?? {}
-      return metadata.kind === 'orchestrator-task' && metadata.orchestratorRunId === runId && metadata.orchestratorTaskId === taskId
+      return isOrchestratorTaskSession(metadata) && metadata.orchestratorRunId === runId && metadata.orchestratorTaskId === taskId
     })
     if (matched) return matched
   }
@@ -171,7 +171,6 @@ export async function ensureOrchestratorTaskSession(
         kind: 'orchestrator-task',
         orchestratorRunId: runId,
         orchestratorTaskId: taskId,
-        hiddenFromSessionTree: true,
       },
     })
     .returning()

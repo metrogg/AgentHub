@@ -1,5 +1,5 @@
-import { readdirSync, statSync, existsSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   db,
   messages,
@@ -1287,8 +1287,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     const beforeFiles = new Map<string, ScannedFile>()
     for (const dir of beforeDirs) {
       for (const f of scanDirectoryFiles(dir, GIT_IGNORE_PATTERNS)) {
-        const key = `${dir}::${f.path}`
-        beforeFiles.set(key, f)
+        beforeFiles.set(fileScanKey(dir, f.path), f)
       }
     }
 
@@ -1342,9 +1341,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       )
       for (const dir of afterDirs) {
         const afterFiles = scanDirectoryFiles(dir, GIT_IGNORE_PATTERNS)
-        const newFiles = computeNewFiles(beforeFiles, afterFiles)
+        const newFiles = computeNewFiles(beforeFiles, dir, afterFiles)
         for (const f of newFiles) {
           if (seenArtifactPaths.has(f.path)) continue
+          if (isLikelySeededWorkdirFile(dir, execPath, childInfo.projectPath ?? null, f)) continue
           if (f.path.endsWith('.patch') || f.path.endsWith('.diff')) continue
           seenArtifactPaths.add(f.path)
           artifacts.push({
@@ -1360,6 +1360,13 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           })
         }
       }
+      materializeArtifactHandoffs({
+        runId,
+        taskId: task.id,
+        artifacts,
+        projectRoot: childInfo.projectPath ?? defaultWorkDir,
+        executionPath: execResult.executionPath ?? null,
+      })
 
       const progressMatches = output.match(/\[PROGRESS:\s*(\d+)%\]\s*(.*)/g)
       if (progressMatches) {
@@ -1688,6 +1695,13 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
                 : typeof artifact.path === 'string'
                   ? artifact.path
                   : undefined,
+            sourcePath: typeof artifact.sourcePath === 'string' ? artifact.sourcePath : undefined,
+            handoffPath:
+              typeof artifact.handoffPath === 'string' ? artifact.handoffPath : undefined,
+            handoffRelativePath:
+              typeof artifact.handoffRelativePath === 'string'
+                ? artifact.handoffRelativePath
+                : undefined,
           },
           agentId: agent.id,
           taskId: task.id,
@@ -2013,6 +2027,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             task.title,
             error?.message || 'Unknown error',
             lastAgentOutput,
+            lastArtifacts,
           ),
           metadata: {
             agentName: agent.name,
@@ -2025,6 +2040,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             taskStatus: TaskStatus.Failed,
             taskResultReport: failureReport,
             artifacts: lastArtifacts,
+            partialArtifacts: lastArtifacts.length > 0,
           },
         })
         .returning()
@@ -3232,6 +3248,9 @@ async function buildTaskPrompt(
 
   if (task.dependencies && task.dependencies.length > 0) {
     parts.push('# 上游 Agent 的产出\n')
+    parts.push(
+      '以下内容来自 Orchestrator 黑板。上游文件如果提供了 handoffPath，才代表你当前可以直接读取；如果只有 filePath/path，请把它当作上游记录的文件名或来源路径，不要假设它存在于你的当前执行目录。',
+    )
     for (const depId of task.dependencies) {
       const depTask = plan.tasks.find((t) => t.id === depId)
       if (!depTask) continue
@@ -3249,11 +3268,7 @@ async function buildTaskPrompt(
         if (entries.length > 0) {
           parts.push(`## ${agentName} 完成了 "${depTask.title}"`)
           for (const entry of entries) {
-            const summary =
-              typeof entry.value === 'object' && entry.value !== null && 'summary' in entry.value
-                ? String((entry.value as Record<string, unknown>).summary).slice(0, 500)
-                : JSON.stringify(entry.value).slice(0, 500)
-            parts.push(`- ${summary}`)
+            parts.push(formatBlackboardEntryForPrompt(entry.value))
           }
           parts.push('')
         }
@@ -3290,7 +3305,7 @@ async function buildTaskPrompt(
   }
 
   parts.push(
-    '请先给出简短工作计划，再产出结果。遇到需要其他 Agent 配合的内容，请在结尾用「需协作:」列出。',
+    '请先给出简短工作计划，再产出结果。需要引用上游产物时优先读取 handoffPath；没有 handoffPath 时只能依据黑板摘要接力，不要读取自己目录下臆造的相对路径。遇到需要其他 Agent 配合的内容，请在结尾用「需协作:」列出。',
   )
 
   if (agentProfile) {
@@ -3298,6 +3313,44 @@ async function buildTaskPrompt(
   }
 
   return parts.join('\n\n')
+}
+
+function formatBlackboardEntryForPrompt(value: unknown) {
+  if (!value || typeof value !== 'object') return `- ${String(value).slice(0, 500)}`
+  const record = value as Record<string, unknown>
+  const lines: string[] = []
+  const summary = typeof record.summary === 'string' ? record.summary : ''
+  if (summary) lines.push(`- 摘要：${summary.slice(0, 600)}`)
+
+  const artifacts = Array.isArray(record.artifacts)
+    ? (record.artifacts as Array<Record<string, unknown>>)
+    : []
+  const visibleArtifacts = artifacts.slice(0, 8)
+  for (const artifact of visibleArtifacts) {
+    const title = String(artifact.title ?? artifact.filePath ?? artifact.path ?? '未命名产物')
+    const handoffPath =
+      typeof artifact.handoffPath === 'string' && artifact.handoffPath
+        ? artifact.handoffPath
+        : null
+    const sourcePath =
+      typeof artifact.sourcePath === 'string' && artifact.sourcePath ? artifact.sourcePath : null
+    if (handoffPath) {
+      lines.push(`  - 可读取产物：${title}，handoffPath=${handoffPath}`)
+    } else if (sourcePath) {
+      lines.push(`  - 上游来源：${title}，sourcePath=${sourcePath}`)
+    } else {
+      const filePath =
+        typeof artifact.filePath === 'string'
+          ? artifact.filePath
+          : typeof artifact.path === 'string'
+            ? artifact.path
+            : ''
+      lines.push(`  - 上游记录：${title}${filePath ? `，filePath=${filePath}` : ''}`)
+    }
+  }
+
+  if (lines.length > 0) return lines.join('\n')
+  return `- ${JSON.stringify(record).slice(0, 600)}`
 }
 
 interface TaskOutputSummary {
@@ -3426,13 +3479,25 @@ function buildAgentGroupFailureContent(
   taskTitle: string,
   error: string,
   output: string,
+  artifacts: Array<Record<string, unknown>>,
 ): string {
-  const lines = [`**${agentName} / ${taskTitle}**`, '', '该任务执行失败，未产生可交付结果。']
+  const hasPartialArtifacts = artifacts.length > 0
+  const lines = [
+    `**${agentName} / ${taskTitle}**`,
+    '',
+    hasPartialArtifacts
+      ? '该任务执行失败，最终结果未确认；已保留执行过程中产生的部分产物与文件变更，供排查或后续接力使用。'
+      : '该任务执行失败，未产生可交付结果。',
+  ]
   lines.push('', '**失败原因**', error.trim() || 'Unknown error')
 
   const detail = output.trim()
   if (detail && detail !== error.trim()) {
     lines.push('', '**Agent 输出摘录**', detail.slice(0, 1200))
+  }
+
+  if (hasPartialArtifacts) {
+    lines.push('', `已保留 ${artifacts.length} 个部分产物，可在消息产物卡或任务看板中查看。`)
   }
 
   return lines.join('\n')
@@ -3584,6 +3649,71 @@ function isArtifactKind(a: Record<string, unknown>, kind: string): boolean {
   return (a.kind as string | undefined) === kind || (a.type as string | undefined) === kind
 }
 
+function materializeArtifactHandoffs(params: {
+  runId: string
+  taskId: string
+  artifacts: Array<Record<string, unknown>>
+  projectRoot: string
+  executionPath: string | null
+}) {
+  const handoffRoot = join(params.projectRoot, '.agenthub', 'handoff', params.runId, params.taskId)
+  for (const artifact of params.artifacts) {
+    const rawPath =
+      typeof artifact.filePath === 'string'
+        ? artifact.filePath
+        : typeof artifact.path === 'string'
+          ? artifact.path
+          : ''
+    if (!rawPath) continue
+
+    const sourcePath = resolveArtifactSourcePath(rawPath, artifact, params.executionPath)
+    if (!sourcePath || !existsSync(sourcePath)) continue
+
+    let stat
+    try {
+      stat = statSync(sourcePath)
+    } catch {
+      continue
+    }
+    if (!stat.isFile() || stat.size > 20 * 1024 * 1024) continue
+
+    const relativeTarget = sanitizeHandoffRelativePath(rawPath)
+    const targetPath = join(handoffRoot, relativeTarget)
+    try {
+      mkdirSync(dirname(targetPath), { recursive: true })
+      copyFileSync(sourcePath, targetPath)
+      artifact.sourcePath = sourcePath
+      artifact.handoffPath = targetPath
+      artifact.handoffRelativePath = relative(params.projectRoot, targetPath).replace(/\\/g, '/')
+    } catch (error: any) {
+      logger.warn(
+        { err: error?.message, taskId: params.taskId, sourcePath, targetPath },
+        'Failed to materialize artifact handoff',
+      )
+    }
+  }
+}
+
+function resolveArtifactSourcePath(
+  rawPath: string,
+  artifact: Record<string, unknown>,
+  executionPath: string | null,
+) {
+  if (isAbsolute(rawPath)) return rawPath
+  const sourceRoot =
+    typeof artifact.source === 'string' && artifact.source ? artifact.source : executionPath
+  return sourceRoot ? resolve(sourceRoot, rawPath) : null
+}
+
+function sanitizeHandoffRelativePath(rawPath: string) {
+  const normalized = rawPath.replace(/\\/g, '/')
+  const parts = normalized
+    .split('/')
+    .filter((part) => part && part !== '.' && part !== '..')
+    .map((part) => part.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 80) || 'file')
+  return parts.length > 0 ? join(...parts) : basename(rawPath) || 'artifact'
+}
+
 interface ScannedFile {
   path: string
   size: number
@@ -3627,12 +3757,37 @@ function scanDirectoryFiles(dir: string, ignorePatterns: RegExp[] = []): Scanned
   return results
 }
 
-function computeNewFiles(before: Map<string, ScannedFile>, after: ScannedFile[]): ScannedFile[] {
+function fileScanKey(dir: string, path: string) {
+  return `${dir}::${path}`
+}
+
+function computeNewFiles(
+  before: Map<string, ScannedFile>,
+  dir: string,
+  after: ScannedFile[],
+): ScannedFile[] {
   return after.filter((f) => {
-    const prev = before.get(f.path)
+    const prev = before.get(fileScanKey(dir, f.path))
     if (!prev) return true
     return f.mtimeMs > prev.mtimeMs + 1000
   })
+}
+
+function isLikelySeededWorkdirFile(
+  scannedDir: string,
+  executionPath: string | null | undefined,
+  projectPath: string | null,
+  file: ScannedFile,
+) {
+  if (!executionPath || !projectPath || scannedDir !== executionPath) return false
+  const originalPath = join(projectPath, file.path)
+  if (!existsSync(originalPath)) return false
+  try {
+    const original = statSync(originalPath)
+    return original.isFile() && original.size === file.size
+  } catch {
+    return false
+  }
 }
 
 /**
