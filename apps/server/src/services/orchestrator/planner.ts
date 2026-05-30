@@ -426,6 +426,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       'Return strict JSON only. Do not include Markdown fences or explanations.',
       'Schema: {"collaborationMode":"pipeline|mapreduce|supervisor","title":string,"summary":string,"clarificationQuestions":[{"id":string,"question":string,"options":string[]}],"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
       'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
+      'Do not assign execution tasks to Orchestrator. Orchestrator only coordinates, monitors, and synthesizes; assign research/design/code/test/review work to specialist agents.',
       'If tasks can run in parallel, put them in the same parallelGroup.',
       'Dependencies should reference task ids, not agent keys.',
       'Each task must include its output contract: what files/interfaces it will produce, so downstream tasks know what to depend on.',
@@ -507,8 +508,10 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       const title = cleanPlanText(t.title)
       const description = cleanPlanText(t.description)
       const agentKey = typeof t.agentKey === 'string' ? t.agentKey : ''
-      const agent = agentMap.get(agentKey)
-      if (!title || !description || !agent) continue
+      const requestedAgent = agentMap.get(agentKey)
+      if (!title || !description || !requestedAgent) continue
+      const taskType = parseTaskType(t.taskType)
+      const agent = this.selectExecutionAgent(agents, requestedAgent, taskType, title, description)
 
       const rawId = cleanPlanText(t.id) || slugifyTaskId(title, index)
       const id = crypto.randomUUID()
@@ -529,7 +532,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         title,
         description,
         agentId: agent.id,
-        taskType: parseTaskType(t.taskType),
+        taskType,
         dependencies: deps,
         parallelGroup: typeof t.parallelGroup === 'string' ? t.parallelGroup : undefined,
         maxRetries: typeof t.maxRetries === 'number' ? Math.max(0, Math.min(t.maxRetries, 5)) : 2,
@@ -675,8 +678,10 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
   ): ExecutionPlan {
     const title = titleFromGoal(goal)
     const selectedAgents = agents.length
-      ? agents.slice(0, Math.max(1, Math.min(agents.length, 4)))
+      ? agents.slice(0, Math.max(1, Math.min(agents.length, 6)))
       : []
+    const workerAgents = selectedAgents.filter((agent) => agent.roleType !== 'orchestrator')
+    const executionAgents = workerAgents.length ? workerAgents : selectedAgents
 
     // 如果有 Spec，按模块生成 fallback 任务
     if (spec && spec.modules.length > 0) {
@@ -690,7 +695,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         // 根据模块职责匹配 Agent
         const keywords = [m.name, ...m.responsibility.split(/\s+/)]
         const matched =
-          this.pickAgent(selectedAgents, keywords) ?? selectedAgents[i % selectedAgents.length]!
+          this.pickAgent(executionAgents, keywords) ?? executionAgents[i % executionAgents.length]!
         tasks.push({
           id: taskId,
           title: `实现模块：${m.name}`,
@@ -707,8 +712,8 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       // 如果只有一个模块，追加 review 任务
       if (tasks.length === 1 && selectedAgents.length > 1) {
         const reviewer =
-          this.pickAgent(selectedAgents, ['审查', 'review', 'test']) ??
-          selectedAgents[selectedAgents.length - 1]!
+          this.pickAgent(executionAgents, ['验收', '审查', 'review', 'test', 'qa']) ??
+          executionAgents[executionAgents.length - 1]!
         const reviewId = crypto.randomUUID()
         tasks.push({
           id: reviewId,
@@ -726,22 +731,23 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
 
     // 无 Spec 时的经典三阶段 fallback，支持 Coder 专业化匹配
     const leadAgent =
-      this.pickAgent(selectedAgents, ['规划', '架构', 'architect', 'plan']) ?? selectedAgents[0]!
+      this.pickAgent(executionAgents, ['设计', '架构', 'architect', 'designer', 'plan']) ??
+      executionAgents[0]!
 
     // 尝试 specialist 匹配，如果没有则回退到通用 coder
     const specialistTags = this.inferSpecialistTags(goal)
     const buildAgent =
       (specialistTags.length > 0
-        ? this.pickAgent(selectedAgents, [...specialistTags, 'coder', 'code'])
+        ? this.pickAgent(executionAgents, [...specialistTags, 'coder', 'code'])
         : undefined) ??
-      this.pickAgent(selectedAgents, ['实现', '代码', 'coder', 'code', 'build']) ??
-      selectedAgents[1] ??
-      selectedAgents[0]!
+      this.pickAgent(executionAgents, ['实现', '代码', 'coder', 'code', 'build', 'builder']) ??
+      executionAgents[1] ??
+      executionAgents[0]!
 
     const reviewAgent =
-      this.pickAgent(selectedAgents, ['审查', 'review', 'test', '风险']) ??
-      selectedAgents[2] ??
-      selectedAgents[selectedAgents.length - 1]!
+      this.pickAgent(executionAgents, ['验收', '审查', 'review', 'test', 'qa', '风险']) ??
+      executionAgents[2] ??
+      executionAgents[executionAgents.length - 1]!
 
     const planId = crypto.randomUUID()
     const buildId = crypto.randomUUID()
@@ -780,6 +786,37 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     ]
 
     return { runId, title, goal, agents: selectedAgents, tasks, collaborationMode: 'pipeline' }
+  }
+
+  private selectExecutionAgent(
+    agents: ExecutionAgent[],
+    requestedAgent: ExecutionAgent,
+    taskType: ExecutionTask['taskType'],
+    title: string,
+    description: string,
+  ): ExecutionAgent {
+    if (taskType === 'synthesize') return requestedAgent
+    if (requestedAgent.roleType !== 'orchestrator') return requestedAgent
+
+    const workers = agents.filter((agent) => agent.roleType !== 'orchestrator')
+    if (!workers.length) return requestedAgent
+
+    const taskHints: Record<string, string[]> = {
+      read: ['researcher', 'research', '资料', '素材', '读取'],
+      research: ['researcher', 'research', '资料', '素材', '调研'],
+      design: ['architect', 'designer', 'design', '设计', '视觉', '产品'],
+      code: ['coder', 'builder', 'code', 'implementation', '实现', '工程'],
+      test: ['verifier', 'reviewer', 'qa', 'test', '验收', '测试'],
+      verify: ['verifier', 'reviewer', 'qa', 'verify', '验收', '验证'],
+      review: ['reviewer', 'qa', 'review', '审查', '验收'],
+    }
+
+    const keywords = taskType ? taskHints[taskType] ?? [] : []
+    return (
+      (keywords.length > 0 ? this.pickAgent(workers, keywords) : undefined) ??
+      this.pickAgent(workers, [title, description]) ??
+      workers[0]!
+    )
   }
 }
 

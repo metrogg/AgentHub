@@ -19,7 +19,7 @@ export interface QAResult {
 
 export interface DeliveryFile {
   name: string
-  size: number
+  size?: number
   type: string
 }
 
@@ -40,7 +40,7 @@ interface DeliveryReportProps {
   data: DeliveryReportData
 }
 
-function formatFileSize(bytes: number): string {
+function formatFileSize(bytes?: number): string {
   if (bytes === undefined || bytes === null || bytes < 0) return '--'
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -107,6 +107,9 @@ const STATUS_CONFIG: Record<string, { icon: React.ReactNode; label: string; bgCl
 const DeliveryReport: FC<DeliveryReportProps> = ({ data }) => {
   const { status, runId, qaResult, files, checklist } = data
   const statusCfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.partial
+  const fileSectionTitle =
+    status === 'completed' || status === 'partial' ? '交付文件' : '诊断文件'
+  const canExport = (status === 'completed' || status === 'partial') && files.length > 0 && runId
 
   const totalIssues = qaResult ? qaResult.critical + qaResult.major + qaResult.minor : 0
 
@@ -160,7 +163,7 @@ const DeliveryReport: FC<DeliveryReportProps> = ({ data }) => {
       {files.length > 0 && (
         <div className="border-b border-neutral-100 px-5 py-3">
           <div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">
-            交付文件 ({files.length})
+            {fileSectionTitle} ({files.length})
           </div>
           <table className="w-full text-sm">
             <thead>
@@ -223,7 +226,7 @@ const DeliveryReport: FC<DeliveryReportProps> = ({ data }) => {
         </div>
       )}
 
-      {files.length > 0 && runId && (
+      {canExport && (
         <div className="border-t border-neutral-100 px-5 py-3">
           <button
             type="button"

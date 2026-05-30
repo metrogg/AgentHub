@@ -1,11 +1,10 @@
-import { CheckCircle2, XCircle, Clock } from 'lucide-react'
+import { Bot, CheckCircle2, Clock, MessagesSquare, XCircle } from 'lucide-react'
 
 export interface AgentTab {
   taskId: string
   agentId: string
   agentName: string
   taskTitle: string
-  roleIcon: string
   status: 'pending' | 'running' | 'done' | 'failed'
   childSessionId: string | null
   progress?: number
@@ -38,7 +37,13 @@ function StatusIndicator({ status }: { status: AgentTab['status'] }) {
   }
 }
 
-export function AgentTabs({ tabs, selectedTab, onSelect, activeAgentCount, runStatus }: AgentTabsProps) {
+export function AgentTabs({
+  tabs,
+  selectedTab,
+  onSelect,
+  activeAgentCount,
+  runStatus,
+}: AgentTabsProps) {
   const statusLabels: Record<string, string> = {
     planning: '规划中',
     running: '执行中',
@@ -59,17 +64,13 @@ export function AgentTabs({ tabs, selectedTab, onSelect, activeAgentCount, runSt
         }`}
       >
         <div className="flex items-center gap-2">
-          <span className="text-base">👥</span>
-          <span className="text-sm font-medium text-gray-900 truncate">团长视角</span>
+          <MessagesSquare className="h-4 w-4 text-blue-600" />
+          <span className="text-sm font-medium text-gray-900 truncate">主对话</span>
         </div>
         <div className="flex items-center gap-2 mt-1">
-          <span className="text-[11px] text-gray-500">
-            {statusLabels[runStatus] || runStatus}
-          </span>
+          <span className="text-[11px] text-gray-500">{statusLabels[runStatus] || runStatus}</span>
           {activeAgentCount > 0 && (
-            <span className="text-[11px] text-blue-600 font-medium">
-              {activeAgentCount} 活跃
-            </span>
+            <span className="text-[11px] text-blue-600 font-medium">{activeAgentCount} 活跃</span>
           )}
         </div>
       </div>
@@ -92,7 +93,7 @@ export function AgentTabs({ tabs, selectedTab, onSelect, activeAgentCount, runSt
               } ${isDisabled ? 'opacity-60' : ''}`}
             >
               <div className="flex items-center gap-2">
-                <span className="text-sm flex-shrink-0">{tab.roleIcon}</span>
+                <Bot className="h-4 w-4 flex-shrink-0 text-gray-500" />
                 <span className="text-sm font-medium text-gray-800 truncate">{tab.agentName}</span>
                 <span className="flex-shrink-0 ml-auto">
                   <StatusIndicator status={tab.status} />
@@ -111,7 +112,9 @@ export function AgentTabs({ tabs, selectedTab, onSelect, activeAgentCount, runSt
                     />
                   </div>
                   {tab.progressStatus && (
-                    <p className="text-[10px] text-gray-400 mt-0.5 truncate">{tab.progressStatus}</p>
+                    <p className="text-[10px] text-gray-400 mt-0.5 truncate">
+                      {tab.progressStatus}
+                    </p>
                   )}
                 </div>
               )}
@@ -124,9 +127,7 @@ export function AgentTabs({ tabs, selectedTab, onSelect, activeAgentCount, runSt
         })}
 
         {tabs.length === 0 && (
-          <div className="p-3 text-center text-xs text-gray-400">
-            暂无 Agent
-          </div>
+          <div className="p-3 text-center text-xs text-gray-400">暂无 Agent</div>
         )}
       </div>
     </div>

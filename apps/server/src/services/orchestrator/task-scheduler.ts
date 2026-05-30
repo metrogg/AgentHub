@@ -24,6 +24,7 @@ export class TaskScheduler {
     collaborationMode?: CollaborationMode,
   ): Promise<TaskResult[]> {
     const graph = new TaskGraph(plan.tasks)
+    const agentNameById = new Map(plan.agents.map((agent) => [agent.id, agent.name]))
     this.activeGraphs.set(plan.runId, graph)
     this.activePlans.set(plan.runId, plan)
 
@@ -72,7 +73,7 @@ export class TaskScheduler {
           const toRun = readyTasks.filter((t) => graph.getStatus(t.id) === 'pending').slice(0, readyTasks.length - runningCount)
           for (const task of toRun) {
             graph.setStatus(task.id, 'running')
-            this.runTask(task, graph, results, executor, runController.signal).catch((err) => {
+            this.runTask(task, graph, results, executor, runController.signal, agentNameById).catch((err) => {
               logger.error({ err, taskId: task.id }, 'Task execution error')
             })
           }
@@ -120,6 +121,7 @@ export class TaskScheduler {
     results: Map<string, TaskResult>,
     executor: TaskExecutor,
     runSignal: AbortSignal,
+    agentNameById: Map<string, string>,
   ) {
     const release = await this.semaphore.acquire(60000)
     const taskController = new AbortController()
@@ -131,7 +133,7 @@ export class TaskScheduler {
         results.set(blockedTask.id, {
           taskId: blockedTask.id,
           agentId: blockedTask.agentId,
-          agentName: 'Unknown',
+          agentName: agentNameById.get(blockedTask.agentId) ?? blockedTask.agentId,
           status: 'blocked',
           output: '',
           artifacts: [],
@@ -161,7 +163,7 @@ export class TaskScheduler {
       results.set(task.id, {
         taskId: task.id,
         agentId: task.agentId,
-        agentName: 'Unknown',
+        agentName: agentNameById.get(task.agentId) ?? task.agentId,
         status: 'failed',
         output: '',
         artifacts: [],

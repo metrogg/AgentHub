@@ -120,7 +120,6 @@ import {
 } from '../../lib/workspaceFilters'
 import { useI18n } from '../../lib/i18n'
 import { useChatStore } from '../../stores/chatStore'
-import { TaskBoard } from '@/components/TaskBoard'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
@@ -230,6 +229,7 @@ export const Thread: FC = () => {
   const isAgentDirectSession = sessionKind === 'agent-direct'
   const isWorkspaceChildSession = sessionKind === 'workspace-agent-child'
   const taskBoard = useChatStore((s) => s.taskBoard)
+  const agentActivity = useChatStore((s) => s.agentActivity)
   const visibleTaskBoard =
     taskBoard &&
     taskBoard.sessionId === currentSession?.id &&
@@ -239,6 +239,13 @@ export const Thread: FC = () => {
   const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
   const agentTabs = useChatStore((s) => s.agentTabs)
   const selectAgentTab = useChatStore((s) => s.selectAgentTab)
+  const planningActivity =
+    isGroupSession &&
+    selectedAgentTab === null &&
+    agentActivity?.sessionId === currentSession?.id &&
+    agentActivity.phase === 'planning'
+      ? agentActivity
+      : null
   const isOrchestratorTaskChild = sessionKind === 'orchestrator-task'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
@@ -295,6 +302,15 @@ export const Thread: FC = () => {
             <ThreadPrimitive.Messages
               components={{ UserMessage, AssistantMessage, SystemMessage }}
             />
+            {isGroupSession &&
+              selectedAgentTab === null &&
+              (visibleTaskBoard || planningActivity) && (
+                <TeamExecutionPanel
+                  taskBoard={visibleTaskBoard}
+                  agentTabs={agentTabs}
+                  activity={planningActivity}
+                />
+              )}
             <ThreadPrimitive.If empty={false}>
               <div className="min-h-28" />
             </ThreadPrimitive.If>
@@ -413,15 +429,15 @@ const OrchestratorChildHeader: FC<{ agentName: string; onBack: () => void }> = (
         type="button"
         onClick={onBack}
         className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-        title="返回团长视角"
-        aria-label="返回团长视角"
+        title="返回主对话"
+        aria-label="返回主对话"
       >
         <ChevronLeft className="h-5 w-5" />
       </button>
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="text-sm truncate">
           <span className="font-medium text-neutral-700">{agentName}</span>
-          <span className="text-neutral-400 ml-1.5 text-xs">子对话</span>
+          <span className="ml-1.5 text-xs text-neutral-400">成员对话</span>
         </span>
       </div>
     </header>
@@ -439,10 +455,10 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({ taskBoard, agentTabs }) =
   const failedCount = agentTabs.filter((t) => t.status === 'failed').length
 
   return (
-    <div className="shrink-0 px-6 py-2.5 border-b border-neutral-100 bg-gradient-to-r from-blue-50 to-indigo-50">
+    <div className="shrink-0 border-b border-neutral-100 bg-white px-6 py-2.5">
       <div className="flex items-center gap-2 text-xs">
-        <span className="text-base">👥</span>
-        <span className="font-semibold text-neutral-700">团长视角</span>
+        <Bot className="h-4 w-4 text-blue-600" />
+        <span className="font-semibold text-neutral-700">主对话</span>
         <span className="text-neutral-400">·</span>
         <span className="text-neutral-500">
           {taskBoard.goal
@@ -473,6 +489,202 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({ taskBoard, agentTabs }) =
           </span>
         )}
         <span className="text-xs text-neutral-400">共 {agentTabs.length} 个 Agent</span>
+      </div>
+    </div>
+  )
+}
+
+type LiveTaskBoard = NonNullable<ReturnType<typeof useChatStore.getState>['taskBoard']>
+type LiveAgentActivity = NonNullable<ReturnType<typeof useChatStore.getState>['agentActivity']>
+
+interface TeamExecutionPanelProps {
+  taskBoard: LiveTaskBoard | null
+  agentTabs: ReturnType<typeof useChatStore.getState>['agentTabs']
+  activity: LiveAgentActivity | null
+}
+
+const runStatusLabel: Record<string, string> = {
+  planning: '规划中',
+  running: '执行中',
+  synthesizing: '汇总中',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+}
+
+const taskStatusLabel: Record<string, string> = {
+  pending: '等待',
+  running: '执行中',
+  done: '已完成',
+  failed: '失败',
+  blocked: '受阻',
+  cancelled: '已取消',
+}
+
+function taskStatusClass(status: string) {
+  if (status === 'running') return 'border-blue-200 bg-blue-50 text-blue-700'
+  if (status === 'done') return 'border-green-200 bg-green-50 text-green-700'
+  if (status === 'failed' || status === 'blocked') return 'border-red-200 bg-red-50 text-red-700'
+  return 'border-neutral-200 bg-white text-neutral-500'
+}
+
+function taskStatusIcon(status: string) {
+  if (status === 'running') return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+  if (status === 'done') return <CheckCircle2 className="h-4 w-4 text-green-600" />
+  if (status === 'failed' || status === 'blocked')
+    return <XCircle className="h-4 w-4 text-red-600" />
+  return <Clock3 className="h-4 w-4 text-neutral-400" />
+}
+
+const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs, activity }) => {
+  const selectAgentTab = useChatStore((state) => state.selectAgentTab)
+
+  if (!taskBoard) {
+    return (
+      <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
+        <div className="flex items-start gap-3">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
+            <Loader2 className="h-4 w-4 animate-spin" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-neutral-900">
+                {activity?.agentName ?? 'Orchestrator'} 正在规划
+              </span>
+              <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-xs text-blue-700">
+                等待任务拆解
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-neutral-600">
+              正在调用模型分析目标、成员能力和任务依赖。计划生成后会在这里展开任务、成员状态和子对话入口。
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const tasks = taskBoard.tasks
+  const runningTasks = tasks.filter((task) => task.status === 'running')
+  const doneCount = tasks.filter((task) => task.status === 'done').length
+  const failedCount = tasks.filter(
+    (task) => task.status === 'failed' || task.status === 'blocked',
+  ).length
+  const artifactCount = tasks.reduce(
+    (total, task) => total + (task.artifactCount ?? task.artifacts?.length ?? 0),
+    0,
+  )
+  const completedLike =
+    doneCount + failedCount + tasks.filter((task) => task.status === 'cancelled').length
+  const progress = tasks.length > 0 ? Math.round((completedLike / tasks.length) * 100) : 0
+  const visibleTasks = [
+    ...runningTasks,
+    ...tasks.filter((task) => task.status === 'pending'),
+    ...tasks.filter((task) => task.status === 'done'),
+    ...tasks.filter((task) => task.status === 'failed' || task.status === 'blocked'),
+  ].slice(0, 6)
+
+  return (
+    <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-neutral-200 bg-white shadow-sm">
+      <div className="border-b border-neutral-100 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <ListTodo className="h-4 w-4 text-blue-600" />
+              <h3 className="truncate text-sm font-semibold text-neutral-900">
+                {taskBoard.title || '团队任务'}
+              </h3>
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
+                {runStatusLabel[taskBoard.status] ?? taskBoard.status}
+              </span>
+            </div>
+            {taskBoard.goal && (
+              <p className="mt-1 line-clamp-2 text-sm text-neutral-600">{taskBoard.goal}</p>
+            )}
+          </div>
+          <div className="shrink-0 text-right text-xs text-neutral-500">
+            <div>
+              {doneCount}/{tasks.length} 完成
+            </div>
+            <div>{agentTabs.length || tasks.length} 个成员任务</div>
+          </div>
+        </div>
+
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-neutral-100">
+          <div
+            className="h-full rounded-full bg-blue-600 transition-all duration-500"
+            style={{ width: `${Math.max(4, progress)}%` }}
+          />
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          <span className="rounded-full border border-neutral-200 px-2 py-1 text-neutral-600">
+            {runningTasks.length} 执行中
+          </span>
+          <span className="rounded-full border border-green-200 bg-green-50 px-2 py-1 text-green-700">
+            {doneCount} 已完成
+          </span>
+          {failedCount > 0 && (
+            <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-red-700">
+              {failedCount} 异常
+            </span>
+          )}
+          <span className="rounded-full border border-neutral-200 px-2 py-1 text-neutral-600">
+            {artifactCount} 个产物
+          </span>
+        </div>
+      </div>
+
+      <div className="divide-y divide-neutral-100">
+        {visibleTasks.map((task) => {
+          const tab = agentTabs.find((item) => item.taskId === task.id)
+          const canOpenChild = Boolean(tab?.childSessionId || task.childSessionId)
+          const artifacts = task.artifactCount ?? task.artifacts?.length ?? 0
+          return (
+            <div key={task.id} className="flex items-start gap-3 p-3">
+              <div className="mt-0.5">{taskStatusIcon(task.status)}</div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-sm font-medium text-neutral-800">
+                    {task.title}
+                  </span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[11px] ${taskStatusClass(task.status)}`}
+                  >
+                    {taskStatusLabel[task.status] ?? task.status}
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                  <span>{task.agentName || 'Agent'}</span>
+                  {task.progressStatus && <span className="truncate">{task.progressStatus}</span>}
+                  {artifacts > 0 && (
+                    <span className="inline-flex items-center gap-1 text-neutral-600">
+                      <FileText className="h-3.5 w-3.5" />
+                      {artifacts} 个产物
+                    </span>
+                  )}
+                </div>
+                {task.outputSummary && (
+                  <p className="mt-1 line-clamp-2 text-xs text-neutral-600">{task.outputSummary}</p>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={!canOpenChild}
+                onClick={() => canOpenChild && selectAgentTab(task.id)}
+                className={cn(
+                  'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition',
+                  canOpenChild
+                    ? 'border-neutral-200 bg-white text-neutral-700 hover:border-blue-200 hover:text-blue-700'
+                    : 'cursor-not-allowed border-neutral-100 bg-neutral-50 text-neutral-400',
+                )}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                子对话
+              </button>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -3161,7 +3373,7 @@ const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
       </div>
       <div className="mt-4 text-sm font-semibold text-neutral-950">{item.title}</div>
       <div className="mt-2 text-xs leading-5 text-neutral-500">
-        {item.description ?? '这个产物会在右侧预览栏保持上下文，后续可接入更完整的图形化查看器。'}
+        {item.description ?? '这个产物当前显示结构化摘要和关联信息。'}
       </div>
     </div>
   </div>
@@ -3916,29 +4128,33 @@ const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
 
 const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> }> = ({
   artifact,
-}) => (
-  <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2">
-    <div className="flex items-center gap-2">
-      <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] leading-6 text-neutral-800" title={artifact.path}>
-          {artifact.path}
+}) => {
+  const item = previewItemFromArtifact(artifact)
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2">
+      <div className="flex items-center gap-2">
+        <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] leading-6 text-neutral-800" title={artifact.path}>
+            {artifact.path}
+          </div>
+          <div className="mt-0.5 text-xs text-neutral-400">
+            {artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}
+          </div>
         </div>
-        <div className="mt-0.5 text-xs text-neutral-400">
-          {artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}
-        </div>
+        <button
+          type="button"
+          onClick={() => requestArtifactPreview(item)}
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
+          title={previewActionLabel(item)}
+        >
+          {previewActionIcon(item)}
+          {previewActionLabel(item)}
+        </button>
       </div>
-      <button
-        type="button"
-        onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
-        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
-      >
-        <Monitor className="h-3.5 w-3.5" />
-        预览
-      </button>
     </div>
-  </div>
-)
+  )
+}
 
 const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> }> = ({
   artifact,
@@ -3979,8 +4195,8 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
           onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
           className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
         >
-          <Monitor className="h-3.5 w-3.5" />
-          在右侧预览
+          <GitBranch className="h-3.5 w-3.5" />
+          查看 Diff
         </button>
       </div>
       {open && <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" />}
@@ -4074,7 +4290,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
           type="button"
           onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
           className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
-          title="右侧预览"
+          title="预览网页"
         >
           <Monitor className="h-3.5 w-3.5" />
         </button>
@@ -4120,7 +4336,7 @@ const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy'
           type="button"
           onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
           className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100"
-          title="右侧预览"
+          title="预览部署"
         >
           <Monitor className="h-3.5 w-3.5" />
         </button>
@@ -4153,9 +4369,9 @@ const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workf
         type="button"
         onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
         className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-indigo-500 hover:bg-indigo-50"
-        title="右侧预览"
+        title="查看流程"
       >
-        <Monitor className="h-3.5 w-3.5" />
+        <GitBranch className="h-3.5 w-3.5" />
       </button>
     </div>
     <div className="border-t border-indigo-100 bg-indigo-50/40 px-3 py-3">
@@ -4311,15 +4527,31 @@ function previewKindLabel(item: ArtifactPreviewItem) {
   return '文件预览'
 }
 
+function previewActionLabel(item: ArtifactPreviewItem) {
+  if (item.kind === 'web') return '预览网页'
+  if (item.kind === 'deploy') return '预览部署'
+  if (item.kind === 'image') return '查看图片'
+  if (item.kind === 'diff') return '查看 Diff'
+  if (item.kind === 'workflow') return '查看流程'
+  return '查看文件'
+}
+
+function previewActionIcon(item: ArtifactPreviewItem) {
+  if (item.kind === 'web' || item.kind === 'deploy') return <Monitor className="h-3.5 w-3.5" />
+  if (item.kind === 'image') return <ImagePlus className="h-3.5 w-3.5" />
+  if (item.kind === 'diff' || item.kind === 'workflow') return <GitBranch className="h-3.5 w-3.5" />
+  return <FileText className="h-3.5 w-3.5" />
+}
+
 function previewFileHint(item: ArtifactPreviewItem) {
   const lower = (item.mimeType || item.path || item.title).toLowerCase()
   if (/\.(docx?|pptx?|xlsx?|pdf)$/.test(lower)) {
-    return '文档类产物会在这里显示可读预览。当前先保留文件信息，后续接入文档渲染器即可直接翻页查看。'
+    return '文档类产物当前展示文件信息，可从产物卡打开文件查看。'
   }
   if (/\.(html?|svg)$/.test(lower)) {
     return '这个文件可以作为网页预览打开。若 Agent 提供 URL，会自动切换为内嵌网页视图。'
   }
-  return '这个产物暂无可嵌入的预览地址，先展示文件信息和上下文。'
+  return '这个产物当前展示文件信息，可从产物卡打开文件查看。'
 }
 
 function previewIcon(item: ArtifactPreviewItem) {
@@ -4457,35 +4689,19 @@ function TaskBoardCard({ data }: { data: any }) {
   const liveTaskBoard = useChatStore((s) => s.taskBoard)
   const taskBoard = liveTaskBoard?.runId === data?.runId ? liveTaskBoard : data
 
-  if (!taskBoard) {
-    return (
-      <div className="my-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
-        <div className="flex items-center gap-2">
-          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-          <span className="text-sm text-gray-500">正在生成执行计划...</span>
+  return (
+    <div className="not-prose my-3 rounded-lg border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-900">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
+          <ListTodo className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold">{taskBoard?.title || '团队执行计划已生成'}</div>
+          <p className="mt-0.5 text-xs leading-5 text-blue-700">
+            任务状态、成员对话和产物统一在右侧任务看板与左侧成员栏查看，这里不再重复展示旧任务卡片。
+          </p>
         </div>
       </div>
-    )
-  }
-
-  return (
-    <div className="my-3 border border-gray-200 rounded-xl overflow-hidden max-h-[600px]">
-      <TaskBoard
-        data={taskBoard}
-        onCancel={() => {
-          fetch(`/api/orchestrator-runs/${taskBoard.runId}/cancel`, { method: 'POST' }).catch(
-            console.error,
-          )
-        }}
-        onRetryFailed={() => {
-          const failedTasks = taskBoard.tasks.filter((t: any) => t.status === 'failed')
-          for (const task of failedTasks) {
-            fetch(`/api/orchestrator-runs/${taskBoard.runId}/retry-task/${task.id}`, {
-              method: 'POST',
-            }).catch(console.error)
-          }
-        }}
-      />
     </div>
   )
 }
@@ -4576,7 +4792,9 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
   const senderName =
     sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
       ? ((sourceMessage.metadata as Record<string, unknown>).agentName as string | undefined)
-      : undefined
+      : messageId === streamingMessage?.id
+        ? streamingMessage.agentName
+        : undefined
   const senderAgent = workspaceAgents.find(
     (a) => a.id === senderId || (senderName && a.name.toLowerCase() === senderName.toLowerCase()),
   )

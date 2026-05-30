@@ -39,7 +39,7 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     )
 
     return c.json({
-      items: list.map(normalizeRunRow),
+      items: await Promise.all(list.map(async (row) => normalizeRunRow(row, await loadRunTasks(row.id)))),
     })
   })
   .get('/:id', async (c) => {
@@ -71,7 +71,7 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     )
 
     if (!run) throw new HTTPException(404, { message: 'Run not found' })
-    return c.json(normalizeRunRow(run))
+    return c.json(normalizeRunRow(run, await loadRunTasks(id)))
   })
   // Cancel a running orchestrator run and mark unfinished tasks as cancelled
   .post('/:id/cancel', async (c) => {
@@ -337,11 +337,47 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ ok: true, item: updated[idx] })
   })
 
-function normalizeRunRow<T extends { sessionTitle: string | null; conflictReport?: unknown }>(row: T) {
+async function loadRunTasks(runId: string) {
+  return tableSafe(
+    db
+      .select({
+        id: workspaceTasks.id,
+        workspaceId: workspaceTasks.workspaceId,
+        agentId: workspaceTasks.agentId,
+        title: workspaceTasks.title,
+        description: workspaceTasks.description,
+        status: workspaceTasks.status,
+        sessionId: workspaceTasks.sessionId,
+        orderIdx: workspaceTasks.orderIdx,
+        runId: workspaceTasks.runId,
+        phaseId: workspaceTasks.phaseId,
+        dependencies: workspaceTasks.dependencies,
+        artifacts: workspaceTasks.artifacts,
+        progressPercent: workspaceTasks.progressPercent,
+        progressStatus: workspaceTasks.progressStatus,
+        startedAt: workspaceTasks.startedAt,
+        completedAt: workspaceTasks.completedAt,
+        errorLog: workspaceTasks.errorLog,
+      })
+      .from(workspaceTasks)
+      .where(eq(workspaceTasks.runId, runId))
+      .orderBy(asc(workspaceTasks.orderIdx), asc(workspaceTasks.createdAt)),
+    [],
+  )
+}
+
+function normalizeRunRow<T extends { sessionTitle: string | null; conflictReport?: unknown }>(
+  row: T,
+  tasks: Awaited<ReturnType<typeof loadRunTasks>> = [],
+) {
   return {
     ...row,
     sessionTitle: row.sessionTitle ?? 'Deleted session',
     conflictReport: Array.isArray(row.conflictReport) ? row.conflictReport : [],
+    tasks: tasks.map((task) => ({
+      ...task,
+      childSessionId: task.sessionId ?? null,
+    })),
   }
 }
 

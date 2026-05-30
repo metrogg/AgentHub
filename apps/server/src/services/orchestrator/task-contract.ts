@@ -13,7 +13,7 @@ export interface TaskContractResult {
 }
 
 export function validateTaskOutputContract(params: {
-  task: Pick<ExecutionTask, 'id' | 'outputContract'>
+  task: Pick<ExecutionTask, 'id' | 'outputContract' | 'taskType'>
   artifacts: Array<Record<string, unknown>>
   writtenBlackboardKeys?: string[]
 }): TaskContractResult {
@@ -68,6 +68,7 @@ export function validateTaskOutputContract(params: {
       const filePath = artifactPath(artifact)
       if (!filePath) continue
       const normalized = normalizePath(filePath)
+      if (isSafeRelativeArtifactPath(filePath) && !shouldEnforceAllowedPath(params.task, artifact)) continue
       if (!allowedPaths.some((pattern) => matchPathPattern(normalized, pattern))) {
         violations.push({
           type: 'path_not_allowed',
@@ -98,6 +99,22 @@ function normalizePathPattern(pattern: string): string {
 
 function normalizePath(value: string): string {
   return value.trim().replace(/\\/g, '/').replace(/^\.?\//, '')
+}
+
+function isSafeRelativeArtifactPath(value: string): boolean {
+  const raw = value.trim()
+  if (!raw) return false
+  if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('/') || raw.startsWith('\\')) return false
+  const segments = raw.replace(/\\/g, '/').split('/')
+  return segments.every((segment) => segment && segment !== '.' && segment !== '..')
+}
+
+function shouldEnforceAllowedPath(
+  task: Pick<ExecutionTask, 'taskType'>,
+  artifact: Record<string, unknown>,
+): boolean {
+  const strictTaskTypes = new Set(['code', 'test', 'verify'])
+  return artifactKind(artifact) === 'diff' || Boolean(task.taskType && strictTaskTypes.has(task.taskType))
 }
 
 function matchPathPattern(filePath: string, pattern: string): boolean {

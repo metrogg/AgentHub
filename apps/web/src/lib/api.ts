@@ -755,6 +755,28 @@ export interface OrchestratorRunListItem {
   updatedAt: string
   workspaceName: string
   sessionTitle: string
+  tasks?: OrchestratorRunTaskSnapshot[]
+}
+
+export interface OrchestratorRunTaskSnapshot {
+  id: string
+  workspaceId: string
+  agentId: string | null
+  title: string
+  description: string
+  status: TaskStatus
+  sessionId: string | null
+  childSessionId: string | null
+  orderIdx: number
+  runId: string | null
+  phaseId: string | null
+  dependencies: string[]
+  artifacts: unknown[]
+  progressPercent: number | null
+  progressStatus: string | null
+  startedAt: string | null
+  completedAt: string | null
+  errorLog: string | null
 }
 
 export interface ExecutionLog {
@@ -786,6 +808,21 @@ export interface OrchestratorRunEvent {
   payload: Record<string, unknown>
   severity: OrchestratorRunEventSeverity
   createdAt: string
+}
+
+export interface AgUiRunEvent {
+  type: string
+  name?: string
+  value?: Record<string, unknown>
+  runId?: string
+  threadId?: string
+  parentRunId?: string
+  stepName?: string
+  message?: string
+  code?: string
+  result?: Record<string, unknown>
+  outcome?: Record<string, unknown>
+  timestamp?: number
 }
 
 // BlackboardSchemaType imported from @agenthub/shared
@@ -849,10 +886,7 @@ export {
   AppErrorCodes,
 } from '@agenthub/shared'
 
-export type {
-  AgentRoleType,
-  AgentRelationType,
-} from '@agenthub/shared'
+export type { AgentRoleType, AgentRelationType } from '@agenthub/shared'
 
 export const api = {
   // Sessions
@@ -967,10 +1001,13 @@ export const api = {
       body: JSON.stringify(data),
     }),
   resetAllApplicationData: (confirm = 'RESET_AGENTHUB_DATA') =>
-    request<{ success: boolean; message: string; preserved: string[] }>('/settings/reset-all-data', {
-      method: 'POST',
-      body: JSON.stringify({ confirm }),
-    }),
+    request<{ success: boolean; message: string; preserved: string[] }>(
+      '/settings/reset-all-data',
+      {
+        method: 'POST',
+        body: JSON.stringify({ confirm }),
+      },
+    ),
   getRuntimeInfo: () =>
     request<{
       git: { runtime: string; path: string; ok: boolean; message: string }
@@ -979,8 +1016,7 @@ export const api = {
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
   startMobilePairing: () =>
     request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
-  getMobileConnectivity: () =>
-    request<MobileConnectivityStatus>('/mobile/connectivity'),
+  getMobileConnectivity: () => request<MobileConnectivityStatus>('/mobile/connectivity'),
   openMobileFirewall: () =>
     request<MobileFirewallAction>('/mobile/firewall/open', { method: 'POST', timeout: 12_000 }),
   getStarOfficeStatus: () => request<StarOfficeStatus>('/office/status'),
@@ -1084,10 +1120,11 @@ export const api = {
     name?: string
     projectPath?: string | null
   }) =>
-    request<{ workspace: Workspace; agents: WorkspaceAgent[]; relations: WorkspaceAgentRelation[] }>(
-      '/workspaces/create-from-template',
-      { method: 'POST', body: JSON.stringify(data) },
-    ),
+    request<{
+      workspace: Workspace
+      agents: WorkspaceAgent[]
+      relations: WorkspaceAgentRelation[]
+    }>('/workspaces/create-from-template', { method: 'POST', body: JSON.stringify(data) }),
   openWorkspaceFolder: (projectPath?: string | null) =>
     request<WorkspaceFolderOpenResult>('/workspaces/open-folder', {
       method: 'POST',
@@ -1211,6 +1248,8 @@ export const api = {
     }),
   getOrchestratorRunEvents: (id: string) =>
     request<{ items: OrchestratorRunEvent[] }>(`/orchestrator-runs/${id}/events`),
+  getAgUiRunEvents: (id: string) =>
+    request<{ items: AgUiRunEvent[] }>(`/protocols/ag-ui/runs/${id}/events`),
   getOrchestratorRunBlackboard: (id: string, schemaType?: BlackboardSchemaType) =>
     request<{ items: TypedBlackboardEntry[] }>(
       `/orchestrator-runs/${id}/blackboard${schemaType ? `?schemaType=${encodeURIComponent(schemaType)}` : ''}`,

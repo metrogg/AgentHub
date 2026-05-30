@@ -79,3 +79,11 @@ logs/
 # Android
 local.properties
 captures/
+
+# AI Tools (IDE internal)
+.trae/
+.workbuddy/
+
+# Browser automation / Playwright output
+output/
+SCRIPT
