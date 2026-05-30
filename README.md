@@ -1,222 +1,156 @@
 # AgentHub
 
-> 多 Agent 协作平台，本地桌面工作台，字节跳动 AI 全栈挑战赛参赛作品。
+AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent 私聊，也可以在群聊中交给 Orchestrator 自动拆解任务、调度多个 Agent、收集产物并汇总结果。
 
-AgentHub 是一个 IM 式多 Agent 协作平台。用户可以与单个 Agent 单聊，也可以在工作区群聊中 `@Agent` 或 `@orchestrator`，由 Orchestrator 自动拆解任务、调度多个 Agent、汇总结果，并把代码 diff、文件、网页预览、部署状态等产物内联展示在聊天流中。
+当前项目处于快速迭代阶段，优先目标是跑通通用的“群聊主线 + 多 Agent 任务子对话 + 本地工作目录 + 产物交接”闭环。
 
-项目当前处于快速迭代阶段，核心目标是跑通“本地多 Agent 协作 + 桌面客户端 + 项目工作区 + Code Agent 产物闭环”。
+## 核心体验
 
-## 核心特性
+- **Agent 私聊**：用户与单个 Agent 一对一对话。
+- **Agent 群聊**：用户在群聊里提出目标，Orchestrator 负责理解、规划、分工和总结。
+- **任务子对话**：每个成员在自己的子对话里真实接收任务并执行，主群聊只展示进度和汇报。
+- **动态任务 DAG**：由模型生成计划，按依赖顺序执行，不使用固定场景模板。
+- **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI。
+- **工作目录与 handoff**：每个 Agent 有自己的工作目录，上游产物通过 `.agenthub/handoff` 交给下游。
+- **产物可见**：文件、网页、diff、诊断产物会进入消息 metadata 和任务看板。
 
-- **单聊 Direct**：每个 Agent 都是一个聊天对象，支持 LLM、Code Agent、原生工具运行时。
-- **群聊 Group**：Workspace 级别 Agent Group，支持 `@Agent名` 指定回复对象。
-- **Orchestrator 调度**：自动生成任务 DAG，按依赖层级调度，支持失败降级、结果合成和风险提示。
-- **Code Agent 接入**：统一适配 Codex、Claude Code、OpenCode CLI，展示过程日志、命令记录、文件变更和产物卡片。
-- **Git 分支隔离**：非 read-only 任务可切出独立分支，提取 diff，并为多 Agent 变更提供冲突检测基础。
-- **产物卡片**：支持 diff、preview、file、deploy 等 artifact 数据结构，便于在聊天流中预览和操作。
-- **办公室可视化**：Office 页面用于观察工作区中 Agent 的状态、活动和任务流转。
-- **Skills 市场**：支持 SkillHub 来源搜索、详情查看、安装，并在输入 `/` 时调出已安装技能。
-- **桌面客户端**：基于 Tauri v2，启动时自动拉起本机 server sidecar，并使用 App Data 保存数据库、配置和日志。
+## 当前协作路径
+
+```text
+用户在群聊发起任务
+  -> Orchestrator 判断复杂度
+  -> 复杂任务生成动态 DAG 和任务看板
+  -> 用户分发执行
+  -> 为每个任务创建 orchestrator-task 子对话
+  -> Agent 在子对话里执行并输出
+  -> 产出写入黑板和 handoff 目录
+  -> 主群聊展示成员汇报、产物和最终总结
+```
+
+左侧会话树规则：
+
+- “Agent 私聊”只显示真正的全局私聊。
+- “群聊”显示主群聊。
+- 展开群聊后只显示真实任务子对话。
+- 旧的 `workspace-agent-child` 和历史占位入口不再作为当前 UI。
+
+更详细的当前架构见 [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)。
 
 ## 技术栈
 
-| 层面 | 技术选型 |
+| 层面 | 技术 |
 | --- | --- |
 | 运行时 | Bun >= 1.1.0 |
 | Monorepo | Bun workspaces |
 | 后端 | Hono + Bun.serve + WebSocket |
-| 前端 | React 18 + Vite + Tailwind CSS + Zustand + Radix UI + assistant-ui |
+| 前端 | React 18 + Vite + TypeScript |
+| UI | Tailwind CSS + Radix UI + assistant-ui |
+| 状态 | Zustand |
 | 数据库 | SQLite + Drizzle ORM |
-| LLM | OpenAI-compatible + Anthropic 流式客户端 |
-| 桌面端 | Tauri v2 + Rust + Bun compiled sidecar |
+| LLM | OpenAI-compatible + Anthropic-compatible streaming client |
+| Code Agent | Codex CLI / Claude Code / OpenCode / Gemini CLI |
 
 ## 项目结构
 
 ```text
 apps/
-  web/        React 前端
-  server/     Hono API、WebSocket、Agent runner、静态资源托管
-  desktop/    Tauri 桌面壳和 sidecar 打包脚本
+  server/
+    src/
+      routes/                 HTTP API
+      services/
+        orchestrator/         Orchestrator、Planner、Scheduler、Synthesizer
+        execution/            任务执行、工作目录、执行信封
+        runtime/              AgentRuntime 统一接口
+        workspace/            工作区和任务子会话管理
+        code-agent-adapter.ts CLI 适配
+        blackboard.ts         Agent 间黑板
+  web/
+    src/
+      components/chat/        Thread、TaskBoard、SessionList
+      stores/                 Zustand store
+      lib/                    API、WebSocket、会话树
 packages/
-  db/         SQLite schema、数据库初始化和迁移
-  shared/     共享类型和工具
-tests/        冒烟测试
-docs/         产品文档、设计记录和比赛材料
+  db/                         Drizzle schema 和 SQLite 连接
+  shared/                     共享 Zod schema、常量、类型
+docs/                         产品、架构、调研和使用说明
+tests/                        bun:test 测试
 ```
 
-## 本地开发
-
-安装依赖：
+## 快速开始
 
 ```bash
 bun install
-```
-
-复制并填写环境变量：
-
-```bash
-cp .env.example .env
-```
-
-执行数据库迁移：
-
-```bash
-bun run db:migrate
-```
-
-启动开发服务：
-
-```bash
 bun run dev
 ```
 
-也可以分别启动：
+开发服务会同时启动：
+
+- Server: 默认从 `http://localhost:8000` 开始，端口占用时自动递增。
+- Web: Vite 默认从 `http://localhost:5173` 开始，端口占用时自动递增。
+
+单独启动：
 
 ```bash
 bun run dev:server
 bun run dev:web
 ```
 
-默认地址：
-
-```text
-Server: http://localhost:8000
-Web:    http://localhost:5173
-```
-
-## 常用命令
+检查：
 
 ```bash
-bun run build
 bun run typecheck
-bun run lint
+bun --filter @agenthub/server typecheck
+bun --filter @agenthub/web typecheck
 bun test
-bun run db:generate
-bun run db:migrate
-bun run db:studio
 ```
-
-## 桌面客户端
-
-桌面端会把 `apps/server` 编译成 sidecar，并把 `apps/web/dist` 复制到 Tauri resources。启动客户端后，Tauri 会：
-
-1. 显示启动页。
-2. 创建 App Data、config、logs、data 目录。
-3. 自动寻找 `8000-8079` 内可用端口。
-4. 启动 `agenthub-server.exe`。
-5. 等待 `/health` 就绪。
-6. 加载本机 Web UI。
-
-准备 sidecar：
-
-```bash
-bun --filter @agenthub/desktop prepare:sidecar
-```
-
-桌面开发：
-
-```bash
-bun run dev:desktop
-```
-
-构建安装包：
-
-```bash
-bun run build:desktop
-```
-
-构建完成后会生成 MSI 和 NSIS 安装包：
-
-```text
-apps/desktop/src-tauri/target/release/bundle/msi/
-apps/desktop/src-tauri/target/release/bundle/nsis/
-```
-
-桌面端数据路径示例：
-
-```text
-C:\Users\<you>\AppData\Roaming\com.agenthub.desktop\data
-C:\Users\<you>\AppData\Roaming\com.agenthub.desktop\config
-C:\Users\<you>\AppData\Roaming\com.agenthub.desktop\logs
-```
-
-## 架构亮点
-
-```text
-API / Routes (Hono)
-  -> Orchestrator Engine (DAG 调度、失败降级、冲突解决、LLM 聚合)
-  -> Agent Runtime (LLM / Code Agent / Native Tool)
-  -> Infrastructure (LLM Client、Tool Registry、Git Branch Manager)
-```
-
-### Orchestrator
-
-- 生成任务图并进行拓扑排序。
-- 支持并行调度和失败降级。
-- 合并多个 Agent 的子会话结果。
-- 使用 LLM 汇总贡献、去重、标注风险和下一步。
-
-### Git 分支隔离
-
-每个非 read-only Agent 任务可在独立分支中执行：
-
-1. 保护用户当前工作区。
-2. 创建 `agenthub/{runId}/{agentKey}/{taskId}` 分支。
-3. Agent 在分支上执行代码变更。
-4. 执行完毕后提取 diff 作为 artifact。
-5. 冲突检测后由用户确认合并或丢弃。
-
-### 沙箱策略
-
-| 策略 | 行为 |
-| --- | --- |
-| `read-only` | 不切分支，Agent 只读取文件 |
-| `workspace-write` | 切独立 Git 分支，执行后提取 diff |
-| `danger-full-access` | 允许更多操作，但仍建议配合分支隔离 |
 
 ## 环境变量
 
-| 变量 | 说明 | 默认值 |
-| --- | --- | --- |
-| `DATABASE_URL` | SQLite 文件路径 | `./storage/agenthub.db` |
-| `PORT` | 服务端端口 | `8000` |
-| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 通用 LLM 配置 | - |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | 供应商专用 Key | - |
-| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | Code Agent 执行开关 | `false` |
-| `ENABLE_LOCAL_CLI_PROBES` | 探测本机 CLI 工具 | `true` |
-| `AGENTHUB_APP_DATA_DIR` | 桌面端 App Data 目录 | - |
-| `AGENTHUB_CONFIG_DIR` | 桌面端配置目录 | - |
-| `AGENTHUB_LOG_DIR` | 桌面端日志目录 | - |
+复制 `.env.example` 到 `.env`。常用项：
 
-## 测试
+| 变量 | 说明 |
+| --- | --- |
+| `DATABASE_URL` | SQLite 文件路径，默认 `./storage/agenthub.db` |
+| `PORT` | Server 起始端口，默认 `8000` |
+| `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 默认模型配置 |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI-compatible 配置 |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Anthropic 配置 |
+| `ENABLE_LOCAL_CLI_PROBES` | 是否探测本机 CLI |
+| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | 是否允许 Code Agent 执行 |
+| `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | Code Agent 超时，建议开发期 `600000` |
+| `AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS` | 是否启用模型动态生成快捷问题 |
 
-```bash
-bun test
+## 工作区与产物
+
+如果用户选择了本地工作区，AgentHub 会在该目录下写入：
+
+```text
+.agenthub/
+  workdirs/{runId}/{agentName}/{taskId}/   每个 Agent 的执行目录
+  handoff/{runId}/{taskId}/                可交接给下游的上游产物
 ```
 
-覆盖方向包括：
+如果没有选择工作区，系统会自动创建一个可写工作区。后续可以在设置里调整默认工作区存储路径。
 
-- 健康检查、会话和消息 CRUD
-- 模型连接测试
-- Workspace 任务派发与失败降级
-- Agent 草案确认
-- TaskGraph DAG 拓扑排序与环检测
-- ConflictResolver 多 Agent 文件冲突检测
-- GitBranchManager 分支生命周期
+当前默认不再把 Git 分支隔离作为主路径。Git 相关能力保留为后续增强和冲突分析基础，但当前设计优先保证本地工作目录可执行、可查看、可交接。
 
-## 开发约定
+## 数据清理
 
-- 全项目 ESM。
-- TypeScript 开启 strict / isolatedModules。
-- 代码格式以 Prettier 为准。
-- 用户界面默认中文，关键类型和协议字段保留英文命名。
+开发阶段可以使用应用内“清除所有数据”能力恢复到近似首次启动状态。执行前请确认不需要保留旧会话、旧任务和旧产物索引。
 
-## 比赛信息
+## 重要文档
 
-- 赛事：字节跳动 AI 全栈挑战赛
-- 赛道：多 Agent 协作平台
-- 截止时间：2026 年 6 月 10 日
+- [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)
+- [docs/使用指南.md](docs/使用指南.md)
+- [docs/AgentHub-项目全景与多Agent协作重构指南.md](docs/AgentHub-项目全景与多Agent协作重构指南.md)
+- [docs/多Agent协作设计调研与优化方案.md](docs/多Agent协作设计调研与优化方案.md)
+- [docs/一些资料/minimax一个agent不够.md](docs/一些资料/minimax一个agent不够.md)
+- [docs/一些资料/讯飞agent_team.md](docs/一些资料/讯飞agent_team.md)
 
-## License
+## 开发注意
 
-MIT
+- 不要恢复静态快捷提示词或固定任务模板，用户明确要求动态模型生成。
+- 不要恢复旧的 `workspace-agent-child` 群聊入口。
+- 不要把“任务失败但已有部分产物”显示成完全无产物。
+- 不要让下游 Agent 假设上游相对路径存在；优先使用黑板中的 `handoffPath`。
+- UI 改动要保持主群聊、私聊、任务子对话的边界清晰。

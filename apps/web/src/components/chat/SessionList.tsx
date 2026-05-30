@@ -426,20 +426,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     }
   }
 
-  async function openWorkspaceAgentChildSession(workspaceId: string, agent: WorkspaceAgent) {
-    if (openingAgentId) return
-    setOpeningAgentId(agent.id)
-    try {
-      const { session } = await api.openWorkspaceAgentSession(workspaceId, agent.id)
-      await fetchSessions()
-      await openExistingSession(session)
-    } catch (error) {
-      showHint(friendlyErrorMessage(error, `打开 ${agent.name} 子会话失败`))
-    } finally {
-      setOpeningAgentId(null)
-    }
-  }
-
   return (
     <>
       <aside className="agenthub-session-sidebar flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
@@ -730,18 +716,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                   isGroupParent && workspaceId
                     ? groupSessionAgents(item.parent, groupWorkspaceAgents[workspaceId] ?? [])
                     : []
-                const stableChildAgentIds = new Set(
-                  item.children
-                    .filter(isStableAgentChildSession)
-                    .map((child) => child.workspaceAgentId)
-                    .filter((id): id is string => Boolean(id)),
-                )
-                const missingAgentChildren = isGroupParent
-                  ? workspaceAgents.filter((agent) => !stableChildAgentIds.has(agent.id))
-                  : []
-                const hasChildren = item.children.length > 0 || missingAgentChildren.length > 0
+                const visibleChildren = item.children.filter(isStableAgentChildSession)
+                const hasChildren = visibleChildren.length > 0
                 const expanded = Boolean(workspaceId && expandedWorkspaces.has(workspaceId))
-                const childActive = item.children.some((child) => child.id === sessionId)
+                const childActive = visibleChildren.some((child) => child.id === sessionId)
                 const active = sessionId === item.parent.id
                 const pinned = pinnedIds.has(item.parent.id)
                 const archived = archivedIds.has(item.parent.id)
@@ -749,7 +727,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                 const memberCount = isGroupParent
                   ? groupMemberCount(
                       item.parent,
-                      item.children.length,
+                      visibleChildren.length,
                       groupMemberCounts[workspaceId ?? ''],
                     )
                   : 0
@@ -883,7 +861,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                           toggleArchive(
                             event,
                             item.parent,
-                            item.children.map((child) => child.id),
+                            visibleChildren.map((child) => child.id),
                           )
                         }
                         className={cn(
@@ -917,7 +895,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
 
                     {hasChildren && expanded && (
                       <ul className="ml-4 space-y-1 border-l border-neutral-200 pl-2">
-                        {item.children.map((child) => {
+                        {visibleChildren.map((child) => {
                           const childAgent = workspaceAgents.find(
                             (agent) => agent.id === child.workspaceAgentId,
                           )
@@ -1022,48 +1000,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                                 title={t('删除')}
                               >
                                 <Trash2 className="h-3 w-3" />
-                              </button>
-                            </li>
-                          )
-                        })}
-                        {missingAgentChildren.map((agent) => {
-                          const opening = openingAgentId === agent.id
-                          return (
-                            <li
-                              key={`agent-${agent.id}`}
-                              onClick={() => {
-                                if (workspaceId)
-                                  void openWorkspaceAgentChildSession(workspaceId, agent)
-                              }}
-                              className="group/child flex cursor-pointer items-center gap-1 rounded-lg transition hover:bg-[#F7F7F7]"
-                            >
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  if (workspaceId)
-                                    void openWorkspaceAgentChildSession(workspaceId, agent)
-                                }}
-                                disabled={opening}
-                                className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-neutral-500 transition hover:text-neutral-800 disabled:opacity-60"
-                              >
-                                <span
-                                  className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-semibold text-white"
-                                  style={{ background: agent.color }}
-                                >
-                                  {agent.name.slice(0, 1).toUpperCase()}
-                                </span>
-                                <span className="min-w-0 flex-1">
-                                  <span className="block truncate">{agent.name}</span>
-                                  <span className="block truncate text-[10px] text-neutral-400">
-                                    {agent.role || '未开始子会话'}
-                                  </span>
-                                </span>
-                                {opening ? (
-                                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-300" />
-                                ) : (
-                                  <MessageCircle className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
-                                )}
                               </button>
                             </li>
                           )
@@ -1548,7 +1484,11 @@ function filterAgents(agents: SavedAgentConfig[], query: string) {
 function isStableAgentChildSession(session: Session) {
   if (session.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
   const metadata = session.metadata ?? {}
-  return metadata.kind !== 'orchestrator-task' && !metadata.hiddenFromSessionTree
+  return Boolean(
+    metadata.kind === 'orchestrator-task' ||
+      metadata.orchestratorTaskId ||
+      metadata.orchestratorRunId,
+  )
 }
 
 function isPrivateAgentSession(

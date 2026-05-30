@@ -3008,7 +3008,7 @@ function stripReasoningTags(output: string) {
 }
 
 function formatCodeAgentFailure(adapter: CodeAgentAdapter, result: CodeAgentCommandResult) {
-  const friendly = friendlyCodeAgentError(result.output)
+  const friendly = friendlyCodeAgentError(result.output, adapter)
   return [`**${adapter.displayName} 执行失败**`, '', friendly, '', `退出码：${result.code}`].join(
     '\n',
   )
@@ -3095,7 +3095,8 @@ function cleanDiagnosticOutput(output: string) {
   return limitOutput(cleaned, 2000)
 }
 
-function friendlyCodeAgentError(output: string) {
+function friendlyCodeAgentError(output: string, adapter?: CodeAgentAdapter) {
+  const cliName = adapter?.displayName ?? 'Coding Tools'
   if (
     /issue with the selected model|may not exist|Run --model to pick a different model/i.test(
       output,
@@ -3113,34 +3114,34 @@ function friendlyCodeAgentError(output: string) {
     ].join('\n')
   }
   if (/Coding Tools timed out after/i.test(output)) {
-    return 'Coding Tools 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。'
+    return `${cliName} 已启动，但 CLI 在限定时间内没有返回结果，已自动停止。可以稍后重试，或把该 Agent 切到 OpenCode / Claude Code。`
   }
   if (
     /CommandNotFoundException|ObjectNotFound: \(node:String\)|node.*not recognized|无法将.*node|找不到.*node/i.test(
       output,
     )
   ) {
-    return 'OpenCode 已启动，但执行环境里找不到 node 命令。已补充 Windows Path/ComSpec/SystemRoot 等环境变量透传；请重启 dev server 后再试。如果仍失败，请确认本机 Node.js 已安装并在系统 Path 中。'
+    return `${cliName} 已启动，但执行环境里找不到 node 命令。已补充 Windows Path/ComSpec/SystemRoot 等环境变量透传；请重启 dev server 后再试。如果仍失败，请确认本机 Node.js 已安装并在系统 Path 中。`
   }
   if (/invalid function arguments json|string, tool_call_id/i.test(output)) {
     return [
-      'Codex CLI 已启动，但当前模型生成了无效的工具调用参数，供应商接口拒绝了这次请求。',
+      `${cliName} 已启动，但当前模型生成了无效的工具调用参数，供应商接口拒绝了这次请求。`,
       '这通常不是工作区路径问题。建议切换到更兼容 Codex 工具调用的模型，或把这个 Agent 临时改为 OpenCode / Claude Code 执行。',
     ].join('\n')
   }
   if (/401 Unauthorized|Missing bearer|basic authentication/i.test(output)) {
-    return 'Codex CLI 已启动，但供应商鉴权失败。请检查本机 API Key、Base URL 和模型是否匹配。'
+    return `${cliName} 已启动，但供应商鉴权失败。请检查本机 API Key、Base URL 和模型是否匹配。`
   }
   if (/wire_api = "chat" is no longer supported/i.test(output)) {
-    return '当前 Codex CLI 不支持这个 provider 配置里的 wire_api=chat。请使用已降级的 Codex CLI，或切换到支持 Responses 的 OpenAI 端点。'
+    return `当前 ${cliName} 不支持这个 provider 配置里的 wire_api=chat。请使用已降级的 Codex CLI，或切换到支持 Responses 的 OpenAI 端点。`
   }
   if (/model.*not found|does not exist|404|unknown model/i.test(output)) {
-    return 'Codex CLI 已启动，但当前模型或 Base URL 不可用。请检查模型名称和供应商地址。'
+    return `${cliName} 已启动，但当前模型或 Base URL 不可用。请检查模型名称和供应商地址。`
   }
   if (/No such file or directory|cannot find the path|系统找不到指定的路径/i.test(output)) {
-    return 'Coding Tools 已启动，但项目目录不存在。请重新打开或选择正确的工作区文件夹。'
+    return `${cliName} 已启动，但项目目录不存在。请重新打开或选择正确的工作区文件夹。`
   }
-  return 'Coding Tools 已启动，但 CLI 执行过程返回了错误。'
+  return `${cliName} 已启动，但 CLI 执行过程返回了错误。`
 }
 
 function quoteForCmd(value: string) {
