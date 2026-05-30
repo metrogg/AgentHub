@@ -45,8 +45,9 @@ const envSchema = z.object({
   AGENTHUB_SKILLS_ROOT: z.string().optional(),
   AGENTHUB_NATIVE_MAX_TOOL_ROUNDS: z.coerce.number().int().min(1).max(12).default(6),
   AGENTHUB_ENABLE_CODE_AGENT_EXECUTION: envBoolean.default(true),
-  AGENTHUB_CODE_AGENT_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
+  AGENTHUB_CODE_AGENT_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
   AGENTHUB_CODE_AGENT_OUTPUT_LIMIT: z.coerce.number().int().positive().default(100_000),
+  AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS: envBoolean.default(true),
 })
 
 export const env = envSchema.parse(Bun.env)

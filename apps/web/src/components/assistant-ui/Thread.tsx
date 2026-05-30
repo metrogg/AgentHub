@@ -123,7 +123,6 @@ import { TaskBoard } from '@/components/TaskBoard'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
-  fallbackWelcomeQuickPrompts,
   rotateQuickPrompts,
 } from '../chat/QuickPromptBubbles'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
@@ -1243,14 +1242,11 @@ const ThreadWelcomeContent: FC = () => {
       .getWelcomeQuickPrompts(seed)
       .then(({ items }) => {
         if (!cancelled) {
-          const nextPrompts = items.length
-            ? rotateQuickPrompts(items, seed, 10)
-            : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10)
-          setQuickPrompts(nextPrompts)
+          setQuickPrompts(items.length ? rotateQuickPrompts(items, seed, 10) : [])
         }
       })
       .catch(() => {
-        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10))
+        if (!cancelled) setQuickPrompts([])
       })
       .finally(() => {
         if (!cancelled) setQuickPromptsLoading(false)

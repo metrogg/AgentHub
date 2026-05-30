@@ -24,10 +24,11 @@ import { buildAgentProfileWithWorktree } from '../agents/profile-builder'
 import { ensureAgentChildSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST, resolveDefaultWorkDir } from '../execution/agent-execution-envelope'
 import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
+import { env } from '../../env'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
 
-const TASK_TIMEOUT_MS = 300_000
+const TASK_TIMEOUT_MS = env.AGENTHUB_CODE_AGENT_TIMEOUT_MS
 
 interface ChildSessionInfo {
   sessionId: string
@@ -990,6 +991,17 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     })
 
     const taskStartTime = Date.now()
+    const stopHeartbeat = startTaskHeartbeat({
+      runId,
+      groupSessionId,
+      workspaceId,
+      taskId: task.id,
+      agentId: agent.id,
+      agentName: agent.name,
+      taskTitle: task.title,
+      startedAt: taskStartTime,
+      timeoutMs: TASK_TIMEOUT_MS,
+    })
     let lastAgentOutput = ''
     let lastArtifacts: Array<Record<string, unknown>> = []
 
@@ -1025,6 +1037,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         existingUserMessageId: userMsg.id,
         deferCompletionStatus: true,
       })
+      stopHeartbeat()
 
       const output = execResult.output
       const artifacts = execResult.artifacts
@@ -1112,6 +1125,13 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       if (execResult.status === TaskStatus.Failed) {
         throw new Error(execResult.error || 'Agent 执行失败')
       }
+
+      await updateTaskProgress({
+        groupSessionId,
+        taskId: task.id,
+        percent: 95,
+        status: `${agent.name} 正在整理产物与任务摘要。`,
+      })
 
       const signals = parseAgentAutonomySignals(output)
 
@@ -1668,6 +1688,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         artifacts: lastArtifacts,
         error: error?.message || 'Unknown error',
       }
+    } finally {
+      stopHeartbeat()
     }
   }
 
@@ -2357,6 +2379,95 @@ ${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.leng
       payload: { sessionId: groupSessionId, message: summaryMsg },
     })
   }
+}
+
+function startTaskHeartbeat(input: {
+  runId: string
+  groupSessionId: string
+  workspaceId: string
+  taskId: string
+  agentId: string
+  agentName: string
+  taskTitle: string
+  startedAt: number
+  timeoutMs: number
+}) {
+  let stopped = false
+  let lastPersistAt = 0
+
+  const tick = async () => {
+    if (stopped) return
+    const elapsedMs = Date.now() - input.startedAt
+    const percent = Math.min(90, Math.max(3, Math.round((elapsedMs / input.timeoutMs) * 100)))
+    const status = `${input.agentName} 正在执行「${input.taskTitle}」，已运行 ${formatDuration(elapsedMs)} / ${formatDuration(input.timeoutMs)}。`
+
+    broadcastSessionEvent(input.groupSessionId, {
+      type: WsEvent.TaskBoardTaskProgress,
+      payload: {
+        taskId: input.taskId,
+        percent,
+        status,
+        runId: input.runId,
+        agentId: input.agentId,
+        agentName: input.agentName,
+        sessionId: input.groupSessionId,
+      },
+    })
+
+    if (Date.now() - lastPersistAt < 30_000) return
+    lastPersistAt = Date.now()
+    await db
+      .update(workspaceTasks)
+      .set({ progressPercent: percent, progressStatus: status })
+      .where(eq(workspaceTasks.id, input.taskId))
+      .catch((err: any) => {
+        logger.warn({ err: err?.message, taskId: input.taskId }, 'Failed to persist task heartbeat')
+      })
+  }
+
+  tick().catch((err: any) => {
+    logger.warn({ err: err?.message, taskId: input.taskId }, 'Failed to emit task heartbeat')
+  })
+  const timer = setInterval(() => {
+    tick().catch((err: any) => {
+      logger.warn({ err: err?.message, taskId: input.taskId }, 'Failed to emit task heartbeat')
+    })
+  }, 10_000)
+
+  return () => {
+    if (stopped) return
+    stopped = true
+    clearInterval(timer)
+  }
+}
+
+async function updateTaskProgress(input: {
+  groupSessionId: string
+  taskId: string
+  percent: number
+  status: string
+}) {
+  await db
+    .update(workspaceTasks)
+    .set({ progressPercent: input.percent, progressStatus: input.status })
+    .where(eq(workspaceTasks.id, input.taskId))
+  broadcastSessionEvent(input.groupSessionId, {
+    type: WsEvent.TaskBoardTaskProgress,
+    payload: {
+      taskId: input.taskId,
+      percent: input.percent,
+      status: input.status,
+      sessionId: input.groupSessionId,
+    },
+  })
+}
+
+function formatDuration(ms: number) {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes <= 0) return `${seconds}秒`
+  return `${minutes}分${seconds.toString().padStart(2, '0')}秒`
 }
 
 function extractQAResult(results: TaskResult[]): { passed: boolean; critical: number; major: number; minor: number } | undefined {

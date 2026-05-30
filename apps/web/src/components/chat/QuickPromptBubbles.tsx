@@ -10,25 +10,6 @@ const placeholderPrompts: WelcomeQuickPrompt[] = [
   { id: 'placeholder-4', label: '准备好就能开聊', prompt: '' },
 ]
 
-export const fallbackWelcomeQuickPrompts: WelcomeQuickPrompt[] = [
-  { id: 'local-1', label: '帮我拆解一个小工具需求', prompt: '帮我把一个小工具需求拆成可执行的开发步骤，并指出风险点。' },
-  { id: 'local-2', label: '这个项目适合怎么重构', prompt: '请从架构、状态管理和测试三个角度，分析一个项目适合怎样重构。' },
-  { id: 'local-3', label: '解释一下前端构建流程', prompt: '用通俗语言解释前端从源码到上线的构建流程。' },
-  { id: 'local-4', label: '给我一个学习路线', prompt: '请根据我的目标生成一份 7 天学习路线，并每天给一个练习。' },
-  { id: 'local-5', label: '帮我整理会议纪要', prompt: '给我一个清晰的会议纪要模板，包含待办、负责人和截止时间。' },
-  { id: 'local-6', label: '写一封更自然的邮件', prompt: '帮我把一封工作邮件改得更自然、礼貌、简洁。' },
-  { id: 'local-7', label: '最近 AI 开发该关注什么', prompt: '不依赖实时新闻，概括最近 AI 开发者值得关注的长期趋势。' },
-  { id: 'local-8', label: '设计一个轻量小游戏', prompt: '帮我设计一个 10 分钟能开局的轻量小游戏玩法。' },
-  { id: 'local-9', label: '帮我写代码审查清单', prompt: '给我一份适合日常项目的代码审查清单，按优先级排列。' },
-  { id: 'local-10', label: '如何排查接口 500', prompt: '请给我一套排查接口 500 错误的步骤，从日志到数据库逐层检查。' },
-  { id: 'local-11', label: '把想法变成任务卡', prompt: '把一个模糊想法整理成任务卡，包含目标、范围、验收标准。' },
-  { id: 'local-12', label: '解释一个复杂概念', prompt: '请用类比、例子和一句话总结，解释一个复杂技术概念。' },
-  { id: 'local-13', label: '帮我规划今天的开发节奏', prompt: '帮我把今天的开发任务安排成 3 个时间块，并给出每块的验收结果。' },
-  { id: 'local-14', label: '设计一个调试实验', prompt: '针对一个偶发 bug，帮我设计最小可复现和排查实验。' },
-  { id: 'local-15', label: '给我一个产品改版方向', prompt: '从用户路径、信息密度和交互成本三个角度，给一个产品页面改版方向。' },
-  { id: 'local-16', label: '把需求写成 PRD', prompt: '把一个功能想法整理成简短 PRD，包含背景、目标、范围和非目标。' },
-]
-
 export function createQuickPromptSeed(scope: string) {
   const random =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -63,7 +44,7 @@ export function QuickPromptBubbles({
   prompts: WelcomeQuickPrompt[]
 }) {
   const [activeId, setActiveId] = useState<string | null>(null)
-  const displayPrompts = prompts.length ? prompts : loading ? placeholderPrompts : fallbackWelcomeQuickPrompts
+  const displayPrompts = prompts.length ? prompts : loading ? placeholderPrompts : []
   const promptRows = useMemo(
     () => [
       displayPrompts.filter((_, index) => index % 2 === 0),

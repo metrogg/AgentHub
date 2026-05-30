@@ -794,23 +794,17 @@ export function normalizeTaskOutputContract(
     allowedPaths?: unknown
     acceptanceCriteria?: unknown
   }
-  const requiredBlackboardWrites = Array.isArray(item.requiredBlackboardWrites)
-    ? item.requiredBlackboardWrites
-        .map((entry) => {
-          if (!entry || typeof entry !== 'object') return null
-          const candidate = entry as { key?: unknown; schemaType?: unknown }
-          const rawKey = cleanPlanText(candidate.key)
-          // 修复：如果 LLM 生成了包含其他 task ID 的 blackboard key，强制修正为当前 task ID
-          const key = rawKey
-            ? rawKey.replace(/^task_[a-f0-9-]+_output$/, `task_${taskId}_output`)
-            : `task_${taskId}_output`
-          const schemaType = parseBlackboardSchemaType(candidate.schemaType)
-          return schemaType ? { key, schemaType } : null
-        })
-        .filter((entry): entry is TaskOutputContract['requiredBlackboardWrites'][number] =>
-          Boolean(entry),
-        )
-    : []
+  const hasRequiredBlackboardWrites =
+    Array.isArray(item.requiredBlackboardWrites) && item.requiredBlackboardWrites.length > 0
+  const requiredBlackboardWrites: TaskOutputContract['requiredBlackboardWrites'] =
+    hasRequiredBlackboardWrites
+      ? [
+          {
+            key: `task_${taskId}_output`,
+            schemaType: 'task_output',
+          },
+        ]
+      : []
   const requiredArtifacts = arrayOfStrings(item.requiredArtifacts)
   const allowedPaths = arrayOfStrings(item.allowedPaths)
   const acceptanceCriteria = arrayOfStrings(item.acceptanceCriteria)

@@ -38,7 +38,6 @@ import {
   QuickPromptBubbles,
   createQuickPromptSeed,
   rotateQuickPrompts,
-  fallbackWelcomeQuickPrompts,
 } from '../components/chat/QuickPromptBubbles'
 import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
@@ -205,14 +204,11 @@ function Welcome() {
       .getWelcomeQuickPrompts(seed)
       .then(({ items }) => {
         if (!cancelled) {
-          const nextPrompts = items.length
-            ? rotateQuickPrompts(items, seed, 10)
-            : rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10)
-          setQuickPrompts(nextPrompts)
+          setQuickPrompts(items.length ? rotateQuickPrompts(items, seed, 10) : [])
         }
       })
       .catch(() => {
-        if (!cancelled) setQuickPrompts(rotateQuickPrompts(fallbackWelcomeQuickPrompts, seed, 10))
+        if (!cancelled) setQuickPrompts([])
       })
       .finally(() => {
         if (!cancelled) setQuickPromptsLoading(false)

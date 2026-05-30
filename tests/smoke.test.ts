@@ -1089,6 +1089,44 @@ describe('AgentHub smoke tests', () => {
     expect(failArtifact.violations.some((item) => item.type === 'missing_artifact')).toBe(true)
   })
 
+  test('task output contract treats model semantic blackboard keys as advisory', async () => {
+    const { normalizeTaskOutputContract } =
+      await import('../apps/server/src/services/orchestrator/planner')
+    const { validateTaskOutputContract } =
+      await import('../apps/server/src/services/orchestrator/task-contract')
+    const taskId = 'design-task'
+    const outputContract = normalizeTaskOutputContract(
+      {
+        requiredBlackboardWrites: [{ key: 'design_spec', schemaType: 'task_output' }],
+        requiredArtifacts: ['design_document.md'],
+      },
+      taskId,
+    )
+
+    expect(outputContract?.requiredBlackboardWrites).toEqual([
+      { key: 'task_design-task_output', schemaType: 'task_output' },
+    ])
+
+    const result = validateTaskOutputContract({
+      task: {
+        id: taskId,
+        title: 'Design task',
+        description: 'Produce a design document.',
+        agentId: 'agent-1',
+        dependencies: [],
+        maxRetries: 0,
+        outputContract: {
+          requiredBlackboardWrites: [{ key: 'design_spec', schemaType: 'task_output' }],
+          requiredArtifacts: ['design_document.md'],
+        },
+      },
+      artifacts: [{ kind: 'file', filePath: 'design_document.md' }],
+      writtenBlackboardKeys: ['task_design-task_output'],
+    })
+
+    expect(result.status).toBe('passed')
+  })
+
   test('ConflictResolver detects file conflicts across agents', async () => {
     const { ConflictResolver } =
       await import('../apps/server/src/services/orchestrator/conflict-resolver')
