@@ -53,7 +53,6 @@ import {
   Maximize2,
   Minimize2,
   Monitor,
-  MessageSquare,
   MoreHorizontal,
   Paperclip,
   Pencil,
@@ -94,11 +93,7 @@ import {
   type AgentArtifact,
   type ChatAttachment,
   type ModelCatalogItem,
-  type OrchestratorDispatchResult,
-  type OrchestratorPlan,
-  type OrchestratorPlanTask,
   type SkillSummary,
-  type TaskStatus,
   type WelcomeQuickPrompt,
   type Workspace,
   type WorkspaceAgent,
@@ -236,6 +231,12 @@ export const Thread: FC = () => {
   const isAgentDirectSession = sessionKind === 'agent-direct'
   const isWorkspaceChildSession = sessionKind === 'workspace-agent-child'
   const taskBoard = useChatStore((s) => s.taskBoard)
+  const visibleTaskBoard =
+    taskBoard &&
+    taskBoard.sessionId === currentSession?.id &&
+    ['planning', 'running', 'synthesizing'].includes(taskBoard.status)
+      ? taskBoard
+      : null
   const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
   const agentTabs = useChatStore((s) => s.agentTabs)
   const selectAgentTab = useChatStore((s) => s.selectAgentTab)
@@ -287,8 +288,8 @@ export const Thread: FC = () => {
             (isAgentDirectSession || isWorkspaceChildSession) && (
               <AgentChatHeader onToggleDetails={() => setChildDetailsOpen((open) => !open)} />
             )}
-          {isGroupSession && taskBoard && selectedAgentTab === null && (
-            <LeaderViewBanner taskBoard={taskBoard} agentTabs={agentTabs} />
+          {isGroupSession && visibleTaskBoard && selectedAgentTab === null && (
+            <LeaderViewBanner taskBoard={visibleTaskBoard} agentTabs={agentTabs} />
           )}
           <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
             <ThreadWelcome />
@@ -2351,7 +2352,6 @@ const AssistantMessage: FC = () => {
               data: {
                 by_name: {
                   agent_avatar: AgentAvatarPart,
-                  orchestrator_plan: OrchestratorPlanCard,
                   task_board: TaskBoardCard,
                   code_agent_run: CodeAgentRunCard,
                   agent_artifacts: AgentArtifactsCard,
@@ -4553,8 +4553,9 @@ function absoluteEditorPath(filePath: string, cwd?: string) {
   return `${root.replace(/[\\/]+$/, '')}/${trimmed.replace(/^[\\/]+/, '')}`
 }
 
-function TaskBoardCard({ data: _data }: { data: any }) {
-  const taskBoard = useChatStore((s) => s.taskBoard)
+function TaskBoardCard({ data }: { data: any }) {
+  const liveTaskBoard = useChatStore((s) => s.taskBoard)
+  const taskBoard = liveTaskBoard?.runId === data?.runId ? liveTaskBoard : data
 
   if (!taskBoard) {
     return (
@@ -4577,7 +4578,7 @@ function TaskBoardCard({ data: _data }: { data: any }) {
           )
         }}
         onRetryFailed={() => {
-          const failedTasks = taskBoard.tasks.filter((t) => t.status === 'failed')
+          const failedTasks = taskBoard.tasks.filter((t: any) => t.status === 'failed')
           for (const task of failedTasks) {
             fetch(`/api/orchestrator-runs/${taskBoard.runId}/retry-task/${task.id}`, {
               method: 'POST',
@@ -4587,468 +4588,6 @@ function TaskBoardCard({ data: _data }: { data: any }) {
       />
     </div>
   )
-}
-
-const OrchestratorPlanCard: FC<{ data: OrchestratorPlan }> = ({ data }) => {
-  const navigate = useNavigate()
-  const currentSessionId = useChatStore((state) => state.currentSessionId)
-  const fetchSessions = useChatStore((state) => state.fetchSessions)
-  const messageId = useMessage((message) => message.id)
-  const liveMessage = useChatStore((state) =>
-    state.messages.find((message) => message.id === messageId),
-  )
-  const livePlan = (liveMessage?.metadata as { plan?: OrchestratorPlan } | null)?.plan
-  const basePlan = livePlan ?? data
-  const [plan, setPlan] = useState(basePlan)
-  const [saving, setSaving] = useState(false)
-  const [dispatching, setDispatching] = useState(false)
-  const [result, setResult] = useState<OrchestratorDispatchResult | null>(
-    basePlan.dispatchResult ?? null,
-  )
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    setPlan(basePlan)
-    setResult(basePlan.dispatchResult ?? null)
-  }, [basePlan])
-
-  function patchTask(taskId: string, patch: Partial<{ agentKey: string; status: TaskStatus }>) {
-    setPlan((current) => ({
-      ...current,
-      tasks: current.tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task)),
-    }))
-  }
-
-  async function savePlan() {
-    if (!currentSessionId || !data.messageId) return plan
-    setSaving(true)
-    setError('')
-    try {
-      const updated = await api.updateOrchestratorPlan(currentSessionId, data.messageId, {
-        tasks: plan.tasks.map((task) => ({
-          id: task.id,
-          agentKey: task.agentKey,
-          status: task.status,
-        })),
-      })
-      const nextPlan = (updated.metadata as { plan?: OrchestratorPlan } | null)?.plan ?? plan
-      setPlan(nextPlan)
-      return nextPlan
-    } catch (err: any) {
-      setError(err?.message || '保存任务卡失败')
-      return null
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function dispatchPlan() {
-    if (!currentSessionId || !data.messageId || dispatching) return
-    setDispatching(true)
-    setError('')
-    try {
-      const saved = await savePlan()
-      if (!saved) return
-      const next = await api.dispatchOrchestratorPlan(currentSessionId, data.messageId)
-      setResult(next)
-      await fetchSessions()
-    } catch (err: any) {
-      setError(err?.message || '分发失败')
-    } finally {
-      setDispatching(false)
-    }
-  }
-
-  return (
-    <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.08)]">
-      <div className="border-b border-neutral-200 bg-[#fbfbf8] px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.08em] text-neutral-400">
-              <GitBranch className="h-3.5 w-3.5" />
-              Orchestrator Plan Draft
-            </div>
-            <h3 className="mt-1 truncate text-base font-semibold text-neutral-950">{plan.title}</h3>
-          </div>
-          <span className="shrink-0 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-xs text-neutral-500">
-            {plan.tasks.length} tasks
-          </span>
-        </div>
-        <p className="mt-2 line-clamp-2 text-sm leading-6 text-neutral-500">{plan.goal}</p>
-        {(() => {
-          const contractCount = plan.tasks.filter((t) => t.outputContract).length
-          const validationCount = plan.tasks.filter((t) => t.validation?.commands?.length).length
-          const reviewCount = plan.tasks.filter((t) => t.validation?.requiresReview).length
-          if (!contractCount && !validationCount && !reviewCount) return null
-          return (
-            <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
-              {contractCount > 0 && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">
-                  <CheckCircle2 className="h-3 w-3" />
-                  {contractCount} 个任务含契约
-                </span>
-              )}
-              {validationCount > 0 && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-blue-700">
-                  <TerminalSquare className="h-3 w-3" />
-                  {validationCount} 个任务含验证
-                </span>
-              )}
-              {reviewCount > 0 && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-700">
-                  <AlertTriangle className="h-3 w-3" />
-                  {reviewCount} 个任务需 Review
-                </span>
-              )}
-            </div>
-          )
-        })()}
-      </div>
-
-      <div className="px-4 py-3">
-        <div className="space-y-2">
-          {plan.tasks.map((task, index) => {
-            const agent = plan.agents.find((item) => item.key === task.agentKey)
-            const status = task.status ?? 'pending'
-            const phase = plan.phases?.find(
-              (item) => item.id === task.phaseId || (item.taskIds ?? []).includes(task.id),
-            )
-            return (
-              <div
-                key={task.id}
-                className="grid grid-cols-[28px_minmax(0,1fr)] gap-3 rounded-xl border border-neutral-200 bg-white p-3"
-              >
-                <div
-                  className="grid h-7 w-7 place-items-center rounded-lg text-xs font-semibold text-white"
-                  style={{ background: agent?.color ?? '#111827' }}
-                >
-                  {index + 1}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {phase && (
-                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 text-[11px] text-neutral-500">
-                        {phase.title}
-                      </span>
-                    )}
-                    <div className="truncate text-sm font-semibold text-neutral-900">
-                      {task.title}
-                    </div>
-                    <select
-                      value={task.agentKey}
-                      onChange={(event) => patchTask(task.id, { agentKey: event.target.value })}
-                      disabled={Boolean(result)}
-                      className="h-7 rounded-full border border-neutral-200 bg-neutral-50 px-2 text-xs text-neutral-600 outline-none transition hover:bg-white focus:border-neutral-400 disabled:opacity-60"
-                    >
-                      {plan.agents.map((item) => (
-                        <option key={item.key} value={item.key}>
-                          {item.name} / {item.role}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">
-                    {task.description}
-                  </p>
-                  <TaskContractDetails task={task} />
-                  <TaskRoutingDetails task={task} agents={plan.agents} />
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {(['pending', 'running', 'done'] as TaskStatus[]).map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        disabled={Boolean(result)}
-                        onClick={() => patchTask(task.id, { status: item })}
-                        className={cn(
-                          'h-7 rounded-full border px-2.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-60',
-                          status === item
-                            ? 'border-neutral-900 bg-neutral-950 text-white'
-                            : 'border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300 hover:text-neutral-900',
-                        )}
-                      >
-                        {taskStatusLabel(item)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        {error && (
-          <div className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-600">{error}</div>
-        )}
-
-        {plan.clarificationQuestions && plan.clarificationQuestions.length > 0 && !result && (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-amber-600">
-              <MessageSquare className="h-3.5 w-3.5" />
-              需求澄清（回答后可优化计划）
-            </div>
-            {plan.clarificationQuestions.map((cq) => (
-              <div key={cq.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-                <p className="text-sm font-medium text-amber-900">{cq.question}</p>
-                {cq.options && cq.options.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {cq.options.map((opt) => (
-                      <button
-                        key={opt}
-                        type="button"
-                        onClick={() => {
-                          setPlan((current) => ({
-                            ...current,
-                            clarificationQuestions: current.clarificationQuestions?.map((q) =>
-                              q.id === cq.id ? { ...q, answer: opt } : q,
-                            ),
-                          }))
-                        }}
-                        className={cn(
-                          'rounded-full border px-2.5 py-1 text-xs transition',
-                          cq.answer === opt
-                            ? 'border-amber-500 bg-amber-100 text-amber-800 font-medium'
-                            : 'border-amber-200 bg-white text-amber-600 hover:border-amber-400',
-                        )}
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {result ? (
-          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
-            <div className="flex items-center gap-2 text-sm font-medium text-emerald-700">
-              <CheckCircle2 className="h-4 w-4" />
-              已分发 {result.tasks.length} 个子任务到 Agent 子会话
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => navigate('/agent-config')}
-                className="inline-flex h-8 items-center gap-2 rounded-lg bg-neutral-950 px-3 text-xs font-medium text-white hover:bg-neutral-800"
-              >
-                管理 Agent
-              </button>
-              {result.groupSessionId && (
-                <button
-                  type="button"
-                  onClick={() => navigate(`/chat/${result.groupSessionId}`)}
-                  className="inline-flex h-8 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-                >
-                  回到群聊
-                </button>
-              )}
-              {result.tasks[0] && (
-                <button
-                  type="button"
-                  onClick={() => navigate(`/chat/${result.tasks[0].sessionId}`)}
-                  className="inline-flex h-8 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-                >
-                  查看任务会话
-                </button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_1.4fr]">
-            <button
-              type="button"
-              onClick={() => void savePlan()}
-              disabled={saving || dispatching}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 disabled:bg-neutral-100 disabled:text-neutral-400"
-            >
-              {saving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Check className="h-4 w-4" />
-              )}
-              {saving ? '正在保存' : '保存调度'}
-            </button>
-            <button
-              type="button"
-              onClick={dispatchPlan}
-              disabled={dispatching || saving}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-300"
-            >
-              {dispatching ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <GitBranch className="h-4 w-4" />
-              )}
-              {dispatching ? '正在创建并分发' : '创建并分发到当前群聊'}
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-const TaskContractDetails: FC<{ task: OrchestratorPlanTask }> = ({ task }) => {
-  const [open, setOpen] = useState(false)
-  const contract = task.outputContract
-  const validation = task.validation
-  if (!contract && !validation) return null
-  const hasDetails =
-    (contract?.allowedPaths && contract.allowedPaths.length > 0) ||
-    (contract?.requiredArtifacts && contract.requiredArtifacts.length > 0) ||
-    (contract?.requiredBlackboardWrites && contract.requiredBlackboardWrites.length > 0) ||
-    (contract?.acceptanceCriteria && contract.acceptanceCriteria.length > 0) ||
-    (validation?.commands && validation.commands.length > 0) ||
-    validation?.requiresReview
-
-  return (
-    <div className="mt-2">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] text-neutral-600 transition hover:bg-neutral-50"
-      >
-        <FileText className="h-3 w-3" />
-        任务契约
-        {hasDetails && (
-          <span className="rounded-full bg-emerald-50 px-1 text-[10px] text-emerald-700">详情</span>
-        )}
-        <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
-      </button>
-      {open && hasDetails && (
-        <div className="mt-2 space-y-2 rounded-lg border border-neutral-200 bg-[#fbfbf8] p-3 text-[11px]">
-          {contract?.allowedPaths && contract.allowedPaths.length > 0 && (
-            <div>
-              <span className="font-medium text-neutral-700">允许路径：</span>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {contract.allowedPaths.map((path: string) => (
-                  <span key={path} className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">
-                    {path}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          {contract?.requiredArtifacts && contract.requiredArtifacts.length > 0 && (
-            <div>
-              <span className="font-medium text-neutral-700">必需产物：</span>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {contract.requiredArtifacts.map((a: string) => (
-                  <span key={a} className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
-                    {a}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          {contract?.requiredBlackboardWrites && contract.requiredBlackboardWrites.length > 0 && (
-            <div>
-              <span className="font-medium text-neutral-700">黑板写入：</span>
-              <div className="mt-1 space-y-1">
-                {contract.requiredBlackboardWrites.map(
-                  (bw: { key: string; schemaType: string }) => (
-                    <div key={bw.key} className="flex items-center gap-1.5">
-                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-neutral-600">
-                        {bw.key}
-                      </span>
-                      <span className="text-neutral-400">→</span>
-                      <span className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">
-                        {bw.schemaType}
-                      </span>
-                    </div>
-                  ),
-                )}
-              </div>
-            </div>
-          )}
-          {contract?.acceptanceCriteria && contract.acceptanceCriteria.length > 0 && (
-            <div>
-              <span className="font-medium text-neutral-700">验收标准：</span>
-              <ul className="mt-1 list-inside list-disc space-y-0.5 text-neutral-600">
-                {contract.acceptanceCriteria.map((c: string, i: number) => (
-                  <li key={i}>{c}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {validation?.commands && validation.commands.length > 0 && (
-            <div>
-              <span className="font-medium text-neutral-700">验证命令：</span>
-              <div className="mt-1 space-y-1">
-                {validation.commands.map((cmd: string) => (
-                  <div
-                    key={cmd}
-                    className="rounded bg-neutral-900 px-2 py-1 font-mono text-[10px] text-neutral-100"
-                  >
-                    {cmd}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {validation?.requiresReview && (
-            <div className="flex items-center gap-1.5 rounded bg-amber-50 px-2 py-1 text-amber-700">
-              <AlertTriangle className="h-3 w-3" />
-              此任务需要人工 Review 后才能继续
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-const TaskRoutingDetails: FC<{
-  task: OrchestratorPlanTask
-  agents: OrchestratorPlan['agents']
-}> = ({ task, agents }) => {
-  const selection = task.agentSelection
-  if (!selection) return null
-
-  const reviewer = selection.reviewerAgentKey
-    ? agents.find((agent) => agent.key === selection.reviewerAgentKey)
-    : null
-  const fallback = selection.fallbackAgentKey
-    ? agents.find((agent) => agent.key === selection.fallbackAgentKey)
-    : null
-
-  return (
-    <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50/60 px-2.5 py-2 text-[11px] text-blue-900">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <GitBranch className="h-3 w-3 text-blue-600" />
-        <span className="font-medium">路由理由</span>
-        <span className="rounded-full bg-white px-1.5 py-0.5 text-blue-700">
-          score {selection.score}
-        </span>
-        {reviewer && (
-          <span className="rounded-full bg-white px-1.5 py-0.5 text-blue-700">
-            review: {reviewer.name}
-          </span>
-        )}
-        {fallback && (
-          <span className="rounded-full bg-white px-1.5 py-0.5 text-blue-700">
-            fallback: {fallback.name}
-          </span>
-        )}
-      </div>
-      {selection.rationale.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {selection.rationale.slice(0, 4).map((item) => (
-            <span key={item} className="rounded bg-white/80 px-1.5 py-0.5 text-blue-700">
-              {item}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function taskStatusLabel(status: TaskStatus) {
-  if (status === 'running') return '进行中'
-  if (status === 'done') return '已完成'
-  return '待处理'
 }
 
 const SystemMessage: FC = () => (

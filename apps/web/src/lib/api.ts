@@ -693,56 +693,6 @@ export type WorkspaceFolderOpenResult =
   | { cancelled: true; projectPath: null; workspace?: null }
   | { cancelled: false; projectPath: string; workspace?: Workspace | null }
 
-export interface OrchestratorPlanAgent {
-  key: string
-  name: string
-  role: string
-  roleType?: AgentRoleType
-  color: string
-  systemPrompt: string
-}
-
-export interface OrchestratorPlanTask {
-  id: string
-  phaseId?: string
-  title: string
-  description: string
-  agentKey: string
-  taskType?: TaskType
-  status?: TaskStatus
-  outputContract?: OrchestratorTaskOutputContract
-  validation?: OrchestratorTaskValidation
-  agentSelection?: {
-    selectedAgentKey: string
-    score: number
-    rationale: string[]
-    reviewerAgentKey?: string
-    fallbackAgentKey?: string
-  }
-}
-
-export interface OrchestratorTaskOutputContract {
-  requiredBlackboardWrites: Array<{
-    key: string
-    schemaType: BlackboardSchemaType
-  }>
-  requiredArtifacts?: string[]
-  allowedPaths?: string[]
-  acceptanceCriteria?: string[]
-}
-
-export interface OrchestratorTaskValidation {
-  commands?: string[]
-  requiresReview?: boolean
-}
-
-export interface OrchestratorPlanPhase {
-  id: string
-  title: string
-  purpose: string
-  taskIds: string[]
-}
-
 export interface ClarificationQuestion {
   id: string
   question: string
@@ -750,24 +700,11 @@ export interface ClarificationQuestion {
   answer?: string
 }
 
-export interface OrchestratorPlan {
-  kind: 'orchestrator_plan'
-  title: string
-  goal: string
-  summary: string
-  agents: OrchestratorPlanAgent[]
-  phases?: OrchestratorPlanPhase[]
-  tasks: OrchestratorPlanTask[]
-  clarificationQuestions?: ClarificationQuestion[]
-  messageId?: string
-  dispatchResult?: OrchestratorDispatchResult
-}
-
 export interface OrchestratorTaskLedger {
   runId: string
   title: string
   goal: string
-  phases: OrchestratorPlanPhase[]
+  phases: Array<{ id: string; title: string; purpose: string; taskIds: string[] }>
   tasks: Array<{
     id: string
     phaseId: string
@@ -775,10 +712,15 @@ export interface OrchestratorTaskLedger {
     description: string
     agentId: string
     dependencies: string[]
-    taskType: NonNullable<OrchestratorPlanTask['taskType']>
+    taskType: TaskType
     status: TaskStatus | 'cancelled'
-    outputContract?: OrchestratorTaskOutputContract
-    validation?: OrchestratorTaskValidation
+    outputContract?: {
+      requiredBlackboardWrites: Array<{ key: string; schemaType: BlackboardSchemaType }>
+      requiredArtifacts?: string[]
+      allowedPaths?: string[]
+      acceptanceCriteria?: string[]
+    }
+    validation?: { commands?: string[]; requiresReview?: boolean }
   }>
 }
 
@@ -890,13 +832,6 @@ export interface ConflictReportItem {
   notes?: string
 }
 
-export interface OrchestratorDispatchResult {
-  runId: string
-  workspaceId: string
-  groupSessionId?: string
-  tasks: Array<{ taskId: string; sessionId: string; title: string; agentName: string }>
-}
-
 export {
   SessionType,
   SenderType,
@@ -1002,25 +937,6 @@ export const api = {
     request<Message>(`/messages/${sessionId}/${messageId}/pin`, { method: 'PATCH' }),
   unpinMessage: (sessionId: string, messageId: string) =>
     request<Message>(`/messages/${sessionId}/${messageId}/unpin`, { method: 'PATCH' }),
-  createOrchestratorPlan: (sessionId: string, content: string) =>
-    request<Message>(`/messages/${sessionId}/orchestrator-plan`, {
-      method: 'POST',
-      body: JSON.stringify({ content }),
-    }),
-  updateOrchestratorPlan: (
-    sessionId: string,
-    messageId: string,
-    data: { tasks: Array<{ id: string; agentKey?: string; status?: TaskStatus }> },
-  ) =>
-    request<Message>(`/messages/${sessionId}/orchestrator-plan/${messageId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    }),
-  dispatchOrchestratorPlan: (sessionId: string, messageId: string) =>
-    request<OrchestratorDispatchResult>(
-      `/messages/${sessionId}/orchestrator-plan/${messageId}/dispatch`,
-      { method: 'POST' },
-    ),
   createArtifactDemo: (sessionId: string, content: string) =>
     request<Message>(`/messages/${sessionId}/artifact-demo`, {
       method: 'POST',

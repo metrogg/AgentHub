@@ -16,6 +16,7 @@ import {
 import { pickNativeFolder } from '../services/workspace/folder-picker'
 import { loadWorkspaceFull, ensureWorkspace, seedClassicAgents } from '../services/workspace/workspace-queries'
 import { ensureGroupSession } from '../services/workspace/group-session'
+import { ensureAgentChildSession } from '../services/workspace/session-manager'
 import { workspaceAgentRunProfile, getActiveRunSessionIds } from '../services/workspace/agent-runtime'
 import { taskExecutionService } from '../services/execution/task-execution-service'
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
@@ -662,19 +663,7 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
 
     let sessionId = task.sessionId
     if (!sessionId) {
-      const title = `${ws.name} / ${agent?.role ?? '任务'} / ${task.title.slice(0, 24)}`
-      const [session] = await db
-        .insert(sessions)
-        .values({
-          title,
-          type: 'direct',
-          ownerId: user.sub,
-          workspaceId: id,
-          workspaceAgentId: agent?.id ?? null,
-          metadata: { hiddenFromSessionTree: true, workspaceTaskId: task.id },
-        })
-        .returning()
-      if (!session) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
+      const session = await ensureAgentChildSession(id, ws.name, user.sub, agent, task.title)
       sessionId = session.id
     }
 

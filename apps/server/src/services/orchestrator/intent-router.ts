@@ -1,9 +1,3 @@
-import { buildDynamicOrchestratorPlan } from './plan-generator'
-import { db, messages, eq } from '@agenthub/db'
-import { broadcastSessionEvent } from '../agent-runner'
-import { WsEvent } from '@agenthub/shared'
-import { logger } from '../../lib/logger'
-
 export type RouteDecision = 'DirectReply' | 'OrchestratorPlan' | 'ConversationLoop' | 'NoOrchestrator'
 
 export interface RouteResult {
@@ -109,17 +103,15 @@ export class IntentRouter {
   assessComplexity(content: string): ComplexityLevel {
     const lower = content.toLowerCase()
 
-    const simpleKeywords = [
-      'one page', '一个页面', 'single page', 'snake', '贪吃蛇', 'calculator', '计算器',
-      'todo', '待办', 'single html', '单个html', 'just do it', '直接做',
-    ]
-    if (simpleKeywords.some((k) => lower.includes(k))) {
+    const directExecutionKeywords = ['just do it', '直接做', '直接执行', '无需计划', '不用确认']
+    if (directExecutionKeywords.some((k) => lower.includes(k)) && content.length < 80) {
       return ComplexityLevel.SIMPLE
     }
 
     const complexKeywords = [
       'multiple', 'system', 'auth', 'authentication', 'database',
       '微服务', '系统', '用户管理', '架构', '多页面', 'full stack', 'fullstack',
+      '网站', '网页', '游戏', '小游戏', '应用', 'app', 'webapp', 'website', 'game',
     ]
     if (complexKeywords.some((k) => lower.includes(k))) {
       return ComplexityLevel.COMPLEX
@@ -130,142 +122,3 @@ export class IntentRouter {
 }
 
 export const intentRouter = new IntentRouter()
-
-export async function generatePlanCardBackground(
-  sessionId: string,
-  content: string,
-  agents: any[],
-  workspaceId?: string | null,
-): Promise<void> {
-  const orchestratorAgent =
-    agents.find((a: any) => a.roleType === 'orchestrator') ??
-    agents.find((a: any) => a.name.toLowerCase().includes('orchestrator'))
-
-  const loadingPlan = {
-    kind: 'orchestrator_plan' as const,
-    title: '计划生成中',
-    goal: '正在分析任务并制定执行计划，请稍候...',
-    summary: '正在分析任务并制定执行计划，请稍候...',
-    tasks: [],
-    agents: [],
-  }
-
-  const [loadingCard] = await db
-    .insert(messages)
-    .values({
-      sessionId,
-      senderId: orchestratorAgent?.id ?? 'orchestrator',
-      senderType: 'agent' as const,
-      type: 'task_card',
-      content: loadingPlan.summary,
-      metadata: {
-        agentName: orchestratorAgent?.name ?? 'Orchestrator',
-        plan: { ...loadingPlan, messageId: '' },
-      },
-    })
-    .returning()
-
-  if (!loadingCard) return
-
-  const loadingPlanWithId = { ...loadingPlan, messageId: loadingCard.id }
-  await db
-    .update(messages)
-    .set({ metadata: { agentName: orchestratorAgent?.name ?? 'Orchestrator', plan: loadingPlanWithId } })
-    .where(eq(messages.id, loadingCard.id))
-
-  broadcastSessionEvent(sessionId, {
-    type: WsEvent.MessageCompleted,
-    payload: {
-      sessionId,
-      message: { ...loadingCard, metadata: { agentName: orchestratorAgent?.name ?? 'Orchestrator', plan: loadingPlanWithId } },
-    },
-  })
-
-  try {
-    const plan = await buildDynamicOrchestratorPlan(content, agents, workspaceId)
-    const planWithId = { ...plan, messageId: loadingCard.id }
-    await db
-      .update(messages)
-      .set({ content: plan.summary, metadata: { agentName: orchestratorAgent?.name ?? 'Orchestrator', plan: planWithId } })
-      .where(eq(messages.id, loadingCard.id))
-    const [updatedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
-    if (updatedCard) {
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message: { ...updatedCard, metadata: { agentName: orchestratorAgent?.name ?? 'Orchestrator', plan: planWithId } } },
-      })
-    }
-  } catch (err: any) {
-    logger.error({ err: err?.message, sessionId }, 'IntentRouter: plan card generation failed')
-    const failedPlan = buildFallbackPlanCard(content, agents)
-    await db.update(messages).set({ content: failedPlan.summary, metadata: { agentName: orchestratorAgent?.name ?? 'Orchestrator', plan: { ...failedPlan, messageId: loadingCard.id } } }).where(eq(messages.id, loadingCard.id))
-    const [failedCard] = await db.select().from(messages).where(eq(messages.id, loadingCard.id)).limit(1)
-    if (failedCard) {
-      broadcastSessionEvent(sessionId, { type: WsEvent.MessageCompleted, payload: { sessionId, message: failedCard } })
-    }
-  }
-}
-
-function buildFallbackPlanCard(content: string, agents: any[]) {
-  const planAgents = agents.slice(0, Math.max(1, Math.min(agents.length, 3))).map((agent: any) => ({
-    key: agent.id,
-    name: agent.name ?? 'Agent',
-    role: agent.role ?? '协作成员',
-    roleType: agent.roleType,
-    color: agent.color ?? '#6366f1',
-    systemPrompt: agent.systemPrompt ?? '',
-    description: agent.description,
-    roleProfile: agent.roleProfile ?? null,
-    modelId: agent.modelId ?? null,
-    runtimeType: agent.runtimeType ?? 'llm',
-    codeAgentType: agent.codeAgentType ?? null,
-    capabilityTags: agent.capabilityTags ?? [],
-    toolPermissions: agent.toolPermissions ?? [],
-    sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
-  }))
-  const [first, second = first, third = second] = planAgents
-  const goal =
-    content
-      .replace(/@orchestrator/gi, '')
-      .replace(/@协调器/g, '')
-      .trim() || '完成多 Agent 协作任务'
-  const taskId1 = crypto.randomUUID()
-  const taskId2 = crypto.randomUUID()
-  const taskId3 = crypto.randomUUID()
-
-  return {
-    kind: 'orchestrator_plan' as const,
-    title: '默认三阶段计划',
-    goal,
-    summary: '计划生成失败，已切换为默认三阶段方案，可先审阅后再分派。',
-    agents: planAgents,
-    tasks: first
-      ? [
-          {
-            id: taskId1,
-            title: '梳理目标与交付范围',
-            description: `围绕「${goal}」明确目标、边界、关键交付物和验收标准。`,
-            agentKey: first.key,
-            dependencies: [],
-            maxRetries: 2,
-          },
-          {
-            id: taskId2,
-            title: '完成核心实现',
-            description: '基于范围说明完成主要实现，并留下可检查的文件产物。',
-            agentKey: second!.key,
-            dependencies: [taskId1],
-            maxRetries: 2,
-          },
-          {
-            id: taskId3,
-            title: '审查与收口',
-            description: '检查产物质量、风险、测试缺口和后续建议，给出最终汇报。',
-            agentKey: third!.key,
-            dependencies: [taskId2],
-            maxRetries: 2,
-          },
-        ]
-      : [],
-  }
-}

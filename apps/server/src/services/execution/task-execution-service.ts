@@ -140,10 +140,6 @@ export class TaskExecutionService {
         return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, executionPath }
       }
 
-      if (!result.ok) {
-        throw new Error(result.cancelled ? '任务被取消' : 'Agent 执行失败，请检查日志')
-      }
-
       if (result.cancelled) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
         return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, executionPath }
@@ -172,6 +168,15 @@ export class TaskExecutionService {
       if (msgArtifacts) artifacts.push(...msgArtifacts)
 
       const taskDuration = Date.now() - taskStartTime
+
+      if (!result.ok) {
+        const error = output.trim() || 'Agent 执行失败，请检查日志'
+        await db
+          .update(workspaceTasks)
+          .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error.slice(0, 2000) })
+          .where(eq(workspaceTasks.id, taskId))
+        return { status: TaskStatus.Failed, output, artifacts, error, durationMs: taskDuration, executionPath }
+      }
 
       if (!input.deferCompletionStatus) {
         await db

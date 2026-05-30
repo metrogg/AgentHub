@@ -14,27 +14,18 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   if (message.senderType === 'system') {
     return {
       id: message.id,
-      role: 'system' as const,
+      role: 'assistant' as const,
       content: [{ type: 'text' as const, text: message.content }],
       createdAt: message.createdAt ? new Date(message.createdAt) : undefined,
     }
   }
 
-  const role: ThreadMessageLike['role'] =
-    message.senderType === 'agent'
-      ? 'assistant'
-      : 'user'
+  const role: ThreadMessageLike['role'] = message.senderType === 'agent' ? 'assistant' : 'user'
 
-  const plan =
-    message.type === 'task_card' && message.metadata && 'plan' in message.metadata
-      ? {
-          ...(message.metadata.plan as Record<string, unknown>),
-          messageId: message.id,
-          dispatchResult: (message.metadata as { dispatchResult?: unknown }).dispatchResult,
-        }
-      : null
   const taskBoard =
-    message.type === 'task_board' && message.metadata && 'plan' in (message.metadata as Record<string, unknown>)
+    message.type === 'task_board' &&
+    message.metadata &&
+    'plan' in (message.metadata as Record<string, unknown>)
       ? {
           ...((message.metadata as Record<string, unknown>).plan as Record<string, unknown>),
           runId: (message.metadata as Record<string, unknown>).runId as string,
@@ -50,7 +41,9 @@ function toThreadMessage(message: Message): ThreadMessageLike {
       ? (message.metadata as Record<string, unknown>).delivery_report
       : null
   const agentName =
-    message.senderType === 'agent' && message.metadata && typeof message.metadata.agentName === 'string'
+    message.senderType === 'agent' &&
+    message.metadata &&
+    typeof message.metadata.agentName === 'string'
       ? message.metadata.agentName
       : null
   const runtimeLabel =
@@ -67,11 +60,17 @@ function toThreadMessage(message: Message): ThreadMessageLike {
       ? message.metadata.displayContent
       : message.content
   const text = senderLabel ? `**${senderLabel}**\n\n${displayContent}` : displayContent
-  const codeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun) ? message.metadata.codeAgentRun : null
+  const codeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun)
+    ? message.metadata.codeAgentRun
+    : null
   const artifacts = readArtifacts(message.metadata?.artifacts, codeAgentRun)
-  const artifactPart = artifacts.length ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: artifacts } }] : []
+  const artifactPart = artifacts.length
+    ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: artifacts } }]
+    : []
   const attachments = readChatAttachments(message.metadata?.attachments)
-  const attachmentPart = attachments.length ? [{ type: 'data' as const, name: 'chat_attachments', data: { items: attachments } }] : []
+  const attachmentPart = attachments.length
+    ? [{ type: 'data' as const, name: 'chat_attachments', data: { items: attachments } }]
+    : []
   const avatarPart = readAgentAvatarPart(message.metadata, codeAgentRun)
 
   const deliveryReportPart = deliveryReport
@@ -84,25 +83,31 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     content: clarification
       ? [{ type: 'data', name: 'clarification_card', data: clarification }]
       : taskBoard
-      ? [{ type: 'data', name: 'task_board', data: taskBoard }]
-      : plan
-        ? [{ type: 'data', name: 'orchestrator_plan', data: plan }]
+        ? [{ type: 'data', name: 'task_board', data: taskBoard }]
         : codeAgentRun
-        ? [
-            ...avatarPart,
-            { type: 'text', text },
-            ...attachmentPart,
-            { type: 'data', name: 'code_agent_run', data: codeAgentRun },
-            ...artifactPart,
-            ...deliveryReportPart,
-          ]
-        : [...avatarPart, { type: 'text', text }, ...attachmentPart, ...artifactPart, ...deliveryReportPart],
+            ? [
+                ...avatarPart,
+                { type: 'text', text },
+                ...attachmentPart,
+                { type: 'data', name: 'code_agent_run', data: codeAgentRun },
+                ...artifactPart,
+                ...deliveryReportPart,
+              ]
+            : [
+                ...avatarPart,
+                { type: 'text', text },
+                ...attachmentPart,
+                ...artifactPart,
+                ...deliveryReportPart,
+              ],
     createdAt: new Date(message.createdAt),
   }
 }
 
 function isCodeAgentRunMetadata(value: unknown): value is CodeAgentRunMetadata {
-  return Boolean(value && typeof value === 'object' && (value as { type?: unknown }).type === 'code-agent-run')
+  return Boolean(
+    value && typeof value === 'object' && (value as { type?: unknown }).type === 'code-agent-run',
+  )
 }
 
 function readArtifacts(value: unknown, codeAgentRun: CodeAgentRunMetadata | null): AgentArtifact[] {
@@ -112,7 +117,12 @@ function readArtifacts(value: unknown, codeAgentRun: CodeAgentRunMetadata | null
   return [...direct, ...fromRun].filter((item): item is AgentArtifact => {
     if (!item || typeof item !== 'object') return false
     const artifact = item as { id?: unknown; type?: unknown }
-    if (typeof artifact.id !== 'string' || typeof artifact.type !== 'string' || seen.has(artifact.id)) return false
+    if (
+      typeof artifact.id !== 'string' ||
+      typeof artifact.type !== 'string' ||
+      seen.has(artifact.id)
+    )
+      return false
     seen.add(artifact.id)
     return ['diff', 'preview', 'file', 'deploy', 'workflow'].includes(artifact.type)
   })
@@ -135,10 +145,19 @@ function readChatAttachments(value: unknown): ChatAttachment[] {
   })
 }
 
-function readAgentAvatarPart(metadata: Message['metadata'], codeAgentRun: CodeAgentRunMetadata | null) {
+function readAgentAvatarPart(
+  metadata: Message['metadata'],
+  codeAgentRun: CodeAgentRunMetadata | null,
+) {
   const runtime = codeAgentRun?.runtime ?? metadata?.codeAgentType
   if (metadata?.runtimeType !== 'code-agent' && !codeAgentRun) return []
-  if (runtime !== 'codex' && runtime !== 'claude-code' && runtime !== 'opencode' && runtime !== 'gemini') return []
+  if (
+    runtime !== 'codex' &&
+    runtime !== 'claude-code' &&
+    runtime !== 'opencode' &&
+    runtime !== 'gemini'
+  )
+    return []
   return [{ type: 'data' as const, name: 'agent_avatar', data: { runtime } }]
 }
 
@@ -157,7 +176,13 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
 
     if (streamingMessage) {
       const streamingAvatarPart = streamingCodeAgentRun
-        ? [{ type: 'data' as const, name: 'agent_avatar', data: { runtime: streamingCodeAgentRun.runtime } }]
+        ? [
+            {
+              type: 'data' as const,
+              name: 'agent_avatar',
+              data: { runtime: streamingCodeAgentRun.runtime },
+            },
+          ]
         : []
       const streamingRuntimeLabel = streamingCodeAgentRun
         ? `代码 Agent / ${String(streamingCodeAgentRun.runtime ?? 'cli')}`
@@ -180,7 +205,13 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
               ...(streamingText.trim() ? [{ type: 'text' as const, text: streamingText }] : []),
               { type: 'data', name: 'code_agent_run', data: streamingCodeAgentRun },
               ...(streamingCodeAgentRun.artifacts?.length
-                ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: streamingCodeAgentRun.artifacts } }]
+                ? [
+                    {
+                      type: 'data' as const,
+                      name: 'agent_artifacts',
+                      data: { items: streamingCodeAgentRun.artifacts },
+                    },
+                  ]
                 : []),
             ]
           : [{ type: 'text', text: streamingMessage.content }],

@@ -103,11 +103,16 @@ export async function buildDynamicOrchestratorPlan(
   }
 
   const planner = new Planner()
+  const orchestratorAgent =
+    planningAgents.find((agent) => agent.roleType === 'orchestrator') ??
+    planningAgents.find((agent) => agent.name.toLowerCase().includes('orchestrator'))
   const executionPlan = await planner.createPlan({
     goal,
     agents: planningAgents.map(toExecutionAgent),
     workspacePath,
     useSpecFirst: false,
+    plannerModelId: orchestratorAgent?.modelId,
+    plannerSystemPrompt: orchestratorAgent?.systemPrompt,
   })
 
   const plan = executionPlanToOrchestratorPlan(executionPlan, planningAgents)

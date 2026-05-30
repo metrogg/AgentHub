@@ -3,7 +3,15 @@ import { streamReply } from '../llm'
 import { harnessManager } from '../harness'
 import { initializeRunLedger } from './run-ledger'
 import { ROLE_PRESETS } from '@agenthub/shared'
-import type { ClarificationQuestion, CollaborationMode, ExecutionAgent, ExecutionPlan, ExecutionTask, TaskOutputContract, TaskValidation } from './types'
+import type {
+  ClarificationQuestion,
+  CollaborationMode,
+  ExecutionAgent,
+  ExecutionPlan,
+  ExecutionTask,
+  TaskOutputContract,
+  TaskValidation,
+} from './types'
 
 export interface PlannerInput {
   goal: string
@@ -11,6 +19,8 @@ export interface PlannerInput {
   agentRelations?: ExecutionPlan['agentRelations']
   workspacePath?: string | null
   useSpecFirst?: boolean
+  plannerModelId?: string | null
+  plannerSystemPrompt?: string | null
 }
 
 interface SpecModule {
@@ -30,7 +40,14 @@ interface ProjectSpec {
 
 export class Planner {
   async createPlan(input: PlannerInput): Promise<ExecutionPlan> {
-    const { goal, agentRelations = [], workspacePath, useSpecFirst = true } = input
+    const {
+      goal,
+      agentRelations = [],
+      workspacePath,
+      useSpecFirst = true,
+      plannerModelId,
+      plannerSystemPrompt,
+    } = input
     const runId = crypto.randomUUID()
 
     // 动态启用 Researcher：根据目标复杂度判断是否需要研究型 Agent
@@ -54,22 +71,36 @@ export class Planner {
     let spec: ProjectSpec | undefined
     if (useSpecFirst !== false) {
       try {
-        spec = await this.generateSpec(goal, agents, workspacePath)
+        spec = await this.generateSpec(goal, agents, workspacePath, plannerModelId)
         logger.info({ goal, moduleCount: spec.modules.length }, 'Planner generated spec')
       } catch (err: any) {
-        logger.warn({ err: err?.message }, 'Planner spec generation failed, falling back to direct plan')
+        logger.warn(
+          { err: err?.message },
+          'Planner spec generation failed, falling back to direct plan',
+        )
       }
     }
 
     try {
-      const generated = await this.generateWithLlm(goal, agents, agentRelations, spec, specPhases)
+      const generated = await this.generateWithLlm(
+        goal,
+        agents,
+        agentRelations,
+        spec,
+        specPhases,
+        plannerModelId,
+        plannerSystemPrompt,
+      )
       const normalized = this.normalizeGeneratedPlan(runId, goal, generated, agents)
       if (normalized) return initializeRunLedger({ ...normalized, agentRelations })
     } catch (error: any) {
       logger.warn({ err: error?.message }, 'Planner LLM generation failed, using fallback')
     }
 
-    return initializeRunLedger({ ...this.buildFallbackPlan(runId, goal, agents, spec), agentRelations })
+    return initializeRunLedger({
+      ...this.buildFallbackPlan(runId, goal, agents, spec),
+      agentRelations,
+    })
   }
 
   private formatSpecPhases(spec: import('../harness').HarnessSpec): string {
@@ -97,13 +128,34 @@ export class Planner {
 
     const lower = goal.toLowerCase()
     const researchTriggers = [
-      'api', 'sdk', '第三方', '接入', '集成',
-      '新技术', '新框架', '方案比较', '对比',
-      '调研', '研究', '不了解', '怎么做',
-      '最佳实践', '行业标准', '竞品',
-      'docker', 'kubernetes', 'k8s', 'wasm',
-      'websocket', 'graphql', 'grpc', 'mqtt',
-      'oauth', 'jwt', 'sso', 'auth',
+      'api',
+      'sdk',
+      '第三方',
+      '接入',
+      '集成',
+      '新技术',
+      '新框架',
+      '方案比较',
+      '对比',
+      '调研',
+      '研究',
+      '不了解',
+      '怎么做',
+      '最佳实践',
+      '行业标准',
+      '竞品',
+      'docker',
+      'kubernetes',
+      'k8s',
+      'wasm',
+      'websocket',
+      'graphql',
+      'grpc',
+      'mqtt',
+      'oauth',
+      'jwt',
+      'sso',
+      'auth',
     ]
 
     const needsResearch = researchTriggers.some((t) => lower.includes(t))
@@ -137,7 +189,14 @@ export class Planner {
   private pickAgent(agents: ExecutionAgent[], keywords: string[]) {
     const lowered = keywords.map((k) => k.toLowerCase())
     return agents.find((agent) => {
-      const text = [agent.name, agent.role, agent.description, agent.runtimeType, agent.codeAgentType, ...(agent.capabilityTags ?? [])]
+      const text = [
+        agent.name,
+        agent.role,
+        agent.description,
+        agent.runtimeType,
+        agent.codeAgentType,
+        ...(agent.capabilityTags ?? []),
+      ]
         .filter(Boolean)
         .join(' ')
         .toLowerCase()
@@ -151,56 +210,127 @@ export class Planner {
   private inferSpecialistTags(goal: string): string[] {
     const lower = goal.toLowerCase()
     const tags: string[] = []
-    if (lower.includes('react') || lower.includes('vue') || lower.includes('frontend') || lower.includes('ui') || lower.includes('页面') || lower.includes('组件')) {
+    if (
+      lower.includes('react') ||
+      lower.includes('vue') ||
+      lower.includes('frontend') ||
+      lower.includes('ui') ||
+      lower.includes('页面') ||
+      lower.includes('组件')
+    ) {
       tags.push('frontend')
     }
-    if (lower.includes('api') || lower.includes('backend') || lower.includes('server') || lower.includes('数据库') || lower.includes('db')) {
+    if (
+      lower.includes('api') ||
+      lower.includes('backend') ||
+      lower.includes('server') ||
+      lower.includes('数据库') ||
+      lower.includes('db')
+    ) {
       tags.push('backend')
     }
-    if (lower.includes('docker') || lower.includes('ci') || lower.includes('deploy') || lower.includes('k8s') || lower.includes('devops')) {
+    if (
+      lower.includes('docker') ||
+      lower.includes('ci') ||
+      lower.includes('deploy') ||
+      lower.includes('k8s') ||
+      lower.includes('devops')
+    ) {
       tags.push('devops')
     }
     return tags
   }
 
-  private inferMode(goal: string, tasks: Array<{ description?: string; taskType?: string }>, phases?: Array<{ taskIds?: string[] }>): CollaborationMode {
+  private inferMode(
+    goal: string,
+    tasks: Array<{ description?: string; taskType?: string }>,
+    phases?: Array<{ taskIds?: string[] }>,
+  ): CollaborationMode {
     const lower = goal.toLowerCase()
 
     const pipelineSignals = [
-      '先', '然后', '接着', '最后', '第一步', '第二步', '第三步', '第四步',
-      'step 1', 'step 2', 'step 3', 'step 4',
-      'first', 'then', 'finally', 'next',
-      '流水线', 'pipeline', '工序',
-      '依赖', 'depends on',
+      '先',
+      '然后',
+      '接着',
+      '最后',
+      '第一步',
+      '第二步',
+      '第三步',
+      '第四步',
+      'step 1',
+      'step 2',
+      'step 3',
+      'step 4',
+      'first',
+      'then',
+      'finally',
+      'next',
+      '流水线',
+      'pipeline',
+      '工序',
+      '依赖',
+      'depends on',
     ]
     let pipelineScore = pipelineSignals.filter((s) => lower.includes(s)).length
     if (phases && phases.length >= 3) pipelineScore += 2
 
     const supervisorSignals = [
-      '调研', '研究', '探索', '分析', '不确定',
-      '发现', '寻找', '评估', '判断',
-      'research', 'explore', 'investigate', 'discover', 'evaluate',
-      '深度', '全面', 'deep',
+      '调研',
+      '研究',
+      '探索',
+      '分析',
+      '不确定',
+      '发现',
+      '寻找',
+      '评估',
+      '判断',
+      'research',
+      'explore',
+      'investigate',
+      'discover',
+      'evaluate',
+      '深度',
+      '全面',
+      'deep',
     ]
     let supervisorScore = supervisorSignals.filter((s) => lower.includes(s)).length
 
     const mapReduceSignals = [
-      '同时', '并行', '分别', '各自', '独立',
-      'simultaneously', 'in parallel', 'respectively', 'independently',
-      '汇总', '合并', '整合', '综合',
-      'synthesize', 'merge', 'aggregate', 'combine',
+      '同时',
+      '并行',
+      '分别',
+      '各自',
+      '独立',
+      'simultaneously',
+      'in parallel',
+      'respectively',
+      'independently',
+      '汇总',
+      '合并',
+      '整合',
+      '综合',
+      'synthesize',
+      'merge',
+      'aggregate',
+      'combine',
     ]
     let mapReduceScore = mapReduceSignals.filter((s) => lower.includes(s)).length
     if (phases && phases.length <= 1) mapReduceScore += 1
     const codeTasks = tasks.filter((t) => t.taskType === 'code')
-    if (codeTasks.length >= 2 && !pipelineSignals.some((s) => lower.includes(s))) mapReduceScore += 2
+    if (codeTasks.length >= 2 && !pipelineSignals.some((s) => lower.includes(s)))
+      mapReduceScore += 2
 
     if (supervisorScore > pipelineScore && supervisorScore > mapReduceScore) return 'supervisor'
     if (pipelineScore > supervisorScore && pipelineScore >= mapReduceScore) return 'pipeline'
     return 'mapreduce'
   }
 
-  private async generateSpec(goal: string, agents: ExecutionAgent[], workspacePath?: string | null): Promise<ProjectSpec> {
+  private async generateSpec(
+    goal: string,
+    agents: ExecutionAgent[],
+    workspacePath?: string | null,
+    plannerModelId?: string | null,
+  ): Promise<ProjectSpec> {
     const prompt = `请为以下项目生成一份架构规格说明（Spec）。
 
 目标：${goal}
@@ -224,7 +354,11 @@ ${agents.map((a) => `- ${a.name}（${a.role}）：${a.description || '无描述'
   "fileLayout": ["建议的文件结构，如 src/engine.ts"]
 }`
     let output = ''
-    for await (const delta of streamReply([{ role: 'user', content: prompt }], '你是软件架构专家。')) {
+    for await (const delta of streamReply(
+      [{ role: 'user', content: prompt }],
+      '你是软件架构专家。',
+      plannerModelId ?? undefined,
+    )) {
       output += delta
       if (output.length > 15_000) break
     }
@@ -246,6 +380,8 @@ ${agents.map((a) => `- ${a.name}（${a.role}）：${a.description || '无描述'
     agentRelations: ExecutionPlan['agentRelations'] = [],
     spec?: ProjectSpec,
     specPhases?: string,
+    plannerModelId?: string | null,
+    plannerSystemPrompt?: string | null,
   ): Promise<unknown> {
     const agentCatalog = agents.map((agent) => ({
       key: agent.key,
@@ -283,6 +419,9 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
 
     const system = [
       'You are AgentHub Orchestrator.',
+      plannerSystemPrompt
+        ? `Use this Orchestrator role instruction as your collaboration style:\n${plannerSystemPrompt}`
+        : '',
       'Create a concise multi-agent execution plan using only the provided agent keys.',
       'Return strict JSON only. Do not include Markdown fences or explanations.',
       'Schema: {"collaborationMode":"pipeline|mapreduce|supervisor","title":string,"summary":string,"clarificationQuestions":[{"id":string,"question":string,"options":string[]}],"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
@@ -298,7 +437,9 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       'Add "collaborationMode" field to the output.',
       specBlock,
       specPhases || '',
-    ].filter(Boolean).join('\n')
+    ]
+      .filter(Boolean)
+      .join('\n')
 
     const messages = [
       {
@@ -308,7 +449,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     ]
 
     let output = ''
-    for await (const delta of streamReply(messages, system)) {
+    for await (const delta of streamReply(messages, system, plannerModelId ?? undefined)) {
       output += delta
       if (output.length > 20_000) break
     }
@@ -414,7 +555,9 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         if (!q || typeof q !== 'object') continue
         const question = cleanPlanText(q.question)
         if (!question) continue
-        const options = Array.isArray(q.options) ? q.options.filter((o): o is string => typeof o === 'string') : []
+        const options = Array.isArray(q.options)
+          ? q.options.filter((o): o is string => typeof o === 'string')
+          : []
         clarificationQuestions.push({
           id: typeof q.id === 'string' ? q.id : `cq-${clarificationQuestions.length}`,
           question,
@@ -423,10 +566,11 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       }
     }
 
-    const mode = (typeof candidate.collaborationMode === 'string' &&
-      ['pipeline', 'mapreduce', 'supervisor'].includes(candidate.collaborationMode))
-      ? candidate.collaborationMode as CollaborationMode
-      : this.inferMode(goal, tasks, phases)
+    const mode =
+      typeof candidate.collaborationMode === 'string' &&
+      ['pipeline', 'mapreduce', 'supervisor'].includes(candidate.collaborationMode)
+        ? (candidate.collaborationMode as CollaborationMode)
+        : this.inferMode(goal, tasks, phases)
 
     return {
       runId,
@@ -436,7 +580,8 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       tasks,
       phases: phases.length > 0 ? phases : undefined,
       collaborationMode: mode,
-      clarificationQuestions: clarificationQuestions.length > 0 ? clarificationQuestions : undefined,
+      clarificationQuestions:
+        clarificationQuestions.length > 0 ? clarificationQuestions : undefined,
     }
   }
 
@@ -449,13 +594,20 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     if (Array.isArray(phases)) {
       for (const phase of phases) {
         if (!phase || typeof phase !== 'object') continue
-        const item = phase as { id?: unknown; title?: unknown; purpose?: unknown; taskIds?: unknown }
+        const item = phase as {
+          id?: unknown
+          title?: unknown
+          purpose?: unknown
+          taskIds?: unknown
+        }
         const id = cleanPlanText(item.id)
         if (!id || normalized.some((existing) => existing.id === id)) continue
         const rawTaskIds = Array.isArray(item.taskIds)
           ? item.taskIds.filter((taskId): taskId is string => typeof taskId === 'string')
           : []
-        const taskIds = rawTaskIds.map((tid) => rawIdToUuid.get(tid) ?? tid).filter(Boolean) as string[]
+        const taskIds = rawTaskIds
+          .map((tid) => rawIdToUuid.get(tid) ?? tid)
+          .filter(Boolean) as string[]
         normalized.push({
           id,
           title: cleanPlanText(item.title) || this.phaseTitleFromId(id),
@@ -484,7 +636,10 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     return normalized
   }
 
-  private inferTaskPhase(task: Pick<ExecutionTask, 'id' | 'title' | 'description'>, index: number): string {
+  private inferTaskPhase(
+    task: Pick<ExecutionTask, 'id' | 'title' | 'description'>,
+    index: number,
+  ): string {
     const text = `${task.id} ${task.title} ${task.description}`.toLowerCase()
     if (/(plan|analysis|scan|read|理解|梳理|分析|调研)/i.test(text)) return 'analysis'
     if (/(design|方案|架构|设计)/i.test(text)) return 'design'
@@ -512,9 +667,16 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     return '推进当前任务'
   }
 
-  private buildFallbackPlan(runId: string, goal: string, agents: ExecutionAgent[], spec?: ProjectSpec): ExecutionPlan {
+  private buildFallbackPlan(
+    runId: string,
+    goal: string,
+    agents: ExecutionAgent[],
+    spec?: ProjectSpec,
+  ): ExecutionPlan {
     const title = titleFromGoal(goal)
-    const selectedAgents = agents.length ? agents.slice(0, Math.max(1, Math.min(agents.length, 4))) : []
+    const selectedAgents = agents.length
+      ? agents.slice(0, Math.max(1, Math.min(agents.length, 4)))
+      : []
 
     // 如果有 Spec，按模块生成 fallback 任务
     if (spec && spec.modules.length > 0) {
@@ -527,12 +689,14 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         moduleToTaskId.set(m.name, taskId)
         // 根据模块职责匹配 Agent
         const keywords = [m.name, ...m.responsibility.split(/\s+/)]
-        const matched = this.pickAgent(selectedAgents, keywords) ?? selectedAgents[i % selectedAgents.length]!
+        const matched =
+          this.pickAgent(selectedAgents, keywords) ?? selectedAgents[i % selectedAgents.length]!
         tasks.push({
           id: taskId,
           title: `实现模块：${m.name}`,
           description: `${m.responsibility}\n需暴露接口：${m.interfaces.join('、') || '无'}\n技术栈：${spec.techStack}`,
           agentId: matched.id,
+          taskType: 'code',
           dependencies: m.dependsOn
             .map((dep) => moduleToTaskId.get(dep))
             .filter((d): d is string => Boolean(d)),
@@ -542,13 +706,16 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
 
       // 如果只有一个模块，追加 review 任务
       if (tasks.length === 1 && selectedAgents.length > 1) {
-        const reviewer = this.pickAgent(selectedAgents, ['审查', 'review', 'test']) ?? selectedAgents[selectedAgents.length - 1]!
+        const reviewer =
+          this.pickAgent(selectedAgents, ['审查', 'review', 'test']) ??
+          selectedAgents[selectedAgents.length - 1]!
         const reviewId = crypto.randomUUID()
         tasks.push({
           id: reviewId,
           title: '审查与测试',
           description: `检查「${goal}」的交互边界、异常状态和测试缺口。`,
           agentId: reviewer.id,
+          taskType: 'review',
           dependencies: [tasks[0]!.id],
           maxRetries: 2,
         })
@@ -558,7 +725,8 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     }
 
     // 无 Spec 时的经典三阶段 fallback，支持 Coder 专业化匹配
-    const leadAgent = this.pickAgent(selectedAgents, ['规划', '架构', 'architect', 'plan']) ?? selectedAgents[0]!
+    const leadAgent =
+      this.pickAgent(selectedAgents, ['规划', '架构', 'architect', 'plan']) ?? selectedAgents[0]!
 
     // 尝试 specialist 匹配，如果没有则回退到通用 coder
     const specialistTags = this.inferSpecialistTags(goal)
@@ -579,13 +747,15 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     const buildId = crypto.randomUUID()
     const reviewId = crypto.randomUUID()
 
-    const specialistHint = specialistTags.length > 0 ? `（专长方向: ${specialistTags.join(', ')}）` : ''
+    const specialistHint =
+      specialistTags.length > 0 ? `（专长方向: ${specialistTags.join(', ')}）` : ''
     const tasks: ExecutionTask[] = [
       {
         id: planId,
         title: '梳理目标与交付范围',
         description: `围绕「${goal}」定义核心目标、交付物、边界、依赖和验收标准。`,
         agentId: leadAgent.id,
+        taskType: 'design',
         dependencies: [],
         maxRetries: 2,
       },
@@ -594,6 +764,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         title: `实现核心功能与界面${specialistHint}`,
         description: `基于拆解结果产出可执行实现方案，优先完成关键路径、组件接入和小步验证。${specialistHint}`,
         agentId: buildAgent.id,
+        taskType: 'code',
         dependencies: [planId],
         maxRetries: 2,
       },
@@ -602,6 +773,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         title: '审查风险与测试建议',
         description: '检查交互边界、异常状态、测试缺口和交付风险，并给出可直接执行的修复建议。',
         agentId: reviewAgent.id,
+        taskType: 'review',
         dependencies: [buildId],
         maxRetries: 2,
       },
@@ -611,7 +783,10 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
   }
 }
 
-export function normalizeTaskOutputContract(value: unknown, taskId: string): TaskOutputContract | undefined {
+export function normalizeTaskOutputContract(
+  value: unknown,
+  taskId: string,
+): TaskOutputContract | undefined {
   if (!value || typeof value !== 'object') return undefined
   const item = value as {
     requiredBlackboardWrites?: unknown
@@ -632,12 +807,20 @@ export function normalizeTaskOutputContract(value: unknown, taskId: string): Tas
           const schemaType = parseBlackboardSchemaType(candidate.schemaType)
           return schemaType ? { key, schemaType } : null
         })
-        .filter((entry): entry is TaskOutputContract['requiredBlackboardWrites'][number] => Boolean(entry))
+        .filter((entry): entry is TaskOutputContract['requiredBlackboardWrites'][number] =>
+          Boolean(entry),
+        )
     : []
   const requiredArtifacts = arrayOfStrings(item.requiredArtifacts)
   const allowedPaths = arrayOfStrings(item.allowedPaths)
   const acceptanceCriteria = arrayOfStrings(item.acceptanceCriteria)
-  if (!requiredBlackboardWrites.length && !requiredArtifacts.length && !allowedPaths.length && !acceptanceCriteria.length) return undefined
+  if (
+    !requiredBlackboardWrites.length &&
+    !requiredArtifacts.length &&
+    !allowedPaths.length &&
+    !acceptanceCriteria.length
+  )
+    return undefined
   return {
     requiredBlackboardWrites,
     requiredArtifacts,
@@ -657,7 +840,9 @@ export function normalizeTaskValidation(value: unknown): TaskValidation | undefi
   }
 }
 
-export function parseBlackboardSchemaType(value: unknown): TaskOutputContract['requiredBlackboardWrites'][number]['schemaType'] | undefined {
+export function parseBlackboardSchemaType(
+  value: unknown,
+): TaskOutputContract['requiredBlackboardWrites'][number]['schemaType'] | undefined {
   if (
     value === 'fact' ||
     value === 'decision' ||
@@ -674,11 +859,18 @@ export function parseBlackboardSchemaType(value: unknown): TaskOutputContract['r
 
 export function arrayOfStrings(value: unknown): string[] {
   if (!Array.isArray(value)) return []
-  return value.map((item) => cleanPlanText(item)).filter(Boolean).slice(0, 12)
+  return value
+    .map((item) => cleanPlanText(item))
+    .filter(Boolean)
+    .slice(0, 12)
 }
 
 export function extractJsonObject(value: string) {
-  const cleaned = value.trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+  const cleaned = value
+    .trim()
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim()
   if (cleaned.startsWith('{') && cleaned.endsWith('}')) return cleaned
   const start = cleaned.indexOf('{')
   const end = cleaned.lastIndexOf('}')
