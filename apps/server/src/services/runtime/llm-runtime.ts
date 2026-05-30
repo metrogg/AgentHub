@@ -1,5 +1,5 @@
 import { logger } from '../../lib/logger'
-import { streamReply } from '../llm'
+import { streamReplyParts } from '../llm'
 import { harnessManager } from '../harness'
 import type { AgentOutputChunk, AgentProfile, AgentRuntime, ExecutionContext } from './agent-runtime'
 
@@ -20,9 +20,12 @@ export class LlmRuntime implements AgentRuntime {
     llmMessages.push({ role: 'user', content: prompt })
 
     try {
-      for await (const delta of streamReply(llmMessages, system, profile.modelId ?? undefined, signal)) {
+      for await (const chunk of streamReplyParts(llmMessages, system, profile.modelId ?? undefined, signal)) {
         if (signal?.aborted) break
-        yield { kind: 'text', text: delta }
+        yield {
+          kind: chunk.type === 'reasoning-delta' ? 'reasoning' : 'text',
+          text: chunk.text,
+        }
       }
     } catch (error: any) {
       if (signal?.aborted) return
