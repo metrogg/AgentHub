@@ -538,17 +538,36 @@ interface ProbeCacheEntry {
 
 const probeCache = new Map<string, ProbeCacheEntry>()
 const PROBE_CACHE_TTL_MS = 15_000
+const PROBE_REACH_TIMEOUT_MS = 800
+const PROBE_VERSION_TIMEOUT_MS = 1200
+const PROBE_TOOL_BUDGET_MS = 1200
 
 function getProbeCacheKey(probe: ToolProbe): string {
   return `${probe.id}:${probe.command}:${probe.apiKeyEnv ?? ''}`
 }
 
 async function probeTools(items: ToolProbe[]) {
-  const results = []
-  for (const item of items) {
-    results.push(await probeTool(item))
-  }
-  return results
+  return Promise.all(items.map((item) => probeToolWithBudget(item)))
+}
+
+async function probeToolWithBudget(probe: ToolProbe) {
+  return Promise.race([
+    probeTool(probe),
+    new Promise<Awaited<ReturnType<typeof probeTool>>>((resolve) => {
+      setTimeout(() => {
+        const configEnv = configEnvName(probe)
+        resolve({
+          id: probe.id,
+          command: probe.command,
+          installed: false,
+          version: null,
+          configured: false,
+          configEnv,
+          configMessage: 'CLI 探测超时，暂时无法判断本机运行配置。',
+        })
+      }, PROBE_TOOL_BUDGET_MS)
+    }),
+  ])
 }
 
 async function probeTool(probe: ToolProbe) {
@@ -743,7 +762,7 @@ async function tryVersionProbe(command: string, flag: string): Promise<string | 
       : Bun.spawn(['sh', '-lc', `command -v ${quoteForSh(command)}`], { stdout: 'ignore', stderr: 'ignore', env: process.env })
     const reachCode = await Promise.race([
       reachProc.exited,
-      new Promise<number>((resolve) => setTimeout(() => { try { reachProc.kill() } catch {} ; resolve(124) }, 5000)),
+      new Promise<number>((resolve) => setTimeout(() => { try { reachProc.kill() } catch {} ; resolve(124) }, PROBE_REACH_TIMEOUT_MS)),
     ])
     if (reachCode !== 0) return null
   } catch {
@@ -762,22 +781,25 @@ async function tryVersionProbe(command: string, flag: string): Promise<string | 
       stderr: 'pipe',
       env: process.env,
     })
+    const stdoutPromise = new Response(proc.stdout).text().catch(() => '')
+    const stderrPromise = new Response(proc.stderr).text().catch(() => '')
     const timed = await Promise.race([
       proc.exited,
       new Promise<number>((resolve) => setTimeout(() => {
         try { proc.kill() } catch {}
         resolve(124)
-      }, 8000)),
+      }, PROBE_VERSION_TIMEOUT_MS)),
     ])
 
-    const stdout = await new Response(proc.stdout).text().catch(() => '')
-    const stderr = await new Response(proc.stderr).text().catch(() => '')
-    const combined = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n')
-
     if (timed === 124) {
-      console.error(`[probe timeout] ${command} ${flag} (exited=${timed}) stdout=${JSON.stringify(stdout.slice(0, 200))} stderr=${JSON.stringify(stderr.slice(0, 200))}`)
+      console.error(`[probe timeout] ${command} ${flag} (exited=${timed})`)
       return null
     }
+
+    const stdout = await stdoutPromise
+    const stderr = await stderrPromise
+    const combined = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n')
+
     if (timed !== 0) {
       console.error(`[probe exit] ${command} ${flag} code=${timed} stdout=${JSON.stringify(stdout.slice(0, 200))} stderr=${JSON.stringify(stderr.slice(0, 200))}`)
       return null
@@ -805,7 +827,7 @@ async function isCommandReachable(command: string): Promise<boolean> {
       const timer = setTimeout(() => {
         try { proc.kill() } catch {}
         resolve(124)
-      }, 8000)
+      }, PROBE_REACH_TIMEOUT_MS)
       return () => clearTimeout(timer)
     })])
     return code === 0

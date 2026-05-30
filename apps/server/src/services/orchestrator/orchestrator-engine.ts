@@ -21,7 +21,7 @@ import { PolicyGuard } from '../policy-guard'
 import { intentRouter } from './intent-router'
 import { streamReply } from '../llm'
 import { buildAgentProfileWithWorktree } from '../agents/profile-builder'
-import { createOrchestratorChildSession } from '../workspace/session-manager'
+import { ensureAgentChildSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST, resolveDefaultWorkDir } from '../execution/agent-execution-envelope'
 import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 
@@ -243,11 +243,17 @@ export class OrchestratorEngine {
       .limit(1)
 
     const plan = (runRow?.plan as ExecutionPlan | undefined) ?? { runId, title: '', goal: '', agents: [], tasks: [task] }
+    const [groupSession] = await db
+      .select({ ownerId: sessions.ownerId })
+      .from(sessions)
+      .where(eq(sessions.id, groupSessionId))
+      .limit(1)
 
     const result = await this.executeTask(
       task, plan, childSessions, runId, groupSessionId, workspaceId,
       this.scheduler.getRunSignal(runId) ?? new AbortController().signal,
       0,
+      groupSession?.ownerId ?? 'user',
     )
 
     return result
@@ -418,7 +424,7 @@ export class OrchestratorEngine {
                 phaseId: pt.phaseId,
               }
 
-              const childSession = await createOrchestratorChildSession(
+              const childSession = await ensureAgentChildSession(
                 workspaceId,
                 plan.title,
                 ownerId,
@@ -438,6 +444,7 @@ export class OrchestratorEngine {
                 title: task.title,
                 description: task.description,
                 status: TaskStatus.Pending,
+                sessionId: childSession.id,
                 orderIdx: plan.tasks.length,
                 runId,
                 phaseId: task.phaseId,
@@ -586,7 +593,7 @@ export class OrchestratorEngine {
           }
         }
 
-        const result = await this.executeTask(currentTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, currentAttempt)
+        const result = await this.executeTask(currentTask, plan, childSessions, runId, groupSessionId, workspaceId, signal, currentAttempt, ownerId)
         if (result.status === TaskStatus.Done || result.status === TaskStatus.Cancelled) {
           return result
         }
@@ -685,7 +692,7 @@ export class OrchestratorEngine {
         if (replan.strategy === 'task_split' && replan.newTasks && replan.newTasks.length > 0) {
           for (const newTask of replan.newTasks) {
             const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
-            const childSession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+            const childSession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
             await db.insert(workspaceTasks).values({
               id: newTask.id,
               workspaceId,
@@ -693,6 +700,7 @@ export class OrchestratorEngine {
               title: newTask.title,
               description: newTask.description,
               status: TaskStatus.Pending,
+              sessionId: childSession.id,
               orderIdx: plan.tasks.length,
               runId,
               phaseId: newTask.phaseId,
@@ -736,7 +744,7 @@ export class OrchestratorEngine {
             if (tasksToAdd.length > 0) {
               for (const newTask of tasksToAdd) {
                 const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
-                const childSession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
+                const childSession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, newAgent ?? null, newTask.title)
                 await db.insert(workspaceTasks).values({
                   id: newTask.id,
                   workspaceId,
@@ -744,6 +752,7 @@ export class OrchestratorEngine {
                   title: newTask.title,
                   description: newTask.description,
                   status: TaskStatus.Pending,
+                  sessionId: childSession.id,
                   orderIdx: plan.tasks.length,
                   runId,
                   phaseId: newTask.phaseId,
@@ -850,6 +859,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     workspaceId: string,
     signal: AbortSignal,
     attemptCount = 0,
+    ownerId = 'user',
   ): Promise<TaskResult> {
     const agent = plan.agents.find((a) => a.id === task.agentId)
     if (!agent) {
@@ -873,26 +883,39 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       }
     }
 
-    const childInfo = childSessions.get(task.id)
-    if (!childInfo) {
-      await emitRunEvent({
-        runId,
+    let childInfo = childSessions.get(task.id)
+    let shouldRepairChildSession = !childInfo
+    if (childInfo) {
+      const [existingChildSession] = await db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(eq(sessions.id, childInfo.sessionId))
+        .limit(1)
+      shouldRepairChildSession = !existingChildSession
+    }
+
+    if (shouldRepairChildSession) {
+      const repairedSession = await ensureAgentChildSession(
         workspaceId,
-        groupSessionId,
-        taskId: task.id,
-        agentId: agent.id,
-        type: 'task.failed',
-        severity: 'error',
-        payload: { title: task.title, error: `Child session not found for task ${task.id}` },
-      })
-      return {
-        taskId: task.id,
-        agentId: agent.id,
-        agentName: agent.name,
-        status: TaskStatus.Failed,
-        output: `Child session not found for task ${task.id}`,
-        artifacts: [],
+        plan.title || 'Agent Group',
+        ownerId,
+        agent,
+        task.title,
+      )
+      childInfo = {
+        sessionId: repairedSession.id,
+        workspaceId,
+        projectPath: childInfo?.projectPath ?? childSessions.values().next().value?.projectPath ?? null,
       }
+      childSessions.set(task.id, childInfo)
+      await db
+        .update(workspaceTasks)
+        .set({ sessionId: repairedSession.id })
+        .where(eq(workspaceTasks.id, task.id))
+    }
+
+    if (!childInfo) {
+      throw new Error(`Child session not found for task ${task.id}`)
     }
 
     // === PolicyGuard 评估 ===
@@ -967,6 +990,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     })
 
     const taskStartTime = Date.now()
+    let lastAgentOutput = ''
+    let lastArtifacts: Array<Record<string, unknown>> = []
 
     const GIT_IGNORE_PATTERNS = [/^\.git\//, /^\.git$/, /^node_modules\//, /^\.agenthub\//, /^\.env$/]
     const beforeDirs: string[] = []
@@ -1003,6 +1028,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
       const output = execResult.output
       const artifacts = execResult.artifacts
+      lastAgentOutput = output
+      lastArtifacts = artifacts
       const taskDuration = execResult.durationMs
 
       const afterDirs: string[] = []
@@ -1498,6 +1525,35 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         })
         .where(eq(workspaceTasks.id, task.id))
 
+      const [agentResultMessage] = await db
+        .insert(messages)
+        .values({
+          sessionId: groupSessionId,
+          senderId: agent.id,
+          senderType: 'agent',
+          type: 'text',
+          content: buildAgentGroupResultContent(agent.name, task.title, summary, artifacts),
+          metadata: {
+            agentName: agent.name,
+            role: agent.role,
+            runtimeType: agent.runtimeType,
+            orchestratorRunId: runId,
+            orchestratorTaskId: task.id,
+            childSessionId: childInfo.sessionId,
+            taskResult: true,
+            outputRef,
+            artifacts,
+          },
+        })
+        .returning()
+
+      if (agentResultMessage) {
+        broadcastSessionEvent(groupSessionId, {
+          type: WsEvent.MessageCompleted,
+          payload: { sessionId: groupSessionId, message: agentResultMessage },
+        })
+      }
+
       broadcastSessionEvent(groupSessionId, {
         type: WsEvent.TaskUpdate,
         payload: { taskId: task.id, status: TaskStatus.Done, sessionId: groupSessionId, agentId: agent.id, agentName: agent.name },
@@ -1569,13 +1625,47 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         },
       })
 
+      const [agentFailureMessage] = await db
+        .insert(messages)
+        .values({
+          sessionId: groupSessionId,
+          senderId: agent.id,
+          senderType: 'agent',
+          type: 'text',
+          content: buildAgentGroupFailureContent(
+            agent.name,
+            task.title,
+            error?.message || 'Unknown error',
+            lastAgentOutput,
+          ),
+          metadata: {
+            agentName: agent.name,
+            role: agent.role,
+            runtimeType: agent.runtimeType,
+            orchestratorRunId: runId,
+            orchestratorTaskId: task.id,
+            childSessionId: childInfo.sessionId,
+            taskResult: true,
+            taskStatus: TaskStatus.Failed,
+            artifacts: lastArtifacts,
+          },
+        })
+        .returning()
+
+      if (agentFailureMessage) {
+        broadcastSessionEvent(groupSessionId, {
+          type: WsEvent.MessageCompleted,
+          payload: { sessionId: groupSessionId, message: agentFailureMessage },
+        })
+      }
+
       return {
         taskId: task.id,
         agentId: agent.id,
         agentName: agent.name,
         status: TaskStatus.Failed,
-        output: '',
-        artifacts: [],
+        output: lastAgentOutput,
+        artifacts: lastArtifacts,
         error: error?.message || 'Unknown error',
       }
     }
@@ -1637,7 +1727,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             maxRetries: 1,
           }
 
-          const verifySession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, verifierAgent, verifyTask.title)
+          const verifySession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, verifierAgent, verifyTask.title)
           childSessions.set(verifyTaskId, {
             sessionId: verifySession.id,
             workspaceId,
@@ -1651,6 +1741,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             title: verifyTask.title,
             description: verifyTask.description,
             status: 'pending',
+            sessionId: verifySession.id,
             orderIdx: plan.tasks.length,
             runId,
             dependencies: [codeTask.id],
@@ -1689,7 +1780,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         maxRetries: 1,
       }
 
-      const reviewSession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, reviewerAgent, reviewTask.title)
+      const reviewSession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, reviewerAgent, reviewTask.title)
       childSessions.set(reviewTaskId, {
         sessionId: reviewSession.id,
         workspaceId,
@@ -1703,6 +1794,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         title: reviewTask.title,
         description: reviewTask.description,
         status: 'pending',
+        sessionId: reviewSession.id,
         orderIdx: plan.tasks.length,
         runId,
         dependencies: verifyTaskId ? [verifyTaskId] : [codeTask.id],
@@ -1993,7 +2085,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       maxRetries: 1,
     }
 
-    const childSession = await createOrchestratorChildSession(workspaceId, plan.title, ownerId, agent, task.title)
+    const childSession = await ensureAgentChildSession(workspaceId, plan.title, ownerId, agent, task.title)
     childSessions.set(taskId, {
       sessionId: childSession.id,
       workspaceId,
@@ -2007,6 +2099,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       title: task.title,
       description: task.description,
       status: TaskStatus.Pending,
+      sessionId: childSession.id,
       orderIdx: plan.tasks.length,
       runId,
       dependencies: task.dependencies,
@@ -2067,14 +2160,25 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
     const summary = await this.synthesizer.synthesize(plan, enrichedResults, conflictReports, typedBlackboardEntries)
 
-    // 检查是否有未通过的 review 或 validation，决定是否允许合并提示
+    // 检查是否有失败、阻塞或缺失结果，最终状态必须反映真实执行情况。
     const failedReviews = enrichedResults.filter(
       (r) => r.taskId.startsWith('review-') && (r.status === TaskStatus.Failed || r.status === TaskStatus.Blocked)
     )
     const failedValidations = enrichedResults.filter(
       (r) => r.status === TaskStatus.Failed && r.error?.includes('Validation')
     )
-    const hasPendingMergeBlockers = failedReviews.length > 0 || failedValidations.length > 0 || conflictReports.length > 0
+    const failedTasks = enrichedResults.filter((r) => r.status === TaskStatus.Failed)
+    const blockedTasks = enrichedResults.filter((r) => r.status === TaskStatus.Blocked)
+    const cancelledTasks = enrichedResults.filter((r) => r.status === TaskStatus.Cancelled)
+    const skippedTasks = enrichedResults.filter((r) => r.status === TaskStatus.Skipped)
+    const missingTasks = plan.tasks.filter((task) => !enrichedResults.some((r) => r.taskId === task.id))
+    const hasBlockingFailures =
+      failedTasks.length > 0 ||
+      blockedTasks.length > 0 ||
+      cancelledTasks.length > 0 ||
+      skippedTasks.length > 0 ||
+      missingTasks.length > 0 ||
+      conflictReports.length > 0
     const finalArtifacts = collectResultArtifacts(enrichedResults)
     const artifactNotice = finalArtifacts.length > 0
       ? `
@@ -2086,15 +2190,36 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 `
       : ''
 
-    const mergeNotice = hasPendingMergeBlockers
+    const taskById = new Map(plan.tasks.map((task) => [task.id, task]))
+    const issueLines = [
+      ...failedTasks.map((result) => {
+        const task = taskById.get(result.taskId)
+        return `- 失败：${task?.title ?? result.taskId}${result.agentName ? `（${result.agentName}）` : ''}${result.error ? `：${result.error}` : ''}`
+      }),
+      ...blockedTasks.map((result) => {
+        const task = taskById.get(result.taskId)
+        return `- 阻塞：${task?.title ?? result.taskId}${result.agentName ? `（${result.agentName}）` : ''}${result.error ? `：${result.error}` : ''}`
+      }),
+      ...cancelledTasks.map((result) => {
+        const task = taskById.get(result.taskId)
+        return `- 取消：${task?.title ?? result.taskId}${result.agentName ? `（${result.agentName}）` : ''}`
+      }),
+      ...skippedTasks.map((result) => {
+        const task = taskById.get(result.taskId)
+        return `- 跳过：${task?.title ?? result.taskId}${result.agentName ? `（${result.agentName}）` : ''}`
+      }),
+      ...missingTasks.map((task) => `- 未返回结果：${task.title}`),
+    ].slice(0, 12)
+
+    const mergeNotice = hasBlockingFailures
       ? `
 
 ---
 ⚠️ **交付需复核**
 
-Agent 已完成各自工作并写入工作区下的成员执行目录，但仍有以下事项需要复核：
-${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过\n` : ''}${failedValidations.length > 0 ? `- ${failedValidations.length} 个验证任务失败\n` : ''}${conflictReports.length > 0 ? `- 检测到 ${conflictReports.length} 个文件冲突未解决\n` : ''}
-请先查看子对话和产物卡，确认问题后再把需要的文件应用到正式工作区。
+本次运行没有完整成功，以下事项需要复核：
+${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过\n` : ''}${failedValidations.length > 0 ? `- ${failedValidations.length} 个验证任务失败\n` : ''}${conflictReports.length > 0 ? `- 检测到 ${conflictReports.length} 个文件冲突未解决\n` : ''}
+请先查看对应成员子对话和产物卡，确认问题后再决定是否重试、调整 Agent 配置或继续推进。
 `
       : `
 
@@ -2138,7 +2263,13 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
       }
     })
 
-    const runStatus = hasPendingMergeBlockers ? 'partial' : 'completed'
+    const completedTaskCount = enrichedResults.filter((r) => r.status === TaskStatus.Done).length
+    const finalRunStatus = hasBlockingFailures
+      ? OrchestratorRunStatus.Failed
+      : OrchestratorRunStatus.Completed
+    const deliveryStatus = hasBlockingFailures
+      ? completedTaskCount > 0 ? 'partial' : 'failed'
+      : 'completed'
 
     const [summaryMsg] = await db
       .insert(messages)
@@ -2170,13 +2301,18 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
             taskIds: plan.tasks.map((t) => t.id),
             workspaceId,
             artifactCount: finalArtifacts.length,
-            mergeBlocked: hasPendingMergeBlockers,
+            mergeBlocked: hasBlockingFailures,
+            failedTaskCount: failedTasks.length,
+            blockedTaskCount: blockedTasks.length,
+            cancelledTaskCount: cancelledTasks.length,
+            skippedTaskCount: skippedTasks.length,
+            missingTaskCount: missingTasks.length,
             failedReviewCount: failedReviews.length,
             failedValidationCount: failedValidations.length,
             unresolvedConflictCount: conflictReports.length,
           },
           delivery_report: {
-            status: runStatus,
+            status: deliveryStatus,
             runId,
             qaResult,
             files: deliveryFiles,
@@ -2188,14 +2324,14 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
 
     await db
       .update(orchestratorRuns)
-      .set({ status: 'completed', summaryMessageId: summaryMsg?.id ?? null })
+      .set({ status: finalRunStatus, summaryMessageId: summaryMsg?.id ?? null })
       .where(eq(orchestratorRuns.id, runId))
 
     broadcastSessionEvent(groupSessionId, {
       type: 'task_board:run_completed',
       payload: {
         runId,
-        status: 'completed',
+        status: finalRunStatus,
       },
     })
 
@@ -2203,8 +2339,17 @@ ${failedReviews.length > 0 ? `- ${failedReviews.length} 个审查任务未通过
       runId,
       workspaceId,
       groupSessionId,
-      type: 'run.completed',
-      payload: { summaryMessageId: summaryMsg?.id ?? null, taskCount: results.length },
+      type: finalRunStatus === OrchestratorRunStatus.Failed ? 'run.failed' : 'run.completed',
+      severity: finalRunStatus === OrchestratorRunStatus.Failed ? 'warning' : 'info',
+      payload: {
+        summaryMessageId: summaryMsg?.id ?? null,
+        taskCount: plan.tasks.length,
+        completedTaskCount,
+        failedTaskCount: failedTasks.length,
+        blockedTaskCount: blockedTasks.length,
+        cancelledTaskCount: cancelledTasks.length,
+        missingTaskCount: missingTasks.length,
+      },
     })
 
     broadcastSessionEvent(groupSessionId, {
@@ -2471,6 +2616,53 @@ function formatSummary(s: TaskOutputSummary): string {
   if (s.dependencies.length) parts.push(`依赖: ${s.dependencies.join(', ')}`)
   if (s.decisions.length) parts.push(`设计决策:\n` + s.decisions.map((d) => `  - ${d}`).join('\n'))
   return parts.join('\n')
+}
+
+function buildAgentGroupResultContent(
+  agentName: string,
+  taskTitle: string,
+  summary: TaskOutputSummary,
+  artifacts: Array<Record<string, unknown>>,
+): string {
+  const lines = [`**${agentName} / ${taskTitle}**`, '', summary.brief.trim() || '已完成该任务。']
+
+  const files = [
+    ...summary.filesCreated.map((file) => ({ file, label: '新建' })),
+    ...summary.filesModified.map((file) => ({ file, label: '修改' })),
+  ].slice(0, 8)
+
+  if (files.length > 0) {
+    lines.push('', '**文件变更**')
+    for (const item of files) lines.push(`- ${item.label}：${item.file}`)
+  }
+
+  if (summary.decisions.length > 0) {
+    lines.push('', '**关键判断**')
+    for (const decision of summary.decisions.slice(0, 5)) lines.push(`- ${decision}`)
+  }
+
+  if (artifacts.length > 0) {
+    lines.push('', `已附带 ${artifacts.length} 个产物，可在消息产物卡或任务看板中查看。`)
+  }
+
+  return lines.join('\n')
+}
+
+function buildAgentGroupFailureContent(
+  agentName: string,
+  taskTitle: string,
+  error: string,
+  output: string,
+): string {
+  const lines = [`**${agentName} / ${taskTitle}**`, '', '该任务执行失败，未产生可交付结果。']
+  lines.push('', '**失败原因**', error.trim() || 'Unknown error')
+
+  const detail = output.trim()
+  if (detail && detail !== error.trim()) {
+    lines.push('', '**Agent 输出摘录**', detail.slice(0, 1200))
+  }
+
+  return lines.join('\n')
 }
 
 async function summarizeTaskOutput(

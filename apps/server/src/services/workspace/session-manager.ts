@@ -124,37 +124,6 @@ export async function ensureAgentChildSession(
   return created
 }
 
-/**
- * 为 Orchestrator 任务创建独立的直接会话（不复用已有）。
- * 每个任务需要独立上下文。
- *
- * 替代 orchestrator-engine.ts:ensureChildSession。
- */
-export async function createOrchestratorChildSession(
-  workspaceId: string,
-  workspaceName: string,
-  ownerId: string,
-  agent: { id: string; name: string } | null,
-  taskTitle?: string,
-) {
-  const [created] = await db
-    .insert(sessions)
-    .values({
-      title: agent
-        ? `${workspaceName} / ${agent.name} / ${taskTitle?.slice(0, 24) || 'Task'}`
-        : `${workspaceName} / ${taskTitle?.slice(0, 24) || 'Agent'}`,
-      type: 'direct',
-      ownerId,
-      workspaceId,
-      workspaceAgentId: agent?.id ?? null,
-      metadata: { kind: 'orchestrator-task', hiddenFromSessionTree: true },
-    })
-    .returning()
-  if (!created)
-    throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Orchestrator 子会话创建失败')
-  return created
-}
-
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 async function findGroupSession(workspaceId: string) {

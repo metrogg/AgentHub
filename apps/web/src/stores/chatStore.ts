@@ -12,7 +12,7 @@ import {
 } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
-import { WsEvent, TaskStatus, MessageType, SessionType } from '@agenthub/shared'
+import { WsEvent, TaskStatus, MessageType, SessionType, SenderType } from '@agenthub/shared'
 
 let pendingStream: {
   messageId: string
@@ -28,7 +28,34 @@ const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: Wo
 function updateCachedMessages(sessionId: string, updater: (messages: Message[]) => Message[]) {
   const cached = messageCache.get(sessionId)
   if (!cached) return
-  messageCache.set(sessionId, updater(cached))
+  messageCache.set(sessionId, sortMessages(updater(cached)))
+}
+
+function messageTime(message: Message): number {
+  const time = Date.parse(message.createdAt)
+  return Number.isFinite(time) ? time : 0
+}
+
+function messageSortPriority(message: Message): number {
+  if (message.senderType === SenderType.User) return 0
+  if (message.senderType === SenderType.System) return 1
+  return 2
+}
+
+function sortMessages(messages: Message[]): Message[] {
+  return [...messages].sort((a, b) => {
+    const byTime = messageTime(a) - messageTime(b)
+    if (byTime !== 0) return byTime
+    const byPriority = messageSortPriority(a) - messageSortPriority(b)
+    return byPriority !== 0 ? byPriority : a.id.localeCompare(b.id)
+  })
+}
+
+function upsertMessage(messages: Message[], message: Message): Message[] {
+  const exists = messages.some((item) => item.id === message.id)
+  return sortMessages(
+    exists ? messages.map((item) => (item.id === message.id ? message : item)) : [...messages, message],
+  )
 }
 
 function sessionWorkspaceAgents(session: Session | null | undefined, agents: WorkspaceAgent[]) {
@@ -277,13 +304,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           )
         : [],
       loadingMessages: true,
-      messages: cachedMessages ?? [],
+      messages: cachedMessages ? sortMessages(cachedMessages) : [],
       streamingMessage: null,
       streamingCodeAgentRun: null,
       pendingAttachments: [],
       agentTyping: false,
       replyingToMessageId: null,
       replyingToMessage: null,
+      taskBoard: state.taskBoard?.sessionId === sessionId ? state.taskBoard : null,
+      agentTabs: state.taskBoard?.sessionId === sessionId ? state.agentTabs : [],
+      selectedAgentTab: state.taskBoard?.sessionId === sessionId ? state.selectedAgentTab : null,
     })
     wsClient.joinSession(sessionId)
     try {
@@ -291,7 +321,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         api.getSession(sessionId),
         api.listMessages(sessionId),
       ])
-      messageCache.set(sessionId, items)
+      messageCache.set(sessionId, sortMessages(items))
       if (session.workspaceId) {
         const full = await api.getWorkspace(session.workspaceId)
         workspaceDetailsCache.set(session.workspaceId, {
@@ -304,7 +334,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           currentSession: session,
           currentWorkspace: full.workspace,
           currentWorkspaceAgents: currentAgents,
-          messages: items,
+          messages: sortMessages(items),
           loadingMessages: false,
         })
       } else {
@@ -313,7 +343,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           currentSession: session,
           currentWorkspace: null,
           currentWorkspaceAgents: [],
-          messages: items,
+          messages: sortMessages(items),
           loadingMessages: false,
         })
       }
@@ -409,24 +439,49 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const contentForAgent = attachments.length
       ? appendAttachmentNote(content, attachments)
       : content
+    const displayContent = options?.displayContent ?? (attachments.length ? content : contentForAgent)
+    const optimisticId = `local-${crypto.randomUUID()}`
+    const optimisticMessage: Message = {
+      id: optimisticId,
+      sessionId,
+      senderId: 'default-user',
+      senderType: SenderType.User,
+      type: MessageType.Text,
+      content: displayContent,
+      metadata: null,
+      replyToMessageId: options?.replyToMessageId ?? get().replyingToMessageId,
+      createdAt: new Date().toISOString(),
+    }
+    set((s) => ({
+      messages: upsertMessage(s.messages, optimisticMessage),
+      pendingAttachments: [],
+      replyingToMessageId: null,
+      replyingToMessage: null,
+    }))
     try {
-      const replyToMessageId = options?.replyToMessageId ?? get().replyingToMessageId
+      const replyToMessageId = optimisticMessage.replyToMessageId ?? undefined
       const msg = await api.sendMessageWithModel(sessionId, {
         content: contentForAgent,
         attachments,
         displayContent: options?.displayContent ?? (attachments.length ? content : undefined),
         replyToMessageId,
       })
+      updateCachedMessages(sessionId, (messages) => upsertMessage(messages, msg))
       set((s) => ({
-        messages: [...s.messages, msg],
-        pendingAttachments: [],
-        replyingToMessageId: null,
-        replyingToMessage: null,
+        messages: upsertMessage(
+          s.messages.filter((message) => message.id !== optimisticId),
+          msg,
+        ),
       }))
       await get().fetchSessions()
       set({ agentTyping: false })
     } catch (error) {
-      set({ agentTyping: false, streamingMessage: null, streamingCodeAgentRun: null })
+      set((s) => ({
+        messages: s.messages.filter((message) => message.id !== optimisticId),
+        agentTyping: false,
+        streamingMessage: null,
+        streamingCodeAgentRun: null,
+      }))
       throw error
     }
     return undefined
@@ -652,12 +707,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const { message } = e.payload as { message: Message }
         cancelledSessions.delete(sessionId)
         clearPendingStream()
+        updateCachedMessages(sessionId, (messages) => upsertMessage(messages, message))
         set((s) => {
-          const exists = s.messages.some((msg) => msg.id === message.id)
           return {
-            messages: exists
-              ? s.messages.map((msg) => (msg.id === message.id ? message : msg))
-              : [...s.messages, message],
+            messages: upsertMessage(s.messages, message),
             streamingMessage: null,
             streamingCodeAgentRun: null,
             agentTyping: false,
@@ -780,56 +833,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
           payload?: Record<string, unknown>
         }
         set((s) => {
-          let updated = false
-          const newMessages = s.messages.map((msg) => {
-            if (
-              msg.type !== MessageType.TaskCard ||
-              !msg.metadata ||
-              typeof msg.metadata !== 'object'
-            )
-              return msg
-            const dispatchResult = (msg.metadata as Record<string, unknown>).dispatchResult as
-              | { runId?: string }
-              | undefined
-            if (!dispatchResult || dispatchResult.runId !== event.runId) return msg
-            const plan = (msg.metadata as Record<string, unknown>).plan as
-              | { tasks?: Array<{ id: string; status?: string }>; runStatus?: string }
-              | undefined
-            if (!plan || !Array.isArray(plan.tasks)) return msg
-            updated = true
-            const nextPlan = { ...plan }
-            if (
-              event.type === 'task.started' ||
-              event.type === 'task.completed' ||
-              event.type === 'task.failed' ||
-              event.type === 'task.cancelled' ||
-              event.type === 'task.retrying'
-            ) {
-              const taskId = event.taskId
-              if (taskId) {
-                nextPlan.tasks = plan.tasks.map((t) => {
-                  if (t.id !== taskId) return t
-                  const statusMap: Record<string, string> = {
-                    'task.started': 'running',
-                    'task.completed': TaskStatus.Done,
-                    'task.failed': TaskStatus.Failed,
-                    'task.cancelled': TaskStatus.Cancelled,
-                    'task.retrying': TaskStatus.Pending,
-                  }
-                  return { ...t, status: statusMap[event.type] ?? t.status }
-                })
-              }
-            }
-            if (event.type === 'run.completed') nextPlan.runStatus = 'completed'
-            if (event.type === 'run.failed') nextPlan.runStatus = 'failed'
-            if (event.type === 'run.cancelled') nextPlan.runStatus = 'cancelled'
-            if (event.type === 'run.synthesizing') nextPlan.runStatus = 'synthesizing'
-            return {
-              ...msg,
-              metadata: { ...(msg.metadata as Record<string, unknown>), plan: nextPlan },
-            }
-          })
-
           let nextTaskBoard = s.taskBoard
           if (nextTaskBoard && nextTaskBoard.runId === event.runId) {
             if (
@@ -880,11 +883,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (event.type === 'run.synthesizing') nextTaskBoard = { ...nextTaskBoard, status: 'synthesizing' }
           }
 
-          if (updated || nextTaskBoard !== s.taskBoard) {
+          if (nextTaskBoard !== s.taskBoard) {
             const nextAgentTabs = updateAgentTabsFromTaskBoard(s.agentTabs, nextTaskBoard, event)
-            return { messages: newMessages, taskBoard: nextTaskBoard, agentTabs: nextAgentTabs }
+            return { taskBoard: nextTaskBoard, agentTabs: nextAgentTabs }
           }
-          return { messages: newMessages }
+          return s
         })
         break
       }

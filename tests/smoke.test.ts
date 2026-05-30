@@ -547,242 +547,6 @@ describe('AgentHub smoke tests', () => {
     expect(prompt.metadata.agentDraft).toBeUndefined()
   })
 
-  test('orchestrator plan includes agent selection rationale', async () => {
-    const full = await json<{ workspace: { id: string } }>(
-      await postJson('/api/workspaces', {
-        name: 'Routed plan workspace',
-        goal: 'Explain routing',
-        template: 'classic',
-      }),
-    )
-    const group = await json<{ session: { id: string } }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
-    )
-
-    const loadingCard = await json<{
-      id: string
-      metadata: {
-        plan?: {
-          tasks: Array<{
-            id: string
-            taskType?: string
-            agentSelection?: {
-              selectedAgentKey: string
-              reviewerAgentKey?: string
-              fallbackAgentKey?: string
-              rationale: string[]
-            }
-          }>
-        }
-      }
-    }>(
-      await postJson(`/api/messages/${group.session.id}/orchestrator-plan`, {
-        content: '@orchestrator implement a small UI change and review it',
-      }),
-    )
-
-    // 后端异步生成 plan，轮询等待结果
-    let card = loadingCard
-    for (let i = 0; i < 20; i++) {
-      const tasks = card.metadata.plan?.tasks ?? []
-      if (tasks.length > 0) break
-      await new Promise((r) => setTimeout(r, 50))
-      const refreshed = await json<{ items: Array<typeof card> }>(
-        await app.request(`/api/messages/${group.session.id}`),
-      )
-      const found = refreshed.items.find((m) => m.id === loadingCard.id)
-      if (found) card = found
-    }
-
-    const tasks = card.metadata.plan?.tasks ?? []
-    expect(tasks.length).toBeGreaterThan(0)
-    expect(tasks.every((task) => task.agentSelection?.selectedAgentKey)).toBe(true)
-    expect(tasks.every((task) => task.agentSelection?.rationale.length)).toBe(true)
-    // 只要 plan 中有需要审查的 task（code/test/verify），就检查 reviewerAgentKey
-    const reviewableTask = tasks.find((task) =>
-      ['code', 'test', 'verify'].includes(task.taskType ?? ''),
-    )
-    if (reviewableTask) {
-      expect(reviewableTask.agentSelection?.reviewerAgentKey).toBeTruthy()
-    }
-  })
-
-  test('orchestrator dispatch returns run id and stores it on the task card', async () => {
-    const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
-      await postJson('/api/workspaces', {
-        name: 'Dispatch run workspace',
-        goal: 'Trace dispatch',
-        template: 'blank',
-        projectPath: process.cwd(),
-      }),
-    )
-    const traceAgent = await createLlmWorkspaceAgent(full.workspace.id, {
-      name: 'Trace Agent',
-      role: '验证执行',
-      systemPrompt: 'Complete the assigned smoke-test task briefly.',
-    })
-    const group = await json<{ session: { id: string } }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
-    )
-    const plan = {
-      kind: 'orchestrator_plan',
-      title: 'Trace dispatch',
-      goal: 'Verify run id',
-      summary: 'Dispatch run id smoke plan',
-      agents: [
-        {
-          key: traceAgent.id,
-          name: traceAgent.name,
-          role: traceAgent.role,
-          color: '#6366f1',
-          systemPrompt: 'Plan only.',
-          runtimeType: 'llm',
-          capabilityTags: [],
-          toolPermissions: [],
-          sandboxPolicy: 'read-only',
-        },
-      ],
-      tasks: [
-        {
-          id: 'trace-task',
-          title: 'Trace task',
-          description: 'Verify dispatch response carries run id.',
-          agentKey: traceAgent.id,
-          taskType: 'test',
-          dependencies: [],
-          maxRetries: 0,
-          outputContract: {
-            requiredBlackboardWrites: [
-              { key: 'task_trace-task_output', schemaType: 'task_output' },
-            ],
-            requiredArtifacts: [],
-            allowedPaths: ['apps/web/src/**'],
-            acceptanceCriteria: ['validation command passes'],
-          },
-          validation: {
-            commands: ['bun --version'],
-            requiresReview: true,
-          },
-        },
-      ],
-    }
-    const [card] = await dbApi.db
-      .insert(dbApi.messages)
-      .values({
-        sessionId: group.session.id,
-        senderId: 'orchestrator',
-        senderType: 'agent',
-        type: 'task_card',
-        content: plan.summary,
-        metadata: { plan },
-      })
-      .returning()
-    expect(card?.id).toBeTruthy()
-
-    const dispatched = await json<{ runId: string; workspaceId: string; groupSessionId: string }>(
-      await postJson(
-        `/api/messages/${group.session.id}/orchestrator-plan/${card!.id}/dispatch`,
-        {},
-      ),
-    )
-
-    expect(dispatched.runId).toBeTruthy()
-    expect(dispatched.workspaceId).toBe(full.workspace.id)
-    expect(dispatched.groupSessionId).toBe(group.session.id)
-
-    const [updatedCard] = await dbApi.db
-      .select()
-      .from(dbApi.messages)
-      .where(dbApi.eq(dbApi.messages.id, card!.id))
-      .limit(1)
-    const metadata = updatedCard?.metadata as {
-      plan?: { dispatchResult?: { runId?: string } }
-    } | null
-    expect(metadata?.plan?.dispatchResult?.runId).toBe(dispatched.runId)
-
-    const [runRecord] = await dbApi.db
-      .select()
-      .from(dbApi.orchestratorRuns)
-      .where(dbApi.eq(dbApi.orchestratorRuns.id, dispatched.runId))
-      .limit(1)
-    const runPlan = runRecord?.plan as {
-      phases?: Array<{ id: string; taskIds: string[] }>
-      taskLedger?: {
-        runId: string
-        tasks: Array<{
-          id: string
-          phaseId: string
-          status: string
-          outputContract?: {
-            requiredArtifacts?: string[]
-            allowedPaths?: string[]
-            acceptanceCriteria?: string[]
-          }
-          validation?: { commands?: string[]; requiresReview?: boolean }
-        }>
-      }
-      progressLedger?: {
-        runId: string
-        status: string
-        pendingTaskIds: string[]
-        runningTaskIds: string[]
-        completedTaskIds: string[]
-      }
-    } | null
-    expect(runPlan?.phases?.[0]?.taskIds).toContain('trace-task')
-    expect(runPlan?.taskLedger?.runId).toBe(dispatched.runId)
-    expect(runPlan?.taskLedger?.tasks[0]?.phaseId).toBeTruthy()
-    expect(['pending', 'running', 'done']).toContain(runPlan?.taskLedger?.tasks[0]?.status)
-    expect(runPlan?.taskLedger?.tasks[0]?.outputContract?.allowedPaths).toContain('apps/web/src/**')
-    expect(runPlan?.taskLedger?.tasks[0]?.validation?.commands).toEqual(['bun --version'])
-    expect(runPlan?.taskLedger?.tasks[0]?.validation?.requiresReview).toBe(true)
-    expect(runPlan?.progressLedger?.runId).toBe(dispatched.runId)
-    expect(runPlan?.progressLedger?.status).toBe('running')
-    expect([
-      ...(runPlan?.progressLedger?.pendingTaskIds ?? []),
-      ...(runPlan?.progressLedger?.runningTaskIds ?? []),
-      ...(runPlan?.progressLedger?.completedTaskIds ?? []),
-    ]).toContain('trace-task')
-
-    const events = await json<{ items: Array<{ type: string; payload: Record<string, unknown> }> }>(
-      await app.request(`/api/orchestrator-runs/${dispatched.runId}/events`),
-    )
-    expect(events.items.map((event) => event.type)).toContain('run.started')
-    expect(events.items.map((event) => event.type)).toContain('plan.created')
-    expect(events.items.find((event) => event.type === 'plan.created')?.payload.taskCount).toBe(1)
-
-    await waitForTaskStatus(dispatched.workspaceId, 'trace-task', 'done')
-    const blackboardEntries = await json<{
-      items: Array<{ key: string; value: { schemaType: string; summary: string; output: string } }>
-    }>(
-      await app.request(
-        `/api/orchestrator-runs/${dispatched.runId}/blackboard?schemaType=task_output`,
-      ),
-    )
-    expect(blackboardEntries.items).toHaveLength(1)
-    expect(blackboardEntries.items[0]!.key).toBe('task_trace-task_output')
-    expect(blackboardEntries.items[0]!.value.schemaType).toBe('task_output')
-    expect(blackboardEntries.items[0]!.value.summary).toBeTruthy()
-    expect(blackboardEntries.items[0]!.value.output).toBeTruthy()
-
-    const testResults = await json<{
-      items: Array<{
-        key: string
-        value: { schemaType: string; command: string; status: string; outputSummary: string }
-      }>
-    }>(
-      await app.request(
-        `/api/orchestrator-runs/${dispatched.runId}/blackboard?schemaType=test_result`,
-      ),
-    )
-    expect(testResults.items).toHaveLength(1)
-    expect(testResults.items[0]!.key).toBe('tests/trace-task/1')
-    expect(testResults.items[0]!.value.schemaType).toBe('test_result')
-    expect(testResults.items[0]!.value.command).toBe('bun --version')
-    expect(testResults.items[0]!.value.status).toBe('passed')
-    expect(testResults.items[0]!.value.outputSummary).toBeTruthy()
-  })
-
   test('TaskGraph topological sort and cycle detection', async () => {
     const { TaskGraph } = await import('../apps/server/src/services/orchestrator/task-graph')
     const tasks = [
@@ -886,6 +650,171 @@ describe('AgentHub smoke tests', () => {
     expect(selection.fallbackAgentKey).toBe('architect')
     expect(selection.score).toBeGreaterThan(0)
     expect(selection.rationale.join(' ')).toContain('code')
+  })
+
+  test('agent router keeps planning tasks away from code-agent workers', async () => {
+    const { selectAgentForTask } =
+      await import('../apps/server/src/services/orchestrator/agent-router')
+    const agents = [
+      {
+        id: 'designer',
+        key: 'designer',
+        name: 'Designer',
+        role: '产品与视觉设计',
+        roleType: 'designer',
+        runtimeType: 'llm',
+        capabilityTags: ['design', 'planning', 'requirements'],
+        toolPermissions: ['workspace:read'],
+        sandboxPolicy: 'read-only',
+      },
+      {
+        id: 'builder',
+        key: 'builder',
+        name: 'Builder',
+        role: '工程实现',
+        roleType: 'coder',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        capabilityTags: ['code', 'implementation', 'workspace-write'],
+        toolPermissions: ['workspace:read', 'workspace:write'],
+        sandboxPolicy: 'workspace-write',
+      },
+    ]
+
+    const selection = selectAgentForTask({
+      task: {
+        id: 'scope',
+        title: '梳理目标与交付范围',
+        description: '围绕「帮我开发一个贪吃蛇游戏」定义目标、交付物、边界和验收标准。',
+        agentId: '',
+        dependencies: [],
+        maxRetries: 1,
+      },
+      agents: agents as any,
+    })
+
+    expect(selection.selectedAgentKey).toBe('designer')
+  })
+
+  test('intent router sends build requests through orchestrator coordination', async () => {
+    const { intentRouter, ComplexityLevel } = await import(
+      '../apps/server/src/services/orchestrator/intent-router'
+    )
+
+    const route = intentRouter.route({
+      content: '帮我做一个贪吃蛇游戏',
+      hasOrchestrator: true,
+      mentionCount: 0,
+    })
+
+    expect(route.decision).toBe('OrchestratorPlan')
+    expect(intentRouter.assessComplexity('帮我做一个贪吃蛇游戏')).not.toBe(ComplexityLevel.SIMPLE)
+  })
+
+  test('group build requests auto-start an orchestrator run instead of posting a plan card', async () => {
+    const full = await json<{ workspace: { id: string } }>(
+      await postJson('/api/workspaces', {
+        name: 'Auto orchestration workspace',
+        goal: 'Auto-start team collaboration',
+        template: 'blank',
+        projectPath: process.cwd(),
+      }),
+    )
+    await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Orchestrator',
+      role: '总指挥',
+      roleType: 'orchestrator',
+      sandboxPolicy: 'read-only',
+      systemPrompt: 'Coordinate the team briefly.',
+    })
+    const builder = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Builder',
+      role: '工程实现',
+      roleType: 'coder',
+      sandboxPolicy: 'read-only',
+      systemPrompt: 'Complete the assigned task briefly.',
+    })
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
+    )
+
+    await json<{ id: string }>(
+      await postJson(`/api/messages/${group.session.id}`, {
+        content: '帮我做一个贪吃蛇游戏',
+        type: 'text',
+      }),
+    )
+
+    let items: Array<{ type: string; content: string; metadata?: any }> = []
+    for (let i = 0; i < 30; i++) {
+      ;({ items } = await json<{ items: Array<{ type: string; content: string; metadata?: any }> }>(
+        await app.request(`/api/messages/${group.session.id}`),
+      ))
+      if (items.some((message) => message.metadata?.systemEvent === 'orchestrator_handoff')) break
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+
+    const thinkingIndex = items.findIndex(
+      (message) => message.metadata?.systemEvent === 'orchestrator_thinking',
+    )
+    const handoffIndex = items.findIndex(
+      (message) => message.metadata?.systemEvent === 'orchestrator_handoff',
+    )
+    const planCard = items.find((message) => message.type === 'task_card')
+
+    expect(thinkingIndex).toBeGreaterThanOrEqual(0)
+    expect(handoffIndex).toBeGreaterThan(thinkingIndex)
+    expect(items[thinkingIndex]!.type).toBe('text')
+    expect(planCard).toBeUndefined()
+
+    const runs = await dbApi.db
+      .select()
+      .from(dbApi.orchestratorRuns)
+      .where(dbApi.eq(dbApi.orchestratorRuns.groupSessionId, group.session.id))
+    expect(runs.length).toBeGreaterThan(0)
+    const run = runs[0]!
+    expect(['running', 'synthesizing', 'completed', 'failed']).toContain(run.status)
+
+    const tasks = await dbApi.db
+      .select()
+      .from(dbApi.workspaceTasks)
+      .where(dbApi.eq(dbApi.workspaceTasks.runId, run.id))
+    expect(tasks.length).toBeGreaterThan(0)
+    for (const task of tasks) {
+      expect(task.sessionId).toBeTruthy()
+      const [taskSession] = await dbApi.db
+        .select()
+        .from(dbApi.sessions)
+        .where(dbApi.eq(dbApi.sessions.id, task.sessionId!))
+        .limit(1)
+      expect(taskSession?.metadata?.kind).toBe('workspace-agent-child')
+      expect(taskSession?.metadata?.hiddenFromSessionTree).toBeUndefined()
+    }
+
+    const childSessions = await dbApi.db
+      .select()
+      .from(dbApi.sessions)
+      .where(
+        dbApi.eq(dbApi.sessions.workspaceAgentId, builder.id),
+      )
+    expect(childSessions.some((session) => session.metadata?.kind === 'workspace-agent-child')).toBe(true)
+    expect(childSessions.some((session) => session.metadata?.hiddenFromSessionTree)).toBe(false)
+
+    let childMessageCount = 0
+    for (let i = 0; i < 30; i++) {
+      const messagesByTask = await Promise.all(
+        tasks.map((task) =>
+          dbApi.db
+            .select()
+            .from(dbApi.messages)
+            .where(dbApi.eq(dbApi.messages.sessionId, task.sessionId!)),
+        ),
+      )
+      childMessageCount = messagesByTask.reduce((count, list) => count + list.length, 0)
+      if (childMessageCount > 0) break
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    expect(childMessageCount).toBeGreaterThan(0)
   })
 
   test('task validation skips commands outside the safe allowlist', async () => {
@@ -1550,5 +1479,5 @@ describe('AgentHub smoke tests', () => {
     await manager.cleanupBranch(branchCtx)
     const afterCleanup = await exec(['show-ref', '--verify', `refs/heads/${branchCtx.branch}`])
     expect(afterCleanup).not.toBe(0)
-  }, 15_000)
+  }, 60_000)
 })

@@ -178,6 +178,10 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
         '--verbose',
         '--include-partial-messages',
       ]
+      if (outputFormat === 'stream-json') {
+        if (cfg['verbose'] !== false) args.push('--verbose')
+        if (cfg['includePartialMessages'] !== false) args.push('--include-partial-messages')
+      }
       // 支持会话恢复：如果有 sessionId，使用 --session-id 保持会话连续性
       if (options?.sessionId) {
         args.push('--session-id', options.sessionId)
@@ -235,8 +239,8 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       if (options?.sandboxPolicy !== 'read-only' && cfg['skipPermissions'] !== false) {
         args.push('--dangerously-skip-permissions')
       }
-      args.push(options?.promptFile ? buildFileBackedPrompt(options.promptFile) : prompt)
       if (options?.promptFile) args.push('--file', options.promptFile)
+      args.push(options?.promptFile ? buildFileBackedPrompt(options.promptFile) : prompt)
       return args
     },
   },
@@ -253,6 +257,13 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       return args
     },
   },
+}
+
+export const __codeAgentAdapterTestHooks = {
+  buildClaudeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
+    adapters['claude-code'].buildArgs(prompt, options),
+  consumeClaudeStreamJson,
+  extractClaudeResultMessage,
 }
 
 export function isCodeAgentProfile(profile?: AgentRunProfile) {
@@ -490,7 +501,9 @@ async function resolveCodeAgentModelTarget(
   return null
 }
 
-async function resolveRuntimeModelTarget(modelId?: string | null): Promise<CodeAgentModelTarget | null> {
+async function resolveRuntimeModelTarget(
+  modelId?: string | null,
+): Promise<CodeAgentModelTarget | null> {
   const effectiveModelId = modelId?.trim()
   if (!effectiveModelId) return null
 
@@ -515,7 +528,10 @@ async function resolveRuntimeModelTarget(modelId?: string | null): Promise<CodeA
   }
 }
 
-function resolveCodeAgentModelId(agentModelId?: string | null, toolConfig?: Record<string, unknown>) {
+function resolveCodeAgentModelId(
+  agentModelId?: string | null,
+  toolConfig?: Record<string, unknown>,
+) {
   return resolveCodeAgentModelCandidates(agentModelId, toolConfig)[0] ?? null
 }
 
@@ -718,6 +734,8 @@ function buildCodeAgentPrompt(
     `允许的工具范围：${(profile.toolPermissions ?? ['chat']).join('、')}。`,
     '请遵循项目内已有约定，保持改动聚焦。',
     '请使用上面的真实项目路径，不要编造 /agent-workspace 之类的容器路径。',
+    '请完成任务要求的实际交付物后给出最终总结并正常退出，不要等待用户继续确认。',
+    '除非任务明确要求只输出计划，否则不要只创建 plan.md 或 TODO 后就结束。',
     '所有面向用户的计划、状态、总结和错误说明都请使用中文。',
     skillContext,
     '',
@@ -805,8 +823,7 @@ async function runCodeAgentCommand(
     adapter.promptMode === 'file' ? writeCodeAgentPromptFile(adapter.command, prompt) : undefined
   const commandPrompt = promptFile
     ? buildFileBackedPrompt(promptFile)
-    : process.platform === 'win32' &&
-        (adapter.command === 'codex' || adapter.command === 'claude')
+    : process.platform === 'win32' && (adapter.command === 'codex' || adapter.command === 'claude')
       ? buildAsciiSafePrompt(prompt)
       : prompt
   // 生成或获取 session ID 用于会话恢复
@@ -2530,8 +2547,8 @@ function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
   )
   const useAnthropicSdk = isAnthropicLike(modelTarget.provider, modelTarget.anthropicBaseUrl)
   const rawBaseUrl = useAnthropicSdk
-    ? modelTarget.anthropicBaseUrl ?? modelTarget.openaiBaseUrl
-    : modelTarget.openaiBaseUrl ?? modelTarget.anthropicBaseUrl
+    ? (modelTarget.anthropicBaseUrl ?? modelTarget.openaiBaseUrl)
+    : (modelTarget.openaiBaseUrl ?? modelTarget.anthropicBaseUrl)
   const baseUrl = useAnthropicSdk ? normalizeAnthropicOpencodeBaseUrl(rawBaseUrl) : rawBaseUrl
   const modelRef = `${modelTarget.providerKey}/${modelTarget.modelId}`
   const apiKey = modelTarget.apiKey?.trim() || readEnv('AGENTHUB_MODEL_API_KEY') || ''
