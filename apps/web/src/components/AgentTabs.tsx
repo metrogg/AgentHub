@@ -1,8 +1,10 @@
 import { CheckCircle2, XCircle, Clock } from 'lucide-react'
 
 export interface AgentTab {
+  taskId: string
   agentId: string
   agentName: string
+  taskTitle: string
   roleIcon: string
   status: 'pending' | 'running' | 'done' | 'failed'
   childSessionId: string | null
@@ -13,7 +15,7 @@ export interface AgentTab {
 interface AgentTabsProps {
   tabs: AgentTab[]
   selectedTab: string | null
-  onSelect: (agentId: string | null) => void
+  onSelect: (taskId: string | null) => void
   activeAgentCount: number
   runStatus: string
 }
@@ -74,14 +76,14 @@ export function AgentTabs({ tabs, selectedTab, onSelect, activeAgentCount, runSt
 
       <div className="flex-1 overflow-y-auto">
         {tabs.map((tab) => {
-          const isSelected = selectedTab === tab.agentId
+          const isSelected = selectedTab === tab.taskId
           const isDisabled = !tab.childSessionId
 
           return (
             <div
-              key={tab.agentId}
+              key={tab.taskId}
               onClick={() => {
-                if (!isDisabled) onSelect(tab.agentId)
+                if (!isDisabled) onSelect(tab.taskId)
               }}
               className={`cursor-pointer px-3 py-2.5 transition-colors border-l-2 ${
                 isSelected
@@ -95,6 +97,9 @@ export function AgentTabs({ tabs, selectedTab, onSelect, activeAgentCount, runSt
                 <span className="flex-shrink-0 ml-auto">
                   <StatusIndicator status={tab.status} />
                 </span>
+              </div>
+              <div className="mt-0.5 ml-6">
+                <p className="text-[10px] text-gray-500 truncate">{tab.taskTitle}</p>
               </div>
 
               {tab.status === 'running' && tab.progress !== undefined && (

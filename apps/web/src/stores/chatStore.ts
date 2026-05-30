@@ -156,33 +156,37 @@ function updateAgentTabsFromTaskBoard(
   const task = taskBoard.tasks.find((t) => t.id === taskId)
   if (!task) return currentTabs
 
-  const tabIndex = currentTabs.findIndex((t) => t.agentName === task.agentName)
+  const tabIndex = currentTabs.findIndex((t) => t.taskId === task.id)
   if (tabIndex === -1) {
     const newTab: AgentTab = {
-      agentId: task.id,
+      taskId: task.id,
+      agentId: task.agentId || task.id,
       agentName: task.agentName,
+      taskTitle: task.title,
       roleIcon: getRoleIcon(task.agentName, task.title),
       status: task.status === 'running' ? 'running' : task.status === 'done' ? 'done' : task.status === 'failed' ? 'failed' : 'pending',
-      childSessionId: (event.payload?.sessionId as string) ?? null,
+      childSessionId: (event.payload?.sessionId as string) ?? task.childSessionId ?? null,
     }
     return [...currentTabs, newTab]
   }
 
   return currentTabs.map((tab, i) => {
     if (i !== tabIndex) return tab
-    const sessionId = (event.payload?.sessionId as string) ?? tab.childSessionId
+    const sessionId = (event.payload?.sessionId as string) ?? tab.childSessionId ?? task.childSessionId
     const status: AgentTab['status'] =
       task.status === 'running' ? 'running'
       : task.status === 'done' ? 'done'
       : task.status === 'failed' ? 'failed'
       : 'pending'
-    return { ...tab, status, childSessionId: sessionId }
+    return { ...tab, status, childSessionId: sessionId, taskTitle: task.title, agentName: task.agentName }
   })
 }
 
 interface AgentTab {
+  taskId: string
   agentId: string
   agentName: string
+  taskTitle: string
   roleIcon: string
   status: 'pending' | 'running' | 'done' | 'failed'
   childSessionId: string | null
@@ -225,11 +229,13 @@ interface ChatState {
       phaseId: string
       title: string
       description: string
+      agentId: string
       agentName: string
       status: 'pending' | 'running' | 'done' | 'failed' | 'blocked' | 'cancelled'
       progress?: number
       progressStatus?: string
       dependencies: string[]
+      childSessionId?: string | null
     }>
     status: 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
     sessionId: string
@@ -628,18 +634,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ previewUrl: url, previewFileType: fileType, previewFileName: fileName })
   },
 
-  selectAgentTab(agentId: string | null) {
+  selectAgentTab(taskId: string | null) {
     const { agentTabs, currentSessionId: groupSessionId } = get()
-    if (agentId === null) {
+    if (taskId === null) {
       set({ selectedAgentTab: null })
       if (groupSessionId) {
         get().selectSession(groupSessionId)
       }
       return
     }
-    const tab = agentTabs.find((t) => t.agentId === agentId)
+    const tab = agentTabs.find((t) => t.taskId === taskId)
     if (!tab || !tab.childSessionId) return
-    set({ selectedAgentTab: agentId })
+    set({ selectedAgentTab: taskId })
     get().selectSession(tab.childSessionId)
   },
 
@@ -1068,25 +1074,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
           phaseId: t.phaseId || '',
           title: t.title || '',
           description: t.description || '',
+          agentId: t.agentId || t.agentKey || '',
           agentName: t.agentName || t.agentKey || t.agentId || '',
           status: 'pending' as const,
           dependencies: t.dependencies || [],
           childSessionId: t.childSessionId ?? null,
         }))
-        const seenAgents = new Map<string, AgentTab>()
-        for (const t of taskBoardTasks) {
-          if (!t.agentName || seenAgents.has(t.agentName)) continue
-          seenAgents.set(t.agentName, {
-            agentId: t.id,
+        set((state) => ({
+          ...state,
+          agentTabs: taskBoardTasks.map((t) => ({
+            taskId: t.id,
+            agentId: t.agentId || t.id,
             agentName: t.agentName,
+            taskTitle: t.title,
             roleIcon: getRoleIcon(t.agentName, t.title),
             status: 'pending',
             childSessionId: t.childSessionId ?? null,
-          })
-        }
-        set((state) => ({
-          ...state,
-          agentTabs: Array.from(seenAgents.values()),
+          })),
           selectedAgentTab: state.taskBoard?.runId !== runId ? null : state.selectedAgentTab,
           taskBoard: {
             runId,
@@ -1121,7 +1125,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               : t
           )
           const nextAgentTabs = state.agentTabs.map((tab) => {
-            const task = nextTasks.find((t) => t.id === tab.agentId)
+            const task = nextTasks.find((t) => t.id === tab.taskId)
             if (task) {
               return { ...tab, progress: percent, progressStatus: status }
             }

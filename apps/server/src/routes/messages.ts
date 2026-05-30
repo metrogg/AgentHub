@@ -33,7 +33,6 @@ import {
   asc,
   desc,
 } from '@agenthub/db'
-import { inArray } from 'drizzle-orm'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 import { broadcastSessionEvent, runAgentReply } from '../services/agent-runner'
@@ -70,6 +69,7 @@ import { intentRouter } from '../services/orchestrator/intent-router'
 import { buildAgentProfile } from '../services/agents/profile-builder'
 import {
   ensureAgentChildSession,
+  ensureOrchestratorTaskSession,
 } from '../services/workspace/session-manager'
 
 const artifactDemoSchema = z.object({
@@ -341,7 +341,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
         if (matchedAgents.length > 0) {
           const targetAgent = matchedAgents[0]!
-          await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
           const [workspace] = await db
             .select()
             .from(workspaces)
@@ -357,7 +356,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         } else {
           const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
           if (orchestrator) {
-            await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
             const [workspace] = await db
               .select()
               .from(workspaces)
@@ -459,7 +457,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
           if (matchedAgents.length > 0) {
             const targetAgent = matchedAgents[0]!
-            await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
             const [workspace] = await db
               .select()
               .from(workspaces)
@@ -472,7 +469,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           } else {
             const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
             if (orchestrator) {
-              await ensureWorkspaceAgentChildSessions(session.workspaceId, user.sub)
               const [workspace] = await db
                 .select()
                 .from(workspaces)
@@ -764,49 +760,6 @@ async function profileForDirectSession(session: typeof sessions.$inferSelect) {
   return toAgentProfile(agent, workspace?.projectPath)
 }
 
-async function ensureWorkspaceAgentChildSessions(workspaceId: string, ownerId: string) {
-  const [workspace] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1)
-  if (!workspace || workspace.ownerId !== ownerId) return
-
-  // 只给群聊 session_members 中的 Agent 创建 child session，避免 workspace 下所有 Agent 都出现子话题
-  const [groupSession] = await db
-    .select()
-    .from(sessions)
-    .where(and(eq(sessions.workspaceId, workspaceId), eq(sessions.type, 'group')))
-    .orderBy(desc(sessions.createdAt))
-    .limit(1)
-
-  if (!groupSession) return
-
-  const members = await db
-    .select()
-    .from(sessionMembers)
-    .where(eq(sessionMembers.sessionId, groupSession.id))
-
-  const agentMemberIds = members.filter((m) => m.memberType === 'agent').map((m) => m.memberId)
-
-  if (agentMemberIds.length === 0) return
-
-  const agents = await db
-    .select()
-    .from(workspaceAgents)
-    .where(
-      and(
-        eq(workspaceAgents.workspaceId, workspaceId),
-        inArray(workspaceAgents.id, agentMemberIds),
-      ),
-    )
-    .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
-
-  for (const agent of agents) {
-    await ensureAgentChildSession(workspace.id, workspace.name, ownerId, agent)
-  }
-}
-
 async function dispatchPlanToExistingGroup(
   session: typeof sessions.$inferSelect,
   ownerId: string,
@@ -962,8 +915,6 @@ async function handleSimpleReply(
 
   const profile = toAgentProfile(orchestrator, workspace?.projectPath)
 
-  await ensureWorkspaceAgentChildSessions(workspaceId, ownerId)
-
   const agentUserMsg: MessageRow = {
     id: randomUUID(),
     sessionId,
@@ -1037,12 +988,14 @@ async function startPlanRunInExistingGroup(params: {
     const dependencies = (task.dependencies ?? []).map((depId) => taskIdRemap.get(depId) ?? depId)
     task.dependencies = dependencies
 
-    const childSession = await ensureAgentChildSession(
+    const childSession = await ensureOrchestratorTaskSession(
       workspaceId,
       workspaceRecord?.name ?? plan.title,
       ownerId,
       agent ?? null,
       task.title,
+      runId,
+      taskId,
     )
 
     const [workspaceTask] = await db
