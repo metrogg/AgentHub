@@ -3,6 +3,8 @@
 定位：AgentHub for Feishu\
 目标：把 AgentHub 从“自研 IM 多 Agent 平台”扩展为“嵌入飞书群聊的多 Agent 协作编排器”。
 
+> 状态：历史方案草稿，部分 runtime/协议边界已过期。当前权威路径请以 `docs/当前多Agent协作架构.md` 为准。
+
 **1. 背景与结论**\
 AgentHub 当前已经具备 Orchestrator、Runtime、Code Agent、Git 分支隔离、Artifact、Workspace、Web/Desktop 控制台等核心能力。继续完整自研 IM 会消耗大量产品和前端成本，且企业协作场景天然发生在飞书、企微、钉钉这类办公 IM 中。
 
@@ -112,7 +114,7 @@ tenant access token
 - RuntimeRegistry
 - LlmRuntime
 - CodeAgentRuntime
-- NativeToolRuntime
+- Skills / MCP / Rules 能力层
 - GitBranchManager
 - workspaceTasks
 - orchestratorRuns

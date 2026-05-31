@@ -271,7 +271,7 @@ export const __codeAgentAdapterTestHooks = {
 }
 
 export function isCodeAgentProfile(profile?: AgentRunProfile) {
-  return profile?.runtimeType === 'code-agent' && Boolean(profile.codeAgentType)
+  return profile?.runtimeType === 'code-agent'
 }
 
 export async function* streamCodeAgentReply(

@@ -10,9 +10,9 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 - **Agent 群聊**：用户在群聊里提出目标，Orchestrator 负责理解、规划、分工和总结。
 - **任务子对话**：每个成员在自己的子对话里真实接收任务并执行，主群聊只展示进度和汇报。
 - **动态任务 DAG**：由模型生成计划，按依赖顺序执行，不使用固定场景模板。
-- **A2A 通信标准**：Orchestrator 给成员分发任务时统一生成 A2A v0.3 `message/send`，本地 LLM、Code Agent、MCP/Native Tool 都作为本地 A2A Agent 运行。
+- **A2A 通信标准**：Orchestrator 给成员分发任务时统一生成 A2A v0.3 `message/send`，A2A 是通信协议，不是 Agent 类型。
 - **显式分工**：执行任务只接受 Orchestrator/Planner 的模型指派，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
-- **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI。
+- **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI；自建 Agent 是在这些 Coding Agent 基底上配置角色、提示词、Skills/MCP 能力和权限。
 - **工作目录与 handoff**：每个 Agent 有自己的工作目录，上游产物通过 `.agenthub/handoff` 交给下游。
 - **产物可见**：文件、网页、diff、诊断产物会进入消息 metadata 和任务看板。
 
@@ -25,7 +25,7 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
   -> 用户分发执行
   -> 为每个任务创建 orchestrator-task 子对话
   -> Orchestrator 生成 A2A message/send envelope
-  -> LocalA2ATransport 分发给本地 A2A Agent
+  -> LocalA2ATransport 分发给本地执行宿主
   -> Agent 在子对话里执行并输出
   -> 产出以 A2A responseTask / artifact metadata 写入消息、黑板和 handoff 目录
   -> 主群聊展示成员汇报、产物和最终总结
@@ -40,6 +40,21 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 
 更详细的当前架构见 [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)。
 
+## 分层定位
+
+AgentHub 的目标不是做一个固定角色模板系统，而是把多 Coding Agent 协作做成可见、可控、可追踪的 IM 产品：
+
+| 层 | 当前定位 |
+| --- | --- |
+| 产品交互层 | 群聊、私聊、任务子对话、任务看板、产物卡 |
+| 编排层 | Orchestrator 动态规划 DAG，调度、取消、重试、汇总 |
+| 通信协议层 | A2A 承载 Agent 间 message/task/artifact，AG-UI 承载运行事件到 UI |
+| 执行层 | Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Agent 基底，LLM 为内部/兜底 |
+| 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
+| 工作区层 | 项目根 + `.agenthub/workdirs` + `.agenthub/handoff` + blackboard |
+
+完整分层和业内方案对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)。
+
 ## 技术栈
 
 | 层面 | 技术 |
@@ -51,7 +66,7 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 | UI | Tailwind CSS + Radix UI + assistant-ui |
 | 状态 | Zustand |
 | 数据库 | SQLite + Drizzle ORM |
-| LLM | OpenAI-compatible + Anthropic-compatible streaming client |
+| LLM | OpenAI-compatible + Anthropic-compatible streaming client，用于 Orchestrator/Planner/Synthesizer 和 fallback |
 | Code Agent | Codex CLI / Claude Code / OpenCode / Gemini CLI |
 | Agent 通信 | A2A v0.3 message/send + AgentHub local/remote transport |
 
@@ -146,6 +161,7 @@ bun test
 ## 重要文档
 
 - [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)
+- [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)
 - [docs/使用指南.md](docs/使用指南.md)
 - [docs/AgentHub-项目全景与多Agent协作重构指南.md](docs/AgentHub-项目全景与多Agent协作重构指南.md)
 - [docs/多Agent协作设计调研与优化方案.md](docs/多Agent协作设计调研与优化方案.md)
@@ -159,5 +175,5 @@ bun test
 - 不要恢复旧的 `workspace-agent-child` 群聊入口。
 - 不要把“任务失败但已有部分产物”显示成完全无产物。
 - 不要让下游 Agent 假设上游相对路径存在；优先使用黑板中的 `handoffPath`。
-- `runtimeType: a2a` 的 Agent 需要显式配置 A2A endpoint，不能静默回落到 LLM。
+- `runtimeType` 只应为 `code-agent` 或 `llm`；A2A/MCP/Skills 都不是 Agent 类型。
 - UI 改动要保持主群聊、私聊、任务子对话的边界清晰。

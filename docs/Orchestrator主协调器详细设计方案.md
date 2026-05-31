@@ -3,6 +3,7 @@
 > 日期：2026-05-27  
 > 范围：群聊模式下的主 Agent 协调器，包括意图理解、任务拆解、Agent 分派、并行调度、失败降级、代码冲突处理、结果聚合和聊天流汇报。  
 > 目标：把赛题中一句“主 Agent 协调器”拆成可实现、可演示、可扩展的工程设计。
+> 状态：历史设计资料，部分 runtime/协议边界已调整。当前实现请以 `docs/当前多Agent协作架构.md` 和 `docs/多Agent协作分层架构与业内对比.md` 为准。本文中的固定团队、远程 runtime、分支隔离等旧设计不代表当前默认路径。
 
 ---
 
@@ -100,7 +101,7 @@ AgentHub 当前已有：
 - `Synthesizer`：汇总子 Agent 产出。
 - `Blackboard`：版本化共享状态。
 - `ExecutionTracer`：记录 LLM、tool、blackboard、task_start/task_end 等日志。
-- `RuntimeRegistry`：统一 `llm`、`code-agent`、`mcp`。
+- `RuntimeRegistry`：统一 `llm`、`code-agent`；A2A 是通信协议，MCP 是工具能力层。
 
 需要补齐的是一个更清晰的 **Orchestrator Run 协议**：
 
@@ -509,7 +510,6 @@ interface SchedulerPolicy {
   "maxGlobalConcurrency": 3,
   "maxConcurrencyByRuntime": {
     "llm": 3,
-    "mcp": 4,
     "code-agent": 1
   },
   "maxConcurrencyByAgent": 1,
@@ -770,7 +770,7 @@ interface AgentRosterItem {
   key: string
   name: string
   role: string
-  runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
+  runtimeType: 'llm' | 'code-agent'
   codeAgentType?: string
   capabilityTags: string[]
   toolPermissions: string[]
@@ -803,7 +803,7 @@ score =
 
 | 任务 | 优先 Agent |
 |---|---|
-| 代码库扫描 | mcp / native read-only |
+| 代码库扫描 | code-agent with read-only |
 | 架构设计 | architect LLM |
 | 代码修改 | code-agent with workspace-write |
 | 测试修复 | code-agent |
@@ -819,7 +819,7 @@ interface EphemeralAgentSpec {
   key: string
   name: string
   purpose: string
-  baseRuntimeType: 'llm' | 'mcp'
+  baseRuntimeType: 'llm' | 'code-agent'
   allowedTools: string[]
   contextSlice: string
   outputContract: TaskOutputContract
@@ -1269,8 +1269,8 @@ Reviewer 不只是最终审查，还应参与冲突判断：
 
 ### P4：协议化扩展
 
-1. MCP tools/resources/roots。
-2. A2A remote runtime。
+1. MCP tools/resources/roots 作为 Code Agent 能力层。
+2. A2A remote endpoint 作为协议层配置。
 3. Agent Card。
 
 ---

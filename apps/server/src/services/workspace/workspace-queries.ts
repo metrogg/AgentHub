@@ -29,7 +29,7 @@ export async function loadWorkspaceFull(id: string, ownerId: string) {
     .from(workspaceAgentRelations)
     .where(eq(workspaceAgentRelations.workspaceId, id))
     .orderBy(asc(workspaceAgentRelations.createdAt))
-  return { workspace: ws, agents, tasks, agentRelations }
+  return { workspace: ws, agents: agents.map(normalizeWorkspaceAgentRuntime), tasks, agentRelations }
 }
 
 export async function ensureWorkspace(id: string, ownerId: string) {
@@ -38,5 +38,15 @@ export async function ensureWorkspace(id: string, ownerId: string) {
     throw new HTTPException(404, { message: 'Workspace not found' })
   }
   return ws
+}
+
+function normalizeWorkspaceAgentRuntime<T extends { runtimeType: string; codeAgentType: string | null }>(agent: T): T {
+  if (agent.runtimeType === 'llm') return { ...agent, codeAgentType: null }
+  if (agent.runtimeType === 'code-agent' && agent.codeAgentType) return agent
+  return {
+    ...agent,
+    runtimeType: 'code-agent',
+    codeAgentType: agent.codeAgentType ?? 'codex',
+  }
 }
 

@@ -1,6 +1,6 @@
 # AgentHub Development Guide
 
-This file is for Claude Code and other coding agents working inside this repository. For product context, also read `README.md` and `docs/当前多Agent协作架构.md`.
+This file is for Claude Code and other coding agents working inside this repository. For product context, also read `README.md`, `docs/当前多Agent协作架构.md`, and `docs/多Agent协作分层架构与业内对比.md`.
 
 ## Product Definition
 
@@ -15,6 +15,19 @@ AgentHub is an IM-style multi-agent collaboration platform. The expected behavio
 Do not implement fixed scenario templates as the core path. The platform must stay general-purpose first.
 Role presets may be used as a manual creation library, but they must not auto-seed a workspace, define a default team, or override model-generated assignments.
 
+## Layered Mental Model
+
+Before changing code, identify which layer you are working on:
+
+- Product interaction: IM group chat, global agent direct chat, task child conversations, task boards, artifact cards.
+- Orchestration: Orchestrator, Planner, dynamic DAG, TaskScheduler, Synthesizer, approvals, cancellation, retry, resume.
+- Protocols: A2A for agent-to-agent message/task/artifact semantics; AG-UI for run events surfaced to the frontend.
+- Execution: Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary agent bases. `llm` is internal/fallback support.
+- Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
+- Workspace and state: `.agenthub/workdirs`, `.agenthub/handoff`, blackboard entries, execution logs, run events, and persisted task state.
+
+AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
+
 ## Stack
 
 - Runtime: Bun >= 1.1.0
@@ -27,6 +40,7 @@ Role presets may be used as a manual creation library, but they must not auto-se
 - LLM: OpenAI-compatible and Anthropic-compatible streaming client
 - Agent communication: A2A v0.3 `message/send` via AgentHub local transport
 - Code agents: Codex CLI, Claude Code, OpenCode, Gemini CLI
+- MCP, Skills, and Rules are tool/capability layers for code agents, not agent runtime types.
 
 ## Commands
 
@@ -79,7 +93,7 @@ OrchestratorEngine.dispatch()
   -> TaskScheduler executes dependency layers
   -> Orchestrator builds A2A message/send envelope
   -> TaskExecutionService sends through LocalA2ATransport
-  -> local A2A agent adapts to LLM / Code Agent / Native Tool runtime
+  -> local execution host adapts to LLM fallback / Code Agent runtime
   -> blackboard stores summaries, decisions, artifact refs as A2A metadata/artifact extensions
   -> .agenthub/handoff materializes readable upstream artifacts
   -> main group chat receives task result messages
@@ -92,11 +106,12 @@ Internal agent-to-agent task dispatch must use A2A objects, not a parallel hidde
 
 - `apps/server/src/services/protocols/a2a-internal.ts` builds the internal `message/send` envelope and response `Task`.
 - `apps/server/src/services/execution/local-a2a-transport.ts` is the local transport facade.
-- `apps/server/src/services/runtime/a2a-runtime.ts` calls remote A2A JSON-RPC endpoints for agents with `runtimeType === "a2a"`.
 - Child conversation user messages persist the A2A request envelope in metadata.
 - Agent outputs and group task reports persist A2A response message/task metadata.
-- A remote A2A agent must provide `roleProfile.a2aEndpoint` or a URL-like `modelId`; do not silently fall back to LLM if it is missing.
+- A2A is a communication protocol, not an agent runtime type. Remote A2A endpoints belong in `roleProfile.protocol = "a2a"` plus `roleProfile.a2aEndpoint`.
 - Blackboard and `.agenthub/handoff` remain AgentHub extensions to A2A artifacts, not separate static routing systems.
+
+The current implementation is an internal A2A envelope plus AgentHub local transport. Do not reintroduce `runtimeType = "a2a"` or show A2A as a selectable agent kind.
 
 ### Session Tree Rules
 
@@ -147,12 +162,13 @@ Core files:
 - `apps/server/src/services/runtime/runtime-registry.ts`
 - `apps/server/src/services/runtime/llm-runtime.ts`
 - `apps/server/src/services/runtime/code-agent-runtime.ts`
-- `apps/server/src/services/runtime/native-tool-runtime.ts`
 - `apps/server/src/services/code-agent-adapter.ts`
 
 When reporting CLI errors, use the actual adapter display name. For example, an OpenCode failure must not say "Codex CLI started".
 
 If a CLI generated files but failed later, report it as a failed task with partial artifacts retained. Do not say the task produced nothing.
+
+User-created agents are specialist profiles on top of coding agents: name, role, system prompt, tool permissions, MCP/Skills, sandbox policy, and context policy. Do not model them as plain LLM agents unless explicitly configured as fallback.
 
 ## Data Model
 
@@ -228,6 +244,7 @@ bun test
 ## Deprecated Or Risky Areas
 
 - `workspace-agent-child`: legacy child session design. Keep hidden from current group UX.
+- A2A/MCP/Skills as runtime types: removed from the active identity model. They are protocol/capability layers.
 - Static fallback plan templates: avoid as normal UX. Prefer model-generated dynamic plans.
 - Static agent routing, keyword-based task reassignment, auto Researcher injection, and artifact-extension follow-up tasks are removed from the active path. Do not reintroduce them; validate explicit Orchestrator/Planner assignments instead.
 - `classic` workspace seeding, default code teams, and `create-from-template` are removed from the active product path.

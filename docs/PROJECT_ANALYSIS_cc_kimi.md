@@ -2,6 +2,7 @@
 
 > **版本**: v0.1.0 | **日期**: 2026-05-28 | **分支**: dev/wzd
 > **定位**: 多 Agent 协作平台 — 字节 AI 全栈挑战赛参赛作品
+> **状态**: 历史分析资料，部分 runtime/MCP/A2A、默认团队和 Git 隔离描述已过期。当前权威路径请以 `docs/当前多Agent协作架构.md` 和 `docs/多Agent协作分层架构与业内对比.md` 为准。
 
 ---
 
@@ -29,15 +30,15 @@ AgentHub 是一个**本地优先的多 Agent 协作平台**，用户可以与 AI
 | 能力 | 状态 | 说明 |
 |------|------|------|
 | 单 Agent 对话 | ✅ 成熟 | LLM 流式对话，支持多模型切换 |
-| 多 Agent 编排 | ✅ 核心 | DAG 任务图 + 并发调度 + 自动审查 |
+| 多 Agent 编排 | ✅ 核心 | DAG 任务图 + 并发调度 + 成员真实任务子对话 |
 | Code Agent 执行 | ✅ 成熟 | Codex / Claude Code / OpenCode / Gemini CLI 适配 |
-| Git 分支隔离 | ✅ 独特 | 每个 Agent 任务独立 worktree，冲突检测 + LLM 三路合并 |
+| 工作目录隔离 | ✅ 当前默认 | 项目根 + `.agenthub/workdirs` + `.agenthub/handoff`，先保证可执行、可查看、可交接 |
 | Blackboard 共享内存 | ✅ 成熟 | 带版本控制、类型化、命名空间隔离的 KV 存储 |
-| Intent Router | ✅ 可用 | 启发式复杂度评估，自动路由到编排器 |
+| Intent Router | ✅ 可用 | 消息入口分流；复杂任务分工必须来自 Orchestrator/Planner 的模型输出 |
 | 桌面应用 | ✅ 可用 | Tauri v2 + Rust 侧载 |
 | 移动配对 | ✅ 可用 | Android 端配对码认证 |
-| A2A 协议 | ❌ 未实现 | `runtimeType: 'a2a'` 已定义但无实现 |
-| MCP 服务器 | ⚠️ 部分 | `NativeToolRuntime` 实现了 MCP runtime 类型，但非标准 MCP 协议 |
+| A2A 协议 | ✅ 内部接入中 | 当前作为通信协议使用，不再作为 Agent/runtime 类型 |
+| MCP 服务器 | ⚠️ 能力层 | 当前作为 Code Agent 可用工具/能力方向，不再作为 Agent/runtime 类型 |
 
 ### 1.3 代码规模估算
 
@@ -292,7 +293,7 @@ Rust 命令：`pick_workspace_folder`, `open_in_editor`, `notify_user`, `desktop
 - 调用 `streamReply()` 流式输出
 - 支持 OpenAI-compatible 和 Anthropic 两种 API
 
-#### NativeToolRuntime
+#### Code Agent 能力层
 
 - **多轮工具调用循环**，最多 `AGENTHUB_NATIVE_MAX_TOOL_ROUNDS`（默认 6）轮
 - 工具集：`workspace_info`, `list_files`, `read_file`, `search_code`, `list_skills`, `read_skill`
@@ -928,7 +929,7 @@ Swarm 的核心洞察：Agent 之间的切换（Handoff）应该是最简单的�
 
 SWE-Agent 的核心创新：为 LLM 设计专用的命令接口（`find_file`, `search_dir`），比原始 shell 命令高效得多。
 
-**AgentHub 可借鉴**: NativeToolRuntime 的只读工具集已经是这个方向，可以扩展为更丰富的 ACI。
+**AgentHub 可借鉴**: 只读工具集可以作为 Code Agent 的 MCP/Skills 能力层，扩展为更丰富的 ACI。
 
 ### 7.3 中国开源项目参考
 
@@ -971,9 +972,9 @@ components/chat/AssistantMessage.tsx
 components/chat/AgentArtifactsCard.tsx
 ```
 
-#### 1.3 删除 `native-agent-loop.ts`
+#### 1.3 删除旧 native 工具循环
 
-直接使用 `NativeToolRuntime`，消除代码重复。
+统一收口到 Code Agent 能力层，消除旧工具循环重复。
 
 #### 1.4 统一前后端类型
 

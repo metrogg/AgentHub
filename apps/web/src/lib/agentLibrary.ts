@@ -207,7 +207,7 @@ export function createSavedAgent(
   input: Partial<AgentConfigInput> & Pick<AgentConfigInput, 'name' | 'role'>,
 ): SavedAgentConfig {
   const now = new Date().toISOString()
-  const runtimeType = input.runtimeType ?? 'code-agent'
+  const runtimeType = normalizeRuntimeType(input.runtimeType)
   return normalizeSavedAgent({
     id:
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -229,13 +229,14 @@ export function createSavedAgent(
     sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
     contextPolicy: input.contextPolicy ?? 'workspace-aware',
     autoInvoke: input.autoInvoke ?? true,
-    approvalRequired: input.approvalRequired ?? (input.runtimeType === 'code-agent' ? false : true),
+    approvalRequired: input.approvalRequired ?? (runtimeType === 'code-agent' ? false : true),
     createdAt: now,
     updatedAt: now,
   })!
 }
 
 export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
+  const runtimeType = normalizeRuntimeType(agent.runtimeType)
   return {
     name: agent.name,
     role: agent.role,
@@ -246,14 +247,14 @@ export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
     roleProfile: agent.roleProfile ?? null,
     color: agent.color ?? '#111827',
     modelId: agent.modelId ?? null,
-    runtimeType: agent.runtimeType ?? 'llm',
-    codeAgentType: agent.runtimeType === 'code-agent' ? (agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null,
+    runtimeType,
+    codeAgentType: runtimeType === 'code-agent' ? (agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null,
     capabilityTags: [...(agent.capabilityTags ?? [])],
     toolPermissions: [...(agent.toolPermissions ?? [])],
     sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
     contextPolicy: agent.contextPolicy ?? 'workspace-aware',
     autoInvoke: agent.autoInvoke ?? true,
-    approvalRequired: agent.runtimeType === 'code-agent' ? false : (agent.approvalRequired ?? true),
+    approvalRequired: runtimeType === 'code-agent' ? false : (agent.approvalRequired ?? true),
   }
 }
 
@@ -287,7 +288,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
   if (!value || typeof value !== 'object') return null
   const input = value as Partial<SavedAgentConfig>
   if (!input.name?.trim() || !input.role?.trim()) return null
-  const runtimeType = input.runtimeType ?? 'llm'
+  const runtimeType = normalizeRuntimeType(input.runtimeType)
   return {
     id: input.id || `${Date.now()}-${Math.random()}`,
     name: input.name.trim(),
@@ -331,6 +332,7 @@ function normalizeLibraryState(value: unknown): AgentLibraryState {
 }
 
 function isPlaceholderSavedAgent(agent: SavedAgentConfig) {
+  const runtimeType = normalizeRuntimeType(agent.runtimeType)
   return (
     normalizeAgentText(agent.name) === 'new agent' &&
     normalizeAgentText(agent.role) === '协作' &&
@@ -338,7 +340,7 @@ function isPlaceholderSavedAgent(agent: SavedAgentConfig) {
       normalizeAgentText('描述这个 Agent 的职责、产出和适合处理的任务。') &&
     normalizeAgentText(agent.systemPrompt ?? '') ===
       normalizeAgentText('你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。') &&
-    (agent.runtimeType ?? 'llm') === 'code-agent' &&
+    runtimeType === 'code-agent' &&
     (agent.codeAgentType ?? 'codex') === 'codex'
   )
 }
@@ -358,7 +360,7 @@ function defaultCodeAgentTypeFor(
 function dedupeSavedAgents(agents: SavedAgentConfig[]) {
   const seen = new Set<string>()
   return agents.filter((agent) => {
-    const runtimeType = (agent.runtimeType ?? 'llm').trim().toLowerCase()
+    const runtimeType = normalizeRuntimeType(agent.runtimeType)
     const codeAgentType = runtimeType === 'code-agent' ? (agent.codeAgentType ?? '').trim().toLowerCase() : ''
     const key = [
       agent.name.trim().toLowerCase(),
@@ -370,6 +372,10 @@ function dedupeSavedAgents(agents: SavedAgentConfig[]) {
     seen.add(key)
     return true
   })
+}
+
+function normalizeRuntimeType(value?: string | null): SavedAgentConfig['runtimeType'] {
+  return value === 'llm' ? 'llm' : 'code-agent'
 }
 
 function normalizeSavedRelation(value: unknown): SavedAgentRelation | null {

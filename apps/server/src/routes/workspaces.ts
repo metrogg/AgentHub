@@ -53,7 +53,7 @@ const createAgentSchema = z.object({
   roleProfile: z.record(z.unknown()).nullable().optional(),
   color: z.string().max(20).default('#6366f1'),
   modelId: z.string().max(120).nullable().optional(),
-  runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']).default('llm'),
+  runtimeType: z.enum(['llm', 'code-agent']).default('code-agent'),
   codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
   capabilityTags: z.array(z.string().max(40)).max(12).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30).default([]),
@@ -101,17 +101,7 @@ function normalizeAgentCreateDefaults(input: z.infer<typeof createAgentSchema>):
       approvalRequired: false,
     }
   }
-  if (input.runtimeType === 'mcp') {
-    return {
-      ...input,
-      modelId: null,
-      codeAgentType: null,
-      toolPermissions: ['workspace:read', 'skills:read'],
-      sandboxPolicy: 'read-only',
-      approvalRequired: true,
-    }
-  }
-  return input
+  return { ...input, codeAgentType: null }
 }
 
 /** 更新 Agent 时只填充显式为 null 的字段，不覆盖已有配置 */
@@ -120,7 +110,11 @@ function normalizeAgentUpdateDefaults(
   currentRuntimeType?: string | null,
 ): z.infer<typeof updateAgentSchema> {
   const result = { ...input }
-  const nextRuntimeType = input.runtimeType ?? currentRuntimeType
+  const normalizedCurrentRuntime = normalizeRuntimeType(currentRuntimeType)
+  const nextRuntimeType = input.runtimeType ?? normalizedCurrentRuntime
+  if (!input.runtimeType && currentRuntimeType && currentRuntimeType !== normalizedCurrentRuntime) {
+    result.runtimeType = normalizedCurrentRuntime
+  }
   if (nextRuntimeType === 'code-agent') {
     if (input.codeAgentType === null) {
       result.codeAgentType = 'codex'
@@ -135,14 +129,12 @@ function normalizeAgentUpdateDefaults(
   if (input.runtimeType === 'llm' && currentRuntimeType === 'code-agent' && input.modelId === undefined) {
     result.modelId = null
   }
-  if (nextRuntimeType === 'mcp') {
-    result.modelId = null
-    result.codeAgentType = null
-    result.toolPermissions = ['workspace:read', 'skills:read']
-    result.sandboxPolicy = 'read-only'
-    result.approvalRequired = true
-  }
+  if (nextRuntimeType === 'llm') result.codeAgentType = null
   return result
+}
+
+function normalizeRuntimeType(value?: string | null): 'llm' | 'code-agent' {
+  return value === 'llm' ? 'llm' : 'code-agent'
 }
 
 // ---------- Routes ----------

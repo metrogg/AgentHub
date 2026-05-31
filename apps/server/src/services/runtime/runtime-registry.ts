@@ -1,9 +1,4 @@
-import {
-  isCodeAgentProfile,
-  isNativeAgentProfile,
-  type AgentProfile,
-  type AgentRuntime,
-} from './agent-runtime'
+import { isCodeAgentProfile, type AgentProfile, type AgentRuntime } from './agent-runtime'
 
 export class RuntimeRegistry {
   private readonly runtimes = new Map<string, AgentRuntime>()
@@ -28,9 +23,6 @@ export class RuntimeRegistry {
     }
     if (isCodeAgentProfile(profile)) {
       return this.runtimes.get('code-agent') ?? fallback
-    }
-    if (isNativeAgentProfile(profile)) {
-      return this.runtimes.get('mcp') ?? fallback
     }
     return this.runtimes.get(profile.runtimeType) ?? fallback
   }

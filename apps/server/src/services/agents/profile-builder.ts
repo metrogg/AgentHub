@@ -57,8 +57,8 @@ export function buildAgentProfile(
     systemPrompt: agent.systemPrompt ?? undefined,
     color: agent.color ?? undefined,
     modelId: agent.modelId ?? null,
-    runtimeType: (agent.runtimeType ?? 'llm') as AgentRunProfile['runtimeType'],
-    codeAgentType: (agent.codeAgentType ?? undefined) as AgentRunProfile['codeAgentType'],
+    runtimeType: normalizeRuntimeType(agent.runtimeType),
+    codeAgentType: normalizeCodeAgentType(agent),
     a2aEndpoint: resolveA2AEndpoint(agent),
     capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: overrides?.toolPermissions ?? agent.toolPermissions ?? [],
@@ -76,8 +76,26 @@ function resolveA2AEndpoint(agent: AgentRow): string | null {
     stringValue(profile.agentCardUrl) ??
     stringValue(profile.endpoint)
   if (profileEndpoint) return profileEndpoint
-  if (agent.runtimeType === 'a2a' && looksLikeUrl(agent.modelId)) return agent.modelId!.trim()
+  if (looksLikeUrl(agent.modelId) && stringValue(profile.protocol) === 'a2a') return agent.modelId!.trim()
   return null
+}
+
+function normalizeRuntimeType(value?: string | null): AgentRunProfile['runtimeType'] {
+  if (value === 'llm') return 'llm'
+  return 'code-agent'
+}
+
+function normalizeCodeAgentType(agent: AgentRow): AgentRunProfile['codeAgentType'] {
+  if (normalizeRuntimeType(agent.runtimeType) !== 'code-agent') return undefined
+  if (
+    agent.codeAgentType === 'codex' ||
+    agent.codeAgentType === 'claude-code' ||
+    agent.codeAgentType === 'opencode' ||
+    agent.codeAgentType === 'gemini'
+  ) {
+    return agent.codeAgentType
+  }
+  return 'codex'
 }
 
 function stringValue(value: unknown): string | null {

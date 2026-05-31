@@ -1,6 +1,7 @@
 # AgentHub 竞品全景对比与差距分析
 
-> 本文基于 AgentHub 当前代码实现（2026-05-29），与 Kimi Agent Cluster、讯飞 AstronClaw、OpenAI Agents SDK、LangGraph、CrewAI、MetaGPT、Magentic-One、Coze 等主流多 Agent 产品/框架进行逐维度对比。
+> 本文基于 AgentHub 当时代码实现（2026-05-29），与 Kimi Agent Cluster、讯飞 AstronClaw、OpenAI Agents SDK、LangGraph、CrewAI、MetaGPT、Magentic-One、Coze 等主流多 Agent 产品/框架进行逐维度对比。
+> 状态：历史竞品分析，部分 runtime/MCP/A2A 描述已过期。当前权威路径请以 `docs/当前多Agent协作架构.md` 为准。
 
 ---
 
@@ -21,8 +22,8 @@
 │  Agent 执行层：RuntimeRegistry                                        │
 │  - LlmRuntime（流式包装）                                            │
 │  - CodeAgentRuntime（codex/claude/opencode/gemini CLI 适配）          │
-│  - NativeToolRuntime → 已升级为 MCP Runtime（真正的 MCP 客户端）    │
-│  - A2aRuntime：❌ 有接口定义，零实现                                  │
+│  - MCP / Skills / Rules：Code Agent 能力层                            │
+│  - A2A：通信协议，不作为 Runtime                                      │
 ├─────────────────────────────────────────────────────────────────────┤
 │  状态层：Workspace State（文件 JSON）+ Blackboard（SQLite）          │
 │  - Run Ledger：内存驻留，重启丢失                                    │
@@ -154,7 +155,7 @@
 | **本地工具** | ✅ 文件系统、代码搜索、ripgrep | 取决于 MCP 服务器 | 未知 | 需自建 | 有限 |
 
 **AgentHub 的优势**：
-- 刚刚升级为 **真正的 MCP Runtime**，工具和 OpenAI Agents SDK 一样接入 MCP 生态。这是重大进步。
+- 当前方向是把 MCP、Skills、Rules 作为 Code Agent 能力层接入，避免把工具协议误做成 Agent 类型。
 
 ---
 
@@ -207,7 +208,7 @@
 1. **IM 式群聊 + 本地代码执行**：这是 AgentHub 最独特的定位。Kimi/讯飞是云端产品，OpenAI/LangGraph/CrewAI 是代码框架，Coze 是低代码平台。AgentHub 是**本地运行的、IM 式交互的、真正执行代码的**工作台。
 2. **Git 分支隔离 + 人工确认闭环**：从代码安全角度，AgentHub 的 worktree 隔离 + diff 审阅 + squash merge 确认是比大多数框架更成熟的设计。
 3. **@mention 路由 + 模式切换**：用户可以在 Orchestrator 执行中随时 `@Agent` 切换为直接对话，这种灵活性在竞品中很少见。
-4. **真正的 MCP Runtime**：刚刚升级，工具生态可扩展性追平了 OpenAI Agents SDK。
+4. **Code Agent 能力层**：MCP、Skills、Rules 可作为 Codex / Claude Code / OpenCode / Gemini CLI 的工具能力扩展。
 5. **Typed Blackboard**：带有 schema 验证的共享状态，比纯消息传递更结构化。
 
 ---
@@ -240,7 +241,7 @@
 
 | # | 问题 | 影响 | 对标 |
 |---|---|---|---|
-| 13 | **A2A Runtime 未实现** | 无法与外部 Agent 互操作 | Google A2A Protocol |
+| 13 | **远程 A2A endpoint 适配不足** | 外部 Agent 互操作还需要协议层适配 | Google A2A Protocol |
 | 14 | **ConflictResolver 自动合并非功能性** | 多 Agent 修改同一文件时无法自动解决 | 需完善 3-way merge |
 | 15 | **无小型动态 Swarm（3-8 临时 worker）** | 广度搜索/并行调研场景效率低 | Kimi Agent Swarm |
 | 16 | **Run 控制弱**（无暂停/继续/跳过单任务） | 用户控制力不足 | LangGraph `interrupt` |
@@ -267,7 +268,7 @@
 
 ### Phase 3：生态扩展（3-4 周）—— 追赶 P2
 
-11. **A2A Runtime 实现**：接入 Google A2A Protocol，让 AgentHub Agent 能被外部调用，也能调用外部 A2A Agent。
+11. **A2A endpoint 适配**：在协议层接入 Google A2A Protocol，让 AgentHub 能被外部调用，也能调用外部 A2A Agent。
 12. **Run 控制增强**：暂停 → 修改计划 → 继续；跳过阻塞任务；单任务重试。
 13. **小型 Swarm 模式**：对于搜索/调研类任务，支持一键创建 3-8 个并行子 Agent，结果汇总。
 14. **Plan 模板市场**：预置常见任务的 Plan 模板（如"开发小游戏"、"写技术报告"），减少 LLM 生成的不稳定性。

@@ -39,7 +39,7 @@ export interface AgentRolePreset {
   description: string
   systemPrompt: string
   color: string
-  runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
+  runtimeType: 'llm' | 'code-agent'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   toolPermissions: string[]

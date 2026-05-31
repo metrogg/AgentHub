@@ -115,6 +115,14 @@ export function getActiveRunSessionIds() {
   return Array.from(activeRuns.keys())
 }
 
+export function cancelAllAgentReplies() {
+  const sessionIds = getActiveRunSessionIds()
+  for (const sessionId of sessionIds) {
+    cancelAgentReply(sessionId)
+  }
+  return sessionIds
+}
+
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
 import { DEFAULT_ENV_ALLOWLIST } from './execution/agent-execution-envelope'
 import { gitBranchManager } from './git/branch-manager'

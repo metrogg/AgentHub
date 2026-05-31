@@ -62,6 +62,14 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
       }),
     ]
   }
+  if (event.type === 'plan.created') {
+    return [
+      buildAgUiPlanCreatedEvent({
+        plan: payload,
+        ref: baseRef,
+      }),
+    ]
+  }
   if (event.type === 'task.started') {
     return [
       buildAgUiTaskStartedEvent({
@@ -166,6 +174,21 @@ export function buildAgUiRunErrorEvent(params: {
     threadId: params.ref?.threadId,
     timestamp: eventTimestamp(params.ref?.timestampMs),
     type: EventType.RUN_ERROR,
+  }
+}
+
+export function buildAgUiPlanCreatedEvent(params: {
+  plan: Record<string, unknown>
+  ref?: AgentHubRunRef
+}): CustomEvent {
+  return {
+    name: 'agenthub.plan.created',
+    parentRunId: params.ref?.parentRunId,
+    runId: params.ref?.runId,
+    threadId: params.ref?.threadId,
+    timestamp: eventTimestamp(params.ref?.timestampMs),
+    type: EventType.CUSTOM,
+    value: params.plan,
   }
 }
 

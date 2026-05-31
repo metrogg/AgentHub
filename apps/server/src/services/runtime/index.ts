@@ -1,14 +1,10 @@
 import { runtimeRegistry } from './runtime-registry'
 import { LlmRuntime } from './llm-runtime'
-import { NativeToolRuntime } from './native-tool-runtime'
 import { CodeAgentRuntime } from './code-agent-runtime'
-import { A2ARuntime } from './a2a-runtime'
 
-// 注册所有 Runtime
+// Runtime 是 Agent 执行基底。A2A 是通信协议，MCP/Skills 是工具能力，不注册为 Agent 类型。
 runtimeRegistry.register(new LlmRuntime())
-runtimeRegistry.register(new NativeToolRuntime())
 runtimeRegistry.register(new CodeAgentRuntime())
-runtimeRegistry.register(new A2ARuntime())
 
 export { runtimeRegistry }
 export * from './agent-runtime'

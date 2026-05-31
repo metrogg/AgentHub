@@ -3,6 +3,7 @@
 > 日期：2026-05-28  
 > 定位：面向人类开发者与 LLM Coding Agent 的 llmwiki 风格项目说明。  
 > 范围：基于当前仓库代码、`AGENTS.md`、`README.md`、`docs/` 既有资料，以及行业公开资料综合整理。  
+> 状态：历史调研/设计资料，部分实现细节已过期。当前权威路径请以 `docs/当前多Agent协作架构.md`、`docs/多Agent协作分层架构与业内对比.md` 和 `README.md` 为准。本文中的 Git worktree 隔离、自动审查、固定路由等内容只作为历史参考。
 
 ---
 
@@ -67,10 +68,10 @@ AgentHub 的核心不是传统工作流编辑器，而是 IM 式多 Agent 工作
 | 模块 | 职责 | 说明 |
 |---|---|---|
 | `agent-runner.ts` | 会话房间、流式回复、取消、上下文裁剪、Runtime 调用、消息落库 | 所有 Agent 回复的实际入口 |
-| `runtime/*` | `llm`、`code-agent`、`mcp` 三类 Runtime 的统一接口与注册 | 当前 `mcp` 实际是原生只读工具 Runtime，不是真正 MCP server/client |
+| `runtime/*` | `llm`、`code-agent` 两类 Runtime 的统一接口与注册 | MCP/Skills/Rules 已收敛为 Code Agent 能力层，不再作为 Runtime 类型 |
 | `llm-client.ts` / `llm.ts` | OpenAI-compatible 与 Anthropic 流式客户端 | 模型配置从 DB settings 与 env 合并 |
 | `code-agent-adapter.ts` | Codex/Claude Code/OpenCode/Gemini CLI 适配 | 复杂度高，建议继续切小 |
-| `tool-registry.ts` | 原生只读工具注册与执行 | 是 Native Tool Runtime 的工具边界 |
+| `tool-registry.ts` | 原生只读工具注册与执行 | 是能力/工具边界，不再作为独立 Native Tool Runtime |
 | `skill-registry.ts` | Skill 发现、匹配与上下文注入 | 适合服务 role-specific Agent |
 | `blackboard.ts` | 结构化共享状态、版本、查询、订阅 | 多 Agent 协作的事实源雏形 |
 | `blackboard-schemas.ts` | fact/decision/risk/artifact_ref/diff_summary/test_result/task_output schema | 方向正确，但还缺权限和生命周期策略 |
@@ -121,11 +122,10 @@ flowchart TB
 
   Runner --> Registry["RuntimeRegistry"]
   Registry --> LLM["LlmRuntime"]
-  Registry --> Native["NativeToolRuntime"]
   Registry --> Code["CodeAgentRuntime"]
 
   Code --> CLI["Codex / Claude Code / OpenCode / Gemini CLI"]
-  Native --> Tools["Read-only Tool Registry"]
+  Code --> Capabilities["Skills / MCP / Rules / Tool Permissions"]
   LLM --> LLMClient["LLM Client"]
 
   Orch --> Planner["Planner"]
@@ -164,11 +164,11 @@ AgentHub 当前实际存在三种拓扑，后续产品和代码都应该明确�
 
 当前 Agent 的关键字段来自 `workspace_agents` 和 `AgentProfile`：
 
-- `runtimeType`: `llm`、`code-agent`、`mcp`、`a2a`
+- `runtimeType`: `code-agent`、`llm`
 - `codeAgentType`: `codex`、`claude-code`、`opencode`、`gemini`
 - `roleType`: `clarifier`、`architect`、`researcher`、`coder`、`reviewer`、`integrator`、`custom`
 - `capabilityTags`: 能力标签，用于 routing 和 skill 匹配
-- `toolPermissions`: 工具权限，用于 Native Tool Runtime
+- `toolPermissions`: 工具权限，用于约束 Code Agent 和本地工具能力
 - `sandboxPolicy`: `read-only`、`workspace-write`、`danger-full-access`
 - `contextPolicy`: `recent-only`、`pinned-recent`、`workspace-aware`
 - `approvalRequired`: 是否需要人工批准
@@ -181,10 +181,8 @@ AgentHub 当前实际存在三种拓扑，后续产品和代码都应该明确�
 |---|---|---|---|
 | `llm` | `runtime/llm-runtime.ts` | 普通 LLM 对话，支持 Harness system prompt | 不会真实修改文件，容易被误用为执行型 Agent |
 | `code-agent` | `runtime/code-agent-runtime.ts` + `code-agent-adapter.ts` | 调本机 Code Agent CLI，能产生 metadata 和真实代码变更 | 单任务 dispatch 没有 Orchestrator 分支隔离；CLI 适配复杂 |
-| `mcp` | `runtime/native-tool-runtime.ts` | OpenAI/Anthropic function calling 风格只读工具循环 | 名称像 MCP，但目前不是标准 MCP 协议实现 |
-| `a2a` | schema 中保留 | 尚未实现 | 过早暴露会造成产品承诺不一致 |
 
-建议把 `mcp` 在 UI/文档中暂时称为“原生只读工具 Agent”，等真正接入 MCP server/client 后再改名。
+A2A 是通信协议；MCP、Skills、Rules 是 Code Agent 的工具/能力层，不再作为 Runtime 矩阵中的独立类型。
 
 ---
 
@@ -630,7 +628,7 @@ CrewAI 把 Flow 和 Crew 分开：Flow 管确定性控制流和状态，Crew 管
 
 ### 9.6 MCP
 
-MCP 适合定义工具、资源、roots 和客户端确认边界。AgentHub 当前的 `NativeToolRuntime` 已经有“只读工具”思想，但还不是标准 MCP。
+MCP 适合定义工具、资源、roots 和客户端确认边界。当前 AgentHub 不把 MCP 做成独立 runtime；MCP、Skills、Rules 都应作为 Code Agent 的工具/能力层接入。
 
 建议：
 

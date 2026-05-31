@@ -41,6 +41,7 @@ import { buildAgentProfile, buildAgentProfileWithWorktree } from '../agents/prof
 import { ensureOrchestratorTaskSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST, resolveDefaultWorkDir } from '../execution/agent-execution-envelope'
 import { buildA2ADispatchEnvelope, buildA2AExecutionTask } from '../protocols/a2a-internal'
+import { buildAgUiTaskStatusEvent } from '../protocols'
 import { runtimeRegistry, type AgentProfile } from '../runtime'
 import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 import { env } from '../../env'
@@ -93,6 +94,18 @@ export class OrchestratorEngine {
     if (!engine) return false
     engine.scheduler.cancelRun(runId)
     return true
+  }
+
+  static getActiveRunIds() {
+    return [...OrchestratorEngine.activeEngines.keys()]
+  }
+
+  static cancelAllActiveRuns() {
+    const runIds = OrchestratorEngine.getActiveRunIds()
+    for (const runId of runIds) {
+      OrchestratorEngine.cancelActiveRun(runId)
+    }
+    return runIds
   }
 
   static async resumeRun(runId: string): Promise<void> {
@@ -2419,16 +2432,18 @@ function startTaskHeartbeat(input: {
     const status = `${input.agentName} 正在执行「${input.taskTitle}」，已运行 ${formatDuration(elapsedMs)} / ${formatDuration(input.timeoutMs)}。`
 
     broadcastSessionEvent(input.groupSessionId, {
-      type: WsEvent.TaskBoardTaskProgress,
-      payload: {
-        taskId: input.taskId,
-        percent,
-        status,
-        runId: input.runId,
+      type: WsEvent.AgUiEvent,
+      payload: buildAgUiTaskStatusEvent({
         agentId: input.agentId,
         agentName: input.agentName,
-        sessionId: input.groupSessionId,
-      },
+        progressPercent: percent,
+        progressStatus: status,
+        runId: input.runId,
+        status: 'running',
+        taskId: input.taskId,
+        taskTitle: input.taskTitle,
+        threadId: input.groupSessionId,
+      }),
     })
 
     if (Date.now() - lastPersistAt < 30_000) return
@@ -2469,13 +2484,15 @@ async function updateTaskProgress(input: {
     .set({ progressPercent: input.percent, progressStatus: input.status })
     .where(eq(workspaceTasks.id, input.taskId))
   broadcastSessionEvent(input.groupSessionId, {
-    type: WsEvent.TaskBoardTaskProgress,
-    payload: {
+    type: WsEvent.AgUiEvent,
+    payload: buildAgUiTaskStatusEvent({
+      progressPercent: input.percent,
+      progressStatus: input.status,
+      status: 'running',
       taskId: input.taskId,
-      percent: input.percent,
-      status: input.status,
-      sessionId: input.groupSessionId,
-    },
+      taskTitle: input.taskId,
+      threadId: input.groupSessionId,
+    }),
   })
 }
 

@@ -4,10 +4,11 @@ import { app } from './app'
 import { env } from './env'
 import { logger } from './lib/logger'
 import { setRuntimeServerPort } from './lib/runtime-server'
-import { joinRoom, cleanupWebSocket } from './services/agent-runner'
-import { db, users, eq, orchestratorRuns } from '@agenthub/db'
+import { joinRoom, cleanupWebSocket, cancelAllAgentReplies } from './services/agent-runner'
+import { db, users, eq, and, sql, orchestratorRuns, workspaceTasks } from '@agenthub/db'
 import { DEFAULT_USER } from './middleware/auth'
-import { WsEvent } from '@agenthub/shared'
+import { OrchestratorRunStatus, TaskStatus, WsEvent } from '@agenthub/shared'
+import { OrchestratorEngine } from './services/orchestrator/orchestrator-engine'
 
 // Seed the local default user (single-user mode, no auth)
 async function seedDefaultUser() {
@@ -106,20 +107,59 @@ try {
   // Best-effort; non-critical
 }
 
-// Ensure clean shutdown on Ctrl+C / SIGTERM / parent process exit
-function shutdown() {
+let shuttingDown = false
+
+// Ensure clean shutdown on Ctrl+C / SIGTERM / parent process exit.
+async function shutdown(reason: string) {
+  if (shuttingDown) return
+  shuttingDown = true
+  logger.info({ reason }, 'AgentHub server shutting down')
+
+  const activeRunIds = OrchestratorEngine.cancelAllActiveRuns()
+  const activeSessionIds = cancelAllAgentReplies()
+
+  if (activeRunIds.length > 0 || activeSessionIds.length > 0) {
+    logger.warn(
+      { activeRunIds, activeSessionIds },
+      'Cancelled active Agent work before process exit',
+    )
+  }
+
+  await Promise.allSettled(
+    activeRunIds.map(async (runId) => {
+      await db
+        .update(orchestratorRuns)
+        .set({ status: OrchestratorRunStatus.Cancelled, updatedAt: new Date() })
+        .where(eq(orchestratorRuns.id, runId))
+      await db
+        .update(workspaceTasks)
+        .set({
+          status: TaskStatus.Cancelled,
+          completedAt: new Date(),
+          errorLog: `Server shutdown: ${reason}`,
+        })
+        .where(
+          and(
+            eq(workspaceTasks.runId, runId),
+            sql`${workspaceTasks.status} in ('pending', 'running')`,
+          ),
+        )
+    }),
+  )
+
+  // Let AbortSignal handlers taskkill spawned Code Agent process trees.
+  await new Promise((resolve) => setTimeout(resolve, 500))
+
   try { unlinkSync(portFile) } catch {}
   try { server.stop() } catch {}
   process.exit(0)
 }
-process.on('SIGINT', shutdown)
-process.on('SIGTERM', shutdown)
+process.once('SIGINT', () => void shutdown('SIGINT'))
+process.once('SIGTERM', () => void shutdown('SIGTERM'))
 // On Windows, detect parent process death via stdin close
 if (process.stdin) {
-  process.stdin.on('end', shutdown)
+  process.stdin.once('end', () => void shutdown('stdin-end'))
 }
-
-import { OrchestratorEngine } from './services/orchestrator/orchestrator-engine'
 
 const runningRuns = await db.query.orchestratorRuns.findMany({
   where: eq(orchestratorRuns.status, 'running'),

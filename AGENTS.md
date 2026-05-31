@@ -1,6 +1,7 @@
 # AgentHub
 
 本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前多Agent协作架构.md` 和 `docs/使用指南.md`。
+更完整的分层设计和业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
 
 ## 当前目标
 
@@ -15,6 +16,19 @@ AgentHub 是一个 IM 式多 Agent 协作平台，也是字节跳动 AI 全栈�
 不要再引入固定场景模板，例如“网站建设 Team 模板”。当前优先做通用多 Agent 协作能力，场景增强放到后续。
 
 角色预设可以作为“创建 Agent 时的参考库”存在，但不能作为默认团队、默认关系或执行模板自动驱动运行。新工作区默认不自动注入 Orchestrator/Researcher/Designer/Builder/QA，也不支持 `classic` 团队模板或 `create-from-template` 入口。
+
+## 分层架构判断
+
+修改代码前先确认自己正在改的是哪一层，不要把不同层的概念混用：
+
+- 产品交互层：IM 群聊、Agent 私聊、任务子对话、任务看板、产物卡。
+- 编排层：Orchestrator、Planner、DAG、TaskScheduler、Synthesizer、人工确认和运行生命周期。
+- 通信协议层：A2A 负责 Agent 间 message/task/artifact 语义；AG-UI 负责运行事件到前端 UI 的桥接。
+- 执行层：Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Agent 基底；`llm` 只作为内部/兜底能力。
+- 能力层：MCP、Skills、Rules、shell、文件系统、浏览器等是 Code Agent 能使用的工具能力，不是 Agent 类型。
+- 工作区与状态层：`.agenthub/workdirs`、`.agenthub/handoff`、blackboard、execution logs、run events。
+
+AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：用 IM 产品体验承载多 Coding Agent 协作，用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
 ## 关键交互边界
 
@@ -58,7 +72,7 @@ AgentHub 是一个 IM 式多 Agent 协作平台，也是字节跳动 AI 全栈�
   -> 每个任务创建 orchestrator-task 子对话
   -> Orchestrator 将任务封装为 A2A message/send envelope
   -> TaskExecutionService 准备工作目录并经 LocalA2ATransport 派发
-  -> 本地 A2A Agent 适配到 LLM / Code Agent / Native Tool
+  -> 本地执行宿主适配到 LLM fallback / Code Agent
   -> 子对话保存完整过程
   -> 黑板写入任务摘要、产物、决策和 handoff（作为 A2A artifact metadata 扩展）
   -> 主群聊广播成员汇报和产物卡
@@ -72,15 +86,16 @@ Agent 之间的任务分发统一以 A2A v0.3 `message/send` 为内部通信标�
 - Orchestrator 发给成员的任务必须先构造成 A2A `MessageSendParams`。
 - 子对话中的 user message metadata 必须保存 `a2a` 请求信封。
 - 成员输出消息 metadata 必须保存 A2A `responseMessage` 或 `responseTask`。
-- 本地 LLM、Code Agent、MCP/Native Tool 都视为 `agenthub-local` transport 后面的本地 A2A Agent。
-- `runtimeType === "a2a"` 的 Agent 必须配置远程 A2A endpoint（优先 `roleProfile.a2aEndpoint`，也兼容把 URL 放在 `modelId`），否则应明确报错，不能静默回落到 LLM。
+- 本地 LLM fallback 和 Code Agent 都通过 `agenthub-local` transport 承接 A2A envelope。
+- A2A 是通信协议，不是 runtimeType；远程 A2A endpoint 应通过 `roleProfile.protocol = "a2a"` + `roleProfile.a2aEndpoint` 配置。
 - `blackboard` 和 `.agenthub/handoff` 是 AgentHub 对 A2A artifact/metadata 的扩展，不是绕过 A2A 的第二套分工协议。
+
+当前实现是“内部 A2A envelope + AgentHub local transport”。远程 A2A endpoint 可作为后续协议配置扩展，但不能恢复 `runtimeType = "a2a"`，也不能把 A2A 作为可创建的 Agent 类型展示给用户。
 
 相关文件：
 
 - `apps/server/src/services/protocols/a2a-internal.ts`: 内部 A2A envelope、message 和 task 映射。
 - `apps/server/src/services/execution/local-a2a-transport.ts`: 本地 A2A transport，负责把 `message/send` 派发到本地 runtime。
-- `apps/server/src/services/runtime/a2a-runtime.ts`: 远程 A2A Agent runtime，负责调用外部 A2A JSON-RPC endpoint。
 - `apps/server/src/services/protocols/a2a-adapter.ts`: 对外 A2A AgentCard / Task / Artifact 映射。
 
 ## 工作目录与产物交接
@@ -112,6 +127,9 @@ Agent 之间的任务分发统一以 A2A v0.3 `message/send` 为内部通信标�
 - 失败提示必须使用实际 adapter 名称，不要把 OpenCode 的错误写成 Codex CLI。
 - CLI 可能已经生成了部分文件，但最后因为构建、验证、模型或 Base URL 失败而返回失败状态。此时要显示“部分产物已保留”，不要说“没有任何产物”。
 - `AGENTHUB_CODE_AGENT_TIMEOUT_MS` 默认建议为 `600000`，即十分钟。
+- MCP、Skills、Rules 是 Code Agent 的能力层，不是独立 runtimeType。
+
+“支持用户自建 Agent”指的是用户在这些 Coding Agent 基底上创建专家角色：设置名称、角色说明、系统提示词、工具权限、Skills/MCP 能力、沙箱策略和上下文策略。不要把它理解成新增一个普通 LLM 类型的聊天机器人。
 
 ## 数据模型要点
 
@@ -162,6 +180,7 @@ bun test tests/orchestrator-routing.test.ts
 
 - 新增路由使用 `AppError`，不要继续新增裸 `HTTPException`。
 - 日志使用 `apps/server/src/lib/logger.ts`，不要新增 `console.log`。
+- 对复杂目标的意图判断、分工、追加任务和最终内容生成必须来自 Orchestrator/Planner/Synthesizer 的模型输出；系统代码只做 schema 校验、权限校验、状态记录和透明错误呈现。
 - 不要恢复静态兜底提示词或固定模板计划。快速提示、任务拆解、协作计划都应由模型动态生成；失败时可以提示用户重试或检查模型配置。
 - 不要恢复静态 Agent 路由、关键词分工、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。系统只能校验 Orchestrator/Planner 的显式选择，不能偷偷改派或追加任务。
 - 不要把旧 `GroupChatManager` 作为新路径入口。群聊统一从 `messages.ts` 进入 Orchestrator 路由。

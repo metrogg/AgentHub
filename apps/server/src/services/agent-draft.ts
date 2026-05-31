@@ -14,7 +14,7 @@ export const confirmAgentDraftSchema = z.object({
       roleProfile: z.record(z.unknown()).nullable().optional(),
       color: z.string().max(20).default('#111827'),
       modelId: z.string().max(120).nullable().optional(),
-      runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']).default('llm'),
+      runtimeType: z.enum(['llm', 'code-agent']).default('code-agent'),
       codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
       capabilityTags: z.array(z.string().max(40)).max(12).default([]),
       toolPermissions: z.array(z.string().max(80)).max(30).default(['chat']),
@@ -38,7 +38,7 @@ const modelAgentDraftSchema = z.object({
   roleProfile: z.record(z.unknown()).nullable(),
   color: z.string().max(20),
   modelId: z.string().max(120).nullable(),
-  runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']),
+  runtimeType: z.enum(['llm', 'code-agent']),
   codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable(),
   capabilityTags: z.array(z.string().max(40)).max(12),
   toolPermissions: z.array(z.string().max(80)).max(30),
@@ -54,8 +54,9 @@ export async function buildAgentDraft(content: string): Promise<AgentDraft> {
     '根据用户的自然语言需求，动态生成一个可加入当前 Agent Group 的 Agent 配置草案。',
     '只返回严格 JSON，不要 Markdown，不要解释。',
     '不要使用固定团队模板；根据用户这次表达决定名称、职责、运行时、工具权限和系统提示。',
-    'runtimeType 可选 "llm"、"code-agent"、"mcp"、"a2a"。',
-    'code-agent 仅在用户明确需要本地代码工具或 CLI 执行时使用，并必须设置 codeAgentType 为 "codex"、"claude-code"、"opencode" 或 "gemini"；否则 codeAgentType 为 null。',
+    'runtimeType 可选 "code-agent"、"llm"。默认使用 code-agent；llm 只作为没有可用 Coding Tools 时的兜底。',
+    'code-agent 是 AgentHub 的主要 Agent 基底，必须设置 codeAgentType 为 "codex"、"claude-code"、"opencode" 或 "gemini"。',
+    'MCP、Skills、Rules 是 code-agent 可使用的工具/能力，不是 runtimeType。不要输出 runtimeType="mcp" 或 runtimeType="a2a"。',
     'sandboxPolicy 必须和职责匹配：只读研究/审查用 read-only；需要改项目文件才用 workspace-write；除非用户明确要求且风险可控，不要用 danger-full-access。',
     'roleType 只能是 orchestrator、clarifier、architect、researcher、coder、verifier、reviewer、integrator、custom。',
     '返回字段：name, role, roleType, description, avatar, systemPrompt, roleProfile, color, modelId, runtimeType, codeAgentType, capabilityTags, toolPermissions, sandboxPolicy, contextPolicy, autoInvoke, approvalRequired。',
@@ -90,8 +91,7 @@ export function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
   const parsed = confirmAgentDraftSchema.shape.draft.safeParse(value)
   if (!parsed.success || !parsed.data) return null
   const draft = parsed.data
-  const runtimeType = draft.runtimeType ?? 'llm'
-  const nativeReadOnly = runtimeType === 'mcp'
+  const runtimeType = draft.runtimeType ?? 'code-agent'
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -103,13 +103,13 @@ export function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
     color: draft.color ?? '#111827',
     modelId: draft.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? null) : null,
+    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
     capabilityTags: draft.capabilityTags ?? [],
-    toolPermissions: nativeReadOnly ? ['workspace:read', 'skills:read'] : draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
-    sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
+    toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
+    sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
+    approvalRequired: runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
   }
 }
 

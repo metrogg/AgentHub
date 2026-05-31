@@ -50,14 +50,14 @@ const defaultAgentDraft: AgentConfigInput = {
   systemPrompt: '',
   color: '#111827',
   modelId: null,
-  runtimeType: 'llm',
-  codeAgentType: null,
+  runtimeType: 'code-agent',
+  codeAgentType: 'codex',
   capabilityTags: [],
   toolPermissions: ['chat'],
   sandboxPolicy: 'workspace-write',
   contextPolicy: 'workspace-aware',
   autoInvoke: true,
-  approvalRequired: true,
+  approvalRequired: false,
 }
 
 export default function AgentWorldPage() {
@@ -674,8 +674,7 @@ function agentToDraft(agent: WorkspaceAgent): AgentConfigInput {
 }
 
 function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
-  const runtimeType = draft.runtimeType ?? 'llm'
-  const nativeReadOnly = runtimeType === 'mcp'
+  const runtimeType = draft.runtimeType ?? 'code-agent'
   const capabilityTags = draft.capabilityTags ?? []
   const hasSkillTags = capabilityTags.some((tag) => tag.startsWith('skill:'))
   return {
@@ -689,9 +688,7 @@ function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
     runtimeType,
     codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
     capabilityTags,
-    toolPermissions: nativeReadOnly
-      ? ['workspace:read', 'skills:read']
-      : hasSkillTags
+    toolPermissions: hasSkillTags
         ? Array.from(
             new Set([
               ...(draft.toolPermissions?.length ? draft.toolPermissions : ['chat']),
@@ -701,12 +698,10 @@ function normalizeAgentDraft(draft: AgentConfigInput): AgentConfigInput {
         : draft.toolPermissions?.length
           ? draft.toolPermissions
           : ['chat'],
-    sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
+    sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly
-      ? true
-      : runtimeType === 'code-agent'
+    approvalRequired: runtimeType === 'code-agent'
         ? false
         : (draft.approvalRequired ?? true),
   }
@@ -921,7 +916,7 @@ function AgentDialog({
   onClose: () => void
 }) {
   const { t } = useI18n()
-  const runtimeType = draft.runtimeType ?? 'llm'
+  const runtimeType = draft.runtimeType ?? 'code-agent'
   const usesCodingCli = runtimeType === 'code-agent'
   const modelChoices = usesCodingCli ? [] : models
   const selectClass =
@@ -1009,26 +1004,20 @@ function AgentDialog({
                 modelId: draft.modelId ?? null,
                 codeAgentType:
                   nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
-                ...(nextRuntime === 'mcp'
+                ...(nextRuntime === 'code-agent'
                   ? {
-                      toolPermissions: ['workspace:read', 'skills:read'],
-                      sandboxPolicy: 'read-only' as const,
-                      approvalRequired: true,
+                      sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
+                      approvalRequired: false,
                     }
-                  : nextRuntime === 'code-agent'
-                    ? {
-                        sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
-                        approvalRequired: false,
-                      }
-                    : {}),
+                  : {
+                      approvalRequired: draft.approvalRequired ?? true,
+                    }),
               })
             }}
             className={selectClass}
           >
-            <option value="llm">{t('普通 LLM Agent')}</option>
             <option value="code-agent">{t('绑定 Coding Tools')}</option>
-            <option value="mcp">Native Read-only Agent</option>
-            <option value="a2a">A2A Agent</option>
+            <option value="llm">{t('普通 LLM Agent')}</option>
           </select>
           <select
             value={runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : ''}

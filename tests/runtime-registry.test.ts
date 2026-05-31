@@ -5,9 +5,7 @@ import { RuntimeRegistry } from '../apps/server/src/services/runtime/runtime-reg
 function registry() {
   return new RuntimeRegistry()
     .register(fakeRuntime('llm'))
-    .register(fakeRuntime('mcp'))
     .register(fakeRuntime('code-agent'))
-    .register(fakeRuntime('a2a'))
 }
 
 function fakeRuntime(runtimeType: string): AgentRuntime {
@@ -38,11 +36,11 @@ describe('runtimeRegistry.resolveForProfile', () => {
     expect(runtime.runtimeType).toBe('llm')
   })
 
-  test('routes LLM agents with native read permissions through the agent loop runtime', () => {
+  test('does not promote LLM agents to another runtime just because tools are readable', () => {
     const runtime = registry().resolveForProfile(
       profile({ toolPermissions: ['chat', 'workspace:read', 'skills:read'] }),
     )
-    expect(runtime.runtimeType).toBe('mcp')
+    expect(runtime.runtimeType).toBe('llm')
   })
 
   test('does not steal code agents just because they can read the workspace', () => {
@@ -57,13 +55,13 @@ describe('runtimeRegistry.resolveForProfile', () => {
     expect(runtime.runtimeType).toBe('code-agent')
   })
 
-  test('routes A2A agents to the A2A runtime instead of falling back to LLM', () => {
+  test('routes code agents through the coding agent runtime even if the CLI binding is incomplete', () => {
     const runtime = registry().resolveForProfile(
       profile({
-        runtimeType: 'a2a',
-        a2aEndpoint: 'http://localhost:8000/api/protocols/a2a/agent',
+        runtimeType: 'code-agent',
+        codeAgentType: undefined,
       }),
     )
-    expect(runtime.runtimeType).toBe('a2a')
+    expect(runtime.runtimeType).toBe('code-agent')
   })
 })

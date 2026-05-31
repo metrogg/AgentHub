@@ -1,8 +1,6 @@
 export const RuntimeType = {
   Llm: 'llm',
   CodeAgent: 'code-agent',
-  Mcp: 'mcp',
-  A2a: 'a2a',
 } as const
 export type RuntimeType = (typeof RuntimeType)[keyof typeof RuntimeType]
 

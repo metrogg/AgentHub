@@ -544,6 +544,24 @@ function normalizeAgUiBoardStatus(
   return null
 }
 
+function normalizeTaskBoardValidationStatus(
+  value: string | undefined,
+): TaskBoardTask['validationStatus'] | undefined {
+  if (value === 'passed' || value === 'failed' || value === 'skipped' || value === 'not_run') {
+    return value
+  }
+  return undefined
+}
+
+function normalizeTaskBoardContractStatus(
+  value: string | undefined,
+): TaskBoardTask['contractStatus'] | undefined {
+  if (value === 'passed' || value === 'failed') {
+    return value
+  }
+  return undefined
+}
+
 function taskBoardMatchesAgUiEvent(
   taskBoard: ChatState['taskBoard'],
   event: AgUiEventPayload,
@@ -718,6 +736,331 @@ function applyAgUiRunStatus(
     ...taskBoard,
     status,
   }
+}
+
+function buildTaskBoardFromPlanPayload(
+  payload: Record<string, unknown>,
+  runId: string,
+  sessionId: string,
+  status: NonNullable<ChatState['taskBoard']>['status'] = 'planning',
+): NonNullable<ChatState['taskBoard']> | null {
+  const plan = asRecord(payload.plan) ?? asRecord(payload)
+  if (!plan) return null
+  const phases = Array.isArray(plan.phases) ? plan.phases : []
+  const tasks = Array.isArray(plan.tasks) ? plan.tasks : []
+  const agents = Array.isArray(plan.agents) ? plan.agents : []
+  const agentNames = new Map(
+    agents
+      .map((agent: unknown) => asRecord(agent))
+      .filter((agent): agent is Record<string, unknown> => Boolean(agent?.id))
+      .map((agent) => [String(agent.id), asString(agent.name) ?? asString(agent.key) ?? 'Agent'] as const),
+  )
+
+  const taskBoardTasks = tasks
+    .map((task: unknown) => asRecord(task))
+    .filter((task): task is Record<string, unknown> => Boolean(task?.id))
+    .map((task) => {
+      const id = String(task.id)
+      const agentId = asString(task.agentId) ?? id
+      return {
+        id,
+        phaseId: asString(task.phaseId) ?? 'execution',
+        title: asString(task.title) ?? id,
+        description: asString(task.description) ?? '',
+        agentId,
+        agentName: agentNames.get(agentId) ?? asString(task.agentName) ?? 'Agent',
+        taskType: asString(task.taskType),
+        status: 'pending' as const,
+        dependencies: asStringArray(task.dependencies) ?? [],
+        childSessionId: asString(task.childSessionId) ?? null,
+        artifactCount: asNumber(task.artifactCount) ?? undefined,
+        artifacts: readTaskBoardArtifacts(task.artifacts),
+        outputSummary: asString(task.outputSummary) ?? undefined,
+        outputRef: null,
+        validationStatus: normalizeTaskBoardValidationStatus(asString(task.validationStatus)),
+        contractStatus: normalizeTaskBoardContractStatus(asString(task.contractStatus)),
+        contractViolations: undefined,
+        resultError: undefined,
+      } satisfies TaskBoardTask
+    })
+
+  const phaseRows = phases.map((phase: unknown) => {
+    const item = asRecord(phase) ?? {}
+    return {
+      id: asString(item.id) ?? 'execution',
+      title: asString(item.title) ?? '执行',
+      purpose: asString(item.purpose) ?? '',
+      taskIds: asStringArray(item.taskIds) ?? [],
+      status: 'pending' as const,
+    }
+  })
+
+  return {
+    runId,
+    title: asString(plan.title) ?? '',
+    goal: asString(plan.goal) ?? '',
+    collaborationMode: asString(plan.collaborationMode) ?? 'mapreduce',
+    phases: phaseRows,
+    tasks: taskBoardTasks,
+    status,
+    sessionId,
+  }
+}
+
+function applyAgUiPlanCreated(
+  taskBoard: NonNullable<ChatState['taskBoard']> | null,
+  event: AgUiEventPayload,
+  currentSessionId: string,
+) {
+  const runId = asString(event.runId)
+  const threadId = asString(event.threadId) ?? currentSessionId
+  const payload = asRecord(event.value)
+  const board = buildTaskBoardFromPlanPayload(payload ?? {}, runId ?? taskBoard?.runId ?? '', threadId)
+  if (!board) return taskBoard
+  const preservedSelected = taskBoard?.runId === board.runId ? taskBoard : null
+  return preservedSelected
+    ? {
+        ...board,
+        tasks: board.tasks.map((task) => {
+          const existing = preservedSelected.tasks.find((item) => item.id === task.id)
+          if (!existing) return task
+          return {
+            ...task,
+            status: existing.status,
+            progress: existing.progress,
+            progressStatus: existing.progressStatus,
+            artifactCount: existing.artifactCount ?? task.artifactCount,
+            artifacts: existing.artifacts?.length ? existing.artifacts : task.artifacts,
+            outputSummary: existing.outputSummary ?? task.outputSummary,
+            outputRef: existing.outputRef ?? task.outputRef,
+            validationStatus: existing.validationStatus ?? task.validationStatus,
+            contractStatus: existing.contractStatus ?? task.contractStatus,
+            contractViolations: existing.contractViolations ?? task.contractViolations,
+            resultError: existing.resultError ?? task.resultError,
+            childSessionId: existing.childSessionId ?? task.childSessionId,
+          }
+        }),
+      }
+    : board
+}
+
+function applyAgUiEventToState(
+  state: ChatState,
+  event: AgUiEventPayload,
+  sessionId: string,
+): ChatState {
+  let nextTaskBoard = state.taskBoard
+  let agentTyping = state.agentTyping
+  let agentActivity = state.agentActivity
+  let selectedAgentTab = state.selectedAgentTab
+
+  const currentSessionMatches =
+    asString(event.threadId) === sessionId ||
+    (nextTaskBoard ? taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId) : true)
+
+  if (!currentSessionMatches) return state
+
+  if (event.type === 'RUN_STARTED') {
+    agentTyping = true
+    agentActivity = {
+      sessionId,
+      phase: 'planning',
+      startedAt: new Date().toISOString(),
+    }
+    if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
+      nextTaskBoard = { ...nextTaskBoard, status: 'running' }
+    }
+  }
+
+  if (event.type === 'STEP_STARTED') {
+    agentTyping = true
+    agentActivity = {
+      sessionId,
+      phase: 'executing',
+      agentName: asString(event.stepName),
+      startedAt: new Date().toISOString(),
+    }
+  }
+
+  if (event.type === 'STEP_FINISHED') {
+    agentTyping = false
+    agentActivity = null
+  }
+
+  if (event.type === 'RUN_FINISHED') {
+    const result = asRecord(event.result)
+    const boardStatus =
+      normalizeAgUiBoardStatus(asString(result?.status)) ??
+      (asString(result?.status) === 'cancelled' ? 'cancelled' : 'completed')
+    agentTyping = false
+    agentActivity = null
+    if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
+      nextTaskBoard = { ...nextTaskBoard, status: boardStatus }
+    }
+  }
+
+  if (event.type === 'RUN_ERROR') {
+    agentTyping = false
+    agentActivity = null
+    if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
+      nextTaskBoard = { ...nextTaskBoard, status: 'failed' }
+    }
+  }
+
+  if (event.type === 'CUSTOM') {
+    const value = asRecord(event.value)
+    if (value && event.name === 'agenthub.plan.created') {
+      const previousRunId = nextTaskBoard?.runId
+      nextTaskBoard = applyAgUiPlanCreated(nextTaskBoard, event, sessionId)
+      if (nextTaskBoard?.runId && previousRunId !== nextTaskBoard.runId) {
+        selectedAgentTab = null
+      }
+      agentTyping = true
+      agentActivity = {
+        sessionId,
+        phase: 'planning',
+        startedAt: new Date().toISOString(),
+      }
+    }
+    if (value && event.name === 'agenthub.task.status') {
+      const taskStatus = normalizeAgUiTaskStatus(asString(value.status))
+      const boardStatus = normalizeAgUiBoardStatus(asString(value.status))
+      const taskId = asString(value.taskId)
+      if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
+        nextTaskBoard = taskStatus
+          ? applyAgUiTaskStatus(nextTaskBoard, value)
+          : boardStatus
+            ? { ...nextTaskBoard, status: boardStatus }
+            : nextTaskBoard
+      }
+      if (taskStatus === 'running') {
+        agentTyping = true
+        agentActivity = {
+          sessionId,
+          agentId: asString(value.agentId),
+          agentName: asString(value.agentName),
+          phase: 'executing',
+          startedAt: new Date().toISOString(),
+        }
+      } else if (taskId && taskStatus) {
+        agentTyping = false
+        agentActivity = null
+      }
+    }
+    if (value && event.name === 'agenthub.artifact.created') {
+      if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
+        nextTaskBoard = applyAgUiArtifact(nextTaskBoard, value)
+      }
+    }
+    if (value && event.name === 'agenthub.blackboard.written') {
+      if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
+        nextTaskBoard = applyAgUiBlackboard(nextTaskBoard, value)
+      }
+    }
+    if (value && event.name === 'agenthub.run.status') {
+      if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
+        nextTaskBoard = applyAgUiRunStatus(nextTaskBoard, value)
+      }
+      if (asString(value.status) === 'synthesizing') {
+        agentTyping = true
+        agentActivity = {
+          sessionId,
+          phase: 'synthesizing',
+          startedAt: new Date().toISOString(),
+        }
+      }
+    }
+  }
+
+  const nextAgentTabs =
+    nextTaskBoard && nextTaskBoard !== state.taskBoard
+      ? updateAgentTabsFromTaskBoard(state.agentTabs, nextTaskBoard, {
+          type: event.type ?? 'ag-ui:event',
+          taskId: asString(asRecord(event.value)?.taskId) ?? null,
+          payload: asRecord(event.value) ?? {},
+        })
+      : state.agentTabs
+
+  if (
+    nextTaskBoard !== state.taskBoard ||
+    nextAgentTabs !== state.agentTabs ||
+    agentTyping !== state.agentTyping ||
+    agentActivity !== state.agentActivity ||
+    selectedAgentTab !== state.selectedAgentTab
+  ) {
+    return {
+      ...state,
+      taskBoard: nextTaskBoard,
+      agentTabs: nextAgentTabs,
+      agentTyping,
+      agentActivity,
+      selectedAgentTab,
+    }
+  }
+
+  return state
+}
+
+function agUiEventsFromLegacyTaskBoardEvent(
+  event: WSEvent,
+  sessionId: string,
+): AgUiEventPayload[] {
+  if (event.type === WsEvent.TaskBoardPlanReady) {
+    const { runId, plan, sessionId: groupSessionId } = event.payload as {
+      runId: string
+      plan: Record<string, unknown>
+      sessionId: string
+    }
+    return [
+      {
+        type: 'CUSTOM',
+        name: 'agenthub.plan.created',
+        runId,
+        threadId: groupSessionId ?? sessionId,
+        value: { plan, runId, threadId: groupSessionId ?? sessionId },
+      },
+    ]
+  }
+  if (event.type === WsEvent.TaskBoardTaskProgress) {
+    const { taskId, percent, status, runId, sessionId: groupSessionId, agentId, agentName } =
+      event.payload as {
+        taskId: string
+        percent: number
+        status: string
+        runId?: string
+        sessionId?: string
+        agentId?: string
+        agentName?: string
+      }
+    return [
+      {
+        type: 'CUSTOM',
+        name: 'agenthub.task.status',
+        runId,
+        threadId: groupSessionId ?? sessionId,
+        value: {
+          taskId,
+          status: 'running',
+          progressPercent: percent,
+          progressStatus: status,
+          agentId,
+          agentName,
+        },
+      },
+    ]
+  }
+  if (event.type === WsEvent.TaskBoardRunCompleted) {
+    const { runId, status } = event.payload as { runId: string; status: string }
+    return [
+      {
+        type: 'RUN_FINISHED',
+        runId,
+        threadId: sessionId,
+        result: { status },
+      } as unknown as AgUiEventPayload,
+    ]
+  }
+  return []
 }
 
 interface ChatState {
@@ -1302,7 +1645,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const eventSessionId =
       typeof e.payload?.sessionId === 'string' && e.payload.sessionId
         ? e.payload.sessionId
-        : sessionId
+        : typeof e.payload?.threadId === 'string' && e.payload.threadId
+          ? e.payload.threadId
+          : sessionId
     const isCurrentSessionEvent = eventSessionId === sessionId
     if (!isCurrentSessionEvent) {
       const isTaskBoardEvent = e.type?.startsWith('task_board:') || e.type === WsEvent.AgUiEvent
@@ -1462,239 +1807,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break
       case WsEvent.AgUiEvent: {
         const event = (e.payload ?? {}) as AgUiEventPayload
-        set((s) => {
-          let nextTaskBoard = s.taskBoard
-          let agentTyping = s.agentTyping
-          let agentActivity = s.agentActivity
-
-          const currentSessionMatches =
-            asString(event.threadId) === sessionId ||
-            (nextTaskBoard ? taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId) : true)
-
-          if (!currentSessionMatches) return s
-
-          if (event.type === 'RUN_STARTED') {
-            agentTyping = true
-            agentActivity = {
-              sessionId,
-              phase: 'planning',
-              startedAt: new Date().toISOString(),
-            }
-            if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
-              nextTaskBoard = { ...nextTaskBoard, status: 'running' }
-            }
-          }
-
-          if (event.type === 'STEP_STARTED') {
-            agentTyping = true
-            agentActivity = {
-              sessionId,
-              phase: 'executing',
-              agentName: asString(event.stepName),
-              startedAt: new Date().toISOString(),
-            }
-          }
-
-          if (event.type === 'STEP_FINISHED') {
-            agentTyping = false
-            agentActivity = null
-          }
-
-          if (event.type === 'RUN_FINISHED') {
-            const result = asRecord(event.result)
-            const boardStatus =
-              normalizeAgUiBoardStatus(asString(result?.status)) ??
-              (asString(result?.status) === 'cancelled' ? 'cancelled' : 'completed')
-            agentTyping = false
-            agentActivity = null
-            if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
-              nextTaskBoard = { ...nextTaskBoard, status: boardStatus }
-            }
-          }
-
-          if (event.type === 'RUN_ERROR') {
-            agentTyping = false
-            agentActivity = null
-            if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
-              nextTaskBoard = { ...nextTaskBoard, status: 'failed' }
-            }
-          }
-
-          if (event.type === 'CUSTOM') {
-            const value = asRecord(event.value)
-            if (value && event.name === 'agenthub.task.status') {
-              const taskStatus = normalizeAgUiTaskStatus(asString(value.status))
-              const boardStatus = normalizeAgUiBoardStatus(asString(value.status))
-              const taskId = asString(value.taskId)
-              if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
-                nextTaskBoard = taskStatus
-                  ? applyAgUiTaskStatus(nextTaskBoard, value)
-                  : boardStatus
-                    ? { ...nextTaskBoard, status: boardStatus }
-                    : nextTaskBoard
-              }
-              if (taskStatus === 'running') {
-                agentTyping = true
-                agentActivity = {
-                  sessionId,
-                  agentId: asString(value.agentId),
-                  agentName: asString(value.agentName),
-                  phase: 'executing',
-                  startedAt: new Date().toISOString(),
-                }
-              } else if (taskId && taskStatus) {
-                agentTyping = false
-                agentActivity = null
-              }
-            }
-            if (value && event.name === 'agenthub.artifact.created') {
-              if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
-                nextTaskBoard = applyAgUiArtifact(nextTaskBoard, value)
-              }
-            }
-            if (value && event.name === 'agenthub.blackboard.written') {
-              if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
-                nextTaskBoard = applyAgUiBlackboard(nextTaskBoard, value)
-              }
-            }
-            if (value && event.name === 'agenthub.run.status') {
-              if (nextTaskBoard && taskBoardMatchesAgUiEvent(nextTaskBoard, event, sessionId)) {
-                nextTaskBoard = applyAgUiRunStatus(nextTaskBoard, value)
-              }
-              if (asString(value.status) === 'synthesizing') {
-                agentTyping = true
-                agentActivity = {
-                  sessionId,
-                  phase: 'synthesizing',
-                  startedAt: new Date().toISOString(),
-                }
-              }
-            }
-          }
-
-          const nextAgentTabs =
-            nextTaskBoard && nextTaskBoard !== s.taskBoard
-              ? updateAgentTabsFromTaskBoard(s.agentTabs, nextTaskBoard, {
-                  type: event.type ?? 'ag-ui:event',
-                  taskId: asString(asRecord(event.value)?.taskId) ?? null,
-                  payload: asRecord(event.value) ?? {},
-                })
-              : s.agentTabs
-
-          if (
-            nextTaskBoard !== s.taskBoard ||
-            nextAgentTabs !== s.agentTabs ||
-            agentTyping !== s.agentTyping ||
-            agentActivity !== s.agentActivity
-          ) {
-            return {
-              taskBoard: nextTaskBoard,
-              agentTabs: nextAgentTabs,
-              agentTyping,
-              agentActivity,
-            }
-          }
-          return s
-        })
+        set((s) => applyAgUiEventToState(s, event, sessionId))
         break
       }
       case WsEvent.TaskBoardPlanReady: {
-        const { runId, plan, sessionId } = e.payload as {
-          runId: string
-          plan: Record<string, unknown>
-          sessionId: string
+        const events = agUiEventsFromLegacyTaskBoardEvent(e, sessionId)
+        if (events.length > 0) {
+          set((state) =>
+            events.reduce((next, event) => applyAgUiEventToState(next, event, sessionId), state),
+          )
         }
-        const phases = (plan.phases as any[]) || []
-        const tasks = (plan.tasks as any[]) || []
-        const taskBoardTasks = tasks.map((t: any) => ({
-          id: t.id,
-          phaseId: t.phaseId || '',
-          title: t.title || '',
-          description: t.description || '',
-          agentId: t.agentId || t.agentKey || '',
-          agentName: t.agentName || t.agentKey || t.agentId || '',
-          status: 'pending' as const,
-          dependencies: t.dependencies || [],
-          childSessionId: t.childSessionId ?? null,
-          artifactCount: typeof t.artifactCount === 'number' ? t.artifactCount : undefined,
-          artifacts: readTaskBoardArtifacts(t.artifacts),
-          outputSummary: typeof t.outputSummary === 'string' ? t.outputSummary : undefined,
-          validationStatus: typeof t.validationStatus === 'string' ? t.validationStatus : undefined,
-          contractStatus: typeof t.contractStatus === 'string' ? t.contractStatus : undefined,
-        }))
-        set((state) => ({
-          ...state,
-          agentTyping: false,
-          agentActivity: null,
-          agentTabs: taskBoardTasks.map((t) => ({
-            taskId: t.id,
-            agentId: t.agentId || t.id,
-            agentName: t.agentName,
-            taskTitle: t.title,
-            status: 'pending',
-            childSessionId: t.childSessionId ?? null,
-          })),
-          selectedAgentTab: state.taskBoard?.runId !== runId ? null : state.selectedAgentTab,
-          taskBoard: {
-            runId,
-            title: (plan.title as string) || '',
-            goal: (plan.goal as string) || '',
-            collaborationMode: (plan.collaborationMode as string) || 'mapreduce',
-            phases: phases.map((p: any) => ({
-              id: p.id,
-              title: p.title || '',
-              purpose: p.purpose || '',
-              taskIds: p.taskIds || [],
-              status: 'pending' as const,
-            })),
-            tasks: taskBoardTasks,
-            status: 'planning' as const,
-            sessionId,
-          },
-        }))
         void get().fetchSessions()
         break
       }
       case WsEvent.TaskBoardTaskProgress: {
-        const { taskId, percent, status } = e.payload as {
-          taskId: string
-          percent: number
-          status: string
-        }
-        set((state) => {
-          if (!state.taskBoard) return state
-          const nextTasks = state.taskBoard.tasks.map((t) =>
-            t.id === taskId
-              ? { ...t, status: 'running' as const, progress: percent, progressStatus: status }
-              : t,
+        const events = agUiEventsFromLegacyTaskBoardEvent(e, sessionId)
+        if (events.length > 0) {
+          set((state) =>
+            events.reduce((next, event) => applyAgUiEventToState(next, event, sessionId), state),
           )
-          const nextAgentTabs = state.agentTabs.map((tab) => {
-            const task = nextTasks.find((t) => t.id === tab.taskId)
-            if (task) {
-              return { ...tab, progress: percent, progressStatus: status }
-            }
-            return tab
-          })
-          return {
-            ...state,
-            taskBoard: { ...state.taskBoard, tasks: nextTasks },
-            agentTabs: nextAgentTabs,
-          }
-        })
+        }
         break
       }
       case WsEvent.TaskBoardRunCompleted: {
-        const { runId, status } = e.payload as { runId: string; status: string }
-        set((state) => {
-          if (!state.taskBoard || state.taskBoard.runId !== runId) return state
-          return {
-            ...state,
-            taskBoard: {
-              ...state.taskBoard,
-              status: status as any,
-            },
-          }
-        })
+        const events = agUiEventsFromLegacyTaskBoardEvent(e, sessionId)
+        if (events.length > 0) {
+          set((state) =>
+            events.reduce((next, event) => applyAgUiEventToState(next, event, sessionId), state),
+          )
+        }
         void get().fetchSessions()
         break
       }

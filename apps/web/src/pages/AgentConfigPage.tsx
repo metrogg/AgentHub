@@ -120,7 +120,7 @@ export default function AgentConfigPage() {
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null
   const showEditor = Boolean(selectedAgent) || isCreatingNewAgent
-  const runtimeType = draft.runtimeType ?? 'llm'
+  const runtimeType = draft.runtimeType ?? 'code-agent'
   const modelCompatibilityMessage = (() => {
     const modelId = draft.modelId ?? null
     const codeAgentType = draft.codeAgentType ?? null
@@ -436,7 +436,7 @@ export default function AgentConfigPage() {
                           ...draft,
                           runtimeType: nextRuntime,
                           codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
-                          approvalRequired: nextRuntime === 'mcp' ? true : nextRuntime === 'code-agent' ? false : draft.approvalRequired,
+                          approvalRequired: nextRuntime === 'code-agent' ? false : (draft.approvalRequired ?? true),
                         })
                       }}>
                         <option value="code-agent">Coding Tools</option>
@@ -588,7 +588,6 @@ export default function AgentConfigPage() {
 function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
   const runtimeType = draft.runtimeType ?? 'code-agent'
   const capabilityTags = draft.capabilityTags ?? []
-  const nativeReadOnly = runtimeType === 'mcp'
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
@@ -604,7 +603,7 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
+    approvalRequired: runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
     roleType: draft.roleType ?? 'custom',
     roleProfile: draft.roleProfile ?? null,
   }

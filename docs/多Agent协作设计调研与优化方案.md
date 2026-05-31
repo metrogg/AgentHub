@@ -2,12 +2,13 @@
 
 > 日期：2026-05-27  
 > 目的：梳理业内多 Agent 协作模式，结合 AgentHub 当前实现，给出可落地的架构优化方案与比赛演示路线。
+> 状态：历史调研资料，部分 runtime/协议边界、固定团队和 Git 隔离描述已调整。当前权威路径请以 `docs/当前多Agent协作架构.md` 和 `docs/多Agent协作分层架构与业内对比.md` 为准。
 
 ---
 
 ## 1. 结论摘要
 
-AgentHub 当前已经具备多 Agent 平台的核心骨架：IM 会话、Workspace、Agent Group、Runtime 统一层、Orchestrator、Task DAG、Blackboard、Execution Logs、Code Agent 分支隔离。下一步不应简单堆更多 Agent，而应把协作系统从“静态 DAG + 任务分发”升级为“可解释、可暂停、可重规划、可审计的协作运行时”。
+AgentHub 当前已经具备多 Agent 平台的核心骨架：IM 会话、Workspace、Agent Group、Runtime 统一层、Orchestrator、Task DAG、Blackboard、Execution Logs、Code Agent 执行适配。当前默认执行路径已经收敛为“项目根 + `.agenthub/workdirs` + `.agenthub/handoff`”，不再把 Git 分支隔离作为默认事实。下一步不应简单堆更多 Agent，而应把协作系统从“静态 DAG + 任务分发”升级为“可解释、可暂停、可重规划、可审计的协作运行时”。
 
 核心建议：
 
@@ -30,11 +31,11 @@ AgentHub 当前已经具备多 Agent 平台的核心骨架：IM 会话、Workspa
 - IM 式 Direct / Group 会话。
 - Workspace、workspace_agents、workspace_tasks。
 - `@orchestrator` 触发任务卡与 dispatch。
-- `AgentRuntime` 统一接口，覆盖 `llm`、`code-agent`、`mcp`。
+- `AgentRuntime` 统一接口，当前只把 `llm` 和 `code-agent` 作为 runtime 身份；MCP/Skills/Rules 是 Code Agent 能力层。
 - Orchestrator 模块：Planner、TaskGraph、TaskScheduler、Synthesizer、ConflictResolver、ReplanningEngine。
 - Blackboard 与 execution_logs 表。
 - Code Agent adapter：Codex、Claude Code、OpenCode、Gemini。
-- Git branch isolation：非 read-only Agent 任务可切独立分支并收集 diff。
+- 工作目录隔离：当前默认使用项目根 + `.agenthub/workdirs` + `.agenthub/handoff`，Git 分支隔离不再作为默认路径。
 - 前端已开始消费 `task:update` 和 `blackboard:update`。
 
 这说明项目不是从 0 开始，重点应是“架构收敛”和“体验打磨”。
@@ -256,16 +257,16 @@ Planning & Scheduling Layer
 
 Agent Runtime Layer
   - LLM Runtime
-  - Native Tool Runtime
   - Code Agent Runtime
-  - Remote A2A Runtime (future)
+  - Remote A2A endpoint adapter (future protocol profile, not runtimeType)
 
 Shared State & Artifact Layer
   - Blackboard
   - Artifact Store
   - Execution Logs
   - Run Events
-  - Git Branch Manager
+  - Agent Workdirs
+  - Handoff Store
 
 Tool / Protocol Layer
   - Local tools

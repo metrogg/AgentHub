@@ -685,6 +685,61 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
                 {task.outputSummary && (
                   <p className="mt-1 line-clamp-2 text-xs text-neutral-600">{task.outputSummary}</p>
                 )}
+                {task.artifacts && task.artifacts.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {task.artifacts.slice(0, 3).map((artifact, index) => {
+                      const title =
+                        artifact.title ||
+                        artifact.filePath ||
+                        artifact.url ||
+                        `产物 ${index + 1}`
+                      const kind =
+                        artifact.type === 'diff'
+                          ? 'diff'
+                          : artifact.type === 'preview'
+                            ? 'web'
+                            : artifact.type === 'deploy'
+                              ? 'deploy'
+                              : artifact.type === 'workflow'
+                                ? 'workflow'
+                                : artifact.url
+                                  ? 'web'
+                                  : /\.(png|jpg|jpeg|webp|gif)$/i.test(artifact.filePath ?? '')
+                                    ? 'image'
+                                    : 'file'
+                      return (
+                        <button
+                          key={artifact.artifactId ?? artifact.id ?? artifact.filePath ?? `${task.id}-${index}`}
+                          type="button"
+                          onClick={() =>
+                            requestArtifactPreview({
+                              id:
+                                artifact.artifactId ??
+                                artifact.id ??
+                                artifact.filePath ??
+                                artifact.url ??
+                                `${task.id}-${index}`,
+                              title,
+                              kind,
+                              url: artifact.url ?? undefined,
+                              path: artifact.filePath ?? undefined,
+                              source: artifact.source ?? undefined,
+                            })
+                          }
+                          className="inline-flex items-center gap-1 rounded-full border border-neutral-200 bg-white px-2 py-1 text-[11px] text-neutral-600 transition hover:border-blue-200 hover:text-blue-700"
+                        >
+                          <FileText className="h-3 w-3" />
+                          <span className="max-w-32 truncate">{title}</span>
+                        </button>
+                      )
+                    })}
+                    {task.artifacts.length > 3 && (
+                      <span className="inline-flex items-center rounded-full border border-neutral-200 bg-neutral-50 px-2 py-1 text-[11px] text-neutral-500">
+                        +{task.artifacts.length - 3}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <button
                 type="button"

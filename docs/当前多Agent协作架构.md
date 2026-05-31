@@ -4,6 +4,8 @@
 
 本文档记录 AgentHub 当前应遵守的多 Agent 协作设计。它用于统一产品、前端、后端和 Coding Agent 的判断，避免旧设计继续造成混乱。
 
+更完整的分层架构与业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
+
 ## 设计目标
 
 AgentHub 要做的是通用多 Agent 协作平台，而不是针对某个固定任务的 Team 模板。
@@ -15,6 +17,22 @@ AgentHub 要做的是通用多 Agent 协作平台，而不是针对某个固定�
 - 用户可以查看每个成员的真实执行过程。
 - 产物要能被主群聊看到，也能被下游 Agent 接力。
 - 系统不再自动注入默认团队、经典模板或关键词路由，所有执行分工都应来自 Orchestrator/Planner 的模型输出。
+
+## 当前分层架构
+
+AgentHub 需要把以下层次分开设计：
+
+| 层 | 我们的当前设计 |
+| --- | --- |
+| 产品交互层 | IM 群聊、全局 Agent 私聊、群聊下任务子对话、任务看板、产物卡 |
+| 编排规划层 | Orchestrator 理解目标，Planner 生成动态 DAG，TaskScheduler 按依赖执行，Synthesizer 汇总 |
+| 通信协议层 | A2A 作为 Agent 间 `message/send`、task、artifact 语义；AG-UI 作为运行事件到前端的桥接 |
+| Agent 身份层 | `code-agent` 是主路径；`llm` 是内部/兜底；A2A/MCP/Skills/Rules 都不是 Agent 类型 |
+| 执行运行时层 | Codex CLI、Claude Code、OpenCode、Gemini CLI 作为 Coding Agent 基底 |
+| 能力工具层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 可用能力 |
+| 工作区与状态层 | `.agenthub/workdirs`、`.agenthub/handoff`、blackboard、execution logs、run events |
+
+产品层应学习 WorkBuddy / Kimi 群聊 / Claude Code subagents 的“主对话可见、子任务可进、过程可信”；编排层应学习 LangGraph / Microsoft Agent Framework 的 DAG、checkpoint、resume、HITL；协议层应坚持 A2A / AG-UI / MCP 各管一层，不互相冒充。
 
 ## 会话模型
 
@@ -101,8 +119,8 @@ workspaceAgentId != null
   -> TaskScheduler 按依赖执行
   -> Orchestrator 生成 A2A message/send envelope
   -> TaskExecutionService 准备执行目录
-  -> LocalA2ATransport 派发给本地 A2A Agent
-  -> 本地 A2A Agent 适配 LLM / Code Agent / Native Tool
+  -> LocalA2ATransport 派发给本地执行宿主
+  -> 本地执行宿主适配 LLM fallback / Code Agent
   -> 写入黑板和产物（以 A2A artifact/metadata 扩展记录）
   -> 主群聊发布成员汇报
   -> Synthesizer 汇总最终结果
@@ -126,12 +144,21 @@ A2A message/send
   -> LocalA2ATransport
   -> runAgentReply
   -> runtimeRegistry
-  -> llm / code-agent / mcp
+  -> llm / code-agent
 ```
 
-也就是说，Codex CLI、Claude Code、OpenCode、Gemini CLI、普通 LLM 和 MCP/Native Tool 都是本地 A2A Agent 的实现细节。黑板和 handoff 只作为 A2A artifact/metadata 的 AgentHub 扩展存在，不能再承担隐藏分工或静态路由职责。
+也就是说，Codex CLI、Claude Code、OpenCode、Gemini CLI 是当前主要 Agent 执行基底；普通 LLM 只作为 Orchestrator/Planner/Synthesizer 和 fallback 能力。MCP、Skills、Rules 是 Code Agent 可使用的工具/能力层，不是 Agent 类型。黑板和 handoff 只作为 A2A artifact/metadata 的 AgentHub 扩展存在，不能再承担隐藏分工或静态路由职责。
 
-对于真正的远程 A2A Agent，`runtimeType` 设置为 `a2a`，并通过 `roleProfile.a2aEndpoint` 配置 JSON-RPC endpoint；如果 `modelId` 本身是 `http(s)` URL，也会作为兼容 endpoint 使用。缺少 endpoint 时必须明确失败，不能静默回落到普通 LLM。
+如果后续接入远程 A2A endpoint，也应作为协议层配置存在，例如 `roleProfile.protocol = "a2a"` 与 `roleProfile.a2aEndpoint`，不能恢复 `runtimeType = "a2a"`。
+
+## Agent 身份模型
+
+当前 `workspace_agents.runtimeType` 只有两类：
+
+- `code-agent`：主路径。用户自建 Agent 是在 Codex CLI、Claude Code、OpenCode、Gemini CLI 等 Coding Agent 基底上配置角色、系统提示词、skills/MCP 能力、工具权限和沙箱策略。
+- `llm`：兜底路径。用于纯文本能力、Orchestrator/Planner/Synthesizer 等内部模型调用或没有可用 Coding Tools 时的保障。
+
+A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库或 Planner 输出中。
 
 ## 工作目录
 
@@ -200,6 +227,8 @@ Code Agent 可能出现“已有产物但任务失败”的情况，例如：
 - “群聊”：显示 group。
 - 群聊展开：只显示真实 orchestrator-task 子对话。
 
+前端运行态统一以 AG-UI 事件驱动任务看板、进度条、子对话入口和产物卡；旧的 `task_board:*` 事件只作为兼容输入，不再作为独立状态源。
+
 主聊天区：
 
 - 用户消息先出现。
@@ -221,7 +250,6 @@ Code Agent 可能出现“已有产物但任务失败”的情况，例如：
 - `apps/server/src/services/orchestrator/task-scheduler.ts`
 - `apps/server/src/services/execution/task-execution-service.ts`
 - `apps/server/src/services/execution/local-a2a-transport.ts`
-- `apps/server/src/services/runtime/a2a-runtime.ts`
 - `apps/server/src/services/protocols/a2a-internal.ts`
 - `apps/server/src/services/execution/agent-workdir.ts`
 - `apps/server/src/services/blackboard.ts`

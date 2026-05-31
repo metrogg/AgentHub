@@ -9,7 +9,7 @@ export interface AgentProfile {
   systemPrompt?: string
   color?: string
   modelId?: string | null
-  runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
+  runtimeType: 'llm' | 'code-agent'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   a2aEndpoint?: string | null
   capabilityTags: string[]
@@ -50,26 +50,5 @@ export interface AgentRuntime {
 }
 
 export function isCodeAgentProfile(profile: AgentProfile): boolean {
-  return profile.runtimeType === 'code-agent' && Boolean(profile.codeAgentType)
-}
-
-export function isNativeAgentProfile(profile: AgentProfile): boolean {
-  if (profile.runtimeType === 'mcp') return true
-  const permissions = normalizePermissions(profile.toolPermissions)
-  return permissions.some((p) =>
-    [
-      'native',
-      'tools',
-      'read-only',
-      'workspace:read',
-      'skills:read',
-      'list_files',
-      'read_file',
-      'search_code',
-    ].includes(p),
-  )
-}
-
-function normalizePermissions(values?: string[]) {
-  return (values ?? ['chat']).map((v) => v.trim().toLowerCase()).filter(Boolean)
+  return profile.runtimeType === 'code-agent'
 }

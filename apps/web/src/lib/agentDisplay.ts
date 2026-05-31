@@ -9,8 +9,6 @@ export function runtimeLabel(value: WorkspaceAgent['runtimeType']): string {
   const map: Record<WorkspaceAgent['runtimeType'], string> = {
     llm: 'LLM Agent',
     'code-agent': 'Coding Tools',
-    mcp: 'Native Read-only',
-    a2a: 'A2A Agent',
   }
   return map[value] ?? value
 }

@@ -61,7 +61,7 @@ export const workspaceAgents = sqliteTable(
   roleProfile: text('role_profile', { mode: 'json' }).$type<Record<string, unknown>>(),
   color: text('color').notNull().default('#6366f1'),
   modelId: text('model_id'),
-  runtimeType: text('runtime_type', { enum: ['llm', 'code-agent', 'mcp', 'a2a'] }).notNull().default('llm'),
+  runtimeType: text('runtime_type', { enum: ['llm', 'code-agent'] }).notNull().default('code-agent'),
   codeAgentType: text('code_agent_type', { enum: ['codex', 'claude-code', 'opencode', 'gemini'] }),
   capabilityTags: text('capability_tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
   toolPermissions: text('tool_permissions', { mode: 'json' }).$type<string[]>().notNull().default([]),

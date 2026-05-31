@@ -1,6 +1,8 @@
 # AgentHub —— IM 聊天式多 Agent 协作平台
 
 > 字节跳动 AI 全栈挑战赛 2026 参赛文档
+> 
+> 状态：历史方案/材料草稿，部分市场数据、Git 隔离、固定协作路径和协议边界描述可能已过期。当前工程权威路径请以 `docs/当前多Agent协作架构.md`、`docs/多Agent协作分层架构与业内对比.md` 和 `README.md` 为准。
 
 ---
 
@@ -837,7 +839,7 @@ AgentHub 的安全需求覆盖四个层面:**Agent 权限控制、代码沙箱�
 - **Layer 3** —— SES 安全 ECMAScript 子集
 - **Layer 4** —— Docker 容器 namespaces/cgroups 隔离
 
-每个 Agent 在独立 worktree 中执行,文件系统视图完全隔离。运行时隔离需防止端口竞争、数据库连接冲突和密钥泄露。
+当前工程默认不再使用独立 worktree 作为主路径，而是使用项目根下的 `.agenthub/workdirs/{runId}/{agentName}/{taskId}` 和 `.agenthub/handoff/{runId}/{taskId}` 做任务级工作目录与产物交接。运行时隔离仍需防止端口竞争、数据库连接冲突和密钥泄露。
 
 ##### Prompt 注入防御
 
