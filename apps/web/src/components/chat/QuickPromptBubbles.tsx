@@ -59,7 +59,7 @@ export function QuickPromptBubbles({
           key={`row-${rowIndex}`}
           className={cn(
             'agenthub-quick-prompt-row',
-            rowIndex % 2 === 1 && 'agenthub-quick-prompt-row-reverse',
+            rowIndex === 1 && 'agenthub-quick-prompt-row-reverse agenthub-quick-prompt-row-compact',
           )}
         >
           <div className="agenthub-quick-prompt-track">

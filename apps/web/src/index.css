@@ -1118,7 +1118,7 @@
   }
 
   .agenthub-quick-prompt-shell {
-    width: min(100%, 58rem);
+    width: min(100%, 44rem);
     margin-inline: auto;
     overflow: hidden;
     padding-block: 0.35rem;
@@ -1194,6 +1194,22 @@
   .agenthub-quick-prompt-bubble:disabled {
     cursor: default;
     opacity: 0.72;
+  }
+
+  /* 第二行：更紧凑 */
+  .agenthub-quick-prompt-row-compact {
+    padding-block: 0.2rem;
+  }
+
+  .agenthub-quick-prompt-row-compact .agenthub-quick-prompt-group {
+    gap: 0.5rem;
+  }
+
+  .agenthub-quick-prompt-row-compact .agenthub-quick-prompt-bubble {
+    min-height: 2.15rem;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+    line-height: 1.15rem;
   }
 
   @media (prefers-reduced-motion: reduce) {
