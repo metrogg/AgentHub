@@ -165,8 +165,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
       if (!isPrivateAgentSession(session)) continue
       const savedAgentId = readSavedAgentId(session)
       if (!savedAgentId || !savedAgentIds.has(savedAgentId)) continue
-      if (byAgentId.has(savedAgentId)) continue
-      byAgentId.set(savedAgentId, session)
+      const existing = byAgentId.get(savedAgentId)
+      if (!existing || Date.parse(session.updatedAt) > Date.parse(existing.updatedAt)) {
+        byAgentId.set(savedAgentId, session)
+      }
     }
     return byAgentId
   }, [savedAgentIds, sessions])
@@ -175,12 +177,15 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     [agentQuery, libraryAgents],
   )
   const privateAgentSessions = useMemo(
-    () =>
-      sessions
+    () => {
+      const seenSavedAgentIds = new Set<string>()
+      return sessions
         .filter((session) => {
           if (!isPrivateAgentSession(session)) return false
           const savedAgentId = readSavedAgentId(session)
           if (!savedAgentId || !savedAgentIds.has(savedAgentId)) return false
+          if (seenSavedAgentIds.has(savedAgentId)) return false
+          seenSavedAgentIds.add(savedAgentId)
           if (!query.trim()) return true
           const savedAgent = libraryAgents.find((agent) => agent.id === savedAgentId) ?? null
           return [
@@ -193,7 +198,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             .toLowerCase()
             .includes(query.trim().toLowerCase())
         })
-        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    },
     [libraryAgents, query, savedAgentIds, sessions],
   )
 
