@@ -36,13 +36,14 @@ export function QuickPromptBubbles({
   prompts: WelcomeQuickPrompt[]
 }) {
   const [activeId, setActiveId] = useState<string | null>(null)
-  const promptRows = useMemo(
-    () => [
-      prompts.filter((_, index) => index % 2 === 0),
-      prompts.filter((_, index) => index % 2 === 1),
-    ].filter((row) => row.length > 0),
-    [prompts],
-  )
+  const promptRows = useMemo(() => {
+    if (!prompts.length) return []
+    const mid = Math.ceil(prompts.length * 0.6)
+    return [
+      prompts.slice(0, mid),
+      prompts.slice(mid),
+    ].filter((row) => row.length > 0)
+  }, [prompts])
 
   function pickPrompt(prompt: WelcomeQuickPrompt) {
     if (!prompt.prompt.trim()) return
