@@ -1312,7 +1312,9 @@
   }
 
   .agenthub-chat-shell .agenthub-session-sidebar,
-  .agenthub-chat-shell .agenthub-session-sidebar > div {
+  .agenthub-chat-shell .agenthub-session-sidebar > div,
+  .agenthub-themed-page .agenthub-session-sidebar,
+  .agenthub-themed-page .agenthub-session-sidebar > div {
     background: var(--agenthub-app-sidebar, #fbfbfb);
     border-color: var(--agenthub-app-border, #e5e5e0);
     color: var(--agenthub-app-text, #171717);
@@ -1320,14 +1322,21 @@
 
   .agenthub-chat-shell .agenthub-session-sidebar .bg-\[\#FBFBFB\],
   .agenthub-chat-shell .agenthub-session-sidebar .bg-\[\#fbfbfb\],
-  .agenthub-chat-shell .agenthub-session-sidebar .bg-white {
+  .agenthub-chat-shell .agenthub-session-sidebar .bg-white,
+  .agenthub-themed-page .agenthub-session-sidebar .bg-\[\#FBFBFB\],
+  .agenthub-themed-page .agenthub-session-sidebar .bg-\[\#fbfbfb\],
+  .agenthub-themed-page .agenthub-session-sidebar .bg-white {
     background-color: var(--agenthub-app-sidebar, #fbfbfb);
   }
 
   .agenthub-chat-shell .agenthub-session-sidebar .bg-\[\#F7F7F7\],
   .agenthub-chat-shell .agenthub-session-sidebar .bg-\[\#f7f7f7\],
   .agenthub-chat-shell .agenthub-session-sidebar .bg-neutral-50,
-  .agenthub-chat-shell .agenthub-session-sidebar .bg-neutral-100 {
+  .agenthub-chat-shell .agenthub-session-sidebar .bg-neutral-100,
+  .agenthub-themed-page .agenthub-session-sidebar .bg-\[\#F7F7F7\],
+  .agenthub-themed-page .agenthub-session-sidebar .bg-\[\#f7f7f7\],
+  .agenthub-themed-page .agenthub-session-sidebar .bg-neutral-50,
+  .agenthub-themed-page .agenthub-session-sidebar .bg-neutral-100 {
     background-color: var(--agenthub-app-panel-muted, #f7f7f7);
   }
 
@@ -1335,50 +1344,67 @@
   .agenthub-chat-shell .agenthub-session-sidebar .hover\:bg-\[\#f7f7f7\]:hover,
   .agenthub-chat-shell .agenthub-session-sidebar .hover\:bg-neutral-100:hover,
   .agenthub-chat-shell .agenthub-session-sidebar .hover\:bg-neutral-200:hover,
-  .agenthub-chat-shell .agenthub-session-sidebar .hover\:bg-white\/70:hover {
+  .agenthub-chat-shell .agenthub-session-sidebar .hover\:bg-white\/70:hover,
+  .agenthub-themed-page .agenthub-session-sidebar .hover\:bg-\[\#F7F7F7\]:hover,
+  .agenthub-themed-page .agenthub-session-sidebar .hover\:bg-\[\#f7f7f7\]:hover,
+  .agenthub-themed-page .agenthub-session-sidebar .hover\:bg-neutral-100:hover,
+  .agenthub-themed-page .agenthub-session-sidebar .hover\:bg-neutral-200:hover,
+  .agenthub-themed-page .agenthub-session-sidebar .hover\:bg-white\/70:hover {
     background-color: var(--agenthub-app-hover, #f7f7f7);
   }
 
   .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-950,
   .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-900,
   .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-800,
-  .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-700 {
+  .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-700,
+  .agenthub-themed-page .agenthub-session-sidebar .text-neutral-950,
+  .agenthub-themed-page .agenthub-session-sidebar .text-neutral-900,
+  .agenthub-themed-page .agenthub-session-sidebar .text-neutral-800,
+  .agenthub-themed-page .agenthub-session-sidebar .text-neutral-700 {
     color: var(--agenthub-app-text, #171717);
   }
 
   .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-600,
   .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-500,
   .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-400,
-  .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-300 {
+  .agenthub-chat-shell .agenthub-session-sidebar .text-neutral-300,
+  .agenthub-themed-page .agenthub-session-sidebar .text-neutral-600,
+  .agenthub-themed-page .agenthub-session-sidebar .text-neutral-500,
+  .agenthub-themed-page .agenthub-session-sidebar .text-neutral-400,
+  .agenthub-themed-page .agenthub-session-sidebar .text-neutral-300 {
     color: var(--agenthub-app-muted-text, #666660);
   }
 
   .agenthub-chat-shell .agenthub-session-sidebar .border-neutral-100,
   .agenthub-chat-shell .agenthub-session-sidebar .border-neutral-200,
-  .agenthub-chat-shell .agenthub-session-sidebar .border-neutral-300 {
+  .agenthub-chat-shell .agenthub-session-sidebar .border-neutral-300,
+  .agenthub-themed-page .agenthub-session-sidebar .border-neutral-100,
+  .agenthub-themed-page .agenthub-session-sidebar .border-neutral-200,
+  .agenthub-themed-page .agenthub-session-sidebar .border-neutral-300 {
     border-color: var(--agenthub-app-border, #e5e5e0);
   }
 
-  .agenthub-chat-shell .agenthub-session-sidebar input {
+  .agenthub-chat-shell .agenthub-session-sidebar input,
+  .agenthub-themed-page .agenthub-session-sidebar input {
     background: transparent;
     color: var(--agenthub-app-text, #171717);
   }
 
   .agenthub-chat-shell .agenthub-session-sidebar .shadow,
   .agenthub-chat-shell .agenthub-session-sidebar .shadow-sm,
-  .agenthub-chat-shell .agenthub-session-sidebar .shadow-xl {
+  .agenthub-chat-shell .agenthub-session-sidebar .shadow-xl,
+  .agenthub-themed-page .agenthub-session-sidebar .shadow,
+  .agenthub-themed-page .agenthub-session-sidebar .shadow-sm,
+  .agenthub-themed-page .agenthub-session-sidebar .shadow-xl {
     box-shadow: none;
   }
 
-  [data-agenthub-theme='dark'] .agenthub-chat-shell .agenthub-session-sidebar .bg-neutral-950 {
+  [data-agenthub-theme='dark'] .agenthub-session-sidebar .bg-neutral-950 {
     background-color: var(--agenthub-app-text, #f5f5f5);
     color: var(--agenthub-app-bg, #171717);
   }
 
-  [data-agenthub-theme='dark']
-    .agenthub-chat-shell
-    .agenthub-session-sidebar
-    .bg-neutral-950.text-white {
+  [data-agenthub-theme='dark'] .agenthub-session-sidebar .bg-neutral-950.text-white {
     color: var(--agenthub-app-bg, #171717);
   }
 
