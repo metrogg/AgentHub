@@ -249,7 +249,10 @@ async function _runAgentReply(
             break
           case 'metadata':
             if (chunk.metadata && typeof chunk.metadata === 'object') {
-              codeAgentRun = chunk.metadata as Record<string, unknown>
+              const incoming = chunk.metadata as Record<string, unknown>
+              codeAgentRun = codeAgentRun
+                ? (Object.assign(codeAgentRun, incoming) as Record<string, unknown>)
+                : incoming
               broadcast(sessionId, {
                 type: 'message:metadata',
                 payload: { sessionId, messageId: streamMsgId, agentId, agentName, codeAgentRun: chunk.metadata },
