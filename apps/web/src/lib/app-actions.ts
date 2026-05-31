@@ -41,7 +41,6 @@ export async function openWorkspaceFolderAsSession({
         name: workspaceNameFromPath(result.projectPath),
         goal: '',
         projectPath: result.projectPath,
-        template: 'blank',
       })
     ).workspace
   const { session } = await api.openWorkspaceGroupSession(workspace.id, [])

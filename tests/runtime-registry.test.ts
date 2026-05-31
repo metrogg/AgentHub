@@ -7,6 +7,7 @@ function registry() {
     .register(fakeRuntime('llm'))
     .register(fakeRuntime('mcp'))
     .register(fakeRuntime('code-agent'))
+    .register(fakeRuntime('a2a'))
 }
 
 function fakeRuntime(runtimeType: string): AgentRuntime {
@@ -54,5 +55,15 @@ describe('runtimeRegistry.resolveForProfile', () => {
       }),
     )
     expect(runtime.runtimeType).toBe('code-agent')
+  })
+
+  test('routes A2A agents to the A2A runtime instead of falling back to LLM', () => {
+    const runtime = registry().resolveForProfile(
+      profile({
+        runtimeType: 'a2a',
+        a2aEndpoint: 'http://localhost:8000/api/protocols/a2a/agent',
+      }),
+    )
+    expect(runtime.runtimeType).toBe('a2a')
   })
 })

@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { AGENT_ROLE_TYPES, inferRoleType } from './workspace/agent-role-presets'
+import { streamReply } from './llm'
+import { AGENT_ROLE_TYPES } from './workspace/agent-role-presets'
 
 export const confirmAgentDraftSchema = z.object({
   draft: z
@@ -27,109 +28,56 @@ export const confirmAgentDraftSchema = z.object({
 
 export type AgentDraft = NonNullable<z.infer<typeof confirmAgentDraftSchema>['draft']>
 
-export function buildAgentDraft(content: string): AgentDraft {
-  const codeAgentType = inferCodeAgentType(content)
-  const runtimeType = codeAgentType ? 'code-agent' : 'llm'
-  const role = inferAgentRole(content)
-  const name = inferAgentName(content, role, codeAgentType)
-  const capabilityTags = inferCapabilityTags(content, role)
-  const toolPermissions = inferToolPermissions(content)
-  const roleType = inferRoleType({ name, role, capabilityTags, roleType: 'custom' })
-  return {
-    name,
-    role,
-    roleType,
-    description: `${role} Agent，负责${capabilityTags.slice(0, 3).join('、') || '协作任务'}。`,
-    avatar: null,
-    systemPrompt: buildAgentSystemPrompt(role, capabilityTags),
-    roleProfile: null,
-    color: colorForRole(role),
-    modelId: null,
-    runtimeType,
-    codeAgentType: codeAgentType ?? null,
-    capabilityTags,
-    toolPermissions,
-    sandboxPolicy: toolPermissions.includes('workspace:write') ? 'workspace-write' : 'read-only',
-    contextPolicy: 'workspace-aware',
-    autoInvoke: true,
-    approvalRequired: codeAgentType ? false : true,
+const modelAgentDraftSchema = z.object({
+  name: z.string().min(1).max(60),
+  role: z.string().min(1).max(60),
+  roleType: z.enum(AGENT_ROLE_TYPES),
+  description: z.string().max(500),
+  avatar: z.string().max(500).nullable(),
+  systemPrompt: z.string().max(4000),
+  roleProfile: z.record(z.unknown()).nullable(),
+  color: z.string().max(20),
+  modelId: z.string().max(120).nullable(),
+  runtimeType: z.enum(['llm', 'code-agent', 'mcp', 'a2a']),
+  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable(),
+  capabilityTags: z.array(z.string().max(40)).max(12),
+  toolPermissions: z.array(z.string().max(80)).max(30),
+  sandboxPolicy: z.enum(['read-only', 'workspace-write', 'danger-full-access']),
+  contextPolicy: z.enum(['recent-only', 'pinned-recent', 'workspace-aware']),
+  autoInvoke: z.boolean(),
+  approvalRequired: z.boolean(),
+})
+
+export async function buildAgentDraft(content: string): Promise<AgentDraft> {
+  const system = [
+    '你是 AgentHub 的 Agent 草案生成器。',
+    '根据用户的自然语言需求，动态生成一个可加入当前 Agent Group 的 Agent 配置草案。',
+    '只返回严格 JSON，不要 Markdown，不要解释。',
+    '不要使用固定团队模板；根据用户这次表达决定名称、职责、运行时、工具权限和系统提示。',
+    'runtimeType 可选 "llm"、"code-agent"、"mcp"、"a2a"。',
+    'code-agent 仅在用户明确需要本地代码工具或 CLI 执行时使用，并必须设置 codeAgentType 为 "codex"、"claude-code"、"opencode" 或 "gemini"；否则 codeAgentType 为 null。',
+    'sandboxPolicy 必须和职责匹配：只读研究/审查用 read-only；需要改项目文件才用 workspace-write；除非用户明确要求且风险可控，不要用 danger-full-access。',
+    'roleType 只能是 orchestrator、clarifier、architect、researcher、coder、verifier、reviewer、integrator、custom。',
+    '返回字段：name, role, roleType, description, avatar, systemPrompt, roleProfile, color, modelId, runtimeType, codeAgentType, capabilityTags, toolPermissions, sandboxPolicy, contextPolicy, autoInvoke, approvalRequired。',
+  ].join('\n')
+
+  let output = ''
+  for await (const delta of streamReply(
+    [{ role: 'user', content: content.trim() }],
+    system,
+  )) {
+    output += delta
+    if (output.length > 12_000) break
   }
-}
 
-export function inferCodeAgentType(content: string): AgentDraft['codeAgentType'] {
-  const lower = content.toLowerCase()
-  if (lower.includes('claude')) return 'claude-code'
-  if (lower.includes('opencode') || lower.includes('open code')) return 'opencode'
-  if (lower.includes('gemini')) return 'gemini'
-  if (lower.includes('codex')) return 'codex'
-  return null
-}
+  const jsonText = extractJsonObject(output)
+  if (!jsonText) throw new Error('Agent 草案生成失败：模型未返回 JSON')
 
-export function inferAgentRole(content: string) {
-  const lower = content.toLowerCase()
-  if (/review|审查|测试|质量/.test(lower)) return '审查'
-  if (/research|研究|调研/.test(lower)) return '研究'
-  if (/deploy|部署|发布|运维/.test(lower)) return '部署'
-  if (/front|react|vue|页面|前端|ui/.test(lower)) return '前端实现'
-  if (/backend|server|api|后端|接口/.test(lower)) return '后端实现'
-  if (/architect|架构|规划/.test(lower)) return '规划'
-  return /coder|code|实现|代码/.test(lower) ? '实现' : '协作'
-}
-
-export function inferAgentName(content: string, role: string, codeAgentType: AgentDraft['codeAgentType']) {
-  const explicit = /(?:创建|添加|新建)\s*(?:一个)?\s*([A-Za-z][A-Za-z0-9_-]{1,24})\s*(?:Agent|代理|助手)/i.exec(content)?.[1]
-  if (explicit && !['agent', 'coder', 'code'].includes(explicit.toLowerCase())) return explicit
-  const prefix = codeAgentType === 'claude-code' ? 'Claude' : codeAgentType === 'opencode' ? 'OpenCode' : codeAgentType === 'gemini' ? 'Gemini' : codeAgentType === 'codex' ? 'Codex' : ''
-  const suffix = role.includes('前端') ? 'Frontend' : role.includes('后端') ? 'Backend' : role.includes('审查') ? 'Reviewer' : role.includes('部署') ? 'Deploy' : 'Coder'
-  return [prefix, suffix].filter(Boolean).join(' ') || 'Custom Agent'
-}
-
-export function inferCapabilityTags(content: string, role: string) {
-  const tags = new Set<string>()
-  const candidates: Array<[RegExp, string]> = [
-    [/react|前端|页面|ui/i, '前端'],
-    [/node|server|api|后端|接口/i, '后端'],
-    [/test|测试|qa/i, '测试'],
-    [/deploy|部署|发布/i, '部署'],
-    [/review|审查|质量/i, '审查'],
-    [/research|研究|调研/i, '研究'],
-    [/workflow|流程|编排/i, '编排'],
-  ]
-  for (const [pattern, tag] of candidates) {
-    if (pattern.test(content)) tags.add(tag)
+  const parsed = modelAgentDraftSchema.safeParse(JSON.parse(jsonText))
+  if (!parsed.success) {
+    throw new Error(`Agent 草案生成失败：模型返回不符合 schema（${parsed.error.issues[0]?.message ?? 'invalid'}）`)
   }
-  if (role) tags.add(role)
-  return [...tags].slice(0, 8)
-}
-
-export function inferToolPermissions(content: string) {
-  const lower = content.toLowerCase()
-  const permissions = new Set<string>(['chat'])
-  if (/读|读取|read|项目|workspace|文件/.test(lower)) permissions.add('workspace:read')
-  if (/写|修改|实现|代码|write|workspace/.test(lower)) permissions.add('workspace:write')
-  if (/预览|preview|shell/.test(lower)) permissions.add('shell:preview')
-  if (/部署|发布|deploy/.test(lower)) permissions.add('deploy:preview')
-  return [...permissions]
-}
-
-export function buildAgentSystemPrompt(role: string, tags: string[]) {
-  return [
-    `你是 AgentHub 中的${role} Agent。`,
-    tags.length ? `你的能力标签是：${tags.join('、')}。` : '',
-    '请基于当前会话上下文给出可执行产出；涉及文件修改、命令执行、部署或密钥时先说明风险并等待用户确认。',
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-export function colorForRole(role: string) {
-  if (role.includes('前端')) return '#2563eb'
-  if (role.includes('后端')) return '#0f766e'
-  if (role.includes('审查')) return '#ef4444'
-  if (role.includes('部署')) return '#7c3aed'
-  if (role.includes('研究')) return '#f59e0b'
-  if (role.includes('规划')) return '#6366f1'
-  return '#111827'
+  return parsed.data
 }
 
 export function parseAgentDraft(metadata: unknown) {
@@ -147,12 +95,7 @@ export function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
   return {
     name: draft.name.trim(),
     role: draft.role.trim(),
-    roleType: draft.roleType ?? inferRoleType({
-      name: draft.name,
-      role: draft.role,
-      capabilityTags: draft.capabilityTags ?? [],
-      roleType: 'custom',
-    }),
+    roleType: draft.roleType ?? 'custom',
     description: draft.description?.trim() ?? '',
     avatar: draft.avatar ?? null,
     systemPrompt: draft.systemPrompt?.trim() ?? '',
@@ -160,7 +103,7 @@ export function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
     color: draft.color ?? '#111827',
     modelId: draft.modelId ?? null,
     runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? null) : null,
     capabilityTags: draft.capabilityTags ?? [],
     toolPermissions: nativeReadOnly ? ['workspace:read', 'skills:read'] : draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
     sandboxPolicy: nativeReadOnly ? 'read-only' : (draft.sandboxPolicy ?? 'workspace-write'),
@@ -168,4 +111,16 @@ export function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
     autoInvoke: draft.autoInvoke ?? true,
     approvalRequired: nativeReadOnly ? true : runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
   }
+}
+
+function extractJsonObject(value: string) {
+  const cleaned = value
+    .trim()
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim()
+  if (cleaned.startsWith('{') && cleaned.endsWith('}')) return cleaned
+  const start = cleaned.indexOf('{')
+  const end = cleaned.lastIndexOf('}')
+  return start >= 0 && end > start ? cleaned.slice(start, end + 1) : null
 }

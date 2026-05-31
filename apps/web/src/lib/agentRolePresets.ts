@@ -1,9 +1,5 @@
-import type { AgentConfigInput, AgentRelationType, AgentRoleType } from './api'
-import {
-  ROLE_PRESETS,
-  DEFAULT_CODE_TEAM_RELATIONS,
-  inferRoleType as sharedInferRoleType,
-} from '@agenthub/shared'
+import type { AgentConfigInput, AgentRoleType } from './api'
+import { ROLE_PRESETS, inferRoleType as sharedInferRoleType } from '@agenthub/shared'
 
 export interface AgentRolePreset extends AgentConfigInput {
   roleType: Exclude<AgentRoleType, 'custom'>
@@ -49,13 +45,6 @@ function sharedPresetToFrontend(key: Exclude<AgentRoleType, 'custom'>): AgentRol
 export const agentRolePresets: AgentRolePreset[] = (
   Object.keys(ROLE_PRESETS) as Array<Exclude<AgentRoleType, 'custom'>>
 ).map(sharedPresetToFrontend)
-
-export const defaultAgentRelations: Array<{
-  sourceRoleType: AgentRoleType
-  targetRoleType: AgentRoleType
-  relationType: AgentRelationType
-  note: string
-}> = DEFAULT_CODE_TEAM_RELATIONS
 
 export function presetForRole(roleType?: AgentRoleType) {
   if (!roleType || roleType === 'custom') return undefined

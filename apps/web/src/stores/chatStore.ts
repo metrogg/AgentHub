@@ -1741,6 +1741,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             sessionId,
           },
         }))
+        void get().fetchSessions()
         break
       }
       case WsEvent.TaskBoardTaskProgress: {
@@ -1783,6 +1784,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             },
           }
         })
+        void get().fetchSessions()
         break
       }
     }

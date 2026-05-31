@@ -11,6 +11,7 @@ export interface AgentRow {
   roleType?: string | null
   description?: string | null
   systemPrompt?: string | null
+  roleProfile?: Record<string, unknown> | null
   color?: string | null
   modelId?: string | null
   runtimeType?: string | null
@@ -58,6 +59,7 @@ export function buildAgentProfile(
     modelId: agent.modelId ?? null,
     runtimeType: (agent.runtimeType ?? 'llm') as AgentRunProfile['runtimeType'],
     codeAgentType: (agent.codeAgentType ?? undefined) as AgentRunProfile['codeAgentType'],
+    a2aEndpoint: resolveA2AEndpoint(agent),
     capabilityTags: agent.capabilityTags ?? [],
     toolPermissions: overrides?.toolPermissions ?? agent.toolPermissions ?? [],
     sandboxPolicy: (overrides?.sandboxPolicy ?? agent.sandboxPolicy ?? 'workspace-write') as AgentRunProfile['sandboxPolicy'],
@@ -65,6 +67,25 @@ export function buildAgentProfile(
     approvalRequired: overrides?.approvalRequired ?? agent.approvalRequired ?? false,
     projectPath: projectPath?.trim() || null,
   }
+}
+
+function resolveA2AEndpoint(agent: AgentRow): string | null {
+  const profile = agent.roleProfile ?? {}
+  const profileEndpoint =
+    stringValue(profile.a2aEndpoint) ??
+    stringValue(profile.agentCardUrl) ??
+    stringValue(profile.endpoint)
+  if (profileEndpoint) return profileEndpoint
+  if (agent.runtimeType === 'a2a' && looksLikeUrl(agent.modelId)) return agent.modelId!.trim()
+  return null
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function looksLikeUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^https?:\/\//i.test(value.trim())
 }
 
 /**

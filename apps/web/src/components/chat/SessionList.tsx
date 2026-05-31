@@ -64,9 +64,8 @@ type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 function activeTabFromPath(
   pathname: string,
   activeSession: Session | undefined,
-  groupWorkspaceIds: Set<string>,
 ): SidebarTab {
-  if (pathname.startsWith('/chat/') && isPrivateAgentSession(activeSession, groupWorkspaceIds))
+  if (pathname.startsWith('/chat/') && isPrivateAgentSession(activeSession))
     return 'agents'
   if (pathname === '/agent-config') return 'agents'
   if (pathname === '/profile' || pathname === '/settings') return 'me'
@@ -132,8 +131,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   )
   const messageSessions = useMemo(
     () =>
-      sessions.filter((session) => !isPrivateAgentSession(session, groupWorkspaceIds)),
-    [groupWorkspaceIds, sessions],
+      sessions.filter((session) => !isPrivateAgentSession(session)),
+    [sessions],
   )
   const baseSessionTree = useMemo(
     () => buildSessionTree(messageSessions, pinnedIds),
@@ -152,25 +151,51 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     [archivedIds, baseSessionTree, query, showArchived],
   )
   const activeSession = sessions.find((session) => session.id === sessionId)
-  const routeTab = activeTabFromPath(location.pathname, activeSession, groupWorkspaceIds)
+  const routeTab = activeTabFromPath(location.pathname, activeSession)
   const activeTab = tabOverride ?? routeTab
   const isAgentConfigRoute = location.pathname === '/agent-config'
   const activeAgentConfigId = new URLSearchParams(location.search).get('agentId')
+  const savedAgentIds = useMemo(
+    () => new Set(libraryAgents.map((agent) => agent.id)),
+    [libraryAgents],
+  )
   const agentDirectSessionsBySavedId = useMemo(() => {
     const byAgentId = new Map<string, Session>()
     for (const session of sessions) {
-      if (!isPrivateAgentSession(session, groupWorkspaceIds)) continue
+      if (!isPrivateAgentSession(session)) continue
       const savedAgentId = readSavedAgentId(session)
-      if (!savedAgentId || byAgentId.has(savedAgentId)) continue
+      if (!savedAgentId || !savedAgentIds.has(savedAgentId)) continue
+      if (byAgentId.has(savedAgentId)) continue
       byAgentId.set(savedAgentId, session)
     }
     return byAgentId
-  }, [groupWorkspaceIds, sessions])
+  }, [savedAgentIds, sessions])
   const filteredLibraryAgents = useMemo(
     () => filterAgents(libraryAgents, agentQuery),
     [agentQuery, libraryAgents],
   )
-  const messageTabAgents = useMemo(() => filterAgents(libraryAgents, query), [libraryAgents, query])
+  const privateAgentSessions = useMemo(
+    () =>
+      sessions
+        .filter((session) => {
+          if (!isPrivateAgentSession(session)) return false
+          const savedAgentId = readSavedAgentId(session)
+          if (!savedAgentId || !savedAgentIds.has(savedAgentId)) return false
+          if (!query.trim()) return true
+          const savedAgent = libraryAgents.find((agent) => agent.id === savedAgentId) ?? null
+          return [
+            session.title,
+            savedAgent?.name ?? '',
+            savedAgent?.role ?? '',
+            savedAgent?.description ?? '',
+          ]
+            .join(' ')
+            .toLowerCase()
+            .includes(query.trim().toLowerCase())
+        })
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+    [libraryAgents, query, savedAgentIds, sessions],
+  )
 
   useEffect(() => {
     if (sessionsBootstrapped || loadingSessions) return
@@ -634,50 +659,49 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                   全部
                 </button>
               </div>
-              {messageTabAgents.length > 0 ? (
+              {privateAgentSessions.length > 0 ? (
                 <div className="space-y-0.5 px-2">
-                  {messageTabAgents.map((agent) => {
-                    const agentSession = agentDirectSessionsBySavedId.get(agent.id)
-                    const active = agentSession?.id === sessionId
-                    const opening = openingAgentId === agent.id
+                  {privateAgentSessions.map((session) => {
+                    const savedAgentId = readSavedAgentId(session)
+                    const savedAgent = savedAgentId
+                      ? libraryAgents.find((agent) => agent.id === savedAgentId)
+                      : null
+                    const active = session.id === sessionId
                     return (
                       <button
-                        key={agent.id}
+                        key={session.id}
                         type="button"
-                        onClick={() => void openAgentSession(agent)}
-                        disabled={opening}
+                        onClick={() => void openExistingSession(session)}
                         className={cn(
                           'flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left transition disabled:opacity-60',
                           active
                             ? 'bg-[#F7F7F7] text-neutral-950 shadow-sm'
                             : 'text-neutral-700 hover:bg-[#F7F7F7]',
                         )}
-                        title={agent.name}
+                        title={sessionDisplayTitle(savedAgent?.name ?? session.title, t)}
                       >
                         <span
                           className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
-                          style={{ background: agent.color }}
+                          style={{ background: savedAgent?.color ?? '#111827' }}
                         >
-                          {agent.name.slice(0, 1).toUpperCase()}
+                          {(savedAgent?.name ?? session.title).slice(0, 1).toUpperCase()}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium">{agent.name}</span>
+                          <span className="block truncate text-sm font-medium">
+                            {savedAgent?.name ?? sessionDisplayTitle(session.title, t)}
+                          </span>
                           <span className="block truncate text-[10px] text-neutral-400">
-                            {agentSession
-                              ? relativeTime(agentSession.updatedAt, language)
-                              : agent.role || '未开始'}
+                            {savedAgent?.role
+                              ? `${savedAgent.role} · ${relativeTime(session.updatedAt, language)}`
+                              : relativeTime(session.updatedAt, language)}
                           </span>
                         </span>
-                        {opening ? (
-                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-400" />
-                        ) : (
-                          <MessageCircle
-                            className={cn(
-                              'h-3.5 w-3.5 shrink-0',
-                              active ? 'text-neutral-700' : 'text-neutral-300',
-                            )}
-                          />
-                        )}
+                        <MessageCircle
+                          className={cn(
+                            'h-3.5 w-3.5 shrink-0',
+                            active ? 'text-neutral-700' : 'text-neutral-300',
+                          )}
+                        />
                       </button>
                     )
                   })}
@@ -685,11 +709,11 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
               ) : (
                 <button
                   type="button"
-                  onClick={addAgent}
+                  onClick={() => setTabOverride('agents')}
                   className="mx-2 flex h-10 w-[calc(100%-1rem)] items-center justify-center gap-2 rounded-xl border border-dashed border-neutral-200 bg-white text-xs text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
                 >
                   <UserPlus className="h-3.5 w-3.5" />
-                  添加 Agent
+                  去添加 Agent
                 </button>
               )}
             </div>
@@ -1487,15 +1511,10 @@ function isStableAgentChildSession(session: Session) {
   )
 }
 
-function isPrivateAgentSession(
-  session: Session | null | undefined,
-  groupWorkspaceIds: Set<string>,
-) {
+function isPrivateAgentSession(session: Session | null | undefined) {
   if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
   const metadata = session.metadata ?? {}
-  if (metadata.kind === 'agent-direct') return true
-  if (metadata.kind === 'orchestrator-task' || metadata.hiddenFromSessionTree) return false
-  return !groupWorkspaceIds.has(session.workspaceId)
+  return metadata.kind === 'agent-direct'
 }
 
 function readSavedAgentId(session: Session) {

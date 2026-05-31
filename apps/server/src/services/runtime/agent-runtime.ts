@@ -12,6 +12,7 @@ export interface AgentProfile {
   modelId?: string | null
   runtimeType: 'llm' | 'code-agent' | 'mcp' | 'a2a'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini'
+  a2aEndpoint?: string | null
   capabilityTags: string[]
   toolPermissions: string[]
   sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'

@@ -169,6 +169,7 @@ import type { AgentExecutionEnvelope } from './execution/agent-execution-envelop
 import { DEFAULT_ENV_ALLOWLIST } from './execution/agent-execution-envelope'
 import { gitBranchManager } from './git/branch-manager'
 import { isCodeAgentProfile } from './runtime'
+import { buildA2AAgentMessage } from './protocols/a2a-internal'
 
 export async function runAgentReply(
   sessionId: string,

@@ -195,10 +195,9 @@ function createConversationWorkspace(name: string, goal: string, projectPath?: s
       name,
       goal,
       projectPath,
-      template: 'blank',
     })
   }
-  return api.createAutoWorkspace({ name, goal, template: 'blank' })
+  return api.createAutoWorkspace({ name, goal })
 }
 
 /**

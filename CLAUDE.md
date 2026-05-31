@@ -13,6 +13,7 @@ AgentHub is an IM-style multi-agent collaboration platform. The expected behavio
 5. Users can open child conversations to inspect each agent's real execution trace.
 
 Do not implement fixed scenario templates as the core path. The platform must stay general-purpose first.
+Role presets may be used as a manual creation library, but they must not auto-seed a workspace, define a default team, or override model-generated assignments.
 
 ## Stack
 
@@ -24,6 +25,7 @@ Do not implement fixed scenario templates as the core path. The platform must st
 - State: Zustand
 - DB: SQLite via `bun:sqlite` + Drizzle ORM
 - LLM: OpenAI-compatible and Anthropic-compatible streaming client
+- Agent communication: A2A v0.3 `message/send` via AgentHub local transport
 - Code agents: Codex CLI, Claude Code, OpenCode, Gemini CLI
 
 ## Commands
@@ -75,12 +77,26 @@ OrchestratorEngine.dispatch()
   -> workspace_tasks + orchestrator_runs persist run state
   -> ensureOrchestratorTaskSession() creates child sessions
   -> TaskScheduler executes dependency layers
-  -> TaskExecutionService runs each agent
-  -> blackboard stores summaries, decisions, artifact refs
+  -> Orchestrator builds A2A message/send envelope
+  -> TaskExecutionService sends through LocalA2ATransport
+  -> local A2A agent adapts to LLM / Code Agent / Native Tool runtime
+  -> blackboard stores summaries, decisions, artifact refs as A2A metadata/artifact extensions
   -> .agenthub/handoff materializes readable upstream artifacts
   -> main group chat receives task result messages
   -> Synthesizer writes final summary
 ```
+
+### A2A Boundary
+
+Internal agent-to-agent task dispatch must use A2A objects, not a parallel hidden protocol:
+
+- `apps/server/src/services/protocols/a2a-internal.ts` builds the internal `message/send` envelope and response `Task`.
+- `apps/server/src/services/execution/local-a2a-transport.ts` is the local transport facade.
+- `apps/server/src/services/runtime/a2a-runtime.ts` calls remote A2A JSON-RPC endpoints for agents with `runtimeType === "a2a"`.
+- Child conversation user messages persist the A2A request envelope in metadata.
+- Agent outputs and group task reports persist A2A response message/task metadata.
+- A remote A2A agent must provide `roleProfile.a2aEndpoint` or a URL-like `modelId`; do not silently fall back to LLM if it is missing.
+- Blackboard and `.agenthub/handoff` remain AgentHub extensions to A2A artifacts, not separate static routing systems.
 
 ### Session Tree Rules
 
@@ -213,6 +229,8 @@ bun test
 
 - `workspace-agent-child`: legacy child session design. Keep hidden from current group UX.
 - Static fallback plan templates: avoid as normal UX. Prefer model-generated dynamic plans.
+- Static agent routing, keyword-based task reassignment, auto Researcher injection, and artifact-extension follow-up tasks are removed from the active path. Do not reintroduce them; validate explicit Orchestrator/Planner assignments instead.
+- `classic` workspace seeding, default code teams, and `create-from-template` are removed from the active product path.
 - Branch-per-agent docs: old design. Git utilities may remain, but current default execution is workdir + handoff.
 - Old static quick prompt fallback: user does not want static prompt content.
 - `GroupChatManager`: deprecated path; do not route new group behavior through it.

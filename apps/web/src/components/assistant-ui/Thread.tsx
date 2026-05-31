@@ -1710,7 +1710,6 @@ const Composer: FC = () => {
       const full = await api.createAutoWorkspace({
         name: '新工作空间',
         goal: '',
-        template: 'blank',
       })
       setWorkspaces((items) => [
         full.workspace,
@@ -1748,7 +1747,6 @@ const Composer: FC = () => {
             name: workspaceNameFromPath(result.projectPath),
             goal: '',
             projectPath: result.projectPath,
-            template: 'blank',
           })
         ).workspace
       setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])

@@ -8,7 +8,6 @@ import {
   TaskType,
 } from '@agenthub/shared'
 import { Planner } from './planner'
-import { selectAgentForTask } from './agent-router'
 import type { CollaborationMode, ExecutionPlan, TaskOutputContract, TaskValidation } from './types'
 
 type PlanAgent = {
@@ -120,9 +119,7 @@ export async function buildDynamicOrchestratorPlan(
     plannerSystemPrompt: orchestratorAgent?.systemPrompt,
   })
 
-  const plan = executionPlanToOrchestratorPlan(executionPlan, workerPlanningAgents)
-  const relations = workspaceId ? await loadWorkspaceAgentRelationsForPlanning(workspaceId) : []
-  return applyAgentSelections(plan, relations)
+  return executionPlanToOrchestratorPlan(executionPlan, workerPlanningAgents)
 }
 
 function normalizeOrchestratorGoal(content: string) {
@@ -163,52 +160,6 @@ export async function loadWorkspaceAgentRelationsForPlanning(workspaceId: string
     })
     .from(workspaceAgentRelations)
     .where(eq(workspaceAgentRelations.workspaceId, workspaceId))
-}
-
-function applyAgentSelections(
-  plan: OrchestratorPlan,
-  relations: Awaited<ReturnType<typeof loadWorkspaceAgentRelationsForPlanning>>,
-): OrchestratorPlan {
-  const executionAgents = plan.agents.map((agent) => ({
-    id: agent.key,
-    key: agent.key,
-    name: agent.name,
-    role: agent.role,
-    roleType: agent.roleType,
-    description: agent.description,
-    color: agent.color,
-    systemPrompt: agent.systemPrompt,
-    roleProfile: agent.roleProfile,
-    modelId: agent.modelId,
-    runtimeType: agent.runtimeType ?? 'llm',
-    codeAgentType: agent.codeAgentType ?? undefined,
-    capabilityTags: agent.capabilityTags ?? [],
-    toolPermissions: agent.toolPermissions ?? [],
-    sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
-  }))
-  return {
-    ...plan,
-    tasks: plan.tasks.map((task) => {
-      const selection = selectAgentForTask({
-        task: {
-          id: task.id,
-          title: task.title,
-          description: task.description,
-          agentId: task.agentKey,
-          taskType: task.taskType,
-          dependencies: task.dependencies ?? [],
-          maxRetries: task.maxRetries ?? 1,
-        },
-        agents: executionAgents,
-        relations,
-      })
-      return {
-        ...task,
-        agentKey: selection.selectedAgentKey || task.agentKey,
-        agentSelection: selection,
-      }
-    }),
-  }
 }
 
 function executionPlanToOrchestratorPlan(

@@ -1,6 +1,8 @@
 import { mkdirSync } from 'node:fs'
 import { homedir, platform, tmpdir } from 'node:os'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { AgentHubA2AEnvelope } from '../protocols/a2a-internal'
 
 const projectRoot = resolve(
   Bun.env.PROJECT_ROOT?.trim() || process.env.PROJECT_ROOT?.trim() || process.cwd(),
@@ -44,6 +46,8 @@ export interface AgentExecutionEnvelope {
     openaiBaseUrl?: string
     anthropicBaseUrl?: string
   }
+  /** 内部 Agent 间通信统一使用的 A2A message/send 信封 */
+  a2a?: AgentHubA2AEnvelope
 }
 
 /** 默认 env 白名单：只传模型 key、必要 PATH、HOME 等明确字段 */

@@ -183,7 +183,6 @@ export default function AgentWorldPage() {
           name: workspaceNameFromPath(result.projectPath) || '项目文件夹',
           goal,
           projectPath: result.projectPath,
-          template: 'classic',
         }))
       await fetchList()
       await selectWorkspace(workspace.id)
