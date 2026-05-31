@@ -5,6 +5,11 @@ import {
   toA2ATaskState,
 } from '../apps/server/src/services/protocols/a2a-adapter'
 import {
+  A2A_AGENTHUB_METADATA_KEY,
+  buildA2ADispatchEnvelope,
+  buildA2AExecutionTask,
+} from '../apps/server/src/services/protocols/a2a-internal'
+import {
   buildAgUiEventsFromRunEvent,
   buildAgUiRunStartedEvent,
   buildAgUiTaskStatusEvent,
@@ -85,6 +90,75 @@ describe('protocol adapters', () => {
       threadId: 'thread-1',
     })
     expect(runStarted.type).toBe('RUN_STARTED')
+  })
+
+  test('uses A2A message/send as the internal agent dispatch envelope', () => {
+    const dispatch = buildA2ADispatchEnvelope({
+      agent: {
+        id: 'agent-1',
+        key: 'researcher',
+        name: 'Researcher',
+        role: 'Researcher',
+        roleType: 'researcher',
+        runtimeType: 'llm',
+        capabilityTags: [],
+        toolPermissions: [],
+        sandboxPolicy: 'read-only',
+      },
+      childSessionId: 'child-1',
+      groupSessionId: 'group-1',
+      plan: {
+        runId: 'run-1',
+        title: 'Research',
+        goal: 'Find facts',
+        agents: [
+          {
+            id: 'orch-1',
+            key: 'orchestrator',
+            name: 'Orchestrator',
+            role: 'Coordinator',
+            roleType: 'orchestrator',
+            runtimeType: 'llm',
+            capabilityTags: [],
+            toolPermissions: [],
+            sandboxPolicy: 'read-only',
+          },
+        ],
+        tasks: [],
+      },
+      prompt: 'Please research current AI coding tools.',
+      task: {
+        id: 'task-1',
+        title: 'Research current tools',
+        description: 'Collect facts',
+        agentId: 'agent-1',
+        dependencies: ['task-0'],
+        taskType: 'research',
+      },
+      userMessageId: 'msg-1',
+      workspaceId: 'ws-1',
+    })
+
+    expect(dispatch.method).toBe('message/send')
+    expect(dispatch.params.message.kind).toBe('message')
+    expect(dispatch.params.message.taskId).toBe('task-1')
+    expect(dispatch.params.message.referenceTaskIds).toEqual(['task-0'])
+    expect(dispatch.params.message.metadata?.[A2A_AGENTHUB_METADATA_KEY]).toMatchObject({
+      runId: 'run-1',
+      toAgentName: 'Researcher',
+    })
+
+    const task = buildA2AExecutionTask({
+      envelope: dispatch,
+      status: 'done',
+      output: 'Done',
+      artifacts: [{ id: 'artifact-1', path: 'report.md', title: 'report.md' }],
+    })
+
+    expect(task.id).toBe('task-1')
+    expect(task.status.state).toBe('completed')
+    expect(task.history?.[0]?.messageId).toBe('msg-1')
+    expect(task.artifacts?.[0]?.artifactId).toBe('artifact-1')
   })
 
   test('converts persisted run events into AG-UI events', () => {

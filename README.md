@@ -2,7 +2,7 @@
 
 AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent 私聊，也可以在群聊中交给 Orchestrator 自动拆解任务、调度多个 Agent、收集产物并汇总结果。
 
-当前项目处于快速迭代阶段，优先目标是跑通通用的“群聊主线 + 多 Agent 任务子对话 + 本地工作目录 + 产物交接”闭环。
+当前项目处于快速迭代阶段，优先目标是跑通通用的“群聊主线 + A2A 任务分发 + 多 Agent 任务子对话 + 本地工作目录 + 产物交接”闭环。
 
 ## 核心体验
 
@@ -10,6 +10,8 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 - **Agent 群聊**：用户在群聊里提出目标，Orchestrator 负责理解、规划、分工和总结。
 - **任务子对话**：每个成员在自己的子对话里真实接收任务并执行，主群聊只展示进度和汇报。
 - **动态任务 DAG**：由模型生成计划，按依赖顺序执行，不使用固定场景模板。
+- **A2A 通信标准**：Orchestrator 给成员分发任务时统一生成 A2A v0.3 `message/send`，本地 LLM、Code Agent、MCP/Native Tool 都作为本地 A2A Agent 运行。
+- **显式分工**：执行任务只接受 Orchestrator/Planner 的模型指派，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
 - **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI。
 - **工作目录与 handoff**：每个 Agent 有自己的工作目录，上游产物通过 `.agenthub/handoff` 交给下游。
 - **产物可见**：文件、网页、diff、诊断产物会进入消息 metadata 和任务看板。
@@ -22,8 +24,10 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
   -> 复杂任务生成动态 DAG 和任务看板
   -> 用户分发执行
   -> 为每个任务创建 orchestrator-task 子对话
+  -> Orchestrator 生成 A2A message/send envelope
+  -> LocalA2ATransport 分发给本地 A2A Agent
   -> Agent 在子对话里执行并输出
-  -> 产出写入黑板和 handoff 目录
+  -> 产出以 A2A responseTask / artifact metadata 写入消息、黑板和 handoff 目录
   -> 主群聊展示成员汇报、产物和最终总结
 ```
 
@@ -49,6 +53,7 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 | 数据库 | SQLite + Drizzle ORM |
 | LLM | OpenAI-compatible + Anthropic-compatible streaming client |
 | Code Agent | Codex CLI / Claude Code / OpenCode / Gemini CLI |
+| Agent 通信 | A2A v0.3 message/send + AgentHub local/remote transport |
 
 ## 项目结构
 
@@ -150,7 +155,9 @@ bun test
 ## 开发注意
 
 - 不要恢复静态快捷提示词或固定任务模板，用户明确要求动态模型生成。
+- 不要恢复 `classic` 工作区、默认代码团队、`create-from-template`、关键词 Agent 路由或自动 QA/review/follow-up 任务注入。
 - 不要恢复旧的 `workspace-agent-child` 群聊入口。
 - 不要把“任务失败但已有部分产物”显示成完全无产物。
 - 不要让下游 Agent 假设上游相对路径存在；优先使用黑板中的 `handoffPath`。
+- `runtimeType: a2a` 的 Agent 需要显式配置 A2A endpoint，不能静默回落到 LLM。
 - UI 改动要保持主群聊、私聊、任务子对话的边界清晰。

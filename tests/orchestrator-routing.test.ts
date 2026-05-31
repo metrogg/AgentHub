@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import { intentRouter } from '../apps/server/src/services/orchestrator/intent-router'
 import { selectAgentForTask } from '../apps/server/src/services/orchestrator/agent-router'
 import type { ExecutionAgent } from '../apps/server/src/services/orchestrator/types'
 
@@ -51,29 +50,7 @@ const agents: ExecutionAgent[] = [
 ]
 
 describe('orchestrator routing', () => {
-  test('routes artifact-producing group requests to orchestration', () => {
-    const samples = [
-      '帮我开发一个深圳技术大学的学校官网',
-      '对目前全球AI主流编程工具进行调研分析，并输出一份PDF文档和一个HTML网页',
-      '写个介绍深圳技术大学的网站',
-      '开发一个坦克大战',
-      '做个俄罗斯方块',
-    ]
-
-    for (const content of samples) {
-      expect(intentRouter.route({ content, hasOrchestrator: true, mentionCount: 0 }).decision).toBe(
-        'OrchestratorPlan',
-      )
-    }
-  })
-
-  test('keeps casual group chat on the conversation loop', () => {
-    expect(intentRouter.route({ content: '你好，在吗', hasOrchestrator: true, mentionCount: 0 }).decision).toBe(
-      'ConversationLoop',
-    )
-  })
-
-  test('does not assign execution tasks to orchestrator', () => {
+  test('preserves explicit Orchestrator assignment instead of keyword rerouting', () => {
     const selection = selectAgentForTask({
       task: {
         id: 'task-build',
@@ -87,16 +64,17 @@ describe('orchestrator routing', () => {
       agents,
     })
 
-    expect(selection.selectedAgentKey).toBe('builder')
+    expect(selection.selectedAgentKey).toBe('orchestrator')
+    expect(selection.rationale).toContain('Using Orchestrator-provided assignment')
   })
 
-  test('does not assign synthesis tasks to orchestrator either', () => {
+  test('returns empty selection when the planned agent does not exist', () => {
     const selection = selectAgentForTask({
       task: {
         id: 'task-synthesize',
         title: '汇总交付结果',
         description: '整合各 Agent 的产出并给出最终交付说明',
-        agentId: 'orchestrator',
+        agentId: 'missing-agent',
         taskType: 'synthesize',
         dependencies: [],
         maxRetries: 1,
@@ -104,6 +82,7 @@ describe('orchestrator routing', () => {
       agents,
     })
 
-    expect(selection.selectedAgentKey).not.toBe('orchestrator')
+    expect(selection.selectedAgentKey).toBe('')
+    expect(selection.score).toBe(0)
   })
 })

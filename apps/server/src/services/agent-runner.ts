@@ -119,6 +119,7 @@ import type { AgentExecutionEnvelope } from './execution/agent-execution-envelop
 import { DEFAULT_ENV_ALLOWLIST } from './execution/agent-execution-envelope'
 import { gitBranchManager } from './git/branch-manager'
 import { isCodeAgentProfile } from './runtime'
+import { buildA2AAgentMessage } from './protocols/a2a-internal'
 
 export async function runAgentReply(
   sessionId: string,
@@ -326,6 +327,10 @@ async function _runAgentReply(
     })
   }
 
+  const persistedArtifacts = Array.isArray(codeAgentRun?.artifacts)
+    ? (codeAgentRun.artifacts as Array<Record<string, unknown>>)
+    : artifacts
+
   const [agentMsg] = await db
     .insert(messages)
     .values({
@@ -345,7 +350,18 @@ async function _runAgentReply(
             sandboxPolicy: profile.sandboxPolicy ?? null,
             projectPath: profile.projectPath ?? null,
             codeAgentRun,
-            artifacts: codeAgentRun?.artifacts ?? artifacts,
+            artifacts: persistedArtifacts,
+            a2a: envelope?.a2a
+              ? {
+                  request: envelope.a2a.params,
+                  responseMessage: buildA2AAgentMessage({
+                    envelope: envelope.a2a,
+                    content: fullContent,
+                    messageId: streamMsgId,
+                    artifacts: persistedArtifacts,
+                  }),
+                }
+              : undefined,
           }
         : null,
     })

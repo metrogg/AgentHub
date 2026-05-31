@@ -54,6 +54,7 @@ import {
   buildDynamicOrchestratorPlan,
   loadWorkspaceAgentRelationsForPlanning,
 } from '../services/orchestrator/plan-generator'
+import { decideOrchestratorAction } from '../services/orchestrator/orchestrator-decision'
 import {
   confirmAgentDraftSchema,
   type AgentDraft,
@@ -62,7 +63,6 @@ import {
   normalizeAgentDraftInput,
 } from '../services/agent-draft'
 
-import { intentRouter } from '../services/orchestrator/intent-router'
 import { buildAgentProfile } from '../services/agents/profile-builder'
 import { ensureOrchestratorTaskSession } from '../services/workspace/session-manager'
 
@@ -306,98 +306,16 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .where(eq(workspaceAgents.workspaceId, session.workspaceId))
         .orderBy(asc(workspaceAgents.orderIdx))
 
-      const hasOrchestrator = agentRows.some((a) => a.roleType === 'orchestrator')
       const content = previousUser.content
-      const mentionCount = (content.match(/@\S+/g) || []).length
-
-      if (mentionCount > 0) {
-        const mentionPattern = /@(\S+)/g
-        let match
-        const mentionedNames: string[] = []
-        while ((match = mentionPattern.exec(content)) !== null) {
-          mentionedNames.push(match[1]!.toLowerCase())
-        }
-
-        const matchedAgents = agentRows.filter((a) => {
-          const nameLower = a.name.toLowerCase()
-          const roleLower = (a.role || '').toLowerCase()
-          return mentionedNames.some(
-            (n) =>
-              nameLower === n || nameLower.includes(n) || roleLower === n || roleLower.includes(n),
-          )
-        })
-        const mentionedOrchestrator =
-          matchedAgents.some((agent) => agent.roleType === 'orchestrator') ||
-          mentionedNames.some((name) => /^(orchestrator|协调器|总指挥)$/i.test(name))
-
-        if (mentionedOrchestrator && intentRouter.hasOrchestratorSignals(content)) {
-          generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
-            (err: any) =>
-              logger.error(
-                { err: err?.message, sessionId },
-                '@orchestrator plan generation failed on regenerate',
-              ),
-          )
-          return c.json({ removedMessageId: message.id })
-        }
-
-        if (matchedAgents.length > 0) {
-          const targetAgent = matchedAgents[0]!
-          const [workspace] = await db
-            .select()
-            .from(workspaces)
-            .where(eq(workspaces.id, session.workspaceId))
-            .limit(1)
-          const profile =
-            targetAgent.roleType === 'orchestrator'
-              ? toCoordinatorProfile(targetAgent, workspace?.projectPath)
-              : toAgentProfile(targetAgent, workspace?.projectPath)
-          runAgentReply(sessionId, previousUser, profile).catch((err: any) =>
-            logger.error(
-              { err: err?.message, sessionId },
-              '@mention agent reply failed on regenerate',
-            ),
-          )
-        } else {
-          const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
-          if (orchestrator) {
-            const [workspace] = await db
-              .select()
-              .from(workspaces)
-              .where(eq(workspaces.id, session.workspaceId))
-              .limit(1)
-            const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
-            runAgentReply(sessionId, previousUser, profile).catch((err: any) =>
-              logger.error(
-                { err: err?.message, sessionId },
-                '@mention fallback orchestrator reply failed on regenerate',
-              ),
-            )
-          }
-        }
-        return c.json({ removedMessageId: message.id })
-      }
-
-      if (!hasOrchestrator) {
-        return c.json({ removedMessageId: message.id })
-      }
-
-      const routeResult = intentRouter.route({ content, hasOrchestrator, mentionCount: 0 })
-
-      if (routeResult.decision === 'ConversationLoop') {
-        handleSimpleReply(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
-          (err: any) =>
-            logger.error({ err: err?.message, sessionId }, 'Simple reply failed on regenerate'),
-        )
-      } else if (routeResult.decision === 'OrchestratorPlan') {
-        generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
-          (err: any) =>
-            logger.error(
-              { err: err?.message, sessionId },
-              'Plan generation failed on regenerate',
-            ),
-        )
-      }
+      routeGroupMessageThroughOrchestrator(
+        sessionId,
+        content,
+        agentRows,
+        session.workspaceId,
+        user.sub,
+      ).catch((err: any) =>
+        logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed on regenerate'),
+      )
     } else {
       const profile = await profileForDirectSession(session)
       import('../services/agent-runner').then(({ runAgentReply }) => {
@@ -437,111 +355,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           .where(eq(workspaceAgents.workspaceId, session.workspaceId))
           .orderBy(asc(workspaceAgents.orderIdx))
 
-        const hasOrchestrator = agentRows.some((a) => a.roleType === 'orchestrator')
-        const mentionCount = (content.match(/@\S+/g) || []).length
-
-        if (mentionCount > 0) {
-          const mentionPattern = /@(\S+)/g
-          let match
-          const mentionedNames: string[] = []
-          while ((match = mentionPattern.exec(content)) !== null) {
-            mentionedNames.push(match[1]!.toLowerCase())
-          }
-
-          const matchedAgents = agentRows.filter((a) => {
-            const nameLower = a.name.toLowerCase()
-            const roleLower = (a.role || '').toLowerCase()
-            return mentionedNames.some(
-              (n) =>
-                nameLower === n ||
-                nameLower.includes(n) ||
-                roleLower === n ||
-                roleLower.includes(n),
-            )
-          })
-          const mentionedOrchestrator =
-            matchedAgents.some((agent) => agent.roleType === 'orchestrator') ||
-            mentionedNames.some((name) => /^(orchestrator|协调器|总指挥)$/i.test(name))
-
-          if (mentionedOrchestrator && intentRouter.hasOrchestratorSignals(content)) {
-            generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
-              (err: any) =>
-                logger.error({ err: err?.message, sessionId }, '@orchestrator plan generation failed'),
-            )
-            return c.json(msg)
-          }
-
-          if (matchedAgents.length > 0) {
-            const targetAgent = matchedAgents[0]!
-            const [workspace] = await db
-              .select()
-              .from(workspaces)
-              .where(eq(workspaces.id, session.workspaceId))
-              .limit(1)
-            const profile =
-              targetAgent.roleType === 'orchestrator'
-                ? toCoordinatorProfile(targetAgent, workspace?.projectPath)
-                : toAgentProfile(targetAgent, workspace?.projectPath)
-            runAgentReply(sessionId, msg, profile).catch((err: any) =>
-              logger.error({ err: err?.message, sessionId }, '@mention agent reply failed'),
-            )
-          } else {
-            const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
-            if (orchestrator) {
-              const [workspace] = await db
-                .select()
-                .from(workspaces)
-                .where(eq(workspaces.id, session.workspaceId))
-                .limit(1)
-              const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
-              runAgentReply(sessionId, msg, profile).catch((err: any) =>
-                logger.error(
-                  { err: err?.message, sessionId },
-                  '@mention fallback orchestrator reply failed',
-                ),
-              )
-            } else {
-              await db.insert(messages).values({
-                sessionId,
-                senderId: 'system',
-                senderType: 'system',
-                type: 'text',
-                content: '⚠️ 未找到指定的 Agent，也未配置 Orchestrator。',
-                metadata: { systemEvent: 'no_orchestrator' },
-              })
-            }
-          }
-          return c.json(msg)
-        }
-
-        if (!hasOrchestrator) {
-          await db.insert(messages).values({
-            sessionId,
-            senderId: 'system',
-            senderType: 'system',
-            type: 'text',
-            content:
-              '⚠️ 群聊中未配置 Orchestrator。请添加一个 Orchestrator Agent 或使用 @Agent名 指定回复对象。',
-            metadata: { systemEvent: 'no_orchestrator' },
-          })
-          return c.json(msg)
-        }
-
-        const routeResult = intentRouter.route({ content, hasOrchestrator, mentionCount: 0 })
-
-        if (routeResult.decision === 'ConversationLoop') {
-          handleSimpleReply(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
-            (err: any) => logger.error({ err: err?.message, sessionId }, 'Simple reply failed'),
-          )
-        } else if (routeResult.decision === 'OrchestratorPlan') {
-          generatePlanAndPushTaskBoard(sessionId, content, agentRows, session.workspaceId, user.sub).catch(
-            (err: any) =>
-              logger.error(
-                { err: err?.message, sessionId },
-                'Plan generation background task failed',
-              ),
-          )
-        }
+        routeGroupMessageThroughOrchestrator(
+          sessionId,
+          content,
+          agentRows,
+          session.workspaceId,
+          user.sub,
+        ).catch((err: any) =>
+          logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed'),
+        )
       } else {
         const profile = session ? await profileForDirectSession(session) : undefined
         runAgentReply(sessionId, msg, profile).catch((err: any) =>
@@ -575,7 +397,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json(prompt)
     }
 
-    const draft = buildAgentDraft(content)
+    const draft = await buildAgentDraft(content)
     const [card] = await db
       .insert(messages)
       .values({
@@ -706,6 +528,124 @@ function toCoordinatorProfile(
     sandboxPolicy: 'read-only',
     toolPermissions: ['chat', 'workspace:read'],
   }
+}
+
+async function routeGroupMessageThroughOrchestrator(
+  sessionId: string,
+  content: string,
+  agentRows: typeof workspaceAgents.$inferSelect[],
+  workspaceId: string,
+  ownerId: string,
+) {
+  const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
+  if (!orchestrator) {
+    const [message] = await db
+      .insert(messages)
+      .values({
+        sessionId,
+        senderId: 'system',
+        senderType: 'system',
+        type: 'text',
+        content: '⚠️ 群聊中未配置 Orchestrator。请先添加 Orchestrator Agent。',
+        metadata: { systemEvent: 'no_orchestrator' },
+      })
+      .returning()
+    if (message) {
+      broadcastSessionEvent(sessionId, {
+        type: WsEvent.MessageCompleted,
+        payload: { sessionId, message },
+      })
+    }
+    return
+  }
+
+  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+  broadcastSessionEvent(sessionId, {
+    type: WsEvent.AgentTyping,
+    payload: {
+      sessionId,
+      agentId: orchestrator.id,
+      agentName: orchestrator.name,
+      phase: 'thinking',
+    },
+  })
+
+  let decision: Awaited<ReturnType<typeof decideOrchestratorAction>>
+  try {
+    decision = await decideOrchestratorAction({
+      content,
+      agents: agentRows,
+      workspaceGoal: workspace?.goal ?? null,
+    })
+  } catch (err: any) {
+    const message = err?.message || '模型没有返回有效的 Orchestrator 决策'
+    logger.warn({ err: message, sessionId }, 'Orchestrator decision failed')
+    const [failedMessage] = await db
+      .insert(messages)
+      .values({
+        sessionId,
+        senderId: orchestrator.id,
+        senderType: 'agent',
+        type: 'text',
+        content: `Orchestrator 决策失败：${message}。请检查当前 Orchestrator 模型配置后重试。`,
+        metadata: {
+          systemEvent: 'orchestrator_decision_failed',
+          error: message,
+        },
+      })
+      .returning()
+    if (failedMessage) {
+      broadcastSessionEvent(sessionId, {
+        type: WsEvent.MessageCompleted,
+        payload: { sessionId, message: failedMessage },
+      })
+    }
+    return
+  }
+
+  if (decision.action === 'plan') {
+    await generatePlanAndPushTaskBoard(sessionId, content, agentRows, workspaceId, ownerId)
+    return
+  }
+
+  const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
+  const agentUserMsg: MessageRow = {
+    id: randomUUID(),
+    sessionId,
+    senderId: orchestrator.id,
+    senderType: 'user',
+    type: 'text',
+    content,
+    metadata: { isOrchestratorHandoff: true, orchestratorDecision: decision.action, decisionReason: decision.reason },
+    createdAt: new Date(),
+  }
+
+  if (decision.message?.trim()) {
+    const [message] = await db
+      .insert(messages)
+      .values({
+        sessionId,
+        senderId: orchestrator.id,
+        senderType: 'agent',
+        type: 'text',
+        content: decision.message.trim(),
+        metadata: {
+          systemEvent: 'orchestrator_decision',
+          orchestratorDecision: decision.action,
+          decisionReason: decision.reason,
+        },
+      })
+      .returning()
+    if (message) {
+      broadcastSessionEvent(sessionId, {
+        type: WsEvent.MessageCompleted,
+        payload: { sessionId, message },
+      })
+    }
+    return
+  }
+
+  await runAgentReply(sessionId, agentUserMsg, profile)
 }
 
 async function profileForDirectSession(session: typeof sessions.$inferSelect) {
@@ -861,38 +801,6 @@ async function runGit(cwd: string, args: string[]) {
     proc.exited,
     new Promise<number>((resolve) => setTimeout(() => resolve(124), 5000)),
   ])
-}
-
-async function handleSimpleReply(
-  sessionId: string,
-  content: string,
-  agentRows: any[],
-  workspaceId: string,
-  ownerId: string,
-): Promise<void> {
-  const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
-  if (!orchestrator) return
-
-  const [workspace] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1)
-
-  const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
-
-  const agentUserMsg: MessageRow = {
-    id: randomUUID(),
-    sessionId,
-    senderId: 'orchestrator',
-    senderType: 'user',
-    type: 'text',
-    content,
-    metadata: { isOrchestratorHandoff: true },
-    createdAt: new Date(),
-  }
-
-  await runAgentReply(sessionId, agentUserMsg, profile)
 }
 
 async function startPlanRunInExistingGroup(params: {

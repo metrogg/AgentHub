@@ -2,7 +2,6 @@ import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
 import { harnessManager } from '../harness'
 import { initializeRunLedger } from './run-ledger'
-import { ROLE_PRESETS } from '@agenthub/shared'
 import type {
   ClarificationQuestion,
   CollaborationMode,
@@ -50,8 +49,7 @@ export class Planner {
     } = input
     const runId = crypto.randomUUID()
 
-    // 动态启用 Researcher：根据目标复杂度判断是否需要研究型 Agent
-    const agents = this.maybeInjectResearcher(input.agents, goal)
+    const agents = input.agents
 
     let specPhases: string | undefined
     if (workspacePath) {
@@ -122,176 +120,6 @@ export class Planner {
       '【规范结束】',
     ]
     return lines.join('\n')
-  }
-
-  /**
-   * 动态启用 Researcher：根据目标复杂度判断是否需要研究型 Agent
-   * 触发条件：涉及外部 API/SDK、新技术栈、方案比较、领域知识查询
-   */
-  private maybeInjectResearcher(agents: ExecutionAgent[], goal: string): ExecutionAgent[] {
-    const hasResearcher = agents.some((a) => a.roleType === 'researcher')
-    if (hasResearcher) return agents
-
-    const lower = goal.toLowerCase()
-    const researchTriggers = [
-      'api',
-      'sdk',
-      '第三方',
-      '接入',
-      '集成',
-      '新技术',
-      '新框架',
-      '方案比较',
-      '对比',
-      '调研',
-      '研究',
-      '不了解',
-      '怎么做',
-      '最佳实践',
-      '行业标准',
-      '竞品',
-      'docker',
-      'kubernetes',
-      'k8s',
-      'wasm',
-      'websocket',
-      'graphql',
-      'grpc',
-      'mqtt',
-      'oauth',
-      'jwt',
-      'sso',
-      'auth',
-    ]
-
-    const needsResearch = researchTriggers.some((t) => lower.includes(t))
-    if (!needsResearch) return agents
-
-    const preset = ROLE_PRESETS.researcher
-    const researcher: ExecutionAgent = {
-      id: `researcher-${crypto.randomUUID().slice(0, 8)}`,
-      key: 'researcher',
-      name: preset.name,
-      role: preset.role,
-      roleType: 'researcher',
-      description: preset.description,
-      color: preset.color,
-      runtimeType: preset.runtimeType,
-      codeAgentType: preset.codeAgentType ?? undefined,
-      capabilityTags: preset.capabilityTags,
-      toolPermissions: preset.toolPermissions,
-      sandboxPolicy: preset.sandboxPolicy,
-      systemPrompt: preset.systemPrompt,
-    }
-
-    logger.info({ goal: goal.slice(0, 80) }, 'Planner dynamically injected Researcher')
-    return [...agents, researcher]
-  }
-
-  /**
-   * 根据目标关键词匹配 specialist agent
-   * 如果团队中没有 specialist，回退到通用 agent
-   */
-  private pickAgent(agents: ExecutionAgent[], keywords: string[]) {
-    const lowered = keywords.map((k) => k.toLowerCase())
-    return agents.find((agent) => {
-      const text = [
-        agent.name,
-        agent.role,
-        agent.description,
-        agent.runtimeType,
-        agent.codeAgentType,
-        ...(agent.capabilityTags ?? []),
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-      return lowered.some((keyword) => text.includes(keyword))
-    })
-  }
-
-  private inferMode(
-    goal: string,
-    tasks: Array<{ description?: string; taskType?: string }>,
-    phases?: Array<{ taskIds?: string[] }>,
-  ): CollaborationMode {
-    const lower = goal.toLowerCase()
-
-    const pipelineSignals = [
-      '先',
-      '然后',
-      '接着',
-      '最后',
-      '第一步',
-      '第二步',
-      '第三步',
-      '第四步',
-      'step 1',
-      'step 2',
-      'step 3',
-      'step 4',
-      'first',
-      'then',
-      'finally',
-      'next',
-      '流水线',
-      'pipeline',
-      '工序',
-      '依赖',
-      'depends on',
-    ]
-    let pipelineScore = pipelineSignals.filter((s) => lower.includes(s)).length
-    if (phases && phases.length >= 3) pipelineScore += 2
-
-    const supervisorSignals = [
-      '调研',
-      '研究',
-      '探索',
-      '分析',
-      '不确定',
-      '发现',
-      '寻找',
-      '评估',
-      '判断',
-      'research',
-      'explore',
-      'investigate',
-      'discover',
-      'evaluate',
-      '深度',
-      '全面',
-      'deep',
-    ]
-    let supervisorScore = supervisorSignals.filter((s) => lower.includes(s)).length
-
-    const mapReduceSignals = [
-      '同时',
-      '并行',
-      '分别',
-      '各自',
-      '独立',
-      'simultaneously',
-      'in parallel',
-      'respectively',
-      'independently',
-      '汇总',
-      '合并',
-      '整合',
-      '综合',
-      'synthesize',
-      'merge',
-      'aggregate',
-      'combine',
-    ]
-    let mapReduceScore = mapReduceSignals.filter((s) => lower.includes(s)).length
-    if (phases && phases.length <= 1) mapReduceScore += 1
-    const codeTasks = tasks.filter((t) => t.taskType === 'code')
-    if (codeTasks.length >= 2 && !pipelineSignals.some((s) => lower.includes(s)))
-      mapReduceScore += 2
-
-    if (supervisorScore > pipelineScore && supervisorScore > mapReduceScore) return 'supervisor'
-    if (pipelineScore > supervisorScore && pipelineScore >= mapReduceScore) return 'pipeline'
-    return 'mapreduce'
   }
 
   private async generateSpec(
@@ -480,7 +308,6 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       const requestedAgent = agentMap.get(agentKey)
       if (!title || !description || !requestedAgent) continue
       const taskType = parseTaskType(t.taskType)
-      const agent = this.selectExecutionAgent(agents, requestedAgent, taskType, title, description)
 
       const rawId = cleanPlanText(t.id) || slugifyTaskId(title, index)
       const id = crypto.randomUUID()
@@ -500,7 +327,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
         phaseId: cleanPlanText(t.phaseId) || undefined,
         title,
         description,
-        agentId: agent.id,
+        agentId: requestedAgent.id,
         taskType,
         dependencies: deps,
         parallelGroup: typeof t.parallelGroup === 'string' ? t.parallelGroup : undefined,
@@ -542,7 +369,7 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       typeof candidate.collaborationMode === 'string' &&
       ['pipeline', 'mapreduce', 'supervisor'].includes(candidate.collaborationMode)
         ? (candidate.collaborationMode as CollaborationMode)
-        : this.inferMode(goal, tasks, phases)
+        : undefined
 
     return {
       runId,
@@ -589,8 +416,8 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       }
     }
 
-    for (const [index, task] of tasks.entries()) {
-      const phaseId = task.phaseId ?? this.inferTaskPhase(task, index)
+    for (const task of tasks) {
+      const phaseId = task.phaseId ?? 'execution'
       task.phaseId = phaseId
       let phase = normalized.find((item) => item.id === phaseId)
       if (!phase) {
@@ -606,19 +433,6 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     }
 
     return normalized
-  }
-
-  private inferTaskPhase(
-    task: Pick<ExecutionTask, 'id' | 'title' | 'description'>,
-    index: number,
-  ): string {
-    const text = `${task.id} ${task.title} ${task.description}`.toLowerCase()
-    if (/(plan|analysis|scan|read|理解|梳理|分析|调研)/i.test(text)) return 'analysis'
-    if (/(design|方案|架构|设计)/i.test(text)) return 'design'
-    if (/(build|code|implement|实现|开发|修改)/i.test(text)) return 'implementation'
-    if (/(review|test|verify|审查|测试|验证|风险)/i.test(text)) return 'verification'
-    if (/(summary|synthesize|汇总|总结)/i.test(text)) return 'synthesis'
-    return index === 0 ? 'analysis' : 'execution'
   }
 
   private phaseTitleFromId(id: string): string {
@@ -639,36 +453,6 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     return '推进当前任务'
   }
 
-  private selectExecutionAgent(
-    agents: ExecutionAgent[],
-    requestedAgent: ExecutionAgent,
-    taskType: ExecutionTask['taskType'],
-    title: string,
-    description: string,
-  ): ExecutionAgent {
-    if (taskType === 'synthesize') return requestedAgent
-    if (requestedAgent.roleType !== 'orchestrator') return requestedAgent
-
-    const workers = agents.filter((agent) => agent.roleType !== 'orchestrator')
-    if (!workers.length) return requestedAgent
-
-    const taskHints: Record<string, string[]> = {
-      read: ['researcher', 'research', '资料', '素材', '读取'],
-      research: ['researcher', 'research', '资料', '素材', '调研'],
-      design: ['architect', 'designer', 'design', '设计', '视觉', '产品'],
-      code: ['coder', 'builder', 'code', 'implementation', '实现', '工程'],
-      test: ['verifier', 'reviewer', 'qa', 'test', '验收', '测试'],
-      verify: ['verifier', 'reviewer', 'qa', 'verify', '验收', '验证'],
-      review: ['reviewer', 'qa', 'review', '审查', '验收'],
-    }
-
-    const keywords = taskType ? taskHints[taskType] ?? [] : []
-    return (
-      (keywords.length > 0 ? this.pickAgent(workers, keywords) : undefined) ??
-      this.pickAgent(workers, [title, description]) ??
-      workers[0]!
-    )
-  }
 }
 
 export function normalizeTaskOutputContract(

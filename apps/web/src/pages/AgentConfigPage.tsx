@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Bot,
   Check,
@@ -55,7 +55,9 @@ const emptyDraft: AgentConfigInput = {
 
 export default function AgentConfigPage() {
   const { t } = useI18n()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const isCreatingNewAgent = searchParams.get('newAgent') === '1'
   const [agents, setAgents] = useState<SavedAgentConfig[]>([])
   const [relations, setRelations] = useState<SavedAgentRelation[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -74,6 +76,11 @@ export default function AgentConfigPage() {
       const loaded = library.agents
       setRelations(library.relations)
       setAgents(loaded)
+      if (isCreatingNewAgent) {
+        setSelectedId(null)
+        setDraft(emptyDraft)
+        return
+      }
       const requestedId = searchParams.get('agentId')
       const current = selectedId ? loaded.find((agent) => agent.id === selectedId) ?? null : null
       const first = loaded.find((agent) => agent.id === requestedId) ?? current ?? loaded[0] ?? null
@@ -81,41 +88,24 @@ export default function AgentConfigPage() {
         setSelectedId(first.id)
         setDraft(toAgentConfigInput(first))
         if (!requestedId) setSearchParams({ agentId: first.id }, { replace: true })
+      } else {
+        setSelectedId(null)
+        setDraft(emptyDraft)
       }
     }
 
-    if (searchParams.get('newAgent') === '1') {
-      const library = loadAgentLibraryState()
-      const next = createSavedAgent({
-        name: 'New Agent',
-        role: '协作',
-        description: '描述这个 Agent 的职责、产出和适合处理的任务。',
-        systemPrompt: '你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。',
-        color: '#111827',
-      })
-      const updated = [next, ...library.agents]
-      setAgents(updated)
-      setRelations(library.relations)
-      saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations: library.relations })
-      setSelectedId(next.id)
-      setDraft(toAgentConfigInput(next))
-      setSearchParams({ agentId: next.id }, { replace: true })
-      void flushAgentLibraryServerSync().catch(toastSaveFailed)
-      toastSaved()
-    } else {
-      syncLibrary()
-    }
+    syncLibrary()
 
     window.addEventListener(agentLibraryChangeEvent, syncLibrary)
     return () => window.removeEventListener(agentLibraryChangeEvent, syncLibrary)
-  }, [searchParams, selectedId])
+  }, [isCreatingNewAgent, searchParams, selectedId])
 
   useEffect(() => {
     const requestedId = searchParams.get('agentId')
-    if (!requestedId || requestedId === selectedId) return
+    if (isCreatingNewAgent || !requestedId || requestedId === selectedId) return
     const agent = agents.find((item) => item.id === requestedId)
     if (agent) selectAgent(agent, true)
-  }, [agents, searchParams, selectedId])
+  }, [agents, isCreatingNewAgent, searchParams, selectedId])
 
   useEffect(() => {
     api
@@ -129,6 +119,7 @@ export default function AgentConfigPage() {
   }, [])
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null
+  const showEditor = Boolean(selectedAgent) || isCreatingNewAgent
   const runtimeType = draft.runtimeType ?? 'llm'
   const modelCompatibilityMessage = (() => {
     const modelId = draft.modelId ?? null
@@ -151,26 +142,8 @@ export default function AgentConfigPage() {
     setSearchParams({ agentId: agent.id }, { replace: replaceUrl })
   }
 
-  async function createAgent() {
-    try {
-      const next = createSavedAgent({
-        name: 'New Agent',
-        role: '协作',
-        description: '描述这个 Agent 的职责、产出和适合处理的任务。',
-        systemPrompt: '你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。',
-        color: '#111827',
-        runtimeType: 'code-agent',
-        codeAgentType: 'codex',
-      })
-      const updated = [next, ...agents]
-      setAgents(updated)
-      saveAgentLibraryState({ schemaVersion: 2, agents: updated, relations })
-      selectAgent(next)
-      await flushAgentLibraryServerSync()
-      toastSaved()
-    } catch (error) {
-      toastSaveFailed(error)
-    }
+  function createAgent() {
+    navigate('/agent-config?newAgent=1')
   }
 
   async function duplicateAgent() {
@@ -203,6 +176,7 @@ export default function AgentConfigPage() {
     if (current) {
       setSelectedId(current.id)
       setDraft(toAgentConfigInput(current))
+      setSearchParams({ agentId: current.id }, { replace: true })
     }
     try {
       await flushAgentLibraryServerSync()
@@ -244,11 +218,18 @@ export default function AgentConfigPage() {
     setDraft(nextDraft)
     setAssistantText('')
     setAssistantReply(reply)
+    if (!nextDraft.name || !nextDraft.role) {
+      setAssistantReply(`${reply} 请补齐名称和角色后再保存。`)
+      return
+    }
     const updated = saveAgentToLibrary(agents, nextDraft, selectedId ?? undefined)
     setAgents(updated)
     setRelations((current) => saveLibrary(updated, current))
     const current = selectedId ? updated.find((agent) => agent.id === selectedId) : updated[0]
-    if (current) setSelectedId(current.id)
+    if (current) {
+      setSelectedId(current.id)
+      setSearchParams({ agentId: current.id }, { replace: true })
+    }
     try {
       await flushAgentLibraryServerSync()
       if (current) await syncSavedAgentDirectSessions(current, selectedAgent)
@@ -424,7 +405,7 @@ export default function AgentConfigPage() {
                 </div>
               </div>
 
-              {selectedAgent ? (
+              {showEditor ? (
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
                   <form onSubmit={saveDraft} className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
                     <div className="mb-4">
@@ -507,7 +488,7 @@ export default function AgentConfigPage() {
                     <div className="mt-5 flex justify-end">
                       <button type="submit" className="inline-flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-5 text-sm font-medium text-white hover:bg-neutral-800">
                         <Save className="h-4 w-4" />
-                        {t('保存 Agent')}
+                        {selectedAgent ? t('保存 Agent') : t('创建 Agent')}
                       </button>
                     </div>
                   </form>
@@ -525,29 +506,37 @@ export default function AgentConfigPage() {
                       <InfoRow label={t('标签')} value={(draft.capabilityTags ?? []).join(', ') || t('未设置')} />
                     </InfoPanel>
 
-                    <InfoPanel title="协作关系">
-                      <RelationSelect
-                        label="下游交接"
-                        value={relationTarget(relations, selectedAgent.id, 'handoff_to')}
-                        agents={agents}
-                        currentId={selectedAgent.id}
-                        onChange={(targetId) => updateSelectedRelation('handoff_to', targetId)}
-                      />
-                      <RelationSelect
-                        label="审查者"
-                        value={relationTarget(relations, selectedAgent.id, 'reviewed_by')}
-                        agents={agents}
-                        currentId={selectedAgent.id}
-                        onChange={(targetId) => updateSelectedRelation('reviewed_by', targetId)}
-                      />
-                      <RelationSelect
-                        label="失败降级"
-                        value={relationTarget(relations, selectedAgent.id, 'fallback_to')}
-                        agents={agents}
-                        currentId={selectedAgent.id}
-                        onChange={(targetId) => updateSelectedRelation('fallback_to', targetId)}
-                      />
-                    </InfoPanel>
+                    {selectedAgent ? (
+                      <InfoPanel title="协作关系">
+                        <RelationSelect
+                          label="下游交接"
+                          value={relationTarget(relations, selectedAgent.id, 'handoff_to')}
+                          agents={agents}
+                          currentId={selectedAgent.id}
+                          onChange={(targetId) => updateSelectedRelation('handoff_to', targetId)}
+                        />
+                        <RelationSelect
+                          label="审查者"
+                          value={relationTarget(relations, selectedAgent.id, 'reviewed_by')}
+                          agents={agents}
+                          currentId={selectedAgent.id}
+                          onChange={(targetId) => updateSelectedRelation('reviewed_by', targetId)}
+                        />
+                        <RelationSelect
+                          label="失败降级"
+                          value={relationTarget(relations, selectedAgent.id, 'fallback_to')}
+                          agents={agents}
+                          currentId={selectedAgent.id}
+                          onChange={(targetId) => updateSelectedRelation('fallback_to', targetId)}
+                        />
+                      </InfoPanel>
+                    ) : (
+                      <InfoPanel title="协作关系">
+                        <div className="text-sm leading-6 text-neutral-500">
+                          保存后才可以设置协作关系。
+                        </div>
+                      </InfoPanel>
+                    )}
 
                     <InfoPanel title={t('对话式修改')}>
                       <div className="rounded-2xl bg-neutral-50 p-3 text-sm leading-6 text-neutral-600">

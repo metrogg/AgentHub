@@ -61,9 +61,7 @@ function agentSessionVisibility(
   if (metadata.kind === 'agent-direct') return 'top'
   if (isOrchestratorTaskMetadata(metadata))
     return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
-  if (metadata.hiddenFromSessionTree) return 'hidden'
-  if (groupWorkspaceIds.has(session.workspaceId)) return 'hidden'
-  return 'top'
+  return 'hidden'
 }
 
 function isOrchestratorTaskMetadata(metadata: Record<string, unknown>) {

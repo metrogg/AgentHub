@@ -14,6 +14,8 @@ AgentHub 是一个 IM 式多 Agent 协作平台，也是字节跳动 AI 全栈�
 
 不要再引入固定场景模板，例如“网站建设 Team 模板”。当前优先做通用多 Agent 协作能力，场景增强放到后续。
 
+角色预设可以作为“创建 Agent 时的参考库”存在，但不能作为默认团队、默认关系或执行模板自动驱动运行。新工作区默认不自动注入 Orchestrator/Researcher/Designer/Builder/QA，也不支持 `classic` 团队模板或 `create-from-template` 入口。
+
 ## 关键交互边界
 
 ### 单聊
@@ -54,13 +56,32 @@ AgentHub 是一个 IM 式多 Agent 协作平台，也是字节跳动 AI 全栈�
   -> Planner 生成或整理 DAG
   -> TaskScheduler 按依赖层调度
   -> 每个任务创建 orchestrator-task 子对话
-  -> TaskExecutionService 准备工作目录
-  -> AgentRuntime 调用 LLM / Code Agent / Native Tool
+  -> Orchestrator 将任务封装为 A2A message/send envelope
+  -> TaskExecutionService 准备工作目录并经 LocalA2ATransport 派发
+  -> 本地 A2A Agent 适配到 LLM / Code Agent / Native Tool
   -> 子对话保存完整过程
-  -> 黑板写入任务摘要、产物、决策和 handoff
+  -> 黑板写入任务摘要、产物、决策和 handoff（作为 A2A artifact metadata 扩展）
   -> 主群聊广播成员汇报和产物卡
   -> Synthesizer 生成最终总结
 ```
+
+## A2A 通信边界
+
+Agent 之间的任务分发统一以 A2A v0.3 `message/send` 为内部通信标准：
+
+- Orchestrator 发给成员的任务必须先构造成 A2A `MessageSendParams`。
+- 子对话中的 user message metadata 必须保存 `a2a` 请求信封。
+- 成员输出消息 metadata 必须保存 A2A `responseMessage` 或 `responseTask`。
+- 本地 LLM、Code Agent、MCP/Native Tool 都视为 `agenthub-local` transport 后面的本地 A2A Agent。
+- `runtimeType === "a2a"` 的 Agent 必须配置远程 A2A endpoint（优先 `roleProfile.a2aEndpoint`，也兼容把 URL 放在 `modelId`），否则应明确报错，不能静默回落到 LLM。
+- `blackboard` 和 `.agenthub/handoff` 是 AgentHub 对 A2A artifact/metadata 的扩展，不是绕过 A2A 的第二套分工协议。
+
+相关文件：
+
+- `apps/server/src/services/protocols/a2a-internal.ts`: 内部 A2A envelope、message 和 task 映射。
+- `apps/server/src/services/execution/local-a2a-transport.ts`: 本地 A2A transport，负责把 `message/send` 派发到本地 runtime。
+- `apps/server/src/services/runtime/a2a-runtime.ts`: 远程 A2A Agent runtime，负责调用外部 A2A JSON-RPC endpoint。
+- `apps/server/src/services/protocols/a2a-adapter.ts`: 对外 A2A AgentCard / Task / Artifact 映射。
 
 ## 工作目录与产物交接
 
@@ -142,6 +163,7 @@ bun test tests/orchestrator-routing.test.ts
 - 新增路由使用 `AppError`，不要继续新增裸 `HTTPException`。
 - 日志使用 `apps/server/src/lib/logger.ts`，不要新增 `console.log`。
 - 不要恢复静态兜底提示词或固定模板计划。快速提示、任务拆解、协作计划都应由模型动态生成；失败时可以提示用户重试或检查模型配置。
+- 不要恢复静态 Agent 路由、关键词分工、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。系统只能校验 Orchestrator/Planner 的显式选择，不能偷偷改派或追加任务。
 - 不要把旧 `GroupChatManager` 作为新路径入口。群聊统一从 `messages.ts` 进入 Orchestrator 路由。
 - 不要把旧 Git 分支隔离写成当前默认事实。当前默认是项目工作区 + `.agenthub/workdirs` + `.agenthub/handoff`。
 - 修改 UI 时要保持 IM 产品感：左侧树清晰、主群聊和子对话不重复、运行状态可见、产物入口明确。

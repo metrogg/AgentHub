@@ -1,10 +1,13 @@
 import { db, messages, workspaceTasks, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
-import { runAgentReply, type AgentRunProfile, type MessageRow } from '../agent-runner'
+import type { AgentRunProfile, MessageRow } from '../agent-runner'
 import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
 import { prepareAgentWorkdir, type AgentWorkdir } from './agent-workdir'
 import { TaskStatus, type TaskType } from '@agenthub/shared'
 import { env } from '../../env'
+import { localA2ATransport } from './local-a2a-transport'
+import type { AgentHubA2AEnvelope } from '../protocols/a2a-internal'
+import { buildA2AExecutionTask } from '../protocols/a2a-internal'
 
 const STRICT_TASK_TYPES = new Set<TaskType>(['code', 'test', 'verify'])
 
@@ -25,6 +28,8 @@ export interface TaskExecutionInput {
   existingWorkdir?: AgentWorkdir | null
   /** Orchestrator 场景需要等 validation / contract 后处理完成后再标记 Done */
   deferCompletionStatus?: boolean
+  /** 内部 Agent 间通信的 A2A message/send 信封 */
+  a2a?: AgentHubA2AEnvelope
 }
 
 export interface TaskExecutionOutput {
@@ -91,6 +96,7 @@ export class TaskExecutionService {
       worktreePath: workdir?.executionPath ?? (executionSandboxPolicy === 'read-only' ? null : executionPath),
       sandboxPolicy: executionSandboxPolicy,
       envAllowlist: DEFAULT_ENV_ALLOWLIST,
+      a2a: input.a2a,
     }
 
     // 插入 user message（orchestrator 可能已预创建）
@@ -104,7 +110,7 @@ export class TaskExecutionService {
       if (!existingUserMsg) {
         return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Existing user message not found', durationMs: 0 }
       }
-      userMsg = existingUserMsg as MessageRow
+      userMsg = await attachA2AMetadata(existingUserMsg as MessageRow, input.a2a)
     } else {
       const [createdUserMsg] = await db
         .insert(messages)
@@ -114,6 +120,7 @@ export class TaskExecutionService {
           senderType: 'user',
           type: 'text',
           content: prompt,
+          metadata: input.a2a ? { a2a: input.a2a } : undefined,
         })
         .returning()
 
@@ -147,7 +154,13 @@ export class TaskExecutionService {
         throw new Error('Failed to prepare user message')
       }
       const result = await Promise.race([
-        runAgentReply(sessionId, agentUserMsg, executionProfile, envelope),
+        localA2ATransport.sendMessage({
+          sessionId,
+          userMessage: agentUserMsg,
+          profile: executionProfile,
+          envelope,
+          a2a: input.a2a,
+        }),
         timeoutPromise,
       ])
 
@@ -184,6 +197,14 @@ export class TaskExecutionService {
       if (msgArtifacts) artifacts.push(...msgArtifacts)
 
       const taskDuration = Date.now() - taskStartTime
+      await attachA2AResultMetadata({
+        message: lastAgentMsg[0] as MessageRow | undefined,
+        a2a: input.a2a,
+        status: result.ok ? TaskStatus.Done : TaskStatus.Failed,
+        output,
+        artifacts,
+        error: result.ok ? undefined : output.trim() || 'Agent 执行失败，请检查日志',
+      })
 
       if (!result.ok) {
         const error = output.trim() || 'Agent 执行失败，请检查日志'
@@ -245,4 +266,50 @@ export function shouldAcceptPartialExecution(
   if (!taskType) return false
   if (artifacts.length === 0) return false
   return !STRICT_TASK_TYPES.has(taskType)
+}
+
+async function attachA2AMetadata(message: MessageRow, a2a?: AgentHubA2AEnvelope): Promise<MessageRow> {
+  if (!a2a) return message
+  const metadata = asMetadataRecord(message.metadata)
+  const nextMetadata = { ...metadata, a2a }
+  await db.update(messages).set({ metadata: nextMetadata }).where(eq(messages.id, message.id))
+  return { ...message, metadata: nextMetadata }
+}
+
+async function attachA2AResultMetadata(params: {
+  message?: MessageRow
+  a2a?: AgentHubA2AEnvelope
+  status: TaskStatus
+  output: string
+  artifacts: Array<Record<string, unknown>>
+  error?: string
+}) {
+  if (!params.message || !params.a2a) return
+  const metadata = asMetadataRecord(params.message.metadata)
+  const finalTask = buildA2AExecutionTask({
+    envelope: params.a2a,
+    status: params.status,
+    output: params.output,
+    error: params.error,
+    artifacts: params.artifacts,
+    messageId: params.message.id,
+  })
+  await db
+    .update(messages)
+    .set({
+      metadata: {
+        ...metadata,
+        a2a: {
+          ...(asMetadataRecord(metadata.a2a)),
+          runtimeTask: finalTask,
+        },
+      },
+    })
+    .where(eq(messages.id, params.message.id))
+}
+
+function asMetadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 }

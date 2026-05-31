@@ -1,6 +1,6 @@
 import { api } from './api'
 import type { AgentConfigInput, AgentRelationType } from './api'
-import { defaultAgentRelations, inferRoleType, presetForRole } from './agentRolePresets'
+import { inferRoleType, presetForRole } from './agentRolePresets'
 
 export interface SavedAgentConfig extends AgentConfigInput {
   id: string
@@ -33,23 +33,10 @@ let pendingServerSync: number | null = null
 let pendingServerSyncState: AgentLibraryState | null = null
 let serverReconcilePromise: Promise<AgentLibraryState> | null = null
 
-const defaultAgentRoleTypes = [
-  'orchestrator',
-  'researcher',
-  'architect',
-  'coder',
-  'reviewer',
-] as const
-
-export const defaultAgentConfigs: SavedAgentConfig[] = defaultAgentRoleTypes
-  .map((roleType) => presetForRole(roleType))
-  .filter(Boolean)
-  .map((preset) => createSavedAgent(preset!))
-
 export const defaultAgentLibrary: AgentLibraryState = {
   schemaVersion: 2,
-  agents: defaultAgentConfigs,
-  relations: buildDefaultSavedRelations(defaultAgentConfigs),
+  agents: [],
+  relations: [],
 }
 
 export function loadAgentLibrary(): SavedAgentConfig[] {
@@ -68,26 +55,6 @@ export function loadAgentLibraryState(): AgentLibraryState {
           ? normalizeLibraryState(parsed)
           : null
       if (state) {
-        // 如果迁移添加了 orchestrator，保存回 localStorage
-        const hadOrchestrator = Array.isArray(parsed?.agents)
-          ? parsed.agents.some((a: unknown) => {
-              const agent = a as { roleType?: string; name?: string; role?: string }
-              return (
-                agent.roleType === 'orchestrator' ||
-                (agent.name ?? '').toLowerCase().includes('orchestrator') ||
-                (agent.role ?? '').includes('总指挥')
-              )
-            })
-          : false
-        const hadLegacyDefaults = Array.isArray(parsed?.agents)
-          ? parsed.agents.some((a: unknown) => {
-              const agent = a as { name?: string }
-              return ['Architect', 'Coder', 'Reviewer'].includes(agent.name ?? '')
-            })
-          : false
-        if (!hadOrchestrator || hadLegacyDefaults) {
-          writeAgentLibraryStateToStorage(state)
-        }
         return state
       }
     } catch {
@@ -96,10 +63,9 @@ export function loadAgentLibraryState(): AgentLibraryState {
   }
 
   const migrated = migrateLegacyAgentConfig()
-  const initial = migrated ? [migrated, ...defaultAgentConfigs] : defaultAgentConfigs
   const state = normalizeLibraryState({
-    agents: initial,
-    relations: buildDefaultSavedRelations(initial),
+    agents: migrated ? [migrated] : [],
+    relations: [],
   })
   return state
 }
@@ -341,24 +307,32 @@ function normalizeLibraryState(value: unknown): AgentLibraryState {
   const parsed = value as Partial<AgentLibraryState> & { agents?: unknown; relations?: unknown }
   let agents = Array.isArray(parsed.agents)
     ? (parsed.agents.map(normalizeSavedAgent).filter(Boolean) as SavedAgentConfig[])
-    : defaultAgentConfigs
-  agents = upgradeDefaultAgentPresets(agents)
+    : []
   agents = dedupeSavedAgents(agents)
-
-  // 迁移：如果缺少 orchestrator，自动添加
-  const hasOrchestrator = agents.some((a) => (a.roleType ?? inferRoleType(a)) === 'orchestrator')
-  if (!hasOrchestrator) {
-    const orchestratorPreset = defaultAgentConfigs.find((a) => a.roleType === 'orchestrator')
-    if (orchestratorPreset) {
-      agents = [orchestratorPreset, ...agents]
-    }
-  }
+  agents = agents.filter((agent) => !isPlaceholderSavedAgent(agent))
 
   const relations = Array.isArray(parsed.relations)
     ? (parsed.relations.map(normalizeSavedRelation).filter(Boolean) as SavedAgentRelation[])
-    : buildDefaultSavedRelations(agents)
+    : []
   const pruned = pruneRelations(relations, agents)
   return { schemaVersion: 2, agents, relations: pruned }
+}
+
+function isPlaceholderSavedAgent(agent: SavedAgentConfig) {
+  return (
+    normalizeAgentText(agent.name) === 'new agent' &&
+    normalizeAgentText(agent.role) === '协作' &&
+    normalizeAgentText(agent.description ?? '') ===
+      normalizeAgentText('描述这个 Agent 的职责、产出和适合处理的任务。') &&
+    normalizeAgentText(agent.systemPrompt ?? '') ===
+      normalizeAgentText('你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。') &&
+    (agent.runtimeType ?? 'llm') === 'code-agent' &&
+    (agent.codeAgentType ?? 'codex') === 'codex'
+  )
+}
+
+function normalizeAgentText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 function defaultCodeAgentTypeFor(
@@ -386,52 +360,6 @@ function dedupeSavedAgents(agents: SavedAgentConfig[]) {
   })
 }
 
-function upgradeDefaultAgentPresets(agents: SavedAgentConfig[]) {
-  const defaultNamesByRole: Record<string, string[]> = {
-    orchestrator: ['Orchestrator'],
-    researcher: ['Researcher'],
-    architect: ['Architect', 'Designer'],
-    coder: ['Coder', 'Builder'],
-    reviewer: ['Reviewer', 'QA Reviewer'],
-  }
-
-  return agents.map((agent) => {
-    const roleType = agent.roleType ?? inferRoleType(agent)
-    const preset = roleType === 'custom' ? undefined : presetForRole(roleType)
-    const defaultNames = defaultNamesByRole[roleType] ?? []
-    if (!preset || !defaultNames.includes(agent.name)) return agent
-    if (hasUserEditedAgent(agent)) return agent
-
-    return (
-      normalizeSavedAgent({
-        ...agent,
-        ...preset,
-        id: agent.id,
-        modelId: agent.modelId ?? preset.modelId,
-        runtimeType: agent.runtimeType ?? preset.runtimeType,
-        codeAgentType: shouldUsePresetCodeAgentType(agent, preset)
-          ? preset.codeAgentType
-          : (agent.codeAgentType ?? preset.codeAgentType),
-        createdAt: agent.createdAt,
-        updatedAt: agent.updatedAt,
-      }) ?? agent
-    )
-  })
-}
-
-function hasUserEditedAgent(agent: SavedAgentConfig) {
-  const created = Date.parse(agent.createdAt)
-  const updated = Date.parse(agent.updatedAt)
-  if (!Number.isFinite(created) || !Number.isFinite(updated)) return true
-  return Math.abs(updated - created) > 1000
-}
-
-function shouldUsePresetCodeAgentType(agent: SavedAgentConfig, preset: NonNullable<ReturnType<typeof presetForRole>>) {
-  if (preset.runtimeType !== 'code-agent') return false
-  if (!agent.codeAgentType) return true
-  return false
-}
-
 function normalizeSavedRelation(value: unknown): SavedAgentRelation | null {
   if (!value || typeof value !== 'object') return null
   const input = value as Partial<SavedAgentRelation>
@@ -446,30 +374,6 @@ function normalizeSavedRelation(value: unknown): SavedAgentRelation | null {
     createdAt: input.createdAt ?? now,
     updatedAt: input.updatedAt ?? now,
   }
-}
-
-function buildDefaultSavedRelations(agents: SavedAgentConfig[]): SavedAgentRelation[] {
-  const now = new Date().toISOString()
-  return defaultAgentRelations.flatMap((relation) => {
-    const source = agents.find(
-      (agent) => (agent.roleType ?? inferRoleType(agent)) === relation.sourceRoleType,
-    )
-    const target = agents.find(
-      (agent) => (agent.roleType ?? inferRoleType(agent)) === relation.targetRoleType,
-    )
-    if (!source || !target) return []
-    return [
-      {
-        id: `${relation.sourceRoleType}-${relation.relationType}-${relation.targetRoleType}`,
-        sourceAgentId: source.id,
-        targetAgentId: target.id,
-        relationType: relation.relationType,
-        note: relation.note,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]
-  })
 }
 
 function pruneRelations(relations: SavedAgentRelation[], agents: SavedAgentConfig[]) {

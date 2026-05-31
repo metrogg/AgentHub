@@ -19,7 +19,7 @@ interface WorkspaceState {
 
   // List ops
   fetchList: () => Promise<void>
-  createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null; template?: 'blank' | 'classic' }) => Promise<Workspace>
+  createWorkspace: (data: { name: string; goal?: string; projectPath?: string | null }) => Promise<Workspace>
   selectWorkspace: (id: string | null) => Promise<void>
   updateWorkspace: (id: string, data: { name?: string; goal?: string; projectPath?: string | null }) => Promise<void>
   deleteWorkspace: (id: string) => Promise<void>

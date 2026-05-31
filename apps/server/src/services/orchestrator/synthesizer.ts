@@ -20,7 +20,7 @@ export class Synthesizer {
       }))
 
     if (sections.length === 0) {
-      return '**Orchestrator 汇总**\n\n所有子任务均未成功完成，请检查任务状态或重新派发。'
+      return buildTransparentResultDump(results, '没有成功完成的子任务，无法生成模型汇总。')
     }
 
     const system = `你是 AgentHub 的协调器。基于各子 Agent 的产出，生成一份统一的进展报告。
@@ -80,10 +80,13 @@ ${JSON.stringify(sections, null, 2)}
       for await (const delta of streamReply([{ role: 'user', content: prompt }], system)) {
         output += delta
       }
-      return output.trim() || buildFallbackSummary(results)
+      return output.trim() || buildTransparentResultDump(results, '汇总模型返回了空内容。')
     } catch (error: any) {
       logger.error({ err: error?.message }, 'Synthesizer LLM call failed')
-      return buildFallbackSummary(results)
+      return buildTransparentResultDump(
+        results,
+        `汇总模型调用失败：${error?.message || 'unknown error'}`,
+      )
     }
   }
 }
@@ -109,38 +112,38 @@ function formatTypedBlackboardEntries(entries: BlackboardEntry[]): string {
     .join('\n')
 }
 
-function buildFallbackSummary(results: TaskResult[]): string {
-  const doneResults = results.filter((r) => r.status === 'done')
-  const failedResults = results.filter((r) => r.status === 'failed')
-
-  const agentOutputs = doneResults.map((r) => {
-    const compact = r.output.trim().replace(/\n{3,}/g, '\n\n').slice(0, 800)
-    return [
-      `### ${r.agentName} — ${r.taskId}`,
-      compact || '无输出。',
-      r.artifacts.length > 0 ? `- 产物：${r.artifacts.map((a) => (a as { filePath?: string }).filePath || 'artifact').join(', ')}` : '',
-    ].join('\n')
-  })
-
-  const riskSection = failedResults.length > 0
-    ? failedResults.map((r) => `- **${r.agentName}** 的任务 **${r.taskId}** 执行失败，需人工检查或重试。`).join('\n')
-    : '未发现明显风险。'
-
-  return [
-    '## 执行摘要',
-    `本次协调共包含 ${results.length} 个子任务，其中 ${doneResults.length} 个成功完成，${failedResults.length} 个失败。`,
+function buildTransparentResultDump(results: TaskResult[], reason: string): string {
+  const lines = [
+    '## 汇总模型未生成最终总结',
+    reason,
     '',
-    '## 各 Agent 产出',
-    ...agentOutputs.flatMap((s) => [s, '']),
-    '## 冲突处理',
-    '无代码冲突。',
+    '以下只展示系统记录到的真实子任务结果，不伪装成 Orchestrator 的模型总结。',
     '',
-    '## 风险与建议',
-    riskSection,
-    '',
-    '## 下一步行动',
-    '1. 检查失败任务的状态和日志，决定是否需要重试。',
-    '2. 在群聊中 @具体 Agent 追问细节。',
-    '3. 如需继续推进，可让 Orchestrator 规划下一轮任务。',
-  ].join('\n')
+  ]
+
+  if (results.length === 0) {
+    lines.push('- 没有记录到任何子任务结果。')
+    return lines.join('\n')
+  }
+
+  for (const result of results) {
+    const artifacts = result.artifacts
+      .map((artifact) => {
+        const item = artifact as { filePath?: string; path?: string; title?: string }
+        return item.filePath || item.path || item.title
+      })
+      .filter(Boolean)
+      .join(', ')
+    const output = result.output.trim().replace(/\n{3,}/g, '\n\n').slice(0, 800)
+    lines.push(
+      `### ${result.agentName || result.agentId} — ${result.taskId}`,
+      `状态：${result.status}`,
+      result.error ? `错误：${result.error}` : '',
+      artifacts ? `产物：${artifacts}` : '',
+      output ? `输出片段：\n${output}` : '',
+      '',
+    )
+  }
+
+  return lines.filter((line) => line !== '').join('\n')
 }

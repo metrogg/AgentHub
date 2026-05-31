@@ -1,7 +1,6 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useNavigate, useParams } from 'react-router-dom'
-import { workspaceNameFromPath, TEAM_TEMPLATES, type TeamTemplate } from '@agenthub/shared'
+import { workspaceNameFromPath } from '@agenthub/shared'
 import {
   ArrowUp,
   AtSign,
@@ -14,8 +13,6 @@ import {
   Paperclip,
   Search,
   Trash2,
-  Users,
-  X,
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
@@ -181,8 +178,6 @@ function Welcome() {
   const [hint, setHint] = useState('')
   const [quickPrompts, setQuickPrompts] = useState<WelcomeQuickPrompt[]>([])
   const [quickPromptsLoading, setQuickPromptsLoading] = useState(true)
-  const [templateSelectorOpen, setTemplateSelectorOpen] = useState(false)
-  const [templateCreating, setTemplateCreating] = useState(false)
   const filteredWorkspaces = workspaces.filter((workspace) => {
     const query = workspaceQuery.trim().toLowerCase()
     if (!query) return true
@@ -448,7 +443,6 @@ function Welcome() {
             name: workspaceNameFromPath(result.projectPath),
             goal: '',
             projectPath: result.projectPath,
-            template: 'blank',
           })
         ).workspace
       setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
@@ -466,31 +460,6 @@ function Welcome() {
 
   function startNewWorkspace() {
     setProjectMenuOpen(false)
-    setTemplateSelectorOpen(true)
-  }
-
-  async function handleCreateFromTemplate(template: TeamTemplate) {
-    if (templateCreating) return
-    setTemplateCreating(true)
-    setTemplateSelectorOpen(false)
-    showHint('正在创建团队工作区...')
-    try {
-      const result = await api.createWorkspaceFromTemplate({
-        templateId: template.id,
-        name: template.name,
-      })
-      setWorkspaces((items) => [result.workspace, ...items.filter((item) => item.id !== result.workspace.id)])
-      setSelectedWorkspace(result.workspace)
-      showHint(`已创建「${template.name}」，含 ${result.agents.length} 个 Agent`)
-    } catch (err) {
-      showHint(friendlyErrorMessage(err, '创建团队工作区失败'))
-    } finally {
-      setTemplateCreating(false)
-    }
-  }
-
-  function skipTemplateSelector() {
-    setTemplateSelectorOpen(false)
     setSelectedWorkspace(null)
     showHint('将从新工作空间开始')
   }
@@ -641,79 +610,6 @@ function Welcome() {
                 </div>
               </div>
             )}
-            {templateSelectorOpen &&
-              createPortal(
-                <div
-                  className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-4 backdrop-blur-md"
-                  role="dialog"
-                  aria-modal="true"
-                  onMouseDown={skipTemplateSelector}
-                >
-                  <div
-                    className="agenthub-portal-theme w-full max-w-[640px] overflow-hidden rounded-[24px] border border-neutral-200/80 bg-[#f7f7f5] shadow-[0_28px_100px_rgba(15,23,42,0.28)]"
-                    onMouseDown={(event) => event.stopPropagation()}
-                  >
-                    <div className="relative flex h-14 shrink-0 items-center justify-center border-b border-neutral-200/80 bg-[#f7f7f5]/95">
-                      <h2 className="text-sm font-semibold tracking-wide text-neutral-950">
-                        选择预设团队模板
-                      </h2>
-                      <button
-                        type="button"
-                        onClick={skipTemplateSelector}
-                        disabled={templateCreating}
-                        className="absolute right-4 top-3 grid h-9 w-9 place-items-center rounded-full text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-40"
-                        aria-label="关闭"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2">
-                      {TEAM_TEMPLATES.map((template) => (
-                        <button
-                          key={template.id}
-                          type="button"
-                          onClick={() => void handleCreateFromTemplate(template)}
-                          disabled={templateCreating}
-                          className="flex flex-col gap-2 rounded-xl border border-neutral-200 bg-white p-4 text-left transition hover:border-neutral-300 hover:shadow-sm disabled:opacity-60"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-2xl">{template.icon}</span>
-                            <span className="text-sm font-semibold text-neutral-900">
-                              {template.name}
-                            </span>
-                          </div>
-                          <p className="text-xs leading-relaxed text-neutral-500">
-                            {template.description}
-                          </p>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <Users className="h-3 w-3 shrink-0 text-neutral-400" />
-                            {template.agents.map((agent) => (
-                              <span
-                                key={agent.name}
-                                className="inline-flex items-center rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 text-[11px] text-neutral-600"
-                              >
-                                {agent.name}
-                              </span>
-                            ))}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                    <div className="border-t border-neutral-200/80 px-5 py-3">
-                      <button
-                        type="button"
-                        onClick={skipTemplateSelector}
-                        disabled={templateCreating}
-                        className="flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-neutral-300 text-sm text-neutral-500 transition hover:bg-neutral-50 hover:text-neutral-700 disabled:opacity-40"
-                      >
-                        <FolderPlus className="h-4 w-4" />
-                        跳过，从空白工作区开始
-                      </button>
-                    </div>
-                  </div>
-                </div>,
-                document.body,
-              )}
             <textarea
               ref={messageInputRef}
               value={message}

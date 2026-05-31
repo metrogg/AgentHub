@@ -13,7 +13,7 @@ import {
   desc,
 } from '@agenthub/db'
 import { logger } from '../../lib/logger'
-import { broadcastSessionEvent, runAgentReply } from '../agent-runner'
+import { broadcastSessionEvent } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
 import { shouldAcceptPartialExecution, taskExecutionService } from '../execution/task-execution-service'
 import { blackboard, Blackboard, type BlackboardRef } from '../blackboard'
@@ -35,11 +35,11 @@ import type {
   TaskResult,
 } from './types'
 import { PolicyGuard } from '../policy-guard'
-import { intentRouter } from './intent-router'
 import { streamReply } from '../llm'
 import { buildAgentProfileWithWorktree } from '../agents/profile-builder'
 import { ensureOrchestratorTaskSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST, resolveDefaultWorkDir } from '../execution/agent-execution-envelope'
+import { buildA2ADispatchEnvelope, buildA2AExecutionTask } from '../protocols/a2a-internal'
 import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 import { env } from '../../env'
 
@@ -587,39 +587,6 @@ export class OrchestratorEngine {
             break
           }
         }
-      }
-
-      // Task #37: Auto-review chain — code tasks 完成后自动注入 review 任务
-      // 修复 Bug 23: 使用 scheduler 的 run signal，使 auto-review 可被取消
-      const reviewSignal = this.scheduler.getRunSignal(runId) ?? new AbortController().signal
-      const reviewResults = await this.injectAutoReviewTasks(
-        plan,
-        results,
-        childSessions,
-        runId,
-        groupSessionId,
-        workspaceId,
-        ownerId,
-        reviewSignal,
-        executor,
-      )
-      if (reviewResults.length > 0) {
-        results.push(...reviewResults)
-      }
-
-      // Task #8: Follow-up task detection — 团长动态交接，根据产出物类型自动创建后续任务
-      const followUpResults = await this.detectAndExecuteFollowUpTasks(
-        plan,
-        results,
-        childSessions,
-        runId,
-        groupSessionId,
-        workspaceId,
-        ownerId,
-        executor,
-      )
-      if (followUpResults.length > 0) {
-        results.push(...followUpResults)
       }
 
       // 冲突检测与解决：遍历所有有 projectPath 的任务目录
@@ -1210,15 +1177,29 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 
     const prompt = await buildTaskPrompt(task, plan, blackboard, bbNamespace)
 
-    // 插入 user message
+    const userMessageId = crypto.randomUUID()
+    const a2aDispatch = buildA2ADispatchEnvelope({
+      task,
+      plan,
+      agent,
+      prompt,
+      workspaceId,
+      groupSessionId,
+      childSessionId: childInfo.sessionId,
+      userMessageId,
+    })
+
+    // 插入 A2A message/send 对应的 user message
     const [userMsg] = await db
       .insert(messages)
       .values({
+        id: userMessageId,
         sessionId: childInfo.sessionId,
         senderId: 'user',
         senderType: 'user',
         type: 'text',
         content: prompt,
+        metadata: { a2a: a2aDispatch },
       })
       .returning()
 
@@ -1306,6 +1287,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         attemptCount,
         existingUserMessageId: userMsg.id,
         deferCompletionStatus: true,
+        a2a: a2aDispatch,
       })
       stopHeartbeat()
 
@@ -1917,6 +1899,15 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             taskStatus: TaskStatus.Done,
             outputRef,
             artifacts,
+            a2a: {
+              request: a2aDispatch.params,
+              responseTask: buildA2AExecutionTask({
+                envelope: a2aDispatch,
+                status: TaskStatus.Done,
+                output,
+                artifacts,
+              }),
+            },
           },
         })
         .returning()
@@ -2044,6 +2035,16 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             taskResultReport: failureReport,
             artifacts: lastArtifacts,
             partialArtifacts: lastArtifacts.length > 0,
+            a2a: {
+              request: a2aDispatch.params,
+              responseTask: buildA2AExecutionTask({
+                envelope: a2aDispatch,
+                status: TaskStatus.Failed,
+                output: lastAgentOutput,
+                error: error?.message || 'Unknown error',
+                artifacts: lastArtifacts,
+              }),
+            },
           },
         })
         .returning()
@@ -2067,640 +2068,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     } finally {
       stopHeartbeat()
     }
-  }
-
-  /**
-   * Auto-review chain: Coder -> Verifier -> Reviewer
-   * 为 code 类型且 requiresReview 的已完成任务自动注入验证和审查任务
-   * 所有 verify/review 任务作为 DAG 节点并行调度
-   */
-  private async injectAutoReviewTasks(
-    plan: ExecutionPlan,
-    results: TaskResult[],
-    childSessions: Map<string, ChildSessionInfo>,
-    runId: string,
-    groupSessionId: string,
-    workspaceId: string,
-    ownerId: string,
-    signal: AbortSignal,
-    executor: TaskExecutor,
-  ): Promise<TaskResult[]> {
-    const chainResults: TaskResult[] = []
-    const codeTasksNeedingReview = plan.tasks.filter((task) => {
-      if (task.taskType !== 'code' || !task.validation?.requiresReview) return false
-      const result = results.find((r) => r.taskId === task.id)
-      return result?.status === TaskStatus.Done && result.output
-    })
-
-    if (codeTasksNeedingReview.length === 0) return chainResults
-
-    // Find verifier agent (prefer roleType='verifier')
-    const verifierAgent =
-      plan.agents.find((a) => a.roleType === 'verifier') ??
-      plan.agents.find((a) =>
-        a.capabilityTags.some((t) => ['verify', 'test', 'build'].includes(t.toLowerCase())),
-      )
-
-    // Find reviewer agent (prefer roleType='reviewer')
-    const firstCodeTask = codeTasksNeedingReview[0]!
-    const reviewerAgent =
-      plan.agents.find((a) => a.roleType === 'reviewer') ??
-      plan.agents.find((a) => {
-        const text = [a.name, a.role, a.description, ...(a.capabilityTags ?? [])]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase()
-        return text.includes('review') || text.includes('审查')
-      }) ??
-      plan.agents.find((a) => a.id !== firstCodeTask.agentId) ??
-      plan.agents[0]
-
-    const autoReviewTasks: ExecutionTask[] = []
-
-    for (const codeTask of codeTasksNeedingReview) {
-      let verifyTaskId: string | null = null
-
-      // === Step 1: Verifier ===
-      if (verifierAgent) {
-        verifyTaskId = `verify-${codeTask.id}`
-        if (
-          !plan.tasks.some((t) => t.id === verifyTaskId) &&
-          !autoReviewTasks.some((t) => t.id === verifyTaskId)
-        ) {
-          const verifyTask: ExecutionTask = {
-            id: verifyTaskId,
-            title: `验证 ${codeTask.title}`,
-            description: `在沙箱中运行「${codeTask.title}」的测试、构建和类型检查命令，验证代码变更是否通过自动化检查。`,
-            agentId: verifierAgent.id,
-            dependencies: [codeTask.id],
-            taskType: 'test',
-            phaseId: codeTask.phaseId ?? 'verification',
-            maxRetries: 1,
-          }
-
-          const verifySession = await ensureOrchestratorTaskSession(
-            workspaceId,
-            plan.title,
-            ownerId,
-            verifierAgent,
-            verifyTask.title,
-            runId,
-            verifyTaskId,
-          )
-          childSessions.set(verifyTaskId, {
-            sessionId: verifySession.id,
-            workspaceId,
-            projectPath: childSessions.get(codeTask.id)?.projectPath,
-          })
-
-          await db.insert(workspaceTasks).values({
-            id: verifyTaskId,
-            workspaceId,
-            agentId: verifierAgent.id,
-            title: verifyTask.title,
-            description: verifyTask.description,
-            status: 'pending',
-            sessionId: verifySession.id,
-            orderIdx: plan.tasks.length,
-            runId,
-            phaseId: verifyTask.phaseId,
-            dependencies: [codeTask.id],
-            maxRetries: 1,
-          })
-
-          plan.tasks.push(verifyTask)
-          autoReviewTasks.push(verifyTask)
-
-          await emitRunEvent({
-            runId,
-            workspaceId,
-            groupSessionId,
-            taskId: verifyTaskId,
-            agentId: verifierAgent.id,
-            type: 'task.queued',
-            severity: 'info',
-            payload: {
-              title: verifyTask.title,
-              description: verifyTask.description,
-              phaseId: verifyTask.phaseId ?? codeTask.phaseId ?? 'verification',
-              taskType: verifyTask.taskType,
-              agentName: verifierAgent.name,
-              agentId: verifierAgent.id,
-              childSessionId: verifySession.id,
-              reason: 'Auto-verify after code task',
-              parentTaskId: codeTask.id,
-            },
-          })
-        }
-      }
-
-      // === Step 2: Reviewer (depends on verifier if present, otherwise code task) ===
-      if (!reviewerAgent) continue
-
-      const reviewTaskId = `review-${codeTask.id}`
-      if (
-        plan.tasks.some((t) => t.id === reviewTaskId) ||
-        autoReviewTasks.some((t) => t.id === reviewTaskId)
-      )
-        continue
-
-      const reviewTask: ExecutionTask = {
-        id: reviewTaskId,
-        title: `审查 ${codeTask.title}`,
-        description: `审查「${codeTask.title}」的代码变更质量、安全性和最佳实践。关注：代码风格一致性、潜在bug、安全漏洞、性能问题。`,
-        agentId: reviewerAgent.id,
-        dependencies: verifyTaskId ? [verifyTaskId] : [codeTask.id],
-        taskType: 'review',
-        phaseId: codeTask.phaseId ?? 'verification',
-        maxRetries: 1,
-      }
-
-      const reviewSession = await ensureOrchestratorTaskSession(
-        workspaceId,
-        plan.title,
-        ownerId,
-        reviewerAgent,
-        reviewTask.title,
-        runId,
-        reviewTaskId,
-      )
-      childSessions.set(reviewTaskId, {
-        sessionId: reviewSession.id,
-        workspaceId,
-        projectPath: childSessions.get(codeTask.id)?.projectPath,
-      })
-
-      await db.insert(workspaceTasks).values({
-        id: reviewTaskId,
-        workspaceId,
-        agentId: reviewerAgent.id,
-        title: reviewTask.title,
-        description: reviewTask.description,
-        status: 'pending',
-        sessionId: reviewSession.id,
-        orderIdx: plan.tasks.length,
-        runId,
-        phaseId: reviewTask.phaseId,
-        dependencies: verifyTaskId ? [verifyTaskId] : [codeTask.id],
-        maxRetries: 1,
-      })
-
-      plan.tasks.push(reviewTask)
-      autoReviewTasks.push(reviewTask)
-
-      await emitRunEvent({
-        runId,
-        workspaceId,
-        groupSessionId,
-        taskId: reviewTaskId,
-        agentId: reviewerAgent.id,
-        type: 'task.queued',
-        severity: 'info',
-        payload: {
-          title: reviewTask.title,
-          description: reviewTask.description,
-          phaseId: reviewTask.phaseId ?? codeTask.phaseId ?? 'verification',
-          taskType: reviewTask.taskType,
-          agentName: reviewerAgent.name,
-          agentId: reviewerAgent.id,
-          childSessionId: reviewSession.id,
-          reason: 'Auto-review after code task',
-          parentTaskId: codeTask.id,
-        },
-      })
-    }
-
-    // 通过 DAG 调度器并行执行所有 auto-review 任务
-    if (autoReviewTasks.length > 0) {
-      const autoReviewPlan: ExecutionPlan = {
-        runId,
-        title: `Auto-Review: ${plan.title}`,
-        goal: plan.goal,
-        agents: plan.agents,
-        tasks: autoReviewTasks,
-      }
-
-      const reviewResults = await this.scheduler.executePlan(autoReviewPlan, executor)
-
-      for (const result of reviewResults) {
-        chainResults.push(result)
-
-        const codeTaskId = result.taskId.replace(/^(verify-|review-)/, '')
-        const codeTask = codeTasksNeedingReview.find((t) => t.id === codeTaskId)
-
-        if (result.taskId.startsWith('verify-') && result.status !== 'done') {
-          await emitRunEvent({
-            runId,
-            workspaceId,
-            groupSessionId,
-            taskId: codeTaskId,
-            agentId: codeTask?.agentId ?? '',
-            type: 'task.failed',
-            severity: 'warning',
-            payload: {
-              title: codeTask?.title ?? '',
-              reason: 'Verification failed, skipping review',
-              verifyTaskId: result.taskId,
-            },
-          })
-        }
-
-        logger.info(
-          { taskId: result.taskId, codeTaskId, status: result.status },
-          'Auto-review task completed',
-        )
-      }
-    }
-
-    return chainResults
-  }
-
-  /**
-   * Task #8: 团长动态交接 — 根据已完成任务的产出物类型，自动创建后续任务
-   *
-   * 规则引擎（非 LLM），按以下规则决策：
-   * 1. 代码文件产出 + 无 QA 任务 → 创建 QA 审查任务
-   * 2. Markdown 文档产出 + 无编辑任务 → 创建润色/校对任务
-   * 3. 代码 + 测试文件产出 + 无 Reviewer 任务 → 创建 Reviewer 任务
-   *
-   * 去重：已有同类 follow-up 任务则跳过
-   */
-  private async detectAndExecuteFollowUpTasks(
-    plan: ExecutionPlan,
-    results: TaskResult[],
-    childSessions: Map<string, ChildSessionInfo>,
-    runId: string,
-    groupSessionId: string,
-    workspaceId: string,
-    ownerId: string,
-    executor: TaskExecutor,
-  ): Promise<TaskResult[]> {
-    const followUpTasks: ExecutionTask[] = []
-
-    for (const result of results) {
-      if (result.status !== TaskStatus.Done || result.artifacts.length === 0) continue
-      const completedTask = plan.tasks.find((t) => t.id === result.taskId)
-      if (!completedTask) continue
-
-      const newTasks = await this.buildFollowUpTasks(
-        completedTask,
-        result.artifacts,
-        plan,
-        childSessions,
-        runId,
-        groupSessionId,
-        workspaceId,
-        ownerId,
-      )
-      followUpTasks.push(...newTasks)
-    }
-
-    if (followUpTasks.length === 0) return []
-
-    this.scheduler.addTasksToRun(runId, followUpTasks)
-
-    broadcastSessionEvent(groupSessionId, {
-      type: 'task_board:plan_ready',
-      payload: {
-        runId,
-        plan: {
-          runId,
-          title: plan.title,
-          goal: plan.goal,
-          collaborationMode: plan.collaborationMode || 'mapreduce',
-          phases: plan.phases || [],
-          tasks: plan.tasks.map((t) => ({
-            id: t.id,
-            phaseId: t.phaseId || '',
-            title: t.title,
-            description: t.description,
-            agentId: t.agentId,
-            agentKey: plan.agents.find((a) => a.id === t.agentId)?.key || t.agentId,
-            agentName: plan.agents.find((a) => a.id === t.agentId)?.name || t.agentId,
-            dependencies: t.dependencies || [],
-            taskType: t.taskType,
-            childSessionId: childSessions.get(t.id)?.sessionId ?? null,
-          })),
-          agents: plan.agents,
-        },
-        sessionId: groupSessionId,
-      },
-    })
-
-    logger.info(
-      { runId, followUpCount: followUpTasks.length },
-      'Detected follow-up tasks, dispatching',
-    )
-
-    const followUpPlan: ExecutionPlan = {
-      runId,
-      title: `Follow-up: ${plan.title}`,
-      goal: plan.goal,
-      agents: plan.agents,
-      tasks: followUpTasks,
-    }
-
-    const followUpResults = await this.scheduler.executePlan(followUpPlan, executor)
-
-    for (const fr of followUpResults) {
-      logger.info({ taskId: fr.taskId, status: fr.status }, 'Follow-up task completed')
-    }
-
-    return followUpResults
-  }
-
-  private async buildFollowUpTasks(
-    completedTask: ExecutionTask,
-    artifacts: Array<Record<string, unknown>>,
-    plan: ExecutionPlan,
-    childSessions: Map<string, ChildSessionInfo>,
-    runId: string,
-    groupSessionId: string,
-    workspaceId: string,
-    ownerId: string,
-  ): Promise<ExecutionTask[]> {
-    const newTasks: ExecutionTask[] = []
-
-    const filePaths: string[] = []
-    for (const artifact of artifacts) {
-      if (!artifact || typeof artifact !== 'object') continue
-      const rec = artifact as Record<string, unknown>
-      const fp = (rec.filePath as string) ?? (rec.path as string) ?? (rec.title as string) ?? ''
-      if (!fp) continue
-      filePaths.push(fp.toLowerCase())
-    }
-    if (filePaths.length === 0) return newTasks
-
-    const extSet = (fp: string) => (fp.includes('.') ? (fp.split('.').pop() ?? '') : '')
-
-    const codeExtensions = new Set([
-      'html',
-      'css',
-      'js',
-      'ts',
-      'jsx',
-      'tsx',
-      'py',
-      'java',
-      'go',
-      'rs',
-      'cpp',
-      'c',
-      'rb',
-      'php',
-      'swift',
-      'kt',
-      'dart',
-      'vue',
-      'svelte',
-      'json',
-      'yaml',
-      'yml',
-      'toml',
-      'xml',
-      'scss',
-      'less',
-      'sass',
-      'lua',
-      'r',
-      'm',
-      'mm',
-      'sh',
-      'bash',
-      'ps1',
-      'bat',
-      'cmd',
-      'sql',
-      'graphql',
-      'proto',
-      'tf',
-      'hcl',
-    ])
-
-    const docExtensions = new Set(['md', 'markdown', 'mdx', 'txt', 'rst', 'adoc', 'org'])
-
-    const isTestFile = (fp: string): boolean => {
-      const name = fp.split('/').pop() ?? fp
-      return (
-        name.includes('.test.') ||
-        name.includes('_test.') ||
-        name.includes('.spec.') ||
-        name.includes('_spec.') ||
-        fp.includes('/test_') ||
-        fp.startsWith('test/') ||
-        fp.startsWith('tests/') ||
-        fp.startsWith('spec/') ||
-        fp.startsWith('__tests__/') ||
-        name.endsWith('_test.py') ||
-        name.endsWith('_test.go') ||
-        name.endsWith('_test.rb') ||
-        name.endsWith('_spec.rb') ||
-        name.endsWith('Test.java') ||
-        name.endsWith('Tests.java')
-      )
-    }
-
-    const hasCodeFiles = filePaths.some((fp) => codeExtensions.has(extSet(fp)))
-    const hasDocFiles = filePaths.some((fp) => docExtensions.has(extSet(fp)))
-    const hasTestFiles = filePaths.some((fp) => isTestFile(fp))
-
-    const taskExistsForRun = (keywords: string[]): boolean => {
-      return plan.tasks.some((t) => {
-        if (t.id.startsWith('qa-') || t.id.startsWith('polish-') || t.id.startsWith('review-')) {
-          return keywords.some((kw) => t.title.toLowerCase().includes(kw))
-        }
-        const combined = (t.title + ' ' + t.description).toLowerCase()
-        return keywords.some((kw) => combined.includes(kw))
-      })
-    }
-
-    // Rule 1: 代码文件产出 + 无 QA 任务 → 创建 QA 审查任务
-    if (hasCodeFiles && !taskExistsForRun(['qa', '测试', '审查'])) {
-      const qaAgent = findFollowUpAgent(
-        plan,
-        completedTask.agentId,
-        ['reviewer', 'verifier'],
-        ['qa', 'test', 'review', '测试', '审查'],
-      )
-      if (qaAgent) {
-        const task = await this.createFollowUpTask({
-          prefix: 'qa',
-          parentTask: completedTask,
-          title: `QA 审查 ${completedTask.title}`,
-          description: `对「${completedTask.title}」产出的代码文件进行质量审查。检查：代码规范、边界情况、错误处理、异常安全、性能问题。`,
-          agent: qaAgent,
-          taskType: 'review',
-          plan,
-          childSessions,
-          runId,
-          groupSessionId,
-          workspaceId,
-          ownerId,
-        })
-        if (task) newTasks.push(task)
-      }
-    }
-
-    // Rule 2: Markdown 文档产出 + 无编辑任务 → 创建润色任务
-    if (hasDocFiles && !taskExistsForRun(['润色', '编辑', '校对', 'polish', 'edit'])) {
-      const editorAgent = findFollowUpAgent(
-        plan,
-        completedTask.agentId,
-        ['reviewer', 'integrator', 'custom'],
-        ['edit', 'polish', '文档', '写作', 'write', '润色', '校对'],
-      )
-      if (editorAgent) {
-        const task = await this.createFollowUpTask({
-          prefix: 'polish',
-          parentTask: completedTask,
-          title: `润色 ${completedTask.title}`,
-          description: `对「${completedTask.title}」产出的文档进行润色和校对。检查：逻辑连贯性、表述清晰度、格式一致性、错别字和语法。`,
-          agent: editorAgent,
-          taskType: 'review',
-          plan,
-          childSessions,
-          runId,
-          groupSessionId,
-          workspaceId,
-          ownerId,
-        })
-        if (task) newTasks.push(task)
-      }
-    }
-
-    // Rule 3: 代码 + 测试文件产出 + 无 Reviewer 任务 → 创建 Reviewer 任务
-    if (hasCodeFiles && hasTestFiles && !taskExistsForRun(['review', '审查', 'code review'])) {
-      const reviewerAgent = findFollowUpAgent(
-        plan,
-        completedTask.agentId,
-        ['reviewer', 'verifier'],
-        ['review', '审查', 'code review'],
-      )
-      if (reviewerAgent) {
-        const task = await this.createFollowUpTask({
-          prefix: 'review',
-          parentTask: completedTask,
-          title: `代码审查 ${completedTask.title}`,
-          description: `审查「${completedTask.title}」的代码变更和测试覆盖率。关注：代码风格一致性、架构合理性、潜在安全漏洞、测试充分度。`,
-          agent: reviewerAgent,
-          taskType: 'review',
-          plan,
-          childSessions,
-          runId,
-          groupSessionId,
-          workspaceId,
-          ownerId,
-        })
-        if (task) newTasks.push(task)
-      }
-    }
-
-    return newTasks
-  }
-
-  private async createFollowUpTask(params: {
-    prefix: string
-    parentTask: ExecutionTask
-    title: string
-    description: string
-    agent: ExecutionAgent
-    taskType: string
-    plan: ExecutionPlan
-    childSessions: Map<string, ChildSessionInfo>
-    runId: string
-    groupSessionId: string
-    workspaceId: string
-    ownerId: string
-  }): Promise<ExecutionTask | null> {
-    const {
-      prefix,
-      parentTask,
-      title,
-      description,
-      agent,
-      taskType,
-      plan,
-      childSessions,
-      runId,
-      groupSessionId,
-      workspaceId,
-      ownerId,
-    } = params
-
-    const taskId = `${prefix}-${parentTask.id}`
-
-    if (plan.tasks.some((t) => t.id === taskId)) return null
-
-    const task: ExecutionTask = {
-      id: taskId,
-      title,
-      description,
-      agentId: agent.id,
-      dependencies: [],
-      taskType: taskType as ExecutionTask['taskType'],
-      phaseId: parentTask.phaseId ?? 'followup',
-      maxRetries: 1,
-    }
-
-    const childSession = await ensureOrchestratorTaskSession(
-      workspaceId,
-      plan.title,
-      ownerId,
-      agent,
-      task.title,
-      runId,
-      taskId,
-    )
-    childSessions.set(taskId, {
-      sessionId: childSession.id,
-      workspaceId,
-      projectPath: childSessions.get(parentTask.id)?.projectPath,
-    })
-
-    await db.insert(workspaceTasks).values({
-      id: taskId,
-      workspaceId,
-      agentId: agent.id,
-      title: task.title,
-      description: task.description,
-      status: TaskStatus.Pending,
-      sessionId: childSession.id,
-      orderIdx: plan.tasks.length,
-      runId,
-      phaseId: task.phaseId,
-      dependencies: task.dependencies,
-      maxRetries: task.maxRetries,
-    })
-
-    plan.tasks.push(task)
-
-    await emitRunEvent({
-      runId,
-      workspaceId,
-      groupSessionId,
-      taskId: task.id,
-      agentId: agent.id,
-      type: 'task.queued',
-      severity: 'info',
-      payload: {
-        title: task.title,
-        description: task.description,
-        phaseId: task.phaseId ?? parentTask.phaseId ?? 'followup',
-        taskType: task.taskType,
-        agentName: agent.name,
-        agentId: agent.id,
-        childSessionId: childSession.id,
-        reason: `团长动态交接: 基于 "${parentTask.title}" 产出自动创建`,
-        parentTaskId: parentTask.id,
-      },
-    })
-
-    logger.info(
-      { taskId: task.id, parentTaskId: parentTask.id, agentName: agent.name },
-      'Follow-up task created via rule engine',
-    )
-
-    return task
   }
 
   private async synthesizeAndReport(
@@ -3791,32 +3158,4 @@ function isLikelySeededWorkdirFile(
   } catch {
     return false
   }
-}
-
-/**
- * Task #8: 为 follow-up 任务匹配合适的 Agent
- * 优先按 roleType 匹配，其次按 capabilityTags，最后按名称/描述
- * 排除已完成任务的原 Agent，避免自己审查自己
- */
-function findFollowUpAgent(
-  plan: ExecutionPlan,
-  excludeAgentId: string,
-  preferredRoleTypes: string[],
-  capabilityKeywords: string[],
-): ExecutionAgent | undefined {
-  const candidates = plan.agents.filter((a) => a.id !== excludeAgentId)
-
-  const byRoleType = candidates.find((a) => preferredRoleTypes.includes(a.roleType ?? ''))
-  if (byRoleType) return byRoleType
-
-  const byCapability = candidates.find((a) =>
-    a.capabilityTags.some((tag) => capabilityKeywords.some((kw) => tag.toLowerCase().includes(kw))),
-  )
-  if (byCapability) return byCapability
-
-  const byName = candidates.find((a) => {
-    const text = [a.name, a.role, a.description ?? ''].join(' ').toLowerCase()
-    return capabilityKeywords.some((kw) => text.includes(kw))
-  })
-  return byName
 }

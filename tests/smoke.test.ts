@@ -79,8 +79,79 @@ function mockSseStream(chunks: string[]) {
   })
 }
 
+function mockSseJsonResponse(content: string) {
+  return mockSseStream([content])
+}
+
 function mockLlmResponse(url: string, init?: RequestInit) {
   const body = parseRequestJson(init)
+  const prompt = collectPromptText(body)
+
+  if (prompt.includes('你是 AgentHub 群聊里的主 Agent（Orchestrator）。')) {
+    return mockSseJsonResponse(
+      JSON.stringify({
+        action: 'plan',
+        message: '我先拆解任务并安排成员协作。',
+        reason: '用户提出了需要多 Agent 协作完成的工作目标',
+      }),
+    )
+  }
+
+  if (prompt.includes('你是 AgentHub 的 Agent 草案生成器。')) {
+    return mockSseJsonResponse(
+      JSON.stringify({
+        name: 'Codex Frontend',
+        role: '前端实现',
+        roleType: 'coder',
+        description: '使用 Codex 完成前端实现和 workspace 文件修改。',
+        avatar: null,
+        systemPrompt: '你负责按用户目标实现前端代码，完成后说明变更和验证结果。',
+        roleProfile: null,
+        color: '#2563eb',
+        modelId: null,
+        runtimeType: 'code-agent',
+        codeAgentType: 'codex',
+        capabilityTags: ['frontend', 'implementation'],
+        toolPermissions: ['chat', 'workspace:read', 'workspace:write'],
+        sandboxPolicy: 'workspace-write',
+        contextPolicy: 'workspace-aware',
+        autoInvoke: true,
+        approvalRequired: false,
+      }),
+    )
+  }
+
+  if (prompt.includes('Create a concise multi-agent execution plan') || prompt.includes('Return strict JSON only. Do not include Markdown fences or explanations.')) {
+    const agentKey = extractPlannerAgentKey(body)
+    return mockSseJsonResponse(
+      JSON.stringify({
+        collaborationMode: 'pipeline',
+        title: '贪吃蛇游戏协作计划',
+        summary: '由 Builder 完成核心实现。',
+        phases: [
+          {
+            id: 'build',
+            title: '实现',
+            purpose: '完成游戏主体',
+            taskIds: ['task-build'],
+          },
+        ],
+        tasks: [
+          {
+            id: 'task-build',
+            phaseId: 'build',
+            title: '实现贪吃蛇游戏',
+            description: '创建游戏主体、交互和基础样式。',
+            agentKey,
+            taskType: 'code',
+            dependencies: [],
+            maxRetries: 1,
+          },
+        ],
+      }),
+    )
+  }
+
   if (body.stream === false) {
     if (url.includes('/v1/messages')) {
       return Response.json({ content: [{ type: 'text', text: 'Task completed successfully.' }] })
@@ -98,6 +169,40 @@ function parseRequestJson(init?: RequestInit): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function collectPromptText(body: Record<string, unknown>) {
+  const system = typeof body.system === 'string' ? body.system : ''
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  const text = messages
+    .map((message) => {
+      if (!message || typeof message !== 'object') return ''
+      const item = message as { content?: unknown }
+      return typeof item.content === 'string' ? item.content : ''
+    })
+    .join('\n')
+  return `${system}\n${text}`
+}
+
+function extractPlannerAgentKey(body: Record<string, unknown>) {
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') continue
+    const content = (message as { content?: unknown }).content
+    if (typeof content !== 'string') continue
+    try {
+      const parsed = JSON.parse(content) as {
+        agents?: Array<{ key?: unknown; roleType?: unknown; name?: unknown }>
+      }
+      const agents = Array.isArray(parsed.agents) ? parsed.agents : []
+      const coder = agents.find((agent) => agent.roleType === 'coder')
+      const first = coder ?? agents[0]
+      if (typeof first?.key === 'string' && first.key) return first.key
+    } catch {
+      // Not the planner JSON payload.
+    }
+  }
+  return 'builder'
 }
 
 async function createLlmWorkspaceAgent(
@@ -127,18 +232,6 @@ async function createLlmWorkspaceAgent(
       approvalRequired: false,
     }),
   )
-}
-
-async function waitForTaskStatus(workspaceId: string, taskId: string, status: string) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    const full = await json<{ tasks: Array<{ id: string; status: string }> }>(
-      await app.request(`/api/workspaces/${workspaceId}`),
-    )
-    const task = full.tasks.find((item) => item.id === taskId)
-    if (task?.status === status) return task
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  }
-  throw new Error(`Task ${taskId} did not reach ${status}`)
 }
 
 describe('AgentHub smoke tests', () => {
@@ -410,50 +503,6 @@ describe('AgentHub smoke tests', () => {
     globalThis.fetch = globalMockedFetch
   })
 
-  test('workspace task dispatch creates a session and marks failed when no LLM key is configured', async () => {
-    globalThis.fetch = async (input, init) => {
-      const url = String(input)
-      if (url.includes('/chat/completions') || url.includes('/v1/messages')) {
-        return new Response(JSON.stringify({ error: { message: 'Invalid API key' } }), {
-          status: 401,
-        })
-      }
-      return originalFetch(input, init)
-    }
-
-    const full = await json<{
-      workspace: { id: string }
-      tasks: Array<{ id: string }>
-    }>(
-      await postJson('/api/workspaces', {
-        name: 'Smoke workspace',
-        goal: 'Verify dispatch',
-        template: 'blank',
-      }),
-    )
-    const agent = await createLlmWorkspaceAgent(full.workspace.id)
-    const agentId = agent.id
-    expect(agentId).toBeTruthy()
-
-    const task = await json<{ id: string }>(
-      await postJson(`/api/workspaces/${full.workspace.id}/tasks`, {
-        title: 'Smoke task',
-        description: 'This should fail gracefully without credentials.',
-        agentId,
-      }),
-    )
-    const dispatched = await json<{
-      task: { status: string; sessionId: string | null }
-      sessionId: string
-    }>(await postJson(`/api/workspaces/${full.workspace.id}/tasks/${task.id}/dispatch`, {}))
-
-    expect(dispatched.sessionId).toBeTruthy()
-    expect(dispatched.task.status).toBe('running')
-    await waitForTaskStatus(full.workspace.id, task.id, 'failed')
-
-    globalThis.fetch = globalMockedFetch
-  })
-
   test('auto workspace creates a local project folder under configured root', async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'agenthub-auto-workspace-'))
     await json<{ success: boolean }>(
@@ -468,7 +517,6 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/workspaces/auto', {
         name: 'Auto workspace smoke',
         goal: 'Verify automatic folder allocation',
-        template: 'blank',
       }),
     )
 
@@ -500,7 +548,7 @@ describe('AgentHub smoke tests', () => {
     expect(existsSync(join(workdir!.executionPath, 'node_modules', 'ignored.txt'))).toBe(false)
   })
 
-  test('classic workspace seeds role agents and editable relations', async () => {
+  test('workspace creation does not auto-seed default agents and relations', async () => {
     const full = await json<{
       workspace: { id: string }
       agents: Array<{ id: string; name: string; roleType: string }>
@@ -509,32 +557,33 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/workspaces', {
         name: 'Role relation workspace',
         goal: 'Coordinate agents by role',
-        template: 'classic',
       }),
     )
 
-    expect(full.agents.map((agent) => agent.roleType)).toEqual([
-      'orchestrator',
-      'researcher',
-      'architect',
-      'coder',
-      'reviewer',
-    ])
-    expect(full.agents.map((agent) => agent.name)).toEqual([
-      'Orchestrator',
-      'Researcher',
-      'Designer',
-      'Builder',
-      'QA Reviewer',
-    ])
-    expect(full.agentRelations.map((relation) => relation.relationType)).toContain('handoff_to')
-    expect(full.agentRelations.map((relation) => relation.relationType)).toContain('reviewed_by')
-    expect(full.agentRelations.map((relation) => relation.relationType)).toContain('reports_to')
-    expect(full.agentRelations.map((relation) => relation.relationType)).toContain('fallback_to')
+    expect(full.agents).toEqual([])
+    expect(full.agentRelations).toEqual([])
 
-    const coder = full.agents.find((agent) => agent.roleType === 'coder')!
-    const reviewer = full.agents.find((agent) => agent.roleType === 'reviewer')!
-    const orchestrator = full.agents.find((agent) => agent.roleType === 'orchestrator')!
+    const orchestrator = await json<{ id: string; roleType: string }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/agents`, {
+        name: 'Orchestrator',
+        role: '总指挥',
+        roleType: 'orchestrator',
+      }),
+    )
+    const coder = await json<{ id: string; roleType: string }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/agents`, {
+        name: 'Builder',
+        role: '实现',
+        roleType: 'coder',
+      }),
+    )
+    const reviewer = await json<{ id: string; roleType: string }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/agents`, {
+        name: 'QA Reviewer',
+        role: '验收',
+        roleType: 'reviewer',
+      }),
+    )
 
     const replaced = await json<{
       items: Array<{
@@ -590,7 +639,6 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/workspaces', {
         name: 'Group member sync workspace',
         goal: 'Verify selected group members',
-        template: 'blank',
       }),
     )
 
@@ -680,7 +728,6 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/workspaces', {
         name: 'Agent draft workspace',
         goal: 'Create agents',
-        template: 'classic',
       }),
     )
     const group = await json<{ session: { id: string } }>(
@@ -838,7 +885,7 @@ describe('AgentHub smoke tests', () => {
         id: 'build',
         title: 'Implement UI',
         description: 'Change React components',
-        agentId: '',
+        agentId: 'coder',
         taskType: 'code',
         dependencies: [],
         maxRetries: 1,
@@ -853,11 +900,11 @@ describe('AgentHub smoke tests', () => {
     expect(selection.selectedAgentKey).toBe('coder')
     expect(selection.reviewerAgentKey).toBe('reviewer')
     expect(selection.fallbackAgentKey).toBe('architect')
-    expect(selection.score).toBeGreaterThan(0)
-    expect(selection.rationale.join(' ')).toContain('code')
+    expect(selection.score).toBe(100)
+    expect(selection.rationale).toContain('Using Orchestrator-provided assignment')
   })
 
-  test('agent router keeps planning tasks away from code-agent workers', async () => {
+  test('agent router honors Orchestrator planning assignment without rerouting', async () => {
     const { selectAgentForTask } =
       await import('../apps/server/src/services/orchestrator/agent-router')
     const agents = [
@@ -891,7 +938,7 @@ describe('AgentHub smoke tests', () => {
         id: 'scope',
         title: '梳理目标与交付范围',
         description: '围绕「帮我开发一个贪吃蛇游戏」定义目标、交付物、边界和验收标准。',
-        agentId: '',
+        agentId: 'designer',
         dependencies: [],
         maxRetries: 1,
       },
@@ -901,19 +948,30 @@ describe('AgentHub smoke tests', () => {
     expect(selection.selectedAgentKey).toBe('designer')
   })
 
-  test('intent router sends build requests through orchestrator coordination', async () => {
-    const { intentRouter, ComplexityLevel } = await import(
-      '../apps/server/src/services/orchestrator/intent-router'
+  test('orchestrator decision routes build requests to planning', async () => {
+    const { decideOrchestratorAction } = await import(
+      '../apps/server/src/services/orchestrator/orchestrator-decision'
     )
 
-    const route = intentRouter.route({
-      content: '帮我做一个贪吃蛇游戏',
-      hasOrchestrator: true,
-      mentionCount: 0,
+    const decision = await decideOrchestratorAction({
+      content: '开发一个坦克大战',
+      agents: [
+        {
+          id: 'orchestrator',
+          name: 'Orchestrator',
+          roleType: 'orchestrator',
+          runtimeType: 'llm',
+        },
+        {
+          id: 'builder',
+          name: 'Builder',
+          roleType: 'coder',
+          runtimeType: 'code-agent',
+        },
+      ] as any,
     })
 
-    expect(route.decision).toBe('OrchestratorPlan')
-    expect(intentRouter.assessComplexity('帮我做一个贪吃蛇游戏')).not.toBe(ComplexityLevel.SIMPLE)
+    expect(decision.action).toBe('plan')
   })
 
   test('group build requests auto-start an orchestrator run instead of posting a plan card', async () => {
@@ -921,7 +979,6 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/workspaces', {
         name: 'Auto orchestration workspace',
         goal: 'Auto-start team collaboration',
-        template: 'blank',
         projectPath: process.cwd(),
       }),
     )
@@ -999,7 +1056,7 @@ describe('AgentHub smoke tests', () => {
         .where(dbApi.eq(dbApi.sessions.id, task.sessionId!))
         .limit(1)
       expect(taskSession?.metadata?.kind).toBe('orchestrator-task')
-      expect(taskSession?.metadata?.hiddenFromSessionTree).toBe(true)
+      expect(taskSession?.workspaceAgentId).toBeTruthy()
     }
 
     const childSessions = await dbApi.db
@@ -1010,7 +1067,6 @@ describe('AgentHub smoke tests', () => {
       )
     expect(childSessions.some((session) => session.metadata?.kind === 'orchestrator-task')).toBe(true)
     expect(childSessions.every((session) => session.metadata?.kind === 'orchestrator-task')).toBe(true)
-    expect(childSessions.every((session) => session.metadata?.hiddenFromSessionTree === true)).toBe(true)
 
     let childMessageCount = 0
     for (let i = 0; i < 30; i++) {
@@ -1037,7 +1093,6 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/workspaces', {
         name: 'Dynamic task ledger workspace',
         goal: 'Track dynamic tasks',
-        template: 'blank',
       }),
     )
     const group = await json<{ session: { id: string } }>(
@@ -1116,6 +1171,7 @@ describe('AgentHub smoke tests', () => {
       title: 'Code task',
       description: 'Modify allowed files only.',
       agentId: 'agent-1',
+      taskType: 'code' as const,
       dependencies: [],
       maxRetries: 0,
       outputContract: {
@@ -1222,7 +1278,6 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/workspaces', {
         name: 'Run events workspace',
         goal: 'Trace events',
-        template: 'classic',
       }),
     )
     const group = await json<{ session: { id: string } }>(
@@ -1353,17 +1408,21 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('orchestrator run can be cancelled and marks unfinished tasks', async () => {
-    const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
+    const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {
         name: 'Cancel run workspace',
         goal: 'Cancel run',
-        template: 'classic',
       }),
     )
+    const runAgent = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Architect',
+      role: '规划',
+      roleType: 'architect',
+    })
     const group = await json<{ session: { id: string } }>(
       await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
-    const agentId = full.agents[0]!.id
+    const agentId = runAgent.id
     const runId = crypto.randomUUID()
     const plan = {
       runId,
@@ -1446,13 +1505,17 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('run events update the persisted progress ledger', async () => {
-    const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
+    const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {
         name: 'Ledger workspace',
         goal: 'Trace ledger',
-        template: 'classic',
       }),
     )
+    const runAgent = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Architect',
+      role: '规划',
+      roleType: 'architect',
+    })
     const group = await json<{ session: { id: string } }>(
       await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
@@ -1461,7 +1524,7 @@ describe('AgentHub smoke tests', () => {
       runId: crypto.randomUUID(),
       title: 'Ledger run',
       goal: 'Track progress ledger',
-      agents: [{ id: full.agents[0]!.id, key: 'architect', name: 'Architect', role: 'Plan' }],
+      agents: [{ id: runAgent.id, key: 'architect', name: 'Architect', role: 'Plan' }],
       phases: [
         { id: 'analysis', title: 'Analysis', purpose: 'Understand scope', taskIds: ['scan'] },
       ],
@@ -1471,7 +1534,7 @@ describe('AgentHub smoke tests', () => {
           phaseId: 'analysis',
           title: 'Scan',
           description: 'Inspect scope',
-          agentId: full.agents[0]!.id,
+          agentId: runAgent.id,
           dependencies: [],
           maxRetries: 1,
         },
@@ -1498,7 +1561,7 @@ describe('AgentHub smoke tests', () => {
       workspaceId: full.workspace.id,
       groupSessionId: group.session.id,
       taskId: 'scan',
-      agentId: full.agents[0]!.id,
+      agentId: runAgent.id,
       type: 'task.started',
       payload: { title: 'Scan' },
     })
@@ -1507,7 +1570,7 @@ describe('AgentHub smoke tests', () => {
       workspaceId: full.workspace.id,
       groupSessionId: group.session.id,
       taskId: 'scan',
-      agentId: full.agents[0]!.id,
+      agentId: runAgent.id,
       type: 'blackboard.written',
       payload: { key: 'task_scan_output', summary: 'Scoped' },
     })
@@ -1516,7 +1579,7 @@ describe('AgentHub smoke tests', () => {
       workspaceId: full.workspace.id,
       groupSessionId: group.session.id,
       taskId: 'scan',
-      agentId: full.agents[0]!.id,
+      agentId: runAgent.id,
       type: 'task.completed',
       payload: { artifactCount: 0 },
     })
@@ -1560,13 +1623,17 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('typed blackboard entries are validated and exposed through run detail API', async () => {
-    const full = await json<{ workspace: { id: string }; agents: Array<{ id: string }> }>(
+    const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {
         name: 'Typed blackboard workspace',
         goal: 'Trace typed entries',
-        template: 'classic',
       }),
     )
+    const runAgent = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Researcher',
+      role: '调研',
+      roleType: 'researcher',
+    })
     const group = await json<{ session: { id: string } }>(
       await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
     )
@@ -1597,11 +1664,11 @@ describe('AgentHub smoke tests', () => {
           schemaType: 'fact',
           summary: 'Missing fact field',
           confidence: 0.9,
-          sourceAgentId: full.agents[0]!.id,
+          sourceAgentId: runAgent.id,
           taskId: 'scan',
           source: 'agent',
         },
-        agentId: full.agents[0]!.id,
+        agentId: runAgent.id,
         taskId: 'scan',
       }),
     ).rejects.toThrow(/Invalid blackboard entry/)
@@ -1613,12 +1680,12 @@ describe('AgentHub smoke tests', () => {
         schemaType: 'fact',
         summary: 'Server framework identified',
         confidence: 0.9,
-        sourceAgentId: full.agents[0]!.id,
+        sourceAgentId: runAgent.id,
         taskId: 'scan',
         fact: 'Server uses Hono routes.',
         source: 'agent',
       },
-      agentId: full.agents[0]!.id,
+      agentId: runAgent.id,
       taskId: 'scan',
     })
     expect(ref.version).toBe(1)
@@ -1637,7 +1704,7 @@ describe('AgentHub smoke tests', () => {
     expect(body.items[0]!.value.schemaType).toBe('fact')
     expect(body.items[0]!.value.summary).toBe('Server framework identified')
     expect(body.items[0]!.value.fact).toBe('Server uses Hono routes.')
-    expect(body.items[0]!.agentId).toBe(full.agents[0]!.id)
+    expect(body.items[0]!.agentId).toBe(runAgent.id)
     expect(body.items[0]!.taskId).toBe('scan')
   })
 

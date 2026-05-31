@@ -1106,20 +1106,9 @@ export const api = {
     name: string
     goal?: string
     projectPath?: string | null
-    template?: 'blank' | 'classic'
   }) => request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
-  createAutoWorkspace: (data: { name?: string; goal?: string; template?: 'blank' | 'classic' }) =>
+  createAutoWorkspace: (data: { name?: string; goal?: string }) =>
     request<WorkspaceFull>('/workspaces/auto', { method: 'POST', body: JSON.stringify(data) }),
-  createWorkspaceFromTemplate: (data: {
-    templateId: string
-    name?: string
-    projectPath?: string | null
-  }) =>
-    request<{
-      workspace: Workspace
-      agents: WorkspaceAgent[]
-      relations: WorkspaceAgentRelation[]
-    }>('/workspaces/create-from-template', { method: 'POST', body: JSON.stringify(data) }),
   openWorkspaceFolder: (projectPath?: string | null) =>
     request<WorkspaceFolderOpenResult>('/workspaces/open-folder', {
       method: 'POST',

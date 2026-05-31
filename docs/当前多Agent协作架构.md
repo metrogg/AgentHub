@@ -14,6 +14,7 @@ AgentHub 要做的是通用多 Agent 协作平台，而不是针对某个固定�
 - 每个成员在自己的子对话里接收任务并输出。
 - 用户可以查看每个成员的真实执行过程。
 - 产物要能被主群聊看到，也能被下游 Agent 接力。
+- 系统不再自动注入默认团队、经典模板或关键词路由，所有执行分工都应来自 Orchestrator/Planner 的模型输出。
 
 ## 会话模型
 
@@ -80,6 +81,7 @@ workspaceAgentId != null
 - 左侧群聊下自动补齐“未开始子会话”。
 - `workspace / Agent` 形式的历史入口。
 - 固定三段式模板作为正常计划来源。
+- `classic` 工作区模板、默认代码团队、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。
 - 将所有复杂请求伪装成 Orchestrator 一个人完成。
 
 保留旧数据时，前端应隐藏这些入口，避免用户看到重复子对话。
@@ -97,12 +99,39 @@ workspaceAgentId != null
   -> Planner 生成/整理任务 DAG
   -> 为每个任务创建 orchestrator-task 子对话
   -> TaskScheduler 按依赖执行
+  -> Orchestrator 生成 A2A message/send envelope
   -> TaskExecutionService 准备执行目录
-  -> Runtime 执行 LLM / Code Agent / Native Tool
-  -> 写入黑板和产物
+  -> LocalA2ATransport 派发给本地 A2A Agent
+  -> 本地 A2A Agent 适配 LLM / Code Agent / Native Tool
+  -> 写入黑板和产物（以 A2A artifact/metadata 扩展记录）
   -> 主群聊发布成员汇报
   -> Synthesizer 汇总最终结果
 ```
+
+## A2A 作为 Agent 间通信标准
+
+当前内部 Agent 通信不再把 A2A 只当成对外展示层。Orchestrator 分发给成员的任务会先转成 A2A v0.3 的 `message/send`：
+
+- `Message.contextId` = 群聊主会话 ID。
+- `Message.taskId` = `workspace_tasks.id`。
+- `Message.referenceTaskIds` = 上游依赖任务 ID。
+- `Message.metadata["agenthub.dev/a2a/internal"]` 记录 run、workspace、child session、发送方 Orchestrator 和接收方 Agent。
+- 子对话 user message 保存 A2A 请求信封。
+- 成员输出保存 A2A `responseMessage`，主群聊成员汇报保存 A2A `responseTask`。
+
+内部 transport：
+
+```text
+A2A message/send
+  -> LocalA2ATransport
+  -> runAgentReply
+  -> runtimeRegistry
+  -> llm / code-agent / mcp
+```
+
+也就是说，Codex CLI、Claude Code、OpenCode、Gemini CLI、普通 LLM 和 MCP/Native Tool 都是本地 A2A Agent 的实现细节。黑板和 handoff 只作为 A2A artifact/metadata 的 AgentHub 扩展存在，不能再承担隐藏分工或静态路由职责。
+
+对于真正的远程 A2A Agent，`runtimeType` 设置为 `a2a`，并通过 `roleProfile.a2aEndpoint` 配置 JSON-RPC endpoint；如果 `modelId` 本身是 `http(s)` URL，也会作为兼容 endpoint 使用。缺少 endpoint 时必须明确失败，不能静默回落到普通 LLM。
 
 ## 工作目录
 
@@ -191,6 +220,9 @@ Code Agent 可能出现“已有产物但任务失败”的情况，例如：
 - `apps/server/src/services/orchestrator/planner.ts`
 - `apps/server/src/services/orchestrator/task-scheduler.ts`
 - `apps/server/src/services/execution/task-execution-service.ts`
+- `apps/server/src/services/execution/local-a2a-transport.ts`
+- `apps/server/src/services/runtime/a2a-runtime.ts`
+- `apps/server/src/services/protocols/a2a-internal.ts`
 - `apps/server/src/services/execution/agent-workdir.ts`
 - `apps/server/src/services/blackboard.ts`
 - `apps/server/src/services/code-agent-adapter.ts`
@@ -205,4 +237,3 @@ Code Agent 可能出现“已有产物但任务失败”的情况，例如：
 - 子对话和主群聊的产物入口统一。
 - 对 Code Agent 失败做更精确分类：模型错误、鉴权错误、构建错误、验证错误、超时。
 - 引入更标准的 Agent 通信协议或开源组件时，优先封装在 Runtime/Blackboard 层，不要破坏当前会话模型。
-
