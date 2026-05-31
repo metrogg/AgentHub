@@ -3432,7 +3432,7 @@ const CodeAgentProcessTimeline: FC<{ running: boolean; steps: CodeAgentRunStep[]
   steps,
 }) => {
   const [expanded, setExpanded] = useState(false)
-  const visibleSteps = expanded ? steps : steps.slice(-12)
+  const visibleSteps = !running || expanded ? steps : steps.slice(-1)
   const hiddenCount = Math.max(0, steps.length - visibleSteps.length)
 
   return (

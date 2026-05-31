@@ -29,7 +29,9 @@
       "Bash(npm info *)",
       "Bash(npm install *)",
       "Bash(npm root *)",
-      "Bash(curl -s http://127.0.0.1:8000/api/settings/ccswitch-models)"
+      "Bash(curl -s http://127.0.0.1:8000/api/settings/ccswitch-models)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'fix: 尊重用户配置的 code agent 类型，不再静默切换到 OpenCode *)"
     ]
   }
 }
