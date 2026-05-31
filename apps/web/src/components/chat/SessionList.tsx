@@ -1,5 +1,5 @@
 import QRCode from 'qrcode'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -110,6 +110,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const [hint, setHint] = useState('')
+  const openedAgentFromMessagesRef = useRef(false)
   const [groupMemberCounts, setGroupMemberCounts] = useState<Record<string, number>>({})
   const [groupWorkspaceAgents, setGroupWorkspaceAgents] = useState<
     Record<string, WorkspaceAgent[]>
@@ -152,7 +153,9 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   )
   const activeSession = sessions.find((session) => session.id === sessionId)
   const routeTab = activeTabFromPath(location.pathname, activeSession)
-  const activeTab = tabOverride ?? routeTab
+  const activeTab =
+    tabOverride ??
+    (openedAgentFromMessagesRef.current && routeTab === 'agents' ? 'messages' : routeTab)
   const isAgentConfigRoute = location.pathname === '/agent-config'
   const activeAgentConfigId = new URLSearchParams(location.search).get('agentId')
   const savedAgentIds = useMemo(
@@ -476,6 +479,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             icon={Users}
             label="Agent"
             onClick={() => {
+              openedAgentFromMessagesRef.current = false
               setTabOverride('agents')
             }}
           />
@@ -671,7 +675,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       <button
                         key={session.id}
                         type="button"
-                        onClick={() => void openExistingSession(session)}
+                        onClick={() => {
+                          openedAgentFromMessagesRef.current = true
+                          void openExistingSession(session)
+                        }}
                         className={cn(
                           'flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left transition disabled:opacity-60',
                           active
