@@ -13,6 +13,7 @@ export interface AgentProfile {
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   a2aEndpoint?: string | null
   capabilityTags: string[]
+  skillIds?: string[]
   toolPermissions: string[]
   sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
   contextPolicy: 'recent-only' | 'pinned-recent' | 'workspace-aware'

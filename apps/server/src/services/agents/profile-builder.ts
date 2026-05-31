@@ -17,6 +17,7 @@ export interface AgentRow {
   runtimeType?: string | null
   codeAgentType?: string | null
   capabilityTags?: string[] | null
+  skillIds?: string[] | null
   toolPermissions?: string[] | null
   sandboxPolicy?: string | null
   contextPolicy?: string | null
@@ -61,6 +62,7 @@ export function buildAgentProfile(
     codeAgentType: normalizeCodeAgentType(agent),
     a2aEndpoint: resolveA2AEndpoint(agent),
     capabilityTags: agent.capabilityTags ?? [],
+    skillIds: agent.skillIds ?? [],
     toolPermissions: overrides?.toolPermissions ?? agent.toolPermissions ?? [],
     sandboxPolicy: (overrides?.sandboxPolicy ?? agent.sandboxPolicy ?? 'workspace-write') as AgentRunProfile['sandboxPolicy'],
     contextPolicy: (overrides?.contextPolicy ?? agent.contextPolicy ?? 'workspace-aware') as AgentRunProfile['contextPolicy'],

@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>深圳技术大学 - Shenzhen Technology University</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --sztu-blue: #003d8f;
+      --sztu-blue-light: #0056cc;
+      --sztu-blue-dark: #002255;
+      --sztu-gold: #c8a951;
+      --sztu-gold-light: #e8d48b;
+      --sztu-white: #f8f9fa;
+      --sztu-gray: #6c757d;
+      --sztu-dark: #1a1a2e;
+      --gradient-hero: linear-gradient(135deg, #002255 0%, #003d8f 40%, #0056cc 100%);
+      --gradient-gold: linear-gradient(135deg, #c8a951 0%, #e8d48b 100%);
+      --shadow-soft: 0 4px 20px rgba(0, 61, 143, 0.1);
+      --shadow-card: 0 8px 32px rgba(0, 61, 143, 0.12);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Noto Sans SC', sans-serif;
+      background: var(--sztu-white);
+      color: #333;
+      overflow-x: hidden;
+    }
+
+    /* Navigation */
+    .nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 1000;
+      background: rgba(0, 34, 85, 0.95);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(200, 169, 81, 0.2);
+      transition: all 0.3s ease;
+    }
+
+    .nav.scrolled {
+      background: rgba(0, 34, 85, 0.98);
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+    }
+
+    .nav-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 40px;
+      height: 80px;
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      text-decoration: none;
+    }
+
+    .nav-logo-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--gradient-gold);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 900;
+      color: var(--sztu-blue-dark);
+      transform: rotate(-5deg);
+    }
+
+    .nav-logo-text {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .nav-logo-cn {
+      font-size: 18px;
+      font-weight: 700;
+      color: white;
+      letter-spacing: 2px;
+    }
+
+    .nav-logo-en {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 11px;
+      color: var(--sztu-gold-light);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 8px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: rgba(255, 255, 255, 0.8);
+      text-decoration: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .nav-links a:hover {
+      color: white;
+      background: rgba(200, 169, 81, 0.15);
+    }
+
+    /* Hero Section */
+    .hero {
+      min-height: 100vh;
+      background: var(--gradient-hero);
+      position: relative;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background:
+        radial-gradient(circle at 20% 50%, rgba(200, 169, 81, 0.1) 0%, transparent 50%),
+        radial-gradient(circle at 80% 20%, rgba(0, 86, 204, 0.15) 0%, transparent 40%);
+      pointer-events: none;
+    }
+
+    .hero-grid {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image:
+        linear-gradient(rgba(200, 169, 81, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(200, 169, 81, 0.05) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+    }
+
+    .hero-content {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 120px 40px 80px;
+      position: relative;
+      z-index: 2;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(200, 169, 81, 0.15);
+      border: 1px solid rgba(200, 169, 81, 0.3);
+      padding: 8px 20px;
+      border-radius: 100px;
+      color: var(--sztu-gold-light);
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 32px;
+      animation: fadeInUp 0.8s ease;
+    }
+
+    .hero-badge-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--sztu-gold);
+      border-radius: 50%;
+      animation: pulse 2s ease infinite;
+    }
+
+    .hero h1 {
+      font-size: clamp(48px, 8vw, 96px);
+      font-weight: 900;
+      color: white;
+      line-height: 1.1;
+      margin-bottom: 24px;
+      animation: fadeInUp 0.8s ease 0.1s both;
+    }
+
+    .hero h1 span {
+      background: var(--gradient-gold);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-subtitle {
+      font-size: clamp(18px, 2.5vw, 24px);
+      color: rgba(255, 255, 255, 0.7);
+      font-weight: 300;
+      max-width: 600px;
+      line-height: 1.6;
+      margin-bottom: 48px;
+      animation: fadeInUp 0.8s ease 0.2s both;
+    }
+
+    .hero-stats {
+      display: flex;
+      gap: 48px;
+      flex-wrap: wrap;
+      animation: fadeInUp 0.8s ease 0.3s both;
+    }
+
+    .hero-stat {
+      text-align: left;
+    }
+
+    .hero-stat-number {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 48px;
+      font-weight: 700;
+      color: var(--sztu-gold);
+      line-height: 1;
+    }
+
+    .hero-stat-label {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.6);
+      margin-top: 8px;
+    }
+
+    .hero-scroll {
+      position: absolute;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 12px;
+      animation: bounce 2s ease infinite;
+    }
+
+    .hero-scroll-line {
+      width: 1px;
+      height: 40px;
+      background: linear-gradient(to bottom, rgba(200, 169, 81, 0.5), transparent);
+    }
+
+    /* Section Styles */
+    .section {
+      padding: 120px 40px;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 80px;
+    }
+
+    .section-label {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      color: var(--sztu-gold);
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-size: clamp(32px, 5vw, 48px);
+      font-weight: 900;
+      color: var(--sztu-blue-dark);
+      margin-bottom: 20px;
+    }
+
+    .section-desc {
+      font-size: 18px;
+      color: var(--sztu-gray);
+      max-width: 600px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    /* About Section */
+    .about-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 80px;
+      align-items: center;
+    }
+
+    .about-image {
+      position: relative;
+      aspect-ratio: 4/3;
+      background: var(--gradient-hero);
+      border-radius: 24px;
+      overflow: hidden;
+    }
+
+    .about-image::before {
+      content: '深技大';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 72px;
+      font-weight: 900;
+      color: rgba(255, 255, 255, 0.1);
+    }
+
+    .about-image-pattern {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background:
+        repeating-linear-gradient(45deg, transparent, transparent 20px, rgba(200, 169, 81, 0.05) 20px, rgba(200, 169, 81, 0.05) 40px);
+    }
+
+    .about-content h3 {
+      font-size: 36px;
+      font-weight: 900;
+      color: var(--sztu-blue-dark);
+      margin-bottom: 24px;
+      line-height: 1.3;
+    }
+
+    .about-content p {
+      font-size: 16px;
+      color: #555;
+      line-height: 1.8;
+      margin-bottom: 20px;
+    }
+
+    .about-highlights {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 32px;
+    }
+
+    .about-highlight {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 16px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .about-highlight-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--gradient-gold);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+
+    .about-highlight-text h4 {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--sztu-blue-dark);
+      margin-bottom: 4px;
+    }
+
+    .about-highlight-text p {
+      font-size: 14px;
+      color: var(--sztu-gray);
+      margin: 0;
+    }
+
+    /* Features Section */
+    .features {
+      background: linear-gradient(180deg, var(--sztu-white) 0%, #eef2f7 100%);
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+    }
+
+    .feature-card {
+      background: white;
+      border-radius: 24px;
+      padding: 40px 32px;
+      box-shadow: var(--shadow-card);
+      transition: all 0.4s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: var(--gradient-gold);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.4s ease;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 16px 48px rgba(0, 61, 143, 0.2);
+    }
+
+    .feature-card:hover::before {
+      transform: scaleX(1);
+    }
+
+    .feature-icon {
+      width: 64px;
+      height: 64px;
+      background: linear-gradient(135deg, rgba(0, 61, 143, 0.08), rgba(0, 61, 143, 0.02));
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      margin-bottom: 24px;
+    }
+
+    .feature-card h3 {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--sztu-blue-dark);
+      margin-bottom: 12px;
+    }
+
+    .feature-card p {
+      font-size: 15px;
+      color: var(--sztu-gray);
+      line-height: 1.6;
+    }
+
+    /* Majors Section */
+    .majors-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+    }
+
+    .major-card {
+      background: white;
+      border-radius: 20px;
+      padding: 32px 24px;
+      text-align: center;
+      box-shadow: var(--shadow-soft);
+      transition: all 0.3s ease;
+      cursor: default;
+    }
+
+    .major-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-card);
+    }
+
+    .major-icon {
+      width: 56px;
+      height: 56px;
+      background: var(--gradient-hero);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin: 0 auto 16px;
+    }
+
+    .major-card h3 {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--sztu-blue-dark);
+      margin-bottom: 8px;
+    }
+
+    .major-card p {
+      font-size: 13px;
+      color: var(--sztu-gray);
+      line-height: 1.5;
+    }
+
+    /* Campus Section */
+    .campus-showcase {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr;
+      grid-template-rows: 300px 300px;
+      gap: 24px;
+    }
+
+    .campus-item {
+      background: var(--gradient-hero);
+      border-radius: 20px;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.4s ease;
+    }
+
+    .campus-item:first-child {
+      grid-row: 1 / 3;
+    }
+
+    .campus-item::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(to top, rgba(0, 34, 85, 0.9), transparent);
+      z-index: 1;
+    }
+
+    .campus-item-content {
+      position: absolute;
+      bottom: 24px;
+      left: 24px;
+      right: 24px;
+      z-index: 2;
+    }
+
+    .campus-item h3 {
+      font-size: 20px;
+      font-weight: 700;
+      color: white;
+      margin-bottom: 8px;
+    }
+
+    .campus-item p {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.7);
+    }
+
+    .campus-item:hover {
+      transform: scale(1.02);
+    }
+
+    /* CTA Section */
+    .cta {
+      background: var(--gradient-hero);
+      padding: 120px 40px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cta::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background:
+        radial-gradient(circle at 30% 50%, rgba(200, 169, 81, 0.1) 0%, transparent 50%),
+        radial-gradient(circle at 70% 50%, rgba(0, 86, 204, 0.1) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    .cta-content {
+      position: relative;
+      z-index: 2;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .cta h2 {
+      font-size: clamp(32px, 5vw, 48px);
+      font-weight: 900;
+      color: white;
+      margin-bottom: 24px;
+    }
+
+    .cta p {
+      font-size: 18px;
+      color: rgba(255, 255, 255, 0.7);
+      margin-bottom: 40px;
+      line-height: 1.6;
+    }
+
+    .cta-buttons {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 16px 32px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.3s ease;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--gradient-gold);
+      color: var(--sztu-blue-dark);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(200, 169, 81, 0.4);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: white;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .btn-secondary:hover {
+      border-color: white;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    /* Footer */
+    .footer {
+      background: var(--sztu-dark);
+      padding: 60px 40px 30px;
+    }
+
+    .footer-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 60px;
+      padding-bottom: 40px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .footer-brand h3 {
+      font-size: 20px;
+      font-weight: 700;
+      color: white;
+      margin-bottom: 16px;
+    }
+
+    .footer-brand p {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.5);
+      line-height: 1.6;
+    }
+
+    .footer-col h4 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--sztu-gold);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 20px;
+    }
+
+    .footer-col ul {
+      list-style: none;
+    }
+
+    .footer-col li {
+      margin-bottom: 12px;
+    }
+
+    .footer-col a {
+      color: rgba(255, 255, 255, 0.6);
+      text-decoration: none;
+      font-size: 14px;
+      transition: color 0.2s ease;
+    }
+
+    .footer-col a:hover {
+      color: white;
+    }
+
+    .footer-bottom {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding-top: 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .footer-bottom p {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    /* Animations */
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.5;
+      }
+    }
+
+    @keyframes bounce {
+      0%, 20%, 50%, 80%, 100% {
+        transform: translateX(-50%) translateY(0);
+      }
+      40% {
+        transform: translateX(-50%) translateY(-10px);
+      }
+      60% {
+        transform: translateX(-50%) translateY(-5px);
+      }
+    }
+
+    /* Scroll animations */
+    .animate-on-scroll {
+      opacity: 0;
+      transform: translateY(40px);
+      transition: all 0.8s ease;
+    }
+
+    .animate-on-scroll.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* Mobile Responsive */
+    @media (max-width: 1024px) {
+      .about-grid {
+        grid-template-columns: 1fr;
+        gap: 40px;
+      }
+
+      .features-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .majors-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .campus-showcase {
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: auto;
+      }
+
+      .campus-item:first-child {
+        grid-row: auto;
+        grid-column: 1 / -1;
+      }
+
+      .footer-inner {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .nav-inner {
+        padding: 0 20px;
+      }
+
+      .nav-links {
+        display: none;
+      }
+
+      .hero-content {
+        padding: 100px 20px 60px;
+      }
+
+      .hero-stats {
+        gap: 24px;
+      }
+
+      .section {
+        padding: 80px 20px;
+      }
+
+      .features-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .majors-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .campus-showcase {
+        grid-template-columns: 1fr;
+      }
+
+      .footer-inner {
+        grid-template-columns: 1fr;
+        gap: 32px;
+      }
+
+      .footer-bottom {
+        flex-direction: column;
+        gap: 12px;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-logo">
+        <div class="nav-logo-icon">SZTU</div>
+        <div class="nav-logo-text">
+          <span class="nav-logo-cn">深圳技术大学</span>
+          <span class="nav-logo-en">Shenzhen Technology University</span>
+        </div>
+      </a>
+      <ul class="nav-links">
+        <li><a href="#about">学校概况</a></li>
+        <li><a href="#features">办学特色</a></li>
+        <li><a href="#majors">院系专业</a></li>
+        <li><a href="#campus">校园风光</a></li>
+        <li><a href="#contact">联系我们</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-grid"></div>
+    <div class="hero-content">
+      <div class="hero-badge">
+        <span class="hero-badge-dot"></span>
+        应用技术型大学
+      </div>
+      <h1>
+        <span>深圳</span>技术大学
+      </h1>
+      <p class="hero-subtitle">
+        对标德国应用技术大学，培养具有国际视野的高水平工程师和设计师，服务粤港澳大湾区产业发展需求
+      </p>
+      <div class="hero-stats">
+        <div class="hero-stat">
+          <div class="hero-stat-number">2018</div>
+          <div class="hero-stat-label">建校年份</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-stat-number">11</div>
+          <div class="hero-stat-label">学院数量</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-stat-number">26+</div>
+          <div class="hero-stat-label">本科专业</div>
+        </div>
+        <div class="hero-stat">
+          <div class="hero-stat-number">坪山</div>
+          <div class="hero-stat-label">校区位置</div>
+        </div>
+      </div>
+    </div>
+    <div class="hero-scroll">
+      <span>向下滚动</span>
+      <div class="hero-scroll-line"></div>
+    </div>
+  </section>
+
+  <!-- About Section -->
+  <section class="section" id="about">
+    <div class="about-grid animate-on-scroll">
+      <div class="about-image">
+        <div class="about-image-pattern"></div>
+      </div>
+      <div class="about-content">
+        <h3>深圳市人民政府创办的应用技术型本科院校</h3>
+        <p>
+          深圳技术大学（Shenzhen Technology University，缩写 SZTU）是广东省和深圳市高标准建设的国际化、高水平、示范性应用技术大学。
+        </p>
+        <p>
+          学校充分借鉴和引进德国、瑞士等发达国家一流应用技术大学的先进办学经验，实施"学历教育＋企业实训＋工程项目"的培养模式，致力于培养具有国际视野的高水平工程师和设计师。
+        </p>
+        <div class="about-highlights">
+          <div class="about-highlight">
+            <div class="about-highlight-icon">🎓</div>
+            <div class="about-highlight-text">
+              <h4>产教融合</h4>
+              <p>校企深度合作，实践教学占比超过 40%</p>
+            </div>
+          </div>
+          <div class="about-highlight">
+            <div class="about-highlight-icon">🌍</div>
+            <div class="about-highlight-text">
+              <h4>国际视野</h4>
+              <p>对标德国 Fachhochschule，引进优质教育资源</p>
+            </div>
+          </div>
+          <div class="about-highlight">
+            <div class="about-highlight-icon">💡</div>
+            <div class="about-highlight-text">
+              <h4>创新驱动</h4>
+              <p>聚焦前沿技术，服务大湾区产业需求</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section class="section features" id="features">
+    <div class="section-header">
+      <div class="section-label">办学特色</div>
+      <h2 class="section-title">为什么选择深圳技术大学？</h2>
+      <p class="section-desc">独特的办学模式和培养理念，打造应用型技术人才</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card animate-on-scroll">
+        <div class="feature-icon">🏭</div>
+        <h3>校企协同育人</h3>
+        <p>与华为、比亚迪、大族激光等知名企业建立深度合作，学生在校期间即可参与真实项目开发</p>
+      </div>
+      <div class="feature-card animate-on-scroll">
+        <div class="feature-icon">🔧</div>
+        <h3>实践导向教学</h3>
+        <p>实验实训课程占比超过 40%，配备行业级实验室和实训基地，强化动手能力培养</p>
+      </div>
+      <div class="feature-card animate-on-scroll">
+        <div class="feature-icon">🌐</div>
+        <h3>国际化培养</h3>
+        <p>引进德国、瑞士等国优质课程体系，开设全英文授课专业，提供海外交流机会</p>
+      </div>
+      <div class="feature-card animate-on-scroll">
+        <div class="feature-icon">🚀</div>
+        <h3>创新创业支持</h3>
+        <p>设立大学生创业园和创新实验室，提供创业指导和资金支持，鼓励学生创新创业</p>
+      </div>
+      <div class="feature-card animate-on-scroll">
+        <div class="feature-icon">📍</div>
+        <h3>区位优势</h3>
+        <p>地处深圳坪山区，毗邻比亚迪等高新技术企业，实习就业机会丰富</p>
+      </div>
+      <div class="feature-card animate-on-scroll">
+        <div class="feature-icon">👥</div>
+        <h3>双师型师资</h3>
+        <p>教师团队兼具学术背景和产业经验，来自企业和高校的双师型教师占比高</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Majors Section -->
+  <section class="section" id="majors">
+    <div class="section-header">
+      <div class="section-label">院系专业</div>
+      <h2 class="section-title">特色学科与专业</h2>
+      <p class="section-desc">紧密对接深圳战略性新兴产业，打造优势学科群</p>
+    </div>
+    <div class="majors-grid">
+      <div class="major-card animate-on-scroll">
+        <div class="major-icon">⚡</div>
+        <h3>中德智能制造学院</h3>
+        <p>机械设计制造、自动化等，对标德国工业 4.0</p>
+      </div>
+      <div class="major-card animate-on-scroll">
+        <div class="major-icon">💻</div>
+        <h3>大数据与互联网学院</h3>
+        <p>计算机科学、物联网工程、数据科学等</p>
+      </div>
+      <div class="major-card animate-on-scroll">
+        <div class="major-icon">🔬</div>
+        <h3>新材料与新能源学院</h3>
+        <p>新能源科学、材料科学与工程等</p>
+      </div>
+      <div class="major-card animate-on-scroll">
+        <div class="major-icon">🚗</div>
+        <h3>城市交通与物流学院</h3>
+        <p>交通运输、物流管理、车辆工程等</p>
+      </div>
+      <div class="major-card animate-on-scroll">
+        <div class="major-icon">🏥</div>
+        <h3>健康与环境工程学院</h3>
+        <p>生物医学工程、环境工程等</p>
+      </div>
+      <div class="major-card animate-on-scroll">
+        <div class="major-icon">🎨</div>
+        <h3>创意设计学院</h3>
+        <p>工业设计、环境设计、艺术与科技等</p>
+      </div>
+      <div class="major-card animate-on-scroll">
+        <div class="major-icon">⚙️</div>
+        <h3>工程物理学院</h3>
+        <p>应用物理学、光电信息科学等</p>
+      </div>
+      <div class="major-card animate-on-scroll">
+        <div class="major-icon">📊</div>
+        <h3>商学院</h3>
+        <p>国际商务、市场营销、财务管理等</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Campus Section -->
+  <section class="section" id="campus">
+    <div class="section-header">
+      <div class="section-label">校园风光</div>
+      <h2 class="section-title">现代化智慧校园</h2>
+      <p class="section-desc">占地约 60 万平方米的生态化、智能化校园</p>
+    </div>
+    <div class="campus-showcase">
+      <div class="campus-item animate-on-scroll">
+        <div class="campus-item-content">
+          <h3>图书馆与学习中心</h3>
+          <p>建筑面积约 3.6 万平方米，藏书丰富，配备智能借阅系统和协作学习空间</p>
+        </div>
+      </div>
+      <div class="campus-item animate-on-scroll">
+        <div class="campus-item-content">
+          <h3>实验实训中心</h3>
+          <p>行业级实验室设备，支持实践教学和科研创新</p>
+        </div>
+      </div>
+      <div class="campus-item animate-on-scroll">
+        <div class="campus-item-content">
+          <h3>学生活动中心</h3>
+          <p>丰富多彩的社团活动和文体设施</p>
+        </div>
+      </div>
+      <div class="campus-item animate-on-scroll">
+        <div class="campus-item-content">
+          <h3>学生公寓</h3>
+          <p>现代化住宿环境，配套完善的生活设施</p>
+        </div>
+      </div>
+      <div class="campus-item animate-on-scroll">
+        <div class="campus-item-content">
+          <h3>体育场馆</h3>
+          <p>标准运动场、游泳馆、篮球馆等体育设施</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="cta" id="contact">
+    <div class="cta-content">
+      <h2>加入深圳技术大学</h2>
+      <p>
+        开启你的应用技术之旅，成为具有国际视野的高水平工程师和设计师
+      </p>
+      <div class="cta-buttons">
+        <a href="https://www.sztu.edu.cn" class="btn btn-primary" target="_blank">
+          访问官网 →
+        </a>
+        <a href="#about" class="btn btn-secondary">
+          了解更多
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <h3>深圳技术大学</h3>
+        <p>Shenzhen Technology University</p>
+        <p style="margin-top: 12px;">地址：广东省深圳市坪山区兰田路 3002 号</p>
+      </div>
+      <div class="footer-col">
+        <h4>快速链接</h4>
+        <ul>
+          <li><a href="#about">学校概况</a></li>
+          <li><a href="#features">办学特色</a></li>
+          <li><a href="#majors">院系专业</a></li>
+          <li><a href="#campus">校园风光</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>招生信息</h4>
+        <ul>
+          <li><a href="#">本科招生</a></li>
+          <li><a href="#">研究生招生</a></li>
+          <li><a href="#">国际学生</a></li>
+          <li><a href="#">继续教育</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>联系方式</h4>
+        <ul>
+          <li><a href="#">招生咨询</a></li>
+          <li><a href="#">就业合作</a></li>
+          <li><a href="#">媒体联络</a></li>
+          <li><a href="#">访问校园</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>© 2024 深圳技术大学 Shenzhen Technology University. All rights reserved.</p>
+      <p>粤ICP备XXXXXXXX号</p>
+    </div>
+  </footer>
+
+  <script>
+    // Navbar scroll effect
+    const nav = document.getElementById('nav');
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 50) {
+        nav.classList.add('scrolled');
+      } else {
+        nav.classList.remove('scrolled');
+      }
+    });
+
+    // Scroll animations
+    const observerOptions = {
+      threshold: 0.1,
+      rootMargin: '0px 0px -50px 0px'
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, observerOptions);
+
+    document.querySelectorAll('.animate-on-scroll').forEach(el => {
+      observer.observe(el);
+    });
+
+    // Smooth scroll for navigation links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+          target.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start'
+          });
+        }
+      });
+    });
+  </script>
+</body>
+</html>

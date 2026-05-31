@@ -12,6 +12,7 @@ import {
   Sparkles,
   Trash2,
   Wand2,
+  Wrench,
 } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import {
@@ -27,7 +28,7 @@ import {
 } from '../lib/agentLibrary'
 import { syncSavedAgentDirectSessions } from '../lib/agentConversation'
 import { agentRolePresets, presetForRole } from '../lib/agentRolePresets'
-import { api, type AgentConfigInput, type ModelCatalogItem, type WorkspaceAgent } from '../lib/api'
+import { api, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type WorkspaceAgent } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { runtimeLabel, sandboxLabel } from '../lib/agentDisplay'
 import { cn } from '../lib/utils'
@@ -44,6 +45,7 @@ const emptyDraft: AgentConfigInput = {
   runtimeType: 'code-agent',
   codeAgentType: 'codex',
   capabilityTags: [],
+  skillIds: [],
   toolPermissions: ['chat'],
   sandboxPolicy: 'workspace-write',
   contextPolicy: 'workspace-aware',
@@ -67,6 +69,7 @@ export default function AgentConfigPage() {
   const [assistantReply, setAssistantReply] = useState('可以直接说：把当前 Agent 改成 Codex 实现者，关闭风险确认，标签加 frontend。')
   const [saved, setSaved] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([])
   const currentSession = useChatStore((state) => state.currentSession)
   const selectSession = useChatStore((state) => state.selectSession)
 
@@ -116,6 +119,13 @@ export default function AgentConfigPage() {
         setModels(parsed.filter((item) => item.enabled))
       })
       .catch(() => setModels([]))
+  }, [])
+
+  useEffect(() => {
+    api
+      .listSkills()
+      .then((result) => setAvailableSkills(result.items))
+      .catch(() => setAvailableSkills([]))
   }, [])
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null
@@ -483,6 +493,68 @@ export default function AgentConfigPage() {
                         <input type="checkbox" checked={draft.approvalRequired ?? true} onChange={(event) => setDraft({ ...draft, approvalRequired: event.target.checked })} />
                         {t('高风险操作需要确认')}
                       </label>
+                    </div>
+
+                    {/* 专属工具箱 */}
+                    <div className="mt-5 rounded-xl border border-neutral-200 bg-white">
+                      <div className="flex h-11 items-center gap-2 border-b border-neutral-100 px-4">
+                        <Wrench className="h-4 w-4 text-amber-600" />
+                        <span className="text-sm font-medium text-neutral-800">专属工具箱</span>
+                        <span className="ml-auto text-xs text-neutral-400">
+                          已绑定 {(draft.skillIds ?? []).length} 个
+                        </span>
+                      </div>
+                      {availableSkills.length === 0 ? (
+                        <div className="px-4 py-3 text-xs text-neutral-400">
+                          暂无已安装的 Skills，可前往技能市场安装。
+                        </div>
+                      ) : (
+                        <div className="max-h-48 space-y-0.5 overflow-auto p-2">
+                          {availableSkills.map((skill) => {
+                            const checked = (draft.skillIds ?? []).includes(skill.id)
+                            return (
+                              <label
+                                key={skill.id}
+                                className={cn(
+                                  'flex cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-sm transition hover:bg-neutral-50',
+                                  checked && 'bg-blue-50/50',
+                                )}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5 shrink-0"
+                                  checked={checked}
+                                  onChange={() => {
+                                    const current = draft.skillIds ?? []
+                                    setDraft({
+                                      ...draft,
+                                      skillIds: checked
+                                        ? current.filter((id) => id !== skill.id)
+                                        : [...current, skill.id],
+                                    })
+                                  }}
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-[13px] font-medium text-neutral-800">
+                                    {skill.name}
+                                  </span>
+                                  {skill.description && (
+                                    <span className="mt-0.5 block truncate text-xs text-neutral-400">
+                                      {skill.description}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="shrink-0 rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-400">
+                                  {skill.source}
+                                </span>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      )}
+                      <div className="border-t border-neutral-50 px-4 py-2 text-[11px] text-neutral-400">
+                        对话时优先加载已绑定的 Skills，再按匹配度自动补充。
+                      </div>
                     </div>
 
                     <div className="mt-5 flex justify-end">

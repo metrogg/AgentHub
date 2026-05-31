@@ -300,6 +300,13 @@ export interface ModelCatalogItem {
   apiKey?: string
 }
 
+export interface CcswitchModel {
+  name: string
+  modelId: string
+  apiEndpoint: string
+  apiKey: string
+}
+
 export interface WelcomeQuickPrompt {
   id: string
   label: string
@@ -310,7 +317,7 @@ export interface WelcomeQuickPromptsResponse {
   generatedAt: string
   items: WelcomeQuickPrompt[]
   seed: string
-  source: 'llm' | 'unavailable'
+  source: 'llm' | 'unavailable' | 'preset'
 }
 
 export interface CodingToolStatus {
@@ -582,6 +589,7 @@ export interface WorkspaceAgent {
   runtimeType: RuntimeType
   codeAgentType: CodeAgentType | null
   capabilityTags: string[]
+  skillIds: string[]
   toolPermissions: string[]
   sandboxPolicy: SandboxPolicy
   contextPolicy: ContextPolicy
@@ -650,6 +658,7 @@ export interface AgentConfigInput {
   runtimeType?: WorkspaceAgent['runtimeType']
   codeAgentType?: WorkspaceAgent['codeAgentType']
   capabilityTags?: string[]
+  skillIds?: string[]
   toolPermissions?: string[]
   sandboxPolicy?: WorkspaceAgent['sandboxPolicy']
   contextPolicy?: WorkspaceAgent['contextPolicy']
@@ -937,6 +946,7 @@ export const api = {
       attachments?: ChatAttachment[]
       displayContent?: string
       replyToMessageId?: string | null
+      safetyMode?: string
     },
   ) =>
     request<Message>(`/messages/${sessionId}`, {
@@ -950,6 +960,7 @@ export const api = {
           ...(data.attachments?.length ? { attachments: data.attachments } : {}),
           ...(data.displayContent !== undefined ? { displayContent: data.displayContent } : {}),
           ...(data.replyToMessageId ? { replyToMessageId: data.replyToMessageId } : {}),
+          ...(data.safetyMode ? { safetyMode: data.safetyMode } : {}),
         },
       }),
     }),
@@ -1040,6 +1051,11 @@ export const api = {
   getStarOfficeStatus: () => request<StarOfficeStatus>('/office/status'),
   startStarOffice: () =>
     request<StarOfficeStatus>('/office/start', { method: 'POST', timeout: 15_000 }),
+  joinOfficeAgents: (sessionId: string) =>
+    request<{ ok: boolean; joined: string[]; total: number }>('/office/join-agents', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    }),
   ensureStorageDirectory: (path: string) =>
     request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>(
       '/settings/storage/ensure',
@@ -1065,6 +1081,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  getCcswitchModels: () =>
+    request<{ models: CcswitchModel[] }>('/settings/ccswitch-models'),
   // Coding tools
   getCodingToolStatus: (tools?: CodingToolProbe[]) =>
     tools?.length
@@ -1271,4 +1289,45 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+
+  // Translate (SSE streaming)
+  translate: async function* (text: string, targetLang: 'zh' | 'en' = 'zh'): AsyncGenerator<string> {
+    const res = await fetch(`${API_BASE}/translate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ text, targetLang }),
+    })
+    if (!res.ok) throw new Error(`翻译请求失败: ${res.status}`)
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.startsWith('event: done')) return
+        if (!line.startsWith('data: ')) continue
+        const payload = line.slice(6).trim()
+        if (!payload) continue
+        yield payload
+      }
+    }
+  },
+
+  // Files
+  writeFile: (data: {
+    workspaceId: string
+    filePath: string
+    content: string
+    startLine?: number
+    endLine?: number
+  }) =>
+    request<{ ok: boolean; lines?: number }>('/files', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 }

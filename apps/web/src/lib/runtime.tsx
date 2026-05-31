@@ -162,6 +162,7 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
   const agentActivity = useChatStore((state) => state.agentActivity)
   const currentSessionId = useChatStore((state) => state.currentSessionId)
   const sendMessage = useChatStore((state) => state.sendMessage)
+  const safetyMode = useChatStore((state) => state.safetyMode)
   const cancelRun = useChatStore((state) => state.cancelRun)
 
   const threadMessages = useMemo<ThreadMessageLike[]>(() => {
@@ -243,7 +244,7 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
         throw new Error('仅支持纯文本消息')
       }
 
-      const result = await sendMessage(part.text)
+      const result = await sendMessage(part.text, { safetyMode })
       if (result?.groupSessionId && result.groupSessionId !== currentSessionId) {
         navigate(`/chat/${result.groupSessionId}`)
       }

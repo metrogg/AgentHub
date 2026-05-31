@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
@@ -175,6 +176,46 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
     }>()
 
     return c.json(await testLlmConnection(input), 200)
+  })
+  .get('/ccswitch-models', async (c) => {
+    const dbPath = resolve(homedir(), '.cc-switch', 'cc-switch.db')
+    if (!existsSync(dbPath)) return c.json({ models: [] })
+
+    try {
+      const { Database } = await import('bun:sqlite')
+      const sqlite = new Database(dbPath, { readonly: true })
+      const rows = sqlite
+        .query<{ id: string; name: string; settings_config: string }, []>(
+          `SELECT id, name, settings_config FROM providers WHERE app_type = 'claude' ORDER BY sort_index, name`,
+        )
+        .all()
+      sqlite.close()
+
+      const models: Array<{
+        name: string
+        modelId: string
+        apiEndpoint: string
+        apiKey: string
+      }> = []
+
+      for (const row of rows) {
+        try {
+          const config = JSON.parse(row.settings_config) as { env?: Record<string, string> }
+          const env = config.env ?? {}
+          const modelId = env.ANTHROPIC_MODEL ?? ''
+          const apiEndpoint = env.ANTHROPIC_BASE_URL ?? ''
+          const apiKey = env.ANTHROPIC_AUTH_TOKEN ?? ''
+          if (!modelId && !apiEndpoint) continue
+          models.push({ name: row.name, modelId, apiEndpoint, apiKey })
+        } catch {
+          // skip invalid config
+        }
+      }
+
+      return c.json({ models })
+    } catch {
+      return c.json({ models: [] })
+    }
   })
 
 async function resetAllApplicationData() {

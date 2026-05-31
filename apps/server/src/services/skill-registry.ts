@@ -96,6 +96,58 @@ export class SkillRegistry {
       ),
     ].join('\n\n')
   }
+
+  /** Load multiple skills by their IDs. Returns only those found. */
+  async loadSkillsByIds(ids: string[]): Promise<LoadedSkill[]> {
+    if (!ids.length) return []
+    const loaded: LoadedSkill[] = []
+    for (const id of ids) {
+      const skill = await this.loadSkill(id).catch(() => null)
+      if (skill) loaded.push(skill)
+    }
+    return loaded
+  }
+
+  /**
+   * Build skill context with preset skills (agent toolbox) loaded first,
+   * then auto-matched skills to fill remaining slots.
+   */
+  async buildSkillContextWithPreset(
+    presetIds: string[],
+    input: string,
+    options: SelectSkillOptions = {},
+  ): Promise<string> {
+    const limit = Math.max(0, Math.min(options.limit ?? 2, 5))
+    if (limit === 0 && !presetIds.length) return ''
+
+    // 1. Load preset skills (agent toolbox)
+    const presetSkills = await this.loadSkillsByIds(presetIds)
+    const presetIdSet = new Set(presetSkills.map((s) => normalizeToken(s.id)))
+
+    // 2. Auto-match remaining slots
+    const remainingSlots = Math.max(0, limit - presetSkills.length)
+    let autoMatched: LoadedSkill[] = []
+    if (remainingSlots > 0) {
+      const allSelected = await this.selectSkills(input, { ...options, limit: limit + presetSkills.length })
+      autoMatched = allSelected.filter((s) => !presetIdSet.has(normalizeToken(s.id))).slice(0, remainingSlots)
+    }
+
+    const allSkills = [...presetSkills, ...autoMatched]
+    if (!allSkills.length) return ''
+
+    return [
+      'Active skills loaded for this task:',
+      ...allSkills.map((skill) => {
+        const tag = presetIdSet.has(normalizeToken(skill.id)) ? ' [专属工具箱]' : ''
+        return [
+          `## ${skill.name}${tag}`,
+          `Description: ${skill.description}`,
+          `Source: ${skill.skillPath}`,
+          limitText(skill.body, 8000),
+        ].join('\n')
+      }),
+    ].join('\n\n')
+  }
 }
 
 export const globalSkillRegistry = new SkillRegistry()

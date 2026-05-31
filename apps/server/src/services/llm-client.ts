@@ -132,7 +132,16 @@ function normalizeProvider(provider?: string): string {
 
 function isAnthropicProvider(provider: string, baseUrl?: string): boolean {
   const normalized = normalizeProvider(provider)
-  return normalized === 'anthropic' || normalized === 'claude' || Boolean(baseUrl?.includes('anthropic.com'))
+  if (normalized === 'anthropic' || normalized === 'claude') return true
+  if (!baseUrl) return false
+  try {
+    const url = new URL(baseUrl)
+    if (url.hostname.includes('anthropic.com')) return true
+    if (/\/anthropic\/?$/.test(url.pathname)) return true
+  } catch {
+    // ignore malformed URL
+  }
+  return false
 }
 
 function defaultBaseUrl(provider: string): string {

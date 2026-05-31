@@ -1073,6 +1073,7 @@ interface ChatState {
   streamingMessage: { id: string; content: string; agentId?: string; agentName?: string } | null
   streamingCodeAgentRun: CodeAgentRunMetadata | null
   pendingAttachments: ChatAttachment[]
+  safetyMode: string
   loadingSessions: boolean
   loadingMessages: boolean
   agentTyping: boolean
@@ -1121,6 +1122,7 @@ interface ChatState {
     options?: {
       displayContent?: string
       replyToMessageId?: string | null
+      safetyMode?: string
     },
   ) => Promise<{ groupSessionId?: string } | undefined>
   sendMessageToSession: (
@@ -1129,6 +1131,7 @@ interface ChatState {
     options?: {
       displayContent?: string
       replyToMessageId?: string | null
+      safetyMode?: string
     },
   ) => Promise<{ groupSessionId?: string } | undefined>
   editMessage: (messageId: string, content: string) => Promise<void>
@@ -1139,6 +1142,7 @@ interface ChatState {
   addPendingAttachments: (attachments: ChatAttachment[]) => void
   removePendingAttachment: (id: string) => void
   clearPendingAttachments: () => void
+  setSafetyMode: (mode: string) => void
   cancelRun: () => Promise<void>
   setReplyingTo: (messageId: string | null) => void
   setPreviewUrl: (
@@ -1169,6 +1173,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingMessage: null,
   streamingCodeAgentRun: null,
   pendingAttachments: [],
+  safetyMode: 'ask',
   loadingSessions: false,
   loadingMessages: false,
   agentTyping: false,
@@ -1479,6 +1484,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         attachments,
         displayContent: options?.displayContent ?? (attachments.length ? content : undefined),
         replyToMessageId,
+        safetyMode: options?.safetyMode,
       })
       updateCachedMessages(sessionId, (messages) => upsertMessage(messages, msg))
       set((s) => ({
@@ -1594,6 +1600,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   clearPendingAttachments() {
     set({ pendingAttachments: [] })
+  },
+
+  setSafetyMode(mode: string) {
+    set({ safetyMode: mode })
   },
 
   async cancelRun() {

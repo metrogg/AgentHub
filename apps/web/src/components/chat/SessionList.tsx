@@ -10,7 +10,6 @@ import {
   Clock,
   ChevronRight,
   Code2,
-  Building2,
   SlidersHorizontal,
   Folder,
   History,
@@ -63,10 +62,8 @@ type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
 function activeTabFromPath(
   pathname: string,
-  activeSession: Session | undefined,
+  _activeSession: Session | undefined,
 ): SidebarTab {
-  if (pathname.startsWith('/chat/') && isPrivateAgentSession(activeSession))
-    return 'agents'
   if (pathname === '/agent-config') return 'agents'
   if (pathname === '/profile' || pathname === '/settings') return 'me'
   if (
@@ -74,7 +71,6 @@ function activeTabFromPath(
       '/models',
       '/coding-tools',
       '/skills',
-      '/office',
       '/orchestrator-runs',
       '/execution-logs',
     ].includes(pathname)
@@ -475,9 +471,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             active={activeTab === 'agents'}
             icon={Users}
             label="Agent"
-            onClick={() => {
-              setTabOverride('agents')
-            }}
+            onClick={() => setTabOverride('agents')}
           />
           <DockButton
             active={activeTab === 'workspace'}
@@ -625,12 +619,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             active={location.pathname === '/skills'}
             onClick={() => navigate('/skills')}
           />
-          <NavItem
-            icon={Building2}
-            label={t('办公室')}
-            active={location.pathname === '/office'}
-            onClick={() => navigate('/office')}
-          />
         </nav>
 
         <div
@@ -776,7 +764,12 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                         )}
                         {isGroupParent ? (
                           <>
-                            <GroupAvatar className="shrink-0" size="sm" title={groupTitle} />
+                            <GroupAvatar
+                              agents={workspaceAgents}
+                              className="shrink-0"
+                              size="sm"
+                              title={groupTitle}
+                            />
                             <span className="flex min-w-0 flex-1 items-center">
                               <span className="truncate font-medium">{groupTitle}</span>
                               <span className="ml-1 shrink-0 font-normal text-neutral-400">
@@ -948,10 +941,20 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                                 {childAgent ? (
                                   <span className="relative h-5 w-5 shrink-0">
                                     <span
-                                      className="grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold text-white"
+                                      className="grid h-5 w-5 place-items-center overflow-hidden rounded-full text-[10px] font-semibold text-white"
                                       style={{ background: childAgent.color }}
                                     >
-                                      {childAgent.name.slice(0, 1).toUpperCase()}
+                                      {childAgent.avatar ? (
+                                        <img
+                                          src={childAgent.avatar}
+                                          alt={childAgent.name}
+                                          className="h-full w-full bg-white object-contain"
+                                          decoding="async"
+                                          draggable={false}
+                                        />
+                                      ) : (
+                                        childAgent.name.slice(0, 1).toUpperCase()
+                                      )}
                                     </span>
                                     {pinnedIds.has(child.id) && (
                                       <Pin className="absolute -right-1 -top-1 h-2.5 w-2.5 fill-neutral-700 text-neutral-700" />
@@ -1087,10 +1090,20 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-left disabled:opacity-60"
                     >
                       <div
-                        className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white"
+                        className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full text-sm font-semibold text-white"
                         style={{ background: agent.color }}
                       >
-                        {agent.name.slice(0, 1).toUpperCase()}
+                        {agent.avatar ? (
+                          <img
+                            src={agent.avatar}
+                            alt={agent.name}
+                            className="h-full w-full bg-white object-contain"
+                            decoding="async"
+                            draggable={false}
+                          />
+                        ) : (
+                          agent.name.slice(0, 1).toUpperCase()
+                        )}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium text-neutral-950">
@@ -1477,7 +1490,7 @@ function AccountAvatar({ name, avatar }: AccountProfile) {
       <img
         src={avatar}
         alt={name || 'Account avatar'}
-        className="h-full w-full object-cover"
+        className="h-full w-full bg-white object-contain"
         decoding="async"
         draggable={false}
       />

@@ -36,13 +36,14 @@ export function QuickPromptBubbles({
   prompts: WelcomeQuickPrompt[]
 }) {
   const [activeId, setActiveId] = useState<string | null>(null)
-  const promptRows = useMemo(
-    () => [
-      prompts.filter((_, index) => index % 2 === 0),
-      prompts.filter((_, index) => index % 2 === 1),
-    ].filter((row) => row.length > 0),
-    [prompts],
-  )
+  const promptRows = useMemo(() => {
+    if (!prompts.length) return []
+    const mid = Math.max(1, Math.floor(prompts.length * 0.4))
+    return [
+      prompts.slice(0, mid),
+      prompts.slice(mid),
+    ].filter((row) => row.length > 0)
+  }, [prompts])
 
   function pickPrompt(prompt: WelcomeQuickPrompt) {
     if (!prompt.prompt.trim()) return
@@ -58,7 +59,7 @@ export function QuickPromptBubbles({
           key={`row-${rowIndex}`}
           className={cn(
             'agenthub-quick-prompt-row',
-            rowIndex % 2 === 1 && 'agenthub-quick-prompt-row-reverse',
+            rowIndex === 1 && 'agenthub-quick-prompt-row-reverse agenthub-quick-prompt-row-compact',
           )}
         >
           <div className="agenthub-quick-prompt-track">
