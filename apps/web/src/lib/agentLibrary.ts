@@ -28,7 +28,7 @@ export const agentLibraryStorageKey = 'agenthub.agentLibrary'
 export const agentLibraryChangeEvent = 'agenthub:agent-library-change'
 export const agentLibrarySyncErrorEvent = 'agenthub:agent-library-sync-error'
 export const agentLibraryServerSettingKey = 'AGENT_LIBRARY'
-const legacyAgentConfigKey = 'agenthub.agentConfig'
+export const legacyAgentConfigKey = 'agenthub.agentConfig'
 let pendingServerSync: number | null = null
 let pendingServerSyncState: AgentLibraryState | null = null
 let serverReconcilePromise: Promise<AgentLibraryState> | null = null
@@ -62,12 +62,24 @@ export function loadAgentLibraryState(): AgentLibraryState {
     }
   }
 
-  const migrated = migrateLegacyAgentConfig()
   const state = normalizeLibraryState({
-    agents: migrated ? [migrated] : [],
+    agents: [],
     relations: [],
   })
   return state
+}
+
+export function clearLegacyAgentLibraryStorage() {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem(legacyAgentConfigKey)
+
+  const current = parseAgentLibraryValue(window.localStorage.getItem(agentLibraryStorageKey))
+  if (!current) return
+  const normalized = normalizeLibraryState(current)
+  if (JSON.stringify(current) !== JSON.stringify(normalized)) {
+    writeAgentLibraryStateToStorage(normalized)
+    queueAgentLibraryServerSync(normalized)
+  }
 }
 
 export function saveAgentLibrary(agents: SavedAgentConfig[]) {
@@ -388,21 +400,3 @@ function pruneRelations(relations: SavedAgentRelation[], agents: SavedAgentConfi
   })
 }
 
-function migrateLegacyAgentConfig() {
-  if (typeof window === 'undefined') return null
-  const raw = window.localStorage.getItem(legacyAgentConfigKey)
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    const profile = parsed?.profile
-    if (!profile?.name) return null
-    return createSavedAgent({
-      name: profile.name,
-      role: profile.tone ?? '默认',
-      description: profile.description ?? '',
-      systemPrompt: profile.instruction ?? '',
-    })
-  } catch {
-    return null
-  }
-}

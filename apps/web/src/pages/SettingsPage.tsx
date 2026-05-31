@@ -33,6 +33,7 @@ import {
 } from 'lucide-react'
 import { api, type Message, type MobileConnectivityStatus, type Session, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
+import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
 import { getDesktopInfo, isDesktopApp, openPath, pickWorkspaceFolder } from '../lib/native'
 import { loadSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent } from '../lib/sessionArchive'
@@ -630,6 +631,19 @@ function SettingsContent({
     for (const key of keys) window.localStorage.removeItem(key)
   }
 
+  async function cleanupLegacyData() {
+    const result = await api.cleanupLegacyData()
+    clearLegacyAgentLibraryStorage()
+    const deleted =
+      result.deletedSessions +
+      result.deletedWorkspaceTasks +
+      result.deletedLegacyTasks +
+      result.deletedLegacyAgents +
+      result.deletedEmptyWorkspaces
+    showActionMessage(`历史入口已清理：${deleted} 项，页面即将刷新`)
+    window.setTimeout(() => window.location.reload(), 800)
+  }
+
   switch (section) {
     case '通用':
       return (
@@ -775,6 +789,27 @@ function SettingsContent({
           </SettingsSection>
           <SettingsSection title="重置所有设置" desc="清除当前配置并重新进入初始引导">
             <button type="button" onClick={resetAllSettings} className="settings-danger-button">{t('重置所有设置')}</button>
+          </SettingsSection>
+          <SettingsSection
+            title="历史入口清场"
+            desc="删除旧 Agent 子会话、无效任务子对话、旧任务表、旧 Agent 表和本地旧 Agent 配置迁移源；保留当前群聊、真实任务子对话和有效 Agent 私聊。"
+          >
+            <button
+              type="button"
+              disabled={busyAction === 'cleanup-legacy-data'}
+              onClick={() => {
+                if (!window.confirm('确定清理历史旧入口和遗留数据吗？当前有效群聊与真实任务子对话会保留。')) return
+                void runAction('cleanup-legacy-data', cleanupLegacyData)
+              }}
+              className="settings-danger-button"
+            >
+              {busyAction === 'cleanup-legacy-data' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Database className="h-4 w-4" />
+              )}
+              {busyAction === 'cleanup-legacy-data' ? t('清理中...') : t('清理历史入口和旧数据')}
+            </button>
           </SettingsSection>
           <SettingsSection
             title="开发重置"

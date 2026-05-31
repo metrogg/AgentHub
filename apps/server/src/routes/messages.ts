@@ -523,10 +523,9 @@ function toCoordinatorProfile(
 ): AgentRunProfile {
   return {
     ...buildAgentProfile(agent, projectPath),
-    runtimeType: 'llm',
-    codeAgentType: undefined,
     sandboxPolicy: 'read-only',
     toolPermissions: ['chat', 'workspace:read'],
+    approvalRequired: false,
   }
 }
 
@@ -576,6 +575,7 @@ async function routeGroupMessageThroughOrchestrator(
       content,
       agents: agentRows,
       workspaceGoal: workspace?.goal ?? null,
+      workspacePath: workspace?.projectPath ?? null,
     })
   } catch (err: any) {
     const message = err?.message || '模型没有返回有效的 Orchestrator 决策'

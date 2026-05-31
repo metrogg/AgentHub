@@ -59,16 +59,19 @@ function agentSessionVisibility(
     return 'top'
   const metadata = session.metadata ?? {}
   if (metadata.kind === 'agent-direct') return 'top'
-  if (isOrchestratorTaskMetadata(metadata))
+  if (isCompleteOrchestratorTaskSession(session, metadata))
     return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
   return 'hidden'
 }
 
-function isOrchestratorTaskMetadata(metadata: Record<string, unknown>) {
-  return Boolean(
-    metadata.kind === 'orchestrator-task' ||
-      metadata.orchestratorTaskId ||
-      metadata.orchestratorRunId,
+function isCompleteOrchestratorTaskSession(session: Session, metadata: Record<string, unknown>) {
+  return (
+    metadata.kind === 'orchestrator-task' &&
+    typeof metadata.orchestratorTaskId === 'string' &&
+    metadata.orchestratorTaskId.length > 0 &&
+    typeof metadata.orchestratorRunId === 'string' &&
+    metadata.orchestratorRunId.length > 0 &&
+    Boolean(session.workspaceId && session.workspaceAgentId)
   )
 }
 

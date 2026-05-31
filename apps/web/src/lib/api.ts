@@ -1003,6 +1003,21 @@ export const api = {
         body: JSON.stringify({ confirm }),
       },
     ),
+  cleanupLegacyData: () =>
+    request<{
+      success: boolean
+      message: string
+      deletedSessions: number
+      deletedMessages: number
+      deletedSessionMembers: number
+      deletedWorkspaceTasks: number
+      deletedLegacyTasks: number
+      deletedLegacyAgents: number
+      deletedEmptyWorkspaces: number
+      cleanedSettings: number
+    }>('/settings/cleanup-legacy-data', {
+      method: 'POST',
+    }),
   getRuntimeInfo: () =>
     request<{
       git: { runtime: string; path: string; ok: boolean; message: string }
@@ -1180,10 +1195,6 @@ export const api = {
     request<{ session: Session }>(`/workspaces/${id}/group-session`, {
       method: 'POST',
       body: agentIds ? JSON.stringify({ agentIds }) : undefined,
-    }),
-  openWorkspaceAgentSession: (id: string, agentId: string) =>
-    request<{ session: Session }>(`/workspaces/${id}/agents/${agentId}/session`, {
-      method: 'POST',
     }),
 
   // Artifacts

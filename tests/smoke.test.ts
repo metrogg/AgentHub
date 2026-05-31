@@ -475,6 +475,183 @@ describe('AgentHub smoke tests', () => {
     expect(userRows[0]?.id).toBe('default-user')
   })
 
+  test('legacy cleanup removes old entries while preserving valid group task sessions', async () => {
+    const now = new Date()
+    const workspaceId = 'cleanup-workspace'
+    const agentId = 'cleanup-agent'
+    const groupSessionId = 'cleanup-group'
+    const validChildSessionId = 'cleanup-valid-child'
+    const legacyChildSessionId = 'cleanup-legacy-child'
+    const hiddenChildSessionId = 'cleanup-hidden-child'
+    const runId = 'cleanup-run'
+    const validTaskId = 'cleanup-valid-task'
+    const staleTaskId = 'cleanup-stale-task'
+    const legacyAgentId = 'cleanup-legacy-agent'
+
+    await dbApi.db.insert(dbApi.workspaces).values({
+      id: workspaceId,
+      ownerId: 'default-user',
+      name: 'Cleanup workspace',
+      goal: 'Cleanup smoke data',
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.workspaceAgents).values({
+      id: agentId,
+      workspaceId,
+      name: 'Cleanup Agent',
+      role: 'Coder',
+      createdAt: now,
+    })
+    await dbApi.db.insert(dbApi.sessions).values([
+      {
+        id: groupSessionId,
+        title: 'Cleanup group',
+        type: 'group',
+        ownerId: 'default-user',
+        workspaceId,
+        metadata: { kind: 'workspace-agent-group', agentIds: [agentId] },
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: validChildSessionId,
+        title: 'Cleanup Agent / Task',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId,
+        workspaceAgentId: agentId,
+        metadata: {
+          kind: 'orchestrator-task',
+          orchestratorRunId: runId,
+          orchestratorTaskId: validTaskId,
+        },
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: legacyChildSessionId,
+        title: 'Cleanup workspace / Agent',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId,
+        workspaceAgentId: agentId,
+        metadata: { kind: 'workspace-agent-child' },
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: hiddenChildSessionId,
+        title: 'Hidden generated child',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId,
+        workspaceAgentId: agentId,
+        metadata: { hiddenFromSessionTree: true, orchestratorRunId: runId },
+        createdAt: now,
+        updatedAt: now,
+      },
+    ])
+    await dbApi.db.insert(dbApi.orchestratorRuns).values({
+      id: runId,
+      workspaceId,
+      groupSessionId,
+      status: 'running',
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.workspaceTasks).values([
+      {
+        id: validTaskId,
+        workspaceId,
+        agentId,
+        title: 'Valid task',
+        description: 'Should remain',
+        status: 'running',
+        sessionId: validChildSessionId,
+        runId,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: staleTaskId,
+        workspaceId,
+        agentId,
+        title: 'Stale task',
+        description: 'Old task without run',
+        status: 'pending',
+        sessionId: legacyChildSessionId,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ])
+    await dbApi.db.insert(dbApi.messages).values({
+      sessionId: legacyChildSessionId,
+      senderId: agentId,
+      senderType: 'agent',
+      type: 'text',
+      content: 'legacy',
+      createdAt: now,
+    })
+    await dbApi.db.insert(dbApi.sessionMembers).values({
+      sessionId: legacyChildSessionId,
+      memberId: agentId,
+      memberType: 'agent',
+      joinedAt: now,
+    })
+    await dbApi.db.insert(dbApi.agents).values({
+      id: legacyAgentId,
+      name: 'Legacy Agent',
+      provider: 'openai',
+      model: 'mock-model',
+      createdAt: now,
+    })
+    await dbApi.db.insert(dbApi.tasks).values({
+      sessionId: groupSessionId,
+      agentId: legacyAgentId,
+      title: 'Legacy task table row',
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.settings).values({
+      key: 'AGENT_LIBRARY',
+      value: JSON.stringify({
+        schemaVersion: 2,
+        agents: [
+          {
+            id: 'placeholder-agent',
+            name: 'New Agent',
+            role: '协作',
+            description: '描述这个 Agent 的职责、产出和适合处理的任务。',
+            systemPrompt: '你是 AgentHub 中的协作 Agent。先理解目标，再给出清晰、可执行的结果。',
+          },
+        ],
+        relations: [],
+      }),
+      updatedAt: now,
+    })
+
+    const result = await json<{ deletedSessions: number; deletedWorkspaceTasks: number }>(
+      await postJson('/api/settings/cleanup-legacy-data', {}),
+    )
+
+    expect(result.deletedSessions).toBe(2)
+    expect(result.deletedWorkspaceTasks).toBe(1)
+    const remainingSessions = await dbApi.db.select().from(dbApi.sessions)
+    expect(remainingSessions.map((session) => session.id).sort()).toEqual([
+      groupSessionId,
+      validChildSessionId,
+    ].sort())
+    expect(await dbApi.db.select().from(dbApi.workspaceTasks)).toHaveLength(1)
+    expect(await dbApi.db.select().from(dbApi.tasks)).toHaveLength(0)
+    expect(await dbApi.db.select().from(dbApi.agents)).toHaveLength(0)
+    const libraryRows = await dbApi.db
+      .select()
+      .from(dbApi.settings)
+      .where(dbApi.eq(dbApi.settings.key, 'AGENT_LIBRARY'))
+    expect(libraryRows).toHaveLength(0)
+  })
+
   test('settings model test can be mocked without real credentials', async () => {
     globalThis.fetch = async (input, init) => {
       const url = String(input)
@@ -1243,6 +1420,30 @@ describe('AgentHub smoke tests', () => {
     })
 
     expect(result.status).toBe('passed')
+  })
+
+  test('planner JSON parsing tolerates comments without inventing fallback content', async () => {
+    const { extractJsonObject, parseJsonObject } =
+      await import('../apps/server/src/services/orchestrator/planner')
+    const text = [
+      'planner output:',
+      '{',
+      '  // model-added note',
+      '  "title": "坦克大战",',
+      '  "url": "https://example.com/a//b",',
+      '  "tasks": [',
+      '    { "id": "build", "dependencies": [], },',
+      '  ],',
+      '}',
+      'done',
+    ].join('\n')
+
+    const json = extractJsonObject(text)
+    expect(json).toBeTruthy()
+    const parsed = parseJsonObject(json!) as { title?: string; url?: string; tasks?: unknown[] }
+    expect(parsed.title).toBe('坦克大战')
+    expect(parsed.url).toBe('https://example.com/a//b')
+    expect(parsed.tasks).toHaveLength(1)
   })
 
   test('ConflictResolver detects file conflicts across agents', async () => {

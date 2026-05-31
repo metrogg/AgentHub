@@ -1,6 +1,7 @@
 import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
 import { harnessManager } from '../harness'
+import { runtimeRegistry, type AgentProfile } from '../runtime'
 import { initializeRunLedger } from './run-ledger'
 import type {
   ClarificationQuestion,
@@ -20,6 +21,7 @@ export interface PlannerInput {
   useSpecFirst?: boolean
   plannerModelId?: string | null
   plannerSystemPrompt?: string | null
+  plannerAgent?: ExecutionAgent | null
 }
 
 interface SpecModule {
@@ -46,6 +48,7 @@ export class Planner {
       useSpecFirst = true,
       plannerModelId,
       plannerSystemPrompt,
+      plannerAgent,
     } = input
     const runId = crypto.randomUUID()
 
@@ -69,7 +72,7 @@ export class Planner {
     let spec: ProjectSpec | undefined
     if (useSpecFirst !== false) {
       try {
-        spec = await this.generateSpec(goal, agents, workspacePath, plannerModelId)
+        spec = await this.generateSpec(goal, agents, workspacePath, plannerModelId, plannerAgent)
         logger.info({ goal, moduleCount: spec.modules.length }, 'Planner generated spec')
       } catch (err: any) {
         logger.warn(
@@ -89,6 +92,8 @@ export class Planner {
         specPhases,
         plannerModelId,
         plannerSystemPrompt,
+        plannerAgent,
+        workspacePath,
       )
       const normalized = this.normalizeGeneratedPlan(runId, goal, generated, agents)
       if (normalized) return initializeRunLedger({ ...normalized, agentRelations })
@@ -103,7 +108,10 @@ export class Planner {
         : typeof planningError === 'string'
           ? planningError
           : 'unknown planner error'
-    logger.warn({ err: message }, 'Planner LLM generation failed')
+    logger.warn(
+      { err: message, plannerRuntime: plannerAgent?.runtimeType ?? 'llm' },
+      'Planner generation failed',
+    )
     throw new Error(`规划生成失败：${message}`)
   }
 
@@ -127,6 +135,7 @@ export class Planner {
     agents: ExecutionAgent[],
     workspacePath?: string | null,
     plannerModelId?: string | null,
+    plannerAgent?: ExecutionAgent | null,
   ): Promise<ProjectSpec> {
     const prompt = `请为以下项目生成一份架构规格说明（Spec）。
 
@@ -150,18 +159,17 @@ ${agents.map((a) => `- ${a.name}（${a.role}）：${a.description || '无描述'
   "techStack": "建议技术栈",
   "fileLayout": ["建议的文件结构，如 src/engine.ts"]
 }`
-    let output = ''
-    for await (const delta of streamReply(
+    const output = await this.generatePlannerOutput(
       [{ role: 'user', content: prompt }],
       '你是软件架构专家。',
       plannerModelId ?? undefined,
-    )) {
-      output += delta
-      if (output.length > 15_000) break
-    }
+      plannerAgent,
+      workspacePath,
+      15_000,
+    )
     const jsonText = extractJsonObject(output)
     if (!jsonText) throw new Error('Spec generation returned no JSON')
-    const parsed = JSON.parse(jsonText) as Partial<ProjectSpec>
+    const parsed = parseJsonObject(jsonText) as Partial<ProjectSpec>
     return {
       goal: parsed.goal || goal,
       modules: parsed.modules || [],
@@ -179,6 +187,8 @@ ${agents.map((a) => `- ${a.name}（${a.role}）：${a.description || '无描述'
     specPhases?: string,
     plannerModelId?: string | null,
     plannerSystemPrompt?: string | null,
+    plannerAgent?: ExecutionAgent | null,
+    workspacePath?: string | null,
   ): Promise<unknown> {
     const agentCatalog = agents.map((agent) => ({
       key: agent.key,
@@ -246,15 +256,101 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       },
     ]
 
-    let output = ''
-    for await (const delta of streamReply(messages, system, plannerModelId ?? undefined)) {
-      output += delta
-      if (output.length > 20_000) break
-    }
+    const output = await this.generatePlannerOutput(
+      messages,
+      system,
+      plannerModelId ?? undefined,
+      plannerAgent,
+      workspacePath,
+      20_000,
+    )
 
     const jsonText = extractJsonObject(output)
     if (!jsonText) return null
-    return JSON.parse(jsonText)
+    return parseJsonObject(jsonText)
+  }
+
+  private async generatePlannerOutput(
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+    system: string,
+    plannerModelId?: string,
+    plannerAgent?: ExecutionAgent | null,
+    workspacePath?: string | null,
+    maxChars = 20_000,
+  ) {
+    if (plannerAgent?.runtimeType === 'code-agent') {
+      return this.generateWithCodeAgent(messages, system, plannerAgent, workspacePath, maxChars)
+    }
+
+    let output = ''
+    for await (const delta of streamReply(messages, system, plannerModelId, undefined)) {
+      output += delta
+      if (output.length > maxChars) break
+    }
+    return output
+  }
+
+  private async generateWithCodeAgent(
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+    system: string,
+    plannerAgent: ExecutionAgent,
+    workspacePath?: string | null,
+    maxChars = 20_000,
+  ) {
+    if (!plannerAgent.codeAgentType) {
+      throw new Error('Orchestrator 配置为 Code Agent，但没有绑定 Coding Tools 类型')
+    }
+
+    const profile: AgentProfile = {
+      id: plannerAgent.id,
+      name: plannerAgent.name,
+      role: plannerAgent.role,
+      roleType: plannerAgent.roleType,
+      description: plannerAgent.description,
+      systemPrompt: [
+        plannerAgent.systemPrompt,
+        '你是 AgentHub 的 Orchestrator。你本次只负责规划，不要修改文件、不要创建计划文件、不要运行构建命令。',
+        '最终回复必须是严格 JSON 对象，不能包含 Markdown、解释、注释或额外文本。',
+      ].filter(Boolean).join('\n'),
+      color: plannerAgent.color,
+      modelId: plannerAgent.modelId,
+      runtimeType: 'code-agent',
+      codeAgentType: plannerAgent.codeAgentType,
+      capabilityTags: plannerAgent.capabilityTags,
+      toolPermissions: plannerAgent.toolPermissions,
+      sandboxPolicy: 'read-only',
+      contextPolicy: 'workspace-aware',
+      approvalRequired: false,
+      projectPath: workspacePath ?? null,
+      originalProjectPath: workspacePath ?? null,
+    }
+    const runtime = runtimeRegistry.resolve(profile)
+    const controller = new AbortController()
+    const prompt = [
+      '请根据下面的系统约束和输入生成 AgentHub 多 Agent 协作计划。',
+      '只输出一个 JSON 对象。不要输出 Markdown 代码块，不要写注释，不要写自然语言前后缀。',
+      '',
+      '系统约束：',
+      system,
+      '',
+      '输入消息：',
+      ...messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`),
+    ].join('\n')
+
+    let output = ''
+    for await (const chunk of runtime.execute({
+      sessionId: `planner-${crypto.randomUUID()}`,
+      prompt,
+      history: [],
+      profile,
+      signal: controller.signal,
+      workspacePath,
+    })) {
+      if (chunk.kind !== 'text') continue
+      output += chunk.text
+      if (output.length > maxChars) break
+    }
+    return output
   }
 
   private normalizeGeneratedPlan(
@@ -537,10 +633,81 @@ export function extractJsonObject(value: string) {
     .replace(/^```(?:json)?/i, '')
     .replace(/```$/i, '')
     .trim()
-  if (cleaned.startsWith('{') && cleaned.endsWith('}')) return cleaned
   const start = cleaned.indexOf('{')
-  const end = cleaned.lastIndexOf('}')
-  return start >= 0 && end > start ? cleaned.slice(start, end + 1) : null
+  if (start < 0) return null
+
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let index = start; index < cleaned.length; index += 1) {
+    const char = cleaned[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\' && inString) {
+      escaped = true
+      continue
+    }
+    if (char === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (char === '{') depth += 1
+    if (char === '}') {
+      depth -= 1
+      if (depth === 0) return cleaned.slice(start, index + 1)
+    }
+  }
+  return null
+}
+
+export function parseJsonObject(value: string) {
+  try {
+    return JSON.parse(value)
+  } catch (error) {
+    const repaired = stripJsonComments(value).replace(/,\s*([}\]])/g, '$1')
+    return JSON.parse(repaired)
+  }
+}
+
+function stripJsonComments(value: string) {
+  let output = ''
+  let inString = false
+  let escaped = false
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]
+    const next = value[index + 1]
+    if (escaped) {
+      output += char
+      escaped = false
+      continue
+    }
+    if (char === '\\' && inString) {
+      output += char
+      escaped = true
+      continue
+    }
+    if (char === '"') {
+      output += char
+      inString = !inString
+      continue
+    }
+    if (!inString && char === '/' && next === '/') {
+      while (index < value.length && value[index] !== '\n') index += 1
+      output += '\n'
+      continue
+    }
+    if (!inString && char === '/' && next === '*') {
+      index += 2
+      while (index < value.length && !(value[index] === '*' && value[index + 1] === '/')) index += 1
+      index += 1
+      continue
+    }
+    output += char
+  }
+  return output
 }
 
 export function cleanPlanText(value: unknown) {

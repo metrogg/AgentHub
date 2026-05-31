@@ -30,6 +30,7 @@ import { env } from '../env'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger } from '../lib/logger'
 import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/auth'
+import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
 import { testLlmConnection } from '../services/llm-client'
 
 const execFileAsync = promisify(execFile)
@@ -146,6 +147,14 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       success: true,
       message: '已清空应用数据并重新创建默认用户',
       preserved: ['本地项目目录', '数据库迁移记录'],
+    })
+  })
+  .post('/cleanup-legacy-data', async (c) => {
+    const result = await cleanupLegacyApplicationData()
+    logger.warn({ userId: c.get('user').sub, result }, 'Legacy AgentHub entries have been cleaned')
+    return c.json({
+      ...result,
+      message: '已清理历史入口、旧任务表、旧 Agent 表和无效任务子会话',
     })
   })
   .post('/test-model', async (c) => {

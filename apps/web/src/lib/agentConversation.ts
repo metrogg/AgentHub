@@ -106,7 +106,7 @@ export async function startAgentConversation({
       return ensureAgentDirectSession(agent, workspace.id, workspaceAgent.id)
     }
 
-    const { session } = await api.openWorkspaceAgentSession(workspace.id, workspaceAgent.id)
+    const { session } = await api.openWorkspaceGroupSession(workspace.id, [workspaceAgent.id])
     return session
   }
 
@@ -121,8 +121,6 @@ export async function syncSavedAgentDirectSessions(
 ) {
   const { items: sessions } = await api.listSessions()
   const updatedWorkspaceIds = new Set<string>()
-  const previousIdentity = previousAgent ? normalizeMatchText(previousAgent.name) : ''
-  const previousRole = previousAgent ? normalizeMatchText(previousAgent.role) : ''
 
   for (const session of sessions) {
     if (!isDirectWorkspaceAgentSession(session)) continue
@@ -131,11 +129,8 @@ export async function syncSavedAgentDirectSessions(
     const metadata = session.metadata ?? {}
     const savedAgentId = typeof metadata.savedAgentId === 'string' ? metadata.savedAgentId : ''
     const matchesSavedId = savedAgentId === agent.id || (previousAgent ? savedAgentId === previousAgent.id : false)
-    const matchesLegacySession =
-      previousAgent &&
-      sessionLooksLikeAgentSession(session.title, previousIdentity, previousRole)
 
-    if (!matchesSavedId && !matchesLegacySession) continue
+    if (!matchesSavedId) continue
 
     const workspaceId = session.workspaceId
     const workspaceAgentId = session.workspaceAgentId
@@ -201,13 +196,9 @@ function createConversationWorkspace(name: string, goal: string, projectPath?: s
 }
 
 /**
- * 查找已包含指定 Agent 的工作区（按名称+角色匹配），避免重复创建。
+ * 只复用带 savedAgentId 的专属 Agent 私聊，避免把历史同名会话重新挂回新流程。
  */
 async function findWorkspaceForAgent(agent: SavedAgentConfig) {
-  const agentName = normalizeMatchText(agent.name)
-  const agentRole = normalizeMatchText(agent.role)
-  if (!agentName) return null
-
   let groupWorkspaceIds = new Set<string>()
   try {
     const { items: sessions } = await api.listSessions()
@@ -232,48 +223,8 @@ async function findWorkspaceForAgent(agent: SavedAgentConfig) {
         workspaceAgentId: directBySavedId.workspaceAgentId ?? null,
       }
     }
-
-    const legacyDirect = sessions.find((session) => {
-      if (!isDirectWorkspaceAgentSession(session)) return false
-      if (groupWorkspaceIds.has(session.workspaceId!)) return false
-      if (isGeneratedTaskMetadata(session.metadata)) return false
-      return sessionLooksLikeAgentSession(session.title, agentName, agentRole)
-    })
-    if (legacyDirect?.workspaceId) {
-      return {
-        workspaceId: legacyDirect.workspaceId,
-        workspaceAgentId: legacyDirect.workspaceAgentId ?? null,
-      }
-    }
   } catch {
     groupWorkspaceIds = new Set()
-  }
-
-  try {
-    const { items } = await api.listWorkspaces()
-    let fallback: { workspaceId: string; workspaceAgentId: string | null } | null = null
-    for (const ws of items) {
-      if (groupWorkspaceIds.has(ws.id)) continue
-
-      const full = await api.getWorkspace(ws.id)
-      const byName = full.agents.find((wa) => normalizeMatchText(wa.name) === agentName)
-      if (normalizeMatchText(full.workspace.name) === agentName) {
-        return {
-          workspaceId: ws.id,
-          workspaceAgentId: byName?.id ?? (full.agents.length === 1 ? full.agents[0]!.id : null),
-        }
-      }
-
-      const byNameAndRole = full.agents.find(
-        (wa) => normalizeMatchText(wa.name) === agentName && normalizeMatchText(wa.role) === agentRole,
-      )
-      if (!fallback && byNameAndRole) {
-        fallback = { workspaceId: ws.id, workspaceAgentId: byNameAndRole.id }
-      }
-    }
-    return fallback
-  } catch {
-    // 查询失败时降级为创建新工作区
   }
   return null
 }
@@ -318,7 +269,7 @@ function findAgentDirectSession(
   sessions: Session[],
   agent: SavedAgentConfig,
   workspaceId: string,
-  workspaceAgentId: string,
+  _workspaceAgentId: string,
 ) {
   const bySavedAgentId = sessions.find((session) => {
     const metadata = session.metadata ?? {}
@@ -330,22 +281,7 @@ function findAgentDirectSession(
     )
   })
   if (bySavedAgentId) return bySavedAgentId
-
-  const agentName = normalizeMatchText(agent.name)
-  const agentRole = normalizeMatchText(agent.role)
-  return (
-    sessions.find((session) => {
-      if (!isDirectWorkspaceSession(session)) return false
-      if (session.workspaceId !== workspaceId) {
-        return false
-      }
-      if (session.workspaceAgentId && session.workspaceAgentId !== workspaceAgentId) return false
-      if (isGeneratedTaskMetadata(session.metadata)) return false
-      const metadata = session.metadata ?? {}
-      if (metadata.kind && metadata.kind !== 'agent-direct') return false
-      return sessionLooksLikeAgentSession(session.title, agentName, agentRole)
-    }) ?? null
-  )
+  return null
 }
 
 function singleAgentWorkspaceName(agent: SavedAgentConfig) {
@@ -395,10 +331,6 @@ function isDirectWorkspaceAgentSession(session: Session) {
   return session.type === SessionType.Direct && Boolean(session.workspaceId && session.workspaceAgentId)
 }
 
-function isDirectWorkspaceSession(session: Session) {
-  return session.type === SessionType.Direct && Boolean(session.workspaceId)
-}
-
 function isGeneratedTaskMetadata(metadata: Record<string, unknown> | null | undefined) {
   return Boolean(
     metadata?.orchestratorTaskId ||
@@ -406,13 +338,6 @@ function isGeneratedTaskMetadata(metadata: Record<string, unknown> | null | unde
       metadata?.hiddenFromSessionTree ||
       metadata?.kind === 'orchestrator-task',
   )
-}
-
-function sessionLooksLikeAgentSession(title: string, agentName: string, agentRole: string) {
-  const normalizedTitle = normalizeMatchText(title)
-  const titleParts = title.split('/').map((part) => normalizeMatchText(part))
-  if (titleParts.some((part) => part === agentName)) return true
-  return normalizedTitle.includes(agentName) && (!agentRole || normalizedTitle.includes(agentRole))
 }
 
 function normalizeMatchText(value: string) {
