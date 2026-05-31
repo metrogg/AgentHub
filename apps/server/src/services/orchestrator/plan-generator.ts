@@ -117,6 +117,7 @@ export async function buildDynamicOrchestratorPlan(
     useSpecFirst: false,
     plannerModelId: orchestratorAgent?.modelId,
     plannerSystemPrompt: orchestratorAgent?.systemPrompt,
+    plannerAgent: orchestratorAgent ? toExecutionAgent(orchestratorAgent) : null,
   })
 
   return executionPlanToOrchestratorPlan(executionPlan, workerPlanningAgents)

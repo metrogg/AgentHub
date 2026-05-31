@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import {
   db,
   messages,
+  workspaceAgents,
   workspaceTasks,
   orchestratorRuns,
   taskClarifications,
@@ -36,10 +37,11 @@ import type {
 } from './types'
 import { PolicyGuard } from '../policy-guard'
 import { streamReply } from '../llm'
-import { buildAgentProfileWithWorktree } from '../agents/profile-builder'
+import { buildAgentProfile, buildAgentProfileWithWorktree } from '../agents/profile-builder'
 import { ensureOrchestratorTaskSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST, resolveDefaultWorkDir } from '../execution/agent-execution-envelope'
 import { buildA2ADispatchEnvelope, buildA2AExecutionTask } from '../protocols/a2a-internal'
+import { runtimeRegistry, type AgentProfile } from '../runtime'
 import { WsEvent, TaskStatus, OrchestratorRunStatus } from '@agenthub/shared'
 import { env } from '../../env'
 
@@ -349,6 +351,7 @@ export class OrchestratorEngine {
       .where(eq(sessions.id, groupSessionId))
       .limit(1)
     const ownerId = groupSessionRecord?.ownerId ?? 'user'
+    const orchestratorProfile = await this.loadOrchestratorProfile(workspaceId)
 
     const executor = this.createTaskExecutor(
       runId,
@@ -455,7 +458,11 @@ export class OrchestratorEngine {
 
           if (taskOutputs.length === 0) break
 
-          const needMoreTasks = await this.evaluateSupervisorNeed(plan.goal, taskOutputs)
+          const needMoreTasks = await this.evaluateSupervisorNeed(
+            plan.goal,
+            taskOutputs,
+            orchestratorProfile,
+          )
           if (!needMoreTasks) break
 
           const supplementPrompt = plan.tasks
@@ -679,6 +686,22 @@ export class OrchestratorEngine {
       // Run 结束，清理黑板内存缓存
       blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
     }
+  }
+
+  private async loadOrchestratorProfile(workspaceId: string): Promise<AgentProfile | null> {
+    const [workspace] = await db
+      .select({ projectPath: workspaces.projectPath })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1)
+    const agents = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.workspaceId, workspaceId))
+    const orchestrator =
+      agents.find((agent) => agent.roleType === 'orchestrator') ??
+      agents.find((agent) => agent.name.toLowerCase().includes('orchestrator'))
+    return orchestrator ? buildAgentProfile(orchestrator, workspace?.projectPath) : null
   }
 
   private createTaskExecutor(
@@ -1047,6 +1070,7 @@ export class OrchestratorEngine {
   private async evaluateSupervisorNeed(
     goal: string,
     taskOutputs: { taskTitle: string; agentName: string; output: string }[],
+    orchestratorProfile?: AgentProfile | null,
   ): Promise<boolean> {
     const prompt = `评估以下任务产出是否充分，决定是否需要追加补充任务。
 
@@ -1060,6 +1084,34 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
 - NO：当前产出已经充分，无需追加`
 
     try {
+      if (orchestratorProfile?.runtimeType === 'code-agent') {
+        const profile: AgentProfile = {
+          ...orchestratorProfile,
+          sandboxPolicy: 'read-only',
+          toolPermissions: ['chat', 'workspace:read'],
+          approvalRequired: false,
+        }
+        const runtime = runtimeRegistry.resolve(profile)
+        let output = ''
+        for await (const chunk of runtime.execute({
+          sessionId: `supervisor-check-${crypto.randomUUID()}`,
+          prompt: [
+            '你是 AgentHub 的 Orchestrator，本次只判断是否需要追加补充任务。',
+            '只回答 YES 或 NO，不要解释，不要修改文件。',
+            '',
+            prompt,
+          ].join('\n'),
+          history: [],
+          profile,
+          signal: new AbortController().signal,
+        })) {
+          if (chunk.kind !== 'text') continue
+          output += chunk.text
+          if (output.length > 100) break
+        }
+        return output.trim().toUpperCase().includes('YES')
+      }
+
       let output = ''
       for await (const delta of streamReply(
         [{ role: 'user', content: prompt }],
@@ -2093,6 +2145,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         failed: results.filter((result) => result.status === TaskStatus.Failed).length,
       },
     })
+    const orchestratorProfile = await this.loadOrchestratorProfile(workspaceId)
 
     // 从黑板读取所有产物，供 Synthesizer 使用（替代直接从 results 读取）
     const bbNamespace = Blackboard.namespace(workspaceId, runId)
@@ -2122,6 +2175,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       enrichedResults,
       conflictReports,
       typedBlackboardEntries,
+      orchestratorProfile,
     )
 
     // 检查是否有失败、阻塞或缺失结果，最终状态必须反映真实执行情况。
@@ -2219,13 +2273,9 @@ ${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.leng
       return t === 'file'
     })
 
-    // 匹配 workspace 中的 orchestrator agent，避免 senderId 与前端头像对不上
-    const orchestratorAgent = plan.agents.find(
-      (a) =>
-        a.roleType === 'orchestrator' ||
-        a.key === 'orchestrator' ||
-        a.name.toLowerCase().includes('orchestrator'),
-    )
+    const orchestratorSenderId = orchestratorProfile?.id ?? 'orchestrator'
+    const orchestratorSenderName = orchestratorProfile?.name ?? 'Orchestrator'
+    const orchestratorSenderRole = orchestratorProfile?.role ?? 'Coordinator'
 
     const qaResult = extractQAResult(enrichedResults)
     const deliveryFiles = finalArtifacts.map((a) => {
@@ -2260,14 +2310,14 @@ ${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.leng
       .insert(messages)
       .values({
         sessionId: groupSessionId,
-        senderId: orchestratorAgent?.id ?? 'orchestrator',
+        senderId: orchestratorSenderId,
         senderType: 'agent',
         type: 'text',
         content: finalSummary,
         metadata: {
-          agentName: orchestratorAgent?.name ?? 'Orchestrator',
-          role: orchestratorAgent?.role ?? 'Coordinator',
-          runtimeType: 'llm',
+          agentName: orchestratorSenderName,
+          role: orchestratorSenderRole,
+          runtimeType: orchestratorProfile?.runtimeType ?? 'llm',
           artifacts: finalArtifacts,
           file_card:
             fileArtifacts.length > 0

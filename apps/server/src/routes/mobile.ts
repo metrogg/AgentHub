@@ -441,12 +441,7 @@ async function ensureSavedAgentDirectSession(ownerId: string, agent: SavedAgentC
       .limit(1)
   }
   if (!workspace) {
-    const [existingWorkspace] = await db
-      .select()
-      .from(workspaces)
-      .where(and(eq(workspaces.ownerId, ownerId), eq(workspaces.name, workspaceName)))
-      .limit(1)
-    workspace = existingWorkspace ?? (await db
+    workspace = (await db
       .insert(workspaces)
       .values({
         ownerId,
@@ -474,10 +469,7 @@ async function ensureSavedAgentDirectSession(ownerId: string, agent: SavedAgentC
   const preferredAgent = existingBySavedId?.workspaceAgentId
     ? workspaceAgentList.find((item) => item.id === existingBySavedId.workspaceAgentId)
     : null
-  let workspaceAgent =
-    preferredAgent ??
-    workspaceAgentList.find((item) => sameAgentIdentity(item, agent)) ??
-    null
+  let workspaceAgent = preferredAgent ?? null
   const agentValues = savedAgentWorkspaceValues(agent)
   if (workspaceAgent) {
     const [updatedAgent] = await db
@@ -499,10 +491,7 @@ async function ensureSavedAgentDirectSession(ownerId: string, agent: SavedAgentC
   }
   if (!workspaceAgent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 创建失败')
 
-  const reusableSession = existingBySavedId ?? sessionList.find((session) =>
-    session.workspaceId === workspace.id &&
-    session.workspaceAgentId === workspaceAgent.id
-  )
+  const reusableSession = existingBySavedId ?? null
   const metadata = { ...(reusableSession?.metadata ?? {}), kind: 'agent-direct', savedAgentId: agent.id }
   if (reusableSession) {
     const [updated] = await db
@@ -555,10 +544,6 @@ function savedAgentWorkspaceValues(agent: SavedAgentConfig) {
     autoInvoke: agent.autoInvoke ?? true,
     approvalRequired: runtimeType === 'code-agent' ? false : (agent.approvalRequired ?? true),
   }
-}
-
-function sameAgentIdentity(agent: typeof workspaceAgents.$inferSelect, saved: SavedAgentConfig) {
-  return contactDedupeKey(agent) === contactDedupeKey(saved)
 }
 
 function contactDedupeKey(agent: { name: string; role: string; runtimeType?: string | null; codeAgentType?: string | null }) {

@@ -269,69 +269,15 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ session })
   })
 
-  // Agent child session
+  // Deprecated: workspace/agent direct sessions were the old child-session entry.
   .post('/:id/agents/:agentId/session', async (c) => {
-    const user = c.get('user')
-    const id = c.req.param('id')
-    const agentId = c.req.param('agentId')
-    await ensureWorkspace(id, user.sub)
-
-    const [agent] = await db
-      .select()
-      .from(workspaceAgents)
-      .where(and(eq(workspaceAgents.id, agentId), eq(workspaceAgents.workspaceId, id)))
-      .limit(1)
-    if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
-
-    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, id)).limit(1)
-
-    const existingSessions = await db
-      .select()
-      .from(sessions)
-      .where(
-        and(
-          eq(sessions.ownerId, user.sub),
-          eq(sessions.type, 'direct'),
-          eq(sessions.workspaceId, id),
-          eq(sessions.workspaceAgentId, agentId)
-        )
-      )
-      .orderBy(desc(sessions.updatedAt))
-
-    const existing = existingSessions.find((session) => !isGeneratedTaskSession(session.metadata))
-    if (existing) return c.json({ session: existing })
-
-    try {
-      const [created] = await db
-        .insert(sessions)
-        .values({
-          title: `${workspace?.name || 'Workspace'} / ${agent.name}`,
-          type: 'direct',
-          ownerId: user.sub,
-          workspaceId: id,
-          workspaceAgentId: agentId,
-          metadata: { kind: 'agent-direct' },
-        })
-        .returning()
-
-      if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, '会话创建失败')
-      return c.json({ session: created })
-    } catch (error) {
-      logger.error(
-        {
-          err: error instanceof Error ? error.message : String(error),
-          workspaceId: id,
-          agentId,
-          userId: user.sub,
-        },
-        'Failed to create agent child session',
-      )
-      if (error instanceof AppError) throw error
-      throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, error instanceof Error ? error.message : '会话创建失败')
-    }
+    throw AppError.fromCode(
+      AppErrorCodes.VALIDATION_FAILED,
+      '旧的 Workspace/Agent 子会话入口已停用；请从 Agent 私聊或群聊任务子对话进入。',
+    )
   })
 
-  // Agent child session
+  // Workspace sessions
   .get('/:id/sessions', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
@@ -524,11 +470,3 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.body(null, 204)
   })
 
-function isGeneratedTaskSession(metadata: Record<string, unknown> | null) {
-  return Boolean(
-    metadata?.orchestratorTaskId ||
-      metadata?.orchestratorRunId ||
-      metadata?.hiddenFromSessionTree ||
-      metadata?.kind === 'orchestrator-task',
-  )
-}
