@@ -276,10 +276,6 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       // OpenCode's --file is an array option; keep it after the message so it
       // does not consume the prompt text as another file path.
       if (options?.promptFile) args.push('--file', options.promptFile)
-      args.push(options?.promptFile ? buildFileBackedPrompt(options.promptFile) : prompt)
-      // OpenCode's --file is an array option; keep it after the message so it
-      // does not consume the prompt text as another file path.
-      if (options?.promptFile) args.push('--file', options.promptFile)
       return args
     },
   },
@@ -296,17 +292,6 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       return args
     },
   },
-}
-
-export const __codeAgentAdapterTestHooks = {
-  buildClaudeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
-    adapters['claude-code'].buildArgs(prompt, options),
-  buildOpencodeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
-    adapters.opencode.buildArgs(prompt, options),
-  consumeClaudeStreamJson,
-  extractClaudeResultMessage,
-  friendlyCodeAgentError: (output: string, displayName = 'Coding Tools') =>
-    friendlyCodeAgentError(output, { displayName } as CodeAgentAdapter),
 }
 
 export function isCodeAgentProfile(profile?: AgentRunProfile) {
@@ -1364,6 +1349,9 @@ async function buildCodeAgentRunMetadata(input: {
     ...(rawOutputArtifact ? [rawOutputArtifact] : []),
     ...buildArtifactsFromMetadata({ cwd: input.cwd, files, output: input.output }),
   ]
+  const partialSuccess =
+    (status === 'failed' || status === 'timed-out') &&
+    (files.length > 0 || commands.length > 0 || Boolean(input.finalMessage))
   return {
     type: 'code-agent-run',
     status,
@@ -1378,7 +1366,7 @@ async function buildCodeAgentRunMetadata(input: {
     artifacts: dedupeArtifacts(artifacts).slice(0, 80),
     finalMessage: input.finalMessage,
     partialSuccess,
-    warning: partialSuccess ? friendlyCodeAgentError(input.output, input.adapter) : undefined,
+    warning: partialSuccess ? friendlyCodeAgentError(input.adapter, input.output) : undefined,
     reviewRequired: requiresCodeAgentOutputReview(input.adapter),
     logs: input.liveLogs?.slice(-80),
     steps: buildFinalRunSteps({
@@ -3270,6 +3258,9 @@ function cleanDiagnosticOutput(output: string, max = env.AGENTHUB_CODE_AGENT_DIA
 
 function friendlyCodeAgentError(adapter: CodeAgentAdapter, output: string) {
   const runtimeName = adapter.displayName
+  if (/webfetch failed|web fetch failed|fetch failed.*404|status code 404|http 404|GET .*404/i.test(output)) {
+    return `${runtimeName} 已启动，但网页抓取失败。请检查目标网址是否可访问；如果已经生成了文件，产物会保留在工作目录中。`
+  }
   if (/model.*not found|does not exist|404|unknown model/i.test(output)) {
     return `${runtimeName} 已启动，但当前模型或 Base URL 不可用。请检查模型名称和供应商地址。`
   }
@@ -3305,9 +3296,9 @@ function friendlyCodeAgentError(adapter: CodeAgentAdapter, output: string) {
     return `当前 ${runtimeName} 不支持这个 provider 配置里的 wire_api=chat。请检查 CLI 和供应商 API 协议。`
   }
   if (/No such file or directory|cannot find the path|系统找不到指定的路径/i.test(output)) {
-    return `${cliName} 已启动，但项目目录不存在。请重新打开或选择正确的工作区文件夹。`
+    return `${runtimeName} 已启动，但项目目录不存在。请重新打开或选择正确的工作区文件夹。`
   }
-  return `${cliName} 已启动，但 CLI 执行过程返回了错误。`
+  return `${runtimeName} 已启动，但 CLI 执行过程返回了错误。`
 }
 
 function quoteForCmd(value: string) {
@@ -3341,6 +3332,9 @@ export const __codeAgentAdapterTestHooks = {
   },
   consumeClaudeStreamJson,
   extractClaudeResultMessage,
+  friendlyCodeAgentError(output: string, displayName = 'Coding Tools') {
+    return friendlyCodeAgentError({ displayName } as CodeAgentAdapter, output)
+  },
   async resolveEffectiveModelTarget(type: CodeAgentType, agentModelId?: string | null) {
     const toolConfig = await resolveToolConfig(type)
     const requestedModelId = resolveCodeAgentModelId(agentModelId, toolConfig)

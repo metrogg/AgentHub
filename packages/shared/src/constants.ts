@@ -61,6 +61,7 @@ export const WsEvent = {
   TaskBoardRunCompleted: 'task_board:run_completed',
   TaskBoardClarificationNeeded: 'task_board:clarification_needed',
   TimelineEvent: 'timeline:event',
+  AgUiEvent: 'ag-ui:event',
 } as const
 export type WsEvent = (typeof WsEvent)[keyof typeof WsEvent]
 

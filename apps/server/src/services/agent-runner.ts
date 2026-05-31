@@ -27,10 +27,6 @@ export interface AgentRunResult {
   messageId?: string
 }
 
-export const __agentRunnerTestHooks = {
-  looksLikeAgentFailure,
-}
-
 const sessionRooms = new Map<string, Set<ServerWebSocket<unknown>>>()
 const activeRuns = new Map<string, { cancelled: boolean; controller: AbortController }>()
 const runLocks = new Map<string, Promise<void>>()
@@ -550,6 +546,7 @@ function looksLikeAgentFailure(content: string) {
 }
 
 export const __agentRunnerTestHooks = {
+  looksLikeAgentFailure,
   mergeCodeAgentRunMetadata,
 }
 

@@ -10,7 +10,7 @@ import {
 } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
 import type { CodeAgentRunMetadata, TimelineEvent } from '@agenthub/shared'
-import { WsEvent, TaskStatus, MessageType, SessionType, SenderType } from '@agenthub/shared'
+import { WsEvent, MessageType, SessionType, SenderType } from '@agenthub/shared'
 
 let pendingStream: {
   messageId: string
@@ -1479,7 +1479,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       case WsEvent.MessageMetadata: {
         if (cancelledSessions.has(sessionId)) break
-        const { messageId, codeAgentRun, agentId, agentName } = e.payload as {
+        const { messageId, codeAgentRun } = e.payload as {
           messageId: string
           codeAgentRun: CodeAgentRunMetadata
           agentId?: string
