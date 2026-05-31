@@ -589,6 +589,7 @@ export interface WorkspaceAgent {
   runtimeType: RuntimeType
   codeAgentType: CodeAgentType | null
   capabilityTags: string[]
+  skillIds: string[]
   toolPermissions: string[]
   sandboxPolicy: SandboxPolicy
   contextPolicy: ContextPolicy
@@ -657,6 +658,7 @@ export interface AgentConfigInput {
   runtimeType?: WorkspaceAgent['runtimeType']
   codeAgentType?: WorkspaceAgent['codeAgentType']
   capabilityTags?: string[]
+  skillIds?: string[]
   toolPermissions?: string[]
   sandboxPolicy?: WorkspaceAgent['sandboxPolicy']
   contextPolicy?: WorkspaceAgent['contextPolicy']

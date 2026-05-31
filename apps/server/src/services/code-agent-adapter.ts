@@ -314,7 +314,8 @@ export async function* streamCodeAgentReply(
     return
   }
 
-  const skillContext = await globalSkillRegistry.buildSkillContext(
+  const skillContext = await globalSkillRegistry.buildSkillContextWithPreset(
+    profile.skillIds ?? [],
     [profile.systemPrompt, profile.description, userMsg.content].filter(Boolean).join('\n\n'),
     { capabilityTags: profile.capabilityTags, limit: 3 },
   )

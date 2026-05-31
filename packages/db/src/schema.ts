@@ -64,6 +64,7 @@ export const workspaceAgents = sqliteTable(
   runtimeType: text('runtime_type', { enum: ['llm', 'code-agent'] }).notNull().default('code-agent'),
   codeAgentType: text('code_agent_type', { enum: ['codex', 'claude-code', 'opencode', 'gemini'] }),
   capabilityTags: text('capability_tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  skillIds: text('skill_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
   toolPermissions: text('tool_permissions', { mode: 'json' }).$type<string[]>().notNull().default([]),
   sandboxPolicy: text('sandbox_policy', { enum: ['read-only', 'workspace-write', 'danger-full-access'] })
     .notNull()

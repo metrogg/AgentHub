@@ -1,6 +1,7 @@
 import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
 import { harnessManager } from '../harness'
+import { globalSkillRegistry } from '../skill-registry'
 import type { AgentOutputChunk, AgentProfile, AgentRuntime, ExecutionContext } from './agent-runtime'
 
 export class LlmRuntime implements AgentRuntime {
@@ -39,13 +40,14 @@ async function buildAgentSystem(profile: AgentProfile, workspacePath?: string | 
   for (const path of harnessPaths) {
     try {
       await harnessManager.loadFromWorkspace(path)
-      return harnessManager.buildSystemPrompt({ agent: profile, workspacePath: path })
+      const base = harnessManager.buildSystemPrompt({ agent: profile, workspacePath: path })
+      return await appendAgentSkills(base, profile)
     } catch (err) {
       logger.error({ err, path }, 'Harness buildSystemPrompt failed, trying fallback')
     }
   }
 
-  return [
+  const base = [
     profile.systemPrompt || `你是 ${profile.name}，AgentHub 中的协作智能体。`,
     profile.role ? `你在群聊中的角色：${profile.role}。` : '',
     profile.description ? `能力摘要：${profile.description}。` : '',
@@ -62,4 +64,23 @@ async function buildAgentSystem(profile: AgentProfile, workspacePath?: string | 
   ]
     .filter(Boolean)
     .join('\n')
+
+  return await appendAgentSkills(base, profile)
+}
+
+/** Append agent-specific skills (toolbox) to the system prompt */
+async function appendAgentSkills(systemPrompt: string, profile: AgentProfile): Promise<string> {
+  if (!profile.skillIds?.length) return systemPrompt
+  try {
+    const skillContext = await globalSkillRegistry.buildSkillContextWithPreset(
+      profile.skillIds,
+      [profile.systemPrompt, profile.description].filter(Boolean).join('\n\n'),
+      { capabilityTags: profile.capabilityTags, limit: 5 },
+    )
+    if (!skillContext) return systemPrompt
+    return `${systemPrompt}\n\n${skillContext}`
+  } catch (err) {
+    logger.error({ err, agentId: profile.id }, 'Failed to load agent skills')
+    return systemPrompt
+  }
 }
