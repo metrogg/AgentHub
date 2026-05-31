@@ -329,41 +329,11 @@ export async function* streamCodeAgentReply(
   ) {
     modelTarget = await resolveRuntimeModelTarget(requestedModelId)
   }
-  let runtimeModelTarget = normalizeCodeAgentModelTarget(type, modelTarget)
+  // 直接使用用户配置的 agent 类型，不因模型 provider 不匹配而静默切换到 OpenCode
+  let runtimeModelTarget = modelTarget ?? null
   let installed = await isCommandInstalled(adapter.command)
   let ignoreModelEnv = false
   let skipLocalCodexConfig = false
-  if (shouldRouteModelThroughOpenCode(type, modelTarget, runtimeModelTarget, requestedModelId)) {
-    const opencodeTarget = modelTarget ?? (await resolveRuntimeModelTarget(requestedModelId))
-    const opencodeAdapter = adapters.opencode
-    const opencodeInstalled = await isCommandInstalled(opencodeAdapter.command)
-    const opencodeConfigured =
-      opencodeInstalled && opencodeTarget
-        ? await isRuntimeConfigured(
-            'opencode',
-            opencodeAdapter,
-            opencodeTarget.modelId,
-            opencodeTarget,
-          )
-        : false
-    if (opencodeInstalled && opencodeConfigured && opencodeTarget) {
-      type = 'opencode'
-      adapter = opencodeAdapter
-      runtimeModelTarget = opencodeTarget
-      modelTarget = opencodeTarget
-      installed = opencodeInstalled
-    } else {
-      yield buildIncompatibleCodeAgentModelMessage({
-        requestedModelId,
-        selectedRuntime: type,
-        selectedRuntimeName: adapter.displayName,
-        modelTarget: opencodeTarget ?? modelTarget,
-        opencodeInstalled,
-        opencodeConfigured,
-      })
-      return
-    }
-  }
   const effectiveModelId = runtimeModelTarget?.modelId ?? null
   const configured = await isRuntimeConfigured(type, adapter, effectiveModelId, runtimeModelTarget)
   const executionEnabled = await getBooleanSetting(
@@ -560,35 +530,6 @@ function resolveCodeAgentModelCandidates(
   return [...new Set([fromAgent, fromTool].filter(Boolean))]
 }
 
-function normalizeCodeAgentModelTarget(
-  type: CodeAgentType,
-  modelTarget?: CodeAgentModelTarget | null,
-) {
-  if (!modelTarget) return null
-  if (type === 'claude-code') return isClaudeCodeModelTarget(modelTarget) ? modelTarget : null
-  if (type === 'codex') return isCodexModelTarget(modelTarget) ? modelTarget : null
-  if (type === 'gemini') return isGeminiModelTarget(modelTarget) ? modelTarget : null
-  return modelTarget
-}
-
-function shouldRouteModelThroughOpenCode(
-  type: CodeAgentType,
-  modelTarget?: CodeAgentModelTarget | null,
-  runtimeModelTarget?: CodeAgentModelTarget | null,
-  requestedModelId?: string | null,
-) {
-  if (type === 'opencode') return false
-  if (modelTarget && !runtimeModelTarget) return true
-  if (
-    !modelTarget &&
-    requestedModelId &&
-    !isNativeCodeAgentModelIdCompatible(type, requestedModelId)
-  ) {
-    return true
-  }
-  return false
-}
-
 function isNativeCodeAgentModelIdCompatible(type: CodeAgentType, modelId?: string | null) {
   const normalized = modelId?.trim().toLowerCase()
   if (!normalized || type === 'opencode') return true
@@ -598,41 +539,6 @@ function isNativeCodeAgentModelIdCompatible(type: CodeAgentType, modelId?: strin
     return /^(gpt|o[1-9](?:\b|-)|chatgpt|codex|computer-use|openai\/)/i.test(normalized)
   }
   return true
-}
-
-function isClaudeCodeModelTarget(modelTarget: CodeAgentModelTarget) {
-  const provider = modelTarget.provider.trim().toLowerCase()
-  const providerKey = modelTarget.providerKey.trim().toLowerCase()
-  const endpoint = (modelTarget.anthropicBaseUrl || modelTarget.openaiBaseUrl || '').toLowerCase()
-  if (modelTarget.anthropicBaseUrl) return true
-  return (
-    provider.includes('anthropic') ||
-    provider.includes('claude') ||
-    providerKey.includes('anthropic') ||
-    providerKey.includes('claude') ||
-    endpoint.includes('anthropic.com') ||
-    endpoint.includes('/anthropic')
-  )
-}
-
-function isCodexModelTarget(modelTarget: CodeAgentModelTarget) {
-  const provider = modelTarget.provider.trim().toLowerCase()
-  const providerKey = modelTarget.providerKey.trim().toLowerCase()
-  const endpoint = (modelTarget.openaiBaseUrl || modelTarget.anthropicBaseUrl || '').toLowerCase()
-  return provider === 'openai' || providerKey === 'openai' || endpoint.includes('api.openai.com')
-}
-
-function isGeminiModelTarget(modelTarget: CodeAgentModelTarget) {
-  const provider = modelTarget.provider.trim().toLowerCase()
-  const providerKey = modelTarget.providerKey.trim().toLowerCase()
-  const modelId = modelTarget.modelId.trim().toLowerCase()
-  return (
-    provider.includes('gemini') ||
-    provider.includes('google') ||
-    providerKey.includes('gemini') ||
-    providerKey.includes('google') ||
-    modelId.includes('gemini')
-  )
 }
 
 async function isRuntimeConfigured(
@@ -695,43 +601,6 @@ function codeAgentBlockerText(options: {
   ].filter(Boolean)
   if (!blockers.length) return '当前配置已满足自动执行条件。'
   return `当前阻塞项：${blockers.join('、')}。`
-}
-
-function buildIncompatibleCodeAgentModelMessage(options: {
-  requestedModelId?: string | null
-  selectedRuntime: CodeAgentType
-  selectedRuntimeName: string
-  modelTarget?: CodeAgentModelTarget | null
-  opencodeInstalled: boolean
-  opencodeConfigured: boolean
-}) {
-  const modelLabel =
-    options.modelTarget?.modelId ?? options.requestedModelId?.trim() ?? '当前选中模型'
-  const providerLabel = options.modelTarget
-    ? `${options.modelTarget.provider}/${options.modelTarget.modelId}`
-    : modelLabel
-  const runtimeLabel = options.selectedRuntimeName || options.selectedRuntime
-  const blockers = [
-    !options.opencodeInstalled ? 'OpenCode 未安装或不在 PATH' : '',
-    options.opencodeInstalled && !options.opencodeConfigured
-      ? 'OpenCode 缺少该模型档案可用的 API Key/Base URL'
-      : '',
-    !options.modelTarget ? '未找到可注入 OpenCode 的模型档案' : '',
-  ].filter(Boolean)
-
-  return [
-    `**${runtimeLabel} 未启动**`,
-    '',
-    `Agent 选择的模型 \`${modelLabel}\` 不是 ${runtimeLabel} 可直接运行的原生模型。为避免再次触发 unsupported_vendor，AgentHub 没有把它交给 ${runtimeLabel}。`,
-    '',
-    `- 选中模型：${providerLabel}`,
-    `- 自动改投 OpenCode：${options.opencodeInstalled && options.opencodeConfigured ? '可用' : '不可用'}`,
-    blockers.length ? `- 阻塞项：${blockers.join('、')}` : '',
-    '',
-    '请把该 Agent 的 Coding Tools 改为 OpenCode，或把 Agent 模型换成当前 CLI 原生支持的模型；OpenCode 安装并配置好后会自动接管这类非原生模型。',
-  ]
-    .filter(Boolean)
-    .join('\n')
 }
 
 function buildCodeAgentPrompt(
