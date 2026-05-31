@@ -30,6 +30,7 @@ import {
 import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
+import type { SandboxContainerSpec } from './execution/sandbox-provider'
 import {
   DEFAULT_ENV_ALLOWLIST,
   validateEnvelope,
@@ -82,6 +83,10 @@ interface CodeAgentCommandResult {
 interface CodeAgentRuntimeOptions {
   ignoreModelEnv?: boolean
   skipLocalCodexConfig?: boolean
+  sandboxEnv?: Record<string, string>
+  sandboxConfigDir?: string
+  sandboxTempDir?: string
+  sandboxContainer?: SandboxContainerSpec
 }
 
 export interface CodeAgentMetadataChunk {
@@ -430,7 +435,14 @@ export async function* streamCodeAgentReply(
     toolConfig,
     envelope?.envAllowlist,
     profile.roleType,
-    { ignoreModelEnv, skipLocalCodexConfig },
+    {
+      ignoreModelEnv,
+      skipLocalCodexConfig,
+      sandboxEnv: envelope?.sandboxEnv,
+      sandboxConfigDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_CONFIG,
+      sandboxTempDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_TMP,
+      sandboxContainer: envelope?.sandboxContainer,
+    },
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
       onText: (text) => push(text),
@@ -840,38 +852,44 @@ async function runCodeAgentCommand(
   continueSession?: boolean,
 ): Promise<CodeAgentCommandResult> {
   cwd = cwd?.trim() || undefined
-  const outputPath =
+  const runtimeCwd = runtimeOptions.sandboxContainer?.workdir ?? cwd
+  const runtimeTempDir = runtimeOptions.sandboxTempDir?.trim() || tmpdir()
+  const outputPathHost =
     adapter.command === 'codex'
       ? join(
-          tmpdir(),
+          runtimeTempDir,
           `agenthub-code-agent-${Date.now()}-${Math.random().toString(36).slice(2)}.md`,
         )
       : undefined
-  const promptFile =
-    adapter.promptMode === 'file' ? writeCodeAgentPromptFile(adapter.command, prompt) : undefined
-  const commandPrompt = promptFile
-    ? buildFileBackedPrompt(promptFile)
+  const outputPathRuntime = mapRuntimePath(outputPathHost, runtimeOptions.sandboxContainer)
+  const promptFileHost =
+    adapter.promptMode === 'file'
+      ? writeCodeAgentPromptFile(adapter.command, prompt, runtimeTempDir)
+      : undefined
+  const promptFileRuntime = mapRuntimePath(promptFileHost, runtimeOptions.sandboxContainer)
+  const commandPrompt = promptFileRuntime
+    ? buildFileBackedPrompt(promptFileRuntime)
     : process.platform === 'win32' && (adapter.command === 'codex' || adapter.command === 'claude')
       ? buildAsciiSafePrompt(prompt)
       : prompt
   // 生成或获取 session ID 用于会话恢复
   const sessionId = continueSession ? undefined : crypto.randomUUID()
   const args = adapter.buildArgs(commandPrompt, {
-    cwd,
+    cwd: runtimeCwd,
     agentRoleType,
     modelId: modelTarget?.modelId,
     modelProvider: modelTarget?.providerKey,
-    outputPath,
+    outputPath: outputPathRuntime,
     sandboxPolicy,
     toolConfig,
-    promptFile,
+    promptFile: promptFileRuntime,
     sessionId,
     continueSession,
   })
 
   if (signal?.aborted) {
-    cleanupTempFile(outputPath)
-    cleanupTempFile(promptFile)
+    cleanupTempFile(outputPathHost)
+    cleanupTempFile(promptFileHost)
     return {
       code: 130,
       output: 'Coding Tools 执行已取消。',
@@ -1072,21 +1090,25 @@ async function runCodeAgentCommand(
   )
   emitLiveMetadata(true)
 
-  if (outputPath && existsSync(outputPath)) {
+  if (outputPathHost && existsSync(outputPathHost)) {
     try {
-      unlinkSync(outputPath)
+      unlinkSync(outputPathHost)
     } catch {
       // A stale last-message file should not block execution.
     }
   }
 
-  const proc = Bun.spawn(buildHostCommand(adapter.command, args), {
-    cwd,
-    env: await mergedEnv(adapter, modelTarget, envAllowlist, runtimeOptions),
-    stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
+  const processEnv = await mergedEnv(adapter, modelTarget, envAllowlist, runtimeOptions)
+  const proc = Bun.spawn(
+    buildRuntimeCommand(adapter.command, args, runtimeOptions.sandboxContainer, processEnv),
+    {
+      cwd,
+      env: processEnv,
+      stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
   if (adapter.promptMode === 'stdin') {
     try {
       proc.stdin?.write(commandPrompt)
@@ -1167,17 +1189,17 @@ async function runCodeAgentCommand(
     .filter(Boolean)
     .join('\n')
   const outputFileMessage =
-    outputPath && existsSync(outputPath) ? readFileSync(outputPath, 'utf8').trim() : undefined
-  if (outputPath && existsSync(outputPath)) {
+    outputPathHost && existsSync(outputPathHost) ? readFileSync(outputPathHost, 'utf8').trim() : undefined
+  if (outputPathHost && existsSync(outputPathHost)) {
     try {
-      unlinkSync(outputPath)
+      unlinkSync(outputPathHost)
     } catch {
       // Best-effort cleanup.
     }
   }
-  if (promptFile && existsSync(promptFile)) {
+  if (promptFileHost && existsSync(promptFileHost)) {
     try {
-      unlinkSync(promptFile)
+      unlinkSync(promptFileHost)
     } catch {
       // Best-effort cleanup.
     }
@@ -1236,8 +1258,8 @@ function buildFileBackedPrompt(promptFile?: string) {
   ].join('\n')
 }
 
-function writeCodeAgentPromptFile(command: string, prompt: string) {
-  const dir = resolve(tmpdir(), 'AgentHub', 'code-agent-prompts')
+function writeCodeAgentPromptFile(command: string, prompt: string, tempRoot = tmpdir()) {
+  const dir = resolve(tempRoot, 'AgentHub', 'code-agent-prompts')
   mkdirSync(dir, { recursive: true })
   const path = resolve(
     dir,
@@ -2334,7 +2356,13 @@ function fileStatusFromGitStatus(status: string): CodeAgentRunMetadata['files'][
   return 'untracked'
 }
 
-function buildHostCommand(command: string, args: string[]) {
+function buildRuntimeCommand(
+  command: string,
+  args: string[],
+  container?: SandboxContainerSpec,
+  envMap: Record<string, string> = {},
+) {
+  if (container) return buildDockerCommand(command, args, container, envMap)
   if (process.platform !== 'win32') return [command, ...args]
   if (command === 'codex') return [windowsCodexCommand(), ...args]
   if (command === 'opencode') {
@@ -2343,6 +2371,59 @@ function buildHostCommand(command: string, args: string[]) {
   }
   // Windows 上直接传数组参数，避免 cmd.exe /c 的 8192 字符命令行长度限制
   return [windowsCliCommand(command), ...args]
+}
+
+function buildDockerCommand(
+  command: string,
+  args: string[],
+  container: SandboxContainerSpec,
+  envMap: Record<string, string>,
+) {
+  const dockerArgs = ['run', '--rm', '-i', '--init']
+  dockerArgs.push('--network', container.networkMode)
+  dockerArgs.push('--workdir', container.workdir)
+  if (container.readOnlyRootfs) dockerArgs.push('--read-only')
+  if (container.user) dockerArgs.push('--user', container.user)
+  for (const mount of container.mounts) {
+    const mountParts = [
+      'type=bind',
+      `source=${mount.hostPath}`,
+      `target=${mount.containerPath}`,
+      ...(mount.readOnly ? ['readonly'] : []),
+    ]
+    dockerArgs.push('--mount', mountParts.join(','))
+  }
+  for (const key of Object.keys(envMap)) {
+    dockerArgs.push('--env', key)
+  }
+  if (container.extraArgs?.length) dockerArgs.push(...container.extraArgs)
+  dockerArgs.push(container.image)
+  dockerArgs.push(command, ...args.map((arg) => mapRuntimeArg(arg, container)))
+  return ['docker', ...dockerArgs]
+}
+
+function mapRuntimeArg(value: string, container: SandboxContainerSpec) {
+  return mapRuntimePath(value, container) ?? value
+}
+
+function mapRuntimePath(pathValue: string | undefined, container?: SandboxContainerSpec) {
+  if (!pathValue || !container) return pathValue
+  const exact = container.mounts.find((mount) => normalizeRuntimePath(mount.hostPath) === normalizeRuntimePath(pathValue))
+  if (exact) return exact.containerPath
+  for (const mount of container.mounts) {
+    const host = normalizeRuntimePath(mount.hostPath)
+    const value = normalizeRuntimePath(pathValue)
+    if (value === host) return mount.containerPath
+    if (value.startsWith(`${host}/`)) {
+      const suffix = value.slice(host.length + 1)
+      return `${mount.containerPath}/${suffix}`
+    }
+  }
+  return pathValue
+}
+
+function normalizeRuntimePath(value: string) {
+  return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
 
 function windowsOpencodeNodeDirect(args: string[]): string[] | null {
@@ -2472,17 +2553,40 @@ async function mergedEnv(
   }
 
   normalizeWindowsProcessEnv(base, allowedKeys)
+  applySandboxEnv(base, runtimeOptions.sandboxEnv)
   applyModelTargetEnv(base, adapter, modelTarget)
   if (runtimeOptions.ignoreModelEnv) removeModelEnv(base, adapter)
 
   if (adapter?.command === 'opencode' && modelTarget) {
-    base.OPENCODE_CONFIG = prepareOpencodeRuntimeConfig(modelTarget)
+    const opencodeConfigPath = prepareOpencodeRuntimeConfig(
+      modelTarget,
+      runtimeOptions.sandboxConfigDir
+        ? resolve(runtimeOptions.sandboxConfigDir, 'opencode')
+        : undefined,
+    )
+    base.OPENCODE_CONFIG =
+      mapRuntimePath(opencodeConfigPath, runtimeOptions.sandboxContainer) ?? opencodeConfigPath
   }
   if (adapter?.command !== 'codex') return base
 
-  const runtimeHome = prepareCodexRuntimeHome(modelTarget, runtimeOptions.skipLocalCodexConfig)
-  base.CODEX_HOME = runtimeHome
+  const runtimeHomeHost = prepareCodexRuntimeHome(
+    modelTarget,
+    runtimeOptions.skipLocalCodexConfig,
+    runtimeOptions.sandboxConfigDir
+      ? resolve(runtimeOptions.sandboxConfigDir, 'codex')
+      : undefined,
+  )
+  base.CODEX_HOME = mapRuntimePath(runtimeHomeHost, runtimeOptions.sandboxContainer) ?? runtimeHomeHost
   return base
+}
+
+function applySandboxEnv(base: Record<string, string>, sandboxEnv?: Record<string, string>) {
+  if (!sandboxEnv) return
+  for (const [key, value] of Object.entries(sandboxEnv)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+    if (typeof value !== 'string' || !value.trim()) continue
+    base[key] = value
+  }
 }
 
 function removeModelEnv(base: Record<string, string>, adapter?: CodeAgentAdapter) {
@@ -2550,8 +2654,8 @@ function applyModelTargetEnv(
   }
 }
 
-function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget) {
-  const dir = resolve(tmpdir(), 'AgentHub', 'opencode-runtime')
+function prepareOpencodeRuntimeConfig(modelTarget: CodeAgentModelTarget, runtimeRoot?: string) {
+  const dir = runtimeRoot ?? resolve(tmpdir(), 'AgentHub', 'opencode-runtime')
   mkdirSync(dir, { recursive: true })
   const path = resolve(
     dir,
@@ -2678,10 +2782,11 @@ function codexRuntimeHome() {
 function prepareCodexRuntimeHome(
   modelTarget?: CodeAgentModelTarget | null,
   skipLocalConfig = false,
+  runtimeRoot?: string,
 ) {
   const sourceHome = codexConfigHome()
   const runtimeHome = resolve(
-    codexRuntimeHome(),
+    runtimeRoot ?? codexRuntimeHome(),
     `${Date.now()}-${Math.random().toString(36).slice(2)}`,
   )
   mkdirSync(runtimeHome, { recursive: true })

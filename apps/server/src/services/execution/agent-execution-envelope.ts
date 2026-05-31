@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AgentHubA2AEnvelope } from '../protocols/a2a-internal'
+import type { SandboxContainerSpec } from './sandbox-provider'
 import { agentHubUserCacheRoot, defaultNoProjectExecutionRoot, safePathSegment } from '../system-paths'
 
 /**
@@ -33,6 +34,10 @@ export interface AgentExecutionEnvelope {
   sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
   /** 子进程 env 白名单 */
   envAllowlist: string[]
+  /** 沙箱提供的额外 env 覆盖 */
+  sandboxEnv?: Record<string, string>
+  /** 容器型沙箱执行上下文；存在时 Code Agent 命令会被容器 runtime 包装 */
+  sandboxContainer?: SandboxContainerSpec
   /** 模型目标配置（注入到子进程 env） */
   modelTarget?: {
     apiKey?: string
@@ -75,6 +80,11 @@ export const DEFAULT_ENV_ALLOWLIST = [
   'AGENTHUB_MODEL_API_KEY',
   'CODEX_HOME',
   'OPENCODE_CONFIG',
+  'NPM_CONFIG_CACHE',
+  'BUN_INSTALL_CACHE_DIR',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
   'NODE_ENV',
 ]
 

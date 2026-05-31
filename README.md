@@ -154,6 +154,17 @@ bun test
 
 当前默认不再把 Git 分支隔离作为主路径，也不把本地 workdir 伪装成容器沙箱。执行层已经抽出 `SandboxProvider` 边界，当前稳定 provider 是 `local-workdir`；Docker/云沙箱可以后续接入。
 
+`local-workdir` 会给每次任务创建系统缓存目录下的 sandbox root，并向 Code Agent 子进程注入独立 temp/cache/config 目录，用于减少 CLI 运行时污染。它不是 OS 级安全边界，不能真正限制网络或阻止进程读取任意本机路径。
+
+需要容器隔离时可启用 Docker provider：
+
+```env
+AGENTHUB_SANDBOX_PROVIDER=docker
+AGENTHUB_DOCKER_SANDBOX_IMAGE=your-code-agent-image:latest
+```
+
+Docker 镜像必须包含要运行的 Code Agent CLI。AgentHub 会把任务工作目录挂载到 `/workspace`，并把 temp/cache/config 目录单独挂载进容器。
+
 ## 数据清理
 
 开发阶段可以使用应用内“清除所有数据”能力恢复到近似首次启动状态。执行前请确认不需要保留旧会话、旧任务和旧产物索引。

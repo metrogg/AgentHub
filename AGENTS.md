@@ -106,7 +106,9 @@ Agent 之间的任务分发统一以 A2A v0.3 `message/send` 为内部通信标�
 - 写入型 Agent 会在项目根下创建 `.agenthub/workdirs/{runId}/{agentName}/{taskId}`。
 - 每个 Agent 在自己的任务目录中执行，避免互相踩文件。
 - 如果用户没有选择项目工作区，自动工作空间默认创建在系统用户数据目录下，例如 `%LOCALAPPDATA%\AgentHub\workspaces`，不能回落到 AgentHub 源码目录。
-- 执行隔离通过 `SandboxProvider` 抽象承载；当前稳定 provider 是 `local-workdir`，不是 Docker/VM 级别沙箱。
+- 每个任务还会有自己的本地 sandbox root，位于系统缓存目录下的 `AgentHub/sandboxes/{runId}/{agentName-agentId}/{taskId}`，用于隔离 CLI 的 temp/cache/config 目录。
+- 执行隔离通过 `SandboxProvider` 抽象承载；当前稳定 provider 是 `local-workdir`，不是 Docker/VM 级别沙箱。它会硬化本地 workdir、temp/cache/config env 和进程生命周期，但不会提供真正的 OS 网络或文件权限沙箱。
+- `AGENTHUB_SANDBOX_PROVIDER=docker` 可启用 Docker provider。Docker 镜像必须通过 `AGENTHUB_DOCKER_SANDBOX_IMAGE` 指定，并且镜像内必须已有对应 Code Agent CLI。Docker provider 会把执行目录挂载到 `/workspace`，把 temp/cache/config/home/data 分别挂载进容器。
 - 上游可交接文件会复制到 `.agenthub/handoff/{runId}/{taskId}/...`。
 - 下游 Agent 只能优先读取黑板中明确给出的 `handoffPath`。
 - 如果黑板只有 `filePath/path`，那只是上游记录，不能假设它存在于当前执行目录。

@@ -9,6 +9,7 @@ import { localA2ATransport } from './local-a2a-transport'
 import type { AgentHubA2AEnvelope } from '../protocols/a2a-internal'
 import { buildA2AExecutionTask } from '../protocols/a2a-internal'
 import { acquireExecutionSandbox } from './sandbox-provider'
+import type { SandboxLease } from './sandbox-provider'
 
 const STRICT_TASK_TYPES = new Set<TaskType>(['code', 'test', 'verify'])
 
@@ -65,8 +66,9 @@ export class TaskExecutionService {
 
     const taskStartTime = Date.now()
     let executionPath: string | null = null
+    let sandboxLease: SandboxLease | null = null
     try {
-      const sandboxLease = await acquireExecutionSandbox({
+      sandboxLease = await acquireExecutionSandbox({
         runId,
         taskId,
         agentId: profile.id,
@@ -109,6 +111,8 @@ export class TaskExecutionService {
         a2a: input.a2a,
         sandboxProvider: sandboxLease.provider,
         isolation: sandboxLease.isolation,
+        sandboxEnv: sandboxLease.env,
+        sandboxContainer: sandboxLease.container,
       }
 
       // 插入 user message（orchestrator 可能已预创建）
@@ -263,6 +267,21 @@ export class TaskExecutionService {
         .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
         .where(eq(workspaceTasks.id, taskId))
       return { status: TaskStatus.Failed, output: '', artifacts: [], error: error?.message || 'Unknown error', durationMs: taskDuration, executionPath }
+    } finally {
+      if (sandboxLease) {
+        try {
+          await sandboxLease.cleanup()
+        } catch (cleanupError: any) {
+          logger.warn(
+            {
+              err: cleanupError?.message || cleanupError,
+              sandboxProvider: sandboxLease.provider,
+              sandboxRoot: sandboxLease.rootDir,
+            },
+            'Failed to cleanup execution sandbox',
+          )
+        }
+      }
     }
   }
 }

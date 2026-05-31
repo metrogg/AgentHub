@@ -30,7 +30,7 @@ AgentHub 需要把以下层次分开设计：
 | Agent 身份层 | `code-agent` 是主路径；`llm` 是内部/兜底；A2A/MCP/Skills/Rules 都不是 Agent 类型 |
 | 执行运行时层 | Codex CLI、Claude Code、OpenCode、Gemini CLI 作为 Coding Agent 基底 |
 | 能力工具层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 可用能力 |
-| 工作区与状态层 | 系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/handoff`、blackboard、execution logs、run events |
+| 工作区与状态层 | 系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/handoff`、local sandbox root、blackboard、execution logs、run events |
 
 产品层应学习 WorkBuddy / Kimi 群聊 / Claude Code subagents 的“主对话可见、子任务可进、过程可信”；编排层应学习 LangGraph / Microsoft Agent Framework 的 DAG、checkpoint、resume、HITL；协议层应坚持 A2A / AG-UI / MCP 各管一层，不互相冒充。
 
@@ -118,7 +118,7 @@ workspaceAgentId != null
   -> 为每个任务创建 orchestrator-task 子对话
   -> TaskScheduler 按依赖执行
   -> Orchestrator 生成 A2A message/send envelope
-  -> TaskExecutionService 准备执行目录
+  -> TaskExecutionService 准备执行目录和 local sandbox lease
   -> LocalA2ATransport 派发给本地执行宿主
   -> 本地执行宿主适配 LLM fallback / Code Agent
   -> 写入黑板和产物（以 A2A artifact/metadata 扩展记录）
@@ -184,7 +184,43 @@ A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库�
 - 默认工作空间存储路径必须位于系统用户数据目录，例如 Windows 的 `%LOCALAPPDATA%\AgentHub\workspaces`，不能回落到 AgentHub 源码仓库。
 - 用户可以在设置里修改默认工作空间存储路径，建议使用用户目录或单独数据盘目录，不要选择 AgentHub 项目源码目录。
 
-执行隔离通过 `SandboxProvider` 抽象承载。当前稳定 provider 是 `local-workdir`；Docker、云沙箱或远程开发容器可以作为后续 provider 接入，但在真正实现前不能把它们描述为已启用。
+执行隔离通过 `SandboxProvider` 抽象承载。当前可用 provider：
+
+- `local-workdir`：默认路径，本机进程 + 独立 workdir/temp/cache/config。
+- `docker`：容器路径，Code Agent CLI 会通过 `docker run` 在容器里执行。
+
+云沙箱或远程开发容器可以作为后续 provider 接入，但在真正实现前不能把它们描述为已启用。
+
+`local-workdir` 当前实际做了这些事：
+
+- 为每个任务创建独立执行目录：`.agenthub/workdirs/{runId}/{agentName}/{taskId}`。
+- 为每个任务创建独立本地沙箱根：系统缓存目录下的 `AgentHub/sandboxes/{runId}/{agentName-agentId}/{taskId}`。
+- 为 Code Agent 子进程注入独立 `TMP/TEMP/TMPDIR`、`APPDATA/LOCALAPPDATA`、`XDG_*`、npm/bun cache 目录。
+- Codex/OpenCode 的本次运行配置文件写入 sandbox config 目录，避免污染全局临时配置。
+- 把 prompt 临时文件和 Codex last-message 文件放入本次沙箱 temp，而不是全局临时目录。
+- 任务取消或超时时通过进程树 kill 处理子进程。
+
+`local-workdir` 不能承诺的边界：
+
+- 不能阻止本机进程访问网络；`networkPolicy` 在本地 provider 中只是声明，真正 enforcement 需要 Docker/cloud provider。
+- 不能阻止恶意 CLI 读取沙箱外路径；它是工作目录和环境隔离，不是 OS 权限边界。
+- 默认不强制改写 `HOME/USERPROFILE`，以免破坏 Codex / Claude Code / OpenCode 的本机登录态。需要更强 HOME 隔离时可设置 `AGENTHUB_SANDBOX_ISOLATE_HOME=true`，但应优先确保模型凭据从 AgentHub 设置注入。
+
+`docker` provider 当前实际做了这些事：
+
+- 需要设置 `AGENTHUB_SANDBOX_PROVIDER=docker` 和 `AGENTHUB_DOCKER_SANDBOX_IMAGE`。
+- 镜像必须已经安装对应 CLI，例如 `codex`、`claude`、`opencode` 或 `gemini`，AgentHub 不在运行时临时安装。
+- 将 Agent 的实际执行目录挂载到容器 `/workspace`，CLI 的 `--cd` / `--dir` 也改为 `/workspace`。
+- 将本次任务的 temp/cache/config/data/home 目录分别挂载到容器路径，例如 `/tmp/agenthub`、`/home/agenthub/.cache`、`/home/agenthub/.config`。
+- OpenCode prompt file、Codex last-message 文件和运行时配置会自动做 host path 到 container path 映射。
+- `networkPolicy=disabled` 会映射到 Docker `--network none`；默认使用 `bridge`，也可通过 `AGENTHUB_DOCKER_NETWORK` 指定。
+- 任务取消或超时时 kill 的是 `docker run` 进程树，容器使用 `--rm` 自动清理。
+
+`docker` provider 仍需要注意：
+
+- 镜像能力决定能不能跑；如果镜像里没有对应 CLI，会正常失败并显示 CLI 不存在。
+- API Key 仍通过 AgentHub 的 env/model 配置注入容器，不建议把宿主机完整 home 目录挂进去。
+- Windows Docker Desktop 对盘符、权限和中文路径可能更敏感；出现挂载失败时优先把默认工作空间放到普通英文路径测试。
 
 ## 产物和 handoff
 
