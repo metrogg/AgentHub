@@ -63,10 +63,8 @@ type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
 function activeTabFromPath(
   pathname: string,
-  activeSession: Session | undefined,
+  _activeSession: Session | undefined,
 ): SidebarTab {
-  if (pathname.startsWith('/chat/') && isPrivateAgentSession(activeSession))
-    return 'agents'
   if (pathname === '/agent-config') return 'agents'
   if (pathname === '/profile' || pathname === '/settings') return 'me'
   if (
