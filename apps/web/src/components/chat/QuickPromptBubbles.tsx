@@ -38,7 +38,7 @@ export function QuickPromptBubbles({
   const [activeId, setActiveId] = useState<string | null>(null)
   const promptRows = useMemo(() => {
     if (!prompts.length) return []
-    const mid = Math.ceil(prompts.length * 0.6)
+    const mid = Math.max(1, Math.floor(prompts.length * 0.4))
     return [
       prompts.slice(0, mid),
       prompts.slice(mid),
