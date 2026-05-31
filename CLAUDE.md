@@ -24,7 +24,7 @@ Before changing code, identify which layer you are working on:
 - Protocols: A2A for agent-to-agent message/task/artifact semantics; AG-UI for run events surfaced to the frontend.
 - Execution: Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary agent bases. `llm` is internal/fallback support.
 - Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
-- Workspace and state: `.agenthub/workdirs`, `.agenthub/handoff`, blackboard entries, execution logs, run events, and persisted task state.
+- Workspace and state: the system default workspace root, `.agenthub/workdirs`, `.agenthub/handoff`, blackboard entries, execution logs, run events, and persisted task state.
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
 
@@ -150,6 +150,8 @@ Rules:
 
 - Write-capable agents execute in `.agenthub/workdirs/...`.
 - Read-only agents may read the project root.
+- If the user did not choose a project workspace, AgentHub creates an auto workspace under the system user data directory, such as `%LOCALAPPDATA%\AgentHub\workspaces` on Windows. Do not fall back to the AgentHub source repository.
+- Execution isolation is behind `SandboxProvider`; the implemented provider is `local-workdir`, not Docker/VM sandboxing.
 - Upstream artifacts that can be reused by downstream agents are copied into `.agenthub/handoff/...`.
 - Downstream prompts must prefer `handoffPath`.
 - If a blackboard entry only has `filePath` or `path`, treat it as an upstream record, not as proof that the file exists in the current workdir.

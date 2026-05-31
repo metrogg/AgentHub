@@ -393,6 +393,10 @@ export interface SettingsGeneralInfo {
     logDir: string
     activeDataDir: string
     dataPath: string
+    workspaceStorageRoot: string
+    workspaceStorageExists: boolean
+    workspaceStorageSizeBytes: number
+    workspaceStorageSizeLabel: string
     databasePath: string
     migrationPending: boolean
     exists: boolean
@@ -534,6 +538,10 @@ export interface SettingsGeneralInfo {
     logDir: string
     activeDataDir: string
     dataPath: string
+    workspaceStorageRoot: string
+    workspaceStorageExists: boolean
+    workspaceStorageSizeBytes: number
+    workspaceStorageSizeLabel: string
     databasePath: string
     migrationPending: boolean
     exists: boolean

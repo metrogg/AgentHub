@@ -174,8 +174,8 @@ const defaultAppSettings: AppSettings = {
   requireApproval: true,
   archivedRetention: '90 天',
   debugMode: false,
-  dataPath: 'F:\\Learning\\AgentHub\\data',
-  dataUsed: '1.78 GB',
+  dataPath: '',
+  dataUsed: '0 B',
   gitRuntime: 'PATH Git git version 2.51.0.windows.1',
   gitPath: 'C:\\Program Files\\Git\\cmd\\git.exe',
   pythonRuntime: '托管 Python 3.13.12',
@@ -536,14 +536,19 @@ function SettingsContent({
   function resolvedWorkspaceRoot() {
     const configured = settings.workspaceStorageRoot.trim()
     if (configured) return configured
-    const base = settings.dataPath.trim()
-    if (!base) return 'workspaces'
-    const separator = base.includes('\\') ? '\\' : '/'
-    return `${base.replace(/[\\/]+$/, '')}${separator}workspaces`
+    const effective = generalInfo?.storage.workspaceStorageRoot?.trim()
+    if (effective) return effective
+    return ''
+  }
+
+  function requireResolvedWorkspaceRoot() {
+    const root = resolvedWorkspaceRoot()
+    if (!root) throw new Error(t('默认工作空间路径尚未加载，请先刷新状态'))
+    return root
   }
 
   async function openWorkspaceRoot() {
-    await openPathWithFallback(resolvedWorkspaceRoot())
+    await openPathWithFallback(requireResolvedWorkspaceRoot())
     showActionMessage(t('已打开默认工作空间目录'))
   }
 
@@ -560,7 +565,7 @@ function SettingsContent({
   }
 
   async function createWorkspaceRoot() {
-    const result = await api.ensureStorageDirectory(resolvedWorkspaceRoot())
+    const result = await api.ensureStorageDirectory(requireResolvedWorkspaceRoot())
     patchSettings({ workspaceStorageRoot: result.path })
     showActionMessage(t('默认工作空间目录已创建'))
   }
@@ -675,14 +680,16 @@ function SettingsContent({
           </SettingsSection>
           <SettingsSection
             title="默认工作空间存储路径"
-            desc="未选择工作空间直接开始对话时，会在这里自动创建新的本地文件夹。"
+            desc="未选择工作空间直接开始对话时，会在这里自动创建新的本地文件夹。系统默认会放在用户数据目录，避免写进 AgentHub 项目源码。"
           >
             <InsetPanel>
               <InfoRow label="当前路径" value={resolvedWorkspaceRoot()} />
+              <InfoRow label="占用空间" value={generalInfo?.storage.workspaceStorageSizeLabel ?? t('等待刷新')} />
+              <Notice>{t('建议使用系统用户目录或单独的数据盘目录，不要选择 AgentHub 源码目录、桌面项目仓库或需要管理员权限的根目录。')}</Notice>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  disabled={busyAction === 'workspace-root'}
+                  disabled={!resolvedWorkspaceRoot() || busyAction === 'workspace-root'}
                   onClick={() => void runAction('workspace-root', openWorkspaceRoot)}
                   className="settings-soft-button"
                 >
@@ -698,7 +705,7 @@ function SettingsContent({
                 </button>
                 <button
                   type="button"
-                  disabled={busyAction === 'workspace-root'}
+                  disabled={!resolvedWorkspaceRoot() || busyAction === 'workspace-root'}
                   onClick={() => void runAction('workspace-root', createWorkspaceRoot)}
                   className="settings-soft-button"
                 >

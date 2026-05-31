@@ -30,7 +30,7 @@ AgentHub 需要把以下层次分开设计：
 | Agent 身份层 | `code-agent` 是主路径；`llm` 是内部/兜底；A2A/MCP/Skills/Rules 都不是 Agent 类型 |
 | 执行运行时层 | Codex CLI、Claude Code、OpenCode、Gemini CLI 作为 Coding Agent 基底 |
 | 能力工具层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 可用能力 |
-| 工作区与状态层 | `.agenthub/workdirs`、`.agenthub/handoff`、blackboard、execution logs、run events |
+| 工作区与状态层 | 系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/handoff`、blackboard、execution logs、run events |
 
 产品层应学习 WorkBuddy / Kimi 群聊 / Claude Code subagents 的“主对话可见、子任务可进、过程可信”；编排层应学习 LangGraph / Microsoft Agent Framework 的 DAG、checkpoint、resume、HITL；协议层应坚持 A2A / AG-UI / MCP 各管一层，不互相冒充。
 
@@ -162,7 +162,7 @@ A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库�
 
 ## 工作目录
 
-当前优先采用“一个项目工作区 + 每个 Agent 一个执行目录”的设计。
+当前优先采用“一个项目工作区 + 每个 Agent 一个执行目录”的设计。这里的隔离是本地 workdir 隔离，不是 Docker/VM 级别的 OS 沙箱。
 
 ```text
 {projectRoot}/.agenthub/
@@ -180,8 +180,11 @@ A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库�
 - 用户选择本地工作区后，项目根就是 `projectRoot`。
 - 写入型 Agent 在 `.agenthub/workdirs/...` 中执行。
 - 只读 Agent 可以读取项目根。
-- 如果用户未选择工作区，系统自动创建一个可写工作区。
-- 后续可以在系统设置中配置默认工作区存储路径。
+- 如果用户未选择工作区，系统会在默认工作空间存储路径下自动创建一个可写工作区。
+- 默认工作空间存储路径必须位于系统用户数据目录，例如 Windows 的 `%LOCALAPPDATA%\AgentHub\workspaces`，不能回落到 AgentHub 源码仓库。
+- 用户可以在设置里修改默认工作空间存储路径，建议使用用户目录或单独数据盘目录，不要选择 AgentHub 项目源码目录。
+
+执行隔离通过 `SandboxProvider` 抽象承载。当前稳定 provider 是 `local-workdir`；Docker、云沙箱或远程开发容器可以作为后续 provider 接入，但在真正实现前不能把它们描述为已启用。
 
 ## 产物和 handoff
 

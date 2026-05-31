@@ -32,6 +32,7 @@ import { logger } from '../lib/logger'
 import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/auth'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
 import { testLlmConnection } from '../services/llm-client'
+import { resolveWorkspaceStorageRoot } from '../services/workspace/auto-workspace'
 
 const execFileAsync = promisify(execFile)
 
@@ -70,11 +71,13 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
     const databasePath = resolve(env.DATABASE_URL)
     const activeDataDir = dirname(databasePath)
     const dataPath = appSettings.dataPath?.trim() || activeDataDir
+    const workspaceStorageRoot = appSettings.workspaceStorageRoot?.trim() || (await resolveWorkspaceStorageRoot())
     const debugDir = join(appDataDir, 'debug', 'llm')
-    const [git, python, dataUsage, debugUsage, databaseUsage] = await Promise.all([
+    const [git, python, dataUsage, workspaceStorageUsage, debugUsage, databaseUsage] = await Promise.all([
       detectRuntime('git', ['--version']),
       detectPythonRuntime(),
       describePathUsage(dataPath),
+      describePathUsage(workspaceStorageRoot),
       describePathUsage(debugDir),
       describeFileUsage(databasePath),
     ])
@@ -94,11 +97,15 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
         logDir,
         activeDataDir,
         dataPath,
+        workspaceStorageRoot,
         databasePath,
         migrationPending: normalizePath(dataPath) !== normalizePath(activeDataDir),
         exists: dataUsage.exists,
         sizeBytes: dataUsage.sizeBytes,
         sizeLabel: formatBytes(dataUsage.sizeBytes),
+        workspaceStorageExists: workspaceStorageUsage.exists,
+        workspaceStorageSizeBytes: workspaceStorageUsage.sizeBytes,
+        workspaceStorageSizeLabel: formatBytes(workspaceStorageUsage.sizeBytes),
         databaseSizeBytes: databaseUsage.sizeBytes,
         databaseSizeLabel: formatBytes(databaseUsage.sizeBytes),
         scannedFiles: dataUsage.scannedFiles,
@@ -216,12 +223,13 @@ function applyRuntimeSettings(map: Record<string, string>) {
   logger.level = appSettings.debugMode ? 'debug' : env.LOG_LEVEL
 }
 
-function parseAppSettings(value?: string): { dataPath?: string; debugMode?: boolean } {
+function parseAppSettings(value?: string): { dataPath?: string; workspaceStorageRoot?: string; debugMode?: boolean } {
   if (!value) return {}
   try {
     const parsed = JSON.parse(value)
     return {
       dataPath: typeof parsed?.dataPath === 'string' ? parsed.dataPath : undefined,
+      workspaceStorageRoot: typeof parsed?.workspaceStorageRoot === 'string' ? parsed.workspaceStorageRoot : undefined,
       debugMode: Boolean(parsed?.debugMode),
     }
   } catch {

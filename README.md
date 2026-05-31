@@ -51,7 +51,7 @@ AgentHub 的目标不是做一个固定角色模板系统，而是把多 Coding 
 | 通信协议层 | A2A 承载 Agent 间 message/task/artifact，AG-UI 承载运行事件到 UI |
 | 执行层 | Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Agent 基底，LLM 为内部/兜底 |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
-| 工作区层 | 项目根 + `.agenthub/workdirs` + `.agenthub/handoff` + blackboard |
+| 工作区层 | 系统默认工作空间根 + 项目根 + `.agenthub/workdirs` + `.agenthub/handoff` + blackboard |
 
 完整分层和业内方案对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)。
 
@@ -150,9 +150,9 @@ bun test
   handoff/{runId}/{taskId}/                可交接给下游的上游产物
 ```
 
-如果没有选择工作区，系统会自动创建一个可写工作区。后续可以在设置里调整默认工作区存储路径。
+如果没有选择工作区，系统会自动在默认工作空间存储路径下创建一个可写工作区。默认位置使用系统用户数据目录，例如 Windows 的 `%LOCALAPPDATA%\AgentHub\workspaces`，避免写进 AgentHub 源码目录。可在设置里调整默认工作区存储路径。
 
-当前默认不再把 Git 分支隔离作为主路径。Git 相关能力保留为后续增强和冲突分析基础，但当前设计优先保证本地工作目录可执行、可查看、可交接。
+当前默认不再把 Git 分支隔离作为主路径，也不把本地 workdir 伪装成容器沙箱。执行层已经抽出 `SandboxProvider` 边界，当前稳定 provider 是 `local-workdir`；Docker/云沙箱可以后续接入。
 
 ## 数据清理
 

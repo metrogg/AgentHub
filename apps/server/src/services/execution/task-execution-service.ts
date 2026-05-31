@@ -2,12 +2,13 @@ import { db, messages, workspaceTasks, eq, and, desc } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import type { AgentRunProfile, MessageRow } from '../agent-runner'
 import { DEFAULT_ENV_ALLOWLIST } from './agent-execution-envelope'
-import { prepareAgentWorkdir, type AgentWorkdir } from './agent-workdir'
+import type { AgentWorkdir } from './agent-workdir'
 import { TaskStatus, type TaskType } from '@agenthub/shared'
 import { env } from '../../env'
 import { localA2ATransport } from './local-a2a-transport'
 import type { AgentHubA2AEnvelope } from '../protocols/a2a-internal'
 import { buildA2AExecutionTask } from '../protocols/a2a-internal'
+import { acquireExecutionSandbox } from './sandbox-provider'
 
 const STRICT_TASK_TYPES = new Set<TaskType>(['code', 'test', 'verify'])
 
@@ -62,82 +63,91 @@ export class TaskExecutionService {
         ? 'workspace-write'
         : requestedSandboxPolicy
 
-    const workdir =
-      input.existingWorkdir ??
-      prepareAgentWorkdir({
-        projectPath,
+    const taskStartTime = Date.now()
+    let executionPath: string | null = null
+    try {
+      const sandboxLease = await acquireExecutionSandbox({
         runId,
         taskId,
         agentId: profile.id,
         agentName: profile.name,
+        projectPath,
         sandboxPolicy: executionSandboxPolicy,
+        existingWorkdir: input.existingWorkdir,
       })
-    const executionPath = workdir?.executionPath ?? profile.projectPath ?? projectPath ?? null
-    if (workdir) {
-      logger.info(
-        { executionPath: workdir.executionPath, relativePath: workdir.relativePath, agent: profile.name },
-        'Agent workdir prepared',
-      )
-    }
-
-    const executionProfile: AgentRunProfile = {
-      ...profile,
-      projectPath: executionPath,
-      originalProjectPath: profile.projectPath ?? null,
-      sandboxPolicy: executionSandboxPolicy,
-    }
-
-    const envelope: import('./agent-execution-envelope').AgentExecutionEnvelope = {
-      runId,
-      taskId,
-      agentId: profile.id,
-      agentName: profile.name,
-      projectPath: projectPath ?? null,
-      worktreePath: workdir?.executionPath ?? (executionSandboxPolicy === 'read-only' ? null : executionPath),
-      sandboxPolicy: executionSandboxPolicy,
-      envAllowlist: DEFAULT_ENV_ALLOWLIST,
-      a2a: input.a2a,
-    }
-
-    // 插入 user message（orchestrator 可能已预创建）
-    let userMsg: MessageRow | undefined
-    if (input.existingUserMessageId) {
-      const [existingUserMsg] = await db
-        .select()
-        .from(messages)
-        .where(eq(messages.id, input.existingUserMessageId))
-        .limit(1)
-      if (!existingUserMsg) {
-        return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Existing user message not found', durationMs: 0 }
+      const workdir = sandboxLease.workdir
+      executionPath = sandboxLease.cwd ?? profile.projectPath ?? projectPath ?? null
+      if (workdir) {
+        logger.info(
+          {
+            executionPath: workdir.executionPath,
+            relativePath: workdir.relativePath,
+            agent: profile.name,
+            sandboxProvider: sandboxLease.provider,
+            isolation: sandboxLease.isolation,
+          },
+          'Agent workdir prepared',
+        )
       }
-      userMsg = await attachA2AMetadata(existingUserMsg as MessageRow, input.a2a)
-    } else {
-      const [createdUserMsg] = await db
-        .insert(messages)
-        .values({
-          sessionId,
-          senderId: 'user',
-          senderType: 'user',
-          type: 'text',
-          content: prompt,
-          metadata: input.a2a ? { a2a: input.a2a } : undefined,
-        })
-        .returning()
 
-      if (!createdUserMsg) {
-        return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
+      const executionProfile: AgentRunProfile = {
+        ...profile,
+        projectPath: executionPath,
+        originalProjectPath: profile.projectPath ?? null,
+        sandboxPolicy: executionSandboxPolicy,
       }
-      userMsg = createdUserMsg as MessageRow
-    }
 
-    // 更新 task 状态
-    await db
-      .update(workspaceTasks)
-      .set({ status: TaskStatus.Running, startedAt: new Date(), retryCount: attemptCount })
-      .where(eq(workspaceTasks.id, taskId))
+      const envelope: import('./agent-execution-envelope').AgentExecutionEnvelope = {
+        runId,
+        taskId,
+        agentId: profile.id,
+        agentName: profile.name,
+        projectPath: projectPath ?? null,
+        worktreePath: workdir?.executionPath ?? (executionSandboxPolicy === 'read-only' ? null : executionPath),
+        sandboxPolicy: executionSandboxPolicy,
+        envAllowlist: DEFAULT_ENV_ALLOWLIST,
+        a2a: input.a2a,
+        sandboxProvider: sandboxLease.provider,
+        isolation: sandboxLease.isolation,
+      }
 
-    const taskStartTime = Date.now()
-    try {
+      // 插入 user message（orchestrator 可能已预创建）
+      let userMsg: MessageRow | undefined
+      if (input.existingUserMessageId) {
+        const [existingUserMsg] = await db
+          .select()
+          .from(messages)
+          .where(eq(messages.id, input.existingUserMessageId))
+          .limit(1)
+        if (!existingUserMsg) {
+          return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Existing user message not found', durationMs: 0 }
+        }
+        userMsg = await attachA2AMetadata(existingUserMsg as MessageRow, input.a2a)
+      } else {
+        const [createdUserMsg] = await db
+          .insert(messages)
+          .values({
+            sessionId,
+            senderId: 'user',
+            senderType: 'user',
+            type: 'text',
+            content: prompt,
+            metadata: input.a2a ? { a2a: input.a2a } : undefined,
+          })
+          .returning()
+
+        if (!createdUserMsg) {
+          return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
+        }
+        userMsg = createdUserMsg as MessageRow
+      }
+
+      // 更新 task 状态
+      await db
+        .update(workspaceTasks)
+        .set({ status: TaskStatus.Running, startedAt: new Date(), retryCount: attemptCount })
+        .where(eq(workspaceTasks.id, taskId))
+
       const TASK_TIMEOUT_MS = env.AGENTHUB_CODE_AGENT_TIMEOUT_MS
       const effectiveSignal = signal ?? new AbortController().signal
 

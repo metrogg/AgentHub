@@ -5,11 +5,10 @@ import { db, eq, settings as settingsTable } from '@agenthub/db'
 import { env } from '../../env'
 import { logger } from '../../lib/logger'
 import { AppError, AppErrorCodes } from '../../lib/error'
+import { agentHubUserDataRoot, agentHubUserCacheRoot, defaultWorkspaceStorageRoot } from '../system-paths'
 
 type AppSettingsLike = {
-  dataPath?: unknown
   workspaceStorageRoot?: unknown
-  worktreeRoot?: unknown
 }
 
 export type AutoWorkspaceFolder = {
@@ -110,22 +109,24 @@ function isDirectory(path: string) {
 async function workspaceStorageRootCandidates() {
   const appSettings = await readAppSettings()
   const configuredRoot = stringValue(appSettings.workspaceStorageRoot)
-  const worktreeRoot = stringValue(appSettings.worktreeRoot)
-  const dataPath = stringValue(appSettings.dataPath)
   const envRoot =
     env.AGENTHUB_WORKSPACE_ROOT && env.AGENTHUB_WORKSPACE_ROOT.trim() !== '.'
       ? env.AGENTHUB_WORKSPACE_ROOT
       : null
-  const appDataRoot = env.AGENTHUB_APP_DATA_DIR?.trim() || process.cwd()
+  const appDataRoot = env.AGENTHUB_APP_DATA_DIR?.trim() || agentHubUserDataRoot()
 
   return dedupePaths([
     configuredRoot,
-    worktreeRoot,
-    dataPath ? join(dataPath, 'workspaces') : null,
     envRoot,
     join(appDataRoot, 'workspaces'),
-    join(process.cwd(), 'storage', 'workspaces'),
+    defaultWorkspaceStorageRoot(),
+    join(agentHubUserCacheRoot(), 'workspaces'),
   ])
+}
+
+export async function resolveWorkspaceStorageRoot() {
+  const candidates = await workspaceStorageRootCandidates()
+  return candidates[0] ?? defaultWorkspaceStorageRoot()
 }
 
 async function readAppSettings(): Promise<AppSettingsLike> {

@@ -1,11 +1,7 @@
 import { mkdirSync } from 'node:fs'
-import { homedir, platform, tmpdir } from 'node:os'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 import type { AgentHubA2AEnvelope } from '../protocols/a2a-internal'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const projectRoot = resolve(__dirname, '../../../..')
+import { agentHubUserCacheRoot, defaultNoProjectExecutionRoot, safePathSegment } from '../system-paths'
 
 /**
  * AgentExecutionEnvelope — 每次 Agent 执行的强制上下文信封。
@@ -47,6 +43,10 @@ export interface AgentExecutionEnvelope {
   }
   /** 内部 Agent 间通信统一使用的 A2A message/send 信封 */
   a2a?: AgentHubA2AEnvelope
+  /** 当前执行隔离 provider。当前稳定实现是 local-workdir。 */
+  sandboxProvider?: 'local-workdir' | 'docker' | 'cloud'
+  /** 实际隔离级别。local-workdir 不是 OS/container sandbox。 */
+  isolation?: 'workdir' | 'container' | 'cloud'
 }
 
 /** 默认 env 白名单：只传模型 key、必要 PATH、HOME 等明确字段 */
@@ -79,7 +79,7 @@ export const DEFAULT_ENV_ALLOWLIST = [
 ]
 
 export function resolveDefaultWorkDir(runId: string): string {
-  const dir = resolve(projectRoot, 'storage', '.agenthub', 'workspaces', runId)
+  const dir = resolve(agentHubUserCacheRoot(), 'artifacts', safePathSegment(runId))
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -137,63 +137,5 @@ export function ensureNoProjectExecutionDir(
 }
 
 function noProjectExecutionRoot() {
-  const configured =
-    Bun.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
-    Bun.env.AGENTHUB_USER_CACHE_DIR?.trim() ||
-    process.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
-    process.env.AGENTHUB_USER_CACHE_DIR?.trim()
-  if (configured) return resolve(configured, '.AgentHub')
-  return agentHubUserCacheRoot()
-}
-
-export function agentHubUserCacheRoot() {
-  const configured =
-    Bun.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
-    Bun.env.AGENTHUB_USER_CACHE_DIR?.trim() ||
-    process.env.AGENTHUB_AGENT_CACHE_DIR?.trim() ||
-    process.env.AGENTHUB_USER_CACHE_DIR?.trim()
-  if (configured) {
-    const root = resolve(configured, '.AgentHub')
-    if (ensureWritableDir(root)) return root
-  }
-
-  const bases =
-    platform() === 'win32'
-      ? [
-          Bun.env.LOCALAPPDATA?.trim(),
-          process.env.LOCALAPPDATA?.trim(),
-          Bun.env.APPDATA?.trim(),
-          process.env.APPDATA?.trim(),
-          tmpdir(),
-        ]
-      : platform() === 'darwin'
-        ? [resolve(homedir(), 'Library', 'Caches'), tmpdir()]
-        : [
-            Bun.env.XDG_CACHE_HOME?.trim(),
-            process.env.XDG_CACHE_HOME?.trim(),
-            resolve(homedir(), '.cache'),
-            tmpdir(),
-          ]
-
-  for (const base of bases.filter(Boolean) as string[]) {
-    const root = resolve(base, '.AgentHub')
-    if (ensureWritableDir(root)) return root
-  }
-
-  const root = resolve(tmpdir(), '.AgentHub')
-  mkdirSync(root, { recursive: true })
-  return root
-}
-
-function safePathSegment(value: string) {
-  return value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'unknown'
-}
-
-function ensureWritableDir(path: string) {
-  try {
-    mkdirSync(path, { recursive: true })
-    return true
-  } catch {
-    return false
-  }
+  return defaultNoProjectExecutionRoot()
 }

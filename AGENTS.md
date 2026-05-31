@@ -26,7 +26,7 @@ AgentHub 是一个 IM 式多 Agent 协作平台，也是字节跳动 AI 全栈�
 - 通信协议层：A2A 负责 Agent 间 message/task/artifact 语义；AG-UI 负责运行事件到前端 UI 的桥接。
 - 执行层：Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Agent 基底；`llm` 只作为内部/兜底能力。
 - 能力层：MCP、Skills、Rules、shell、文件系统、浏览器等是 Code Agent 能使用的工具能力，不是 Agent 类型。
-- 工作区与状态层：`.agenthub/workdirs`、`.agenthub/handoff`、blackboard、execution logs、run events。
+- 工作区与状态层：系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/handoff`、blackboard、execution logs、run events。
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：用 IM 产品体验承载多 Coding Agent 协作，用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
@@ -105,6 +105,8 @@ Agent 之间的任务分发统一以 A2A v0.3 `message/send` 为内部通信标�
 - 如果用户选择了项目工作区，AgentHub 使用该目录作为项目根。
 - 写入型 Agent 会在项目根下创建 `.agenthub/workdirs/{runId}/{agentName}/{taskId}`。
 - 每个 Agent 在自己的任务目录中执行，避免互相踩文件。
+- 如果用户没有选择项目工作区，自动工作空间默认创建在系统用户数据目录下，例如 `%LOCALAPPDATA%\AgentHub\workspaces`，不能回落到 AgentHub 源码目录。
+- 执行隔离通过 `SandboxProvider` 抽象承载；当前稳定 provider 是 `local-workdir`，不是 Docker/VM 级别沙箱。
 - 上游可交接文件会复制到 `.agenthub/handoff/{runId}/{taskId}/...`。
 - 下游 Agent 只能优先读取黑板中明确给出的 `handoffPath`。
 - 如果黑板只有 `filePath/path`，那只是上游记录，不能假设它存在于当前执行目录。
