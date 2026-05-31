@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Loader2, PanelLeft, Plus, SlidersHorizontal, X } from 'lucide-react'
+import { CheckCircle2, Download, Loader2, PanelLeft, Plus, SlidersHorizontal, X } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
-import { api } from '../lib/api'
+import { api, type CcswitchModel } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { settingsUpdatedEvent } from '../lib/shortcuts'
 import { cn } from '../lib/utils'
@@ -68,6 +68,7 @@ export default function ModelManagementPage() {
   const [showEditor, setShowEditor] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [testMessages, setTestMessages] = useState<Record<string, string>>({})
+  const [showCcswitch, setShowCcswitch] = useState(false)
 
   useEffect(() => {
     api
@@ -200,14 +201,24 @@ export default function ModelManagementPage() {
                 {t('管理可用模型、API 端点、密钥变量和连接测试状态。')}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={openCreate}
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-900 px-3 text-sm font-medium text-white hover:bg-neutral-700"
-            >
-              <Plus className="h-4 w-4" />
-              {t('添加模型')}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowCcswitch(true)}
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                <Download className="h-4 w-4" />
+                {t('从 ccswitch 导入')}
+              </button>
+              <button
+                type="button"
+                onClick={openCreate}
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-900 px-3 text-sm font-medium text-white hover:bg-neutral-700"
+              >
+                <Plus className="h-4 w-4" />
+                {t('添加模型')}
+              </button>
+            </div>
           </section>
 
           {loading ? (
@@ -238,6 +249,16 @@ export default function ModelManagementPage() {
           onClose={() => setShowEditor(false)}
           onSave={saveDraft}
           editing={Boolean(editingId)}
+        />
+      )}
+      {showCcswitch && (
+        <CcswitchImportDialog
+          existingNames={new Set(models.map((m) => m.name))}
+          onClose={() => setShowCcswitch(false)}
+          onImport={(imported) => {
+            setModels((current) => [...current, ...imported])
+            if (imported.length > 0 && !models.length) setActiveModelId(imported[0]!.id)
+          }}
         />
       )}
     </div>
@@ -489,4 +510,151 @@ function resolveActiveModelId(models: ModelConfig[], value: string | undefined) 
   if (value && models.some((item) => item.id === value)) return value
   const byProvider = models.find((item) => item.provider === value)
   return byProvider?.id ?? models[0]?.id ?? defaultModels[0]!.id
+}
+
+function inferProvider(endpoint: string): string {
+  try {
+    const url = new URL(endpoint)
+    if (url.hostname.includes('anthropic.com')) return 'anthropic'
+    if (/\/anthropic\/?$/.test(url.pathname)) return 'anthropic'
+    if (url.hostname.includes('openai.com')) return 'openai'
+    if (url.hostname.includes('deepseek.com')) return 'deepseek'
+    if (url.hostname.includes('bigmodel.cn')) return 'zhipu'
+    if (url.hostname.includes('moonshot')) return 'moonshot'
+    if (url.hostname.includes('alibabacloud') || url.hostname.includes('aliyuncs') || url.hostname.includes('qwen')) return 'dashscope'
+  } catch {
+    // ignore
+  }
+  return 'openai-compatible'
+}
+
+function CcswitchImportDialog({
+  existingNames,
+  onClose,
+  onImport,
+}: {
+  existingNames: Set<string>
+  onClose: () => void
+  onImport: (models: ModelConfig[]) => void
+}) {
+  const { t } = useI18n()
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [candidates, setCandidates] = useState<CcswitchModel[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    api
+      .getCcswitchModels()
+      .then((res) => {
+        const fresh = res.models.filter((m) => !existingNames.has(m.name))
+        setCandidates(fresh)
+        setSelected(new Set(fresh.map((m) => m.name)))
+      })
+      .catch((e: any) => setError(e?.message || t('加载失败')))
+      .finally(() => setLoading(false))
+  }, [])
+
+  function toggle(name: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  function doImport() {
+    const imported: ModelConfig[] = candidates
+      .filter((m) => selected.has(m.name))
+      .map((m) => ({
+        id: `ccswitch-${m.name}`,
+        enabled: true,
+        name: m.name,
+        provider: inferProvider(m.apiEndpoint),
+        modelId: m.modelId,
+        apiEndpoint: m.apiEndpoint,
+        anthropicEndpoint: '',
+        apiKeyEnv: '',
+        apiKey: m.apiKey,
+        temperature: '0.7',
+        topP: '0.9',
+        maxTokens: '4096',
+        tested: false,
+      }))
+    onImport(imported)
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-6 backdrop-blur-sm">
+      <div className="w-full max-w-2xl rounded-2xl border border-neutral-200 bg-white p-6 shadow-2xl">
+        <div className="mb-5 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{t('从 ccswitch 导入模型')}</h2>
+          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center gap-2 py-12 text-sm text-neutral-500">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t('正在扫描 cc-switch 配置...')}
+          </div>
+        ) : error ? (
+          <div className="py-12 text-center text-sm text-red-500">{error}</div>
+        ) : candidates.length === 0 ? (
+          <div className="py-12 text-center text-sm text-neutral-400">
+            {t('未发现可用的 cc-switch 模型（数据库为空或均已导入）')}
+          </div>
+        ) : (
+          <>
+            <p className="mb-3 text-xs text-neutral-500">
+              {t('以下模型从 cc-switch 配置中读取，已存在的模型自动跳过：')}
+            </p>
+            <div className="max-h-80 space-y-1 overflow-y-auto rounded-xl border border-neutral-100 bg-neutral-50 p-2">
+              {candidates.map((m) => (
+                <label
+                  key={m.name}
+                  className="flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2.5 transition hover:bg-white"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(m.name)}
+                    onChange={() => toggle(m.name)}
+                    className="mt-0.5 h-4 w-4 rounded border-neutral-300"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-neutral-800">{m.name}</div>
+                    <div className="mt-0.5 font-mono text-xs text-neutral-500">
+                      {m.modelId}
+                      {m.apiEndpoint && <span className="ml-2 text-neutral-400">· {m.apiEndpoint}</span>}
+                    </div>
+                    {m.apiKey && (
+                      <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">
+                        API Key ✓
+                      </span>
+                    )}
+                  </div>
+                </label>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div className="mt-5 flex justify-end gap-3">
+          <button onClick={onClose} className="h-9 rounded-lg border border-neutral-200 px-4 text-sm text-neutral-700 hover:bg-neutral-50">
+            {t('取消')}
+          </button>
+          <button
+            onClick={doImport}
+            disabled={selected.size === 0}
+            className="h-9 rounded-lg bg-neutral-900 px-4 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-40"
+          >
+            {t('导入选中')} ({selected.size})
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }

@@ -56,7 +56,7 @@ function GroupAvatarCell({
       <img
         src={agent.avatar}
         alt=""
-        className={cn('rounded-full object-cover', className)}
+        className={cn('rounded-full bg-white object-contain', className)}
         decoding="async"
         draggable={false}
       />

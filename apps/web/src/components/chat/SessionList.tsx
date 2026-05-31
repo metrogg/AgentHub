@@ -1,5 +1,5 @@
 import QRCode from 'qrcode'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -110,6 +110,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const [hint, setHint] = useState('')
+  const openedAgentFromMessagesRef = useRef(false)
   const [groupMemberCounts, setGroupMemberCounts] = useState<Record<string, number>>({})
   const [groupWorkspaceAgents, setGroupWorkspaceAgents] = useState<
     Record<string, WorkspaceAgent[]>
@@ -152,7 +153,9 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   )
   const activeSession = sessions.find((session) => session.id === sessionId)
   const routeTab = activeTabFromPath(location.pathname, activeSession)
-  const activeTab = tabOverride ?? routeTab
+  const activeTab =
+    tabOverride ??
+    (openedAgentFromMessagesRef.current && routeTab === 'agents' ? 'messages' : routeTab)
   const isAgentConfigRoute = location.pathname === '/agent-config'
   const activeAgentConfigId = new URLSearchParams(location.search).get('agentId')
   const savedAgentIds = useMemo(
@@ -476,6 +479,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             icon={Users}
             label="Agent"
             onClick={() => {
+              openedAgentFromMessagesRef.current = false
               setTabOverride('agents')
             }}
           />
@@ -671,7 +675,10 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       <button
                         key={session.id}
                         type="button"
-                        onClick={() => void openExistingSession(session)}
+                        onClick={() => {
+                          openedAgentFromMessagesRef.current = true
+                          void openExistingSession(session)
+                        }}
                         className={cn(
                           'flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left transition disabled:opacity-60',
                           active
@@ -776,7 +783,12 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                         )}
                         {isGroupParent ? (
                           <>
-                            <GroupAvatar className="shrink-0" size="sm" title={groupTitle} />
+                            <GroupAvatar
+                              agents={workspaceAgents}
+                              className="shrink-0"
+                              size="sm"
+                              title={groupTitle}
+                            />
                             <span className="flex min-w-0 flex-1 items-center">
                               <span className="truncate font-medium">{groupTitle}</span>
                               <span className="ml-1 shrink-0 font-normal text-neutral-400">
@@ -948,10 +960,20 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                                 {childAgent ? (
                                   <span className="relative h-5 w-5 shrink-0">
                                     <span
-                                      className="grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold text-white"
+                                      className="grid h-5 w-5 place-items-center overflow-hidden rounded-full text-[10px] font-semibold text-white"
                                       style={{ background: childAgent.color }}
                                     >
-                                      {childAgent.name.slice(0, 1).toUpperCase()}
+                                      {childAgent.avatar ? (
+                                        <img
+                                          src={childAgent.avatar}
+                                          alt={childAgent.name}
+                                          className="h-full w-full bg-white object-contain"
+                                          decoding="async"
+                                          draggable={false}
+                                        />
+                                      ) : (
+                                        childAgent.name.slice(0, 1).toUpperCase()
+                                      )}
                                     </span>
                                     {pinnedIds.has(child.id) && (
                                       <Pin className="absolute -right-1 -top-1 h-2.5 w-2.5 fill-neutral-700 text-neutral-700" />
@@ -1087,10 +1109,20 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-left disabled:opacity-60"
                     >
                       <div
-                        className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white"
+                        className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full text-sm font-semibold text-white"
                         style={{ background: agent.color }}
                       >
-                        {agent.name.slice(0, 1).toUpperCase()}
+                        {agent.avatar ? (
+                          <img
+                            src={agent.avatar}
+                            alt={agent.name}
+                            className="h-full w-full bg-white object-contain"
+                            decoding="async"
+                            draggable={false}
+                          />
+                        ) : (
+                          agent.name.slice(0, 1).toUpperCase()
+                        )}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium text-neutral-950">
@@ -1477,7 +1509,7 @@ function AccountAvatar({ name, avatar }: AccountProfile) {
       <img
         src={avatar}
         alt={name || 'Account avatar'}
-        className="h-full w-full object-cover"
+        className="h-full w-full bg-white object-contain"
         decoding="async"
         draggable={false}
       />
