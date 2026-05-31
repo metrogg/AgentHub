@@ -1440,11 +1440,29 @@
   .agenthub-themed-page .bg-\[\#fbfbf8\],
   .agenthub-themed-page .bg-\[\#fbfbf9\],
   .agenthub-themed-page .bg-\[\#fafaf7\],
+  .agenthub-portal-theme .bg-\[\#f7f5f1\],
   .agenthub-portal-theme .bg-\[\#f7f7f4\],
+  .agenthub-portal-theme .bg-\[\#f7f7f5\],
+  .agenthub-portal-theme .bg-\[\#f5f4ef\],
   .agenthub-portal-theme .bg-\[\#fbfbf8\],
   .agenthub-portal-theme .bg-\[\#fbfbf9\],
-  .agenthub-portal-theme .bg-\[\#fafaf7\] {
+  .agenthub-portal-theme .bg-\[\#fafaf7\],
+  .agenthub-thread-root .bg-\[\#FBFBFB\],
+  .agenthub-thread-root .bg-\[\#fbfbfb\] {
     background-color: var(--agenthub-app-sidebar, #fbfbfb);
+  }
+
+  .agenthub-portal-theme .bg-\[\#fafafa\],
+  .agenthub-portal-theme .bg-\[\#FAFAFA\],
+  .agenthub-thread-root .bg-\[\#F3F3F3\],
+  .agenthub-thread-root .bg-\[\#f3f3f3\] {
+    background-color: var(--agenthub-app-panel-muted, #f7f7f7);
+  }
+
+  .agenthub-portal-theme .hover\:bg-\[\#f7f7f5\]:hover,
+  .agenthub-thread-root .hover\:bg-\[\#F3F3F3\]:hover,
+  .agenthub-thread-root .hover\:bg-\[\#f3f3f3\]:hover {
+    background-color: var(--agenthub-app-hover, #f7f7f7);
   }
 
   .agenthub-themed-page .bg-\[\#edf7f3\],
