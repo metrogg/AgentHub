@@ -76,6 +76,7 @@ import {
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -109,9 +110,14 @@ import {
   openUrlWindow,
   pickWorkspaceFolder,
 } from '../../lib/native'
-import { sendModeShouldSubmit, shouldInsertNewline, useShortcutSettings } from '../../lib/shortcuts'
+import {
+  sendModeShouldSubmit,
+  shouldInsertNewline,
+  useShortcutSettings,
+} from '../../lib/shortcuts'
 import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { cn } from '../../lib/utils'
+import { getCachedAccountProfile } from '../../lib/accountProfile'
 import {
   isProjectWorkspace,
   workspaceSearchText,
@@ -135,6 +141,8 @@ import {
   type SavedAgentConfig,
 } from '../../lib/agentLibrary'
 import { workspaceNameFromPath } from '@agenthub/shared'
+import { useLineSelection } from './useLineSelection'
+import LineSelectionToolbar from './LineSelectionToolbar'
 
 const highlightLanguageMap = {
   bash,
@@ -1116,9 +1124,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
           <div className="min-h-0 flex-1 overflow-y-auto bg-[#FBFBFB] px-6 py-6">
             <div className="flex flex-col items-center text-center">
               <div className="relative h-20 w-20">
-                <div className="absolute left-1 top-3 grid h-12 w-12 place-items-center rounded-full bg-neutral-900 text-sm font-semibold text-white ring-4 ring-[#FBFBFB]">
-                  Y
-                </div>
+                <UserAvatar className="absolute left-1 top-3 h-12 w-12 ring-4 ring-[#FBFBFB]" />
                 {agents.slice(0, 3).map((agent, index) => (
                   <div
                     key={agent.id}
@@ -1135,7 +1141,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                       <img
                         src={agent.avatar}
                         alt={agent.name}
-                        className="h-full w-full object-cover"
+                        className="h-full w-full bg-white object-contain"
                       />
                     ) : (
                       agent.name.slice(0, 1).toUpperCase()
@@ -1209,7 +1215,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                           <img
                             src={agent.avatar}
                             alt={agent.name}
-                            className="h-full w-full object-cover"
+                            className="h-full w-full bg-white object-contain"
                           />
                         ) : (
                           agent.name.slice(0, 1).toUpperCase()
@@ -2442,8 +2448,8 @@ const UserMessage: FC = () => {
   }
 
   return (
-    <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] justify-end py-3">
-      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'w-full' : 'max-w-[68%]')}>
+    <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start justify-end gap-3 py-3">
+      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'min-w-0 flex-1' : 'max-w-[68%]')}>
         <div
           className={cn(
             'w-full text-sm leading-6 text-neutral-900',
@@ -2519,6 +2525,7 @@ const UserMessage: FC = () => {
           </div>
         )}
       </div>
+      <Avatar role="user" />
     </MessagePrimitive.Root>
   )
 }
@@ -3119,7 +3126,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
               )
             ) : item.kind === 'diff' ? (
               <div className="h-full overflow-auto">
-                <DiffViewer diff={item.source ?? ''} maxHeightClassName="max-h-none" />
+                <DiffViewer diff={item.source ?? ''} maxHeightClassName="max-h-none" filePath={item.path} />
               </div>
             ) : item.kind === 'workflow' ? (
               <PreviewPlaceholder item={item} />
@@ -3916,54 +3923,80 @@ const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> 
 const CodeAgentFilesCard: FC<{ cwd?: string; files: CodeAgentRunMetadata['files'] }> = ({
   cwd,
   files,
-}) => (
-  <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-    <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
-      <FileText className="h-4 w-4 shrink-0 text-amber-600" />
-      文件变更 {files.length}
-    </div>
-    <div className="space-y-1.5 p-2">
-      {files.map((file) => {
-        const vscodeHref = file.status === 'deleted' ? null : vscodeFileHref(file.path, cwd)
-        return (
-          <details key={`${file.status}-${file.path}`} className="group rounded-md bg-neutral-50">
-            <summary className="grid cursor-pointer list-none grid-cols-[4.75rem_minmax(0,1fr)_auto_1rem] items-center gap-2 px-3 py-2.5">
-              <span className="text-[13px] text-neutral-500">{fileStatusLabel(file.status)}</span>
-              <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>
-                {file.path}
-              </span>
-              {vscodeHref ? (
-                <a
-                  href={vscodeHref}
-                  onClick={(event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    window.location.href = vscodeHref
-                  }}
-                  className="inline-flex h-7 min-w-10 items-center justify-center gap-1 rounded-full border border-neutral-200 bg-white px-2 text-neutral-500 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
-                  title="用 VS Code 打开"
-                  aria-label={`用 VS Code 打开 ${file.path}`}
-                >
-                  <img src="/vscode-color.svg" alt="" className="h-4 w-4" draggable={false} />
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              ) : (
-                <span className="h-7 min-w-10" />
-              )}
-              <ChevronDown
-                className={cn(
-                  'h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180',
-                  !file.diff && 'opacity-0',
+}) => {
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
+
+  async function handleSaveEdit(filePath: string, params: { lineText: string; lineNumber: number }) {
+    if (!workspaceId) return
+    try {
+      await api.writeFile({
+        workspaceId,
+        filePath,
+        content: params.lineText,
+        startLine: params.lineNumber,
+        endLine: params.lineNumber,
+      })
+    } catch (err) {
+      console.error('[CodeAgentFilesCard] Failed to save edit:', err)
+    }
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+      <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
+        <FileText className="h-4 w-4 shrink-0 text-amber-600" />
+        文件变更 {files.length}
+      </div>
+      <div className="space-y-1.5 p-2">
+        {files.map((file) => {
+          const vscodeHref = file.status === 'deleted' ? null : vscodeFileHref(file.path, cwd)
+          return (
+            <details key={`${file.status}-${file.path}`} className="group rounded-md bg-neutral-50">
+              <summary className="grid cursor-pointer list-none grid-cols-[4.75rem_minmax(0,1fr)_auto_1rem] items-center gap-2 px-3 py-2.5">
+                <span className="text-[13px] text-neutral-500">{fileStatusLabel(file.status)}</span>
+                <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>
+                  {file.path}
+                </span>
+                {vscodeHref ? (
+                  <a
+                    href={vscodeHref}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      window.location.href = vscodeHref
+                    }}
+                    className="inline-flex h-7 min-w-10 items-center justify-center gap-1 rounded-full border border-neutral-200 bg-white px-2 text-neutral-500 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+                    title="用 VS Code 打开"
+                    aria-label={`用 VS Code 打开 ${file.path}`}
+                  >
+                    <img src="/vscode-color.svg" alt="" className="h-4 w-4" draggable={false} />
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                ) : (
+                  <span className="h-7 min-w-10" />
                 )}
-              />
-            </summary>
-            {file.diff && <DiffViewer diff={file.diff} maxHeightClassName="max-h-72" />}
-          </details>
-        )
-      })}
+                <ChevronDown
+                  className={cn(
+                    'h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180',
+                    !file.diff && 'opacity-0',
+                  )}
+                />
+              </summary>
+              {file.diff && (
+                <DiffViewer
+                  diff={file.diff}
+                  maxHeightClassName="max-h-72"
+                  filePath={file.path}
+                  onSaveEdit={workspaceId ? (params) => handleSaveEdit(file.path, params) : undefined}
+                />
+              )}
+            </details>
+          )
+        })}
+      </div>
     </div>
-  </div>
-)
+  )
+}
 
 const CodeAgentLogsCard: FC<{ logs: NonNullable<CodeAgentRunMetadata['logs']> }> = ({ logs }) => {
   const [open, setOpen] = useState(false)
@@ -4262,6 +4295,18 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
   const lines = artifact.diff.split(/\r?\n/)
   const additions = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
   const deletions = lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
+
+  async function handleSaveEdit(params: { lineText: string; lineNumber: number }) {
+    if (!workspaceId) return
+    await api.writeFile({
+      workspaceId,
+      filePath: artifact.filePath,
+      content: params.lineText,
+      startLine: params.lineNumber,
+      endLine: params.lineNumber,
+    })
+  }
 
   return (
     <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
@@ -4298,69 +4343,208 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
           查看 Diff
         </button>
       </div>
-      {open && <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" />}
+      {open && <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" filePath={artifact.filePath} onSaveEdit={workspaceId ? handleSaveEdit : undefined} />}
     </div>
   )
 }
 
-const DiffViewer: FC<{ diff: string; maxHeightClassName?: string }> = ({
+const DiffViewer: FC<{
+  diff: string
+  maxHeightClassName?: string
+  filePath?: string
+  /** Called when user saves an inline edit. Receives the new line text and the 1-based line number in the current file. */
+  onSaveEdit?: (params: { lineText: string; lineNumber: number }) => void
+}> = ({
   diff,
   maxHeightClassName = 'max-h-96',
+  filePath,
+  onSaveEdit,
 }) => {
   const rows = useMemo(() => parseDiffRows(diff), [diff])
+  // Only selectable rows are add/del/context (not hunk/meta)
+  const selectableRows = useMemo(
+    () => rows.map((row, i) => ({ ...row, _index: i })).filter((r) => r.kind === 'add' || r.kind === 'del' || r.kind === 'context'),
+    [rows],
+  )
+  const selectableCount = selectableRows.length
+  const selection = useLineSelection(selectableCount)
+  const [editingSelectableIndex, setEditingSelectableIndex] = useState<number | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  function isRowSelected(originalIndex: number) {
+    const selIdx = selectableRows.findIndex((r) => r._index === originalIndex)
+    return selIdx >= 0 && selection.isSelected(selIdx)
+  }
+
+  function handleLineNumberClick(originalIndex: number, shiftKey: boolean) {
+    const selIdx = selectableRows.findIndex((r) => r._index === originalIndex)
+    if (selIdx >= 0) selection.toggleLine(selIdx, shiftKey)
+  }
+
+  function buildReferenceText() {
+    const selected = selection.sortedSelected.map((si) => selectableRows[si])
+    if (selected.length === 0) return ''
+    const lines = selected.map((r) => {
+      const marker = r.kind === 'add' ? '+' : r.kind === 'del' ? '-' : ' '
+      return `${marker}${r.text}`
+    })
+    const lineRange = selected.length === 1
+      ? `第 ${selected[0].newNumber ?? selected[0].oldNumber ?? '?'} 行`
+      : `第 ${selected[0].newNumber ?? selected[0].oldNumber ?? '?'}-${selected[selected.length - 1].newNumber ?? selected[selected.length - 1].oldNumber ?? '?'} 行`
+    const langGuess = filePath ? guessLanguageFromPath(filePath) : ''
+    const header = filePath
+      ? `\`${filePath}\` ${lineRange}:\n`
+      : `${lineRange}:\n`
+    return `${header}\`\`\`${langGuess}\n${lines.join('\n')}\n\`\`\`\n`
+  }
+
+  function handleReference() {
+    const text = buildReferenceText()
+    if (text) insertTextIntoComposer(text)
+    selection.clearSelection()
+  }
+
+  function handleStartEdit() {
+    if (selection.sortedSelected.length === 0) return
+    const firstSelIdx = selection.sortedSelected[0]
+    setEditingSelectableIndex(firstSelIdx)
+    const row = selectableRows[firstSelIdx]
+    const marker = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' '
+    setEditDraft(`${marker}${row.text}`)
+  }
+
+  function handleCancelEdit() {
+    setEditingSelectableIndex(null)
+    setEditDraft('')
+  }
+
+  async function handleSaveEdit() {
+    if (editingSelectableIndex === null || !onSaveEdit) return
+    setSaving(true)
+    try {
+      const row = selectableRows[editingSelectableIndex]
+      // Determine the 1-based line number in the current file
+      // For 'add' and 'context' rows, use newNumber; for 'del', use oldNumber
+      const lineNumber = row.kind === 'del' ? row.oldNumber : row.newNumber
+      if (!lineNumber) {
+        setSaving(false)
+        return
+      }
+      // The editDraft has a prefix marker (+, -, or space); strip it to get just the line text
+      const lineText = editDraft.length > 1 ? editDraft.slice(1) : ''
+      await onSaveEdit({ lineText, lineNumber })
+      setEditingSelectableIndex(null)
+      setEditDraft('')
+      selection.clearSelection()
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
-    <div
-      className={cn(
-        'overflow-auto border-t border-neutral-200 bg-white text-[13px]',
-        maxHeightClassName,
+    <div className="agenthub-diff-container">
+      {selection.selectedCount > 0 && (
+        <LineSelectionToolbar
+          selectedCount={selection.selectedCount}
+          onReference={handleReference}
+          onEdit={onSaveEdit ? handleStartEdit : undefined}
+          onClear={selection.clearSelection}
+        />
       )}
-    >
-      <div className="agenthub-readable-code min-w-max py-1 leading-7">
-        {rows.map((row, index) => (
-          <div
-            key={`${index}-${row.text}`}
-            className={cn(
-              'grid grid-cols-[3.25rem_3.25rem_minmax(32rem,1fr)] border-l-4 pr-4',
-              row.kind === 'add' && 'border-emerald-500 bg-emerald-50 text-emerald-950',
-              row.kind === 'del' && 'border-red-500 bg-red-50 text-red-950',
-              row.kind === 'hunk' && 'border-blue-300 bg-blue-50 text-blue-700',
-              row.kind === 'meta' && 'border-transparent bg-neutral-50 text-neutral-500',
-              row.kind === 'context' && 'border-transparent text-neutral-800',
-            )}
-          >
-            <span
-              className={cn(
-                'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
-                row.kind === 'add' && 'text-emerald-600',
-                row.kind === 'del' && 'text-red-600',
-              )}
-            >
-              {row.oldNumber ?? ''}
-            </span>
-            <span
-              className={cn(
-                'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
-                row.kind === 'add' && 'text-emerald-600',
-                row.kind === 'del' && 'text-red-600',
-              )}
-            >
-              {row.newNumber ?? ''}
-            </span>
-            <code className="whitespace-pre px-3">
-              <span
+      <div
+        className={cn(
+          'overflow-auto border-t border-neutral-200 bg-white text-[13px]',
+          maxHeightClassName,
+          selection.selectedCount > 0 && 'border-t-0',
+        )}
+      >
+        <div className="agenthub-readable-code min-w-max py-1 leading-7">
+          {rows.map((row, index) => {
+            const selected = isRowSelected(index)
+            const isEditing = selectableRows.findIndex((r) => r._index === index) === editingSelectableIndex
+            const canSelect = row.kind === 'add' || row.kind === 'del' || row.kind === 'context'
+
+            return (
+              <div
+                key={`${index}-${row.text}`}
                 className={cn(
-                  'mr-2 inline-block w-3 select-none',
-                  row.kind === 'add' && 'text-emerald-600',
-                  row.kind === 'del' && 'text-red-600',
+                  'grid grid-cols-[3.25rem_3.25rem_minmax(32rem,1fr)] border-l-4 pr-4',
+                  row.kind === 'add' && 'border-emerald-500 bg-emerald-50 text-emerald-950',
+                  row.kind === 'del' && 'border-red-500 bg-red-50 text-red-950',
+                  row.kind === 'hunk' && 'border-blue-300 bg-blue-50 text-blue-700',
+                  row.kind === 'meta' && 'border-transparent bg-neutral-50 text-neutral-500',
+                  row.kind === 'context' && 'border-transparent text-neutral-800',
+                  selected && 'agenthub-diff-row-selected',
                 )}
               >
-                {row.marker}
-              </span>
-              {row.text}
-            </code>
-          </div>
-        ))}
+                <span
+                  className={cn(
+                    'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
+                    row.kind === 'add' && 'text-emerald-600',
+                    row.kind === 'del' && 'text-red-600',
+                    canSelect && 'agenthub-diff-line-number',
+                  )}
+                  onClick={canSelect ? (e) => handleLineNumberClick(index, e.shiftKey) : undefined}
+                >
+                  {row.oldNumber ?? ''}
+                </span>
+                <span
+                  className={cn(
+                    'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
+                    row.kind === 'add' && 'text-emerald-600',
+                    row.kind === 'del' && 'text-red-600',
+                    canSelect && 'agenthub-diff-line-number',
+                  )}
+                  onClick={canSelect ? (e) => handleLineNumberClick(index, e.shiftKey) : undefined}
+                >
+                  {row.newNumber ?? ''}
+                </span>
+                {isEditing ? (
+                  <div className="flex flex-col px-1 py-0.5">
+                    <textarea
+                      value={editDraft}
+                      onChange={(e) => setEditDraft(e.target.value)}
+                      className="agenthub-inline-edit"
+                      autoFocus
+                      rows={1}
+                    />
+                    <div className="agenthub-inline-edit-actions">
+                      <button
+                        type="button"
+                        className="agenthub-inline-edit-btn agenthub-inline-edit-btn-save"
+                        onClick={handleSaveEdit}
+                        disabled={saving}
+                      >
+                        {saving ? '保存中...' : '保存'}
+                      </button>
+                      <button
+                        type="button"
+                        className="agenthub-inline-edit-btn agenthub-inline-edit-btn-cancel"
+                        onClick={handleCancelEdit}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <code className="whitespace-pre px-3">
+                    <span
+                      className={cn(
+                        'mr-2 inline-block w-3 select-none',
+                        row.kind === 'add' && 'text-emerald-600',
+                        row.kind === 'del' && 'text-red-600',
+                      )}
+                    >
+                      {row.marker}
+                    </span>
+                    {row.text}
+                  </code>
+                )}
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )
@@ -4725,6 +4909,19 @@ function parseDiffRows(diff: string): DiffRow[] {
   return rows
 }
 
+function guessLanguageFromPath(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+  const map: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+    py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java',
+    css: 'css', scss: 'css', less: 'css', html: 'xml', xml: 'xml',
+    json: 'json', yaml: 'yaml', yml: 'yaml', md: 'markdown',
+    sh: 'bash', bash: 'bash', zsh: 'bash', sql: 'sql', vue: 'xml',
+    svelte: 'xml',
+  }
+  return map[ext] ?? ''
+}
+
 const AlertCircleIcon: FC = () => (
   <span className="grid h-4 w-4 place-items-center rounded-full border border-neutral-300 text-[10px]">
     !
@@ -4902,19 +5099,18 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
   const runtime = useMessage((message) =>
     role === 'assistant' ? codeAgentRuntimeFromParts(message.content) : null,
   )
-
   // 优先显示 workspace agent 头像
   if (role === 'assistant' && senderAgent) {
     return (
       <div
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm font-semibold text-white shadow-sm"
+        className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full text-sm font-semibold text-white shadow-sm"
         style={{ background: senderAgent.color ?? '#111827' }}
       >
         {senderAgent.avatar ? (
           <img
             src={senderAgent.avatar}
             alt={senderAgent.name}
-            className="h-full w-full rounded-full object-cover"
+            className="h-full w-full bg-white object-contain"
             decoding="async"
             draggable={false}
           />
@@ -4942,6 +5138,10 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
     )
   }
 
+  if (role === 'user') {
+    return <UserAvatar />
+  }
+
   return (
     <div
       className={cn(
@@ -4950,6 +5150,39 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
       )}
     >
       {role === 'assistant' ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
+    </div>
+  )
+}
+
+function UserAvatar({
+  profile,
+  className,
+}: {
+  profile?: ReturnType<typeof getCachedAccountProfile>
+  className?: string
+}) {
+  const resolvedProfile = profile ?? getCachedAccountProfile()
+  const label = (resolvedProfile.name.trim().slice(0, 1) || 'Y').toUpperCase()
+
+  return (
+    <div
+      className={cn(
+        'grid shrink-0 place-items-center overflow-hidden rounded-full bg-white text-sm font-semibold text-neutral-900 shadow-sm ring-1 ring-neutral-200',
+        className ?? 'h-9 w-9',
+      )}
+      title={resolvedProfile.name || 'You'}
+    >
+      {resolvedProfile.avatar ? (
+        <img
+          src={resolvedProfile.avatar}
+          alt={resolvedProfile.name || 'You'}
+          className="h-full w-full bg-white object-contain"
+          decoding="async"
+          draggable={false}
+        />
+      ) : (
+        label
+      )}
     </div>
   )
 }
@@ -5108,22 +5341,75 @@ const CodeSyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
   code,
 }) => {
   const normalizedLanguage = normalizeHighlightLanguage(language)
-  const highlighted = useMemo(
-    () => highlightCode(code, normalizedLanguage),
-    [code, normalizedLanguage],
+  const lines = useMemo(() => code.replace(/\n$/, '').split('\n'), [code])
+  const highlightedLines = useMemo(
+    () => lines.map((line) => highlightCode(line, normalizedLanguage)),
+    [lines, normalizedLanguage],
   )
+  const langLabel = normalizedLanguage || 'text'
+  const filePath = guessFilePathFromLanguage(langLabel)
+  const selection = useLineSelection(lines.length)
 
+  const handleReference = useCallback(() => {
+    const selected = selection.sortedSelected
+    if (selected.length === 0) return
+    const selectedLines = selected.map((i) => lines[i])
+    const lineRange = selected.length === 1
+      ? `第 ${selected[0] + 1} 行`
+      : `第 ${selected[0] + 1}-${selected[selected.length - 1] + 1} 行`
+    const header = filePath
+      ? `\`${filePath}\` ${lineRange}:\n`
+      : `${lineRange}:\n`
+    const text = `${header}\`\`\`${langLabel}\n${selectedLines.join('\n')}\n\`\`\`\n`
+    insertTextIntoComposer(text)
+    selection.clearSelection()
+  }, [selection, lines, filePath, langLabel])
+
+  // Always render table layout with line numbers for consistent UX
   return (
-    <Pre className="agenthub-code-pre not-prose">
-      <Code
-        className={cn(
-          'agenthub-code',
-          normalizedLanguage ? `language-${normalizedLanguage}` : 'language-text',
-        )}
-        dangerouslySetInnerHTML={{ __html: highlighted }}
-      />
-    </Pre>
+    <div className="agenthub-code-block-wrapper">
+      {selection.selectedCount > 0 && (
+        <LineSelectionToolbar
+          selectedCount={selection.selectedCount}
+          onReference={handleReference}
+          onClear={() => { selection.clearSelection() }}
+        />
+      )}
+      <Pre className="agenthub-code-pre not-prose">
+        <Code className={cn('agenthub-code', `language-${langLabel}`)}>
+          <table className="agenthub-code-table">
+            <tbody>
+              {lines.map((_line, i) => (
+                <tr
+                  key={i}
+                  className={selection.isSelected(i) ? 'agenthub-code-row-selected' : undefined}
+                >
+                  <td
+                    className="agenthub-code-ln"
+                    onClick={(e) => { selection.toggleLine(i, e.shiftKey) }}
+                  >
+                    {i + 1}
+                  </td>
+                  <td className="agenthub-code-content">
+                    <span dangerouslySetInnerHTML={{ __html: highlightedLines[i] || '&nbsp;' }} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Code>
+      </Pre>
+    </div>
   )
+}
+
+/** Heuristic: try to extract a file path from the language label (e.g. "typescript // src/app.ts") */
+function guessFilePathFromLanguage(langLabel: string): string | undefined {
+  const match = langLabel.match(/^(.+?)\s+(?:\/\/\s*)?(.+\.\w+)$/)
+  if (match) return match[2]
+  // If the label itself looks like a file path
+  if (langLabel.includes('/') || langLabel.includes('\\')) return langLabel
+  return undefined
 }
 
 function normalizeHighlightLanguage(language: string | undefined) {

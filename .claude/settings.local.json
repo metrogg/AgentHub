@@ -24,7 +24,12 @@
       "Bash(npm search *)",
       "mcp__web-reader__webReader",
       "Bash(npx @bainiu/ccswitch --help)",
-      "Bash(npx *)"
+      "Bash(npx *)",
+      "Bash(npm pack *)",
+      "Bash(npm info *)",
+      "Bash(npm install *)",
+      "Bash(npm root *)",
+      "Bash(curl -s http://127.0.0.1:8000/api/settings/ccswitch-models)"
     ]
   }
 }

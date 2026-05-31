@@ -300,6 +300,13 @@ export interface ModelCatalogItem {
   apiKey?: string
 }
 
+export interface CcswitchModel {
+  name: string
+  modelId: string
+  apiEndpoint: string
+  apiKey: string
+}
+
 export interface WelcomeQuickPrompt {
   id: string
   label: string
@@ -1057,6 +1064,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  getCcswitchModels: () =>
+    request<{ models: CcswitchModel[] }>('/settings/ccswitch-models'),
   // Coding tools
   getCodingToolStatus: (tools?: CodingToolProbe[]) =>
     tools?.length
@@ -1263,4 +1272,17 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+
+  // Files
+  writeFile: (data: {
+    workspaceId: string
+    filePath: string
+    content: string
+    startLine?: number
+    endLine?: number
+  }) =>
+    request<{ ok: boolean; lines?: number }>('/files', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 }

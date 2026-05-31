@@ -2016,6 +2016,285 @@
     color: #bef264;
   }
 
+  /* ── Line selection: DiffViewer ── */
+
+  .agenthub-diff-line-number {
+    cursor: pointer;
+    transition: background-color 100ms ease;
+  }
+
+  .agenthub-diff-line-number:hover {
+    background-color: rgba(59, 130, 246, 0.08);
+  }
+
+  .agenthub-diff-row-selected {
+    background-color: rgba(59, 130, 246, 0.12) !important;
+    border-left-color: #3b82f6 !important;
+  }
+
+  .agenthub-diff-row-selected.agenthub-diff-row-selected {
+    /* Override add/del/hunk colors when selected */
+  }
+
+  /* ── Line selection: Code blocks ── */
+
+  .agenthub-code-block-wrapper {
+    position: relative;
+  }
+
+  .agenthub-code-table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+  }
+
+  .agenthub-code-table td {
+    padding: 0;
+    vertical-align: top;
+  }
+
+  .agenthub-code-table .agenthub-code-ln {
+    width: 3.25rem;
+    min-width: 3.25rem;
+    padding: 0 0.625rem 0 0.5rem;
+    text-align: right;
+    color: #6b7280;
+    user-select: none;
+    cursor: pointer;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    transition: background-color 100ms ease;
+  }
+
+  .agenthub-code-table .agenthub-code-ln:hover {
+    background-color: rgba(59, 130, 246, 0.1);
+    color: #93c5fd;
+  }
+
+  .agenthub-code-table tr.agenthub-code-row-selected .agenthub-code-ln {
+    background-color: rgba(59, 130, 246, 0.18);
+    color: #93c5fd;
+  }
+
+  .agenthub-code-table tr.agenthub-code-row-selected {
+    background-color: rgba(59, 130, 246, 0.1);
+  }
+
+  .agenthub-code-table .agenthub-code-content {
+    padding: 0 1rem 0 0.75rem;
+  }
+
+  /* ── Line selection: Floating toolbar ── */
+
+  .agenthub-line-selection-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.375rem 0.75rem;
+    background: #1e293b;
+    border-bottom: 1px solid #334155;
+    font-size: 0.75rem;
+    color: #e2e8f0;
+  }
+
+  .agenthub-line-selection-count {
+    font-weight: 500;
+    color: #93c5fd;
+    white-space: nowrap;
+  }
+
+  .agenthub-line-selection-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  .agenthub-line-selection-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: #cbd5e1;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease;
+    white-space: nowrap;
+  }
+
+  .agenthub-line-selection-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+  }
+
+  .agenthub-line-selection-btn-primary {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
+  }
+
+  .agenthub-line-selection-btn-primary:hover {
+    background: rgba(59, 130, 246, 0.35);
+    color: #bfdbfe;
+  }
+
+  .agenthub-line-selection-btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    padding: 0.25rem;
+  }
+
+  .agenthub-line-selection-btn-ghost:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  /* ── DiffViewer light toolbar variant ── */
+
+  .agenthub-diff-container .agenthub-line-selection-toolbar {
+    background: #f8fafc;
+    border-bottom-color: #e2e8f0;
+    color: #334155;
+  }
+
+  .agenthub-diff-container .agenthub-line-selection-count {
+    color: #2563eb;
+  }
+
+  .agenthub-diff-container .agenthub-line-selection-btn {
+    color: #475569;
+    background: rgba(0, 0, 0, 0.04);
+    border-color: #e2e8f0;
+  }
+
+  .agenthub-diff-container .agenthub-line-selection-btn:hover {
+    background: rgba(0, 0, 0, 0.08);
+    color: #1e293b;
+  }
+
+  .agenthub-diff-container .agenthub-line-selection-btn-primary {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    color: #2563eb;
+  }
+
+  .agenthub-diff-container .agenthub-line-selection-btn-primary:hover {
+    background: #dbeafe;
+    color: #1d4ed8;
+  }
+
+  .agenthub-diff-container .agenthub-line-selection-btn-ghost {
+    background: transparent;
+    border-color: transparent;
+  }
+
+  .agenthub-diff-container .agenthub-line-selection-btn-ghost:hover {
+    background: rgba(0, 0, 0, 0.06);
+  }
+
+  /* ── Inline editing ── */
+
+  .agenthub-inline-edit {
+    width: 100%;
+    min-height: 1.75rem;
+    padding: 0 0.5rem;
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+      monospace;
+    font-size: 0.8125rem;
+    line-height: 1.65;
+    background: #0f172a;
+    color: #e2e8f0;
+    border: 1px solid #3b82f6;
+    border-radius: 2px;
+    outline: none;
+    resize: vertical;
+  }
+
+  .agenthub-inline-edit:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3);
+  }
+
+  .agenthub-inline-edit-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.5rem;
+    background: #1e293b;
+    border-top: 1px solid #334155;
+  }
+
+  .agenthub-inline-edit-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: 0.375rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease;
+    white-space: nowrap;
+  }
+
+  .agenthub-inline-edit-btn-save {
+    background: #3b82f6;
+    color: #ffffff;
+    border: none;
+  }
+
+  .agenthub-inline-edit-btn-save:hover {
+    background: #2563eb;
+  }
+
+  .agenthub-inline-edit-btn-cancel {
+    background: transparent;
+    color: #94a3b8;
+    border: 1px solid #334155;
+  }
+
+  .agenthub-inline-edit-btn-cancel:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #e2e8f0;
+  }
+
+  /* DiffViewer light inline edit variant */
+  .agenthub-diff-container .agenthub-inline-edit {
+    background: #ffffff;
+    color: #1e293b;
+    border-color: #3b82f6;
+  }
+
+  .agenthub-diff-container .agenthub-inline-edit:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2);
+  }
+
+  .agenthub-diff-container .agenthub-inline-edit-actions {
+    background: #f8fafc;
+    border-top-color: #e2e8f0;
+  }
+
+  .agenthub-diff-container .agenthub-inline-edit-btn-cancel {
+    color: #64748b;
+    border-color: #e2e8f0;
+  }
+
+  .agenthub-diff-container .agenthub-inline-edit-btn-cancel:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: #334155;
+  }
+
   .office-scene {
     background:
       radial-gradient(circle at 20% 17%, rgba(255, 255, 255, 0.9), transparent 16rem),
