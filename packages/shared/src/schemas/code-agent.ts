@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { timelineEventSchema } from './timeline'
 
 /**
  * CodeAgent 运行元数据。
@@ -53,6 +54,8 @@ export const codeAgentRunMetadataSchema = z.object({
     createdAt: z.number().optional(),
   })).optional(),
   diagnostics: z.string().optional(),
+  timelineEvents: z.array(timelineEventSchema).optional(),
+  sessionId: z.string().optional(),
 })
 
 export type CodeAgentRunMetadata = z.infer<typeof codeAgentRunMetadataSchema>

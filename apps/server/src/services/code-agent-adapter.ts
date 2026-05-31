@@ -90,7 +90,39 @@ export interface CodeAgentMetadataChunk {
   metadata: CodeAgentRunMetadata
 }
 
-export type CodeAgentReplyChunk = string | CodeAgentMetadataChunk
+export interface CodeAgentThinkingChunk {
+  kind: 'code-agent-thinking'
+  text: string
+}
+
+export interface CodeAgentBlockStartChunk {
+  kind: 'code-agent-block-start'
+  block: any
+}
+
+export interface CodeAgentBlockStopChunk {
+  kind: 'code-agent-block-stop'
+  index: number
+}
+
+export interface CodeAgentToolInputChunk {
+  kind: 'code-agent-tool-input'
+  partialJson: string
+}
+
+export interface CodeAgentPlanChunk {
+  kind: 'code-agent-plan'
+  input: Record<string, unknown>
+}
+
+export type CodeAgentReplyChunk =
+  | string
+  | CodeAgentMetadataChunk
+  | CodeAgentThinkingChunk
+  | CodeAgentBlockStartChunk
+  | CodeAgentBlockStopChunk
+  | CodeAgentToolInputChunk
+  | CodeAgentPlanChunk
 
 const serviceDir = dirname(fileURLToPath(import.meta.url))
 const sourceProjectRoot = resolve(serviceDir, '../../../..')
@@ -415,6 +447,11 @@ export async function* streamCodeAgentReply(
     {
       onMetadata: (metadata) => push({ kind: 'code-agent-metadata', metadata }),
       onText: (text) => push(text),
+      onThinkingText: (text) => push({ kind: 'code-agent-thinking', text }),
+      onContentBlockStart: (block) => push({ kind: 'code-agent-block-start', block }),
+      onContentBlockStop: (index) => push({ kind: 'code-agent-block-stop', index }),
+      onToolInputDelta: (partialJson) => push({ kind: 'code-agent-tool-input', partialJson }),
+      onPlanEvent: (input) => push({ kind: 'code-agent-plan', input }),
     },
     continueSession,
     resumeSessionId,
@@ -806,6 +843,11 @@ async function runCodeAgentCommand(
   hooks: {
     onMetadata?: (metadata: CodeAgentRunMetadata) => void
     onText?: (text: string) => void
+    onThinkingText?: (text: string) => void
+    onContentBlockStart?: (block: any) => void
+    onContentBlockStop?: (index: number) => void
+    onToolInputDelta?: (partialJson: string) => void
+    onPlanEvent?: (input: Record<string, unknown>) => void
   } = {},
   continueSession?: boolean,
   resumeSessionId?: string,
@@ -1039,6 +1081,21 @@ async function runCodeAgentCommand(
     onSessionId: (sessionId: string) => {
       claudeSessionId = sessionId
     },
+    onThinkingText: (text: string) => {
+      hooks.onThinkingText?.(text)
+    },
+    onContentBlockStart: (block: any) => {
+      hooks.onContentBlockStart?.(block)
+    },
+    onContentBlockStop: (index: number) => {
+      hooks.onContentBlockStop?.(index)
+    },
+    onToolInputDelta: (partialJson: string) => {
+      hooks.onToolInputDelta?.(partialJson)
+    },
+    onPlanEvent: (input: Record<string, unknown>) => {
+      hooks.onPlanEvent?.(input)
+    },
   }
 
   addStep(
@@ -1259,7 +1316,10 @@ async function buildCodeAgentRunMetadata(input: {
   output: string
   timedOut: boolean
 }): Promise<CodeAgentRunMetadata> {
-  const diagnostics = input.code === 0 && !input.timedOut ? '' : cleanDiagnosticOutput(input.output)
+  const diagnostics =
+    input.code === 0 && !input.timedOut
+      ? ''
+      : cleanDiagnosticOutput(input.output, env.AGENTHUB_CODE_AGENT_DIAGNOSTIC_LIMIT)
   const parsedCommands = parseExecutedCommands(input.output)
   const commands = mergeCommands([...(input.liveCommands ?? []), ...parsedCommands])
   const files = await enrichFileDiffs(
@@ -1269,7 +1329,6 @@ async function buildCodeAgentRunMetadata(input: {
       ...(await diffWorkspaceFiles(input.cwd, input.beforeFiles)),
     ]),
   )
-  const artifacts = buildArtifactsFromMetadata({ cwd: input.cwd, files, output: input.output })
   const status: CodeAgentRunMetadata['status'] = input.timedOut
     ? 'timed-out'
     : input.code === 0
@@ -1277,6 +1336,19 @@ async function buildCodeAgentRunMetadata(input: {
       : input.code === 130
         ? 'cancelled'
         : 'failed'
+  const rawOutputArtifact =
+    status === 'completed'
+      ? null
+      : persistRawCodeAgentOutputArtifact({
+          adapter: input.adapter,
+          durationMs: input.durationMs,
+          output: input.output,
+          status,
+        })
+  const artifacts = [
+    ...(rawOutputArtifact ? [rawOutputArtifact] : []),
+    ...buildArtifactsFromMetadata({ cwd: input.cwd, files, output: input.output }),
+  ]
   return {
     type: 'code-agent-run',
     status,
@@ -1288,7 +1360,7 @@ async function buildCodeAgentRunMetadata(input: {
     commands,
     files,
     toolCalls: input.liveToolCalls?.slice(0, 120),
-    artifacts,
+    artifacts: dedupeArtifacts(artifacts).slice(0, 80),
     finalMessage: input.finalMessage,
     reviewRequired: requiresCodeAgentOutputReview(input.adapter),
     logs: input.liveLogs?.slice(-80),
@@ -1447,6 +1519,11 @@ function consumeClaudeStreamJson(
     onText: (text: string) => void
     onAssistantText?: (text: string) => void
     onSessionId?: (sessionId: string) => void
+    onThinkingText?: (text: string) => void
+    onContentBlockStart?: (block: any) => void
+    onContentBlockStop?: (index: number) => void
+    onToolInputDelta?: (partialJson: string) => void
+    onPlanEvent?: (input: Record<string, unknown>) => void
   },
 ) {
   const combined = previousBuffer + chunk
@@ -1573,6 +1650,11 @@ function parseClaudeJsonLine(
     onText: (text: string) => void
     onAssistantText?: (text: string) => void
     onSessionId?: (sessionId: string) => void
+    onThinkingText?: (text: string) => void
+    onContentBlockStart?: (block: any) => void
+    onContentBlockStop?: (index: number) => void
+    onToolInputDelta?: (partialJson: string) => void
+    onPlanEvent?: (input: Record<string, unknown>) => void
   },
 ) {
   const trimmed = line.trim()
@@ -1604,7 +1686,28 @@ function parseClaudeJsonLine(
     const event = payload.event
     const block = event?.content_block
     const delta = event?.delta
+
+    // content block 生命周期
+    if (event.type === 'content_block_start') {
+      handlers.onContentBlockStart?.(event.content_block ?? event)
+    }
+    if (event.type === 'content_block_stop') {
+      handlers.onContentBlockStop?.(event.index ?? 0)
+    }
+
+    // 文本 delta
     if (delta?.type === 'text_delta' && typeof delta.text === 'string') handlers.onText(delta.text)
+
+    // thinking / reasoning delta
+    if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+      handlers.onThinkingText?.(delta.thinking)
+    }
+
+    // 工具调用参数流式 JSON
+    if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+      handlers.onToolInputDelta?.(delta.partial_json)
+    }
+
     if (block?.type === 'tool_use') recordClaudeToolUse(block, handlers)
     return
   }
@@ -1640,6 +1743,7 @@ function recordClaudeToolUse(
     addCommand: (command: string, cwd?: string) => void
     addToolCall: (name: string, input?: Record<string, unknown>) => void
     addLog: (stream: 'stdout' | 'stderr' | 'event', text: string) => void
+    onPlanEvent?: (input: Record<string, unknown>) => void
   },
 ) {
   const name = String(block.name ?? '')
@@ -1650,6 +1754,11 @@ function recordClaudeToolUse(
         ? block.params
         : {}
   if (name) handlers.addToolCall(name, input)
+  if (name === 'ExitPlanMode') {
+    handlers.onPlanEvent?.(input)
+    handlers.addLog('event', `计划确认：${String(input.plan || '').slice(0, 200)}`)
+    return
+  }
   if (name === 'Bash' && typeof input.command === 'string') {
     handlers.addCommand(input.command, typeof input.cwd === 'string' ? input.cwd : undefined)
     return
@@ -2246,6 +2355,55 @@ function buildArtifactsFromMetadata(input: {
   }
 
   return dedupeArtifacts(artifacts).slice(0, 80)
+}
+
+function persistRawCodeAgentOutputArtifact(input: {
+  adapter: CodeAgentAdapter
+  durationMs: number
+  output: string
+  status: CodeAgentRunMetadata['status']
+}): AgentArtifact | null {
+  const output = input.output.trim()
+  if (!output) return null
+
+  const baseDir = resolve(
+    env.AGENTHUB_APP_DATA_DIR?.trim() || process.cwd(),
+    'debug',
+    'code-agent-output',
+  )
+  const dir = resolve(
+    baseDir,
+    new Date().toISOString().slice(0, 10),
+    safeFileName(input.adapter.command),
+  )
+  mkdirSync(dir, { recursive: true })
+  const filePath = resolve(
+    dir,
+    `${Date.now()}-${Math.random().toString(36).slice(2)}-${safeFileName(input.status)}.log`,
+  )
+  writeFileSync(
+    filePath,
+    [
+      `command: ${input.adapter.command}`,
+      `status: ${input.status}`,
+      `durationMs: ${input.durationMs}`,
+      '',
+      output,
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+
+  return {
+    id: `raw-output:${crypto.randomUUID()}`,
+    type: 'file',
+    title: `原始日志: ${input.adapter.displayName}`,
+    path: filePath,
+    mimeType: 'text/plain',
+    size: Buffer.byteLength(output, 'utf8'),
+    source: 'code-agent',
+    createdAt: new Date().toISOString(),
+  }
 }
 
 function isHtmlFile(path: string) {
@@ -3059,7 +3217,7 @@ function sanitizeCodeAgentFallbackText(value: string) {
   return paragraphs.at(-1) ?? cleaned
 }
 
-function cleanDiagnosticOutput(output: string) {
+function cleanDiagnosticOutput(output: string, max = env.AGENTHUB_CODE_AGENT_DIAGNOSTIC_LIMIT) {
   const claudeMessage = extractClaudeResultMessage(output)
   const cleanedLines = stripToolNoise(stripLastMessageBlock(output))
     .split(/\r?\n/)
@@ -3087,7 +3245,7 @@ function cleanDiagnosticOutput(output: string) {
   const cleaned = [claudeMessage, ...(diagnosticLines.length ? diagnosticLines : cleanedLines)]
     .filter(Boolean)
     .join('\n')
-  return limitOutput(cleaned, 2000)
+  return limitOutput(cleaned, max)
 }
 
 function friendlyCodeAgentError(adapter: CodeAgentAdapter, output: string) {

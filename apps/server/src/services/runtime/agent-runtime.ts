@@ -1,4 +1,5 @@
 import type { AgentArtifact } from '@agenthub/db'
+import type { TimelineEvent } from '@agenthub/shared'
 
 export interface AgentProfile {
   id: string
@@ -39,6 +40,7 @@ export type AgentOutputChunk =
   | { kind: 'reasoning'; text: string }
   | { kind: 'artifact'; artifact: AgentArtifact }
   | { kind: 'metadata'; metadata: Record<string, unknown> }
+  | { kind: 'timeline_event'; event: TimelineEvent }
 
 export interface AgentRuntime {
   readonly runtimeType: string

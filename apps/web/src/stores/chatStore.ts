@@ -9,7 +9,7 @@ import {
   type WorkspaceAgent,
 } from '../lib/api'
 import { wsClient, type WSEvent } from '../lib/ws'
-import type { CodeAgentRunMetadata } from '@agenthub/shared'
+import type { CodeAgentRunMetadata, TimelineEvent } from '@agenthub/shared'
 import { WsEvent, TaskStatus, MessageType, SessionType, SenderType } from '@agenthub/shared'
 
 let pendingStream: {
@@ -200,6 +200,7 @@ interface ChatState {
   streamingMessage: { id: string; content: string; agentId?: string; agentName?: string } | null
   streamingParts: StreamingPart[]
   streamingCodeAgentRun: CodeAgentRunMetadata | null
+  timelineEvents: TimelineEvent[]
   pendingAttachments: ChatAttachment[]
   loadingSessions: boolean
   loadingMessages: boolean
@@ -302,6 +303,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingMessage: null,
   streamingParts: [],
   streamingCodeAgentRun: null,
+  timelineEvents: [],
   pendingAttachments: [],
   loadingSessions: false,
   loadingMessages: false,
@@ -844,6 +846,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
+      case WsEvent.TimelineEvent: {
+        if (cancelledSessions.has(sessionId)) break
+        const { event } = e.payload as { event: TimelineEvent; messageId?: string }
+        if (!event?.id) break
+        set((s) => {
+          const idx = s.timelineEvents.findIndex((te) => te.id === event.id)
+          const next =
+            idx === -1
+              ? [...s.timelineEvents, event]
+              : [
+                  ...s.timelineEvents.slice(0, idx),
+                  { ...event, createdAt: s.timelineEvents[idx]!.createdAt },
+                  ...s.timelineEvents.slice(idx + 1),
+                ]
+          return { timelineEvents: next, agentTyping: false }
+        })
+        break
+      }
       case WsEvent.MessageCompleted: {
         const { message } = e.payload as { message: Message }
         cancelledSessions.delete(sessionId)
@@ -855,6 +875,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             streamingMessage: null,
             streamingParts: [],
             streamingCodeAgentRun: null,
+            timelineEvents: [],
             agentTyping: false,
           }
         })
@@ -863,7 +884,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case WsEvent.MessageCancelled:
         cancelledSessions.add(sessionId)
         clearPendingStream()
-        set({ streamingMessage: null, streamingParts: [], streamingCodeAgentRun: null, agentTyping: false })
+        set({ streamingMessage: null, streamingParts: [], streamingCodeAgentRun: null, timelineEvents: [], agentTyping: false })
         break
       case WsEvent.TaskUpdate: {
         const { taskId, status, strategy, agentId } = e.payload as {

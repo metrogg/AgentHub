@@ -47,6 +47,7 @@ const envSchema = z.object({
   AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS: envBoolean.default(false),
   AGENTHUB_ENABLE_CODE_AGENT_EXECUTION: envBoolean.default(true),
   AGENTHUB_CODE_AGENT_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
+  AGENTHUB_CODE_AGENT_DIAGNOSTIC_LIMIT: z.coerce.number().int().min(0).default(12_000),
   AGENTHUB_CODE_AGENT_OUTPUT_LIMIT: z.coerce.number().int().min(0).default(0),
 })
 

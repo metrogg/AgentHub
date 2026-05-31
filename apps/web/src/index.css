@@ -1856,6 +1856,19 @@
     }
   }
 
+  .agenthub-reasoning-streaming {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2rem;
+    border-radius: 999px;
+    background: #f4f4f5;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+    line-height: 1;
+    color: #71717a;
+  }
+
   .agenthub-code-agent-step {
     animation: agenthub-code-agent-step-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
   }

@@ -3,7 +3,7 @@ import { logger } from '../lib/logger'
 import type { ServerWebSocket } from 'bun'
 import { runtimeRegistry } from './runtime'
 import type { AgentProfile, AgentOutputChunk } from './runtime'
-import { WsEvent, SenderType, MessageType } from '@agenthub/shared'
+import { WsEvent, SenderType, MessageType, type TimelineEvent } from '@agenthub/shared'
 
 export interface MessageRow {
   id: string
@@ -102,6 +102,17 @@ function mergeCodeAgentRunMetadata(
     ...(current ?? {}),
     ...patch,
   }
+}
+
+function upsertTimelineEvent(
+  events: TimelineEvent[],
+  incoming: TimelineEvent,
+): TimelineEvent[] {
+  const idx = events.findIndex((e) => e.id === incoming.id)
+  if (idx === -1) return [...events, incoming]
+  const updated = [...events]
+  updated[idx] = { ...incoming, createdAt: events[idx]!.createdAt }
+  return updated
 }
 
 type StreamPartType = 'text' | 'reasoning'
@@ -240,6 +251,7 @@ async function _runAgentReply(
   let fullReasoning = ''
   let failed = false
   let codeAgentRun: Record<string, unknown> | null = null
+  let runTimelineEvents: TimelineEvent[] = []
   const artifacts: Array<Record<string, unknown>> = []
   const startedParts = new Set<StreamPartType>()
 
@@ -345,6 +357,21 @@ async function _runAgentReply(
             artifacts.push(chunk.artifact as unknown as Record<string, unknown>)
             codeAgentRun = mergeCodeAgentRunMetadata(codeAgentRun, { artifacts })
             // 修复 Bug 16: 实时广播 artifact 更新
+            broadcast(sessionId, {
+              type: 'message:metadata',
+              payload: { sessionId, messageId: streamMsgId, agentId, agentName, codeAgentRun },
+            })
+            break
+          case 'timeline_event':
+            runTimelineEvents = upsertTimelineEvent(runTimelineEvents, chunk.event)
+            codeAgentRun = mergeCodeAgentRunMetadata(codeAgentRun, {
+              timelineEvents: runTimelineEvents,
+            })
+            broadcast(sessionId, {
+              type: WsEvent.TimelineEvent,
+              payload: { sessionId, messageId: streamMsgId, event: chunk.event },
+            })
+            // 同时更新 codeAgentRun metadata（向后兼容）
             broadcast(sessionId, {
               type: 'message:metadata',
               payload: { sessionId, messageId: streamMsgId, agentId, agentName, codeAgentRun },

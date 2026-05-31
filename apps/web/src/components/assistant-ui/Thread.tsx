@@ -99,7 +99,7 @@ import {
   type WorkspaceAgent,
 } from '../../lib/api'
 import { filterModelsForCodeAgent } from '../../lib/modelCompatibility'
-import type { CodeAgentRunMetadata } from '@agenthub/shared'
+import type { CodeAgentRunMetadata, TimelineEvent } from '@agenthub/shared'
 import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
 import {
   downloadExternalUrl,
@@ -2409,15 +2409,49 @@ const AssistantThinking: EmptyMessagePartComponent = ({ status }) => {
 
 const AgentReasoningPart: FC<{ data: { text: string; running?: boolean } }> = ({ data }) => {
   const text = data.text.trim()
+  const [expanded, setExpanded] = useState(false)
+
   if (!text) return null
 
-  return (
-    <div className="not-prose mb-3 rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-xs leading-6 text-amber-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
-      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-amber-700">
-        <CircleHelp className="h-3.5 w-3.5" />
-        {data.running ? 'Thinking' : 'Reasoning'}
+  if (data.running) {
+    return (
+      <div className="not-prose mb-3 rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-xs leading-6 text-amber-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)]">
+        <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-amber-700">
+          <CircleHelp className="h-3.5 w-3.5" />
+          思考中...
+        </div>
+        <div className="whitespace-pre-wrap break-words">{text}</div>
       </div>
-      <div className="whitespace-pre-wrap break-words">{text}</div>
+    )
+  }
+
+  return (
+    <div className="not-prose mb-3 rounded-2xl border border-amber-200/60 bg-amber-50/40 px-4 py-2.5 text-xs leading-6 text-amber-950">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-amber-700 hover:text-amber-900 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <CircleHelp className="h-3.5 w-3.5" />
+        <span>已完成思考</span>
+        <span className="tabular-nums text-amber-500">({text.length} 字符)</span>
+        <ChevronDown
+          className={cn(
+            'ml-auto h-3.5 w-3.5 transition-transform',
+            expanded && 'rotate-180',
+          )}
+        />
+      </button>
+      <div
+        className={cn(
+          'grid transition-all duration-200',
+          expanded ? 'grid-rows-[1fr] opacity-100 mt-2' : 'grid-rows-[0fr] opacity-0',
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="whitespace-pre-wrap break-words border-t border-amber-200/60 pt-2">{text}</div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -3635,7 +3669,88 @@ function isProgressLikeCodeAgentLog(text: string) {
   )
 }
 
+function timelineEventStatusToStepStatus(
+  status: string,
+): CodeAgentRunStep['status'] {
+  switch (status) {
+    case 'pending':
+    case 'started':
+    case 'running':
+    case 'requires_action':
+      return 'running'
+    case 'success':
+      return 'completed'
+    case 'error':
+      return 'failed'
+    case 'cancelled':
+      return 'cancelled'
+    default:
+      return 'running'
+  }
+}
+
+function timelineEventToStep(ev: TimelineEvent): CodeAgentRunStep | null {
+  const kind = timelineEventKindToStepKind(ev.kind)
+  if (!kind) return null
+  return {
+    id: ev.id,
+    kind,
+    status: timelineEventStatusToStepStatus(ev.status),
+    title: ev.title,
+    subtitle: ev.summary,
+    detail:
+      typeof ev.payload?.command === 'string'
+        ? `cwd: ${String(ev.payload.cwd ?? '')}`.trim()
+        : undefined,
+    toolName: typeof ev.payload?.toolName === 'string' ? ev.payload.toolName : undefined,
+    command: typeof ev.payload?.command === 'string' ? ev.payload.command : undefined,
+    path: typeof ev.payload?.path === 'string' ? ev.payload.path : undefined,
+    fileStatus:
+      ev.kind === 'file_change' && typeof ev.payload?.fileStatus === 'string'
+        ? (ev.payload.fileStatus as CodeAgentRunStep['fileStatus'])
+        : undefined,
+    createdAt: ev.createdAt,
+  }
+}
+
+function timelineEventKindToStepKind(
+  kind: string,
+): CodeAgentRunStep['kind'] | null {
+  switch (kind) {
+    case 'message':
+    case 'reasoning':
+    case 'turn':
+      return 'status'
+    case 'command':
+      return 'command'
+    case 'file_read':
+    case 'file_change':
+      return 'file'
+    case 'search':
+    case 'subagent':
+    case 'plan':
+    case 'approval':
+    case 'tool':
+      return 'tool'
+    case 'error':
+      return 'log'
+    case 'todo_list':
+      return 'tool'
+    default:
+      return null
+  }
+}
+
 function codeAgentProcessSteps(data: CodeAgentRunMetadata): CodeAgentRunStep[] {
+  const timelineEvents = data.timelineEvents
+  if (Array.isArray(timelineEvents) && timelineEvents.length > 0) {
+    const steps = timelineEvents
+      .sort((a, b) => a.intraTurnOrder - b.intraTurnOrder || a.turnSeq - b.turnSeq)
+      .map(timelineEventToStep)
+      .filter((s): s is CodeAgentRunStep => s !== null)
+    if (steps.length) return steps.slice(-120)
+  }
+
   const steps = Array.isArray(data.steps) ? data.steps.filter(isCodeAgentStep) : []
   if (steps.length) return steps.slice(-120)
 
@@ -4470,7 +4585,25 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
     role === 'assistant' ? codeAgentRuntimeFromParts(message.content) : null,
   )
 
-  // 优先显示 workspace agent 头像
+  // 优先显示 Code Agent runtime 专属图标（Claude Code / Codex / Gemini / OpenCode）
+  if (role === 'assistant' && runtime) {
+    return (
+      <div
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-neutral-200 bg-white shadow-sm"
+        title={codeAgentRuntimeLabel(runtime)}
+      >
+        <img
+          src={codeAgentLogoSrc(runtime)}
+          alt={codeAgentRuntimeLabel(runtime)}
+          className="h-5 w-5 object-contain"
+          decoding="async"
+          draggable={false}
+        />
+      </div>
+    )
+  }
+
+  // workspace agent 自定义头像
   if (role === 'assistant' && senderAgent) {
     return (
       <div
@@ -4488,23 +4621,6 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
         ) : (
           senderAgent.name.slice(0, 1).toUpperCase()
         )}
-      </div>
-    )
-  }
-
-  if (role === 'assistant' && runtime) {
-    return (
-      <div
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-neutral-200 bg-white shadow-sm"
-        title={codeAgentRuntimeLabel(runtime)}
-      >
-        <img
-          src={codeAgentLogoSrc(runtime)}
-          alt={codeAgentRuntimeLabel(runtime)}
-          className="h-5 w-5 object-contain"
-          decoding="async"
-          draggable={false}
-        />
       </div>
     )
   }
