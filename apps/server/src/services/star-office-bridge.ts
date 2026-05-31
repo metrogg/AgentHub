@@ -92,7 +92,7 @@ export async function pushStarOfficeAgentState(
   }
 }
 
-async function ensureStarOfficeAgent(profile: AgentRunProfile) {
+export async function ensureStarOfficeAgent(profile: AgentRunProfile) {
   const cacheKey = agentCacheKey(profile)
   const cached = joinedAgents.get(cacheKey)
   if (cached) return cached

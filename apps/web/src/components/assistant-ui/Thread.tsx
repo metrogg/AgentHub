@@ -67,6 +67,7 @@ import {
   Sheet,
   Square,
   TerminalSquare,
+  Building2,
   Trash2,
   User,
   X,
@@ -308,6 +309,9 @@ export const Thread: FC = () => {
             isAgentDirectSession && (
               <AgentChatHeader onToggleDetails={() => setChildDetailsOpen((open) => !open)} />
             )}
+          {!isGroupSession && !isOrchestratorTaskChild && !isAgentDirectSession && (
+            <RegularChatHeader />
+          )}
           {isGroupSession && visibleTaskBoard && selectedAgentTab === null && (
             <LeaderViewBanner taskBoard={visibleTaskBoard} agentTabs={agentTabs} />
           )}
@@ -356,6 +360,7 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const clearMessages = useChatStore((state) => state.clearMessages)
+  const navigate = useNavigate()
   const title = groupChatDisplayTitle(session?.title, workspace?.name)
   const memberCount = agents.length + 1
 
@@ -375,6 +380,15 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
         </div>
       </div>
       <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+          title="办公室"
+          aria-label="办公室"
+        >
+          <Building2 className="h-4 w-4" />
+        </button>
         <button
           type="button"
           onClick={handleClear}
@@ -405,6 +419,7 @@ const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
   const agent = agents.find((item) => item.id === session?.workspaceAgentId)
   const title = agent?.name || session?.title || 'Agent'
   const subtitle = [agent?.role, workspace?.name].filter(Boolean).join(' · ') || '单 Agent 会话'
+  const navigate = useNavigate()
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
@@ -420,15 +435,26 @@ const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
           <div className="mt-0.5 truncate text-xs text-neutral-500">{subtitle}</div>
         </div>
       </div>
-      <button
-        type="button"
-        onClick={onToggleDetails}
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-        title="Agent 设置"
-        aria-label="Agent 设置"
-      >
-        <MoreHorizontal className="h-5 w-5" />
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+          title="办公室"
+          aria-label="办公室"
+        >
+          <Building2 className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onToggleDetails}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+          title="Agent 设置"
+          aria-label="Agent 设置"
+        >
+          <MoreHorizontal className="h-5 w-5" />
+        </button>
+      </div>
     </header>
   )
 }
@@ -437,23 +463,58 @@ const OrchestratorChildHeader: FC<{ agentName: string; onBack: () => void }> = (
   agentName,
   onBack,
 }) => {
+  const session = useChatStore((state) => state.currentSession)
+  const navigate = useNavigate()
+
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
-      <button
-        type="button"
-        onClick={onBack}
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-        title="返回主对话"
-        aria-label="返回主对话"
-      >
-        <ChevronLeft className="h-5 w-5" />
-      </button>
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
+        <button
+          type="button"
+          onClick={onBack}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+          title="返回主对话"
+          aria-label="返回主对话"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </button>
         <span className="text-sm truncate">
           <span className="font-medium text-neutral-700">{agentName}</span>
           <span className="ml-1.5 text-xs text-neutral-400">成员对话</span>
         </span>
       </div>
+      <button
+        type="button"
+        onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+        title="办公室"
+        aria-label="办公室"
+      >
+        <Building2 className="h-4 w-4" />
+      </button>
+    </header>
+  )
+}
+
+const RegularChatHeader: FC = () => {
+  const session = useChatStore((state) => state.currentSession)
+  const navigate = useNavigate()
+  const title = session?.title || '新会话'
+
+  return (
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="truncate text-sm font-semibold text-neutral-950">{title}</span>
+      </div>
+      <button
+        type="button"
+        onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+        title="办公室"
+        aria-label="办公室"
+      >
+        <Building2 className="h-4 w-4" />
+      </button>
     </header>
   )
 }
@@ -1005,7 +1066,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
               <div className="mt-3 flex items-start gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
                 <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
                 <div className="min-w-0">
-                  <div className="font-medium text-neutral-900">工作区</div>
+                  <div className="font-medium text-neutral-900"> 工作区</div>
                   <div className="mt-1 break-all font-mono">{workspace.projectPath}</div>
                 </div>
               </div>

@@ -55,7 +55,9 @@
       "Bash(curl -s \"https://api.github.com/search/repositories?q=Star-Office-UI+in:name\")",
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(i['full_name'], i['html_url']\\) for i in d.get\\('items',[]\\)]\")",
       "Bash(git clone *)",
-      "Bash(git commit -m 'feat: 输入框添加安全模式切换 *)"
+      "Bash(git commit -m 'feat: 输入框添加安全模式切换 *)",
+      "Bash(git commit -m 'docs: 添加项目完整功能设计文档 *)",
+      "Bash(git commit -m 'feat: 翻译路由、办公室入口、普通聊天头部、技能市场优化 *)"
     ]
   }
 }

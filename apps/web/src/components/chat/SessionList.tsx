@@ -1,5 +1,5 @@
 import QRCode from 'qrcode'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -10,7 +10,6 @@ import {
   Clock,
   ChevronRight,
   Code2,
-  Building2,
   SlidersHorizontal,
   Folder,
   History,
@@ -63,10 +62,8 @@ type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
 function activeTabFromPath(
   pathname: string,
-  activeSession: Session | undefined,
+  _activeSession: Session | undefined,
 ): SidebarTab {
-  if (pathname.startsWith('/chat/') && isPrivateAgentSession(activeSession))
-    return 'agents'
   if (pathname === '/agent-config') return 'agents'
   if (pathname === '/profile' || pathname === '/settings') return 'me'
   if (
@@ -74,7 +71,6 @@ function activeTabFromPath(
       '/models',
       '/coding-tools',
       '/skills',
-      '/office',
       '/orchestrator-runs',
       '/execution-logs',
     ].includes(pathname)
@@ -110,7 +106,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const [openingAgentId, setOpeningAgentId] = useState<string | null>(null)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const [hint, setHint] = useState('')
-  const openedAgentFromMessagesRef = useRef(false)
   const [groupMemberCounts, setGroupMemberCounts] = useState<Record<string, number>>({})
   const [groupWorkspaceAgents, setGroupWorkspaceAgents] = useState<
     Record<string, WorkspaceAgent[]>
@@ -153,9 +148,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   )
   const activeSession = sessions.find((session) => session.id === sessionId)
   const routeTab = activeTabFromPath(location.pathname, activeSession)
-  const activeTab =
-    tabOverride ??
-    (openedAgentFromMessagesRef.current && routeTab === 'agents' ? 'messages' : routeTab)
+  const activeTab = tabOverride ?? routeTab
   const isAgentConfigRoute = location.pathname === '/agent-config'
   const activeAgentConfigId = new URLSearchParams(location.search).get('agentId')
   const savedAgentIds = useMemo(
@@ -478,10 +471,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             active={activeTab === 'agents'}
             icon={Users}
             label="Agent"
-            onClick={() => {
-              openedAgentFromMessagesRef.current = false
-              setTabOverride('agents')
-            }}
+            onClick={() => setTabOverride('agents')}
           />
           <DockButton
             active={activeTab === 'workspace'}
@@ -629,12 +619,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             active={location.pathname === '/skills'}
             onClick={() => navigate('/skills')}
           />
-          <NavItem
-            icon={Building2}
-            label={t('办公室')}
-            active={location.pathname === '/office'}
-            onClick={() => navigate('/office')}
-          />
         </nav>
 
         <div
@@ -675,10 +659,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                       <button
                         key={session.id}
                         type="button"
-                        onClick={() => {
-                          openedAgentFromMessagesRef.current = true
-                          void openExistingSession(session)
-                        }}
+                        onClick={() => void openExistingSession(session)}
                         className={cn(
                           'flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left transition disabled:opacity-60',
                           active

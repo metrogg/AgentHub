@@ -17,6 +17,7 @@ import { officeRoutes } from './routes/office'
 import { welcomeRoutes } from './routes/welcome'
 import { protocolRoutes } from './routes/protocols'
 import { fileRoutes } from './routes/files'
+import { translateRoutes } from './routes/translate'
 import { requestContextMiddleware } from './middleware/request-context'
 import { formatErrorResponse } from './lib/error'
 import { APP_VERSION } from '@agenthub/shared'
@@ -49,6 +50,7 @@ const routes = app
   .route('/api/welcome', welcomeRoutes)
   .route('/api/protocols', protocolRoutes)
   .route('/api/files', fileRoutes)
+  .route('/api/translate', translateRoutes)
 
 app.get('/deploy/:workspaceId/*', async (c) => {
   const workspaceId = c.req.param('workspaceId')

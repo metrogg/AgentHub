@@ -1051,6 +1051,11 @@ export const api = {
   getStarOfficeStatus: () => request<StarOfficeStatus>('/office/status'),
   startStarOffice: () =>
     request<StarOfficeStatus>('/office/start', { method: 'POST', timeout: 15_000 }),
+  joinOfficeAgents: (sessionId: string) =>
+    request<{ ok: boolean; joined: string[]; total: number }>('/office/join-agents', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    }),
   ensureStorageDirectory: (path: string) =>
     request<{ ok: boolean; path: string; sizeBytes: number; sizeLabel: string; message: string }>(
       '/settings/storage/ensure',
@@ -1284,6 +1289,34 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+
+  // Translate (SSE streaming)
+  translate: async function* (text: string, targetLang: 'zh' | 'en' = 'zh'): AsyncGenerator<string> {
+    const res = await fetch(`${API_BASE}/translate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ text, targetLang }),
+    })
+    if (!res.ok) throw new Error(`翻译请求失败: ${res.status}`)
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.startsWith('event: done')) return
+        if (!line.startsWith('data: ')) continue
+        const payload = line.slice(6).trim()
+        if (!payload) continue
+        yield payload
+      }
+    }
+  },
 
   // Files
   writeFile: (data: {
