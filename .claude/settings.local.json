@@ -31,7 +31,9 @@
       "Bash(npm root *)",
       "Bash(curl -s http://127.0.0.1:8000/api/settings/ccswitch-models)",
       "Bash(git add *)",
-      "Bash(git commit -m 'fix: 尊重用户配置的 code agent 类型，不再静默切换到 OpenCode *)"
+      "Bash(git commit -m 'fix: 尊重用户配置的 code agent 类型，不再静默切换到 OpenCode *)",
+      "Bash(git commit -m 'fix: 执行过程运行中只显示最新一步，完成后自动展开全部 *)",
+      "Bash(git commit -m 'fix: 保留 code agent 执行过程元数据，修复完成后卡片消失 *)"
     ]
   }
 }

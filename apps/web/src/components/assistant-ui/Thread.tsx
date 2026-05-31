@@ -3431,8 +3431,9 @@ const CodeAgentProcessTimeline: FC<{ running: boolean; steps: CodeAgentRunStep[]
   running,
   steps,
 }) => {
-  const [expanded, setExpanded] = useState(false)
-  const visibleSteps = !running || expanded ? steps : steps.slice(-1)
+  const [collapsed, setCollapsed] = useState(false)
+  const showAll = !collapsed && (!running || steps.length <= 1)
+  const visibleSteps = showAll ? steps : steps.slice(-1)
   const hiddenCount = Math.max(0, steps.length - visibleSteps.length)
 
   return (
@@ -3447,21 +3448,33 @@ const CodeAgentProcessTimeline: FC<{ running: boolean; steps: CodeAgentRunStep[]
           />
           执行过程
         </span>
-        <span>
-          {running ? '实时更新' : '已记录'} {steps.length} 项
-        </span>
+        <div className="flex items-center gap-2">
+          <span>
+            {running ? '实时更新' : '已记录'} {steps.length} 项
+          </span>
+          {hiddenCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => setCollapsed(false)}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-800"
+            >
+              展开
+              <ChevronDown className="h-3 w-3" />
+            </button>
+          ) : (
+            steps.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setCollapsed(true)}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-800"
+              >
+                收起
+                <ChevronDown className="h-3 w-3 rotate-180" />
+              </button>
+            )
+          )}
+        </div>
       </div>
-
-      {hiddenCount > 0 && (
-        <button
-          type="button"
-          onClick={() => setExpanded(true)}
-          className="flex h-9 w-full items-center justify-center gap-1 rounded-lg border border-neutral-200 bg-white text-xs font-medium text-neutral-500 shadow-sm transition hover:border-neutral-300 hover:text-neutral-800"
-        >
-          展开更早 {hiddenCount} 项
-          <ChevronDown className="h-3.5 w-3.5" />
-        </button>
-      )}
 
       <div className="space-y-1.5">
         {visibleSteps.length ? (
