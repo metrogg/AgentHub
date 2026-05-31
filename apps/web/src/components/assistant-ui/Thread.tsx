@@ -61,6 +61,9 @@ import {
   RefreshCw,
   Rocket,
   Search,
+  Shield,
+  ShieldAlert,
+  ShieldOff,
   Sheet,
   Square,
   TerminalSquare,
@@ -1584,6 +1587,8 @@ const Composer: FC = () => {
   const pendingAttachments = useChatStore((state) => state.pendingAttachments)
   const addPendingAttachments = useChatStore((state) => state.addPendingAttachments)
   const removePendingAttachment = useChatStore((state) => state.removePendingAttachment)
+  const safetyMode = useChatStore((state) => state.safetyMode)
+  const setSafetyMode = useChatStore((state) => state.setSafetyMode)
   const [menu, setMenu] = useState<'tools' | 'agents' | 'workspace' | null>(null)
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -2044,6 +2049,7 @@ const Composer: FC = () => {
               >
                 <AtSign className="h-4 w-4" />
               </ComposerToolButton>
+              <SafetyModeButton mode={safetyMode} onChange={setSafetyMode} />
             </div>
             <div className="flex items-center gap-2">
               <ComposerAction />
@@ -2447,6 +2453,68 @@ const MenuRow: FC<{ title: string; desc: string; color?: string; onClick: () => 
 
 function mentionInitial(title: string) {
   return title.replace(/^@/, '').trim().slice(0, 1).toUpperCase() || '@'
+}
+
+const SAFETY_MODES = [
+  { key: 'read-only', label: '只读', desc: '禁止写操作', Icon: ShieldAlert, color: 'text-neutral-500' },
+  { key: 'ask', label: '询问', desc: '敏感操作前询问', Icon: Shield, color: 'text-blue-500' },
+  { key: 'full-access', label: '完全访问', desc: '无需逐条确认', Icon: ShieldOff, color: 'text-orange-500' },
+] as const
+
+const SafetyModeButton: FC<{ mode: string; onChange: (mode: string) => void }> = ({
+  mode,
+  onChange,
+}) => {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const current = SAFETY_MODES.find((m) => m.key === mode) ?? SAFETY_MODES[1]
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <ComposerToolButton
+        aria-label={`安全模式: ${current.label}`}
+        title={`${current.label} · ${current.desc}`}
+        onClick={() => setOpen(!open)}
+        className={cn(current.color)}
+      >
+        <current.Icon className="h-4 w-4" />
+      </ComposerToolButton>
+      {open && (
+        <div className="agenthub-portal-theme absolute bottom-full left-0 z-50 mb-2 w-52 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-xl">
+          {SAFETY_MODES.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => {
+                onChange(item.key)
+                setOpen(false)
+              }}
+              className={cn(
+                'flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition hover:bg-neutral-50',
+                mode === item.key && 'bg-neutral-50',
+              )}
+            >
+              <item.Icon className={cn('h-4 w-4 shrink-0', item.color)} />
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-neutral-800">{item.label}</div>
+                <div className="text-xs text-neutral-400">{item.desc}</div>
+              </div>
+              {mode === item.key && <Check className="h-3.5 w-3.5 shrink-0 text-neutral-500" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 const ComposerAction: FC = () => (

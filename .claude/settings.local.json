@@ -33,7 +33,29 @@
       "Bash(git add *)",
       "Bash(git commit -m 'fix: 尊重用户配置的 code agent 类型，不再静默切换到 OpenCode *)",
       "Bash(git commit -m 'fix: 执行过程运行中只显示最新一步，完成后自动展开全部 *)",
-      "Bash(git commit -m 'fix: 保留 code agent 执行过程元数据，修复完成后卡片消失 *)"
+      "Bash(git commit -m 'fix: 保留 code agent 执行过程元数据，修复完成后卡片消失 *)",
+      "Bash(git push *)",
+      "Bash(git log *)",
+      "Bash(git commit -m 'fix: profile/coding-tools 侧栏适配暗色主题 *)",
+      "Bash(git commit -m 'fix: 新建群聊弹窗和群聊设置适配暗色主题 *)",
+      "Bash(cat .env)",
+      "Bash(cat .env.local)",
+      "Bash(ls -la apps/server/.env*)",
+      "Bash(ls -la .env*)",
+      "Bash(cat apps/server/.env)",
+      "Bash(git commit -m 'refactor: 快速对话气泡改为静态预生成，移除 LLM 依赖 *)",
+      "Bash(git commit -m 'fix: 快速对话气泡改为上长下宽布局，减少空白 *)",
+      "Bash(git commit -m 'fix: 缩小快速对话气泡显示范围，第二行更紧凑 *)",
+      "Bash(git commit -m 'fix: 扩大快速对话气泡两侧淡出范围至 20% *)",
+      "Bash(git commit -m 'fix: 第二行气泡 track 宽度加大至 400%，消除空白间隙 *)",
+      "Bash(git commit -m 'fix: 第二行气泡宽度缩至 50% 并居中 *)",
+      "Bash(git commit -m 'fix: 第二行气泡恢复 50% 宽度，行分配改为 4/6 *)",
+      "Bash(curl -s \"https://api.github.com/repos/metrogg/AgentHub\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('organization',{}\\).get\\('login',''\\), d.get\\('owner',{}\\).get\\('login',''\\)\\)\")",
+      "Bash(curl -s \"https://api.github.com/search/repositories?q=Star-Office-UI+in:name\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(i['full_name'], i['html_url']\\) for i in d.get\\('items',[]\\)]\")",
+      "Bash(git clone *)",
+      "Bash(git commit -m 'feat: 输入框添加安全模式切换 *)"
     ]
   }
 }

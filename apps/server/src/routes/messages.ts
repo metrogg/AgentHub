@@ -365,7 +365,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed'),
         )
       } else {
-        const profile = session ? await profileForDirectSession(session) : undefined
+        let profile = session ? await profileForDirectSession(session) : undefined
+        if (profile && metadata?.safetyMode && typeof metadata.safetyMode === 'string') {
+          profile = applySafetyMode(profile, metadata.safetyMode)
+        }
         runAgentReply(sessionId, msg, profile).catch((err: any) =>
           logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on new message'),
         )
@@ -515,6 +518,18 @@ function toAgentProfile(
   projectPath?: string | null,
 ): AgentRunProfile {
   return buildAgentProfile(agent, projectPath)
+}
+
+function applySafetyMode(profile: AgentRunProfile, mode: string): AgentRunProfile {
+  switch (mode) {
+    case 'read-only':
+      return { ...profile, sandboxPolicy: 'read-only', approvalRequired: true }
+    case 'full-access':
+      return { ...profile, sandboxPolicy: 'workspace-write', approvalRequired: false }
+    case 'ask':
+    default:
+      return { ...profile, sandboxPolicy: 'workspace-write', approvalRequired: true }
+  }
 }
 
 function toCoordinatorProfile(
