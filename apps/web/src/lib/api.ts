@@ -317,7 +317,7 @@ export interface WelcomeQuickPromptsResponse {
   generatedAt: string
   items: WelcomeQuickPrompt[]
   seed: string
-  source: 'llm' | 'unavailable'
+  source: 'llm' | 'unavailable' | 'preset'
 }
 
 export interface CodingToolStatus {
@@ -946,6 +946,7 @@ export const api = {
       attachments?: ChatAttachment[]
       displayContent?: string
       replyToMessageId?: string | null
+      safetyMode?: string
     },
   ) =>
     request<Message>(`/messages/${sessionId}`, {
@@ -959,6 +960,7 @@ export const api = {
           ...(data.attachments?.length ? { attachments: data.attachments } : {}),
           ...(data.displayContent !== undefined ? { displayContent: data.displayContent } : {}),
           ...(data.replyToMessageId ? { replyToMessageId: data.replyToMessageId } : {}),
+          ...(data.safetyMode ? { safetyMode: data.safetyMode } : {}),
         },
       }),
     }),
