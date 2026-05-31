@@ -1198,6 +1198,8 @@
 
   /* 第二行：更紧凑 */
   .agenthub-quick-prompt-row-compact {
+    width: 50%;
+    margin-inline: auto;
     padding-block: 0.2rem;
   }
 
