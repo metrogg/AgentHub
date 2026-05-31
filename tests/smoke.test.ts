@@ -35,14 +35,29 @@ beforeAll(async () => {
   ;({ app } = await import('../apps/server/src/app'))
   originalFetch = globalThis.fetch
   globalMockedFetch = async (input, init) => {
-    const url = String(input)
+    const url = fetchInputUrl(input)
     if (url.includes('/chat/completions') || url.includes('/v1/messages')) {
-      return mockLlmResponse(url, init)
+      return mockLlmResponse(url, await fetchInputInit(input, init))
     }
     return originalFetch(input, init)
   }
   globalThis.fetch = globalMockedFetch
 })
+
+function fetchInputUrl(input: Parameters<typeof fetch>[0]) {
+  if (typeof input === 'string') return input
+  if (input instanceof URL) return input.toString()
+  return input.url
+}
+
+async function fetchInputInit(input: Parameters<typeof fetch>[0], init?: RequestInit) {
+  if (init?.body || !(input instanceof Request)) return init
+  const body = await input.clone().text().catch(() => '')
+  return {
+    ...init,
+    body,
+  }
+}
 
 afterAll(() => {
   globalThis.fetch = originalFetch
@@ -66,7 +81,9 @@ function mockSseStream(chunks: string[]) {
   const stream = new ReadableStream({
     start(controller) {
       for (const chunk of chunks) {
-        const data = JSON.stringify({ choices: [{ delta: { content: chunk } }] })
+        const data = JSON.stringify({
+          choices: [{ delta: { content: chunk }, index: 0 }],
+        })
         controller.enqueue(encoder.encode(`data: ${data}\n\n`))
       }
       controller.enqueue(encoder.encode('data: [DONE]\n\n'))
@@ -152,11 +169,19 @@ function mockLlmResponse(url: string, init?: RequestInit) {
     )
   }
 
-  if (body.stream === false) {
+  if (body.stream !== true) {
     if (url.includes('/v1/messages')) {
       return Response.json({ content: [{ type: 'text', text: 'Task completed successfully.' }] })
     }
-    return Response.json({ choices: [{ message: { content: 'Task completed successfully.' } }] })
+    return Response.json({
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: 'Task completed successfully.' },
+          finish_reason: 'stop',
+        },
+      ],
+    })
   }
   return mockSseStream(['Task completed successfully.'])
 }
@@ -178,10 +203,34 @@ function collectPromptText(body: Record<string, unknown>) {
     .map((message) => {
       if (!message || typeof message !== 'object') return ''
       const item = message as { content?: unknown }
-      return typeof item.content === 'string' ? item.content : ''
+      return collectContentText(item.content)
     })
     .join('\n')
-  return `${system}\n${text}`
+  const responsesInput = Array.isArray(body.input)
+    ? body.input
+        .map((message) => {
+          if (!message || typeof message !== 'object') return ''
+          const item = message as { content?: unknown }
+          return collectContentText(item.content)
+        })
+        .join('\n')
+    : ''
+  return `${system}\n${text}\n${responsesInput}`
+}
+
+function collectContentText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part
+      if (!part || typeof part !== 'object') return ''
+      const item = part as { text?: unknown; content?: unknown }
+      if (typeof item.text === 'string') return item.text
+      if (typeof item.content === 'string') return item.content
+      return ''
+    })
+    .join('\n')
 }
 
 function extractPlannerAgentKey(body: Record<string, unknown>) {
@@ -654,11 +703,20 @@ describe('AgentHub smoke tests', () => {
 
   test('settings model test can be mocked without real credentials', async () => {
     globalThis.fetch = async (input, init) => {
-      const url = String(input)
+      const url = fetchInputUrl(input)
       if (url === 'https://mock.local/v1/chat/completions') {
-        const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string }
+        const nextInit = await fetchInputInit(input, init)
+        const body = JSON.parse(String(nextInit?.body ?? '{}')) as { model?: string }
         expect(body.model).toBe('mock-model')
-        return new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }), {
+        return new Response(JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'stop',
+              index: 0,
+              message: { role: 'assistant', content: 'OK' },
+            },
+          ],
+        }), {
           status: 200,
         })
       }

@@ -25,6 +25,8 @@
     "@agenthub/db": "workspace:*",
     "@agenthub/shared": "workspace:*",
     "@ai-sdk/anthropic": "^3.0.78",
+    "@ai-sdk/openai": "^3.0.67",
+    "@ai-sdk/provider-utils": "^4.0.27",
     "@hono/zod-validator": "^0.4.1",
     "@mastra/core": "^1.35.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

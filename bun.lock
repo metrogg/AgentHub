@@ -36,6 +36,8 @@
         "@agenthub/db": "workspace:*",
         "@agenthub/shared": "workspace:*",
         "@ai-sdk/anthropic": "^3.0.78",
+        "@ai-sdk/openai": "^3.0.67",
+        "@ai-sdk/provider-utils": "^4.0.27",
         "@hono/zod-validator": "^0.4.1",
         "@mastra/core": "^1.35.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
@@ -133,6 +135,8 @@
     "@ai-sdk/anthropic": ["@ai-sdk/anthropic@3.0.78", "https://registry.npmmirror.com/@ai-sdk/anthropic/-/anthropic-3.0.78.tgz", { "dependencies": { "@ai-sdk/provider": "3.0.10", "@ai-sdk/provider-utils": "4.0.27" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-0OY12G20cUt6iU6htpEA1491Oz++NVxZxlmWGX4B7rSbeZ5pnDmOu6YtW9BKzdZlNx5Gn23i6WMxyZFoMKNcgA=="],
 
     "@ai-sdk/gateway": ["@ai-sdk/gateway@3.0.116", "https://registry.npmmirror.com/@ai-sdk/gateway/-/gateway-3.0.116.tgz", { "dependencies": { "@ai-sdk/provider": "3.0.10", "@ai-sdk/provider-utils": "4.0.27", "@vercel/oidc": "3.2.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-k8P17w7Eho5Y4l3tZrYxqQdffkI4xwtl8GCxkZs+JdMWZhyrLLlozqWkKLaWrCSlEYQOeIhEnQLhqQgYYU86Rw=="],
+
+    "@ai-sdk/openai": ["@ai-sdk/openai@3.0.67", "https://registry.npmmirror.com/@ai-sdk/openai/-/openai-3.0.67.tgz", { "dependencies": { "@ai-sdk/provider": "3.0.10", "@ai-sdk/provider-utils": "4.0.27" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-oAiGC9eWG7IgtdsdS74bOCnAAHarAfTJhWN9x5INwnWPekL802AvF+0I5DvLzIF1MIRmNw4N8mPSL/GUVbX9Mw=="],
 
     "@ai-sdk/provider": ["@ai-sdk/provider@3.0.10", "https://registry.npmmirror.com/@ai-sdk/provider/-/provider-3.0.10.tgz", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-Q3BZ27qfpYqnCYGvE3vt+Qi6LGOF9R5Nmzn+9JoM1lCRsD9mYaIhfJLkSunN48nfGXJ6n+XNV0J/XVpqGQl7Dw=="],
 

@@ -1,6 +1,10 @@
 import { db, settings } from '@agenthub/db'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { streamText, generateText } from 'ai'
+import { createAnthropic } from '@ai-sdk/anthropic'
+import { createOpenAI } from '@ai-sdk/openai'
+import type { FetchFunction } from '@ai-sdk/provider-utils'
 import { env } from '../env'
 import { logger } from '../lib/logger'
 
@@ -307,13 +311,45 @@ export async function getLlmRuntimeStatus(selectedModelId?: string) {
   }
 }
 
+/* ─────────── Vercel AI SDK integration ─────────── */
+
+function createAiSdkModel(config: LlmRuntimeConfig) {
+  const { apiKey, baseUrl, model } = config
+  if (!apiKey) {
+    throw new Error('API Key 未配置。请设置 LLM_API_KEY 或供应商专用 API Key 环境变量。')
+  }
+
+  const fetch = createLlmFetch(config)
+  if (isAnthropicProvider(config.provider, config.baseUrl)) {
+    return createAnthropic({ apiKey, baseURL: baseUrl, fetch })(model)
+  }
+
+  // AgentHub 目前按 OpenAI-compatible chat/completions 适配各种供应商。
+  // 不自动切 Responses API，避免官方/第三方供应商和测试 mock 走两套协议。
+  const openai = createOpenAI({ apiKey, baseURL: baseUrl, fetch })
+  return openai.chat(model)
+}
+
 export function createLlmClient(config: LlmRuntimeConfig) {
   return {
-    stream(options: StreamOptions) {
-      if (isAnthropicProvider(config.provider, config.baseUrl)) {
-        return streamAnthropic(options, config)
+    async *stream(options: StreamOptions) {
+      const model = createAiSdkModel(config)
+      const timeout = withTimeoutSignal(options.signal, config.timeoutMs, 'LLM stream')
+      const { textStream } = streamText({
+        model,
+        system: options.system ?? DEFAULT_AGENT_INSTRUCTIONS,
+        messages: options.messages,
+        abortSignal: timeout.signal,
+        maxRetries: config.maxRetries,
+      })
+
+      try {
+        for await (const delta of textStream) {
+          yield delta
+        }
+      } finally {
+        timeout.dispose()
       }
-      return streamOpenAICompatible(options, config)
     },
   }
 }
@@ -347,232 +383,81 @@ export async function testLlmConnection(input: TestConnectionInput) {
     'settings'
   )
 
-  // 如果 model 是默认值，提示用户确认模型 ID 是否正确
   const isDefaultModel = !clean(input.modelId)
 
   try {
-    const res = isAnthropicProvider(config.provider, config.baseUrl)
-      ? await testAnthropicMessage(config)
-      : await testOpenAICompatibleMessage(config)
-    if (!res.ok) {
-      let message = await formatHttpError('连接测试', res, config)
-      if (res.status === 400 && isDefaultModel) {
-        message += `（提示：未提供 modelId，使用了默认模型 "${config.model}"。如果使用的是第三方兼容 API，请在模型配置中填写正确的模型 ID。）`
-      }
-      return {
-        ok: false,
-        status: res.status,
-        message,
-      }
+    const aiModel = createAiSdkModel(config)
+    const timeout = withTimeoutSignal(undefined, config.timeoutMs, '连接测试')
+    try {
+      await generateText({
+        model: aiModel,
+        messages: [{ role: 'user', content: '只回复 OK。' }],
+        abortSignal: timeout.signal,
+        maxRetries: 0,
+      })
+    } finally {
+      timeout.dispose()
     }
 
-    return { ok: true, status: res.status, message: '连接成功。' }
+    return { ok: true, status: 200, message: '连接成功。' }
   } catch (error: any) {
-    return { ok: false, message: redactSensitive(error?.message || '连接失败。', [apiKey]) }
-  }
-}
-
-async function testAnthropicMessage(config: LlmRuntimeConfig) {
-  return fetchWithRetry(
-    `${config.baseUrl}/v1/messages`,
-    {
-      method: 'POST',
-      headers: buildHeaders(config),
-      body: JSON.stringify({
-        model: config.model,
-        max_tokens: 8,
-        messages: [{ role: 'user', content: '只回复 OK。' }],
-        stream: false,
-      }),
-    },
-    { ...config, maxRetries: 0 },
-    'Anthropic 消息测试'
-  )
-}
-
-async function testOpenAICompatibleMessage(config: LlmRuntimeConfig) {
-  return fetchWithRetry(
-    `${config.baseUrl}/chat/completions`,
-    {
-      method: 'POST',
-      headers: buildHeaders(config),
-      body: JSON.stringify({
-        model: config.model,
-        messages: [{ role: 'user', content: '只回复 OK。' }],
-        max_tokens: 8,
-        stream: false,
-      }),
-    },
-    { ...config, maxRetries: 0 },
-    '聊天补全测试'
-  )
-}
-
-async function* streamOpenAICompatible(
-  options: StreamOptions,
-  config: LlmRuntimeConfig
-): AsyncGenerator<string, void, unknown> {
-  assertApiKey(config)
-  const res = await fetchWithRetry(
-    `${config.baseUrl}/chat/completions`,
-    {
-      method: 'POST',
-      headers: buildHeaders(config),
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: 'system', content: options.system ?? DEFAULT_AGENT_INSTRUCTIONS },
-          ...options.messages.map((message) => ({ role: message.role, content: message.content })),
-        ],
-        stream: true,
-      }),
-      signal: options.signal,
-    },
-    config,
-    '聊天补全'
-  )
-
-  if (!res.ok || !res.body) {
-    throw new Error(await formatHttpError('聊天补全', res, config))
-  }
-
-  for await (const data of iterateSseData(res.body)) {
-    if (data === '[DONE]') continue
-    try {
-      const parsed = JSON.parse(data)
-      const delta = parsed?.choices?.[0]?.delta?.content ?? parsed?.choices?.[0]?.message?.content
-      if (typeof delta === 'string' && delta) yield delta
-    } catch {
-      // Ignore malformed SSE chunks.
+    let message = redactSensitive(error?.message || '连接失败。', [apiKey])
+    if (error?.message?.includes('400') && isDefaultModel) {
+      message += `（提示：未提供 modelId，使用了默认模型 "${config.model}"。如果使用的是第三方兼容 API，请在模型配置中填写正确的模型 ID。）`
     }
+    return { ok: false, message }
   }
 }
 
-async function* streamAnthropic(
-  options: StreamOptions,
-  config: LlmRuntimeConfig
-): AsyncGenerator<string, void, unknown> {
-  assertApiKey(config)
-  const res = await fetchWithRetry(
-    `${config.baseUrl}/v1/messages`,
-    {
-      method: 'POST',
-      headers: buildHeaders(config),
-      body: JSON.stringify({
-        model: config.model,
-        max_tokens: 4096,
-        system: options.system ?? DEFAULT_AGENT_INSTRUCTIONS,
-        messages: options.messages.map((message) => ({ role: message.role, content: message.content })),
-        stream: true,
-      }),
-      signal: options.signal,
-    },
-    config,
-    'Anthropic 消息'
-  )
+function withTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number, label: string) {
+  const controller = new AbortController()
+  const abortFromParent = () => controller.abort(parent?.reason ?? new Error(`${label}已中止`))
+  const timer = setTimeout(() => controller.abort(new Error(`${label}超时`)), timeoutMs)
 
-  if (!res.ok || !res.body) {
-    throw new Error(await formatHttpError('Anthropic 消息', res, config))
-  }
-
-  for await (const data of iterateSseData(res.body)) {
-    try {
-      const parsed = JSON.parse(data)
-      const delta = parsed?.delta?.text
-      if (typeof delta === 'string' && delta) yield delta
-    } catch {
-      // Ignore malformed SSE chunks.
-    }
-  }
-}
-
-function buildHeaders(config: LlmRuntimeConfig): Record<string, string> {
-  if (isAnthropicProvider(config.provider, config.baseUrl)) {
-    return {
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-      'x-api-key': config.apiKey ?? '',
-    }
+  if (parent?.aborted) {
+    abortFromParent()
+  } else {
+    parent?.addEventListener('abort', abortFromParent, { once: true })
   }
 
   return {
-    authorization: `Bearer ${config.apiKey ?? ''}`,
-    'content-type': 'application/json',
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timer)
+      parent?.removeEventListener('abort', abortFromParent)
+    },
   }
 }
 
-function assertApiKey(config: LlmRuntimeConfig) {
-  if (!config.apiKey) {
-    throw new Error('API Key 未配置。请设置 LLM_API_KEY 或供应商专用 API Key 环境变量。')
-  }
-}
-
-async function fetchWithRetry(
-  url: string,
-  init: RequestInit,
-  config: LlmRuntimeConfig,
-  label: string
-): Promise<Response> {
-  let lastError: unknown
-
-  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new Error(`${label}超时`)), config.timeoutMs)
-    const abortFromInput = () => controller.abort(init.signal?.reason ?? new Error(`${label}已中止`))
-    if (init.signal?.aborted) {
-      abortFromInput()
-    } else {
-      init.signal?.addEventListener('abort', abortFromInput, { once: true })
-      // 重新检查，防止在 addEventListener 期间 signal 被 abort
-      if (init.signal?.aborted) abortFromInput()
-    }
-
+function createLlmFetch(config: LlmRuntimeConfig): FetchFunction {
+  const llmFetch = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const startedAt = Date.now()
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
     try {
-      const res = await fetch(url, {
-        ...init,
-        signal: controller.signal,
+      const response = await globalThis.fetch(input, init)
+      await writeLlmDebugLog(config, 'AI SDK request', url, init, {
+        ok: response.ok,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
       })
-      clearTimeout(timer)
-      init.signal?.removeEventListener('abort', abortFromInput)
-      await writeLlmDebugLog(config, label, url, init, {
-        attempt,
-        status: res.status,
-        ok: res.ok,
-        retryable: isRetryableStatus(res.status) && attempt < config.maxRetries,
+      return response
+    } catch (error: any) {
+      await writeLlmDebugLog(config, 'AI SDK request', url, init, {
+        error: error?.message || String(error),
+        durationMs: Date.now() - startedAt,
       })
-
-      if (isRetryableStatus(res.status) && attempt < config.maxRetries) {
-        await res.arrayBuffer().catch((err: any) => {
-          logger.warn({ err: err?.message, label, status: res.status }, 'Failed to read retry response body')
-        })
-        await delay(backoffMs(attempt))
-        continue
-      }
-
-      return res
-    } catch (error) {
-      clearTimeout(timer)
-      init.signal?.removeEventListener('abort', abortFromInput)
-      lastError = error
-      await writeLlmDebugLog(config, label, url, init, {
-        attempt,
-        error: error instanceof Error ? error.message : String(error),
-      })
-      if (attempt >= config.maxRetries) break
-      await delay(backoffMs(attempt))
+      throw error
     }
   }
-
-  const message = lastError instanceof Error ? lastError.message : `${label}请求失败`
-  throw new Error(redactSensitive(message, [config.apiKey]))
+  return llmFetch as unknown as FetchFunction
 }
 
 async function writeLlmDebugLog(
   config: LlmRuntimeConfig,
   label: string,
   url: string,
-  init: RequestInit,
-  result: Record<string, unknown>
+  init: RequestInit | undefined,
+  result: Record<string, unknown>,
 ) {
   if (!config.debug.enabled) return
   try {
@@ -586,10 +471,10 @@ async function writeLlmDebugLog(
       model: config.model,
       source: config.source,
       request: {
-        method: init.method ?? 'GET',
+        method: init?.method ?? 'GET',
         url: redactSensitive(url, [config.apiKey]),
-        headers: redactHeaders(init.headers),
-        body: redactRequestBody(init.body, config.apiKey),
+        headers: redactHeaders(init?.headers),
+        body: redactRequestBody(init?.body, config.apiKey),
       },
       result: redactJson(result, config.apiKey),
     }
@@ -639,69 +524,7 @@ function safeFilePart(value: string) {
   return value.replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'request'
 }
 
-function isRetryableStatus(status: number): boolean {
-  return status === 408 || status === 409 || status === 429 || (status >= 500 && status <= 599)
-}
-
-function backoffMs(attempt: number): number {
-  return Math.min(4_000, 300 * 2 ** attempt)
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function formatHttpError(label: string, res: Response, config: LlmRuntimeConfig): Promise<string> {
-  const body = await res.text().catch((err: any) => {
-    logger.warn({ err: err?.message, label, status: res.status }, 'Failed to read error response body')
-    return ''
-  })
-  const providerMessage = extractProviderErrorMessage(body)
-  const details = providerMessage || body || `HTTP ${res.status}`
-  const source = [
-    `provider=${config.provider}`,
-    `model=${config.model}`,
-    `baseUrl=${config.baseUrl}`,
-    `apiKeySource=${config.apiKeySource ?? 'unknown'}`,
-  ].join(', ')
-  return `${label} failed with status ${res.status} (${source}): ${redactSensitive(details.slice(0, 500), [config.apiKey])}`
-}
-
-function extractProviderErrorMessage(body: string): string | null {
-  try {
-    const parsed = JSON.parse(body)
-    const message = parsed?.error?.message ?? parsed?.message ?? parsed?.error
-    return typeof message === 'string' ? message : null
-  } catch {
-    return null
-  }
-}
-
-async function* iterateSseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string, void, unknown> {
-  const reader = body.getReader()
-  try {
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      const lines = buffer.split(/\r?\n/)
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith('data:')) continue
-        const data = trimmed.slice(5).trim()
-        if (data) yield data
-      }
-    }
-  } finally {
-    reader.releaseLock()
-  }
-}
+/* ─────────── Utilities ─────────── */
 
 export function redactSensitive(value: string, extraSecrets: Array<string | null | undefined> = []): string {
   let output = value

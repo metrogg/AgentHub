@@ -1085,7 +1085,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   async sendMessageToSession(sessionId, content, options) {
     cancelledSessions.delete(sessionId)
-    set({ agentTyping: true, agentActivity: null })
+    const targetSession =
+      get().currentSession?.id === sessionId
+        ? get().currentSession
+        : (get().sessions.find((item) => item.id === sessionId) ?? null)
+    const isGroupSession = targetSession?.type === SessionType.Group && Boolean(targetSession.workspaceId)
+    const orchestrator = isGroupSession
+      ? get().currentWorkspaceAgents.find((agent) => agent.roleType === 'orchestrator')
+      : null
+    set({
+      agentTyping: true,
+      agentActivity: isGroupSession
+        ? {
+            sessionId,
+            agentId: orchestrator?.id,
+            agentName: orchestrator?.name ?? 'Orchestrator',
+            phase: 'planning',
+            startedAt: new Date().toISOString(),
+          }
+        : null,
+    })
     const attachments = get().pendingAttachments
     const contentForAgent = attachments.length
       ? appendAttachmentNote(content, attachments)
@@ -1280,8 +1299,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleWSEvent(e) {
     const sessionId = get().currentSessionId
     if (!sessionId) return
-    if (e.payload?.sessionId && e.payload.sessionId !== sessionId) {
+    const eventSessionId =
+      typeof e.payload?.sessionId === 'string' && e.payload.sessionId
+        ? e.payload.sessionId
+        : sessionId
+    const isCurrentSessionEvent = eventSessionId === sessionId
+    if (!isCurrentSessionEvent) {
       const isTaskBoardEvent = e.type?.startsWith('task_board:') || e.type === WsEvent.AgUiEvent
+      if (e.type === WsEvent.MessageCompleted) {
+        const { message } = e.payload as { message?: Message }
+        if (message) {
+          updateCachedMessages(eventSessionId, (messages) => upsertMessage(messages, message))
+          void get().fetchSessions()
+        }
+        return
+      }
       if (!isTaskBoardEvent) return
     }
 
@@ -1291,7 +1323,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({
           agentTyping: true,
           agentActivity: {
-            sessionId,
+            sessionId: eventSessionId,
             agentId: typeof e.payload?.agentId === 'string' ? e.payload.agentId : undefined,
             agentName: typeof e.payload?.agentName === 'string' ? e.payload.agentName : undefined,
             phase: typeof e.payload?.phase === 'string' ? e.payload.phase : 'replying',

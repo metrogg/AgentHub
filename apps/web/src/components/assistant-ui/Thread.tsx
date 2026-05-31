@@ -232,17 +232,27 @@ export const Thread: FC = () => {
   const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
   const agentTabs = useChatStore((s) => s.agentTabs)
   const selectAgentTab = useChatStore((s) => s.selectAgentTab)
+  const selectSession = useChatStore((s) => s.selectSession)
+  const navigate = useNavigate()
   const planningActivity =
     isGroupSession &&
     selectedAgentTab === null &&
     agentActivity?.sessionId === currentSession?.id &&
-    agentActivity.phase === 'planning'
+    ['thinking', 'planning', 'synthesizing'].includes(agentActivity.phase ?? '')
       ? agentActivity
       : null
   const isOrchestratorTaskChild = sessionKind === 'orchestrator-task'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
+
+  async function openGroupConversation() {
+    selectAgentTab(null)
+    const groupSessionId = taskBoard?.sessionId
+    if (!groupSessionId) return
+    await selectSession(groupSessionId)
+    navigate(`/chat/${groupSessionId}`)
+  }
 
   useEffect(() => {
     setGroupDetailsOpen(false)
@@ -279,7 +289,7 @@ export const Thread: FC = () => {
                       ?.name ?? 'Agent')
                   : 'Agent'
               }
-              onBack={() => selectAgentTab(null)}
+              onBack={() => void openGroupConversation()}
             />
           )}
           {!isGroupSession &&
@@ -531,8 +541,16 @@ function taskStatusIcon(status: string) {
 
 const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs, activity }) => {
   const selectAgentTab = useChatStore((state) => state.selectAgentTab)
+  const selectSession = useChatStore((state) => state.selectSession)
+  const navigate = useNavigate()
 
   if (!taskBoard) {
+    const phaseLabel =
+      activity?.phase === 'synthesizing'
+        ? '正在汇总'
+        : activity?.phase === 'thinking'
+          ? '正在理解目标'
+          : '正在规划'
     return (
       <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
         <div className="flex items-start gap-3">
@@ -542,14 +560,14 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-semibold text-neutral-900">
-                {activity?.agentName ?? 'Orchestrator'} 正在规划
+                {activity?.agentName ?? 'Orchestrator'} {phaseLabel}
               </span>
               <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-xs text-blue-700">
-                等待任务拆解
+                {activity?.phase === 'synthesizing' ? '等待最终汇总' : '等待任务拆解'}
               </span>
             </div>
             <p className="mt-1 text-sm text-neutral-600">
-              正在调用模型分析目标、成员能力和任务依赖。计划生成后会在这里展开任务、成员状态和子对话入口。
+              Orchestrator 正在分析目标、成员能力和任务依赖。计划生成后会在这里展开任务、成员状态和子对话入口。
             </p>
           </div>
         </div>
@@ -631,8 +649,15 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
       <div className="divide-y divide-neutral-100">
         {visibleTasks.map((task) => {
           const tab = agentTabs.find((item) => item.taskId === task.id)
-          const canOpenChild = Boolean(tab?.childSessionId || task.childSessionId)
+          const childSessionId = tab?.childSessionId || task.childSessionId || null
+          const canOpenChild = Boolean(childSessionId)
           const artifacts = task.artifactCount ?? task.artifacts?.length ?? 0
+          const openChildSession = async () => {
+            if (!childSessionId) return
+            selectAgentTab(task.id)
+            await selectSession(childSessionId)
+            navigate(`/chat/${childSessionId}`)
+          }
           return (
             <div key={task.id} className="flex items-start gap-3 p-3">
               <div className="mt-0.5">{taskStatusIcon(task.status)}</div>
@@ -664,7 +689,7 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
               <button
                 type="button"
                 disabled={!canOpenChild}
-                onClick={() => canOpenChild && selectAgentTab(task.id)}
+                onClick={() => void openChildSession()}
                 className={cn(
                   'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition',
                   canOpenChild
