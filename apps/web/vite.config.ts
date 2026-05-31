@@ -87,6 +87,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    headers: {
+      'Cache-Control': 'no-store, max-age=0',
+      Pragma: 'no-cache',
+      Expires: '0',
+    },
     watch: {
       ignored: ['**/dist/**', '**/node_modules/**', '**/.git/**'],
     },
