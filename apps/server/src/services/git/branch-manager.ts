@@ -44,7 +44,7 @@ class ProjectLock {
 
 const projectLock = new ProjectLock()
 
-export class GitBranchManager {
+export class ExecutionBranchManager {
   async ensureGitRepo(projectPath: string): Promise<void> {
     const gitDir = join(projectPath, '.git')
     if (existsSync(gitDir)) {
@@ -70,7 +70,7 @@ export class GitBranchManager {
     taskId: string
   ): Promise<BranchContext | null> {
     if (!projectPath) {
-      logger.info({ runId, agentKey, taskId }, 'No project path, skipping branch isolation, using default workdir')
+      logger.info({ runId, agentKey, taskId }, 'No project path, using default execution directory')
       return null
     }
     const release = await projectLock.acquire(projectPath)
@@ -91,7 +91,7 @@ export class GitBranchManager {
 
     const branch = `agenthub/${runId}/${agentKey}/${taskId}`
     const originalBranch = await this.getCurrentBranch(projectPath)
-    logger.info({ projectPath, originalBranch, newBranch: branch }, 'Preparing agent branch')
+    logger.info({ projectPath, originalBranch, newBranch: branch }, 'Preparing legacy git execution branch')
 
     // stash 当前未提交变更，记录 stash ref 以便精确恢复
     let stashRef: string | undefined
@@ -115,7 +115,7 @@ export class GitBranchManager {
     const worktreePath = join(tmpdir(), `agenthub-wt-${randomUUID()}`)
     await this.execGit(projectPath, ['worktree', 'add', worktreePath, branch])
 
-    logger.info({ worktreePath, branch }, 'Git worktree created for agent task')
+    logger.info({ worktreePath, branch }, 'Legacy git execution directory created for agent task')
 
     return { branch, originalBranch, projectPath, worktreePath, stashRef }
   }
@@ -135,7 +135,7 @@ export class GitBranchManager {
     try {
       // 移除 worktree
       await this.execGit(projectPath, ['worktree', 'remove', '--force', worktreePath]).catch((err) => {
-        logger.warn({ err: err?.message, worktreePath }, 'Failed to remove worktree via git, trying manual cleanup')
+        logger.warn({ err: err?.message, worktreePath }, 'Failed to remove legacy git execution directory, trying manual cleanup')
         try { rmSync(worktreePath, { recursive: true, force: true }) } catch {}
       })
 
@@ -341,4 +341,5 @@ export class GitBranchManager {
   }
 }
 
-export const gitBranchManager = new GitBranchManager()
+export const executionBranchManager = new ExecutionBranchManager()
+export { ExecutionBranchManager as GitBranchManager, executionBranchManager as gitBranchManager }

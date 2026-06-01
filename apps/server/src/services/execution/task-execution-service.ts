@@ -10,6 +10,10 @@ import type { AgentHubA2AEnvelope } from '../protocols/a2a-internal'
 import { buildA2AExecutionTask } from '../protocols/a2a-internal'
 import { acquireExecutionSandbox } from './sandbox-provider'
 import type { SandboxLease } from './sandbox-provider'
+import {
+  buildExecutionConfigSummary,
+  type ExecutionConfigSummary,
+} from './execution-config-summary'
 
 const STRICT_TASK_TYPES = new Set<TaskType>(['code', 'test', 'verify'])
 
@@ -32,6 +36,7 @@ export interface TaskExecutionInput {
   deferCompletionStatus?: boolean
   /** 内部 Agent 间通信的 A2A message/send 信封 */
   a2a?: AgentHubA2AEnvelope
+  onExecutionConfigReady?: (config: ExecutionConfigSummary) => void | Promise<void>
 }
 
 export interface TaskExecutionOutput {
@@ -43,6 +48,7 @@ export interface TaskExecutionOutput {
   durationMs: number
   /** 实际执行目录（写入型 Agent 会落在工作区下的 .agenthub/workdirs） */
   executionPath?: string | null
+  executionConfig?: ExecutionConfigSummary
 }
 
 export const __taskExecutionTestHooks = {
@@ -67,6 +73,11 @@ export class TaskExecutionService {
     const taskStartTime = Date.now()
     let executionPath: string | null = null
     let sandboxLease: SandboxLease | null = null
+    let executionConfig = await buildExecutionConfigSummary({
+      profile,
+      projectPath,
+      requestedSandboxPolicy,
+    })
     try {
       sandboxLease = await acquireExecutionSandbox({
         runId,
@@ -98,6 +109,22 @@ export class TaskExecutionService {
         originalProjectPath: profile.projectPath ?? null,
         sandboxPolicy: executionSandboxPolicy,
       }
+      executionConfig = await buildExecutionConfigSummary({
+        profile: executionProfile,
+        projectPath,
+        executionPath,
+        workdir,
+        sandboxLease,
+        requestedSandboxPolicy,
+      })
+      try {
+        await input.onExecutionConfigReady?.(executionConfig)
+      } catch (notifyError: any) {
+        logger.warn(
+          { err: notifyError?.message || notifyError, taskId },
+          'Failed to publish execution config summary',
+        )
+      }
 
       const envelope: import('./agent-execution-envelope').AgentExecutionEnvelope = {
         runId,
@@ -124,7 +151,7 @@ export class TaskExecutionService {
           .where(eq(messages.id, input.existingUserMessageId))
           .limit(1)
         if (!existingUserMsg) {
-          return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Existing user message not found', durationMs: 0 }
+          return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Existing user message not found', durationMs: 0, executionConfig }
         }
         userMsg = await attachA2AMetadata(existingUserMsg as MessageRow, input.a2a)
       } else {
@@ -141,7 +168,7 @@ export class TaskExecutionService {
           .returning()
 
         if (!createdUserMsg) {
-          return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0 }
+          return { status: TaskStatus.Failed, output: '', artifacts: [], error: 'Failed to create user message', durationMs: 0, executionConfig }
         }
         userMsg = createdUserMsg as MessageRow
       }
@@ -180,12 +207,12 @@ export class TaskExecutionService {
 
       if (signal?.aborted) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, executionPath }
+        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, executionPath, executionConfig }
       }
 
       if (result.cancelled) {
         await db.update(workspaceTasks).set({ status: TaskStatus.Cancelled, completedAt: new Date() }).where(eq(workspaceTasks.id, taskId))
-        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, executionPath }
+        return { status: TaskStatus.Cancelled, output: 'Task was cancelled', artifacts: [], durationMs: Date.now() - taskStartTime, executionPath, executionConfig }
       }
 
       // 收集 output：优先使用 runAgentReply 返回的 agent messageId，避免同毫秒写入时误取 user prompt。
@@ -239,13 +266,14 @@ export class TaskExecutionService {
             warning: error,
             durationMs: taskDuration,
             executionPath,
+            executionConfig,
           }
         }
         await db
           .update(workspaceTasks)
           .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error.slice(0, 2000) })
           .where(eq(workspaceTasks.id, taskId))
-        return { status: TaskStatus.Failed, output, artifacts, error, durationMs: taskDuration, executionPath }
+        return { status: TaskStatus.Failed, output, artifacts, error, durationMs: taskDuration, executionPath, executionConfig }
       }
 
       if (!input.deferCompletionStatus) {
@@ -259,14 +287,14 @@ export class TaskExecutionService {
           .where(eq(workspaceTasks.id, taskId))
       }
 
-      return { status: TaskStatus.Done, output, artifacts, durationMs: taskDuration, executionPath }
+      return { status: TaskStatus.Done, output, artifacts, durationMs: taskDuration, executionPath, executionConfig }
     } catch (error: any) {
       const taskDuration = Date.now() - taskStartTime
       await db
         .update(workspaceTasks)
         .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
         .where(eq(workspaceTasks.id, taskId))
-      return { status: TaskStatus.Failed, output: '', artifacts: [], error: error?.message || 'Unknown error', durationMs: taskDuration, executionPath }
+      return { status: TaskStatus.Failed, output: '', artifacts: [], error: error?.message || 'Unknown error', durationMs: taskDuration, executionPath, executionConfig }
     } finally {
       if (sandboxLease) {
         try {

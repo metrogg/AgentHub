@@ -611,6 +611,84 @@ function taskStatusIcon(status: string) {
   return <Clock3 className="h-4 w-4 text-neutral-400" />
 }
 
+function TaskRuntimeStrip({
+  executionConfig,
+}: {
+  executionConfig?: {
+    runtimeType?: string
+    adapterName?: string
+    codeAgentType?: string
+    command?: string
+    modelLabel?: string
+    modelId?: string | null
+    modelProvider?: string | null
+    baseUrlHost?: string | null
+    readinessStatus?: string
+    sandboxProvider?: string
+    isolation?: string
+    sandboxPolicy?: string
+    workdirRelativePath?: string | null
+    executionPath?: string | null
+  }
+}) {
+  if (!executionConfig) return null
+  const runtime =
+    executionConfig.adapterName ||
+    executionConfig.codeAgentType ||
+    (executionConfig.runtimeType === 'llm' ? 'LLM fallback' : executionConfig.runtimeType)
+  const model = executionConfig.modelLabel || executionConfig.modelId
+  const sandbox = [
+    executionConfig.sandboxProvider,
+    executionConfig.isolation,
+    executionConfig.sandboxPolicy,
+  ]
+    .filter(Boolean)
+    .join('/')
+  const workdir = executionConfig.workdirRelativePath || compactPath(executionConfig.executionPath)
+  return (
+    <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
+      {runtime && (
+        <span className="inline-flex max-w-full items-center gap-1 rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5">
+          <TerminalSquare className="h-3 w-3 shrink-0" />
+          <span className="truncate">{runtime}</span>
+        </span>
+      )}
+      {model && (
+        <span className="max-w-[180px] truncate rounded border border-neutral-200 bg-white px-1.5 py-0.5">
+          {model}
+        </span>
+      )}
+      {executionConfig.baseUrlHost && (
+        <span className="max-w-[150px] truncate rounded border border-neutral-200 bg-white px-1.5 py-0.5">
+          {executionConfig.baseUrlHost}
+        </span>
+      )}
+      {sandbox && (
+        <span className="max-w-[170px] truncate rounded border border-neutral-200 bg-white px-1.5 py-0.5">
+          {sandbox}
+        </span>
+      )}
+      {workdir && (
+        <span className="max-w-[220px] truncate rounded border border-neutral-200 bg-white px-1.5 py-0.5">
+          {workdir}
+        </span>
+      )}
+      {executionConfig.readinessStatus === 'blocked' && (
+        <span className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-red-700">
+          blocked
+        </span>
+      )}
+    </div>
+  )
+}
+
+function compactPath(value?: string | null) {
+  if (!value) return null
+  const parts = value.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (parts.length <= 3) return value
+  return `${parts[parts.length - 3]}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
+}
+
 const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs, activity }) => {
   const selectAgentTab = useChatStore((state) => state.selectAgentTab)
   const selectSession = useChatStore((state) => state.selectSession)
@@ -754,6 +832,7 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
                     </span>
                   )}
                 </div>
+                <TaskRuntimeStrip executionConfig={task.executionConfig} />
                 {task.outputSummary && (
                   <p className="mt-1 line-clamp-2 text-xs text-neutral-600">{task.outputSummary}</p>
                 )}

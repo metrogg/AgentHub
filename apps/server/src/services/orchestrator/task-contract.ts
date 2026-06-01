@@ -12,6 +12,22 @@ export interface TaskContractResult {
   violations: TaskContractViolation[]
 }
 
+export function hasFatalTaskContractViolations(
+  violations: TaskContractViolation[],
+  artifacts: Array<Record<string, unknown>> = [],
+) {
+  return violations.some((violation) => isFatalTaskContractViolation(violation, artifacts))
+}
+
+export function isFatalTaskContractViolation(
+  violation: TaskContractViolation,
+  artifacts: Array<Record<string, unknown>> = [],
+) {
+  if (violation.type !== 'path_not_allowed') return true
+  if (!hasDeliveryArtifact(artifacts)) return true
+  return !isSafeRelativeArtifactPath(violation.actual ?? '')
+}
+
 export function validateTaskOutputContract(params: {
   task: Pick<ExecutionTask, 'id' | 'outputContract' | 'taskType'>
   artifacts: Array<Record<string, unknown>>
@@ -107,6 +123,20 @@ function isSafeRelativeArtifactPath(value: string): boolean {
   if (/^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('/') || raw.startsWith('\\')) return false
   const segments = raw.replace(/\\/g, '/').split('/')
   return segments.every((segment) => segment && segment !== '.' && segment !== '..')
+}
+
+function hasDeliveryArtifact(artifacts: Array<Record<string, unknown>>) {
+  return artifacts.some((artifact) => {
+    const kind = artifactKind(artifact)
+    if (kind === 'preview' || kind === 'deploy' || kind === 'workflow') return true
+    const type = artifactPathKind(artifact)
+    return type === 'preview' || type === 'deploy' || type === 'workflow'
+  })
+}
+
+function artifactPathKind(artifact: Record<string, unknown>) {
+  const value = artifact.artifactKind ?? artifact.kind ?? artifact.type
+  return typeof value === 'string' ? value : ''
 }
 
 function shouldEnforceAllowedPath(
