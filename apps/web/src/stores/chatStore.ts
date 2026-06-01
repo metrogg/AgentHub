@@ -133,7 +133,7 @@ function updateAgentTabsFromTaskBoard(
 ): AgentTab[] {
   if (!taskBoard) return currentTabs
   const taskId = event.taskId
-  if (!taskId) return currentTabs
+  if (!taskId) return agentTabsFromTaskBoard(taskBoard)
 
   const task = taskBoard.tasks.find((t) => t.id === taskId)
   if (!task) return currentTabs
@@ -199,6 +199,46 @@ function selectedTaskForSession(
 ) {
   if (taskBoard?.sessionId === sessionId) return null
   return agentTabs.find((tab) => tab.childSessionId === sessionId)?.taskId ?? null
+}
+
+function taskBoardSessionIds(taskBoard: ChatState['taskBoard'], currentSessionId?: string | null) {
+  const ids = new Set<string>()
+  if (currentSessionId) ids.add(currentSessionId)
+  if (taskBoard?.sessionId) ids.add(taskBoard.sessionId)
+  for (const task of taskBoard?.tasks ?? []) {
+    if (task.childSessionId) ids.add(task.childSessionId)
+  }
+  return Array.from(ids)
+}
+
+function buildOptimisticOrchestratorTaskSession(
+  state: ChatState,
+  sessionId: string,
+): Session | null {
+  const taskBoard = state.taskBoard
+  if (!taskBoard?.sessionId) return null
+  const task = taskBoard.tasks.find((item) => item.childSessionId === sessionId)
+  if (!task || !task.agentId) return null
+  const groupSession =
+    state.sessions.find((session) => session.id === taskBoard.sessionId) ??
+    (state.currentSession?.id === taskBoard.sessionId ? state.currentSession : null)
+  if (!groupSession?.workspaceId) return null
+  return {
+    id: sessionId,
+    ownerId: groupSession.ownerId,
+    title: `${task.agentName} · ${task.title}`,
+    type: SessionType.Direct,
+    workspaceId: groupSession.workspaceId,
+    workspaceAgentId: task.agentId,
+    metadata: {
+      kind: 'orchestrator-task',
+      orchestratorRunId: taskBoard.runId,
+      orchestratorTaskId: task.id,
+    },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastMessage: null,
+  }
 }
 
 interface AgentTab {
@@ -978,6 +1018,45 @@ function applyAgUiPlanCreated(
     : board
 }
 
+function buildOptimisticOrchestratorTaskSessions(
+  state: ChatState,
+  taskBoard: NonNullable<ChatState['taskBoard']> | null,
+) {
+  if (!taskBoard?.sessionId) return state.sessions
+  const groupSession =
+    state.sessions.find((session) => session.id === taskBoard.sessionId) ??
+    (state.currentSession?.id === taskBoard.sessionId ? state.currentSession : null)
+  if (!groupSession) return state.sessions
+
+  const workspaceId = groupSession.workspaceId ?? null
+  if (!workspaceId) return state.sessions
+
+  const now = new Date().toISOString()
+  const nextSessions = taskBoard.tasks.reduce((sessions, task) => {
+    if (!task.childSessionId || !task.agentId) return sessions
+    const existing = sessions.find((session) => session.id === task.childSessionId) ?? null
+    const session: Session = {
+      id: task.childSessionId,
+      ownerId: existing?.ownerId ?? groupSession.ownerId,
+      title: existing?.title || `${task.agentName} · ${task.title}`,
+      type: SessionType.Direct,
+      workspaceId: existing?.workspaceId ?? workspaceId,
+      workspaceAgentId: existing?.workspaceAgentId ?? task.agentId,
+      metadata: {
+        ...(existing?.metadata ?? {}),
+        kind: 'orchestrator-task',
+        orchestratorRunId: taskBoard.runId,
+        orchestratorTaskId: task.id,
+      },
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      lastMessage: existing?.lastMessage ?? null,
+    }
+    return upsertSessionList(sessions, session)
+  }, state.sessions)
+  return nextSessions
+}
+
 function applyAgUiEventToState(
   state: ChatState,
   event: AgUiEventPayload,
@@ -988,6 +1067,7 @@ function applyAgUiEventToState(
   let agentActivity = state.agentActivity
   let selectedAgentTab = state.selectedAgentTab
   let nextMessages = state.messages
+  let nextSessions = state.sessions
 
   const currentSessionMatches =
     asString(event.threadId) === sessionId ||
@@ -1131,10 +1211,17 @@ function applyAgUiEventToState(
           payload: asRecord(event.value) ?? {},
         })
       : state.agentTabs
+  if (nextTaskBoard && nextTaskBoard !== state.taskBoard) {
+    nextSessions = buildOptimisticOrchestratorTaskSessions(
+      { ...state, sessions: nextSessions },
+      nextTaskBoard,
+    )
+  }
 
   if (
     nextTaskBoard !== state.taskBoard ||
     nextAgentTabs !== state.agentTabs ||
+    nextSessions !== state.sessions ||
     nextMessages !== state.messages ||
     agentTyping !== state.agentTyping ||
     agentActivity !== state.agentActivity ||
@@ -1144,6 +1231,7 @@ function applyAgUiEventToState(
       ...state,
       taskBoard: nextTaskBoard,
       agentTabs: nextAgentTabs,
+      sessions: nextSessions,
       messages: nextMessages,
       agentTyping,
       agentActivity,
@@ -1306,7 +1394,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const keepTaskBoard = isTaskBoardSession(sessionId, state.taskBoard, state.agentTabs)
     const optimisticSession =
       state.sessions.find((session) => session.id === sessionId) ??
-      (state.currentSession?.id === sessionId ? state.currentSession : null)
+      (state.currentSession?.id === sessionId ? state.currentSession : null) ??
+      buildOptimisticOrchestratorTaskSession(state, sessionId)
     const cachedWorkspace = optimisticSession?.workspaceId
       ? workspaceDetailsCache.get(optimisticSession.workspaceId)
       : null
@@ -1324,6 +1413,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : Promise.resolve(null)
 
     set({
+      sessions: optimisticSession
+        ? upsertSessionList(state.sessions, optimisticSession)
+        : state.sessions,
       currentSessionId: sessionId,
       currentSession: optimisticSession ?? state.currentSession,
       currentWorkspace: optimisticSession?.workspaceId
@@ -1350,9 +1442,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? selectedTaskForSession(sessionId, state.taskBoard, state.agentTabs)
         : null,
     })
-    wsClient.joinSessions(
-      Array.from(new Set([sessionId, keepTaskBoard ? state.taskBoard?.sessionId : null].filter(Boolean) as string[])),
-    )
+    wsClient.joinSessions(taskBoardSessionIds(keepTaskBoard ? state.taskBoard : null, sessionId))
     try {
       const [session, { items }] = await Promise.all([
         api.getSession(sessionId),
@@ -1373,9 +1463,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (get().currentSessionId !== sessionId) return
         const currentAgents = sessionWorkspaceAgents(session, full.agents)
         if (resolvedSnapshot) {
-          wsClient.joinSessions(
-            Array.from(new Set([sessionId, resolvedSnapshot.taskBoard.sessionId].filter(Boolean) as string[])),
-          )
+          wsClient.joinSessions(taskBoardSessionIds(resolvedSnapshot.taskBoard, sessionId))
         }
         set((s) => ({
           currentSession: session,
@@ -1410,9 +1498,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           (!keepTaskBoard ? await loadTaskBoardSnapshotForSession(session).catch(() => null) : null)
         if (get().currentSessionId !== sessionId) return
         if (snapshot) {
-          wsClient.joinSessions(
-            Array.from(new Set([sessionId, snapshot.taskBoard.sessionId].filter(Boolean) as string[])),
-          )
+          wsClient.joinSessions(taskBoardSessionIds(snapshot.taskBoard, sessionId))
         }
         set((s) => ({
           currentSession: session,
@@ -1936,6 +2022,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case WsEvent.AgUiEvent: {
         const event = (e.payload ?? {}) as AgUiEventPayload
         set((s) => applyAgUiEventToState(s, event, sessionId))
+        wsClient.joinSessions(taskBoardSessionIds(get().taskBoard, get().currentSessionId))
         if (agUiEventShouldRefreshSessions(event)) {
           scheduleSessionRefresh(() => get().fetchSessions())
         }
