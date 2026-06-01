@@ -18,7 +18,8 @@ export interface AgentWorkdir {
 
 /**
  * 为写入型 Agent 准备一个通用执行目录。
- * 现阶段不再强依赖 Git 分支/worktree，先保证每个成员有稳定、可预览、可追踪的工作目录。
+ * Current default: stable per-agent execution directories under .agenthub/workdirs.
+ * Git branch/worktree isolation is not part of the default execution contract.
  */
 export function prepareAgentWorkdir(input: AgentWorkdirInput): AgentWorkdir | null {
   const projectPath = input.projectPath?.trim()

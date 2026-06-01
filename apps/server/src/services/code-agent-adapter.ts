@@ -406,7 +406,7 @@ export async function* streamCodeAgentReply(
   }
 
   // 如果提供了 envelope，使用 envelope 的执行上下文；否则降级到旧路径（已废弃）
-  const legacyProjectPath = profile.projectPath?.trim() || null
+  const profileExecutionPath = profile.projectPath?.trim() || null
 
   const cwdInfo = envelope
     ? resolveExecutionCwd(envelope)
@@ -415,8 +415,8 @@ export async function* streamCodeAgentReply(
         taskId: userMsg.id || 'legacy',
         agentId: profile.id,
         agentName: profile.name,
-        projectPath: legacyProjectPath,
-        worktreePath: legacyProjectPath,
+        projectPath: profileExecutionPath,
+        worktreePath: profileExecutionPath,
         sandboxPolicy: profile.sandboxPolicy ?? 'workspace-write',
         envAllowlist: DEFAULT_ENV_ALLOWLIST,
       })

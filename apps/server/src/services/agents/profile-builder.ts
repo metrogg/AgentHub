@@ -112,16 +112,18 @@ function looksLikeUrl(value: unknown): value is string {
  * 构建带执行目录覆盖的 AgentRunProfile。
  * 参数名保留 worktreePath 兼容旧调用；当前也可传普通 Agent 工作目录。
  */
-export function buildAgentProfileWithWorktree(
+export function buildAgentProfileWithExecutionDir(
   agent: AgentRow,
-  worktreePath: string | null | undefined,
+  executionDir: string | null | undefined,
   originalProjectPath: string | null | undefined,
   overrides?: PolicyOverrides,
 ): AgentRunProfile {
-  const profile = buildAgentProfile(agent, worktreePath ?? originalProjectPath ?? null, overrides)
+  const profile = buildAgentProfile(agent, executionDir ?? originalProjectPath ?? null, overrides)
   return {
     ...profile,
-    projectPath: worktreePath ?? originalProjectPath ?? null,
+    projectPath: executionDir ?? originalProjectPath ?? null,
     originalProjectPath: originalProjectPath ?? null,
   }
 }
+
+export { buildAgentProfileWithExecutionDir as buildAgentProfileWithWorktree }
