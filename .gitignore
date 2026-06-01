@@ -82,6 +82,7 @@ captures/
 # AI Tools (IDE internal)
 .trae/
 .workbuddy/
+.claude/settings.local.json
 
 # Browser automation / Playwright output
 output/

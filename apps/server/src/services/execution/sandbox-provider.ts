@@ -377,6 +377,15 @@ function normalizeDockerNetworkPolicy(): NetworkPolicy {
 
 function dockerNetworkMode(policy: NetworkPolicy) {
   if (policy === 'disabled') return 'none'
+  if (policy === 'restricted') {
+    const network = readEnv('AGENTHUB_DOCKER_NETWORK')
+    if (!network) {
+      throw new Error(
+        'Docker networkPolicy=restricted requires AGENTHUB_DOCKER_NETWORK to point to a preconfigured restricted Docker network.',
+      )
+    }
+    return network
+  }
   return readEnv('AGENTHUB_DOCKER_NETWORK') || 'bridge'
 }
 

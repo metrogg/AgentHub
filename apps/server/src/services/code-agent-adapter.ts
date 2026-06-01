@@ -2249,6 +2249,7 @@ function buildDockerCommand(
   container: SandboxContainerSpec,
   envMap: Record<string, string>,
 ) {
+  const combinedEnv = { ...envMap, ...container.env }
   const dockerArgs = ['run', '--rm', '-i', '--init']
   dockerArgs.push('--network', container.networkMode)
   dockerArgs.push('--workdir', container.workdir)
@@ -2263,13 +2264,35 @@ function buildDockerCommand(
     ]
     dockerArgs.push('--mount', mountParts.join(','))
   }
-  for (const key of Object.keys(envMap)) {
-    dockerArgs.push('--env', key)
+  for (const [key, value] of Object.entries(combinedEnv)) {
+    if (!shouldPassDockerEnvKey(key)) continue
+    if (typeof value !== 'string' || !value.trim()) continue
+    dockerArgs.push('--env', `${key}=${value}`)
   }
   if (container.extraArgs?.length) dockerArgs.push(...container.extraArgs)
   dockerArgs.push(container.image)
   dockerArgs.push(command, ...args.map((arg) => mapRuntimeArg(arg, container)))
   return ['docker', ...dockerArgs]
+}
+
+function shouldPassDockerEnvKey(key: string) {
+  const normalized = key.trim().toUpperCase()
+  if (!normalized) return false
+  return ![
+    'PATH',
+    'PATHEXT',
+    'COMSPEC',
+    'SYSTEMROOT',
+    'WINDIR',
+    'PROCESSOR_ARCHITECTURE',
+    'PROCESSOR_IDENTIFIER',
+    'PROCESSOR_LEVEL',
+    'PROCESSOR_REVISION',
+    'PROGRAMFILES',
+    'PROGRAMFILES(X86)',
+    'PROGRAMW6432',
+    'OS',
+  ].includes(normalized)
 }
 
 function mapRuntimeArg(value: string, container: SandboxContainerSpec) {
