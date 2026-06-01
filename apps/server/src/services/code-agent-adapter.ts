@@ -2419,13 +2419,13 @@ function windowsBunShim(command: string) {
 
 async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, unknown>> {
   try {
-    const rows = await db
-      .select()
-      .from(settings)
-      .where(eq(settings.key, 'CODING_TOOLS_CONFIG'))
-      .limit(1)
-    const raw = rows[0]?.value
-    if (!raw) return {}
+    const rows = await db.select().from(settings)
+    const settingsMap = Object.fromEntries(rows.map((row) => [row.key, row.value]))
+    const raw = settingsMap.CODING_TOOLS_CONFIG
+    const config: Record<string, unknown> = {}
+    if (!raw) {
+      return activeToolConfig(toolId, settingsMap, config)
+    }
     const parsed = JSON.parse(raw) as Array<{
       id: string
       config?: Record<string, unknown>
@@ -2437,7 +2437,7 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
       protocol?: string
     }>
     const tool = parsed.find((t) => t.id === toolId)
-    const config = { ...(tool?.config ?? {}) }
+    Object.assign(config, tool?.config ?? {})
     // 兼容前端直接保存的扁平字段
     if (tool?.provider) config.provider = tool.provider
     if (tool?.agent) config.agent = tool.agent
@@ -2445,10 +2445,24 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
     if (tool?.baseUrl) config.baseUrl = tool.baseUrl
     if (tool?.apiKeyEnv) config.apiKeyEnv = tool.apiKeyEnv
     if (tool?.protocol) config.protocol = tool.protocol
-    return config
+    return activeToolConfig(toolId, settingsMap, config)
   } catch {
     return {}
   }
+}
+
+function activeToolConfig(
+  toolId: CodeAgentType,
+  settingsMap: Record<string, string>,
+  config: Record<string, unknown>,
+) {
+  if (settingsMap.CODE_AGENT_ACTIVE_TOOL !== toolId) return config
+  if (settingsMap.CODE_AGENT_ACTIVE_MODEL) config.modelId = settingsMap.CODE_AGENT_ACTIVE_MODEL
+  if (settingsMap.CODE_AGENT_ACTIVE_BASE_URL) config.baseUrl = settingsMap.CODE_AGENT_ACTIVE_BASE_URL
+  if (settingsMap.CODE_AGENT_ACTIVE_API_KEY_ENV)
+    config.apiKeyEnv = settingsMap.CODE_AGENT_ACTIVE_API_KEY_ENV
+  if (settingsMap.CODE_AGENT_ACTIVE_PROTOCOL) config.protocol = settingsMap.CODE_AGENT_ACTIVE_PROTOCOL
+  return config
 }
 
 function readEnv(key: string) {

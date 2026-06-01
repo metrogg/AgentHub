@@ -1,3 +1,4 @@
+import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
 import { runtimeRegistry, type AgentProfile } from '../runtime'
 import { extractJsonObject, parseJsonObject } from './planner'
@@ -9,6 +10,10 @@ export interface OrchestratorDecision {
   action: OrchestratorDecisionAction
   message?: string
   reason?: string
+}
+
+export const __orchestratorDecisionTestHooks = {
+  buildHeuristicDecision,
 }
 
 interface DecideInput {
@@ -61,17 +66,33 @@ export async function decideOrchestratorAction(input: DecideInput): Promise<Orch
     .filter(Boolean)
     .join('\n')
 
-  const output = await generateDecisionOutput({
+  let output = await generateDecisionOutput({
     prompt,
     orchestrator,
     workspacePath: input.workspacePath,
   })
 
-  const jsonText = extractJsonObject(output)
-  if (!jsonText) {
-    throw new Error(
-      `Orchestrator 没有返回可解析的路由判断。原始输出片段：${formatOutputPreview(output)}`,
+  let jsonText = extractJsonObject(output)
+  if (!jsonText && orchestrator?.runtimeType === 'code-agent') {
+    logger.warn(
+      {
+        orchestratorId: orchestrator.id,
+        orchestratorName: orchestrator.name,
+        outputPreview: formatOutputPreview(output),
+      },
+      'Code-agent orchestrator decision returned non-JSON output; falling back to control LLM',
     )
+    const fallbackOutput = await generateDecisionWithLlm(prompt, orchestrator?.modelId ?? undefined)
+    const fallbackJsonText = extractJsonObject(fallbackOutput)
+    if (fallbackJsonText) {
+      output = fallbackOutput
+      jsonText = fallbackJsonText
+    }
+  }
+  if (!jsonText) {
+    const heuristic = buildHeuristicDecision(input.content, workers.length)
+    if (heuristic) return heuristic
+    throw new Error(`Orchestrator 没有返回可解析的路由判断。原始输出片段：${formatOutputPreview(output)}`)
   }
 
   const parsed = parseJsonObject(jsonText) as Partial<OrchestratorDecision>
@@ -103,11 +124,15 @@ async function generateDecisionOutput(params: {
     return generateDecisionWithCodeAgent(prompt, orchestrator, workspacePath)
   }
 
+  return generateDecisionWithLlm(prompt, orchestrator?.modelId ?? undefined)
+}
+
+async function generateDecisionWithLlm(prompt: string, modelId?: string | null) {
   let output = ''
   for await (const chunk of streamReply(
     [{ role: 'user', content: prompt }],
     DECISION_SYSTEM,
-    orchestrator?.modelId ?? undefined,
+    modelId ?? undefined,
   )) {
     output += chunk
     if (output.length > 4000) break
@@ -189,4 +214,44 @@ function normalizeCodeAgentType(value?: string | null): AgentProfile['codeAgentT
 
 function normalizeMessage(value: unknown) {
   return typeof value === 'string' ? value.trim().slice(0, 1200) : ''
+}
+
+function buildHeuristicDecision(
+  content: string,
+  workerCount: number,
+): OrchestratorDecision | null {
+  const text = content.trim()
+  if (!text) {
+    return {
+      action: 'reply',
+      message: '我在。你可以直接描述要完成的目标，我会判断是否需要分派给团队成员。',
+      reason: 'empty_or_short_message_fallback',
+    }
+  }
+
+  const looksLikeWork =
+    /创建|开发|实现|设计|调研|分析|输出|生成|修改|修复|写|做|页面|网站|应用|游戏|文档|报告|PDF|PPT|HTML|代码|部署|测试|验证|review|build|create|implement|fix|generate|analyze|design/i.test(
+      text,
+    )
+  if (looksLikeWork) {
+    if (workerCount === 0) {
+      return {
+        action: 'clarify',
+        message:
+          '当前群聊只有 Orchestrator，还没有可执行任务的 Agent。请先添加 Researcher、Designer、Builder 或 QA Reviewer 等成员。',
+        reason: 'heuristic_no_worker_agents',
+      }
+    }
+    return {
+      action: 'plan',
+      message: '我会先生成协作计划，并按任务分派给合适的成员执行。',
+      reason: 'heuristic_artifact_or_work_request',
+    }
+  }
+
+  return {
+    action: 'reply',
+    message: '收到。这个问题看起来不需要分派团队执行，我先直接回复。',
+    reason: 'heuristic_simple_chat',
+  }
 }
