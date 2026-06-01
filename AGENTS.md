@@ -1,6 +1,6 @@
 # AgentHub
 
-本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前多Agent协作架构.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
+本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前状态与下一步路线.md`、`docs/当前多Agent协作架构.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
 更完整的分层设计和业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
 
 ## 当前目标

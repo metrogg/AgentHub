@@ -4,6 +4,7 @@
 
 本文档记录 AgentHub 当前应遵守的多 Agent 协作设计。它用于统一产品、前端、后端和 Coding Agent 的判断，避免旧设计继续造成混乱。
 
+当前事实总览见 `docs/当前状态与下一步路线.md`。
 更完整的分层架构与业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
 Spec Kit 契约化和 AG-UI 事件收敛路线见 `docs/SpecKit契约与AGUI事件落地路线.md`。
 

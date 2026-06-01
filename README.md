@@ -4,6 +4,8 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 
 当前项目处于快速迭代阶段，优先目标是跑通通用的“群聊主线 + A2A 任务分发 + 多 Agent 任务子对话 + 本地工作目录 + 产物交接”闭环。
 
+如果你是第一次接手项目，先读 [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)。它是当前事实总览，用来区分主路径、后续路线和历史遗留设计。
+
 ## 核心体验
 
 - **Agent 私聊**：用户与单个 Agent 一对一对话。
@@ -38,7 +40,7 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 - 展开群聊后只显示真实任务子对话。
 - 旧的 `workspace-agent-child` 和历史占位入口不再作为当前 UI。
 
-更详细的当前架构见 [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)，Spec Kit 契约化与 AG-UI 收敛路线见 [docs/SpecKit契约与AGUI事件落地路线.md](docs/SpecKit契约与AGUI事件落地路线.md)。
+更详细的当前架构见 [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)，分层和业内对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)，Spec Kit 契约化与 AG-UI 收敛路线见 [docs/SpecKit契约与AGUI事件落地路线.md](docs/SpecKit契约与AGUI事件落地路线.md)。
 
 ## 分层定位
 
@@ -172,13 +174,17 @@ Docker 镜像必须包含要运行的 Code Agent CLI。AgentHub 会把任务工�
 
 ## 重要文档
 
+- [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)
 - [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)
 - [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)
 - [docs/使用指南.md](docs/使用指南.md)
-- [docs/AgentHub-项目全景与多Agent协作重构指南.md](docs/AgentHub-项目全景与多Agent协作重构指南.md)
-- [docs/多Agent协作设计调研与优化方案.md](docs/多Agent协作设计调研与优化方案.md)
+- [docs/SpecKit契约与AGUI事件落地路线.md](docs/SpecKit契约与AGUI事件落地路线.md)
+- [docs/功能设计文档.md](docs/功能设计文档.md)
+- [docs/技术实现补充文档.md](docs/技术实现补充文档.md)
 - [docs/一些资料/minimax一个agent不够.md](docs/一些资料/minimax一个agent不够.md)
 - [docs/一些资料/讯飞agent_team.md](docs/一些资料/讯飞agent_team.md)
+
+`docs/archive/` 和 `docs/old/` 中的内容只作为历史参考，不作为当前工程事实。凡是与上面几份权威文档冲突的，以权威文档为准。
 
 ## 开发注意
 

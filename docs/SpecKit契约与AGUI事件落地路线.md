@@ -7,6 +7,8 @@
 1. 把 Spec Kit 的思路落到 `.agenthub/contracts` 的质量门和产物链。
 2. 把运行时事件完全收敛到 AG-UI，让任务看板、进度、子对话入口和产物卡都由事件驱动。
 
+当前工程事实总览见 `docs/当前状态与下一步路线.md`。本文只描述 Contract 与 AG-UI 两条路线，不替代整体架构文档。
+
 ## 1. 结论先行
 
 AgentHub 不应该把 Spec Kit、LangGraph、CrewAI、AutoGen 整套搬进来。我们只吸收它们成熟的分层思想：
@@ -169,4 +171,3 @@ OrchestratorRunEvent
 4. 补 AG-UI event replay 和前端 reducer 测试。
 5. 逐步收敛旧的 `task_board:*` 主动广播。
 6. 最后再补 UI：Contract 状态、产物链、Run trace、失败保留产物。
-

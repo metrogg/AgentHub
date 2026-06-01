@@ -611,8 +611,8 @@ async function probeToolDirectImpl(probe: ToolProbe) {
   const version = await runVersionProbe(probe.command)
   const configEnv = configEnvName(probe)
   const configured = await isDirectToolConfigured(probe, configEnv)
-  const installed = Boolean(version)
   const reachable = await isCommandReachable(probe.command)
+  const installed = Boolean(version || reachable)
   return {
     id: probe.id,
     command: probe.command,
@@ -748,7 +748,11 @@ async function getApiKeyAuthStatus() {
 async function runVersionProbe(command: string): Promise<string | null> {
   if (!isSafeCommand(command)) return null
 
-  for (const flag of ['--version', '-v', '-V']) {
+  // OpenCode 启动成本高，且 --version / -v 在不同发行版上经常带来噪音或超时。
+  // 这里不再对它做版本探测，直接交给“是否可达”判断。
+  if (command === 'opencode') return null
+
+  for (const flag of ['--version']) {
     const result = await tryVersionProbe(command, flag)
     if (result != null) return result
   }
