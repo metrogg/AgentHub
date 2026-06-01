@@ -1036,6 +1036,118 @@ describe('AgentHub smoke tests', () => {
     expect(prompt.metadata.agentDraft).toBeUndefined()
   })
 
+  test('confirmed member proposal can continue into a dynamic DAG run', async () => {
+    const { CORE_AGENT_EXPERT_PROFILES } = await import('../packages/shared/src/expert-profiles')
+    const productProfile = CORE_AGENT_EXPERT_PROFILES.find((profile) => profile.id === 'product-manager')
+    expect(productProfile).toBeTruthy()
+
+    const full = await json<{ workspace: { id: string } }>(
+      await postJson('/api/workspaces', {
+        name: 'Proposal continue workspace',
+        goal: 'Continue after adding members',
+      }),
+    )
+    const orchestrator = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Orchestrator',
+      role: '协调者',
+      roleType: 'orchestrator',
+    })
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
+    )
+    const goal = '规划一个课程学习产品的需求和交付路径'
+    await json<{ id: string }>(
+      await postJson(`/api/messages/${group.session.id}`, {
+        content: goal,
+        type: 'text',
+        metadata: { skipAgentReply: true },
+      }),
+    )
+    const [proposalCard] = await dbApi.db
+      .insert(dbApi.messages)
+      .values({
+        sessionId: group.session.id,
+        senderId: orchestrator.id,
+        senderType: 'agent',
+        type: 'text',
+        content: '当前群聊缺少产品拆解能力，建议补充产品经理。',
+        metadata: {
+          systemEvent: 'orchestrator_decision',
+          orchestratorDecision: 'clarify',
+          memberProposalStatus: 'pending',
+          memberProposalGoal: goal,
+          memberProposals: [
+            {
+              expertProfileId: productProfile!.id,
+              name: productProfile!.name,
+              role: productProfile!.role,
+              category: productProfile!.category,
+              runtimeType: productProfile!.runtimeType,
+              codeAgentType: productProfile!.codeAgentType ?? null,
+              color: productProfile!.color,
+              capabilityTags: productProfile!.capabilityTags,
+              reason: '需要产品目标拆解',
+              expectedContribution: '补齐需求分析和范围界定',
+            },
+          ],
+        },
+      })
+      .returning()
+
+    const confirmed = await json<{ agents: Array<{ id: string; roleType: string }>; message: any }>(
+      await postJson(
+        `/api/messages/${group.session.id}/member-proposals/${proposalCard!.id}/confirm`,
+        { profileIds: [productProfile!.id] },
+      ),
+    )
+    expect(confirmed.agents).toHaveLength(1)
+    expect(confirmed.message.metadata.memberProposalStatus).toBe('confirmed')
+
+    const continued = await json<{ started: boolean; message: any }>(
+      await postJson(
+        `/api/messages/${group.session.id}/member-proposals/${proposalCard!.id}/continue`,
+        {},
+      ),
+    )
+    expect(continued.started).toBe(true)
+    expect(continued.message.metadata.memberProposalContinueStatus).toBe('running')
+
+    let runs: any[] = []
+    let tasks: any[] = []
+    let proposalMessage: any
+    for (let i = 0; i < 120; i++) {
+      runs = await dbApi.db
+        .select()
+        .from(dbApi.orchestratorRuns)
+        .where(dbApi.eq(dbApi.orchestratorRuns.groupSessionId, group.session.id))
+      const run = runs[0]
+      if (run) {
+        tasks = await dbApi.db
+          .select()
+          .from(dbApi.workspaceTasks)
+          .where(dbApi.eq(dbApi.workspaceTasks.runId, run.id))
+        const [latestProposalMessage] = await dbApi.db
+          .select()
+          .from(dbApi.messages)
+          .where(dbApi.eq(dbApi.messages.id, proposalCard!.id))
+          .limit(1)
+        proposalMessage = latestProposalMessage
+        if (
+          tasks.length > 0 &&
+          latestProposalMessage?.metadata?.memberProposalContinueStatus === 'completed'
+        ) {
+          break
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+
+    expect(runs.length).toBeGreaterThan(0)
+    expect(tasks.length).toBeGreaterThan(0)
+    expect(proposalMessage?.metadata?.memberProposalContinueStatus).toBe('completed')
+    expect(proposalMessage?.metadata?.continuedRunId).toBe(runs[0]!.id)
+  })
+
   test('TaskGraph topological sort and cycle detection', async () => {
     const { TaskGraph } = await import('../apps/server/src/services/orchestrator/task-graph')
     const tasks = [

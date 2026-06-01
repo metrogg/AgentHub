@@ -2906,9 +2906,16 @@ function MemberProposalCard({ data }: { data?: Record<string, unknown> | null })
   const fetchSessions = useChatStore((state) => state.fetchSessions)
   const proposals = readMemberProposals(data?.memberProposals)
   const status = typeof data?.memberProposalStatus === 'string' ? data.memberProposalStatus : 'pending'
+  const continueStatus =
+    typeof data?.memberProposalContinueStatus === 'string'
+      ? data.memberProposalContinueStatus
+      : 'idle'
+  const continueError =
+    typeof data?.memberProposalContinueError === 'string' ? data.memberProposalContinueError : ''
   const messageId = typeof data?.messageId === 'string' ? data.messageId : ''
   const [selectedIds, setSelectedIds] = useState(() => proposals.map((proposal) => proposal.expertProfileId))
   const [busy, setBusy] = useState(false)
+  const [continueBusy, setContinueBusy] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -2942,6 +2949,21 @@ function MemberProposalCard({ data }: { data?: Record<string, unknown> | null })
       setError(friendlyErrorMessage(err, '加入 Agent 失败'))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function continuePlanning() {
+    if (!currentSessionId || !messageId || continueBusy || continueStatus === 'running') return
+    setContinueBusy(true)
+    setError('')
+    try {
+      await api.continueMemberProposals(currentSessionId, messageId)
+      await fetchSessions().catch(() => undefined)
+      await selectSession(currentSessionId).catch(() => undefined)
+    } catch (err) {
+      setError(friendlyErrorMessage(err, '重新规划失败'))
+    } finally {
+      setContinueBusy(false)
     }
   }
 
@@ -3039,6 +3061,44 @@ function MemberProposalCard({ data }: { data?: Record<string, unknown> | null })
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             加入选中 Agent
+          </button>
+        </div>
+      )}
+      {confirmed && (
+        <div className="flex flex-col gap-2 border-t border-neutral-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div
+            className={cn(
+              'min-h-5 text-xs leading-5',
+              continueStatus === 'failed' ? 'text-red-600' : 'text-neutral-500',
+            )}
+          >
+            {error ||
+              (continueStatus === 'running'
+                ? 'Orchestrator 正在重新规划并分发任务...'
+                : continueStatus === 'completed'
+                  ? '已接回任务计划，任务正在看板中执行。'
+                  : continueStatus === 'failed'
+                    ? continueError || '重新规划失败，可以重试。'
+                    : '补员完成后，可以直接接回当前目标继续分发。')}
+          </div>
+          <button
+            type="button"
+            disabled={
+              continueBusy || continueStatus === 'running' || continueStatus === 'completed'
+            }
+            onClick={() => void continuePlanning()}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-500 disabled:bg-neutral-300"
+          >
+            {continueBusy || continueStatus === 'running' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Rocket className="h-4 w-4" />
+            )}
+            {continueStatus === 'completed'
+              ? '已继续分发'
+              : continueStatus === 'running'
+                ? '规划中...'
+                : '让 Orchestrator 重新规划/继续分发'}
           </button>
         </div>
       )}

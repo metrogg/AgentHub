@@ -649,6 +649,189 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ agents: agentsToJoin, message, session: updatedSession ?? session })
     },
   )
+  .post('/:sessionId/member-proposals/:messageId/continue', async (c) => {
+    const user = c.get('user')
+    const sessionId = c.req.param('sessionId')
+    const messageId = c.req.param('messageId')
+
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (
+      !session ||
+      session.ownerId !== user.sub ||
+      session.type !== 'group' ||
+      !session.workspaceId
+    ) {
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
+    }
+
+    const [proposalMessage] = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.id, messageId))
+      .limit(1)
+    if (!proposalMessage || proposalMessage.sessionId !== sessionId) {
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '补员建议消息不存在')
+    }
+
+    const metadata = proposalMessage.metadata ?? {}
+    if (metadata.memberProposalStatus !== 'confirmed') {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请先确认补员，再继续分发')
+    }
+    if (metadata.memberProposalContinueStatus === 'running') {
+      return c.json({ message: proposalMessage, started: false })
+    }
+
+    const goal =
+      readString(metadata.memberProposalGoal) ??
+      (await findPreviousUserMessageContent(sessionId, proposalMessage.id))
+    if (!goal) {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '找不到需要继续分发的原始用户目标')
+    }
+
+    const runningMessage = await updateMemberProposalContinueState({
+      message: proposalMessage,
+      metadata,
+      content: `已加入建议成员。Orchestrator 正在基于新成员重新规划并分发任务。`,
+      status: 'running',
+      goal,
+    })
+
+    continueMemberProposalPlanning({
+      session,
+      ownerId: user.sub,
+      proposalMessageId: proposalMessage.id,
+      goal,
+    }).catch((err: any) =>
+      logger.error(
+        { err: err?.message, sessionId, messageId: proposalMessage.id },
+        'Member proposal continue failed',
+      ),
+    )
+
+    return c.json({ message: runningMessage, started: true })
+  })
+
+function readString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+async function findPreviousUserMessageContent(sessionId: string, beforeMessageId: string) {
+  const list = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.sessionId, sessionId))
+    .orderBy(asc(messages.createdAt))
+  const index = list.findIndex((message) => message.id === beforeMessageId)
+  if (index < 0) return null
+  const previousUser = [...list.slice(0, index)]
+    .reverse()
+    .find((message) => message.senderType === 'user' && message.content.trim())
+  return previousUser?.content.trim() || null
+}
+
+async function updateMemberProposalContinueState(params: {
+  message: typeof messages.$inferSelect
+  metadata: Record<string, unknown>
+  content: string
+  status: 'running' | 'completed' | 'failed'
+  goal: string
+  monitor?: DispatchMonitor
+  error?: string
+}) {
+  const { message, metadata, content, status, goal, monitor, error } = params
+  const nextMetadata: Record<string, unknown> = {
+    ...metadata,
+    memberProposalGoal: goal,
+    memberProposalContinueStatus: status,
+    memberProposalContinueUpdatedAt: new Date().toISOString(),
+  }
+  if (status === 'running') {
+    nextMetadata.memberProposalContinueRequestedAt = new Date().toISOString()
+    delete nextMetadata.memberProposalContinueError
+  }
+  if (monitor) {
+    nextMetadata.continuedRunId = monitor.dispatchId
+    nextMetadata.continuedTaskIds = monitor.taskIds
+  }
+  if (error) nextMetadata.memberProposalContinueError = error
+
+  const [updated] = await db
+    .update(messages)
+    .set({ content, metadata: nextMetadata })
+    .where(eq(messages.id, message.id))
+    .returning()
+  const result = updated ?? message
+  broadcastSessionEvent(message.sessionId, {
+    type: WsEvent.MessageCompleted,
+    payload: { sessionId: message.sessionId, message: result },
+  })
+  return result
+}
+
+async function continueMemberProposalPlanning(params: {
+  session: typeof sessions.$inferSelect
+  ownerId: string
+  proposalMessageId: string
+  goal: string
+}) {
+  const { session, ownerId, proposalMessageId, goal } = params
+  if (!session.workspaceId) return
+
+  const [proposalMessage] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, proposalMessageId))
+    .limit(1)
+  if (!proposalMessage) return
+
+  const metadata = proposalMessage.metadata ?? {}
+  try {
+    const agentRows = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.workspaceId, session.workspaceId))
+      .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+    const monitor = await generatePlanAndPushTaskBoard(
+      session.id,
+      goal,
+      agentRows,
+      session.workspaceId,
+      ownerId,
+      { propagateErrors: true },
+    )
+    if (!monitor) throw new Error('Orchestrator 规划没有启动')
+    const [latestMessage] = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.id, proposalMessageId))
+      .limit(1)
+    await updateMemberProposalContinueState({
+      message: latestMessage ?? proposalMessage,
+      metadata: (latestMessage?.metadata ?? metadata) as Record<string, unknown>,
+      content: '已加入建议成员。Orchestrator 已重新规划并开始分发任务。',
+      status: 'completed',
+      goal,
+      monitor,
+    })
+  } catch (err: any) {
+    const error = err?.message || 'Orchestrator 重新规划失败'
+    const [latestMessage] = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.id, proposalMessageId))
+      .limit(1)
+    await updateMemberProposalContinueState({
+      message: latestMessage ?? proposalMessage,
+      metadata: (latestMessage?.metadata ?? metadata) as Record<string, unknown>,
+      content: `已加入建议成员，但 Orchestrator 重新规划失败：${error}`,
+      status: 'failed',
+      goal,
+      error,
+    })
+    throw err
+  }
+}
+
 function expertProfileToAgentInsert(profile: AgentExpertProfile) {
   return {
     name: profile.name,
@@ -894,6 +1077,7 @@ async function routeGroupMessageThroughOrchestrator(
             ? {
                 memberProposalStatus: 'pending',
                 memberProposals,
+                memberProposalGoal: content,
               }
             : {}),
         },
@@ -1072,7 +1256,7 @@ async function startPlanRunInExistingGroup(params: {
   workspaceId: string
   ownerId: string
   planMessageId?: string | null
-}): Promise<void> {
+}): Promise<DispatchMonitor> {
   const { sessionId, plan, workspaceId, ownerId, planMessageId } = params
 
   const [sourceSession] = await db
@@ -1294,6 +1478,11 @@ async function startPlanRunInExistingGroup(params: {
         payload: { error: err?.message || '编排器引擎启动失败' },
       })
     })
+  return {
+    dispatchId: runId,
+    groupSessionId: sessionId,
+    taskIds: executionPlan.tasks.map((task) => task.id),
+  }
 }
 
 async function generatePlanAndPushTaskBoard(
@@ -1302,7 +1491,8 @@ async function generatePlanAndPushTaskBoard(
   agents: any[],
   workspaceId: string,
   ownerId: string,
-): Promise<void> {
+  options: { propagateErrors?: boolean } = {},
+): Promise<DispatchMonitor | null> {
   const orchestratorAgent =
     agents.find((a: any) => a.roleType === 'orchestrator') ??
     agents.find((a: any) => a.name.toLowerCase().includes('orchestrator'))
@@ -1330,7 +1520,7 @@ async function generatePlanAndPushTaskBoard(
         payload: { sessionId, message: blockedMessage },
       })
     }
-    return
+    return null
   }
 
   broadcastSessionEvent(sessionId, {
@@ -1345,7 +1535,7 @@ async function generatePlanAndPushTaskBoard(
 
   try {
     const plan = await buildDynamicOrchestratorPlan(content, agents, workspaceId)
-    await startPlanRunInExistingGroup({ sessionId, plan, workspaceId, ownerId })
+    return await startPlanRunInExistingGroup({ sessionId, plan, workspaceId, ownerId })
   } catch (err: any) {
     const message = err?.message || '模型没有返回可执行的任务计划'
     logger.warn({ err: message, sessionId }, 'Dynamic orchestrator plan failed')
@@ -1369,5 +1559,7 @@ async function generatePlanAndPushTaskBoard(
         payload: { sessionId, message: failedMessage },
       })
     }
+    if (options.propagateErrors) throw err
+    return null
   }
 }

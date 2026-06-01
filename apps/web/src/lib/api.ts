@@ -700,6 +700,11 @@ export interface MemberProposalConfirmResult {
   session: Session
 }
 
+export interface MemberProposalContinueResult {
+  message: Message
+  started: boolean
+}
+
 // TaskStatus imported from @agenthub/shared
 
 export interface WorkspaceTask {
@@ -1026,6 +1031,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ profileIds }),
     }),
+  continueMemberProposals: (sessionId: string, messageId: string) =>
+    request<MemberProposalContinueResult>(
+      `/messages/${sessionId}/member-proposals/${messageId}/continue`,
+      {
+        method: 'POST',
+      },
+    ),
   getWelcomeQuickPrompts: (seed: string, count = 10) =>
     request<WelcomeQuickPromptsResponse>('/welcome/quick-prompts', {
       method: 'POST',
