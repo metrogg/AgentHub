@@ -1143,7 +1143,6 @@ interface ChatState {
     sessionId: string
   } | null
   previewUrl: string | null
-  previewFileType: 'html' | 'markdown' | 'image' | null
   previewFileName: string | null
   selectedAgentTab: string | null
   agentTabs: AgentTab[]
@@ -1169,7 +1168,7 @@ interface ChatState {
       replyToMessageId?: string | null
       safetyMode?: string
     },
-  ) => Promise<{ groupSessionId?: string } | undefined>
+  ) => Promise<void>
   sendMessageToSession: (
     sessionId: string,
     content: string,
@@ -1178,7 +1177,7 @@ interface ChatState {
       replyToMessageId?: string | null
       safetyMode?: string
     },
-  ) => Promise<{ groupSessionId?: string } | undefined>
+  ) => Promise<void>
   editMessage: (messageId: string, content: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
   regenerateMessage: (messageId: string) => Promise<void>
@@ -1228,7 +1227,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionsBootstrapped: false,
   taskBoard: null,
   previewUrl: null,
-  previewFileType: null,
   previewFileName: null,
   selectedAgentTab: null,
   agentTabs: [],
@@ -1477,6 +1475,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   async clearMessages(sessionId) {
     await api.clearMessages(sessionId)
+    messageCache.delete(sessionId)
     if (get().currentSessionId === sessionId) {
       set({
         messages: [],
@@ -1490,7 +1489,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   async sendMessage(content, options) {
     const sessionId = get().currentSessionId
-    if (!sessionId) return undefined
+    if (!sessionId) return
     return get().sendMessageToSession(sessionId, content, options)
   },
 
@@ -1576,7 +1575,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }))
       throw error
     }
-    return undefined
   },
 
   async editMessage(messageId, content) {
@@ -1603,13 +1601,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingCodeAgentRun: null,
     })
     await api.cancelMessage(sessionId).catch(() => undefined)
-    const result = await api.withdrawMessage(sessionId, messageId, { rollback: true })
-    const removed = new Set(result.removedMessageIds)
-    updateCachedMessages(sessionId, (messages) =>
-      messages.filter((message) => !removed.has(message.id)),
-    )
-    set((s) => ({ messages: s.messages.filter((message) => !removed.has(message.id)) }))
-    return result.rollback
+    try {
+      const result = await api.withdrawMessage(sessionId, messageId, { rollback: true })
+      const removed = new Set(result.removedMessageIds)
+      updateCachedMessages(sessionId, (messages) =>
+        messages.filter((message) => !removed.has(message.id)),
+      )
+      set((s) => ({ messages: s.messages.filter((message) => !removed.has(message.id)) }))
+      return result.rollback
+    } catch {
+      cancelledSessions.delete(sessionId)
+      return null
+    }
   },
 
   async regenerateMessage(messageId) {
@@ -1623,13 +1626,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingMessage: null,
       streamingCodeAgentRun: null,
     })
-    const result = await api.regenerateMessage(sessionId, messageId)
-    updateCachedMessages(sessionId, (messages) =>
-      messages.filter((message) => message.id !== result.removedMessageId),
-    )
-    set((s) => ({
-      messages: s.messages.filter((message) => message.id !== result.removedMessageId),
-    }))
+    try {
+      const result = await api.regenerateMessage(sessionId, messageId)
+      updateCachedMessages(sessionId, (messages) =>
+        messages.filter((message) => message.id !== result.removedMessageId),
+      )
+      set((s) => ({
+        messages: s.messages.filter((message) => message.id !== result.removedMessageId),
+      }))
+    } catch {
+      set({ agentTyping: false })
+    }
   },
 
   async pinMessage(messageId) {
@@ -1692,8 +1699,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ replyingToMessageId: messageId, replyingToMessage: msg })
   },
 
-  setPreviewUrl(url, fileType = null, fileName = null) {
-    set({ previewUrl: url, previewFileType: fileType, previewFileName: fileName })
+  setPreviewUrl(url, _fileType = null, fileName = null) {
+    set({ previewUrl: url, previewFileName: fileName })
   },
 
   selectAgentTab(taskId: string | null) {

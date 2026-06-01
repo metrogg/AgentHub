@@ -169,7 +169,7 @@ export default function ModelManagementPage() {
 
   return (
     <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#f7f5f1] text-neutral-950">
-      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} />
+      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-5">
           <div className="flex min-w-0 items-center gap-3">
@@ -293,14 +293,48 @@ function ModelManagement({
 
   return (
     <div>
-      <div className="mb-6 flex w-full overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50">
+      <div className="mb-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Stat value={models.length} label="模型总数" />
         <Stat value={enabledCount} label="已启用" />
         <Stat value={configuredCount} label="API Key 已配置" />
         <Stat value={testedCount} label="已测试连接" />
       </div>
 
-      <div className="overflow-x-auto rounded-2xl border border-neutral-200 bg-white shadow-sm">
+      {/* Mobile: card layout */}
+      <div className="space-y-2 md:hidden">
+        {models.map((item) => (
+          <div key={item.id} className={cn('rounded-xl border border-neutral-200 bg-white p-3 shadow-sm', activeModelId === item.id && 'border-blue-300 bg-blue-50/30')}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <input type="radio" checked={activeModelId === item.id} onChange={() => setActiveModelId(item.id)} />
+                  <span className="truncate text-sm font-medium text-neutral-800">{item.name}</span>
+                </div>
+                <div className="mt-1 truncate font-mono text-xs text-neutral-500">{item.modelId}</div>
+              </div>
+              <SmallToggle checked={item.enabled} onChange={(enabled) => updateModel(item.id, { enabled })} />
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-neutral-500">{item.provider}</span>
+              {item.apiKeyEnv && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-600">{item.apiKeyEnv}</span>}
+              {item.tested && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-600">✓</span>}
+            </div>
+            <div className="mt-2 flex items-center gap-3 text-xs">
+              <button type="button" onClick={() => testModel(item)} disabled={testingId === item.id} className="text-sky-600">
+                {testingId === item.id ? t('测试中') : t('测试')}
+              </button>
+              <button type="button" onClick={() => openEdit(item)} className="text-sky-600">{t('编辑')}</button>
+              <button type="button" onClick={() => deleteModel(item.id)} className="text-red-500">{t('删除')}</button>
+              {testMessages[item.id] && (
+                <span className={cn('truncate', item.tested ? 'text-emerald-600' : 'text-red-500')}>{testMessages[item.id]}</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop: table layout */}
+      <div className="hidden overflow-x-auto rounded-2xl border border-neutral-200 bg-white shadow-sm md:block">
         <table className="w-full min-w-[980px] text-left text-sm">
           <thead className="border-b border-neutral-200 bg-neutral-50 text-xs font-medium text-neutral-500">
             <tr>
@@ -426,8 +460,8 @@ function ModelEditor({
   const patch = (value: Partial<ModelConfig>) => setDraft({ ...draft, ...value })
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-6 backdrop-blur-sm">
-      <div className="w-full max-w-4xl rounded-2xl border border-neutral-200 bg-white p-6 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-6 backdrop-blur-sm max-md:p-0">
+      <div className="w-full max-w-4xl rounded-2xl border border-neutral-200 bg-white p-6 shadow-2xl max-md:h-full max-md:max-w-none max-md:rounded-none max-md:overflow-y-auto">
         <div className="mb-6 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{editing ? t('编辑模型') : t('添加模型')}</h2>
           <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100">

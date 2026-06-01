@@ -456,10 +456,7 @@ function Welcome() {
       })
       await selectSession(session.id)
       navigate(`/chat/${session.id}`)
-      const result = await sendMessageToSession(session.id, trimmed)
-      if (result?.groupSessionId) {
-        navigate(`/chat/${result.groupSessionId}`)
-      }
+      await sendMessageToSession(session.id, trimmed)
       setMessage('')
     } finally {
       setSubmitting(false)

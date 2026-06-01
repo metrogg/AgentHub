@@ -61,10 +61,7 @@ import { useIsMobile } from '../../lib/useIsMobile'
 
 type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
-function activeTabFromPath(
-  pathname: string,
-  _activeSession: Session | undefined,
-): SidebarTab {
+function activeTabFromPath(pathname: string): SidebarTab {
   if (pathname === '/agent-config') return 'agents'
   if (pathname === '/profile' || pathname === '/settings') return 'me'
   if (
@@ -152,7 +149,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const activeSession =
     sessions.find((session) => session.id === sessionId) ??
     (currentSession && currentSession.id === sessionId ? currentSession : undefined)
-  const routeTab = activeTabFromPath(location.pathname, activeSession)
+  const routeTab = activeTabFromPath(location.pathname)
   const activeTab = tabOverride ?? routeTab
   const isAgentConfigRoute = location.pathname === '/agent-config'
   const activeAgentConfigId = new URLSearchParams(location.search).get('agentId')
