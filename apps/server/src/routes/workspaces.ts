@@ -56,6 +56,7 @@ const createAgentSchema = z.object({
   runtimeType: z.enum(['llm', 'code-agent']).default('code-agent'),
   codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
   capabilityTags: z.array(z.string().max(40)).max(12).default([]),
+  skillIds: z.array(z.string().max(120)).max(40).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30).default([]),
   sandboxPolicy: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('workspace-write'),
   contextPolicy: z.enum(['recent-only', 'pinned-recent', 'workspace-aware']).default('workspace-aware'),

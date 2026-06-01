@@ -40,6 +40,10 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     message.metadata && 'delivery_report' in (message.metadata as Record<string, unknown>)
       ? (message.metadata as Record<string, unknown>).delivery_report
       : null
+  const memberProposal =
+    message.metadata && 'memberProposals' in (message.metadata as Record<string, unknown>)
+      ? { ...(message.metadata as Record<string, unknown>), messageId: message.id, content: message.content }
+      : null
   const agentName =
     message.senderType === 'agent' &&
     message.metadata &&
@@ -68,6 +72,9 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const deliveryReportPart = deliveryReport
     ? [{ type: 'data' as const, name: 'delivery_report', data: deliveryReport }]
     : []
+  const memberProposalPart = memberProposal
+    ? [{ type: 'data' as const, name: 'member_proposal_card', data: memberProposal }]
+    : []
 
   return {
     id: message.id,
@@ -81,6 +88,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
                 ...avatarPart,
                 { type: 'text', text },
                 ...attachmentPart,
+                ...memberProposalPart,
                 { type: 'data', name: 'code_agent_run', data: codeAgentRun },
                 ...artifactPart,
                 ...deliveryReportPart,
@@ -89,6 +97,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
                 ...avatarPart,
                 { type: 'text', text },
                 ...attachmentPart,
+                ...memberProposalPart,
                 ...artifactPart,
                 ...deliveryReportPart,
               ],

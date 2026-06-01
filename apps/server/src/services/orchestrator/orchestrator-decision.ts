@@ -3,13 +3,28 @@ import { streamReply } from '../llm'
 import { runtimeRegistry, type AgentProfile } from '../runtime'
 import { extractJsonObject, parseJsonObject } from './planner'
 import type { PlanningAgentInput } from './plan-generator'
+import { CORE_AGENT_EXPERT_PROFILES } from '@agenthub/shared'
 
 export type OrchestratorDecisionAction = 'reply' | 'clarify' | 'plan'
+
+export interface OrchestratorMemberProposal {
+  expertProfileId: string
+  name: string
+  role: string
+  category: string
+  runtimeType: 'llm' | 'code-agent'
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  color?: string
+  capabilityTags: string[]
+  reason: string
+  expectedContribution: string
+}
 
 export interface OrchestratorDecision {
   action: OrchestratorDecisionAction
   message?: string
   reason?: string
+  memberProposals?: OrchestratorMemberProposal[]
 }
 
 export const __orchestratorDecisionTestHooks = {
@@ -36,10 +51,12 @@ const DECISION_SYSTEM = [
   '重要原则：',
   '- Orchestrator 只负责判断、协调、拆解和汇总，不亲自执行代码或产出文件。',
   '- 只要用户是在要求“做出某个东西”或“完成一项工作”，优先 action=plan。',
+  '- 如果当前成员能力明显不足，但可用核心模板里有合适的 Agent，请 action=clarify，并在 memberProposals 里给出 1-3 个建议补充的 Agent；不要静默创建或假装已有成员。',
+  '- memberProposals[].expertProfileId 必须来自“可建议补充的核心 Agent 模板”，不能编造。',
   '- 不要因为用户没有写明技术栈、文件类型或“游戏/网页”等关键词就回避计划；你要理解自然语言意图。',
   '- 如果只是缺少可选细节，但仍可合理默认，请 action=plan，不要过度追问。',
   '',
-  '输出格式：{"action":"reply|clarify|plan","message":"给用户看的简短中文内容","reason":"内部判断理由"}',
+  '输出格式：{"action":"reply|clarify|plan","message":"给用户看的简短中文内容","reason":"内部判断理由","memberProposals":[{"expertProfileId":"模板 id","reason":"为什么需要","expectedContribution":"加入后负责什么"}]}',
 ].join('\n')
 
 export async function decideOrchestratorAction(input: DecideInput): Promise<OrchestratorDecision> {
@@ -56,12 +73,28 @@ export async function decideOrchestratorAction(input: DecideInput): Promise<Orch
         agent.roleType ? `roleType=${agent.roleType}` : '',
         agent.role ? `role=${agent.role}` : '',
         agent.runtimeType ? `runtime=${agent.runtimeType}` : '',
+        agent.capabilityTags?.length ? `capabilities=${agent.capabilityTags.join(',')}` : '',
+        readExpertProfileId(agent.roleProfile) ? `expertProfileId=${readExpertProfileId(agent.roleProfile)}` : '',
       ]
         .filter(Boolean)
         .join('；'),
     ),
     '',
     `可执行成员数量：${workers.length}`,
+    '',
+    '可建议补充的核心 Agent 模板（仅用于向用户申请补员，不能静默创建）：',
+    ...availableExpertProfiles(input.agents).map((profile) =>
+      [
+        `- ${profile.id}`,
+        `name=${profile.name}`,
+        `role=${profile.role}`,
+        `category=${profile.category}`,
+        profile.capabilityTags.length ? `capabilities=${profile.capabilityTags.join(',')}` : '',
+        profile.acceptsTaskTypes.length ? `accepts=${profile.acceptsTaskTypes.join(',')}` : '',
+      ]
+        .filter(Boolean)
+        .join('；'),
+    ),
   ]
     .filter(Boolean)
     .join('\n')
@@ -80,18 +113,11 @@ export async function decideOrchestratorAction(input: DecideInput): Promise<Orch
         orchestratorName: orchestrator.name,
         outputPreview: formatOutputPreview(output),
       },
-      'Code-agent orchestrator decision returned non-JSON output; falling back to control LLM',
+      'Code-agent orchestrator decision returned non-JSON output',
     )
-    const fallbackOutput = await generateDecisionWithLlm(prompt, orchestrator?.modelId ?? undefined)
-    const fallbackJsonText = extractJsonObject(fallbackOutput)
-    if (fallbackJsonText) {
-      output = fallbackOutput
-      jsonText = fallbackJsonText
-    }
   }
+  const candidateProposals = availableExpertProfiles(input.agents)
   if (!jsonText) {
-    const heuristic = buildHeuristicDecision(input.content, workers.length)
-    if (heuristic) return heuristic
     throw new Error(`Orchestrator 没有返回可解析的路由判断。原始输出片段：${formatOutputPreview(output)}`)
   }
 
@@ -103,14 +129,16 @@ export async function decideOrchestratorAction(input: DecideInput): Promise<Orch
   if (action === 'plan' && workers.length === 0) {
     return {
       action: 'clarify',
-      message: '当前群聊只有 Orchestrator，还没有可执行任务的 Agent。请先添加 Researcher、Designer、Builder 或 QA Reviewer 等成员。',
+      message: '当前群聊只有 Orchestrator，还没有可执行任务的 Agent。请先添加合适的执行成员后再分发任务。',
       reason: 'no worker agents',
+      memberProposals: normalizeMemberProposals(parsed.memberProposals, candidateProposals),
     }
   }
   return {
     action,
     message: normalizeMessage(parsed.message),
     reason: normalizeMessage(parsed.reason),
+    memberProposals: normalizeMemberProposals(parsed.memberProposals, candidateProposals),
   }
 }
 
@@ -216,42 +244,79 @@ function normalizeMessage(value: unknown) {
   return typeof value === 'string' ? value.trim().slice(0, 1200) : ''
 }
 
+function availableExpertProfiles(agents: PlanningAgentInput[]) {
+  const existingProfileIds = new Set(
+    agents
+      .map((agent) => readExpertProfileId(agent.roleProfile))
+      .filter((id): id is string => Boolean(id)),
+  )
+  const existingNames = new Set(agents.map((agent) => normalizeText(agent.name)))
+  return CORE_AGENT_EXPERT_PROFILES
+    .filter((profile) => !existingProfileIds.has(profile.id) && !existingNames.has(normalizeText(profile.name)))
+    .map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      role: profile.role,
+      category: profile.category,
+      runtimeType: profile.runtimeType,
+      codeAgentType: profile.codeAgentType ?? null,
+      color: profile.color,
+      capabilityTags: profile.capabilityTags.slice(0, 8),
+      acceptsTaskTypes: profile.acceptsTaskTypes.slice(0, 6),
+    }))
+}
+
+function normalizeMemberProposals(
+  value: unknown,
+  candidateProposals: ReturnType<typeof availableExpertProfiles>,
+): OrchestratorMemberProposal[] {
+  if (!Array.isArray(value)) return []
+  const candidates = new Map(candidateProposals.map((profile) => [profile.id, profile]))
+  const seen = new Set<string>()
+  const proposals: OrchestratorMemberProposal[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const raw = item as {
+      expertProfileId?: unknown
+      reason?: unknown
+      expectedContribution?: unknown
+    }
+    if (typeof raw.expertProfileId !== 'string') continue
+    const profile = candidates.get(raw.expertProfileId)
+    if (!profile || seen.has(profile.id)) continue
+    seen.add(profile.id)
+    proposals.push({
+      expertProfileId: profile.id,
+      name: profile.name,
+      role: profile.role,
+      category: profile.category,
+      runtimeType: profile.runtimeType,
+      codeAgentType: profile.codeAgentType,
+      color: profile.color,
+      capabilityTags: profile.capabilityTags,
+      reason: normalizeMessage(raw.reason),
+      expectedContribution: normalizeMessage(raw.expectedContribution),
+    })
+    if (proposals.length >= 3) break
+  }
+  return proposals
+}
+
+function readExpertProfileId(roleProfile: unknown) {
+  if (!roleProfile || typeof roleProfile !== 'object') return ''
+  const value = (roleProfile as { expertProfileId?: unknown }).expertProfileId
+  return typeof value === 'string' ? value : ''
+}
+
+function normalizeText(value?: string | null) {
+  return (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
 function buildHeuristicDecision(
   content: string,
   workerCount: number,
 ): OrchestratorDecision | null {
-  const text = content.trim()
-  if (!text) {
-    return {
-      action: 'reply',
-      message: '我在。你可以直接描述要完成的目标，我会判断是否需要分派给团队成员。',
-      reason: 'empty_or_short_message_fallback',
-    }
-  }
-
-  const looksLikeWork =
-    /创建|开发|实现|设计|调研|分析|输出|生成|修改|修复|写|做|页面|网站|应用|游戏|文档|报告|PDF|PPT|HTML|代码|部署|测试|验证|review|build|create|implement|fix|generate|analyze|design/i.test(
-      text,
-    )
-  if (looksLikeWork) {
-    if (workerCount === 0) {
-      return {
-        action: 'clarify',
-        message:
-          '当前群聊只有 Orchestrator，还没有可执行任务的 Agent。请先添加 Researcher、Designer、Builder 或 QA Reviewer 等成员。',
-        reason: 'heuristic_no_worker_agents',
-      }
-    }
-    return {
-      action: 'plan',
-      message: '我会先生成协作计划，并按任务分派给合适的成员执行。',
-      reason: 'heuristic_artifact_or_work_request',
-    }
-  }
-
-  return {
-    action: 'reply',
-    message: '收到。这个问题看起来不需要分派团队执行，我先直接回复。',
-    reason: 'heuristic_simple_chat',
-  }
+  void content
+  void workerCount
+  return null
 }

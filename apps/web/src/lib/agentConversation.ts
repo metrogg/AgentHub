@@ -4,6 +4,7 @@ import { loadAgentLibraryState, toAgentConfigInput, type SavedAgentConfig } from
 export interface StartAgentConversationOptions {
   agents: SavedAgentConfig[]
   title?: string
+  goal?: string
   workspaceId?: string | null
   projectPath?: string | null
 }
@@ -11,6 +12,7 @@ export interface StartAgentConversationOptions {
 export async function startAgentConversation({
   agents,
   title,
+  goal,
   workspaceId,
   projectPath,
 }: StartAgentConversationOptions): Promise<Session> {
@@ -25,6 +27,12 @@ export async function startAgentConversation({
     const full = await api.getWorkspace(workspaceId)
     workspace = full.workspace
     workspaceAgentsList = full.agents
+    const nextGoal = goal?.trim()
+    if (nextGoal && workspace.goal !== nextGoal) {
+      const updated = await api.updateWorkspace(workspace.id, { goal: nextGoal })
+      workspace = updated.workspace
+      workspaceAgentsList = updated.agents
+    }
   } else if (dedicatedSingleAgent) {
     const agent = agents[0]!
     const workspaceTitle = singleAgentWorkspaceName(agent)
@@ -50,9 +58,10 @@ export async function startAgentConversation({
     }
   } else {
     const workspaceTitle = (title?.trim() || defaultConversationTitle(agents)).slice(0, 80)
+    const workspaceGoal = goal?.trim() || `邀请 ${agents.length} 个 Agent 组成群聊`
     const full = await createConversationWorkspace(
       workspaceTitle,
-      `邀请 ${agents.length} 个 Agent 组成群聊`,
+      workspaceGoal,
       projectPath,
     )
     workspace = full.workspace

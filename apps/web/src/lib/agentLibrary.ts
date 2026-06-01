@@ -225,6 +225,7 @@ export function createSavedAgent(
     runtimeType,
     codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
     capabilityTags: input.capabilityTags ?? [],
+    skillIds: input.skillIds ?? [],
     toolPermissions: input.toolPermissions ?? [],
     sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
     contextPolicy: input.contextPolicy ?? 'workspace-aware',
@@ -250,6 +251,7 @@ export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
     runtimeType,
     codeAgentType: runtimeType === 'code-agent' ? (agent.codeAgentType ?? defaultCodeAgentTypeFor(agent)) : null,
     capabilityTags: [...(agent.capabilityTags ?? [])],
+    skillIds: [...(agent.skillIds ?? [])],
     toolPermissions: [...(agent.toolPermissions ?? [])],
     sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
     contextPolicy: agent.contextPolicy ?? 'workspace-aware',
@@ -303,6 +305,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
     runtimeType,
     codeAgentType: runtimeType === 'code-agent' ? (input.codeAgentType ?? defaultCodeAgentTypeFor(input)) : null,
     capabilityTags: Array.isArray(input.capabilityTags) ? input.capabilityTags : [],
+    skillIds: Array.isArray(input.skillIds) ? input.skillIds : [],
     toolPermissions:
       Array.isArray(input.toolPermissions) && input.toolPermissions.length
         ? input.toolPermissions

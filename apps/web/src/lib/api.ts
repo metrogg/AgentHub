@@ -680,6 +680,25 @@ export interface AgentDraftConfirmResult {
   message: Message
 }
 
+export interface MemberProposal {
+  expertProfileId: string
+  name: string
+  role: string
+  category: string
+  runtimeType: WorkspaceAgent['runtimeType']
+  codeAgentType?: WorkspaceAgent['codeAgentType']
+  color?: string
+  capabilityTags?: string[]
+  reason?: string
+  expectedContribution?: string
+}
+
+export interface MemberProposalConfirmResult {
+  agents: WorkspaceAgent[]
+  message: Message
+  session: Session
+}
+
 // TaskStatus imported from @agenthub/shared
 
 export interface WorkspaceTask {
@@ -1000,6 +1019,11 @@ export const api = {
     request<AgentDraftConfirmResult>(`/messages/${sessionId}/agent-draft/${messageId}/confirm`, {
       method: 'POST',
       body: JSON.stringify({ draft }),
+    }),
+  confirmMemberProposals: (sessionId: string, messageId: string, profileIds: string[]) =>
+    request<MemberProposalConfirmResult>(`/messages/${sessionId}/member-proposals/${messageId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ profileIds }),
     }),
   getWelcomeQuickPrompts: (seed: string, count = 10) =>
     request<WelcomeQuickPromptsResponse>('/welcome/quick-prompts', {

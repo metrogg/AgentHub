@@ -87,13 +87,12 @@ describe('orchestrator routing', () => {
     expect(selection.score).toBe(0)
   })
 
-  test('falls back to a plan decision for artifact-producing requests when code-agent output is not parseable', () => {
+  test('does not use keyword heuristics when code-agent output is not parseable', () => {
     const decision = __orchestratorDecisionTestHooks.buildHeuristicDecision(
       '帮我生成一个中文 HTML 页面，展示这些项目数据',
       3,
     )
 
-    expect(decision?.action).toBe('plan')
-    expect(decision?.reason).toBe('heuristic_artifact_or_work_request')
+    expect(decision).toBeNull()
   })
 })

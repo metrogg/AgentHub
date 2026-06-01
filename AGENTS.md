@@ -1,6 +1,6 @@
 # AgentHub
 
-本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前状态与下一步路线.md`、`docs/当前多Agent协作架构.md`、`docs/场景角色团队协作调研.md`、`docs/角色提示词与动态组队设计.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
+本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前状态与下一步路线.md`、`docs/当前多Agent协作架构.md`、`docs/场景角色团队协作调研.md`、`docs/角色提示词与动态组队设计.md`、`docs/专家库与开源角色Skill生态调研.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
 更完整的分层设计和业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
 
 ## 当前目标
@@ -18,6 +18,8 @@ AgentHub 是一个 IM 式多 Agent 协作平台，也是字节跳动 AI 全栈�
 角色预设可以作为“创建 Agent 时的参考库”存在，但不能作为默认团队、默认关系或执行模板自动驱动运行。新工作区默认不自动注入 Orchestrator/Researcher/Designer/Builder/QA，也不支持 `classic` 团队模板或 `create-from-template` 入口。
 
 角色设计要按 `docs/角色提示词与动态组队设计.md` 的组合模型推进：公共协作协议 + 角色背景 + 专属 Skill 包 + 任务上下文 + 输出契约。群聊目标可以用于智能推荐成员，但不能变成固定模板；已有群聊能力不足时，Orchestrator 可以提出补员申请，默认必须用户确认，不能静默拉新 Agent。
+
+预装 Agent 模板和轻量专家团建议见 `docs/专家库与开源角色Skill生态调研.md`。可以借鉴 Claude Code subagents、BMAD、SuperClaude、awesome-cursor-skills、MCP server 生态等开源资产，但必须经过许可证、安全边界、质量和 AgentHub schema 适配；近期不做“我的专家”或完整专家市场，不要直接复制未审计 prompt 或默认启用第三方 MCP。
 
 ## 分层架构判断
 
@@ -66,6 +68,7 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 用户在群聊发消息
   -> messages.ts 判断意图
   -> 简单聊天：Orchestrator 直接回复
+  -> 能力不足：Orchestrator 返回结构化 memberProposals，主群聊展示补员卡，用户确认后才创建/加入真实 Agent
   -> 复杂任务：生成动态计划和任务看板
   -> 用户确认/分发
   -> OrchestratorEngine.dispatch()
@@ -187,6 +190,8 @@ bun test tests/orchestrator-routing.test.ts
 - 新增路由使用 `AppError`，不要继续新增裸 `HTTPException`。
 - 日志使用 `apps/server/src/lib/logger.ts`，不要新增 `console.log`。
 - 对复杂目标的意图判断、分工、追加任务和最终内容生成必须来自 Orchestrator/Planner/Synthesizer 的模型输出；系统代码只做 schema 校验、权限校验、状态记录和透明错误呈现。
+- Orchestrator 决策输出解析失败时要透明报错或提示检查模型配置，不允许用关键词启发式兜底成 `plan/reply/clarify`。
+- 运行中补员只能来自 Orchestrator 明确输出的 `memberProposals`；前端只展示确认卡，后端只按用户确认创建/加入真实 workspace agent。
 - 不要恢复静态兜底提示词或固定模板计划。快速提示、任务拆解、协作计划都应由模型动态生成；失败时可以提示用户重试或检查模型配置。
 - 不要恢复静态 Agent 路由、关键词分工、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。系统只能校验 Orchestrator/Planner 的显式选择，不能偷偷改派或追加任务。
 - 不要恢复内置 `.agenthub/specs/*.spec.yml` 场景模板，也不要让 `ensureHarnessPresets()` 把 specs 自动复制到新工作区。Spec 后续只可作为用户显式创建的协作契约。
