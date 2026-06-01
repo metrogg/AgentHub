@@ -144,6 +144,85 @@ function isAnthropicProvider(provider: string, baseUrl?: string): boolean {
   return false
 }
 
+function endpointLooksAnthropic(baseUrl?: string): boolean {
+  if (!baseUrl) return false
+  try {
+    const url = new URL(baseUrl)
+    if (url.hostname.includes('anthropic.com')) return true
+    return /\/anthropic\/?$/.test(url.pathname)
+  } catch {
+    return false
+  }
+}
+
+function inferProviderFromEndpoint(baseUrl?: string): string {
+  if (!baseUrl) return 'openai-compatible'
+  try {
+    const url = new URL(baseUrl)
+    const host = url.hostname.toLowerCase()
+    if (host.includes('anthropic.com')) return 'anthropic'
+    if (/\/anthropic\/?$/i.test(url.pathname)) return 'anthropic'
+    if (host.includes('openai.com')) return 'openai'
+    if (host.includes('deepseek.com')) return 'deepseek'
+    if (host.includes('xiaomimimo.com')) return 'mimo'
+    if (host.includes('bigmodel.cn')) return 'zhipu'
+    if (host.includes('moonshot')) return 'moonshot'
+    if (host.includes('alibabacloud') || host.includes('aliyuncs') || host.includes('qwen')) return 'dashscope'
+  } catch {
+    // Ignore malformed endpoint and use a generic OpenAI-compatible provider.
+  }
+  return 'openai-compatible'
+}
+
+function resolveCatalogRuntime(item: ModelCatalogItem): ProviderCandidate {
+  const rawProvider = normalizeProvider(item.provider)
+  const apiEndpoint = clean(item.apiEndpoint)
+  const anthropicEndpoint = clean(item.anthropicEndpoint)
+  const declaredAnthropic = rawProvider === 'anthropic' || rawProvider === 'claude'
+  const useAnthropicRuntime =
+    declaredAnthropic && (!apiEndpoint || endpointLooksAnthropic(apiEndpoint))
+  const baseUrl = useAnthropicRuntime
+    ? anthropicEndpoint ?? apiEndpoint
+    : apiEndpoint ?? anthropicEndpoint
+  const provider = useAnthropicRuntime
+    ? rawProvider
+    : declaredAnthropic
+      ? inferProviderFromEndpoint(apiEndpoint)
+      : rawProvider
+  const key = configuredApiKey(item)
+
+  return {
+    apiKey: key.value,
+    apiKeySource: key.source,
+    baseUrl,
+    model: item.modelId,
+    provider,
+  }
+}
+
+function resolveDirectRuntime(input: TestConnectionInput): ProviderCandidate {
+  const rawProvider = normalizeProvider(input.provider)
+  const apiEndpoint = clean(input.apiEndpoint)
+  const anthropicEndpoint = clean(input.anthropicEndpoint)
+  const declaredAnthropic = rawProvider === 'anthropic' || rawProvider === 'claude'
+  const useAnthropicRuntime =
+    declaredAnthropic && (!apiEndpoint || endpointLooksAnthropic(apiEndpoint))
+  const baseUrl = useAnthropicRuntime
+    ? anthropicEndpoint ?? apiEndpoint
+    : apiEndpoint ?? anthropicEndpoint
+  const provider = useAnthropicRuntime
+    ? rawProvider
+    : declaredAnthropic
+      ? inferProviderFromEndpoint(apiEndpoint)
+      : rawProvider
+
+  return {
+    baseUrl,
+    model: clean(input.modelId),
+    provider,
+  }
+}
+
 function defaultBaseUrl(provider: string): string {
   return isAnthropicProvider(provider) ? env.ANTHROPIC_BASE_URL : env.OPENAI_BASE_URL
 }
@@ -223,16 +302,7 @@ function pickSettingsCandidate(map: Record<string, string>, selectedModelId?: st
   const item = selected ?? firstConfigured
 
   if (item?.modelId) {
-    const key = configuredApiKey(item)
-    return {
-      apiKey: key.value,
-      apiKeySource: key.source,
-      baseUrl: item.provider === 'anthropic'
-        ? clean(item.anthropicEndpoint) ?? clean(item.apiEndpoint)
-        : clean(item.apiEndpoint) ?? clean(item.anthropicEndpoint),
-      model: item.modelId,
-      provider: item.provider,
-    }
+    return resolveCatalogRuntime(item)
   }
 
   return null
@@ -269,11 +339,8 @@ export async function resolveModelApiKey(modelId?: string | null): Promise<{ api
       ? catalog.find((entry) => (entry.id === targetId || entry.modelId === targetId) && entry.enabled !== false)
       : catalog.find((entry) => entry.enabled !== false && clean(entry.modelId))
     if (item?.modelId) {
-      const key = configuredApiKey(item)
-      const baseUrl = item.provider === 'anthropic'
-        ? clean(item.anthropicEndpoint) ?? clean(item.apiEndpoint)
-        : clean(item.apiEndpoint) ?? clean(item.anthropicEndpoint)
-      return { apiKey: key.value, provider: item.provider, baseUrl }
+      const candidate = resolveCatalogRuntime(item)
+      return { apiKey: candidate.apiKey, provider: candidate.provider, baseUrl: candidate.baseUrl }
     }
   } catch {
     // fall through to LLM runtime config fallback
@@ -364,14 +431,13 @@ export function createLlmClient(config: LlmRuntimeConfig) {
 }
 
 export async function testLlmConnection(input: TestConnectionInput) {
-  const provider = normalizeProvider(input.provider)
-  const endpoint = isAnthropicProvider(provider)
-    ? clean(input.anthropicEndpoint) ?? clean(input.apiEndpoint)
-    : clean(input.apiEndpoint)
+  const runtime = resolveDirectRuntime(input)
+  const provider = normalizeProvider(runtime.provider)
+  const endpoint = clean(runtime.baseUrl)
   const directKey = clean(input.apiKey)
   const envKey = readEnv(input.apiKeyEnv)
   const apiKey = directKey ?? envKey
-  const model = clean(input.modelId)
+  const model = clean(runtime.model)
 
   if (!endpoint) {
     return { ok: false, message: 'API endpoint is required.' }

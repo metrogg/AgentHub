@@ -292,6 +292,39 @@ describe('AgentHub smoke tests', () => {
     expect(body.version).toBe('0.1.0')
   })
 
+  test('LLM runtime uses OpenAI-compatible endpoint for ccswitch models with an auxiliary Anthropic endpoint', async () => {
+    for (const key of ['MODEL_CATALOG', 'ACTIVE_MODEL_ID']) {
+      await dbApi.db.delete(dbApi.settings).where(dbApi.eq(dbApi.settings.key, key))
+    }
+    await dbApi.db.insert(dbApi.settings).values([
+      {
+        key: 'MODEL_CATALOG',
+        value: JSON.stringify([
+          {
+            id: 'ccswitch-Xiaomi MiMo',
+            enabled: true,
+            name: 'Xiaomi MiMo',
+            provider: 'anthropic',
+            modelId: 'mimo-v2.5-pro',
+            apiEndpoint: 'https://token-plan-cn.xiaomimimo.com/v1',
+            anthropicEndpoint: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+            apiKey: 'test-key',
+          },
+        ]),
+      },
+      {
+        key: 'ACTIVE_MODEL_ID',
+        value: 'ccswitch-Xiaomi MiMo',
+      },
+    ])
+
+    const { resolveLlmRuntimeConfig } = await import('../apps/server/src/services/llm-client')
+    const config = await resolveLlmRuntimeConfig()
+    expect(config.provider).toBe('mimo')
+    expect(config.baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/v1')
+    expect(config.model).toBe('mimo-v2.5-pro')
+  })
+
   test('database enforces collaboration foreign keys', () => {
     const sqlite = new Database(dbApi.databasePath ?? process.env.DATABASE_URL!)
     sqlite.exec('PRAGMA foreign_keys = ON;')

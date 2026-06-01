@@ -553,6 +553,7 @@ function inferProvider(endpoint: string): string {
     if (/\/anthropic\/?$/.test(url.pathname)) return 'anthropic'
     if (url.hostname.includes('openai.com')) return 'openai'
     if (url.hostname.includes('deepseek.com')) return 'deepseek'
+    if (url.hostname.includes('xiaomimimo.com')) return 'mimo'
     if (url.hostname.includes('bigmodel.cn')) return 'zhipu'
     if (url.hostname.includes('moonshot')) return 'moonshot'
     if (url.hostname.includes('alibabacloud') || url.hostname.includes('aliyuncs') || url.hostname.includes('qwen')) return 'dashscope'
@@ -563,8 +564,9 @@ function inferProvider(endpoint: string): string {
 }
 
 function modelProviderFromEndpoints(apiEndpoint: string, anthropicEndpoint?: string) {
-  if (anthropicEndpoint?.trim()) return 'anthropic'
-  return inferProvider(apiEndpoint)
+  const provider = inferProvider(apiEndpoint)
+  if (provider !== 'openai-compatible') return provider
+  return anthropicEndpoint?.trim() && !apiEndpoint.trim() ? 'anthropic' : provider
 }
 
 function CcswitchImportDialog({
