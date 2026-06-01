@@ -94,12 +94,30 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
       buildAgUiTaskStatusEvent(taskStatusPayload(event, 'done')),
     ]
   }
+  if (event.type === 'task.progress')
+    return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'running'))]
   if (event.type === 'task.failed')
     return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'failed'))]
   if (event.type === 'task.cancelled')
     return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'cancelled'))]
   if (event.type === 'task.queued')
     return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'pending'))]
+  if (event.type === 'task.clarification_needed') {
+    return [
+      {
+        name: 'agenthub.task.clarification_needed',
+        runId: event.runId,
+        threadId: event.groupSessionId,
+        timestamp: eventTimestamp(event.timestampMs),
+        type: EventType.CUSTOM,
+        value: {
+          ...payload,
+          agentId: event.agentId ?? stringValue(payload.agentId),
+          taskId: event.taskId ?? stringValue(payload.taskId) ?? 'task',
+        },
+      },
+    ]
+  }
   if (event.type === 'artifact.created') {
     return [
       buildAgUiArtifactEvent({

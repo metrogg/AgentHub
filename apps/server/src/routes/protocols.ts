@@ -52,6 +52,7 @@ export const protocolRoutes = new Hono<{ Variables: AuthVariables }>()
         'CUSTOM:agenthub.task.status',
         'CUSTOM:agenthub.artifact.created',
         'CUSTOM:agenthub.blackboard.written',
+        'CUSTOM:agenthub.task.clarification_needed',
         'CUSTOM:agenthub.run.status',
       ],
       sampleTaskStatusEvent: buildAgUiTaskStatusEvent({

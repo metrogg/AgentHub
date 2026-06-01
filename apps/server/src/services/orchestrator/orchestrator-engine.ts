@@ -232,12 +232,13 @@ export class OrchestratorEngine {
         .limit(1)
       if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
         logger.info({ runId }, 'Orchestrator run cancelled before synthesis (resumed)')
-        broadcastSessionEvent(run.groupSessionId, {
-          type: 'task_board:run_completed',
-          payload: {
-            runId,
-            status: OrchestratorRunStatus.Cancelled,
-          },
+        await emitRunEvent({
+          runId,
+          workspaceId: run.workspaceId,
+          groupSessionId: run.groupSessionId,
+          type: 'run.cancelled',
+          severity: 'warning',
+          payload: { status: OrchestratorRunStatus.Cancelled },
         })
         return
       }
@@ -249,13 +250,6 @@ export class OrchestratorEngine {
         .update(orchestratorRuns)
         .set({ status: OrchestratorRunStatus.Failed })
         .where(eq(orchestratorRuns.id, runId))
-      broadcastSessionEvent(run.groupSessionId, {
-        type: 'task_board:run_completed',
-        payload: {
-          runId,
-          status: OrchestratorRunStatus.Failed,
-        },
-      })
       await emitRunEvent({
         runId,
         workspaceId: run.workspaceId,
@@ -424,12 +418,13 @@ export class OrchestratorEngine {
         .limit(1)
       if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
         logger.info({ runId }, 'Orchestrator run cancelled before synthesis')
-        broadcastSessionEvent(groupSessionId, {
-          type: 'task_board:run_completed',
-          payload: {
-            runId,
-            status: OrchestratorRunStatus.Cancelled,
-          },
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          type: 'run.cancelled',
+          severity: 'warning',
+          payload: { status: OrchestratorRunStatus.Cancelled },
         })
         return
       }
@@ -677,13 +672,6 @@ export class OrchestratorEngine {
         .update(orchestratorRuns)
         .set({ status: OrchestratorRunStatus.Failed })
         .where(eq(orchestratorRuns.id, runId))
-      broadcastSessionEvent(groupSessionId, {
-        type: 'task_board:run_completed',
-        payload: {
-          runId,
-          status: OrchestratorRunStatus.Failed,
-        },
-      })
       await emitRunEvent({
         runId,
         workspaceId,
@@ -1448,9 +1436,23 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             .update(workspaceTasks)
             .set({ progressPercent: percent, progressStatus: status })
             .where(eq(workspaceTasks.id, task.id))
-          broadcastSessionEvent(groupSessionId, {
-            type: 'task_board:task_progress',
-            payload: { taskId: task.id, percent, status },
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: task.id,
+            agentId: agent.id,
+            type: 'task.progress',
+            payload: {
+              taskTitle: task.title,
+              agentId: agent.id,
+              agentName: agent.name,
+              percent,
+              progressPercent: percent,
+              status,
+              progressStatus: status,
+              childSessionId: childInfo.sessionId,
+            },
           })
         }
       }
@@ -1523,11 +1525,18 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           })
           .returning()
 
-        broadcastSessionEvent(groupSessionId, {
-          type: 'task_board:clarification_needed',
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          taskId: task.id,
+          agentId: task.agentId,
+          type: 'task.clarification_needed',
+          severity: 'warning',
           payload: {
             taskId: task.id,
             agentId: task.agentId,
+            agentName: agent.name,
             question: clarification.question,
             options: clarification.options,
             messageId: clarMsg[0]?.id,
@@ -1644,9 +1653,23 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           .update(workspaceTasks)
           .set({ progressPercent: lastProgress.percent, progressStatus: lastProgress.status })
           .where(eq(workspaceTasks.id, task.id))
-        broadcastSessionEvent(groupSessionId, {
-          type: 'task_board:task_progress',
-          payload: { taskId: task.id, percent: lastProgress.percent, status: lastProgress.status },
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          taskId: task.id,
+          agentId: agent.id,
+          type: 'task.progress',
+          payload: {
+            taskTitle: task.title,
+            agentId: agent.id,
+            agentName: agent.name,
+            percent: lastProgress.percent,
+            progressPercent: lastProgress.percent,
+            status: lastProgress.status,
+            progressStatus: lastProgress.status,
+            childSessionId: childInfo.sessionId,
+          },
         })
       }
 
@@ -2399,14 +2422,6 @@ ${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.leng
       .update(orchestratorRuns)
       .set({ status: finalRunStatus, summaryMessageId: summaryMsg?.id ?? null })
       .where(eq(orchestratorRuns.id, runId))
-
-    broadcastSessionEvent(groupSessionId, {
-      type: 'task_board:run_completed',
-      payload: {
-        runId,
-        status: finalRunStatus,
-      },
-    })
 
     await emitRunEvent({
       runId,

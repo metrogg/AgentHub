@@ -398,7 +398,9 @@ function agentTabsFromTaskBoard(taskBoard: NonNullable<ChatState['taskBoard']>):
   }))
 }
 
-async function loadTaskBoardSnapshotForGroupSession(sessionId: string) {
+async function loadTaskBoardSnapshotForGroupSession(
+  sessionId: string,
+): Promise<TaskBoardSnapshot | null> {
   const { items } = await api.listOrchestratorRuns()
   const run = items.find((item) => item.groupSessionId === sessionId)
   if (!run) return null
@@ -407,10 +409,11 @@ async function loadTaskBoardSnapshotForGroupSession(sessionId: string) {
   return {
     taskBoard,
     agentTabs: agentTabsFromTaskBoard(taskBoard),
+    agUiEvents: await loadAgUiReplayEvents(run.id),
   }
 }
 
-async function loadTaskBoardSnapshotForSession(session: Session) {
+async function loadTaskBoardSnapshotForSession(session: Session): Promise<TaskBoardSnapshot | null> {
   if (session.type === SessionType.Group) return loadTaskBoardSnapshotForGroupSession(session.id)
   const metadata = session.metadata ?? {}
   const runId =
@@ -424,6 +427,7 @@ async function loadTaskBoardSnapshotForSession(session: Session) {
   return {
     taskBoard,
     agentTabs: agentTabsFromTaskBoard(taskBoard),
+    agUiEvents: await loadAgUiReplayEvents(run.id),
   }
 }
 
@@ -437,6 +441,21 @@ interface AgUiEventPayload {
   message?: string
   code?: string
   result?: unknown
+}
+
+interface TaskBoardSnapshot {
+  taskBoard: NonNullable<ChatState['taskBoard']>
+  agentTabs: AgentTab[]
+  agUiEvents: AgUiEventPayload[]
+}
+
+async function loadAgUiReplayEvents(runId: string): Promise<AgUiEventPayload[]> {
+  try {
+    const { items } = await api.getAgUiRunEvents(runId)
+    return items as AgUiEventPayload[]
+  } catch {
+    return []
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1306,6 +1325,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
               }
             : {}),
         })
+        if (resolvedSnapshot?.agUiEvents.length) {
+          set((state) =>
+            resolvedSnapshot.agUiEvents.reduce(
+              (next, event) => applyAgUiEventToState(next, event, sessionId),
+              state,
+            ),
+          )
+        }
       } else {
         const snapshot =
           (await taskBoardSnapshot) ??
@@ -1334,6 +1361,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
               }
             : {}),
         })
+        if (snapshot?.agUiEvents.length) {
+          set((state) =>
+            snapshot.agUiEvents.reduce(
+              (next, event) => applyAgUiEventToState(next, event, sessionId),
+              state,
+            ),
+          )
+        }
       }
     } catch (error) {
       if (get().currentSessionId !== sessionId) return

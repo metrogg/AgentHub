@@ -1032,34 +1032,6 @@ async function startPlanRunInExistingGroup(params: {
     },
   })
 
-  broadcastSessionEvent(sessionId, {
-    type: 'task_board:plan_ready',
-    payload: {
-      runId,
-      plan: {
-        runId,
-        title: executionPlan.title,
-        goal: executionPlan.goal,
-        collaborationMode: executionPlan.collaborationMode || 'mapreduce',
-        phases: executionPlan.phases || [],
-        tasks: executionPlan.tasks.map((t) => ({
-          id: t.id,
-          phaseId: t.phaseId || '',
-          title: t.title,
-          description: t.description,
-          agentId: t.agentId,
-          agentKey: executionPlan.agents.find((a) => a.id === t.agentId)?.key || t.agentId,
-          agentName: executionPlan.agents.find((a) => a.id === t.agentId)?.name || t.agentId,
-          dependencies: t.dependencies || [],
-          taskType: t.taskType,
-          childSessionId: childSessions.get(t.id)?.sessionId ?? null,
-        })),
-        agents: executionPlan.agents,
-      },
-      sessionId,
-    },
-  })
-
   const engine = new OrchestratorEngine()
   engine
     .startRun({ runId, groupSessionId: sessionId, workspaceId, plan: executionPlan, childSessions })
