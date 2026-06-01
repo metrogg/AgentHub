@@ -241,6 +241,30 @@ interface TaskBoardValidationResult {
   outputSummary: string
 }
 
+interface TaskExecutionConfig {
+  runtimeType?: string
+  codeAgentType?: string
+  adapterName?: string
+  command?: string
+  modelId?: string | null
+  modelProvider?: string | null
+  modelLabel?: string
+  baseUrlHost?: string | null
+  readinessStatus?: string
+  installed?: boolean
+  configured?: boolean
+  executionEnabled?: boolean
+  canExecute?: boolean
+  sandboxPolicy?: string
+  sandboxProvider?: string
+  isolation?: string
+  executionPath?: string | null
+  workdirRelativePath?: string | null
+  skillCount?: number
+  toolPermissions?: string[]
+  approvalRequired?: boolean
+}
+
 interface TaskBoardTask {
   id: string
   phaseId: string
@@ -263,6 +287,7 @@ interface TaskBoardTask {
   contractStatus?: 'passed' | 'failed'
   contractViolations?: Array<{ message?: string }>
   resultError?: string
+  executionConfig?: TaskExecutionConfig
 }
 
 function normalizeTaskStatusFromRun(value: unknown): TaskBoardTask['status'] | null {
@@ -375,6 +400,9 @@ function taskBoardFromRun(run: OrchestratorRunListItem): ChatState['taskBoard'] 
           asString(ledgerTask.contractStatus) ??
           asString(planTask.contractStatus) ??
           undefined,
+        executionConfig: readExecutionConfig(
+          runTask?.executionConfig ?? ledgerTask.executionConfig ?? planTask.executionConfig,
+        ),
       } as TaskBoardTask
     })
 
@@ -501,6 +529,36 @@ function asNumber(value: unknown): number | undefined {
 function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined
   return value.filter((item): item is string => typeof item === 'string')
+}
+
+function readExecutionConfig(value: unknown): TaskExecutionConfig | undefined {
+  const item = asRecord(value)
+  if (!item) return undefined
+  return {
+    runtimeType: asString(item.runtimeType),
+    codeAgentType: asString(item.codeAgentType),
+    adapterName: asString(item.adapterName),
+    command: asString(item.command),
+    modelId: asString(item.modelId) ?? null,
+    modelProvider: asString(item.modelProvider) ?? null,
+    modelLabel: asString(item.modelLabel),
+    baseUrlHost: asString(item.baseUrlHost) ?? null,
+    readinessStatus: asString(item.readinessStatus),
+    installed: typeof item.installed === 'boolean' ? item.installed : undefined,
+    configured: typeof item.configured === 'boolean' ? item.configured : undefined,
+    executionEnabled:
+      typeof item.executionEnabled === 'boolean' ? item.executionEnabled : undefined,
+    canExecute: typeof item.canExecute === 'boolean' ? item.canExecute : undefined,
+    sandboxPolicy: asString(item.sandboxPolicy),
+    sandboxProvider: asString(item.sandboxProvider),
+    isolation: asString(item.isolation),
+    executionPath: asString(item.executionPath) ?? null,
+    workdirRelativePath: asString(item.workdirRelativePath) ?? null,
+    skillCount: asNumber(item.skillCount),
+    toolPermissions: asStringArray(item.toolPermissions),
+    approvalRequired:
+      typeof item.approvalRequired === 'boolean' ? item.approvalRequired : undefined,
+  }
 }
 
 function readTaskBoardArtifacts(value: unknown): TaskBoardArtifact[] {
@@ -658,6 +716,7 @@ function applyAgUiTaskStatus(
   const progressStatus = asString(value.progressStatus)
   const artifactCount = asNumber(value.artifactCount)
   const dependencies = asStringArray(value.dependencies)
+  const executionConfig = readExecutionConfig(value.executionConfig)
   const nextTask: TaskBoardTask = {
     id: taskId,
     phaseId,
@@ -681,6 +740,7 @@ function applyAgUiTaskStatus(
     contractStatus: existingTask?.contractStatus,
     contractViolations: existingTask?.contractViolations,
     resultError: existingTask?.resultError,
+    executionConfig: executionConfig ?? existingTask?.executionConfig,
   }
 
   const tasks = existingTask
@@ -826,6 +886,7 @@ function buildTaskBoardFromPlanPayload(
         contractStatus: normalizeTaskBoardContractStatus(asString(task.contractStatus)),
         contractViolations: undefined,
         resultError: undefined,
+        executionConfig: readExecutionConfig(task.executionConfig),
       } satisfies TaskBoardTask
     })
 
@@ -883,6 +944,7 @@ function applyAgUiPlanCreated(
             contractViolations: existing.contractViolations ?? task.contractViolations,
             resultError: existing.resultError ?? task.resultError,
             childSessionId: existing.childSessionId ?? task.childSessionId,
+            executionConfig: existing.executionConfig ?? task.executionConfig,
           }
         }),
       }
@@ -1500,18 +1562,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
       get().currentSession?.id === sessionId
         ? get().currentSession
         : (get().sessions.find((item) => item.id === sessionId) ?? null)
-    const isGroupSession = targetSession?.type === SessionType.Group && Boolean(targetSession.workspaceId)
+    const isGroupSession =
+      targetSession?.type === SessionType.Group && Boolean(targetSession.workspaceId)
     const orchestrator = isGroupSession
       ? get().currentWorkspaceAgents.find((agent) => agent.roleType === 'orchestrator')
       : null
     set({
       agentTyping: true,
+      selectedAgentTab: isGroupSession ? null : get().selectedAgentTab,
       agentActivity: isGroupSession
         ? {
             sessionId,
             agentId: orchestrator?.id,
             agentName: orchestrator?.name ?? 'Orchestrator',
-            phase: 'planning',
+            phase: 'thinking',
             startedAt: new Date().toISOString(),
           }
         : null,

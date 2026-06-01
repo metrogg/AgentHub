@@ -125,6 +125,10 @@ export interface TaskLedger {
     dependencies: string[]
     taskType: NonNullable<ExecutionTask['taskType']>
     status: TaskStatus
+    childSessionId?: string | null
+    progressPercent?: number
+    progressStatus?: string
+    executionConfig?: Record<string, unknown>
     outputContract: TaskOutputContract
     validation: TaskValidation
   }>

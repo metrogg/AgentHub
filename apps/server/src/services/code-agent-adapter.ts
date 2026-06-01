@@ -98,6 +98,26 @@ export interface CodeAgentMetadataChunk {
 
 export type CodeAgentReplyChunk = string | CodeAgentMetadataChunk
 
+export interface CodeAgentRuntimeInspection {
+  runtimeType: 'code-agent'
+  codeAgentType?: CodeAgentType
+  adapterName?: string
+  command?: string
+  modelId?: string | null
+  modelProvider?: string | null
+  modelLabel: string
+  modelSource?: string | null
+  baseUrl?: string | null
+  baseUrlHost?: string | null
+  installed: boolean
+  configured: boolean
+  executionEnabled: boolean
+  cwdValid: boolean
+  canExecute: boolean
+  commandPreview?: string
+  blockers: string[]
+}
+
 const serviceDir = dirname(fileURLToPath(import.meta.url))
 const sourceProjectRoot = resolve(serviceDir, '../../../..')
 const projectRoot = sourceProjectRoot
@@ -282,6 +302,86 @@ export const __codeAgentAdapterTestHooks = {
 
 export function isCodeAgentProfile(profile?: AgentRunProfile) {
   return profile?.runtimeType === 'code-agent'
+}
+
+export async function inspectCodeAgentRuntime(
+  profile: AgentRunProfile,
+  cwd?: string | null,
+): Promise<CodeAgentRuntimeInspection | null> {
+  const type = profile.codeAgentType
+  if (profile.runtimeType !== 'code-agent' || !type) return null
+
+  const adapter = adapters[type]
+  const cwdValid = Boolean(cwd?.trim() || profile.projectPath?.trim())
+  if (!adapter) {
+    return {
+      runtimeType: 'code-agent',
+      codeAgentType: type,
+      modelId: profile.modelId ?? null,
+      modelProvider: null,
+      modelLabel: profile.modelId ?? '自动模型',
+      installed: false,
+      configured: false,
+      executionEnabled: false,
+      cwdValid,
+      canExecute: false,
+      blockers: [`Unsupported Code Agent: ${type}`],
+    }
+  }
+
+  const toolConfig = await resolveToolConfig(type)
+  const requestedModelId = resolveCodeAgentModelId(profile.modelId, toolConfig)
+  let modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+  const nativeOpenCodeModelRef =
+    !modelTarget && type === 'opencode' && isOpenCodeNativeModelRef(requestedModelId)
+      ? requestedModelId
+      : null
+  if (nativeOpenCodeModelRef) {
+    modelTarget = createNativeOpenCodeModelTarget(nativeOpenCodeModelRef)
+  }
+  if (
+    !modelTarget &&
+    requestedModelId &&
+    !nativeOpenCodeModelRef &&
+    (type === 'opencode' || !isNativeCodeAgentModelIdCompatible(type, requestedModelId))
+  ) {
+    modelTarget = await resolveRuntimeModelTarget(requestedModelId)
+  }
+
+  const installed = await isCommandInstalled(adapter.command)
+  const configured = await isRuntimeConfigured(type, adapter, modelTarget?.modelId ?? requestedModelId, modelTarget)
+  const executionEnabled = await getBooleanSetting(
+    'AGENTHUB_ENABLE_CODE_AGENT_EXECUTION',
+    env.AGENTHUB_ENABLE_CODE_AGENT_EXECUTION,
+  )
+  const canExecute = executionEnabled && installed && configured && cwdValid
+  const baseUrl = sanitizeInspectableBaseUrl(modelTarget?.anthropicBaseUrl ?? modelTarget?.openaiBaseUrl)
+
+  return {
+    runtimeType: 'code-agent',
+    codeAgentType: type,
+    adapterName: adapter.displayName,
+    command: adapter.command,
+    modelId: modelTarget?.modelId ?? requestedModelId ?? null,
+    modelProvider: modelTarget?.provider ?? null,
+    modelLabel: formatModelTargetLabel(modelTarget),
+    modelSource: modelTarget?.nativeOpenCodeRef ? 'native-opencode-ref' : (modelTarget?.catalogId ?? modelTarget?.apiKeySource ?? null),
+    baseUrl,
+    baseUrlHost: baseUrl ? safeUrlHost(baseUrl) : null,
+    installed,
+    configured,
+    executionEnabled,
+    cwdValid,
+    canExecute,
+    commandPreview: previewCommand(adapter, cwd ?? profile.projectPath ?? undefined, profile.sandboxPolicy, modelTarget),
+    blockers: codeAgentReadinessBlockers({
+      configured,
+      cwdValid,
+      executionEnabled,
+      installed,
+      profile,
+    }),
+  }
 }
 
 export async function* streamCodeAgentReply(
@@ -655,6 +755,45 @@ function codeAgentBlockerText(options: {
   ].filter(Boolean)
   if (!blockers.length) return '当前配置已满足自动执行条件。'
   return `当前阻塞项：${blockers.join('、')}。`
+}
+
+function codeAgentReadinessBlockers(options: {
+  configured: boolean
+  cwdValid: boolean
+  executionEnabled: boolean
+  installed: boolean
+  profile: AgentRunProfile
+}) {
+  return [
+    !options.installed ? 'CLI is not installed or not on PATH' : '',
+    !options.configured ? 'Model credentials are not configured for this runtime' : '',
+    !options.executionEnabled ? 'Code Agent execution is disabled' : '',
+    options.profile.approvalRequired === false ? '' : 'Approval is still required for high-risk actions',
+    !options.cwdValid ? 'Execution working directory is missing or invalid' : '',
+  ].filter(Boolean)
+}
+
+function sanitizeInspectableBaseUrl(value?: string | null) {
+  const raw = value?.trim()
+  if (!raw) return null
+  try {
+    const url = new URL(raw)
+    url.username = ''
+    url.password = ''
+    url.search = ''
+    url.hash = ''
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return raw.replace(/[?#].*$/, '').replace(/\/$/, '')
+  }
+}
+
+function safeUrlHost(value: string) {
+  try {
+    return new URL(value).host
+  } catch {
+    return value.replace(/^https?:\/\//i, '').split('/')[0] || value
+  }
 }
 
 function buildCodeAgentPrompt(

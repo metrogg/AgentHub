@@ -8,6 +8,7 @@ import {
   FileText,
   MessagesSquare,
   ShieldCheck,
+  TerminalSquare,
 } from 'lucide-react'
 
 interface TaskBoardTask {
@@ -27,6 +28,20 @@ interface TaskBoardTask {
   validationStatus?: 'passed' | 'failed' | 'skipped' | 'not_run'
   contractStatus?: 'passed' | 'failed'
   resultError?: string
+  executionConfig?: {
+    runtimeType?: string
+    codeAgentType?: string
+    adapterName?: string
+    modelId?: string | null
+    modelLabel?: string
+    baseUrlHost?: string | null
+    readinessStatus?: string
+    sandboxPolicy?: string
+    sandboxProvider?: string
+    isolation?: string
+    workdirRelativePath?: string | null
+    executionPath?: string | null
+  }
 }
 
 interface TaskBoardPhase {
@@ -115,6 +130,56 @@ function validationClass(status?: TaskBoardTask['validationStatus']) {
   if (status === 'failed') return 'border-red-200 bg-red-50 text-red-700'
   if (status === 'skipped') return 'border-amber-200 bg-amber-50 text-amber-700'
   return 'border-gray-200 bg-white text-gray-500'
+}
+
+function RuntimeStrip({ config }: { config?: TaskBoardTask['executionConfig'] }) {
+  if (!config) return null
+  const runtime =
+    config.adapterName ||
+    config.codeAgentType ||
+    (config.runtimeType === 'llm' ? 'LLM fallback' : config.runtimeType)
+  const model = config.modelLabel || config.modelId
+  const sandbox = [config.sandboxProvider, config.isolation, config.sandboxPolicy]
+    .filter(Boolean)
+    .join('/')
+  const workdir = config.workdirRelativePath || compactPath(config.executionPath)
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      {runtime && (
+        <span className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-600">
+          <TerminalSquare className="h-3 w-3" />
+          {runtime}
+        </span>
+      )}
+      {model && (
+        <span className="max-w-[160px] truncate rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-500">
+          {model}
+        </span>
+      )}
+      {config.baseUrlHost && (
+        <span className="max-w-[130px] truncate rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-500">
+          {config.baseUrlHost}
+        </span>
+      )}
+      {sandbox && (
+        <span className="max-w-[150px] truncate rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-500">
+          {sandbox}
+        </span>
+      )}
+      {workdir && (
+        <span className="max-w-[170px] truncate rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-500">
+          {workdir}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function compactPath(value?: string | null) {
+  if (!value) return null
+  const parts = value.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (parts.length <= 3) return value
+  return `${parts[parts.length - 3]}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
 }
 
 export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
@@ -221,7 +286,8 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
                     Boolean(task.outputSummary) ||
                     Boolean(task.validationStatus) ||
                     Boolean(task.childSessionId) ||
-                    Boolean(task.resultError)
+                    Boolean(task.resultError) ||
+                    Boolean(task.executionConfig)
                   return (
                     <div
                       key={task.id}
@@ -245,6 +311,7 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
                           </span>
                         </div>
                         <span className="text-gray-400">{task.agentName}</span>
+                        <RuntimeStrip config={task.executionConfig} />
 
                         {task.status === 'running' && task.progress !== undefined && (
                           <div className="mt-1.5">

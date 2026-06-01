@@ -17,6 +17,10 @@ import { logger } from '../../lib/logger'
 import { broadcastSessionEvent } from '../agent-runner'
 import { gitBranchManager } from '../git/branch-manager'
 import { shouldAcceptPartialExecution, taskExecutionService } from '../execution/task-execution-service'
+import {
+  buildExecutionConfigSummary,
+  type ExecutionConfigSummary,
+} from '../execution/execution-config-summary'
 import { blackboard, Blackboard, type BlackboardRef } from '../blackboard'
 import { executionTracer } from '../execution-tracer'
 import { Planner } from './planner'
@@ -78,6 +82,7 @@ interface TaskResultReport {
   durationMs: number
   blackboardKeys: string[]
   completedAt: string
+  executionConfig?: ExecutionConfigSummary
   error?: string
 }
 
@@ -1289,6 +1294,13 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       }
     }
 
+    let executionConfig = await buildExecutionConfigSummary({
+      profile,
+      projectPath: childInfo.projectPath ?? null,
+      executionPath: profile.projectPath ?? childInfo.projectPath ?? null,
+      requestedSandboxPolicy: profile.sandboxPolicy,
+    })
+
     // 发送 orchestrator 特有的事件
     await emitRunEvent({
       runId,
@@ -1302,6 +1314,13 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         agentName: agent.name,
         attempt: attemptCount,
         sessionId: childInfo.sessionId,
+        childSessionId: childInfo.sessionId,
+        executionConfig,
+        progressStatus: buildExecutionProgressStatus({
+          agentName: agent.name,
+          taskTitle: task.title,
+          executionConfig,
+        }),
       },
     })
 
@@ -1316,6 +1335,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       taskTitle: task.title,
       startedAt: taskStartTime,
       timeoutMs: TASK_TIMEOUT_MS,
+      getExecutionConfig: () => executionConfig,
     })
     let lastAgentOutput = ''
     let lastArtifacts: Array<Record<string, unknown>> = []
@@ -1363,8 +1383,33 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         existingUserMessageId: userMsg.id,
         deferCompletionStatus: true,
         a2a: a2aDispatch,
+        onExecutionConfigReady: async (config) => {
+          executionConfig = config
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: task.id,
+            agentId: agent.id,
+            type: 'task.progress',
+            payload: {
+              taskTitle: task.title,
+              agentId: agent.id,
+              agentName: agent.name,
+              childSessionId: childInfo.sessionId,
+              executionConfig,
+              progressPercent: 5,
+              progressStatus: buildExecutionProgressStatus({
+                agentName: agent.name,
+                taskTitle: task.title,
+                executionConfig,
+              }),
+            },
+          })
+        },
       })
       stopHeartbeat()
+      executionConfig = execResult.executionConfig ?? executionConfig
 
       const output = execResult.output
       const artifacts = execResult.artifacts
@@ -1453,6 +1498,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
               status,
               progressStatus: status,
               childSessionId: childInfo.sessionId,
+              executionConfig,
             },
           })
         }
@@ -1467,7 +1513,13 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           agentId: agent.id,
           type: 'task.cancelled',
           severity: 'warning',
-          payload: { title: task.title, agentName: agent.name, sessionId: childInfo.sessionId },
+          payload: {
+            title: task.title,
+            agentName: agent.name,
+            sessionId: childInfo.sessionId,
+            childSessionId: childInfo.sessionId,
+            executionConfig,
+          },
         })
         return {
           taskId: task.id,
@@ -1909,6 +1961,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           durationMs: Date.now() - taskStartTime,
           childSessionId: childInfo.sessionId,
           blackboardKeys: writtenBlackboardKeys,
+          executionConfig,
           error: `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`,
         })
         await blackboard.write({
@@ -1940,6 +1993,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           payload: {
             title: task.title,
             agentName: agent.name,
+            childSessionId: childInfo.sessionId,
+            executionConfig,
             error: `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`,
             violations: contractResult.violations,
             ...taskResultReportEventPayload(failureReport),
@@ -1987,6 +2042,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         durationMs: taskDuration,
         childSessionId: childInfo.sessionId,
         blackboardKeys: writtenBlackboardKeys,
+        executionConfig,
       })
 
       const [agentResultMessage] = await db
@@ -2009,6 +2065,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             taskStatus: TaskStatus.Done,
             outputRef,
             artifacts,
+            executionConfig,
             a2a: {
               request: a2aDispatch.params,
               responseTask: buildA2AExecutionTask({
@@ -2040,8 +2097,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           title: task.title,
           agentName: agent.name,
           sessionId: childInfo.sessionId,
+          childSessionId: childInfo.sessionId,
           durationMs: taskDuration,
           artifactCount: artifacts.length,
+          executionConfig,
           ...taskResultReportEventPayload(taskResultReport),
         },
       })
@@ -2069,6 +2128,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         durationMs: Date.now() - taskStartTime,
         childSessionId: childInfo.sessionId,
         blackboardKeys: lastBlackboardKeys,
+        executionConfig,
         error: error?.message || 'Unknown error',
       })
       await executionTracer.log({
@@ -2113,8 +2173,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           title: task.title,
           agentName: agent.name,
           sessionId: childInfo.sessionId,
+          childSessionId: childInfo.sessionId,
           error: error?.message || 'Unknown error',
           durationMs: Date.now() - taskStartTime,
+          executionConfig,
           ...taskResultReportEventPayload(failureReport),
         },
       })
@@ -2145,6 +2207,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             taskResultReport: failureReport,
             artifacts: lastArtifacts,
             partialArtifacts: lastArtifacts.length > 0,
+            executionConfig,
             a2a: {
               request: a2aDispatch.params,
               responseTask: buildA2AExecutionTask({
@@ -2458,6 +2521,7 @@ function startTaskHeartbeat(input: {
   taskTitle: string
   startedAt: number
   timeoutMs: number
+  getExecutionConfig?: () => ExecutionConfigSummary | undefined
 }) {
   let stopped = false
   let lastPersistAt = 0
@@ -2466,13 +2530,21 @@ function startTaskHeartbeat(input: {
     if (stopped) return
     const elapsedMs = Date.now() - input.startedAt
     const percent = Math.min(90, Math.max(3, Math.round((elapsedMs / input.timeoutMs) * 100)))
-    const status = `${input.agentName} 正在执行「${input.taskTitle}」，已运行 ${formatDuration(elapsedMs)} / ${formatDuration(input.timeoutMs)}。`
+    const executionConfig = input.getExecutionConfig?.()
+    const status = buildExecutionProgressStatus({
+      agentName: input.agentName,
+      taskTitle: input.taskTitle,
+      executionConfig,
+      elapsedMs,
+      timeoutMs: input.timeoutMs,
+    })
 
     broadcastSessionEvent(input.groupSessionId, {
       type: WsEvent.AgUiEvent,
       payload: buildAgUiTaskStatusEvent({
         agentId: input.agentId,
         agentName: input.agentName,
+        executionConfig: executionConfig as unknown as Record<string, unknown> | undefined,
         progressPercent: percent,
         progressStatus: status,
         runId: input.runId,
@@ -2508,6 +2580,55 @@ function startTaskHeartbeat(input: {
     stopped = true
     clearInterval(timer)
   }
+}
+
+function buildExecutionProgressStatus(input: {
+  agentName: string
+  taskTitle: string
+  executionConfig?: ExecutionConfigSummary
+  elapsedMs?: number
+  timeoutMs?: number
+}) {
+  const runtime =
+    input.executionConfig?.adapterName ??
+    input.executionConfig?.codeAgentType ??
+    (input.executionConfig?.runtimeType === 'llm' ? 'LLM fallback' : 'Code Agent')
+  const model = input.executionConfig?.modelLabel || input.executionConfig?.modelId
+  const workdir =
+    input.executionConfig?.workdirRelativePath ||
+    shortPathLabel(input.executionConfig?.executionPath) ||
+    shortPathLabel(input.executionConfig?.projectPath)
+  const sandbox = [
+    input.executionConfig?.sandboxProvider,
+    input.executionConfig?.isolation,
+    input.executionConfig?.sandboxPolicy,
+  ]
+    .filter(Boolean)
+    .join('/')
+  const elapsed =
+    typeof input.elapsedMs === 'number' && typeof input.timeoutMs === 'number'
+      ? `，已运行 ${formatDuration(input.elapsedMs)} / ${formatDuration(input.timeoutMs)}`
+      : ''
+  const waitHint =
+    typeof input.elapsedMs === 'number' && input.elapsedMs > 30_000
+      ? '，等待 CLI 输出或文件变更'
+      : ''
+  const detail = [
+    model ? `模型 ${model}` : '',
+    sandbox ? `沙箱 ${sandbox}` : '',
+    workdir ? `目录 ${workdir}` : '',
+  ]
+    .filter(Boolean)
+    .join('，')
+  return `${input.agentName} 正在通过 ${runtime} 执行「${input.taskTitle}」${elapsed}${waitHint}${detail ? `（${detail}）` : ''}`
+}
+
+function shortPathLabel(value?: string | null) {
+  if (!value) return null
+  const normalized = value.replace(/\\/g, '/')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts.length <= 3) return normalized
+  return `${parts[parts.length - 3]}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
 }
 
 async function updateTaskProgress(input: {
@@ -2891,6 +3012,7 @@ export function buildTaskResultReport(params: {
   durationMs: number
   childSessionId: string
   blackboardKeys: string[]
+  executionConfig?: ExecutionConfigSummary
   error?: string
 }): TaskResultReport {
   const validationStatus =
@@ -2927,6 +3049,7 @@ export function buildTaskResultReport(params: {
     durationMs: params.durationMs,
     blackboardKeys: params.blackboardKeys,
     completedAt: new Date().toISOString(),
+    executionConfig: params.executionConfig,
     ...(params.error ? { error: params.error } : {}),
   }
 }
@@ -2944,6 +3067,7 @@ export function taskResultReportEventPayload(report: TaskResultReport): Record<s
     contractViolations: report.contractViolations,
     blackboardKeys: report.blackboardKeys,
     durationMs: report.durationMs,
+    executionConfig: report.executionConfig,
     error: report.error,
   }
 }
