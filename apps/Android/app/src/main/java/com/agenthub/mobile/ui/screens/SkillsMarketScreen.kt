@@ -37,13 +37,13 @@ import androidx.compose.ui.unit.sp
 import com.agenthub.mobile.data.MobileUiState
 import com.agenthub.mobile.data.MobileWorkbenchSkillSummary
 
-private val Ink = Color(0xFF000000)
-private val MutedText = Color(0xFF7A7A7A)
-private val PanelBackground = Color.White
-private val PageBackground = Color(0xFFF5F5F5)
-private val TgBlue = Color(0xFF3390EC)
-private val ProfileBlue = Color(0xFF3390EC)
-private val SoftFill = Color(0xFFF0F2F5)
+private val Ink = Color(0xFFF4F7FA)
+private val MutedText = Color(0xFF92A0AE)
+private val PanelBackground = Color(0xFF1B2530)
+private val PageBackground = Color(0xFF121B24)
+private val TgBlue = Color(0xFF4EA2F6)
+private val ProfileBlue = Color(0xFF4EA2F6)
+private val SoftFill = Color(0xFF22303F)
 
 @Composable
 fun SkillsMarketScreen(
@@ -205,7 +205,7 @@ private fun MetricTile(label: String, value: String, modifier: Modifier = Modifi
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFF7F7F7))
+            .background(SoftFill)
             .padding(12.dp),
     ) {
         Text(value, color = Ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -255,7 +255,7 @@ private fun SkillDetailCard(skill: MobileWorkbenchSkillSummary) {
         if (skill.description.isNotBlank()) {
             Text(
                 skill.description,
-                color = Color(0xFF444444), fontSize = 13.sp, lineHeight = 20.sp,
+                color = MutedText, fontSize = 13.sp, lineHeight = 20.sp,
             )
         }
 

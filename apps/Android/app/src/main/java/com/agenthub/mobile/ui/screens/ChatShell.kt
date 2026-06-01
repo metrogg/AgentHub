@@ -16,10 +16,12 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -94,24 +96,26 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonArray
 
-// Telegram-inspired color palette
-private val Hairline = Color(0xFFE8EAED)
-private val PageBackground = Color(0xFFFFFFFF)
-private val PanelBackground = Color.White
-private val Ink = Color(0xFF000000)
-private val MutedText = Color(0xFF8B9AA3)
-private val TgBlue = Color(0xFF3390EC)
-private val TgBlueLight = Color(0xFFD6E8FF)
-private val TgGreen = Color(0xFF4CAF50)
-private val TgSentBg = Color(0xFFEFFDDE)         // Light green for sent bubbles
-private val TgReceivedBg = Color(0xFFFFFFFF)     // White for received bubbles
-private val TgChatBg = Color(0xFFF0F2F5)         // Chat background
-private val SoftFill = Color(0xFFF0F2F5)
-private val WorkAmber = Color(0xFFF2A23A)
-private val ProfileGreenSoft = Color(0xFFEAF8EF)
-private val ProfileBlue = Color(0xFF3390EC)
-private val TgUnreadBg = Color(0xFF3390EC)        // Unread badge blue
-private val TgOnlineGreen = Color(0xFF4DCD5E)     // Online indicator
+// Telegram-inspired dark palette
+private val Hairline = Color(0xFF253343)
+private val PageBackground = Color(0xFF121B24)
+private val PanelBackground = Color(0xFF1B2530)
+private val PanelElevated = Color(0xFF22303D)
+private val Ink = Color(0xFFF4F7FA)
+private val MutedText = Color(0xFF92A0AE)
+private val TgBlue = Color(0xFF4EA2F6)
+private val TgBlueLight = Color(0xFF223648)
+private val TgGreen = Color(0xFF55D66B)
+private val TgSentBg = Color(0xFF4B83E4)
+private val TgReceivedBg = Color(0xFF1D2834)
+private val TgChatBg = Color(0xFF0D1620)
+private val SoftFill = Color(0xFF22303F)
+private val WorkAmber = Color(0xFFFFB04A)
+private val ProfileGreenSoft = Color(0xFF162A20)
+private val ProfileBlue = Color(0xFF4EA2F6)
+private val TgUnreadBg = Color(0xFF4EA2F6)
+private val TgOnlineGreen = Color(0xFF55D66B)
+private val BottomGlass = Color(0xE616212D)
 
 private enum class MobileTab(val label: String, val iconRes: Int) {
     Messages("消息", R.drawable.ic_mobile_tab_chat),
@@ -172,7 +176,7 @@ fun ChatShell(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(PanelBackground),
+            .background(PageBackground),
     ) {
         MobileTopBar(
             title = when {
@@ -221,9 +225,9 @@ fun ChatShell(
                 text = state.error.orEmpty(),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFFFFF1F0))
+                    .background(Color(0xFF3A1F25))
                     .padding(horizontal = 18.dp, vertical = 8.dp),
-                color = Color(0xFFB42318),
+                color = Color(0xFFFF7B86),
                 fontSize = 12.sp,
             )
         }
@@ -340,74 +344,105 @@ private fun MobileTopBar(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp)
-                .background(PanelBackground)
-                .padding(horizontal = 12.dp),
+                .height(if (showBack) 68.dp else 74.dp)
+                .background(PageBackground)
+                .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (showBack) {
                 TopIconButton(label = "‹", onClick = onBack)
-                Spacer(modifier = Modifier.width(4.dp))
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, maxLines = 1)
-                if (conversationMode || !showBack) {
+                Spacer(modifier = Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(PanelElevated),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Text(
-                        if (connected) "在线" else "离线",
+                        currentSession?.title?.take(1)?.uppercase().orEmpty().ifBlank { "A" },
+                        color = Ink,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        title,
+                        color = Ink,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 18.sp,
+                        maxLines = 1,
+                    )
+                    Text(
+                        if (connected) "已同步" else "连接中...",
                         color = if (connected) TgOnlineGreen else MutedText,
                         fontSize = 12.sp,
                         maxLines = 1,
                     )
                 }
+            } else {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, color = Ink, fontWeight = FontWeight.Bold, fontSize = 24.sp, maxLines = 1)
+                    Text(
+                        if (connected) "已同步到电脑端" else "等待连接电脑端",
+                        color = if (connected) TgOnlineGreen else MutedText,
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                    )
+                }
             }
-        Box(modifier = Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-            TopBarActionButton(
-                conversationMode = conversationMode,
-                onClick = { menuOpen = true },
-            )
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                if (conversationMode) {
-                    DropdownMenuItem(text = { Text("会话设置") }, onClick = {
-                        menuOpen = false
-                    })
-                    DropdownMenuItem(text = { Text("回到会话列表") }, onClick = {
-                        menuOpen = false
-                        onOpenSessions()
-                    })
-                    DropdownMenuItem(text = { Text("归档会话") }, onClick = {
-                        menuOpen = false
-                        currentSession?.id?.let(onArchiveCurrent)
-                    })
-                    DropdownMenuItem(text = { Text("删除会话") }, onClick = {
-                        menuOpen = false
-                        confirmDelete = true
-                    })
-                    DropdownMenuItem(text = { Text("同步会话") }, onClick = {
-                        menuOpen = false
-                        onRefresh()
-                    })
-                } else {
-                    DropdownMenuItem(text = { Text("发起群聊") }, onClick = {
-                        menuOpen = false
-                        onCreateSession()
-                    })
-                    DropdownMenuItem(text = { Text("扫一扫") }, onClick = {
-                        menuOpen = false
-                        onScanQr()
-                    })
-                    DropdownMenuItem(text = { Text("同步会话") }, onClick = {
-                        menuOpen = false
-                        onRefresh()
-                    })
+
+            Box(modifier = Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                TopBarActionButton(
+                    onClick = { menuOpen = true },
+                    conversationMode = conversationMode,
+                )
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (conversationMode) {
+                        DropdownMenuItem(text = { Text("会话设置") }, onClick = {
+                            menuOpen = false
+                            showSettings = true
+                        })
+                        DropdownMenuItem(text = { Text("回到会话列表") }, onClick = {
+                            menuOpen = false
+                            onOpenSessions()
+                        })
+                        DropdownMenuItem(text = { Text("归档会话") }, onClick = {
+                            menuOpen = false
+                            currentSession?.id?.let(onArchiveCurrent)
+                        })
+                        DropdownMenuItem(text = { Text("删除会话") }, onClick = {
+                            menuOpen = false
+                            confirmDelete = true
+                        })
+                        DropdownMenuItem(text = { Text("同步会话") }, onClick = {
+                            menuOpen = false
+                            onRefresh()
+                        })
+                    } else {
+                        DropdownMenuItem(text = { Text("发起群聊") }, onClick = {
+                            menuOpen = false
+                            onCreateSession()
+                        })
+                        DropdownMenuItem(text = { Text("扫一扫") }, onClick = {
+                            menuOpen = false
+                            onScanQr()
+                        })
+                        DropdownMenuItem(text = { Text("同步会话") }, onClick = {
+                            menuOpen = false
+                            onRefresh()
+                        })
+                    }
                 }
             }
         }
-        }
-        // Bottom border
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -436,21 +471,101 @@ private fun MobileTopBar(
             },
         )
     }
+
+    if (showSettings && currentSession != null) {
+        ConversationSettingsDialog(
+            session = currentSession,
+            connected = connected,
+            onDismiss = { showSettings = false },
+            onRefresh = {
+                showSettings = false
+                onRefresh()
+            },
+            onArchive = {
+                showSettings = false
+                onArchiveCurrent(currentSession.id)
+            },
+            onRequestDelete = {
+                showSettings = false
+                confirmDelete = true
+            },
+        )
+    }
 }
 
 @Composable
-private fun TopBarActionButton(conversationMode: Boolean, onClick: () -> Unit) {
+private fun ConversationSettingsDialog(
+    session: Session,
+    connected: Boolean,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onArchive: () -> Unit,
+    onRequestDelete: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PanelBackground,
+        title = { Text("会话设置", color = Ink, fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SettingsInfoRow("名称", session.title.ifBlank { "未命名会话" })
+                SettingsInfoRow("类型", if (session.type == "group") "群聊" else "私聊")
+                SettingsInfoRow("同步", if (connected) "已同步到电脑端" else "等待连接")
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    TextButton(onClick = onArchive) {
+                        Text("归档", color = TgBlue)
+                    }
+                    TextButton(onClick = onRequestDelete) {
+                        Text("删除", color = Color(0xFFFF6B78))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onRefresh) {
+                Text("同步", color = TgBlue)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭", color = MutedText)
+            }
+        },
+    )
+}
+
+@Composable
+private fun SettingsInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = MutedText, fontSize = 13.sp, modifier = Modifier.width(54.dp))
+        Text(
+            value,
+            color = Ink,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun TopBarActionButton(onClick: () -> Unit, conversationMode: Boolean) {
     Box(
         modifier = Modifier
             .size(36.dp)
             .clip(CircleShape)
+            .background(PanelElevated)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         if (conversationMode) {
-            MoreGlyph(color = MutedText)
+            MoreGlyph(color = Ink)
         } else {
-            PlusGlyph(color = TgBlue)
+            PlusGlyph(color = Ink, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -553,32 +668,31 @@ private fun SessionListScreen(
     val visibleSessions = sessions.filter { archivedSessionIds.contains(it.id) == showArchived }
 
     Column(modifier = Modifier.fillMaxSize().background(PageBackground)) {
-        // Telegram-style search bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(20.dp))
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(24.dp))
                     .background(SoftFill)
-                    .padding(horizontal = 14.dp),
+                    .padding(horizontal = 15.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Text("搜索", color = MutedText, fontSize = 15.sp)
+                Text("⌕  搜索对话", color = MutedText, fontSize = 15.sp)
             }
             Spacer(modifier = Modifier.width(8.dp))
-            // Archive toggle (pill-shaped)
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(if (showArchived) TgBlueLight else Color.Transparent)
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(if (showArchived) TgBlueLight else PanelElevated)
                     .clickable { showArchived = !showArchived }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
                 Text(
                     text = if (showArchived) "归档" else "全部",
@@ -589,34 +703,56 @@ private fun SessionListScreen(
             }
         }
 
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 84.dp),
-        ) {
-            item { SectionTitle(if (showArchived) "已归档会话" else "最近消息") }
-            items(visibleSessions, key = { it.id }) { session ->
-                SessionRow(
-                    session = session,
-                    selected = session.id == selectedSessionId,
-                    archived = archivedSessionIds.contains(session.id),
-                    onClick = { onSelect(session) },
-                    onArchive = { onArchiveSession(session.id) },
-                    onUnarchive = { onUnarchiveSession(session.id) },
-                    onDelete = { onDeleteSession(session.id) },
-                )
-            }
-            if (visibleSessions.isEmpty()) {
-                item {
-                    EmptySessionList(
-                        archived = showArchived,
-                        onCreateSession = onCreateSession,
-                        onRefresh = onRefresh,
+        Box(modifier = Modifier.weight(1f)) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 110.dp),
+            ) {
+                item { SectionTitle(if (showArchived) "已归档会话" else "最近消息") }
+                items(visibleSessions, key = { it.id }) { session ->
+                    SessionRow(
+                        session = session,
+                        selected = session.id == selectedSessionId,
+                        archived = archivedSessionIds.contains(session.id),
+                        onClick = { onSelect(session) },
+                        onArchive = { onArchiveSession(session.id) },
+                        onUnarchive = { onUnarchiveSession(session.id) },
+                        onDelete = { onDeleteSession(session.id) },
                     )
                 }
+                if (visibleSessions.isEmpty()) {
+                    item {
+                        EmptySessionList(
+                            archived = showArchived,
+                            onCreateSession = onCreateSession,
+                            onRefresh = onRefresh,
+                        )
+                    }
+                }
+                item { Spacer(modifier = Modifier.height(24.dp)) }
             }
-            item { Spacer(modifier = Modifier.height(24.dp)) }
+            FloatingTelegramActionButton(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 18.dp, bottom = 104.dp),
+                onClick = onCreateSession,
+            )
         }
+    }
+}
+
+@Composable
+private fun FloatingTelegramActionButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier = modifier
+            .size(58.dp)
+            .clip(CircleShape)
+            .background(TgBlue)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        PlusGlyph(color = Color.White, modifier = Modifier.size(24.dp))
     }
 }
 
@@ -669,6 +805,7 @@ private fun EmptySessionList(archived: Boolean, onCreateSession: () -> Unit, onR
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SessionRow(
     session: Session,
@@ -694,17 +831,19 @@ private fun SessionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (selected) TgBlueLight else PanelBackground)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .background(if (selected) PanelElevated else PanelBackground)
+            .border(if (selected) 0.5.dp else 0.dp, TgBlue, RoundedCornerShape(0.dp))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { menuOpen = true },
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Circular avatar (Telegram style)
         SessionAvatar(session)
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Group icon indicator
                 if (session.type == "group") {
                     Text("👥", fontSize = 13.sp)
                     Spacer(modifier = Modifier.width(3.dp))
@@ -718,14 +857,12 @@ private fun SessionRow(
                     fontSize = 16.sp,
                     modifier = Modifier.weight(1f),
                 )
-                // Time on the right (Telegram style)
                 Text(sessionTime, color = if (unreadCount > 0) TgBlue else MutedText, fontSize = 12.sp)
             }
             Row(
                 modifier = Modifier.padding(top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Last message preview
                 Text(
                     text = lastMessage,
                     modifier = Modifier.weight(1f),
@@ -734,7 +871,6 @@ private fun SessionRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // Unread badge (Telegram style)
                 if (unreadCount > 0) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Box(
@@ -754,13 +890,15 @@ private fun SessionRow(
                 }
             }
         }
-        // Long-press menu (hidden, activated on long click)
-        Box {
-            Spacer(
-                modifier = Modifier
-                    .size(1.dp)
-                    .clickable { menuOpen = true },
-            )
+        Spacer(modifier = Modifier.width(8.dp))
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .clickable { menuOpen = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            MoreGlyph(color = MutedText, modifier = Modifier.size(16.dp))
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text(if (archived) "移出归档" else "归档") }, onClick = {
                     menuOpen = false
@@ -798,39 +936,41 @@ private fun SessionRow(
 
 @Composable
 private fun MainTabBar(modifier: Modifier = Modifier, active: MobileTab, onSelect: (MobileTab) -> Unit) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        // Top border line
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(0.5.dp)
-                .background(Hairline),
-        )
+    Box(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .background(PageBackground)
+                .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(horizontal = 0.dp, vertical = 6.dp),
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .clip(RoundedCornerShape(28.dp))
+                .background(BottomGlass)
+                .border(0.5.dp, Hairline, RoundedCornerShape(28.dp))
+                .padding(horizontal = 6.dp, vertical = 7.dp),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             MobileTab.values().forEach { tab ->
-                TabItem(tab = tab, active = active == tab, onClick = { onSelect(tab) })
+                TabItem(
+                    modifier = Modifier.weight(1f),
+                    tab = tab,
+                    active = active == tab,
+                    onClick = { onSelect(tab) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun TabItem(tab: MobileTab, active: Boolean, onClick: () -> Unit) {
+private fun TabItem(modifier: Modifier = Modifier, tab: MobileTab, active: Boolean, onClick: () -> Unit) {
     Column(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
+            .then(modifier)
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (active) TgBlueLight else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 2.dp),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         TabIcon(tab = tab, active = active)
@@ -867,6 +1007,7 @@ private fun ConversationScreen(
     val showHome = messages.isEmpty() && !state.agentTyping
 
     Box(modifier = Modifier.fillMaxSize().background(TgChatBg)) {
+        TelegramChatPattern(modifier = Modifier.matchParentSize())
         if (state.selectedSession == null && state.sessions.isNotEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 OutlinedButton(onClick = onOpenSessions) {
@@ -884,7 +1025,7 @@ private fun ConversationScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = 108.dp),
+                    .padding(bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 item { Spacer(modifier = Modifier.height(8.dp)) }
@@ -963,6 +1104,35 @@ private fun MobileHomeContent(modifier: Modifier) {
             fontSize = 15.sp,
         )
         Spacer(modifier = Modifier.weight(1.6f))
+    }
+}
+
+@Composable
+private fun TelegramChatPattern(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val line = Hairline.copy(alpha = 0.22f)
+        val blue = TgBlue.copy(alpha = 0.08f)
+        val stepX = 92.dp.toPx()
+        val stepY = 88.dp.toPx()
+        var y = 24.dp.toPx()
+        var row = 0
+        while (y < size.height) {
+            var x = if (row % 2 == 0) 22.dp.toPx() else 62.dp.toPx()
+            while (x < size.width) {
+                drawCircle(color = blue, radius = 12.dp.toPx(), center = Offset(x, y))
+                drawLine(
+                    color = line,
+                    start = Offset(x - 18.dp.toPx(), y + 18.dp.toPx()),
+                    end = Offset(x + 18.dp.toPx(), y + 4.dp.toPx()),
+                    strokeWidth = 1.dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
+                drawCircle(color = line, radius = 3.dp.toPx(), center = Offset(x + 24.dp.toPx(), y - 16.dp.toPx()))
+                x += stepX
+            }
+            y += stepY
+            row += 1
+        }
     }
 }
 
@@ -1445,10 +1615,10 @@ private fun WorkspaceSummaryCard(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Ink),
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(TgBlue),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -1483,7 +1653,7 @@ private fun WorkspaceSummaryCard(
         }
         Text(
             workspace.projectPath.orEmpty().ifBlank { "未绑定项目路径" },
-            color = Color(0xFF666666),
+            color = MutedText,
             fontSize = 11.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1529,7 +1699,7 @@ private fun RunSummaryCard(run: MobileWorkbenchRunSummary) {
         }
         Text(
             "${formatWorkbenchDate(run.createdAt)} · ${run.id.take(8)}",
-            color = Color(0xFF666666),
+            color = MutedText,
             fontSize = 11.sp,
             maxLines = 1,
         )
@@ -1579,7 +1749,7 @@ private fun CodingToolsCard(
             Button(
                 onClick = onRepair,
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
             ) {
                 Text("修复")
             }
@@ -1600,7 +1770,7 @@ private fun CodingToolRow(tool: MobileWorkbenchCodingToolItem) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFF7F7F7))
+            .background(PanelElevated)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -1667,7 +1837,7 @@ private fun SkillRow(skill: MobileWorkbenchSkillSummary) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFF7F7F7))
+            .background(PanelElevated)
             .padding(12.dp),
         verticalAlignment = Alignment.Top,
     ) {
@@ -1786,7 +1956,7 @@ private fun WorkbenchChip(text: String) {
         text = text,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(Color(0xFFF0F0F0))
+            .background(PanelElevated)
             .padding(horizontal = 9.dp, vertical = 4.dp),
         color = Ink,
         fontSize = 10.sp,
@@ -2226,8 +2396,8 @@ private fun ProfileSecondaryAction(text: String, enabled: Boolean, onClick: () -
             .fillMaxWidth()
             .height(46.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(if (enabled) PanelBackground else Color(0xFFF0F0F0))
-            .border(0.8.dp, if (enabled) Hairline else Color(0xFFE0E0E0), RoundedCornerShape(16.dp))
+            .background(if (enabled) PanelBackground else SoftFill)
+            .border(0.8.dp, Hairline, RoundedCornerShape(16.dp))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -2252,36 +2422,31 @@ private fun MobileChatComposer(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(PageBackground)
-            .border(0.5.dp, Hairline)
-            .padding(horizontal = 6.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp, vertical = 10.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(BottomGlass)
+            .border(0.5.dp, Hairline, RoundedCornerShape(28.dp))
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
-        // Attach button (Telegram style)
         Box(
             modifier = Modifier
-                .size(38.dp)
+                .size(40.dp)
                 .clip(CircleShape)
+                .background(PanelElevated)
                 .clickable { },
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(modifier = Modifier.size(22.dp)) {
-                val stroke = 2.2.dp.toPx()
-                val cx = size.width / 2f
-                val cy = size.height / 2f
-                // Paperclip icon (simplified)
-                drawLine(MutedText, Offset(cx - 5.dp.toPx(), cy), Offset(cx + 5.dp.toPx(), cy), stroke, StrokeCap.Round)
-                drawLine(MutedText, Offset(cx, cy - 5.dp.toPx()), Offset(cx, cy + 5.dp.toPx()), stroke, StrokeCap.Round)
-            }
+            PlusGlyph(color = MutedText, modifier = Modifier.size(18.dp))
         }
 
-        // Text input (Telegram-style rounded)
         Box(
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 4.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(SoftFill)
+                .clip(RoundedCornerShape(24.dp))
+                .background(PanelElevated)
+                .border(0.5.dp, Hairline, RoundedCornerShape(24.dp))
                 .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
             BasicTextField(
@@ -2289,7 +2454,7 @@ private fun MobileChatComposer(
                 onValueChange = onValueChange,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 20.dp, max = 100.dp),
+                    .heightIn(min = 22.dp, max = 108.dp),
                 textStyle = TextStyle(color = Ink, fontSize = 16.sp, lineHeight = 22.sp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
@@ -2304,24 +2469,22 @@ private fun MobileChatComposer(
             )
         }
 
-        // Send button (Telegram style - round blue)
         Box(
             modifier = Modifier
-                .size(38.dp)
+                .size(40.dp)
                 .clip(CircleShape)
-                .background(if (canSend) TgBlue else Color.Transparent)
+                .background(if (canSend) TgBlue else PanelElevated)
                 .clickable(enabled = canSend, onClick = onSend),
             contentAlignment = Alignment.Center,
         ) {
             if (canSend) {
                 Text("↑", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             } else {
-                // Microphone icon placeholder
                 Box(
                     modifier = Modifier
-                        .size(18.dp)
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(MutedText.copy(alpha = 0.3f)),
+                        .size(16.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(MutedText.copy(alpha = 0.35f)),
                 )
             }
         }
@@ -2385,7 +2548,7 @@ private fun ChatComposer(
                 modifier = Modifier
                     .size(38.dp)
                     .clip(CircleShape)
-                    .background(if (value.isBlank()) Color(0xFFE8E8E5) else TgBlue)
+                    .background(if (value.isBlank()) PanelElevated else TgBlue)
                     .clickable(enabled = value.isNotBlank(), onClick = onSend),
                 contentAlignment = Alignment.Center,
             ) {
@@ -2423,15 +2586,21 @@ private fun MessageBubble(
             message.createdAt?.substringAfter('T')?.take(5) ?: ""
         } catch (_: Exception) { "" }
     }
+    val bubbleShape = RoundedCornerShape(
+        topStart = if (isUser) 18.dp else 6.dp,
+        topEnd = if (isUser) 6.dp else 18.dp,
+        bottomStart = 18.dp,
+        bottomEnd = 18.dp,
+    )
+    val bubbleTextColor = if (isUser) Color.White else Ink
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp),
+            .padding(horizontal = 10.dp, vertical = 3.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         if (!isUser) {
-            // Agent avatar (small, circular)
             Box(
                 modifier = Modifier
                     .size(32.dp)
@@ -2452,26 +2621,15 @@ private fun MessageBubble(
         Column(
             modifier = Modifier
                 .fillMaxWidth(0.78f)
-                .clip(RoundedCornerShape(
-                    topStart = if (isUser) 16.dp else 4.dp,
-                    topEnd = if (isUser) 4.dp else 16.dp,
-                    bottomStart = 16.dp,
-                    bottomEnd = 16.dp,
-                ))
+                .clip(bubbleShape)
                 .background(if (isUser) TgSentBg else TgReceivedBg)
                 .border(
                     width = if (streaming && !isUser) 1.dp else if (!isUser) 0.5.dp else 0.dp,
                     color = if (streaming && !isUser) TgBlue.copy(alpha = 0.45f) else if (!isUser) Hairline else Color.Transparent,
-                    shape = RoundedCornerShape(
-                        topStart = if (isUser) 16.dp else 4.dp,
-                        topEnd = if (isUser) 4.dp else 16.dp,
-                        bottomStart = 16.dp,
-                        bottomEnd = 16.dp,
-                    ),
+                    shape = bubbleShape,
                 )
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            // Sender name for agent messages
             if (!isUser) {
                 Text(
                     text = senderLabel(message),
@@ -2487,14 +2645,14 @@ private fun MessageBubble(
                 Text(
                     text = message.content.ifBlank { " " },
                     modifier = Modifier.weight(1f),
-                    color = Ink,
+                    color = bubbleTextColor,
                     fontSize = 15.sp,
                     lineHeight = 21.sp,
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = messageTime,
-                    color = if (isUser) Color(0xFF6DBF5D) else MutedText,
+                    color = if (isUser) Color.White.copy(alpha = 0.72f) else MutedText,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(bottom = 1.dp),
                 )
@@ -2596,7 +2754,7 @@ private fun ArtifactPreviewCard(artifact: MobileArtifact, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFFF6F6F6))
+            .background(PanelElevated)
             .clickable(onClick = onClick)
             .padding(horizontal = 11.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -2889,10 +3047,11 @@ private fun TopIconButton(label: String, onClick: () -> Unit) {
         modifier = Modifier
             .size(34.dp)
             .clip(RoundedCornerShape(10.dp))
+            .background(PanelElevated)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 2.dp),
         color = Ink,
-        fontSize = 28.sp,
+        fontSize = 26.sp,
         fontWeight = FontWeight.Medium,
     )
 }

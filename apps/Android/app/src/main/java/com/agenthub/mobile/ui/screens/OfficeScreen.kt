@@ -28,14 +28,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agenthub.mobile.data.MobileUiState
 
-private val Ink = Color(0xFF000000)
-private val MutedText = Color(0xFF7A7A7A)
-private val PanelBackground = Color.White
-private val PageBackground = Color(0xFFF5F5F5)
-private val TgBlue = Color(0xFF3390EC)
-private val SuccessGreen = Color(0xFF07C160)
-private val ErrorRed = Color(0xFFB42318)
-private val WorkAmber = Color(0xFFF2A23A)
+private val Ink = Color(0xFFF4F7FA)
+private val MutedText = Color(0xFF92A0AE)
+private val PanelBackground = Color(0xFF1B2530)
+private val PageBackground = Color(0xFF121B24)
+private val TgBlue = Color(0xFF4EA2F6)
+private val SuccessGreen = Color(0xFF55D66B)
+private val ErrorRed = Color(0xFFFF6B78)
+private val WorkAmber = Color(0xFFFFB04A)
 
 @Composable
 fun OfficeScreen(
@@ -113,7 +113,7 @@ fun OfficeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFFFFF5F5))
+                            .background(Color(0xFF3A1F25))
                             .padding(12.dp),
                     ) {
                         Text("错误信息", color = ErrorRed, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
@@ -245,9 +245,9 @@ fun OfficeScreen(
 @Composable
 private fun BigStatusBadge(running: Boolean, starting: Boolean) {
     val (text, color, bgColor) = when {
-        running -> Triple("运行中", SuccessGreen, Color(0xFFE8F5E9))
-        starting -> Triple("启动中", WorkAmber, Color(0xFFFFF8E1))
-        else -> Triple("已停止", MutedText, Color(0xFFF5F5F5))
+        running -> Triple("运行中", SuccessGreen, Color(0xFF163523))
+        starting -> Triple("启动中", WorkAmber, Color(0xFF3A2812))
+        else -> Triple("已停止", MutedText, Color(0xFF22303F))
     }
     Text(
         text = text,

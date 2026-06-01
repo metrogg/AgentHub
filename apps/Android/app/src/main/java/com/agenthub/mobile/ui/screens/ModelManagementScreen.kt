@@ -50,13 +50,14 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-private val Ink = Color(0xFF000000)
-private val MutedText = Color(0xFF7A7A7A)
-private val PanelBackground = Color.White
-private val PageBackground = Color(0xFFF5F5F5)
-private val TgBlue = Color(0xFF3390EC)
-private val SuccessGreen = Color(0xFF07C160)
-private val ErrorRed = Color(0xFFB42318)
+private val Ink = Color(0xFFF4F7FA)
+private val MutedText = Color(0xFF92A0AE)
+private val PanelBackground = Color(0xFF1B2530)
+private val PageBackground = Color(0xFF121B24)
+private val TgBlue = Color(0xFF4EA2F6)
+private val SuccessGreen = Color(0xFF55D66B)
+private val ErrorRed = Color(0xFFFF6B78)
+private val SoftFill = Color(0xFF22303F)
 
 @Composable
 fun ModelManagementScreen(
@@ -232,7 +233,7 @@ fun ModelManagementScreen(
                     onTestModel(TestModelRequest())
                 },
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
             ) {
                 Text("测试当前默认连接")
             }
@@ -374,7 +375,7 @@ private fun StatusChip(text: String, isPositive: Boolean) {
         text = text,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(if (isPositive) Color(0xFFE8F5E9) else Color(0xFFFFF3E0))
+            .background(if (isPositive) Color(0xFF163523) else Color(0xFF3A2812))
             .padding(horizontal = 9.dp, vertical = 4.dp),
         color = if (isPositive) SuccessGreen else WorkAmber,
         fontSize = 10.sp,
@@ -382,7 +383,7 @@ private fun StatusChip(text: String, isPositive: Boolean) {
     )
 }
 
-private val WorkAmber = Color(0xFFF2A23A)
+private val WorkAmber = Color(0xFFFFB04A)
 
 @Composable
 private fun InfoChip(text: String) {
@@ -390,7 +391,7 @@ private fun InfoChip(text: String) {
         text = text,
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(Color(0xFFF0F0F0))
+            .background(SoftFill)
             .padding(horizontal = 9.dp, vertical = 4.dp),
         color = Ink,
         fontSize = 10.sp,

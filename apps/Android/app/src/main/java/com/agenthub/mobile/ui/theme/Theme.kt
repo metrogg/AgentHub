@@ -1,37 +1,37 @@
 package com.agenthub.mobile.ui.theme
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// Telegram-inspired color palette
-private val AgentHubLightColors = lightColorScheme(
-    primary = Color(0xFF3390EC),           // Telegram blue
+// Telegram-inspired dark palette
+private val AgentHubDarkColors = darkColorScheme(
+    primary = Color(0xFF4FA3F7),
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFD6E8FF),  // Light blue tint
-    onPrimaryContainer = Color(0xFF001C3B),
-    background = Color(0xFFFFFFFF),        // Pure white like Telegram
-    onBackground = Color(0xFF000000),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF000000),
-    surfaceVariant = Color(0xFFF0F2F5),    // Telegram light gray
-    onSurfaceVariant = Color(0xFF6B7B8D),
-    outline = Color(0xFFDADCE0),
-    outlineVariant = Color(0xFFE8EAED),
-    secondary = Color(0xFF4CAF50),         // Online green
+    primaryContainer = Color(0xFF22384C),
+    onPrimaryContainer = Color(0xFFD8ECFF),
+    background = Color(0xFF121B24),
+    onBackground = Color(0xFFF4F7FA),
+    surface = Color(0xFF1C2733),
+    onSurface = Color(0xFFF4F7FA),
+    surfaceVariant = Color(0xFF243241),
+    onSurfaceVariant = Color(0xFF9AA8B5),
+    outline = Color(0xFF314252),
+    outlineVariant = Color(0xFF243241),
+    secondary = Color(0xFF55D66B),
     onSecondary = Color(0xFFFFFFFF),
-    error = Color(0xFFE53935),
+    error = Color(0xFFFF6B78),
     onError = Color(0xFFFFFFFF),
-    inverseSurface = Color(0xFF1B1F23),
-    inverseOnSurface = Color(0xFFF1F3F5),
-    inversePrimary = Color(0xFFA8C7FA),
+    inverseSurface = Color(0xFFF4F7FA),
+    inverseOnSurface = Color(0xFF121B24),
+    inversePrimary = Color(0xFF2A7FD1),
 )
 
 @Composable
 fun AgentHubTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = AgentHubLightColors,
+        colorScheme = AgentHubDarkColors,
         content = content,
     )
 }

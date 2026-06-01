@@ -44,13 +44,13 @@ import androidx.compose.ui.unit.sp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
-private val TgBlue = Color(0xFF3390EC)
-private val TgBlueLight = Color(0xFFD6E8FF)
-private val Ink = Color(0xFF000000)
-private val PageBackground = Color(0xFFFFFFFF)
-private val Hairline = Color(0xFFE8EAED)
-private val MutedText = Color(0xFF8B9AA3)
-private val SoftFill = Color(0xFFF0F2F5)
+private val TgBlue = Color(0xFF4EA2F6)
+private val TgBlueLight = Color(0xFF223648)
+private val Ink = Color(0xFFF4F7FA)
+private val PageBackground = Color(0xFF121B24)
+private val Hairline = Color(0xFF253343)
+private val MutedText = Color(0xFF92A0AE)
+private val SoftFill = Color(0xFF22303F)
 
 @Composable
 fun ConnectScreen(

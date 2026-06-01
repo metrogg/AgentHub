@@ -10,6 +10,7 @@ import { zValidator } from '@hono/zod-validator'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { env } from '../env'
 import { globalSkillRegistry } from '../services/skill-registry'
+import { globalSkillhubCatalog } from '../services/skillhub-catalog'
 
 const routeDir = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(routeDir, '../../../..')
@@ -22,6 +23,7 @@ const installSkillSchema = z.object({
 
 const skillhubSearchSchema = z.object({
   q: z.string().trim().min(1).max(120),
+  limit: z.coerce.number().int().min(1).max(120).optional(),
 })
 
 const skillhubInstallSchema = z.object({
@@ -34,8 +36,8 @@ export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ items: await globalSkillRegistry.listSkills() })
   })
   .get('/skillhub/search', zValidator('query', skillhubSearchSchema), async (c) => {
-    const { q } = c.req.valid('query')
-    const result = await searchSkillhubNative(q)
+    const { q, limit } = c.req.valid('query')
+    const result = await globalSkillhubCatalog.search(q, { limit })
     if (!result.ok) {
       return c.json({ ok: false, items: [], message: result.message || 'SkillHub 搜索失败' }, 500)
     }
@@ -72,27 +74,6 @@ export const skillRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!skill) return c.json({ message: 'Skill 不存在' }, 404)
     return c.json(skill)
   })
-
-async function searchSkillhubNative(q: string) {
-  try {
-    const url = new URL('https://lightmake.site/api/v1/search')
-    url.searchParams.set('q', q)
-    url.searchParams.set('limit', '40')
-    const response = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'AgentHub/SkillHub',
-      },
-    })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const payload = (await response.json()) as any
-    const rawItems = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload?.items) ? payload.items : []
-    const items = rawItems.map(normalizeSkillhubItem).filter(Boolean).slice(0, 40)
-    return { ok: true, items, message: `SkillHub 搜索完成：${items.length} 个结果` }
-  } catch (error: any) {
-    return { ok: false, items: [], message: error?.message || 'SkillHub 搜索失败' }
-  }
-}
 
 async function installSkillhubNative(slug: string) {
   const targetDir = resolve(installedSkillsRoot, slug)
@@ -338,25 +319,6 @@ function buildChildProcessEnv() {
 function stringEnv(key: string) {
   const value = process.env[key]
   return typeof value === 'string' ? value : ''
-}
-
-function normalizeSkillhubItem(value: any) {
-  const slug = stringValue(value?.slug || value?.id || value?.name)
-  if (!slug) return null
-  const title = stringValue(value?.displayName || value?.title || value?.name || slug)
-  const description = stringValue(value?.description_zh || value?.description || value?.summary)
-  const version = stringValue(value?.version)
-  return {
-    slug,
-    title: cleanSkillhubText(title || slug),
-    description: cleanSkillhubText(description),
-    ...(version ? { version } : {}),
-    source: stringValue(value?.source) || 'SkillHub',
-  }
-}
-
-function stringValue(value: unknown) {
-  return typeof value === 'string' ? value.trim() : ''
 }
 
 async function downloadSkillhubZip(slug: string) {

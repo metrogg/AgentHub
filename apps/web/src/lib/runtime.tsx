@@ -58,14 +58,15 @@ function toThreadMessage(message: Message): ThreadMessageLike {
       ? message.metadata.displayContent
       : message.content
   const finalCodeAgentContent =
-    typeof codeAgentRun?.finalMessage === 'string' ? codeAgentRun.finalMessage.trim() : ''
+    typeof rawCodeAgentRun?.finalMessage === 'string' ? rawCodeAgentRun.finalMessage.trim() : ''
   const displayContent = finalCodeAgentContent || rawDisplayContent
   const text = senderLabel
     ? displayContent.trim()
       ? `**${senderLabel}**\n\n${displayContent}`
       : `**${senderLabel}**`
     : displayContent
-  const artifacts = readArtifacts(message.metadata?.artifacts, codeAgentRun)
+  const artifacts = readArtifacts(message.metadata?.artifacts, rawCodeAgentRun)
+  const codeAgentRun = rawCodeAgentRun ? { ...rawCodeAgentRun, artifacts } : null
   const artifactPart = artifacts.length
     ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: artifacts } }]
     : []
@@ -96,7 +97,6 @@ function toThreadMessage(message: Message): ThreadMessageLike {
                 ...attachmentPart,
                 ...memberProposalPart,
                 { type: 'data', name: 'code_agent_run', data: codeAgentRun },
-                ...artifactPart,
                 ...deliveryReportPart,
               ]
             : [
@@ -209,15 +209,6 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
               ...streamingAvatarPart,
               ...(streamingText.trim() ? [{ type: 'text' as const, text: streamingText }] : []),
               { type: 'data', name: 'code_agent_run', data: streamingCodeAgentRun },
-              ...(streamingCodeAgentRun.artifacts?.length
-                ? [
-                    {
-                      type: 'data' as const,
-                      name: 'agent_artifacts',
-                      data: { items: streamingCodeAgentRun.artifacts },
-                    },
-                  ]
-                : []),
             ]
           : [{ type: 'text', text: streamingMessage.content }],
         status: { type: 'running' },

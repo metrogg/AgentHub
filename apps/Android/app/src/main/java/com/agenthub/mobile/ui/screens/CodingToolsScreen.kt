@@ -30,13 +30,14 @@ import androidx.compose.ui.unit.sp
 import com.agenthub.mobile.data.MobileUiState
 import com.agenthub.mobile.data.MobileWorkbenchCodingToolItem
 
-private val Ink = Color(0xFF000000)
-private val MutedText = Color(0xFF7A7A7A)
-private val PanelBackground = Color.White
-private val PageBackground = Color(0xFFF5F5F5)
-private val SuccessGreen = Color(0xFF07C160)
-private val ErrorRed = Color(0xFFB42318)
-private val TgBlue = Color(0xFF3390EC)
+private val Ink = Color(0xFFF4F7FA)
+private val MutedText = Color(0xFF92A0AE)
+private val PanelBackground = Color(0xFF1B2530)
+private val PageBackground = Color(0xFF121B24)
+private val SuccessGreen = Color(0xFF55D66B)
+private val ErrorRed = Color(0xFFFF6B78)
+private val TgBlue = Color(0xFF4EA2F6)
+private val SoftFill = Color(0xFF22303F)
 
 @Composable
 fun CodingToolsScreen(
@@ -89,7 +90,7 @@ fun CodingToolsScreen(
                     Button(
                         onClick = onRepair,
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                        colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
                     ) {
                         Text("修复/重启")
                     }
@@ -198,7 +199,7 @@ private fun MetricTile(label: String, value: String, modifier: Modifier = Modifi
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFF7F7F7))
+            .background(SoftFill)
             .padding(12.dp),
     ) {
         Text(value, color = Ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -268,7 +269,7 @@ private fun CodingToolDetailCard(tool: MobileWorkbenchCodingToolItem) {
         if (tool.docsHint.isNotBlank()) {
             Text(
                 "💡 ${tool.docsHint}",
-                color = Color(0xFF666666), fontSize = 11.sp, lineHeight = 16.sp,
+                color = MutedText, fontSize = 11.sp, lineHeight = 16.sp,
             )
         }
     }
@@ -280,7 +281,7 @@ private fun StatusBadge(ready: Boolean) {
         text = if (ready) "✓ Ready" else "✗ Not Ready",
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(if (ready) Color(0xFFE8F5E9) else Color(0xFFFFEBEE))
+            .background(if (ready) Color(0xFF163523) else Color(0xFF3A1F25))
             .padding(horizontal = 10.dp, vertical = 5.dp),
         color = if (ready) SuccessGreen else ErrorRed,
         fontSize = 11.sp,
@@ -294,7 +295,7 @@ private fun DetailChip(label: String, value: Boolean) {
         text = "$label: ${if (value) "✓" else "✗"}",
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(if (value) Color(0xFFF0F0F0) else Color(0xFFF5F5F5))
+            .background(if (value) SoftFill else PanelBackground)
             .padding(horizontal = 9.dp, vertical = 4.dp),
         color = if (value) SuccessGreen else MutedText,
         fontSize = 10.sp,
