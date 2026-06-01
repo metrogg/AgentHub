@@ -682,8 +682,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                             {savedAgent?.name ?? sessionDisplayTitle(session.title, t)}
                           </span>
                           <span className="block truncate text-[10px] text-neutral-400">
-                            {savedAgent?.role
-                              ? `${savedAgent.role} · ${relativeTime(session.updatedAt, language)}`
+                            {session.lastMessage?.content
+                              ? session.lastMessage.content
                               : relativeTime(session.updatedAt, language)}
                           </span>
                         </span>
@@ -845,7 +845,9 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                               <span className="block truncate text-[11px] text-neutral-400">
                                 {hasChildren
                                   ? `${formatSubtopicCount(item.children.length, language, t)} · ${relativeTime(item.latestUpdatedAt, language)}`
-                                  : relativeTime(item.latestUpdatedAt, language)}
+                                  : item.parent.lastMessage?.content
+                                    ? item.parent.lastMessage.content
+                                    : relativeTime(item.latestUpdatedAt, language)}
                               </span>
                             </span>
                           </>
