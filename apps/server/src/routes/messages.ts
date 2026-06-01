@@ -14,6 +14,8 @@ import {
   SandboxPolicy,
   TaskType,
   WsEvent,
+  CORE_AGENT_EXPERT_PROFILES,
+  type AgentExpertProfile,
 } from '@agenthub/shared'
 import { logger } from '../lib/logger'
 import {
@@ -69,6 +71,10 @@ import { ensureOrchestratorTaskSession } from '../services/workspace/session-man
 
 const agentDraftSchema = z.object({
   content: z.string().min(1).max(10000),
+})
+
+const confirmMemberProposalsSchema = z.object({
+  profileIds: z.array(z.string().min(1).max(120)).min(1).max(5),
 })
 
 const updateMessageSchema = z.object({
@@ -522,6 +528,227 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ agent, message: updatedCard ?? card })
     },
   )
+  .post(
+    '/:sessionId/member-proposals/:messageId/confirm',
+    zValidator('json', confirmMemberProposalsSchema),
+    async (c) => {
+      const user = c.get('user')
+      const sessionId = c.req.param('sessionId')
+      const messageId = c.req.param('messageId')
+      const { profileIds } = c.req.valid('json')
+
+      const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+      if (
+        !session ||
+        session.ownerId !== user.sub ||
+        session.type !== 'group' ||
+        !session.workspaceId
+      ) {
+        throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
+      }
+
+      const [proposalMessage] = await db
+        .select()
+        .from(messages)
+        .where(eq(messages.id, messageId))
+        .limit(1)
+      if (!proposalMessage || proposalMessage.sessionId !== sessionId) {
+        throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '补员建议消息不存在')
+      }
+
+      const metadata = proposalMessage.metadata ?? {}
+      if (metadata.memberProposalStatus !== 'pending') {
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '补员建议已经处理或不可确认')
+      }
+
+      const allowedProfileIds = new Set(readMemberProposalProfileIds(metadata.memberProposals))
+      const selectedProfileIds = Array.from(new Set(profileIds)).filter((id) => allowedProfileIds.has(id))
+      if (!selectedProfileIds.length) {
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请选择 Orchestrator 建议中的 Agent')
+      }
+
+      const existingAgents = await db
+        .select()
+        .from(workspaceAgents)
+        .where(eq(workspaceAgents.workspaceId, session.workspaceId))
+        .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+      const existingProfileIds = new Set(
+        existingAgents
+          .map((agent) => readExpertProfileId(agent.roleProfile))
+          .filter((id): id is string => Boolean(id)),
+      )
+      const existingNames = new Set(existingAgents.map((agent) => normalizeAgentIdentity(agent.name)))
+      const createdAgents: Array<typeof workspaceAgents.$inferSelect> = []
+      const reusedAgents: Array<typeof workspaceAgents.$inferSelect> = []
+      let orderIdx = existingAgents.length
+
+      for (const profileId of selectedProfileIds) {
+        const profile = CORE_AGENT_EXPERT_PROFILES.find((item) => item.id === profileId)
+        if (!profile) continue
+
+        const existing =
+          existingAgents.find((agent) => readExpertProfileId(agent.roleProfile) === profile.id) ??
+          existingAgents.find((agent) => normalizeAgentIdentity(agent.name) === normalizeAgentIdentity(profile.name))
+        if (existing) {
+          reusedAgents.push(existing)
+          continue
+        }
+        if (existingProfileIds.has(profile.id) || existingNames.has(normalizeAgentIdentity(profile.name))) {
+          continue
+        }
+
+        const [agent] = await db
+          .insert(workspaceAgents)
+          .values({
+            ...expertProfileToAgentInsert(profile),
+            workspaceId: session.workspaceId,
+            orderIdx,
+          })
+          .returning()
+        if (agent) {
+          createdAgents.push(agent)
+          existingProfileIds.add(profile.id)
+          existingNames.add(normalizeAgentIdentity(profile.name))
+          orderIdx += 1
+        }
+      }
+
+      const agentsToJoin = [...reusedAgents, ...createdAgents]
+      if (!agentsToJoin.length) {
+        throw AppError.fromCode(AppErrorCodes.AGENT_REPLY_FAILED, '没有创建或加入新的 Agent')
+      }
+
+      await ensureSessionMembers(sessionId, user.sub, agentsToJoin.map((agent) => agent.id))
+      const updatedSession = await refreshGroupMemberMetadata(session, user.sub)
+      await db
+        .update(workspaces)
+        .set({ updatedAt: new Date() })
+        .where(eq(workspaces.id, session.workspaceId))
+
+      const [updatedMessage] = await db
+        .update(messages)
+        .set({
+          content: `已加入：${agentsToJoin.map((agent) => agent.name).join('、')}。现在可以让 Orchestrator 重新规划并分发任务。`,
+          metadata: {
+            ...metadata,
+            memberProposalStatus: 'confirmed',
+            confirmedProfileIds: selectedProfileIds,
+            createdAgentIds: createdAgents.map((agent) => agent.id),
+            reusedAgentIds: reusedAgents.map((agent) => agent.id),
+          },
+        })
+        .where(eq(messages.id, messageId))
+        .returning()
+
+      const message = updatedMessage ?? proposalMessage
+      broadcastSessionEvent(sessionId, {
+        type: WsEvent.MessageCompleted,
+        payload: { sessionId, message },
+      })
+
+      return c.json({ agents: agentsToJoin, message, session: updatedSession ?? session })
+    },
+  )
+function expertProfileToAgentInsert(profile: AgentExpertProfile) {
+  return {
+    name: profile.name,
+    role: profile.role,
+    roleType: profile.roleType,
+    description: profile.description,
+    avatar: null,
+    systemPrompt: profile.systemPrompt,
+    roleProfile: {
+      expertProfileId: profile.id,
+      category: profile.category,
+      expertLevel: profile.riskLevel === 'high' ? 'specialist' : 'standard',
+      background: profile.background,
+      responsibilities: profile.capabilityTags,
+      cannotDo: profile.cannotDo,
+      acceptsTaskTypes: profile.acceptsTaskTypes,
+      outputContract: profile.outputContract,
+      qualityGates: profile.qualityGates,
+      defaultSkillIds: profile.defaultSkillIds,
+      recommendedMcpServers: profile.recommendedMcpServers,
+      preferredTopologies: profile.preferredTopologies,
+      riskLevel: profile.riskLevel,
+    },
+    color: profile.color,
+    modelId: null,
+    runtimeType: profile.runtimeType,
+    codeAgentType: profile.runtimeType === 'code-agent' ? (profile.codeAgentType ?? 'codex') : null,
+    capabilityTags: profile.capabilityTags,
+    skillIds: profile.defaultSkillIds,
+    toolPermissions: profile.toolPermissions,
+    sandboxPolicy: profile.sandboxPolicy,
+    contextPolicy: profile.contextPolicy,
+    autoInvoke: profile.autoInvoke,
+    approvalRequired: profile.runtimeType === 'code-agent' ? false : profile.approvalRequired,
+  }
+}
+
+function readMemberProposalProfileIds(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return ''
+      const id = (item as { expertProfileId?: unknown }).expertProfileId
+      return typeof id === 'string' ? id : ''
+    })
+    .filter(Boolean)
+}
+
+function readExpertProfileId(roleProfile: unknown) {
+  if (!roleProfile || typeof roleProfile !== 'object') return ''
+  const value = (roleProfile as { expertProfileId?: unknown }).expertProfileId
+  return typeof value === 'string' ? value : ''
+}
+
+function normalizeAgentIdentity(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+async function ensureSessionMembers(sessionId: string, ownerId: string, agentIds: string[]) {
+  const existing = await db
+    .select()
+    .from(sessionMembers)
+    .where(eq(sessionMembers.sessionId, sessionId))
+  const keys = new Set(existing.map((member) => `${member.memberType}:${member.memberId}`))
+  const wanted = [
+    { memberType: 'user' as const, memberId: ownerId },
+    ...agentIds.map((agentId) => ({ memberType: 'agent' as const, memberId: agentId })),
+  ].filter((member) => !keys.has(`${member.memberType}:${member.memberId}`))
+  if (wanted.length) {
+    await db.insert(sessionMembers).values(wanted.map((member) => ({ sessionId, ...member })))
+  }
+}
+
+async function refreshGroupMemberMetadata(session: typeof sessions.$inferSelect, ownerId: string) {
+  if (!session.workspaceId) return session
+  const members = await db
+    .select()
+    .from(sessionMembers)
+    .where(eq(sessionMembers.sessionId, session.id))
+  const agentIds = members
+    .filter((member) => member.memberType === 'agent')
+    .map((member) => member.memberId)
+  const nextMetadata = {
+    ...(session.metadata ?? {}),
+    kind: 'workspace-agent-group',
+    agentIds,
+    agentCount: agentIds.length,
+    memberCount: agentIds.length + 1,
+  }
+  const [updated] = await db
+    .update(sessions)
+    .set({
+      metadata: nextMetadata,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(sessions.id, session.id), eq(sessions.ownerId, ownerId)))
+    .returning()
+  return updated ?? session
+}
+
 function toAgentProfile(
   agent: typeof workspaceAgents.$inferSelect,
   projectPath?: string | null,
@@ -644,7 +871,13 @@ async function routeGroupMessageThroughOrchestrator(
     createdAt: new Date(),
   }
 
-  if (decision.message?.trim()) {
+  const memberProposals = Array.isArray(decision.memberProposals) ? decision.memberProposals : []
+  const decisionContent =
+    decision.message?.trim() ||
+    (memberProposals.length
+      ? '当前群聊成员能力可能不够完整，Orchestrator 建议先补充下面的 Agent。'
+      : '')
+  if (decisionContent) {
     const [message] = await db
       .insert(messages)
       .values({
@@ -652,11 +885,17 @@ async function routeGroupMessageThroughOrchestrator(
         senderId: orchestrator.id,
         senderType: 'agent',
         type: 'text',
-        content: decision.message.trim(),
+        content: decisionContent,
         metadata: {
           systemEvent: 'orchestrator_decision',
           orchestratorDecision: decision.action,
           decisionReason: decision.reason,
+          ...(memberProposals.length
+            ? {
+                memberProposalStatus: 'pending',
+                memberProposals,
+              }
+            : {}),
         },
       })
       .returning()

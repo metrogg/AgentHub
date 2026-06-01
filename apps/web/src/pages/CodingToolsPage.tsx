@@ -23,6 +23,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
+import { settingsUpdatedEvent } from '../lib/shortcuts'
 import {
   api,
   type CodexAuthStatus,
@@ -583,6 +584,7 @@ export default function CodingToolsPage() {
       CODE_AGENT_ACTIVE_SANDBOX: activeTool.sandbox,
       CODEX_CHATGPT_TRANSPORT: codexTransport,
     })
+    window.dispatchEvent(new Event(settingsUpdatedEvent))
     showSaved()
   }
 
@@ -717,7 +719,7 @@ export default function CodingToolsPage() {
 
   return (
     <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#f7f5f1] text-neutral-950">
-      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} />
+      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-5">
           <div className="flex min-w-0 items-center gap-3">

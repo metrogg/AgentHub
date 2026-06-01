@@ -17,6 +17,7 @@ export const confirmAgentDraftSchema = z.object({
       runtimeType: z.enum(['llm', 'code-agent']).default('code-agent'),
       codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
       capabilityTags: z.array(z.string().max(40)).max(12).default([]),
+      skillIds: z.array(z.string().max(120)).max(40).default([]),
       toolPermissions: z.array(z.string().max(80)).max(30).default(['chat']),
       sandboxPolicy: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('workspace-write'),
       contextPolicy: z.enum(['recent-only', 'pinned-recent', 'workspace-aware']).default('workspace-aware'),
@@ -41,6 +42,7 @@ const modelAgentDraftSchema = z.object({
   runtimeType: z.enum(['llm', 'code-agent']),
   codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable(),
   capabilityTags: z.array(z.string().max(40)).max(12),
+  skillIds: z.array(z.string().max(120)).max(40).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30),
   sandboxPolicy: z.enum(['read-only', 'workspace-write', 'danger-full-access']),
   contextPolicy: z.enum(['recent-only', 'pinned-recent', 'workspace-aware']),
@@ -59,7 +61,7 @@ export async function buildAgentDraft(content: string): Promise<AgentDraft> {
     'MCP、Skills、Rules 是 code-agent 可使用的工具/能力，不是 runtimeType。不要输出 runtimeType="mcp" 或 runtimeType="a2a"。',
     'sandboxPolicy 必须和职责匹配：只读研究/审查用 read-only；需要改项目文件才用 workspace-write；除非用户明确要求且风险可控，不要用 danger-full-access。',
     'roleType 只能是 orchestrator、clarifier、architect、researcher、coder、verifier、reviewer、integrator、custom。',
-    '返回字段：name, role, roleType, description, avatar, systemPrompt, roleProfile, color, modelId, runtimeType, codeAgentType, capabilityTags, toolPermissions, sandboxPolicy, contextPolicy, autoInvoke, approvalRequired。',
+    '返回字段：name, role, roleType, description, avatar, systemPrompt, roleProfile, color, modelId, runtimeType, codeAgentType, capabilityTags, skillIds, toolPermissions, sandboxPolicy, contextPolicy, autoInvoke, approvalRequired。',
   ].join('\n')
 
   let output = ''
@@ -105,6 +107,7 @@ export function normalizeAgentDraftInput(value: unknown): AgentDraft | null {
     runtimeType,
     codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
     capabilityTags: draft.capabilityTags ?? [],
+    skillIds: draft.skillIds ?? [],
     toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
     sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',

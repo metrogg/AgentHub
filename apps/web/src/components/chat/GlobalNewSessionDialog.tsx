@@ -1,11 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Check, CircleHelp, FolderOpen, FolderPlus, Loader2, Search, X } from 'lucide-react'
+import { Check, CircleHelp, FolderOpen, FolderPlus, Loader2, Search, Sparkles, X } from 'lucide-react'
 import { workspaceNameFromPath } from '@agenthub/shared'
-import { agentLibraryChangeEvent, loadAgentLibrary, type SavedAgentConfig } from '../../lib/agentLibrary'
+import {
+  agentLibraryChangeEvent,
+  createSavedAgent,
+  loadAgentLibrary,
+  loadAgentLibraryState,
+  saveAgentLibraryState,
+  type SavedAgentConfig,
+} from '../../lib/agentLibrary'
 import { defaultConversationTitle, startAgentConversation } from '../../lib/agentConversation'
 import { api, friendlyErrorMessage, type Workspace } from '../../lib/api'
+import {
+  expertProfileForId,
+  expertProfileToAgentConfig,
+  expertTeamProfiles,
+} from '../../lib/expertProfiles'
 import { pickWorkspaceFolder } from '../../lib/native'
 import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { cn } from '../../lib/utils'
@@ -70,6 +82,7 @@ export function GlobalNewSessionDialog() {
     selectedAgents: SavedAgentConfig[],
     title?: string,
     workspaceChoice: WorkspaceChoice = { mode: 'new' },
+    goal?: string,
   ) {
     const key = selectedAgents.length === 1 ? selectedAgents[0]!.id : 'group'
     setCreatingChoice(key)
@@ -83,7 +96,7 @@ export function GlobalNewSessionDialog() {
               ? { workspaceId: workspaceChoice.workspace.id }
               : { projectPath: workspaceChoice.projectPath }
             : {}
-      const session = await startAgentConversation({ agents: selectedAgents, title, ...workspaceOptions })
+      const session = await startAgentConversation({ agents: selectedAgents, title, goal, ...workspaceOptions })
       await fetchSessions()
       await selectSession(session.id)
       setOpen(false)
@@ -128,17 +141,20 @@ function NewSessionDialog({
     agents: SavedAgentConfig[],
     title?: string,
     workspaceChoice?: WorkspaceChoice,
+    goal?: string,
   ) => Promise<void>
   onManageAgents: () => void
 }) {
   const [query, setQuery] = useState('')
   const [title, setTitle] = useState('')
+  const [goal, setGoal] = useState('')
+  const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>(agents)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [workspaceChoice, setWorkspaceChoice] = useState<WorkspaceChoice>({ mode: 'new' })
   const [workspaceQuery, setWorkspaceQuery] = useState('')
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
-  const selectedAgents = useMemo(() => agents.filter((agent) => selectedIds.has(agent.id)), [agents, selectedIds])
+  const selectedAgents = useMemo(() => libraryAgents.filter((agent) => selectedIds.has(agent.id)), [libraryAgents, selectedIds])
   const groupTitle = defaultConversationTitle(selectedAgents)
   const filteredWorkspaces = useMemo(() => {
     const keyword = workspaceQuery.trim().toLowerCase()
@@ -147,14 +163,14 @@ function NewSessionDialog({
   }, [workspaceQuery, workspaces])
   const filteredAgents = useMemo(() => {
     const keyword = query.trim().toLowerCase()
-    return agents.filter((agent) => {
+    return libraryAgents.filter((agent) => {
       if (!keyword) return true
       return [agent.name, agent.role, agent.description, ...(agent.capabilityTags ?? [])]
         .join(' ')
         .toLowerCase()
         .includes(keyword)
     })
-  }, [agents, query])
+  }, [libraryAgents, query])
 
   function toggleAgent(agent: SavedAgentConfig) {
     setSelectedIds((current) => {
@@ -167,7 +183,12 @@ function NewSessionDialog({
 
   function handleCreate() {
     if (!selectedAgents.length || creatingChoice) return
-    void onCreateAgent(selectedAgents, title.trim() || groupTitle || undefined, workspaceChoice)
+    void onCreateAgent(
+      selectedAgents,
+      title.trim() || groupTitle || undefined,
+      workspaceChoice,
+      goal.trim() || undefined,
+    )
   }
 
   function handleClose() {
@@ -177,11 +198,48 @@ function NewSessionDialog({
   const submittingSelected = Boolean(creatingChoice)
 
   useEffect(() => {
+    setLibraryAgents(agents)
+  }, [agents])
+
+  useEffect(() => {
     setQuery('')
     setTitle('')
+    setGoal('')
     setSelectedIds(new Set())
     setWorkspaceChoice({ mode: 'new' })
-  }, [agents])
+  }, [])
+
+  function applyTeamSuggestion(teamId: string) {
+    const team = expertTeamProfiles.find((item) => item.id === teamId)
+    if (!team) return
+
+    const library = loadAgentLibraryState()
+    const nextAgents = [...library.agents]
+    const nextSelectedIds = new Set(selectedIds)
+
+    for (const expertId of team.memberExpertIds) {
+      const profile = expertProfileForId(expertId)
+      if (!profile) continue
+      const existing = nextAgents.find(
+        (agent) =>
+          agent.roleProfile?.expertProfileId === profile.id ||
+          (normalizeAgentText(agent.name) === normalizeAgentText(profile.name) &&
+            normalizeAgentText(agent.role) === normalizeAgentText(profile.role)),
+      )
+      const agent = existing ?? createSavedAgent(expertProfileToAgentConfig(profile))
+      if (!existing) nextAgents.unshift(agent)
+      nextSelectedIds.add(agent.id)
+    }
+
+    saveAgentLibraryState({
+      schemaVersion: 2,
+      agents: nextAgents,
+      relations: library.relations,
+    })
+    setLibraryAgents(nextAgents)
+    setSelectedIds(nextSelectedIds)
+    if (!title.trim()) setTitle(team.name)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -268,7 +326,7 @@ function NewSessionDialog({
             <div className="mt-4 flex items-center justify-between px-1 text-xs text-neutral-500">
               <span>选择成员</span>
               <span>
-                {selectedAgents.length}/{agents.length}
+                {selectedAgents.length}/{libraryAgents.length}
               </span>
             </div>
 
@@ -308,7 +366,7 @@ function NewSessionDialog({
               })}
               {!filteredAgents.length && (
                 <div className="px-3 py-8 text-center text-sm text-neutral-400">
-                  {agents.length ? '没有匹配的 Agent' : '还没有全局 Agent'}
+                  {libraryAgents.length ? '没有匹配的 Agent' : '还没有全局 Agent'}
                 </div>
               )}
             </div>
@@ -337,6 +395,48 @@ function NewSessionDialog({
                   className="h-11 w-full rounded-2xl border border-neutral-200 bg-[#fafafa] px-4 text-sm text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-emerald-400"
                 />
               </label>
+              <label className="mt-4 block">
+                <span className="mb-2 block text-xs font-medium text-neutral-500">群聊目标</span>
+                <textarea
+                  value={goal}
+                  onChange={(event) => setGoal(event.target.value)}
+                  placeholder="可选。比如：调研全球主流 AI 编程工具，输出 PDF 和 HTML。目标会写入工作区，真正分工仍由 Orchestrator 动态规划。"
+                  rows={3}
+                  className="w-full resize-none rounded-2xl border border-neutral-200 bg-[#fafafa] px-4 py-3 text-sm leading-6 text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-emerald-400"
+                />
+              </label>
+              <div className="mt-4 rounded-2xl border border-neutral-200 bg-[#fafafa] p-2">
+                <div className="flex items-center gap-2 px-1 pb-2 text-xs font-medium text-neutral-500">
+                  <Sparkles className="h-3.5 w-3.5 text-emerald-500" />
+                  轻量组队建议
+                </div>
+                <div className="grid gap-2">
+                  {expertTeamProfiles.map((team) => (
+                    <button
+                      key={team.id}
+                      type="button"
+                      onClick={() => applyTeamSuggestion(team.id)}
+                      disabled={Boolean(creatingChoice)}
+                      className="rounded-xl border border-neutral-200 bg-white px-3 py-2 text-left transition hover:border-emerald-300 hover:bg-emerald-50/40 disabled:opacity-60"
+                    >
+                      <span className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-neutral-900">{team.name}</span>
+                        <span className="text-[11px] text-emerald-600">加入建议成员</span>
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-neutral-500">{team.description}</span>
+                      <span className="mt-1 block truncate text-[11px] text-neutral-400">
+                        {team.memberExpertIds
+                          .map((id) => expertProfileForId(id)?.name)
+                          .filter(Boolean)
+                          .join(' / ')}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-2 px-1 text-[11px] leading-5 text-neutral-400">
+                  这里只是显式帮你创建并选中 Agent 配置，不会替 Orchestrator 做固定分工。
+                </div>
+              </div>
               <div className="mt-4 min-w-0 rounded-2xl border border-neutral-200 bg-[#fafafa] p-2">
                 <div className="mb-2 flex items-center justify-between gap-2 px-1">
                   <div className="min-w-0">
@@ -470,4 +570,8 @@ function NewSessionDialog({
     </div>,
     document.body,
   )
+}
+
+function normalizeAgentText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }

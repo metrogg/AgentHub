@@ -95,7 +95,8 @@ export async function buildDynamicOrchestratorPlan(
   agents: PlanningAgentInput[],
   workspaceId?: string | null,
 ): Promise<OrchestratorPlan> {
-  const goal = normalizeOrchestratorGoal(content)
+  const [workspaceGoal, workspacePath] = await resolveWorkspaceContext(workspaceId)
+  const goal = normalizeOrchestratorGoal(content, workspaceGoal)
   if (!agents.length) {
     throw new Error('当前群聊没有可调度的 Agent，请先添加成员后再发起编排')
   }
@@ -106,12 +107,6 @@ export async function buildDynamicOrchestratorPlan(
   const workerPlanningAgents = planningAgents.filter((agent) => agent.roleType !== 'orchestrator')
   if (!workerPlanningAgents.length) {
     throw new Error('当前群聊只有 Orchestrator，没有可执行任务的 Agent')
-  }
-
-  let workspacePath: string | null = null
-  if (workspaceId) {
-    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
-    workspacePath = ws?.projectPath ?? null
   }
 
   const planner = new Planner()
@@ -129,13 +124,26 @@ export async function buildDynamicOrchestratorPlan(
   return executionPlanToOrchestratorPlan(executionPlan, workerPlanningAgents, collaborationContracts)
 }
 
-function normalizeOrchestratorGoal(content: string) {
-  return (
+async function resolveWorkspaceContext(workspaceId?: string | null): Promise<[string | null, string | null]> {
+  if (!workspaceId) return [null, null]
+  const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+  return [ws?.goal ?? null, ws?.projectPath ?? null]
+}
+
+function normalizeOrchestratorGoal(content: string, workspaceGoal?: string | null) {
+  const userGoal =
     content
       .replace(/@orchestrator/gi, '')
       .replace(/@协调器/g, '')
       .trim() || '完成一个多 Agent 协作任务'
-  )
+  if (!workspaceGoal?.trim()) return userGoal
+  const normalizedWorkspaceGoal = workspaceGoal.trim()
+  if (normalizeGoalText(normalizedWorkspaceGoal) === normalizeGoalText(userGoal)) return userGoal
+  return `群聊目标：${normalizedWorkspaceGoal}\n本次任务：${userGoal}`
+}
+
+function normalizeGoalText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 function planAgentFromInput(agent: PlanningAgentInput): PlanAgent {

@@ -97,6 +97,7 @@ import {
   friendlyErrorMessage,
   type AgentArtifact,
   type ChatAttachment,
+  type MemberProposal,
   type ModelCatalogItem,
   type SkillSummary,
   type WelcomeQuickPrompt,
@@ -230,6 +231,7 @@ function classifyAgentSession(
 
 export const Thread: FC = () => {
   const currentSession = useChatStore((state) => state.currentSession)
+  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
   const sessionKind = classifyAgentSession(currentSession)
   const isAgentDirectSession = sessionKind === 'agent-direct'
@@ -295,9 +297,7 @@ export const Thread: FC = () => {
             <OrchestratorChildHeader
               agentName={
                 currentSession?.workspaceAgentId
-                  ? (useChatStore
-                      .getState()
-                      .currentWorkspaceAgents.find((a) => a.id === currentSession?.workspaceAgentId)
+                  ? (workspaceAgents.find((a) => a.id === currentSession.workspaceAgentId)
                       ?.name ?? 'Agent')
                   : 'Agent'
               }
@@ -2850,6 +2850,7 @@ const AssistantMessage: FC = () => {
                   agent_artifacts: AgentArtifactsCard,
                   chat_attachments: ChatAttachmentsPart,
                   clarification_card: ClarificationCardWrapper,
+                  member_proposal_card: MemberProposalCard,
                   file_card: FileCardMessage,
                   delivery_report: DeliveryReportMessage,
                 },
@@ -2897,6 +2898,161 @@ function ClarificationCardWrapper({ data }: { data: any }) {
       sessionId={sessionId}
     />
   )
+}
+
+function MemberProposalCard({ data }: { data?: Record<string, unknown> | null }) {
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const selectSession = useChatStore((state) => state.selectSession)
+  const fetchSessions = useChatStore((state) => state.fetchSessions)
+  const proposals = readMemberProposals(data?.memberProposals)
+  const status = typeof data?.memberProposalStatus === 'string' ? data.memberProposalStatus : 'pending'
+  const messageId = typeof data?.messageId === 'string' ? data.messageId : ''
+  const [selectedIds, setSelectedIds] = useState(() => proposals.map((proposal) => proposal.expertProfileId))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setSelectedIds(proposals.map((proposal) => proposal.expertProfileId))
+  }, [data?.messageId])
+
+  if (!proposals.length) return null
+
+  const confirmed = status === 'confirmed'
+  const selectedSet = new Set(selectedIds)
+
+  function toggleProfile(profileId: string) {
+    setSelectedIds((ids) =>
+      ids.includes(profileId) ? ids.filter((id) => id !== profileId) : [...ids, profileId],
+    )
+    setError('')
+  }
+
+  async function confirm() {
+    if (!currentSessionId || !messageId || !selectedIds.length) {
+      setError('请选择至少一个 Agent')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await api.confirmMemberProposals(currentSessionId, messageId, selectedIds)
+      await fetchSessions().catch(() => undefined)
+      await selectSession(currentSessionId).catch(() => undefined)
+    } catch (err) {
+      setError(friendlyErrorMessage(err, '加入 Agent 失败'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="not-prose mt-3 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
+      <div className="flex items-start gap-3 border-b border-neutral-100 px-4 py-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-neutral-950 text-white">
+          <Blocks className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-neutral-950">
+            {confirmed ? '已加入建议成员' : 'Orchestrator 建议补充成员'}
+          </div>
+          <div className="mt-1 text-xs leading-5 text-neutral-500">
+            这些只是候选 Agent 配置，确认后才会成为当前群聊的真实成员。
+          </div>
+        </div>
+        {confirmed && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            已确认
+          </span>
+        )}
+      </div>
+      <div className="divide-y divide-neutral-100">
+        {proposals.map((proposal) => {
+          const checked = selectedSet.has(proposal.expertProfileId)
+          return (
+            <button
+              key={proposal.expertProfileId}
+              type="button"
+              disabled={confirmed || busy}
+              onClick={() => toggleProfile(proposal.expertProfileId)}
+              className={cn(
+                'flex w-full items-start gap-3 px-4 py-3 text-left transition',
+                !confirmed && 'hover:bg-neutral-50',
+              )}
+            >
+              <span
+                className={cn(
+                  'mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border',
+                  checked || confirmed
+                    ? 'border-neutral-950 bg-neutral-950 text-white'
+                    : 'border-neutral-300 bg-white text-transparent',
+                )}
+              >
+                <Check className="h-3.5 w-3.5" />
+              </span>
+              <span
+                className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl text-white"
+                style={{ backgroundColor: proposal.color || '#111827' }}
+              >
+                <Bot className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold text-neutral-950">{proposal.name}</span>
+                  <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-600">
+                    {proposal.role}
+                  </span>
+                  <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                    {proposal.runtimeType === 'code-agent'
+                      ? proposal.codeAgentType || 'code-agent'
+                      : 'LLM'}
+                  </span>
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-neutral-600">
+                  {proposal.expectedContribution || proposal.reason || '补齐当前任务所需能力。'}
+                </span>
+                {proposal.capabilityTags?.length ? (
+                  <span className="mt-2 flex flex-wrap gap-1.5">
+                    {proposal.capabilityTags.slice(0, 6).map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-md bg-neutral-50 px-1.5 py-0.5 text-[11px] text-neutral-500"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+      {!confirmed && (
+        <div className="flex flex-col gap-2 border-t border-neutral-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-h-5 text-xs leading-5 text-red-600">{error}</div>
+          <button
+            type="button"
+            disabled={busy || selectedIds.length === 0}
+            onClick={() => void confirm()}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:bg-neutral-300"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            加入选中 Agent
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function readMemberProposals(value: unknown): MemberProposal[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is MemberProposal => {
+    if (!item || typeof item !== 'object') return false
+    const proposal = item as Partial<MemberProposal>
+    return typeof proposal.expertProfileId === 'string' && typeof proposal.name === 'string'
+  })
 }
 
 interface FileCardEntry {

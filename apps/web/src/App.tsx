@@ -1,7 +1,6 @@
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { type PointerEvent as ReactPointerEvent, Component, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
 import AgentConfigPage from './pages/AgentConfigPage'
 import ChatPage from './pages/ChatPage'
 import CodingToolsPage from './pages/CodingToolsPage'

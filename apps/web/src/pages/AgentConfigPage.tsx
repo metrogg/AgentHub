@@ -27,8 +27,15 @@ import {
   type SavedAgentConfig,
 } from '../lib/agentLibrary'
 import { syncSavedAgentDirectSessions } from '../lib/agentConversation'
-import { agentRolePresets, presetForRole } from '../lib/agentRolePresets'
 import { api, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type WorkspaceAgent } from '../lib/api'
+import {
+  expertCategoryLabels,
+  expertProfileForId,
+  expertProfileIdFromDraft,
+  expertProfiles,
+  expertProfileToAgentConfig,
+  readProfileStringArray,
+} from '../lib/expertProfiles'
 import { useI18n } from '../lib/i18n'
 import { runtimeLabel, sandboxLabel } from '../lib/agentDisplay'
 import { cn } from '../lib/utils'
@@ -70,6 +77,10 @@ export default function AgentConfigPage() {
   const [saved, setSaved] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([])
+  const selectedExpertProfile = expertProfileForId(expertProfileIdFromDraft(draft))
+  const draftOutputContract = readProfileStringArray(draft.roleProfile, 'outputContract')
+  const draftQualityGates = readProfileStringArray(draft.roleProfile, 'qualityGates')
+  const draftRecommendedMcpServers = readProfileStringArray(draft.roleProfile, 'recommendedMcpServers')
   const currentSession = useChatStore((state) => state.currentSession)
   const selectSession = useChatStore((state) => state.selectSession)
 
@@ -320,18 +331,26 @@ export default function AgentConfigPage() {
     window.alert(`Agent 配置保存到服务端失败，请检查后端/客户端连接后重试。${message ? `\n${message}` : ''}`)
   }
 
-  function applyRolePreset(roleType: string) {
-    const preset = presetForRole(roleType as WorkspaceAgent['roleType'])
-    if (!preset) {
-      setDraft({ ...draft, roleType: 'custom' })
+  function applyExpertProfile(profileId: string) {
+    const profile = expertProfileForId(profileId)
+    if (!profile) {
+      setDraft({
+        ...draft,
+        roleType: 'custom',
+        roleProfile: {
+          ...(draft.roleProfile ?? {}),
+          expertProfileId: undefined,
+        },
+      })
       return
     }
+    const preset = expertProfileToAgentConfig(profile)
     setDraft({
       ...draft,
       ...preset,
       name: preset.name,
       role: preset.role,
-      codeAgentType: preset.runtimeType === 'code-agent' ? (preset.codeAgentType ?? 'claude-code') : null,
+      codeAgentType: preset.runtimeType === 'code-agent' ? (preset.codeAgentType ?? 'codex') : null,
     })
   }
 
@@ -362,7 +381,7 @@ export default function AgentConfigPage() {
 
   return (
     <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#fbfbf9] text-neutral-950">
-      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} />
+      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-6">
           <div className="flex min-w-0 items-center gap-3">
@@ -419,12 +438,21 @@ export default function AgentConfigPage() {
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
                   <form onSubmit={saveDraft} className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
                     <div className="mb-4">
-                      <SelectField label="角色模板" value={draft.roleType ?? 'custom'} onChange={applyRolePreset}>
-                        <option value="custom">自定义</option>
-                        {agentRolePresets.map((preset) => (
-                          <option key={preset.roleType} value={preset.roleType}>{preset.label}</option>
+                      <SelectField
+                        label="预装专家模板"
+                        value={expertProfileIdFromDraft(draft)}
+                        onChange={applyExpertProfile}
+                      >
+                        <option value="">自定义专家</option>
+                        {expertProfiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {expertCategoryLabels[profile.category]} / {profile.name}
+                          </option>
                         ))}
                       </SelectField>
+                      <p className="mt-2 text-xs leading-5 text-neutral-400">
+                        当前只暴露少量核心模板。模板只是帮你填充 Agent 配置，不是独立专家系统，也不会固定驱动分工。
+                      </p>
                     </div>
                     <div className="flex items-start gap-4">
                       <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl text-white shadow-sm" style={{ background: draft.color ?? '#111827' }}>
@@ -437,6 +465,12 @@ export default function AgentConfigPage() {
                     </div>
 
                     <TextField label={t('简介')} rows={3} value={draft.description ?? ''} onChange={(description) => setDraft({ ...draft, description })} />
+                    {selectedExpertProfile && (
+                      <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/50 px-3 py-2 text-xs leading-5 text-blue-800">
+                        <div className="font-medium">{expertCategoryLabels[selectedExpertProfile.category]} · {selectedExpertProfile.riskLevel === 'high' ? '高风险专家' : '标准专家'}</div>
+                        <div className="mt-1 text-blue-700">{selectedExpertProfile.background}</div>
+                      </div>
+                    )}
                     <TextField label={t('系统提示词')} rows={6} value={draft.systemPrompt ?? ''} onChange={(systemPrompt) => setDraft({ ...draft, systemPrompt })} />
 
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -573,9 +607,16 @@ export default function AgentConfigPage() {
                         value={t(modelName(draft.modelId ?? null, models))}
                       />
                       <InfoRow label={t('权限')} value={t(sandboxLabel(draft.sandboxPolicy ?? 'workspace-write'))} />
-                      <InfoRow label="可接任务" value={presetForRole(draft.roleType)?.acceptsTaskTypes.join(', ') || '自定义'} />
-                      <InfoRow label="主要产出" value={presetForRole(draft.roleType)?.produces.join(', ') || '自定义'} />
+                      <InfoRow label="模板分类" value={selectedExpertProfile ? expertCategoryLabels[selectedExpertProfile.category] : '自定义'} />
+                      <InfoRow label="可接任务" value={readProfileStringArray(draft.roleProfile, 'acceptsTaskTypes').join(', ') || '自定义'} />
+                      <InfoRow label="主要产出" value={draftOutputContract.join(', ') || '自定义'} />
                       <InfoRow label={t('标签')} value={(draft.capabilityTags ?? []).join(', ') || t('未设置')} />
+                    </InfoPanel>
+
+                    <InfoPanel title="模板能力">
+                      <InfoRow label="默认 Skills" value={(draft.skillIds ?? []).join(', ') || '未绑定'} />
+                      <InfoRow label="推荐 MCP" value={draftRecommendedMcpServers.join(', ') || '未设置'} />
+                      <InfoRow label="质量门" value={draftQualityGates.join(' / ') || '未设置'} />
                     </InfoPanel>
 
                     {selectedAgent ? (
@@ -666,6 +707,7 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     description: draft.description?.trim() ?? '',
     avatar: draft.avatar ?? null,
     systemPrompt: draft.systemPrompt?.trim() ?? '',
+    skillIds: draft.skillIds ?? [],
     color: draft.color || '#111827',
     modelId: draft.modelId ?? null,
     runtimeType,

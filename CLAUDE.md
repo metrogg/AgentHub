@@ -1,6 +1,6 @@
 # AgentHub Development Guide
 
-This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md` and `docs/当前状态与下一步路线.md`, then read `docs/当前多Agent协作架构.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
+This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md` and `docs/当前状态与下一步路线.md`, then read `docs/当前多Agent协作架构.md`, `docs/场景角色团队协作调研.md`, `docs/角色提示词与动态组队设计.md`, `docs/专家库与开源角色Skill生态调研.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
 
 ## Product Definition
 
@@ -14,6 +14,8 @@ AgentHub is an IM-style multi-agent collaboration platform. The expected behavio
 
 Do not implement fixed scenario templates as the core path. The platform must stay general-purpose first.
 Role presets may be used as a manual creation library, but they must not auto-seed a workspace, define a default team, or override model-generated assignments.
+Role prompts should follow `docs/角色提示词与动态组队设计.md`: shared collaboration protocol + role background + bound skills + runtime task context + output contract. Group goals may drive member recommendations, but not fixed execution templates. If an existing group lacks needed capability, Orchestrator may propose adding a new agent; this must be visible and user-approved by default.
+Preinstalled agent templates and lightweight expert-team recommendations live in `docs/专家库与开源角色Skill生态调研.md`. You may borrow structure from Claude Code subagents, BMAD, SuperClaude, awesome-cursor-skills, and MCP server ecosystems, but first adapt for license, safety boundaries, quality, and AgentHub schemas. Do not build a separate "my experts" system or full expert marketplace yet, and do not directly copy unaudited prompts or enable third-party MCP servers by default.
 
 ## Layered Mental Model
 
@@ -67,6 +69,7 @@ Main entry: `apps/server/src/routes/messages.ts`.
 POST /api/messages/:sessionId
   -> direct chat: run target agent
   -> group simple chat: Orchestrator replies directly
+  -> group capability gap: Orchestrator emits structured memberProposals; UI shows an approval card; confirmed proposals create/join real workspace agents
   -> group complex task: create dynamic plan + task board
   -> dispatch: OrchestratorEngine.dispatch()
 ```
@@ -253,6 +256,8 @@ bun test
 - Static fallback plan templates: avoid as normal UX. Prefer model-generated dynamic plans.
 - Built-in `.agenthub/specs/*.spec.yml` scenario templates and trigger-based Spec matching are removed. Specs may return only as user-explicit collaboration contracts.
 - Static agent routing, keyword-based task reassignment, auto Researcher injection, and artifact-extension follow-up tasks are removed from the active path. Do not reintroduce them; validate explicit Orchestrator/Planner assignments instead.
+- Do not add keyword heuristic fallbacks for Orchestrator decisions. If the Orchestrator output is not parseable, surface a transparent model/config error.
+- Runtime member additions must be driven by structured `memberProposals` from Orchestrator and explicit user approval. Do not silently create agents.
 - `classic` workspace seeding, default code teams, and `create-from-template` are removed from the active product path.
 - Branch-per-agent docs: old design. Git utilities may remain, but current default execution is workdir + handoff.
 - Old static quick prompt fallback: user does not want static prompt content.

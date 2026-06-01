@@ -2890,3 +2890,51 @@
     }
   }
 }
+
+/* ── Mobile sidebar overlay ── */
+
+.agenthub-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transition: opacity 200ms ease;
+  pointer-events: none;
+}
+
+.agenthub-sidebar-backdrop.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ── Mobile fullscreen modal ── */
+
+@media (max-width: 767px) {
+  .agenthub-mobile-fullscreen {
+    inset: 0 !important;
+    max-width: none !important;
+    max-height: none !important;
+    border-radius: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+  }
+}
+
+/* ── 移动端适配 ── */
+
+@media (max-width: 767px) {
+  .agenthub-thread-root {
+    --thread-max-width: 100%;
+  }
+
+  .agenthub-thread-root > div[data-thread-viewport],
+  .agenthub-thread-root .agenthub-composer-dock {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .agenthub-composer-dock .rounded-3xl {
+    border-radius: 1rem;
+  }
+}
