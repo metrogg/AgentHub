@@ -13,8 +13,10 @@ let globalMockedFetch: typeof fetch
 setDefaultTimeout(30000)
 
 beforeAll(async () => {
-  const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-smoke-'))
-  process.env.DATABASE_URL = join(tempDir, 'agenthub-smoke.db')
+  if (process.env.AGENTHUB_TEST_PRELOADED !== '1') {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-smoke-'))
+    process.env.DATABASE_URL = join(tempDir, 'agenthub-smoke.db')
+  }
   process.env.LLM_API_KEY = 'test-key'
   process.env.OPENAI_API_KEY = ''
   process.env.ANTHROPIC_API_KEY = ''
@@ -31,7 +33,7 @@ beforeAll(async () => {
     email: 'local@agenthub.local',
     username: 'You',
     passwordHash: 'test-only',
-  })
+  }).onConflictDoNothing()
   ;({ app } = await import('../apps/server/src/app'))
   originalFetch = globalThis.fetch
   globalMockedFetch = async (input, init) => {
@@ -291,7 +293,7 @@ describe('AgentHub smoke tests', () => {
   })
 
   test('database enforces collaboration foreign keys', () => {
-    const sqlite = new Database(process.env.DATABASE_URL!)
+    const sqlite = new Database(dbApi.databasePath ?? process.env.DATABASE_URL!)
     sqlite.exec('PRAGMA foreign_keys = ON;')
 
     const foreignKeys = (table: string) =>

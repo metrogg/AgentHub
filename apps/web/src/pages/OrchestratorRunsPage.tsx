@@ -182,7 +182,7 @@ export default function OrchestratorRunsPage() {
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
-              onClick={() => navigate('/agent-world')}
+              onClick={() => navigate('/agent-config')}
               className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
               aria-label="返回 Agent Group"
             >
