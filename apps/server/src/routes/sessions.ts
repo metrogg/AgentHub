@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { createSessionSchema, updateSessionSchema } from '@agenthub/shared'
-import { db, sessions, sessionMembers, workspaceAgents, workspaces, eq, desc, and } from '@agenthub/db'
+import { db, sessions, sessionMembers, workspaceAgents, workspaces, messages, eq, desc, and } from '@agenthub/db'
 import { inArray } from 'drizzle-orm'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 
@@ -15,7 +15,28 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
       ? and(eq(sessions.ownerId, user.sub), eq(sessions.workspaceId, workspaceId))
       : eq(sessions.ownerId, user.sub)
     const list = await db.select().from(sessions).where(conditions).orderBy(desc(sessions.updatedAt))
-    return c.json({ items: list })
+
+    // 附加每条会话的最后消息预览
+    const sessionIds = list.map((s) => s.id)
+    const lastMessages: Record<string, { content: string; senderType: string }> = {}
+    if (sessionIds.length > 0) {
+      for (const sid of sessionIds) {
+        const [last] = await db
+          .select({ content: messages.content, senderType: messages.senderType })
+          .from(messages)
+          .where(and(eq(messages.sessionId, sid), eq(messages.type, 'text')))
+          .orderBy(desc(messages.createdAt))
+          .limit(1)
+        if (last) lastMessages[sid] = { content: last.content.slice(0, 120), senderType: last.senderType }
+      }
+    }
+
+    return c.json({
+      items: list.map((s) => ({
+        ...s,
+        lastMessage: lastMessages[s.id] ?? null,
+      })),
+    })
   })
   .post('/', zValidator('json', createSessionSchema), async (c) => {
     const user = c.get('user')

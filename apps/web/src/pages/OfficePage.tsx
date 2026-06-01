@@ -5,10 +5,11 @@ import {
   CheckCircle2,
   ExternalLink,
   Loader2,
+  PanelLeft,
   RefreshCw,
   Sparkles,
 } from 'lucide-react'
-import SessionList from '../components/chat/SessionList'
+import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import { api, friendlyErrorMessage, type StarOfficeStatus } from '../lib/api'
 import { cn } from '../lib/utils'
 import { useChatStore } from '../stores/chatStore'
@@ -20,6 +21,7 @@ export default function OfficePage() {
   const [searchParams] = useSearchParams()
   const sessions = useChatStore((state) => state.sessions)
   const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [frameKey, setFrameKey] = useState(0)
   const [loaded, setLoaded] = useState(false)
   const [officeBusy, setOfficeBusy] = useState(false)
@@ -83,10 +85,18 @@ export default function OfficePage() {
 
   return (
     <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#f5f4ef] text-neutral-950">
-      <SessionList />
+      <CollapsibleSessionSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex h-12 shrink-0 items-center justify-between border-b border-neutral-200 bg-white px-4">
           <div className="flex min-w-0 items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((v) => !v)}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+              aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+            >
+              <PanelLeft className="h-4 w-4" />
+            </button>
             {boundSession && (
               <button
                 type="button"

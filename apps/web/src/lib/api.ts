@@ -188,6 +188,7 @@ export interface Session {
   metadata?: Record<string, unknown> | null
   createdAt: string
   updatedAt: string
+  lastMessage?: { content: string; senderType: string } | null
 }
 
 export interface StarOfficeStatus {

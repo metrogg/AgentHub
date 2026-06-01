@@ -231,6 +231,7 @@ function classifyAgentSession(
 
 export const Thread: FC = () => {
   const currentSession = useChatStore((state) => state.currentSession)
+  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
   const sessionKind = classifyAgentSession(currentSession)
   const isAgentDirectSession = sessionKind === 'agent-direct'
@@ -296,9 +297,7 @@ export const Thread: FC = () => {
             <OrchestratorChildHeader
               agentName={
                 currentSession?.workspaceAgentId
-                  ? (useChatStore
-                      .getState()
-                      .currentWorkspaceAgents.find((a) => a.id === currentSession?.workspaceAgentId)
+                  ? (workspaceAgents.find((a) => a.id === currentSession.workspaceAgentId)
                       ?.name ?? 'Agent')
                   : 'Agent'
               }
