@@ -1,6 +1,6 @@
 # AgentHub Development Guide
 
-This file is for Claude Code and other coding agents working inside this repository. For product context, also read `README.md`, `docs/当前多Agent协作架构.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
+This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md` and `docs/当前状态与下一步路线.md`, then read `docs/当前多Agent协作架构.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
 
 ## Product Definition
 
