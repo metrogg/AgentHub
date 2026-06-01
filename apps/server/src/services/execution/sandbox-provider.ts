@@ -1,12 +1,13 @@
 import { mkdirSync, rmSync } from 'node:fs'
 import { platform } from 'node:os'
 import { resolve } from 'node:path'
+import { env } from '../../env'
 import type { AgentWorkdir } from './agent-workdir'
 import { prepareAgentWorkdir } from './agent-workdir'
 import { agentHubUserCacheRoot, safePathSegment } from '../system-paths'
 
-export type SandboxProviderKind = 'local-workdir' | 'docker' | 'cloud'
-export type ExecutionIsolation = 'workdir' | 'container' | 'cloud'
+export type SandboxProviderKind = 'local-workdir' | 'docker-sandbox' | 'cloud'
+export type ExecutionIsolation = 'workdir' | 'microvm' | 'cloud'
 export type NetworkPolicy = 'default' | 'restricted' | 'disabled'
 export type AgentSandboxPolicy = 'read-only' | 'workspace-write' | 'danger-full-access'
 
@@ -17,6 +18,7 @@ export interface SandboxSpec {
   agentId: string
   agentName: string
   projectPath?: string | null
+  codeAgentType?: string | null
   sandboxPolicy: AgentSandboxPolicy
   networkPolicy?: NetworkPolicy
   existingWorkdir?: AgentWorkdir | null
@@ -47,27 +49,19 @@ export interface SandboxProvider {
   acquire(spec: SandboxSpec): Promise<SandboxLease>
 }
 
-export interface SandboxMount {
-  hostPath: string
-  containerPath: string
-  readOnly?: boolean
-}
-
 export interface SandboxContainerSpec {
-  runtime: 'docker'
-  image: string
+  runtime: 'docker-sandbox'
+  containerName: string
   workdir: string
   env: Record<string, string>
-  mounts: SandboxMount[]
-  networkMode: string
-  readOnlyRootfs?: boolean
-  user?: string
-  extraArgs?: string[]
+  networkMode: NetworkPolicy
+  sandboxName?: string
+  sandboxAgent?: string
 }
 
 export class SandboxProviderUnavailableError extends Error {
   constructor(kind: SandboxProviderKind) {
-    super(`Sandbox provider "${kind}" is not implemented yet. Current stable provider is "local-workdir".`)
+    super(`Sandbox provider "${kind}" is not implemented yet. Supported providers are "docker-sandbox" and "local-workdir".`)
     this.name = 'SandboxProviderUnavailableError'
   }
 }
@@ -153,19 +147,12 @@ class LocalWorkdirSandboxProvider implements SandboxProvider {
 
 const localWorkdirProvider = new LocalWorkdirSandboxProvider()
 
-class DockerSandboxProvider implements SandboxProvider {
-  kind: SandboxProviderKind = 'docker'
+class DockerSbxSandboxProvider implements SandboxProvider {
+  kind: SandboxProviderKind = 'docker-sandbox'
 
   async acquire(spec: SandboxSpec): Promise<SandboxLease> {
-    const image = readEnv('AGENTHUB_DOCKER_SANDBOX_IMAGE')
-    if (!image) {
-      throw new Error(
-        'Docker sandbox requires AGENTHUB_DOCKER_SANDBOX_IMAGE. The image must contain the configured Code Agent CLIs.',
-      )
-    }
-    await assertDockerAvailable()
-
-    const networkPolicy = spec.networkPolicy ?? normalizeDockerNetworkPolicy()
+    await assertSbxAvailable()
+    const networkPolicy = spec.networkPolicy ?? 'default'
     const sandboxRoot = resolve(
       agentHubUserCacheRoot(),
       'sandboxes',
@@ -194,24 +181,27 @@ class DockerSandboxProvider implements SandboxProvider {
         sandboxPolicy: spec.sandboxPolicy,
       })
     const executionPath = workdir?.executionPath ?? spec.projectPath ?? workspaceDir
-    const cleanupMode = normalizeCleanupMode()
-    const containerEnv = buildDockerContainerEnv()
-    const mounts: SandboxMount[] = [
-      {
-        hostPath: executionPath,
-        containerPath: '/workspace',
-        readOnly: spec.sandboxPolicy === 'read-only',
-      },
-      { hostPath: homeDir, containerPath: '/home/agenthub' },
-      { hostPath: tempDir, containerPath: '/tmp/agenthub' },
-      { hostPath: cacheDir, containerPath: '/home/agenthub/.cache' },
-      { hostPath: configDir, containerPath: '/home/agenthub/.config' },
-      { hostPath: dataDir, containerPath: '/home/agenthub/.local/share' },
-    ]
+    const cleanupMode = normalizeCleanupMode('delete')
+    const sandboxName = buildSandboxContainerName(spec)
+    const sandboxAgent = resolveDockerSandboxAgent(spec)
+    const sandboxEnv = buildDockerSandboxEnv({
+      homeDir,
+      cacheDir,
+      configDir,
+      dataDir,
+      tempDir,
+    })
+    await createDockerSandbox({
+      sandboxName,
+      sandboxAgent,
+      executionPath,
+      extraWorkspaces: [homeDir, cacheDir, configDir, dataDir, tempDir],
+      readOnlyWorkspace: spec.sandboxPolicy === 'read-only',
+    })
 
     return {
       provider: this.kind,
-      isolation: 'container',
+      isolation: 'microvm',
       sandboxPolicy: spec.sandboxPolicy,
       cwd: executionPath,
       workdir:
@@ -232,9 +222,9 @@ class DockerSandboxProvider implements SandboxProvider {
       networkPolicy,
       cleanupMode,
       env: {
-        ...containerEnv,
-        AGENTHUB_SANDBOX_PROVIDER: 'docker',
-        AGENTHUB_SANDBOX_ISOLATION: 'container',
+        ...sandboxEnv,
+        AGENTHUB_SANDBOX_PROVIDER: 'docker-sandbox',
+        AGENTHUB_SANDBOX_ISOLATION: 'microvm',
         AGENTHUB_SANDBOX_ROOT: sandboxRoot,
         AGENTHUB_SANDBOX_HOME: homeDir,
         AGENTHUB_SANDBOX_CACHE: cacheDir,
@@ -243,54 +233,67 @@ class DockerSandboxProvider implements SandboxProvider {
         AGENTHUB_SANDBOX_TMP: tempDir,
       },
       container: {
-        runtime: 'docker',
-        image,
-        workdir: '/workspace',
-        env: containerEnv,
-        mounts,
-        networkMode: dockerNetworkMode(networkPolicy),
-        readOnlyRootfs: envFlag('AGENTHUB_DOCKER_READONLY_ROOTFS', false),
-        user: readEnv('AGENTHUB_DOCKER_USER') || undefined,
-        extraArgs: splitShellWords(readEnv('AGENTHUB_DOCKER_EXTRA_ARGS')),
+        runtime: 'docker-sandbox',
+        containerName: sandboxName,
+        sandboxName,
+        sandboxAgent,
+        workdir: executionPath,
+        env: sandboxEnv,
+        networkMode: networkPolicy,
       },
       metadata: {
-        note: 'Docker sandbox executes the Code Agent CLI inside a container. The selected image must provide the CLI binary.',
+        note: 'Docker Sandboxes executes the Code Agent CLI inside a Docker-managed sandbox environment.',
         networkPolicy,
         networkEnforced: true,
-        image,
+        sandboxName,
+        sandboxAgent,
         rootDir: sandboxRoot,
         executionPath,
-        containerWorkdir: '/workspace',
         cleanupMode,
       },
       cleanup: async () => {
         if (cleanupMode !== 'delete') return
+        await removeDockerSandbox(sandboxName)
         rmSync(sandboxRoot, { recursive: true, force: true })
       },
     }
   }
 }
 
-const dockerProvider = new DockerSandboxProvider()
+const dockerSbxProvider = new DockerSbxSandboxProvider()
 
 export function normalizeSandboxProviderKind(value?: string | null): SandboxProviderKind {
   const normalized = value?.trim().toLowerCase()
-  if (normalized === 'docker') return 'docker'
+  if (normalized === 'docker-sandbox' || normalized === 'sbx') return 'docker-sandbox'
   if (normalized === 'cloud') return 'cloud'
   return 'local-workdir'
 }
 
 export function configuredSandboxProviderKind(): SandboxProviderKind {
-  return normalizeSandboxProviderKind(
-    Bun.env.AGENTHUB_SANDBOX_PROVIDER || process.env.AGENTHUB_SANDBOX_PROVIDER,
-  )
+  return normalizeSandboxProviderKind(readEnv('AGENTHUB_SANDBOX_PROVIDER') || 'docker-sandbox')
 }
 
 export async function acquireExecutionSandbox(spec: SandboxSpec): Promise<SandboxLease> {
   const kind = spec.provider ?? configuredSandboxProviderKind()
   if (kind === 'local-workdir') return localWorkdirProvider.acquire(spec)
-  if (kind === 'docker') return dockerProvider.acquire(spec)
+  if (kind === 'docker-sandbox') return dockerSbxProvider.acquire(spec)
   throw new SandboxProviderUnavailableError(kind)
+}
+
+export async function describeSandboxRuntimeStatus() {
+  const [sbxAvailable, sbxProbe] = await probeSbxAvailability()
+  const sandboxProvider = configuredSandboxProviderKind()
+  return {
+    defaultProvider: 'docker-sandbox',
+    configuredProvider: sandboxProvider,
+    dockerSandbox: {
+      agent: readEnv('AGENTHUB_DOCKER_SANDBOX_AGENT') || 'auto',
+      available: sbxAvailable,
+      probe: sbxProbe,
+    },
+    cleanupMode: normalizeCleanupMode('delete'),
+    sandboxRoot: agentHubUserCacheRoot(),
+  }
 }
 
 function buildLocalSandboxEnv(input: {
@@ -334,8 +337,9 @@ function buildLocalSandboxEnv(input: {
   return env
 }
 
-function normalizeCleanupMode(): 'keep' | 'delete' {
+function normalizeCleanupMode(defaultMode: 'keep' | 'delete' = 'keep'): 'keep' | 'delete' {
   const value = readEnv('AGENTHUB_SANDBOX_CLEANUP').toLowerCase()
+  if (!value) return defaultMode
   return value === 'delete' || value === 'cleanup' ? 'delete' : 'keep'
 }
 
@@ -346,69 +350,135 @@ function envFlag(key: string, fallback: boolean) {
 }
 
 function readEnv(key: string) {
+  const configured = (env as Record<string, unknown>)[key]
+  if (typeof configured === 'string' && configured.trim()) return configured.trim()
   return Bun.env[key]?.trim() || process.env[key]?.trim() || ''
 }
 
-function buildDockerContainerEnv(): Record<string, string> {
+function buildDockerSandboxEnv(input: {
+  homeDir: string
+  cacheDir: string
+  configDir: string
+  dataDir: string
+  tempDir: string
+}): Record<string, string> {
   return {
-    AGENTHUB_SANDBOX_PROVIDER: 'docker',
-    AGENTHUB_SANDBOX_ISOLATION: 'container',
-    HOME: '/home/agenthub',
-    USERPROFILE: '/home/agenthub',
-    APPDATA: '/home/agenthub/.config',
-    LOCALAPPDATA: '/home/agenthub/.cache',
-    TMP: '/tmp/agenthub',
-    TEMP: '/tmp/agenthub',
-    TMPDIR: '/tmp/agenthub',
-    XDG_CACHE_HOME: '/home/agenthub/.cache',
-    XDG_CONFIG_HOME: '/home/agenthub/.config',
-    XDG_DATA_HOME: '/home/agenthub/.local/share',
-    NPM_CONFIG_CACHE: '/home/agenthub/.cache/npm',
-    BUN_INSTALL_CACHE_DIR: '/home/agenthub/.cache/bun',
+    AGENTHUB_SANDBOX_PROVIDER: 'docker-sandbox',
+    AGENTHUB_SANDBOX_ISOLATION: 'microvm',
+    HOME: input.homeDir,
+    USERPROFILE: input.homeDir,
+    APPDATA: input.configDir,
+    LOCALAPPDATA: input.cacheDir,
+    TMP: input.tempDir,
+    TEMP: input.tempDir,
+    TMPDIR: input.tempDir,
+    XDG_CACHE_HOME: input.cacheDir,
+    XDG_CONFIG_HOME: input.configDir,
+    XDG_DATA_HOME: input.dataDir,
+    NPM_CONFIG_CACHE: resolve(input.cacheDir, 'npm'),
+    BUN_INSTALL_CACHE_DIR: resolve(input.cacheDir, 'bun'),
   }
 }
 
-function normalizeDockerNetworkPolicy(): NetworkPolicy {
-  const value = readEnv('AGENTHUB_DOCKER_NETWORK_POLICY').toLowerCase()
-  if (value === 'disabled' || value === 'none') return 'disabled'
-  if (value === 'restricted') return 'restricted'
-  return 'default'
+async function assertSbxAvailable() {
+  const [available] = await probeSbxAvailability()
+  if (!available) {
+    throw new Error('Docker Sandboxes is enabled, but the sbx CLI is not available. Install Docker Sandboxes or set AGENTHUB_SANDBOX_PROVIDER=local-workdir for compatibility mode.')
+  }
 }
 
-function dockerNetworkMode(policy: NetworkPolicy) {
-  if (policy === 'disabled') return 'none'
-  if (policy === 'restricted') {
-    const network = readEnv('AGENTHUB_DOCKER_NETWORK')
-    if (!network) {
-      throw new Error(
-        'Docker networkPolicy=restricted requires AGENTHUB_DOCKER_NETWORK to point to a preconfigured restricted Docker network.',
-      )
+async function probeSbxAvailability(): Promise<[boolean, { version?: string; exitCode: number }]> {
+  for (const args of [['--version'], ['version']]) {
+    try {
+      const proc = Bun.spawn(['sbx', ...args], {
+        stdout: 'pipe',
+        stderr: 'ignore',
+        env: process.env,
+      })
+      const code = await Promise.race([
+        proc.exited,
+        new Promise<number>((resolve) => setTimeout(() => resolve(124), 3000)),
+      ])
+      if (code === 0) {
+        const version = (await new Response(proc.stdout).text()).trim()
+        return [true, { version: version || undefined, exitCode: code }]
+      }
+      if (code !== 124) continue
+      return [false, { exitCode: code }]
+    } catch {
+      // Try the next common version shape before reporting unavailable.
     }
-    return network
   }
-  return readEnv('AGENTHUB_DOCKER_NETWORK') || 'bridge'
+  return [false, { exitCode: -1 }]
 }
 
-async function assertDockerAvailable() {
+async function createDockerSandbox(input: {
+  sandboxName: string
+  sandboxAgent: string
+  executionPath: string
+  extraWorkspaces: string[]
+  readOnlyWorkspace: boolean
+}) {
+  const workspaceArg = input.readOnlyWorkspace ? `${input.executionPath}:ro` : input.executionPath
+  const args = [
+    'create',
+    '--name',
+    input.sandboxName,
+    input.sandboxAgent,
+    workspaceArg,
+    ...input.extraWorkspaces,
+  ]
+  const proc = Bun.spawn(['sbx', ...args], {
+    stdout: 'ignore',
+    stderr: 'pipe',
+    env: process.env,
+  })
+  const code = await Promise.race([
+    proc.exited,
+    new Promise<number>((resolve) => setTimeout(() => resolve(124), 30_000)),
+  ])
+  if (code === 0) return
+  if (code === 124) {
+    try {
+      proc.kill()
+    } catch {
+      // Process may have exited.
+    }
+  }
+  const stderr = (await new Response(proc.stderr).text()).trim()
+  throw new Error(`Docker Sandboxes failed to create sandbox "${input.sandboxName}": ${stderr || `exit code ${code}`}`)
+}
+
+async function removeDockerSandbox(sandboxName: string) {
   try {
-    const proc = Bun.spawn(['docker', 'version', '--format', '{{.Server.Version}}'], {
+    const proc = Bun.spawn(['sbx', 'rm', '-f', sandboxName], {
       stdout: 'ignore',
       stderr: 'ignore',
       env: process.env,
     })
-    const code = await Promise.race([
-      proc.exited,
-      new Promise<number>((resolve) => setTimeout(() => resolve(124), 3000)),
-    ])
-    if (code === 0) return
+    await Promise.race([proc.exited, new Promise((resolve) => setTimeout(resolve, 3000))])
   } catch {
-    // Fall through to a clear error below.
+    // Best-effort cleanup.
   }
-  throw new Error('Docker sandbox is enabled, but Docker CLI/daemon is not available.')
 }
 
-function splitShellWords(value: string) {
-  if (!value) return []
-  const matches = value.match(/"[^"]*"|'[^']*'|\S+/g) ?? []
-  return matches.map((item) => item.replace(/^['"]|['"]$/g, '')).filter(Boolean)
+function buildSandboxContainerName(spec: SandboxSpec) {
+  const parts = [
+    'agenthub',
+    safePathSegment(spec.runId),
+    safePathSegment(spec.agentName),
+    safePathSegment(spec.agentId),
+    safePathSegment(spec.taskId),
+  ]
+  return parts.join('-').slice(0, 120)
+}
+
+function resolveDockerSandboxAgent(spec: SandboxSpec) {
+  const configured = readEnv('AGENTHUB_DOCKER_SANDBOX_AGENT')
+  if (configured) return configured
+  const codeAgentType = spec.codeAgentType?.trim().toLowerCase()
+  if (codeAgentType === 'claude-code' || codeAgentType === 'claude') return 'claude'
+  if (codeAgentType === 'opencode') return 'opencode'
+  if (codeAgentType === 'gemini') return 'gemini'
+  return 'codex'
 }

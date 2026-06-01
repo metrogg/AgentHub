@@ -31,6 +31,7 @@ import { env } from '../env'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger } from '../lib/logger'
 import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/auth'
+import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
 import { testLlmConnection } from '../services/llm-client'
 import { resolveWorkspaceStorageRoot } from '../services/workspace/auto-workspace'
@@ -74,13 +75,14 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
     const dataPath = appSettings.dataPath?.trim() || activeDataDir
     const workspaceStorageRoot = appSettings.workspaceStorageRoot?.trim() || (await resolveWorkspaceStorageRoot())
     const debugDir = join(appDataDir, 'debug', 'llm')
-    const [git, python, dataUsage, workspaceStorageUsage, debugUsage, databaseUsage] = await Promise.all([
+    const [git, python, dataUsage, workspaceStorageUsage, debugUsage, databaseUsage, sandbox] = await Promise.all([
       detectRuntime('git', ['--version']),
       detectPythonRuntime(),
       describePathUsage(dataPath),
       describePathUsage(workspaceStorageRoot),
       describePathUsage(debugDir),
       describeFileUsage(databasePath),
+      describeSandboxRuntimeStatus(),
     ])
 
     return c.json({
@@ -113,6 +115,7 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
         truncated: dataUsage.truncated,
         message: dataUsage.message,
       },
+      sandbox,
       git,
       python,
     })
@@ -195,6 +198,7 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
         name: string
         modelId: string
         apiEndpoint: string
+        anthropicEndpoint?: string
         apiKey: string
       }> = []
 
@@ -203,10 +207,11 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
           const config = JSON.parse(row.settings_config) as { env?: Record<string, string> }
           const env = config.env ?? {}
           const modelId = env.ANTHROPIC_MODEL ?? ''
-          const apiEndpoint = env.ANTHROPIC_BASE_URL ?? ''
+          const anthropicEndpoint = env.ANTHROPIC_BASE_URL ?? ''
+          const apiEndpoint = inferOpenAiEndpointFromAnthropicBaseUrl(anthropicEndpoint) ?? ''
           const apiKey = env.ANTHROPIC_AUTH_TOKEN ?? ''
-          if (!modelId && !apiEndpoint) continue
-          models.push({ name: row.name, modelId, apiEndpoint, apiKey })
+          if (!modelId && !anthropicEndpoint && !apiEndpoint) continue
+          models.push({ name: row.name, modelId, apiEndpoint, anthropicEndpoint, apiKey })
         } catch {
           // skip invalid config
         }
@@ -217,6 +222,20 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ models: [] })
     }
   })
+
+function inferOpenAiEndpointFromAnthropicBaseUrl(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  try {
+    const url = new URL(trimmed)
+    const originalPath = url.pathname
+    url.pathname = url.pathname.replace(/\/anthropic\/?$/i, '/v1')
+    if (url.pathname === originalPath) return ''
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return ''
+  }
+}
 
 async function resetAllApplicationData() {
   await db.transaction(async (tx) => {

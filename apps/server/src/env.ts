@@ -47,6 +47,8 @@ const envSchema = z.object({
   AGENTHUB_ENABLE_CODE_AGENT_EXECUTION: envBoolean.default(true),
   AGENTHUB_CODE_AGENT_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
   AGENTHUB_CODE_AGENT_OUTPUT_LIMIT: z.coerce.number().int().positive().default(100_000),
+  AGENTHUB_SANDBOX_PROVIDER: z.enum(['local-workdir', 'docker-sandbox', 'cloud']).default('docker-sandbox'),
+  AGENTHUB_DOCKER_SANDBOX_AGENT: z.string().optional(),
   AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS: envBoolean.default(true),
 })
 

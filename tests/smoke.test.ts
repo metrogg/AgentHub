@@ -740,6 +740,62 @@ describe('AgentHub smoke tests', () => {
     globalThis.fetch = globalMockedFetch
   })
 
+  test('settings model test probes anthropic-compatible Claude Code base urls', async () => {
+    const requestedUrls: string[] = []
+    globalThis.fetch = async (input, init) => {
+      const url = fetchInputUrl(input)
+      requestedUrls.push(url)
+      if (url === 'https://mock.local/anthropic/v1/messages') {
+        const nextInit = await fetchInputInit(input, init)
+        const body = JSON.parse(String(nextInit?.body ?? '{}')) as { model?: string }
+        expect(body.model).toBe('claude-compatible-model')
+        return new Response(JSON.stringify({
+          content: [{ type: 'text', text: 'OK' }],
+          id: 'msg_mock',
+          model: 'claude-compatible-model',
+          role: 'assistant',
+          stop_reason: 'end_turn',
+          type: 'message',
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }), {
+          status: 200,
+        })
+      }
+      return new Response('missing', { status: 404, statusText: 'Not Found' })
+    }
+
+    const result = await json<{ ok: boolean; status?: number }>(
+      await postJson('/api/settings/test-model', {
+        provider: 'anthropic',
+        apiEndpoint: 'https://mock.local/v1',
+        anthropicEndpoint: 'https://mock.local/anthropic',
+        apiKey: 'sk-test-12345678',
+        modelId: 'claude-compatible-model',
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.status).toBe(200)
+    expect(requestedUrls).toContain('https://mock.local/anthropic/v1/messages')
+
+    globalThis.fetch = globalMockedFetch
+  })
+
+  test('settings general info exposes Docker Sandboxes as the default execution path', async () => {
+    const info = await json<{
+      sandbox: {
+        defaultProvider: string
+        configuredProvider: string
+        dockerSandbox: { agent: string; available: boolean }
+      }
+    }>(await app.request('/api/settings/general-info'))
+
+    expect(info.sandbox.defaultProvider).toBe('docker-sandbox')
+    expect(info.sandbox.configuredProvider).toBe('docker-sandbox')
+    expect(info.sandbox.dockerSandbox.agent).toBe('auto')
+    expect(typeof info.sandbox.dockerSandbox.available).toBe('boolean')
+  })
+
   test('auto workspace creates a local project folder under configured root', async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'agenthub-auto-workspace-'))
     await json<{ success: boolean }>(

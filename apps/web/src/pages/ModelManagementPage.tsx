@@ -562,6 +562,11 @@ function inferProvider(endpoint: string): string {
   return 'openai-compatible'
 }
 
+function modelProviderFromEndpoints(apiEndpoint: string, anthropicEndpoint?: string) {
+  if (anthropicEndpoint?.trim()) return 'anthropic'
+  return inferProvider(apiEndpoint)
+}
+
 function CcswitchImportDialog({
   existingNames,
   onClose,
@@ -605,10 +610,10 @@ function CcswitchImportDialog({
         id: `ccswitch-${m.name}`,
         enabled: true,
         name: m.name,
-        provider: inferProvider(m.apiEndpoint),
+        provider: modelProviderFromEndpoints(m.apiEndpoint, m.anthropicEndpoint),
         modelId: m.modelId,
         apiEndpoint: m.apiEndpoint,
-        anthropicEndpoint: '',
+        anthropicEndpoint: m.anthropicEndpoint ?? '',
         apiKeyEnv: '',
         apiKey: m.apiKey,
         temperature: '0.7',
@@ -662,7 +667,8 @@ function CcswitchImportDialog({
                     <div className="text-sm font-medium text-neutral-800">{m.name}</div>
                     <div className="mt-0.5 font-mono text-xs text-neutral-500">
                       {m.modelId}
-                      {m.apiEndpoint && <span className="ml-2 text-neutral-400">· {m.apiEndpoint}</span>}
+                      {m.apiEndpoint && <span className="ml-2 text-neutral-400">· OpenAI: {m.apiEndpoint}</span>}
+                      {m.anthropicEndpoint && <span className="ml-2 text-sky-600">· Anthropic: {m.anthropicEndpoint}</span>}
                     </div>
                     {m.apiKey && (
                       <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">

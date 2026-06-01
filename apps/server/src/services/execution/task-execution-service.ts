@@ -85,6 +85,7 @@ export class TaskExecutionService {
         agentId: profile.id,
         agentName: profile.name,
         projectPath,
+        codeAgentType: profile.codeAgentType ?? null,
         sandboxPolicy: executionSandboxPolicy,
         existingWorkdir: input.existingWorkdir,
       })

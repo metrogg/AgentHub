@@ -156,8 +156,7 @@ Rules:
 - Read-only agents may read the project root.
 - If the user did not choose a project workspace, AgentHub creates an auto workspace under the system user data directory, such as `%LOCALAPPDATA%\AgentHub\workspaces` on Windows. Do not fall back to the AgentHub source repository.
 - Each task also gets a sandbox root under the system cache directory, used for temp/cache/config isolation for CLI runtimes.
-- Execution isolation is behind `SandboxProvider`; the implemented provider is `local-workdir`, not Docker/VM sandboxing. It hardens workdir plus process env, but it is not an OS/network permission sandbox.
-- `AGENTHUB_SANDBOX_PROVIDER=docker` enables the Docker provider. The image must be configured with `AGENTHUB_DOCKER_SANDBOX_IMAGE` and must already contain the selected Code Agent CLI. Docker mounts the execution directory to `/workspace` and mounts per-task temp/cache/config/home/data directories into the container.
+- Execution isolation is behind `SandboxProvider`; the default provider is now `docker-sandbox`, with `local-workdir` only as a compatibility fallback. `local-workdir` hardens workdir plus process env, but it is not an OS/network permission sandbox.
 - Upstream artifacts that can be reused by downstream agents are copied into `.agenthub/handoff/...`.
 - Downstream prompts must prefer `handoffPath`.
 - If a blackboard entry only has `filePath` or `path`, treat it as an upstream record, not as proof that the file exists in the current workdir.

@@ -91,6 +91,8 @@ interface CodeAgentRuntimeOptions {
   sandboxContainer?: SandboxContainerSpec
 }
 
+const activeDockerSandboxes = new Map<number, string>()
+
 export interface CodeAgentMetadataChunk {
   kind: 'code-agent-metadata'
   metadata: CodeAgentRunMetadata
@@ -1166,6 +1168,9 @@ async function runCodeAgentCommand(
       stderr: 'pipe',
     },
   )
+  if (runtimeOptions.sandboxContainer?.runtime === 'docker-sandbox' && runtimeOptions.sandboxContainer?.sandboxName && proc.pid) {
+    activeDockerSandboxes.set(proc.pid, runtimeOptions.sandboxContainer.sandboxName)
+  }
   if (adapter.promptMode === 'stdin') {
     try {
       proc.stdin?.write(commandPrompt)
@@ -1232,6 +1237,7 @@ async function runCodeAgentCommand(
     clearTimeout(timer)
     clearInterval(heartbeat)
     signal?.removeEventListener('abort', abortRun)
+    if (proc.pid) activeDockerSandboxes.delete(proc.pid)
   }
   if (adapter.command === 'claude' && claudeStdoutBuffer.trim()) {
     claudeStdoutBuffer = consumeClaudeStreamJson('\n', claudeStdoutBuffer, claudeStreamHandlers)
@@ -1342,6 +1348,17 @@ function jsonStringifyAscii(value: string) {
 }
 
 function killProcessTree(proc: ReturnType<typeof Bun.spawn>) {
+  const sandboxName = proc.pid ? activeDockerSandboxes.get(proc.pid) : undefined
+  if (sandboxName) {
+    try {
+      Bun.spawn(['sbx', 'rm', '-f', sandboxName], {
+        stdout: 'ignore',
+        stderr: 'ignore',
+      })
+    } catch {
+      // Best-effort. The spawned CLI process still gets killed below.
+    }
+  }
   try {
     if (process.platform === 'win32' && proc.pid) {
       Bun.spawn(['taskkill', '/pid', String(proc.pid), '/t', '/f'], {
@@ -2419,7 +2436,7 @@ function buildRuntimeCommand(
   container?: SandboxContainerSpec,
   envMap: Record<string, string> = {},
 ) {
-  if (container) return buildDockerCommand(command, args, container, envMap)
+  if (container?.runtime === 'docker-sandbox') return buildDockerSandboxCommand(command, args, container, envMap)
   if (process.platform !== 'win32') return [command, ...args]
   if (command === 'codex') return [windowsCodexCommand(), ...args]
   if (command === 'opencode') {
@@ -2430,36 +2447,21 @@ function buildRuntimeCommand(
   return [windowsCliCommand(command), ...args]
 }
 
-function buildDockerCommand(
+function buildDockerSandboxCommand(
   command: string,
   args: string[],
   container: SandboxContainerSpec,
   envMap: Record<string, string>,
 ) {
-  const combinedEnv = { ...envMap, ...container.env }
-  const dockerArgs = ['run', '--rm', '-i', '--init']
-  dockerArgs.push('--network', container.networkMode)
-  dockerArgs.push('--workdir', container.workdir)
-  if (container.readOnlyRootfs) dockerArgs.push('--read-only')
-  if (container.user) dockerArgs.push('--user', container.user)
-  for (const mount of container.mounts) {
-    const mountParts = [
-      'type=bind',
-      `source=${mount.hostPath}`,
-      `target=${mount.containerPath}`,
-      ...(mount.readOnly ? ['readonly'] : []),
-    ]
-    dockerArgs.push('--mount', mountParts.join(','))
-  }
-  for (const [key, value] of Object.entries(combinedEnv)) {
+  const sandboxName = container.sandboxName ?? container.containerName
+  const sbxArgs = ['exec', '-w', container.workdir]
+  for (const [key, value] of Object.entries({ ...envMap, ...container.env })) {
     if (!shouldPassDockerEnvKey(key)) continue
     if (typeof value !== 'string' || !value.trim()) continue
-    dockerArgs.push('--env', `${key}=${value}`)
+    sbxArgs.push('-e', `${key}=${value}`)
   }
-  if (container.extraArgs?.length) dockerArgs.push(...container.extraArgs)
-  dockerArgs.push(container.image)
-  dockerArgs.push(command, ...args.map((arg) => mapRuntimeArg(arg, container)))
-  return ['docker', ...dockerArgs]
+  sbxArgs.push(sandboxName, command, ...args.map((arg) => mapRuntimeArg(arg, container)))
+  return ['sbx', ...sbxArgs]
 }
 
 function shouldPassDockerEnvKey(key: string) {
@@ -2488,22 +2490,7 @@ function mapRuntimeArg(value: string, container: SandboxContainerSpec) {
 
 function mapRuntimePath(pathValue: string | undefined, container?: SandboxContainerSpec) {
   if (!pathValue || !container) return pathValue
-  const exact = container.mounts.find((mount) => normalizeRuntimePath(mount.hostPath) === normalizeRuntimePath(pathValue))
-  if (exact) return exact.containerPath
-  for (const mount of container.mounts) {
-    const host = normalizeRuntimePath(mount.hostPath)
-    const value = normalizeRuntimePath(pathValue)
-    if (value === host) return mount.containerPath
-    if (value.startsWith(`${host}/`)) {
-      const suffix = value.slice(host.length + 1)
-      return `${mount.containerPath}/${suffix}`
-    }
-  }
   return pathValue
-}
-
-function normalizeRuntimePath(value: string) {
-  return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
 
 function windowsOpencodeNodeDirect(args: string[]): string[] | null {

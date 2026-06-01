@@ -191,8 +191,8 @@ A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库�
 
 执行隔离通过 `SandboxProvider` 抽象承载。当前可用 provider：
 
-- `local-workdir`：默认路径，本机进程 + 独立 workdir/temp/cache/config。
-- `docker`：容器路径，Code Agent CLI 会通过 `docker run` 在容器里执行。
+- `docker-sandbox`：默认路径，Code Agent CLI 会通过 Docker Sandboxes 的 `sbx` CLI 在沙箱里执行。
+- `local-workdir`：兼容降级路径，本机进程 + 独立 workdir/temp/cache/config。
 
 云沙箱或远程开发容器可以作为后续 provider 接入，但在真正实现前不能把它们描述为已启用。
 
@@ -211,21 +211,13 @@ A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库�
 - 不能阻止恶意 CLI 读取沙箱外路径；它是工作目录和环境隔离，不是 OS 权限边界。
 - 默认不强制改写 `HOME/USERPROFILE`，以免破坏 Codex / Claude Code / OpenCode 的本机登录态。需要更强 HOME 隔离时可设置 `AGENTHUB_SANDBOX_ISOLATE_HOME=true`，但应优先确保模型凭据从 AgentHub 设置注入。
 
-`docker` provider 当前实际做了这些事：
+`docker-sandbox` provider 当前实际做了这些事：
 
-- 需要设置 `AGENTHUB_SANDBOX_PROVIDER=docker` 和 `AGENTHUB_DOCKER_SANDBOX_IMAGE`。
-- 镜像必须已经安装对应 CLI，例如 `codex`、`claude`、`opencode` 或 `gemini`，AgentHub 不在运行时临时安装。
-- 将 Agent 的实际执行目录挂载到容器 `/workspace`，CLI 的 `--cd` / `--dir` 也改为 `/workspace`。
-- 将本次任务的 temp/cache/config/data/home 目录分别挂载到容器路径，例如 `/tmp/agenthub`、`/home/agenthub/.cache`、`/home/agenthub/.config`。
-- OpenCode prompt file、Codex last-message 文件和运行时配置会自动做 host path 到 container path 映射。
-- `networkPolicy=disabled` 会映射到 Docker `--network none`；默认使用 `bridge`，也可通过 `AGENTHUB_DOCKER_NETWORK` 指定。
-- 任务取消或超时时 kill 的是 `docker run` 进程树，容器使用 `--rm` 自动清理。
-
-`docker` provider 仍需要注意：
-
-- 镜像能力决定能不能跑；如果镜像里没有对应 CLI，会正常失败并显示 CLI 不存在。
-- API Key 仍通过 AgentHub 的 env/model 配置注入容器，不建议把宿主机完整 home 目录挂进去。
-- Windows Docker Desktop 对盘符、权限和中文路径可能更敏感；出现挂载失败时优先把默认工作空间放到普通英文路径测试。
+- 默认启用 `AGENTHUB_SANDBOX_PROVIDER=docker-sandbox`，依赖 Docker Sandboxes 的 `sbx` CLI。
+- 根据 Agent 的 `codeAgentType` 自动选择 `sbx create` 的 agent 类型：Codex、Claude、OpenCode、Gemini。
+- 将 Agent 的实际执行目录作为 sandbox workspace，temp/cache/config/data/home 目录作为额外 workspace。
+- OpenCode prompt file、Codex last-message 文件和运行时配置都放在已挂载的 sandbox temp/config 目录中。
+- 每个任务会生成独立 sandbox 名；任务取消或超时时会主动 `sbx rm -f` 对应 sandbox。
 
 ## 产物和 handoff
 

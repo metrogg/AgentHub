@@ -305,6 +305,7 @@ export interface CcswitchModel {
   name: string
   modelId: string
   apiEndpoint: string
+  anthropicEndpoint?: string
   apiKey: string
 }
 

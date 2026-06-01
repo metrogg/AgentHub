@@ -50,10 +50,10 @@ export interface AgentExecutionEnvelope {
   }
   /** 内部 Agent 间通信统一使用的 A2A message/send 信封 */
   a2a?: AgentHubA2AEnvelope
-  /** 当前执行隔离 provider。当前稳定实现是 local-workdir。 */
-  sandboxProvider?: 'local-workdir' | 'docker' | 'cloud'
+  /** 当前执行隔离 provider。默认是 Docker Sandboxes。 */
+  sandboxProvider?: 'local-workdir' | 'docker-sandbox' | 'cloud'
   /** 实际隔离级别。local-workdir 不是 OS/container sandbox。 */
-  isolation?: 'workdir' | 'container' | 'cloud'
+  isolation?: 'workdir' | 'microvm' | 'cloud'
 }
 
 /** 默认 env 白名单：只传模型 key、必要 PATH、HOME 等明确字段 */

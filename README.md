@@ -155,18 +155,15 @@ bun test
 
 如果没有选择工作区，系统会自动在默认工作空间存储路径下创建一个可写工作区。默认位置使用系统用户数据目录，例如 Windows 的 `%LOCALAPPDATA%\AgentHub\workspaces`，避免写进 AgentHub 源码目录。可在设置里调整默认工作区存储路径。
 
-当前默认不再把 Git 分支隔离作为主路径，也不把本地 workdir 伪装成容器沙箱。执行层已经抽出 `SandboxProvider` 边界，当前稳定 provider 是 `local-workdir`；Docker/云沙箱可以后续接入。
+当前默认不再把 Git 分支隔离作为主路径，也不把本地 workdir 伪装成容器沙箱。执行层已经抽出 `SandboxProvider` 边界，默认 provider 是 `docker-sandbox`；`local-workdir` 只作为兼容降级路径。
 
-`local-workdir` 会给每次任务创建系统缓存目录下的 sandbox root，并向 Code Agent 子进程注入独立 temp/cache/config 目录，用于减少 CLI 运行时污染。它不是 OS 级安全边界，不能真正限制网络或阻止进程读取任意本机路径。
-
-需要容器隔离时可启用 Docker provider：
+如需临时回退到本地工作目录隔离，可显式设置：
 
 ```env
-AGENTHUB_SANDBOX_PROVIDER=docker
-AGENTHUB_DOCKER_SANDBOX_IMAGE=your-code-agent-image:latest
+AGENTHUB_SANDBOX_PROVIDER=local-workdir
 ```
 
-Docker 镜像必须包含要运行的 Code Agent CLI。AgentHub 会把任务工作目录挂载到 `/workspace`，并把 temp/cache/config 目录单独挂载进容器。
+`local-workdir` 会给每次任务创建系统缓存目录下的 sandbox root，并向 Code Agent 子进程注入独立 temp/cache/config 目录，用于减少 CLI 运行时污染。它不是 OS 级安全边界，不能真正限制网络或阻止进程读取任意本机路径。
 
 ## 数据清理
 

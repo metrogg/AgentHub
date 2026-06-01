@@ -1,7 +1,7 @@
 import { db, settings } from '@agenthub/db'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { streamText, generateText } from 'ai'
+import { streamText } from 'ai'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import type { FetchFunction } from '@ai-sdk/provider-utils'
@@ -395,15 +395,9 @@ export async function testLlmConnection(input: TestConnectionInput) {
   const isDefaultModel = !clean(input.modelId)
 
   try {
-    const aiModel = createAiSdkModel(config)
     const timeout = withTimeoutSignal(undefined, config.timeoutMs, '连接测试')
     try {
-      await generateText({
-        model: aiModel,
-        messages: [{ role: 'user', content: '只回复 OK。' }],
-        abortSignal: timeout.signal,
-        maxRetries: 0,
-      })
+      await testProviderConnection(config, apiKey, timeout.signal)
     } finally {
       timeout.dispose()
     }
@@ -416,6 +410,75 @@ export async function testLlmConnection(input: TestConnectionInput) {
     }
     return { ok: false, message }
   }
+}
+
+async function testProviderConnection(config: LlmRuntimeConfig, apiKey: string, signal: AbortSignal) {
+  if (isAnthropicProvider(config.provider, config.baseUrl)) {
+    return testAnthropicConnection(config, apiKey, signal)
+  }
+  return testOpenAiCompatibleConnection(config, apiKey, signal)
+}
+
+async function testOpenAiCompatibleConnection(config: LlmRuntimeConfig, apiKey: string, signal: AbortSignal) {
+  const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`
+  const response = await globalThis.fetch(url, {
+    method: 'POST',
+    signal,
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages: [{ role: 'user', content: '只回复 OK。' }],
+      max_tokens: 8,
+      temperature: 0,
+    }),
+  })
+  if (!response.ok) throw new Error(await formatHttpError(response, url))
+  return response
+}
+
+async function testAnthropicConnection(config: LlmRuntimeConfig, apiKey: string, signal: AbortSignal) {
+  const baseUrl = config.baseUrl.replace(/\/$/, '')
+  const candidateUrls = baseUrl.endsWith('/v1')
+    ? [`${baseUrl}/messages`]
+    : [`${baseUrl}/v1/messages`, `${baseUrl}/messages`]
+  let lastError = ''
+
+  for (const url of candidateUrls) {
+    const response = await globalThis.fetch(url, {
+      method: 'POST',
+      signal,
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [{ role: 'user', content: '只回复 OK。' }],
+        max_tokens: 8,
+      }),
+    })
+    if (response.ok) return response
+
+    lastError = await formatHttpError(response, url)
+    if (response.status !== 404) break
+  }
+
+  throw new Error(lastError || 'Anthropic-compatible connection failed.')
+}
+
+async function formatHttpError(response: Response, url: string) {
+  const body = await response.text().catch(() => '')
+  const detail = body.trim().slice(0, 400)
+  return [
+    `HTTP ${response.status} ${response.statusText || ''}`.trim(),
+    `URL: ${url}`,
+    detail,
+  ].filter(Boolean).join(' | ')
 }
 
 function withTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number, label: string) {
