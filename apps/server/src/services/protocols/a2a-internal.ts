@@ -34,9 +34,7 @@ export function buildA2ADispatchEnvelope(params: {
   childSessionId: string
   userMessageId: string
 }): AgentHubA2AEnvelope {
-  const orchestrator =
-    params.plan.agents.find((agent) => agent.roleType === 'orchestrator') ??
-    params.plan.agents.find((agent) => agent.name.toLowerCase().includes('orchestrator'))
+  const orchestrator = params.plan.agents.find((agent) => agent.roleType === 'orchestrator')
   const fromAgentId = orchestrator?.id ?? 'orchestrator'
   const fromAgentName = orchestrator?.name ?? 'Orchestrator'
   const referenceTaskIds = params.task.dependencies ?? []

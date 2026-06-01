@@ -101,9 +101,7 @@ export async function buildDynamicOrchestratorPlan(
     throw new Error('当前群聊没有可调度的 Agent，请先添加成员后再发起编排')
   }
   const planningAgents = agents.map(planAgentFromInput)
-  const orchestratorAgent =
-    planningAgents.find((agent) => agent.roleType === 'orchestrator') ??
-    planningAgents.find((agent) => agent.name.toLowerCase().includes('orchestrator'))
+  const orchestratorAgent = planningAgents.find((agent) => agent.roleType === 'orchestrator')
   const workerPlanningAgents = planningAgents.filter((agent) => agent.roleType !== 'orchestrator')
   if (!workerPlanningAgents.length) {
     throw new Error('当前群聊只有 Orchestrator，没有可执行任务的 Agent')

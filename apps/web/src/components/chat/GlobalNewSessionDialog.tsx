@@ -16,7 +16,7 @@ import { api, friendlyErrorMessage, type Workspace } from '../../lib/api'
 import {
   expertProfileForId,
   expertProfileToAgentConfig,
-  expertTeamProfiles,
+  allExpertTeamProfiles,
 } from '../../lib/expertProfiles'
 import { pickWorkspaceFolder } from '../../lib/native'
 import { requestSettingsDialog } from '../../lib/settingsDialog'
@@ -25,6 +25,7 @@ import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../.
 import { useChatStore } from '../../stores/chatStore'
 
 export const openNewSessionDialogEvent = 'agenthub:open-new-session-dialog'
+const orchestratorExpertProfileId = 'orchestrator-team-builder'
 
 export function requestNewSessionDialog() {
   window.dispatchEvent(new Event(openNewSessionDialogEvent))
@@ -155,6 +156,16 @@ function NewSessionDialog({
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const selectedAgents = useMemo(() => libraryAgents.filter((agent) => selectedIds.has(agent.id)), [libraryAgents, selectedIds])
+  const selectedOrchestrators = useMemo(
+    () => selectedAgents.filter(isOrchestratorAgent),
+    [selectedAgents],
+  )
+  const groupValidationMessage =
+    selectedAgents.length > 1 && selectedOrchestrators.length === 0
+      ? '多成员群聊需要 1 个 Orchestrator 作为总指挥。'
+      : selectedOrchestrators.length > 1
+        ? '一个群聊只能有 1 个 Orchestrator，请只保留一个总指挥。'
+        : ''
   const groupTitle = defaultConversationTitle(selectedAgents)
   const filteredWorkspaces = useMemo(() => {
     const keyword = workspaceQuery.trim().toLowerCase()
@@ -182,7 +193,7 @@ function NewSessionDialog({
   }
 
   function handleCreate() {
-    if (!selectedAgents.length || creatingChoice) return
+    if (!selectedAgents.length || creatingChoice || groupValidationMessage) return
     void onCreateAgent(
       selectedAgents,
       title.trim() || groupTitle || undefined,
@@ -210,14 +221,14 @@ function NewSessionDialog({
   }, [])
 
   function applyTeamSuggestion(teamId: string) {
-    const team = expertTeamProfiles.find((item) => item.id === teamId)
+    const team = allExpertTeamProfiles.find((item) => item.id === teamId)
     if (!team) return
 
     const library = loadAgentLibraryState()
     const nextAgents = [...library.agents]
     const nextSelectedIds = new Set(selectedIds)
 
-    for (const expertId of team.memberExpertIds) {
+    for (const expertId of uniqueExpertIds([orchestratorExpertProfileId, ...team.memberExpertIds])) {
       const profile = expertProfileForId(expertId)
       if (!profile) continue
       const existing = nextAgents.find(
@@ -239,6 +250,27 @@ function NewSessionDialog({
     setLibraryAgents(nextAgents)
     setSelectedIds(nextSelectedIds)
     if (!title.trim()) setTitle(team.name)
+  }
+
+  function addOrchestratorToSelection() {
+    const existing = libraryAgents.find(isOrchestratorAgent)
+    if (existing) {
+      setSelectedIds((current) => new Set([...current, existing.id]))
+      return
+    }
+
+    const profile = expertProfileForId(orchestratorExpertProfileId)
+    if (!profile) return
+    const library = loadAgentLibraryState()
+    const next = createSavedAgent(expertProfileToAgentConfig(profile))
+    const nextAgents = [next, ...library.agents]
+    saveAgentLibraryState({
+      schemaVersion: 2,
+      agents: nextAgents,
+      relations: library.relations,
+    })
+    setLibraryAgents(nextAgents)
+    setSelectedIds((current) => new Set([...current, next.id]))
   }
 
   useEffect(() => {
@@ -383,7 +415,7 @@ function NewSessionDialog({
           </div>
 
           <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white">
-            <div className="shrink-0 border-b border-neutral-200/80 px-5 py-4">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
               <div className="text-sm font-semibold text-neutral-950">已选成员</div>
               <div className="mt-1 text-xs text-neutral-500">选择后即可创建群聊，标题会用于工作区和会话列表。</div>
               <label className="mt-4 block">
@@ -411,7 +443,7 @@ function NewSessionDialog({
                   轻量组队建议
                 </div>
                 <div className="grid gap-2">
-                  {expertTeamProfiles.map((team) => (
+                  {allExpertTeamProfiles.map((team) => (
                     <button
                       key={team.id}
                       type="button"
@@ -513,47 +545,71 @@ function NewSessionDialog({
                   ))}
                 </div>
               </div>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-              {selectedAgents.length ? (
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-3">
-                  {selectedAgents.map((agent) => (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      onClick={() => toggleAgent(agent)}
-                      className="group flex min-w-0 items-center gap-3 rounded-2xl border border-neutral-200 bg-[#fafafa] px-3 py-3 text-left transition hover:border-neutral-300 hover:bg-white"
-                    >
-                      <span
-                        className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl text-sm font-semibold text-white shadow-sm"
-                        style={{ background: agent.color ?? '#111827' }}
+              <div className="mt-5 rounded-2xl border border-neutral-200 bg-[#fafafa] p-3">
+                <div className="mb-3 flex items-center justify-between gap-3 px-1">
+                  <div>
+                    <div className="text-xs font-medium text-neutral-500">已选成员预览</div>
+                    <div className="mt-0.5 text-[11px] text-neutral-400">
+                      这里展示将被加入群聊的 Agent。
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-neutral-400">
+                    {selectedAgents.length}/{libraryAgents.length}
+                  </div>
+                </div>
+                {selectedAgents.length ? (
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-3">
+                    {selectedAgents.map((agent) => (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        onClick={() => toggleAgent(agent)}
+                        className="group flex min-w-0 items-center gap-3 rounded-2xl border border-neutral-200 bg-white px-3 py-3 text-left transition hover:border-neutral-300 hover:bg-neutral-50"
                       >
-                        {agent.name.slice(0, 1).toUpperCase()}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm text-neutral-950">{agent.name}</span>
-                        <span className="block truncate text-xs text-neutral-500">{agent.role}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex h-full items-center justify-center rounded-3xl border border-dashed border-neutral-200 bg-[#fafafa] px-6 text-center text-sm text-neutral-400">
-                  从左侧选择一个或多个 Agent，马上就能发起群聊。
-                </div>
-              )}
+                        <span
+                          className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl text-sm font-semibold text-white shadow-sm"
+                          style={{ background: agent.color ?? '#111827' }}
+                        >
+                          {agent.name.slice(0, 1).toUpperCase()}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm text-neutral-950">{agent.name}</span>
+                          <span className="block truncate text-xs text-neutral-500">{agent.role}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex min-h-24 items-center justify-center rounded-2xl border border-dashed border-neutral-200 bg-white px-6 text-center text-sm text-neutral-400">
+                    从左侧选择一个或多个 Agent，马上就能发起群聊。
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="flex min-h-20 shrink-0 flex-wrap items-center justify-end gap-3 border-t border-neutral-200/80 bg-white px-5 py-4">
               {createError && <div className="mr-auto max-w-full truncate text-xs text-red-500">{createError}</div>}
+              {groupValidationMessage && (
+                <div className="mr-auto flex min-w-0 flex-wrap items-center gap-2 text-xs text-amber-600">
+                  <span className="max-w-[360px] truncate">{groupValidationMessage}</span>
+                  {selectedOrchestrators.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={addOrchestratorToSelection}
+                      className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 font-medium text-amber-700 transition hover:bg-amber-100"
+                    >
+                      添加 Orchestrator
+                    </button>
+                  )}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={handleCreate}
-                disabled={!selectedAgents.length || Boolean(creatingChoice)}
+                disabled={!selectedAgents.length || Boolean(creatingChoice) || Boolean(groupValidationMessage)}
                 className="inline-flex h-11 min-w-[120px] items-center justify-center rounded-2xl bg-neutral-100 px-5 text-sm font-medium text-neutral-400 transition enabled:bg-emerald-500 enabled:text-white enabled:hover:bg-emerald-600 disabled:cursor-not-allowed"
               >
-                {submittingSelected ? <Loader2 className="h-4 w-4 animate-spin" /> : '完成'}
+                {submittingSelected ? <Loader2 className="h-4 w-4 animate-spin" /> : '创建群聊'}
               </button>
               <button
                 type="button"
@@ -574,4 +630,12 @@ function NewSessionDialog({
 
 function normalizeAgentText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function uniqueExpertIds(ids: string[]) {
+  return Array.from(new Set(ids))
+}
+
+function isOrchestratorAgent(agent: SavedAgentConfig) {
+  return agent.roleType === 'orchestrator'
 }

@@ -1547,9 +1547,7 @@ async function generatePlanAndPushTaskBoard(
   ownerId: string,
   options: { propagateErrors?: boolean } = {},
 ): Promise<DispatchMonitor | null> {
-  const orchestratorAgent =
-    agents.find((a: any) => a.roleType === 'orchestrator') ??
-    agents.find((a: any) => a.name.toLowerCase().includes('orchestrator'))
+  const orchestratorAgent = agents.find((a: any) => a.roleType === 'orchestrator')
 
   const guardrails = checkInputGuardrails(content)
   if (!guardrails.ok && guardrails.riskLevel === 'high') {

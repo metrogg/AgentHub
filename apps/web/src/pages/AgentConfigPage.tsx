@@ -32,7 +32,8 @@ import {
   expertCategoryLabels,
   expertProfileForId,
   expertProfileIdFromDraft,
-  expertProfiles,
+  allExpertProfiles,
+  allExpertTeamProfiles,
   expertProfileToAgentConfig,
   readProfileStringArray,
 } from '../lib/expertProfiles'
@@ -141,6 +142,11 @@ export default function AgentConfigPage() {
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null
   const showEditor = Boolean(selectedAgent) || isCreatingNewAgent
+  const savedExpertProfileIds = new Set(
+    agents
+      .map((agent) => agent.roleProfile?.expertProfileId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  )
   const runtimeType = draft.runtimeType ?? 'code-agent'
   const modelCompatibilityMessage = (() => {
     const modelId = draft.modelId ?? null
@@ -165,6 +171,66 @@ export default function AgentConfigPage() {
 
   function createAgent() {
     navigate('/agent-config?newAgent=1')
+  }
+
+  async function importExpertProfile(profileId: string) {
+    const profile = expertProfileForId(profileId)
+    if (!profile) return
+    const existing = agents.find(
+      (agent) =>
+        agent.roleProfile?.expertProfileId === profile.id ||
+        (normalizeAgentText(agent.name) === normalizeAgentText(profile.name) &&
+          normalizeAgentText(agent.role) === normalizeAgentText(profile.role)),
+    )
+    if (existing) {
+      selectAgent(existing)
+      return
+    }
+
+    const next = createSavedAgent(expertProfileToAgentConfig(profile))
+    const updated = [next, ...agents]
+    setAgents(updated)
+    setRelations((current) => saveLibrary(updated, current))
+    selectAgent(next)
+    try {
+      await flushAgentLibraryServerSync()
+      toastSaved()
+    } catch (error) {
+      toastSaveFailed(error)
+    }
+  }
+
+  async function importExpertTeam(teamId: string) {
+    const team = allExpertTeamProfiles.find((item) => item.id === teamId)
+    if (!team) return
+
+    let nextAgents = [...agents]
+    for (const expertId of team.memberExpertIds) {
+      const profile = expertProfileForId(expertId)
+      if (!profile) continue
+      const existing = nextAgents.find(
+        (agent) =>
+          agent.roleProfile?.expertProfileId === profile.id ||
+          (normalizeAgentText(agent.name) === normalizeAgentText(profile.name) &&
+            normalizeAgentText(agent.role) === normalizeAgentText(profile.role)),
+      )
+      if (!existing) nextAgents = [createSavedAgent(expertProfileToAgentConfig(profile)), ...nextAgents]
+    }
+
+    setAgents(nextAgents)
+    setRelations((current) => saveLibrary(nextAgents, current))
+    const firstMember = team.memberExpertIds
+      .map((expertId) =>
+        nextAgents.find((agent) => agent.roleProfile?.expertProfileId === expertId),
+      )
+      .find(Boolean)
+    if (firstMember) selectAgent(firstMember)
+    try {
+      await flushAgentLibraryServerSync()
+      toastSaved()
+    } catch (error) {
+      toastSaveFailed(error)
+    }
   }
 
   async function duplicateAgent() {
@@ -434,6 +500,88 @@ export default function AgentConfigPage() {
                 </div>
               </div>
 
+              <section className="mb-6 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-neutral-900">预装专家库</div>
+                      <p className="mt-1 text-xs leading-5 text-neutral-500">
+                        这些是可导入的 Agent 配置画像。导入后才会进入左侧全局通讯录；不会自动组队，也不会替 Orchestrator 固定分工。
+                      </p>
+                    </div>
+                    <div className="text-xs text-neutral-400">
+                      {allExpertProfiles.length} 个专家 · {savedExpertProfileIds.size} 个已导入
+                    </div>
+                  </div>
+                  <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
+                    {allExpertProfiles.map((profile) => {
+                      const imported = savedExpertProfileIds.has(profile.id)
+                      return (
+                        <button
+                          key={profile.id}
+                          type="button"
+                          onClick={() => void importExpertProfile(profile.id)}
+                          className={cn(
+                            'rounded-xl border px-3 py-3 text-left transition',
+                            imported
+                              ? 'border-emerald-100 bg-emerald-50/40'
+                              : 'border-neutral-200 bg-neutral-50 hover:border-neutral-300 hover:bg-white',
+                          )}
+                        >
+                          <span className="flex items-center gap-2">
+                            <span
+                              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-semibold text-white"
+                              style={{ background: profile.color }}
+                            >
+                              {profile.name.slice(0, 1).toUpperCase()}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium text-neutral-900">
+                                {profile.name}
+                              </span>
+                              <span className="block truncate text-[11px] text-neutral-400">
+                                {expertCategoryLabels[profile.category]} · {runtimeLabel(profile.runtimeType)}
+                              </span>
+                            </span>
+                            <span className={cn('shrink-0 text-[11px]', imported ? 'text-emerald-600' : 'text-neutral-400')}>
+                              {imported ? '已导入' : '导入'}
+                            </span>
+                          </span>
+                          <span className="mt-2 line-clamp-2 block text-xs leading-5 text-neutral-500">
+                            {profile.description}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+                  <div className="text-sm font-semibold text-neutral-900">专家团建议</div>
+                  <p className="mt-1 text-xs leading-5 text-neutral-500">
+                    专家团只负责批量导入成员配置，真实协作仍由群聊里的 Orchestrator 动态规划。
+                  </p>
+                  <div className="mt-4 space-y-2">
+                    {allExpertTeamProfiles.map((team) => (
+                      <button
+                        key={team.id}
+                        type="button"
+                        onClick={() => void importExpertTeam(team.id)}
+                        className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3 text-left transition hover:border-neutral-300 hover:bg-white"
+                      >
+                        <span className="flex items-center justify-between gap-3">
+                          <span className="text-sm font-medium text-neutral-900">{team.name}</span>
+                          <span className="text-[11px] text-emerald-600">导入成员</span>
+                        </span>
+                        <span className="mt-1 line-clamp-2 block text-xs leading-5 text-neutral-500">
+                          {team.description}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </section>
+
               {showEditor ? (
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
                   <form onSubmit={saveDraft} className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
@@ -444,14 +592,14 @@ export default function AgentConfigPage() {
                         onChange={applyExpertProfile}
                       >
                         <option value="">自定义专家</option>
-                        {expertProfiles.map((profile) => (
+                        {allExpertProfiles.map((profile) => (
                           <option key={profile.id} value={profile.id}>
                             {expertCategoryLabels[profile.category]} / {profile.name}
                           </option>
                         ))}
                       </SelectField>
                       <p className="mt-2 text-xs leading-5 text-neutral-400">
-                        当前只暴露少量核心模板。模板只是帮你填充 Agent 配置，不是独立专家系统，也不会固定驱动分工。
+                        模板只是帮你填充 Agent 配置，不是独立专家系统，也不会固定驱动分工。
                       </p>
                     </div>
                     <div className="flex items-start gap-4">
@@ -836,6 +984,10 @@ function splitList(value: string) {
     .split(/[,，、\s]+/)
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function normalizeAgentText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 function saveLibrary(agents: SavedAgentConfig[], relations: SavedAgentRelation[]) {

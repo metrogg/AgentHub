@@ -708,9 +708,7 @@ export class OrchestratorEngine {
       .select()
       .from(workspaceAgents)
       .where(eq(workspaceAgents.workspaceId, workspaceId))
-    const orchestrator =
-      agents.find((agent) => agent.roleType === 'orchestrator') ??
-      agents.find((agent) => agent.name.toLowerCase().includes('orchestrator'))
+    const orchestrator = agents.find((agent) => agent.roleType === 'orchestrator')
     return orchestrator ? buildAgentProfile(orchestrator, workspace?.projectPath) : null
   }
 

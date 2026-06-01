@@ -13,6 +13,7 @@ export async function ensureGroupSession(
   selectedAgentIds?: string[],
 ) {
   const ws = await ensureWorkspace(workspaceId, ownerId)
+  await ensureValidGroupOrchestrator(workspaceId, selectedAgentIds)
   let session = await findGroupSession(workspaceId)
   if (!session) {
     const [created] = await db
@@ -31,6 +32,35 @@ export async function ensureGroupSession(
   await syncGroupMembers(session.id, workspaceId, ownerId, selectedAgentIds)
   const [refreshed] = await db.select().from(sessions).where(eq(sessions.id, session.id)).limit(1)
   return refreshed ?? session
+}
+
+async function ensureValidGroupOrchestrator(workspaceId: string, selectedAgentIds?: string[]) {
+  const allAgents = await db
+    .select()
+    .from(workspaceAgents)
+    .where(eq(workspaceAgents.workspaceId, workspaceId))
+    .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
+
+  const selectedAgentIdSet =
+    selectedAgentIds && selectedAgentIds.length > 0 ? new Set(selectedAgentIds) : null
+  const agents = selectedAgentIdSet
+    ? allAgents.filter((agent) => selectedAgentIdSet.has(agent.id))
+    : allAgents
+
+  if (agents.length <= 1) return
+
+  const orchestrators = agents.filter((agent) => agent.roleType === 'orchestrator')
+  if (orchestrators.length === 1) return
+  if (orchestrators.length === 0) {
+    throw AppError.fromCode(
+      AppErrorCodes.VALIDATION_FAILED,
+      '多成员群聊必须包含 1 个 Orchestrator 作为总指挥。',
+    )
+  }
+  throw AppError.fromCode(
+    AppErrorCodes.VALIDATION_FAILED,
+    '一个群聊只能包含 1 个 Orchestrator，请移除重复的总指挥。',
+  )
 }
 
 /**
