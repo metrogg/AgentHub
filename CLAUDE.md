@@ -1,6 +1,6 @@
 # AgentHub Development Guide
 
-This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md` and `docs/当前状态与下一步路线.md`, then read `docs/当前多Agent协作架构.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
+This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md` and `docs/当前状态与下一步路线.md`, then read `docs/当前多Agent协作架构.md`, `docs/场景角色团队协作调研.md`, `docs/角色提示词与动态组队设计.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
 
 ## Product Definition
 
@@ -14,6 +14,7 @@ AgentHub is an IM-style multi-agent collaboration platform. The expected behavio
 
 Do not implement fixed scenario templates as the core path. The platform must stay general-purpose first.
 Role presets may be used as a manual creation library, but they must not auto-seed a workspace, define a default team, or override model-generated assignments.
+Role prompts should follow `docs/角色提示词与动态组队设计.md`: shared collaboration protocol + role background + bound skills + runtime task context + output contract. Group goals may drive member recommendations, but not fixed execution templates. If an existing group lacks needed capability, Orchestrator may propose adding a new agent; this must be visible and user-approved by default.
 
 ## Layered Mental Model
 
