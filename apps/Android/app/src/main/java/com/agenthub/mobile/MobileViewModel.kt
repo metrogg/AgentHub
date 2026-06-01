@@ -99,7 +99,16 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
 
     fun openWorkspaceAgent(workspaceId: String, agentId: String) = repository.openWorkspaceAgent(workspaceId, agentId)
 
-    fun openWorkspaceGroupSession(workspaceId: String) = repository.openWorkspaceGroupSession(workspaceId)
+    fun openWorkspaceGroupSession(
+        workspaceId: String,
+        agentIds: List<String> = emptyList(),
+        title: String? = null,
+    ) = repository.openWorkspaceGroupSession(workspaceId, agentIds, title)
+
+    fun openContactGroupSession(
+        agentIds: List<String> = emptyList(),
+        title: String? = null,
+    ) = repository.openContactGroupSession(agentIds, title)
 
     fun openAgentContact(contact: AgentContact) = repository.openAgentContact(contact)
 

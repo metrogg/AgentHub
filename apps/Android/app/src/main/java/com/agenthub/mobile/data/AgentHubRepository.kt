@@ -174,13 +174,39 @@ class AgentHubRepository(
         }
     }
 
-    fun openWorkspaceGroupSession(workspaceId: String) {
+    fun openWorkspaceGroupSession(workspaceId: String, agentIds: List<String> = emptyList(), title: String? = null) {
         val config = _uiState.value.connection ?: run {
             setError("请先点击右上角 +，选择扫一扫连接电脑端")
             return
         }
         scope.launch {
-            runCatching { client.openWorkspaceGroupSession(config, workspaceId) }
+            runCatching { client.openWorkspaceGroupSession(config, workspaceId, agentIds, title) }
+                .onSuccess { session ->
+                    _uiState.update {
+                        it.copy(
+                            sessions = listOf(session) + it.sessions.filterNot { item -> item.id == session.id },
+                            error = null,
+                        )
+                    }
+                    refreshSessions()
+                    refreshWorkbench()
+                    selectSession(session.id)
+                }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun openContactGroupSession(agentIds: List<String> = emptyList(), title: String? = null) {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        if (agentIds.isEmpty()) {
+            setError("请选择至少一个 Agent")
+            return
+        }
+        scope.launch {
+            runCatching { client.openContactGroupSession(config, agentIds, title) }
                 .onSuccess { session ->
                     _uiState.update {
                         it.copy(
@@ -538,6 +564,7 @@ class AgentHubRepository(
             val selectedSessionId = state.selectedSessionId
                 ?.takeIf { id -> sync.sessions.any { session -> session.id == id } }
             state.copy(
+                currentUser = sync.currentUser,
                 sessions = sync.sessions,
                 workspaces = sync.workspaces,
                 agents = sync.agents,

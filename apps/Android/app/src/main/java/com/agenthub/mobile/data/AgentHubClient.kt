@@ -55,8 +55,29 @@ class AgentHubClient(
         return post(config, "/sessions", CreateSessionRequest(title = title))
     }
 
-    suspend fun openWorkspaceGroupSession(config: ConnectionConfig, workspaceId: String): Session {
-        return post<SessionResponse>(config, "/workspaces/$workspaceId/group-session").session
+    suspend fun openWorkspaceGroupSession(
+        config: ConnectionConfig,
+        workspaceId: String,
+        agentIds: List<String> = emptyList(),
+        title: String? = null,
+    ): Session {
+        return post<GroupSessionRequest, SessionResponse>(
+            config,
+            "/workspaces/$workspaceId/group-session",
+            GroupSessionRequest(agentIds = agentIds, title = title),
+        ).session
+    }
+
+    suspend fun openContactGroupSession(
+        config: ConnectionConfig,
+        agentIds: List<String> = emptyList(),
+        title: String? = null,
+    ): Session {
+        return post<GroupSessionRequest, SessionResponse>(
+            config,
+            "/mobile/agents/group-session",
+            GroupSessionRequest(agentIds = agentIds, title = title),
+        ).session
     }
 
     suspend fun deleteSession(config: ConnectionConfig, sessionId: String) {

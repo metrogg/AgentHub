@@ -44,6 +44,7 @@ fun AgentHubApp(viewModel: MobileViewModel = viewModel()) {
                     onRefresh = viewModel::refreshAll,
                     onCreateSession = viewModel::createSession,
                     onOpenWorkspaceGroupSession = viewModel::openWorkspaceGroupSession,
+                    onCreateGroupSession = viewModel::openContactGroupSession,
                     onOpenAgentContact = viewModel::openAgentContact,
                     onSelectSession = viewModel::selectSession,
                     onSendMessage = viewModel::sendMessage,
