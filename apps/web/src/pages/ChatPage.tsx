@@ -1,4 +1,4 @@
-import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { workspaceNameFromPath } from '@agenthub/shared'
 import {
@@ -40,6 +40,7 @@ import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
 import { useChatStore } from '../stores/chatStore'
+import { useIsMobile } from '../lib/useIsMobile'
 
 export default function ChatPage() {
   const { sessionId } = useParams()
@@ -49,13 +50,24 @@ export default function ChatPage() {
   const sessions = useChatStore((state) => state.sessions)
   const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
   const initWebSocket = useChatStore((state) => state.initWebSocket)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const mobile = useIsMobile()
   const desktop = isDesktopApp()
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const threadReady = Boolean(sessionId && currentSessionId === sessionId)
 
-  function toggleSidebar() {
+  // 移动端：有会话时默认隐藏侧栏，无会话时显示
+  const sidebarVisible = mobile ? !sessionId : !sidebarCollapsed
+
+  const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((current) => !current)
-  }
+  }, [])
+
+  // 移动端选择会话后自动关闭侧栏
+  useEffect(() => {
+    if (mobile && sessionId) {
+      setSidebarCollapsed(true)
+    }
+  }, [mobile, sessionId])
 
   useEffect(() => {
     const off = initWebSocket()
@@ -73,6 +85,47 @@ export default function ChatPage() {
     }
     void selectSession(sessionId).catch(() => navigate('/', { replace: true }))
   }, [sessionId, currentSessionId, navigate, selectSession, sessions, sessionsBootstrapped])
+
+  if (mobile) {
+    return (
+      <div className="agenthub-chat-shell relative flex h-screen overflow-hidden bg-[#F7F7F7] text-neutral-950">
+        {/* 移动端：侧栏全屏覆盖 */}
+        {sidebarVisible && (
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-black/30"
+              onClick={toggleSidebar}
+            />
+            <aside className="fixed inset-y-0 left-0 z-50 w-full max-w-[380px] transform-gpu transition-transform duration-300">
+              <SessionList onCollapse={toggleSidebar} />
+            </aside>
+          </>
+        )}
+        <main className="relative flex min-w-0 flex-1 flex-col">
+          {!sidebarVisible && (
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="absolute left-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-md border border-neutral-200 bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-50 hover:text-neutral-900"
+              aria-label="展开侧栏"
+              title="展开侧栏"
+            >
+              <PanelLeft className="h-4 w-4 rotate-180" />
+            </button>
+          )}
+          {sessionId && threadReady ? (
+            <AgentHubRuntimeProvider key={sessionId}>
+              <Thread key={sessionId} />
+            </AgentHubRuntimeProvider>
+          ) : sessionId ? (
+            <ThreadSwitching />
+          ) : (
+            <Welcome />
+          )}
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-[#F7F7F7] text-neutral-950">
