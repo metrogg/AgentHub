@@ -40,4 +40,25 @@ describe('code agent partial success handling', () => {
       false,
     )
   })
+
+  test('treats provider/model OpenCode ids as native OpenCode model references', async () => {
+    const { __codeAgentAdapterTestHooks } = await import(
+      '../apps/server/src/services/code-agent-adapter'
+    )
+
+    expect(
+      __codeAgentAdapterTestHooks.isOpenCodeNativeModelRef('xiaomi-token-plan-cn/mimo-v2.5'),
+    ).toBe(true)
+    expect(
+      __codeAgentAdapterTestHooks.isOpenCodeNativeModelRef('opencode/deepseek-v4-flash-free'),
+    ).toBe(true)
+    expect(__codeAgentAdapterTestHooks.isOpenCodeNativeModelRef('mimo-v2.5')).toBe(false)
+
+    const target = __codeAgentAdapterTestHooks.createNativeOpenCodeModelTarget(
+      'xiaomi-token-plan-cn/mimo-v2.5',
+    )
+    expect(__codeAgentAdapterTestHooks.formatModelTargetLabel(target)).toBe(
+      'xiaomi-token-plan-cn/mimo-v2.5',
+    )
+  })
 })

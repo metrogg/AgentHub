@@ -66,6 +66,7 @@ interface CodeAgentModelTarget {
   provider: string
   providerKey: string
   modelId: string
+  nativeOpenCodeRef?: boolean
   apiKey?: string
   apiKeySource?: string
   openaiBaseUrl?: string
@@ -271,6 +272,9 @@ export const __codeAgentAdapterTestHooks = {
     adapters.opencode.buildArgs(prompt, options),
   consumeClaudeStreamJson,
   extractClaudeResultMessage,
+  isOpenCodeNativeModelRef,
+  formatModelTargetLabel,
+  createNativeOpenCodeModelTarget,
   friendlyCodeAgentError: (output: string, displayName = 'Coding Tools') =>
     friendlyCodeAgentError(output, { displayName } as CodeAgentAdapter),
 }
@@ -327,10 +331,15 @@ export async function* streamCodeAgentReply(
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const toolConfig = await resolveToolConfig(type)
   const requestedModelId = resolveCodeAgentModelId(profile.modelId, toolConfig)
-  let modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+  const nativeOpenCodeModelRef =
+    type === 'opencode' && isOpenCodeNativeModelRef(requestedModelId) ? requestedModelId : null
+  let modelTarget = nativeOpenCodeModelRef
+    ? createNativeOpenCodeModelTarget(nativeOpenCodeModelRef)
+    : await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
   if (
     !modelTarget &&
     requestedModelId &&
+    !nativeOpenCodeModelRef &&
     (type === 'opencode' || !isNativeCodeAgentModelIdCompatible(type, requestedModelId))
   ) {
     modelTarget = await resolveRuntimeModelTarget(requestedModelId)
@@ -358,7 +367,7 @@ export async function* streamCodeAgentReply(
       `- 命令：\`${adapter.command}\``,
       `- 沙箱：${profile.sandboxPolicy ?? 'workspace-write'}`,
       `- 项目目录：${cwdInfo.label}`,
-      `- 模型档案：${runtimeModelTarget ? `${runtimeModelTarget.provider}/${runtimeModelTarget.modelId}` : '自动模型'}`,
+      `- 模型档案：${formatModelTargetLabel(runtimeModelTarget)}`,
       `- 运行凭据：${configured ? '可由模型管理注入' : '未检测到'}`,
       `- 安装状态：${installed ? '已安装' : '未安装'}`,
       `- 执行开关：${executionEnabled ? '已启用' : '已禁用'}\``,
@@ -532,6 +541,29 @@ function resolveCodeAgentModelId(
   toolConfig?: Record<string, unknown>,
 ) {
   return resolveCodeAgentModelCandidates(agentModelId, toolConfig)[0] ?? null
+}
+
+function isOpenCodeNativeModelRef(modelId?: string | null) {
+  const value = modelId?.trim()
+  if (!value || /^https?:\/\//i.test(value)) return false
+  const slashIndex = value.indexOf('/')
+  return slashIndex > 0 && slashIndex < value.length - 1
+}
+
+function createNativeOpenCodeModelTarget(modelRef: string): CodeAgentModelTarget {
+  const [provider] = modelRef.split('/')
+  return {
+    provider: provider || 'opencode',
+    providerKey: safeProviderKey(provider || 'opencode'),
+    modelId: modelRef,
+    nativeOpenCodeRef: true,
+  }
+}
+
+function formatModelTargetLabel(modelTarget?: CodeAgentModelTarget | null) {
+  if (!modelTarget) return '自动模型'
+  if (modelTarget.nativeOpenCodeRef) return modelTarget.modelId
+  return `${modelTarget.provider}/${modelTarget.modelId}`
 }
 
 function resolveCodeAgentModelCandidates(
@@ -2450,7 +2482,7 @@ async function mergedEnv(
   applyModelTargetEnv(base, adapter, modelTarget)
   if (runtimeOptions.ignoreModelEnv) removeModelEnv(base, adapter)
 
-  if (adapter?.command === 'opencode' && modelTarget) {
+  if (adapter?.command === 'opencode' && modelTarget && !modelTarget.nativeOpenCodeRef) {
     const opencodeConfigPath = prepareOpencodeRuntimeConfig(
       modelTarget,
       runtimeOptions.sandboxConfigDir
@@ -2522,6 +2554,7 @@ function applyModelTargetEnv(
 ) {
   if (!adapter) return
 
+  if (modelTarget?.nativeOpenCodeRef) return
   const key = modelTarget?.apiKey?.trim()
   if (key) {
     base.AGENTHUB_MODEL_API_KEY = key
