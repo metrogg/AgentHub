@@ -57,6 +57,7 @@ import {
 } from '../../lib/accountProfile'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 import { GroupAvatar } from './GroupAvatar'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
@@ -84,6 +85,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const { t, language } = useI18n()
   const location = useLocation()
   const { sessionId } = useParams()
+  const mobile = useIsMobile()
   const sessions = useChatStore((state) => state.sessions)
   const currentSession = useChatStore((state) => state.currentSession)
   const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
@@ -449,7 +451,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   return (
     <>
       <aside className="agenthub-session-sidebar flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
-      <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#FBFBFB] py-3">
+      <div className={cn('flex h-full shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#FBFBFB] py-3', mobile ? 'w-0 overflow-hidden border-r-0' : 'w-[68px]')}>
         <button
           type="button"
           onClick={() => navigate('/profile')}

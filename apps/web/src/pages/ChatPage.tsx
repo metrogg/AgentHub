@@ -4,15 +4,19 @@ import { workspaceNameFromPath } from '@agenthub/shared'
 import {
   ArrowUp,
   AtSign,
+  BriefcaseBusiness,
   Check,
   CircleHelp,
   FolderOpen,
   FolderPlus,
   Loader2,
+  MessageCircle,
   PanelLeft,
   Paperclip,
   Search,
   Trash2,
+  UserCircle,
+  Users,
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
@@ -41,6 +45,7 @@ import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
 import { useChatStore } from '../stores/chatStore'
 import { useIsMobile } from '../lib/useIsMobile'
+import { cn } from '../lib/utils'
 
 export default function ChatPage() {
   const { sessionId } = useParams()
@@ -88,7 +93,7 @@ export default function ChatPage() {
 
   if (mobile) {
     return (
-      <div className="agenthub-chat-shell relative flex h-screen overflow-hidden bg-[#F7F7F7] text-neutral-950">
+      <div className="agenthub-chat-shell relative flex h-screen flex-col overflow-hidden bg-[#F7F7F7] text-neutral-950">
         {/* 移动端：侧栏全屏覆盖 */}
         {sidebarVisible && (
           <>
@@ -123,6 +128,15 @@ export default function ChatPage() {
             <Welcome />
           )}
         </main>
+        {/* 移动端底部 Tab 栏 */}
+        {!sessionId && (
+          <nav className="flex h-14 shrink-0 items-center justify-around border-t border-neutral-200 bg-white">
+            <MobileTab icon={MessageCircle} label="消息" active onClick={() => navigate('/')} />
+            <MobileTab icon={Users} label="Agent" onClick={() => navigate('/')} />
+            <MobileTab icon={BriefcaseBusiness} label="工作台" onClick={() => navigate('/coding-tools')} />
+            <MobileTab icon={UserCircle} label="我的" onClick={() => navigate('/profile')} />
+          </nav>
+        )}
       </div>
     )
   }
@@ -195,6 +209,31 @@ function ThreadSwitching() {
       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
       正在切换会话...
     </div>
+  )
+}
+
+function MobileTab({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: typeof MessageCircle
+  label: string
+  active?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex flex-col items-center gap-0.5 px-3 py-1"
+    >
+      <Icon className={cn('h-5 w-5', active ? 'text-blue-500' : 'text-neutral-400')} />
+      <span className={cn('text-[10px]', active ? 'font-medium text-blue-500' : 'text-neutral-400')}>
+        {label}
+      </span>
+    </button>
   )
 }
 
