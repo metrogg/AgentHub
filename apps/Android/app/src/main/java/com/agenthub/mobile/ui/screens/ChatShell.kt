@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -62,13 +63,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -122,6 +127,27 @@ private enum class MobileTab(val label: String, val iconRes: Int) {
     Agents("通讯录", R.drawable.ic_mobile_tab_agents),
     Workbench("工作台", R.drawable.ic_mobile_tab_workbench),
     Me("设置", R.drawable.ic_mobile_tab_me),
+}
+
+private enum class LineIconKind {
+    Search,
+    Chat,
+    Agents,
+    Bot,
+    History,
+    Logs,
+    Tools,
+    Skills,
+    Office,
+    Send,
+    File,
+    Image,
+    Web,
+    Document,
+    Presentation,
+    Diff,
+    Workflow,
+    Info,
 }
 
 @OptIn(ExperimentalAnimationApi::class)
@@ -607,6 +633,120 @@ private fun MoreGlyph(color: Color, modifier: Modifier = Modifier.size(18.dp)) {
 }
 
 @Composable
+private fun LineIcon(kind: LineIconKind, color: Color, modifier: Modifier = Modifier.size(20.dp)) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val sw = (w.coerceAtMost(h) * 0.085f).coerceAtLeast(1.4.dp.toPx())
+        val stroke = Stroke(width = sw, cap = StrokeCap.Round)
+        fun p(x: Float, y: Float) = Offset(w * x, h * y)
+        fun s(x: Float, y: Float) = Size(w * x, h * y)
+        when (kind) {
+            LineIconKind.Search -> {
+                drawCircle(color, radius = w * 0.27f, center = p(0.43f, 0.43f), style = stroke)
+                drawLine(color, p(0.63f, 0.63f), p(0.84f, 0.84f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Chat -> {
+                drawRoundRect(color, topLeft = p(0.16f, 0.20f), size = s(0.68f, 0.48f), cornerRadius = CornerRadius(w * 0.13f), style = stroke)
+                drawLine(color, p(0.38f, 0.68f), p(0.28f, 0.82f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.44f, 0.68f), p(0.28f, 0.82f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Agents -> {
+                drawCircle(color, radius = w * 0.13f, center = p(0.38f, 0.36f), style = stroke)
+                drawCircle(color, radius = w * 0.11f, center = p(0.65f, 0.40f), style = stroke)
+                drawLine(color, p(0.18f, 0.74f), p(0.58f, 0.74f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.52f, 0.72f), p(0.82f, 0.72f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Bot -> {
+                drawRoundRect(color, topLeft = p(0.22f, 0.28f), size = s(0.56f, 0.48f), cornerRadius = CornerRadius(w * 0.12f), style = stroke)
+                drawLine(color, p(0.50f, 0.16f), p(0.50f, 0.28f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawCircle(color, radius = w * 0.025f, center = p(0.38f, 0.50f))
+                drawCircle(color, radius = w * 0.025f, center = p(0.62f, 0.50f))
+                drawLine(color, p(0.40f, 0.64f), p(0.60f, 0.64f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.History -> {
+                drawCircle(color, radius = w * 0.32f, center = p(0.52f, 0.52f), style = stroke)
+                drawLine(color, p(0.50f, 0.30f), p(0.50f, 0.54f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.50f, 0.54f), p(0.66f, 0.62f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Logs -> {
+                drawRoundRect(color, topLeft = p(0.22f, 0.16f), size = s(0.56f, 0.68f), cornerRadius = CornerRadius(w * 0.08f), style = stroke)
+                listOf(0.35f, 0.50f, 0.65f).forEach { y ->
+                    drawLine(color, p(0.34f, y), p(0.66f, y), strokeWidth = sw, cap = StrokeCap.Round)
+                }
+            }
+            LineIconKind.Tools -> {
+                drawLine(color, p(0.24f, 0.76f), p(0.74f, 0.26f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawCircle(color, radius = w * 0.09f, center = p(0.78f, 0.22f), style = stroke)
+                drawLine(color, p(0.26f, 0.24f), p(0.76f, 0.74f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Skills -> {
+                drawLine(color, p(0.50f, 0.16f), p(0.62f, 0.42f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.62f, 0.42f), p(0.84f, 0.50f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.84f, 0.50f), p(0.62f, 0.58f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.62f, 0.58f), p(0.50f, 0.84f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.50f, 0.84f), p(0.38f, 0.58f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.38f, 0.58f), p(0.16f, 0.50f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.16f, 0.50f), p(0.38f, 0.42f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.38f, 0.42f), p(0.50f, 0.16f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Office -> {
+                drawLine(color, p(0.18f, 0.48f), p(0.50f, 0.20f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.50f, 0.20f), p(0.82f, 0.48f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawRoundRect(color, topLeft = p(0.28f, 0.44f), size = s(0.44f, 0.38f), cornerRadius = CornerRadius(w * 0.05f), style = stroke)
+            }
+            LineIconKind.Send -> {
+                drawLine(color, p(0.18f, 0.50f), p(0.82f, 0.18f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.82f, 0.18f), p(0.66f, 0.82f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.18f, 0.50f), p(0.54f, 0.58f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.54f, 0.58f), p(0.66f, 0.82f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.File, LineIconKind.Document -> {
+                drawRoundRect(color, topLeft = p(0.26f, 0.14f), size = s(0.48f, 0.72f), cornerRadius = CornerRadius(w * 0.06f), style = stroke)
+                drawLine(color, p(0.58f, 0.14f), p(0.74f, 0.30f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.38f, 0.52f), p(0.62f, 0.52f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.38f, 0.64f), p(0.58f, 0.64f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Image -> {
+                drawRoundRect(color, topLeft = p(0.18f, 0.22f), size = s(0.64f, 0.56f), cornerRadius = CornerRadius(w * 0.08f), style = stroke)
+                drawCircle(color, radius = w * 0.055f, center = p(0.36f, 0.40f), style = stroke)
+                drawLine(color, p(0.28f, 0.68f), p(0.46f, 0.52f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.46f, 0.52f), p(0.60f, 0.66f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.60f, 0.66f), p(0.72f, 0.56f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Web -> {
+                drawCircle(color, radius = w * 0.32f, center = p(0.50f, 0.50f), style = stroke)
+                drawLine(color, p(0.18f, 0.50f), p(0.82f, 0.50f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.50f, 0.18f), p(0.50f, 0.82f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Presentation -> {
+                drawRoundRect(color, topLeft = p(0.18f, 0.20f), size = s(0.64f, 0.44f), cornerRadius = CornerRadius(w * 0.07f), style = stroke)
+                drawLine(color, p(0.50f, 0.64f), p(0.50f, 0.82f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.36f, 0.82f), p(0.64f, 0.82f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Diff -> {
+                drawLine(color, p(0.24f, 0.34f), p(0.46f, 0.34f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.35f, 0.23f), p(0.35f, 0.45f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.54f, 0.68f), p(0.78f, 0.68f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.22f, 0.72f), p(0.80f, 0.30f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Workflow -> {
+                drawCircle(color, radius = w * 0.09f, center = p(0.24f, 0.50f), style = stroke)
+                drawCircle(color, radius = w * 0.09f, center = p(0.52f, 0.28f), style = stroke)
+                drawCircle(color, radius = w * 0.09f, center = p(0.76f, 0.60f), style = stroke)
+                drawLine(color, p(0.32f, 0.44f), p(0.44f, 0.34f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawLine(color, p(0.58f, 0.36f), p(0.70f, 0.52f), strokeWidth = sw, cap = StrokeCap.Round)
+            }
+            LineIconKind.Info -> {
+                drawCircle(color, radius = w * 0.32f, center = p(0.50f, 0.50f), style = stroke)
+                drawLine(color, p(0.50f, 0.46f), p(0.50f, 0.66f), strokeWidth = sw, cap = StrokeCap.Round)
+                drawCircle(color, radius = w * 0.025f, center = p(0.50f, 0.34f))
+            }
+        }
+    }
+}
+
+@Composable
 private fun MessageArea(
     state: MobileUiState,
     showSessions: Boolean,
@@ -683,7 +823,11 @@ private fun SessionListScreen(
                     .padding(horizontal = 15.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                Text("⌕  搜索对话", color = MutedText, fontSize = 15.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LineIcon(kind = LineIconKind.Search, color = MutedText, modifier = Modifier.size(17.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("搜索对话", color = MutedText, fontSize = 15.sp)
+                }
             }
             Spacer(modifier = Modifier.width(8.dp))
             Box(
@@ -735,7 +879,7 @@ private fun SessionListScreen(
             FloatingTelegramActionButton(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 18.dp, bottom = 104.dp),
+                    .padding(end = 18.dp, bottom = 88.dp),
                 onClick = onCreateSession,
             )
         }
@@ -771,7 +915,7 @@ private fun EmptySessionList(archived: Boolean, onCreateSession: () -> Unit, onR
                 .background(TgBlueLight),
             contentAlignment = Alignment.Center,
         ) {
-            Text("💬", fontSize = 32.sp)
+            LineIcon(kind = LineIconKind.Chat, color = TgBlue, modifier = Modifier.size(34.dp))
         }
         Text(
             if (archived) "暂无归档会话" else "还没有消息",
@@ -845,7 +989,7 @@ private fun SessionRow(
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (session.type == "group") {
-                    Text("👥", fontSize = 13.sp)
+                    LineIcon(kind = LineIconKind.Agents, color = MutedText, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(3.dp))
                 }
                 Text(
@@ -941,12 +1085,12 @@ private fun MainTabBar(modifier: Modifier = Modifier, active: MobileTab, onSelec
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-                .clip(RoundedCornerShape(28.dp))
+                .fillMaxWidth(0.88f)
+                .padding(vertical = 7.dp)
+                .clip(RoundedCornerShape(24.dp))
                 .background(BottomGlass)
-                .border(0.5.dp, Hairline, RoundedCornerShape(28.dp))
-                .padding(horizontal = 6.dp, vertical = 7.dp),
+                .border(0.5.dp, Hairline, RoundedCornerShape(24.dp))
+                .padding(horizontal = 5.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -967,10 +1111,10 @@ private fun TabItem(modifier: Modifier = Modifier, tab: MobileTab, active: Boole
     Column(
         modifier = Modifier
             .then(modifier)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(15.dp))
             .background(if (active) TgBlueLight else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .padding(horizontal = 5.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         TabIcon(tab = tab, active = active)
@@ -978,7 +1122,7 @@ private fun TabItem(modifier: Modifier = Modifier, tab: MobileTab, active: Boole
             text = tab.label,
             modifier = Modifier.padding(top = 2.dp),
             color = if (active) TgBlue else MutedText,
-            fontSize = 11.sp,
+            fontSize = 10.sp,
             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
         )
     }
@@ -990,7 +1134,7 @@ private fun TabIcon(tab: MobileTab, active: Boolean) {
     Image(
         painter = painterResource(tab.iconRes),
         contentDescription = tab.label,
-        modifier = Modifier.size(24.dp),
+        modifier = Modifier.size(21.dp),
         colorFilter = ColorFilter.tint(tint),
     )
 }
@@ -1088,7 +1232,7 @@ private fun MobileHomeContent(modifier: Modifier) {
                 .background(TgBlueLight),
             contentAlignment = Alignment.Center,
         ) {
-            Text("🤖", fontSize = 32.sp)
+            LineIcon(kind = LineIconKind.Bot, color = TgBlue, modifier = Modifier.size(34.dp))
         }
         Text(
             text = "AgentHub",
@@ -1263,7 +1407,7 @@ private fun EmptyAgentDirectory(onRefresh: () -> Unit) {
                 .background(TgBlueLight),
             contentAlignment = Alignment.Center,
         ) {
-            Text("👥", fontSize = 32.sp)
+            LineIcon(kind = LineIconKind.Agents, color = TgBlue, modifier = Modifier.size(34.dp))
         }
         Text(
             "暂无联系人",
@@ -1297,6 +1441,7 @@ private fun AgentContactRow(
     hasSession: Boolean,
     onClick: () -> Unit,
 ) {
+    val avatarColor = contactAvatarColor(contact)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1310,7 +1455,8 @@ private fun AgentContactRow(
             modifier = Modifier
                 .size(48.dp)
                 .clip(CircleShape)
-                .background(contactAvatarColor(contact)),
+                .background(avatarColor.copy(alpha = 0.20f))
+                .border(2.dp, avatarColor, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -1383,17 +1529,17 @@ private fun WorkbenchScreen(state: MobileUiState, onRefresh: () -> Unit, onCreat
         // Quick entries (Telegram-style settings list)
         item {
             Column(modifier = Modifier.background(PanelBackground)) {
-                WorkbenchMenuEntry(title = "运行历史", icon = "📋", onClick = onRefresh)
+                WorkbenchMenuEntry(title = "运行历史", icon = LineIconKind.History, onClick = onRefresh)
                 WorkbenchMenuDivider()
-                WorkbenchMenuEntry(title = "执行日志", icon = "📝", onClick = onRefresh)
+                WorkbenchMenuEntry(title = "执行日志", icon = LineIconKind.Logs, onClick = onRefresh)
                 WorkbenchMenuDivider()
-                WorkbenchMenuEntry(title = "模型管理", icon = "🤖", onClick = onRefresh)
+                WorkbenchMenuEntry(title = "模型管理", icon = LineIconKind.Bot, onClick = onRefresh)
                 WorkbenchMenuDivider()
-                WorkbenchMenuEntry(title = "Coding Tools", icon = "🛠", onClick = onRefresh)
+                WorkbenchMenuEntry(title = "Coding Tools", icon = LineIconKind.Tools, onClick = onRefresh)
                 WorkbenchMenuDivider()
-                WorkbenchMenuEntry(title = "Skills 市场", icon = "⚡", onClick = onRefresh)
+                WorkbenchMenuEntry(title = "Skills 市场", icon = LineIconKind.Skills, onClick = onRefresh)
                 WorkbenchMenuDivider()
-                WorkbenchMenuEntry(title = "办公室", icon = "🏠", onClick = onRefresh)
+                WorkbenchMenuEntry(title = "办公室", icon = LineIconKind.Office, onClick = onRefresh)
             }
         }
 
@@ -1410,7 +1556,11 @@ private fun WorkbenchScreen(state: MobileUiState, onRefresh: () -> Unit, onCreat
                     .clickable(onClick = onCreateSession)
                     .padding(horizontal = 16.dp, vertical = 14.dp),
             ) {
-                Text("＋ 新任务", color = TgBlue, fontSize = 15.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PlusGlyph(color = TgBlue, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("新任务", color = TgBlue, fontSize = 15.sp)
+                }
             }
         }
 
@@ -1419,7 +1569,7 @@ private fun WorkbenchScreen(state: MobileUiState, onRefresh: () -> Unit, onCreat
 }
 
 @Composable
-private fun WorkbenchMenuEntry(title: String, icon: String, onClick: () -> Unit) {
+private fun WorkbenchMenuEntry(title: String, icon: LineIconKind, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1427,7 +1577,15 @@ private fun WorkbenchMenuEntry(title: String, icon: String, onClick: () -> Unit)
             .padding(horizontal = 16.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(icon, fontSize = 20.sp)
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(TgBlueLight),
+            contentAlignment = Alignment.Center,
+        ) {
+            LineIcon(kind = icon, color = TgBlue, modifier = Modifier.size(18.dp))
+        }
         Spacer(modifier = Modifier.width(14.dp))
         Text(title, color = Ink, fontSize = 15.sp, modifier = Modifier.weight(1f))
         Text("›", color = MutedText, fontSize = 18.sp)
@@ -2431,19 +2589,8 @@ private fun MobileChatComposer(
     ) {
         Box(
             modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(PanelElevated)
-                .clickable { },
-            contentAlignment = Alignment.Center,
-        ) {
-            PlusGlyph(color = MutedText, modifier = Modifier.size(18.dp))
-        }
-
-        Box(
-            modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 4.dp)
+                .padding(end = 6.dp)
                 .clip(RoundedCornerShape(24.dp))
                 .background(PanelElevated)
                 .border(0.5.dp, Hairline, RoundedCornerShape(24.dp))
@@ -2478,7 +2625,7 @@ private fun MobileChatComposer(
             contentAlignment = Alignment.Center,
         ) {
             if (canSend) {
-                Text("↑", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                LineIcon(kind = LineIconKind.Send, color = Color.White, modifier = Modifier.size(18.dp))
             } else {
                 Box(
                     modifier = Modifier
@@ -2549,10 +2696,10 @@ private fun ChatComposer(
                     .size(38.dp)
                     .clip(CircleShape)
                     .background(if (value.isBlank()) PanelElevated else TgBlue)
-                    .clickable(enabled = value.isNotBlank(), onClick = onSend),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("↑", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            .clickable(enabled = value.isNotBlank(), onClick = onSend),
+        contentAlignment = Alignment.Center,
+    ) {
+                LineIcon(kind = LineIconKind.Send, color = Color.White, modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -2580,6 +2727,9 @@ private fun MessageBubble(
     val isUser = message.senderType == "user"
     val artifacts = remember(message.metadata, streamingCodeAgentRun, workspaceId) {
         readArtifacts(message.metadata, streamingCodeAgentRun, workspaceId)
+    }
+    val codeAgentRun = remember(message.metadata, streamingCodeAgentRun) {
+        streamingCodeAgentRun ?: message.metadata?.get("codeAgentRun")?.asJsonObject()
     }
     val messageTime = remember(message) {
         try {
@@ -2638,35 +2788,186 @@ private fun MessageBubble(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            Row(
+            Column(
                 modifier = Modifier.padding(top = if (isUser) 2.dp else 4.dp),
-                verticalAlignment = Alignment.Bottom,
             ) {
-                Text(
-                    text = message.content.ifBlank { " " },
-                    modifier = Modifier.weight(1f),
-                    color = bubbleTextColor,
-                    fontSize = 15.sp,
-                    lineHeight = 21.sp,
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = messageTime,
-                    color = if (isUser) Color.White.copy(alpha = 0.72f) else MutedText,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(bottom = 1.dp),
-                )
+                MessageBodyContent(content = message.content.ifBlank { " " }, textColor = bubbleTextColor)
+                if (messageTime.isNotBlank()) {
+                    Text(
+                        text = messageTime,
+                        color = if (isUser) Color.White.copy(alpha = 0.72f) else MutedText,
+                        fontSize = 11.sp,
+                        modifier = Modifier.align(Alignment.End).padding(top = 3.dp),
+                    )
+                }
             }
             if (streaming && !isUser) {
                 StreamingStatusBar(
                     text = if (artifacts.isEmpty()) "正在输入..." else "正在生成产物...",
                 )
             }
+            if (!isUser && codeAgentRun != null) {
+                CodeAgentRunMiniCard(run = codeAgentRun)
+            }
             if (artifacts.isNotEmpty()) {
                 ArtifactStrip(artifacts = artifacts, onPreview = onPreviewArtifact)
             }
         }
     }
+}
+
+@Composable
+private fun MessageBodyContent(content: String, textColor: Color) {
+    val segments = remember(content) { splitMessageBody(content) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        segments.forEach { segment ->
+            if (segment.isCode) {
+                CodeBlockPreview(language = segment.language, code = segment.text)
+            } else if (segment.text.isNotBlank()) {
+                Text(
+                    text = segment.text.trimEnd(),
+                    color = textColor,
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodeBlockPreview(language: String?, code: String) {
+    val horizontalState = rememberScrollState()
+    val verticalState = rememberScrollState()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF101821))
+            .border(0.5.dp, Hairline, RoundedCornerShape(10.dp)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(PanelElevated)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                language?.ifBlank { null } ?: "code",
+                color = MutedText,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text("桌面端查看完整代码", color = MutedText, fontSize = 10.sp)
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 220.dp)
+                .horizontalScroll(horizontalState)
+                .verticalScroll(verticalState)
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+        ) {
+            Text(
+                code.ifBlank { " " },
+                color = Ink,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CodeAgentRunMiniCard(run: JsonObject) {
+    val runtime = run.stringValue("runtime")
+    val status = run.stringValue("status")
+    val runtimeLabel = codeAgentRuntimeLabel(runtime)
+    val statusLabel = codeAgentStatusLabel(status, run.booleanValue("partialSuccess"))
+    val files = run["files"]?.asJsonArray()?.size ?: 0
+    val commands = run["commands"]?.asJsonArray()?.size ?: 0
+    val toolCalls = run["toolCalls"]?.asJsonArray()?.size ?: 0
+    val artifacts = run["artifacts"]?.asJsonArray()?.size ?: 0
+    val durationMs = run.longValue("durationMs") ?: 0L
+    val exitCode = run.intValue("exitCode")
+    val reviewRequired = run.booleanValue("reviewRequired")
+    val warning = run.stringValue("warning") ?: run.stringValue("diagnostics")
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(PanelElevated)
+            .border(0.5.dp, Hairline, RoundedCornerShape(12.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(codeAgentStatusColor(status, reviewRequired)),
+            )
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                runtimeLabel,
+                color = Ink,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            MiniRunChip(statusLabel, codeAgentStatusColor(status, reviewRequired))
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (commands > 0) MiniRunChip("$commands 命令", MutedText)
+            if (files > 0) MiniRunChip("$files 文件", TgBlue)
+            if (toolCalls > 0) MiniRunChip("$toolCalls 工具", WorkAmber)
+            if (artifacts > 0) MiniRunChip("$artifacts 产物", TgGreen)
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (durationMs > 0) MiniRunChip(formatDuration(durationMs), MutedText)
+            if (exitCode != null && exitCode != 0) MiniRunChip("exit $exitCode", Color(0xFFFF6B78))
+            if (reviewRequired) MiniRunChip("待复核", WorkAmber)
+        }
+
+        if (!warning.isNullOrBlank()) {
+            Text(
+                warning.take(180),
+                color = if (status == "failed" || status == "timed-out") Color(0xFFFF9AA3) else MutedText,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MiniRunChip(text: String, color: Color) {
+    Text(
+        text,
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(color.copy(alpha = 0.14f))
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+        color = color,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -2759,7 +3060,7 @@ private fun ArtifactPreviewCard(artifact: MobileArtifact, onClick: () -> Unit) {
             .padding(horizontal = 11.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(artifact.icon, fontSize = 18.sp)
+        ArtifactIcon(artifact = artifact, color = TgBlue, modifier = Modifier.size(20.dp))
         Spacer(modifier = Modifier.width(9.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -2780,6 +3081,27 @@ private fun ArtifactPreviewCard(artifact: MobileArtifact, onClick: () -> Unit) {
         }
         Text("预览", color = TgBlue, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
+}
+
+@Composable
+private fun ArtifactIcon(artifact: MobileArtifact, color: Color, modifier: Modifier = Modifier.size(20.dp)) {
+    val iconKind = when {
+        artifact.icon == "deploy" -> LineIconKind.Send
+        artifact.icon == "presentation" -> LineIconKind.Presentation
+        artifact.icon == "workflow" -> LineIconKind.Workflow
+        artifact.icon == "diff" -> LineIconKind.Diff
+        artifact.icon == "image" -> LineIconKind.Image
+        artifact.icon == "web" -> LineIconKind.Web
+        artifact.icon == "document" -> LineIconKind.Document
+        artifact.icon == "file" -> LineIconKind.File
+        artifact.kind == MobileArtifactKind.Web -> LineIconKind.Web
+        artifact.kind == MobileArtifactKind.Image -> LineIconKind.Image
+        artifact.kind == MobileArtifactKind.Document -> LineIconKind.Document
+        artifact.kind == MobileArtifactKind.Diff -> LineIconKind.Diff
+        artifact.kind == MobileArtifactKind.Workflow -> LineIconKind.Workflow
+        else -> LineIconKind.File
+    }
+    LineIcon(kind = iconKind, color = color, modifier = modifier)
 }
 
 @Composable
@@ -2910,7 +3232,15 @@ private fun DocumentPreviewPlaceholder(
             .padding(horizontal = 24.dp, vertical = 36.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(artifact.icon, fontSize = 52.sp)
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(TgBlueLight),
+            contentAlignment = Alignment.Center,
+        ) {
+            ArtifactIcon(artifact = artifact, color = TgBlue, modifier = Modifier.size(38.dp))
+        }
         Text(
             artifact.title,
             modifier = Modifier.padding(top = 16.dp),
@@ -2990,9 +3320,16 @@ private fun contactAvatarColor(contact: AgentContact): Color {
     if (hexColor.startsWith('#') && hexColor.length == 7) {
         runCatching { return Color(android.graphics.Color.parseColor(hexColor)) }
     }
-    // Telegram-style avatar colors (vibrant but not harsh)
+    // AgentHub-specific Code Agent colors, borrowed from the mobile prototype.
+    when (contact.codeAgentType?.trim()?.lowercase()) {
+        "claude-code", "claude" -> return Color(0xFFD4A574)
+        "codex" -> return Color(0xFF10B981)
+        "opencode", "open-code" -> return Color(0xFF60A5FA)
+        "gemini", "gemini-cli" -> return Color(0xFFA78BFA)
+    }
+    // Telegram-style fallback avatar colors (vibrant but not harsh)
     return when (contact.runtimeType) {
-        "code-agent" -> Color(0xFFE17076)   // Red-ish
+        "code-agent" -> Color(0xFF7C5CFF)
         "mcp" -> Color(0xFF7BC862)          // Green
         else -> when (contact.roleType) {
             "orchestrator" -> Color(0xFF6EC9CB)  // Teal
@@ -3062,12 +3399,79 @@ private fun SectionTitle(text: String) {
         text = text,
         modifier = Modifier
             .fillMaxWidth()
-            .background(SoftFill)
+            .background(PageBackground)
             .padding(horizontal = 16.dp, vertical = 6.dp),
         color = MutedText,
         fontSize = 14.sp,
         fontWeight = FontWeight.SemiBold,
     )
+}
+
+private data class MessageBodySegment(
+    val text: String,
+    val language: String? = null,
+    val isCode: Boolean = false,
+)
+
+private fun splitMessageBody(content: String): List<MessageBodySegment> {
+    if (content.isBlank()) return listOf(MessageBodySegment(" "))
+    val regex = Regex("""```([^\n`]*)\n?([\s\S]*?)```""")
+    val segments = mutableListOf<MessageBodySegment>()
+    var lastIndex = 0
+    regex.findAll(content).forEach { match ->
+        if (match.range.first > lastIndex) {
+            segments.add(MessageBodySegment(content.substring(lastIndex, match.range.first)))
+        }
+        val language = match.groups[1]?.value?.trim()?.takeIf { it.isNotBlank() }
+        val code = match.groups[2]?.value?.trimEnd().orEmpty()
+        segments.add(MessageBodySegment(text = code, language = language, isCode = true))
+        lastIndex = match.range.last + 1
+    }
+    if (lastIndex < content.length) {
+        segments.add(MessageBodySegment(content.substring(lastIndex)))
+    }
+    return segments.ifEmpty { listOf(MessageBodySegment(content)) }
+}
+
+private fun codeAgentRuntimeLabel(runtime: String?): String {
+    return when (runtime?.trim()?.lowercase()) {
+        "claude-code" -> "Claude Code"
+        "codex" -> "Codex CLI"
+        "opencode" -> "OpenCode"
+        "gemini" -> "Gemini CLI"
+        else -> "Code Agent"
+    }
+}
+
+private fun codeAgentStatusLabel(status: String?, partialSuccess: Boolean): String {
+    if (partialSuccess) return "部分成功"
+    return when (status?.trim()?.lowercase()) {
+        "running" -> "运行中"
+        "completed" -> "已完成"
+        "failed" -> "失败"
+        "cancelled" -> "已取消"
+        "timed-out" -> "超时"
+        else -> "处理中"
+    }
+}
+
+private fun codeAgentStatusColor(status: String?, reviewRequired: Boolean): Color {
+    if (reviewRequired) return WorkAmber
+    return when (status?.trim()?.lowercase()) {
+        "completed" -> TgGreen
+        "running" -> TgBlue
+        "failed", "timed-out" -> Color(0xFFFF6B78)
+        "cancelled" -> MutedText
+        else -> MutedText
+    }
+}
+
+private fun formatDuration(durationMs: Long): String {
+    return when {
+        durationMs < 1_000 -> "${durationMs}ms"
+        durationMs < 60_000 -> "${durationMs / 1_000}s"
+        else -> "${durationMs / 60_000}m ${(durationMs % 60_000) / 1_000}s"
+    }
 }
 
 private enum class MobileArtifactKind {
@@ -3130,7 +3534,7 @@ private fun artifactFromJson(value: JsonObject, sessionWorkspaceId: String?): Mo
                     "static-html" -> "HTML 预览"
                     else -> "网页预览"
                 },
-                icon = "🌐",
+                icon = "web",
                 url = url,
                 description = description,
             )
@@ -3143,7 +3547,7 @@ private fun artifactFromJson(value: JsonObject, sessionWorkspaceId: String?): Mo
                 subtitle = listOfNotNull(value.stringValue("provider"), value.stringValue("status"))
                     .joinToString(" · ")
                     .ifBlank { "部署预览" },
-                icon = "🚀",
+                icon = "deploy",
                 url = value.stringValue("url"),
                 description = description ?: value.stringValue("logs"),
             )
@@ -3179,10 +3583,10 @@ private fun artifactFromJson(value: JsonObject, sessionWorkspaceId: String?): Mo
                     }
                 },
                 icon = when (kind) {
-                    MobileArtifactKind.Web -> "🌐"
-                    MobileArtifactKind.Image -> "🖼"
-                    MobileArtifactKind.Document -> if (ext.startsWith("ppt")) "📊" else "📄"
-                    else -> "📎"
+                    MobileArtifactKind.Web -> "web"
+                    MobileArtifactKind.Image -> "image"
+                    MobileArtifactKind.Document -> if (ext.startsWith("ppt")) "presentation" else "document"
+                    else -> "file"
                 },
                 url = htmlUrl,
                 path = path,
@@ -3194,7 +3598,7 @@ private fun artifactFromJson(value: JsonObject, sessionWorkspaceId: String?): Mo
             kind = MobileArtifactKind.Diff,
             title = title ?: value.stringValue("filePath") ?: "代码 Diff",
             subtitle = listOfNotNull(value.stringValue("status"), "Diff").joinToString(" · "),
-            icon = "⌘",
+            icon = "diff",
             path = value.stringValue("filePath"),
             source = value.stringValue("diff"),
             description = description,
@@ -3204,7 +3608,7 @@ private fun artifactFromJson(value: JsonObject, sessionWorkspaceId: String?): Mo
             kind = MobileArtifactKind.Workflow,
             title = title ?: "工作流",
             subtitle = "Agent 流程",
-            icon = "⬡",
+            icon = "workflow",
             source = value.toString(),
             description = description,
         )
@@ -3214,6 +3618,22 @@ private fun artifactFromJson(value: JsonObject, sessionWorkspaceId: String?): Mo
 
 private fun JsonObject.stringValue(key: String): String? {
     return (this[key] as? JsonPrimitive)?.contentOrNull
+}
+
+private fun JsonObject.booleanValue(key: String): Boolean {
+    return when ((this[key] as? JsonPrimitive)?.contentOrNull?.trim()?.lowercase()) {
+        "true" -> true
+        "false" -> false
+        else -> false
+    }
+}
+
+private fun JsonObject.intValue(key: String): Int? {
+    return (this[key] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+}
+
+private fun JsonObject.longValue(key: String): Long? {
+    return (this[key] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
 }
 
 private fun kotlinx.serialization.json.JsonElement.asJsonObject(): JsonObject? {

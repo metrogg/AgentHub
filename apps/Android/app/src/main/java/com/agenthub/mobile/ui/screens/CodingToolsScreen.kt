@@ -268,7 +268,7 @@ private fun CodingToolDetailCard(tool: MobileWorkbenchCodingToolItem) {
         }
         if (tool.docsHint.isNotBlank()) {
             Text(
-                "💡 ${tool.docsHint}",
+                "提示：${tool.docsHint}",
                 color = MutedText, fontSize = 11.sp, lineHeight = 16.sp,
             )
         }

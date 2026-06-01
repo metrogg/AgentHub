@@ -245,10 +245,14 @@ export const Thread: FC = () => {
     ['planning', 'running', 'synthesizing'].includes(taskBoard.status)
       ? taskBoard
       : null
-  const railTaskBoard =
-    taskBoard && taskBoard.sessionId === currentSession?.id ? taskBoard : null
   const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
   const agentTabs = useChatStore((s) => s.agentTabs)
+  const railTaskBoard =
+    taskBoard &&
+    (taskBoard.sessionId === currentSession?.id ||
+      agentTabs.some((tab) => tab.childSessionId === currentSession?.id))
+      ? taskBoard
+      : null
   const selectAgentTab = useChatStore((s) => s.selectAgentTab)
   const selectSession = useChatStore((s) => s.selectSession)
   const navigate = useNavigate()
@@ -259,6 +263,7 @@ export const Thread: FC = () => {
     ['thinking', 'planning', 'synthesizing'].includes(agentActivity.phase ?? '')
       ? agentActivity
       : null
+  const showContextRail = Boolean(currentSession?.workspaceId || railTaskBoard || planningActivity)
   const isOrchestratorTaskChild = sessionKind === 'orchestrator-task'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
@@ -361,7 +366,7 @@ export const Thread: FC = () => {
         {previewItem && !previewCollapsed && (
           <ArtifactPreviewPanel item={previewItem} onClose={() => setPreviewItem(null)} />
         )}
-        {isGroupSession && (!previewItem || previewCollapsed) && (
+        {showContextRail && (!previewItem || previewCollapsed) && (
           <ThreadContextRail taskBoard={railTaskBoard} activity={planningActivity} />
         )}
         {isGroupSession && (
@@ -713,8 +718,9 @@ const ThreadContextRail: FC<{
       : '发送一个复杂目标后，进度会同步到这里。')
 
   return (
-    <aside className="hidden w-72 shrink-0 overflow-y-auto px-4 pb-6 pt-[4.5rem] xl:flex xl:flex-col">
-      <div className="space-y-3">
+    <div className="pointer-events-none absolute right-5 top-16 z-30 hidden w-[15.5rem] bg-transparent lg:block xl:right-8">
+      <div className="pointer-events-none max-h-[calc(100vh-5.5rem)] overflow-visible bg-transparent">
+        <div className="flex flex-col gap-3 bg-transparent">
         <RailCard
           title="进度"
           subtitle="跟踪较长任务的进度"
@@ -818,8 +824,9 @@ const ThreadContextRail: FC<{
             </div>
           </div>
         </RailCard>
+        </div>
       </div>
-    </aside>
+    </div>
   )
 }
 
@@ -830,7 +837,7 @@ const RailCard: FC<{
   onToggle: () => void
   children: ReactNode
 }> = ({ title, subtitle, open, onToggle, children }) => (
-  <section className="rounded-2xl border border-neutral-200 bg-white px-4 py-3.5">
+  <section className="pointer-events-auto rounded-2xl border border-neutral-200 bg-white/95 px-4 py-3.5 shadow-[0_14px_40px_rgba(15,23,42,0.08)] backdrop-blur">
     <button
       type="button"
       className="flex w-full items-start justify-between gap-3 text-left"
