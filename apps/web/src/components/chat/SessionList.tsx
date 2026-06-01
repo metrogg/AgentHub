@@ -57,13 +57,11 @@ import {
 } from '../../lib/accountProfile'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 import { GroupAvatar } from './GroupAvatar'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
-function activeTabFromPath(
-  pathname: string,
-  _activeSession: Session | undefined,
-): SidebarTab {
+function activeTabFromPath(pathname: string): SidebarTab {
   if (pathname === '/agent-config') return 'agents'
   if (pathname === '/profile' || pathname === '/settings') return 'me'
   if (
@@ -84,6 +82,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const { t, language } = useI18n()
   const location = useLocation()
   const { sessionId } = useParams()
+  const mobile = useIsMobile()
   const sessions = useChatStore((state) => state.sessions)
   const currentSession = useChatStore((state) => state.currentSession)
   const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
@@ -150,7 +149,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const activeSession =
     sessions.find((session) => session.id === sessionId) ??
     (currentSession && currentSession.id === sessionId ? currentSession : undefined)
-  const routeTab = activeTabFromPath(location.pathname, activeSession)
+  const routeTab = activeTabFromPath(location.pathname)
   const activeTab = tabOverride ?? routeTab
   const isAgentConfigRoute = location.pathname === '/agent-config'
   const activeAgentConfigId = new URLSearchParams(location.search).get('agentId')
@@ -449,7 +448,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   return (
     <>
       <aside className="agenthub-session-sidebar flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
-      <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#FBFBFB] py-3">
+      <div className={cn('flex h-full shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#FBFBFB] py-3', mobile ? 'w-0 overflow-hidden border-r-0' : 'w-[68px]')}>
         <button
           type="button"
           onClick={() => navigate('/profile')}
@@ -682,8 +681,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                             {savedAgent?.name ?? sessionDisplayTitle(session.title, t)}
                           </span>
                           <span className="block truncate text-[10px] text-neutral-400">
-                            {savedAgent?.role
-                              ? `${savedAgent.role} · ${relativeTime(session.updatedAt, language)}`
+                            {session.lastMessage?.content
+                              ? session.lastMessage.content
                               : relativeTime(session.updatedAt, language)}
                           </span>
                         </span>
@@ -845,7 +844,9 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
                               <span className="block truncate text-[11px] text-neutral-400">
                                 {hasChildren
                                   ? `${formatSubtopicCount(item.children.length, language, t)} · ${relativeTime(item.latestUpdatedAt, language)}`
-                                  : relativeTime(item.latestUpdatedAt, language)}
+                                  : item.parent.lastMessage?.content
+                                    ? item.parent.lastMessage.content
+                                    : relativeTime(item.latestUpdatedAt, language)}
                               </span>
                             </span>
                           </>
