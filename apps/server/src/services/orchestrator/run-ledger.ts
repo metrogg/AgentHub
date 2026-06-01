@@ -106,21 +106,29 @@ export async function updateProgressLedgerFromEvent(input: EmitRunEventInput): P
     case 'task.started':
       moveTask(progressLedger, taskId, TaskStatus.Running)
       setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Running)
+      mergeLedgerTaskPayload(taskLedger, taskId, payload)
+      setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
+      break
+    case 'task.progress':
+      mergeLedgerTaskPayload(taskLedger, taskId, payload)
       setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       break
     case 'task.completed':
       moveTask(progressLedger, taskId, TaskStatus.Done)
       setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Done)
+      mergeLedgerTaskPayload(taskLedger, taskId, payload)
       setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       break
     case 'task.failed':
       moveTask(progressLedger, taskId, TaskStatus.Failed)
       setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Failed)
+      mergeLedgerTaskPayload(taskLedger, taskId, payload)
       setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       break
     case 'task.cancelled':
       moveTask(progressLedger, taskId, TaskStatus.Cancelled)
       setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Cancelled)
+      mergeLedgerTaskPayload(taskLedger, taskId, payload)
       setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       break
     case 'task.retrying':
@@ -329,6 +337,23 @@ function setLedgerTaskStatus(taskLedger: TaskLedger, taskId: string | undefined,
   if (task) task.status = status
 }
 
+function mergeLedgerTaskPayload(
+  taskLedger: TaskLedger,
+  taskId: string | undefined,
+  payload: Record<string, unknown>,
+) {
+  if (!taskId) return
+  const task = taskLedger.tasks.find((item) => item.id === taskId)
+  if (!task) return
+  const childSessionId = payloadText(payload.childSessionId) ?? payloadText(payload.sessionId)
+  const progressPercent = payloadNumber(payload.progressPercent) ?? payloadNumber(payload.percent)
+  const progressStatus = payloadText(payload.progressStatus) ?? payloadText(payload.status)
+  if (childSessionId) task.childSessionId = childSessionId
+  if (typeof progressPercent === 'number') task.progressPercent = progressPercent
+  if (progressStatus) task.progressStatus = progressStatus
+  if (isRecord(payload.executionConfig)) task.executionConfig = payload.executionConfig
+}
+
 function reassignLedgerTaskAgent(
   taskLedger: TaskLedger,
   taskId: string | undefined,
@@ -451,6 +476,14 @@ function safeId(value: unknown): string | undefined {
 
 function payloadText(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function payloadNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function arrayOfStrings(value: unknown): string[] {

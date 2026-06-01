@@ -15,18 +15,26 @@ import {
 } from '@agenthub/db'
 import { logger } from '../../lib/logger'
 import { broadcastSessionEvent } from '../agent-runner'
-import { gitBranchManager } from '../git/branch-manager'
+import { executionBranchManager } from '../git/branch-manager'
 import { shouldAcceptPartialExecution, taskExecutionService } from '../execution/task-execution-service'
+import {
+  buildExecutionConfigSummary,
+  type ExecutionConfigSummary,
+} from '../execution/execution-config-summary'
 import { blackboard, Blackboard, type BlackboardRef } from '../blackboard'
 import { executionTracer } from '../execution-tracer'
 import { Planner } from './planner'
 import { TaskScheduler, type TaskExecutor } from './task-scheduler'
 import { Synthesizer } from './synthesizer'
-import { ConflictResolver } from './conflict-resolver'
+import { ExecutionMergeResolver, type MergeReport } from './conflict-resolver'
 import { ReplanningEngine } from './replanning-engine'
 import { emitRunEvent } from './run-events'
 import { initializeRunLedger } from './run-ledger'
-import { validateTaskOutputContract, type TaskContractResult } from './task-contract'
+import {
+  hasFatalTaskContractViolations,
+  validateTaskOutputContract,
+  type TaskContractResult,
+} from './task-contract'
 import { runTaskValidation, type TaskValidationResult } from './task-validation'
 import type {
   CollaborationMode,
@@ -37,7 +45,7 @@ import type {
 } from './types'
 import { PolicyGuard } from '../policy-guard'
 import { streamReply } from '../llm'
-import { buildAgentProfile, buildAgentProfileWithWorktree } from '../agents/profile-builder'
+import { buildAgentProfile, buildAgentProfileWithExecutionDir } from '../agents/profile-builder'
 import { ensureOrchestratorTaskSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST, resolveDefaultWorkDir } from '../execution/agent-execution-envelope'
 import { buildA2ADispatchEnvelope, buildA2AExecutionTask } from '../protocols/a2a-internal'
@@ -78,6 +86,7 @@ interface TaskResultReport {
   durationMs: number
   blackboardKeys: string[]
   completedAt: string
+  executionConfig?: ExecutionConfigSummary
   error?: string
 }
 
@@ -86,7 +95,7 @@ export class OrchestratorEngine {
   private planner = new Planner()
   private scheduler = new TaskScheduler()
   private synthesizer = new Synthesizer()
-  private conflictResolver = new ConflictResolver()
+  private mergeResolver = new ExecutionMergeResolver()
   private replanningEngine = new ReplanningEngine()
 
   static cancelActiveRun(runId: string): boolean {
@@ -113,7 +122,7 @@ export class OrchestratorEngine {
       where: eq(orchestratorRuns.id, runId),
     })
     if (!run || run.status !== 'running') {
-      console.warn(`[OrchestratorEngine] Cannot resume run ${runId}: status=${run?.status}`)
+      logger.warn({ runId, status: run?.status }, 'Cannot resume orchestrator run')
       return
     }
 
@@ -611,17 +620,17 @@ export class OrchestratorEngine {
         if (path) projectPaths.add(path)
       }
 
-      const conflictReports: import('./conflict-resolver').ConflictReport[] = []
+      const mergeReports: MergeReport[] = []
       for (const projectPath of projectPaths) {
-        const reports = await this.conflictResolver.detectAndResolve(results, {
+        const reports = await this.mergeResolver.detectAndResolve(results, {
           projectPath,
-          baseBranch: await gitBranchManager.inferBaseBranch(projectPath),
+          baseBranch: await executionBranchManager.inferBaseBranch(projectPath),
         })
-        conflictReports.push(...reports)
+        mergeReports.push(...reports)
       }
 
-      if (conflictReports.length > 0) {
-        for (const report of conflictReports) {
+      if (mergeReports.length > 0) {
+        for (const report of mergeReports) {
           await emitRunEvent({
             runId,
             workspaceId,
@@ -653,7 +662,7 @@ export class OrchestratorEngine {
         await db
           .update(orchestratorRuns)
           .set({
-            conflictReport: conflictReports as unknown as import('@agenthub/db').ConflictReport[],
+            conflictReport: mergeReports as unknown as import('@agenthub/db').ConflictReport[],
           })
           .where(eq(orchestratorRuns.id, runId))
       }
@@ -664,7 +673,7 @@ export class OrchestratorEngine {
         workspaceId,
         plan,
         results,
-        conflictReports,
+        mergeReports,
       )
     } catch (error: any) {
       logger.error({ err: error?.message, runId }, 'Scheduler execution failed')
@@ -1227,7 +1236,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     })
 
     const defaultCwd = childInfo.projectPath ? null : resolveDefaultWorkDir(runId)
-    const profile = buildAgentProfileWithWorktree(
+    const profile = buildAgentProfileWithExecutionDir(
       agent,
       defaultCwd,
       childInfo.projectPath ?? null,
@@ -1289,6 +1298,13 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       }
     }
 
+    let executionConfig = await buildExecutionConfigSummary({
+      profile,
+      projectPath: childInfo.projectPath ?? null,
+      executionPath: profile.projectPath ?? childInfo.projectPath ?? null,
+      requestedSandboxPolicy: profile.sandboxPolicy,
+    })
+
     // 发送 orchestrator 特有的事件
     await emitRunEvent({
       runId,
@@ -1302,6 +1318,13 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         agentName: agent.name,
         attempt: attemptCount,
         sessionId: childInfo.sessionId,
+        childSessionId: childInfo.sessionId,
+        executionConfig,
+        progressStatus: buildExecutionProgressStatus({
+          agentName: agent.name,
+          taskTitle: task.title,
+          executionConfig,
+        }),
       },
     })
 
@@ -1316,6 +1339,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       taskTitle: task.title,
       startedAt: taskStartTime,
       timeoutMs: TASK_TIMEOUT_MS,
+      getExecutionConfig: () => executionConfig,
     })
     let lastAgentOutput = ''
     let lastArtifacts: Array<Record<string, unknown>> = []
@@ -1363,8 +1387,33 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         existingUserMessageId: userMsg.id,
         deferCompletionStatus: true,
         a2a: a2aDispatch,
+        onExecutionConfigReady: async (config) => {
+          executionConfig = config
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: task.id,
+            agentId: agent.id,
+            type: 'task.progress',
+            payload: {
+              taskTitle: task.title,
+              agentId: agent.id,
+              agentName: agent.name,
+              childSessionId: childInfo.sessionId,
+              executionConfig,
+              progressPercent: 5,
+              progressStatus: buildExecutionProgressStatus({
+                agentName: agent.name,
+                taskTitle: task.title,
+                executionConfig,
+              }),
+            },
+          })
+        },
       })
       stopHeartbeat()
+      executionConfig = execResult.executionConfig ?? executionConfig
 
       const output = execResult.output
       const artifacts = execResult.artifacts
@@ -1453,6 +1502,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
               status,
               progressStatus: status,
               childSessionId: childInfo.sessionId,
+              executionConfig,
             },
           })
         }
@@ -1467,7 +1517,13 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           agentId: agent.id,
           type: 'task.cancelled',
           severity: 'warning',
-          payload: { title: task.title, agentName: agent.name, sessionId: childInfo.sessionId },
+          payload: {
+            title: task.title,
+            agentName: agent.name,
+            sessionId: childInfo.sessionId,
+            childSessionId: childInfo.sessionId,
+            executionConfig,
+          },
         })
         return {
           taskId: task.id,
@@ -1896,11 +1952,17 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       })
       lastContractResult = contractResult
       if (contractResult.status === 'failed') {
+        const fatalContractFailure = hasFatalTaskContractViolations(
+          contractResult.violations,
+          artifacts,
+        )
+        const contractError =
+          `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`
         const failureReport = buildTaskResultReport({
           runId,
           task,
           agent,
-          status: TaskStatus.Failed,
+          status: fatalContractFailure ? TaskStatus.Failed : TaskStatus.Done,
           summary,
           outputRef,
           artifacts,
@@ -1909,7 +1971,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           durationMs: Date.now() - taskStartTime,
           childSessionId: childInfo.sessionId,
           blackboardKeys: writtenBlackboardKeys,
-          error: `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`,
+          executionConfig,
+          error: fatalContractFailure ? contractError : undefined,
         })
         await blackboard.write({
           namespace: bbNamespace,
@@ -1921,33 +1984,58 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             sourceAgentId: agent.id,
             taskId: task.id,
             risk: contractResult.violations.map((violation) => violation.message).join('\n'),
-            severity: 'high',
+            severity: fatalContractFailure ? 'high' : 'medium',
             mitigation:
-              'Review the task output contract, allowed paths, and produced artifacts before accepting this task.',
+              fatalContractFailure
+                ? 'Review the task output contract, allowed paths, and produced artifacts before accepting this task.'
+                : 'Produced artifacts are preserved and usable, but the planned output path contract should be reviewed.',
           },
           agentId: agent.id,
           taskId: task.id,
           tags: ['risk', 'contract_violation', `agent_${agent.id}`],
         })
-        await emitRunEvent({
-          runId,
-          workspaceId,
-          groupSessionId,
-          taskId: task.id,
-          agentId: agent.id,
-          type: 'task.failed',
-          severity: 'error',
-          payload: {
-            title: task.title,
-            agentName: agent.name,
-            error: `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`,
-            violations: contractResult.violations,
-            ...taskResultReportEventPayload(failureReport),
-          },
-        })
-        throw new Error(
-          `Task output contract failed: ${contractResult.violations[0]?.message ?? 'unknown violation'}`,
-        )
+        if (!fatalContractFailure) {
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: task.id,
+            agentId: agent.id,
+            type: 'task.progress',
+            severity: 'warning',
+            payload: {
+              title: task.title,
+              agentName: agent.name,
+              childSessionId: childInfo.sessionId,
+              executionConfig,
+              progressPercent: 95,
+              progressStatus: '产物已生成，路径合约存在偏差，已转为复核警告。',
+              violations: contractResult.violations,
+              ...taskResultReportEventPayload(failureReport),
+            },
+          })
+        }
+        if (fatalContractFailure) {
+          await emitRunEvent({
+            runId,
+            workspaceId,
+            groupSessionId,
+            taskId: task.id,
+            agentId: agent.id,
+            type: 'task.failed',
+            severity: 'error',
+            payload: {
+              title: task.title,
+              agentName: agent.name,
+              childSessionId: childInfo.sessionId,
+              executionConfig,
+              error: contractError,
+              violations: contractResult.violations,
+              ...taskResultReportEventPayload(failureReport),
+            },
+          })
+          throw new Error(contractError)
+        }
       }
 
       // 广播黑板更新到群聊会话
@@ -1987,6 +2075,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         durationMs: taskDuration,
         childSessionId: childInfo.sessionId,
         blackboardKeys: writtenBlackboardKeys,
+        executionConfig,
       })
 
       const [agentResultMessage] = await db
@@ -2009,6 +2098,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             taskStatus: TaskStatus.Done,
             outputRef,
             artifacts,
+            executionConfig,
             a2a: {
               request: a2aDispatch.params,
               responseTask: buildA2AExecutionTask({
@@ -2040,8 +2130,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           title: task.title,
           agentName: agent.name,
           sessionId: childInfo.sessionId,
+          childSessionId: childInfo.sessionId,
           durationMs: taskDuration,
           artifactCount: artifacts.length,
+          executionConfig,
           ...taskResultReportEventPayload(taskResultReport),
         },
       })
@@ -2069,6 +2161,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         durationMs: Date.now() - taskStartTime,
         childSessionId: childInfo.sessionId,
         blackboardKeys: lastBlackboardKeys,
+        executionConfig,
         error: error?.message || 'Unknown error',
       })
       await executionTracer.log({
@@ -2113,8 +2206,10 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           title: task.title,
           agentName: agent.name,
           sessionId: childInfo.sessionId,
+          childSessionId: childInfo.sessionId,
           error: error?.message || 'Unknown error',
           durationMs: Date.now() - taskStartTime,
+          executionConfig,
           ...taskResultReportEventPayload(failureReport),
         },
       })
@@ -2145,6 +2240,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             taskResultReport: failureReport,
             artifacts: lastArtifacts,
             partialArtifacts: lastArtifacts.length > 0,
+            executionConfig,
             a2a: {
               request: a2aDispatch.params,
               responseTask: buildA2AExecutionTask({
@@ -2458,6 +2554,7 @@ function startTaskHeartbeat(input: {
   taskTitle: string
   startedAt: number
   timeoutMs: number
+  getExecutionConfig?: () => ExecutionConfigSummary | undefined
 }) {
   let stopped = false
   let lastPersistAt = 0
@@ -2466,13 +2563,21 @@ function startTaskHeartbeat(input: {
     if (stopped) return
     const elapsedMs = Date.now() - input.startedAt
     const percent = Math.min(90, Math.max(3, Math.round((elapsedMs / input.timeoutMs) * 100)))
-    const status = `${input.agentName} 正在执行「${input.taskTitle}」，已运行 ${formatDuration(elapsedMs)} / ${formatDuration(input.timeoutMs)}。`
+    const executionConfig = input.getExecutionConfig?.()
+    const status = buildExecutionProgressStatus({
+      agentName: input.agentName,
+      taskTitle: input.taskTitle,
+      executionConfig,
+      elapsedMs,
+      timeoutMs: input.timeoutMs,
+    })
 
     broadcastSessionEvent(input.groupSessionId, {
       type: WsEvent.AgUiEvent,
       payload: buildAgUiTaskStatusEvent({
         agentId: input.agentId,
         agentName: input.agentName,
+        executionConfig: executionConfig as unknown as Record<string, unknown> | undefined,
         progressPercent: percent,
         progressStatus: status,
         runId: input.runId,
@@ -2508,6 +2613,55 @@ function startTaskHeartbeat(input: {
     stopped = true
     clearInterval(timer)
   }
+}
+
+function buildExecutionProgressStatus(input: {
+  agentName: string
+  taskTitle: string
+  executionConfig?: ExecutionConfigSummary
+  elapsedMs?: number
+  timeoutMs?: number
+}) {
+  const runtime =
+    input.executionConfig?.adapterName ??
+    input.executionConfig?.codeAgentType ??
+    (input.executionConfig?.runtimeType === 'llm' ? 'LLM fallback' : 'Code Agent')
+  const model = input.executionConfig?.modelLabel || input.executionConfig?.modelId
+  const workdir =
+    input.executionConfig?.workdirRelativePath ||
+    shortPathLabel(input.executionConfig?.executionPath) ||
+    shortPathLabel(input.executionConfig?.projectPath)
+  const sandbox = [
+    input.executionConfig?.sandboxProvider,
+    input.executionConfig?.isolation,
+    input.executionConfig?.sandboxPolicy,
+  ]
+    .filter(Boolean)
+    .join('/')
+  const elapsed =
+    typeof input.elapsedMs === 'number' && typeof input.timeoutMs === 'number'
+      ? `，已运行 ${formatDuration(input.elapsedMs)} / ${formatDuration(input.timeoutMs)}`
+      : ''
+  const waitHint =
+    typeof input.elapsedMs === 'number' && input.elapsedMs > 30_000
+      ? '，等待 CLI 输出或文件变更'
+      : ''
+  const detail = [
+    model ? `模型 ${model}` : '',
+    sandbox ? `沙箱 ${sandbox}` : '',
+    workdir ? `目录 ${workdir}` : '',
+  ]
+    .filter(Boolean)
+    .join('，')
+  return `${input.agentName} 正在通过 ${runtime} 执行「${input.taskTitle}」${elapsed}${waitHint}${detail ? `（${detail}）` : ''}`
+}
+
+function shortPathLabel(value?: string | null) {
+  if (!value) return null
+  const normalized = value.replace(/\\/g, '/')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts.length <= 3) return normalized
+  return `${parts[parts.length - 3]}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
 }
 
 async function updateTaskProgress(input: {
@@ -2891,6 +3045,7 @@ export function buildTaskResultReport(params: {
   durationMs: number
   childSessionId: string
   blackboardKeys: string[]
+  executionConfig?: ExecutionConfigSummary
   error?: string
 }): TaskResultReport {
   const validationStatus =
@@ -2927,6 +3082,7 @@ export function buildTaskResultReport(params: {
     durationMs: params.durationMs,
     blackboardKeys: params.blackboardKeys,
     completedAt: new Date().toISOString(),
+    executionConfig: params.executionConfig,
     ...(params.error ? { error: params.error } : {}),
   }
 }
@@ -2944,6 +3100,7 @@ export function taskResultReportEventPayload(report: TaskResultReport): Record<s
     contractViolations: report.contractViolations,
     blackboardKeys: report.blackboardKeys,
     durationMs: report.durationMs,
+    executionConfig: report.executionConfig,
     error: report.error,
   }
 }

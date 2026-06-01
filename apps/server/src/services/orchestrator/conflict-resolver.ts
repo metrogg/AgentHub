@@ -1,8 +1,8 @@
+import { mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
-import { tmpdir } from 'node:os'
-import { mkdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
 
 export interface FileVariant {
   agentId: string
@@ -11,7 +11,7 @@ export interface FileVariant {
   fullContent?: string
 }
 
-export interface ConflictReport {
+export interface MergeReport {
   filePath: string
   baseContent: string
   variants: FileVariant[]
@@ -20,11 +20,19 @@ export interface ConflictReport {
   notes?: string
 }
 
-export class ConflictResolver {
+/**
+ * Reviews competing file artifacts produced by agent workdirs.
+ *
+ * The current execution model does not merge agent workdirs back into the project
+ * automatically. This resolver only produces structured merge reports for the
+ * orchestrator event stream. Git is used opportunistically to read a base file
+ * when the user workspace already has a repository.
+ */
+export class ExecutionMergeResolver {
   async detectAndResolve(
     results: Array<{ agentId: string; agentName: string; artifacts: Array<Record<string, unknown>> }>,
     options?: { projectPath?: string; baseBranch?: string },
-  ): Promise<ConflictReport[]> {
+  ): Promise<MergeReport[]> {
     const fileMap = new Map<string, FileVariant[]>()
 
     for (const result of results) {
@@ -45,11 +53,10 @@ export class ConflictResolver {
       }
     }
 
-    const reports: ConflictReport[] = []
+    const reports: MergeReport[] = []
     for (const [filePath, variants] of fileMap) {
       if (variants.length < 2) continue
 
-      // 优先从 Git 获取 base 内容，回退到 variants[0].fullContent
       let baseContent = ''
       if (options?.projectPath) {
         baseContent = await this.getBaseContent(options.projectPath, filePath, options.baseBranch)
@@ -58,7 +65,6 @@ export class ConflictResolver {
         baseContent = variants[0]?.fullContent ?? ''
       }
 
-      // 尝试简单合并：如果 diffs 不重叠，可以自动合并
       const autoMerged = await this.tryAutoMerge(baseContent, variants)
       if (autoMerged.ok) {
         reports.push({
@@ -71,9 +77,7 @@ export class ConflictResolver {
         continue
       }
 
-      // LLM 3-way merge
-      const llmResult = await this.llmMerge(filePath, baseContent, variants)
-      reports.push(llmResult)
+      reports.push(await this.llmMerge(filePath, baseContent, variants))
     }
 
     return reports
@@ -89,7 +93,9 @@ export class ConflictResolver {
         env: process.env,
       })
       const timeout = setTimeout(() => {
-        try { proc.kill() } catch {}
+        try {
+          proc.kill()
+        } catch {}
       }, 30000)
       try {
         const out = await new Response(proc.stdout).text()
@@ -104,7 +110,6 @@ export class ConflictResolver {
   }
 
   private async tryAutoMerge(base: string, variants: FileVariant[]): Promise<{ ok: boolean; content?: string }> {
-    // 使用 git apply --check 来验证多个 patch 是否可以无冲突应用
     const tmpDir = join(tmpdir(), `agenthub-merge-${crypto.randomUUID()}`)
     mkdirSync(tmpDir, { recursive: true })
     try {
@@ -119,7 +124,6 @@ export class ConflictResolver {
         patchFiles.push(patchFile)
       }
 
-      // Step 1: 逐个检查 patch 能否应用到 base
       const workingFile = join(tmpDir, 'working')
       await Bun.write(workingFile, base)
       for (let i = 0; i < patchFiles.length; i++) {
@@ -135,7 +139,6 @@ export class ConflictResolver {
         }
       }
 
-      // Step 2: 依次应用所有 patch
       for (let i = 0; i < patchFiles.length; i++) {
         const patchPath = patchFiles[i]!
         const proc = Bun.spawn(['git', 'apply', '-p0', patchPath], {
@@ -154,42 +157,55 @@ export class ConflictResolver {
     } catch {
       return { ok: false }
     } finally {
-      try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore cleanup errors */ }
+      try {
+        rmSync(tmpDir, { recursive: true, force: true })
+      } catch {
+        // Best-effort temp cleanup.
+      }
     }
   }
 
-  private async llmMerge(filePath: string, base: string, variants: FileVariant[]): Promise<ConflictReport> {
+  private async llmMerge(filePath: string, base: string, variants: FileVariant[]): Promise<MergeReport> {
     const prompt = `
-文件路径：${filePath}
+File path: ${filePath}
 
-原始内容：
+Base content:
 \`\`\`
 ${base.slice(0, 3000)}
 \`\`\`
 
-${variants.map((v, i) => `=== ${v.agentName} 的修改 ===
+${variants
+  .map(
+    (variant) => `=== Changes from ${variant.agentName} ===
 \`\`\`diff
-${v.diff.slice(0, 2000)}
-\`\`\``).join('\n\n')}
+${variant.diff.slice(0, 2000)}
+\`\`\``,
+  )
+  .join('\n\n')}
 
-请合并以上修改。如果两个 Agent 的修改在同一位置且不冲突，保留两者。如果冲突，选择最合理的方案并标注冲突位置。
-返回 JSON：
+Merge the changes above. Preserve non-overlapping edits from all agents. If edits conflict,
+choose the most coherent result and explain the decision.
+
+Return JSON only:
 {
-  "mergedContent": "合并后的完整文件内容",
+  "mergedContent": "complete merged file content",
   "hasConflict": boolean,
-  "notes": "说明冲突解决方式"
+  "notes": "short merge decision notes"
 }
 `
 
     try {
       let output = ''
-      for await (const delta of streamReply([{ role: 'user', content: prompt }], '你是代码合并专家。')) {
+      for await (const delta of streamReply(
+        [{ role: 'user', content: prompt }],
+        'You are an expert code merge assistant. Return valid JSON only.',
+      )) {
         output += delta
       }
 
       const jsonText = extractJson(output)
       if (!jsonText) {
-        return { filePath, baseContent: base, variants, resolution: 'needs-human', notes: 'LLM 未返回有效 JSON' }
+        return { filePath, baseContent: base, variants, resolution: 'needs-human', notes: 'LLM did not return valid JSON' }
       }
 
       const parsed = JSON.parse(jsonText) as { mergedContent?: string; hasConflict?: boolean; notes?: string }
@@ -200,7 +216,7 @@ ${v.diff.slice(0, 2000)}
           baseContent: base,
           variants,
           resolution: 'needs-human',
-          notes: parsed.notes || '存在冲突，需要人工决策',
+          notes: parsed.notes || 'Conflicting edits require human review',
         }
       }
 
@@ -214,10 +230,13 @@ ${v.diff.slice(0, 2000)}
       }
     } catch (error: any) {
       logger.error({ err: error?.message, filePath }, 'LLM merge failed')
-      return { filePath, baseContent: base, variants, resolution: 'needs-human', notes: 'LLM 合并失败' }
+      return { filePath, baseContent: base, variants, resolution: 'needs-human', notes: 'LLM merge failed' }
     }
   }
 }
+
+export type ConflictReport = MergeReport
+export { ExecutionMergeResolver as ConflictResolver }
 
 function extractJson(text: string): string | null {
   const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()

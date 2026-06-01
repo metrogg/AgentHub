@@ -10,9 +10,11 @@ import { agentHubUserCacheRoot, defaultNoProjectExecutionRoot, safePathSegment }
  * 要求：
  * 1. runId + taskId + agentId 必须提供，用于全链路追踪。
  * 2. projectPath 是用户原始工作区路径。
- * 3. worktreePath 是实际执行目录（历史字段名，现可为普通 Agent 工作目录）。
- *    - read-only: worktreePath 可为 null，直接在 projectPath 读取。
- *    - workspace-write / danger-full-access: worktreePath 必须非空，通常位于 projectPath/.agenthub/workdirs。
+ * 3. worktreePath is a compatibility field name. Its current meaning is the
+ *    prepared execution directory.
+ *    - read-only: may be null; the agent reads directly from projectPath.
+ *    - workspace-write / danger-full-access: must be non-null, usually under
+ *      projectPath/.agenthub/workdirs.
  * 4. sandboxPolicy 决定文件系统边界。
  * 5. envAllowlist 决定子进程能看到的 env 键白名单。
  */
@@ -28,7 +30,7 @@ export interface AgentExecutionEnvelope {
   agentName: string
   /** 用户原始项目路径 */
   projectPath: string | null
-  /** 实际执行目录。历史字段名保留为 worktreePath，非 read-only 时必须非空 */
+  /** Prepared execution directory. Field name kept for backward compatibility. */
   worktreePath: string | null
   /** 沙箱策略 */
   sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -104,8 +106,8 @@ export function validateEnvelope(envelope: AgentExecutionEnvelope): void {
         `An agent execution directory must be prepared before execution. Fallback to original projectPath is prohibited.`
     )
   }
-  // projectPath 为 null 时（无项目工作区），允许 worktreePath 为 null，
-  // buildExecutionCwd 会按需创建 no-project 执行目录。
+  // When there is no project workspace, buildExecutionCwd creates a no-project
+  // execution directory on demand.
 }
 
 export function buildExecutionCwd(envelope: AgentExecutionEnvelope): {

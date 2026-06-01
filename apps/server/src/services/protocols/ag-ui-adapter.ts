@@ -249,6 +249,7 @@ export function buildAgUiTaskStatusEvent(params: {
   childSessionId?: string | null
   dependencies?: string[]
   description?: string
+  executionConfig?: Record<string, unknown>
   phaseId?: string
   progressPercent?: number | null
   progressStatus?: string | null
@@ -339,6 +340,7 @@ function taskStatusPayload(event: AgentHubRunEventLike, status: string) {
       ? payload.dependencies.filter((item): item is string => typeof item === 'string')
       : undefined,
     description: stringValue(payload.description),
+    executionConfig: recordValue(payload.executionConfig),
     phaseId: stringValue(payload.phaseId),
     progressPercent: numberValue(payload.progressPercent) ?? numberValue(payload.percent),
     progressStatus: stringValue(payload.progressStatus) ?? stringValue(payload.status),
@@ -363,4 +365,10 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
 }

@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { BlackboardSchemaType, TaskType } from '../packages/shared/src/enums'
-import { validateTaskOutputContract } from '../apps/server/src/services/orchestrator/task-contract'
+import {
+  hasFatalTaskContractViolations,
+  validateTaskOutputContract,
+} from '../apps/server/src/services/orchestrator/task-contract'
 import type { ExecutionTask } from '../apps/server/src/services/orchestrator/types'
 
 function task(overrides: Partial<ExecutionTask> = {}): Pick<ExecutionTask, 'id' | 'outputContract' | 'taskType'> {
@@ -22,15 +25,20 @@ function task(overrides: Partial<ExecutionTask> = {}): Pick<ExecutionTask, 'id' 
 }
 
 describe('validateTaskOutputContract', () => {
-  test('allows safe relative artifact files even when model-generated allowedPaths is too narrow', () => {
+  test('downgrades safe relative delivery path mismatches to non-fatal contract warnings', () => {
+    const artifacts = [
+      { type: 'file', path: 'index.html' },
+      { type: 'preview', path: 'index.html' },
+    ]
     const result = validateTaskOutputContract({
-      task: task(),
-      artifacts: [{ type: 'file', path: 'research_report.md' }],
+      task: task({ taskType: TaskType.Code }),
+      artifacts,
       writtenBlackboardKeys: ['task_task-research_output'],
     })
 
-    expect(result.status).toBe('passed')
-    expect(result.violations).toHaveLength(0)
+    expect(result.status).toBe('failed')
+    expect(result.violations.some((violation) => violation.type === 'path_not_allowed')).toBe(true)
+    expect(hasFatalTaskContractViolations(result.violations, artifacts)).toBe(false)
   })
 
   test('still rejects unsafe artifact paths outside the agent workdir', () => {
@@ -45,6 +53,7 @@ describe('validateTaskOutputContract', () => {
 
       expect(result.status).toBe('failed')
       expect(result.violations.some((violation) => violation.type === 'path_not_allowed')).toBe(true)
+      expect(hasFatalTaskContractViolations(result.violations, [{ type: 'preview', path }])).toBe(true)
     }
   })
 
@@ -69,6 +78,7 @@ describe('validateTaskOutputContract', () => {
 
     expect(result.status).toBe('failed')
     expect(result.violations.some((violation) => violation.type === 'path_not_allowed')).toBe(true)
+    expect(hasFatalTaskContractViolations(result.violations, [{ kind: 'diff', filePath: 'packages/db/src/schema.ts' }])).toBe(true)
   })
 
   test('continues to enforce required artifact and blackboard writes', () => {

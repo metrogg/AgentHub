@@ -350,6 +350,14 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (msg && !metadata?.skipAgentReply) {
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
       if (session?.type === 'group' && session.workspaceId) {
+        broadcastSessionEvent(sessionId, {
+          type: WsEvent.AgentTyping,
+          payload: {
+            sessionId,
+            agentName: 'Orchestrator',
+            phase: 'thinking',
+          },
+        })
         const agentRows = await db
           .select()
           .from(workspaceAgents)
@@ -574,7 +582,6 @@ async function routeGroupMessageThroughOrchestrator(
     return
   }
 
-  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
   broadcastSessionEvent(sessionId, {
     type: WsEvent.AgentTyping,
     payload: {
@@ -584,6 +591,7 @@ async function routeGroupMessageThroughOrchestrator(
       phase: 'thinking',
     },
   })
+  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
 
   let decision: Awaited<ReturnType<typeof decideOrchestratorAction>>
   try {
