@@ -52,10 +52,6 @@ export const WsEvent = {
   DiffReady: 'diff:ready',
   SessionJoin: 'session:join',
   SessionJoined: 'session:joined',
-  TaskBoardPlanReady: 'task_board:plan_ready',
-  TaskBoardTaskProgress: 'task_board:task_progress',
-  TaskBoardRunCompleted: 'task_board:run_completed',
-  TaskBoardClarificationNeeded: 'task_board:clarification_needed',
 } as const
 export type WsEvent = (typeof WsEvent)[keyof typeof WsEvent]
 

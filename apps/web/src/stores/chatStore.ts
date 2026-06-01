@@ -1154,68 +1154,6 @@ function applyAgUiEventToState(
   return state
 }
 
-function agUiEventsFromLegacyTaskBoardEvent(
-  event: WSEvent,
-  sessionId: string,
-): AgUiEventPayload[] {
-  if (event.type === WsEvent.TaskBoardPlanReady) {
-    const { runId, plan, sessionId: groupSessionId } = event.payload as {
-      runId: string
-      plan: Record<string, unknown>
-      sessionId: string
-    }
-    return [
-      {
-        type: 'CUSTOM',
-        name: 'agenthub.plan.created',
-        runId,
-        threadId: groupSessionId ?? sessionId,
-        value: { plan, runId, threadId: groupSessionId ?? sessionId },
-      },
-    ]
-  }
-  if (event.type === WsEvent.TaskBoardTaskProgress) {
-    const { taskId, percent, status, runId, sessionId: groupSessionId, agentId, agentName } =
-      event.payload as {
-        taskId: string
-        percent: number
-        status: string
-        runId?: string
-        sessionId?: string
-        agentId?: string
-        agentName?: string
-      }
-    return [
-      {
-        type: 'CUSTOM',
-        name: 'agenthub.task.status',
-        runId,
-        threadId: groupSessionId ?? sessionId,
-        value: {
-          taskId,
-          status: 'running',
-          progressPercent: percent,
-          progressStatus: status,
-          agentId,
-          agentName,
-        },
-      },
-    ]
-  }
-  if (event.type === WsEvent.TaskBoardRunCompleted) {
-    const { runId, status } = event.payload as { runId: string; status: string }
-    return [
-      {
-        type: 'RUN_FINISHED',
-        runId,
-        threadId: sessionId,
-        result: { status },
-      } as unknown as AgUiEventPayload,
-    ]
-  }
-  return []
-}
-
 interface ChatState {
   sessions: Session[]
   currentSession: Session | null
@@ -1840,7 +1778,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           : sessionId
     const isCurrentSessionEvent = eventSessionId === sessionId
     if (!isCurrentSessionEvent) {
-      const isTaskBoardEvent = e.type?.startsWith('task_board:') || e.type === WsEvent.AgUiEvent
+      const isTaskBoardEvent = e.type === WsEvent.AgUiEvent
       if (e.type === WsEvent.MessageCompleted) {
         const { message } = e.payload as { message?: Message }
         if (message) {
@@ -2001,35 +1939,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (agUiEventShouldRefreshSessions(event)) {
           scheduleSessionRefresh(() => get().fetchSessions())
         }
-        break
-      }
-      case WsEvent.TaskBoardPlanReady: {
-        const events = agUiEventsFromLegacyTaskBoardEvent(e, sessionId)
-        if (events.length > 0) {
-          set((state) =>
-            events.reduce((next, event) => applyAgUiEventToState(next, event, sessionId), state),
-          )
-        }
-        void get().fetchSessions()
-        break
-      }
-      case WsEvent.TaskBoardTaskProgress: {
-        const events = agUiEventsFromLegacyTaskBoardEvent(e, sessionId)
-        if (events.length > 0) {
-          set((state) =>
-            events.reduce((next, event) => applyAgUiEventToState(next, event, sessionId), state),
-          )
-        }
-        break
-      }
-      case WsEvent.TaskBoardRunCompleted: {
-        const events = agUiEventsFromLegacyTaskBoardEvent(e, sessionId)
-        if (events.length > 0) {
-          set((state) =>
-            events.reduce((next, event) => applyAgUiEventToState(next, event, sessionId), state),
-          )
-        }
-        void get().fetchSessions()
         break
       }
     }
