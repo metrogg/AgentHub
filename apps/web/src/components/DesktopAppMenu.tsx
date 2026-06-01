@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Bot, FolderOpen, Menu, MessageSquarePlus, Minus, RotateCw, Square, X } from 'lucide-react'
+import { FolderOpen, Menu, MessageSquarePlus, Minus, RotateCw, Square, X } from 'lucide-react'
 import { useAppActions, type AppActionId } from '../lib/app-actions'
 import { useI18n } from '../lib/i18n'
 import {
@@ -13,16 +13,16 @@ import {
 import { shortcutFor, useShortcutSettings } from '../lib/shortcuts'
 
 const menuItems = [
-  { id: 'new-chat', label: '新建会话', shortcut: 'Ctrl+N' },
-  { id: 'quick-chat', label: '快速对话', shortcut: 'Alt+Ctrl+N' },
-  { id: 'open-folder', label: '打开项目文件夹...', shortcut: 'Ctrl+O' },
+  { id: 'new-chat', label: '新建会话' },
+  { id: 'quick-chat', label: '快速对话' },
+  { id: 'open-folder', label: '打开项目文件夹...' },
   { type: 'separator' },
-  { id: 'settings', label: '设置', shortcut: 'Ctrl+,' },
-  { id: 'reload', label: '重新加载', shortcut: 'Ctrl+R' },
+  { id: 'settings', label: '设置' },
+  { id: 'reload', label: '重新加载' },
   { type: 'separator' },
-  { id: 'new-window', label: '新建窗口', shortcut: 'Ctrl+Shift+N' },
-  { id: 'toggle-fullscreen', label: '切换全屏', shortcut: 'F11' },
-  { id: 'close-window', label: '关闭窗口', shortcut: 'Ctrl+W' },
+  { id: 'new-window', label: '新建窗口' },
+  { id: 'toggle-fullscreen', label: '切换全屏' },
+  { id: 'close-window', label: '关闭窗口' },
 ] as const
 
 const routeLabels: Record<string, string> = {
@@ -34,6 +34,8 @@ const routeLabels: Record<string, string> = {
   '/profile': '个人资料',
   '/settings': '设置',
   '/skills': 'Skills 市场',
+  '/orchestrator-runs': '编排运行',
+  '/execution-logs': '执行日志',
 }
 
 export function DesktopAppMenu() {
@@ -68,7 +70,7 @@ export function DesktopAppMenu() {
 
   async function runTopbarAction(id: AppActionId) {
     setMenuOpen(false)
-    await runAppAction(id as AppActionId)
+    await runAppAction(id)
   }
 
   function reloadDesktopWindow() {
@@ -83,16 +85,16 @@ export function DesktopAppMenu() {
 
   return (
     <header className="agenthub-desktop-titlebar" aria-label={t('窗口')}>
-      <div className="agenthub-desktop-titlebar-left" onPointerDown={(event) => event.stopPropagation()}>
-        <button type="button" className="agenthub-titlebar-brand" onClick={() => navigate('/')} aria-label="AgentHub">
-          <span className="agenthub-titlebar-brand-icon">
-            <Bot className="h-4 w-4" />
-          </span>
-          <span className="font-semibold">AgentHub</span>
-        </button>
-        <div className="agenthub-titlebar-divider" />
-        <span className="agenthub-titlebar-location">{currentLabel}</span>
+      <div className="agenthub-desktop-titlebar-left" aria-hidden="true">
+        <span className="agenthub-mac-window-dot agenthub-mac-window-dot-close" />
+        <span className="agenthub-mac-window-dot agenthub-mac-window-dot-minimize" />
+        <span className="agenthub-mac-window-dot agenthub-mac-window-dot-maximize" />
       </div>
+
+      <button type="button" className="agenthub-titlebar-center" onClick={() => navigate('/')} aria-label="AgentHub">
+        <span className="agenthub-titlebar-app-name">AgentHub</span>
+        <span className="agenthub-titlebar-page">{currentLabel}</span>
+      </button>
 
       <div
         className="agenthub-desktop-titlebar-drag"
@@ -134,7 +136,6 @@ export function DesktopAppMenu() {
             </div>
           )}
         </div>
-        <div className="agenthub-titlebar-divider" />
         <TopbarIconButton label="最小化" onClick={() => void minimizeDesktopWindow()}>
           <Minus className="h-4 w-4" />
         </TopbarIconButton>
@@ -218,5 +219,6 @@ function isSeparator<T extends { type: 'separator' } | { id: string }>(item: T):
 
 function routeLabel(pathname: string) {
   if (pathname.startsWith('/chat/')) return '消息'
+  if (pathname.startsWith('/workspace/')) return '工作区'
   return routeLabels[pathname] ?? 'AgentHub'
 }

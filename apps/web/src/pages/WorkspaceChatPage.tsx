@@ -52,7 +52,7 @@ export function WorkspaceChatPage() {
         />
       )}
 
-      <div className={`flex-1 flex flex-col min-w-0 ${taskBoard ? 'border-r border-gray-200' : ''}`}>
+      <div className="flex-1 flex flex-col min-w-0 bg-[#fbfbf8]">
         <AgentHubRuntimeProvider key={sessionId}>
           <ThreadPrimitive.Root className="flex-1 flex flex-col">
             <Thread />
@@ -71,9 +71,9 @@ export function WorkspaceChatPage() {
       )}
 
       {previewUrl && (
-        <div className="w-96 flex-shrink-0 overflow-hidden border-l border-gray-200 bg-white">
+        <div className="w-96 flex-shrink-0 overflow-hidden bg-white">
           <div className="flex h-full flex-col">
-            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+            <div className="flex items-center justify-between bg-[#f6f6f3] px-4 py-3">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-900">
                 <ExternalLink className="h-4 w-4 text-neutral-400" />
                 <span className="truncate max-w-[250px]">{previewFileName || '预览'}</span>

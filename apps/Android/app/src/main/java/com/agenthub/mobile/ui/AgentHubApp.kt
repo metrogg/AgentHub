@@ -55,6 +55,10 @@ fun AgentHubApp(viewModel: MobileViewModel = viewModel()) {
                     onInstallCodingTools = viewModel::installCodingTools,
                     onRepairCodingTools = viewModel::repairCodingTools,
                     onScanPairingQr = viewModel::connectWithPairingQr,
+                    onFetchSettings = viewModel::fetchSettings,
+                    onUpdateSettings = viewModel::updateSettings,
+                    onTestModel = viewModel::testModel,
+                    onClearTestModelResult = viewModel::clearTestModelResult,
                 )
             }
         }

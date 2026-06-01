@@ -237,6 +237,29 @@ data class WorkbenchActionResponse(
 )
 
 @Serializable
+data class TestModelRequest(
+    val provider: String? = null,
+    val apiEndpoint: String? = null,
+    val anthropicEndpoint: String? = null,
+    val apiKey: String? = null,
+    val apiKeyEnv: String? = null,
+    val modelId: String? = null,
+)
+
+@Serializable
+data class TestModelResponse(
+    val ok: Boolean = false,
+    val message: String = "",
+    val model: String? = null,
+    val latencyMs: Long? = null,
+)
+
+@Serializable
+data class SettingsResponse(
+    val settings: Map<String, String> = emptyMap(),
+)
+
+@Serializable
 data class SessionResponse(
     val session: Session,
 )
@@ -292,6 +315,9 @@ data class MobileUiState(
     val streamingCodeAgentRun: JsonObject? = null,
     val workbench: MobileWorkbenchResponse? = null,
     val workbenchLoading: Boolean = false,
+    val settings: Map<String, String> = emptyMap(),
+    val settingsLoading: Boolean = false,
+    val testModelResult: TestModelResponse? = null,
     val agentTyping: Boolean = false,
     val connecting: Boolean = false,
     val connected: Boolean = false,

@@ -371,7 +371,7 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
   }
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <GroupAvatar agents={agents} size="md" title={title} />
         <div className="flex min-w-0 items-center text-sm">
@@ -422,7 +422,7 @@ const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
   const navigate = useNavigate()
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-3">
         <div
           className="grid h-8 w-8 shrink-0 place-items-center rounded-xl text-sm font-semibold text-white shadow-sm"
@@ -467,7 +467,7 @@ const OrchestratorChildHeader: FC<{ agentName: string; onBack: () => void }> = (
   const navigate = useNavigate()
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <button
           type="button"
@@ -502,7 +502,7 @@ const RegularChatHeader: FC = () => {
   const title = session?.title || '新会话'
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="truncate text-sm font-semibold text-neutral-950">{title}</span>
       </div>
@@ -530,7 +530,7 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({ taskBoard, agentTabs }) =
   const failedCount = agentTabs.filter((t) => t.status === 'failed').length
 
   return (
-    <div className="shrink-0 border-b border-neutral-100 bg-white px-6 py-2.5">
+    <div className="shrink-0 bg-[#f5f5f1] px-6 py-2.5">
       <div className="flex items-center gap-2 text-xs">
         <Bot className="h-4 w-4 text-blue-600" />
         <span className="font-semibold text-neutral-700">主对话</span>
@@ -1014,12 +1014,12 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
       />
       <aside
         className={cn(
-          'relative h-full w-[320px] max-w-[88vw] border-l border-neutral-200 bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'relative h-full w-[320px] max-w-[88vw] bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
       >
         <div className="flex h-full flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-4">
+          <div className="flex shrink-0 items-center justify-between gap-3 bg-[#f5f5f1] px-4 py-4">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-neutral-950">
                 {agent?.name ?? 'Agent 设置'}
@@ -1321,12 +1321,12 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
       />
       <aside
         className={cn(
-          'relative h-full w-[340px] max-w-[88vw] border-l border-neutral-200 bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'relative h-full w-[340px] max-w-[88vw] bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
       >
         <div className="flex h-full flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-4">
+          <div className="flex shrink-0 items-center justify-between gap-3 bg-[#f5f5f1] px-4 py-4">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-neutral-950">群聊设置</div>
               <div className="mt-1 truncate text-xs text-neutral-500">
@@ -3522,7 +3522,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
             )}
           />
         )}
-        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-neutral-200 bg-white/90 px-3 backdrop-blur">
+        <div className="flex h-16 shrink-0 items-center gap-3 bg-[#f5f5f1] px-3 backdrop-blur">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-neutral-200 bg-gradient-to-br from-white to-neutral-100 text-neutral-500 shadow-sm">
               {previewIcon(item)}
@@ -3650,7 +3650,7 @@ const PreviewActionPanel: FC<{
   onOpenPath: (path?: string) => void
 }> = ({ items, onClose, onOpenPath }) => (
   <div className="absolute right-3 top-[4.5rem] z-30 w-[min(22rem,calc(100%-1.5rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-[0_18px_60px_rgba(15,23,42,0.18)]">
-    <div className="flex h-12 items-center justify-between border-b border-neutral-100 px-4">
+    <div className="flex h-12 items-center justify-between bg-[#f5f5f1] px-4">
       <div className="text-sm font-semibold text-neutral-950">下载</div>
       <div className="flex items-center gap-1">
         <button
@@ -3772,7 +3772,7 @@ const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item })
   const fileName = item.path ?? item.title
   return (
     <div className="flex h-full flex-col bg-white">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-3 text-xs text-neutral-500">
+      <div className="flex h-11 shrink-0 items-center gap-2 bg-[#f5f5f1] px-3 text-xs text-neutral-500">
         <FileText className="h-4 w-4 text-neutral-400" />
         <span className="min-w-0 flex-1 truncate">{fileName}</span>
         <span className="rounded-md bg-[#F7F7F7] px-2 py-1">只读预览</span>
@@ -3809,936 +3809,51 @@ const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
   </div>
 )
 
-type CodeAgentRunStep = NonNullable<CodeAgentRunMetadata['steps']>[number]
-
 const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
-  const changedFiles = data.files ?? []
-  const commands = data.commands ?? []
-  const toolCalls = data.toolCalls ?? []
-  const logs = data.logs ?? []
-  const eventCount = logs.filter((log) => displayLogStream(log) === 'event').length
-  const steps = useMemo(() => codeAgentProcessSteps(data), [data])
-  const hasDetails =
-    toolCalls.length > 0 || commands.length > 0 || changedFiles.length > 0 || logs.length > 0
+  const finalMessage = (data.finalMessage ?? '').trim()
 
-  return (
-    <div className="not-prose mt-3 space-y-2 text-sm">
-      <CodeAgentStatusCard
-        data={data}
-        commandCount={commands.length}
-        eventCount={eventCount}
-        fileCount={changedFiles.length}
-        toolCount={toolCalls.length}
-      />
-      <CodeAgentProcessTimeline steps={steps} running={data.status === 'running'} />
-      {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
-      <CodeAgentOutputReviewCard data={data} />
-      {hasDetails && (
-        <CodeAgentRunDetails
-          changedFiles={changedFiles}
-          commands={commands}
-          cwd={data.cwd ?? commands.find((command) => command.cwd)?.cwd}
-          logs={logs}
-          running={data.status === 'running'}
-          toolCalls={toolCalls}
-        />
-      )}
-    </div>
-  )
+  if (data.status === 'running') return <CodeAgentLiveActivity data={data} />
+  if (data.status === 'completed') return null
+  if (finalMessage) return null
+
+  return <CodeAgentFailureNotice data={data} />
 }
 
-const CodeAgentStatusCard: FC<{
-  commandCount: number
-  data: CodeAgentRunMetadata
-  eventCount: number
-  fileCount: number
-  toolCount: number
-}> = ({ commandCount, data, eventCount, fileCount, toolCount }) => {
-  const statusTone =
-    data.status === 'running'
-      ? 'text-blue-600'
-      : data.status === 'completed'
-        ? 'text-neutral-500'
-        : data.partialSuccess || data.status === 'timed-out'
-          ? 'text-amber-600'
-          : 'text-red-600'
+const CodeAgentLiveActivity: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+  const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
 
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
-        <div className={cn('inline-flex min-w-0 items-center gap-2', statusTone)}>
-          {data.status === 'running' ? (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-          ) : data.partialSuccess ? (
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-          ) : (
-            <Clock3 className="h-4 w-4 shrink-0" />
-          )}
-          <div className="min-w-0">
-            <div className="truncate font-medium">
-              {codeAgentStatusLabel(data.status, Boolean(data.partialSuccess))} · {formatRunDuration(data.durationMs)}
-            </div>
-            <div className="mt-0.5 truncate text-[11px] text-neutral-400">
-              {codeAgentRuntimeLabel(data.runtime)} · {data.command}
-            </div>
-            {data.warning && (
-              <div className="mt-1 truncate text-[11px] text-amber-700">{data.warning}</div>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
-          <CodeAgentMiniStat
-            icon={<Search className="h-3.5 w-3.5" />}
-            label="工具"
-            value={toolCount}
-          />
-          <CodeAgentMiniStat
-            icon={<TerminalSquare className="h-3.5 w-3.5" />}
-            label="命令"
-            value={commandCount}
-          />
-          <CodeAgentMiniStat
-            icon={<FileText className="h-3.5 w-3.5" />}
-            label="文件"
-            value={fileCount}
-          />
-          <CodeAgentMiniStat
-            icon={<ListTodo className="h-3.5 w-3.5" />}
-            label="事件"
-            value={eventCount}
-          />
-        </div>
+    <div className="not-prose mt-2">
+      <div className="inline-flex max-w-full items-center gap-2 rounded-[20px] rounded-tl-md bg-[#f4f5f1] px-4 py-2.5 text-sm leading-6 text-neutral-700 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-500" />
+        <span className="min-w-0 truncate">{runtimeLabel} 正在产出结果</span>
+        <CodeAgentTypingDots />
       </div>
     </div>
   )
 }
 
-const CodeAgentMiniStat: FC<{ icon: ReactNode; label: string; value: number }> = ({
-  icon,
-  label,
-  value,
-}) => (
-  <span
-    className={cn(
-      'inline-flex h-7 items-center gap-1 rounded-md border px-2',
-      value
-        ? 'border-neutral-200 bg-neutral-50 text-neutral-700'
-        : 'border-neutral-100 bg-white text-neutral-300',
-    )}
-  >
-    {icon}
-    {label} {value}
-  </span>
-)
-
-const CodeAgentProcessTimeline: FC<{ running: boolean; steps: CodeAgentRunStep[] }> = ({
-  running,
-  steps,
-}) => {
-  const [collapsed, setCollapsed] = useState(false)
-  const showAll = !collapsed && (!running || steps.length <= 1)
-  const visibleSteps = showAll ? steps : steps.slice(-1)
-  const hiddenCount = Math.max(0, steps.length - visibleSteps.length)
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-xs text-neutral-500">
-        <span className="inline-flex items-center gap-2 font-medium text-neutral-700">
-          <span
-            className={cn(
-              'h-2 w-2 rounded-full',
-              running ? 'bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.12)]' : 'bg-neutral-300',
-            )}
-          />
-          执行过程
-        </span>
-        <div className="flex items-center gap-2">
-          <span>
-            {running ? '实时更新' : '已记录'} {steps.length} 项
-          </span>
-          {hiddenCount > 0 ? (
-            <button
-              type="button"
-              onClick={() => setCollapsed(false)}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-800"
-            >
-              展开
-              <ChevronDown className="h-3 w-3" />
-            </button>
-          ) : (
-            steps.length > 1 && (
-              <button
-                type="button"
-                onClick={() => setCollapsed(true)}
-                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-800"
-              >
-                收起
-                <ChevronDown className="h-3 w-3 rotate-180" />
-              </button>
-            )
-          )}
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        {visibleSteps.length ? (
-          visibleSteps.map((step, index) => (
-            <CodeAgentProcessStepCard
-              key={step.id}
-              latest={running && index === visibleSteps.length - 1}
-              step={step}
-            />
-          ))
-        ) : (
-          <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-3 text-xs text-neutral-500">
-            等待 Coding Tools 返回过程事件
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-const CodeAgentProcessStepCard: FC<{ latest: boolean; step: CodeAgentRunStep }> = ({
-  latest,
-  step,
-}) => {
-  const canExpand = Boolean(step.detail || step.command || step.path)
-  const content = (
-    <div
-      className={cn(
-        'agenthub-code-agent-step flex min-h-[3.75rem] min-w-0 items-center gap-3 rounded-lg border bg-white px-3 py-2.5 shadow-sm transition',
-        step.status === 'failed'
-          ? 'border-red-200 bg-red-50/50'
-          : step.status === 'running'
-            ? 'border-blue-200 bg-blue-50/40'
-            : 'border-neutral-200',
-        latest && 'agenthub-code-agent-step-live',
-      )}
-    >
-      <span
-        className={cn(
-          'grid h-9 w-9 shrink-0 place-items-center rounded-md border',
-          step.status === 'failed'
-            ? 'border-red-200 bg-white text-red-600'
-            : step.status === 'running'
-              ? 'border-blue-200 bg-white text-blue-600'
-              : 'border-neutral-200 bg-neutral-50 text-neutral-500',
-        )}
-      >
-        {codeAgentStepIcon(step)}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 text-[11px] font-semibold text-neutral-400">
-            {codeAgentStepKindLabel(step)}
-          </span>
-          <span className="truncate text-[13px] font-medium leading-5 text-neutral-900">
-            {step.title}
-          </span>
-        </span>
-        <span
-          className="mt-0.5 block truncate text-[13px] leading-5 text-neutral-600"
-          title={step.subtitle ?? step.detail ?? step.command ?? step.path}
-        >
-          {step.subtitle ?? step.detail ?? step.command ?? step.path ?? '处理中'}
-        </span>
-      </span>
-      <span className="grid h-6 w-6 shrink-0 place-items-center text-neutral-400">
-        {step.status === 'running' ? (
-          <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-        ) : step.status === 'failed' ? (
-          <AlertTriangle className="h-4 w-4 text-red-500" />
-        ) : canExpand ? (
-          <ChevronRight className="h-4 w-4 transition group-open:rotate-90" />
-        ) : (
-          <CheckCircle2 className="h-4 w-4 text-neutral-300" />
-        )}
-      </span>
-    </div>
-  )
-
-  if (!canExpand) return content
-
-  return (
-    <details className="group">
-      <summary className="list-none cursor-pointer [&::-webkit-details-marker]:hidden">
-        {content}
-      </summary>
-      <div className="mx-3 border-l border-neutral-200 px-4 py-2 text-xs leading-5 text-neutral-600">
-        {step.command && (
-          <pre className="agenthub-readable-code max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-neutral-950 px-3 py-2 text-neutral-100">
-            {step.command}
-          </pre>
-        )}
-        {step.detail && <div className="mt-1 whitespace-pre-wrap break-words">{step.detail}</div>}
-        {step.path && !step.command && (
-          <div className="agenthub-readable-code mt-1 truncate text-neutral-500">{step.path}</div>
-        )}
-      </div>
-    </details>
-  )
-}
-
-const CodeAgentRunDetails: FC<{
-  changedFiles: CodeAgentRunMetadata['files']
-  commands: CodeAgentRunMetadata['commands']
-  cwd?: string
-  logs: NonNullable<CodeAgentRunMetadata['logs']>
-  running: boolean
-  toolCalls: NonNullable<CodeAgentRunMetadata['toolCalls']>
-}> = ({ changedFiles, commands, cwd, logs, running, toolCalls }) => (
-  <details className="group">
-    <summary className="flex h-10 cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-3 text-left text-[13px] font-medium text-neutral-700 shadow-sm transition hover:bg-neutral-50 [&::-webkit-details-marker]:hidden">
-      <span className="inline-flex min-w-0 items-center gap-2">
-        <ListTodo className="h-4 w-4 shrink-0 text-neutral-500" />
-        执行明细
-      </span>
-      <ChevronDown className="h-4 w-4 shrink-0 text-neutral-400 transition-transform group-open:rotate-180" />
+const CodeAgentFailureNotice: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => (
+  <details className="not-prose mt-2 max-w-[42rem] rounded-[20px] rounded-tl-md bg-red-50 px-4 py-3 text-sm text-red-700">
+    <summary className="cursor-pointer list-none font-medium [&::-webkit-details-marker]:hidden">
+      {codeAgentStatusLabel(data.status, Boolean(data.partialSuccess))}
+      {data.warning ? `：${data.warning}` : ''}
     </summary>
-    <div className="mt-2 space-y-2">
-      {toolCalls.length > 0 && <CodeAgentToolsCard items={toolCalls} running={running} />}
-      {commands.length > 0 && <CodeAgentCommandsCard commands={commands} />}
-      {changedFiles.length > 0 && <CodeAgentFilesCard cwd={cwd} files={changedFiles} />}
-      {logs.length > 0 && <CodeAgentLogsCard logs={logs} />}
-    </div>
+    {data.diagnostics && (
+      <pre className="agenthub-readable-code mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-white/80 px-3 py-2 text-xs leading-5 text-red-700">
+        {data.diagnostics}
+      </pre>
+    )}
   </details>
 )
 
-const CodeAgentOutputReviewCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
-  const messageId = useMessage((message) => message.id)
-  const currentSession = useChatStore((state) => state.currentSession)
-  const sourceMessage = useChatStore((state) =>
-    state.messages.find((message) => message.id === messageId),
-  )
-  const sendMessageToSession = useChatStore((state) => state.sendMessageToSession)
-  const finalMessage = (data.finalMessage ?? '').trim()
-  const reviewRequired =
-    data.reviewRequired || data.runtime === 'codex' || data.runtime === 'claude-code'
-  const startsExpanded = finalMessage.length <= 1600 && finalMessage.split(/\r?\n/).length <= 14
-  const [expanded, setExpanded] = useState(startsExpanded)
-  const [confirmed, setConfirmed] = useState(false)
-  const [continuing, setContinuing] = useState(false)
-  const [continueError, setContinueError] = useState('')
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    setExpanded(startsExpanded)
-    setConfirmed(false)
-    setContinuing(false)
-    setContinueError('')
-    setCopied(false)
-  }, [finalMessage, startsExpanded])
-
-  if (!reviewRequired) return null
-
-  const running = data.status === 'running'
-  const hasFinalMessage = finalMessage.length > 0
-  const preview = expanded ? finalMessage : codeAgentReviewPreview(finalMessage)
-  const hasMore = preview !== finalMessage
-  const lineCount = hasFinalMessage ? finalMessage.split(/\r?\n/).length : 0
-  const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
-  const sourceMetadata =
-    sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
-      ? (sourceMessage.metadata as Record<string, unknown>)
-      : null
-  const sourceAgentName =
-    typeof sourceMetadata?.agentName === 'string' ? sourceMetadata.agentName.trim() : ''
-  const shouldMentionAgent = currentSession?.type === 'group' && sourceAgentName.length > 0
-
-  async function copyFinalMessage() {
-    if (!finalMessage) return
-    try {
-      await navigator.clipboard.writeText(finalMessage)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1400)
-    } catch {
-      setCopied(false)
-    }
-  }
-
-  async function continueOutput() {
-    if (!messageId || !currentSession?.id || continuing || confirmed) return
-    const continuationPrompt = buildCodeAgentContinuationPrompt({
-      finalMessage,
-      runtimeLabel,
-      agentName: shouldMentionAgent ? sourceAgentName : null,
-    })
-    setContinuing(true)
-    setContinueError('')
-    try {
-      await sendMessageToSession(currentSession.id, continuationPrompt, {
-        displayContent: '继续输出',
-        replyToMessageId: messageId,
-      })
-      setConfirmed(true)
-    } catch (error) {
-      setContinueError(friendlyErrorMessage(error, '继续输出失败'))
-    } finally {
-      setContinuing(false)
-    }
-  }
-
-  return (
-    <div
-      className={cn(
-        'overflow-hidden rounded-lg border bg-white shadow-sm',
-        confirmed ? 'border-emerald-200' : 'border-neutral-200',
-      )}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
-        <div className="inline-flex min-w-0 items-center gap-2">
-          <span
-            className={cn(
-              'grid h-8 w-8 shrink-0 place-items-center rounded-md border',
-              confirmed
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
-                : running
-                  ? 'border-blue-200 bg-blue-50 text-blue-600'
-                  : hasFinalMessage
-                    ? 'border-neutral-200 bg-neutral-50 text-neutral-600'
-                    : 'border-amber-200 bg-amber-50 text-amber-600',
-            )}
-          >
-            {running ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : confirmed ? (
-              <CheckCircle2 className="h-4 w-4" />
-            ) : hasFinalMessage ? (
-              <FileText className="h-4 w-4" />
-            ) : (
-              <AlertTriangle className="h-4 w-4" />
-            )}
-          </span>
-          <span className="min-w-0">
-            <span className="block truncate text-[13px] font-medium leading-5 text-neutral-900">
-              输出审核
-            </span>
-            <span className="block truncate text-[11px] leading-5 text-neutral-500">
-              {running
-                ? `${runtimeLabel} 正在写入流式输出`
-                : hasFinalMessage
-                  ? `完整终稿 ${lineCount} 行 · ${finalMessage.length.toLocaleString()} 字`
-                  : `${runtimeLabel} 未捕获到完整终稿`}
-            </span>
-          </span>
-        </div>
-        <span
-          className={cn(
-            'inline-flex h-6 items-center rounded-md border px-2 text-[11px] font-medium',
-            confirmed
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : running
-                ? 'border-blue-100 bg-blue-50 text-blue-600'
-                : 'border-neutral-200 bg-neutral-50 text-neutral-500',
-          )}
-        >
-          {confirmed ? '已确认' : running ? '待完成' : '待审核'}
-        </span>
-      </div>
-
-      <div className="border-t border-neutral-100 bg-neutral-50/70 px-3 py-3">
-        {running ? (
-          <div className="rounded-md border border-dashed border-blue-200 bg-white px-3 py-2 text-xs leading-5 text-neutral-500">
-            Claude Code / Codex 的最终正文会在执行结束后锁定到这里，审核时可展开全文确认。
-          </div>
-        ) : hasFinalMessage ? (
-          <>
-            <pre
-              className={cn(
-                'agenthub-readable-code whitespace-pre-wrap break-words rounded-md border border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-800',
-                expanded ? 'max-h-[32rem] overflow-auto' : 'max-h-44 overflow-hidden',
-              )}
-            >
-              {preview}
-            </pre>
-            {hasMore && (
-              <div className="mt-2 text-[11px] leading-5 text-neutral-500">
-                当前为预览，展开后显示完整输出。
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
-            本次运行没有返回可锁定的最终正文；过程日志和文件变更仍可在执行明细中查看。
-          </div>
-        )}
-        {!running && (
-          <>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {hasFinalMessage && (
-                <>
-                  <button
-                    type="button"
-                    onClick={copyFinalMessage}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
-                  >
-                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                    {copied ? '已复制' : '复制全文'}
-                  </button>
-                  {hasMore && (
-                    <button
-                      type="button"
-                      onClick={() => setExpanded((value) => !value)}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
-                    >
-                      <ChevronDown
-                        className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
-                      />
-                      {expanded ? '收起全文' : '展开全文'}
-                    </button>
-                  )}
-                </>
-              )}
-              <button
-                type="button"
-                onClick={() => void continueOutput()}
-                disabled={continuing || confirmed || !currentSession?.id}
-                className={cn(
-                  'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition',
-                  confirmed
-                    ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'bg-neutral-950 text-white hover:bg-neutral-800 disabled:bg-neutral-300 disabled:text-neutral-500',
-                )}
-              >
-                {continuing ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : confirmed ? (
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" />
-                )}
-                {confirmed ? '已继续输出' : continuing ? '提交中...' : '确认并继续输出'}
-              </button>
-            </div>
-            {continueError && (
-              <div className="mt-2 text-[11px] leading-5 text-red-500">{continueError}</div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function codeAgentReviewPreview(value: string) {
-  const lines = value.split(/\r?\n/)
-  if (lines.length <= 14 && value.length <= 1600) return value
-  const firstLines = lines.slice(0, 14).join('\n')
-  if (firstLines.length <= 1600) return `${firstLines}\n...`
-  return `${firstLines.slice(0, 1600)}\n...`
-}
-
-function buildCodeAgentContinuationPrompt({
-  finalMessage,
-  runtimeLabel,
-  agentName,
-}: {
-  finalMessage: string
-  runtimeLabel: string
-  agentName: string | null
-}) {
-  const tail = finalMessage.trim()
-  const tailPreview = tail.length > 1200 ? `${tail.slice(-1200).trimStart()}` : tail
-  const prefix = agentName ? `@${agentName} ` : ''
-  const lines = [
-    `${prefix}请继续上一轮 ${runtimeLabel} 的输出，不要重复已经给出的内容。`,
-    '如果上一轮已经结束，请补充剩余结论、验证结果和剩余风险；如果还没结束，请从最后一句之后接着写。',
-  ]
-  if (tailPreview) {
-    lines.push(`上一轮输出末尾：\n${tailPreview}`)
-  }
-  return lines.join('\n\n')
-}
-
-const CodeAgentToolsCard: FC<{
-  items: NonNullable<CodeAgentRunMetadata['toolCalls']>
-  running: boolean
-}> = ({ items, running }) => (
-  <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-    <div className="flex h-10 items-center justify-between gap-3 border-b border-neutral-100 px-3">
-      <span className="inline-flex min-w-0 items-center gap-2 font-medium text-neutral-800">
-        <Search className="h-4 w-4 shrink-0 text-blue-500" />
-        工具调用 {items.length}
-      </span>
-      {running && (
-        <span className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.12)]" />
-      )}
-    </div>
-    <div className="grid gap-1.5 p-2">
-      {items.slice(-12).map((item) => (
-        <div
-          key={item.id}
-          className="grid grid-cols-[5.25rem_minmax(0,1fr)] gap-3 rounded-md bg-neutral-50 px-3 py-2.5 antialiased"
-        >
-          <span className="text-[13px] font-medium leading-6 text-neutral-500">{item.label}</span>
-          <span className="min-w-0">
-            <span
-              className="block truncate text-[13px] leading-6 text-neutral-900"
-              title={item.target ?? item.name}
-            >
-              {item.target ?? item.name}
-            </span>
-            {item.detail && (
-              <span
-                className="mt-0.5 block truncate text-xs leading-5 text-neutral-500"
-                title={item.detail}
-              >
-                {item.detail}
-              </span>
-            )}
-          </span>
-        </div>
-      ))}
-    </div>
-  </div>
-)
-
-const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> = ({
-  commands,
-}) => (
-  <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-    <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
-      <TerminalSquare className="h-4 w-4 shrink-0 text-emerald-600" />
-      命令记录 {commands.length}
-    </div>
-    <div className="space-y-1.5 p-2">
-      {commands.map((command) => (
-        <details
-          key={command.id}
-          className="group rounded-md border border-neutral-200 bg-neutral-50 text-neutral-900"
-        >
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
-            <span
-              className="agenthub-readable-code truncate text-[13px] leading-6"
-              title={command.command}
-            >
-              {command.command}
-            </span>
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-400 transition group-open:rotate-180" />
-          </summary>
-          {(command.cwd || command.output) && (
-            <div className="border-t border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-700">
-              {command.cwd && (
-                <div className="agenthub-readable-code truncate text-neutral-500">
-                  cwd: {command.cwd}
-                </div>
-              )}
-              {command.output && (
-                <pre className="agenthub-readable-code mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">
-                  {command.output}
-                </pre>
-              )}
-            </div>
-          )}
-        </details>
-      ))}
-    </div>
-  </div>
-)
-
-const CodeAgentFilesCard: FC<{ cwd?: string; files: CodeAgentRunMetadata['files'] }> = ({
-  cwd,
-  files,
-}) => {
-  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
-
-  async function handleSaveEdit(filePath: string, params: { lineText: string; lineNumber: number }) {
-    if (!workspaceId) return
-    try {
-      await api.writeFile({
-        workspaceId,
-        filePath,
-        content: params.lineText,
-        startLine: params.lineNumber,
-        endLine: params.lineNumber,
-      })
-    } catch (err) {
-      console.error('[CodeAgentFilesCard] Failed to save edit:', err)
-    }
-  }
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
-        <FileText className="h-4 w-4 shrink-0 text-amber-600" />
-        文件变更 {files.length}
-      </div>
-      <div className="space-y-1.5 p-2">
-        {files.map((file) => {
-          const vscodeHref = file.status === 'deleted' ? null : vscodeFileHref(file.path, cwd)
-          return (
-            <details key={`${file.status}-${file.path}`} className="group rounded-md bg-neutral-50">
-              <summary className="grid cursor-pointer list-none grid-cols-[4.75rem_minmax(0,1fr)_auto_1rem] items-center gap-2 px-3 py-2.5">
-                <span className="text-[13px] text-neutral-500">{fileStatusLabel(file.status)}</span>
-                <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>
-                  {file.path}
-                </span>
-                {vscodeHref ? (
-                  <a
-                    href={vscodeHref}
-                    onClick={(event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      window.location.href = vscodeHref
-                    }}
-                    className="inline-flex h-7 min-w-10 items-center justify-center gap-1 rounded-full border border-neutral-200 bg-white px-2 text-neutral-500 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
-                    title="用 VS Code 打开"
-                    aria-label={`用 VS Code 打开 ${file.path}`}
-                  >
-                    <img src="/vscode-color.svg" alt="" className="h-4 w-4" draggable={false} />
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                ) : (
-                  <span className="h-7 min-w-10" />
-                )}
-                <ChevronDown
-                  className={cn(
-                    'h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180',
-                    !file.diff && 'opacity-0',
-                  )}
-                />
-              </summary>
-              {file.diff && (
-                <DiffViewer
-                  diff={file.diff}
-                  maxHeightClassName="max-h-72"
-                  filePath={file.path}
-                  onSaveEdit={workspaceId ? (params) => handleSaveEdit(file.path, params) : undefined}
-                />
-              )}
-            </details>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-const CodeAgentLogsCard: FC<{ logs: NonNullable<CodeAgentRunMetadata['logs']> }> = ({ logs }) => {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-neutral-800 hover:bg-neutral-50"
-      >
-        <span className="inline-flex min-w-0 items-center gap-2">
-          <ListTodo className="h-4 w-4 shrink-0 text-neutral-500" />
-          过程日志 {logs.length}
-        </span>
-        <ChevronDown
-          className={cn(
-            'h-4 w-4 shrink-0 text-neutral-400 transition-transform',
-            open && 'rotate-180',
-          )}
-        />
-      </button>
-      {open && (
-        <div className="max-h-64 space-y-1.5 overflow-auto border-t border-neutral-100 bg-white p-2">
-          {logs.map((log) => (
-            <CodeAgentLogRow key={log.id} log={log} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-const CodeAgentLogRow: FC<{ log: NonNullable<CodeAgentRunMetadata['logs']>[number] }> = ({
-  log,
-}) => {
-  const stream = displayLogStream(log)
-  return (
-    <div
-      className={cn(
-        'grid grid-cols-[4.25rem_minmax(0,1fr)] gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-6 antialiased',
-        stream === 'stderr'
-          ? 'border-red-100 bg-red-50/70'
-          : stream === 'event'
-            ? 'border-blue-100 bg-blue-50/60'
-            : 'border-neutral-100 bg-neutral-50',
-      )}
-    >
-      <span
-        className={cn(
-          'inline-flex h-5 items-center justify-center rounded px-1.5 text-[11px] font-medium',
-          stream === 'stderr'
-            ? 'bg-red-100 text-red-700'
-            : stream === 'event'
-              ? 'bg-blue-100 text-blue-700'
-              : 'bg-neutral-200 text-neutral-600',
-        )}
-      >
-        {logStreamLabel(stream)}
-      </span>
-      <span className="whitespace-pre-wrap break-words text-neutral-800">{log.text}</span>
-    </div>
-  )
-}
-
-function displayLogStream(log: NonNullable<CodeAgentRunMetadata['logs']>[number]) {
-  if (log.stream !== 'stderr') return log.stream
-  return isProgressLikeCodeAgentLog(log.text) ? 'event' : 'stderr'
-}
-
-function isProgressLikeCodeAgentLog(text: string) {
-  const normalized = text.trim()
-  return (
-    /^(->|→)\s*(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)\b/i.test(
-      normalized,
-    ) ||
-    /^#\s*Todos\b/i.test(normalized) ||
-    /^\[[ xX-]\]\s+/.test(normalized) ||
-    /^[✓✔]\s+/.test(normalized) ||
-    /^[•·]\s+/.test(normalized) ||
-    /^>\s*[\w.-]+\s*·\s*[\w./:+-]+/i.test(normalized) ||
-    /\b(Explore|Plan|Analyze|Review|Build|Write|Read)\b.*\bAgent\b/i.test(normalized) ||
-    /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(
-      normalized,
-    ) ||
-    /^(Warning|Warn|警告)[：:\s]/i.test(normalized)
-  )
-}
-
-function codeAgentProcessSteps(data: CodeAgentRunMetadata): CodeAgentRunStep[] {
-  const steps = Array.isArray(data.steps) ? data.steps.filter(isCodeAgentStep) : []
-  if (steps.length) return steps.slice(-120)
-
-  const fallback: CodeAgentRunStep[] = []
-  fallback.push({
-    id: 'fallback-status',
-    kind: 'status',
-    status:
-      data.status === 'running'
-        ? 'running'
-        : data.status === 'completed' || data.partialSuccess
-          ? 'completed'
-          : 'failed',
-    title: codeAgentStatusLabel(data.status, Boolean(data.partialSuccess)),
-    subtitle: `${codeAgentRuntimeLabel(data.runtime)} · ${formatRunDuration(data.durationMs)}`,
-  })
-
-  for (const item of (data.toolCalls ?? []).slice(-20)) {
-    fallback.push({
-      id: `fallback-tool-${item.id}`,
-      kind: 'tool',
-      status: 'completed',
-      title: item.label,
-      subtitle: item.target ?? item.name,
-      detail: item.detail,
-      toolName: item.name,
-    })
-  }
-
-  for (const command of (data.commands ?? []).slice(-20)) {
-    fallback.push({
-      id: `fallback-command-${command.id}`,
-      kind: 'command',
-      status: 'completed',
-      title: '运行命令',
-      subtitle: command.command,
-      detail: command.cwd ? `cwd: ${command.cwd}` : undefined,
-      command: command.command,
-    })
-  }
-
-  for (const file of (data.files ?? []).slice(-20)) {
-    fallback.push({
-      id: `fallback-file-${file.status}-${file.path}`,
-      kind: 'file',
-      status: 'completed',
-      title: `${fileStatusLabel(file.status)}文件`,
-      subtitle: file.path,
-      path: file.path,
-      fileStatus: file.status,
-    })
-  }
-
-  return fallback.slice(-120)
-}
-
-function isCodeAgentStep(value: unknown): value is CodeAgentRunStep {
-  if (!value || typeof value !== 'object') return false
-  const step = value as Partial<CodeAgentRunStep>
-  return (
-    typeof step.id === 'string' &&
-    typeof step.title === 'string' &&
-    (step.kind === 'status' ||
-      step.kind === 'tool' ||
-      step.kind === 'command' ||
-      step.kind === 'file' ||
-      step.kind === 'log') &&
-    (step.status === 'running' ||
-      step.status === 'completed' ||
-      step.status === 'failed' ||
-      step.status === 'cancelled' ||
-      step.status === 'timed-out')
-  )
-}
-
-function codeAgentStepKindLabel(step: CodeAgentRunStep) {
-  if (step.kind === 'command') return '命令'
-  if (step.kind === 'file') return '文件'
-  if (step.kind === 'log') return step.stream === 'stderr' ? '错误' : '日志'
-  if (step.kind === 'status') return '运行'
-  if (step.toolName === 'TodoWrite') return '待办'
-  if (step.toolName === 'Read') return '读取'
-  if (step.toolName === 'Grep' || step.toolName === 'Glob') return '搜索'
-  if (step.toolName === 'WebFetch' || step.toolName === 'WebSearch') return '网页'
-  return '工具'
-}
-
-function codeAgentStepIcon(step: CodeAgentRunStep): ReactNode {
-  if (step.status === 'running') return <Loader2 className="h-4 w-4 animate-spin" />
-  if (step.status === 'failed' || step.status === 'cancelled' || step.status === 'timed-out')
-    return <AlertTriangle className="h-4 w-4" />
-  if (step.kind === 'command') return <TerminalSquare className="h-4 w-4" />
-  if (step.kind === 'file')
-    return step.fileStatus === 'created' ? <FilePlusIcon /> : <FileText className="h-4 w-4" />
-  if (step.kind === 'log') return <ListTodo className="h-4 w-4" />
-  if (step.kind === 'status') return <Rocket className="h-4 w-4" />
-  if (step.toolName === 'TodoWrite') return <ListTodo className="h-4 w-4" />
-  if (step.toolName === 'Read') return <FileText className="h-4 w-4" />
-  if (step.toolName === 'WebFetch' || step.toolName === 'WebSearch')
-    return <Globe2 className="h-4 w-4" />
-  if (step.toolName === 'Grep' || step.toolName === 'Glob') return <Search className="h-4 w-4" />
-  return <Pencil className="h-4 w-4" />
-}
-
-const FilePlusIcon: FC = () => (
-  <span className="relative grid h-4 w-4 place-items-center">
-    <FileText className="h-4 w-4" />
-    <Plus className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-white" />
+const CodeAgentTypingDots: FC = () => (
+  <span className="inline-flex shrink-0 items-center gap-1 pl-0.5" aria-hidden="true">
+    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400 [animation-delay:-0.2s]" />
+    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400 [animation-delay:-0.1s]" />
+    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400" />
   </span>
 )
-
-const CodeAgentDiagnosticsCard: FC<{ diagnostics: string }> = ({ diagnostics }) => {
-  const [open, setOpen] = useState(true)
-  return (
-    <div className="overflow-hidden rounded-lg border border-red-200 bg-white">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-red-700 hover:bg-red-50"
-      >
-        <span className="inline-flex items-center gap-2">
-          <AlertCircleIcon />
-          诊断输出
-        </span>
-        <ChevronDown
-          className={cn('h-4 w-4 shrink-0 text-red-300 transition-transform', open && 'rotate-180')}
-        />
-      </button>
-      {open && (
-        <pre className="max-h-56 overflow-auto border-t border-red-100 bg-neutral-950 px-3 py-2 text-xs leading-5 text-neutral-100">
-          {diagnostics}
-        </pre>
-      )}
-    </div>
-  )
-}
 
 const AgentArtifactsCard: FC<{ data: { items?: AgentArtifact[] } }> = ({ data }) => {
   const items = data.items ?? []
@@ -5439,21 +4554,6 @@ function guessLanguageFromPath(filePath: string): string {
   return map[ext] ?? ''
 }
 
-const AlertCircleIcon: FC = () => (
-  <span className="grid h-4 w-4 place-items-center rounded-full border border-neutral-300 text-[10px]">
-    !
-  </span>
-)
-
-function formatRunDuration(ms: number) {
-  if (!Number.isFinite(ms) || ms <= 0) return '0s'
-  const totalSeconds = Math.max(1, Math.round(ms / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  if (minutes <= 0) return `${seconds}s`
-  return `${minutes}m ${seconds}s`
-}
-
 function codeAgentStatusLabel(status: CodeAgentRunMetadata['status'], partialSuccess = false) {
   if (status === 'running') return '正在执行'
   if (status === 'completed') return '执行完成'
@@ -5469,34 +4569,12 @@ function groupChatDisplayTitle(sessionTitle?: string | null, workspaceName?: str
   return withoutSuffix || workspaceName?.trim() || 'Agent 群聊'
 }
 
-function logStreamLabel(stream: NonNullable<CodeAgentRunMetadata['logs']>[number]['stream']) {
-  if (stream === 'stderr') return '错误'
-  if (stream === 'event') return '事件'
-  return '输出'
-}
-
 function fileStatusLabel(status: CodeAgentRunMetadata['files'][number]['status']) {
   if (status === 'created') return '创建'
   if (status === 'modified') return '修改'
   if (status === 'deleted') return '删除'
   if (status === 'renamed') return '重命名'
   return '未跟踪'
-}
-
-function vscodeFileHref(filePath: string, cwd?: string) {
-  const absolutePath = absoluteEditorPath(filePath, cwd)
-  if (!absolutePath) return null
-  const normalized = absolutePath.replace(/\\/g, '/')
-  return `vscode://file/${encodeURI(normalized).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
-}
-
-function absoluteEditorPath(filePath: string, cwd?: string) {
-  const trimmed = filePath.trim()
-  if (!trimmed) return null
-  if (/^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith('/')) return trimmed
-  const root = cwd?.trim()
-  if (!root || (!/^[a-zA-Z]:[\\/]/.test(root) && !root.startsWith('/'))) return null
-  return `${root.replace(/[\\/]+$/, '')}/${trimmed.replace(/^[\\/]+/, '')}`
 }
 
 function TaskBoardCard({ data }: { data: any }) {
@@ -5995,18 +5073,20 @@ function closeUnterminatedCodeFence(text: string) {
 }
 
 const MarkdownText: FC = () => (
-  <MarkdownTextPrimitive
-    remarkPlugins={[remarkGfm]}
-    smooth={false}
-    preprocess={closeUnterminatedCodeFence}
-    components={{
-      pre: CodePre,
-      code: CodeToken,
-      CodeHeader,
-      SyntaxHighlighter: CodeSyntaxHighlighter,
-    }}
-    className="agenthub-markdown prose prose-neutral prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-code:before:content-none prose-code:after:content-none"
-  />
+  <div className="not-prose mt-1 inline-block w-fit max-w-full rounded-[20px] rounded-tl-md bg-[#f4f5f1] px-4 py-2.5 text-neutral-900 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+    <MarkdownTextPrimitive
+      remarkPlugins={[remarkGfm]}
+      smooth={false}
+      preprocess={closeUnterminatedCodeFence}
+      components={{
+        pre: CodePre,
+        code: CodeToken,
+        CodeHeader,
+        SyntaxHighlighter: CodeSyntaxHighlighter,
+      }}
+      className="agenthub-markdown prose prose-neutral prose-sm max-w-none prose-p:my-1.5 prose-ul:my-2 prose-code:before:content-none prose-code:after:content-none"
+    />
+  </div>
 )
 
 function normalizePreviewUrl(url?: string) {

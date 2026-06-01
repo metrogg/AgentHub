@@ -82,6 +82,7 @@ import com.agenthub.mobile.data.MobileWorkbenchCodingToolItem
 import com.agenthub.mobile.data.MobileWorkbenchRunSummary
 import com.agenthub.mobile.data.MobileWorkbenchSkillSummary
 import com.agenthub.mobile.data.MobileWorkbenchWorkspaceSummary
+import com.agenthub.mobile.data.TestModelRequest
 import com.agenthub.mobile.data.Workspace
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -93,22 +94,30 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonArray
 
-private val Hairline = Color(0xFFE8E8E8)
-private val PageBackground = Color(0xFFF5F5F5)
+// Telegram-inspired color palette
+private val Hairline = Color(0xFFE8EAED)
+private val PageBackground = Color(0xFFFFFFFF)
 private val PanelBackground = Color.White
-private val Ink = Color(0xFF111111)
-private val MutedText = Color(0xFF7A7A7A)
-private val WeChatGreen = Color(0xFF07C160)
-private val SoftFill = Color(0xFFEDEDED)
+private val Ink = Color(0xFF000000)
+private val MutedText = Color(0xFF8B9AA3)
+private val TgBlue = Color(0xFF3390EC)
+private val TgBlueLight = Color(0xFFD6E8FF)
+private val TgGreen = Color(0xFF4CAF50)
+private val TgSentBg = Color(0xFFEFFDDE)         // Light green for sent bubbles
+private val TgReceivedBg = Color(0xFFFFFFFF)     // White for received bubbles
+private val TgChatBg = Color(0xFFF0F2F5)         // Chat background
+private val SoftFill = Color(0xFFF0F2F5)
 private val WorkAmber = Color(0xFFF2A23A)
 private val ProfileGreenSoft = Color(0xFFEAF8EF)
-private val ProfileBlue = Color(0xFF2F80ED)
+private val ProfileBlue = Color(0xFF3390EC)
+private val TgUnreadBg = Color(0xFF3390EC)        // Unread badge blue
+private val TgOnlineGreen = Color(0xFF4DCD5E)     // Online indicator
 
 private enum class MobileTab(val label: String, val iconRes: Int) {
-    Messages("聊天", R.drawable.ic_mobile_tab_chat),
-    Agents("Agent通讯录", R.drawable.ic_mobile_tab_agents),
+    Messages("消息", R.drawable.ic_mobile_tab_chat),
+    Agents("通讯录", R.drawable.ic_mobile_tab_agents),
     Workbench("工作台", R.drawable.ic_mobile_tab_workbench),
-    Me("我的", R.drawable.ic_mobile_tab_me),
+    Me("设置", R.drawable.ic_mobile_tab_me),
 }
 
 @OptIn(ExperimentalAnimationApi::class)
@@ -130,9 +139,14 @@ fun ChatShell(
     onInstallCodingTools: () -> Unit,
     onRepairCodingTools: () -> Unit,
     onScanPairingQr: (String) -> Unit,
+    onFetchSettings: () -> Unit,
+    onUpdateSettings: (Map<String, String>) -> Unit,
+    onTestModel: (TestModelRequest) -> Unit,
+    onClearTestModelResult: () -> Unit,
 ) {
     var currentTab by remember { mutableStateOf(MobileTab.Messages) }
     var showSessions by remember { mutableStateOf(true) }
+    var workbenchSubScreen by remember { mutableStateOf<String?>(null) }
     val qrLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         val contents = result.contents
         if (!contents.isNullOrBlank()) onScanPairingQr(contents)
@@ -158,19 +172,33 @@ fun ChatShell(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(PageBackground),
+            .background(PanelBackground),
     ) {
         MobileTopBar(
             title = when {
+                currentTab == MobileTab.Workbench && workbenchSubScreen != null -> when (workbenchSubScreen) {
+                    "model-management" -> "模型管理"
+                    "coding-tools" -> "Coding Tools"
+                    "skills-market" -> "Skills 市场"
+                    "office" -> "办公室"
+                    else -> currentTab.label
+                }
                 currentTab != MobileTab.Messages -> currentTab.label
-                showSessions -> "Agent Hub"
+                showSessions -> "消息"
                 else -> state.selectedSession?.title.orEmpty().ifBlank { "对话" }
             },
             connected = state.connected,
-            showBack = currentTab == MobileTab.Messages && !showSessions,
+            showBack = (currentTab == MobileTab.Messages && !showSessions) ||
+                (currentTab == MobileTab.Workbench && workbenchSubScreen != null),
             conversationMode = currentTab == MobileTab.Messages && !showSessions,
             currentSession = state.selectedSession,
-            onBack = { showSessions = true },
+            onBack = {
+                if (currentTab == MobileTab.Workbench && workbenchSubScreen != null) {
+                    workbenchSubScreen = null
+                } else {
+                    showSessions = true
+                }
+            },
             onCreateSession = onCreateSession,
             onRefresh = onRefresh,
             onScanQr = ::scanQr,
@@ -230,11 +258,53 @@ fun ChatShell(
                         onOpenAgentContact = onOpenAgentContact,
                         onRefresh = onRefresh,
                     )
-                    MobileTab.Workbench -> WorkbenchScreen(
-                        state = state,
-                        onRefresh = onRefresh,
-                        onCreateSession = onCreateSession,
-                    )
+                    MobileTab.Workbench -> {
+                        val subScreen = workbenchSubScreen
+                        when (subScreen) {
+                            "model-management" -> ModelManagementScreen(
+                                state = state,
+                                onBack = { workbenchSubScreen = null },
+                                onFetchSettings = onFetchSettings,
+                                onUpdateSettings = onUpdateSettings,
+                                onTestModel = onTestModel,
+                                onClearTestResult = onClearTestModelResult,
+                                onRefresh = onRefresh,
+                            )
+                            "coding-tools" -> CodingToolsScreen(
+                                state = state,
+                                onBack = { workbenchSubScreen = null },
+                                onInstall = onInstallCodingTools,
+                                onRepair = onRepairCodingTools,
+                                onRefresh = onRefresh,
+                            )
+                            "skills-market" -> SkillsMarketScreen(
+                                state = state,
+                                onBack = { workbenchSubScreen = null },
+                                onRefresh = onRefresh,
+                            )
+                            "office" -> OfficeScreen(
+                                state = state,
+                                onBack = { workbenchSubScreen = null },
+                                onStartOffice = onStartOffice,
+                                onOpenFirewall = onOpenFirewall,
+                                onRefresh = onRefresh,
+                            )
+                            else -> WorkbenchScreenV2(
+                                state = state,
+                                onRefresh = onRefresh,
+                                onCreateSession = onCreateSession,
+                                onOpenWorkspaceGroupSession = onOpenWorkspaceGroupSession,
+                                onStartOffice = onStartOffice,
+                                onOpenFirewall = onOpenFirewall,
+                                onInstallCodingTools = onInstallCodingTools,
+                                onRepairCodingTools = onRepairCodingTools,
+                                onOpenModelManagement = { workbenchSubScreen = "model-management" },
+                                onOpenCodingTools = { workbenchSubScreen = "coding-tools" },
+                                onOpenSkillsMarket = { workbenchSubScreen = "skills-market" },
+                                onOpenOffice = { workbenchSubScreen = "office" },
+                            )
+                        }
+                    }
                     MobileTab.Me -> ProfileScreen(state = state, onDisconnect = onDisconnect, onScanQr = ::scanQr)
                 }
             }
@@ -245,6 +315,7 @@ fun ChatShell(
                     onSelect = { selected ->
                         currentTab = selected
                         if (selected == MobileTab.Messages) showSessions = true
+                        workbenchSubScreen = null
                     },
                 )
             }
@@ -269,28 +340,30 @@ private fun MobileTopBar(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .background(PanelBackground)
-            .border(width = 0.5.dp, color = Hairline)
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (showBack) {
-            TopIconButton(label = "‹", onClick = onBack)
-            Spacer(modifier = Modifier.width(8.dp))
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, color = Ink, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1)
-            Text(
-                if (connected) "电脑端在线" else "离线，可先浏览首页",
-                color = if (connected) WeChatGreen else MutedText,
-                fontSize = 11.sp,
-                maxLines = 1,
-            )
-        }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .background(PanelBackground)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (showBack) {
+                TopIconButton(label = "‹", onClick = onBack)
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, maxLines = 1)
+                if (conversationMode || !showBack) {
+                    Text(
+                        if (connected) "在线" else "离线",
+                        color = if (connected) TgOnlineGreen else MutedText,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                    )
+                }
+            }
         Box(modifier = Modifier.size(40.dp), contentAlignment = Alignment.Center) {
             TopBarActionButton(
                 conversationMode = conversationMode,
@@ -333,6 +406,14 @@ private fun MobileTopBar(
                 }
             }
         }
+        }
+        // Bottom border
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(Hairline),
+        )
     }
 
     if (confirmDelete) {
@@ -359,20 +440,17 @@ private fun MobileTopBar(
 
 @Composable
 private fun TopBarActionButton(conversationMode: Boolean, onClick: () -> Unit) {
-    val background = if (conversationMode) SoftFill else Color(0xFF2C2C2C)
-    val foreground = if (conversationMode) Ink else Color.White
     Box(
         modifier = Modifier
             .size(36.dp)
             .clip(CircleShape)
-            .background(background)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         if (conversationMode) {
-            MoreGlyph(color = foreground)
+            MoreGlyph(color = MutedText)
         } else {
-            PlusGlyph(color = foreground)
+            PlusGlyph(color = TgBlue)
         }
     }
 }
@@ -474,35 +552,41 @@ private fun SessionListScreen(
     var showArchived by remember { mutableStateOf(false) }
     val visibleSessions = sessions.filter { archivedSessionIds.contains(it.id) == showArchived }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(PageBackground)) {
+        // Telegram-style search bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "搜索",
+            Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(20.dp))
                     .background(SoftFill)
-                    .padding(horizontal = 14.dp, vertical = 9.dp),
-                color = MutedText,
-                fontSize = 14.sp,
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(
-                text = if (showArchived) "归档" else "当前",
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text("搜索", color = MutedText, fontSize = 15.sp)
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            // Archive toggle (pill-shaped)
+            Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(if (showArchived) Color(0xFFEAF3DD) else SoftFill)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (showArchived) TgBlueLight else Color.Transparent)
                     .clickable { showArchived = !showArchived }
-                    .padding(horizontal = 13.dp, vertical = 9.dp),
-                color = if (showArchived) WeChatGreen else Ink,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-            )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = if (showArchived) "归档" else "全部",
+                    color = if (showArchived) TgBlue else MutedText,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
         }
 
         LazyColumn(
@@ -541,29 +625,44 @@ private fun EmptySessionList(archived: Boolean, onCreateSession: () -> Unit, onR
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 28.dp, vertical = 42.dp),
+            .padding(horizontal = 40.dp, vertical = 60.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        AgentHubLogo(size = 58.dp)
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(TgBlueLight),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("💬", fontSize = 32.sp)
+        }
         Text(
-            if (archived) "暂无归档会话" else "还没有Agent联系人",
+            if (archived) "暂无归档会话" else "还没有消息",
             modifier = Modifier.padding(top = 16.dp),
             color = Ink,
-            fontWeight = FontWeight.Bold,
-            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 18.sp,
         )
         Text(
-            if (archived) "删除前可以先把不常用会话收进这里。" else "同步电脑端，点右上角 + 扫一扫。",
+            if (archived) "删除前可以先把不常用会话收进这里。" else "同步电脑端或创建新会话开始聊天",
             modifier = Modifier.padding(top = 8.dp),
             color = MutedText,
             fontSize = 14.sp,
-            lineHeight = 21.sp,
+            lineHeight = 20.sp,
         )
-        Row(modifier = Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onCreateSession, colors = ButtonDefaults.buttonColors(containerColor = Ink)) {
-                Text("新建")
+        Row(modifier = Modifier.padding(top = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(
+                onClick = onCreateSession,
+                colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                Text("新建会话")
             }
-            OutlinedButton(onClick = onRefresh) {
+            OutlinedButton(
+                onClick = onRefresh,
+                shape = RoundedCornerShape(20.dp),
+            ) {
                 Text("同步")
             }
         }
@@ -582,48 +681,85 @@ private fun SessionRow(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    // Simulated last message and unread count for display
+    val lastMessage = remember(session) {
+        when {
+            session.type == "group" -> "群聊消息"
+            else -> "点击开始对话"
+        }
+    }
+    val sessionTime = remember(session) { formatSessionTime(session.updatedAt) }
+    val unreadCount = remember(session) { 0 } // TODO: wire from real unread data
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (selected) Color(0xFFEAF3DD) else PanelBackground)
+            .background(if (selected) TgBlueLight else PanelBackground)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Circular avatar (Telegram style)
         SessionAvatar(session)
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Group icon indicator
+                if (session.type == "group") {
+                    Text("👥", fontSize = 13.sp)
+                    Spacer(modifier = Modifier.width(3.dp))
+                }
                 Text(
                     text = session.title.ifBlank { "未命名会话" },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     fontWeight = FontWeight.SemiBold,
                     color = Ink,
+                    fontSize = 16.sp,
                     modifier = Modifier.weight(1f),
                 )
-                Text("刚刚", color = MutedText, fontSize = 11.sp)
+                // Time on the right (Telegram style)
+                Text(sessionTime, color = if (unreadCount > 0) TgBlue else MutedText, fontSize = 12.sp)
             }
-            Text(
-                text = if (session.type == "group") "Agent 群聊" else "Agent 单聊",
-                modifier = Modifier.padding(top = 5.dp),
-                color = MutedText,
-                fontSize = 13.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                modifier = Modifier.padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Last message preview
+                Text(
+                    text = lastMessage,
+                    modifier = Modifier.weight(1f),
+                    color = MutedText,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // Unread badge (Telegram style)
+                if (unreadCount > 0) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(TgUnreadBg),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = if (unreadCount > 99) "99+" else unreadCount.toString(),
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
         }
+        // Long-press menu (hidden, activated on long click)
         Box {
-            Text(
-                text = "⋯",
+            Spacer(
                 modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .clickable { menuOpen = true }
-                    .padding(start = 8.dp, bottom = 7.dp),
-                color = MutedText,
-                fontSize = 24.sp,
+                    .size(1.dp)
+                    .clickable { menuOpen = true },
             )
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(text = { Text(if (archived) "移出归档" else "归档") }, onClick = {
@@ -662,18 +798,28 @@ private fun SessionRow(
 
 @Composable
 private fun MainTabBar(modifier: Modifier = Modifier, active: MobileTab, onSelect: (MobileTab) -> Unit) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(PanelBackground)
-            .border(0.5.dp, Hairline)
-            .navigationBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceAround,
-        verticalAlignment = Alignment.CenterVertically,
+    Column(
+        modifier = modifier.fillMaxWidth(),
     ) {
-        MobileTab.values().forEach { tab ->
-            TabItem(tab = tab, active = active == tab, onClick = { onSelect(tab) })
+        // Top border line
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(0.5.dp)
+                .background(Hairline),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(PageBackground)
+                .navigationBarsPadding()
+                .padding(horizontal = 0.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceAround,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MobileTab.values().forEach { tab ->
+                TabItem(tab = tab, active = active == tab, onClick = { onSelect(tab) })
+            }
         }
     }
 }
@@ -690,9 +836,9 @@ private fun TabItem(tab: MobileTab, active: Boolean, onClick: () -> Unit) {
         TabIcon(tab = tab, active = active)
         Text(
             text = tab.label,
-            modifier = Modifier.padding(top = 1.dp),
-            color = if (active) WeChatGreen else MutedText,
-            fontSize = 10.sp,
+            modifier = Modifier.padding(top = 2.dp),
+            color = if (active) TgBlue else MutedText,
+            fontSize = 11.sp,
             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
         )
     }
@@ -700,11 +846,11 @@ private fun TabItem(tab: MobileTab, active: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun TabIcon(tab: MobileTab, active: Boolean) {
-    val tint = if (active) WeChatGreen else MutedText
+    val tint = if (active) TgBlue else MutedText
     Image(
         painter = painterResource(tab.iconRes),
         contentDescription = tab.label,
-        modifier = Modifier.size(21.dp),
+        modifier = Modifier.size(24.dp),
         colorFilter = ColorFilter.tint(tint),
     )
 }
@@ -720,7 +866,7 @@ private fun ConversationScreen(
     val messages = state.messages + listOfNotNull(state.streamingMessage)
     val showHome = messages.isEmpty() && !state.agentTyping
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().background(TgChatBg)) {
         if (state.selectedSession == null && state.sessions.isNotEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 OutlinedButton(onClick = onOpenSessions) {
@@ -738,10 +884,10 @@ private fun ConversationScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = 118.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                    .padding(bottom = 108.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                item { Spacer(modifier = Modifier.height(12.dp)) }
+                item { Spacer(modifier = Modifier.height(8.dp)) }
                 items(messages, key = { it.id }) { message ->
                     MessageBubble(
                         message = message,
@@ -789,14 +935,32 @@ private fun ConversationScreen(
 
 @Composable
 private fun MobileHomeContent(modifier: Modifier) {
-    Column(modifier = modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Spacer(modifier = Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(TgBlueLight),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("🤖", fontSize = 32.sp)
+        }
+        Text(
+            text = "AgentHub",
+            modifier = Modifier.padding(top = 12.dp),
+            color = Ink,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
         Text(
             text = "有什么可以帮忙的？",
-            color = Ink,
-            fontSize = 27.sp,
-            lineHeight = 34.sp,
-            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 6.dp),
+            color = MutedText,
+            fontSize = 15.sp,
         )
         Spacer(modifier = Modifier.weight(1.6f))
     }
@@ -812,48 +976,105 @@ private fun AgentDirectoryScreen(
     val contacts = remember(state.contacts, state.workspaces) {
         state.contacts.sortedWith(
             compareBy<AgentContact> {
-                workspacesById[it.workspaceId]?.name.orEmpty()
+                it.name.ifBlank { "Z" }.take(1).uppercase()
             }.thenBy { it.name }.thenBy { it.role },
         )
     }
+    // Group contacts by first letter (Telegram-style)
+    val groupedContacts = remember(contacts) {
+        contacts.groupBy { contact ->
+            val name = contact.name.ifBlank { "Agent" }
+            val first = name.take(1).uppercase()
+            if (first.matches(Regex("[A-Z]"))) first else "#"
+        }
+    }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item {
-            FeatureHero(
-                title = "Agent 通讯录",
-                subtitle = if (state.connected) {
-                    "已同步 ${contacts.size} 个唯一联系人，点击即可打开对应私聊。"
-                } else {
-                    "连接电脑端后会自动同步电脑端的 Agent 通讯录。"
-                },
-                icon = "👥",
-                action = "同步通讯录",
-                onAction = onRefresh,
-            )
+    Column(modifier = Modifier.fillMaxSize().background(PageBackground)) {
+        // Search bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(SoftFill)
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text("搜索 Agent", color = MutedText, fontSize = 15.sp)
+            }
         }
+
         if (contacts.isEmpty()) {
-            item {
-                EmptyAgentDirectory(onRefresh = onRefresh)
-            }
+            EmptyAgentDirectory(onRefresh = onRefresh)
         } else {
-            item { SectionTitle("Agent") }
-            items(contacts, key = { it.uniqueKey() }) { contact ->
-                AgentContactRow(
-                    contact = contact,
-                    workspace = workspacesById[contact.workspaceId],
-                    hasSession = state.sessions.any { session ->
-                        sessionMatchesContact(session, contact)
-                    },
-                    onClick = { onOpenAgentContact(contact) },
-                )
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                // Header: synced count
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${contacts.size} 个 Agent",
+                            color = MutedText,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(
+                            "同步",
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable(onClick = onRefresh)
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                            color = TgBlue,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
+
+                // Grouped contacts with letter headers
+                groupedContacts.forEach { (letter, groupContacts) ->
+                    // Letter header
+                    item(key = "header_$letter") {
+                        Text(
+                            text = letter,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(SoftFill)
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            color = MutedText,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    // Contact rows
+                    items(groupContacts, key = { it.uniqueKey() }) { contact ->
+                        AgentContactRow(
+                            contact = contact,
+                            workspace = workspacesById[contact.workspaceId],
+                            hasSession = state.sessions.any { session ->
+                                sessionMatchesContact(session, contact)
+                            },
+                            onClick = { onOpenAgentContact(contact) },
+                        )
+                    }
+                }
+
+                item { Spacer(modifier = Modifier.height(84.dp)) }
             }
         }
-        item { Spacer(modifier = Modifier.height(84.dp)) }
     }
 }
 
@@ -862,31 +1083,39 @@ private fun EmptyAgentDirectory(onRefresh: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(PanelBackground)
-            .padding(horizontal = 18.dp, vertical = 28.dp),
+            .padding(horizontal = 40.dp, vertical = 60.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        AgentHubLogo(size = 52.dp)
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(TgBlueLight),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("👥", fontSize = 32.sp)
+        }
         Text(
-            "暂无 Agent",
-            modifier = Modifier.padding(top = 14.dp),
+            "暂无联系人",
+            modifier = Modifier.padding(top = 16.dp),
             color = Ink,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.SemiBold,
             fontSize = 18.sp,
         )
         Text(
-            "请先在电脑端创建工作区或 Agent，然后点击同步到手机端。",
+            "连接电脑端后会自动同步 Agent 通讯录",
             modifier = Modifier.padding(top = 8.dp),
             color = MutedText,
-            fontSize = 13.sp,
+            fontSize = 14.sp,
             lineHeight = 20.sp,
         )
-        OutlinedButton(
+        Button(
             onClick = onRefresh,
-            modifier = Modifier.padding(top = 16.dp),
+            modifier = Modifier.padding(top = 20.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+            shape = RoundedCornerShape(20.dp),
         ) {
-            Text("同步")
+            Text("同步通讯录")
         }
     }
 }
@@ -901,16 +1130,16 @@ private fun AgentContactRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
             .background(PanelBackground)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Circular avatar (Telegram style)
         Box(
             modifier = Modifier
-                .size(46.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .size(48.dp)
+                .clip(CircleShape)
                 .background(contactAvatarColor(contact)),
             contentAlignment = Alignment.Center,
         ) {
@@ -918,15 +1147,15 @@ private fun AgentContactRow(
                 contactAvatarLabel(contact),
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
+                fontSize = 18.sp,
             )
         }
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 contact.name.ifBlank { "Agent" },
                 color = Ink,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Medium,
                 fontSize = 16.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -936,29 +1165,22 @@ private fun AgentContactRow(
                     workspace?.name?.takeIf { it.isNotBlank() },
                     contact.role.takeIf { it.isNotBlank() } ?: contact.roleType,
                 ).joinToString(" · "),
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = 3.dp),
                 color = MutedText,
-                fontSize = 12.sp,
+                fontSize = 14.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (contact.description.isNotBlank()) {
-                Text(
-                    contact.description,
-                    modifier = Modifier.padding(top = 3.dp),
-                    color = Color(0xFF666666),
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
-        Text(
-            if (hasSession) "继续" else "打开",
-            color = WeChatGreen,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
+        // Online indicator or status
+        if (hasSession) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(TgOnlineGreen),
+            )
+        }
     }
 }
 
@@ -967,35 +1189,90 @@ private fun WorkbenchScreen(state: MobileUiState, onRefresh: () -> Unit, onCreat
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .background(SoftFill),
     ) {
+        // Stats cards
         item {
-            FeatureHero(
-                title = "移动工作台",
-                subtitle = "移植桌面端的运行历史、执行日志、模型、Coding Tools、Skills 和办公室入口，手机端先做轻量查看与触发。",
-                icon = "⬡",
-                action = "同步",
-                onAction = onRefresh,
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(PanelBackground)
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 MetricCard("会话", state.sessions.size.toString(), Modifier.weight(1f))
-                MetricCard("在线", if (state.connected) "1" else "0", Modifier.weight(1f))
-                MetricCard("流式", if (state.streamingMessage != null) "ON" else "OFF", Modifier.weight(1f))
+                MetricCard("在线", if (state.connected) "✓" else "—", Modifier.weight(1f))
+                MetricCard("Agent", state.contacts.size.toString(), Modifier.weight(1f))
             }
         }
-        items(
-            listOf("运行历史", "执行日志", "模型管理", "Coding Tools", "Skills 市场", "办公室"),
-        ) { title ->
-            QuickEntry(title, "桌面端功能的移动入口", "›", onRefresh)
-        }
+
         item {
-            QuickEntry("新任务", "发给电脑端执行", "+", onCreateSession)
-            Spacer(modifier = Modifier.height(84.dp))
+            Spacer(modifier = Modifier.fillMaxWidth().height(24.dp).background(SoftFill))
         }
+
+        // Quick entries (Telegram-style settings list)
+        item {
+            Column(modifier = Modifier.background(PanelBackground)) {
+                WorkbenchMenuEntry(title = "运行历史", icon = "📋", onClick = onRefresh)
+                WorkbenchMenuDivider()
+                WorkbenchMenuEntry(title = "执行日志", icon = "📝", onClick = onRefresh)
+                WorkbenchMenuDivider()
+                WorkbenchMenuEntry(title = "模型管理", icon = "🤖", onClick = onRefresh)
+                WorkbenchMenuDivider()
+                WorkbenchMenuEntry(title = "Coding Tools", icon = "🛠", onClick = onRefresh)
+                WorkbenchMenuDivider()
+                WorkbenchMenuEntry(title = "Skills 市场", icon = "⚡", onClick = onRefresh)
+                WorkbenchMenuDivider()
+                WorkbenchMenuEntry(title = "办公室", icon = "🏠", onClick = onRefresh)
+            }
+        }
+
+        item {
+            Spacer(modifier = Modifier.fillMaxWidth().height(24.dp).background(SoftFill))
+        }
+
+        // New task button
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(PanelBackground)
+                    .clickable(onClick = onCreateSession)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+            ) {
+                Text("＋ 新任务", color = TgBlue, fontSize = 15.sp)
+            }
+        }
+
+        item { Spacer(modifier = Modifier.height(92.dp)) }
     }
+}
+
+@Composable
+private fun WorkbenchMenuEntry(title: String, icon: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(icon, fontSize = 20.sp)
+        Spacer(modifier = Modifier.width(14.dp))
+        Text(title, color = Ink, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Text("›", color = MutedText, fontSize = 18.sp)
+    }
+}
+
+@Composable
+private fun WorkbenchMenuDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 50.dp)
+            .height(0.5.dp)
+            .background(Hairline),
+    )
 }
 
 @Composable
@@ -1008,6 +1285,10 @@ private fun WorkbenchScreenV2(
     onOpenFirewall: () -> Unit,
     onInstallCodingTools: () -> Unit,
     onRepairCodingTools: () -> Unit,
+    onOpenModelManagement: () -> Unit,
+    onOpenCodingTools: () -> Unit,
+    onOpenSkillsMarket: () -> Unit,
+    onOpenOffice: () -> Unit,
 ) {
     val workbench = state.workbench
     val workspaceItems = workbench?.workspaces ?: fallbackWorkbenchWorkspaces(state)
@@ -1062,32 +1343,35 @@ private fun WorkbenchScreenV2(
                 RunSummaryCard(run = run)
             }
         }
-        item { WorkbenchSectionHeader("Coding Tools", "本机 CLI 探测与执行状态") }
+        item { WorkbenchSectionHeader("Coding Tools", "本机 CLI 探测与执行状态 · 点击查看详情", onClick = onOpenCodingTools) }
         item {
             CodingToolsCard(
                 items = toolItems,
                 loading = state.workbenchLoading,
                 onInstall = onInstallCodingTools,
                 onRepair = onRepairCodingTools,
+                onClick = onOpenCodingTools,
             )
         }
-        item { WorkbenchSectionHeader("Skills", "安装与本地发现") }
+        item { WorkbenchSectionHeader("Skills", "安装与本地发现 · 点击查看详情", onClick = onOpenSkillsMarket) }
         item {
             SkillsCard(
                 skills = skills,
                 onRefresh = onRefresh,
+                onClick = onOpenSkillsMarket,
             )
         }
-        item { WorkbenchSectionHeader("模型与运行时", "LLM 连接状态") }
+        item { WorkbenchSectionHeader("模型与运行时", "LLM 连接状态 · 点击查看详情", onClick = onOpenModelManagement) }
         item {
             RuntimeInfoCard(
                 provider = workbench?.runtime?.provider.orEmpty(),
                 model = workbench?.runtime?.model.orEmpty(),
                 source = workbench?.runtime?.source.orEmpty(),
                 apiKeyConfigured = workbench?.runtime?.apiKeyConfigured == true,
+                onClick = onOpenModelManagement,
             )
         }
-        item { WorkbenchSectionHeader("办公室与网络", "Star Office 与局域网连通性") }
+        item { WorkbenchSectionHeader("办公室与网络", "Star Office 与局域网连通性 · 点击查看详情", onClick = onOpenOffice) }
         item {
             OfficeNetworkCard(
                 officeRunning = workbench?.office?.running == true,
@@ -1096,6 +1380,7 @@ private fun WorkbenchScreenV2(
                 networkMessage = workbench?.connectivity?.message.orEmpty(),
                 onStartOffice = onStartOffice,
                 onOpenFirewall = onOpenFirewall,
+                onClick = onOpenOffice,
             )
         }
         item {
@@ -1106,8 +1391,13 @@ private fun WorkbenchScreenV2(
 }
 
 @Composable
-private fun WorkbenchSectionHeader(title: String, subtitle: String) {
-    Column(modifier = Modifier.padding(horizontal = 4.dp)) {
+private fun WorkbenchSectionHeader(title: String, subtitle: String, onClick: (() -> Unit)? = null) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 4.dp),
+    ) {
         Text(title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         Text(
             subtitle,
@@ -1188,7 +1478,7 @@ private fun WorkspaceSummaryCard(
                 )
             }
             TextButton(onClick = onOpenGroup) {
-                Text("群聊", color = WeChatGreen)
+                Text("群聊", color = TgBlue)
             }
         }
         Text(
@@ -1252,12 +1542,14 @@ private fun CodingToolsCard(
     loading: Boolean,
     onInstall: () -> Unit,
     onRepair: () -> Unit,
+    onClick: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(PanelBackground)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -1342,12 +1634,13 @@ private fun CodingToolRow(tool: MobileWorkbenchCodingToolItem) {
 }
 
 @Composable
-private fun SkillsCard(skills: List<MobileWorkbenchSkillSummary>, onRefresh: () -> Unit) {
+private fun SkillsCard(skills: List<MobileWorkbenchSkillSummary>, onRefresh: () -> Unit, onClick: (() -> Unit)? = null) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(PanelBackground)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -1356,7 +1649,7 @@ private fun SkillsCard(skills: List<MobileWorkbenchSkillSummary>, onRefresh: () 
                 Text("Skills", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 Text("已安装技能与本地发现结果", color = MutedText, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
             }
-            TextButton(onClick = onRefresh) { Text("同步", color = WeChatGreen) }
+            TextButton(onClick = onRefresh) { Text("同步", color = TgBlue) }
         }
         if (skills.isEmpty()) {
             Text("暂无技能。可以在电脑端安装后同步到手机查看。", color = MutedText, fontSize = 12.sp)
@@ -1381,7 +1674,7 @@ private fun SkillRow(skill: MobileWorkbenchSkillSummary) {
         Box(
             modifier = Modifier
                 .size(34.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(CircleShape)
                 .background(ProfileBlue),
             contentAlignment = Alignment.Center,
         ) {
@@ -1408,12 +1701,14 @@ private fun RuntimeInfoCard(
     model: String,
     source: String,
     apiKeyConfigured: Boolean,
+    onClick: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(PanelBackground)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -1440,12 +1735,14 @@ private fun OfficeNetworkCard(
     networkMessage: String,
     onStartOffice: () -> Unit,
     onOpenFirewall: () -> Unit,
+    onClick: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(PanelBackground)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -1455,7 +1752,7 @@ private fun OfficeNetworkCard(
                 Text(
                     if (officeRunning) "Star Office 正在运行" else "Star Office 未启动",
                     modifier = Modifier.padding(top = 3.dp),
-                    color = if (officeRunning) WeChatGreen else MutedText,
+                    color = if (officeRunning) TgBlue else MutedText,
                     fontSize = 12.sp,
                 )
             }
@@ -1471,7 +1768,7 @@ private fun OfficeNetworkCard(
             Button(
                 onClick = onStartOffice,
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = WeChatGreen),
+                colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
             ) {
                 Text("启动办公室")
             }
@@ -1525,70 +1822,196 @@ private fun ProfileScreen(state: MobileUiState, onDisconnect: () -> Unit, onScan
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFF7F8FA))
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .background(SoftFill),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        item { Spacer(modifier = Modifier.height(6.dp)) }
+        // Profile hero section (Telegram-style big avatar)
         item {
-            ProfileHeroCard(
-                connected = state.connected,
-                baseUrl = state.connection?.baseUrl ?: "未连接电脑端",
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ProfileMetricTile(
-                    label = "会话",
-                    value = state.sessions.size.toString(),
-                    modifier = Modifier.weight(1f),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(PanelBackground)
+                    .padding(vertical = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                // Big circular avatar
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(CircleShape)
+                            .background(TgBlue),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("AH", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 28.sp)
+                    }
+                    // Online indicator
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(if (state.connected) TgOnlineGreen else MutedText)
+                            .border(3.dp, PanelBackground, CircleShape),
+                    )
+                }
+                Text(
+                    "AgentHub Mobile",
+                    modifier = Modifier.padding(top = 12.dp),
+                    color = Ink,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 20.sp,
                 )
-                ProfileMetricTile(
-                    label = "连接",
-                    value = if (state.connected) "在线" else "离线",
-                    modifier = Modifier.weight(1f),
-                    accent = if (state.connected) WeChatGreen else MutedText,
-                )
-                ProfileMetricTile(
-                    label = "流式",
-                    value = if (state.streamingMessage != null) "ON" else "OFF",
-                    modifier = Modifier.weight(1f),
-                    accent = if (state.streamingMessage != null) ProfileBlue else MutedText,
+                Text(
+                    if (state.connected) "已连接 · ${state.connection?.deviceName ?: "电脑端"}" else "未连接",
+                    modifier = Modifier.padding(top = 4.dp),
+                    color = if (state.connected) TgOnlineGreen else MutedText,
+                    fontSize = 14.sp,
                 )
             }
         }
+
+        // Stats row
         item {
-            ProfileInfoCard(
-                rows = listOf(
-                    "设备名" to (state.connection?.deviceName ?: "Android"),
-                    "连接状态" to if (state.connected) "电脑端在线" else "未连接",
-                    "服务地址" to (state.connection?.baseUrl ?: "等待扫码配对"),
-                ),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(PanelBackground)
+                    .padding(horizontal = 24.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                ProfileStat("会话", state.sessions.size.toString())
+                ProfileStat("状态", if (state.connected) "在线" else "离线")
+                ProfileStat("Agent", state.contacts.size.toString())
+            }
         }
+
+        // Spacer
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                ProfilePrimaryAction(
-                    text = "扫码连接电脑端",
+            Spacer(modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .background(SoftFill))
+        }
+
+        // Info section
+        item {
+            Column(modifier = Modifier.background(PanelBackground)) {
+                ProfileSettingsRow(
+                    label = "设备名",
+                    value = state.connection?.deviceName ?: "Android",
+                )
+                ProfileSettingsDivider()
+                ProfileSettingsRow(
+                    label = "连接状态",
+                    value = if (state.connected) "电脑端在线" else "未连接",
+                )
+                ProfileSettingsDivider()
+                ProfileSettingsRow(
+                    label = "服务地址",
+                    value = state.connection?.baseUrl ?: "等待扫码配对",
+                )
+            }
+        }
+
+        // Spacer
+        item {
+            Spacer(modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .background(SoftFill))
+        }
+
+        // Actions section
+        item {
+            Column(modifier = Modifier.background(PanelBackground)) {
+                ProfileSettingsAction(
+                    label = "扫码连接电脑端",
+                    icon = "📷",
+                    accent = true,
                     onClick = onScanQr,
                 )
-                ProfileSecondaryAction(
-                    text = "断开电脑端",
+                ProfileSettingsDivider()
+                ProfileSettingsAction(
+                    label = "断开电脑端",
+                    icon = "🔌",
+                    accent = false,
                     enabled = state.connection != null,
                     onClick = onDisconnect,
                 )
             }
         }
+
+        // Info text
         item {
             Text(
                 text = if (state.connected) "手机端会跟随电脑端实时同步会话、消息和 Agent 状态。" else "打开电脑端设置里的移动端连接，扫码后即可同步。",
                 color = MutedText,
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
-                modifier = Modifier.padding(start = 2.dp, top = 2.dp, end = 2.dp),
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
             )
         }
         item { Spacer(modifier = Modifier.height(92.dp)) }
+    }
+}
+
+@Composable
+private fun ProfileStat(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, color = Ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text(label, modifier = Modifier.padding(top = 2.dp), color = MutedText, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun ProfileSettingsRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = Ink, fontSize = 15.sp, modifier = Modifier.width(80.dp))
+        Text(
+            value,
+            color = MutedText,
+            fontSize = 15.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun ProfileSettingsDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp)
+            .height(0.5.dp)
+            .background(Hairline),
+    )
+}
+
+@Composable
+private fun ProfileSettingsAction(label: String, icon: String, accent: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(icon, fontSize = 20.sp)
+        Spacer(modifier = Modifier.width(14.dp))
+        Text(
+            label,
+            color = if (accent) TgBlue else if (enabled) Ink else MutedText,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Normal,
+        )
     }
 }
 
@@ -1597,20 +2020,20 @@ private fun FeatureHero(title: String, subtitle: String, icon: String, action: S
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
             .background(PanelBackground)
-            .padding(18.dp),
+            .padding(horizontal = 16.dp, vertical = 16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(icon, fontSize = 24.sp, color = Ink)
-            Spacer(modifier = Modifier.width(12.dp))
-            Text(title, color = Ink, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Text(icon, fontSize = 20.sp)
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(title, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
         }
-        Text(subtitle, modifier = Modifier.padding(top = 10.dp), color = MutedText, fontSize = 14.sp, lineHeight = 21.sp)
+        Text(subtitle, modifier = Modifier.padding(top = 8.dp), color = MutedText, fontSize = 14.sp, lineHeight = 20.sp)
         Button(
             onClick = onAction,
-            modifier = Modifier.padding(top = 14.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Ink),
+            modifier = Modifier.padding(top = 12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+            shape = RoundedCornerShape(20.dp),
         ) {
             Text(action)
         }
@@ -1621,11 +2044,12 @@ private fun FeatureHero(title: String, subtitle: String, icon: String, action: S
 private fun MetricCard(label: String, value: String, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(PanelBackground)
+            .clip(RoundedCornerShape(10.dp))
+            .background(SoftFill)
             .padding(14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(value, color = Ink, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Text(value, color = TgBlue, fontWeight = FontWeight.Bold, fontSize = 22.sp)
         Text(label, modifier = Modifier.padding(top = 4.dp), color = MutedText, fontSize = 12.sp)
     }
 }
@@ -1655,31 +2079,37 @@ private fun ProfileHeroCard(connected: Boolean, baseUrl: String) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
             .background(PanelBackground)
-            .border(0.5.dp, Hairline, RoundedCornerShape(22.dp))
             .padding(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box {
-                AgentHubLogo(size = 58.dp)
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(TgBlue),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("AH", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                }
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .size(16.dp)
                         .clip(CircleShape)
-                        .background(if (connected) WeChatGreen else MutedText)
+                        .background(if (connected) TgOnlineGreen else MutedText)
                         .border(2.dp, PanelBackground, CircleShape),
                 )
             }
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("AgentHub Mobile", color = Ink, fontWeight = FontWeight.Bold, fontSize = 22.sp, maxLines = 1)
+                Text("AgentHub Mobile", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1)
                 Text(
                     baseUrl,
                     modifier = Modifier.padding(top = 2.dp),
                     color = MutedText,
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1687,24 +2117,24 @@ private fun ProfileHeroCard(connected: Boolean, baseUrl: String) {
         }
         Row(
             modifier = Modifier
-                .padding(top = 16.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(if (connected) ProfileGreenSoft else SoftFill)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(top = 14.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (connected) TgBlueLight else SoftFill)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(if (connected) WeChatGreen else MutedText),
+                    .background(if (connected) TgOnlineGreen else MutedText),
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                if (connected) "电脑端在线，移动端已接入" else "等待扫码连接电脑端",
-                color = if (connected) Color(0xFF14783C) else MutedText,
+                if (connected) "电脑端在线" else "等待扫码连接电脑端",
+                color = if (connected) TgBlue else MutedText,
                 fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Medium,
             )
         }
     }
@@ -1781,7 +2211,7 @@ private fun ProfilePrimaryAction(text: String, onClick: () -> Unit) {
             .fillMaxWidth()
             .height(48.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(WeChatGreen)
+            .background(TgBlue)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -1822,50 +2252,78 @@ private fun MobileChatComposer(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(PanelBackground)
+            .background(PageBackground)
             .border(0.5.dp, Hairline)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = 6.dp, vertical = 6.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
-        ComposerRoundButton(label = "+", onClick = {})
+        // Attach button (Telegram style)
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .clickable { },
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(modifier = Modifier.size(22.dp)) {
+                val stroke = 2.2.dp.toPx()
+                val cx = size.width / 2f
+                val cy = size.height / 2f
+                // Paperclip icon (simplified)
+                drawLine(MutedText, Offset(cx - 5.dp.toPx(), cy), Offset(cx + 5.dp.toPx(), cy), stroke, StrokeCap.Round)
+                drawLine(MutedText, Offset(cx, cy - 5.dp.toPx()), Offset(cx, cy + 5.dp.toPx()), stroke, StrokeCap.Round)
+            }
+        }
+
+        // Text input (Telegram-style rounded)
         Box(
             modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 8.dp)
-                .clip(RoundedCornerShape(18.dp))
+                .padding(horizontal = 4.dp)
+                .clip(RoundedCornerShape(20.dp))
                 .background(SoftFill)
-                .padding(horizontal = 12.dp, vertical = 9.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 24.dp, max = 92.dp),
+                    .heightIn(min = 20.dp, max = 100.dp),
                 textStyle = TextStyle(color = Ink, fontSize = 16.sp, lineHeight = 22.sp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
                 decorationBox = { innerTextField ->
                     Box {
                         if (value.isBlank()) {
-                            Text("发消息给 AgentHub", color = MutedText, fontSize = 15.sp)
+                            Text("消息", color = MutedText, fontSize = 16.sp)
                         }
                         innerTextField()
                     }
                 },
             )
         }
-        ComposerRoundButton(label = "@", onClick = {})
-        Spacer(modifier = Modifier.width(8.dp))
+
+        // Send button (Telegram style - round blue)
         Box(
             modifier = Modifier
                 .size(38.dp)
                 .clip(CircleShape)
-                .background(if (canSend) WeChatGreen else Color(0xFFE5E5E5))
+                .background(if (canSend) TgBlue else Color.Transparent)
                 .clickable(enabled = canSend, onClick = onSend),
             contentAlignment = Alignment.Center,
         ) {
-            Text("↑", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            if (canSend) {
+                Text("↑", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            } else {
+                // Microphone icon placeholder
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(MutedText.copy(alpha = 0.3f)),
+                )
+            }
         }
     }
 }
@@ -1927,7 +2385,7 @@ private fun ChatComposer(
                 modifier = Modifier
                     .size(38.dp)
                     .clip(CircleShape)
-                    .background(if (value.isBlank()) Color(0xFFE8E8E5) else WeChatGreen)
+                    .background(if (value.isBlank()) Color(0xFFE8E8E5) else TgBlue)
                     .clickable(enabled = value.isNotBlank(), onClick = onSend),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1960,39 +2418,90 @@ private fun MessageBubble(
     val artifacts = remember(message.metadata, streamingCodeAgentRun, workspaceId) {
         readArtifacts(message.metadata, streamingCodeAgentRun, workspaceId)
     }
+    val messageTime = remember(message) {
+        try {
+            message.createdAt?.substringAfter('T')?.take(5) ?: ""
+        } catch (_: Exception) { "" }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 18.dp),
+            .padding(horizontal = 8.dp, vertical = 2.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
+        if (!isUser) {
+            // Agent avatar (small, circular)
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(TgBlue),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    senderLabel(message).take(1),
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                )
+            }
+            Spacer(modifier = Modifier.width(6.dp))
+        }
+
         Column(
             modifier = Modifier
-                .fillMaxWidth(0.86f)
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (isUser) Color(0xFF95EC69) else PanelBackground)
+                .fillMaxWidth(0.78f)
+                .clip(RoundedCornerShape(
+                    topStart = if (isUser) 16.dp else 4.dp,
+                    topEnd = if (isUser) 4.dp else 16.dp,
+                    bottomStart = 16.dp,
+                    bottomEnd = 16.dp,
+                ))
+                .background(if (isUser) TgSentBg else TgReceivedBg)
                 .border(
-                    width = if (streaming && !isUser) 1.dp else 0.dp,
-                    color = if (streaming && !isUser) WeChatGreen.copy(alpha = 0.45f) else Color.Transparent,
-                    shape = RoundedCornerShape(12.dp),
+                    width = if (streaming && !isUser) 1.dp else if (!isUser) 0.5.dp else 0.dp,
+                    color = if (streaming && !isUser) TgBlue.copy(alpha = 0.45f) else if (!isUser) Hairline else Color.Transparent,
+                    shape = RoundedCornerShape(
+                        topStart = if (isUser) 16.dp else 4.dp,
+                        topEnd = if (isUser) 4.dp else 16.dp,
+                        bottomStart = 16.dp,
+                        bottomEnd = 16.dp,
+                    ),
                 )
-                .padding(14.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
-            Text(
-                text = if (isUser) "我" else senderLabel(message),
-                color = MutedText,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = message.content.ifBlank { " " },
-                modifier = Modifier.padding(top = 6.dp),
-                color = Ink,
-                lineHeight = 20.sp,
-            )
+            // Sender name for agent messages
+            if (!isUser) {
+                Text(
+                    text = senderLabel(message),
+                    color = TgBlue,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Row(
+                modifier = Modifier.padding(top = if (isUser) 2.dp else 4.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Text(
+                    text = message.content.ifBlank { " " },
+                    modifier = Modifier.weight(1f),
+                    color = Ink,
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = messageTime,
+                    color = if (isUser) Color(0xFF6DBF5D) else MutedText,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(bottom = 1.dp),
+                )
+            }
             if (streaming && !isUser) {
                 StreamingStatusBar(
-                    text = if (artifacts.isEmpty()) "正在实时输出" else "正在生成产物，可快速预览",
+                    text = if (artifacts.isEmpty()) "正在输入..." else "正在生成产物...",
                 )
             }
             if (artifacts.isNotEmpty()) {
@@ -2006,20 +2515,20 @@ private fun MessageBubble(
 private fun StreamingStatusBar(text: String) {
     Row(
         modifier = Modifier
-            .padding(top = 10.dp)
+            .padding(top = 6.dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(Color(0xFFEAF3DD))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .background(TgBlueLight)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(7.dp)
+                .size(6.dp)
                 .clip(CircleShape)
-                .background(WeChatGreen),
+                .background(TgBlue),
         )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(text, color = WeChatGreen, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Spacer(modifier = Modifier.width(5.dp))
+        Text(text, color = TgBlue, fontSize = 11.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -2028,24 +2537,37 @@ private fun TypingIndicator() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 18.dp),
+            .padding(horizontal = 8.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.Start,
     ) {
+        // Agent avatar
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(TgBlue),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("A", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        }
+        Spacer(modifier = Modifier.width(6.dp))
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(PanelBackground)
-                .padding(horizontal = 14.dp, vertical = 11.dp),
+                .clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
+                .background(TgReceivedBg)
+                .border(0.5.dp, Hairline, RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Animated dots
+            Text("正在输入", color = TgBlue, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(modifier = Modifier.width(4.dp))
             Box(
                 modifier = Modifier
-                    .size(8.dp)
+                    .size(6.dp)
                     .clip(CircleShape)
-                    .background(WeChatGreen),
+                    .background(TgBlue),
             )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Agent 正在思考...", color = MutedText, fontSize = 13.sp)
         }
     }
 }
@@ -2098,7 +2620,7 @@ private fun ArtifactPreviewCard(artifact: MobileArtifact, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Text("预览", color = WeChatGreen, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Text("预览", color = TgBlue, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -2158,7 +2680,7 @@ private fun ArtifactPreviewOverlay(
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = absoluteUrl != null, onClick = ::openExternal)
                     .padding(horizontal = 8.dp, vertical = 7.dp),
-                color = if (absoluteUrl != null) WeChatGreen else MutedText,
+                color = if (absoluteUrl != null) TgBlue else MutedText,
                 fontSize = 14.sp,
             )
         }
@@ -2264,7 +2786,7 @@ private fun DocumentPreviewPlaceholder(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 22.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = WeChatGreen),
+            colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
         ) {
             Text("打开预览")
         }
@@ -2278,21 +2800,21 @@ private fun AgentHubLogo(size: androidx.compose.ui.unit.Dp) {
         contentDescription = "AgentHub",
         modifier = Modifier
             .size(size)
-            .clip(RoundedCornerShape(size / 3)),
+            .clip(CircleShape),
     )
 }
 
 @Composable
 private fun SessionAvatar(session: Session) {
     val color = when {
-        session.type == "group" -> Ink
-        session.workspaceAgentId != null -> WeChatGreen
+        session.type == "group" -> Color(0xFF5B7FB5)
+        session.workspaceAgentId != null -> TgBlue
         else -> WorkAmber
     }
     Box(
         modifier = Modifier
-            .size(46.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .size(52.dp)
+            .clip(CircleShape)
             .background(color),
         contentAlignment = Alignment.Center,
     ) {
@@ -2300,7 +2822,7 @@ private fun SessionAvatar(session: Session) {
             text = session.title.ifBlank { "A" }.take(1).uppercase(),
             color = Color.White,
             fontWeight = FontWeight.Bold,
-            fontSize = 17.sp,
+            fontSize = 20.sp,
         )
     }
 }
@@ -2310,14 +2832,25 @@ private fun contactAvatarColor(contact: AgentContact): Color {
     if (hexColor.startsWith('#') && hexColor.length == 7) {
         runCatching { return Color(android.graphics.Color.parseColor(hexColor)) }
     }
+    // Telegram-style avatar colors (vibrant but not harsh)
     return when (contact.runtimeType) {
-        "code-agent" -> WorkAmber
-        "mcp" -> Color(0xFF576B95)
+        "code-agent" -> Color(0xFFE17076)   // Red-ish
+        "mcp" -> Color(0xFF7BC862)          // Green
         else -> when (contact.roleType) {
-            "orchestrator" -> Ink
-            "reviewer", "verifier" -> Color(0xFF576B95)
-            "coder" -> WorkAmber
-            else -> WeChatGreen
+            "orchestrator" -> Color(0xFF6EC9CB)  // Teal
+            "reviewer", "verifier" -> Color(0xFF65AADD)  // Blue
+            "coder" -> Color(0xFFE8A04D)    // Orange
+            "planner" -> Color(0xFFB694E2)  // Purple
+            else -> {
+                // Hash name to pick a consistent color
+                val colors = listOf(
+                    Color(0xFFE17076), Color(0xFFE8A04D), Color(0xFF7BC862),
+                    Color(0xFF65AADD), Color(0xFF6EC9CB), Color(0xFFB694E2),
+                    Color(0xFFEE7AAE),
+                )
+                val index = (contact.name.hashCode().and(0x7FFFFFFF)) % colors.size
+                colors[index]
+            }
         }
     }
 }
@@ -2368,9 +2901,12 @@ private fun TopIconButton(label: String, onClick: () -> Unit) {
 private fun SectionTitle(text: String) {
     Text(
         text = text,
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SoftFill)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
         color = MutedText,
-        fontSize = 12.sp,
+        fontSize = 14.sp,
         fontWeight = FontWeight.SemiBold,
     )
 }
@@ -2543,6 +3079,25 @@ private fun absoluteArtifactUrl(baseUrl: String?, url: String?): String? {
 
 private fun encodeUrl(value: String): String {
     return URLEncoder.encode(value, "UTF-8")
+}
+
+private fun formatSessionTime(updatedAt: String?): String {
+    if (updatedAt.isNullOrBlank()) return ""
+    return try {
+        val datePart = updatedAt.substringBefore('T')
+        val timePart = updatedAt.substringAfter('T').take(5)
+        val today = java.time.LocalDate.now().toString()
+        when (datePart) {
+            today -> timePart  // Show time for today
+            else -> {
+                val month = datePart.substring(5, 7).toIntOrNull() ?: 0
+                val day = datePart.substring(8, 10).toIntOrNull() ?: 0
+                "$month/$day"
+            }
+        }
+    } catch (_: Exception) {
+        updatedAt.take(10)
+    }
 }
 
 private fun senderLabel(message: Message): String {

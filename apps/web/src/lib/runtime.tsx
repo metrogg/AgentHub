@@ -43,6 +43,9 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     message.metadata && 'memberProposals' in (message.metadata as Record<string, unknown>)
       ? { ...(message.metadata as Record<string, unknown>), messageId: message.id, content: message.content }
       : null
+  const codeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun)
+    ? message.metadata.codeAgentRun
+    : null
   const agentName =
     message.senderType === 'agent' &&
     message.metadata &&
@@ -50,14 +53,18 @@ function toThreadMessage(message: Message): ThreadMessageLike {
       ? message.metadata.agentName
       : null
   const senderLabel = agentName
-  const displayContent =
+  const rawDisplayContent =
     message.senderType === 'user' && typeof message.metadata?.displayContent === 'string'
       ? message.metadata.displayContent
       : message.content
-  const text = senderLabel ? `**${senderLabel}**\n\n${displayContent}` : displayContent
-  const codeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun)
-    ? message.metadata.codeAgentRun
-    : null
+  const finalCodeAgentContent =
+    typeof codeAgentRun?.finalMessage === 'string' ? codeAgentRun.finalMessage.trim() : ''
+  const displayContent = finalCodeAgentContent || rawDisplayContent
+  const text = senderLabel
+    ? displayContent.trim()
+      ? `**${senderLabel}**\n\n${displayContent}`
+      : `**${senderLabel}**`
+    : displayContent
   const artifacts = readArtifacts(message.metadata?.artifacts, codeAgentRun)
   const artifactPart = artifacts.length
     ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: artifacts } }]
@@ -189,9 +196,11 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
       const streamingText =
         streamingSenderLabel && streamingMessage.content.trim()
           ? `**${streamingSenderLabel}**\n\n${streamingMessage.content}`
-          : streamingSenderLabel
-            ? `**${streamingSenderLabel}**`
-            : streamingMessage.content
+          : streamingCodeAgentRun
+            ? ''
+            : streamingSenderLabel
+              ? `**${streamingSenderLabel}**`
+              : streamingMessage.content
       list.push({
         id: streamingMessage.id,
         role: 'assistant',

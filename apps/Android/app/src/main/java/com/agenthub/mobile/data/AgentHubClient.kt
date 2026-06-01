@@ -175,6 +175,18 @@ class AgentHubClient(
         return post(config, "/coding-tools/lifecycle/startup", timeoutMillis = 60_000L)
     }
 
+    suspend fun getSettings(config: ConnectionConfig): Map<String, String> {
+        return get<Map<String, String>>(config, "/settings")
+    }
+
+    suspend fun updateSettings(config: ConnectionConfig, settings: Map<String, String>) {
+        post<Map<String, String>, Unit>(config, "/settings", settings)
+    }
+
+    suspend fun testModel(config: ConnectionConfig, request: TestModelRequest): TestModelResponse {
+        return post(config, "/settings/test-model", request, timeoutMillis = 30_000L)
+    }
+
     private fun dedupeWorkspaceAgents(agents: List<WorkspaceAgent>): List<AgentContact> {
         val seen = mutableSetOf<String>()
         return agents.mapNotNull { agent ->

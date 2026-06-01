@@ -57,8 +57,6 @@ import {
 } from '../../lib/accountProfile'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 import { GroupAvatar } from './GroupAvatar'
-import { useIsMobile } from '../../lib/useIsMobile'
-
 type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
 
 function activeTabFromPath(pathname: string): SidebarTab {
@@ -82,7 +80,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const { t, language } = useI18n()
   const location = useLocation()
   const { sessionId } = useParams()
-  const mobile = useIsMobile()
   const sessions = useChatStore((state) => state.sessions)
   const currentSession = useChatStore((state) => state.currentSession)
   const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
@@ -447,8 +444,8 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
 
   return (
     <>
-      <aside className="agenthub-session-sidebar flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden border-r border-neutral-200 bg-[#FBFBFB]">
-      <div className={cn('flex h-full shrink-0 flex-col items-center justify-between border-r border-neutral-200 bg-[#FBFBFB] py-3', mobile ? 'w-0 overflow-hidden border-r-0' : 'w-[68px]')}>
+      <aside className="agenthub-session-sidebar flex h-full min-h-0 w-[340px] shrink-0 overflow-hidden bg-[#FBFBFB]">
+      <div className="flex h-full w-[68px] shrink-0 flex-col items-center justify-between bg-[#f2f2ee] py-3">
         <button
           type="button"
           onClick={() => navigate('/profile')}
@@ -623,9 +620,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           />
         </nav>
 
-        <div
-          className={cn('my-3 border-t border-neutral-200', activeTab !== 'messages' && 'hidden')}
-        />
+        <div className={cn('my-3', activeTab !== 'messages' && 'hidden')} />
 
         <div
           className={cn('flex-1 overflow-y-auto px-2 pb-4', activeTab !== 'messages' && 'hidden')}
@@ -1194,7 +1189,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           </div>
         )}
 
-        <div className={cn('border-t border-neutral-200 p-2', activeTab !== 'me' && 'hidden')}>
+        <div className={cn('bg-[#f5f5f1] p-2', activeTab !== 'me' && 'hidden')}>
           <button
             onClick={requestSettingsDialog}
             className="flex h-10 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-[#F7F7F7]"

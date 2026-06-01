@@ -131,6 +131,18 @@ class MobileViewModel(application: Application) : AndroidViewModel(application) 
 
     fun repairCodingTools() = repository.repairCodingTools()
 
+    fun fetchSettings() = repository.fetchSettings()
+
+    fun updateSettings(settings: Map<String, String>) = repository.updateSettings(settings)
+
+    fun testModel(request: com.agenthub.mobile.data.TestModelRequest) {
+        viewModelScope.launch {
+            repository.testModel(request)
+        }
+    }
+
+    fun clearTestModelResult() = repository.clearTestModelResult()
+
     private fun isAndroidEmulatorHost(url: String): Boolean {
         return Regex("^https?://10\\.0\\.2\\.2(?::\\d+)?(?:/.*)?$", RegexOption.IGNORE_CASE).matches(url)
     }

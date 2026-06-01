@@ -379,6 +379,69 @@ class AgentHubRepository(
         }
     }
 
+    fun fetchSettings() {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            _uiState.update { it.copy(settingsLoading = true) }
+            runCatching { client.getSettings(config) }
+                .onSuccess { settings ->
+                    _uiState.update { it.copy(settings = settings, settingsLoading = false, error = null) }
+                }
+                .onFailure { error ->
+                    _uiState.update { it.copy(settingsLoading = false, error = error.message) }
+                }
+        }
+    }
+
+    fun updateSettings(settings: Map<String, String>) {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            _uiState.update { it.copy(settingsLoading = true) }
+            runCatching { client.updateSettings(config, settings) }
+                .onSuccess {
+                    _uiState.update { it.copy(settingsLoading = false, error = null) }
+                    fetchSettings()
+                    refreshWorkbench()
+                }
+                .onFailure { error ->
+                    _uiState.update { it.copy(settingsLoading = false, error = error.message) }
+                }
+        }
+    }
+
+    fun testModel(request: TestModelRequest) {
+        val config = _uiState.value.connection ?: run {
+            setError("请先点击右上角 +，选择扫一扫连接电脑端")
+            return
+        }
+        scope.launch {
+            _uiState.update { it.copy(settingsLoading = true) }
+            runCatching { client.testModel(config, request) }
+                .onSuccess { result ->
+                    _uiState.update { it.copy(testModelResult = result, settingsLoading = false, error = null) }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            testModelResult = TestModelResponse(ok = false, message = error.message ?: "测试失败"),
+                            settingsLoading = false,
+                            error = null,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun clearTestModelResult() {
+        _uiState.update { it.copy(testModelResult = null) }
+    }
+
     private fun socketListener(config: ConnectionConfig) = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             _uiState.update { it.copy(connected = true, connecting = false, error = null) }

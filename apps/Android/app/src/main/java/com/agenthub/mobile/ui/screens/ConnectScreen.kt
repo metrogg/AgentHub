@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,13 +19,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,15 +38,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
-private val Ink = Color(0xFF171717)
-private val PageBackground = Color(0xFFFCFCFA)
-private val Hairline = Color(0xFFE8E6E0)
-private val MutedText = Color(0xFF71716B)
+private val TgBlue = Color(0xFF3390EC)
+private val TgBlueLight = Color(0xFFD6E8FF)
+private val Ink = Color(0xFF000000)
+private val PageBackground = Color(0xFFFFFFFF)
+private val Hairline = Color(0xFFE8EAED)
+private val MutedText = Color(0xFF8B9AA3)
+private val SoftFill = Color(0xFFF0F2F5)
 
 @Composable
 fun ConnectScreen(
@@ -65,106 +70,150 @@ fun ConnectScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(PageBackground)
-            .padding(22.dp),
+            .padding(24.dp),
         verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(58.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(Ink),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("AH", color = Color.White, fontWeight = FontWeight.Black, fontSize = 19.sp)
-            }
-            Spacer(modifier = Modifier.width(14.dp))
-            Column {
-                Text("AgentHub", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Ink)
-                Text("移动端轻量 IM 控制台", color = MutedText, fontSize = 14.sp)
-            }
+        // Logo (circular, Telegram style)
+        Box(
+            modifier = Modifier
+                .size(80.dp)
+                .clip(CircleShape)
+                .background(TgBlue),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("AH", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 28.sp)
         }
 
-        Spacer(modifier = Modifier.height(26.dp))
+        Text(
+            "AgentHub",
+            modifier = Modifier.padding(top = 16.dp),
+            fontSize = 28.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Ink,
+        )
+        Text(
+            "移动端 IM 控制台",
+            modifier = Modifier.padding(top = 4.dp),
+            color = MutedText,
+            fontSize = 15.sp,
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Pairing steps
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(26.dp))
-                .background(Color.White)
-                .border(1.dp, Hairline, RoundedCornerShape(26.dp))
-                .padding(18.dp),
+                .clip(RoundedCornerShape(12.dp))
+                .background(SoftFill)
+                .padding(16.dp),
         ) {
             PairingStep("1", "在电脑端打开移动端扫码连接")
             PairingStep("2", "手机扫码后会共享历史会话和流式输出")
             PairingStep("3", "也可以手动填写同局域网 Server 地址")
+        }
 
-            Spacer(modifier = Modifier.height(16.dp))
-            OutlinedTextField(
-                value = baseUrl,
-                onValueChange = { baseUrl = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("电脑端 Server 地址") },
-                placeholder = { Text("例如 http://电脑热点IP:8000") },
-                singleLine = true,
-            )
-            OutlinedTextField(
-                value = token,
-                onValueChange = { token = it },
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Input fields (Telegram-style clean)
+        TextField(
+            value = baseUrl,
+            onValueChange = { baseUrl = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("电脑端 Server 地址") },
+            placeholder = { Text("http://IP:8000") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = SoftFill,
+                unfocusedContainerColor = SoftFill,
+                focusedIndicatorColor = TgBlue,
+                unfocusedIndicatorColor = Color.Transparent,
+            ),
+            shape = RoundedCornerShape(12.dp),
+        )
+        TextField(
+            value = token,
+            onValueChange = { token = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp),
+            label = { Text("设备 Token（可选）") },
+            singleLine = true,
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = SoftFill,
+                unfocusedContainerColor = SoftFill,
+                focusedIndicatorColor = TgBlue,
+                unfocusedIndicatorColor = Color.Transparent,
+            ),
+            shape = RoundedCornerShape(12.dp),
+        )
+
+        AnimatedVisibility(
+            visible = !error.isNullOrBlank(),
+            enter = slideInVertically { -it / 2 } + fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Text(
+                text = error.orEmpty(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp),
-                label = { Text("设备 Token（配对前可留空）") },
-                singleLine = true,
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 13.sp,
             )
+        }
 
-            AnimatedVisibility(
-                visible = !error.isNullOrBlank(),
-                enter = slideInVertically { -it / 2 } + fadeIn(),
-                exit = fadeOut(),
-            ) {
-                Text(
-                    text = error.orEmpty(),
-                    modifier = Modifier.padding(top = 12.dp),
-                    color = MaterialTheme.colorScheme.error,
-                    fontSize = 13.sp,
+        Button(
+            onClick = { onConnect(baseUrl, token.takeIf { it.isNotBlank() }) },
+            enabled = !connecting && baseUrl.isNotBlank(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 20.dp)
+                .height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+            shape = RoundedCornerShape(24.dp),
+        ) {
+            if (connecting) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .padding(end = 8.dp),
+                    strokeWidth = 2.dp,
+                    color = Color.White,
                 )
             }
+            Text(
+                if (connecting) "正在连接..." else "连接电脑端",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
 
-            Button(
-                onClick = { onConnect(baseUrl, token.takeIf { it.isNotBlank() }) },
-                enabled = !connecting,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 18.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Ink),
-            ) {
-                if (connecting) {
-                    CircularProgressIndicator(modifier = Modifier.padding(end = 10.dp), strokeWidth = 2.dp)
-                }
-                Text(if (connecting) "正在连接" else "连接电脑端")
-            }
-            OutlinedButton(
-                onClick = {
-                    qrLauncher.launch(
-                        ScanOptions()
-                            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                            .setPrompt("扫描电脑端 AgentHub 配对二维码")
-                            .setBeepEnabled(false)
-                            .setOrientationLocked(false),
-                    )
-                },
-                enabled = !connecting,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp),
-            ) {
-                Text("扫码连接局域网")
-            }
+        OutlinedButton(
+            onClick = {
+                qrLauncher.launch(
+                    ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt("扫描电脑端 AgentHub 配对二维码")
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(false),
+                )
+            },
+            enabled = !connecting,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 12.dp)
+                .height(48.dp),
+            shape = RoundedCornerShape(24.dp),
+        ) {
+            Text("扫码连接", fontSize = 15.sp)
         }
 
         Text(
-            text = "电脑连接手机热点时，请填写电脑在热点中获得的 IP；10.0.2.2 只适用于 Android 模拟器。",
-            modifier = Modifier.padding(top = 16.dp),
+            text = "电脑连接手机热点时，请填写电脑在热点中获得的 IP",
+            modifier = Modifier.padding(top = 20.dp),
             color = MutedText,
             fontSize = 12.sp,
         )
@@ -174,19 +223,19 @@ fun ConnectScreen(
 @Composable
 private fun PairingStep(number: String, text: String) {
     Row(
-        modifier = Modifier.padding(bottom = 10.dp),
+        modifier = Modifier.padding(bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(24.dp)
+                .size(22.dp)
                 .clip(CircleShape)
-                .background(Color(0xFFF1F1EE)),
+                .background(TgBlueLight),
             contentAlignment = Alignment.Center,
         ) {
-            Text(number, color = Ink, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(number, color = TgBlue, fontWeight = FontWeight.Bold, fontSize = 11.sp)
         }
         Spacer(modifier = Modifier.width(10.dp))
-        Text(text, color = MutedText, fontSize = 13.sp)
+        Text(text, color = Ink, fontSize = 13.sp)
     }
 }
