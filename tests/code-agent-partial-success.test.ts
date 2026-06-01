@@ -61,4 +61,33 @@ describe('code agent partial success handling', () => {
       'xiaomi-token-plan-cn/mimo-v2.5',
     )
   })
+
+  test('prefixes catalog OpenCode model ids with the configured provider', async () => {
+    const { __codeAgentAdapterTestHooks } = await import(
+      '../apps/server/src/services/code-agent-adapter'
+    )
+
+    const args = __codeAgentAdapterTestHooks.buildOpencodeArgs('prompt', {
+      modelProvider: 'deepseek',
+      modelId: 'xiaomi-token-plan-cn/mimo-v2.5',
+    })
+
+    expect(args).toContain('--model')
+    expect(args).toContain('deepseek/xiaomi-token-plan-cn/mimo-v2.5')
+  })
+
+  test('explains OpenCode provider/model lookup failures precisely', async () => {
+    const { __codeAgentAdapterTestHooks } = await import(
+      '../apps/server/src/services/code-agent-adapter'
+    )
+
+    const message = __codeAgentAdapterTestHooks.friendlyCodeAgentError(
+      'ProviderModelNotFoundError: ProviderModelNotFoundError\ndata: {\nproviderID: "xiaomi-token-plan-cn",\nmodelID: "mimo-v2.5"\n}',
+      'OpenCode',
+    )
+
+    expect(message).toContain('provider=xiaomi-token-plan-cn')
+    expect(message).toContain('model=mimo-v2.5')
+    expect(message).not.toContain('Base URL 不可用')
+  })
 })

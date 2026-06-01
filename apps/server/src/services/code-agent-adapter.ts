@@ -52,6 +52,7 @@ interface CodeAgentRunOptions {
   cwd?: string
   modelId?: string | null
   modelProvider?: string | null
+  nativeOpenCodeRef?: boolean
   agentRoleType?: string
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
@@ -228,7 +229,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       if (options?.cwd) args.push('--dir', options.cwd)
       if (options?.modelId) {
         const provider = options.modelProvider || String(cfg['provider'] ?? 'agenthub')
-        const modelId = options.modelId.includes('/')
+        const modelId = options.nativeOpenCodeRef
           ? options.modelId
           : `${provider}/${options.modelId}`
         args.push('--model', modelId)
@@ -290,6 +291,7 @@ export async function* streamCodeAgentReply(
   signal?: AbortSignal,
   envelope?: AgentExecutionEnvelope,
   continueSession?: boolean,
+  options?: { rawFinalOutput?: boolean },
 ): AsyncGenerator<CodeAgentReplyChunk, void, unknown> {
   let type = profile.codeAgentType
   if (!type) {
@@ -331,11 +333,14 @@ export async function* streamCodeAgentReply(
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
   const toolConfig = await resolveToolConfig(type)
   const requestedModelId = resolveCodeAgentModelId(profile.modelId, toolConfig)
+  let modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
   const nativeOpenCodeModelRef =
-    type === 'opencode' && isOpenCodeNativeModelRef(requestedModelId) ? requestedModelId : null
-  let modelTarget = nativeOpenCodeModelRef
-    ? createNativeOpenCodeModelTarget(nativeOpenCodeModelRef)
-    : await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+    !modelTarget && type === 'opencode' && isOpenCodeNativeModelRef(requestedModelId)
+      ? requestedModelId
+      : null
+  if (nativeOpenCodeModelRef) {
+    modelTarget = createNativeOpenCodeModelTarget(nativeOpenCodeModelRef)
+  }
   if (
     !modelTarget &&
     requestedModelId &&
@@ -460,12 +465,16 @@ export async function* streamCodeAgentReply(
   yield { kind: 'code-agent-metadata', metadata: metadataWithSession }
 
   const finalMessage = stripReasoningTags(finalResult.finalMessage?.trim() || '')
+  const cleanedOutput = stripReasoningTags(stripToolNoise(finalResult.output))
+  if (finalResult.code === 0 && options?.rawFinalOutput && !streamedText) {
+    yield limitFinalOutput(finalMessage || cleanedOutput || '(Coding Tools 没有返回正文)')
+    return
+  }
   if (finalResult.code === 0 && finalMessage && !streamedText) {
     yield finalMessage
     return
   }
 
-  const cleanedOutput = stripReasoningTags(stripToolNoise(finalResult.output))
   if (finalResult.code === 0 && !streamedText) {
     if (adapter.command === 'opencode') {
       yield buildCodeAgentCompletionMessage(finalResult.metadata, cleanedOutput)
@@ -781,6 +790,7 @@ async function runCodeAgentCommand(
     agentRoleType,
     modelId: modelTarget?.modelId,
     modelProvider: modelTarget?.providerKey,
+    nativeOpenCodeRef: Boolean(modelTarget?.nativeOpenCodeRef),
     outputPath: outputPathRuntime,
     sandboxPolicy,
     toolConfig,
@@ -3144,6 +3154,17 @@ function cleanDiagnosticOutput(output: string) {
 
 function friendlyCodeAgentError(output: string, adapter?: CodeAgentAdapter) {
   const cliName = adapter?.displayName ?? 'Coding Tools'
+  if (/ProviderModelNotFoundError|Model not found:/i.test(output)) {
+    const match = output.match(/providerID:\s*"([^"]+)"[\s\S]*?modelID:\s*"([^"]+)"/i)
+    const detail = match
+      ? `OpenCode 把当前模型解析为 provider=${match[1]}、model=${match[2]}，但本机 OpenCode 配置里没有这个组合。`
+      : 'OpenCode 没有在本机配置里找到当前 provider/model 组合。'
+    return [
+      `${cliName} 已启动，但当前 OpenCode 模型标识无法匹配到可用 provider/model。`,
+      detail,
+      '请在 Coding Tools 设置里重新选择 OpenCode 可识别的模型，或把该 Agent 绑定到模型库里已配置 API Key 的模型。不要把供应商路由前缀误当成 OpenCode provider。',
+    ].join('\n')
+  }
   if (
     /issue with the selected model|may not exist|Run --model to pick a different model/i.test(
       output,

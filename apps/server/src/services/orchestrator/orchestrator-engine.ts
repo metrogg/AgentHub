@@ -1105,6 +1105,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           history: [],
           profile,
           signal: new AbortController().signal,
+          rawFinalOutput: true,
         })) {
           if (chunk.kind !== 'text') continue
           output += chunk.text

@@ -34,6 +34,7 @@ export interface ExecutionContext {
   envelope?: AgentExecutionEnvelope
   continueSession?: boolean
   resumeSessionId?: string
+  rawFinalOutput?: boolean
 }
 
 export type AgentOutputChunk =

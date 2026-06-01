@@ -253,6 +253,7 @@ export class Planner {
       profile,
       signal: controller.signal,
       workspacePath,
+      rawFinalOutput: true,
     })) {
       if (chunk.kind !== 'text') continue
       output += chunk.text

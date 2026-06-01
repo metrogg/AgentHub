@@ -69,7 +69,9 @@ export async function decideOrchestratorAction(input: DecideInput): Promise<Orch
 
   const jsonText = extractJsonObject(output)
   if (!jsonText) {
-    throw new Error('Orchestrator 没有返回可解析的路由判断')
+    throw new Error(
+      `Orchestrator 没有返回可解析的路由判断。原始输出片段：${formatOutputPreview(output)}`,
+    )
   }
 
   const parsed = parseJsonObject(jsonText) as Partial<OrchestratorDecision>
@@ -163,12 +165,19 @@ async function generateDecisionWithCodeAgent(
     profile,
     signal: new AbortController().signal,
     workspacePath,
+    rawFinalOutput: true,
   })) {
     if (chunk.kind !== 'text') continue
     output += chunk.text
     if (output.length > 4000) break
   }
   return output
+}
+
+function formatOutputPreview(value: string) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (!normalized) return '空输出'
+  return normalized.slice(0, 300)
 }
 
 function normalizeCodeAgentType(value?: string | null): AgentProfile['codeAgentType'] | null {

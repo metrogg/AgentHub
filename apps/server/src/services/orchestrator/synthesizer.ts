@@ -144,6 +144,7 @@ ${JSON.stringify(sections, null, 2)}
       history: [],
       profile,
       signal: new AbortController().signal,
+      rawFinalOutput: true,
     })) {
       if (chunk.kind !== 'text') continue
       output += chunk.text
