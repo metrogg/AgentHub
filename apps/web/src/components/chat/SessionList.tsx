@@ -85,6 +85,7 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
   const location = useLocation()
   const { sessionId } = useParams()
   const sessions = useChatStore((state) => state.sessions)
+  const currentSession = useChatStore((state) => state.currentSession)
   const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
   const loadingSessions = useChatStore((state) => state.loadingSessions)
   const currentSessionId = useChatStore((state) => state.currentSessionId)
@@ -146,7 +147,9 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
     () => filterSessionTree(baseSessionTree, query, showArchived, archivedIds),
     [archivedIds, baseSessionTree, query, showArchived],
   )
-  const activeSession = sessions.find((session) => session.id === sessionId)
+  const activeSession =
+    sessions.find((session) => session.id === sessionId) ??
+    (currentSession && currentSession.id === sessionId ? currentSession : undefined)
   const routeTab = activeTabFromPath(location.pathname, activeSession)
   const activeTab = tabOverride ?? routeTab
   const isAgentConfigRoute = location.pathname === '/agent-config'

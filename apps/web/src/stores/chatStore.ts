@@ -21,6 +21,7 @@ let pendingStream: {
   agentName?: string
 } | null = null
 let pendingStreamTimer: number | null = null
+let pendingSessionRefreshTimer: number | null = null
 const cancelledSessions = new Set<string>()
 const messageCache = new Map<string, Message[]>()
 const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
@@ -29,6 +30,31 @@ function updateCachedMessages(sessionId: string, updater: (messages: Message[]) 
   const cached = messageCache.get(sessionId)
   if (!cached) return
   messageCache.set(sessionId, sortMessages(updater(cached)))
+}
+
+function upsertSessionList(sessions: Session[], session: Session) {
+  const next = sessions.some((item) => item.id === session.id)
+    ? sessions.map((item) => (item.id === session.id ? session : item))
+    : [session, ...sessions]
+  return next.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+}
+
+function scheduleSessionRefresh(refresh: () => Promise<void>) {
+  if (pendingSessionRefreshTimer !== null) return
+  pendingSessionRefreshTimer = window.setTimeout(() => {
+    pendingSessionRefreshTimer = null
+    void refresh()
+  }, 80)
+}
+
+function agUiEventShouldRefreshSessions(event: AgUiEventPayload) {
+  if (event.type !== 'CUSTOM') return false
+  const name = asString(event.name)
+  const value = asRecord(event.value)
+  if (name === 'agenthub.plan.created') return true
+  if (name === 'agenthub.run.status') return true
+  if (name === 'agenthub.task.status' && asString(value?.childSessionId)) return true
+  return false
 }
 
 function messageTime(message: Message): number {
@@ -1307,24 +1333,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
             Array.from(new Set([sessionId, resolvedSnapshot.taskBoard.sessionId].filter(Boolean) as string[])),
           )
         }
-        set({
+        set((s) => ({
           currentSession: session,
           currentWorkspace: full.workspace,
           currentWorkspaceAgents: currentAgents,
+          sessions: upsertSessionList(s.sessions, session),
           messages: sortMessages(items),
           loadingMessages: false,
           ...(resolvedSnapshot
-            ? {
-                taskBoard: resolvedSnapshot.taskBoard,
-                agentTabs: resolvedSnapshot.agentTabs,
-                selectedAgentTab: selectedTaskForSession(
-                  sessionId,
-                  resolvedSnapshot.taskBoard,
-                  resolvedSnapshot.agentTabs,
-                ),
-              }
-            : {}),
-        })
+              ? {
+                  taskBoard: resolvedSnapshot.taskBoard,
+                  agentTabs: resolvedSnapshot.agentTabs,
+                  selectedAgentTab: selectedTaskForSession(
+                    sessionId,
+                    resolvedSnapshot.taskBoard,
+                    resolvedSnapshot.agentTabs,
+                  ),
+                }
+              : {}),
+        }))
         if (resolvedSnapshot?.agUiEvents.length) {
           set((state) =>
             resolvedSnapshot.agUiEvents.reduce(
@@ -1343,10 +1370,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
             Array.from(new Set([sessionId, snapshot.taskBoard.sessionId].filter(Boolean) as string[])),
           )
         }
-        set({
+        set((s) => ({
           currentSession: session,
           currentWorkspace: null,
           currentWorkspaceAgents: [],
+          sessions: upsertSessionList(s.sessions, session),
           messages: sortMessages(items),
           loadingMessages: false,
           ...(snapshot
@@ -1360,7 +1388,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 ),
               }
             : {}),
-        })
+        }))
         if (snapshot?.agUiEvents.length) {
           set((state) =>
             snapshot.agUiEvents.reduce(
@@ -1853,6 +1881,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       case WsEvent.AgUiEvent: {
         const event = (e.payload ?? {}) as AgUiEventPayload
         set((s) => applyAgUiEventToState(s, event, sessionId))
+        if (agUiEventShouldRefreshSessions(event)) {
+          scheduleSessionRefresh(() => get().fetchSessions())
+        }
         break
       }
       case WsEvent.TaskBoardPlanReady: {
