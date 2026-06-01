@@ -53,6 +53,7 @@ function agUiEventShouldRefreshSessions(event: AgUiEventPayload) {
   const value = asRecord(event.value)
   if (name === 'agenthub.plan.created') return true
   if (name === 'agenthub.run.status') return true
+  if (name === 'agenthub.member_proposal.continue') return true
   if (name === 'agenthub.task.status' && asString(value?.childSessionId)) return true
   return false
 }
@@ -843,6 +844,32 @@ function applyAgUiRunStatus(
   }
 }
 
+function applyMemberProposalContinueEvent(messages: Message[], value: Record<string, unknown>) {
+  const messageId = asString(value.messageId)
+  const status = asString(value.status)
+  if (!messageId || !status) return messages
+  let changed = false
+  const nextMessages = messages.map((message) => {
+    if (message.id !== messageId) return message
+    changed = true
+    const metadata = message.metadata ?? {}
+    return {
+      ...message,
+      metadata: {
+        ...metadata,
+        memberProposalContinueStatus: status,
+        memberProposalGoal: asString(value.goal) ?? metadata.memberProposalGoal,
+        continuedRunId: asString(value.runId) ?? metadata.continuedRunId,
+        continuedTaskIds: asStringArray(value.taskIds) ?? metadata.continuedTaskIds,
+        memberProposalContinueError:
+          asString(value.error) ?? metadata.memberProposalContinueError,
+        memberProposalContinueUpdatedAt: new Date().toISOString(),
+      },
+    }
+  })
+  return changed ? nextMessages : messages
+}
+
 function buildTaskBoardFromPlanPayload(
   payload: Record<string, unknown>,
   runId: string,
@@ -960,6 +987,7 @@ function applyAgUiEventToState(
   let agentTyping = state.agentTyping
   let agentActivity = state.agentActivity
   let selectedAgentTab = state.selectedAgentTab
+  let nextMessages = state.messages
 
   const currentSessionMatches =
     asString(event.threadId) === sessionId ||
@@ -1077,6 +1105,22 @@ function applyAgUiEventToState(
         }
       }
     }
+    if (value && event.name === 'agenthub.member_proposal.continue') {
+      nextMessages = applyMemberProposalContinueEvent(nextMessages, value)
+      const status = asString(value.status)
+      if (status === 'running') {
+        agentTyping = true
+        agentActivity = {
+          sessionId,
+          agentName: 'Orchestrator',
+          phase: 'planning',
+          startedAt: new Date().toISOString(),
+        }
+      } else if (status === 'completed' || status === 'failed') {
+        agentTyping = false
+        agentActivity = null
+      }
+    }
   }
 
   const nextAgentTabs =
@@ -1091,6 +1135,7 @@ function applyAgUiEventToState(
   if (
     nextTaskBoard !== state.taskBoard ||
     nextAgentTabs !== state.agentTabs ||
+    nextMessages !== state.messages ||
     agentTyping !== state.agentTyping ||
     agentActivity !== state.agentActivity ||
     selectedAgentTab !== state.selectedAgentTab
@@ -1099,6 +1144,7 @@ function applyAgUiEventToState(
       ...state,
       taskBoard: nextTaskBoard,
       agentTabs: nextAgentTabs,
+      messages: nextMessages,
       agentTyping,
       agentActivity,
       selectedAgentTab,

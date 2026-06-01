@@ -53,6 +53,7 @@ import type {
 import { emitRunEvent } from '../services/orchestrator/run-events'
 import { initializeRunLedger } from '../services/orchestrator/run-ledger'
 import { checkInputGuardrails } from '../services/orchestrator/input-guardrails'
+import { buildAgUiMemberProposalContinueEvent } from '../services/protocols'
 import {
   buildDynamicOrchestratorPlan,
   loadWorkspaceAgentRelationsForPlanning,
@@ -695,6 +696,12 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       status: 'running',
       goal,
     })
+    broadcastMemberProposalContinueStatus({
+      sessionId,
+      messageId: proposalMessage.id,
+      status: 'running',
+      goal,
+    })
 
     continueMemberProposalPlanning({
       session,
@@ -768,6 +775,34 @@ async function updateMemberProposalContinueState(params: {
   return result
 }
 
+function broadcastMemberProposalContinueStatus(params: {
+  sessionId: string
+  messageId: string
+  status: 'running' | 'completed' | 'failed'
+  goal: string
+  runId?: string | null
+  taskIds?: string[]
+  error?: string
+}) {
+  broadcastSessionEvent(params.sessionId, {
+    type: WsEvent.AgUiEvent,
+    payload: buildAgUiMemberProposalContinueEvent({
+      ref: {
+        runId: params.runId ?? undefined,
+        threadId: params.sessionId,
+      },
+      value: {
+        messageId: params.messageId,
+        goal: params.goal,
+        status: params.status,
+        runId: params.runId ?? undefined,
+        taskIds: params.taskIds ?? [],
+        error: params.error,
+      },
+    }),
+  })
+}
+
 async function continueMemberProposalPlanning(params: {
   session: typeof sessions.$inferSelect
   ownerId: string
@@ -813,6 +848,18 @@ async function continueMemberProposalPlanning(params: {
       goal,
       monitor,
     })
+    await emitRunEvent({
+      runId: monitor.dispatchId,
+      workspaceId: session.workspaceId,
+      groupSessionId: session.id,
+      type: 'member_proposal.continued',
+      payload: {
+        messageId: proposalMessage.id,
+        status: 'completed',
+        goal,
+        taskIds: monitor.taskIds,
+      },
+    })
   } catch (err: any) {
     const error = err?.message || 'Orchestrator 重新规划失败'
     const [latestMessage] = await db
@@ -824,6 +871,13 @@ async function continueMemberProposalPlanning(params: {
       message: latestMessage ?? proposalMessage,
       metadata: (latestMessage?.metadata ?? metadata) as Record<string, unknown>,
       content: `已加入建议成员，但 Orchestrator 重新规划失败：${error}`,
+      status: 'failed',
+      goal,
+      error,
+    })
+    broadcastMemberProposalContinueStatus({
+      sessionId: session.id,
+      messageId: proposalMessage.id,
       status: 'failed',
       goal,
       error,

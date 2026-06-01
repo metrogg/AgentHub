@@ -1146,6 +1146,18 @@ describe('AgentHub smoke tests', () => {
     expect(tasks.length).toBeGreaterThan(0)
     expect(proposalMessage?.metadata?.memberProposalContinueStatus).toBe('completed')
     expect(proposalMessage?.metadata?.continuedRunId).toBe(runs[0]!.id)
+
+    const agUiEvents = await json<{ items: Array<{ name?: string; value?: any }> }>(
+      await app.request(`/api/protocols/ag-ui/runs/${runs[0]!.id}/events`),
+    )
+    expect(
+      agUiEvents.items.some(
+        (event) =>
+          event.name === 'agenthub.member_proposal.continue' &&
+          event.value?.messageId === proposalCard!.id &&
+          event.value?.status === 'completed',
+      ),
+    ).toBe(true)
   })
 
   test('TaskGraph topological sort and cycle detection', async () => {

@@ -25,6 +25,7 @@ export type OrchestratorRunEventType =
   | 'task.reassigned'
   | 'task.clarification_needed'
   | 'run.replanned'
+  | 'member_proposal.continued'
   | 'conflict.detected'
   | 'conflict.resolved'
   | 'run.synthesizing'

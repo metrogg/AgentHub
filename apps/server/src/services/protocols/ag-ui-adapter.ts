@@ -151,6 +151,17 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
       }),
     ]
   }
+  if (event.type === 'member_proposal.continued') {
+    return [
+      buildAgUiMemberProposalContinueEvent({
+        ref: baseRef,
+        value: {
+          ...payload,
+          status: stringValue(payload.status) ?? 'completed',
+        },
+      }),
+    ]
+  }
 
   return []
 }
@@ -322,6 +333,21 @@ export function buildAgUiArtifactEvent(params: {
     timestamp: eventTimestamp(params.ref?.timestampMs),
     type: EventType.CUSTOM,
     value: params,
+  }
+}
+
+export function buildAgUiMemberProposalContinueEvent(params: {
+  ref?: Partial<AgentHubRunRef> & { threadId?: string }
+  value: Record<string, unknown>
+}): CustomEvent {
+  return {
+    name: 'agenthub.member_proposal.continue',
+    parentRunId: params.ref?.parentRunId,
+    runId: params.ref?.runId,
+    threadId: params.ref?.threadId,
+    timestamp: eventTimestamp(params.ref?.timestampMs),
+    type: EventType.CUSTOM,
+    value: params.value,
   }
 }
 

@@ -208,6 +208,28 @@ describe('protocol adapters', () => {
       name: 'agenthub.run.status',
       value: { status: 'synthesizing', artifactCount: 2 },
     })
+
+    const memberProposalEvents = buildAgUiEventsFromRunEvent({
+      groupSessionId: 'thread-1',
+      payload: {
+        goal: 'Build the report',
+        messageId: 'proposal-message-1',
+        status: 'completed',
+        taskIds: ['task-1'],
+      },
+      runId: 'run-1',
+      type: 'member_proposal.continued',
+    })
+    expect(memberProposalEvents[0]).toMatchObject({
+      name: 'agenthub.member_proposal.continue',
+      runId: 'run-1',
+      threadId: 'thread-1',
+      value: {
+        messageId: 'proposal-message-1',
+        status: 'completed',
+        taskIds: ['task-1'],
+      },
+    })
   })
 
   test('publishes a conservative MCP manifest', () => {
