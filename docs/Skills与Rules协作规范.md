@@ -29,7 +29,9 @@ Skills 和 Rules 是 Agent 的**能力层（Capability Layer）**，不是独立
 └──────────────────────────────────────────────────┘
 ```
 
-核心原则：**Skills 定义"怎么做"，Rules 定义"不能做什么"，两者通过模板变量组合注入到 Agent 的系统提示中。**
+核心原则：**Skills 定义"怎么做"，Rules 定义"不能做什么"。它们是 Code Agent 的能力和约束，不是任务模板，也不替 Orchestrator 判断意图或分工。**
+
+Spec 若后续恢复，只能作为用户显式提供的协作契约：描述范围、允许路径、必需产物、验收标准和合规约束。Spec 不应通过 trigger 正则命中用户目标，也不应自动生成固定阶段或固定团队。
 
 ## 2. 文件目录结构
 
@@ -42,12 +44,10 @@ Skills 和 Rules 是 Agent 的**能力层（Capability Layer）**，不是独立
   rules/                     ← Rule 定义（.yml）
     code-quality.yml
     frontend-coding.yml
-  specs/                     ← Spec 工作流定义（.spec.yml）
-    code-review.spec.yml
-    web-app-building.spec.yml
+  specs/                     ← 不再默认创建；如后续恢复，只能作为用户显式协作契约
 ```
 
-新建工作区时，`ensureHarnessPresets()` 自动从项目根目录 `.agenthub/` 复制预置的 skills、rules、specs 到新工作区。
+新建工作区时，`ensureHarnessPresets()` 只复制通用 skills 和 rules，不再复制 specs。内置场景 Spec 模板已经移除，避免固定工作流回流。若需要显式协作契约，请放入 `.agenthub/contracts/*.contract.json|yml`，不要再用 `specs/*.spec.yml` 当主路径。
 
 ## 3. Skill 定义规范
 
@@ -220,7 +220,6 @@ LlmRuntime.execute()
 buildAgentSystem()
   ↓
 HarnessManager.loadFromWorkspace(workspacePath)
-  ├── 扫描 .agenthub/specs/*.spec.yml
   ├── 扫描 .agenthub/skills/*.skill.yml
   └── 扫描 .agenthub/rules/*.yml
   ↓
@@ -266,18 +265,26 @@ buildCodeAgentPrompt()
 组装后的提示 → 通过 CLI Adapter 发送给外部 Code Agent
 ```
 
-> **重要差异**：Code Agent 路径使用 `SkillRegistry`（SKILL.md 格式的外部技能），**不使用** HarnessManager 的 YAML Skills/Rules。两条路径的 Skill 体系目前是独立的。
+> **当前现实**：Code Agent 路径主要使用 `SkillRegistry`（SKILL.md 格式的外部技能），LLM 路径仍保留 HarnessManager 的 YAML Skills/Rules 兼容能力。  
+> **目标方向**：Skills、Rules、MCP 都应统一为 Code Agent 能力层。YAML Skills/Rules 可以作为兼容导入或项目规则来源，但不应该长期形成“LLM 一套、Code Agent 一套”的分裂体系。
 
 ### 5.3 两条路径对比
 
-| 维度 | LLM Runtime | Code Agent Runtime |
+| 当前维度 | LLM Runtime | Code Agent Runtime |
 |------|-------------|-------------------|
 | 加载器 | `HarnessManager` | `SkillRegistry` |
 | Skill 格式 | `.skill.yml`（YAML 模板） | `SKILL.md`（Markdown + frontmatter） |
-| Rule 注入 | ✅ 通过模板变量注入 | ❌ 当前未注入 |
+| Rule 注入 | ✅ 通过模板变量注入 | ⚠️ 需要统一接入 |
 | 匹配方式 | `capabilityTags` 交集 | 文本评分（名称/描述/token 重叠） |
 | 来源 | 工作区 `.agenthub/skills/` | SkillHub / GitHub / npx |
-| 变量插值 | ✅ 支持全部模板变量 | ❌ 不支持（原样注入） |
+| 变量插值 | ✅ 支持全部模板变量 | ⚠️ 当前原样注入，后续需要统一能力注入模型 |
+
+后续改造优先级：
+
+1. Agent 配置页把 Skills、Rules、MCP 都作为 `code-agent` 的能力绑定展示。
+2. 执行时把绑定的 Rules 以 CLI 适配器支持的方式注入 Code Agent。
+3. 保留 `SKILL.md` 作为主格式；YAML Skills/Rules 只做兼容读取和迁移。
+4. 前端展示本次任务实际启用的 Skills/MCP/Rules，避免用户不知道 Agent 用了什么能力。
 
 ## 6. SKILL.md 外部技能体系
 
@@ -329,16 +336,35 @@ LLM Runtime 的 Agent 可通过以下工具动态访问外部技能：
 | `list_skills` | `skills:read` | 列出所有已安装的 SKILL.md 技能 |
 | `read_skill` | `skills:read` | 按名称或 ID 读取指定技能的完整内容 |
 
-## 7. Spec 与 Skills/Rules 的关系
+## 7. Contract 与 Skills/Rules 的关系
 
-Spec（`.spec.yml`）定义多 Agent 协作的工作流，其中 `requiredAgents` 字段引用 Agent 的 capability 标签。Spec 本身不直接引用 Skill 或 Rule，但通过以下间接链路关联：
+Contract（`.agenthub/contracts/*.contract.json|yml`）只描述协作约束，不定义固定工作流，也不通过 `requiredAgents` 指派角色。它可以声明偏好的能力层配置，例如：
 
+```yaml
+capabilities:
+  preferredSkills:
+    - reviewer
+  requiredTools:
+    - workspace:read
+  requiredMcpServers:
+    - browser
+  rules:
+    - code-quality
 ```
-Spec.requiredAgents: [reviewer]
-  → Orchestrator 匹配 capabilityTags 含 "review" 的 Agent
-    → Agent 的 capabilityTags 触发 Skill 匹配
-      → reviewer.skill.yml 的 applicableCapabilities 含 "review" → 命中
-        → Skill 模板引用 {{RULES.code-quality}} → Rule 注入
+
+正确链路是：
+
+```text
+Contract.capabilities 提供能力偏好和约束
+  -> Planner 在动态 DAG 中显式选择合适 Agent
+    -> Agent 的 profile 绑定 Skills / Rules / MCP
+      -> 执行时注入 Code Agent 能力上下文
+```
+
+禁止链路是：
+
+```text
+Contract / Spec 通过 trigger 或 requiredAgents 静态决定任务意图和分工
 ```
 
 ## 8. 开发指南
@@ -423,5 +449,5 @@ capabilityTags: [security]               → 匹配自定义 security-engineer.s
 | YAML 解析 | 自研简单解析器（不支持嵌套对象） | 引入标准 YAML 库（如 `yaml` 包） |
 | 双 Skill 体系 | Harness YAML 和 SKILL.md 并行 | 统一为一套，或明确分层：Harness = 内部模板，SKILL.md = 外部生态 |
 | Rule 管理 UI | 无，手动编辑 YAML | 前端可视化 Rule 编辑器 |
-| Spec 联动 | Spec 不直接引用 Skill/Rule | Spec 阶段可声明推荐的 Skill 和 Rule |
+| Contract 联动 | Contract 可声明能力偏好，但不指派角色 | Contract/Agent profile 统一到 Code Agent 能力绑定 |
 | 版本管理 | 文件级版本号，无冲突检测 | 支持 Skill/Rule 版本升级和回滚 |

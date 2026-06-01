@@ -44,7 +44,7 @@ export function touchWorkspace(id: string) {
 
 const serviceDir = dirname(fileURLToPath(import.meta.url))
 const presetAgenthubDir = resolve(serviceDir, '../../../../../.agenthub')
-const presetAgenthubEntries = ['rules', 'skills', 'specs'] as const
+const presetAgenthubEntries = ['rules', 'skills'] as const
 
 export function ensureHarnessPresets(projectPath: string | null | undefined) {
   if (!projectPath) return

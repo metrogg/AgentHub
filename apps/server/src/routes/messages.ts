@@ -38,6 +38,7 @@ import { OrchestratorEngine } from '../services/orchestrator/orchestrator-engine
 import {
   extractJsonObject,
   cleanPlanText,
+  validateRealWorkerAssignments,
   normalizeTaskOutputContract,
   normalizeTaskValidation,
   titleFromGoal,
@@ -837,6 +838,27 @@ async function startPlanRunInExistingGroup(params: {
   }
 
   const { agentsByKey } = await dispatchPlanToExistingGroup(sourceSession, ownerId, plan)
+
+  const validationAgents = plan.agents
+    .map((agent) => {
+      const dbAgent = agentsByKey.get(agent.key)
+      return {
+        id: dbAgent?.id ?? agent.key,
+        key: agent.key,
+        name: dbAgent?.name ?? agent.name,
+        roleType: dbAgent?.roleType ?? agent.roleType,
+      }
+    })
+  const validationError = validateRealWorkerAssignments({
+    agents: validationAgents,
+    tasks: plan.tasks.map((task) => ({
+      agentId: agentsByKey.get(task.agentKey)?.id ?? task.agentKey,
+      title: task.title,
+    })),
+  })
+  if (validationError) {
+    throw AppError.fromCode(AppErrorCodes.ORCHESTRATOR_PLAN_INVALID, validationError)
+  }
 
   const childSessions = new Map<
     string,

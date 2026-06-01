@@ -1,6 +1,6 @@
 # AgentHub Development Guide
 
-This file is for Claude Code and other coding agents working inside this repository. For product context, also read `README.md`, `docs/当前多Agent协作架构.md`, and `docs/多Agent协作分层架构与业内对比.md`.
+This file is for Claude Code and other coding agents working inside this repository. For product context, also read `README.md`, `docs/当前多Agent协作架构.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
 
 ## Product Definition
 
@@ -24,6 +24,7 @@ Before changing code, identify which layer you are working on:
 - Protocols: A2A for agent-to-agent message/task/artifact semantics; AG-UI for run events surfaced to the frontend.
 - Execution: Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary agent bases. `llm` is internal/fallback support.
 - Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
+- Collaboration contracts: user-explicit Specs may describe scope, allowed paths, required outputs, and acceptance criteria; they must not be trigger-based scenario templates.
 - Workspace and state: the system default workspace root, `.agenthub/workdirs`, `.agenthub/handoff`, blackboard entries, execution logs, run events, and persisted task state.
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
@@ -250,6 +251,7 @@ bun test
 - `workspace-agent-child`: legacy child session design. Keep hidden from current group UX.
 - A2A/MCP/Skills as runtime types: removed from the active identity model. They are protocol/capability layers.
 - Static fallback plan templates: avoid as normal UX. Prefer model-generated dynamic plans.
+- Built-in `.agenthub/specs/*.spec.yml` scenario templates and trigger-based Spec matching are removed. Specs may return only as user-explicit collaboration contracts.
 - Static agent routing, keyword-based task reassignment, auto Researcher injection, and artifact-extension follow-up tasks are removed from the active path. Do not reintroduce them; validate explicit Orchestrator/Planner assignments instead.
 - `classic` workspace seeding, default code teams, and `create-from-template` are removed from the active product path.
 - Branch-per-agent docs: old design. Git utilities may remain, but current default execution is workdir + handoff.

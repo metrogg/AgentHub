@@ -1171,6 +1171,27 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         artifacts: [],
       }
     }
+    if (agent.roleType === 'orchestrator') {
+      const error = 'Planner attempted to assign executable work to Orchestrator. Orchestrator may coordinate only; worker tasks must target specialist agents.'
+      await emitRunEvent({
+        runId,
+        workspaceId,
+        groupSessionId,
+        taskId: task.id,
+        agentId: agent.id,
+        type: 'task.failed',
+        severity: 'error',
+        payload: { title: task.title, agentName: agent.name, error },
+      })
+      return {
+        taskId: task.id,
+        agentId: agent.id,
+        agentName: agent.name,
+        status: TaskStatus.Failed,
+        output: error,
+        artifacts: [],
+      }
+    }
 
     let childInfo = childSessions.get(task.id)
     let shouldRepairChildSession = !childInfo

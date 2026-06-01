@@ -1,6 +1,6 @@
 # AgentHub
 
-本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前多Agent协作架构.md` 和 `docs/使用指南.md`。
+本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前多Agent协作架构.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
 更完整的分层设计和业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
 
 ## 当前目标
@@ -187,6 +187,7 @@ bun test tests/orchestrator-routing.test.ts
 - 对复杂目标的意图判断、分工、追加任务和最终内容生成必须来自 Orchestrator/Planner/Synthesizer 的模型输出；系统代码只做 schema 校验、权限校验、状态记录和透明错误呈现。
 - 不要恢复静态兜底提示词或固定模板计划。快速提示、任务拆解、协作计划都应由模型动态生成；失败时可以提示用户重试或检查模型配置。
 - 不要恢复静态 Agent 路由、关键词分工、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。系统只能校验 Orchestrator/Planner 的显式选择，不能偷偷改派或追加任务。
+- 不要恢复内置 `.agenthub/specs/*.spec.yml` 场景模板，也不要让 `ensureHarnessPresets()` 把 specs 自动复制到新工作区。Spec 后续只可作为用户显式创建的协作契约。
 - 不要把旧 `GroupChatManager` 作为新路径入口。群聊统一从 `messages.ts` 进入 Orchestrator 路由。
 - 不要把旧 Git 分支隔离写成当前默认事实。当前默认是项目工作区 + `.agenthub/workdirs` + `.agenthub/handoff`。
 - 修改 UI 时要保持 IM 产品感：左侧树清晰、主群聊和子对话不重复、运行状态可见、产物入口明确。

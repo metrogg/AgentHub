@@ -401,25 +401,12 @@ function defaultValidation(task: ExecutionTask): TaskValidation {
   }
 }
 
-function inferTaskType(task: ExecutionTask): NonNullable<ExecutionTask['taskType']> {
-  const text = `${task.id} ${task.title} ${task.description}`.toLowerCase()
-  if (/(review|审查|审核|风险)/i.test(text)) return 'review'
-  if (/(test|verify|验证|测试|qa)/i.test(text)) return 'test'
-  if (/(code|build|implement|实现|开发|修改)/i.test(text)) return 'code'
-  if (/(design|方案|设计|架构)/i.test(text)) return 'design'
-  if (/(research|调研|资料|搜索)/i.test(text)) return 'research'
-  if (/(summary|synthesize|汇总|总结)/i.test(text)) return 'synthesize'
+function inferTaskType(_task: ExecutionTask): NonNullable<ExecutionTask['taskType']> {
   return 'read'
 }
 
-function inferPhaseId(task: ExecutionTask, index: number): string {
-  const text = `${task.id} ${task.title} ${task.description}`.toLowerCase()
-  if (/(plan|analysis|scan|read|理解|梳理|分析|调研)/i.test(text)) return 'analysis'
-  if (/(design|方案|架构|设计)/i.test(text)) return 'design'
-  if (/(build|code|implement|实现|开发|修改)/i.test(text)) return 'implementation'
-  if (/(review|test|verify|审查|测试|验证|风险)/i.test(text)) return 'verification'
-  if (/(summary|synthesize|汇总|总结)/i.test(text)) return 'synthesis'
-  return index === 0 ? 'analysis' : 'execution'
+function inferPhaseId(_task: ExecutionTask, _index: number): string {
+  return 'execution'
 }
 
 function titleFromPhaseId(phaseId?: string): string {

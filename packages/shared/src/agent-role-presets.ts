@@ -313,36 +313,8 @@ export function inferRoleType(agent: {
   role?: string | null
   capabilityTags?: string[] | null
 }): AgentRoleType {
-  if (agent.roleType && agent.roleType !== 'custom') return agent.roleType as AgentRoleType
-  const text = [agent.name ?? '', agent.role ?? '', ...(agent.capabilityTags ?? [])]
-    .join(' ')
-    .toLowerCase()
-  if (
-    text.includes('orchestrator') ||
-    text.includes('总指挥') ||
-    text.includes('协调') ||
-    text.includes('调度')
-  )
-    return 'orchestrator'
-  if (text.includes('clarif') || text.includes('需求') || text.includes('澄清')) return 'clarifier'
-  if (text.includes('architect') || text.includes('规划') || text.includes('架构'))
-    return 'architect'
-  if (text.includes('research') || text.includes('研究')) return 'researcher'
-  if (text.includes('coder') || text.includes('code') || text.includes('实现')) return 'coder'
-  if (
-    text.includes('verif') ||
-    text.includes('验证') ||
-    text.includes('测试') ||
-    text.includes('build')
-  )
-    return 'verifier'
-  if (text.includes('review') || text.includes('审查')) return 'reviewer'
-  if (
-    text.includes('integrat') ||
-    text.includes('summary') ||
-    text.includes('交付') ||
-    text.includes('汇总')
-  )
-    return 'integrator'
+  if (agent.roleType && AGENT_ROLE_TYPES.includes(agent.roleType as AgentRoleType)) {
+    return agent.roleType as AgentRoleType
+  }
   return 'custom'
 }

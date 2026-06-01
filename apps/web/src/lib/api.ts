@@ -317,7 +317,8 @@ export interface WelcomeQuickPromptsResponse {
   generatedAt: string
   items: WelcomeQuickPrompt[]
   seed: string
-  source: 'llm' | 'unavailable' | 'preset'
+  source: 'llm' | 'unavailable'
+  error?: string
 }
 
 export interface CodingToolStatus {

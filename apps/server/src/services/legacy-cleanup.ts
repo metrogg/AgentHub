@@ -1,4 +1,9 @@
 import {
+  existsSync,
+  rmSync,
+} from 'node:fs'
+import { join } from 'node:path'
+import {
   agents,
   db,
   eq,
@@ -25,6 +30,7 @@ export interface LegacyCleanupResult {
   deletedLegacyAgents: number
   deletedEmptyWorkspaces: number
   cleanedSettings: number
+  deletedLegacySpecDirs: number
 }
 
 const agentLibrarySettingKey = 'AGENT_LIBRARY'
@@ -40,6 +46,7 @@ export async function cleanupLegacyApplicationData(): Promise<LegacyCleanupResul
     deletedLegacyAgents: 0,
     deletedEmptyWorkspaces: 0,
     cleanedSettings: 0,
+    deletedLegacySpecDirs: 0,
   }
 
   await db.transaction(async (tx) => {
@@ -95,7 +102,7 @@ export async function cleanupLegacyApplicationData(): Promise<LegacyCleanupResul
     }
     result.deletedLegacyAgents = legacyAgentRows.length
 
-    const workspaceRows = await tx.select({ id: workspaces.id }).from(workspaces)
+    const workspaceRows = await tx.select({ id: workspaces.id, projectPath: workspaces.projectPath }).from(workspaces)
     for (const workspace of workspaceRows) {
       const [remainingSession] = await tx
         .select({ id: sessions.id })
@@ -115,6 +122,13 @@ export async function cleanupLegacyApplicationData(): Promise<LegacyCleanupResul
       if (remainingSession || remainingTask || remainingAgent) continue
       await tx.delete(workspaces).where(eq(workspaces.id, workspace.id))
       result.deletedEmptyWorkspaces += 1
+    }
+
+    for (const workspace of workspaceRows) {
+      const specsDir = workspace.projectPath ? join(workspace.projectPath, '.agenthub', 'specs') : null
+      if (!specsDir || !existsSync(specsDir)) continue
+      rmSync(specsDir, { recursive: true, force: true })
+      result.deletedLegacySpecDirs += 1
     }
 
     const [librarySetting] = await tx

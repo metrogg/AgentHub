@@ -1,8 +1,11 @@
 import { logger } from '../../lib/logger'
 import { streamReply } from '../llm'
-import { harnessManager } from '../harness'
 import { runtimeRegistry, type AgentProfile } from '../runtime'
 import { initializeRunLedger } from './run-ledger'
+import {
+  formatContractsForPlanner,
+  type CollaborationContract,
+} from './collaboration-contract'
 import type {
   ClarificationQuestion,
   CollaborationMode,
@@ -18,25 +21,16 @@ export interface PlannerInput {
   agents: ExecutionAgent[]
   agentRelations?: ExecutionPlan['agentRelations']
   workspacePath?: string | null
-  useSpecFirst?: boolean
+  collaborationContracts?: CollaborationContract[]
   plannerModelId?: string | null
   plannerSystemPrompt?: string | null
   plannerAgent?: ExecutionAgent | null
 }
 
-interface SpecModule {
-  name: string
-  responsibility: string
-  interfaces: string[]
-  dependsOn: string[]
-}
-
-interface ProjectSpec {
-  goal: string
-  modules: SpecModule[]
-  dataFlow: string
-  techStack: string
-  fileLayout: string[]
+export interface PlannerNormalizationResult {
+  plan: ExecutionPlan | null
+  error?: string
+  recoverable: boolean
 }
 
 export class Planner {
@@ -45,7 +39,7 @@ export class Planner {
       goal,
       agentRelations = [],
       workspacePath,
-      useSpecFirst = true,
+      collaborationContracts = [],
       plannerModelId,
       plannerSystemPrompt,
       plannerAgent,
@@ -54,52 +48,38 @@ export class Planner {
 
     const agents = input.agents
 
-    let specPhases: string | undefined
-    if (workspacePath) {
-      try {
-        await harnessManager.loadFromWorkspace(workspacePath)
-        const spec = harnessManager.findBestSpec(goal)
-        if (spec) {
-          specPhases = this.formatSpecPhases(spec)
-          logger.info({ specId: spec.id, goal }, 'Planner matched Harness spec')
-        }
-      } catch (err: any) {
-        logger.warn({ err: err?.message, workspacePath }, 'Planner failed to load Harness spec')
-      }
-    }
-
-    // Spec-first：根据 useSpecFirst 决定是否让 LLM 先输出架构规格
-    let spec: ProjectSpec | undefined
-    if (useSpecFirst !== false) {
-      try {
-        spec = await this.generateSpec(goal, agents, workspacePath, plannerModelId, plannerAgent)
-        logger.info({ goal, moduleCount: spec.modules.length }, 'Planner generated spec')
-      } catch (err: any) {
-        logger.warn(
-          { err: err?.message },
-          'Planner spec generation failed, falling back to direct plan',
-        )
-      }
-    }
-
     let planningError: unknown
-    try {
-      const generated = await this.generateWithLlm(
-        goal,
-        agents,
-        agentRelations,
-        spec,
-        specPhases,
-        plannerModelId,
-        plannerSystemPrompt,
-        plannerAgent,
-        workspacePath,
-      )
-      const normalized = this.normalizeGeneratedPlan(runId, goal, generated, agents)
-      if (normalized) return initializeRunLedger({ ...normalized, agentRelations })
-      planningError = new Error('Planner returned an invalid or empty plan')
-    } catch (error: any) {
-      planningError = error
+    let validationFeedback: string | undefined
+    const maxAttempts = 2
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const generated = await this.generateWithLlm(
+          goal,
+          agents,
+          agentRelations,
+          plannerModelId,
+          plannerSystemPrompt,
+          plannerAgent,
+          workspacePath,
+          collaborationContracts,
+          validationFeedback,
+        )
+        const normalized = normalizePlannerOutput(runId, goal, generated, agents, collaborationContracts)
+        if (normalized.plan) return initializeRunLedger({ ...normalized.plan, agentRelations })
+
+        const message = normalized.error ?? 'Planner returned an invalid or empty plan'
+        planningError = new Error(message)
+        if (!normalized.recoverable || attempt >= maxAttempts) break
+        validationFeedback = message
+        logger.warn(
+          { err: message, attempt, maxAttempts, plannerRuntime: plannerAgent?.runtimeType ?? 'llm' },
+          'Planner output rejected, retrying with validation feedback',
+        )
+      } catch (error: any) {
+        planningError = error
+        break
+      }
     }
 
     const message =
@@ -115,80 +95,16 @@ export class Planner {
     throw new Error(`规划生成失败：${message}`)
   }
 
-  private formatSpecPhases(spec: import('../harness').HarnessSpec): string {
-    const lines = [
-      `【协作规范：${spec.name}】`,
-      spec.description,
-      '',
-      '请按以下阶段组织任务（每个阶段可映射为 1 个或多个 task）：',
-      ...spec.phases.map((p, i) => {
-        const deps = p.dependsOn?.length ? `（依赖：${p.dependsOn.join('、')}）` : ''
-        return `${i + 1}. ${p.name}：${p.description} ${deps}`
-      }),
-      '【规范结束】',
-    ]
-    return lines.join('\n')
-  }
-
-  private async generateSpec(
-    goal: string,
-    agents: ExecutionAgent[],
-    workspacePath?: string | null,
-    plannerModelId?: string | null,
-    plannerAgent?: ExecutionAgent | null,
-  ): Promise<ProjectSpec> {
-    const prompt = `请为以下项目生成一份架构规格说明（Spec）。
-
-目标：${goal}
-
-可用 Agent 团队：
-${agents.map((a) => `- ${a.name}（${a.role}）：${a.description || '无描述'}`).join('\n')}
-
-请返回 JSON（不要 Markdown 代码块）：
-{
-  "goal": "项目目标重述",
-  "modules": [
-    {
-      "name": "模块名",
-      "responsibility": "该模块的职责描述",
-      "interfaces": ["对外暴露的接口/函数/类名"],
-      "dependsOn": ["依赖的其他模块名"]
-    }
-  ],
-  "dataFlow": "模块间数据流描述（200字以内）",
-  "techStack": "建议技术栈",
-  "fileLayout": ["建议的文件结构，如 src/engine.ts"]
-}`
-    const output = await this.generatePlannerOutput(
-      [{ role: 'user', content: prompt }],
-      '你是软件架构专家。',
-      plannerModelId ?? undefined,
-      plannerAgent,
-      workspacePath,
-      15_000,
-    )
-    const jsonText = extractJsonObject(output)
-    if (!jsonText) throw new Error('Spec generation returned no JSON')
-    const parsed = parseJsonObject(jsonText) as Partial<ProjectSpec>
-    return {
-      goal: parsed.goal || goal,
-      modules: parsed.modules || [],
-      dataFlow: parsed.dataFlow || '',
-      techStack: parsed.techStack || '',
-      fileLayout: parsed.fileLayout || [],
-    }
-  }
-
   private async generateWithLlm(
     goal: string,
     agents: ExecutionAgent[],
     agentRelations: ExecutionPlan['agentRelations'] = [],
-    spec?: ProjectSpec,
-    specPhases?: string,
     plannerModelId?: string | null,
     plannerSystemPrompt?: string | null,
     plannerAgent?: ExecutionAgent | null,
     workspacePath?: string | null,
+    collaborationContracts: CollaborationContract[] = [],
+    validationFeedback?: string,
   ): Promise<unknown> {
     const agentCatalog = agents.map((agent) => ({
       key: agent.key,
@@ -211,19 +127,6 @@ ${agents.map((a) => `- ${a.name}（${a.role}）：${a.description || '无描述'
       systemPrompt: agent.systemPrompt,
     }))
 
-    const specBlock = spec
-      ? `
-【架构规格】
-项目目标：${spec.goal}
-模块划分：
-${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.dependsOn.join('、') || '无'}）`).join('\n')}
-数据流：${spec.dataFlow}
-技术栈：${spec.techStack}
-建议文件结构：${spec.fileLayout.join(', ')}
-【规格结束】
-请严格按照以上模块划分分配任务，每个模块对应 1 个 task。`
-      : ''
-
     const system = [
       'You are AgentHub Orchestrator.',
       plannerSystemPrompt
@@ -234,17 +137,22 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       'Schema: {"collaborationMode":"pipeline|mapreduce|supervisor","title":string,"summary":string,"clarificationQuestions":[{"id":string,"question":string,"options":string[]}],"phases":[{"id":string,"title":string,"purpose":string,"taskIds":string[]}],"tasks":[{"id":string,"phaseId":string,"title":string,"description":string,"agentKey":string,"taskType":"read|research|design|code|test|review|synthesize","dependencies":string[],"parallelGroup":string?,"maxRetries":number?,"outputContract":{"requiredBlackboardWrites":[{"key":string,"schemaType":"fact|decision|risk|artifact_ref|diff_summary|test_result|task_output"}],"requiredArtifacts":string[],"allowedPaths":string[],"acceptanceCriteria":string[]},"validation":{"commands":string[],"requiresReview":boolean}}]}',
       'Use 2-6 tasks. Pick the most suitable agent for each task based on role, capabilities, runtime, tools, sandbox, and system prompt.',
       'Do not assign execution tasks to Orchestrator. Orchestrator only coordinates, monitors, and synthesizes; assign research/design/code/test/review work to specialist agents.',
+      'If two or more non-Orchestrator agents are available, the plan must involve at least two different agents. Do not let one agent perform the whole collaboration unless only one worker exists.',
       'If tasks can run in parallel, put them in the same parallelGroup.',
       'Dependencies should reference task ids, not agent keys.',
       'Each task must include its output contract: what files/interfaces it will produce, so downstream tasks know what to depend on.',
+      collaborationContracts.length
+        ? `Follow these explicit collaboration contracts:\n${formatContractsForPlanner(collaborationContracts)}`
+        : '',
       'If the goal is ambiguous or missing critical details (tech stack, scope, constraints, data sources, auth method, UI framework, etc.), include 1-3 clarificationQuestions. Each question should have 2-4 options. If the goal is clear enough, return an empty array.',
       'Analyze the task structure and choose the best collaboration mode:',
       '- "pipeline": tasks have clear sequential dependencies (design → code → review), each stage feeds into the next',
       '- "mapreduce": multiple workers can run in parallel on independent sub-problems, then a synthesizer merges results',
       '- "supervisor": the task is exploratory; the orchestrator needs to monitor intermediate results and dynamically assign follow-up work',
       'Add "collaborationMode" field to the output.',
-      specBlock,
-      specPhases || '',
+      validationFeedback
+        ? `Previous output was rejected by AgentHub validation: ${validationFeedback}. Regenerate a valid plan; do not explain the previous failure.`
+        : '',
     ]
       .filter(Boolean)
       .join('\n')
@@ -353,121 +261,167 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
     return output
   }
 
-  private normalizeGeneratedPlan(
-    runId: string,
-    goal: string,
-    generated: unknown,
-    agents: ExecutionAgent[],
-  ): ExecutionPlan | null {
-    if (!generated || typeof generated !== 'object') return null
-    const candidate = generated as {
-      collaborationMode?: unknown
+}
+
+export function normalizePlannerOutput(
+  runId: string,
+  goal: string,
+  generated: unknown,
+  agents: ExecutionAgent[],
+  contracts: CollaborationContract[] = [],
+): PlannerNormalizationResult {
+  if (!generated || typeof generated !== 'object') {
+    return { plan: null, error: 'Planner did not return a JSON object', recoverable: true }
+  }
+  const candidate = generated as {
+    collaborationMode?: unknown
+    title?: unknown
+    summary?: unknown
+    phases?: Array<{
+      id?: unknown
       title?: unknown
-      summary?: unknown
-      phases?: Array<{
-        id?: unknown
-        title?: unknown
-        purpose?: unknown
-        taskIds?: unknown
-      }>
-      clarificationQuestions?: Array<{
-        id?: unknown
-        question?: unknown
-        options?: unknown
-      }>
-      tasks?: Array<{
-        id?: unknown
-        phaseId?: unknown
-        title?: unknown
-        description?: unknown
-        agentKey?: unknown
-        taskType?: unknown
-        dependencies?: unknown
-        parallelGroup?: unknown
-        maxRetries?: unknown
-        outputContract?: unknown
-        validation?: unknown
-      }>
+      purpose?: unknown
+      taskIds?: unknown
+    }>
+    clarificationQuestions?: Array<{
+      id?: unknown
+      question?: unknown
+      options?: unknown
+    }>
+    tasks?: Array<{
+      id?: unknown
+      phaseId?: unknown
+      title?: unknown
+      description?: unknown
+      agentKey?: unknown
+      taskType?: unknown
+      dependencies?: unknown
+      parallelGroup?: unknown
+      maxRetries?: unknown
+      outputContract?: unknown
+      validation?: unknown
+    }>
+  }
+
+  if (!Array.isArray(candidate.tasks) || candidate.tasks.length === 0) {
+    return { plan: null, error: 'Planner returned no executable tasks', recoverable: true }
+  }
+
+  const agentMap = new Map(agents.map((a) => [a.key, a]))
+  const taskIds = new Set<string>()
+  const rawIdToUuid = new Map<string, string>()
+  const tasks: ExecutionTask[] = []
+  const violations: string[] = []
+
+  for (const [index, t] of candidate.tasks.entries()) {
+    const title = cleanPlanText(t.title)
+    const description = cleanPlanText(t.description)
+    const agentKey = typeof t.agentKey === 'string' ? t.agentKey : ''
+    const requestedAgent = agentMap.get(agentKey)
+    if (!title || !description) {
+      violations.push(`Task ${index + 1} is missing title or description`)
+      continue
+    }
+    if (!requestedAgent) {
+      violations.push(`Task "${title}" references unknown agent key "${agentKey || '(empty)'}"`)
+      continue
+    }
+    if (requestedAgent.roleType === 'orchestrator') {
+      violations.push(`Task "${title}" is assigned to Orchestrator; execution tasks must target worker agents`)
+      continue
+    }
+    const taskType = parseTaskType(t.taskType)
+
+    const rawId = cleanPlanText(t.id) || slugifyTaskId(title, index)
+    const id = crypto.randomUUID()
+    rawIdToUuid.set(rawId, id)
+    if (taskIds.has(id)) continue
+    taskIds.add(id)
+
+    const deps: string[] = []
+    if (Array.isArray(t.dependencies)) {
+      for (const dep of t.dependencies) {
+        if (typeof dep === 'string') deps.push(dep)
+      }
     }
 
-    if (!Array.isArray(candidate.tasks) || candidate.tasks.length === 0) return null
+    tasks.push({
+      id,
+      phaseId: cleanPlanText(t.phaseId) || undefined,
+      title,
+      description,
+      agentId: requestedAgent.id,
+      taskType,
+      dependencies: deps,
+      parallelGroup: typeof t.parallelGroup === 'string' ? t.parallelGroup : undefined,
+      maxRetries: typeof t.maxRetries === 'number' ? Math.max(0, Math.min(t.maxRetries, 5)) : 2,
+      outputContract: normalizeTaskOutputContract(t.outputContract, id),
+      validation: normalizeTaskValidation(t.validation),
+    })
+  }
 
-    const agentMap = new Map(agents.map((a) => [a.key, a]))
-    const taskIds = new Set<string>()
-    const rawIdToUuid = new Map<string, string>()
-    const tasks: ExecutionTask[] = []
+  if (violations.length) {
+    return { plan: null, error: violations.slice(0, 4).join('; '), recoverable: true }
+  }
+  if (!tasks.length) {
+    return { plan: null, error: 'Planner returned no valid worker tasks', recoverable: true }
+  }
 
-    for (const [index, t] of candidate.tasks.entries()) {
-      const title = cleanPlanText(t.title)
-      const description = cleanPlanText(t.description)
-      const agentKey = typeof t.agentKey === 'string' ? t.agentKey : ''
-      const requestedAgent = agentMap.get(agentKey)
-      if (!title || !description || !requestedAgent) continue
-      const taskType = parseTaskType(t.taskType)
+  for (const task of tasks) {
+    task.dependencies = task.dependencies.map((dep) => rawIdToUuid.get(dep) ?? dep)
+  }
 
-      const rawId = cleanPlanText(t.id) || slugifyTaskId(title, index)
-      const id = crypto.randomUUID()
-      rawIdToUuid.set(rawId, id)
-      if (taskIds.has(id)) continue
-      taskIds.add(id)
+  const knownTaskIds = new Set(tasks.map((task) => task.id))
+  const unresolvedDependencies = tasks.flatMap((task) =>
+    task.dependencies
+      .filter((dep) => !knownTaskIds.has(dep))
+      .map((dep) => `${task.title} -> ${dep}`),
+  )
+  if (unresolvedDependencies.length) {
+    return {
+      plan: null,
+      error: `Planner returned dependencies that do not match any task: ${unresolvedDependencies.slice(0, 4).join('; ')}`,
+      recoverable: true,
+    }
+  }
 
-      const deps: string[] = []
-      if (Array.isArray(t.dependencies)) {
-        for (const dep of t.dependencies) {
-          if (typeof dep === 'string') deps.push(dep)
-        }
-      }
+  const assignmentError = validateRealWorkerAssignments({ agents, tasks })
+  if (assignmentError) {
+    return { plan: null, error: assignmentError, recoverable: true }
+  }
 
-      tasks.push({
-        id,
-        phaseId: cleanPlanText(t.phaseId) || undefined,
-        title,
-        description,
-        agentId: requestedAgent.id,
-        taskType,
-        dependencies: deps,
-        parallelGroup: typeof t.parallelGroup === 'string' ? t.parallelGroup : undefined,
-        maxRetries: typeof t.maxRetries === 'number' ? Math.max(0, Math.min(t.maxRetries, 5)) : 2,
-        outputContract: normalizeTaskOutputContract(t.outputContract, id),
-        validation: normalizeTaskValidation(t.validation),
+  applyContractDefaults(tasks, contracts)
+  const phases = normalizePhases(candidate.phases, tasks, rawIdToUuid)
+  const contractError = validatePlannerContracts(tasks, contracts)
+  if (contractError) {
+    return { plan: null, error: contractError, recoverable: true }
+  }
+
+  const clarificationQuestions: ClarificationQuestion[] = []
+  if (Array.isArray(candidate.clarificationQuestions)) {
+    for (const q of candidate.clarificationQuestions) {
+      if (!q || typeof q !== 'object') continue
+      const question = cleanPlanText(q.question)
+      if (!question) continue
+      const options = Array.isArray(q.options)
+        ? q.options.filter((o): o is string => typeof o === 'string')
+        : []
+      clarificationQuestions.push({
+        id: typeof q.id === 'string' ? q.id : `cq-${clarificationQuestions.length}`,
+        question,
+        options: options.length > 0 ? options : undefined,
       })
     }
+  }
 
-    if (!tasks.length) return null
+  const mode =
+    typeof candidate.collaborationMode === 'string' &&
+    ['pipeline', 'mapreduce', 'supervisor'].includes(candidate.collaborationMode)
+      ? (candidate.collaborationMode as CollaborationMode)
+      : undefined
 
-    // 将依赖中的 rawId 替换为 UUID
-    for (const task of tasks) {
-      task.dependencies = task.dependencies.map((dep) => rawIdToUuid.get(dep) ?? dep)
-    }
-
-    // 提取并规范化 phases
-    const phases = this.normalizePhases(candidate.phases, tasks, rawIdToUuid)
-
-    // Extract clarification questions
-    const clarificationQuestions: ClarificationQuestion[] = []
-    if (Array.isArray(candidate.clarificationQuestions)) {
-      for (const q of candidate.clarificationQuestions) {
-        if (!q || typeof q !== 'object') continue
-        const question = cleanPlanText(q.question)
-        if (!question) continue
-        const options = Array.isArray(q.options)
-          ? q.options.filter((o): o is string => typeof o === 'string')
-          : []
-        clarificationQuestions.push({
-          id: typeof q.id === 'string' ? q.id : `cq-${clarificationQuestions.length}`,
-          question,
-          options: options.length > 0 ? options : undefined,
-        })
-      }
-    }
-
-    const mode =
-      typeof candidate.collaborationMode === 'string' &&
-      ['pipeline', 'mapreduce', 'supervisor'].includes(candidate.collaborationMode)
-        ? (candidate.collaborationMode as CollaborationMode)
-        : undefined
-
-    return {
+  return {
+    plan: {
       runId,
       title: cleanPlanText(candidate.title) || titleFromGoal(goal),
       goal,
@@ -477,78 +431,184 @@ ${spec.modules.map((m) => `- ${m.name}：${m.responsibility}（依赖：${m.depe
       collaborationMode: mode,
       clarificationQuestions:
         clarificationQuestions.length > 0 ? clarificationQuestions : undefined,
+    },
+    recoverable: false,
+  }
+}
+
+export function validateRealWorkerAssignments(input: {
+  agents: Array<Pick<ExecutionAgent, 'id' | 'key' | 'name' | 'roleType'>>
+  tasks: Array<Pick<ExecutionTask, 'agentId' | 'title'>>
+}): string | null {
+  const workers = input.agents.filter((agent) => agent.roleType !== 'orchestrator')
+  if (!workers.length) return 'No worker agents are available; Orchestrator cannot execute tasks by itself'
+
+  const agentById = new Map(input.agents.map((agent) => [agent.id, agent]))
+  const assignedWorkerIds = new Set<string>()
+  for (const task of input.tasks) {
+    const agent = agentById.get(task.agentId)
+    if (!agent) return `Task "${task.title}" references an agent that is not in the current team`
+    if (agent.roleType === 'orchestrator') {
+      return `Task "${task.title}" is assigned to Orchestrator; worker tasks must use specialist agents`
+    }
+    assignedWorkerIds.add(agent.id)
+  }
+
+  if (workers.length >= 2 && assignedWorkerIds.size < 2) {
+    return 'At least two different worker agents must participate when two or more workers are available'
+  }
+
+  return null
+}
+
+function normalizePhases(
+  phases: unknown,
+  tasks: ExecutionTask[],
+  rawIdToUuid: Map<string, string>,
+): import('./types').OrchestratorPhase[] {
+  const normalized: import('./types').OrchestratorPhase[] = []
+  if (Array.isArray(phases)) {
+    for (const phase of phases) {
+      if (!phase || typeof phase !== 'object') continue
+      const item = phase as {
+        id?: unknown
+        title?: unknown
+        purpose?: unknown
+        taskIds?: unknown
+      }
+      const id = cleanPlanText(item.id)
+      if (!id || normalized.some((existing) => existing.id === id)) continue
+      const rawTaskIds = Array.isArray(item.taskIds)
+        ? item.taskIds.filter((taskId): taskId is string => typeof taskId === 'string')
+        : []
+      const taskIds = rawTaskIds
+        .map((tid) => rawIdToUuid.get(tid) ?? tid)
+        .filter(Boolean) as string[]
+      normalized.push({
+        id,
+        title: cleanPlanText(item.title) || phaseTitleFromId(id),
+        purpose: cleanPlanText(item.purpose) || phasePurposeFromId(id),
+        taskIds,
+      })
     }
   }
 
-  private normalizePhases(
-    phases: unknown,
-    tasks: ExecutionTask[],
-    rawIdToUuid: Map<string, string>,
-  ): import('./types').OrchestratorPhase[] {
-    const normalized: import('./types').OrchestratorPhase[] = []
-    if (Array.isArray(phases)) {
-      for (const phase of phases) {
-        if (!phase || typeof phase !== 'object') continue
-        const item = phase as {
-          id?: unknown
-          title?: unknown
-          purpose?: unknown
-          taskIds?: unknown
+  for (const task of tasks) {
+    const phaseId = task.phaseId ?? normalized.find((item) => item.taskIds.includes(task.id))?.id ?? 'execution'
+    task.phaseId = phaseId
+    let phase = normalized.find((item) => item.id === phaseId)
+    if (!phase) {
+      phase = {
+        id: phaseId,
+        title: phaseTitleFromId(phaseId),
+        purpose: phasePurposeFromId(phaseId),
+        taskIds: [],
+      }
+      normalized.push(phase)
+    }
+    if (!phase.taskIds.includes(task.id)) phase.taskIds.push(task.id)
+  }
+
+  return normalized
+}
+
+function phaseTitleFromId(id: string): string {
+  if (id === 'analysis') return '分析'
+  if (id === 'design') return '设计'
+  if (id === 'implementation') return '实现'
+  if (id === 'verification') return '验证'
+  if (id === 'synthesis') return '汇总'
+  return '执行'
+}
+
+function phasePurposeFromId(id: string): string {
+  if (id === 'analysis') return '理解目标和上下文'
+  if (id === 'design') return '确定方案和边界'
+  if (id === 'implementation') return '完成核心实现'
+  if (id === 'verification') return '验证质量和风险'
+  if (id === 'synthesis') return '汇总协作产出'
+  return '推进当前任务'
+}
+
+function validatePlannerContracts(tasks: ExecutionTask[], contracts: CollaborationContract[]) {
+  if (!contracts.length) return null
+  const requiredArtifacts = new Set<string>()
+  for (const contract of contracts) {
+    for (const artifact of contract.outputs.requiredArtifacts) requiredArtifacts.add(artifact)
+    for (const forbiddenPath of contract.scope.forbiddenPaths) {
+      for (const task of tasks) {
+        const allowedPaths = task.outputContract?.allowedPaths ?? []
+        if (allowedPaths.some((allowed) => pathPatternIntersects(allowed, forbiddenPath))) {
+          return `Task "${task.title}" declares an allowed path that intersects forbidden contract path "${forbiddenPath}"`
         }
-        const id = cleanPlanText(item.id)
-        if (!id || normalized.some((existing) => existing.id === id)) continue
-        const rawTaskIds = Array.isArray(item.taskIds)
-          ? item.taskIds.filter((taskId): taskId is string => typeof taskId === 'string')
-          : []
-        const taskIds = rawTaskIds
-          .map((tid) => rawIdToUuid.get(tid) ?? tid)
-          .filter(Boolean) as string[]
-        normalized.push({
-          id,
-          title: cleanPlanText(item.title) || this.phaseTitleFromId(id),
-          purpose: cleanPlanText(item.purpose) || this.phasePurposeFromId(id),
-          taskIds,
-        })
       }
     }
+  }
 
-    for (const task of tasks) {
-      const phaseId = task.phaseId ?? 'execution'
-      task.phaseId = phaseId
-      let phase = normalized.find((item) => item.id === phaseId)
-      if (!phase) {
-        phase = {
-          id: phaseId,
-          title: this.phaseTitleFromId(phaseId),
-          purpose: this.phasePurposeFromId(phaseId),
-          taskIds: [],
-        }
-        normalized.push(phase)
-      }
-      if (!phase.taskIds.includes(task.id)) phase.taskIds.push(task.id)
+  for (const required of requiredArtifacts) {
+    const matched = tasks.some((task) => (task.outputContract?.requiredArtifacts ?? []).includes(required))
+    if (!matched) return `Explicit collaboration contract requires artifact "${required}" but no task declares it`
+  }
+  const requiresBlackboardWrites = contracts.some(
+    (contract) => contract.outputs.requiredBlackboardWrites.length > 0,
+  )
+  if (
+    requiresBlackboardWrites &&
+    !tasks.some((task) => (task.outputContract?.requiredBlackboardWrites ?? []).length > 0)
+  ) {
+    return 'Explicit collaboration contract requires blackboard writes but no task declares any blackboard output contract'
+  }
+
+  return null
+}
+
+function applyContractDefaults(tasks: ExecutionTask[], contracts: CollaborationContract[]) {
+  if (!contracts.length) return
+  const allowedPaths = contracts.flatMap((contract) => contract.scope.allowedPaths)
+  const acceptanceCriteria = contracts.flatMap((contract) => [
+    ...contract.quality.acceptanceCriteria,
+    ...contract.quality.qualityGates,
+  ])
+  if (!allowedPaths.length && !acceptanceCriteria.length) return
+
+  for (const task of tasks) {
+    const current = task.outputContract ?? {
+      requiredBlackboardWrites: [],
+      requiredArtifacts: [],
+      allowedPaths: [],
+      acceptanceCriteria: [],
     }
-
-    return normalized
+    const nextAllowed = uniqueStrings([
+      ...(current.allowedPaths ?? []),
+      ...allowedPaths,
+    ])
+    const nextCriteria = uniqueStrings([
+      ...(current.acceptanceCriteria ?? []),
+      ...acceptanceCriteria,
+    ])
+    task.outputContract = {
+      ...current,
+      allowedPaths: nextAllowed,
+      acceptanceCriteria: nextCriteria,
+    }
   }
+}
 
-  private phaseTitleFromId(id: string): string {
-    if (id === 'analysis') return '分析'
-    if (id === 'design') return '设计'
-    if (id === 'implementation') return '实现'
-    if (id === 'verification') return '验证'
-    if (id === 'synthesis') return '汇总'
-    return '执行'
-  }
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
+}
 
-  private phasePurposeFromId(id: string): string {
-    if (id === 'analysis') return '理解目标和上下文'
-    if (id === 'design') return '确定方案和边界'
-    if (id === 'implementation') return '完成核心实现'
-    if (id === 'verification') return '验证质量和风险'
-    if (id === 'synthesis') return '汇总协作产出'
-    return '推进当前任务'
-  }
+function pathPatternIntersects(a: string, b: string) {
+  const left = normalizePathPattern(a)
+  const right = normalizePathPattern(b)
+  if (!left || !right) return false
+  if (left === right) return true
+  if (left.startsWith(right.replace(/\*\*$/, '')) || right.startsWith(left.replace(/\*\*$/, ''))) return true
+  return false
+}
 
+function normalizePathPattern(pattern: string) {
+  return pattern.trim().replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/+$/, '')
 }
 
 export function normalizeTaskOutputContract(

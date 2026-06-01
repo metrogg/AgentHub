@@ -5,6 +5,7 @@
 本文档记录 AgentHub 当前应遵守的多 Agent 协作设计。它用于统一产品、前端、后端和 Coding Agent 的判断，避免旧设计继续造成混乱。
 
 更完整的分层架构与业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
+Spec Kit 契约化和 AG-UI 事件收敛路线见 `docs/SpecKit契约与AGUI事件落地路线.md`。
 
 ## 设计目标
 
@@ -30,6 +31,7 @@ AgentHub 需要把以下层次分开设计：
 | Agent 身份层 | `code-agent` 是主路径；`llm` 是内部/兜底；A2A/MCP/Skills/Rules 都不是 Agent 类型 |
 | 执行运行时层 | Codex CLI、Claude Code、OpenCode、Gemini CLI 作为 Coding Agent 基底 |
 | 能力工具层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 可用能力 |
+| 协作契约层 | 用户显式提供的 Spec / Contract 只描述范围、产出、验收和路径边界，不做固定模板或意图路由 |
 | 工作区与状态层 | 系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/handoff`、local sandbox root、blackboard、execution logs、run events |
 
 产品层应学习 WorkBuddy / Kimi 群聊 / Claude Code subagents 的“主对话可见、子任务可进、过程可信”；编排层应学习 LangGraph / Microsoft Agent Framework 的 DAG、checkpoint、resume、HITL；协议层应坚持 A2A / AG-UI / MCP 各管一层，不互相冒充。
@@ -99,6 +101,7 @@ workspaceAgentId != null
 - 左侧群聊下自动补齐“未开始子会话”。
 - `workspace / Agent` 形式的历史入口。
 - 固定三段式模板作为正常计划来源。
+- 内置 `.agenthub/specs/*.spec.yml` 场景模板，以及把 specs 自动复制到新工作区。
 - `classic` 工作区模板、默认代码团队、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。
 - 将所有复杂请求伪装成 Orchestrator 一个人完成。
 
@@ -180,6 +183,7 @@ A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库�
 - 用户选择本地工作区后，项目根就是 `projectRoot`。
 - 写入型 Agent 在 `.agenthub/workdirs/...` 中执行。
 - 只读 Agent 可以读取项目根。
+- 显式协作契约放在 `.agenthub/contracts/*.contract.json|yml`；旧的 `.agenthub/specs/*.spec.yml` 只作为历史残留，不再参与主路径。
 - 如果用户未选择工作区，系统会在默认工作空间存储路径下自动创建一个可写工作区。
 - 默认工作空间存储路径必须位于系统用户数据目录，例如 Windows 的 `%LOCALAPPDATA%\AgentHub\workspaces`，不能回落到 AgentHub 源码仓库。
 - 用户可以在设置里修改默认工作空间存储路径，建议使用用户目录或单独数据盘目录，不要选择 AgentHub 项目源码目录。

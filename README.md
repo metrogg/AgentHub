@@ -38,7 +38,7 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 - 展开群聊后只显示真实任务子对话。
 - 旧的 `workspace-agent-child` 和历史占位入口不再作为当前 UI。
 
-更详细的当前架构见 [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)。
+更详细的当前架构见 [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)，Spec Kit 契约化与 AG-UI 收敛路线见 [docs/SpecKit契约与AGUI事件落地路线.md](docs/SpecKit契约与AGUI事件落地路线.md)。
 
 ## 分层定位
 
@@ -51,6 +51,7 @@ AgentHub 的目标不是做一个固定角色模板系统，而是把多 Coding 
 | 通信协议层 | A2A 承载 Agent 间 message/task/artifact，AG-UI 承载运行事件到 UI |
 | 执行层 | Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Agent 基底，LLM 为内部/兜底 |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
+| 协作契约层 | 用户显式 Spec 描述范围、产出、验收和路径边界，不做固定场景模板 |
 | 工作区层 | 系统默认工作空间根 + 项目根 + `.agenthub/workdirs` + `.agenthub/handoff` + blackboard |
 
 完整分层和业内方案对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)。

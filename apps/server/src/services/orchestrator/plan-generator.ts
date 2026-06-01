@@ -9,6 +9,11 @@ import {
 } from '@agenthub/shared'
 import { Planner } from './planner'
 import type { CollaborationMode, ExecutionPlan, TaskOutputContract, TaskValidation } from './types'
+import {
+  formatContractsForPlanner,
+  loadExplicitCollaborationContracts,
+  type CollaborationContract,
+} from './collaboration-contract'
 
 type PlanAgent = {
   key: string
@@ -110,17 +115,18 @@ export async function buildDynamicOrchestratorPlan(
   }
 
   const planner = new Planner()
+  const collaborationContracts = await loadExplicitCollaborationContracts(workspacePath)
   const executionPlan = await planner.createPlan({
     goal,
     agents: workerPlanningAgents.map(toExecutionAgent),
     workspacePath,
-    useSpecFirst: false,
+    collaborationContracts,
     plannerModelId: orchestratorAgent?.modelId,
     plannerSystemPrompt: orchestratorAgent?.systemPrompt,
     plannerAgent: orchestratorAgent ? toExecutionAgent(orchestratorAgent) : null,
   })
 
-  return executionPlanToOrchestratorPlan(executionPlan, workerPlanningAgents)
+  return executionPlanToOrchestratorPlan(executionPlan, workerPlanningAgents, collaborationContracts)
 }
 
 function normalizeOrchestratorGoal(content: string) {
@@ -166,12 +172,19 @@ export async function loadWorkspaceAgentRelationsForPlanning(workspaceId: string
 function executionPlanToOrchestratorPlan(
   plan: ExecutionPlan,
   planAgents: PlanAgent[],
+  collaborationContracts: CollaborationContract[],
 ): OrchestratorPlan {
+  const contractSummary = formatContractsForPlanner(collaborationContracts)
   return {
     kind: 'orchestrator_plan',
     title: plan.title,
     goal: plan.goal,
-    summary: `我已根据当前 Agent 团队把「${plan.title}」拆成 ${plan.tasks.length} 个子任务。确认后会创建或复用 Agent Group 并分发执行。`,
+    summary: [
+      `我已根据当前 Agent 团队把「${plan.title}」拆成 ${plan.tasks.length} 个子任务。确认后会创建或复用 Agent Group 并分发执行。`,
+      contractSummary ? `\n${contractSummary}` : '',
+    ]
+      .filter(Boolean)
+      .join(''),
     agents: planAgents,
     phases: plan.phases?.map((p) => ({
       id: p.id,

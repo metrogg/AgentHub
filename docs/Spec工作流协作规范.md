@@ -1,342 +1,120 @@
-# Spec 工作流协作规范
+# Spec 协作契约规范
 
-> 本文档沉淀 AgentHub 中 Spec（`.spec.yml` 工作流定义）的设计定义、文件格式、匹配机制、与 Planner 的集成方式以及协作约定。
+> 状态：已重写。旧版 Spec 曾被设计成“按 trigger 正则命中固定场景模板”的工作流骨架，这与当前 AgentHub 的通用多 Agent 协作目标冲突。当前文档只保留 Spec 作为可选协作契约的设计边界，不再把它作为默认计划来源。
 
-## 1. 架构定位
+## 1. 当前结论
 
-Spec 是 `.agenthub/` 三层配置体系中的一层，与 Skills 和 Rules 并列：
+AgentHub 当前主路径是：
 
+```text
+用户目标
+  -> Orchestrator 动态理解
+  -> Planner 动态生成 DAG
+  -> 多个 Coding Agent 在任务子对话中真实执行
+  -> 主群聊展示进度、成员汇报、产物和最终总结
 ```
-.agenthub/
-  skills/     ← 定义 Agent "怎么做"（系统提示模板）
-  rules/      ← 定义 Agent "不能做什么"（约束/禁止项）
-  specs/      ← 定义多 Agent "怎么协作"（阶段 DAG + 输出契约）
-```
 
-Spec 的核心作用：**为 Planner 提供预定义的协作骨架**，让 LLM 生成的执行计划有结构化的阶段参考，而不是从零推理。
+Spec 不能再承担以下职责：
 
-## 2. 文件格式
+- 不能作为“Web 应用构建”“代码审查”等内置固定场景模板。
+- 不能通过 trigger 正则或关键词抢先判断用户意图。
+- 不能替 Orchestrator/Planner 决定阶段、分工、追加任务。
+- 不能被 `ensureHarnessPresets()` 默认复制到新工作区。
 
-文件名：`{id}.spec.yml`，顶层键为 `spec:`。
+Spec 可以保留的合理定位是：**用户或项目主动提供的协作契约**。它只描述验收标准、输出契约、合规约束、路径边界、可用能力等可校验信息，供 Planner 参考和系统校验，不作为隐藏路由器。
 
-### 2.1 完整 Schema
+当前实现只读取 `.agenthub/contracts/*.contract.json|yml`。旧的 `.agenthub/specs/*.spec.yml` 不再是主路径，`.agenthub/specs` 目录下即使出现 `*.contract.*` 也不会被加载。
+
+## 2. 与旧设计的差异
+
+| 旧设计 | 当前要求 |
+| --- | --- |
+| `.agenthub/specs/web-app-building.spec.yml` 这类内置场景模板 | 删除，不再内置 |
+| `triggers` 正则命中用户目标 | 不作为默认主路径 |
+| 首次命中 Spec 即注入 Planner | 不再让静态规则抢占 Orchestrator 判断 |
+| Spec 定义阶段 DAG 和 requiredAgents | Planner 动态生成 DAG，Spec 最多提供约束 |
+| Spec 与 Skills/Rules 并列复制到新工作区 | 新工作区只复制通用 rules/skills，不复制 specs |
+
+## 3. 推荐的新 Schema 方向
+
+后续如果恢复 Spec，建议改成契约而不是模板：
 
 ```yaml
 spec:
-  id: code-review                    # 唯一标识，与文件名（去 .spec.yml）一致
-  name: 代码审查                      # 显示名称
-  description: 对现有代码进行多维度审查的协作流程
+  id: project-delivery-contract
+  name: 项目交付契约
   version: 1.0.0
 
-  triggers:                          # 触发模式列表（正则或纯文本）
-    - pattern: "(审查|review|检查).*?(代码|code|实现)"
-    - pattern: "code review|cr|review my code"
+  scope:
+    description: 这个工作区希望 Agent 遵守的交付边界
+    allowedPaths:
+      - src/**
+      - docs/**
+    forbiddenPaths:
+      - .env
+      - node_modules/**
 
-  phases:                            # 协作阶段（DAG 有序）
-    - name: static_analysis          # 阶段标识
-      description: 静态分析代码结构、命名规范、潜在bug
-      requiredAgents: [reviewer]     # 推荐的 Agent 能力标签
-      expectedArtifacts:             # 预期产出物
-        - type: review_report
-          schema: ReviewReportSchema
+  outputs:
+    artifactChain:
+      - 需求理解或调研记录
+      - 实施计划
+      - 可交付文件或代码
+      - 验证记录
+      - 最终总结
+    requiredArtifacts:
+      - report
+      - source_file
 
-    - name: security_check
-      description: 安全检查
-      requiredAgents: [security_engineer]
-      dependsOn: [static_analysis]   # 依赖的前置阶段
-      expectedArtifacts:
-        - type: review_report
-          schema: ReviewReportSchema
+  quality:
+    acceptanceCriteria:
+      - 说明完成了哪些用户目标
+      - 标明失败任务和部分产物
+      - 给出可复现的验证方式
+    qualityGates:
+      - 关键产物必须能追溯到 runId、taskId、agentId 和 childSessionId
+      - 验证失败时必须保留部分产物并说明失败原因
 
-  synthesis:                         # 汇总策略
-    mode: final                      # final = 全部完成后汇总 | phased = 每阶段汇总
-    aggregatorPrompt: |              # 汇总提示词
-      请汇总各审查维度的发现，按严重级别排序，给出可执行的修复建议。
+  capabilities:
+    preferredSkills:
+      - document
+      - frontend
+    requiredTools:
+      - workspace:read
 ```
 
-### 2.2 字段说明
+这类 Spec 的作用是约束和校验，不是把“做网站”硬拆成需求分析、架构设计、实现、审查。
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `id` | string | ✅ | 唯一标识，与文件名一致 |
-| `name` | string | ✅ | 显示名称 |
-| `description` | string | ✅ | 工作流描述 |
-| `version` | string | ❌ | 版本号，默认 `1.0.0` |
-| `triggers` | string[] | ❌ | 触发正则列表，用于 `findBestSpec()` 匹配 |
-| `phases` | Phase[] | ✅ | 协作阶段列表 |
-| `phases[].name` | string | ✅ | 阶段标识 |
-| `phases[].description` | string | ✅ | 阶段描述 |
-| `phases[].requiredAgents` | string[] | ❌ | 推荐的 Agent 能力标签 |
-| `phases[].dependsOn` | string[] | ❌ | 依赖的前置阶段 name 列表 |
-| `phases[].expectedArtifacts` | Artifact[] | ❌ | 预期产出物（type + schema） |
-| `synthesis.mode` | string | ❌ | `final` 或 `phased` |
-| `synthesis.aggregatorPrompt` | string | ❌ | 汇总阶段的提示词 |
+## 4. Planner 边界
 
-## 3. 匹配机制
+Planner 可以读取用户显式配置的契约，但必须遵守：
 
-### 3.1 HarnessManager.findBestSpec()
+- 分工来源仍是模型输出。
+- 系统代码只做 schema 校验、路径校验、权限校验、任务依赖合法性校验。
+- 如果契约和用户目标冲突，应让 Orchestrator 说明冲突并询问用户，而不是静默覆盖。
+- 失败时透明报错或重试，不生成静态兜底计划。
 
-Planner 调用 `harnessManager.findBestSpec(goal)` 匹配 Spec：
+## 5. 代码清理状态
 
-```typescript
-findBestSpec(goal: string): HarnessSpec | undefined {
-  for (const spec of this.specs.values()) {
-    for (const trigger of spec.triggers) {
-      // 1. 尝试正则匹配（大小写不敏感）
-      const regex = new RegExp(trigger, 'i')
-      if (regex.test(goal)) return spec
-      // 2. 正则失败则回退到简单包含
-      if (goal.includes(trigger.toLowerCase())) return spec
-    }
-  }
-  return undefined
-}
-```
+已经清理：
 
-匹配逻辑：遍历所有 Spec 的 `triggers`，对用户目标做正则/包含匹配，**首次命中即返回**。
+- 删除内置 `.agenthub/specs/web-app-building.spec.yml`。
+- 删除内置 `.agenthub/specs/code-review.spec.yml`。
+- `ensureHarnessPresets()` 不再把 `specs` 复制到新工作区。
+- `HarnessManager` 和 `Planner` 的运行链路不再使用 `findBestSpec()` / `specPhases` / `ProjectSpec`。
+- 显式契约由独立的契约加载器读取，只认 `.agenthub/contracts`，不再混入 Harness 的 Skills/Rules 路径，也不再兼容 `.agenthub/specs`。
 
-### 3.2 匹配优先级
+历史遗留说明：
 
-当前实现为首次命中即返回，不做评分排序。多个 Spec 的优先级由加载顺序（文件名字母序）决定。
+- 如果未来恢复 Spec，只能作为显式契约读取，而不是自动命中模板。
+- 若要承载复杂契约，应改用正式 YAML/JSON 解析器，而不是当前简单 YAML 兼容器。
 
-> **设计取舍**：Spec 触发词通常是明确的场景标识（如"审查"、"构建"），冲突概率低。若未来需要更智能的匹配，可引入与 SKILL.md 类似的评分机制。
+## 6. 判断准则
 
-## 4. 与 Planner 的集成
+当你准备新增一个 Spec 时，先问：
 
-### 4.1 执行链路
+- 它是在帮 Planner 校验输出，还是替 Orchestrator 决定意图？
+- 它是项目约束，还是固定场景模板？
+- 用户是否显式选择或创建了它？
+- 它失败时是否透明，而不是静默回落到静态计划？
 
-```
-用户发送复杂任务
-  ↓
-OrchestratorEngine.dispatch()
-  ↓
-Planner.createPlan(input)
-  ↓
-┌─────────────────────────────────────────────────────┐
-│ 1. Spec 匹配                                         │
-│    harnessManager.loadFromWorkspace(workspacePath)    │
-│    harnessManager.findBestSpec(goal)                  │
-│    → 若命中，formatSpecPhases(spec) 生成结构化阶段文本   │
-│                                                        │
-│ 2. Spec-first 架构规格生成（useSpecFirst=true 时）      │
-│    generateSpec(goal, agents) → ProjectSpec            │
-│    → LLM 输出模块划分、数据流、技术栈、文件结构            │
-│                                                        │
-│ 3. LLM 生成执行计划                                     │
-│    generateWithLlm(goal, agents, spec, specPhases)     │
-│    → 将 Spec 阶段和架构规格注入 system prompt            │
-│    → LLM 输出 ExecutionPlan JSON                       │
-│                                                        │
-│ 4. 规范化                                              │
-│    normalizeGeneratedPlan(runId, goal, generated)      │
-│    → 生成任务 UUID、替换依赖 ID、提取 phases              │
-└─────────────────────────────────────────────────────┘
-  ↓
-返回 ExecutionPlan → TaskScheduler 执行
-```
-
-### 4.2 Spec 注入方式
-
-`formatSpecPhases()` 将 Spec 转为文本注入 Planner 的 system prompt：
-
-```
-【协作规范：代码审查】
-对现有代码进行多维度审查的协作流程
-
-请按以下阶段组织任务（每个阶段可映射为 1 个或多个 task）：
-1. static_analysis：静态分析代码结构、命名规范、潜在bug
-2. security_check：安全检查：注入、XSS、路径遍历、密钥泄露 （依赖：static_analysis）
-3. test_gap_analysis：检查测试覆盖率和边界条件 （依赖：static_analysis）
-【规范结束】
-```
-
-### 4.3 Spec-first 架构规格
-
-当 `useSpecFirst=true`（默认）时，Planner 先调用 `generateSpec()` 让 LLM 输出一个 `ProjectSpec`：
-
-```json
-{
-  "goal": "实现用户注册登录系统",
-  "modules": [
-    {
-      "name": "auth-service",
-      "responsibility": "处理注册、登录、Token 签发",
-      "interfaces": ["register()", "login()", "verifyToken()"],
-      "dependsOn": ["user-model"]
-    }
-  ],
-  "dataFlow": "前端 → auth API → auth-service → user-model → SQLite",
-  "techStack": "Hono + Drizzle + JWT",
-  "fileLayout": ["src/routes/auth.ts", "src/services/auth.ts"]
-}
-```
-
-该 Spec 再注入到 `generateWithLlm()` 的 prompt 中，引导 LLM 生成更精准的 ExecutionPlan。
-
-### 4.4 ExecutionPlan 输出结构
-
-Planner 最终输出的 `ExecutionPlan` 结构：
-
-```typescript
-interface ExecutionPlan {
-  runId: string
-  title: string
-  goal: string
-  collaborationMode: 'pipeline' | 'mapreduce' | 'supervisor'
-  phases?: OrchestratorPhase[]
-  agents: ExecutionAgent[]
-  tasks: ExecutionTask[]
-  agentRelations?: AgentRelation[]
-  clarificationQuestions?: ClarificationQuestion[]
-}
-
-interface ExecutionTask {
-  id: string              // UUID
-  phaseId?: string        // 所属阶段
-  title: string
-  description: string
-  agentId: string         // 分配的 Agent UUID
-  taskType: 'read' | 'research' | 'design' | 'code' | 'test' | 'review' | 'synthesize'
-  dependencies: string[]  // 依赖的任务 UUID 列表
-  parallelGroup?: string  // 同组可并行执行
-  maxRetries: number      // 最大重试次数（默认 2，上限 5）
-  outputContract?: TaskOutputContract
-  validation?: TaskValidation
-}
-```
-
-## 5. 内置 Specs
-
-### 5.1 代码审查（code-review）
-
-```
-触发词：审查/检查 + 代码/code | code review | cr
-
-阶段 DAG：
-  static_analysis ──┬──→ security_check
-                    └──→ test_gap_analysis
-
-产出：review_report
-汇总模式：final（全部完成后汇总）
-```
-
-### 5.2 Web 应用构建（web-app-building）
-
-```
-触发词：构建/创建/写 + 网站/应用/web/app | build + website/app
-
-阶段 DAG：
-  requirement_analysis → architecture_design → implementation ──→ review
-                                                 ↑                    │
-                                           (frontend, backend)   (reviewer, qa)
-
-产出：spec → design_doc → code_diff → review_report
-汇总模式：phased（每阶段汇总）
-```
-
-## 6. Spec 与 Skills/Rules 的协作
-
-三者通过 Planner 的 prompt 组装形成完整协作链：
-
-```
-Planner system prompt 组成：
-
-1. Orchestrator 角色指令
-2. ★ Spec 阶段骨架（来自 findBestSpec）
-3. ★ Spec-first 架构规格（来自 generateSpec）
-4. Agent 团队目录（capabilityTags、runtimeType 等）
-5. LLM 输出 JSON Schema 约束
-
-任务执行时：
-
-6. Agent 的 capabilityTags → 匹配 Skill
-7. Skill 模板 → 引用 {{RULES.xxx}} → 注入 Rule
-8. 组装后的系统提示 → 发送给 Agent 运行时
-```
-
-间接关联路径：
-
-```
-Spec.phases[].requiredAgents: [reviewer]
-  → Planner 尝试匹配 capabilityTags 含 "review" 的 Agent
-    → Agent 执行时，capabilityTags 触发 Skill 匹配
-      → reviewer.skill.yml 命中
-        → Skill 模板引用 {{RULES.code-quality}} → Rule 注入
-```
-
-## 7. 开发指南
-
-### 7.1 创建新 Spec
-
-1. 在 `.agenthub/specs/` 下创建 `{id}.spec.yml`
-2. 定义 `triggers`：覆盖用户可能的表达方式（中英文、缩写）
-3. 设计 `phases` DAG：明确阶段间依赖关系
-4. 为每个阶段指定 `requiredAgents`：使用能力标签而非具体 Agent 名
-5. 定义 `expectedArtifacts`：让产出可追踪
-6. 选择 `synthesis.mode`：`final` 适合一次性交付，`phased` 适合渐进审查
-
-```yaml
-spec:
-  id: api-development
-  name: API 开发
-  description: 从需求到实现的完整 API 开发流程
-  version: 1.0.0
-
-  triggers:
-    - pattern: "(开发|实现|写).*?(API|接口|服务)"
-    - pattern: "(build|implement|create).*?(api|endpoint|service)"
-
-  phases:
-    - name: api_design
-      description: 设计 API 接口规范，定义请求/响应格式
-      requiredAgents: [architect, backend]
-      expectedArtifacts:
-        - type: api_spec
-          schema: OpenAPISchema
-
-    - name: implementation
-      description: 实现 API 路由、业务逻辑、数据校验
-      requiredAgents: [backend]
-      dependsOn: [api_design]
-      expectedArtifacts:
-        - type: code_diff
-          schema: CodeDiffSchema
-
-    - name: testing
-      description: 编写单元测试和集成测试
-      requiredAgents: [qa, backend]
-      dependsOn: [implementation]
-      expectedArtifacts:
-        - type: test_result
-          schema: TestResultSchema
-
-  synthesis:
-    mode: final
-    aggregatorPrompt: |
-      汇总 API 设计文档、实现代码和测试结果，
-      确保接口一致性，输出完整的交付清单。
-```
-
-### 7.2 Spec 设计原则
-
-| 原则 | 说明 |
-|------|------|
-| **粗粒度阶段** | 每个阶段对应一个协作里程碑，不要拆得太细（Planner 会进一步拆 task） |
-| **能力标签而非人名** | `requiredAgents: [backend]` 而非 `requiredAgents: [zhang-san]`，让 Planner 灵活分配 |
-| **明确依赖** | `dependsOn` 帮助 Planner 构建正确的 DAG，避免隐式顺序假设 |
-| **产出可追踪** | `expectedArtifacts` 让汇总阶段知道要收集什么 |
-| **触发词覆盖** | 中英文、全称、缩写都要覆盖，提升命中率 |
-
-## 8. 当前局限与演进方向
-
-| 维度 | 当前状态 | 演进方向 |
-|------|---------|---------|
-| Spec 匹配 | 首次正则命中即返回 | 评分排序，支持权重/优先级 |
-| Phase-Agent 映射 | `requiredAgents` 仅作为 Planner 参考 | 直接约束 Planner 的 Agent 分配 |
-| 产出物校验 | `expectedArtifacts` 仅作描述，不校验 | Task 完成后校验产出物类型 |
-| Spec 可视化 | 无 | 前端 Spec 编辑器 + DAG 预览 |
-| Spec 版本管理 | 文件级版本号 | 支持升级、回滚、冲突检测 |
-| 多 Spec 组合 | 单次只匹配一个 Spec | 支持 Spec 嵌套/组合（如"构建" = 设计 Spec + 实现 Spec） |
-| 自定义 Spec | 需手动编辑 YAML | 前端可视化 Spec 创建向导 |
-| Spec 模板库 | 仅 2 个内置 Spec | 社区共享的 Spec 模板市场 |
-| Spec 与 Synthesizer 联动 | `synthesis.aggregatorPrompt` 仅作参考 | Synthesizer 根据 Spec 阶段产出物结构化汇总 |
+如果答案偏向“静态判断、固定场景、自动命中”，就不应该加入当前主路径。
