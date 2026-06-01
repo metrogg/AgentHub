@@ -420,6 +420,23 @@ export interface SettingsGeneralInfo {
   }
   git: { runtime: string; path: string; ok: boolean; message: string }
   python: { runtime: string; path: string; ok: boolean; message: string }
+  sandbox: {
+    defaultProvider: string
+    configuredProvider: string
+    cleanupMode: string
+    sandboxRoot: string
+    dockerSandbox: {
+      agent: string
+      available: boolean
+      probe: {
+        version?: string
+        exitCode: number
+        installed?: boolean
+        daemonReady?: boolean
+        message?: string
+      }
+    }
+  }
 }
 
 export interface OpencodeModelItem {
@@ -565,6 +582,23 @@ export interface SettingsGeneralInfo {
   }
   git: { runtime: string; path: string; ok: boolean; message: string }
   python: { runtime: string; path: string; ok: boolean; message: string }
+  sandbox: {
+    defaultProvider: string
+    configuredProvider: string
+    cleanupMode: string
+    sandboxRoot: string
+    dockerSandbox: {
+      agent: string
+      available: boolean
+      probe: {
+        version?: string
+        exitCode: number
+        installed?: boolean
+        daemonReady?: boolean
+        message?: string
+      }
+    }
+  }
 }
 
 export interface Workspace {

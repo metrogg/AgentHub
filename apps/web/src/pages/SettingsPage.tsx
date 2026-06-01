@@ -25,6 +25,7 @@ import {
   Search,
   Server,
   Settings,
+  ShieldCheck,
   Smartphone,
   TerminalSquare,
   Trash2,
@@ -2177,6 +2178,26 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const warningCount = logs.filter((row) => row.level === 'Warn').length
   const agentCount = logs.filter((row) => row.source === 'Agent').length
   const backendCount = logs.filter((row) => row.source === '后端').length
+  const sandbox = generalInfo?.sandbox
+  const sandboxStartCommand = 'sbx daemon start'
+  const sandboxOk = sandbox?.configuredProvider === 'docker-sandbox' && Boolean(sandbox?.dockerSandbox.available)
+  const sandboxStatus = sandbox
+    ? sandboxOk
+      ? 'Docker Sandboxes 可用'
+      : sandbox.configuredProvider === 'docker-sandbox'
+        ? 'Docker Sandboxes 未就绪'
+        : `当前为 ${sandbox.configuredProvider}`
+    : '等待刷新'
+  const sandboxDetail = sandbox
+    ? [
+        `默认 ${sandbox.defaultProvider}`,
+        `清理 ${sandbox.cleanupMode}`,
+        sandbox.dockerSandbox.probe.message
+          ? sandbox.dockerSandbox.probe.message
+          : sandbox.dockerSandbox.probe.version || `探测退出码 ${sandbox.dockerSandbox.probe.exitCode}`,
+      ].join(' · ')
+    : '每个 Agent 任务会创建独立执行沙箱'
+  const sandboxNeedsSetup = sandbox?.configuredProvider === 'docker-sandbox' && !sandboxOk
 
   useEffect(() => {
     void refreshDiagnostics(false)
@@ -2212,7 +2233,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Info',
         source: '后端',
         module: 'settings/general-info',
-        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}`,
+        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.dockerSandbox.available ? 'ok' : 'missing'}`,
       })
       if (visible) showNotice(t('诊断信息已刷新'))
     } catch (error: any) {
@@ -2254,6 +2275,21 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
       showNotice(t('已复制日志'))
     } catch {
       showNotice(t('复制失败'))
+    }
+  }
+
+  async function copySandboxStartCommand() {
+    try {
+      await navigator.clipboard.writeText(sandboxStartCommand)
+      showNotice(t('Docker Sandboxes 启动命令已复制'))
+      appendLog({
+        level: 'Info',
+        source: '前端',
+        module: 'sandbox',
+        content: `copied command: ${sandboxStartCommand}`,
+      })
+    } catch {
+      showNotice(t('复制失败，请手动复制命令'))
     }
   }
 
@@ -2385,6 +2421,39 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             status={generalInfo?.python.ok ? '可用' : '未检测到'}
             detail={generalInfo?.python.runtime ?? '用于脚本工具和文档处理'}
           />
+          <ConsoleDiagnosticCard
+            icon={ShieldCheck}
+            title="执行隔离"
+            status={sandboxStatus}
+            detail={sandboxDetail}
+            action="刷新状态"
+            busy={busy === 'refresh'}
+            onAction={() => void refreshDiagnostics()}
+          />
+          {sandboxNeedsSetup && (
+            <div
+              className="rounded-2xl border p-4 text-sm leading-6 shadow-sm"
+              style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}
+            >
+              <div className="font-semibold">如何启用 Docker Sandboxes</div>
+              <div className="mt-2 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                AgentHub 默认会把每个 Agent 的任务放进独立 Docker Sandboxes 运行，避免多个 OpenCode、Claude Code、Codex 同时共享同一个执行环境。你现在已经安装了 sbx CLI，但后台 daemon 没启动，所以隔离任务会在开始前被拦住。
+              </div>
+              <div className="mt-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--settings-border)', background: 'var(--settings-panel-muted)' }}>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>在终端执行</span>
+                  <button type="button" onClick={() => void copySandboxStartCommand()} className="settings-soft-button h-7 px-2 text-xs">
+                    <Copy className="h-3.5 w-3.5" />
+                    复制
+                  </button>
+                </div>
+                <code className="block break-all font-mono text-xs">{sandboxStartCommand}</code>
+              </div>
+              <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                启动后回到这里点“刷新状态”。如果只是临时开发、不需要真实沙箱，可以在启动服务前设置 AGENTHUB_SANDBOX_PROVIDER=local-workdir；这是兼容模式，不提供真正的系统级隔离。
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

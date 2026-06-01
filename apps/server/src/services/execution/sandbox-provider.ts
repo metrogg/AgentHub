@@ -381,35 +381,81 @@ function buildDockerSandboxEnv(input: {
 }
 
 async function assertSbxAvailable() {
-  const [available] = await probeSbxAvailability()
+  const [available, probe] = await probeSbxAvailability()
   if (!available) {
-    throw new Error('Docker Sandboxes is enabled, but the sbx CLI is not available. Install Docker Sandboxes or set AGENTHUB_SANDBOX_PROVIDER=local-workdir for compatibility mode.')
+    throw new Error(
+      probe.message ||
+        'Docker Sandboxes is enabled, but the sbx CLI is not available. Install Docker Sandboxes or set AGENTHUB_SANDBOX_PROVIDER=local-workdir for compatibility mode.',
+    )
   }
 }
 
-async function probeSbxAvailability(): Promise<[boolean, { version?: string; exitCode: number }]> {
+async function probeSbxAvailability(): Promise<
+  [boolean, { version?: string; exitCode: number; installed?: boolean; daemonReady?: boolean; message?: string }]
+> {
   for (const args of [['--version'], ['version']]) {
     try {
       const proc = Bun.spawn(['sbx', ...args], {
         stdout: 'pipe',
-        stderr: 'ignore',
+        stderr: 'pipe',
+        stdin: 'ignore',
         env: process.env,
       })
-      const code = await Promise.race([
-        proc.exited,
-        new Promise<number>((resolve) => setTimeout(() => resolve(124), 3000)),
-      ])
+      let timedOut = false
+      const timeout = setTimeout(() => {
+        timedOut = true
+        try {
+          proc.kill()
+        } catch {
+          // Best-effort only.
+        }
+      }, 3000)
+      const code = await proc.exited.finally(() => clearTimeout(timeout))
       if (code === 0) {
         const version = (await new Response(proc.stdout).text()).trim()
-        return [true, { version: version || undefined, exitCode: code }]
+        if (/server version:\s*unavailable|daemon not running/i.test(version)) {
+          return [
+            false,
+            {
+              version: version || undefined,
+              exitCode: code,
+              installed: true,
+              daemonReady: false,
+              message: 'Docker Sandboxes CLI is installed, but the daemon is not running. Run `sbx daemon start` before executing isolated agents.',
+            },
+          ]
+        }
+        return [
+          true,
+          { version: version || undefined, exitCode: code, installed: true, daemonReady: true },
+        ]
       }
-      if (code !== 124) continue
-      return [false, { exitCode: code }]
+      if (timedOut) {
+        return [
+          false,
+          {
+            exitCode: 124,
+            installed: true,
+            daemonReady: false,
+            message: 'Docker Sandboxes CLI probe timed out. Start or restart the sbx daemon.',
+          },
+        ]
+      }
+      const stderr = (await new Response(proc.stderr).text()).trim()
+      if (stderr && /unexpected argument|unknown option|not recognized/i.test(stderr)) continue
     } catch {
       // Try the next common version shape before reporting unavailable.
     }
   }
-  return [false, { exitCode: -1 }]
+  return [
+    false,
+    {
+      exitCode: -1,
+      installed: false,
+      daemonReady: false,
+      message: 'Docker Sandboxes CLI is not available on PATH. Install Docker Sandboxes or use local-workdir compatibility mode.',
+    },
+  ]
 }
 
 async function createDockerSandbox(input: {
