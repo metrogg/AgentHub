@@ -7,3 +7,6 @@ cache = true
 [install.scopes]
 # 国内镜像加速（如需）
 # "@npm" = { url = "https://registry.npmmirror.com" }
+
+[test]
+preload = ["./tests/setup.ts"]

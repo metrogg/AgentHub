@@ -567,8 +567,8 @@ function applyContractDefaults(tasks: ExecutionTask[], contracts: CollaborationC
   if (!contracts.length) return
   const allowedPaths = contracts.flatMap((contract) => contract.scope.allowedPaths)
   const acceptanceCriteria = contracts.flatMap((contract) => [
-    ...contract.quality.acceptanceCriteria,
-    ...contract.quality.qualityGates,
+    ...(contract.quality.acceptanceCriteria ?? []),
+    ...(contract.quality.qualityGates ?? []),
   ])
   if (!allowedPaths.length && !acceptanceCriteria.length) return
 

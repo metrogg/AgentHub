@@ -13,8 +13,10 @@ let globalMockedFetch: typeof fetch
 setDefaultTimeout(30000)
 
 beforeAll(async () => {
-  const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-smoke-'))
-  process.env.DATABASE_URL = join(tempDir, 'agenthub-smoke.db')
+  if (process.env.AGENTHUB_TEST_DATABASE_URL_LOCKED !== '1') {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-smoke-'))
+    process.env.DATABASE_URL = join(tempDir, 'agenthub-smoke.db')
+  }
   process.env.LLM_API_KEY = 'test-key'
   process.env.OPENAI_API_KEY = ''
   process.env.ANTHROPIC_API_KEY = ''
