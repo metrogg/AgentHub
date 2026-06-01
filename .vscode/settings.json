@@ -1,0 +1,12 @@
+{
+  "files.exclude": {
+    "**/.agenthub/workdirs": true,
+    "**/.agenthub/handoff": true,
+    "**/.agenthub/sandboxes": true
+  },
+  "search.exclude": {
+    "**/.agenthub/workdirs": true,
+    "**/.agenthub/handoff": true,
+    "**/.agenthub/sandboxes": true
+  }
+}

@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, readdirSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 export interface AgentWorkdirInput {
@@ -18,6 +18,11 @@ export interface AgentWorkdir {
 
 /**
  * 为写入型 Agent 准备一个通用执行目录。
+ *
+ * 这个目录只用于当前任务的产物和中间文件，不再镜像用户项目。
+ * Agent 需要读取原项目时，通过 prompt 中的 originalProjectPath 显式访问；
+ * 这样可以避免搜索重复、上下文污染，以及把运行目录误当真实仓库根。
+ *
  * Current default: stable per-agent execution directories under .agenthub/workdirs.
  * Git branch/worktree isolation is not part of the default execution contract.
  */
@@ -34,59 +39,12 @@ export function prepareAgentWorkdir(input: AgentWorkdirInput): AgentWorkdir | nu
   ].join('/')
   const executionPath = resolve(projectPath, relativePath)
   mkdirSync(executionPath, { recursive: true })
-  seedWorkdir(projectPath, executionPath)
 
   return {
     projectPath,
     executionPath,
     relativePath,
   }
-}
-
-function seedWorkdir(projectPath: string, executionPath: string) {
-  try {
-    mirrorDirectory(executionPath, projectPath, executionPath)
-  } catch {
-    // 复制只是让 Agent 工作目录更接近真实项目；失败时仍允许 Agent 在空目录中产出。
-  }
-}
-
-function mirrorDirectory(targetRoot: string, sourceDir: string, targetDir: string) {
-  const entries = readdirSync(sourceDir, { withFileTypes: true })
-  for (const entry of entries) {
-    if (shouldSkipMirrorEntry(entry.name)) continue
-    const sourcePath = resolve(sourceDir, entry.name)
-    const targetPath = resolve(targetDir, entry.name)
-    if (sourcePath === targetRoot || sourcePath.startsWith(`${targetRoot}\\`) || sourcePath.startsWith(`${targetRoot}/`)) {
-      continue
-    }
-    if (entry.isDirectory()) {
-      mkdirSync(targetPath, { recursive: true })
-      mirrorDirectory(targetRoot, sourcePath, targetPath)
-      continue
-    }
-    if (entry.isFile()) {
-      copyFileSync(sourcePath, targetPath)
-    }
-  }
-}
-
-function shouldSkipMirrorEntry(name: string) {
-  const lower = name.toLowerCase()
-  return [
-    '.agenthub',
-    '.git',
-    'node_modules',
-    'dist',
-    'build',
-    '.next',
-    '.vite',
-    'coverage',
-    '.turbo',
-    '.cache',
-    '.idea',
-    '.vscode',
-  ].includes(lower)
 }
 
 function safePathSegment(value: string) {

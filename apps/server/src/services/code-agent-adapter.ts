@@ -803,6 +803,8 @@ function buildCodeAgentPrompt(
   workspacePath: string,
   skillContext = '',
 ) {
+  const sourcePath = profile.originalProjectPath?.trim() || null
+  const executionPath = workspacePath.trim()
   const recent = history
     .slice(-12)
     .map((message) => ({
@@ -827,6 +829,10 @@ function buildCodeAgentPrompt(
     '请完成任务要求的实际交付物后给出最终总结并正常退出，不要等待用户继续确认。',
     '除非任务明确要求只输出计划，否则不要只创建 plan.md 或 TODO 后就结束。',
     '所有面向用户的计划、状态、总结和错误说明都请使用中文。',
+    sourcePath
+      ? `原项目根路径（只读参考）：${sourcePath}。请从这里读取已有代码和文档，不要直接写入这里。`
+      : '',
+    `Agent 执行目录：${executionPath}。新的文件、临时产物和中间结果优先放在这里。`,
     skillContext,
     '',
     recent ? '最近群聊上下文：' : '',
