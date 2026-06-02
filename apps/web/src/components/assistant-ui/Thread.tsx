@@ -3078,6 +3078,7 @@ const UserMessage: FC = () => {
     state.messages.find((message) => message.id === messageId),
   )
   const editMessage = useChatStore((state) => state.editMessage)
+  const resendMessage = useChatStore((state) => state.resendMessage)
   const withdrawMessage = useChatStore((state) => state.withdrawMessage)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -3100,9 +3101,27 @@ const UserMessage: FC = () => {
     setBusy('edit')
     try {
       await editMessage(sourceMessage.id, draft.trim())
+      await resendMessage(sourceMessage.id)
       setEditing(false)
     } finally {
       setBusy(null)
+    }
+  }
+
+  function cancelEdit() {
+    setDraft(text)
+    setEditing(false)
+  }
+
+  function handleEditKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelEdit()
+      return
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault()
+      void saveEdit()
     }
   }
 
@@ -3127,29 +3146,31 @@ const UserMessage: FC = () => {
 
   return (
     <MessagePrimitive.Root className="group ml-0 mr-auto flex w-full max-w-[var(--thread-max-width)] items-start justify-end gap-3 py-3">
-      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'min-w-0 flex-1' : 'max-w-[68%]')}>
+      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'w-full max-w-[36rem]' : 'max-w-[68%]')}>
         <div
           className={cn(
             'w-full text-sm leading-6 text-neutral-900',
             editing
-              ? 'min-h-36 rounded-[28px] bg-[#f4f4f4] px-4 pb-4 pt-3'
+              ? 'rounded-2xl border border-neutral-200 bg-white p-2.5 shadow-sm'
               : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none',
           )}
         >
           {editing ? (
-            <div className="flex min-h-32 flex-col">
+            <div className="flex flex-col gap-2">
               <textarea
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={handleEditKeyDown}
                 placeholder="编辑消息"
-                className="min-h-20 flex-1 resize-none bg-transparent px-1 py-1 text-base leading-7 text-neutral-900 outline-none placeholder:text-neutral-300"
+                className="max-h-36 min-h-16 resize-y rounded-xl bg-neutral-50 px-3 py-2 text-sm leading-6 text-neutral-900 outline-none ring-1 ring-transparent transition placeholder:text-neutral-400 focus:bg-white focus:ring-neutral-200"
                 autoFocus
               />
-              <div className="mt-4 flex justify-end gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-neutral-400">Ctrl/⌘ + Enter 发送，Esc 取消</span>
                 <button
                   type="button"
-                  onClick={() => setEditing(false)}
-                  className="h-10 rounded-[14px] border border-neutral-200 bg-white px-4 text-base font-medium text-neutral-900 shadow-sm transition hover:bg-neutral-50"
+                  onClick={cancelEdit}
+                  className="h-8 rounded-full border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 hover:text-neutral-900"
                 >
                   取消
                 </button>
@@ -3157,7 +3178,7 @@ const UserMessage: FC = () => {
                   type="button"
                   onClick={saveEdit}
                   disabled={busy === 'edit' || !draft.trim()}
-                  className="h-10 rounded-[14px] bg-neutral-950 px-4 text-base font-semibold text-white shadow-sm transition hover:bg-neutral-800 disabled:bg-neutral-300"
+                  className="h-8 rounded-full bg-neutral-950 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-neutral-800 disabled:bg-neutral-300"
                 >
                   {busy === 'edit' ? '发送中' : '发送'}
                 </button>

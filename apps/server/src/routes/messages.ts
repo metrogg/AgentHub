@@ -213,6 +213,69 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_UPDATE_FAILED, '消息更新失败')
     return c.json(updated)
   })
+  .post('/:sessionId/:messageId/resend', async (c) => {
+    const user = c.get('user')
+    const sessionId = c.req.param('sessionId')
+    const messageId = c.req.param('messageId')
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+    if (!session || session.ownerId !== user.sub)
+      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Session not found')
+
+    const list = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, sessionId))
+      .orderBy(asc(messages.createdAt))
+    const messageIndex = list.findIndex((message) => message.id === messageId)
+    const message = messageIndex >= 0 ? list[messageIndex] : null
+    if (
+      !message ||
+      message.senderType !== 'user' ||
+      message.senderId !== user.sub ||
+      message.sessionId !== sessionId
+    ) {
+      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'User message not found')
+    }
+
+    const affected = collectAffectedMessages(list, messageIndex)
+    for (const item of affected) {
+      await db.delete(messages).where(eq(messages.id, item.id))
+    }
+    const removedMessageIds = affected.map((item) => item.id)
+    const { cancelAgentReply } = await import('../services/agent-runner')
+    cancelAgentReply(sessionId)
+    if (removedMessageIds.length) {
+      broadcastSessionEvent(sessionId, {
+        type: WsEvent.MessageCancelled,
+        payload: { sessionId, removedMessageIds },
+      })
+    }
+
+    if (session.type === 'group' && session.workspaceId) {
+      const agentRows = await db
+        .select()
+        .from(workspaceAgents)
+        .where(eq(workspaceAgents.workspaceId, session.workspaceId))
+        .orderBy(asc(workspaceAgents.orderIdx))
+
+      routeGroupMessageThroughOrchestrator(
+        sessionId,
+        message.content,
+        agentRows,
+        session.workspaceId,
+        user.sub,
+      ).catch((err: any) =>
+        logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed on resend'),
+      )
+    } else {
+      const profile = await profileForDirectSession(session)
+      runAgentReply(sessionId, message, profile).catch((err: any) =>
+        logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on resend'),
+      )
+    }
+
+    return c.json({ removedMessageIds })
+  })
   .patch('/:sessionId/:messageId/pin', async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')

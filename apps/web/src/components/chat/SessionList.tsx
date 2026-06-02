@@ -6,7 +6,7 @@ import {
   AlertTriangle,
   Archive,
   ArchiveRestore,
-  BriefcaseBusiness,
+  Blocks,
   Clock,
   ChevronRight,
   Code2,
@@ -15,7 +15,6 @@ import {
   History,
   Loader2,
   MessageCircle,
-  PanelLeft,
   Pin,
   PinOff,
   Plus,
@@ -57,25 +56,25 @@ import {
 } from '../../lib/accountProfile'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 import { GroupAvatar } from './GroupAvatar'
-type SidebarTab = 'messages' | 'agents' | 'workspace' | 'me'
+type SidebarTab = 'messages' | 'agents' | 'artifacts' | 'abilities' | 'me'
 
 function activeTabFromPath(pathname: string): SidebarTab {
   if (pathname === '/agent-config') return 'agents'
   if (pathname === '/profile' || pathname === '/settings') return 'me'
-  if (
-    [
-      '/models',
-      '/coding-tools',
-      '/skills',
-      '/orchestrator-runs',
-      '/execution-logs',
-    ].includes(pathname)
-  )
-    return 'workspace'
+  if (['/artifacts', '/orchestrator-runs', '/execution-logs'].includes(pathname))
+    return 'artifacts'
+  if (['/abilities', '/models', '/coding-tools', '/skills'].includes(pathname))
+    return 'abilities'
   return 'messages'
 }
 
-export default function SessionList({ onCollapse }: { onCollapse?: () => void }) {
+export default function SessionList({
+  collapsed = false,
+  onCollapse,
+}: {
+  collapsed?: boolean
+  onCollapse?: () => void
+}) {
   const navigate = useNavigate()
   const { t, language } = useI18n()
   const location = useLocation()
@@ -462,6 +461,16 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             icon={MessageCircle}
             label="Messages"
             onClick={() => {
+              if (collapsed) {
+                setTabOverride('messages')
+                navigate(sessionId ? `/chat/${sessionId}` : '/')
+                onCollapse?.()
+                return
+              }
+              if (activeTab === 'messages' && onCollapse) {
+                onCollapse()
+                return
+              }
               setTabOverride('messages')
               navigate(sessionId ? `/chat/${sessionId}` : '/')
             }}
@@ -473,11 +482,19 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             onClick={() => setTabOverride('agents')}
           />
           <DockButton
-            active={activeTab === 'workspace'}
-            icon={BriefcaseBusiness}
-            label="Workspace"
+            active={activeTab === 'artifacts'}
+            icon={Archive}
+            label="产物"
             onClick={() => {
-              navigate('/coding-tools')
+              navigate('/artifacts')
+            }}
+          />
+          <DockButton
+            active={activeTab === 'abilities'}
+            icon={Blocks}
+            label="能力"
+            onClick={() => {
+              navigate('/abilities')
             }}
           />
           <DockButton
@@ -494,25 +511,20 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           </div>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col bg-[#FBFBFB]">
-        <div className="agenthub-session-panel-header flex h-14 items-center justify-between px-4">
+      <div
+        aria-hidden={collapsed}
+        className={cn(
+          'flex min-w-0 flex-1 flex-col bg-[#FBFBFB] transition-opacity duration-300',
+          collapsed && 'pointer-events-none opacity-0',
+        )}
+      >
+        <div className="agenthub-session-panel-header flex h-14 items-center justify-start px-4">
           <div className="agenthub-session-panel-brand flex items-center gap-2">
             <div className="grid h-7 w-7 place-items-center rounded-lg bg-neutral-950 text-white">
               <MessageCircle className="h-4 w-4" />
             </div>
             <span className="text-sm font-semibold text-neutral-950">AgentHub</span>
           </div>
-          {onCollapse && (
-            <button
-              type="button"
-              onClick={onCollapse}
-              className="grid h-8 w-8 place-items-center rounded-md text-neutral-400 transition hover:bg-neutral-200 hover:text-neutral-900"
-              aria-label="收起侧栏"
-              title="收起侧栏"
-            >
-              <PanelLeft className="h-4 w-4" />
-            </button>
-          )}
         </div>
 
         <div className={cn('px-2 pt-3', activeTab !== 'messages' && 'hidden')}>
@@ -581,13 +593,20 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             </span>
           </button>
         </div>
-        {activeTab === 'workspace' && (
+        {activeTab === 'artifacts' && (
           <div className="px-3 pt-3">
-            <div className="px-1 text-sm font-medium text-neutral-900">&gt;工作区</div>
+            <div className="px-1 text-sm font-medium text-neutral-900">产物</div>
           </div>
         )}
 
-        <nav className={cn('space-y-1 px-3 pt-3', activeTab !== 'workspace' && 'hidden')}>
+        <nav className={cn('space-y-1 px-3 pt-3', activeTab !== 'artifacts' && 'hidden')}>
+          <NavItem
+            icon={Archive}
+            label="产物资产库"
+            strong
+            active={location.pathname === '/artifacts'}
+            onClick={() => navigate('/artifacts')}
+          />
           <NavItem
             icon={History}
             label="运行历史"
@@ -599,6 +618,22 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
             label="执行日志"
             active={location.pathname === '/execution-logs'}
             onClick={() => navigate('/execution-logs')}
+          />
+        </nav>
+
+        {activeTab === 'abilities' && (
+          <div className="px-3 pt-3">
+            <div className="px-1 text-sm font-medium text-neutral-900">能力</div>
+          </div>
+        )}
+
+        <nav className={cn('space-y-1 px-3 pt-3', activeTab !== 'abilities' && 'hidden')}>
+          <NavItem
+            icon={Blocks}
+            label="能力商店"
+            strong
+            active={location.pathname === '/abilities'}
+            onClick={() => navigate('/abilities')}
           />
           <NavItem
             icon={SlidersHorizontal}

@@ -1089,6 +1089,10 @@ export const api = {
     request<{ removedMessageId: string }>(`/messages/${sessionId}/${messageId}/regenerate`, {
       method: 'POST',
     }),
+  resendMessage: (sessionId: string, messageId: string) =>
+    request<{ removedMessageIds: string[] }>(`/messages/${sessionId}/${messageId}/resend`, {
+      method: 'POST',
+    }),
   pinMessage: (sessionId: string, messageId: string) =>
     request<Message>(`/messages/${sessionId}/${messageId}/pin`, { method: 'PATCH' }),
   unpinMessage: (sessionId: string, messageId: string) =>
