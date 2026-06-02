@@ -319,14 +319,7 @@ async function _runAgentReply(
   if (looksLikeAgentFailure(fullContent)) failed = true
 
   if (run.cancelled) {
-    if (!fullContent.trim()) {
-      broadcast(sessionId, {
-        type: 'message:cancelled',
-        payload: { sessionId },
-      })
-      return { ok: false, cancelled: true }
-    }
-    fullContent = `${fullContent.trimEnd()}\n\n[用户已停止]`
+    return { ok: false, cancelled: true }
   }
 
   if (!fullContent.trim()) {

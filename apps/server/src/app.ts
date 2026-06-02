@@ -18,6 +18,7 @@ import { welcomeRoutes } from './routes/welcome'
 import { protocolRoutes } from './routes/protocols'
 import { fileRoutes } from './routes/files'
 import { translateRoutes } from './routes/translate'
+import { agentConfigRoutes } from './routes/agent-config'
 import { requestContextMiddleware } from './middleware/request-context'
 import { formatErrorResponse } from './lib/error'
 import { APP_VERSION } from '@agenthub/shared'
@@ -51,6 +52,7 @@ const routes = app
   .route('/api/protocols', protocolRoutes)
   .route('/api/files', fileRoutes)
   .route('/api/translate', translateRoutes)
+  .route('/api/agent-config', agentConfigRoutes)
 
 app.get('/deploy/:workspaceId/*', async (c) => {
   const workspaceId = c.req.param('workspaceId')

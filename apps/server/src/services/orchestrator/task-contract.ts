@@ -12,6 +12,11 @@ export interface TaskContractResult {
   violations: TaskContractViolation[]
 }
 
+/**
+ * Contract failures are not always task failures. Delivery artifacts can turn a
+ * safe relative path mismatch into a warning, while missing outputs still block
+ * downstream tasks.
+ */
 export function hasFatalTaskContractViolations(
   violations: TaskContractViolation[],
   artifacts: Array<Record<string, unknown>> = [],
@@ -19,6 +24,10 @@ export function hasFatalTaskContractViolations(
   return violations.some((violation) => isFatalTaskContractViolation(violation, artifacts))
 }
 
+/**
+ * Only downgrade path violations when the task produced a delivery-style
+ * artifact and the reported path is safe to expose as a relative artifact path.
+ */
 export function isFatalTaskContractViolation(
   violation: TaskContractViolation,
   artifacts: Array<Record<string, unknown>> = [],
