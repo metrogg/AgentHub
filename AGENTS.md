@@ -1,17 +1,31 @@
 # AgentHub
 
-本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前状态与下一步路线.md`、`docs/当前多Agent协作架构.md`、`docs/场景角色团队协作调研.md`、`docs/角色提示词与动态组队设计.md`、`docs/专家库与开源角色Skill生态调研.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
+本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前状态与下一步路线.md`、`docs/Coze新版本对标拆解与开源复刻路线.md`、`docs/当前多Agent协作架构.md`、`docs/场景角色团队协作调研.md`、`docs/角色提示词与动态组队设计.md`、`docs/专家库与开源角色Skill生态调研.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
 更完整的分层设计和业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
 
 ## 当前目标
 
-AgentHub 是一个 IM 式多 Agent 协作平台，也是字节跳动 AI 全栈挑战赛项目。核心体验不是“一个模型假装多人说话”，而是：
+AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经进一步明确为：
+
+- 近期运行时主路径：IM 式多 Agent 协作。
+- 中期产品目标：`Coze 风格的开源 AI 工作平台`。
+
+也就是说，群聊、私聊、任务子对话不是终点，而是我们当前承载复杂协作的交互外壳。核心体验不是“一个模型假装多人说话”，而是：
 
 - 用户在群聊里提出复杂目标。
 - Orchestrator 先理解任务、生成动态 DAG 计划。
 - 多个 Agent 在各自的任务子对话里真实执行。
 - 主群聊只展示计划、进度、成员汇报、产物和最终综合结果。
 - 用户可以进入任一子对话查看该 Agent 的完整执行过程。
+
+后续产品层必须逐步补齐 Coze 风格的：
+
+- Space
+- Task Center
+- Asset / Library Center
+- Expert / Skill Center
+- Eval / Trace
+- Coding / Deploy / Long-running Work
 
 不要再引入固定场景模板，例如“网站建设 Team 模板”。当前优先做通用多 Agent 协作能力，场景增强放到后续。
 
@@ -40,7 +54,7 @@ AgentHub 是一个 IM 式多 Agent 协作平台，也是字节跳动 AI 全栈�
 
 `内部 LLM 默认模型` 必须保持可见，且只作用于欢迎页动态提示、Orchestrator、Planner、Synthesizer 等内部模型链路。
 
-AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：用 IM 产品体验承载多 Coding Agent 协作，用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
+AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
 ## 关键交互边界
 

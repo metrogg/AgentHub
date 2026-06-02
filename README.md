@@ -1,15 +1,27 @@
 # AgentHub
 
-AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent 私聊，也可以在群聊中交给 Orchestrator 自动拆解任务、调度多个 Agent、收集产物并汇总结果。
+AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平台”，而是朝着一套 `Coze 风格的开源 AI 工作平台` 演进。
 
-当前项目处于快速迭代阶段，优先目标是跑通通用的“群聊主线 + A2A 任务分发 + 多 Agent 任务子对话 + 本地工作目录 + 产物交接”闭环。
+现阶段的主交互仍然是群聊、私聊和任务子对话，但这些只是工作台的承载外壳。我们真正要做的是：
 
-如果你是第一次接手项目，先读 [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)。它是当前事实总览，用来区分主路径、后续路线和历史遗留设计。
+- 用户围绕一个工作目标发起协作，而不是只发起一段对话。
+- Orchestrator 动态理解目标、规划任务、调度多个 Coding Agent。
+- 多个 Agent 在真实子对话里执行，并交付网页、文档、报告、代码、应用等结果资产。
+- 平台逐步形成 `Space / Task Center / Asset Center / Expert Center / Eval & Trace` 的完整结构。
+
+当前项目仍处于快速迭代阶段，近期优先目标是先把“群聊主线 + A2A 任务分发 + 多 Agent 任务子对话 + 本地工作目录 + 产物交接”闭环跑稳，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
+
+如果你是第一次接手项目，先读 [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)。它是当前事实总览，用来区分主路径、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。
 
 ## 核心体验
 
+从当前版本到目标版本，AgentHub 的体验会分两层理解：
+
+- 当前主路径：IM 风格的多 Agent 协作工作流。
+- 目标产品形态：Coze 风格的 AI 工作台与 AI 空间。
+
 - **Agent 私聊**：用户与单个 Agent 一对一对话。
-- **Agent 群聊**：用户在群聊里提出目标，Orchestrator 负责理解、规划、分工和总结。
+- **Agent 群聊 / 工作会话**：用户围绕目标发起协作，Orchestrator 负责理解、规划、分工和总结。
 - **任务子对话**：每个成员在自己的子对话里真实接收任务并执行，主群聊只展示进度和汇报。
 - **动态任务 DAG**：由模型生成计划，按依赖顺序执行，不使用固定场景模板。
 - **A2A 通信标准**：Orchestrator 给成员分发任务时统一生成 A2A v0.3 `message/send`，A2A 是通信协议，不是 Agent 类型。
@@ -17,6 +29,7 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 - **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI；自建 Agent 是在这些 Coding Agent 基底上配置角色、提示词、Skills/MCP 能力和权限。
 - **工作目录与 handoff**：每个 Agent 有自己的工作目录，上游产物通过 `.agenthub/handoff` 交给下游。
 - **产物可见**：文件、网页、diff、诊断产物会进入消息 metadata 和任务看板。
+- **Coze 对标方向**：后续产品层要逐步补齐 Space、Task Center、Asset Center、Expert Center、Eval / Trace、部署与长期主动任务能力。
 
 ## 当前协作路径
 
@@ -44,19 +57,19 @@ AgentHub 是一个 IM 式多 Agent 协作平台。用户可以和单个 Agent �
 
 ## 分层定位
 
-AgentHub 的目标不是做一个固定角色模板系统，而是把多 Coding Agent 协作做成可见、可控、可追踪的 IM 产品：
+AgentHub 的目标不是做一个固定角色模板系统，也不只是做一个聊天壳上的编排器，而是把多 Coding Agent 协作做成可见、可控、可追踪、可交付的 AI 工作平台：
 
 | 层 | 当前定位 |
 | --- | --- |
-| 产品交互层 | 群聊、私聊、任务子对话、任务看板、产物卡 |
+| 产品交互层 | 群聊、私聊、任务子对话、任务看板、产物卡，并逐步进化为 Space / Task / Asset 工作台 |
 | 编排层 | Orchestrator 动态规划 DAG，调度、取消、重试、汇总 |
 | 通信协议层 | A2A 承载 Agent 间 message/task/artifact，AG-UI 承载运行事件到 UI |
 | 执行层 | Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Agent 基底，LLM 为内部/兜底 |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
-| 协作契约层 | 用户显式 Spec 描述范围、产出、验收和路径边界，不做固定场景模板 |
+| 协作契约层 | 用户显式 Spec/Contract 描述范围、产出、验收和路径边界，不做固定场景模板 |
 | 工作区层 | 系统默认工作空间根 + 项目根 + `.agenthub/workdirs` + `.agenthub/handoff` + blackboard |
 
-完整分层和业内方案对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)。
+完整分层和业内方案对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)。产品北极星与 Coze 对标判断见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。
 
 当前配置真相也分三层：
 
