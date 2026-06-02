@@ -7,6 +7,7 @@ export type TaskExecutor = (task: ExecutionTask, signal: AbortSignal) => Promise
 
 export class TaskScheduler {
   private semaphore = new Semaphore(3)
+  private concurrency = 3
   private aborted = false
   private additionalTasks: ExecutionTask[] = []
   private activeControllers = new Map<string, AbortController>()
@@ -15,7 +16,8 @@ export class TaskScheduler {
   public onPhaseCompleted?: (phaseId: string, phaseTitle: string) => void
 
   setConcurrency(n: number) {
-    this.semaphore = new Semaphore(Math.max(1, Math.min(n, 10)))
+    this.concurrency = Math.max(1, Math.min(n, 10))
+    this.semaphore = new Semaphore(this.concurrency)
   }
 
   async executePlan(
@@ -42,21 +44,26 @@ export class TaskScheduler {
 
     const results = new Map<string, TaskResult>()
     const runController = new AbortController()
+    const emittedCompletedPhaseIds = new Set<string>()
     this.activeControllers.set(plan.runId, runController)
+
+    const emitCompletedPhases = () => {
+      if (collaborationMode !== 'pipeline' || !plan.phases || plan.phases.length === 0) return
+      for (const phase of plan.phases) {
+        if (emittedCompletedPhaseIds.has(phase.id)) continue
+        const phaseTaskIds = phase.taskIds.filter((taskId) => plan.tasks.some((task) => task.id === taskId))
+        if (phaseTaskIds.length === 0) continue
+        const phaseDone = phaseTaskIds.every((taskId) => isTerminalStatus(graph.getStatus(taskId)))
+        if (phaseDone) {
+          emittedCompletedPhaseIds.add(phase.id)
+          this.onPhaseCompleted?.(phase.id, phase.title)
+        }
+      }
+    }
 
     try {
       while (!graph.allDone() && !runController.signal.aborted) {
-        if (collaborationMode === 'pipeline' && plan.phases && plan.phases.length > 0) {
-          const activePhase = plan.phases.find((phase) =>
-            phase.taskIds.some((taskId) => {
-              const status = graph.getStatus(taskId)
-              return status !== 'done' && status !== 'failed' && status !== 'blocked'
-            }),
-          )
-          if (activePhase) {
-            this.onPhaseCompleted?.(activePhase.id, activePhase.title)
-          }
-        }
+        emitCompletedPhases()
 
         if (collaborationMode === 'supervisor' && this.additionalTasks.length > 0) {
           for (const task of this.additionalTasks) {
@@ -69,18 +76,59 @@ export class TaskScheduler {
 
         const readyTasks = graph.getReadyTasks()
         const runningCount = graph.getRunningTasks().length
-        if (runningCount < readyTasks.length) {
-          const toRun = readyTasks.filter((t) => graph.getStatus(t.id) === 'pending').slice(0, readyTasks.length - runningCount)
+        const availableSlots = Math.max(0, this.concurrency - runningCount)
+        if (availableSlots > 0 && readyTasks.length > 0) {
+          const toRun = readyTasks
+            .filter((t) => graph.getStatus(t.id) === 'pending')
+            .slice(0, availableSlots)
           for (const task of toRun) {
             graph.setStatus(task.id, 'running')
             this.runTask(task, graph, results, executor, runController.signal, agentNameById).catch((err) => {
               logger.error({ err, taskId: task.id }, 'Task execution error')
+              graph.setStatus(task.id, 'failed')
+              results.set(task.id, {
+                taskId: task.id,
+                agentId: task.agentId,
+                agentName: agentNameById.get(task.agentId) ?? task.agentId,
+                status: 'failed',
+                output: '',
+                artifacts: [],
+                error: err?.message || 'Task execution error',
+              })
             })
           }
         }
 
+        if (readyTasks.length === 0 && runningCount === 0 && !graph.allDone()) {
+          const pendingTasks = plan.tasks.filter((task) => graph.getStatus(task.id) === 'pending')
+          const details = pendingTasks.map((task) => ({
+            id: task.id,
+            title: task.title,
+            dependencies: task.dependencies,
+            dependencyStatuses: task.dependencies.map((depId) => ({
+              id: depId,
+              status: graph.getStatus(depId),
+            })),
+          }))
+          for (const task of pendingTasks) {
+            graph.setStatus(task.id, 'blocked')
+            results.set(task.id, {
+              taskId: task.id,
+              agentId: task.agentId,
+              agentName: agentNameById.get(task.agentId) ?? task.agentId,
+              status: 'blocked',
+              output: '',
+              artifacts: [],
+              error: '没有可执行任务，DAG 依赖无法继续推进',
+            })
+          }
+          logger.error({ runId: plan.runId, pendingTasks: details }, 'Execution plan stalled')
+          continue
+        }
+
         await sleep(200)
       }
+      emitCompletedPhases()
     } finally {
       this.activeControllers.delete(plan.runId)
       this.activeGraphs.delete(plan.runId)
@@ -123,7 +171,7 @@ export class TaskScheduler {
     runSignal: AbortSignal,
     agentNameById: Map<string, string>,
   ) {
-    const release = await this.semaphore.acquire(60000)
+    let release: (() => void) | null = null
     const taskController = new AbortController()
     const combinedSignal = combineAbortSignals(runSignal, taskController.signal)
 
@@ -143,6 +191,7 @@ export class TaskScheduler {
     }
 
     try {
+      release = await this.semaphore.acquire(60000)
       const result = await executor(task, combinedSignal)
 
       if (combinedSignal.aborted) {
@@ -171,9 +220,19 @@ export class TaskScheduler {
       })
       recordBlockedResults()
     } finally {
-      release()
+      release?.()
     }
   }
+}
+
+function isTerminalStatus(status: string): boolean {
+  return (
+    status === 'done' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'blocked' ||
+    status === 'skipped'
+  )
 }
 
 function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {

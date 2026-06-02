@@ -1,4 +1,4 @@
-import { db, orchestratorRunEvents, asc, eq } from '@agenthub/db'
+import { db, orchestratorRunEvents, and, asc, desc, eq } from '@agenthub/db'
 import { WsEvent } from '@agenthub/shared'
 import { broadcastSessionEvent } from '../agent-runner'
 import { logger } from '../../lib/logger'
@@ -12,6 +12,7 @@ export type OrchestratorRunEventType =
   | 'approval.requested'
   | 'approval.granted'
   | 'phase.started'
+  | 'phase.completed'
   | 'task.queued'
   | 'task.started'
   | 'task.progress'
@@ -49,6 +50,9 @@ export interface EmitRunEventInput {
 export type OrchestratorRunEvent = typeof orchestratorRunEvents.$inferSelect
 
 export async function emitRunEvent(input: EmitRunEventInput): Promise<OrchestratorRunEvent> {
+  const duplicate = await findDuplicateRunEvent(input)
+  if (duplicate) return duplicate
+
   const [event] = await db
     .insert(orchestratorRunEvents)
     .values({
@@ -85,6 +89,26 @@ export async function emitRunEvent(input: EmitRunEventInput): Promise<Orchestrat
   }
 
   return event
+}
+
+async function findDuplicateRunEvent(input: EmitRunEventInput): Promise<OrchestratorRunEvent | null> {
+  if (input.type !== 'phase.completed') return null
+  const phaseId = typeof input.payload?.phaseId === 'string' ? input.payload.phaseId : null
+  if (!phaseId) return null
+
+  const recentEvents = await db
+    .select()
+    .from(orchestratorRunEvents)
+    .where(and(eq(orchestratorRunEvents.runId, input.runId), eq(orchestratorRunEvents.type, input.type)))
+    .orderBy(desc(orchestratorRunEvents.createdAt))
+    .limit(50)
+
+  return (
+    recentEvents.find((event) => {
+      const payload = event.payload
+      return payload && typeof payload === 'object' && !Array.isArray(payload) && payload.phaseId === phaseId
+    }) ?? null
+  )
 }
 
 export async function listRunEvents(runId: string): Promise<OrchestratorRunEvent[]> {
