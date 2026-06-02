@@ -327,7 +327,7 @@ function NewSessionDialog({
       onMouseDown={handleClose}
     >
       <div
-        className="agenthub-portal-theme flex h-[calc(100vh-2rem)] min-h-0 w-[calc(100vw-2rem)] max-w-[960px] flex-col overflow-hidden rounded-[24px] border border-neutral-200/80 bg-[#f7f7f5] shadow-[0_28px_100px_rgba(15,23,42,0.28)] sm:h-[82vh] sm:max-h-[760px] sm:min-h-[520px]"
+        className="agenthub-portal-theme agenthub-new-session-dialog flex h-[calc(100vh-2rem)] min-h-0 w-[calc(100vw-2rem)] max-w-[960px] flex-col overflow-hidden rounded-[24px] border border-neutral-200/80 bg-[#f7f7f5] shadow-[0_28px_100px_rgba(15,23,42,0.28)] sm:h-[82vh] sm:max-h-[760px] sm:min-h-[520px]"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="relative flex h-16 shrink-0 items-center justify-center border-b border-neutral-200/80 bg-[#f7f7f5]/95">

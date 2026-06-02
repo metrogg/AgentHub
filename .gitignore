@@ -67,6 +67,7 @@ packages/*/storage/
 .agenthub-*
 .AgentHub/
 !.agenthub.example
+.worktrees/
 
 # Logs
 *.log

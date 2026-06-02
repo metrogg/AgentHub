@@ -45,8 +45,22 @@ data class Session(
     val workspaceId: String? = null,
     val workspaceAgentId: String? = null,
     val metadata: JsonObject? = null,
+    val lastMessage: SessionLastMessage? = null,
     val createdAt: String = "",
     val updatedAt: String = "",
+)
+
+@Serializable
+data class SessionLastMessage(
+    val content: String = "",
+    val senderType: String = "",
+)
+
+@Serializable
+data class MobileUserProfile(
+    val id: String = "",
+    val name: String = "You",
+    val avatar: String? = null,
 )
 
 @Serializable
@@ -125,6 +139,7 @@ data class MobileSyncResponse(
     val workspaces: List<Workspace> = emptyList(),
     val agents: List<WorkspaceAgent> = emptyList(),
     val contacts: List<AgentContact> = emptyList(),
+    val currentUser: MobileUserProfile = MobileUserProfile(),
 )
 
 @Serializable
@@ -213,8 +228,36 @@ data class MobileWorkbenchRunSummary(
     val groupSessionId: String = "",
     val sessionTitle: String = "",
     val status: String = "",
+    val conflictCount: Int = 0,
     val createdAt: String = "",
     val updatedAt: String = "",
+)
+
+@Serializable
+data class MobileWorkbenchTaskSummary(
+    val id: String,
+    val workspaceId: String,
+    val workspaceName: String = "",
+    val runId: String? = null,
+    val groupSessionId: String? = null,
+    val sessionId: String? = null,
+    val sessionTitle: String = "",
+    val agentId: String? = null,
+    val agentName: String = "",
+    val agentRole: String = "",
+    val title: String = "",
+    val description: String = "",
+    val status: String = "",
+    val progressPercent: Int = 0,
+    val progressStatus: String = "",
+    val phaseId: String? = null,
+    val orderIdx: Int = 0,
+    val requiresAttention: Boolean = false,
+    val createdAt: String = "",
+    val updatedAt: String = "",
+    val startedAt: String? = null,
+    val completedAt: String? = null,
+    val errorLog: String? = null,
 )
 
 @Serializable
@@ -227,6 +270,7 @@ data class MobileWorkbenchResponse(
     val connectivity: MobileWorkbenchConnectivityStatus = MobileWorkbenchConnectivityStatus(),
     val workspaces: List<MobileWorkbenchWorkspaceSummary> = emptyList(),
     val runs: List<MobileWorkbenchRunSummary> = emptyList(),
+    val tasks: List<MobileWorkbenchTaskSummary> = emptyList(),
 )
 
 @Serializable
@@ -234,6 +278,29 @@ data class WorkbenchActionResponse(
     val ok: Boolean = true,
     val status: String? = null,
     val message: String = "",
+)
+
+@Serializable
+data class TestModelRequest(
+    val provider: String? = null,
+    val apiEndpoint: String? = null,
+    val anthropicEndpoint: String? = null,
+    val apiKey: String? = null,
+    val apiKeyEnv: String? = null,
+    val modelId: String? = null,
+)
+
+@Serializable
+data class TestModelResponse(
+    val ok: Boolean = false,
+    val message: String = "",
+    val model: String? = null,
+    val latencyMs: Long? = null,
+)
+
+@Serializable
+data class SettingsResponse(
+    val settings: Map<String, String> = emptyMap(),
 )
 
 @Serializable
@@ -253,6 +320,12 @@ data class CreateSessionRequest(
     val type: String = "direct",
     val workspaceId: String? = null,
     val workspaceAgentId: String? = null,
+)
+
+@Serializable
+data class GroupSessionRequest(
+    val agentIds: List<String> = emptyList(),
+    val title: String? = null,
 )
 
 @Serializable
@@ -281,6 +354,7 @@ data class JoinSessionPayload(
 
 data class MobileUiState(
     val connection: ConnectionConfig? = null,
+    val currentUser: MobileUserProfile = MobileUserProfile(),
     val sessions: List<Session> = emptyList(),
     val workspaces: List<Workspace> = emptyList(),
     val agents: List<WorkspaceAgent> = emptyList(),
@@ -292,6 +366,9 @@ data class MobileUiState(
     val streamingCodeAgentRun: JsonObject? = null,
     val workbench: MobileWorkbenchResponse? = null,
     val workbenchLoading: Boolean = false,
+    val settings: Map<String, String> = emptyMap(),
+    val settingsLoading: Boolean = false,
+    val testModelResult: TestModelResponse? = null,
     val agentTyping: Boolean = false,
     val connecting: Boolean = false,
     val connected: Boolean = false,

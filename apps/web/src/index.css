@@ -883,8 +883,8 @@
     flex-shrink: 0;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid var(--agenthub-menu-border, #e7e7e7);
-    background: var(--agenthub-menu-bg, #fbfbfb);
+    border-bottom: 0;
+    background: #f4f4f1;
     color: var(--agenthub-app-text, #111111);
     font-family: 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif;
     font-size: 0.8125rem;
@@ -904,11 +904,16 @@
   }
 
   .agenthub-desktop-titlebar-left {
-    min-width: 18rem;
+    min-width: 5.75rem;
+    justify-content: flex-start;
+    gap: 0.45rem;
+    padding-left: 0.9rem;
+    z-index: 3;
   }
 
   .agenthub-desktop-titlebar-actions {
     justify-content: flex-end;
+    z-index: 3;
   }
 
   .agenthub-desktop-titlebar-drag {
@@ -917,6 +922,72 @@
     min-width: 3rem;
     cursor: move;
     -webkit-app-region: drag;
+  }
+
+  .agenthub-mac-window-dot {
+    position: relative;
+    display: inline-block;
+    height: 0.75rem;
+    width: 0.75rem;
+    flex: 0 0 auto;
+    border: 0;
+    border-radius: 999px;
+    box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.34);
+  }
+
+  .agenthub-mac-window-dot-close {
+    background: #EF4444;
+  }
+
+  .agenthub-mac-window-dot-minimize {
+    background: #F59E0B;
+  }
+
+  .agenthub-mac-window-dot-maximize {
+    background: #10B981;
+  }
+
+  .agenthub-titlebar-center {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 2;
+    display: inline-flex;
+    max-width: min(30rem, calc(100vw - 22rem));
+    min-width: 0;
+    transform: translate(-50%, -50%);
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    border-radius: 0.55rem;
+    padding: 0.22rem 0.65rem;
+    color: var(--agenthub-app-text, #111111);
+    transition: background-color 120ms ease;
+    -webkit-app-region: no-drag;
+  }
+
+  .agenthub-titlebar-center:hover {
+    background: var(--agenthub-menu-hover, #f7f7f7);
+  }
+
+  .agenthub-titlebar-app-name {
+    flex: 0 0 auto;
+    font-weight: 700;
+  }
+
+  .agenthub-titlebar-page {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--agenthub-app-muted-text, #666660);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agenthub-titlebar-page::before {
+    content: '/';
+    margin-right: 0.45rem;
+    color: color-mix(in srgb, var(--agenthub-app-muted-text, #666660) 58%, transparent);
   }
 
   .agenthub-titlebar-brand {
@@ -945,10 +1016,7 @@
   }
 
   .agenthub-titlebar-divider {
-    height: 1.1rem;
-    width: 1px;
-    margin: 0 0.25rem;
-    background: var(--agenthub-menu-border, #e5e5e0);
+    display: none;
   }
 
   .agenthub-titlebar-location {
@@ -966,6 +1034,8 @@
     align-items: center;
     justify-content: center;
     border-radius: 0.55rem;
+    border: 0;
+    background: transparent;
     line-height: 1;
     color: var(--agenthub-app-muted-text, #666660);
     transition:
@@ -975,7 +1045,7 @@
 
   .agenthub-titlebar-button:hover,
   .agenthub-titlebar-button[aria-pressed='true'] {
-    background: var(--agenthub-menu-hover, #f7f7f7);
+    background: rgba(0, 0, 0, 0.05);
     color: var(--agenthub-app-text, #111111);
   }
 
@@ -1088,6 +1158,13 @@
     border-color: var(--agenthub-app-border, #e5e5e0);
   }
 
+  .agenthub-chat-shell .agenthub-session-sidebar,
+  .agenthub-chat-shell .agenthub-session-sidebar > div,
+  .agenthub-thread-root > div > div > aside {
+    border-left: 0 !important;
+    border-right: 0 !important;
+  }
+
   .agenthub-chat-shell > div > div > aside,
   .agenthub-chat-shell .agenthub-thread-root aside {
     box-shadow: none;
@@ -1096,7 +1173,8 @@
   .agenthub-chat-shell header,
   .agenthub-thread-root header {
     background: var(--agenthub-app-panel, #ffffff);
-    border-color: var(--agenthub-app-border, #e5e5e0);
+    border-bottom: 0 !important;
+    border-color: transparent;
   }
 
   .agenthub-composer-dock {
@@ -1593,6 +1671,38 @@
   .agenthub-portal-theme .shadow-xl,
   .agenthub-portal-theme .shadow-2xl {
     box-shadow: 0 16px 38px rgba(15, 23, 42, 0.1);
+  }
+
+  .agenthub-new-session-dialog {
+    border-color: rgba(190, 190, 180, 0.28) !important;
+  }
+
+  .agenthub-new-session-dialog .border-neutral-100,
+  .agenthub-new-session-dialog .border-neutral-200,
+  .agenthub-new-session-dialog .border-neutral-300 {
+    border-color: rgba(190, 190, 180, 0.28) !important;
+  }
+
+  .agenthub-new-session-dialog .border-t,
+  .agenthub-new-session-dialog .border-r,
+  .agenthub-new-session-dialog .border-b,
+  .agenthub-new-session-dialog .border-l {
+    border-color: rgba(190, 190, 180, 0.18) !important;
+  }
+
+  .agenthub-new-session-dialog :where(input)[class*='border'],
+  .agenthub-new-session-dialog .rounded-2xl.border,
+  .agenthub-new-session-dialog .rounded-3xl.border {
+    border-color: rgba(190, 190, 180, 0.26) !important;
+  }
+
+  .agenthub-new-session-dialog .border-dashed {
+    border-color: rgba(190, 190, 180, 0.24) !important;
+  }
+
+  .agenthub-new-session-dialog .hover\:border-neutral-300:hover,
+  .agenthub-new-session-dialog .hover\:border-neutral-400:hover {
+    border-color: rgba(170, 170, 160, 0.42) !important;
   }
 
   .agenthub-embedded-window {

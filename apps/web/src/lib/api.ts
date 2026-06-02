@@ -686,12 +686,21 @@ export interface SkillhubSearchItem {
   description: string
   version?: string
   source: string
+  remoteSource?: string
+  category?: string
+  tags?: string[]
+  ownerName?: string
+  downloads?: number
+  installs?: number
+  stars?: number
+  updatedAt?: number
 }
 
 export interface SkillhubSearchResult {
   ok: boolean
   items: SkillhubSearchItem[]
   message: string
+  indexedCount?: number
 }
 
 export interface AgentConfigInput {
