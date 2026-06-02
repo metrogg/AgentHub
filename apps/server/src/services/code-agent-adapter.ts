@@ -228,11 +228,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       }
       const addDirs = normalizeStringList(cfg['addDir'] ?? cfg['addDirs'])
       for (const dir of addDirs) args.push('--add-dir', dir)
-      if (
-        options?.sandboxPolicy !== 'read-only' &&
-        permissionMode === 'bypassPermissions' &&
-        cfg['skipPermissions'] !== false
-      ) {
+      if (permissionMode === 'bypassPermissions' && cfg['skipPermissions'] !== false) {
         args.push('--dangerously-skip-permissions')
       }
       return args
@@ -259,11 +255,9 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       const agent =
         typeof cfg['agent'] === 'string' && cfg['agent'].trim()
           ? cfg['agent'].trim()
-          : options?.sandboxPolicy === 'read-only'
-            ? 'plan'
-            : 'build'
+          : 'build'
       args.push('--agent', agent)
-      if (options?.sandboxPolicy !== 'read-only' && cfg['skipPermissions'] !== false) {
+      if (cfg['skipPermissions'] !== false) {
         args.push('--dangerously-skip-permissions')
       }
       args.push(options?.promptFile ? buildFileBackedPrompt(options.promptFile) : prompt)
@@ -597,16 +591,10 @@ async function resolveCodeAgentModelTarget(
 ): Promise<CodeAgentModelTarget | null> {
   const explicitAgentModelId = typeof agentModelId === 'string' ? agentModelId.trim() : ''
   if (explicitAgentModelId) {
-    return (
-      (await resolveCatalogCodeAgentModelTarget(explicitAgentModelId)) ??
-      resolveToolConfigModelTarget(toolConfig, explicitAgentModelId)
-    )
+    return await resolveCatalogCodeAgentModelTarget(explicitAgentModelId)
   }
 
-  return (
-    resolveToolConfigModelTarget(toolConfig) ??
-    (await resolveCatalogCodeAgentModelTarget(readStringConfig(toolConfig ?? {}, 'modelId')))
-  )
+  return await resolveDefaultCodeAgentModelTarget(type)
 }
 
 async function resolveCatalogCodeAgentModelTarget(
@@ -633,53 +621,66 @@ async function resolveCatalogCodeAgentModelTarget(
   }
 }
 
-function resolveToolConfigModelTarget(
-  toolConfig?: Record<string, unknown>,
-  expectedModelId?: string | null,
-): CodeAgentModelTarget | null {
-  if (!toolConfig) return null
+async function resolveDefaultCodeAgentModelTarget(
+  type: CodeAgentType,
+): Promise<CodeAgentModelTarget | null> {
+  const rows = await db.select().from(settings)
+  const settingsMap = Object.fromEntries(rows.map((row) => [row.key, row.value]))
+  const rawCatalog = settingsMap.MODEL_CATALOG
+  if (!rawCatalog) return null
 
-  const modelId = readStringConfig(toolConfig, 'modelId')
-  const baseUrl = readStringConfig(toolConfig, 'baseUrl')?.replace(/\/+$/, '')
-  if (!modelId || !baseUrl) return null
-  if (expectedModelId?.trim() && expectedModelId.trim() !== modelId) return null
-
-  const provider = inferToolConfigProvider(toolConfig, baseUrl)
-  const apiKeyEnv = readStringConfig(toolConfig, 'apiKeyEnv')
-  const apiKey = apiKeyEnv ? readEnv(apiKeyEnv) : undefined
-  const anthropicBaseUrl = isAnthropicLike(provider, baseUrl) ? baseUrl : undefined
-  const openaiBaseUrl = anthropicBaseUrl ? undefined : baseUrl
-
-  return {
-    provider,
-    providerKey: safeProviderKey(provider),
-    modelId,
-    apiKey,
-    apiKeySource: apiKey ? apiKeyEnv : 'coding-tools-config',
-    openaiBaseUrl,
-    anthropicBaseUrl,
+  try {
+    const parsed = JSON.parse(rawCatalog) as Array<{
+      id?: string
+      enabled?: boolean
+      provider?: string
+      modelId?: string
+      apiEndpoint?: string
+      anthropicEndpoint?: string
+    }>
+    for (const item of parsed) {
+      if (!item || item.enabled === false || !item.modelId?.trim()) continue
+      if (!isCatalogModelCompatibleWithCodeAgent(type, item)) continue
+      const resolved = await resolveCatalogCodeAgentModelTarget(item.id ?? item.modelId)
+      if (resolved) return resolved
+    }
+  } catch {
+    return null
   }
+
+  return null
 }
 
-function inferToolConfigProvider(toolConfig: Record<string, unknown>, baseUrl: string) {
-  const explicitProvider = readStringConfig(toolConfig, 'provider')
-  if (explicitProvider) return explicitProvider
+function isCatalogModelCompatibleWithCodeAgent(
+  type: CodeAgentType,
+  item: {
+    provider?: string
+    modelId?: string
+    apiEndpoint?: string
+    anthropicEndpoint?: string
+  },
+) {
+  const modelId = item.modelId?.trim() ?? ''
+  const provider = item.provider?.trim().toLowerCase() ?? ''
+  const apiEndpoint = item.apiEndpoint?.trim().toLowerCase() ?? ''
+  const anthropicEndpoint = item.anthropicEndpoint?.trim().toLowerCase() ?? ''
 
-  const protocol = readStringConfig(toolConfig, 'protocol')
-  if (protocol === 'anthropic-messages') return 'anthropic'
-  if (protocol === 'openai-responses') return 'openai'
-
-  const normalizedBaseUrl = baseUrl.toLowerCase()
-  if (normalizedBaseUrl.includes('deepseek')) return 'deepseek'
-  if (normalizedBaseUrl.includes('dashscope') || normalizedBaseUrl.includes('aliyuncs')) {
-    return 'dashscope'
+  if (type === 'claude-code') {
+    return Boolean(
+      anthropicEndpoint ||
+        provider.includes('anthropic') ||
+        provider.includes('claude') ||
+        /\b(claude|sonnet|opus|haiku)\b/i.test(modelId) ||
+        apiEndpoint.includes('anthropic.com'),
+    )
   }
-  if (normalizedBaseUrl.includes('openrouter')) return 'openrouter'
-  if (normalizedBaseUrl.includes('generativelanguage.googleapis.com')) return 'gemini'
-  if (normalizedBaseUrl.includes('anthropic.com') || normalizedBaseUrl.includes('/anthropic')) {
-    return 'anthropic'
+  if (type === 'codex') {
+    return provider === 'openai' || apiEndpoint.includes('openai.com') || /^(gpt|o[1-9]\b|chatgpt|codex)/i.test(modelId)
   }
-  return 'openai-compatible'
+  if (type === 'gemini') {
+    return provider === 'gemini' || provider === 'google' || /\bgemini\b|\bgoogle\b/i.test(modelId)
+  }
+  return true
 }
 
 async function resolveRuntimeModelTarget(
@@ -744,8 +745,7 @@ function resolveCodeAgentModelCandidates(
   toolConfig?: Record<string, unknown>,
 ) {
   const fromAgent = typeof agentModelId === 'string' ? agentModelId.trim() : ''
-  const fromTool = typeof toolConfig?.['modelId'] === 'string' ? toolConfig['modelId'].trim() : ''
-  return [...new Set([fromAgent, fromTool].filter(Boolean))]
+  return [...new Set([fromAgent].filter(Boolean))]
 }
 
 function isNativeCodeAgentModelIdCompatible(type: CodeAgentType, modelId?: string | null) {
@@ -2618,50 +2618,23 @@ async function resolveToolConfig(toolId: CodeAgentType): Promise<Record<string, 
     const raw = settingsMap.CODING_TOOLS_CONFIG
     const config: Record<string, unknown> = {}
     if (!raw) {
-      return activeToolConfig(toolId, settingsMap, config)
+      return config
     }
     const parsed = JSON.parse(raw) as Array<{
       id: string
       config?: Record<string, unknown>
       provider?: string
       agent?: string
-      modelId?: string
-      baseUrl?: string
-      apiKeyEnv?: string
-      protocol?: string
     }>
     const tool = parsed.find((t) => t.id === toolId)
     Object.assign(config, tool?.config ?? {})
     // 兼容前端直接保存的扁平字段
     if (tool?.provider) config.provider = tool.provider
     if (tool?.agent) config.agent = tool.agent
-    if (tool?.modelId) config.modelId = tool.modelId
-    if (tool?.baseUrl) config.baseUrl = tool.baseUrl
-    if (tool?.apiKeyEnv) config.apiKeyEnv = tool.apiKeyEnv
-    if (tool?.protocol) config.protocol = tool.protocol
-    return activeToolConfig(toolId, settingsMap, config)
+    return config
   } catch {
     return {}
   }
-}
-
-function activeToolConfig(
-  toolId: CodeAgentType,
-  settingsMap: Record<string, string>,
-  config: Record<string, unknown>,
-) {
-  if (settingsMap.CODE_AGENT_ACTIVE_TOOL !== toolId) return config
-
-  const activeModel = settingsMap.CODE_AGENT_ACTIVE_MODEL
-  const activeBaseUrl = settingsMap.CODE_AGENT_ACTIVE_BASE_URL
-  const activeKeyEnv = settingsMap.CODE_AGENT_ACTIVE_API_KEY_ENV
-  const activeProtocol = settingsMap.CODE_AGENT_ACTIVE_PROTOCOL
-
-  if (activeModel && !config.modelId) config.modelId = activeModel
-  if (activeBaseUrl && !config.baseUrl) config.baseUrl = activeBaseUrl
-  if (activeKeyEnv && !config.apiKeyEnv) config.apiKeyEnv = activeKeyEnv
-  if (activeProtocol && !config.protocol) config.protocol = activeProtocol
-  return config
 }
 
 function readEnv(key: string) {
@@ -3084,7 +3057,6 @@ function escapeToml(value: string) {
 
 function toCodexSandbox(sandboxPolicy?: AgentRunProfile['sandboxPolicy']) {
   if (sandboxPolicy === 'danger-full-access') return 'danger-full-access'
-  if (sandboxPolicy === 'read-only') return 'read-only'
   return 'workspace-write'
 }
 
@@ -3097,11 +3069,9 @@ type ClaudePermissionMode =
   | 'bypassPermissions'
 
 function resolveClaudePermissionMode(
-  sandboxPolicy?: AgentRunProfile['sandboxPolicy'],
+  _sandboxPolicy?: AgentRunProfile['sandboxPolicy'],
   cfg: Record<string, unknown> = {},
 ): ClaudePermissionMode {
-  if (sandboxPolicy === 'read-only') return 'plan'
-
   if (cfg['skipPermissions'] === true || cfg['dangerouslySkipPermissions'] === true) {
     return 'bypassPermissions'
   }

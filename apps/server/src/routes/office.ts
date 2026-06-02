@@ -4,6 +4,7 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { ensureStarOfficeRunning, getStarOfficeRuntimeStatus } from '../services/star-office-service'
 import { ensureStarOfficeAgent, starOfficeStateForProfile, pushStarOfficeAgentState } from '../services/star-office-bridge'
 import { logger } from '../lib/logger'
+import type { AgentProfile } from '../services/runtime'
 
 export const officeRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -32,7 +33,7 @@ export const officeRoutes = new Hono<{ Variables: AuthVariables }>()
     const joined: string[] = []
     for (const agent of agents) {
       try {
-        const profile = {
+        const profile: AgentProfile = {
           id: agent.id,
           name: agent.name,
           role: agent.role,
@@ -41,7 +42,8 @@ export const officeRoutes = new Hono<{ Variables: AuthVariables }>()
           codeAgentType: agent.codeAgentType as 'codex' | 'claude-code' | 'opencode' | 'gemini' | undefined,
           capabilityTags: agent.capabilityTags ?? [],
           toolPermissions: agent.toolPermissions ?? [],
-          sandboxPolicy: agent.sandboxPolicy as 'read-only' | 'workspace-write' | 'danger-full-access',
+          sandboxPolicy:
+            agent.sandboxPolicy === 'danger-full-access' ? 'danger-full-access' : 'workspace-write',
           contextPolicy: agent.contextPolicy as 'recent-only' | 'pinned-recent' | 'workspace-aware',
           approvalRequired: agent.approvalRequired,
         }

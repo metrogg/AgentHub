@@ -44,7 +44,6 @@ export function codeAgentLabel(value: NonNullable<WorkspaceAgent['codeAgentType'
  */
 export function sandboxLabel(value: WorkspaceAgent['sandboxPolicy']): string {
   const map: Record<WorkspaceAgent['sandboxPolicy'], string> = {
-    'read-only': '只读',
     'workspace-write': '工作区写入',
     'danger-full-access': '完全访问',
   }

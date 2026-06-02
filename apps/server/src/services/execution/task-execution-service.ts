@@ -64,11 +64,9 @@ export class TaskExecutionService {
     const { taskId, sessionId, projectPath, profile, prompt, signal, attemptCount = 0 } = input
 
     const runId = input.runId ?? 'standalone'
-    const requestedSandboxPolicy = profile.sandboxPolicy ?? 'workspace-write'
-    const executionSandboxPolicy =
-      profile.runtimeType === 'code-agent' && requestedSandboxPolicy === 'read-only'
-        ? 'workspace-write'
-        : requestedSandboxPolicy
+    const requestedSandboxPolicy =
+      profile.sandboxPolicy === 'danger-full-access' ? 'danger-full-access' : 'workspace-write'
+    const executionSandboxPolicy = requestedSandboxPolicy
 
     const taskStartTime = Date.now()
     let executionPath: string | null = null
@@ -133,7 +131,7 @@ export class TaskExecutionService {
         agentId: profile.id,
         agentName: profile.name,
         projectPath: projectPath ?? null,
-        worktreePath: workdir?.executionPath ?? (executionSandboxPolicy === 'read-only' ? null : executionPath),
+        worktreePath: workdir?.executionPath ?? executionPath,
         sandboxPolicy: executionSandboxPolicy,
         envAllowlist: DEFAULT_ENV_ALLOWLIST,
         a2a: input.a2a,

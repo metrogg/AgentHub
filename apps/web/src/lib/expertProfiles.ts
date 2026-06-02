@@ -68,7 +68,8 @@ export function expertProfileToAgentConfig(profile: AgentExpertProfile): AgentCo
     capabilityTags: profile.capabilityTags,
     skillIds: profile.defaultSkillIds,
     toolPermissions: profile.toolPermissions,
-    sandboxPolicy: profile.sandboxPolicy,
+    sandboxPolicy:
+      profile.sandboxPolicy === 'danger-full-access' ? 'danger-full-access' : 'workspace-write',
     contextPolicy: profile.contextPolicy,
     autoInvoke: profile.autoInvoke,
     approvalRequired: profile.approvalRequired,

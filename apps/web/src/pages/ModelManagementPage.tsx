@@ -60,7 +60,6 @@ export default function ModelManagementPage() {
   const { t } = useI18n()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [models, setModels] = useState<ModelConfig[]>(defaultModels)
-  const [activeModelId, setActiveModelId] = useState(defaultModels[0]!.id)
   const [loading, setLoading] = useState(true)
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [draft, setDraft] = useState<ModelConfig>({ ...emptyDraft, id: crypto.randomUUID(), enabled: true })
@@ -84,7 +83,6 @@ export default function ModelManagementPage() {
           }
         }
         setModels(nextModels)
-        setActiveModelId(resolveActiveModelId(nextModels, settings.ACTIVE_MODEL_ID ?? settings.MODEL_PROVIDER))
       })
       .finally(() => setLoading(false))
   }, [])
@@ -92,12 +90,10 @@ export default function ModelManagementPage() {
   useEffect(() => {
     if (loading) return
     const timer = window.setTimeout(() => {
-      const selected = models.find((item) => item.id === activeModelId) ?? models[0]
       setSaveState('saving')
       void api
         .saveSettings({
           MODEL_CATALOG: JSON.stringify(models),
-          ACTIVE_MODEL_ID: selected?.id ?? '',
         })
         .then(() => {
           window.dispatchEvent(new Event(settingsUpdatedEvent))
@@ -107,7 +103,7 @@ export default function ModelManagementPage() {
         .catch(() => setSaveState('error'))
     }, 650)
     return () => window.clearTimeout(timer)
-  }, [activeModelId, loading, models])
+  }, [loading, models])
 
   function updateModel(id: string, patch: Partial<ModelConfig>) {
     setModels((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)))
@@ -131,7 +127,6 @@ export default function ModelManagementPage() {
       setModels((current) => current.map((item) => (item.id === editingId ? draft : item)))
     } else {
       setModels((current) => [...current, draft])
-      setActiveModelId(draft.id)
     }
     setShowEditor(false)
   }
@@ -139,9 +134,7 @@ export default function ModelManagementPage() {
   function deleteModel(id: string) {
     setModels((current) => {
       if (current.length <= 1) return current
-      const next = current.filter((item) => item.id !== id)
-      if (activeModelId === id) setActiveModelId(next[0]!.id)
-      return next
+      return current.filter((item) => item.id !== id)
     })
   }
 
@@ -197,6 +190,9 @@ export default function ModelManagementPage() {
                 {t('模型目录')}
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">{t('模型管理')}</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-600">
+                {t('管理可用模型、双端点地址、密钥变量和连接测试状态。这里维护的是模型目录，不负责给具体 Agent 选组合。')}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -226,8 +222,6 @@ export default function ModelManagementPage() {
           ) : (
             <ModelManagement
               models={models}
-              activeModelId={activeModelId}
-              setActiveModelId={setActiveModelId}
               updateModel={updateModel}
               openEdit={openEdit}
               deleteModel={deleteModel}
@@ -254,7 +248,6 @@ export default function ModelManagementPage() {
           onClose={() => setShowCcswitch(false)}
           onImport={(imported) => {
             setModels((current) => [...current, ...imported])
-            if (imported.length > 0 && !models.length) setActiveModelId(imported[0]!.id)
           }}
         />
       )}
@@ -264,8 +257,6 @@ export default function ModelManagementPage() {
 
 function ModelManagement({
   models,
-  activeModelId,
-  setActiveModelId,
   updateModel,
   openEdit,
   deleteModel,
@@ -274,8 +265,6 @@ function ModelManagement({
   testMessages,
 }: {
   models: ModelConfig[]
-  activeModelId: string
-  setActiveModelId: (id: string) => void
   updateModel: (id: string, patch: Partial<ModelConfig>) => void
   openEdit: (item: ModelConfig) => void
   deleteModel: (id: string) => void
@@ -297,16 +286,21 @@ function ModelManagement({
         <Stat value={testedCount} label="已测试连接" />
       </div>
 
+      <div className="mb-4 rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-600 shadow-sm">
+        <div className="font-medium text-neutral-800">模型目录职责</div>
+        <div className="mt-1 leading-6">
+          这里仅维护模型条目、端点、密钥变量和连通性测试，不负责选择默认模型，也不负责给专家装配
+          CLI × 模型组合。内部 LLM 默认模型请到「设置 / 通用」修改，具体专家的组合请到「Agent 配置」设置。
+        </div>
+      </div>
+
       {/* Mobile: card layout */}
       <div className="space-y-2 md:hidden">
         {models.map((item) => (
-          <div key={item.id} className={cn('rounded-xl border border-neutral-200 bg-white p-3 shadow-sm', activeModelId === item.id && 'border-blue-300 bg-blue-50/30')}>
+          <div key={item.id} className="rounded-xl border border-neutral-200 bg-white p-3 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <input type="radio" checked={activeModelId === item.id} onChange={() => setActiveModelId(item.id)} />
-                  <span className="truncate text-sm font-medium text-neutral-800">{item.name}</span>
-                </div>
+                <div className="truncate text-sm font-medium text-neutral-800">{item.name}</div>
                 <div className="mt-1 truncate font-mono text-xs text-neutral-500">{item.modelId}</div>
               </div>
               <SmallToggle checked={item.enabled} onChange={(enabled) => updateModel(item.id, { enabled })} />
@@ -347,16 +341,11 @@ function ModelManagement({
           </thead>
           <tbody className="divide-y divide-neutral-100">
             {models.map((item) => (
-              <tr key={item.id} className={cn(activeModelId === item.id && 'bg-neutral-50')}>
+              <tr key={item.id}>
                 <td className="px-4 py-3">
                   <SmallToggle checked={item.enabled} onChange={(enabled) => updateModel(item.id, { enabled })} />
                 </td>
-                <td className="px-4 py-3 font-medium text-neutral-800">
-                  <label className="flex items-center gap-2">
-                    <input type="radio" checked={activeModelId === item.id} onChange={() => setActiveModelId(item.id)} />
-                    {item.name}
-                  </label>
-                </td>
+                <td className="px-4 py-3 font-medium text-neutral-800">{item.name}</td>
                 <td className="px-4 py-3 text-neutral-500">{item.provider}</td>
                 <td className="px-4 py-3 font-mono text-xs text-neutral-800">{item.modelId}</td>
                 <td className="px-4 py-3 font-mono text-xs text-neutral-600">
@@ -390,7 +379,7 @@ function ModelManagement({
       </div>
 
       <p className="mt-4 text-xs text-neutral-400">
-        {t('提示：模型变更会自动保存，并作为 Agent 配置和 Coding Tools 的可选模型来源。')}
+        {t('提示：模型管理页只维护目录。内部 LLM 默认模型在设置页维护；具体 Agent 的 CLI × 模型组合请在 Agent 配置页设置。')}
       </p>
     </div>
   )
@@ -535,12 +524,6 @@ function SmallToggle({ checked, onChange }: { checked: boolean; onChange: (check
       <span className={cn('absolute top-1 h-4 w-4 rounded-full bg-white transition', checked ? 'left-6' : 'left-1')} />
     </button>
   )
-}
-
-function resolveActiveModelId(models: ModelConfig[], value: string | undefined) {
-  if (value && models.some((item) => item.id === value)) return value
-  const byProvider = models.find((item) => item.provider === value)
-  return byProvider?.id ?? models[0]?.id ?? defaultModels[0]!.id
 }
 
 function inferProvider(endpoint: string): string {

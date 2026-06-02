@@ -9,7 +9,7 @@ import { agentHubUserCacheRoot, safePathSegment } from '../system-paths'
 export type SandboxProviderKind = 'local-workdir' | 'docker-sandbox' | 'cloud'
 export type ExecutionIsolation = 'workdir' | 'microvm' | 'cloud'
 export type NetworkPolicy = 'default' | 'restricted' | 'disabled'
-export type AgentSandboxPolicy = 'read-only' | 'workspace-write' | 'danger-full-access'
+export type AgentSandboxPolicy = 'workspace-write' | 'danger-full-access'
 
 export interface SandboxSpec {
   provider?: SandboxProviderKind | null
@@ -196,7 +196,6 @@ class DockerSbxSandboxProvider implements SandboxProvider {
       sandboxAgent,
       executionPath,
       extraWorkspaces: [homeDir, cacheDir, configDir, dataDir, tempDir],
-      readOnlyWorkspace: spec.sandboxPolicy === 'read-only',
     })
 
     return {
@@ -284,9 +283,27 @@ export async function describeSandboxRuntimeStatus() {
   const [sbxAvailable, sbxProbe] = await probeSbxAvailability()
   const policy = sbxProbe.daemonReady ? await probeSbxPolicy() : null
   const sandboxProvider = configuredSandboxProviderKind()
+  const sbxInstalled = Boolean(sbxProbe.installed)
+  const daemonReady = Boolean(sbxProbe.daemonReady)
+  const dockerLoggedIn = policy?.authenticated ?? false
+  const policyConfigured = policy?.configured ?? false
+  const sandboxRunnable =
+    sandboxProvider === 'docker-sandbox' &&
+    sbxInstalled &&
+    daemonReady &&
+    dockerLoggedIn &&
+    policyConfigured &&
+    sbxAvailable
   return {
     defaultProvider: 'docker-sandbox',
     configuredProvider: sandboxProvider,
+    providerConfigured: Boolean(sandboxProvider),
+    sbxInstalled,
+    daemonReady,
+    dockerLoggedIn,
+    policyConfigured,
+    sandboxRunnable,
+    supportsPerAgentIsolation: sandboxProvider === 'docker-sandbox' ? sandboxRunnable : false,
     dockerSandbox: {
       agent: readEnv('AGENTHUB_DOCKER_SANDBOX_AGENT') || 'auto',
       available: sbxAvailable && (policy?.configured ?? true),
@@ -465,15 +482,13 @@ async function createDockerSandbox(input: {
   sandboxAgent: string
   executionPath: string
   extraWorkspaces: string[]
-  readOnlyWorkspace: boolean
 }) {
-  const workspaceArg = input.readOnlyWorkspace ? `${input.executionPath}:ro` : input.executionPath
   const args = [
     'create',
     '--name',
     input.sandboxName,
     input.sandboxAgent,
-    workspaceArg,
+    input.executionPath,
     ...input.extraWorkspaces,
   ]
   const proc = Bun.spawn(['sbx', ...args], {

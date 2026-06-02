@@ -5,6 +5,7 @@ import { streamText } from 'ai'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import type { FetchFunction } from '@ai-sdk/provider-utils'
+import { INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING } from '@agenthub/shared'
 import { env } from '../env'
 import { logger } from '../lib/logger'
 
@@ -289,9 +290,20 @@ function withDebugSettings(config: LlmRuntimeConfig, map: Record<string, string>
   }
 }
 
+function resolveInternalDefaultModelId(
+  map: Record<string, string>,
+  selectedModelId?: string | null,
+) {
+  return (
+    clean(selectedModelId) ??
+    clean(map[INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING]) ??
+    clean(map.ACTIVE_MODEL_ID)
+  )
+}
+
 function pickSettingsCandidate(map: Record<string, string>, selectedModelId?: string): ProviderCandidate | null {
   const catalog = parseCatalog(map.MODEL_CATALOG)
-  const activeId = clean(selectedModelId) ?? clean(map.ACTIVE_MODEL_ID)
+  const activeId = resolveInternalDefaultModelId(map, selectedModelId)
   const selected = activeId
     ? catalog.find((item) => (item.id === activeId || item.modelId === activeId) && item.enabled !== false)
     : undefined
@@ -334,7 +346,7 @@ export async function resolveModelApiKey(modelId?: string | null): Promise<{ api
   try {
     const map = await getSettingsMap()
     const catalog = parseCatalog(map.MODEL_CATALOG)
-    const targetId = clean(modelId) ?? clean(map.ACTIVE_MODEL_ID)
+    const targetId = resolveInternalDefaultModelId(map, modelId)
     const item = targetId
       ? catalog.find((entry) => (entry.id === targetId || entry.modelId === targetId) && entry.enabled !== false)
       : catalog.find((entry) => entry.enabled !== false && clean(entry.modelId))
@@ -353,7 +365,7 @@ export async function resolveModelConfig(modelId?: string | null): Promise<Resol
   try {
     const map = await getSettingsMap()
     const catalog = parseCatalog(map.MODEL_CATALOG)
-    const targetId = clean(modelId) ?? clean(map.ACTIVE_MODEL_ID)
+    const targetId = resolveInternalDefaultModelId(map, modelId)
     const item = targetId
       ? catalog.find((entry) => (entry.id === targetId || entry.modelId === targetId) && entry.enabled !== false)
       : catalog.find((entry) => entry.enabled !== false && clean(entry.modelId))

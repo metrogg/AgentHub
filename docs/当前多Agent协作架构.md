@@ -37,6 +37,16 @@ AgentHub 需要把以下层次分开设计：
 
 产品层应学习 WorkBuddy / Kimi 群聊 / Claude Code subagents 的“主对话可见、子任务可进、过程可信”；编排层应学习 LangGraph / Microsoft Agent Framework 的 DAG、checkpoint、resume、HITL；协议层应坚持 A2A / AG-UI / MCP 各管一层，不互相冒充。
 
+## 配置口径
+
+当前配置真相已经拆成三层：
+
+- `模型管理`：模型目录、端点、密钥、模型测试。
+- `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
+- `Agent 配置`：`code agent × model × skills × sandbox` 的实际装配。
+
+另有一个独立的 `内部 LLM 默认模型`，只供欢迎页动态提示、Orchestrator / Planner / Synthesizer 等内部模型链路使用。
+
 ## 会话模型
 
 ### Agent 私聊
@@ -174,7 +184,7 @@ Agent = CLI 运行器 × 模型绑定 × Skills/MCP 能力 × 沙箱策略 × �
 
 ## 工作目录
 
-当前优先采用“一个项目工作区 + 每个 Agent 一个执行目录”的设计。这里的隔离是本地 workdir 隔离，不是 Docker/VM 级别的 OS 沙箱。
+当前优先采用“一个项目工作区 + 每个 Agent 一个执行目录”的设计。默认隔离层是 Docker Sandboxes；`local-workdir` 只作为兼容降级路径。
 
 ```text
 {projectRoot}/.agenthub/
@@ -226,6 +236,18 @@ Agent = CLI 运行器 × 模型绑定 × Skills/MCP 能力 × 沙箱策略 × �
 - 将 Agent 的实际执行目录作为 sandbox workspace，temp/cache/config/data/home 目录作为额外 workspace。
 - OpenCode prompt file、Codex last-message 文件和运行时配置都放在已挂载的 sandbox temp/config 目录中。
 - 每个任务会生成独立 sandbox 名；任务取消或超时时会主动 `sbx rm -f` 对应 sandbox。
+
+状态展示不再只看单个 `available`。当前重点状态是：
+
+- `providerConfigured`
+- `sbxInstalled`
+- `daemonReady`
+- `dockerLoggedIn`
+- `policyConfigured`
+- `sandboxRunnable`
+- `supportsPerAgentIsolation`
+
+只有 `sandboxRunnable=true` 才表示 Docker Sandboxes 当前真的可运行；只有 `supportsPerAgentIsolation=true` 才表示当前默认隔离层满足“每个 Agent 独立运行态”的要求。
 
 ## 产物和 handoff
 

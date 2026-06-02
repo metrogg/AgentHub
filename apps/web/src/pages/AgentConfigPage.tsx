@@ -208,15 +208,21 @@ export default function AgentConfigPage() {
     const modelId = draft.modelId ?? null
     const codeAgentType = draft.codeAgentType ?? null
     const model = selectedModel
-    if (!modelId) return '留空时会沿用模型管理页里配置好的默认模型；填入后该 Agent 绑定独立模型，不会和其他 Agent 共用。'
-    if (!model) return '将优先使用这个 Agent 自己保存的模型覆盖；若模型目录里暂时找不到，会回退到模型管理的默认配置。'
+    if (!modelId) return '留空时会按当前 CLI 基底，从模型管理中挑选兼容的默认模型；填入后该 Agent 绑定独立模型，不会和其他 Agent 共用。'
+    if (!model) return '这个 Agent 绑定了独立模型，但模型目录里暂时找不到对应条目；运行时会直接报错，不再偷偷回退到旧工具配置。'
     if (codeAgentType === 'claude-code' && !/claude|sonnet|opus|haiku|anthropic/i.test(`${model.provider} ${model.modelId} ${model.apiEndpoint ?? ''} ${model.anthropicEndpoint ?? ''}`)) {
-      return 'Claude Code 更适合 Anthropic/Claude 兼容模型；这条组合仍可保存，但运行时可能会回退到可用模型。'
+      return 'Claude Code 更适合 Anthropic/Claude 兼容模型；建议为它绑定带 Anthropic 端点的模型条目。'
     }
     if (codeAgentType === 'gemini' && !/gemini|google/i.test(`${model.provider} ${model.modelId}`)) {
-      return 'Gemini CLI 更适合 Gemini/Google 兼容模型；这条组合仍可保存，但运行时可能会回退到可用模型。'
+      return 'Gemini CLI 更适合 Gemini/Google 兼容模型；建议为它绑定 Gemini/Google 兼容条目。'
     }
-    return '这个 Agent 会优先使用独立模型覆盖，并把对应 Base URL / API Key 注入到当前 Coding Tools 运行器。'
+    if (codeAgentType === 'claude-code') {
+      return '这个 Agent 会优先使用独立模型，并把该模型的 Anthropic 端点和密钥注入 Claude Code。'
+    }
+    if (codeAgentType === 'codex') {
+      return '这个 Agent 会优先使用独立模型；Codex 仍走官方 auth/config 体系，不使用通用 Base URL 选择器。'
+    }
+    return '这个 Agent 会优先使用独立模型，并把对应模型端点与密钥注入当前 CLI 运行器。'
   })()
 
   function selectAgent(agent: SavedAgentConfig, replaceUrl = false) {
@@ -1133,13 +1139,10 @@ function patchFromInstruction(text: string, current: AgentConfigInput) {
     notes.push('运行时切换为普通 LLM')
   }
 
-  if (lower.includes('只读')) {
-    patch.sandboxPolicy = 'read-only'
-    notes.push('沙箱改为只读')
-  } else if (lower.includes('完全访问') || lower.includes('danger')) {
+  if (lower.includes('完全访问') || lower.includes('danger')) {
     patch.sandboxPolicy = 'danger-full-access'
     notes.push('沙箱改为完全访问')
-  } else if (lower.includes('工作区写入')) {
+  } else if (lower.includes('工作区写入') || lower.includes('写入')) {
     patch.sandboxPolicy = 'workspace-write'
     notes.push('沙箱改为工作区写入')
   }
@@ -1317,12 +1320,12 @@ function buildSandboxHealth(info: SettingsGeneralInfo): NonNullable<AgentComboHe
   }
   const docker = info.sandbox.dockerSandbox
   const policy = docker.policy
-  const ok = Boolean(docker.available && docker.probe.installed && docker.probe.daemonReady && (policy?.configured ?? true) && (policy?.authenticated ?? true))
+  const ok = Boolean(info.sandbox.sandboxRunnable)
   const blockers = [
-    docker.probe.installed ? '' : 'sbx CLI 未安装',
-    docker.probe.daemonReady ? '' : 'daemon 未运行',
-    policy && !policy.authenticated ? 'Docker 未登录' : '',
-    policy && !policy.configured ? '默认网络策略未配置' : '',
+    info.sandbox.sbxInstalled ? '' : 'sbx CLI 未安装',
+    info.sandbox.daemonReady ? '' : 'daemon 未运行',
+    info.sandbox.dockerLoggedIn ? '' : 'Docker 未登录',
+    info.sandbox.policyConfigured ? '' : '默认网络策略未配置',
   ].filter(Boolean)
   return {
     ok,
@@ -1335,9 +1338,8 @@ function buildSandboxHealth(info: SettingsGeneralInfo): NonNullable<AgentComboHe
 }
 
 function buildIsolationHealth(info: SettingsGeneralInfo): NonNullable<AgentComboHealth['isolation']> {
-  const provider = info.sandbox.configuredProvider
   const cleanup = info.sandbox.cleanupMode
-  const ok = provider === 'docker-sandbox' && info.sandbox.dockerSandbox.available
+  const ok = Boolean(info.sandbox.supportsPerAgentIsolation)
   return {
     ok,
     label: '配置隔离',
