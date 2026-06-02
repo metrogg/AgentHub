@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Hono } from 'hono'
 import { inArray } from 'drizzle-orm'
-import { db, sessions, workspaces, workspaceAgents, workspaceTasks, orchestratorRuns, settings, eq, and, desc, asc } from '@agenthub/db'
+import { db, sessions, messages, workspaces, workspaceAgents, workspaceTasks, orchestratorRuns, settings, users, eq, and, desc, asc } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { env } from '../env'
 import { getRuntimeServerPort } from '../lib/runtime-server'
@@ -13,6 +13,8 @@ import { getCodingToolsWorkbenchStatus } from './coding-tools'
 import { getLlmRuntimeStatus } from '../services/llm-client'
 import { globalSkillRegistry } from '../services/skill-registry'
 import { getStarOfficeRuntimeStatus } from '../services/star-office-service'
+import { createAutoWorkspaceFolder } from '../services/workspace/auto-workspace'
+import { ensureGroupSession } from '../services/workspace/session-manager'
 
 const PAIRING_TTL_MS = 2 * 60 * 1000
 const AGENT_LIBRARY_SETTING_KEY = 'AGENT_LIBRARY'
@@ -39,10 +41,11 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('/firewall/open', authMiddleware)
   .get('/sync', async (c) => {
     const user = c.get('user')
-    const [sessionList, workspaceList, savedLibrary] = await Promise.all([
+    const [sessionList, workspaceList, savedLibrary, profile] = await Promise.all([
       db.select().from(sessions).where(eq(sessions.ownerId, user.sub)).orderBy(desc(sessions.updatedAt)),
       db.select().from(workspaces).where(eq(workspaces.ownerId, user.sub)).orderBy(desc(workspaces.updatedAt)),
       readSavedAgentLibrary(),
+      readMobileUserProfile(user.sub),
     ])
     const workspaceIds = workspaceList.map((workspace) => workspace.id)
     const agentList = workspaceIds.length
@@ -52,15 +55,30 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
           .where(inArray(workspaceAgents.workspaceId, workspaceIds))
           .orderBy(asc(workspaceAgents.workspaceId), asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
       : []
-    const contacts = savedLibrary.found
-      ? contactsFromSavedAgents(savedLibrary.agents)
-      : contactsFromWorkspaceAgents(agentList)
+    const contacts = mergeMobileContacts(
+      contactsFromWorkspaceAgents(agentList),
+      savedLibrary.found ? contactsFromSavedAgents(savedLibrary.agents) : [],
+    )
+    const lastMessages: Record<string, { content: string; senderType: string }> = {}
+    for (const session of sessionList) {
+      const [last] = await db
+        .select({ content: messages.content, senderType: messages.senderType })
+        .from(messages)
+        .where(and(eq(messages.sessionId, session.id), eq(messages.type, 'text')))
+        .orderBy(desc(messages.createdAt))
+        .limit(1)
+      if (last) lastMessages[session.id] = { content: last.content.slice(0, 120), senderType: last.senderType }
+    }
 
     return c.json({
-      sessions: sessionList,
+      sessions: sessionList.map((session) => ({
+        ...session,
+        lastMessage: lastMessages[session.id] ?? null,
+      })),
       workspaces: workspaceList,
       agents: agentList,
       contacts,
+      currentUser: profile,
     })
   })
   .get('/workbench', async (c) => {
@@ -74,6 +92,65 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
     const agent = savedLibrary.agents.find((item) => item.id === agentId)
     if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 通讯录未同步或该 Agent 不存在')
     const session = await ensureSavedAgentDirectSession(user.sub, agent)
+    return c.json({ session })
+  })
+  .post('/agents/group-session', async (c) => {
+    const user = c.get('user')
+    const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({}))
+    const requestedAgentIds = Array.isArray(body.agentIds)
+      ? uniqueStrings(body.agentIds.filter((id): id is string => typeof id === 'string'))
+      : []
+    if (!requestedAgentIds.length) {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请选择至少一个 Agent')
+    }
+
+    const savedLibrary = await readSavedAgentLibrary()
+    const workspaceList = await db.select().from(workspaces).where(eq(workspaces.ownerId, user.sub))
+    const workspaceIds = workspaceList.map((workspace) => workspace.id)
+    const agentList = workspaceIds.length
+      ? await db.select().from(workspaceAgents).where(inArray(workspaceAgents.workspaceId, workspaceIds))
+      : []
+    const selectedAgents = resolveMobileContactAgents(requestedAgentIds, savedLibrary.agents, agentList)
+    if (selectedAgents.length !== requestedAgentIds.length) {
+      throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, '部分 Agent 未同步或已不存在，请刷新通讯录后重试')
+    }
+
+    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 80) : ''
+    const workspaceName = (title || defaultMobileGroupTitle(selectedAgents)).slice(0, 80)
+    const folder = await createAutoWorkspaceFolder(workspaceName)
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: user.sub,
+        name: workspaceName,
+        goal: `邀请 ${selectedAgents.length} 个 Agent 组成群聊`,
+        projectPath: folder.projectPath,
+      })
+      .returning()
+    if (!workspace) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
+
+    const invitedAgents: Array<typeof workspaceAgents.$inferSelect> = []
+    for (const [index, agent] of selectedAgents.entries()) {
+      const [createdAgent] = await db
+        .insert(workspaceAgents)
+        .values({
+          ...savedAgentWorkspaceValues(agent),
+          workspaceId: workspace.id,
+          orderIdx: index,
+        })
+        .returning()
+      if (createdAgent) invitedAgents.push(createdAgent)
+    }
+    if (invitedAgents.length !== selectedAgents.length) {
+      throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 创建失败')
+    }
+
+    const session = await ensureGroupSession(
+      workspace.id,
+      user.sub,
+      invitedAgents.map((agent) => agent.id),
+      title || undefined,
+    )
     return c.json({ session })
   })
   .get('/connectivity', async (c) => {
@@ -199,6 +276,12 @@ interface SavedAgentLibrary {
   agents: SavedAgentConfig[]
 }
 
+interface MobileUserProfile {
+  id: string
+  name: string
+  avatar: string | null
+}
+
 async function buildMobileWorkbench(ownerId: string) {
   const [workspaceList, savedLibrary, runtime, codingTools, skills, office, connectivity] = await Promise.all([
     db.select().from(workspaces).where(eq(workspaces.ownerId, ownerId)).orderBy(desc(workspaces.updatedAt)),
@@ -228,6 +311,7 @@ async function buildMobileWorkbench(ownerId: string) {
             workspaceId: orchestratorRuns.workspaceId,
             groupSessionId: orchestratorRuns.groupSessionId,
             status: orchestratorRuns.status,
+            conflictReport: orchestratorRuns.conflictReport,
             createdAt: orchestratorRuns.createdAt,
             updatedAt: orchestratorRuns.updatedAt,
             workspaceName: workspaces.name,
@@ -243,6 +327,7 @@ async function buildMobileWorkbench(ownerId: string) {
           workspaceId: string
           groupSessionId: string
           status: string
+          conflictReport: unknown
           createdAt: Date
           updatedAt: Date
           workspaceName: string | null
@@ -257,6 +342,10 @@ async function buildMobileWorkbench(ownerId: string) {
     runList.filter((run) => ['planning', 'running', 'synthesizing'].includes(run.status)),
     (run) => run.workspaceId,
   )
+  const workspaceById = new Map(workspaceList.map((workspace) => [workspace.id, workspace]))
+  const agentById = new Map(agentList.map((agent) => [agent.id, agent]))
+  const sessionById = new Map(sessionList.map((session) => [session.id, session]))
+  const runById = new Map(runList.map((run) => [run.id, run]))
   const latestRunByWorkspace = new Map<string, typeof runList[number]>()
   for (const run of runList) {
     if (!latestRunByWorkspace.has(run.workspaceId)) latestRunByWorkspace.set(run.workspaceId, run)
@@ -303,14 +392,79 @@ async function buildMobileWorkbench(ownerId: string) {
       groupSessionId: run.groupSessionId,
       sessionTitle: run.sessionTitle ?? '',
       status: run.status,
-      createdAt: run.createdAt instanceof Date ? run.createdAt.toISOString() : String(run.createdAt ?? ''),
-      updatedAt: run.updatedAt instanceof Date ? run.updatedAt.toISOString() : String(run.updatedAt ?? ''),
+      conflictCount: countHumanConflictReports(run.conflictReport),
+      createdAt: dateToIso(run.createdAt),
+      updatedAt: dateToIso(run.updatedAt),
     })),
+    tasks: taskList
+      .slice()
+      .sort((a, b) => dateSortValue(b.updatedAt ?? b.createdAt) - dateSortValue(a.updatedAt ?? a.createdAt))
+      .slice(0, 80)
+      .map((task) => {
+        const workspace = workspaceById.get(task.workspaceId)
+        const agent = task.agentId ? agentById.get(task.agentId) : undefined
+        const run = task.runId ? runById.get(task.runId) : undefined
+        const childSession = task.sessionId ? sessionById.get(task.sessionId) : undefined
+        const requiresAttention = isTaskRequiringAttention(task.status, task.progressStatus, task.errorLog)
+        return {
+          id: task.id,
+          workspaceId: task.workspaceId,
+          workspaceName: workspace?.name ?? '',
+          runId: task.runId,
+          groupSessionId: run?.groupSessionId ?? null,
+          sessionId: task.sessionId,
+          sessionTitle: childSession?.title ?? run?.sessionTitle ?? '',
+          agentId: task.agentId,
+          agentName: agent?.name ?? '',
+          agentRole: agent?.role ?? agent?.roleType ?? '',
+          title: task.title,
+          description: task.description,
+          status: task.status,
+          progressPercent: task.progressPercent ?? 0,
+          progressStatus: task.progressStatus ?? '',
+          phaseId: task.phaseId,
+          orderIdx: task.orderIdx,
+          requiresAttention,
+          createdAt: dateToIso(task.createdAt),
+          updatedAt: dateToIso(task.updatedAt),
+          startedAt: dateToIso(task.startedAt),
+          completedAt: dateToIso(task.completedAt),
+          errorLog: task.errorLog,
+        }
+      }),
     savedAgentLibrary: {
       found: savedLibrary.found,
       count: savedLibrary.agents.length,
     },
   }
+}
+
+function dateToIso(value: Date | string | number | null | undefined) {
+  if (!value) return ''
+  if (value instanceof Date) return value.toISOString()
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toISOString()
+}
+
+function dateSortValue(value: Date | string | number | null | undefined) {
+  if (!value) return 0
+  const date = value instanceof Date ? value : new Date(value)
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime()
+}
+
+function countHumanConflictReports(value: unknown) {
+  if (!Array.isArray(value)) return 0
+  return value.filter((item) => {
+    if (!item || typeof item !== 'object') return false
+    return (item as { resolution?: unknown }).resolution === 'needs-human'
+  }).length
+}
+
+function isTaskRequiringAttention(status: string, progressStatus?: string | null, errorLog?: string | null) {
+  if (['blocked', 'failed'].includes(status)) return true
+  const text = `${progressStatus ?? ''}\n${errorLog ?? ''}`.toLowerCase()
+  return /确认|审批|复核|冲突|review|approval|approve|human/.test(text)
 }
 
 function countBy<T>(items: T[], keyOf: (item: T) => string) {
@@ -340,6 +494,32 @@ async function readSavedAgentLibrary(): Promise<SavedAgentLibrary> {
     }
   } catch {
     return { found: true, agents: [] }
+  }
+}
+
+async function readMobileUserProfile(userId: string): Promise<MobileUserProfile> {
+  const [[userRow], [settingsRow]] = await Promise.all([
+    db.select().from(users).where(eq(users.id, userId)).limit(1),
+    db.select().from(settings).where(eq(settings.key, 'APP_SETTINGS')).limit(1),
+  ])
+  const settingsProfile = parseAccountProfile(settingsRow?.value)
+  return {
+    id: userId,
+    name: settingsProfile.name || userRow?.username || 'You',
+    avatar: settingsProfile.avatar || userRow?.avatarUrl || null,
+  }
+}
+
+function parseAccountProfile(value?: string | null) {
+  if (!value) return { name: '', avatar: '' }
+  try {
+    const parsed = JSON.parse(value) as { accountName?: unknown; accountAvatar?: unknown }
+    return {
+      name: typeof parsed.accountName === 'string' ? parsed.accountName.trim() : '',
+      avatar: typeof parsed.accountAvatar === 'string' ? parsed.accountAvatar.trim() : '',
+    }
+  } catch {
+    return { name: '', avatar: '' }
   }
 }
 
@@ -419,6 +599,75 @@ function contactsFromWorkspaceAgents(agentList: Array<typeof workspaceAgents.$in
       capabilityTags: agent.capabilityTags,
     }]
   })
+}
+
+type MobileAgentContact =
+  | ReturnType<typeof contactsFromSavedAgents>[number]
+  | ReturnType<typeof contactsFromWorkspaceAgents>[number]
+
+export function mergeMobileContacts(...groups: MobileAgentContact[][]) {
+  const byIdentity = new Map<string, MobileAgentContact>()
+  for (const group of groups) {
+    for (const contact of group) {
+      const key = contactDedupeKey(contact)
+      const previous = byIdentity.get(key)
+      if (!previous || shouldPreferContact(contact, previous)) {
+        byIdentity.set(key, contact)
+      }
+    }
+  }
+  return [...byIdentity.values()]
+}
+
+function shouldPreferContact(candidate: MobileAgentContact, current: MobileAgentContact) {
+  const candidateMaterialized = Boolean(candidate.workspaceId && candidate.workspaceAgentId)
+  const currentMaterialized = Boolean(current.workspaceId && current.workspaceAgentId)
+  if (candidateMaterialized !== currentMaterialized) return candidateMaterialized
+  if (candidate.source === 'workspace-agent' && current.source !== 'workspace-agent') return true
+  return false
+}
+
+function resolveMobileContactAgents(
+  requestedAgentIds: string[],
+  savedAgents: SavedAgentConfig[],
+  agentList: Array<typeof workspaceAgents.$inferSelect>,
+) {
+  const savedById = new Map(savedAgents.map((agent) => [agent.id, agent]))
+  const workspaceById = new Map(agentList.map((agent) => [agent.id, workspaceAgentToSavedAgent(agent)]))
+  return requestedAgentIds.flatMap((id) => {
+    const saved = savedById.get(id)
+    if (saved) return [saved]
+    const workspaceAgent = workspaceById.get(id)
+    return workspaceAgent ? [workspaceAgent] : []
+  })
+}
+
+function workspaceAgentToSavedAgent(agent: typeof workspaceAgents.$inferSelect): SavedAgentConfig {
+  return {
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    roleType: normalizeRoleType(agent.roleType),
+    description: agent.description,
+    avatar: agent.avatar,
+    systemPrompt: agent.systemPrompt,
+    roleProfile: agent.roleProfile as Record<string, unknown> | null,
+    color: agent.color,
+    modelId: agent.modelId,
+    runtimeType: normalizeRuntimeType(agent.runtimeType),
+    codeAgentType: normalizeCodeAgentType(agent.codeAgentType),
+    capabilityTags: agent.capabilityTags,
+    toolPermissions: agent.toolPermissions,
+    sandboxPolicy: normalizeSandboxPolicy(agent.sandboxPolicy),
+    contextPolicy: normalizeContextPolicy(agent.contextPolicy),
+    autoInvoke: agent.autoInvoke,
+    approvalRequired: agent.approvalRequired,
+  }
+}
+
+function defaultMobileGroupTitle(agents: SavedAgentConfig[]) {
+  const names = agents.slice(0, 3).map((agent) => agent.name).join('、')
+  return agents.length > 3 ? `${names} 等 ${agents.length} 个 Agent` : names || 'Agent 群聊'
 }
 
 async function ensureSavedAgentDirectSession(ownerId: string, agent: SavedAgentConfig) {
@@ -559,6 +808,16 @@ function contactDedupeKey(agent: { name: string; role: string; runtimeType?: str
 
 function normalizeText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function uniqueStrings(values: string[]) {
+  const seen = new Set<string>()
+  return values.flatMap((value) => {
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) return []
+    seen.add(trimmed)
+    return [trimmed]
+  })
 }
 
 function isNonEmptyString(value: unknown): value is string {

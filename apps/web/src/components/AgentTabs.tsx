@@ -54,10 +54,10 @@ export function AgentTabs({
   }
 
   return (
-    <div className="flex flex-col h-full w-48 flex-shrink-0 border-r border-gray-200 bg-gray-50/80">
+    <div className="flex h-full w-48 flex-shrink-0 flex-col bg-[#f3f3ef]">
       <div
         onClick={() => onSelect(null)}
-        className={`cursor-pointer px-3 py-3 border-b border-gray-200 transition-colors ${
+        className={`cursor-pointer px-3 py-3 transition-colors ${
           selectedTab === null
             ? 'bg-blue-50 border-l-2 border-l-blue-500'
             : 'hover:bg-gray-100 border-l-2 border-l-transparent'

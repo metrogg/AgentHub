@@ -54,6 +54,8 @@ import {
   Minimize2,
   Monitor,
   MoreHorizontal,
+  PanelRightClose,
+  PanelRightOpen,
   Paperclip,
   Pencil,
   Plus,
@@ -245,6 +247,12 @@ export const Thread: FC = () => {
       : null
   const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
   const agentTabs = useChatStore((s) => s.agentTabs)
+  const railTaskBoard =
+    taskBoard &&
+    (taskBoard.sessionId === currentSession?.id ||
+      agentTabs.some((tab) => tab.childSessionId === currentSession?.id))
+      ? taskBoard
+      : null
   const selectAgentTab = useChatStore((s) => s.selectAgentTab)
   const selectSession = useChatStore((s) => s.selectSession)
   const navigate = useNavigate()
@@ -255,10 +263,12 @@ export const Thread: FC = () => {
     ['thinking', 'planning', 'synthesizing'].includes(agentActivity.phase ?? '')
       ? agentActivity
       : null
+  const showContextRail = Boolean(currentSession?.workspaceId || railTaskBoard || planningActivity)
   const isOrchestratorTaskChild = sessionKind === 'orchestrator-task'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
+  const [previewCollapsed, setPreviewCollapsed] = useState(false)
 
   async function openGroupConversation() {
     selectAgentTab(null)
@@ -278,6 +288,7 @@ export const Thread: FC = () => {
       const item = (event as CustomEvent<ArtifactPreviewItem>).detail
       if (!item?.id) return
       setPreviewItem(item)
+      setPreviewCollapsed(false)
     }
     window.addEventListener(artifactPreviewEvent, handlePreview)
     return () => window.removeEventListener(artifactPreviewEvent, handlePreview)
@@ -286,12 +297,17 @@ export const Thread: FC = () => {
   return (
     <ThreadPrimitive.Root
       className="agenthub-thread-root relative flex h-full flex-col overflow-hidden bg-white"
-      style={{ ['--thread-max-width' as string]: '44rem' }}
+      style={{ ['--thread-max-width' as string]: '56rem' }}
     >
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           {isGroupSession && !isOrchestratorTaskChild && (
-            <GroupChatHeader onToggleDetails={() => setGroupDetailsOpen((open) => !open)} />
+            <GroupChatHeader
+              onToggleDetails={() => setGroupDetailsOpen((open) => !open)}
+              previewCollapsed={previewCollapsed}
+              previewAvailable={Boolean(previewItem)}
+              onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+            />
           )}
           {isOrchestratorTaskChild && (
             <OrchestratorChildHeader
@@ -302,15 +318,27 @@ export const Thread: FC = () => {
                   : 'Agent'
               }
               onBack={() => void openGroupConversation()}
+              previewCollapsed={previewCollapsed}
+              previewAvailable={Boolean(previewItem)}
+              onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
             />
           )}
           {!isGroupSession &&
             !isOrchestratorTaskChild &&
             isAgentDirectSession && (
-              <AgentChatHeader onToggleDetails={() => setChildDetailsOpen((open) => !open)} />
+              <AgentChatHeader
+                onToggleDetails={() => setChildDetailsOpen((open) => !open)}
+                previewCollapsed={previewCollapsed}
+                previewAvailable={Boolean(previewItem)}
+                onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+              />
             )}
           {!isGroupSession && !isOrchestratorTaskChild && !isAgentDirectSession && (
-            <RegularChatHeader />
+            <RegularChatHeader
+              previewCollapsed={previewCollapsed}
+              previewAvailable={Boolean(previewItem)}
+              onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+            />
           )}
           {isGroupSession && visibleTaskBoard && selectedAgentTab === null && (
             <LeaderViewBanner taskBoard={visibleTaskBoard} agentTabs={agentTabs} />
@@ -335,8 +363,11 @@ export const Thread: FC = () => {
           </ThreadPrimitive.Viewport>
           <Composer />
         </div>
-        {previewItem && (
+        {previewItem && !previewCollapsed && (
           <ArtifactPreviewPanel item={previewItem} onClose={() => setPreviewItem(null)} />
+        )}
+        {showContextRail && (!previewItem || previewCollapsed) && (
+          <ThreadContextRail taskBoard={railTaskBoard} activity={planningActivity} />
         )}
         {isGroupSession && (
           <GroupChatDetailsPanel
@@ -355,7 +386,49 @@ export const Thread: FC = () => {
   )
 }
 
-const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails }) => {
+type PreviewHeaderControlProps = {
+  previewCollapsed?: boolean
+  previewAvailable?: boolean
+  onTogglePreview?: () => void
+}
+
+const HeaderPreviewButton: FC<PreviewHeaderControlProps> = ({
+  previewCollapsed = false,
+  previewAvailable = false,
+  onTogglePreview,
+}) => {
+  if (!onTogglePreview) return null
+
+  const label = previewAvailable
+    ? previewCollapsed
+      ? '展开预览'
+      : '收起预览'
+    : '暂无预览'
+
+  return (
+    <button
+      type="button"
+      onClick={onTogglePreview}
+      disabled={!previewAvailable}
+      className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-neutral-500"
+      title={label}
+      aria-label={label}
+    >
+      {previewCollapsed ? (
+        <PanelRightOpen className="h-4 w-4" />
+      ) : (
+        <PanelRightClose className="h-4 w-4" />
+      )}
+    </button>
+  )
+}
+
+const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => void }> = ({
+  onToggleDetails,
+  previewCollapsed,
+  previewAvailable,
+  onTogglePreview,
+}) => {
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
@@ -371,7 +444,7 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
   }
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <GroupAvatar agents={agents} size="md" title={title} />
         <div className="flex min-w-0 items-center text-sm">
@@ -380,6 +453,15 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
         </div>
       </div>
       <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={onToggleDetails}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+          title="群聊详情"
+          aria-label="群聊详情"
+        >
+          <MoreHorizontal className="h-5 w-5" />
+        </button>
         <button
           type="button"
           onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
@@ -398,21 +480,22 @@ const GroupChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
         >
           <Trash2 className="h-4 w-4" />
         </button>
-        <button
-          type="button"
-          onClick={onToggleDetails}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-          title="群聊详情"
-          aria-label="群聊详情"
-        >
-          <MoreHorizontal className="h-5 w-5" />
-        </button>
+        <HeaderPreviewButton
+          previewCollapsed={previewCollapsed}
+          previewAvailable={previewAvailable}
+          onTogglePreview={onTogglePreview}
+        />
       </div>
     </header>
   )
 }
 
-const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails }) => {
+const AgentChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => void }> = ({
+  onToggleDetails,
+  previewCollapsed,
+  previewAvailable,
+  onTogglePreview,
+}) => {
   const session = useChatStore((state) => state.currentSession)
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
@@ -422,7 +505,7 @@ const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
   const navigate = useNavigate()
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-3">
         <div
           className="grid h-8 w-8 shrink-0 place-items-center rounded-xl text-sm font-semibold text-white shadow-sm"
@@ -438,15 +521,6 @@ const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
       <div className="flex items-center gap-1">
         <button
           type="button"
-          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-          title="办公室"
-          aria-label="办公室"
-        >
-          <Building2 className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
           onClick={onToggleDetails}
           className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
           title="Agent 设置"
@@ -454,20 +528,39 @@ const AgentChatHeader: FC<{ onToggleDetails: () => void }> = ({ onToggleDetails 
         >
           <MoreHorizontal className="h-5 w-5" />
         </button>
+        <button
+          type="button"
+          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+          title="办公室"
+          aria-label="办公室"
+        >
+          <Building2 className="h-4 w-4" />
+        </button>
+        <HeaderPreviewButton
+          previewCollapsed={previewCollapsed}
+          previewAvailable={previewAvailable}
+          onTogglePreview={onTogglePreview}
+        />
       </div>
     </header>
   )
 }
 
-const OrchestratorChildHeader: FC<{ agentName: string; onBack: () => void }> = ({
+const OrchestratorChildHeader: FC<
+  PreviewHeaderControlProps & { agentName: string; onBack: () => void }
+> = ({
   agentName,
   onBack,
+  previewCollapsed,
+  previewAvailable,
+  onTogglePreview,
 }) => {
   const session = useChatStore((state) => state.currentSession)
   const navigate = useNavigate()
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <button
           type="button"
@@ -483,38 +576,56 @@ const OrchestratorChildHeader: FC<{ agentName: string; onBack: () => void }> = (
           <span className="ml-1.5 text-xs text-neutral-400">成员对话</span>
         </span>
       </div>
-      <button
-        type="button"
-        onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-        title="办公室"
-        aria-label="办公室"
-      >
-        <Building2 className="h-4 w-4" />
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+          title="办公室"
+          aria-label="办公室"
+        >
+          <Building2 className="h-4 w-4" />
+        </button>
+        <HeaderPreviewButton
+          previewCollapsed={previewCollapsed}
+          previewAvailable={previewAvailable}
+          onTogglePreview={onTogglePreview}
+        />
+      </div>
     </header>
   )
 }
 
-const RegularChatHeader: FC = () => {
+const RegularChatHeader: FC<PreviewHeaderControlProps> = ({
+  previewCollapsed,
+  previewAvailable,
+  onTogglePreview,
+}) => {
   const session = useChatStore((state) => state.currentSession)
   const navigate = useNavigate()
   const title = session?.title || '新会话'
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-white/95 pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="truncate text-sm font-semibold text-neutral-950">{title}</span>
       </div>
-      <button
-        type="button"
-        onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
-        title="办公室"
-        aria-label="办公室"
-      >
-        <Building2 className="h-4 w-4" />
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-neutral-400 transition hover:bg-emerald-50 hover:text-emerald-600"
+          title="办公室"
+          aria-label="办公室"
+        >
+          <Building2 className="h-4 w-4" />
+        </button>
+        <HeaderPreviewButton
+          previewCollapsed={previewCollapsed}
+          previewAvailable={previewAvailable}
+          onTogglePreview={onTogglePreview}
+        />
+      </div>
     </header>
   )
 }
@@ -530,7 +641,7 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({ taskBoard, agentTabs }) =
   const failedCount = agentTabs.filter((t) => t.status === 'failed').length
 
   return (
-    <div className="shrink-0 border-b border-neutral-100 bg-white px-6 py-2.5">
+    <div className="shrink-0 bg-[#f5f5f1] px-6 py-2.5">
       <div className="flex items-center gap-2 text-xs">
         <Bot className="h-4 w-4 text-blue-600" />
         <span className="font-semibold text-neutral-700">主对话</span>
@@ -576,6 +687,285 @@ interface TeamExecutionPanelProps {
   taskBoard: LiveTaskBoard | null
   agentTabs: ReturnType<typeof useChatStore.getState>['agentTabs']
   activity: LiveAgentActivity | null
+}
+
+const ThreadContextRail: FC<{
+  taskBoard: LiveTaskBoard | null
+  activity: LiveAgentActivity | null
+}> = ({ taskBoard, activity }) => {
+  const workspace = useChatStore((state) => state.currentWorkspace)
+  const [progressOpen, setProgressOpen] = useState(true)
+  const [workspaceOpen, setWorkspaceOpen] = useState(true)
+  const stats = taskProgressStats(taskBoard)
+  const files = useMemo(
+    () => collectRailFiles(taskBoard, workspace),
+    [taskBoard, workspace?.projectPath],
+  )
+  const activeTask =
+    taskBoard?.tasks.find((task) => task.status === 'running') ??
+    taskBoard?.tasks.find((task) => task.status === 'pending') ??
+    taskBoard?.tasks[0]
+  const workspaceName =
+    workspace?.name ||
+    (workspace?.projectPath ? workspaceNameFromPath(workspace.projectPath) : 'AgentHub')
+  const workspacePath = workspace?.projectPath ?? null
+  const progressPercent = taskBoard ? stats.percent : activity ? 18 : 0
+  const planningText =
+    taskBoard?.goal ||
+    taskBoard?.title ||
+    (activity
+      ? `${activity.agentName ?? 'Orchestrator'} 正在生成目标规划`
+      : '发送一个复杂目标后，进度会同步到这里。')
+
+  return (
+    <div className="pointer-events-none absolute right-5 top-16 z-30 hidden w-[15.5rem] bg-transparent lg:block xl:right-8">
+      <div className="pointer-events-none max-h-[calc(100vh-5.5rem)] overflow-visible bg-transparent">
+        <div className="flex flex-col gap-3 bg-transparent">
+        <RailCard
+          title="进度"
+          subtitle="跟踪较长任务的进度"
+          open={progressOpen}
+          onToggle={() => setProgressOpen((open) => !open)}
+        >
+          <div className="space-y-3">
+            <div className="rounded-xl bg-neutral-50 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2 text-[11px] text-neutral-500">
+                <span>目标规划</span>
+                <span className="shrink-0">
+                  {taskBoard ? runStatusLabel[taskBoard.status] ?? taskBoard.status : activityLabel(activity)}
+                </span>
+              </div>
+              <p className="mt-1 line-clamp-3 text-xs leading-5 text-neutral-700">
+                {planningText}
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between text-[11px] text-neutral-500">
+                <span>
+                  {stats.done}/{stats.total || 0} 完成
+                </span>
+                <span>{progressPercent}%</span>
+              </div>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-neutral-100">
+                <div
+                  className="h-full rounded-full bg-neutral-900 transition-all duration-500"
+                  style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                />
+              </div>
+            </div>
+
+            {activeTask && (
+              <div className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
+                <div className="mt-0.5 shrink-0">{taskStatusIcon(activeTask.status)}</div>
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-medium text-neutral-800">
+                    {activeTask.title}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-neutral-500">
+                    {activeTask.progressStatus || activeTask.agentName || '等待成员执行'}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </RailCard>
+
+        <RailCard
+          title="工作文件夹"
+          subtitle={workspacePath ? compactPath(workspacePath) ?? workspaceName : '当前项目与产物'}
+          open={workspaceOpen}
+          onToggle={() => setWorkspaceOpen((open) => !open)}
+        >
+          <div>
+            <button
+              type="button"
+              disabled={!workspacePath}
+              onClick={() => workspacePath && void openPath(workspacePath)}
+              className="mb-2 block max-w-full truncate text-left text-sm text-neutral-400 transition hover:text-neutral-700 disabled:cursor-default disabled:hover:text-neutral-400"
+              title={workspacePath ?? workspaceName}
+            >
+              {workspaceName}
+            </button>
+
+            <div className="space-y-1.5">
+              {files.map((file) => (
+                <button
+                  key={file.id}
+                  type="button"
+                  onClick={() => openRailFile(file)}
+                  className="flex min-h-8 w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition hover:bg-neutral-50"
+                  title={file.path ?? file.url ?? file.title}
+                >
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-neutral-100 text-neutral-500">
+                    <FileText className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-900">
+                    {file.title}
+                  </span>
+                </button>
+              ))}
+
+              {files.length === 0 && (
+                <button
+                  type="button"
+                  disabled={!workspacePath}
+                  onClick={() => workspacePath && void openPath(workspacePath)}
+                  className="flex min-h-9 w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left text-sm text-neutral-600 transition hover:bg-neutral-50 disabled:cursor-default disabled:text-neutral-400 disabled:hover:bg-transparent"
+                >
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-neutral-100 text-neutral-500">
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {workspacePath ? '打开工作文件夹' : '尚未选择工作文件夹'}
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+        </RailCard>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const RailCard: FC<{
+  title: string
+  subtitle: string
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}> = ({ title, subtitle, open, onToggle, children }) => (
+  <section className="pointer-events-auto rounded-2xl border border-neutral-200 bg-white/95 px-4 py-3.5 shadow-[0_14px_40px_rgba(15,23,42,0.08)] backdrop-blur">
+    <button
+      type="button"
+      className="flex w-full items-start justify-between gap-3 text-left"
+      aria-expanded={open}
+      onClick={onToggle}
+    >
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-neutral-950">{title}</span>
+        <span className="mt-1 block truncate text-xs text-neutral-500">{subtitle}</span>
+      </span>
+      <ChevronDown
+        className={cn(
+          'mt-0.5 h-4 w-4 shrink-0 text-neutral-400 transition-transform',
+          !open && '-rotate-90',
+        )}
+      />
+    </button>
+    {open && <div className="mt-3">{children}</div>}
+  </section>
+)
+
+type RailFileItem = {
+  id: string
+  title: string
+  path?: string
+  url?: string
+  source?: string
+  kind: ArtifactPreviewItem['kind']
+}
+
+function taskProgressStats(taskBoard: LiveTaskBoard | null) {
+  const tasks = taskBoard?.tasks ?? []
+  const done = tasks.filter((task) => task.status === 'done').length
+  const finished =
+    done +
+    tasks.filter((task) =>
+      ['failed', 'blocked', 'cancelled'].includes(task.status),
+    ).length
+  return {
+    done,
+    total: tasks.length,
+    percent: tasks.length ? Math.round((finished / tasks.length) * 100) : 0,
+  }
+}
+
+function activityLabel(activity: LiveAgentActivity | null) {
+  if (activity?.phase === 'thinking') return '理解中'
+  if (activity?.phase === 'planning') return '规划中'
+  if (activity?.phase === 'synthesizing') return '汇总中'
+  return '未开始'
+}
+
+function collectRailFiles(
+  taskBoard: LiveTaskBoard | null,
+  workspace: Workspace | null,
+): RailFileItem[] {
+  const files: RailFileItem[] = []
+  const seen = new Set<string>()
+  const workspacePath = workspace?.projectPath ?? null
+
+  for (const task of taskBoard?.tasks ?? []) {
+    for (const artifact of task.artifacts ?? []) {
+      const rawPath = artifact.filePath ?? undefined
+      const rawUrl = artifact.url ?? undefined
+      const key = artifact.artifactId ?? artifact.id ?? rawPath ?? rawUrl ?? artifact.title
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+
+      const path = rawPath ? resolveWorkspacePath(rawPath, workspacePath) : undefined
+      const title =
+        artifact.title ||
+        fileNameFromPath(rawPath) ||
+        fileNameFromPath(rawUrl) ||
+        task.title ||
+        '任务产物'
+
+      files.push({
+        id: key,
+        kind: railPreviewKind(artifact.type ?? artifact.kind, rawPath, rawUrl),
+        path,
+        source: artifact.source,
+        title,
+        url: rawUrl,
+      })
+    }
+  }
+
+  return files.slice(0, 4)
+}
+
+function railPreviewKind(
+  artifactKind?: string,
+  path?: string,
+  url?: string,
+): ArtifactPreviewItem['kind'] {
+  if (artifactKind === 'diff') return 'diff'
+  if (artifactKind === 'deploy') return 'deploy'
+  if (artifactKind === 'workflow') return 'workflow'
+  if (artifactKind === 'preview' || url) return 'web'
+  if (/\.(png|jpe?g|webp|gif|svg)$/i.test(path ?? '')) return 'image'
+  return 'file'
+}
+
+function openRailFile(file: RailFileItem) {
+  if (file.path) {
+    void openPath(file.path)
+      .then((opened) => {
+        if (!opened) requestArtifactPreview(file)
+      })
+      .catch(() => requestArtifactPreview(file))
+    return
+  }
+  requestArtifactPreview(file)
+}
+
+function resolveWorkspacePath(path: string, workspacePath?: string | null) {
+  if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('/') || path.startsWith('\\\\')) {
+    return path
+  }
+  if (!workspacePath) return path
+  return `${workspacePath.replace(/[\\/]+$/, '')}\\${path.replace(/^[\\/]+/, '')}`
+}
+
+function fileNameFromPath(value?: string | null) {
+  if (!value) return null
+  const normalized = value.replace(/\\/g, '/')
+  const withoutQuery = normalized.split(/[?#]/)[0]
+  return withoutQuery.split('/').filter(Boolean).pop() ?? value
 }
 
 const runStatusLabel: Record<string, string> = {
@@ -702,7 +1092,7 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
           ? '正在理解目标'
           : '正在规划'
     return (
-      <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
+      <div className="ml-0 mr-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
         <div className="flex items-start gap-3">
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -746,7 +1136,7 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
   ].slice(0, 6)
 
   return (
-    <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-neutral-200 bg-white shadow-sm">
+    <div className="ml-0 mr-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-neutral-200 bg-white shadow-sm">
       <div className="border-b border-neutral-100 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -1014,12 +1404,12 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
       />
       <aside
         className={cn(
-          'relative h-full w-[320px] max-w-[88vw] border-l border-neutral-200 bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'relative h-full w-[320px] max-w-[88vw] bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
       >
         <div className="flex h-full flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-4">
+          <div className="flex shrink-0 items-center justify-between gap-3 bg-[#f5f5f1] px-4 py-4">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-neutral-950">
                 {agent?.name ?? 'Agent 设置'}
@@ -1321,12 +1711,12 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
       />
       <aside
         className={cn(
-          'relative h-full w-[340px] max-w-[88vw] border-l border-neutral-200 bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'relative h-full w-[340px] max-w-[88vw] bg-[#FBFBFB] shadow-none transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           open ? 'translate-x-0' : 'translate-x-full',
         )}
       >
         <div className="flex h-full flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-4">
+          <div className="flex shrink-0 items-center justify-between gap-3 bg-[#f5f5f1] px-4 py-4">
             <div className="min-w-0">
               <div className="text-sm font-semibold text-neutral-950">群聊设置</div>
               <div className="mt-1 truncate text-xs text-neutral-500">
@@ -2001,7 +2391,7 @@ const Composer: FC = () => {
   return (
     <div className="agenthub-composer-dock shrink-0 px-6 pb-6 pt-3">
       <ComposerPrimitive.Root
-        className="mx-auto w-full max-w-[var(--thread-max-width)]"
+        className="ml-0 mr-auto w-full max-w-[var(--thread-max-width)]"
         onSubmitCapture={syncComposerTextAfterComposerAction}
         onClickCapture={(event) => {
           if ((event.target as HTMLElement).closest('button[aria-label="发送"]')) {
@@ -2736,7 +3126,7 @@ const UserMessage: FC = () => {
   }
 
   return (
-    <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start justify-end gap-3 py-3">
+    <MessagePrimitive.Root className="group ml-0 mr-auto flex w-full max-w-[var(--thread-max-width)] items-start justify-end gap-3 py-3">
       <div className={cn('flex flex-col items-end gap-1.5', editing ? 'min-w-0 flex-1' : 'max-w-[68%]')}>
         <div
           className={cn(
@@ -2834,7 +3224,7 @@ const AssistantMessage: FC = () => {
     (state) => state.messages.find((message) => message.id === messageId)?.createdAt,
   )
   return (
-    <MessagePrimitive.Root className="mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
+    <MessagePrimitive.Root className="ml-0 mr-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
       <Avatar role="assistant" />
       <div className="min-w-0 flex-1">
         <div className="text-sm leading-7 text-neutral-950">
@@ -3522,7 +3912,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
             )}
           />
         )}
-        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-neutral-200 bg-white/90 px-3 backdrop-blur">
+        <div className="flex h-16 shrink-0 items-center gap-3 bg-[#f5f5f1] px-3 backdrop-blur">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-neutral-200 bg-gradient-to-br from-white to-neutral-100 text-neutral-500 shadow-sm">
               {previewIcon(item)}
@@ -3650,7 +4040,7 @@ const PreviewActionPanel: FC<{
   onOpenPath: (path?: string) => void
 }> = ({ items, onClose, onOpenPath }) => (
   <div className="absolute right-3 top-[4.5rem] z-30 w-[min(22rem,calc(100%-1.5rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-[0_18px_60px_rgba(15,23,42,0.18)]">
-    <div className="flex h-12 items-center justify-between border-b border-neutral-100 px-4">
+    <div className="flex h-12 items-center justify-between bg-[#f5f5f1] px-4">
       <div className="text-sm font-semibold text-neutral-950">下载</div>
       <div className="flex items-center gap-1">
         <button
@@ -3772,7 +4162,7 @@ const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item })
   const fileName = item.path ?? item.title
   return (
     <div className="flex h-full flex-col bg-white">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-3 text-xs text-neutral-500">
+      <div className="flex h-11 shrink-0 items-center gap-2 bg-[#f5f5f1] px-3 text-xs text-neutral-500">
         <FileText className="h-4 w-4 text-neutral-400" />
         <span className="min-w-0 flex-1 truncate">{fileName}</span>
         <span className="rounded-md bg-[#F7F7F7] px-2 py-1">只读预览</span>
@@ -3809,960 +4199,457 @@ const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
   </div>
 )
 
-type CodeAgentRunStep = NonNullable<CodeAgentRunMetadata['steps']>[number]
-
 const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
-  const changedFiles = data.files ?? []
-  const commands = data.commands ?? []
-  const toolCalls = data.toolCalls ?? []
-  const logs = data.logs ?? []
-  const eventCount = logs.filter((log) => displayLogStream(log) === 'event').length
-  const steps = useMemo(() => codeAgentProcessSteps(data), [data])
-  const hasDetails =
-    toolCalls.length > 0 || commands.length > 0 || changedFiles.length > 0 || logs.length > 0
-
-  return (
-    <div className="not-prose mt-3 space-y-2 text-sm">
-      <CodeAgentStatusCard
-        data={data}
-        commandCount={commands.length}
-        eventCount={eventCount}
-        fileCount={changedFiles.length}
-        toolCount={toolCalls.length}
-      />
-      <CodeAgentProcessTimeline steps={steps} running={data.status === 'running'} />
-      {data.diagnostics && <CodeAgentDiagnosticsCard diagnostics={data.diagnostics} />}
-      <CodeAgentOutputReviewCard data={data} />
-      {hasDetails && (
-        <CodeAgentRunDetails
-          changedFiles={changedFiles}
-          commands={commands}
-          cwd={data.cwd ?? commands.find((command) => command.cwd)?.cwd}
-          logs={logs}
-          running={data.status === 'running'}
-          toolCalls={toolCalls}
-        />
-      )}
-    </div>
-  )
+  return <CodeAgentLiveActivity data={data} />
 }
 
-const CodeAgentStatusCard: FC<{
-  commandCount: number
-  data: CodeAgentRunMetadata
-  eventCount: number
-  fileCount: number
-  toolCount: number
-}> = ({ commandCount, data, eventCount, fileCount, toolCount }) => {
-  const statusTone =
-    data.status === 'running'
-      ? 'text-blue-600'
-      : data.status === 'completed'
-        ? 'text-neutral-500'
-        : data.partialSuccess || data.status === 'timed-out'
-          ? 'text-amber-600'
-          : 'text-red-600'
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
-        <div className={cn('inline-flex min-w-0 items-center gap-2', statusTone)}>
-          {data.status === 'running' ? (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-          ) : data.partialSuccess ? (
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-          ) : (
-            <Clock3 className="h-4 w-4 shrink-0" />
-          )}
-          <div className="min-w-0">
-            <div className="truncate font-medium">
-              {codeAgentStatusLabel(data.status, Boolean(data.partialSuccess))} · {formatRunDuration(data.durationMs)}
-            </div>
-            <div className="mt-0.5 truncate text-[11px] text-neutral-400">
-              {codeAgentRuntimeLabel(data.runtime)} · {data.command}
-            </div>
-            {data.warning && (
-              <div className="mt-1 truncate text-[11px] text-amber-700">{data.warning}</div>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
-          <CodeAgentMiniStat
-            icon={<Search className="h-3.5 w-3.5" />}
-            label="工具"
-            value={toolCount}
-          />
-          <CodeAgentMiniStat
-            icon={<TerminalSquare className="h-3.5 w-3.5" />}
-            label="命令"
-            value={commandCount}
-          />
-          <CodeAgentMiniStat
-            icon={<FileText className="h-3.5 w-3.5" />}
-            label="文件"
-            value={fileCount}
-          />
-          <CodeAgentMiniStat
-            icon={<ListTodo className="h-3.5 w-3.5" />}
-            label="事件"
-            value={eventCount}
-          />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const CodeAgentMiniStat: FC<{ icon: ReactNode; label: string; value: number }> = ({
-  icon,
-  label,
-  value,
-}) => (
-  <span
-    className={cn(
-      'inline-flex h-7 items-center gap-1 rounded-md border px-2',
-      value
-        ? 'border-neutral-200 bg-neutral-50 text-neutral-700'
-        : 'border-neutral-100 bg-white text-neutral-300',
-    )}
-  >
-    {icon}
-    {label} {value}
-  </span>
-)
-
-const CodeAgentProcessTimeline: FC<{ running: boolean; steps: CodeAgentRunStep[] }> = ({
-  running,
-  steps,
-}) => {
-  const [collapsed, setCollapsed] = useState(false)
-  const showAll = !collapsed && (!running || steps.length <= 1)
-  const visibleSteps = showAll ? steps : steps.slice(-1)
-  const hiddenCount = Math.max(0, steps.length - visibleSteps.length)
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-xs text-neutral-500">
-        <span className="inline-flex items-center gap-2 font-medium text-neutral-700">
-          <span
-            className={cn(
-              'h-2 w-2 rounded-full',
-              running ? 'bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.12)]' : 'bg-neutral-300',
-            )}
-          />
-          执行过程
-        </span>
-        <div className="flex items-center gap-2">
-          <span>
-            {running ? '实时更新' : '已记录'} {steps.length} 项
-          </span>
-          {hiddenCount > 0 ? (
-            <button
-              type="button"
-              onClick={() => setCollapsed(false)}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-800"
-            >
-              展开
-              <ChevronDown className="h-3 w-3" />
-            </button>
-          ) : (
-            steps.length > 1 && (
-              <button
-                type="button"
-                onClick={() => setCollapsed(true)}
-                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-800"
-              >
-                收起
-                <ChevronDown className="h-3 w-3 rotate-180" />
-              </button>
-            )
-          )}
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        {visibleSteps.length ? (
-          visibleSteps.map((step, index) => (
-            <CodeAgentProcessStepCard
-              key={step.id}
-              latest={running && index === visibleSteps.length - 1}
-              step={step}
-            />
-          ))
-        ) : (
-          <div className="rounded-lg border border-dashed border-neutral-200 bg-white px-3 py-3 text-xs text-neutral-500">
-            等待 Coding Tools 返回过程事件
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-const CodeAgentProcessStepCard: FC<{ latest: boolean; step: CodeAgentRunStep }> = ({
-  latest,
-  step,
-}) => {
-  const canExpand = Boolean(step.detail || step.command || step.path)
-  const content = (
-    <div
-      className={cn(
-        'agenthub-code-agent-step flex min-h-[3.75rem] min-w-0 items-center gap-3 rounded-lg border bg-white px-3 py-2.5 shadow-sm transition',
-        step.status === 'failed'
-          ? 'border-red-200 bg-red-50/50'
-          : step.status === 'running'
-            ? 'border-blue-200 bg-blue-50/40'
-            : 'border-neutral-200',
-        latest && 'agenthub-code-agent-step-live',
-      )}
-    >
-      <span
-        className={cn(
-          'grid h-9 w-9 shrink-0 place-items-center rounded-md border',
-          step.status === 'failed'
-            ? 'border-red-200 bg-white text-red-600'
-            : step.status === 'running'
-              ? 'border-blue-200 bg-white text-blue-600'
-              : 'border-neutral-200 bg-neutral-50 text-neutral-500',
-        )}
-      >
-        {codeAgentStepIcon(step)}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 text-[11px] font-semibold text-neutral-400">
-            {codeAgentStepKindLabel(step)}
-          </span>
-          <span className="truncate text-[13px] font-medium leading-5 text-neutral-900">
-            {step.title}
-          </span>
-        </span>
-        <span
-          className="mt-0.5 block truncate text-[13px] leading-5 text-neutral-600"
-          title={step.subtitle ?? step.detail ?? step.command ?? step.path}
-        >
-          {step.subtitle ?? step.detail ?? step.command ?? step.path ?? '处理中'}
-        </span>
-      </span>
-      <span className="grid h-6 w-6 shrink-0 place-items-center text-neutral-400">
-        {step.status === 'running' ? (
-          <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-        ) : step.status === 'failed' ? (
-          <AlertTriangle className="h-4 w-4 text-red-500" />
-        ) : canExpand ? (
-          <ChevronRight className="h-4 w-4 transition group-open:rotate-90" />
-        ) : (
-          <CheckCircle2 className="h-4 w-4 text-neutral-300" />
-        )}
-      </span>
-    </div>
-  )
-
-  if (!canExpand) return content
-
-  return (
-    <details className="group">
-      <summary className="list-none cursor-pointer [&::-webkit-details-marker]:hidden">
-        {content}
-      </summary>
-      <div className="mx-3 border-l border-neutral-200 px-4 py-2 text-xs leading-5 text-neutral-600">
-        {step.command && (
-          <pre className="agenthub-readable-code max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-neutral-950 px-3 py-2 text-neutral-100">
-            {step.command}
-          </pre>
-        )}
-        {step.detail && <div className="mt-1 whitespace-pre-wrap break-words">{step.detail}</div>}
-        {step.path && !step.command && (
-          <div className="agenthub-readable-code mt-1 truncate text-neutral-500">{step.path}</div>
-        )}
-      </div>
-    </details>
-  )
-}
-
-const CodeAgentRunDetails: FC<{
-  changedFiles: CodeAgentRunMetadata['files']
-  commands: CodeAgentRunMetadata['commands']
-  cwd?: string
-  logs: NonNullable<CodeAgentRunMetadata['logs']>
-  running: boolean
-  toolCalls: NonNullable<CodeAgentRunMetadata['toolCalls']>
-}> = ({ changedFiles, commands, cwd, logs, running, toolCalls }) => (
-  <details className="group">
-    <summary className="flex h-10 cursor-pointer list-none items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-3 text-left text-[13px] font-medium text-neutral-700 shadow-sm transition hover:bg-neutral-50 [&::-webkit-details-marker]:hidden">
-      <span className="inline-flex min-w-0 items-center gap-2">
-        <ListTodo className="h-4 w-4 shrink-0 text-neutral-500" />
-        执行明细
-      </span>
-      <ChevronDown className="h-4 w-4 shrink-0 text-neutral-400 transition-transform group-open:rotate-180" />
-    </summary>
-    <div className="mt-2 space-y-2">
-      {toolCalls.length > 0 && <CodeAgentToolsCard items={toolCalls} running={running} />}
-      {commands.length > 0 && <CodeAgentCommandsCard commands={commands} />}
-      {changedFiles.length > 0 && <CodeAgentFilesCard cwd={cwd} files={changedFiles} />}
-      {logs.length > 0 && <CodeAgentLogsCard logs={logs} />}
-    </div>
-  </details>
-)
-
-const CodeAgentOutputReviewCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
-  const messageId = useMessage((message) => message.id)
-  const currentSession = useChatStore((state) => state.currentSession)
-  const sourceMessage = useChatStore((state) =>
-    state.messages.find((message) => message.id === messageId),
-  )
-  const sendMessageToSession = useChatStore((state) => state.sendMessageToSession)
-  const finalMessage = (data.finalMessage ?? '').trim()
-  const reviewRequired =
-    data.reviewRequired || data.runtime === 'codex' || data.runtime === 'claude-code'
-  const startsExpanded = finalMessage.length <= 1600 && finalMessage.split(/\r?\n/).length <= 14
-  const [expanded, setExpanded] = useState(startsExpanded)
-  const [confirmed, setConfirmed] = useState(false)
-  const [continuing, setContinuing] = useState(false)
-  const [continueError, setContinueError] = useState('')
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    setExpanded(startsExpanded)
-    setConfirmed(false)
-    setContinuing(false)
-    setContinueError('')
-    setCopied(false)
-  }, [finalMessage, startsExpanded])
-
-  if (!reviewRequired) return null
-
-  const running = data.status === 'running'
-  const hasFinalMessage = finalMessage.length > 0
-  const preview = expanded ? finalMessage : codeAgentReviewPreview(finalMessage)
-  const hasMore = preview !== finalMessage
-  const lineCount = hasFinalMessage ? finalMessage.split(/\r?\n/).length : 0
+const CodeAgentLiveActivity: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
   const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
-  const sourceMetadata =
-    sourceMessage?.metadata && typeof sourceMessage.metadata === 'object'
-      ? (sourceMessage.metadata as Record<string, unknown>)
-      : null
-  const sourceAgentName =
-    typeof sourceMetadata?.agentName === 'string' ? sourceMetadata.agentName.trim() : ''
-  const shouldMentionAgent = currentSession?.type === 'group' && sourceAgentName.length > 0
-
-  async function copyFinalMessage() {
-    if (!finalMessage) return
-    try {
-      await navigator.clipboard.writeText(finalMessage)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1400)
-    } catch {
-      setCopied(false)
-    }
-  }
-
-  async function continueOutput() {
-    if (!messageId || !currentSession?.id || continuing || confirmed) return
-    const continuationPrompt = buildCodeAgentContinuationPrompt({
-      finalMessage,
-      runtimeLabel,
-      agentName: shouldMentionAgent ? sourceAgentName : null,
-    })
-    setContinuing(true)
-    setContinueError('')
-    try {
-      await sendMessageToSession(currentSession.id, continuationPrompt, {
-        displayContent: '继续输出',
-        replyToMessageId: messageId,
-      })
-      setConfirmed(true)
-    } catch (error) {
-      setContinueError(friendlyErrorMessage(error, '继续输出失败'))
-    } finally {
-      setContinuing(false)
-    }
-  }
+  const artifacts = readFlowArtifacts(data.artifacts)
+  const summary = buildCodeAgentRunSummary(data)
+  const [detailsOpen, setDetailsOpen] = useState(() =>
+    data.status === 'running' || data.status === 'failed' || data.status === 'timed-out',
+  )
 
   return (
-    <div
-      className={cn(
-        'overflow-hidden rounded-lg border bg-white shadow-sm',
-        confirmed ? 'border-emerald-200' : 'border-neutral-200',
-      )}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
-        <div className="inline-flex min-w-0 items-center gap-2">
-          <span
-            className={cn(
-              'grid h-8 w-8 shrink-0 place-items-center rounded-md border',
-              confirmed
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
-                : running
-                  ? 'border-blue-200 bg-blue-50 text-blue-600'
-                  : hasFinalMessage
-                    ? 'border-neutral-200 bg-neutral-50 text-neutral-600'
-                    : 'border-amber-200 bg-amber-50 text-amber-600',
-            )}
-          >
-            {running ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : confirmed ? (
-              <CheckCircle2 className="h-4 w-4" />
-            ) : hasFinalMessage ? (
-              <FileText className="h-4 w-4" />
-            ) : (
-              <AlertTriangle className="h-4 w-4" />
-            )}
+    <div className="not-prose mt-2 max-w-[48rem] text-sm leading-6 text-neutral-700">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-neutral-500">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-100 px-2 py-1 text-neutral-700">
+            <Bot className="h-3.5 w-3.5" />
+            {runtimeLabel}
           </span>
-          <span className="min-w-0">
-            <span className="block truncate text-[13px] font-medium leading-5 text-neutral-900">
-              输出审核
-            </span>
-            <span className="block truncate text-[11px] leading-5 text-neutral-500">
-              {running
-                ? `${runtimeLabel} 正在写入流式输出`
-                : hasFinalMessage
-                  ? `完整终稿 ${lineCount} 行 · ${finalMessage.length.toLocaleString()} 字`
-                  : `${runtimeLabel} 未捕获到完整终稿`}
-            </span>
+          <span className="inline-flex items-center rounded-full bg-neutral-100 px-2 py-1 text-neutral-700">
+            {codeAgentStatusLabel(data.status, Boolean(data.partialSuccess))}
           </span>
-        </div>
-        <span
-          className={cn(
-            'inline-flex h-6 items-center rounded-md border px-2 text-[11px] font-medium',
-            confirmed
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : running
-                ? 'border-blue-100 bg-blue-50 text-blue-600'
-                : 'border-neutral-200 bg-neutral-50 text-neutral-500',
+          {data.durationMs > 0 && (
+            <span className="inline-flex items-center rounded-full bg-neutral-100 px-2 py-1 text-neutral-700">
+              {formatDurationMs(data.durationMs)}
+            </span>
           )}
+          {summary && <span>{summary}</span>}
+          {data.exitCode !== 0 && (
+            <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-1 text-red-700">
+              exit {data.exitCode}
+            </span>
+          )}
+          {data.status === 'running' && <CodeAgentTypingDots />}
+          {data.partialSuccess && (
+            <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-1 text-amber-700">
+              部分成功
+            </span>
+          )}
+          {data.reviewRequired && (
+            <span className="inline-flex items-center rounded-full bg-violet-50 px-2 py-1 text-violet-700">
+              待复核
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setDetailsOpen((value) => !value)}
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
+          aria-expanded={detailsOpen}
         >
-          {confirmed ? '已确认' : running ? '待完成' : '待审核'}
-        </span>
+          <ChevronDown
+            className={cn('h-3 w-3 transition-transform', detailsOpen && 'rotate-180')}
+          />
+          {detailsOpen ? '收起过程' : '展开过程'}
+        </button>
       </div>
-
-      <div className="border-t border-neutral-100 bg-neutral-50/70 px-3 py-3">
-        {running ? (
-          <div className="rounded-md border border-dashed border-blue-200 bg-white px-3 py-2 text-xs leading-5 text-neutral-500">
-            Claude Code / Codex 的最终正文会在执行结束后锁定到这里，审核时可展开全文确认。
-          </div>
-        ) : hasFinalMessage ? (
-          <>
-            <pre
-              className={cn(
-                'agenthub-readable-code whitespace-pre-wrap break-words rounded-md border border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-800',
-                expanded ? 'max-h-[32rem] overflow-auto' : 'max-h-44 overflow-hidden',
-              )}
-            >
-              {preview}
-            </pre>
-            {hasMore && (
-              <div className="mt-2 text-[11px] leading-5 text-neutral-500">
-                当前为预览，展开后显示完整输出。
+      {detailsOpen && (
+        <>
+          {data.warning && (
+            <div className="mb-2 flex items-start gap-2 text-[12px] leading-5 text-amber-700">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{data.warning}</span>
+            </div>
+          )}
+          <FlowRail>
+            <CodeAgentProcessRows data={data} />
+            {data.diagnostics && <CodeAgentFailureNotice data={data} />}
+          </FlowRail>
+          {artifacts.length > 0 && (
+            <div className="mt-3">
+              <div className="mb-1.5 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-neutral-400">
+                <Blocks className="h-3.5 w-3.5" />
+                产物 · {artifacts.length}
               </div>
-            )}
-          </>
-        ) : (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
-            本次运行没有返回可锁定的最终正文；过程日志和文件变更仍可在执行明细中查看。
-          </div>
-        )}
-        {!running && (
-          <>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {hasFinalMessage && (
-                <>
-                  <button
-                    type="button"
-                    onClick={copyFinalMessage}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
-                  >
-                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                    {copied ? '已复制' : '复制全文'}
-                  </button>
-                  {hasMore && (
-                    <button
-                      type="button"
-                      onClick={() => setExpanded((value) => !value)}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-600 transition hover:border-neutral-300 hover:text-neutral-900"
-                    >
-                      <ChevronDown
-                        className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')}
-                      />
-                      {expanded ? '收起全文' : '展开全文'}
-                    </button>
-                  )}
-                </>
-              )}
-              <button
-                type="button"
-                onClick={() => void continueOutput()}
-                disabled={continuing || confirmed || !currentSession?.id}
-                className={cn(
-                  'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition',
-                  confirmed
-                    ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'bg-neutral-950 text-white hover:bg-neutral-800 disabled:bg-neutral-300 disabled:text-neutral-500',
-                )}
-              >
-                {continuing ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : confirmed ? (
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" />
-                )}
-                {confirmed ? '已继续输出' : continuing ? '提交中...' : '确认并继续输出'}
-              </button>
-            </div>
-            {continueError && (
-              <div className="mt-2 text-[11px] leading-5 text-red-500">{continueError}</div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function codeAgentReviewPreview(value: string) {
-  const lines = value.split(/\r?\n/)
-  if (lines.length <= 14 && value.length <= 1600) return value
-  const firstLines = lines.slice(0, 14).join('\n')
-  if (firstLines.length <= 1600) return `${firstLines}\n...`
-  return `${firstLines.slice(0, 1600)}\n...`
-}
-
-function buildCodeAgentContinuationPrompt({
-  finalMessage,
-  runtimeLabel,
-  agentName,
-}: {
-  finalMessage: string
-  runtimeLabel: string
-  agentName: string | null
-}) {
-  const tail = finalMessage.trim()
-  const tailPreview = tail.length > 1200 ? `${tail.slice(-1200).trimStart()}` : tail
-  const prefix = agentName ? `@${agentName} ` : ''
-  const lines = [
-    `${prefix}请继续上一轮 ${runtimeLabel} 的输出，不要重复已经给出的内容。`,
-    '如果上一轮已经结束，请补充剩余结论、验证结果和剩余风险；如果还没结束，请从最后一句之后接着写。',
-  ]
-  if (tailPreview) {
-    lines.push(`上一轮输出末尾：\n${tailPreview}`)
-  }
-  return lines.join('\n\n')
-}
-
-const CodeAgentToolsCard: FC<{
-  items: NonNullable<CodeAgentRunMetadata['toolCalls']>
-  running: boolean
-}> = ({ items, running }) => (
-  <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-    <div className="flex h-10 items-center justify-between gap-3 border-b border-neutral-100 px-3">
-      <span className="inline-flex min-w-0 items-center gap-2 font-medium text-neutral-800">
-        <Search className="h-4 w-4 shrink-0 text-blue-500" />
-        工具调用 {items.length}
-      </span>
-      {running && (
-        <span className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.12)]" />
-      )}
-    </div>
-    <div className="grid gap-1.5 p-2">
-      {items.slice(-12).map((item) => (
-        <div
-          key={item.id}
-          className="grid grid-cols-[5.25rem_minmax(0,1fr)] gap-3 rounded-md bg-neutral-50 px-3 py-2.5 antialiased"
-        >
-          <span className="text-[13px] font-medium leading-6 text-neutral-500">{item.label}</span>
-          <span className="min-w-0">
-            <span
-              className="block truncate text-[13px] leading-6 text-neutral-900"
-              title={item.target ?? item.name}
-            >
-              {item.target ?? item.name}
-            </span>
-            {item.detail && (
-              <span
-                className="mt-0.5 block truncate text-xs leading-5 text-neutral-500"
-                title={item.detail}
-              >
-                {item.detail}
-              </span>
-            )}
-          </span>
-        </div>
-      ))}
-    </div>
-  </div>
-)
-
-const CodeAgentCommandsCard: FC<{ commands: CodeAgentRunMetadata['commands'] }> = ({
-  commands,
-}) => (
-  <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-    <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
-      <TerminalSquare className="h-4 w-4 shrink-0 text-emerald-600" />
-      命令记录 {commands.length}
-    </div>
-    <div className="space-y-1.5 p-2">
-      {commands.map((command) => (
-        <details
-          key={command.id}
-          className="group rounded-md border border-neutral-200 bg-neutral-50 text-neutral-900"
-        >
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
-            <span
-              className="agenthub-readable-code truncate text-[13px] leading-6"
-              title={command.command}
-            >
-              {command.command}
-            </span>
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-neutral-400 transition group-open:rotate-180" />
-          </summary>
-          {(command.cwd || command.output) && (
-            <div className="border-t border-neutral-200 bg-white px-3 py-2 text-[13px] leading-6 text-neutral-700">
-              {command.cwd && (
-                <div className="agenthub-readable-code truncate text-neutral-500">
-                  cwd: {command.cwd}
-                </div>
-              )}
-              {command.output && (
-                <pre className="agenthub-readable-code mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words">
-                  {command.output}
-                </pre>
-              )}
+              <FlowRail>
+                {artifacts.map((item) => (
+                  <ArtifactCard key={item.id} artifact={item} />
+                ))}
+              </FlowRail>
             </div>
           )}
-        </details>
-      ))}
-    </div>
-  </div>
-)
-
-const CodeAgentFilesCard: FC<{ cwd?: string; files: CodeAgentRunMetadata['files'] }> = ({
-  cwd,
-  files,
-}) => {
-  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
-
-  async function handleSaveEdit(filePath: string, params: { lineText: string; lineNumber: number }) {
-    if (!workspaceId) return
-    try {
-      await api.writeFile({
-        workspaceId,
-        filePath,
-        content: params.lineText,
-        startLine: params.lineNumber,
-        endLine: params.lineNumber,
-      })
-    } catch (err) {
-      console.error('[CodeAgentFilesCard] Failed to save edit:', err)
-    }
-  }
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <div className="flex h-10 items-center gap-2 border-b border-neutral-100 px-3 font-medium text-neutral-800">
-        <FileText className="h-4 w-4 shrink-0 text-amber-600" />
-        文件变更 {files.length}
+        </>
+      )}
       </div>
-      <div className="space-y-1.5 p-2">
-        {files.map((file) => {
-          const vscodeHref = file.status === 'deleted' ? null : vscodeFileHref(file.path, cwd)
-          return (
-            <details key={`${file.status}-${file.path}`} className="group rounded-md bg-neutral-50">
-              <summary className="grid cursor-pointer list-none grid-cols-[4.75rem_minmax(0,1fr)_auto_1rem] items-center gap-2 px-3 py-2.5">
-                <span className="text-[13px] text-neutral-500">{fileStatusLabel(file.status)}</span>
-                <span className="truncate text-[13px] leading-6 text-neutral-800" title={file.path}>
-                  {file.path}
-                </span>
-                {vscodeHref ? (
-                  <a
-                    href={vscodeHref}
-                    onClick={(event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      window.location.href = vscodeHref
-                    }}
-                    className="inline-flex h-7 min-w-10 items-center justify-center gap-1 rounded-full border border-neutral-200 bg-white px-2 text-neutral-500 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
-                    title="用 VS Code 打开"
-                    aria-label={`用 VS Code 打开 ${file.path}`}
-                  >
-                    <img src="/vscode-color.svg" alt="" className="h-4 w-4" draggable={false} />
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                ) : (
-                  <span className="h-7 min-w-10" />
-                )}
-                <ChevronDown
-                  className={cn(
-                    'h-3.5 w-3.5 text-neutral-400 transition group-open:rotate-180',
-                    !file.diff && 'opacity-0',
-                  )}
-                />
-              </summary>
-              {file.diff && (
-                <DiffViewer
-                  diff={file.diff}
-                  maxHeightClassName="max-h-72"
-                  filePath={file.path}
-                  onSaveEdit={workspaceId ? (params) => handleSaveEdit(file.path, params) : undefined}
-                />
-              )}
-            </details>
-          )
-        })}
-      </div>
-    </div>
   )
 }
 
-const CodeAgentLogsCard: FC<{ logs: NonNullable<CodeAgentRunMetadata['logs']> }> = ({ logs }) => {
+const CodeAgentFailureNotice: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
   const [open, setOpen] = useState(false)
+  const tone: FlowTone =
+    data.status === 'failed' ? 'red' : data.status === 'timed-out' ? 'amber' : 'neutral'
+
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-neutral-800 hover:bg-neutral-50"
-      >
-        <span className="inline-flex min-w-0 items-center gap-2">
-          <ListTodo className="h-4 w-4 shrink-0 text-neutral-500" />
-          过程日志 {logs.length}
-        </span>
-        <ChevronDown
-          className={cn(
-            'h-4 w-4 shrink-0 text-neutral-400 transition-transform',
-            open && 'rotate-180',
-          )}
-        />
-      </button>
-      {open && (
-        <div className="max-h-64 space-y-1.5 overflow-auto border-t border-neutral-100 bg-white p-2">
-          {logs.map((log) => (
-            <CodeAgentLogRow key={log.id} log={log} />
-          ))}
-        </div>
-      )}
-    </div>
+    <FlowRowShell
+      icon={<AlertTriangle className="h-3.5 w-3.5" />}
+      tone={tone}
+      title="诊断日志"
+      subtitle="执行器返回了诊断信息，可能包含失败原因或截断线索。"
+      action={
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
+        >
+          <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
+          {open ? '收起' : '展开'}
+        </button>
+      }
+      expand={
+        open ? (
+          <pre className="agenthub-readable-code whitespace-pre-wrap break-words pl-6 text-[12px] leading-5 text-neutral-700">
+            {data.diagnostics}
+          </pre>
+        ) : undefined
+      }
+    />
   )
 }
 
-const CodeAgentLogRow: FC<{ log: NonNullable<CodeAgentRunMetadata['logs']>[number] }> = ({
-  log,
-}) => {
-  const stream = displayLogStream(log)
-  return (
-    <div
-      className={cn(
-        'grid grid-cols-[4.25rem_minmax(0,1fr)] gap-2 rounded-md border px-3 py-2.5 text-[13px] leading-6 antialiased',
-        stream === 'stderr'
-          ? 'border-red-100 bg-red-50/70'
-          : stream === 'event'
-            ? 'border-blue-100 bg-blue-50/60'
-            : 'border-neutral-100 bg-neutral-50',
-      )}
-    >
-      <span
-        className={cn(
-          'inline-flex h-5 items-center justify-center rounded px-1.5 text-[11px] font-medium',
-          stream === 'stderr'
-            ? 'bg-red-100 text-red-700'
-            : stream === 'event'
-              ? 'bg-blue-100 text-blue-700'
-              : 'bg-neutral-200 text-neutral-600',
-        )}
-      >
-        {logStreamLabel(stream)}
-      </span>
-      <span className="whitespace-pre-wrap break-words text-neutral-800">{log.text}</span>
-    </div>
-  )
-}
-
-function displayLogStream(log: NonNullable<CodeAgentRunMetadata['logs']>[number]) {
-  if (log.stream !== 'stderr') return log.stream
-  return isProgressLikeCodeAgentLog(log.text) ? 'event' : 'stderr'
-}
-
-function isProgressLikeCodeAgentLog(text: string) {
-  const normalized = text.trim()
-  return (
-    /^(->|→)\s*(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)\b/i.test(
-      normalized,
-    ) ||
-    /^#\s*Todos\b/i.test(normalized) ||
-    /^\[[ xX-]\]\s+/.test(normalized) ||
-    /^[✓✔]\s+/.test(normalized) ||
-    /^[•·]\s+/.test(normalized) ||
-    /^>\s*[\w.-]+\s*·\s*[\w./:+-]+/i.test(normalized) ||
-    /\b(Explore|Plan|Analyze|Review|Build|Write|Read)\b.*\bAgent\b/i.test(normalized) ||
-    /^(Read|Edit|Write|MultiEdit|Grep|Glob|Bash|TodoWrite|Task|WebFetch|WebSearch)[：:]/i.test(
-      normalized,
-    ) ||
-    /^(Warning|Warn|警告)[：:\s]/i.test(normalized)
-  )
-}
-
-function codeAgentProcessSteps(data: CodeAgentRunMetadata): CodeAgentRunStep[] {
-  const steps = Array.isArray(data.steps) ? data.steps.filter(isCodeAgentStep) : []
-  if (steps.length) return steps.slice(-120)
-
-  const fallback: CodeAgentRunStep[] = []
-  fallback.push({
-    id: 'fallback-status',
-    kind: 'status',
-    status:
-      data.status === 'running'
-        ? 'running'
-        : data.status === 'completed' || data.partialSuccess
-          ? 'completed'
-          : 'failed',
-    title: codeAgentStatusLabel(data.status, Boolean(data.partialSuccess)),
-    subtitle: `${codeAgentRuntimeLabel(data.runtime)} · ${formatRunDuration(data.durationMs)}`,
-  })
-
-  for (const item of (data.toolCalls ?? []).slice(-20)) {
-    fallback.push({
-      id: `fallback-tool-${item.id}`,
-      kind: 'tool',
-      status: 'completed',
-      title: item.label,
-      subtitle: item.target ?? item.name,
-      detail: item.detail,
-      toolName: item.name,
-    })
-  }
-
-  for (const command of (data.commands ?? []).slice(-20)) {
-    fallback.push({
-      id: `fallback-command-${command.id}`,
-      kind: 'command',
-      status: 'completed',
-      title: '运行命令',
-      subtitle: command.command,
-      detail: command.cwd ? `cwd: ${command.cwd}` : undefined,
-      command: command.command,
-    })
-  }
-
-  for (const file of (data.files ?? []).slice(-20)) {
-    fallback.push({
-      id: `fallback-file-${file.status}-${file.path}`,
-      kind: 'file',
-      status: 'completed',
-      title: `${fileStatusLabel(file.status)}文件`,
-      subtitle: file.path,
-      path: file.path,
-      fileStatus: file.status,
-    })
-  }
-
-  return fallback.slice(-120)
-}
-
-function isCodeAgentStep(value: unknown): value is CodeAgentRunStep {
-  if (!value || typeof value !== 'object') return false
-  const step = value as Partial<CodeAgentRunStep>
-  return (
-    typeof step.id === 'string' &&
-    typeof step.title === 'string' &&
-    (step.kind === 'status' ||
-      step.kind === 'tool' ||
-      step.kind === 'command' ||
-      step.kind === 'file' ||
-      step.kind === 'log') &&
-    (step.status === 'running' ||
-      step.status === 'completed' ||
-      step.status === 'failed' ||
-      step.status === 'cancelled' ||
-      step.status === 'timed-out')
-  )
-}
-
-function codeAgentStepKindLabel(step: CodeAgentRunStep) {
-  if (step.kind === 'command') return '命令'
-  if (step.kind === 'file') return '文件'
-  if (step.kind === 'log') return step.stream === 'stderr' ? '错误' : '日志'
-  if (step.kind === 'status') return '运行'
-  if (step.toolName === 'TodoWrite') return '待办'
-  if (step.toolName === 'Read') return '读取'
-  if (step.toolName === 'Grep' || step.toolName === 'Glob') return '搜索'
-  if (step.toolName === 'WebFetch' || step.toolName === 'WebSearch') return '网页'
-  return '工具'
-}
-
-function codeAgentStepIcon(step: CodeAgentRunStep): ReactNode {
-  if (step.status === 'running') return <Loader2 className="h-4 w-4 animate-spin" />
-  if (step.status === 'failed' || step.status === 'cancelled' || step.status === 'timed-out')
-    return <AlertTriangle className="h-4 w-4" />
-  if (step.kind === 'command') return <TerminalSquare className="h-4 w-4" />
-  if (step.kind === 'file')
-    return step.fileStatus === 'created' ? <FilePlusIcon /> : <FileText className="h-4 w-4" />
-  if (step.kind === 'log') return <ListTodo className="h-4 w-4" />
-  if (step.kind === 'status') return <Rocket className="h-4 w-4" />
-  if (step.toolName === 'TodoWrite') return <ListTodo className="h-4 w-4" />
-  if (step.toolName === 'Read') return <FileText className="h-4 w-4" />
-  if (step.toolName === 'WebFetch' || step.toolName === 'WebSearch')
-    return <Globe2 className="h-4 w-4" />
-  if (step.toolName === 'Grep' || step.toolName === 'Glob') return <Search className="h-4 w-4" />
-  return <Pencil className="h-4 w-4" />
-}
-
-const FilePlusIcon: FC = () => (
-  <span className="relative grid h-4 w-4 place-items-center">
-    <FileText className="h-4 w-4" />
-    <Plus className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-white" />
+const CodeAgentTypingDots: FC = () => (
+  <span className="inline-flex shrink-0 items-center gap-1 pl-0.5" aria-hidden="true">
+    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400 [animation-delay:-0.2s]" />
+    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400 [animation-delay:-0.1s]" />
+    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400" />
   </span>
 )
 
-const CodeAgentDiagnosticsCard: FC<{ diagnostics: string }> = ({ diagnostics }) => {
-  const [open, setOpen] = useState(true)
+type FlowTone = 'neutral' | 'blue' | 'emerald' | 'amber' | 'red' | 'violet'
+
+type FlowRow = {
+  key: string
+  icon: ReactNode
+  title: string
+  subtitle?: string
+  detail?: ReactNode
+  tone?: FlowTone
+  meta?: ReactNode
+  action?: ReactNode
+  expand?: ReactNode
+}
+
+const flowToneClasses: Record<FlowTone, { bubble: string; dot: string; meta: string }> = {
+  neutral: {
+    bubble: 'bg-neutral-100 text-neutral-600',
+    dot: 'bg-neutral-400',
+    meta: 'bg-neutral-100 text-neutral-600',
+  },
+  blue: {
+    bubble: 'bg-blue-50 text-blue-600',
+    dot: 'bg-blue-500',
+    meta: 'bg-blue-50 text-blue-700',
+  },
+  emerald: {
+    bubble: 'bg-emerald-50 text-emerald-600',
+    dot: 'bg-emerald-500',
+    meta: 'bg-emerald-50 text-emerald-700',
+  },
+  amber: {
+    bubble: 'bg-amber-50 text-amber-600',
+    dot: 'bg-amber-500',
+    meta: 'bg-amber-50 text-amber-700',
+  },
+  red: {
+    bubble: 'bg-red-50 text-red-600',
+    dot: 'bg-red-500',
+    meta: 'bg-red-50 text-red-700',
+  },
+  violet: {
+    bubble: 'bg-violet-50 text-violet-600',
+    dot: 'bg-violet-500',
+    meta: 'bg-violet-50 text-violet-700',
+  },
+}
+
+const FlowRail: FC<{ children: ReactNode }> = ({ children }) => (
+  <div className="relative pl-4">
+    <div className="absolute bottom-1 left-2 top-1 w-px rounded-full bg-neutral-200/80" />
+    <div className="space-y-1.5">{children}</div>
+  </div>
+)
+
+const FlowRowShell: FC<Omit<FlowRow, 'key'>> = ({
+  action,
+  detail,
+  expand,
+  icon,
+  meta,
+  subtitle,
+  title,
+  tone = 'neutral',
+}) => {
+  const classes = flowToneClasses[tone]
+
   return (
-    <div className="overflow-hidden rounded-lg border border-red-200 bg-white">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-10 w-full items-center justify-between gap-3 px-3 text-left font-medium text-red-700 hover:bg-red-50"
-      >
-        <span className="inline-flex items-center gap-2">
-          <AlertCircleIcon />
-          诊断输出
-        </span>
-        <ChevronDown
-          className={cn('h-4 w-4 shrink-0 text-red-300 transition-transform', open && 'rotate-180')}
-        />
-      </button>
-      {open && (
-        <pre className="max-h-56 overflow-auto border-t border-red-100 bg-neutral-950 px-3 py-2 text-xs leading-5 text-neutral-100">
-          {diagnostics}
-        </pre>
-      )}
+    <div className="relative py-1.5 pl-4">
+      <span
+        className={cn(
+          'absolute left-[7px] top-3 h-2.5 w-2.5 rounded-full ring-4 ring-white',
+          classes.dot,
+        )}
+      />
+      <div className="flex items-start gap-2.5">
+        <div
+          className={cn(
+            'mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full',
+            classes.bubble,
+          )}
+        >
+          {icon}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[13px] font-medium text-neutral-900">{title}</span>
+            {meta}
+          </div>
+          {subtitle && <div className="text-[12px] text-neutral-500">{subtitle}</div>}
+          {detail && <div className="mt-0.5 text-[12px] leading-5 text-neutral-600">{detail}</div>}
+          {expand && <div className="mt-1">{expand}</div>}
+        </div>
+        {action && <div className="shrink-0 pt-0.5">{action}</div>}
+      </div>
     </div>
   )
+}
+
+const CodeAgentProcessRows: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+  const rows = useMemo(() => buildCodeAgentProcessRows(data), [data])
+  return (
+    <>
+      {rows.map(({ key, ...row }) => (
+        <FlowRowShell key={key} {...row} />
+      ))}
+    </>
+  )
+}
+
+function buildCodeAgentProcessRows(data: CodeAgentRunMetadata): FlowRow[] {
+  const rows: FlowRow[] = []
+  const steps = data.steps ?? []
+
+  if (steps.length > 0) {
+    const logSteps = steps.filter((step) => step.kind === 'log')
+    for (const step of steps) {
+      if (step.kind === 'log') continue
+      rows.push(stepToFlowRow(step))
+    }
+    if (logSteps.length) {
+      const lastLog = logSteps[logSteps.length - 1]
+      rows.push({
+        key: 'step-log-summary',
+        icon: <ListTodo className="h-3.5 w-3.5" />,
+        tone: logSteps.some((step) => step.status === 'failed') ? 'red' : 'neutral',
+        title: '过程输出',
+        subtitle: `${logSteps.length} 条运行日志`,
+        detail: trimLongText(
+          lastLog.detail || lastLog.subtitle || lastLog.title || '日志已折叠，最终结果保留在消息正文。',
+          220,
+        ),
+      })
+    }
+  } else {
+    if (data.toolCalls?.length) {
+      for (const call of data.toolCalls) {
+        rows.push({
+          key: `tool-${call.id}`,
+          icon: <Blocks className="h-3.5 w-3.5" />,
+          tone: 'blue',
+          title: call.label,
+          subtitle: [call.name, call.target].filter(Boolean).join(' · ') || undefined,
+          detail: call.detail,
+        })
+      }
+    }
+
+    if (data.commands?.length) {
+      for (const command of data.commands) {
+        rows.push({
+          key: `command-${command.id}`,
+          icon: <TerminalSquare className="h-3.5 w-3.5" />,
+          tone: 'neutral',
+          title: command.command,
+          subtitle: command.cwd ?? undefined,
+          detail: command.output ? trimLongText(command.output, 220) : undefined,
+        })
+      }
+    }
+
+    if (data.files?.length) {
+      for (const file of data.files) {
+        rows.push({
+          key: `file-${file.path}`,
+          icon: <FileText className="h-3.5 w-3.5" />,
+          tone: fileTone(file.status),
+          title: file.path,
+          subtitle: file.status ? fileStatusLabel(file.status) : undefined,
+          detail: file.diff ? summarizeDiff(file.diff) : undefined,
+        })
+      }
+    }
+
+    if (data.logs?.length) {
+      const lastLog = data.logs[data.logs.length - 1]
+      rows.push({
+        key: 'log-summary',
+        icon: lastLog.stream === 'stderr' ? <XCircle className="h-3.5 w-3.5" /> : <ListTodo className="h-3.5 w-3.5" />,
+        tone: data.logs.some((log) => log.stream === 'stderr') ? 'red' : 'neutral',
+        title: '过程输出',
+        subtitle: `${data.logs.length} 条运行日志`,
+        detail: trimLongText(lastLog.text, 220),
+      })
+    }
+  }
+
+  if (!rows.length) {
+    rows.push({
+      key: 'code-agent-empty',
+      icon: <Clock3 className="h-3.5 w-3.5" />,
+      tone: data.status === 'failed' ? 'red' : data.status === 'running' ? 'blue' : 'neutral',
+      title: codeAgentStatusLabel(data.status, Boolean(data.partialSuccess)),
+      subtitle: '当前只拿到汇总状态，还没有拆分出的执行事件。',
+    })
+  }
+
+  return rows
+}
+
+function stepToFlowRow(step: NonNullable<CodeAgentRunMetadata['steps']>[number]): FlowRow {
+  const tone = stepTone(step.status)
+  const icon = stepIcon(step.kind, step.status)
+  const subtitle = [
+    step.subtitle,
+    step.toolName ? `工具 ${step.toolName}` : null,
+    step.command ? `命令 ${step.command}` : null,
+    step.path ? `路径 ${step.path}` : null,
+    step.fileStatus ? fileStatusLabel(step.fileStatus) : null,
+    step.stream ? step.stream : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  return {
+    key: step.id,
+    icon,
+    tone,
+    title: step.title,
+    subtitle: subtitle || undefined,
+    detail: step.detail ? trimLongText(step.detail, 240) : undefined,
+  }
+}
+
+function stepTone(status: CodeAgentRunMetadata['status']): FlowTone {
+  if (status === 'failed') return 'red'
+  if (status === 'timed-out') return 'amber'
+  if (status === 'running') return 'blue'
+  if (status === 'cancelled') return 'neutral'
+  return 'emerald'
+}
+
+function stepIcon(
+  kind: NonNullable<CodeAgentRunMetadata['steps']>[number]['kind'],
+  status: CodeAgentRunMetadata['status'],
+) {
+  if (status === 'running') return <Loader2 className="h-3.5 w-3.5 animate-spin" />
+  if (status === 'failed') return <XCircle className="h-3.5 w-3.5" />
+  if (status === 'timed-out') return <Clock3 className="h-3.5 w-3.5" />
+  if (status === 'cancelled') return <Square className="h-3.5 w-3.5" />
+  if (kind === 'tool') return <Blocks className="h-3.5 w-3.5" />
+  if (kind === 'command') return <TerminalSquare className="h-3.5 w-3.5" />
+  if (kind === 'file') return <FileText className="h-3.5 w-3.5" />
+  if (kind === 'log') return <ListTodo className="h-3.5 w-3.5" />
+  return <CheckCircle2 className="h-3.5 w-3.5" />
+}
+
+function buildCodeAgentRunSummary(data: CodeAgentRunMetadata) {
+  const artifactCount = readFlowArtifacts(data.artifacts).length
+  const parts = [
+    data.steps?.length ? `${data.steps.length} 步骤` : null,
+    data.toolCalls?.length ? `${data.toolCalls.length} 工具` : null,
+    data.commands?.length ? `${data.commands.length} 命令` : null,
+    data.files?.length ? `${data.files.length} 文件` : null,
+    data.logs?.length ? `${data.logs.length} 日志` : null,
+    artifactCount ? `${artifactCount} 产物` : null,
+  ].filter(Boolean)
+  return parts.join(' · ')
+}
+
+function formatDurationMs(value: number) {
+  if (!Number.isFinite(value) || value < 0) return ''
+  if (value < 1000) return `${Math.round(value)}ms`
+  if (value < 60_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}s`
+  const minutes = Math.floor(value / 60_000)
+  const seconds = Math.round((value % 60_000) / 1000)
+  return `${minutes}m${seconds.toString().padStart(2, '0')}s`
+}
+
+function trimLongText(text: string, limit: number) {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= limit) return normalized
+  return `${normalized.slice(0, limit - 1)}…`
+}
+
+function summarizeDiff(diff: string) {
+  const lines = diff.split(/\r?\n/)
+  const additions = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
+  const deletions = lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
+  return `Diff · +${additions} / -${deletions}`
+}
+
+function readFlowArtifacts(value: unknown): AgentArtifact[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  return value.filter((item): item is AgentArtifact => {
+    if (!item || typeof item !== 'object') return false
+    const artifact = item as { id?: unknown; type?: unknown }
+    if (
+      typeof artifact.id !== 'string' ||
+      typeof artifact.type !== 'string' ||
+      seen.has(artifact.id)
+    ) {
+      return false
+    }
+    seen.add(artifact.id)
+    return ['diff', 'preview', 'file', 'deploy', 'workflow'].includes(artifact.type)
+  })
+}
+
+function fileTone(status?: CodeAgentRunMetadata['files'][number]['status']): FlowTone {
+  if (status === 'deleted') return 'red'
+  if (status === 'created') return 'emerald'
+  if (status === 'renamed') return 'violet'
+  if (status === 'untracked') return 'amber'
+  return 'blue'
 }
 
 const AgentArtifactsCard: FC<{ data: { items?: AgentArtifact[] } }> = ({ data }) => {
   const items = data.items ?? []
   if (!items.length) return null
-  const diffCount = items.filter((item) => item.type === 'diff').length
-  const previewCount = items.filter((item) => item.type === 'preview').length
-  const deployCount = items.filter((item) => item.type === 'deploy').length
 
   return (
-    <div className="not-prose mt-3 space-y-2">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-        <span className="inline-flex items-center gap-1 rounded-full border border-neutral-200 bg-white px-2.5 py-1">
-          <Blocks className="h-3.5 w-3.5" />
-          产物 {items.length}
-        </span>
-        {diffCount > 0 && <span>{diffCount} 个 Diff</span>}
-        {previewCount > 0 && <span>{previewCount} 个预览</span>}
-        {deployCount > 0 && <span>{deployCount} 个部署</span>}
+    <div className="not-prose mt-3 max-w-[48rem] text-sm leading-6 text-neutral-700">
+      <div className="mb-1.5 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-neutral-400">
+        <Blocks className="h-3.5 w-3.5" />
+        产物 · {items.length}
       </div>
-      <div className="space-y-2">
+      <FlowRail>
         {items.map((item) => (
           <ArtifactCard key={item.id} artifact={item} />
         ))}
-      </div>
+      </FlowRail>
     </div>
   )
 }
@@ -4780,28 +4667,24 @@ const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> 
 }) => {
   const item = previewItemFromArtifact(artifact)
   return (
-    <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2">
-      <div className="flex items-center gap-2">
-        <FileText className="h-4 w-4 shrink-0 text-neutral-400" />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] leading-6 text-neutral-800" title={artifact.path}>
-            {artifact.path}
-          </div>
-          <div className="mt-0.5 text-xs text-neutral-400">
-            {artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}
-          </div>
-        </div>
+    <FlowRowShell
+      icon={<FileText className="h-3.5 w-3.5" />}
+      tone={fileTone(artifact.status)}
+      title={artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path}
+      subtitle={artifact.status ? fileStatusLabel(artifact.status) : '文件产物'}
+      detail={artifact.path}
+      action={
         <button
           type="button"
           onClick={() => requestArtifactPreview(item)}
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
+          className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
           title={previewActionLabel(item)}
         >
           {previewActionIcon(item)}
           {previewActionLabel(item)}
         </button>
-      </div>
-    </div>
+      }
+    />
   )
 }
 
@@ -4826,42 +4709,45 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-11 w-full items-center justify-between gap-3 px-3 text-left hover:bg-neutral-50"
-      >
-        <span className="inline-flex min-w-0 items-center gap-2">
-          <GitBranch className="h-4 w-4 shrink-0 text-blue-500" />
-          <span className="min-w-0">
-            <span className="block truncate text-[13px] leading-6 text-neutral-900">
-              {artifact.filePath}
-            </span>
-            <span className="block text-xs text-neutral-400">
-              +{additions} / -{deletions}
-            </span>
-          </span>
-        </span>
-        <ChevronDown
-          className={cn(
-            'h-4 w-4 shrink-0 text-neutral-400 transition-transform',
-            open && 'rotate-180',
-          )}
-        />
-      </button>
-      <div className="border-t border-neutral-100 px-3 py-2">
-        <button
-          type="button"
-          onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-neutral-50 px-2.5 text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-950"
-        >
-          <GitBranch className="h-3.5 w-3.5" />
-          查看 Diff
-        </button>
-      </div>
-      {open && <DiffViewer diff={artifact.diff} maxHeightClassName="max-h-96" filePath={artifact.filePath} onSaveEdit={workspaceId ? handleSaveEdit : undefined} />}
-    </div>
+    <FlowRowShell
+      icon={<GitBranch className="h-3.5 w-3.5" />}
+      tone="blue"
+      title={artifact.title || artifact.filePath}
+      subtitle={`${fileStatusLabel(artifact.status ?? 'modified')} · Diff · +${additions} / -${deletions}`}
+      detail={artifact.description ?? artifact.filePath}
+      action={
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
+            className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
+          >
+            <GitBranch className="h-3 w-3" />
+            Diff
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
+          >
+            <ChevronDown
+              className={cn('h-3 w-3 transition-transform', open && 'rotate-180')}
+            />
+            {open ? '收起' : '展开'}
+          </button>
+        </div>
+      }
+      expand={
+        open ? (
+          <DiffViewer
+            diff={artifact.diff}
+            maxHeightClassName="max-h-96"
+            filePath={artifact.filePath}
+            onSaveEdit={workspaceId ? handleSaveEdit : undefined}
+          />
+        ) : undefined
+      }
+    />
   )
 }
 
@@ -5070,166 +4956,102 @@ const DiffViewer: FC<{
 const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'preview' }> }> = ({
   artifact,
 }) => {
+  const item = previewItemFromArtifact(artifact)
   return (
-    <div className="agenthub-embedded-window overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <div className="flex h-11 items-center justify-between gap-3 px-3">
+    <FlowRowShell
+      icon={<Globe2 className="h-3.5 w-3.5" />}
+      tone="emerald"
+      title={artifact.title}
+      subtitle={previewKindName(artifact.previewKind)}
+      detail={artifact.url}
+      action={
+        <div className="flex items-center gap-1.5">
         <button
           type="button"
-          onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
-          className="inline-flex min-w-0 flex-1 items-center gap-2 text-left"
-        >
-          <Globe2 className="h-4 w-4 shrink-0 text-emerald-600" />
-          <span className="min-w-0">
-            <span className="block truncate text-xs font-medium text-neutral-900">
-              {artifact.title}
-            </span>
-            <span className="block truncate text-[11px] text-neutral-400">{artifact.url}</span>
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
-          className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+          onClick={() => requestArtifactPreview(item)}
+          className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
           title="预览网页"
         >
-          <Monitor className="h-3.5 w-3.5" />
+          <Monitor className="h-3 w-3" />
+          预览
         </button>
         <a
           href={artifact.url}
           target="_blank"
           rel="noreferrer"
-          className="grid h-7 w-7 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+          className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
           title="新窗口打开"
         >
-          <ExternalLink className="h-3.5 w-3.5" />
+          <ExternalLink className="h-3 w-3" />
+          打开
         </a>
       </div>
-    </div>
+      }
+    />
   )
 }
 
 const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy' }> }> = ({
   artifact,
-}) => (
-  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
-    <div className="flex items-center gap-2">
-      <Rocket className="h-4 w-4 shrink-0 text-emerald-700" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-xs font-semibold text-emerald-900">{artifact.title}</div>
-        <div className="mt-0.5 truncate text-[11px] text-emerald-700">
-          {artifact.provider} · {deployStatusLabel(artifact.status)}
-        </div>
-      </div>
-      {artifact.url && (
-        <a
-          href={artifact.url}
-          target="_blank"
-          rel="noreferrer"
-          className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100"
-          title="打开部署"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </a>
-      )}
-      {artifact.url && (
-        <button
-          type="button"
-          onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
-          className="grid h-7 w-7 place-items-center rounded-md text-emerald-700 hover:bg-emerald-100"
-          title="预览部署"
-        >
-          <Monitor className="h-3.5 w-3.5" />
-        </button>
-      )}
-    </div>
-  </div>
-)
+}) => {
+  const item = previewItemFromArtifact(artifact)
+  return (
+    <FlowRowShell
+      icon={<Rocket className="h-3.5 w-3.5" />}
+      tone={artifact.status === 'failed' ? 'red' : artifact.status === 'ready' ? 'emerald' : 'amber'}
+      title={artifact.title}
+      subtitle={`${artifact.provider} · ${deployStatusLabel(artifact.status)}`}
+      detail={artifact.logs ?? artifact.description}
+      action={
+        artifact.url ? (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => requestArtifactPreview(item)}
+              className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
+              title="预览部署"
+            >
+              <Monitor className="h-3 w-3" />
+              预览
+            </button>
+            <a
+              href={artifact.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
+              title="打开部署"
+            >
+              <ExternalLink className="h-3 w-3" />
+              打开
+            </a>
+          </div>
+        ) : undefined
+      }
+    />
+  )
+}
 
 const WorkflowArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'workflow' }> }> = ({
   artifact,
 }) => (
-  <div className="overflow-hidden rounded-lg border border-indigo-200 bg-white shadow-sm">
-    <div className="flex h-11 items-center justify-between gap-3 px-3">
+  <FlowRowShell
+    icon={<GitBranch className="h-3.5 w-3.5" />}
+    tone="violet"
+    title={artifact.title}
+    subtitle={`${artifact.nodes.length} 个节点 · ${artifact.edges.length} 条连接`}
+    detail={artifact.description}
+    action={
       <button
         type="button"
         onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
-        className="inline-flex min-w-0 flex-1 items-center gap-2 text-left"
-      >
-        <GitBranch className="h-4 w-4 shrink-0 text-indigo-500" />
-        <span className="min-w-0">
-          <span className="block truncate text-xs font-medium text-neutral-900">
-            {artifact.title}
-          </span>
-          <span className="block truncate text-[11px] text-neutral-400">
-            {artifact.nodes.length} 个节点 · {artifact.edges.length} 条连接
-          </span>
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
-        className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-indigo-500 hover:bg-indigo-50"
+        className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
         title="查看流程"
       >
-        <GitBranch className="h-3.5 w-3.5" />
+        <GitBranch className="h-3 w-3" />
+        流程
       </button>
-    </div>
-    <div className="border-t border-indigo-100 bg-indigo-50/40 px-3 py-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {artifact.nodes.map((node, index) => (
-          <div key={node.id} className="flex items-center gap-2">
-            <div
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
-                node.type === 'input'
-                  ? 'border-neutral-200 bg-white text-neutral-600'
-                  : node.type === 'output'
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'border-indigo-200 bg-white text-indigo-700',
-              )}
-            >
-              {node.type === 'agent' && (
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ background: node.agentColor ?? '#6366f1' }}
-                />
-              )}
-              <span>{node.label}</span>
-            </div>
-            {index < artifact.nodes.length - 1 && (
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-indigo-300" />
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-    <div className="border-t border-indigo-100 bg-white px-3 py-3">
-      <div className="space-y-2 text-xs text-neutral-600">
-        {artifact.edges.map((edge) => (
-          <div
-            key={`${edge.from}-${edge.to}`}
-            className="flex items-center gap-2 rounded-md bg-neutral-50 px-2.5 py-1.5"
-          >
-            <span className="font-medium text-neutral-800">
-              {artifact.nodes.find((n) => n.id === edge.from)?.label ?? edge.from}
-            </span>
-            <ChevronRight className="h-3 w-3 text-neutral-300" />
-            <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
-              {edge.label ?? '下一步'}
-            </span>
-            <ChevronRight className="h-3 w-3 text-neutral-300" />
-            <span className="font-medium text-neutral-800">
-              {artifact.nodes.find((n) => n.id === edge.to)?.label ?? edge.to}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="mt-3 rounded-md bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
-        <span className="font-medium text-neutral-700">Workflow 说明</span>
-        <div className="mt-1">{artifact.description}</div>
-      </div>
-    </div>
-  </div>
+    }
+  />
 )
 
 function deployStatusLabel(status: Extract<AgentArtifact, { type: 'deploy' }>['status']) {
@@ -5439,21 +5261,6 @@ function guessLanguageFromPath(filePath: string): string {
   return map[ext] ?? ''
 }
 
-const AlertCircleIcon: FC = () => (
-  <span className="grid h-4 w-4 place-items-center rounded-full border border-neutral-300 text-[10px]">
-    !
-  </span>
-)
-
-function formatRunDuration(ms: number) {
-  if (!Number.isFinite(ms) || ms <= 0) return '0s'
-  const totalSeconds = Math.max(1, Math.round(ms / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  if (minutes <= 0) return `${seconds}s`
-  return `${minutes}m ${seconds}s`
-}
-
 function codeAgentStatusLabel(status: CodeAgentRunMetadata['status'], partialSuccess = false) {
   if (status === 'running') return '正在执行'
   if (status === 'completed') return '执行完成'
@@ -5469,34 +5276,12 @@ function groupChatDisplayTitle(sessionTitle?: string | null, workspaceName?: str
   return withoutSuffix || workspaceName?.trim() || 'Agent 群聊'
 }
 
-function logStreamLabel(stream: NonNullable<CodeAgentRunMetadata['logs']>[number]['stream']) {
-  if (stream === 'stderr') return '错误'
-  if (stream === 'event') return '事件'
-  return '输出'
-}
-
 function fileStatusLabel(status: CodeAgentRunMetadata['files'][number]['status']) {
   if (status === 'created') return '创建'
   if (status === 'modified') return '修改'
   if (status === 'deleted') return '删除'
   if (status === 'renamed') return '重命名'
   return '未跟踪'
-}
-
-function vscodeFileHref(filePath: string, cwd?: string) {
-  const absolutePath = absoluteEditorPath(filePath, cwd)
-  if (!absolutePath) return null
-  const normalized = absolutePath.replace(/\\/g, '/')
-  return `vscode://file/${encodeURI(normalized).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
-}
-
-function absoluteEditorPath(filePath: string, cwd?: string) {
-  const trimmed = filePath.trim()
-  if (!trimmed) return null
-  if (/^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith('/')) return trimmed
-  const root = cwd?.trim()
-  if (!root || (!/^[a-zA-Z]:[\\/]/.test(root) && !root.startsWith('/'))) return null
-  return `${root.replace(/[\\/]+$/, '')}/${trimmed.replace(/^[\\/]+/, '')}`
 }
 
 function TaskBoardCard({ data }: { data: any }) {
@@ -5521,7 +5306,7 @@ function TaskBoardCard({ data }: { data: any }) {
 }
 
 const SystemMessage: FC = () => (
-  <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] py-2">
+  <MessagePrimitive.Root className="ml-0 mr-auto w-full max-w-[var(--thread-max-width)] py-2">
     <div className="rounded-2xl bg-neutral-100 px-3 py-2 text-xs text-neutral-500">
       <MessagePrimitive.Parts />
     </div>
@@ -5995,18 +5780,20 @@ function closeUnterminatedCodeFence(text: string) {
 }
 
 const MarkdownText: FC = () => (
-  <MarkdownTextPrimitive
-    remarkPlugins={[remarkGfm]}
-    smooth={false}
-    preprocess={closeUnterminatedCodeFence}
-    components={{
-      pre: CodePre,
-      code: CodeToken,
-      CodeHeader,
-      SyntaxHighlighter: CodeSyntaxHighlighter,
-    }}
-    className="agenthub-markdown prose prose-neutral prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-code:before:content-none prose-code:after:content-none"
-  />
+  <div className="not-prose mt-1 inline-block w-fit max-w-full rounded-[20px] rounded-tl-md bg-[#f4f5f1] px-4 py-2.5 text-neutral-900 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+    <MarkdownTextPrimitive
+      remarkPlugins={[remarkGfm]}
+      smooth={false}
+      preprocess={closeUnterminatedCodeFence}
+      components={{
+        pre: CodePre,
+        code: CodeToken,
+        CodeHeader,
+        SyntaxHighlighter: CodeSyntaxHighlighter,
+      }}
+      className="agenthub-markdown prose prose-neutral prose-sm max-w-none prose-p:my-1.5 prose-ul:my-2 prose-code:before:content-none prose-code:after:content-none"
+    />
+  </div>
 )
 
 function normalizePreviewUrl(url?: string) {
