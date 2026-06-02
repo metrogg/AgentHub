@@ -1,12 +1,15 @@
 import { FormEvent, useEffect, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
+  AlertTriangle,
   Bot,
   Check,
+  CheckCircle2,
   Copy,
   MessageSquareText,
   PanelLeft,
   Plus,
+  RefreshCw,
   Save,
   Settings2,
   Sparkles,
@@ -27,7 +30,15 @@ import {
   type SavedAgentConfig,
 } from '../lib/agentLibrary'
 import { syncSavedAgentDirectSessions } from '../lib/agentConversation'
-import { api, type AgentConfigInput, type ModelCatalogItem, type SkillSummary, type WorkspaceAgent } from '../lib/api'
+import {
+  api,
+  type AgentConfigInput,
+  type CodingToolStatus,
+  type ModelCatalogItem,
+  type SettingsGeneralInfo,
+  type SkillSummary,
+  type WorkspaceAgent,
+} from '../lib/api'
 import {
   expertCategoryLabels,
   expertProfileForId,
@@ -63,6 +74,36 @@ const emptyDraft: AgentConfigInput = {
   roleProfile: null,
 }
 
+type HealthState = 'idle' | 'checking' | 'ready' | 'error'
+
+interface AgentComboHealth {
+  state: HealthState
+  checkedAt?: string
+  error?: string
+  cli?: {
+    ok: boolean
+    label: string
+    message: string
+    status?: CodingToolStatus | null
+  }
+  model?: {
+    ok: boolean
+    label: string
+    message: string
+  }
+  sandbox?: {
+    ok: boolean
+    label: string
+    message: string
+    provider?: string
+  }
+  isolation?: {
+    ok: boolean
+    label: string
+    message: string
+  }
+}
+
 export default function AgentConfigPage() {
   const { t } = useI18n()
   const navigate = useNavigate()
@@ -78,6 +119,7 @@ export default function AgentConfigPage() {
   const [saved, setSaved] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([])
+  const [comboHealth, setComboHealth] = useState<AgentComboHealth>({ state: 'idle' })
   const selectedExpertProfile = expertProfileForId(expertProfileIdFromDraft(draft))
   const draftOutputContract = readProfileStringArray(draft.roleProfile, 'outputContract')
   const draftQualityGates = readProfileStringArray(draft.roleProfile, 'qualityGates')
@@ -148,19 +190,25 @@ export default function AgentConfigPage() {
       .filter((id): id is string => typeof id === 'string' && id.length > 0),
   )
   const runtimeType = draft.runtimeType ?? 'code-agent'
+  const selectedModel = draft.modelId ? models.find((item) => item.id === draft.modelId || item.modelId === draft.modelId) ?? null : null
+  const selectedSkills = draft.skillIds ?? []
+  const runtimeComboLabel =
+    runtimeType === 'code-agent'
+      ? `${labelForCodeAgentType(draft.codeAgentType ?? 'codex')} × ${modelName(draft.modelId ?? null, models)} × ${selectedSkills.length} 个 Skills`
+      : `LLM × ${modelName(draft.modelId ?? null, models)} × ${selectedSkills.length} 个 Skills`
   const modelCompatibilityMessage = (() => {
     const modelId = draft.modelId ?? null
     const codeAgentType = draft.codeAgentType ?? null
-    const model = modelId ? models.find((item) => item.id === modelId || item.modelId === modelId) : null
-    if (!modelId) return '留空时跟随 Coding Tools 页面里的默认模型、Base URL 和 API Key。'
-    if (!model) return '将优先使用当前 Agent 保存的模型覆盖；若模型目录缺失该项，会回退到 Coding Tools 默认配置。'
+    const model = selectedModel
+    if (!modelId) return '留空时会沿用模型管理页里配置好的默认模型；填入后该 Agent 绑定独立模型，不会和其他 Agent 共用。'
+    if (!model) return '将优先使用这个 Agent 自己保存的模型覆盖；若模型目录里暂时找不到，会回退到模型管理的默认配置。'
     if (codeAgentType === 'claude-code' && !/claude|sonnet|opus|haiku|anthropic/i.test(`${model.provider} ${model.modelId} ${model.apiEndpoint ?? ''} ${model.anthropicEndpoint ?? ''}`)) {
-      return 'Claude Code 需要 Anthropic/Claude 兼容模型；当前选择可能会被运行时回退。'
+      return 'Claude Code 更适合 Anthropic/Claude 兼容模型；这条组合仍可保存，但运行时可能会回退到可用模型。'
     }
     if (codeAgentType === 'gemini' && !/gemini|google/i.test(`${model.provider} ${model.modelId}`)) {
-      return 'Gemini CLI 需要 Gemini/Google 兼容模型；当前选择可能会被运行时回退。'
+      return 'Gemini CLI 更适合 Gemini/Google 兼容模型；这条组合仍可保存，但运行时可能会回退到可用模型。'
     }
-    return 'Code Agent 会优先使用这个模型覆盖，并把对应 Base URL / API Key 注入到 Coding Tools。'
+    return '这个 Agent 会优先使用独立模型覆盖，并把对应 Base URL / API Key 注入到当前 Coding Tools 运行器。'
   })()
 
   function selectAgent(agent: SavedAgentConfig, replaceUrl = false) {
@@ -272,6 +320,44 @@ export default function AgentConfigPage() {
       toastSaved()
     } catch (error) {
       toastSaveFailed(error)
+    }
+  }
+
+  async function refreshComboHealth() {
+    setComboHealth({ state: 'checking' })
+    try {
+      const codeAgentType = draft.codeAgentType ?? 'codex'
+      const model = selectedModel
+      const [toolStatus, generalInfo, modelResult] = await Promise.all([
+        runtimeType === 'code-agent'
+          ? api.getCodingToolStatus([{ id: codeAgentType, command: commandForCodeAgentType(codeAgentType) }])
+          : Promise.resolve(null),
+        api.getSettingsGeneralInfo(),
+        model
+          ? api.testModel({
+              provider: model.provider,
+              apiEndpoint: model.apiEndpoint,
+              anthropicEndpoint: model.anthropicEndpoint,
+              apiKey: model.apiKey,
+              apiKeyEnv: model.apiKeyEnv,
+              modelId: model.modelId,
+            })
+          : Promise.resolve(null),
+      ])
+      const cliStatus = toolStatus?.items?.find((item) => item.id === codeAgentType) ?? toolStatus?.items?.[0] ?? null
+      setComboHealth({
+        state: 'ready',
+        checkedAt: new Date().toLocaleTimeString(),
+        cli: buildCliHealth(runtimeType, codeAgentType, cliStatus),
+        model: buildModelHealth(model, modelResult),
+        sandbox: buildSandboxHealth(generalInfo),
+        isolation: buildIsolationHealth(generalInfo),
+      })
+    } catch (error) {
+      setComboHealth({
+        state: 'error',
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
   }
 
@@ -602,6 +688,13 @@ export default function AgentConfigPage() {
                         模板只是帮你填充 Agent 配置，不是独立专家系统，也不会固定驱动分工。
                       </p>
                     </div>
+                    <div className="mb-4 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs leading-5 text-neutral-600">
+                      <div className="font-medium text-neutral-800">运行组合</div>
+                      <div className="mt-1">{runtimeComboLabel}</div>
+                      <div className="mt-1">
+                        模型管理负责把模型、Base URL、API Key 配好；Coding Tools 负责本机 CLI 可用；这里负责给每个专家绑定自己的 CLI、模型和 Skills。
+                      </div>
+                    </div>
                     <div className="flex items-start gap-4">
                       <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl text-white shadow-sm" style={{ background: draft.color ?? '#111827' }}>
                         <Bot className="h-7 w-7" />
@@ -622,7 +715,7 @@ export default function AgentConfigPage() {
                     <TextField label={t('系统提示词')} rows={6} value={draft.systemPrompt ?? ''} onChange={(systemPrompt) => setDraft({ ...draft, systemPrompt })} />
 
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      <SelectField label={t('运行时')} value={runtimeType} onChange={(value) => {
+                      <SelectField label="Agent 基底" value={runtimeType} onChange={(value) => {
                         const nextRuntime = value as WorkspaceAgent['runtimeType']
                         setDraft({
                           ...draft,
@@ -631,18 +724,18 @@ export default function AgentConfigPage() {
                           approvalRequired: nextRuntime === 'code-agent' ? false : (draft.approvalRequired ?? true),
                         })
                       }}>
-                        <option value="code-agent">Coding Tools</option>
+                        <option value="code-agent">Coding Tools / CLI 运行器</option>
                         <option value="llm">{t('普通 LLM Agent')}</option>
                       </SelectField>
-                      <SelectField label="Coding Tools" value={draft.codeAgentType ?? 'codex'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
+                      <SelectField label="CLI 运行器" value={draft.codeAgentType ?? 'codex'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
                         <option value="">{t('不绑定 CLI')}</option>
                         <option value="codex">Codex CLI</option>
                         <option value="claude-code">Claude Code</option>
                         <option value="opencode">OpenCode</option>
                         <option value="gemini">Gemini CLI</option>
                       </SelectField>
-                      <SelectField label="Agent 模型覆盖" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
-                        <option value="">{runtimeType === 'code-agent' ? '跟随 Coding Tools 默认模型' : '使用默认模型'}</option>
+                      <SelectField label="模型绑定" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
+                        <option value="">{runtimeType === 'code-agent' ? '沿用模型管理默认' : '使用默认模型'}</option>
                         {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
                       </SelectField>
                       <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
@@ -681,7 +774,7 @@ export default function AgentConfigPage() {
                     <div className="mt-5 rounded-xl border border-neutral-200 bg-white">
                       <div className="flex h-11 items-center gap-2 border-b border-neutral-100 px-4">
                         <Wrench className="h-4 w-4 text-amber-600" />
-                        <span className="text-sm font-medium text-neutral-800">专属工具箱</span>
+                        <span className="text-sm font-medium text-neutral-800">能力包 / Skills</span>
                         <span className="ml-auto text-xs text-neutral-400">
                           已绑定 {(draft.skillIds ?? []).length} 个
                         </span>
@@ -750,6 +843,7 @@ export default function AgentConfigPage() {
                   <aside className="space-y-4">
                     <InfoPanel title="能力卡">
                       <InfoRow label={t('运行时')} value={runtimeLabel(runtimeType)} />
+                      <InfoRow label="组合" value={runtimeComboLabel} />
                       <InfoRow
                         label={t('模型')}
                         value={t(modelName(draft.modelId ?? null, models))}
@@ -759,6 +853,43 @@ export default function AgentConfigPage() {
                       <InfoRow label="可接任务" value={readProfileStringArray(draft.roleProfile, 'acceptsTaskTypes').join(', ') || '自定义'} />
                       <InfoRow label="主要产出" value={draftOutputContract.join(', ') || '自定义'} />
                       <InfoRow label={t('标签')} value={(draft.capabilityTags ?? []).join(', ') || t('未设置')} />
+                    </InfoPanel>
+
+                    <InfoPanel title="组合健康检查">
+                      <button
+                        type="button"
+                        onClick={() => void refreshComboHealth()}
+                        disabled={comboHealth.state === 'checking'}
+                        className="mb-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium text-neutral-700 shadow-sm transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <RefreshCw className={cn('h-4 w-4', comboHealth.state === 'checking' && 'animate-spin')} />
+                        {comboHealth.state === 'checking' ? '检查中' : '刷新当前组合'}
+                      </button>
+                      {comboHealth.state === 'idle' ? (
+                        <div className="text-sm leading-6 text-neutral-500">
+                          检查 CLI、模型连通性、Docker Sandboxes 和执行隔离是否匹配当前组合。
+                        </div>
+                      ) : comboHealth.state === 'error' ? (
+                        <HealthRow ok={false} label="检查失败" message={comboHealth.error ?? '健康检查请求失败'} />
+                      ) : (
+                        <div className="space-y-2">
+                          {comboHealth.cli && (
+                            <HealthRow ok={comboHealth.cli.ok} label={comboHealth.cli.label} message={comboHealth.cli.message} />
+                          )}
+                          {comboHealth.model && (
+                            <HealthRow ok={comboHealth.model.ok} label={comboHealth.model.label} message={comboHealth.model.message} />
+                          )}
+                          {comboHealth.sandbox && (
+                            <HealthRow ok={comboHealth.sandbox.ok} label={comboHealth.sandbox.label} message={comboHealth.sandbox.message} />
+                          )}
+                          {comboHealth.isolation && (
+                            <HealthRow ok={comboHealth.isolation.ok} label={comboHealth.isolation.label} message={comboHealth.isolation.message} />
+                          )}
+                          {comboHealth.checkedAt && (
+                            <div className="pt-1 text-[11px] text-neutral-400">检查时间 {comboHealth.checkedAt}</div>
+                          )}
+                        </div>
+                      )}
                     </InfoPanel>
 
                     <InfoPanel title="模板能力">
@@ -1030,6 +1161,123 @@ function modelName(modelId: string | null, models: ModelCatalogItem[]) {
   return model?.name || model?.modelId || modelId
 }
 
+function buildCliHealth(
+  runtimeType: WorkspaceAgent['runtimeType'],
+  codeAgentType: WorkspaceAgent['codeAgentType'] | null | undefined,
+  status?: CodingToolStatus | null,
+): NonNullable<AgentComboHealth['cli']> {
+  if (runtimeType !== 'code-agent') {
+    return {
+      ok: true,
+      label: 'CLI 运行器',
+      message: '当前是 LLM fallback，不需要本地 Coding Tools CLI。',
+      status,
+    }
+  }
+  const label = labelForCodeAgentType(codeAgentType ?? 'codex')
+  if (!status) {
+    return {
+      ok: false,
+      label,
+      message: '没有拿到 CLI 探测结果，请检查服务端是否正常。',
+      status,
+    }
+  }
+  const ok = Boolean(status.installed && status.configured !== false)
+  const parts = [
+    status.installed ? '已安装' : '未安装',
+    status.configured === false ? '配置不可用' : '配置可用',
+    status.version ? `版本 ${status.version}` : '',
+  ].filter(Boolean)
+  return {
+    ok,
+    label,
+    message: status.configMessage || parts.join('，'),
+    status,
+  }
+}
+
+function buildModelHealth(
+  model: ModelCatalogItem | null,
+  result: { ok: boolean; status?: number; message: string } | null,
+): NonNullable<AgentComboHealth['model']> {
+  if (!model) {
+    return {
+      ok: true,
+      label: '模型绑定',
+      message: '未绑定专属模型，将沿用模型管理默认配置。',
+    }
+  }
+  if (!result) {
+    return {
+      ok: false,
+      label: model.name || model.modelId,
+      message: '模型未完成测试。',
+    }
+  }
+  return {
+    ok: result.ok,
+    label: model.name || model.modelId,
+    message: result.message || (result.ok ? '模型连接可用。' : '模型连接失败。'),
+  }
+}
+
+function buildSandboxHealth(info: SettingsGeneralInfo): NonNullable<AgentComboHealth['sandbox']> {
+  const provider = info.sandbox.configuredProvider
+  if (provider !== 'docker-sandbox') {
+    return {
+      ok: false,
+      label: 'Docker Sandboxes',
+      provider,
+      message: `当前 provider 是 ${provider}，不是默认 Docker Sandboxes。`,
+    }
+  }
+  const docker = info.sandbox.dockerSandbox
+  const policy = docker.policy
+  const ok = Boolean(docker.available && docker.probe.installed && docker.probe.daemonReady && (policy?.configured ?? true) && (policy?.authenticated ?? true))
+  const blockers = [
+    docker.probe.installed ? '' : 'sbx CLI 未安装',
+    docker.probe.daemonReady ? '' : 'daemon 未运行',
+    policy && !policy.authenticated ? 'Docker 未登录' : '',
+    policy && !policy.configured ? '默认网络策略未配置' : '',
+  ].filter(Boolean)
+  return {
+    ok,
+    label: 'Docker Sandboxes',
+    provider,
+    message: ok
+      ? `已就绪，agent=${docker.agent || 'auto'}。`
+      : blockers.join('，') || docker.probe.message || policy?.message || 'Docker Sandboxes 不可用。',
+  }
+}
+
+function buildIsolationHealth(info: SettingsGeneralInfo): NonNullable<AgentComboHealth['isolation']> {
+  const provider = info.sandbox.configuredProvider
+  const cleanup = info.sandbox.cleanupMode
+  const ok = provider === 'docker-sandbox' && info.sandbox.dockerSandbox.available
+  return {
+    ok,
+    label: '配置隔离',
+    message: ok
+      ? `每次任务使用独立 sandbox root/home/cache/config/tmp；清理策略 ${cleanup}。`
+      : '当前无法确认 microVM 级隔离；可能退化为本地 workdir 兼容隔离。',
+  }
+}
+
+function labelForCodeAgentType(type: WorkspaceAgent['codeAgentType'] | null | undefined) {
+  if (type === 'claude-code') return 'Claude Code'
+  if (type === 'opencode') return 'OpenCode'
+  if (type === 'gemini') return 'Gemini CLI'
+  return 'Codex CLI'
+}
+
+function commandForCodeAgentType(type: WorkspaceAgent['codeAgentType'] | null | undefined) {
+  if (type === 'claude-code') return 'claude'
+  if (type === 'opencode') return 'opencode'
+  if (type === 'gemini') return 'gemini'
+  return 'codex'
+}
+
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <label className="block text-sm">
@@ -1110,6 +1358,20 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-3 border-t border-neutral-100 py-2 text-sm first:border-t-0">
       <span className="text-neutral-400">{label}</span>
       <span className="min-w-0 truncate text-neutral-700">{value}</span>
+    </div>
+  )
+}
+
+function HealthRow({ ok, label, message }: { ok: boolean; label: string; message: string }) {
+  return (
+    <div className="rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
+      <div className="flex items-start gap-2">
+        {ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />}
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-neutral-800">{label}</div>
+          <div className="mt-0.5 text-xs leading-5 text-neutral-500">{message}</div>
+        </div>
+      </div>
     </div>
   )
 }

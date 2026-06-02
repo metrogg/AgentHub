@@ -52,6 +52,7 @@ interface ToolConfig {
   apiKeyEnv: string
   baseUrl: string
   sandbox: SandboxMode
+  config?: Record<string, unknown>
 }
 
 const storageKey = 'CODING_TOOLS_CONFIG'
@@ -80,6 +81,11 @@ const defaults: ToolConfig[] = [
     apiKeyEnv: 'OPENAI_API_KEY',
     baseUrl: 'https://api.openai.com/v1',
     sandbox: 'workspace-write',
+    config: {
+      approvalPolicy: 'never',
+      searchEnabled: false,
+      jsonOutput: false,
+    },
   },
   {
     id: 'claude-code',
@@ -93,6 +99,14 @@ const defaults: ToolConfig[] = [
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     baseUrl: 'https://api.anthropic.com',
     sandbox: 'workspace-write',
+    config: {
+      permissionMode: 'acceptEdits',
+      outputFormat: 'stream-json',
+      verbose: true,
+      includePartialMessages: true,
+      maxTurns: '',
+      addDirs: '',
+    },
   },
   {
     id: 'opencode',
@@ -106,6 +120,11 @@ const defaults: ToolConfig[] = [
     apiKeyEnv: 'DEEPSEEK_API_KEY',
     baseUrl: 'https://api.deepseek.com',
     sandbox: 'workspace-write',
+    config: {
+      agent: 'build',
+      skipPermissions: true,
+      provider: '',
+    },
   },
   {
     id: 'gemini',
@@ -411,6 +430,22 @@ export default function CodingToolsPage() {
     setTools((current) => current.map((tool) => (tool.id === id ? { ...tool, ...patch } : tool)))
   }
 
+  function patchToolConfig(id: string, key: string, value: unknown) {
+    setTools((current) =>
+      current.map((tool) =>
+        tool.id === id
+          ? {
+              ...tool,
+              config: {
+                ...(tool.config ?? {}),
+                [key]: value,
+              },
+            }
+          : tool,
+      ),
+    )
+  }
+
   function patchToolCatalogModel(id: string, modelId: string) {
     const model = models.find((item) => item.modelId === modelId)
     if (!model) {
@@ -577,6 +612,7 @@ export default function CodingToolsPage() {
       [storageKey]: JSON.stringify(tools),
       CODE_AGENT_ACTIVE_TOOL: activeTool.id,
       CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
+      CODE_AGENT_ACTIVE_MODEL: activeTool.modelId,
       CODE_AGENT_ACTIVE_PROTOCOL: activeTool.protocol,
       CODE_AGENT_ACTIVE_BASE_URL: activeTool.baseUrl,
       CODE_AGENT_ACTIVE_API_KEY_ENV: activeTool.apiKeyEnv,
@@ -604,6 +640,7 @@ export default function CodingToolsPage() {
         [storageKey]: JSON.stringify(tools),
         CODE_AGENT_ACTIVE_TOOL: activeTool.id,
         CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
+        CODE_AGENT_ACTIVE_MODEL: activeTool.modelId,
         CODEX_CHATGPT_TRANSPORT: codexTransport,
       })
       await refreshStatus(tools, true)
@@ -657,6 +694,7 @@ export default function CodingToolsPage() {
       [storageKey]: JSON.stringify(tools),
       CODE_AGENT_ACTIVE_TOOL: activeTool.id,
       CODE_AGENT_ACTIVE_COMMAND: activeTool.command,
+      CODE_AGENT_ACTIVE_MODEL: activeTool.modelId,
       CODE_AGENT_ACTIVE_PROTOCOL: activeTool.protocol,
       CODE_AGENT_ACTIVE_BASE_URL: activeTool.baseUrl,
       CODE_AGENT_ACTIVE_API_KEY_ENV: activeTool.apiKeyEnv,
@@ -951,7 +989,7 @@ export default function CodingToolsPage() {
                   <p className="mt-1 text-sm text-neutral-500">
                     {activeTool.id === 'codex'
                       ? t(
-                          'Codex 使用本机 auth.json 与 config.toml；AgentHub 不再维护额外的 Codex 模型配置。',
+                          'Codex 仍可读取本机 auth.json 与 config.toml；AgentHub 会在运行时注入当前 Agent 绑定的模型和执行参数。',
                         )
                       : t(
                           '配置会写入 AgentHub 设置，并作为 Coding Tools 的默认运行参数。',
@@ -968,6 +1006,11 @@ export default function CodingToolsPage() {
                   <ExternalLink className="h-4 w-4" />
                 </a>
               </div>
+
+              <CodeAgentAdvancedSettings
+                tool={activeTool}
+                onPatch={(key, value) => patchToolConfig(activeTool.id, key, value)}
+              />
 
               {activeTool.id === 'codex' ? (
                 <>
@@ -1303,10 +1346,17 @@ export default function CodingToolsPage() {
 }
 
 function mergeTools(saved: ToolConfig[]) {
-  return defaults.map((item) => ({
-    ...item,
-    ...saved.find((tool) => tool.id === item.id),
-  }))
+  return defaults.map((item) => {
+    const persisted = saved.find((tool) => tool.id === item.id)
+    return {
+      ...item,
+      ...persisted,
+      config: {
+        ...(item.config ?? {}),
+        ...(persisted?.config ?? {}),
+      },
+    }
+  })
 }
 
 function delay(ms: number) {
@@ -1327,6 +1377,180 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
       },
     )
   })
+}
+
+function CodeAgentAdvancedSettings({
+  tool,
+  onPatch,
+}: {
+  tool: ToolConfig
+  onPatch: (key: string, value: unknown) => void
+}) {
+  const { t } = useI18n()
+  const cfg = tool.config ?? {}
+  const title =
+    tool.id === 'codex'
+      ? 'Codex CLI 执行参数'
+      : tool.id === 'claude-code'
+        ? 'Claude Code 执行参数'
+        : tool.id === 'opencode'
+          ? 'OpenCode 执行参数'
+          : 'Gemini CLI 执行参数'
+  const claudePermissionMode = readToolConfigString(cfg, 'permissionMode', 'acceptEdits')
+  const claudeSkipPermissions = readToolConfigBoolean(
+    cfg,
+    'skipPermissions',
+    claudePermissionMode === 'bypassPermissions',
+  )
+
+  return (
+    <div className="mt-5 rounded-lg border border-neutral-200 bg-neutral-50 p-4">
+      <div>
+        <div className="text-sm font-semibold text-neutral-800">{t(title)}</div>
+        <p className="mt-1 text-xs leading-5 text-neutral-500">
+          {t('这些参数会在运行时自动传递给 CLI，不修改本机配置文件。Agent 绑定的模型、Skills 和沙箱策略优先由专家配置决定。')}
+        </p>
+      </div>
+
+      {tool.id === 'codex' && (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <ToolSelectField
+            label="审批策略"
+            value={readToolConfigString(cfg, 'approvalPolicy', 'never')}
+            onChange={(value) => onPatch('approvalPolicy', value)}
+            options={[
+              ['never', 'never / full-auto'],
+              ['ask', 'ask'],
+            ]}
+          />
+          <ToolSelectField
+            label="Codex 沙箱"
+            value={readToolConfigString(cfg, 'sandbox', '')}
+            onChange={(value) => onPatch('sandbox', value)}
+            options={[
+              ['', '跟随 Agent 沙箱策略'],
+              ['read-only', 'read-only'],
+              ['workspace-write', 'workspace-write'],
+              ['danger-full-access', 'danger-full-access'],
+            ]}
+          />
+          <Field
+            label="Codex profile"
+            value={readToolConfigString(cfg, 'profile', '')}
+            onChange={(value) => onPatch('profile', value)}
+          />
+          <div className="grid gap-2">
+            <ToolToggle
+              label="启用 Web Search"
+              checked={readToolConfigBoolean(cfg, 'searchEnabled', false)}
+              onChange={(value) => onPatch('searchEnabled', value)}
+            />
+            <ToolToggle
+              label="JSON 输出模式"
+              checked={readToolConfigBoolean(cfg, 'jsonOutput', false)}
+              onChange={(value) => onPatch('jsonOutput', value)}
+            />
+          </div>
+        </div>
+      )}
+
+      {tool.id === 'claude-code' && (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <ToolSelectField
+            label="权限模式"
+            value={readToolConfigString(cfg, 'permissionMode', 'acceptEdits')}
+            onChange={(value) => onPatch('permissionMode', value)}
+            options={[
+              ['default', 'default'],
+              ['acceptEdits', 'acceptEdits'],
+              ['plan', 'plan / read-only'],
+              ['bypassPermissions', 'bypassPermissions'],
+            ]}
+          />
+          <ToolSelectField
+            label="输出格式"
+            value={readToolConfigString(cfg, 'outputFormat', 'stream-json')}
+            onChange={(value) => onPatch('outputFormat', value)}
+            options={[
+              ['stream-json', 'stream-json'],
+              ['text', 'text'],
+              ['json', 'json'],
+            ]}
+          />
+          <Field
+            label="Max turns"
+            value={readToolConfigString(cfg, 'maxTurns', '')}
+            onChange={(value) => onPatch('maxTurns', value)}
+          />
+          <Field
+            label="Settings 文件路径"
+            value={readToolConfigString(cfg, 'settings', '')}
+            onChange={(value) => onPatch('settings', value)}
+          />
+          <Field
+            label="额外目录 add-dir"
+            value={readToolConfigString(cfg, 'addDirs', '')}
+            onChange={(value) => onPatch('addDirs', value)}
+          />
+          <div className="grid gap-2">
+            <ToolToggle
+              label="Verbose stream"
+              checked={readToolConfigBoolean(cfg, 'verbose', true)}
+              onChange={(value) => onPatch('verbose', value)}
+            />
+            <ToolToggle
+              label="包含 partial messages"
+              checked={readToolConfigBoolean(cfg, 'includePartialMessages', true)}
+              onChange={(value) => onPatch('includePartialMessages', value)}
+            />
+            <ToolToggle
+              label="跳过权限确认"
+              checked={claudeSkipPermissions}
+              onChange={(value) => {
+                onPatch('skipPermissions', value)
+                if (value) {
+                  onPatch('permissionMode', 'bypassPermissions')
+                } else if (claudePermissionMode === 'bypassPermissions') {
+                  onPatch('permissionMode', 'acceptEdits')
+                }
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {tool.id === 'opencode' && (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <ToolSelectField
+            label="OpenCode Agent"
+            value={readToolConfigString(cfg, 'agent', 'build')}
+            onChange={(value) => onPatch('agent', value)}
+            options={[
+              ['build', 'build'],
+              ['plan', 'plan'],
+              ['general', 'general'],
+            ]}
+          />
+          <Field
+            label="Provider 覆盖"
+            value={readToolConfigString(cfg, 'provider', '')}
+            onChange={(value) => onPatch('provider', value)}
+          />
+          <ToolToggle
+            label="跳过权限确认"
+            checked={readToolConfigBoolean(cfg, 'skipPermissions', true)}
+            onChange={(value) => onPatch('skipPermissions', value)}
+          />
+        </div>
+      )}
+
+      {tool.id === 'gemini' && (
+        <div className="mt-4 text-xs leading-5 text-neutral-500">
+          {t('Gemini CLI 当前主要使用模型绑定和沙箱环境注入。后续会继续补齐 MCP、工具确认和会话配置。')}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function CodexConfigPanel({
@@ -1624,12 +1848,45 @@ function buildEnvSnippet(tool: ToolConfig) {
 }
 
 function buildRunCommand(tool: ToolConfig) {
-  if (tool.id === 'codex') return `${tool.command} exec "<task>"`
-  if (tool.id === 'claude-code') return `${tool.command} --model ${tool.modelId}`
+  const cfg = tool.config ?? {}
+  if (tool.id === 'codex') {
+    const args = ['exec']
+    const sandbox = readToolConfigString(cfg, 'sandbox', '')
+    if (sandbox) args.push('--sandbox', sandbox)
+    if (readToolConfigString(cfg, 'approvalPolicy', 'never') === 'never') args.push('--full-auto')
+    const profile = readToolConfigString(cfg, 'profile', '')
+    if (profile) args.push('--profile', profile)
+    if (readToolConfigBoolean(cfg, 'searchEnabled', false)) args.push('--search')
+    if (readToolConfigBoolean(cfg, 'jsonOutput', false)) args.push('--json')
+    args.push('"<task>"')
+    return `${tool.command} ${args.join(' ')}`
+  }
+  if (tool.id === 'claude-code') {
+    const args = [
+      '-p',
+      '--permission-mode',
+      readToolConfigString(cfg, 'permissionMode', 'acceptEdits'),
+      '--output-format',
+      readToolConfigString(cfg, 'outputFormat', 'stream-json'),
+    ]
+    const maxTurns = readToolConfigString(cfg, 'maxTurns', '')
+    if (maxTurns) args.push('--max-turns', maxTurns)
+    if (tool.modelId) args.push('--model', tool.modelId)
+    const settings = readToolConfigString(cfg, 'settings', '')
+    if (settings) args.push('--settings', `"${settings}"`)
+    const addDirs = readToolConfigString(cfg, 'addDirs', '')
+    if (addDirs) args.push('--add-dir', `"${addDirs}"`)
+    args.push('"<task>"')
+    return `${tool.command} ${args.join(' ')}`
+  }
   if (tool.id === 'opencode') {
-    return tool.modelId
-      ? `${tool.command} run --model ${tool.modelId} "<task>"`
-      : `${tool.command} run "<task>"`
+    const args = ['run']
+    if (tool.modelId) args.push('--model', tool.modelId)
+    const agent = readToolConfigString(cfg, 'agent', 'build')
+    if (agent) args.push('--agent', agent)
+    if (readToolConfigBoolean(cfg, 'skipPermissions', true)) args.push('--dangerously-skip-permissions')
+    args.push('"<task>"')
+    return `${tool.command} ${args.join(' ')}`
   }
   if (tool.id === 'gemini') {
     return tool.modelId
@@ -1640,6 +1897,8 @@ function buildRunCommand(tool: ToolConfig) {
 }
 
 function inferProvider(tool: ToolConfig) {
+  const providerOverride = readToolConfigString(tool.config ?? {}, 'provider', '')
+  if (providerOverride) return providerOverride
   if (tool.protocol === 'anthropic-messages') return 'anthropic'
   if (
     tool.id === 'gemini' ||
@@ -1792,6 +2051,68 @@ function Field({
       />
     </label>
   )
+}
+
+function ToolSelectField({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string
+  options: Array<[string, string]>
+  value: string
+  onChange: (value: string) => void
+}) {
+  const { t } = useI18n()
+  return (
+    <label className="block text-sm">
+      <span className="mb-2 block text-neutral-600">{t(label)}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full rounded-md border border-neutral-200 bg-white px-3 outline-none transition focus:border-teal-700"
+      >
+        {options.map(([optionValue, optionLabel]) => (
+          <option key={optionValue} value={optionValue}>
+            {optionLabel}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function ToolToggle({
+  checked,
+  label,
+  onChange,
+}: {
+  checked: boolean
+  label: string
+  onChange: (value: boolean) => void
+}) {
+  const { t } = useI18n()
+  return (
+    <label className="flex h-10 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-600">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {t(label)}
+    </label>
+  )
+}
+
+function readToolConfigString(cfg: Record<string, unknown>, key: string, fallback: string) {
+  const value = cfg[key]
+  return typeof value === 'string' ? value : fallback
+}
+
+function readToolConfigBoolean(cfg: Record<string, unknown>, key: string, fallback: boolean) {
+  const value = cfg[key]
+  return typeof value === 'boolean' ? value : fallback
 }
 
 function ChoiceButton({

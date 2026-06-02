@@ -5,6 +5,12 @@ import {
 } from '@agenthub/shared'
 
 type PresetRoleType = Exclude<AgentRoleType, 'custom'>
+type AvatarRoleType =
+  | 'orchestrator'
+  | 'architect'
+  | 'researcher'
+  | 'coder'
+  | 'reviewer'
 
 export type AgentVisualInput = {
   avatar?: string | null
@@ -13,6 +19,22 @@ export type AgentVisualInput = {
   name?: string | null
   role?: string | null
   roleType?: string | null
+}
+
+const AGENT_ROLE_AVATAR_PATHS: Record<AvatarRoleType, string> = {
+  orchestrator: '/avatars/orchestrator_avatar.png',
+  architect: '/avatars/designer_avatar.png',
+  researcher: '/avatars/researcher_avatar.png',
+  coder: '/avatars/builder_avatar.png',
+  reviewer: '/avatars/qa_reviewer_avatar.png',
+}
+
+const AGENT_ROLE_DARK_AVATAR_PATHS: Record<AvatarRoleType, string> = {
+  orchestrator: '/avatars/orchestrator_avatar_white.png',
+  architect: '/avatars/designer_avatar_white.png',
+  researcher: '/avatars/researcher_avatar_white.png',
+  coder: '/avatars/builder_avatar_white.png',
+  reviewer: '/avatars/qa_reviewer_avatar_white.png',
 }
 
 const neutralFallbackColors = new Set(['#111827', '#171717', '#000000'])
