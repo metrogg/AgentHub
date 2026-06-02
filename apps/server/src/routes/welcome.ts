@@ -67,7 +67,7 @@ async function generateQuickPrompts(seed: string, count: number): Promise<{
 
     const jsonText = extractJsonObject(output)
     if (!jsonText) throw new Error('模型未返回可解析 JSON')
-    const parsed = JSON.parse(jsonText) as { items?: Array<{ label?: unknown; prompt?: unknown }> }
+    const parsed = parseQuickPromptPayload(jsonText)
     const items = normalizePromptItems(parsed.items, count)
     if (!items.length) throw new Error('模型返回的快速提示为空')
     return { items, source: 'llm' }
@@ -110,4 +110,55 @@ function extractJsonObject(value: string) {
   const start = cleaned.indexOf('{')
   const end = cleaned.lastIndexOf('}')
   return start >= 0 && end > start ? cleaned.slice(start, end + 1) : null
+}
+
+function parseQuickPromptPayload(jsonText: string): { items?: Array<{ label?: unknown; prompt?: unknown }> } {
+  const attempts = [
+    jsonText,
+    repairJsonDelimiters(stripTrailingCommas(jsonText)),
+    repairJsonDelimiters(jsonText),
+  ]
+
+  let lastError: unknown = null
+  for (const attempt of attempts) {
+    try {
+      return JSON.parse(attempt) as { items?: Array<{ label?: unknown; prompt?: unknown }> }
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('快速提示 JSON 解析失败')
+}
+
+function stripTrailingCommas(value: string) {
+  return value.replace(/,\s*([}\]])/g, '$1')
+}
+
+function repairJsonDelimiters(value: string) {
+  const stack: string[] = []
+  let inString = false
+  let escaped = false
+
+  for (const char of value) {
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+    if (char === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (char === '{') stack.push('}')
+    else if (char === '[') stack.push(']')
+    else if ((char === '}' || char === ']') && stack[stack.length - 1] === char) stack.pop()
+  }
+
+  if (inString) value += '"'
+  if (!stack.length) return value
+  return value + stack.reverse().join('')
 }

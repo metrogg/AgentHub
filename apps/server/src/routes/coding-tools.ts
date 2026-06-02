@@ -292,10 +292,17 @@ async function ensureDefaultCodingToolSettings() {
   const rows = await db.select().from(settings)
   const map = Object.fromEntries(rows.map((row) => [row.key, row.value]))
   const patch: Record<string, string> = {}
+  const legacyKeys = [
+    'CODE_AGENT_ACTIVE_MODEL',
+    'CODE_AGENT_ACTIVE_BASE_URL',
+    'CODE_AGENT_ACTIVE_API_KEY',
+    'CODE_AGENT_ACTIVE_API_KEY_ENV',
+    'CODE_AGENT_ACTIVE_PROTOCOL',
+    'CODE_AGENT_ACTIVE_SANDBOX',
+  ]
 
   if (!map.CODE_AGENT_ACTIVE_TOOL) patch.CODE_AGENT_ACTIVE_TOOL = 'codex'
   if (!map.CODE_AGENT_ACTIVE_COMMAND) patch.CODE_AGENT_ACTIVE_COMMAND = 'codex'
-  if (!map.CODE_AGENT_ACTIVE_SANDBOX) patch.CODE_AGENT_ACTIVE_SANDBOX = 'workspace-write'
   if (!map.CODEX_CHATGPT_TRANSPORT) patch.CODEX_CHATGPT_TRANSPORT = 'http'
   patch.CODE_AGENT_LIFECYCLE_LAST_RUN_AT = new Date().toISOString()
 
@@ -309,7 +316,16 @@ async function ensureDefaultCodingToolSettings() {
     }
   }
 
-  return Object.keys(patch).some((key) => key !== 'CODE_AGENT_LIFECYCLE_LAST_RUN_AT' && map[key] !== patch[key])
+  for (const key of legacyKeys) {
+    if (map[key] !== undefined) {
+      await db.delete(settings).where(eq(settings.key, key))
+    }
+  }
+
+  return (
+    Object.keys(patch).some((key) => key !== 'CODE_AGENT_LIFECYCLE_LAST_RUN_AT' && map[key] !== patch[key]) ||
+    legacyKeys.some((key) => map[key] !== undefined)
+  )
 }
 
 async function getOpencodeModels() {
