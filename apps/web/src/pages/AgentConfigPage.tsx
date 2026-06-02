@@ -5,6 +5,7 @@ import {
   Bot,
   Check,
   CheckCircle2,
+  ChevronDown,
   Copy,
   MessageSquareText,
   PanelLeft,
@@ -75,6 +76,7 @@ const emptyDraft: AgentConfigInput = {
 }
 
 type HealthState = 'idle' | 'checking' | 'ready' | 'error'
+type AdvancedSectionKey = 'prompt' | 'capabilities' | 'policies'
 
 interface AgentComboHealth {
   state: HealthState
@@ -118,6 +120,12 @@ export default function AgentConfigPage() {
   const [assistantReply, setAssistantReply] = useState('可以直接说：把当前 Agent 改成 Codex 实现者，关闭风险确认，标签加 frontend。')
   const [saved, setSaved] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [showImportPanel, setShowImportPanel] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState<Record<AdvancedSectionKey, boolean>>({
+    prompt: false,
+    capabilities: false,
+    policies: false,
+  })
   const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([])
   const [comboHealth, setComboHealth] = useState<AgentComboHealth>({ state: 'idle' })
   const selectedExpertProfile = expertProfileForId(expertProfileIdFromDraft(draft))
@@ -537,6 +545,10 @@ export default function AgentConfigPage() {
     }
   }
 
+  function toggleAdvancedSection(section: AdvancedSectionKey) {
+    setAdvancedOpen((current) => ({ ...current, [section]: !current[section] }))
+  }
+
   return (
     <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#fbfbf9] text-neutral-950">
       <CollapsibleSessionSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
@@ -568,296 +580,366 @@ export default function AgentConfigPage() {
 
         <div className="min-h-0 flex-1 overflow-hidden">
           <section className="h-full min-w-0 overflow-y-auto px-8 py-7">
-            <div className="mx-auto max-w-6xl">
-              <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <div className="inline-flex h-7 items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 text-xs text-neutral-500">
-                    <Settings2 className="h-3.5 w-3.5" />
-                    {t('全局 Agent 配置库')}
+            <div className="w-full max-w-[1400px]">
+              <div className="mb-5 rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="inline-flex h-7 items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-2.5 text-xs text-neutral-500">
+                      <Settings2 className="h-3.5 w-3.5" />
+                      {t('全局 Agent 配置库')}
+                    </div>
+                    <h1 className="mt-3 text-2xl font-semibold tracking-normal">{t('Agent 通讯录')}</h1>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                      <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-neutral-600">
+                        {agents.length} 个 Agent
+                      </span>
+                      <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-neutral-600">
+                        {agents.filter((agent) => agent.runtimeType === 'code-agent').length} 个 Coding Tools
+                      </span>
+                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">
+                        {savedExpertProfileIds.size} 个模板已导入
+                      </span>
+                    </div>
                   </div>
-                  <h1 className="mt-4 text-3xl font-semibold tracking-normal">{t('管理所有 Agent')}</h1>
-                  <p className="mt-2 max-w-2xl text-sm leading-7 text-neutral-500">
-                    {t('这里保存的是唯一的全局 Agent 通讯录。新建群聊时像微信拉群一样邀请这些 Agent，无需再维护另一套群组配置。')}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button type="button" onClick={duplicateAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm hover:bg-neutral-50 disabled:text-neutral-300">
-                    <Copy className="h-4 w-4" />
-                    {t('复制')}
-                  </button>
-                  <button type="button" onClick={deleteAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50 disabled:text-neutral-300">
-                    <Trash2 className="h-4 w-4" />
-                    {t('删除')}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowImportPanel((open) => !open)}
+                      className={cn(
+                        'inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm font-medium shadow-sm transition',
+                        showImportPanel
+                          ? 'border-teal-200 bg-teal-50 text-teal-700'
+                          : 'border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50',
+                      )}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      {showImportPanel ? t('收起导入') : t('导入专家')}
+                    </button>
+                    <button type="button" onClick={duplicateAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm hover:bg-neutral-50 disabled:text-neutral-300">
+                      <Copy className="h-4 w-4" />
+                      {t('复制')}
+                    </button>
+                    <button type="button" onClick={deleteAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50 disabled:text-neutral-300">
+                      <Trash2 className="h-4 w-4" />
+                      {t('删除')}
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <section className="mb-6 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold text-neutral-900">预装专家库</div>
-                      <p className="mt-1 text-xs leading-5 text-neutral-500">
-                        这些是可导入的 Agent 配置画像。导入后才会进入左侧全局通讯录；不会自动组队，也不会替 Orchestrator 固定分工。
-                      </p>
+              {showImportPanel && (
+                <section className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                  <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-neutral-900">专家模板</div>
+                      <div className="text-xs text-neutral-400">
+                        {allExpertProfiles.length} 个可导入 · {savedExpertProfileIds.size} 个已导入
+                      </div>
                     </div>
-                    <div className="text-xs text-neutral-400">
-                      {allExpertProfiles.length} 个专家 · {savedExpertProfileIds.size} 个已导入
+                    <div className="mt-3 grid max-h-56 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
+                      {allExpertProfiles.map((profile) => {
+                        const imported = savedExpertProfileIds.has(profile.id)
+                        return (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            onClick={() => void importExpertProfile(profile.id)}
+                            className={cn(
+                              'rounded-xl border px-3 py-2.5 text-left transition',
+                              imported
+                                ? 'border-emerald-100 bg-emerald-50/40'
+                                : 'border-neutral-200 bg-neutral-50 hover:border-neutral-300 hover:bg-white',
+                            )}
+                          >
+                            <span className="flex items-center gap-2">
+                              <span
+                                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-semibold text-white"
+                                style={{ background: profile.color }}
+                              >
+                                {profile.name.slice(0, 1).toUpperCase()}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium text-neutral-900">
+                                  {profile.name}
+                                </span>
+                                <span className="block truncate text-[11px] text-neutral-400">
+                                  {expertCategoryLabels[profile.category]} · {runtimeLabel(profile.runtimeType)}
+                                </span>
+                              </span>
+                              <span className={cn('shrink-0 text-[11px]', imported ? 'text-emerald-600' : 'text-neutral-400')}>
+                                {imported ? '已导入' : '导入'}
+                              </span>
+                            </span>
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
-                  <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
-                    {allExpertProfiles.map((profile) => {
-                      const imported = savedExpertProfileIds.has(profile.id)
-                      return (
+
+                  <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+                    <div className="text-sm font-semibold text-neutral-900">专家团</div>
+                    <div className="mt-3 space-y-2">
+                      {allExpertTeamProfiles.map((team) => (
                         <button
-                          key={profile.id}
+                          key={team.id}
                           type="button"
-                          onClick={() => void importExpertProfile(profile.id)}
-                          className={cn(
-                            'rounded-xl border px-3 py-3 text-left transition',
-                            imported
-                              ? 'border-emerald-100 bg-emerald-50/40'
-                              : 'border-neutral-200 bg-neutral-50 hover:border-neutral-300 hover:bg-white',
-                          )}
+                          onClick={() => void importExpertTeam(team.id)}
+                          className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2.5 text-left transition hover:border-neutral-300 hover:bg-white"
                         >
-                          <span className="flex items-center gap-2">
-                            <span
-                              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-semibold text-white"
-                              style={{ background: profile.color }}
-                            >
-                              {profile.name.slice(0, 1).toUpperCase()}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-medium text-neutral-900">
-                                {profile.name}
-                              </span>
-                              <span className="block truncate text-[11px] text-neutral-400">
-                                {expertCategoryLabels[profile.category]} · {runtimeLabel(profile.runtimeType)}
-                              </span>
-                            </span>
-                            <span className={cn('shrink-0 text-[11px]', imported ? 'text-emerald-600' : 'text-neutral-400')}>
-                              {imported ? '已导入' : '导入'}
-                            </span>
-                          </span>
-                          <span className="mt-2 line-clamp-2 block text-xs leading-5 text-neutral-500">
-                            {profile.description}
+                          <span className="flex items-center justify-between gap-3">
+                            <span className="truncate text-sm font-medium text-neutral-900">{team.name}</span>
+                            <span className="shrink-0 text-[11px] text-emerald-600">导入成员</span>
                           </span>
                         </button>
-                      )
-                    })}
+                      ))}
+                    </div>
                   </div>
-                </div>
-
-                <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
-                  <div className="text-sm font-semibold text-neutral-900">专家团建议</div>
-                  <p className="mt-1 text-xs leading-5 text-neutral-500">
-                    专家团只负责批量导入成员配置，真实协作仍由群聊里的 Orchestrator 动态规划。
-                  </p>
-                  <div className="mt-4 space-y-2">
-                    {allExpertTeamProfiles.map((team) => (
-                      <button
-                        key={team.id}
-                        type="button"
-                        onClick={() => void importExpertTeam(team.id)}
-                        className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3 text-left transition hover:border-neutral-300 hover:bg-white"
-                      >
-                        <span className="flex items-center justify-between gap-3">
-                          <span className="text-sm font-medium text-neutral-900">{team.name}</span>
-                          <span className="text-[11px] text-emerald-600">导入成员</span>
-                        </span>
-                        <span className="mt-1 line-clamp-2 block text-xs leading-5 text-neutral-500">
-                          {team.description}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </section>
+                </section>
+              )}
 
               {showEditor ? (
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-                  <form onSubmit={saveDraft} className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
-                    <div className="mb-4">
-                      <SelectField
-                        label="预装专家模板"
-                        value={expertProfileIdFromDraft(draft)}
-                        onChange={applyExpertProfile}
-                      >
-                        <option value="">自定义专家</option>
-                        {allExpertProfiles.map((profile) => (
-                          <option key={profile.id} value={profile.id}>
-                            {expertCategoryLabels[profile.category]} / {profile.name}
-                          </option>
-                        ))}
-                      </SelectField>
-                      <p className="mt-2 text-xs leading-5 text-neutral-400">
-                        模板只是帮你填充 Agent 配置，不是独立专家系统，也不会固定驱动分工。
-                      </p>
-                    </div>
-                    <div className="mb-4 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs leading-5 text-neutral-600">
-                      <div className="font-medium text-neutral-800">运行组合</div>
-                      <div className="mt-1">{runtimeComboLabel}</div>
-                      <div className="mt-1">
-                        模型管理负责把模型、Base URL、API Key 配好；Coding Tools 负责本机 CLI 可用；这里负责给每个专家绑定自己的 CLI、模型和 Skills。
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-4">
-                      <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl text-white shadow-sm" style={{ background: draft.color ?? '#111827' }}>
-                        <Bot className="h-7 w-7" />
-                      </div>
-                      <div className="grid min-w-0 flex-1 gap-3 md:grid-cols-2">
-                        <Field label={t('名称')} value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
-                        <Field label={t('角色')} value={draft.role} onChange={(role) => setDraft({ ...draft, role })} />
-                      </div>
-                    </div>
-
-                    <TextField label={t('简介')} rows={3} value={draft.description ?? ''} onChange={(description) => setDraft({ ...draft, description })} />
-                    {selectedExpertProfile && (
-                      <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/50 px-3 py-2 text-xs leading-5 text-blue-800">
-                        <div className="font-medium">{expertCategoryLabels[selectedExpertProfile.category]} · {selectedExpertProfile.riskLevel === 'high' ? '高风险专家' : '标准专家'}</div>
-                        <div className="mt-1 text-blue-700">{selectedExpertProfile.background}</div>
-                      </div>
-                    )}
-                    <TextField label={t('系统提示词')} rows={6} value={draft.systemPrompt ?? ''} onChange={(systemPrompt) => setDraft({ ...draft, systemPrompt })} />
-
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      <SelectField label="Agent 基底" value={runtimeType} onChange={(value) => {
-                        const nextRuntime = value as WorkspaceAgent['runtimeType']
-                        setDraft({
-                          ...draft,
-                          runtimeType: nextRuntime,
-                          codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
-                          approvalRequired: nextRuntime === 'code-agent' ? false : (draft.approvalRequired ?? true),
-                        })
-                      }}>
-                        <option value="code-agent">Coding Tools / CLI 运行器</option>
-                        <option value="llm">{t('普通 LLM Agent')}</option>
-                      </SelectField>
-                      <SelectField label="CLI 运行器" value={draft.codeAgentType ?? 'codex'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
-                        <option value="">{t('不绑定 CLI')}</option>
-                        <option value="codex">Codex CLI</option>
-                        <option value="claude-code">Claude Code</option>
-                        <option value="opencode">OpenCode</option>
-                        <option value="gemini">Gemini CLI</option>
-                      </SelectField>
-                      <SelectField label="模型绑定" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
-                        <option value="">{runtimeType === 'code-agent' ? '沿用模型管理默认' : '使用默认模型'}</option>
-                        {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
-                      </SelectField>
-                      <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
-                        <option value="workspace-write">{t('工作区写入')}</option>
-                        <option value="danger-full-access">{t('完全访问')}</option>
-                      </SelectField>
-                      <SelectField label={t('上下文策略')} value={draft.contextPolicy ?? 'workspace-aware'} onChange={(value) => setDraft({ ...draft, contextPolicy: value as WorkspaceAgent['contextPolicy'] })}>
-                        <option value="recent-only">{t('仅最近上下文')}</option>
-                        <option value="pinned-recent">{t('固定与最近上下文')}</option>
-                        <option value="workspace-aware">{t('工作区上下文')}</option>
-                      </SelectField>
-                      <Field label={t('颜色')} value={draft.color ?? '#111827'} onChange={(color) => setDraft({ ...draft, color })} />
-                      <Field label={t('能力标签')} value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, capabilityTags: splitList(value) })} />
-                      <Field label={t('工具权限')} value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, toolPermissions: splitList(value) })} />
-                    </div>
-
-                    {runtimeType === 'code-agent' && (
-                      <div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
-                        {modelCompatibilityMessage}
-                      </div>
-                    )}
-
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      <label className="flex h-11 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
-                        <input type="checkbox" checked={draft.autoInvoke ?? true} onChange={(event) => setDraft({ ...draft, autoInvoke: event.target.checked })} />
-                        {t('允许 Orchestrator 自动调用')}
-                      </label>
-                      <label className="flex h-11 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
-                        <input type="checkbox" checked={draft.approvalRequired ?? true} onChange={(event) => setDraft({ ...draft, approvalRequired: event.target.checked })} />
-                        {t('高风险操作需要确认')}
-                      </label>
-                    </div>
-
-                    {/* 专属工具箱 */}
-                    <div className="mt-5 rounded-xl border border-neutral-200 bg-white">
-                      <div className="flex h-11 items-center gap-2 border-b border-neutral-100 px-4">
-                        <Wrench className="h-4 w-4 text-amber-600" />
-                        <span className="text-sm font-medium text-neutral-800">能力包 / Skills</span>
-                        <span className="ml-auto text-xs text-neutral-400">
-                          已绑定 {(draft.skillIds ?? []).length} 个
-                        </span>
-                      </div>
-                      {availableSkills.length === 0 ? (
-                        <div className="px-4 py-3 text-xs text-neutral-400">
-                          暂无已安装的 Skills，可前往技能市场安装。
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+                  <form onSubmit={saveDraft} className="space-y-4">
+                    <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
+                      <div className="border-b border-neutral-100 px-5 py-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div
+                              className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl text-white shadow-sm"
+                              style={{ background: draft.color ?? '#111827' }}
+                            >
+                              <Bot className="h-6 w-6" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="truncate text-lg font-semibold text-neutral-950">
+                                {draft.name || '未命名 Agent'}
+                              </div>
+                              <div className="mt-1 truncate text-sm text-neutral-500">
+                                {draft.role || '设置角色后可保存'}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            type="submit"
+                            className="inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white hover:bg-neutral-800"
+                          >
+                            <Save className="h-4 w-4" />
+                            {selectedAgent ? t('保存 Agent') : t('创建 Agent')}
+                          </button>
                         </div>
-                      ) : (
-                        <div className="max-h-48 space-y-0.5 overflow-auto p-2">
-                          {availableSkills.map((skill) => {
-                            const checked = (draft.skillIds ?? []).includes(skill.id)
-                            return (
-                              <label
-                                key={skill.id}
-                                className={cn(
-                                  'flex cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-sm transition hover:bg-neutral-50',
-                                  checked && 'bg-blue-50/50',
-                                )}
-                              >
-                                <input
-                                  type="checkbox"
-                                  className="mt-0.5 shrink-0"
-                                  checked={checked}
-                                  onChange={() => {
-                                    const current = draft.skillIds ?? []
-                                    setDraft({
-                                      ...draft,
-                                      skillIds: checked
-                                        ? current.filter((id) => id !== skill.id)
-                                        : [...current, skill.id],
-                                    })
-                                  }}
-                                />
-                                <span className="min-w-0 flex-1">
-                                  <span className="block truncate text-[13px] font-medium text-neutral-800">
-                                    {skill.name}
-                                  </span>
-                                  {skill.description && (
-                                    <span className="mt-0.5 block truncate text-xs text-neutral-400">
-                                      {skill.description}
-                                    </span>
-                                  )}
-                                </span>
-                                <span className="shrink-0 rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-400">
-                                  {skill.source}
-                                </span>
-                              </label>
-                            )
-                          })}
+                      </div>
+
+                      <div className="space-y-4 px-5 py-5">
+                        <SelectField
+                          label="预装专家模板"
+                          value={expertProfileIdFromDraft(draft)}
+                          onChange={applyExpertProfile}
+                        >
+                          <option value="">自定义专家</option>
+                          {allExpertProfiles.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {expertCategoryLabels[profile.category]} / {profile.name}
+                            </option>
+                          ))}
+                        </SelectField>
+
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <Field label={t('名称')} value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
+                          <Field label={t('角色')} value={draft.role} onChange={(role) => setDraft({ ...draft, role })} />
+                        </div>
+
+                        <TextField
+                          label={t('简介')}
+                          rows={3}
+                          value={draft.description ?? ''}
+                          onChange={(description) => setDraft({ ...draft, description })}
+                        />
+
+                        {selectedExpertProfile && (
+                          <div className="rounded-xl border border-blue-100 bg-blue-50/50 px-3 py-2 text-xs leading-5 text-blue-800">
+                            <div className="font-medium">
+                              {expertCategoryLabels[selectedExpertProfile.category]} · {selectedExpertProfile.riskLevel === 'high' ? '高风险专家' : '标准专家'}
+                            </div>
+                            <div className="mt-1 text-blue-700">{selectedExpertProfile.background}</div>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h2 className="text-base font-semibold text-neutral-950">执行配置</h2>
+                          <p className="mt-1 text-xs text-neutral-400">选择运行器、模型和执行边界。</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-neutral-600">
+                            {runtimeType === 'code-agent' ? labelForCodeAgentType(draft.codeAgentType ?? 'codex') : 'LLM'}
+                          </span>
+                          <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-neutral-600">
+                            {modelName(draft.modelId ?? null, models)}
+                          </span>
+                          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">
+                            {(draft.skillIds ?? []).length} Skills
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <SelectField label="Agent 基底" value={runtimeType} onChange={(value) => {
+                          const nextRuntime = value as WorkspaceAgent['runtimeType']
+                          setDraft({
+                            ...draft,
+                            runtimeType: nextRuntime,
+                            codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+                            approvalRequired: nextRuntime === 'code-agent' ? false : (draft.approvalRequired ?? true),
+                          })
+                        }}>
+                          <option value="code-agent">Coding Tools / CLI 运行器</option>
+                          <option value="llm">{t('普通 LLM Agent')}</option>
+                        </SelectField>
+                        <SelectField label="CLI 运行器" value={draft.codeAgentType ?? 'codex'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
+                          <option value="">{t('不绑定 CLI')}</option>
+                          <option value="codex">Codex CLI</option>
+                          <option value="claude-code">Claude Code</option>
+                          <option value="opencode">OpenCode</option>
+                          <option value="gemini">Gemini CLI</option>
+                        </SelectField>
+                        <SelectField label="模型绑定" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
+                          <option value="">{runtimeType === 'code-agent' ? '沿用模型管理默认' : '使用默认模型'}</option>
+                          {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
+                        </SelectField>
+                        <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
+                          <option value="read-only">{t('只读')}</option>
+                          <option value="workspace-write">{t('工作区写入')}</option>
+                          <option value="danger-full-access">{t('完全访问')}</option>
+                        </SelectField>
+                      </div>
+
+                      {runtimeType === 'code-agent' && (
+                        <div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs leading-5 text-neutral-500">
+                          {modelCompatibilityMessage}
                         </div>
                       )}
-                      <div className="border-t border-neutral-50 px-4 py-2 text-[11px] text-neutral-400">
-                        对话时优先加载已绑定的 Skills，再按匹配度自动补充。
-                      </div>
-                    </div>
+                    </section>
 
-                    <div className="mt-5 flex justify-end">
-                      <button type="submit" className="inline-flex h-10 items-center gap-2 rounded-xl bg-neutral-950 px-5 text-sm font-medium text-white hover:bg-neutral-800">
-                        <Save className="h-4 w-4" />
-                        {selectedAgent ? t('保存 Agent') : t('创建 Agent')}
-                      </button>
-                    </div>
+                    <AdvancedPanel
+                      title="提示词"
+                      summary={draft.systemPrompt ? '已配置系统提示词' : '未配置系统提示词'}
+                      open={advancedOpen.prompt}
+                      onToggle={() => toggleAdvancedSection('prompt')}
+                    >
+                      <TextField
+                        label={t('系统提示词')}
+                        rows={7}
+                        value={draft.systemPrompt ?? ''}
+                        onChange={(systemPrompt) => setDraft({ ...draft, systemPrompt })}
+                      />
+                    </AdvancedPanel>
+
+                    <AdvancedPanel
+                      title="能力与上下文"
+                      summary={`${(draft.skillIds ?? []).length} 个 Skills · ${(draft.capabilityTags ?? []).length || 0} 个标签`}
+                      open={advancedOpen.capabilities}
+                      onToggle={() => toggleAdvancedSection('capabilities')}
+                    >
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <SelectField label={t('上下文策略')} value={draft.contextPolicy ?? 'workspace-aware'} onChange={(value) => setDraft({ ...draft, contextPolicy: value as WorkspaceAgent['contextPolicy'] })}>
+                          <option value="recent-only">{t('仅最近上下文')}</option>
+                          <option value="pinned-recent">{t('固定与最近上下文')}</option>
+                          <option value="workspace-aware">{t('工作区上下文')}</option>
+                        </SelectField>
+                        <Field label={t('能力标签')} value={(draft.capabilityTags ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, capabilityTags: splitList(value) })} />
+                      </div>
+
+                      <div className="mt-4 rounded-xl border border-neutral-200 bg-white">
+                        <div className="flex h-11 items-center gap-2 border-b border-neutral-100 px-4">
+                          <Wrench className="h-4 w-4 text-amber-600" />
+                          <span className="text-sm font-medium text-neutral-800">能力包 / Skills</span>
+                          <span className="ml-auto text-xs text-neutral-400">
+                            已绑定 {(draft.skillIds ?? []).length} 个
+                          </span>
+                        </div>
+                        {availableSkills.length === 0 ? (
+                          <div className="px-4 py-3 text-xs text-neutral-400">
+                            暂无已安装的 Skills，可前往技能市场安装。
+                          </div>
+                        ) : (
+                          <div className="max-h-52 space-y-0.5 overflow-auto p-2">
+                            {availableSkills.map((skill) => {
+                              const checked = (draft.skillIds ?? []).includes(skill.id)
+                              return (
+                                <label
+                                  key={skill.id}
+                                  className={cn(
+                                    'flex cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-sm transition hover:bg-neutral-50',
+                                    checked && 'bg-blue-50/50',
+                                  )}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="mt-0.5 shrink-0"
+                                    checked={checked}
+                                    onChange={() => {
+                                      const current = draft.skillIds ?? []
+                                      setDraft({
+                                        ...draft,
+                                        skillIds: checked
+                                          ? current.filter((id) => id !== skill.id)
+                                          : [...current, skill.id],
+                                      })
+                                    }}
+                                  />
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-[13px] font-medium text-neutral-800">
+                                      {skill.name}
+                                    </span>
+                                    {skill.description && (
+                                      <span className="mt-0.5 block truncate text-xs text-neutral-400">
+                                        {skill.description}
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="shrink-0 rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-400">
+                                    {skill.source}
+                                  </span>
+                                </label>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </AdvancedPanel>
+
+                    <AdvancedPanel
+                      title="策略"
+                      summary={`${draft.autoInvoke ? '自动调用' : '手动调用'} · ${draft.approvalRequired ? '需要确认' : '无需确认'}`}
+                      open={advancedOpen.policies}
+                      onToggle={() => toggleAdvancedSection('policies')}
+                    >
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <Field label={t('颜色')} value={draft.color ?? '#111827'} onChange={(color) => setDraft({ ...draft, color })} />
+                        <Field label={t('工具权限')} value={(draft.toolPermissions ?? []).join(', ')} onChange={(value) => setDraft({ ...draft, toolPermissions: splitList(value) })} />
+                      </div>
+                      <div className="mt-4 grid gap-3 md:grid-cols-2">
+                        <label className="flex h-11 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
+                          <input type="checkbox" checked={draft.autoInvoke ?? true} onChange={(event) => setDraft({ ...draft, autoInvoke: event.target.checked })} />
+                          {t('允许 Orchestrator 自动调用')}
+                        </label>
+                        <label className="flex h-11 items-center gap-2 rounded-xl border border-neutral-200 px-3 text-sm text-neutral-600">
+                          <input type="checkbox" checked={draft.approvalRequired ?? true} onChange={(event) => setDraft({ ...draft, approvalRequired: event.target.checked })} />
+                          {t('高风险操作需要确认')}
+                        </label>
+                      </div>
+                    </AdvancedPanel>
                   </form>
 
                   <aside className="space-y-4">
-                    <InfoPanel title="能力卡">
+                    <InfoPanel title="状态概览">
                       <InfoRow label={t('运行时')} value={runtimeLabel(runtimeType)} />
                       <InfoRow label="组合" value={runtimeComboLabel} />
-                      <InfoRow
-                        label={t('模型')}
-                        value={t(modelName(draft.modelId ?? null, models))}
-                      />
                       <InfoRow label={t('权限')} value={t(sandboxLabel(draft.sandboxPolicy ?? 'workspace-write'))} />
-                      <InfoRow label="模板分类" value={selectedExpertProfile ? expertCategoryLabels[selectedExpertProfile.category] : '自定义'} />
-                      <InfoRow label="可接任务" value={readProfileStringArray(draft.roleProfile, 'acceptsTaskTypes').join(', ') || '自定义'} />
                       <InfoRow label="主要产出" value={draftOutputContract.join(', ') || '自定义'} />
-                      <InfoRow label={t('标签')} value={(draft.capabilityTags ?? []).join(', ') || t('未设置')} />
                     </InfoPanel>
 
                     <InfoPanel title="组合健康检查">
@@ -898,6 +980,8 @@ export default function AgentConfigPage() {
                     </InfoPanel>
 
                     <InfoPanel title="模板能力">
+                      <InfoRow label="模板分类" value={selectedExpertProfile ? expertCategoryLabels[selectedExpertProfile.category] : '自定义'} />
+                      <InfoRow label="可接任务" value={readProfileStringArray(draft.roleProfile, 'acceptsTaskTypes').join(', ') || '自定义'} />
                       <InfoRow label="默认 Skills" value={(draft.skillIds ?? []).join(', ') || '未绑定'} />
                       <InfoRow label="推荐 MCP" value={draftRecommendedMcpServers.join(', ') || '未设置'} />
                       <InfoRow label="质量门" value={draftQualityGates.join(' / ') || '未设置'} />
@@ -945,9 +1029,9 @@ export default function AgentConfigPage() {
                           value={assistantText}
                           onChange={(event) => setAssistantText(event.target.value)}
                           placeholder={t('例如：改成 Claude Code 审查员，沙箱只读，标签加 review、安全')}
-                          className="h-28 w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm leading-6 outline-none placeholder:text-neutral-300 focus:border-neutral-400"
+                          className="h-24 w-full resize-none rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm leading-6 outline-none placeholder:text-neutral-300 focus:border-neutral-400"
                         />
-                        <button type="submit" className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium shadow-sm hover:bg-neutral-50">
+                        <button type="submit" className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white text-sm font-medium shadow-sm hover:bg-neutral-50">
                           <Wand2 className="h-4 w-4" />
                           {t('应用并保存')}
                         </button>
@@ -1305,6 +1389,43 @@ function SelectField({ label, value, disabled, onChange, children }: { label: st
         {children}
       </select>
     </label>
+  )
+}
+
+function AdvancedPanel({
+  title,
+  summary,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string
+  summary: string
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition hover:bg-neutral-50"
+      >
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold text-neutral-950">{title}</span>
+          <span className="mt-1 block truncate text-xs text-neutral-400">{summary}</span>
+        </span>
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-neutral-400 transition-transform',
+            open && 'rotate-180',
+          )}
+        />
+      </button>
+      {open && <div className="border-t border-neutral-100 px-5 pb-5 pt-1">{children}</div>}
+    </section>
   )
 }
 

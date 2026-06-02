@@ -16,7 +16,7 @@ import {
   Store,
   X,
 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import SessionList from '../components/chat/SessionList'
 import { api, type LoadedSkill, type SkillhubSearchItem, type SkillSummary } from '../lib/api'
 import { cn } from '../lib/utils'
@@ -57,6 +57,7 @@ const sortOptions: Array<{ value: SortMode; label: string }> = [
 
 export default function SkillsMarketPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [sourceUrl, setSourceUrl] = useState('')
   const [sourceName, setSourceName] = useState('')
@@ -80,6 +81,9 @@ export default function SkillsMarketPage() {
   const installedIds = useMemo(() => new Set(skills.map((skill) => skill.id)), [skills])
   const activeQuery = viewMode === 'market' ? marketQuery : installedQuery
   const activeFilters = viewMode === 'market' ? marketFilters : installedFilters
+  const deepLinkedSkillId = useMemo(() => {
+    return new URLSearchParams(location.search).get('skill')?.trim() ?? ''
+  }, [location.search])
 
   const visibleMarketSkills = useMemo(() => {
     const query = normalizeSearch(marketQuery)
@@ -117,8 +121,34 @@ export default function SkillsMarketPage() {
   }, [])
 
   useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const nextView = params.get('view')
+    if (nextView === 'installed' || params.has('skill')) {
+      setViewMode('installed')
+      return
+    }
+    if (nextView === 'market') setViewMode('market')
+  }, [location.search])
+
+  useEffect(() => {
     setSourceFilter('all')
   }, [viewMode])
+
+  useEffect(() => {
+    if (!deepLinkedSkillId || !skills.length) return
+    const normalizedId = normalizeSearch(deepLinkedSkillId)
+    const skill =
+      skills.find((item) => normalizeSearch(item.id) === normalizedId) ??
+      skills.find((item) => normalizeSearch(item.name) === normalizedId)
+    if (!skill) {
+      setViewMode('installed')
+      setMessage(`未找到 Skill：${deepLinkedSkillId}`)
+      return
+    }
+    setViewMode('installed')
+    setInstalledQuery('')
+    void openInstalledDetail(skill)
+  }, [deepLinkedSkillId, skills])
 
   async function refreshSkills() {
     setLoading(true)
@@ -241,6 +271,16 @@ export default function SkillsMarketPage() {
 
   function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Enter' && viewMode === 'market') void searchSkillhub()
+  }
+
+  function closeSelectedSkill() {
+    setSelected(null)
+    setLoadedSkill(null)
+    const params = new URLSearchParams(location.search)
+    if (!params.has('skill')) return
+    params.delete('skill')
+    const nextSearch = params.toString()
+    navigate(nextSearch ? `/skills?${nextSearch}` : '/skills', { replace: true })
   }
 
   const totalCount = viewMode === 'market' ? visibleMarketSkills.length : visibleInstalledSkills.length
@@ -399,10 +439,7 @@ export default function SkillsMarketPage() {
           loadedSkill={loadedSkill}
           loading={loadingDetail}
           selected={selected}
-          onClose={() => {
-            setSelected(null)
-            setLoadedSkill(null)
-          }}
+          onClose={closeSelectedSkill}
           onInstall={selected.type === 'market' ? () => void installFromSkillhub(selected.item.slug) : undefined}
         />
       )}

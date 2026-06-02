@@ -1313,6 +1313,7 @@ interface ChatState {
     },
   ) => Promise<void>
   editMessage: (messageId: string, content: string) => Promise<void>
+  resendMessage: (messageId: string) => Promise<void>
   withdrawMessage: (messageId: string) => Promise<{ reverted: number; failed: number } | null>
   regenerateMessage: (messageId: string) => Promise<void>
   pinMessage: (messageId: string) => Promise<void>
@@ -1723,6 +1724,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }))
   },
 
+  async resendMessage(messageId) {
+    const sessionId = get().currentSessionId
+    if (!sessionId) return
+    cancelledSessions.delete(sessionId)
+    clearPendingStream()
+    set({
+      agentTyping: true,
+      agentActivity: null,
+      streamingMessage: null,
+      streamingCodeAgentRun: null,
+    })
+    try {
+      const result = await api.resendMessage(sessionId, messageId)
+      const removed = new Set(result.removedMessageIds)
+      if (removed.size) {
+        updateCachedMessages(sessionId, (messages) =>
+          messages.filter((message) => !removed.has(message.id)),
+        )
+        set((s) => ({
+          messages: s.messages.filter((message) => !removed.has(message.id)),
+        }))
+      }
+      await get().fetchSessions()
+    } catch (error) {
+      set({ agentTyping: false })
+      throw error
+    }
+  },
+
   async withdrawMessage(messageId) {
     const sessionId = get().currentSessionId
     if (!sessionId) return null
@@ -2009,7 +2039,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         break
       }
-      case WsEvent.MessageCancelled:
+      case WsEvent.MessageCancelled: {
+        const removedMessageIds = Array.isArray(e.payload?.removedMessageIds)
+          ? e.payload.removedMessageIds.filter((id: unknown): id is string => typeof id === 'string')
+          : []
+        if (removedMessageIds.length) {
+          const removed = new Set(removedMessageIds)
+          clearPendingStream()
+          updateCachedMessages(eventSessionId, (messages) =>
+            messages.filter((message) => !removed.has(message.id)),
+          )
+          set((s) => ({
+            messages: s.messages.filter((message) => !removed.has(message.id)),
+            streamingMessage: null,
+            streamingCodeAgentRun: null,
+          }))
+          break
+        }
         cancelledSessions.add(sessionId)
         clearPendingStream()
         set({
@@ -2019,6 +2065,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           agentActivity: null,
         })
         break
+      }
       case WsEvent.AgUiEvent: {
         const event = (e.payload ?? {}) as AgUiEventPayload
         set((s) => applyAgUiEventToState(s, event, sessionId))
