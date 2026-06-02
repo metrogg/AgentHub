@@ -2340,8 +2340,9 @@ private fun WorkbenchScreenV2(
         .sortedByDescending { taskSortKey(it) }
     val activeTasks = taskItems.filter { it.status in setOf("pending", "running", "blocked") }
     val conflictRuns = runItems.filter { it.conflictCount > 0 }
-    val agentProgress = buildAgentProgressSnapshots(state, taskItems)
-    val activeAgentCount = activeTasks.mapNotNull { it.agentId }.distinct().size
+    val groupProgress = buildGroupProgressSnapshots(state, taskItems, runItems)
+    val activeGroupCount = groupProgress.count { it.status in setOf("planning", "pending", "running", "synthesizing", "blocked") }
+    var expandedGroupIds by remember(groupProgress) { mutableStateOf(groupProgress.take(3).map { it.id }.toSet()) }
 
     LazyColumn(
         modifier = Modifier
@@ -2353,9 +2354,9 @@ private fun WorkbenchScreenV2(
             FeatureHero(
                 title = "会话审批与进度",
                 subtitle = if (state.connected) {
-                    "集中查看需要你处理的会话事项，并按 Agent 追踪每个任务的当前进度。"
+                    "集中查看需要你处理的会话事项，并按群聊汇总主进度与子 Agent 进度。"
                 } else {
-                    "连接电脑端后，这里会同步会话审批、冲突复核和 Agent 任务进度。"
+                    "连接电脑端后，这里会同步会话审批、冲突复核和群聊任务进度。"
                 },
                 icon = LineIconKind.Workflow,
                 action = if (state.workbenchLoading) "同步中" else "刷新",
@@ -2366,7 +2367,7 @@ private fun WorkbenchScreenV2(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 MetricCard("待处理", (attentionTasks.size + conflictRuns.size).toString(), Modifier.weight(1f))
                 MetricCard("运行任务", activeTasks.count { it.status == "running" }.toString(), Modifier.weight(1f))
-                MetricCard("活跃Agent", activeAgentCount.toString(), Modifier.weight(1f))
+                MetricCard("活跃群聊", activeGroupCount.toString(), Modifier.weight(1f))
             }
         }
         item { WorkbenchSectionHeader("会话审批中心", "需要确认、复核或排障的会话事项") }
@@ -2386,15 +2387,23 @@ private fun WorkbenchScreenV2(
                 )
             }
         }
-        item { WorkbenchSectionHeader("Agent 进度查询", "按成员查看最近任务、状态和执行百分比") }
-        if (agentProgress.isEmpty()) {
-            item { WorkbenchEmptyCard("暂无 Agent 进度", "同步电脑端通讯录后，这里会显示每个 Agent 的最近任务。") }
+        item { WorkbenchSectionHeader("群聊主进度", "以群聊为主线汇总进度，展开查看子 Agent 执行状态") }
+        if (groupProgress.isEmpty()) {
+            item { WorkbenchEmptyCard("暂无群聊进度", "触发一次群聊协作后，这里会按群聊展示主进度和子 Agent 进度。") }
         } else {
-            items(agentProgress.take(16), key = { it.agent.id }) { item ->
-                AgentProgressCard(
+            items(groupProgress.take(16), key = { it.id }) { item ->
+                GroupProgressCard(
                     item = item,
+                    expanded = expandedGroupIds.contains(item.id),
+                    onToggleExpanded = {
+                        expandedGroupIds = if (expandedGroupIds.contains(item.id)) {
+                            expandedGroupIds - item.id
+                        } else {
+                            expandedGroupIds + item.id
+                        }
+                    },
                     onOpenGroup = {
-                        val workspaceId = item.workspace?.id
+                        val workspaceId = item.workspaceId
                         if (workspaceId != null) onOpenWorkspaceGroupSession(workspaceId)
                     },
                 )
@@ -2435,10 +2444,28 @@ private fun WorkbenchSectionHeader(title: String, subtitle: String, onClick: (()
     }
 }
 
-private data class AgentProgressSnapshot(
-    val agent: WorkspaceAgent,
+private data class GroupProgressSnapshot(
+    val id: String,
+    val workspaceId: String?,
+    val workspace: Workspace?,
+    val run: MobileWorkbenchRunSummary?,
+    val title: String,
+    val status: String,
+    val progressPercent: Int,
+    val attentionCount: Int,
+    val activeCount: Int,
+    val completedCount: Int,
+    val updatedAt: String,
+    val childProgress: List<ChildAgentProgressSnapshot>,
+)
+
+private data class ChildAgentProgressSnapshot(
+    val agent: WorkspaceAgent?,
     val workspace: Workspace?,
     val task: MobileWorkbenchTaskSummary?,
+    val fallbackAgentId: String,
+    val fallbackName: String,
+    val fallbackRole: String,
 )
 
 @Composable
@@ -2543,16 +2570,22 @@ private fun TaskAttentionCard(task: MobileWorkbenchTaskSummary, onOpenGroup: () 
 }
 
 @Composable
-private fun AgentProgressCard(item: AgentProgressSnapshot, onOpenGroup: () -> Unit) {
-    val task = item.task
-    val status = task?.status ?: "idle"
-    val color = workbenchStatusColor(status)
+private fun GroupProgressCard(
+    item: GroupProgressSnapshot,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    onOpenGroup: () -> Unit,
+) {
+    val color = workbenchStatusColor(item.status)
+    val subtitle = listOfNotNull(
+        item.workspace?.name?.takeIf { it.isNotBlank() },
+        item.run?.updatedAt?.takeIf { it.isNotBlank() }?.let { formatWorkbenchDate(it) },
+    ).joinToString(" · ").ifBlank { "群聊协作进度" }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(PanelBackground)
-            .clickable(onClick = onOpenGroup)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -2560,22 +2593,16 @@ private fun AgentProgressCard(item: AgentProgressSnapshot, onOpenGroup: () -> Un
             Box(
                 modifier = Modifier
                     .size(42.dp)
-                    .clip(CircleShape)
-                    .background(workspaceAgentAvatarColor(item.agent).copy(alpha = 0.22f))
-                    .border(1.dp, workspaceAgentAvatarColor(item.agent), CircleShape),
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(color.copy(alpha = 0.16f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    item.agent.name.ifBlank { "A" }.take(1).uppercase(),
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp,
-                )
+                LineIcon(kind = LineIconKind.Workflow, color = color, modifier = Modifier.size(22.dp))
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    item.agent.name.ifBlank { "Agent" },
+                    item.title.ifBlank { "群聊进度" },
                     color = Ink,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,
@@ -2583,13 +2610,107 @@ private fun AgentProgressCard(item: AgentProgressSnapshot, onOpenGroup: () -> Un
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    listOfNotNull(
-                        item.workspace?.name?.takeIf { it.isNotBlank() },
-                        item.agent.role.takeIf { it.isNotBlank() } ?: item.agent.roleType,
-                    ).joinToString(" · "),
+                    subtitle,
                     modifier = Modifier.padding(top = 2.dp),
                     color = MutedText,
                     fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            WorkbenchChip(workbenchStatusLabel(item.status))
+        }
+        WorkbenchProgressBar(progress = item.progressPercent, color = color)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            WorkbenchChip("执行 ${item.activeCount}")
+            WorkbenchChip("完成 ${item.completedCount}")
+            if (item.attentionCount > 0) WorkbenchChip("待处理 ${item.attentionCount}")
+        }
+        AnimatedVisibility(visible = expanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                if (item.childProgress.isEmpty()) {
+                    Text(
+                        "暂无子 Agent 进度，等待 Orchestrator 分发任务。",
+                        color = MutedText,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                    )
+                } else {
+                    item.childProgress.forEachIndexed { index, child ->
+                        if (index > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 46.dp, top = 2.dp, bottom = 2.dp)
+                                    .height(0.5.dp)
+                                    .background(Hairline),
+                            )
+                        }
+                        ChildAgentProgressRow(child = child)
+                    }
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onToggleExpanded) {
+                Text(if (expanded) "收起子进度" else "展开子进度", color = TgBlue, fontSize = 12.sp)
+            }
+            TextButton(onClick = onOpenGroup) {
+                Text("打开群聊", color = TgBlue, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChildAgentProgressRow(child: ChildAgentProgressSnapshot) {
+    val task = child.task
+    val status = task?.status ?: "idle"
+    val color = workbenchStatusColor(status)
+    val avatarColor = child.agent?.let { workspaceAgentAvatarColor(it) }
+        ?: fallbackAgentAvatarColor("${child.fallbackAgentId}:${child.fallbackName}")
+    val avatarLabel = child.agent?.let { workspaceAgentAvatarLabel(it) }
+        ?: child.fallbackName.ifBlank { "A" }.take(1).uppercase()
+    val name = child.agent?.name?.takeIf { it.isNotBlank() } ?: child.fallbackName.ifBlank { "Agent" }
+    val role = child.agent?.role?.takeIf { it.isNotBlank() }
+        ?: child.fallbackRole.takeIf { it.isNotBlank() }
+        ?: child.agent?.roleType
+        ?: "子任务"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(avatarColor.copy(alpha = 0.22f))
+                    .border(1.dp, avatarColor, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(avatarLabel, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    name,
+                    color = Ink,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    listOfNotNull(
+                        role,
+                        task?.title?.takeIf { it.isNotBlank() },
+                    ).joinToString(" · ").ifBlank { "等待任务分配" },
+                    modifier = Modifier.padding(top = 2.dp),
+                    color = MutedText,
+                    fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -2598,18 +2719,12 @@ private fun AgentProgressCard(item: AgentProgressSnapshot, onOpenGroup: () -> Un
         }
         WorkbenchProgressBar(progress = task?.let { taskProgressPercent(it) } ?: 0, color = color)
         Text(
-            task?.title?.takeIf { it.isNotBlank() } ?: "暂无任务",
-            color = Ink,
-            fontSize = 13.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            task?.progressStatus?.ifBlank { task.description }?.ifBlank { "等待 Orchestrator 分配任务" }
-                ?: "等待 Orchestrator 分配任务",
+            task?.progressStatus?.ifBlank { task.description }?.ifBlank { "等待 Orchestrator 调度" }
+                ?: "等待 Orchestrator 调度",
+            modifier = Modifier.padding(start = 44.dp),
             color = MutedText,
-            fontSize = 12.sp,
-            lineHeight = 17.sp,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -3044,24 +3159,186 @@ private fun fallbackWorkbenchWorkspaces(state: MobileUiState): List<MobileWorkbe
     }
 }
 
-private fun buildAgentProgressSnapshots(
+private fun buildGroupProgressSnapshots(
     state: MobileUiState,
     tasks: List<MobileWorkbenchTaskSummary>,
-): List<AgentProgressSnapshot> {
+    runs: List<MobileWorkbenchRunSummary>,
+): List<GroupProgressSnapshot> {
     val workspacesById = state.workspaces.associateBy { it.id }
-    val latestTaskByAgent = tasks
-        .filter { !it.agentId.isNullOrBlank() }
-        .groupBy { it.agentId.orEmpty() }
-        .mapValues { (_, agentTasks) -> agentTasks.maxByOrNull { taskSortKey(it) } }
-    return state.agents
-        .sortedWith(compareBy<WorkspaceAgent> { it.workspaceId }.thenBy { it.orderIdx }.thenBy { it.name })
-        .map { agent ->
-            AgentProgressSnapshot(
+    val agentsById = state.agents.associateBy { it.id }
+    val runsById = runs.associateBy { it.id }
+    val runsByGroupSessionId = runs
+        .filter { it.groupSessionId.isNotBlank() }
+        .associateBy { it.groupSessionId }
+    val latestRunByWorkspaceId = runs
+        .groupBy { it.workspaceId }
+        .mapValues { (_, workspaceRuns) -> workspaceRuns.maxByOrNull { it.updatedAt.ifBlank { it.createdAt } } }
+    val tasksByGroup = tasks.groupBy { groupProgressKey(it) }.toMutableMap()
+
+    runs.forEach { run ->
+        val representedByTask = tasks.any { task ->
+            task.runId == run.id ||
+                (run.groupSessionId.isNotBlank() && task.groupSessionId == run.groupSessionId)
+        }
+        if (!representedByTask) {
+            tasksByGroup.putIfAbsent(runGroupKey(run), emptyList())
+        }
+    }
+
+    return tasksByGroup.map { (groupId, groupTasks) ->
+        val run = groupTasks.firstNotNullOfOrNull { task ->
+            task.runId?.let { runsById[it] }
+        } ?: groupTasks.firstNotNullOfOrNull { task ->
+            task.groupSessionId?.let { runsByGroupSessionId[it] }
+        } ?: groupTasks.firstNotNullOfOrNull { task ->
+            latestRunByWorkspaceId[task.workspaceId]
+        } ?: runs.firstOrNull { runGroupKey(it) == groupId }
+
+        val workspaceId = groupTasks.firstOrNull()?.workspaceId ?: run?.workspaceId
+        val workspace = workspaceId?.let { workspacesById[it] }
+        val status = groupProgressStatus(groupTasks, run)
+        val childProgress = buildChildAgentProgressSnapshots(groupTasks, agentsById, workspacesById)
+
+        GroupProgressSnapshot(
+            id = groupId,
+            workspaceId = workspaceId,
+            workspace = workspace,
+            run = run,
+            title = run?.sessionTitle?.takeIf { it.isNotBlank() }
+                ?: groupTasks.firstOrNull { it.sessionTitle.isNotBlank() }?.sessionTitle
+                ?: workspace?.name?.takeIf { it.isNotBlank() }
+                ?: groupTasks.firstOrNull()?.workspaceName?.takeIf { it.isNotBlank() }
+                ?: "群聊进度",
+            status = status,
+            progressPercent = groupProgressPercent(groupTasks, status),
+            attentionCount = groupTasks.count { taskRequiresAttention(it) },
+            activeCount = groupTasks.count { it.status in setOf("pending", "running", "blocked") },
+            completedCount = groupTasks.count { it.status in setOf("done", "completed") },
+            updatedAt = groupProgressUpdatedAt(groupTasks, run),
+            childProgress = childProgress,
+        )
+    }.sortedWith(
+        compareBy<GroupProgressSnapshot> { groupStatusSortKey(it.status) }
+            .thenByDescending { it.updatedAt },
+    )
+}
+
+private fun buildChildAgentProgressSnapshots(
+    tasks: List<MobileWorkbenchTaskSummary>,
+    agentsById: Map<String, WorkspaceAgent>,
+    workspacesById: Map<String, Workspace>,
+): List<ChildAgentProgressSnapshot> {
+    return tasks
+        .groupBy { childAgentProgressKey(it) }
+        .mapNotNull { (_, agentTasks) ->
+            val task = agentTasks.maxByOrNull { taskSortKey(it) } ?: return@mapNotNull null
+            val agent = task.agentId?.let { agentsById[it] }
+            ChildAgentProgressSnapshot(
                 agent = agent,
-                workspace = workspacesById[agent.workspaceId],
-                task = latestTaskByAgent[agent.id],
+                workspace = workspacesById[task.workspaceId],
+                task = task,
+                fallbackAgentId = task.agentId?.takeIf { it.isNotBlank() } ?: task.id,
+                fallbackName = agent?.name?.takeIf { it.isNotBlank() }
+                    ?: task.agentName.takeIf { it.isNotBlank() }
+                    ?: "Agent",
+                fallbackRole = agent?.role?.takeIf { it.isNotBlank() }
+                    ?: task.agentRole.takeIf { it.isNotBlank() }
+                    ?: agent?.roleType.orEmpty(),
             )
         }
+        .sortedWith(
+            compareBy<ChildAgentProgressSnapshot>(
+                { childStatusSortKey(it.task?.status ?: "idle") },
+                { it.task?.orderIdx ?: it.agent?.orderIdx ?: 9999 },
+                { it.fallbackName.ifBlank { "Agent" } },
+            ),
+        )
+}
+
+private fun groupProgressKey(task: MobileWorkbenchTaskSummary): String {
+    val groupSessionId = task.groupSessionId?.takeIf { it.isNotBlank() }
+    val runId = task.runId?.takeIf { it.isNotBlank() }
+    return when {
+        groupSessionId != null -> "group:$groupSessionId"
+        runId != null -> "run:$runId"
+        task.workspaceId.isNotBlank() -> "workspace:${task.workspaceId}"
+        else -> "task:${task.id}"
+    }
+}
+
+private fun runGroupKey(run: MobileWorkbenchRunSummary): String {
+    return run.groupSessionId.takeIf { it.isNotBlank() }?.let { "group:$it" } ?: "run:${run.id}"
+}
+
+private fun childAgentProgressKey(task: MobileWorkbenchTaskSummary): String {
+    return task.agentId?.takeIf { it.isNotBlank() }?.let { "agent:$it" } ?: "task:${task.id}"
+}
+
+private fun groupProgressStatus(
+    tasks: List<MobileWorkbenchTaskSummary>,
+    run: MobileWorkbenchRunSummary?,
+): String {
+    val runStatus = run?.status?.trim()?.lowercase().orEmpty()
+    if (tasks.isEmpty()) return runStatus.ifBlank { "idle" }
+    val statuses = tasks.map { it.status.trim().lowercase() }
+    return when {
+        runStatus == "failed" -> "failed"
+        runStatus == "blocked" -> "blocked"
+        statuses.any { it == "failed" } -> "failed"
+        statuses.any { it == "blocked" } || tasks.any { taskRequiresAttention(it) } -> "blocked"
+        statuses.any { it == "running" } -> "running"
+        runStatus in setOf("planning", "synthesizing") -> runStatus
+        statuses.any { it == "pending" } -> "pending"
+        statuses.all { it in setOf("done", "completed", "skipped") } -> {
+            if (runStatus in setOf("completed", "done", "cancelled")) runStatus else "done"
+        }
+        runStatus.isNotBlank() -> runStatus
+        else -> statuses.firstOrNull()?.ifBlank { "idle" } ?: "idle"
+    }
+}
+
+private fun groupProgressPercent(tasks: List<MobileWorkbenchTaskSummary>, status: String): Int {
+    if (tasks.isNotEmpty()) {
+        return (tasks.sumOf { taskProgressPercent(it) } / tasks.size).coerceIn(0, 100)
+    }
+    return when (status.trim().lowercase()) {
+        "done", "completed" -> 100
+        "synthesizing" -> 82
+        "running" -> 36
+        "planning" -> 12
+        "pending" -> 5
+        "blocked", "failed" -> 8
+        else -> 0
+    }
+}
+
+private fun groupProgressUpdatedAt(
+    tasks: List<MobileWorkbenchTaskSummary>,
+    run: MobileWorkbenchRunSummary?,
+): String {
+    return tasks.maxOfOrNull { taskSortKey(it) }
+        ?: run?.updatedAt?.ifBlank { run.createdAt }
+        ?: ""
+}
+
+private fun groupStatusSortKey(status: String): Int {
+    return when (status.trim().lowercase()) {
+        "blocked", "failed" -> 0
+        "running" -> 1
+        "planning", "pending", "synthesizing" -> 2
+        "done", "completed" -> 3
+        else -> 4
+    }
+}
+
+private fun childStatusSortKey(status: String): Int {
+    return when (status.trim().lowercase()) {
+        "blocked", "failed" -> 0
+        "running" -> 1
+        "planning", "pending", "synthesizing" -> 2
+        "done", "completed" -> 3
+        else -> 4
+    }
 }
 
 private fun taskRequiresAttention(task: MobileWorkbenchTaskSummary): Boolean {
@@ -3075,7 +3352,7 @@ private fun taskRequiresAttention(task: MobileWorkbenchTaskSummary): Boolean {
 private fun taskProgressPercent(task: MobileWorkbenchTaskSummary): Int {
     val stored = task.progressPercent.coerceIn(0, 100)
     return when (task.status) {
-        "done" -> 100
+        "done", "completed" -> 100
         "running" -> stored.coerceAtLeast(12)
         "blocked", "failed" -> stored.coerceAtLeast(8)
         "pending" -> stored.coerceAtMost(5)
@@ -4641,6 +4918,19 @@ private fun workspaceAgentAvatarColor(agent: WorkspaceAgent): Color {
         "planner" -> Color(0xFFB694E2)
         else -> Color(0xFF7C5CFF)
     }
+}
+
+private fun fallbackAgentAvatarColor(seed: String): Color {
+    val colors = listOf(
+        Color(0xFF4EA2F6),
+        Color(0xFF10B981),
+        Color(0xFFD4A574),
+        Color(0xFFA78BFA),
+        Color(0xFFEE5D9A),
+        Color(0xFFE8A04D),
+    )
+    val index = (seed.ifBlank { "Agent" }.hashCode().and(0x7FFFFFFF)) % colors.size
+    return colors[index]
 }
 
 private fun workspaceAgentAvatarLabel(agent: WorkspaceAgent): String {
