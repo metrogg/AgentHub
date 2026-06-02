@@ -12,7 +12,6 @@ import { agentHubUserCacheRoot, defaultNoProjectExecutionRoot, safePathSegment }
  * 2. projectPath 是用户原始工作区路径。
  * 3. worktreePath is a compatibility field name. Its current meaning is the
  *    prepared execution directory.
- *    - read-only: may be null; the agent reads directly from projectPath.
  *    - workspace-write / danger-full-access: must be non-null, usually under
  *      projectPath/.agenthub/workdirs.
  * 4. sandboxPolicy 决定文件系统边界。
@@ -33,7 +32,7 @@ export interface AgentExecutionEnvelope {
   /** Prepared execution directory. Field name kept for backward compatibility. */
   worktreePath: string | null
   /** 沙箱策略 */
-  sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandboxPolicy: 'workspace-write' | 'danger-full-access'
   /** 子进程 env 白名单 */
   envAllowlist: string[]
   /** 沙箱提供的额外 env 覆盖 */
@@ -100,7 +99,7 @@ export function validateEnvelope(envelope: AgentExecutionEnvelope): void {
   if (!envelope.runId) throw new Error('AgentExecutionEnvelope.runId is required')
   if (!envelope.taskId) throw new Error('AgentExecutionEnvelope.taskId is required')
   if (!envelope.agentId) throw new Error('AgentExecutionEnvelope.agentId is required')
-  if (envelope.sandboxPolicy !== 'read-only' && envelope.projectPath && !envelope.worktreePath) {
+  if (envelope.projectPath && !envelope.worktreePath) {
     throw new Error(
       `AgentExecutionEnvelope.worktreePath is required for sandboxPolicy=${envelope.sandboxPolicy}. ` +
         `An agent execution directory must be prepared before execution. Fallback to original projectPath is prohibited.`
@@ -115,11 +114,6 @@ export function buildExecutionCwd(envelope: AgentExecutionEnvelope): {
   label: string
   valid: boolean
 } {
-  if (envelope.sandboxPolicy === 'read-only') {
-    const path = envelope.projectPath ?? ensureNoProjectExecutionDir(envelope) ?? undefined
-    return { cwd: path, label: path ?? '(只读模式，无项目目录)', valid: true }
-  }
-
   const wt = envelope.worktreePath ?? (envelope.projectPath ? null : resolveDefaultWorkDir(envelope.runId))
   if (!wt) {
     return {

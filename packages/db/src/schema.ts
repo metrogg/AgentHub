@@ -66,7 +66,7 @@ export const workspaceAgents = sqliteTable(
   capabilityTags: text('capability_tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
   skillIds: text('skill_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
   toolPermissions: text('tool_permissions', { mode: 'json' }).$type<string[]>().notNull().default([]),
-  sandboxPolicy: text('sandbox_policy', { enum: ['read-only', 'workspace-write', 'danger-full-access'] })
+  sandboxPolicy: text('sandbox_policy', { enum: ['workspace-write', 'danger-full-access'] })
     .notNull()
     .default('workspace-write'),
   contextPolicy: text('context_policy', { enum: ['recent-only', 'pinned-recent', 'workspace-aware'] })

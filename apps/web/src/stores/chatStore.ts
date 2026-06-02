@@ -719,6 +719,52 @@ function taskBoardMatchesAgUiEvent(
   return true
 }
 
+function buildLocalPlanningTaskBoard(params: {
+  sessionId: string
+  goal: string
+  orchestrator?: WorkspaceAgent | null
+}): NonNullable<ChatState['taskBoard']> {
+  const agentId = params.orchestrator?.id ?? 'orchestrator'
+  const agentName = params.orchestrator?.name ?? 'Orchestrator'
+  const taskId = `local-planning-${params.sessionId}`
+  return {
+    runId: `local-${params.sessionId}-${Date.now()}`,
+    title: 'Orchestrator 正在规划',
+    goal: params.goal.trim() || '等待 Orchestrator 理解任务目标',
+    collaborationMode: 'dynamic',
+    phases: [
+      {
+        id: 'planning',
+        title: '规划',
+        purpose: '理解目标、选择成员并生成动态执行计划',
+        taskIds: [taskId],
+        status: 'active',
+      },
+    ],
+    tasks: [
+      {
+        id: taskId,
+        phaseId: 'planning',
+        title: '理解目标并准备分工',
+        description: params.goal,
+        agentId,
+        agentName,
+        status: 'running',
+        progress: 10,
+        progressStatus: 'Orchestrator 正在理解目标',
+        dependencies: [],
+        childSessionId: null,
+      },
+    ],
+    status: 'planning',
+    sessionId: params.sessionId,
+  }
+}
+
+function isLocalPlanningBoard(taskBoard: ChatState['taskBoard']) {
+  return Boolean(taskBoard?.runId.startsWith('local-'))
+}
+
 function applyTaskStatusToPhases(
   taskBoard: NonNullable<ChatState['taskBoard']>,
   taskId: string,
@@ -1205,11 +1251,17 @@ function applyAgUiEventToState(
 
   const nextAgentTabs =
     nextTaskBoard && nextTaskBoard !== state.taskBoard
-      ? updateAgentTabsFromTaskBoard(state.agentTabs, nextTaskBoard, {
+      ? updateAgentTabsFromTaskBoard(
+          isLocalPlanningBoard(state.taskBoard) && !isLocalPlanningBoard(nextTaskBoard)
+            ? []
+            : state.agentTabs,
+          nextTaskBoard,
+          {
           type: event.type ?? 'ag-ui:event',
           taskId: asString(asRecord(event.value)?.taskId) ?? null,
           payload: asRecord(event.value) ?? {},
-        })
+          },
+        )
       : state.agentTabs
   if (nextTaskBoard && nextTaskBoard !== state.taskBoard) {
     nextSessions = buildOptimisticOrchestratorTaskSessions(
@@ -1637,9 +1689,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const orchestrator = isGroupSession
       ? get().currentWorkspaceAgents.find((agent) => agent.roleType === 'orchestrator')
       : null
+    const localTaskBoard = isGroupSession
+      ? buildLocalPlanningTaskBoard({ sessionId, goal: content, orchestrator })
+      : null
+    const localAgentTabs = localTaskBoard ? agentTabsFromTaskBoard(localTaskBoard) : get().agentTabs
     set({
       agentTyping: true,
       selectedAgentTab: isGroupSession ? null : get().selectedAgentTab,
+      taskBoard: localTaskBoard ?? get().taskBoard,
+      agentTabs: isGroupSession ? localAgentTabs : get().agentTabs,
       agentActivity: isGroupSession
         ? {
             sessionId,
@@ -1694,17 +1752,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set((state) => {
         if (
           state.agentActivity?.sessionId === sessionId &&
-          state.agentActivity.phase === 'planning'
+          (state.agentActivity.phase === 'planning' || state.agentActivity.phase === 'thinking')
         ) {
-          return { agentTyping: true }
+          return { agentTyping: true, taskBoard: state.taskBoard, agentTabs: state.agentTabs }
         }
-        return { agentTyping: false, agentActivity: null }
+        return {
+          agentTyping: false,
+          agentActivity: null,
+          ...(isGroupSession && isLocalPlanningBoard(state.taskBoard)
+            ? { taskBoard: null, agentTabs: [], selectedAgentTab: null }
+            : {}),
+        }
       })
     } catch (error) {
       set((s) => ({
         messages: s.messages.filter((message) => message.id !== optimisticId),
         agentTyping: false,
         agentActivity: null,
+        ...(isGroupSession && isLocalPlanningBoard(s.taskBoard)
+          ? { taskBoard: null, agentTabs: [], selectedAgentTab: null }
+          : {}),
         streamingMessage: null,
         streamingCodeAgentRun: null,
       }))
@@ -2035,6 +2102,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             streamingCodeAgentRun: null,
             agentTyping: false,
             agentActivity: null,
+            ...(isLocalPlanningBoard(s.taskBoard)
+              ? { taskBoard: null, agentTabs: [], selectedAgentTab: null }
+              : {}),
           }
         })
         break

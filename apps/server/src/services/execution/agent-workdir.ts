@@ -7,7 +7,7 @@ export interface AgentWorkdirInput {
   taskId: string
   agentId: string
   agentName?: string | null
-  sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandboxPolicy: 'workspace-write' | 'danger-full-access'
 }
 
 export interface AgentWorkdir {
@@ -28,7 +28,7 @@ export interface AgentWorkdir {
  */
 export function prepareAgentWorkdir(input: AgentWorkdirInput): AgentWorkdir | null {
   const projectPath = input.projectPath?.trim()
-  if (!projectPath || input.sandboxPolicy === 'read-only') return null
+  if (!projectPath) return null
 
   const relativePath = [
     '.agenthub',

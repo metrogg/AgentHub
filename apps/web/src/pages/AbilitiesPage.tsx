@@ -36,7 +36,6 @@ import { cn } from '../lib/utils'
 type CapabilityKind = 'skill' | 'mcp' | 'rules' | 'cli' | 'sandbox' | 'context'
 type RiskLevel = 'low' | 'medium' | 'high'
 type KindFilter = CapabilityKind | 'all'
-type AbilitySandboxPolicy = SandboxPolicy | 'read-only'
 
 interface CapabilityCardData {
   id: string
@@ -436,7 +435,7 @@ function buildCapabilityCards({
     actionPath: '/coding-tools',
   })
 
-  const sandboxPolicies: AbilitySandboxPolicy[] = ['read-only', 'workspace-write', 'danger-full-access']
+  const sandboxPolicies: SandboxPolicy[] = ['workspace-write', 'danger-full-access']
   for (const policy of sandboxPolicies) {
     const boundAgents = agents.filter((agent) => agent.sandboxPolicy === policy)
     cards.push({
@@ -445,7 +444,7 @@ function buildCapabilityCards({
       title: sandboxPolicyLabel(policy),
       description: sandboxPolicyDescription(policy, settingsInfo),
       permissions: sandboxPolicyPermissions(policy),
-      risk: policy === 'danger-full-access' ? 'high' : policy === 'workspace-write' ? 'medium' : 'low',
+      risk: policy === 'danger-full-access' ? 'high' : 'medium',
       appliesTo: boundAgents.map((agent) => agent.name),
       examples: sandboxPolicyExamples(policy),
       source: settingsInfo?.sandbox.defaultProvider
@@ -600,30 +599,26 @@ function codeAgentLabel(type: CodeAgentType) {
   return map[type]
 }
 
-function sandboxPolicyLabel(policy: AbilitySandboxPolicy) {
-  const map: Record<AbilitySandboxPolicy, string> = {
-    'read-only': 'Read Only 沙箱',
+function sandboxPolicyLabel(policy: SandboxPolicy) {
+  const map: Record<SandboxPolicy, string> = {
     'workspace-write': 'Workspace Write 沙箱',
     'danger-full-access': 'Danger Full Access 沙箱',
   }
   return map[policy]
 }
 
-function sandboxPolicyDescription(policy: AbilitySandboxPolicy, settingsInfo: SettingsGeneralInfo | null) {
+function sandboxPolicyDescription(policy: SandboxPolicy, settingsInfo: SettingsGeneralInfo | null) {
   const provider = settingsInfo?.sandbox.configuredProvider || settingsInfo?.sandbox.defaultProvider || 'local'
-  if (policy === 'read-only') return `只读执行策略，当前 Provider：${provider}。适合调研、审阅和信息整理。`
   if (policy === 'workspace-write') return `允许写入工作区内任务目录，当前 Provider：${provider}。适合实现和交付产物。`
   return `最高权限执行策略，当前 Provider：${provider}。仅适合明确可信的本机任务。`
 }
 
-function sandboxPolicyPermissions(policy: AbilitySandboxPolicy) {
-  if (policy === 'read-only') return ['读取工作区', '不主动写入项目文件']
+function sandboxPolicyPermissions(policy: SandboxPolicy) {
   if (policy === 'workspace-write') return ['读取工作区', '写入任务工作目录', '生成 handoff / artifacts']
   return ['完整文件系统访问', 'shell 执行', '网络访问', '本机环境变量']
 }
 
-function sandboxPolicyExamples(policy: AbilitySandboxPolicy) {
-  if (policy === 'read-only') return ['阅读代码并给出审阅意见', '梳理需求和风险']
+function sandboxPolicyExamples(policy: SandboxPolicy) {
   if (policy === 'workspace-write') return ['实现功能并保存产物', '运行构建并生成报告']
   return ['修复本机 CLI 配置', '执行需要完整本机权限的维护任务']
 }

@@ -1095,7 +1095,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       if (orchestratorProfile?.runtimeType === 'code-agent') {
         const profile: AgentProfile = {
           ...orchestratorProfile,
-          sandboxPolicy: 'read-only',
+          sandboxPolicy: 'workspace-write',
           toolPermissions: ['chat', 'workspace:read'],
           approvalRequired: false,
         }
