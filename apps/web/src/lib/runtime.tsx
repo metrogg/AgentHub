@@ -43,7 +43,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
     message.metadata && 'memberProposals' in (message.metadata as Record<string, unknown>)
       ? { ...(message.metadata as Record<string, unknown>), messageId: message.id, content: message.content }
       : null
-  const codeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun)
+  const rawCodeAgentRun = isCodeAgentRunMetadata(message.metadata?.codeAgentRun)
     ? message.metadata.codeAgentRun
     : null
   const agentName =

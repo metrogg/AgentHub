@@ -149,7 +149,6 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
       workspace.id,
       user.sub,
       invitedAgents.map((agent) => agent.id),
-      title || undefined,
     )
     return c.json({ session })
   })
@@ -665,7 +664,7 @@ function workspaceAgentToSavedAgent(agent: typeof workspaceAgents.$inferSelect):
   }
 }
 
-function defaultMobileGroupTitle(agents: SavedAgentConfig[]) {
+export function defaultMobileGroupTitle(agents: SavedAgentConfig[]) {
   const names = agents.slice(0, 3).map((agent) => agent.name).join('、')
   return agents.length > 3 ? `${names} 等 ${agents.length} 个 Agent` : names || 'Agent 群聊'
 }
