@@ -1947,6 +1947,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         task,
         artifacts,
         writtenBlackboardKeys,
+        executionPath: execResult.executionPath ?? null,
       })
       lastContractResult = contractResult
       if (contractResult.status === 'failed') {
