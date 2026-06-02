@@ -1,13 +1,10 @@
 import {
-  AGENT_ROLE_AVATAR_PATHS,
-  AGENT_ROLE_DARK_AVATAR_PATHS,
   ROLE_PRESETS,
   inferRoleType as inferSharedRoleType,
   type AgentRoleType,
 } from '@agenthub/shared'
 
 type PresetRoleType = Exclude<AgentRoleType, 'custom'>
-type AvatarRoleType = keyof typeof AGENT_ROLE_AVATAR_PATHS
 
 export type AgentVisualInput = {
   avatar?: string | null
@@ -19,19 +16,6 @@ export type AgentVisualInput = {
 }
 
 const neutralFallbackColors = new Set(['#111827', '#171717', '#000000'])
-const roleAvatarEntries = Object.entries(AGENT_ROLE_AVATAR_PATHS) as Array<[AvatarRoleType, string]>
-const lightToDarkAvatar = new Map<string, string>(
-  roleAvatarEntries.map(([roleType, avatar]) => [
-    avatar,
-    AGENT_ROLE_DARK_AVATAR_PATHS[roleType] ?? avatar,
-  ]),
-)
-const darkToLightAvatar = new Map<string, string>(
-  Object.entries(AGENT_ROLE_DARK_AVATAR_PATHS).map(([roleType, avatar]) => [
-    avatar,
-    AGENT_ROLE_AVATAR_PATHS[roleType as AvatarRoleType] ?? avatar,
-  ]),
-)
 
 export function currentAgentHubTheme(): 'light' | 'dark' {
   if (typeof document !== 'undefined') {
@@ -83,9 +67,7 @@ function normalizeVisualText(value?: string | null) {
 }
 
 export function defaultAgentAvatarPath(agent: AgentVisualInput): string | null {
-  const roleType = resolveAgentRoleType(agent)
-  const avatarRole = roleWithAvatar(roleType)
-  return avatarRole ? AGENT_ROLE_AVATAR_PATHS[avatarRole] : null
+  return null
 }
 
 export function defaultAgentColor(agent: AgentVisualInput): string | null {
@@ -102,19 +84,8 @@ export function resolveAgentColor(agent: AgentVisualInput, fallback = '#111827')
   return rawColor
 }
 
-export function resolveAgentAvatarSrc(
-  agent: AgentVisualInput,
-  theme: 'light' | 'dark' = currentAgentHubTheme(),
-): string | null {
-  const explicitAvatar = agent.avatar?.trim() || null
-  const defaultAvatar = defaultAgentAvatarPath(agent)
-  const avatar = explicitAvatar ?? defaultAvatar
-  if (!avatar) return null
-
-  if (theme === 'dark') {
-    return lightToDarkAvatar.get(avatar) ?? defaultDarkAvatarPath(agent) ?? avatar
-  }
-  return darkToLightAvatar.get(avatar) ?? avatar
+export function resolveAgentAvatarSrc(agent: AgentVisualInput): string | null {
+  return agent.avatar?.trim() || null
 }
 
 export function resolveAgentInitial(agent: AgentVisualInput, fallback?: string | null): string {
@@ -124,21 +95,10 @@ export function resolveAgentInitial(agent: AgentVisualInput, fallback?: string |
 export function withAgentVisualDefaults<T extends AgentVisualInput>(
   agent: T,
 ): T & { avatar: string | null; color: string } {
-  const avatar = agent.avatar ?? defaultAgentAvatarPath(agent)
   const color = resolveAgentColor(agent)
   return {
     ...agent,
-    avatar,
+    avatar: agent.avatar ?? null,
     color,
   }
-}
-
-function defaultDarkAvatarPath(agent: AgentVisualInput): string | null {
-  const roleType = resolveAgentRoleType(agent)
-  const avatarRole = roleWithAvatar(roleType)
-  return avatarRole ? AGENT_ROLE_DARK_AVATAR_PATHS[avatarRole] : null
-}
-
-function roleWithAvatar(roleType: AgentRoleType): AvatarRoleType | null {
-  return roleType in AGENT_ROLE_AVATAR_PATHS ? (roleType as AvatarRoleType) : null
 }
