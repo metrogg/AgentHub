@@ -123,6 +123,7 @@ import {
   useShortcutSettings,
 } from '../../lib/shortcuts'
 import { requestSettingsDialog } from '../../lib/settingsDialog'
+import { useMessageStyleMode } from '../../lib/messageStyle'
 import { cn } from '../../lib/utils'
 import { getCachedAccountProfile } from '../../lib/accountProfile'
 import {
@@ -3073,6 +3074,8 @@ const ComposerAction: FC = () => (
 )
 
 const UserMessage: FC = () => {
+  const messageStyleMode = useMessageStyleMode()
+  const isFlatMessageStyle = messageStyleMode === 'flat'
   const messageId = useMessage((message) => message.id)
   const sourceMessage = useChatStore((state) =>
     state.messages.find((message) => message.id === messageId),
@@ -3145,14 +3148,22 @@ const UserMessage: FC = () => {
   }
 
   return (
-    <MessagePrimitive.Root className="group ml-0 mr-auto flex w-full max-w-[var(--thread-max-width)] items-start justify-end gap-3 py-3">
-      <div className={cn('flex flex-col items-end gap-1.5', editing ? 'w-full max-w-[36rem]' : 'max-w-[68%]')}>
+    <MessagePrimitive.Root className={cn(
+      'group ml-0 mr-auto flex w-full max-w-[var(--thread-max-width)] items-start justify-end gap-3',
+      isFlatMessageStyle ? 'border-b border-neutral-100 py-3' : 'py-3',
+    )}>
+      <div className={cn(
+        'flex flex-col items-end gap-1.5',
+        editing ? 'w-full max-w-[36rem]' : isFlatMessageStyle ? 'w-full max-w-none' : 'max-w-[68%]',
+      )}>
         <div
           className={cn(
-            'w-full text-sm leading-6 text-neutral-900',
+            'w-full text-sm leading-6 text-neutral-900 transition-colors',
             editing
               ? 'rounded-2xl border border-neutral-200 bg-white p-2.5 shadow-sm'
-              : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none',
+              : isFlatMessageStyle
+                ? 'border-r-2 border-neutral-300 bg-transparent py-0 pr-4 text-right shadow-none'
+                : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none',
           )}
         >
           {editing ? (
@@ -3240,15 +3251,20 @@ function formatTime(value: string | Date) {
 }
 
 const AssistantMessage: FC = () => {
+  const messageStyleMode = useMessageStyleMode()
+  const isFlatMessageStyle = messageStyleMode === 'flat'
   const messageId = useMessage((message) => message.id)
   const createdAt = useChatStore(
     (state) => state.messages.find((message) => message.id === messageId)?.createdAt,
   )
   return (
-    <MessagePrimitive.Root className="ml-0 mr-auto flex w-full max-w-[var(--thread-max-width)] gap-3 py-4">
+    <MessagePrimitive.Root className={cn(
+      'ml-0 mr-auto flex w-full max-w-[var(--thread-max-width)] gap-3',
+      isFlatMessageStyle ? 'border-b border-neutral-100 py-3' : 'py-4',
+    )}>
       <Avatar role="assistant" />
-      <div className="min-w-0 flex-1">
-        <div className="text-sm leading-7 text-neutral-950">
+      <div className={cn('min-w-0 flex-1', isFlatMessageStyle ? 'pl-1' : '')}>
+        <div className={cn('text-sm text-neutral-950', isFlatMessageStyle ? 'leading-6' : 'leading-7')}>
           <MessagePrimitive.Parts
             components={{
               Text: MarkdownText,

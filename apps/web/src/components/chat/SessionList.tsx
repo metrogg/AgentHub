@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Archive,
   ArchiveRestore,
+  Brain,
   Blocks,
   Clock,
   ChevronRight,
@@ -630,7 +631,7 @@ export default function SessionList({
         <nav className={cn('space-y-1 px-3 pt-3', activeTab !== 'abilities' && 'hidden')}>
           <NavItem
             icon={Blocks}
-            label="能力商店"
+            label="能力中心"
             strong
             active={location.pathname === '/abilities'}
             onClick={() => navigate('/abilities')}
@@ -1219,6 +1220,14 @@ export default function SessionList({
                 className="mt-3 flex h-9 w-full items-center justify-center rounded-lg bg-neutral-950 text-sm font-medium text-white transition hover:bg-neutral-800"
               >
                 编辑个人资料
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/profile?section=memory')}
+                className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-neutral-200 bg-white text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 hover:text-neutral-950"
+              >
+                <Brain className="h-4 w-4" />
+                Agent 记忆管理
               </button>
             </div>
           </div>

@@ -120,7 +120,6 @@ export default function CodingToolsPage() {
   const [activeToolId, setActiveToolId] = useState(defaults[0]!.id)
   const [checking, setChecking] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [copied, setCopied] = useState<string | null>(null)
   const [codexAuth, setCodexAuth] = useState<CodexAuthStatus | null>(null)
   const [authBusy, setAuthBusy] = useState(false)
   const [authMessage, setAuthMessage] = useState('')
@@ -206,8 +205,6 @@ export default function CodingToolsPage() {
     currentAgent?.runtimeType === 'code-agent' && currentAgent.codeAgentType
       ? `${currentAgent.id}:${currentAgent.codeAgentType}`
       : null
-  const envSnippet = buildEnvSnippet(activeTool)
-  const runCommand = buildRunCommand(activeTool)
   const installedCount = useMemo(
     () => tools.filter((tool) => statuses[tool.id]?.installed).length,
     [statuses, tools],
@@ -545,12 +542,6 @@ export default function CodingToolsPage() {
     }
   }
 
-  function copy(text: string, label: string) {
-    void navigator.clipboard?.writeText(text).catch(() => undefined)
-    setCopied(label)
-    window.setTimeout(() => setCopied(null), 1400)
-  }
-
   function showSaved() {
     setSaved(true)
     window.setTimeout(() => setSaved(false), 1600)
@@ -775,7 +766,7 @@ export default function CodingToolsPage() {
             )}
           </section>
 
-          <section className="mt-5 grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <section className="mt-5 grid items-start gap-5">
             <div className="rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -914,37 +905,6 @@ export default function CodingToolsPage() {
             </div>
 
             <aside className="space-y-4">
-              <div className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
-                <div className="text-sm font-semibold">{t('本机运行预览')}</div>
-                <p className="mt-2 text-xs leading-5 text-neutral-500">
-                  {t('Agent 会在工作区真实路径下启动，不再转换为容器内路径。')}
-                </p>
-                <div className="mt-4 text-xs font-medium text-neutral-600">
-                  {t('环境变量')}
-                </div>
-                <CodeBlock value={envSnippet} />
-                <button
-                  type="button"
-                  onClick={() => copy(envSnippet, '环境变量')}
-                  className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-neutral-200 text-sm hover:bg-neutral-50"
-                >
-                  <Copy className="h-4 w-4" />
-                  {t('复制环境变量')}
-                </button>
-                <div className="mt-4 text-xs font-medium text-neutral-600">
-                  {t('命令预览')}
-                </div>
-                <CodeBlock value={runCommand} />
-                <button
-                  type="button"
-                  onClick={() => copy(runCommand, '运行命令')}
-                  className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-neutral-200 text-sm hover:bg-neutral-50"
-                >
-                  <Copy className="h-4 w-4" />
-                  {t('复制命令')}
-                </button>
-              </div>
-
               {(cliMessage || cliOutput) && (
                 <div className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
                   <div className="text-sm font-semibold">{t('安装输出')}</div>
@@ -957,11 +917,9 @@ export default function CodingToolsPage() {
         </div>
       </main>
 
-      {(saved || copied) && (
+      {saved && (
         <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-md bg-neutral-950 px-4 py-2 text-sm text-white shadow-xl">
-          {copied
-            ? t('已复制项目').replace('{item}', t(copied))
-            : t('已保存配置')}
+          {t('已保存配置')}
         </div>
       )}
     </div>
@@ -1436,67 +1394,6 @@ function ToolIcon({ toolId, name }: { toolId: string; name: string }) {
       draggable={false}
     />
   )
-}
-
-function buildEnvSnippet(tool: ToolConfig) {
-  if (tool.id === 'codex') {
-    return '# Codex reads local ~/.codex/config.toml and auth.json\n# AgentHub only maintains Codex CLI parameters here; model binding is selected per Agent.'
-  }
-  if (tool.id === 'claude-code') {
-    return '# Claude Code runtime will receive ANTHROPIC_* env from the Agent-selected model entry at execution time.'
-  }
-  if (tool.id === 'opencode') {
-    return '# OpenCode uses its local config for diagnostics.\n# AgentHub injects the Agent-selected model/provider at execution time.'
-  }
-  if (tool.id === 'gemini') {
-    return '# Gemini CLI runtime will receive the Agent-selected Gemini model and credentials at execution time.'
-  }
-  return '# Model endpoints and credentials are managed in the model catalog and injected per Agent.'
-}
-
-function buildRunCommand(tool: ToolConfig) {
-  const cfg = tool.config ?? {}
-  if (tool.id === 'codex') {
-    const args = ['exec']
-    const sandbox = readToolConfigString(cfg, 'sandbox', '')
-    if (sandbox) args.push('--sandbox', sandbox)
-    if (readToolConfigString(cfg, 'approvalPolicy', 'never') === 'never') args.push('--full-auto')
-    const profile = readToolConfigString(cfg, 'profile', '')
-    if (profile) args.push('--profile', profile)
-    if (readToolConfigBoolean(cfg, 'searchEnabled', false)) args.push('--search')
-    if (readToolConfigBoolean(cfg, 'jsonOutput', false)) args.push('--json')
-    args.push('"<task>"')
-    return `${tool.command} ${args.join(' ')}`
-  }
-  if (tool.id === 'claude-code') {
-    const args = [
-      '-p',
-      '--permission-mode',
-      readToolConfigString(cfg, 'permissionMode', 'acceptEdits'),
-      '--output-format',
-      readToolConfigString(cfg, 'outputFormat', 'stream-json'),
-    ]
-    const maxTurns = readToolConfigString(cfg, 'maxTurns', '')
-    if (maxTurns) args.push('--max-turns', maxTurns)
-    const settings = readToolConfigString(cfg, 'settings', '')
-    if (settings) args.push('--settings', `"${settings}"`)
-    const addDirs = readToolConfigString(cfg, 'addDirs', '')
-    if (addDirs) args.push('--add-dir', `"${addDirs}"`)
-    args.push('"<task>"')
-    return `${tool.command} ${args.join(' ')}`
-  }
-  if (tool.id === 'opencode') {
-    const args = ['run']
-    const agent = readToolConfigString(cfg, 'agent', 'build')
-    if (agent) args.push('--agent', agent)
-    if (readToolConfigBoolean(cfg, 'skipPermissions', true)) args.push('--dangerously-skip-permissions')
-    args.push('"<task>"')
-    return `${tool.command} ${args.join(' ')}`
-  }
-  if (tool.id === 'gemini') {
-    return `${tool.command} -p "<task>"`
-  }
-  return `${tool.command} "<task>"`
 }
 
 function IconButton({

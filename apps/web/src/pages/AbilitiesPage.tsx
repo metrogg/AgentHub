@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AlertTriangle,
   Blocks,
@@ -36,6 +36,7 @@ import { cn } from '../lib/utils'
 type CapabilityKind = 'skill' | 'mcp' | 'rules' | 'cli' | 'sandbox' | 'context'
 type RiskLevel = 'low' | 'medium' | 'high'
 type KindFilter = CapabilityKind | 'all'
+type AbilitySandboxPolicy = SandboxPolicy | 'read-only'
 
 interface CapabilityCardData {
   id: string
@@ -81,6 +82,8 @@ export default function AbilitiesPage() {
   const [message, setMessage] = useState('')
   const [query, setQuery] = useState('')
   const [kindFilter, setKindFilter] = useState<KindFilter>('all')
+  const deferredQuery = useDeferredValue(query)
+  const deferredKindFilter = useDeferredValue(kindFilter)
 
   async function refresh() {
     setLoading(true)
@@ -96,7 +99,7 @@ export default function AbilitiesPage() {
       setSettingsInfo(settingsResult)
       setAgents(loadAgentLibrary())
     } catch (error: any) {
-      setMessage(error?.message || '读取能力库失败')
+      setMessage(error?.message || '读取能力中心失败')
     } finally {
       setLoading(false)
     }
@@ -122,9 +125,9 @@ export default function AbilitiesPage() {
   )
 
   const filteredCards = useMemo(() => {
-    const keyword = query.trim().toLowerCase()
+    const keyword = deferredQuery.trim().toLowerCase()
     return cards.filter((card) => {
-      const matchesKind = kindFilter === 'all' || card.kind === kindFilter
+      const matchesKind = deferredKindFilter === 'all' || card.kind === deferredKindFilter
       const matchesQuery =
         !keyword ||
         [
@@ -143,10 +146,12 @@ export default function AbilitiesPage() {
           .includes(keyword)
       return matchesKind && matchesQuery
     })
-  }, [cards, kindFilter, query])
+  }, [cards, deferredKindFilter, deferredQuery])
 
-  const enabledCount = cards.filter((card) => card.enabled).length
-  const highRiskCount = cards.filter((card) => card.risk === 'high').length
+  const enabledCount = useMemo(() => cards.filter((card) => card.enabled).length, [cards])
+  const highRiskCount = useMemo(() => cards.filter((card) => card.risk === 'high').length, [cards])
+  const filteringPending = deferredKindFilter !== kindFilter || deferredQuery !== query
+  const openCapabilityPath = useCallback((path: string) => navigate(path), [navigate])
 
   return (
     <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#f7f8f6] text-neutral-950">
@@ -157,7 +162,7 @@ export default function AbilitiesPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <Blocks className="h-4 w-4 text-emerald-700" />
-                <h1 className="truncate text-lg font-semibold tracking-normal">能力</h1>
+                <h1 className="truncate text-lg font-semibold tracking-normal">能力中心</h1>
               </div>
               <div className="mt-1 flex flex-wrap gap-2 text-xs text-neutral-500">
                 <span>{cards.length} 项能力</span>
@@ -172,7 +177,7 @@ export default function AbilitiesPage() {
                 className="inline-flex h-9 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50"
               >
                 <PackageCheck className="h-4 w-4" />
-                Skills
+                Skills 市场
               </button>
               <button
                 type="button"
@@ -214,6 +219,15 @@ export default function AbilitiesPage() {
                       {filter.label}
                     </button>
                   ))}
+                  <span
+                    aria-hidden={!filteringPending}
+                    className={cn(
+                      'grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-400 transition-opacity',
+                      filteringPending ? 'opacity-100' : 'opacity-0',
+                    )}
+                  >
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </span>
                 </div>
                 <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3">
                   <Search className="h-4 w-4 shrink-0 text-neutral-400" />
@@ -234,16 +248,17 @@ export default function AbilitiesPage() {
             )}
 
             {loading && cards.length === 0 ? (
-              <EmptyState icon={<Loader2 className="h-5 w-5 animate-spin" />} text="正在读取能力库" />
+              <EmptyState icon={<Loader2 className="h-5 w-5 animate-spin" />} text="正在读取能力中心" />
             ) : filteredCards.length === 0 ? (
               <EmptyState icon={<Search className="h-5 w-5" />} text="没有匹配的能力" />
             ) : (
               <section
-                className="grid gap-3"
-                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(21rem, 1fr))' }}
+                aria-busy={filteringPending}
+                className={cn('grid gap-3 transition-opacity duration-150', filteringPending && 'opacity-75')}
+                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(19rem, 1fr))' }}
               >
                 {filteredCards.map((card) => (
-                  <CapabilityCard key={`${card.kind}:${card.id}`} card={card} onOpen={navigate} />
+                  <CapabilityCard key={`${card.kind}:${card.id}`} card={card} onOpen={openCapabilityPath} />
                 ))}
               </section>
             )}
@@ -254,7 +269,7 @@ export default function AbilitiesPage() {
   )
 }
 
-function CapabilityCard({
+const CapabilityCard = memo(function CapabilityCard({
   card,
   onOpen,
 }: {
@@ -263,7 +278,7 @@ function CapabilityCard({
 }) {
   const Icon = kindIcon(card.kind)
   return (
-    <article className="flex min-h-[22rem] flex-col rounded-xl border border-neutral-200 bg-white p-4 shadow-sm transition hover:border-neutral-300">
+    <article className="flex min-h-[14rem] flex-col rounded-xl border border-neutral-200 bg-white p-4 shadow-sm transition hover:border-neutral-300">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <div className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl', kindTone(card.kind))}>
@@ -283,9 +298,6 @@ function CapabilityCard({
       </div>
 
       <InfoBlock label="能力说明" value={card.description} />
-      <ListBlock label="权限需求" values={card.permissions} />
-      <ListBlock label="适用 Agent" values={card.appliesTo.length ? card.appliesTo : ['未绑定']} />
-      <ListBlock label="示例任务" values={card.examples} />
 
       <div className="mt-auto space-y-2 pt-3">
         <div className="rounded-lg border border-neutral-100 bg-[#f8f8f5] px-3 py-2 text-xs leading-5">
@@ -307,7 +319,7 @@ function CapabilityCard({
       </div>
     </article>
   )
-}
+})
 
 function buildCapabilityCards({
   adapters,
@@ -337,8 +349,8 @@ function buildCapabilityCards({
       license: '按来源仓库或 SKILL.md 审计',
       enabled: boundAgents.length > 0,
       statusText: boundAgents.length > 0 ? `${boundAgents.length} 个 Agent` : '已安装未绑定',
-      actionLabel: '管理 Skills',
-      actionPath: '/skills',
+      actionLabel: '去 Skills 市场',
+      actionPath: `/skills?view=installed&skill=${encodeURIComponent(skill.id)}`,
     })
   }
 
@@ -424,7 +436,7 @@ function buildCapabilityCards({
     actionPath: '/coding-tools',
   })
 
-  const sandboxPolicies: SandboxPolicy[] = ['read-only', 'workspace-write', 'danger-full-access']
+  const sandboxPolicies: AbilitySandboxPolicy[] = ['read-only', 'workspace-write', 'danger-full-access']
   for (const policy of sandboxPolicies) {
     const boundAgents = agents.filter((agent) => agent.sandboxPolicy === policy)
     cards.push({
@@ -479,30 +491,6 @@ function InfoBlock({ label, value }: { label: string; value: string }) {
     <div className="mt-4">
       <div className="text-xs font-medium text-neutral-400">{label}</div>
       <p className="mt-1 line-clamp-3 text-sm leading-6 text-neutral-700">{value}</p>
-    </div>
-  )
-}
-
-function ListBlock({ label, values }: { label: string; values: string[] }) {
-  return (
-    <div className="mt-3">
-      <div className="text-xs font-medium text-neutral-400">{label}</div>
-      <div className="mt-1 flex flex-wrap gap-1.5">
-        {(values.length ? values : ['未配置']).slice(0, 5).map((value) => (
-          <span
-            key={value}
-            className="max-w-full truncate rounded-md bg-neutral-100 px-2 py-1 text-xs text-neutral-600"
-            title={value}
-          >
-            {value}
-          </span>
-        ))}
-        {values.length > 5 && (
-          <span className="rounded-md bg-neutral-100 px-2 py-1 text-xs text-neutral-400">
-            +{values.length - 5}
-          </span>
-        )}
-      </div>
     </div>
   )
 }
@@ -612,8 +600,8 @@ function codeAgentLabel(type: CodeAgentType) {
   return map[type]
 }
 
-function sandboxPolicyLabel(policy: SandboxPolicy) {
-  const map: Record<SandboxPolicy, string> = {
+function sandboxPolicyLabel(policy: AbilitySandboxPolicy) {
+  const map: Record<AbilitySandboxPolicy, string> = {
     'read-only': 'Read Only 沙箱',
     'workspace-write': 'Workspace Write 沙箱',
     'danger-full-access': 'Danger Full Access 沙箱',
@@ -621,20 +609,20 @@ function sandboxPolicyLabel(policy: SandboxPolicy) {
   return map[policy]
 }
 
-function sandboxPolicyDescription(policy: SandboxPolicy, settingsInfo: SettingsGeneralInfo | null) {
+function sandboxPolicyDescription(policy: AbilitySandboxPolicy, settingsInfo: SettingsGeneralInfo | null) {
   const provider = settingsInfo?.sandbox.configuredProvider || settingsInfo?.sandbox.defaultProvider || 'local'
   if (policy === 'read-only') return `只读执行策略，当前 Provider：${provider}。适合调研、审阅和信息整理。`
   if (policy === 'workspace-write') return `允许写入工作区内任务目录，当前 Provider：${provider}。适合实现和交付产物。`
   return `最高权限执行策略，当前 Provider：${provider}。仅适合明确可信的本机任务。`
 }
 
-function sandboxPolicyPermissions(policy: SandboxPolicy) {
+function sandboxPolicyPermissions(policy: AbilitySandboxPolicy) {
   if (policy === 'read-only') return ['读取工作区', '不主动写入项目文件']
   if (policy === 'workspace-write') return ['读取工作区', '写入任务工作目录', '生成 handoff / artifacts']
   return ['完整文件系统访问', 'shell 执行', '网络访问', '本机环境变量']
 }
 
-function sandboxPolicyExamples(policy: SandboxPolicy) {
+function sandboxPolicyExamples(policy: AbilitySandboxPolicy) {
   if (policy === 'read-only') return ['阅读代码并给出审阅意见', '梳理需求和风险']
   if (policy === 'workspace-write') return ['实现功能并保存产物', '运行构建并生成报告']
   return ['修复本机 CLI 配置', '执行需要完整本机权限的维护任务']

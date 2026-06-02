@@ -37,6 +37,7 @@ import { api, type Message, type MobileConnectivityStatus, type ModelCatalogItem
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
+import { messageStyleOptions, normalizeMessageStyleMode, normalizeMessageStyleSetting } from '../lib/messageStyle'
 import { getDesktopInfo, isDesktopApp, openPath, pickWorkspaceFolder } from '../lib/native'
 import { loadSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent } from '../lib/sessionArchive'
 import {
@@ -138,7 +139,7 @@ const defaultAppSettings: AppSettings = {
   theme: '浅色',
   accent: '黑色',
   fontSize: '14',
-  bubbleStyle: '简洁',
+  bubbleStyle: '气泡模式',
   personality: '温和理性',
   responseDepth: '自动',
   planBeforeAct: true,
@@ -229,7 +230,6 @@ const themeModes = ['跟随系统', '亮色', '暗色']
 const accentOptions = ['黑色', '蓝色', '绿色', '琥珀色']
 const fontOptions = ['默认', 'Aptos', 'Microsoft YaHei UI', 'Noto Sans SC', 'LXGW WenKai', 'JetBrains Mono', 'Cascadia Mono']
 const fontSizeOptions = ['13', '14', '15', '16', '18']
-const messageStyleOptions = ['紧凑', '简洁', '气泡']
 
 export default function SettingsPage() {
   const navigate = useNavigate()
@@ -277,6 +277,7 @@ export function SettingsSurface({
               ...defaultAppSettings,
               ...parsed,
               language: languageToSettingValue(normalizedLanguage),
+              bubbleStyle: normalizeMessageStyleSetting(parsed.bubbleStyle),
               shortcuts: normalizeShortcutBindings(parsed.shortcuts),
             })
           } catch {
@@ -2053,7 +2054,11 @@ function FontDisplayPanel({ settings, patchSettings }: { settings: AppSettings; 
             </div>
             <div>
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('消息样式')}</div>
-              <SegmentedControl value={settings.bubbleStyle} options={messageStyleOptions} onChange={(bubbleStyle) => patchSettings({ bubbleStyle })} />
+              <SegmentedControl
+                value={normalizeMessageStyleSetting(settings.bubbleStyle)}
+                options={messageStyleOptions}
+                onChange={(bubbleStyle) => patchSettings({ bubbleStyle: normalizeMessageStyleSetting(bubbleStyle) })}
+              />
             </div>
           </div>
 
@@ -2099,6 +2104,7 @@ function FontPreview({ settings }: { settings: AppSettings }) {
   const bodyFont = fontStack(settings.bodyFont, 'body')
   const codeFont = fontStack(settings.codeBlockFont, 'mono')
   const size = `${settings.fontSize}px`
+  const messageStyleMode = normalizeMessageStyleMode(settings.bubbleStyle)
   return (
     <div className="rounded-2xl border p-4" style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}>
       <div className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--settings-muted-text)' }}>{t('字体预览')}</div>
@@ -2111,9 +2117,18 @@ function FontPreview({ settings }: { settings: AppSettings }) {
           <div>const agent = "AgentHub"</div>
           <div>run(agent, workspace)</div>
         </div>
-        <div className={cn('mt-3 max-w-[85%] rounded-xl px-3 py-2 text-sm text-white', settings.bubbleStyle === '紧凑' ? 'rounded-md py-1.5' : settings.bubbleStyle === '气泡' ? 'rounded-2xl' : '')} style={{ background: accentColor(settings.accent), fontFamily: bodyFont }}>
-          {t('消息气泡预览')}
-        </div>
+        {messageStyleMode === 'flat' ? (
+          <div
+            className="mt-3 rounded-xl border px-3 py-2 text-sm"
+            style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)', fontFamily: bodyFont }}
+          >
+            {t('平铺消息预览')}
+          </div>
+        ) : (
+          <div className="mt-3 max-w-[85%] rounded-[18px] px-4 py-2 text-sm text-white" style={{ background: accentColor(settings.accent), fontFamily: bodyFont }}>
+            {t('消息气泡预览')}
+          </div>
+        )}
       </div>
     </div>
   )
