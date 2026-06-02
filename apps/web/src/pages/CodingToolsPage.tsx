@@ -210,7 +210,6 @@ export default function CodingToolsPage() {
   const [codexAuthFileMessage, setCodexAuthFileMessage] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [toolPage, setToolPage] = useState(0)
-  const [runPreviewOpen, setRunPreviewOpen] = useState(false)
   const [executionEnabled, setExecutionEnabled] = useState<boolean | null>(null)
   const [executionBusy, setExecutionBusy] = useState(false)
   const [focusedAgentToolKey, setFocusedAgentToolKey] = useState<string | null>(null)
@@ -288,8 +287,6 @@ export default function CodingToolsPage() {
       : null
   const selectedModel = models.find((model) => model.modelId === activeTool.modelId)
   const activeApiKey = apiKeyDrafts[activeTool.modelId] ?? selectedModel?.apiKey ?? ''
-  const envSnippet = buildEnvSnippet(activeTool)
-  const runCommand = buildRunCommand(activeTool)
   const modelOptions = useMemo(
     () =>
       buildModelOptions(
