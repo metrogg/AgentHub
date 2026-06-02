@@ -388,63 +388,6 @@ export interface CodingToolsStartupLifecycleResult {
   settingsChanged: boolean
 }
 
-export interface SettingsGeneralInfo {
-  debug: {
-    enabled: boolean
-    dir: string
-    logLevel: string
-    exists: boolean
-    sizeBytes: number
-    sizeLabel: string
-  }
-  storage: {
-    appDataDir: string
-    configDir: string
-    logDir: string
-    activeDataDir: string
-    dataPath: string
-    workspaceStorageRoot: string
-    workspaceStorageExists: boolean
-    workspaceStorageSizeBytes: number
-    workspaceStorageSizeLabel: string
-    databasePath: string
-    migrationPending: boolean
-    exists: boolean
-    sizeBytes: number
-    sizeLabel: string
-    databaseSizeBytes: number
-    databaseSizeLabel: string
-    scannedFiles: number
-    truncated: boolean
-    message: string
-  }
-  git: { runtime: string; path: string; ok: boolean; message: string }
-  python: { runtime: string; path: string; ok: boolean; message: string }
-  sandbox: {
-    defaultProvider: string
-    configuredProvider: string
-    cleanupMode: string
-    sandboxRoot: string
-    dockerSandbox: {
-      agent: string
-      available: boolean
-      probe: {
-        version?: string
-        exitCode: number
-        installed?: boolean
-        daemonReady?: boolean
-        message?: string
-      }
-      policy?: {
-        configured: boolean
-        authenticated: boolean
-        message: string
-        recommendedCommand?: string
-      } | null
-    }
-  }
-}
-
 export interface OpencodeModelItem {
   id: string
   provider: string
@@ -591,6 +534,13 @@ export interface SettingsGeneralInfo {
   sandbox: {
     defaultProvider: string
     configuredProvider: string
+    providerConfigured: boolean
+    sbxInstalled: boolean
+    daemonReady: boolean
+    dockerLoggedIn: boolean
+    policyConfigured: boolean
+    sandboxRunnable: boolean
+    supportsPerAgentIsolation: boolean
     cleanupMode: string
     sandboxRoot: string
     dockerSandbox: {

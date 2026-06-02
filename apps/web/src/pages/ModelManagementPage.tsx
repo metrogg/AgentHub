@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING } from '@agenthub/shared'
 import { CheckCircle2, Download, Loader2, PanelLeft, Plus, SlidersHorizontal, X } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
 import { api, type CcswitchModel } from '../lib/api'
@@ -84,7 +85,14 @@ export default function ModelManagementPage() {
           }
         }
         setModels(nextModels)
-        setActiveModelId(resolveActiveModelId(nextModels, settings.ACTIVE_MODEL_ID ?? settings.MODEL_PROVIDER))
+        setActiveModelId(
+          resolveActiveModelId(
+            nextModels,
+            settings[INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING] ??
+              settings.ACTIVE_MODEL_ID ??
+              settings.MODEL_PROVIDER,
+          ),
+        )
       })
       .finally(() => setLoading(false))
   }, [])
@@ -97,7 +105,7 @@ export default function ModelManagementPage() {
       void api
         .saveSettings({
           MODEL_CATALOG: JSON.stringify(models),
-          ACTIVE_MODEL_ID: selected?.id ?? '',
+          [INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING]: selected?.id ?? '',
         })
         .then(() => {
           window.dispatchEvent(new Event(settingsUpdatedEvent))
@@ -198,7 +206,7 @@ export default function ModelManagementPage() {
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">{t('模型管理')}</h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-600">
-                {t('管理可用模型、API 端点、密钥变量和连接测试状态。')}
+                {t('管理可用模型、双端点地址、密钥变量和连接测试状态。这里维护的是模型目录，不负责给具体 Agent 选组合。')}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -300,6 +308,14 @@ function ModelManagement({
         <Stat value={testedCount} label="已测试连接" />
       </div>
 
+      <div className="mb-4 rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-600 shadow-sm">
+        <div className="font-medium text-neutral-800">内部 LLM 默认模型</div>
+        <div className="mt-1 leading-6">
+          当前选中的模型会作为欢迎页动态提示、Orchestrator / Planner / Synthesizer 等内部模型调用的默认值。
+          具体专家使用哪个 CLI 基底和哪条模型，请到 Agent 配置页单独选择。
+        </div>
+      </div>
+
       {/* Mobile: card layout */}
       <div className="space-y-2 md:hidden">
         {models.map((item) => (
@@ -393,7 +409,7 @@ function ModelManagement({
       </div>
 
       <p className="mt-4 text-xs text-neutral-400">
-        {t('提示：模型变更会自动保存，并作为 Agent 配置和 Coding Tools 的可选模型来源。')}
+        {t('提示：这里选中的默认项只作为内部 LLM 默认模型，用于欢迎页、Orchestrator/Planner/Synthesizer 等内部模型调用；具体 Agent 的 CLI × 模型组合请在 Agent 配置页设置。')}
       </p>
     </div>
   )

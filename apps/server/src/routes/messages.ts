@@ -996,7 +996,7 @@ function toAgentProfile(
 function applySafetyMode(profile: AgentRunProfile, mode: string): AgentRunProfile {
   switch (mode) {
     case 'read-only':
-      return { ...profile, sandboxPolicy: 'read-only', approvalRequired: true }
+      return { ...profile, sandboxPolicy: 'workspace-write', approvalRequired: true }
     case 'full-access':
       return { ...profile, sandboxPolicy: 'workspace-write', approvalRequired: false }
     case 'ask':
@@ -1011,7 +1011,7 @@ function toCoordinatorProfile(
 ): AgentRunProfile {
   return {
     ...buildAgentProfile(agent, projectPath),
-    sandboxPolicy: 'read-only',
+    sandboxPolicy: 'workspace-write',
     toolPermissions: ['chat', 'workspace:read'],
     approvalRequired: false,
   }
@@ -1448,7 +1448,10 @@ async function startPlanRunInExistingGroup(params: {
         codeAgentType: dbAgent?.codeAgentType ?? a.codeAgentType ?? undefined,
         capabilityTags: dbAgent?.capabilityTags ?? a.capabilityTags ?? [],
         toolPermissions: dbAgent?.toolPermissions ?? a.toolPermissions ?? [],
-        sandboxPolicy: dbAgent?.sandboxPolicy ?? a.sandboxPolicy ?? 'workspace-write',
+        sandboxPolicy:
+          (dbAgent?.sandboxPolicy ?? a.sandboxPolicy) === 'danger-full-access'
+            ? 'danger-full-access'
+            : 'workspace-write',
       }
     }),
     tasks: plan.tasks.map((t) => ({

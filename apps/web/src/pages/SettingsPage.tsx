@@ -1,4 +1,5 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
+import { INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING } from '@agenthub/shared'
 import { useNavigate } from 'react-router-dom'
 import QRCode from 'qrcode'
 import {
@@ -32,7 +33,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, type Message, type MobileConnectivityStatus, type Session, type SettingsGeneralInfo } from '../lib/api'
+import { api, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
@@ -444,6 +445,8 @@ function SettingsContent({
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [actionMessage, setActionMessage] = useState('')
   const [generalInfo, setGeneralInfo] = useState<SettingsGeneralInfo | null>(null)
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogItem[]>([])
+  const [internalDefaultModelId, setInternalDefaultModelId] = useState('')
 
   function patchLanguage(value: string) {
     const next = normalizeLanguage(value)
@@ -451,14 +454,34 @@ function SettingsContent({
     patchSettings({ language: languageToSettingValue(next) })
   }
 
+  function safeHydrateInternalModel(
+    settingsMap: Record<string, string>,
+    info: SettingsGeneralInfo | null,
+  ) {
+    const parsedModels = settingsMap.MODEL_CATALOG
+      ? safeParseModelCatalog(settingsMap.MODEL_CATALOG)
+      : []
+    setModelCatalog(parsedModels.filter((item) => item.enabled))
+    setInternalDefaultModelId(
+      settingsMap[INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING] ??
+        settingsMap.ACTIVE_MODEL_ID ??
+        '',
+    )
+    if (info) setGeneralInfo(info)
+  }
+
   useEffect(() => {
     if (section !== '通用') return
     let cancelled = false
     async function hydrateGeneralInfo() {
       try {
-        const [info, desktopInfo] = await Promise.all([api.getSettingsGeneralInfo().catch(() => null), getDesktopInfo().catch(() => null)])
+        const [info, desktopInfo, settingsMap] = await Promise.all([
+          api.getSettingsGeneralInfo().catch(() => null),
+          getDesktopInfo().catch(() => null),
+          api.getSettings().catch(() => ({} as Record<string, string>)),
+        ])
         if (cancelled) return
-        if (info) setGeneralInfo(info)
+        safeHydrateInternalModel(settingsMap, info)
         const patch: Partial<AppSettings> = {}
         if (info?.git) {
           patch.gitRuntime = info.git.runtime
@@ -484,6 +507,15 @@ function SettingsContent({
       cancelled = true
     }
   }, [section, settings.dataPath])
+
+  async function patchInternalDefaultModel(nextModelId: string) {
+    setInternalDefaultModelId(nextModelId)
+    await api.saveSettings({
+      [INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING]: nextModelId,
+    })
+    window.dispatchEvent(new Event(settingsUpdatedEvent))
+    showActionMessage(t('内部 LLM 默认模型已更新'))
+  }
 
   function showActionMessage(message: string) {
     setActionMessage(message)
@@ -657,6 +689,53 @@ function SettingsContent({
           {actionMessage && <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-600 shadow-sm">{actionMessage}</div>}
           <SettingsSection title="界面语言" desc="切换界面显示语言">
             <SegmentedControl value={languageToSettingValue(normalizeLanguage(settings.language))} options={['中文', 'English']} onChange={patchLanguage} />
+          </SettingsSection>
+          <SettingsSection
+            title="内部 LLM 默认模型"
+            desc="只影响欢迎页动态提示、Orchestrator / Planner / Synthesizer 等内部模型调用，不决定具体专家的 CLI × 模型组合。"
+          >
+            <InsetPanel>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <StatusPill
+                  ok={Boolean(internalDefaultModelId)}
+                  label={internalDefaultModelId ? '已指定内部默认模型' : '未指定，仍会兼容旧默认值'}
+                />
+                <button
+                  type="button"
+                  disabled={busyAction === 'internal-model'}
+                  onClick={() => void runAction('internal-model', refreshGeneralInfo)}
+                  className="settings-soft-button"
+                >
+                  {t('刷新状态')}
+                </button>
+              </div>
+              <InfoRow
+                label="当前模型"
+                value={
+                  (modelCatalog.find((item) => item.id === internalDefaultModelId || item.modelId === internalDefaultModelId)?.name ??
+                    internalDefaultModelId) ||
+                  t('未设置')
+                }
+              />
+              <label className="block text-sm">
+                <span className="mb-2 block text-neutral-600">{t('从模型目录中选择')}</span>
+                <select
+                  value={internalDefaultModelId}
+                  onChange={(event) =>
+                    void runAction('internal-model', () => patchInternalDefaultModel(event.target.value))
+                  }
+                  className="h-10 w-full rounded-xl border border-neutral-200 bg-white px-3 outline-none focus:border-neutral-400"
+                >
+                  <option value="">{t('未设置')}</option>
+                  {modelCatalog.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.modelId})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Notice>{t('具体专家的 Code Agent × 模型 × Skills × 沙箱组合，请在 Agent 配置页完成；Coding Tools 页只检查 CLI 平台是否可用。')}</Notice>
+            </InsetPanel>
           </SettingsSection>
           <SettingsSection title="移动端扫码连接" desc="让手机在同一局域网内扫码连接这台电脑的 AgentHub。二维码 2 分钟有效，用后即失效。">
             <MobilePairingPanel />
@@ -2180,15 +2259,15 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const backendCount = logs.filter((row) => row.source === '后端').length
   const sandbox = generalInfo?.sandbox
   const sandboxPolicyCommand = sandbox?.dockerSandbox.policy?.recommendedCommand ?? 'sbx policy set-default balanced'
-  const sandboxOk = sandbox?.configuredProvider === 'docker-sandbox' && Boolean(sandbox?.dockerSandbox.available)
-  const sandboxPolicyConfigured = sandbox?.dockerSandbox.policy?.configured ?? false
-  const sandboxAuthenticated = sandbox?.dockerSandbox.policy?.authenticated ?? false
+  const sandboxOk = Boolean(sandbox?.sandboxRunnable)
   const sandboxSetupReason = sandbox
-    ? !sandbox.dockerSandbox.probe.daemonReady
+    ? !sandbox.sbxInstalled
+      ? '你现在还没有安装 sbx CLI，所以还不能创建 Docker Sandboxes。'
+      : !sandbox.daemonReady
       ? '你现在已经安装了 sbx CLI，但后台 daemon 没启动，所以隔离任务会在开始前被拦住。'
-      : !sandboxAuthenticated
+      : !sandbox.dockerLoggedIn
         ? 'Docker Sandboxes daemon 已启动，但 Docker 账号还没有登录，所以无法创建沙箱。'
-      : !sandboxPolicyConfigured
+      : !sandbox.policyConfigured
         ? 'Docker Sandboxes daemon 已启动，但还没有配置默认网络策略，所以创建沙箱会被拒绝。'
         : 'Docker Sandboxes 还没有完成初始化。'
     : '正在读取 Docker Sandboxes 状态。'
@@ -2196,18 +2275,25 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     ? sandboxOk
       ? 'Docker Sandboxes 可用'
       : sandbox.configuredProvider === 'docker-sandbox'
-        ? sandboxAuthenticated
-          ? 'Docker Sandboxes 未就绪'
-          : 'Docker 账号未登录'
+        ? !sandbox.sbxInstalled
+          ? 'sbx CLI 未安装'
+          : !sandbox.daemonReady
+            ? 'daemon 未启动'
+            : !sandbox.dockerLoggedIn
+              ? 'Docker 账号未登录'
+              : !sandbox.policyConfigured
+                ? '默认网络策略未配置'
+                : 'Docker Sandboxes 未就绪'
         : `当前为 ${sandbox.configuredProvider}`
     : '等待刷新'
   const sandboxDetail = sandbox
     ? [
         `默认 ${sandbox.defaultProvider}`,
         `清理 ${sandbox.cleanupMode}`,
+        sandbox.supportsPerAgentIsolation ? '支持每 Agent 独立隔离' : '隔离能力不足',
         sandbox.dockerSandbox.probe.message
           ? sandbox.dockerSandbox.probe.message
-          : sandbox.dockerSandbox.policy && !sandbox.dockerSandbox.policy.configured
+          : sandbox.dockerSandbox.policy && !sandbox.policyConfigured
             ? sandbox.dockerSandbox.policy.message
             : sandbox.dockerSandbox.probe.version || `探测退出码 ${sandbox.dockerSandbox.probe.exitCode}`,
       ].join(' · ')
@@ -2248,7 +2334,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Info',
         source: '后端',
         module: 'settings/general-info',
-        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.dockerSandbox.available ? 'ok' : 'missing'}`,
+        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}`,
       })
       if (visible) showNotice(t('诊断信息已刷新'))
     } catch (error: any) {
@@ -2641,6 +2727,15 @@ function parentDirectory(path: string | undefined) {
   const normalized = path.replace(/[\\/]+$/, '')
   const index = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'))
   return index > 0 ? normalized.slice(0, index) : normalized
+}
+
+function safeParseModelCatalog(raw: string): ModelCatalogItem[] {
+  try {
+    const parsed = JSON.parse(raw) as ModelCatalogItem[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
 }
 
 function sectionDescription(section: SectionKey) {

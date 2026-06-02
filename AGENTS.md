@@ -32,6 +32,14 @@ AgentHub 是一个 IM 式多 Agent 协作平台，也是字节跳动 AI 全栈�
 - 能力层：MCP、Skills、Rules、shell、文件系统、浏览器等是 Code Agent 能使用的工具能力，不是 Agent 类型。
 - 工作区与状态层：系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/handoff`、blackboard、execution logs、run events。
 
+配置真相也要分层：
+
+- `模型管理`：模型目录、端点、密钥、模型测试。
+- `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
+- `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
+
+`内部 LLM 默认模型` 必须保持可见，且只作用于欢迎页动态提示、Orchestrator、Planner、Synthesizer 等内部模型链路。
+
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：用 IM 产品体验承载多 Coding Agent 协作，用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
 ## 关键交互边界
@@ -136,6 +144,7 @@ Agent 之间的任务分发统一以 A2A v0.3 `message/send` 为内部通信标�
 - CLI 可能已经生成了部分文件，但最后因为构建、验证、模型或 Base URL 失败而返回失败状态。此时要显示“部分产物已保留”，不要说“没有任何产物”。
 - `AGENTHUB_CODE_AGENT_TIMEOUT_MS` 默认建议为 `600000`，即十分钟。
 - MCP、Skills、Rules 是 Code Agent 的能力层，不是独立 runtimeType。
+- Code Agent 的用户可选沙箱只保留 `workspace-write` 和 `danger-full-access`；不要再恢复 `read-only` 作为公开 code-agent 配置项。
 
 “支持用户自建 Agent”指的是用户在这些 Coding Agent 基底上创建专家角色：设置名称、角色说明、系统提示词、工具权限、Skills/MCP 能力、沙箱策略和上下文策略。不要把它理解成新增一个普通 LLM 类型的聊天机器人。
 

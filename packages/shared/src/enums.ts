@@ -5,7 +5,6 @@ export const RuntimeType = {
 export type RuntimeType = (typeof RuntimeType)[keyof typeof RuntimeType]
 
 export const SandboxPolicy = {
-  ReadOnly: 'read-only',
   WorkspaceWrite: 'workspace-write',
   DangerFullAccess: 'danger-full-access',
 } as const

@@ -33,7 +33,7 @@ function sharedPresetToFrontend(key: Exclude<AgentRoleType, 'custom'>): AgentRol
     codeAgentType: p.codeAgentType ?? null,
     capabilityTags: p.capabilityTags,
     toolPermissions: p.toolPermissions,
-    sandboxPolicy: p.sandboxPolicy,
+    sandboxPolicy: p.sandboxPolicy === 'danger-full-access' ? 'danger-full-access' : 'workspace-write',
     contextPolicy: p.contextPolicy,
     autoInvoke: p.autoInvoke,
     approvalRequired: p.approvalRequired,

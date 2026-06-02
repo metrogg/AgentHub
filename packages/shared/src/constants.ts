@@ -3,6 +3,7 @@ export const APP_VERSION = '0.1.0'
 
 export const API_BASE_PATH = '/api'
 export const WS_BASE_PATH = '/ws'
+export const INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING = 'INTERNAL_LLM_DEFAULT_MODEL_ID'
 
 export const SenderType = {
   User: 'user',
