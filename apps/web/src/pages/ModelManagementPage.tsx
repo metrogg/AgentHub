@@ -190,9 +190,6 @@ export default function ModelManagementPage() {
                 {t('模型目录')}
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">{t('模型管理')}</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-600">
-                {t('管理可用模型、双端点地址、密钥变量和连接测试状态。这里维护的是模型目录，不负责给具体 Agent 选组合。')}
-              </p>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -284,14 +281,6 @@ function ModelManagement({
         <Stat value={enabledCount} label="已启用" />
         <Stat value={configuredCount} label="API Key 已配置" />
         <Stat value={testedCount} label="已测试连接" />
-      </div>
-
-      <div className="mb-4 rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-600 shadow-sm">
-        <div className="font-medium text-neutral-800">模型目录职责</div>
-        <div className="mt-1 leading-6">
-          这里仅维护模型条目、端点、密钥变量和连通性测试，不负责选择默认模型，也不负责给专家装配
-          CLI × 模型组合。内部 LLM 默认模型请到「设置 / 通用」修改，具体专家的组合请到「Agent 配置」设置。
-        </div>
       </div>
 
       {/* Mobile: card layout */}

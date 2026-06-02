@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Camera, CheckCircle2, Loader2, UserCircle } from 'lucide-react'
+import { useLocation } from 'react-router-dom'
 import SessionList from '../components/chat/SessionList'
 import { api } from '../lib/api'
 import { cacheAccountProfileFromProfile, getCachedAccountProfile } from '../lib/accountProfile'
@@ -19,6 +20,7 @@ const defaultProfile: ProfileSettings = {
 }
 
 export default function ProfilePage() {
+  const location = useLocation()
   const [profile, setProfile] = useState<ProfileSettings>(() => {
     const cached = getCachedAccountProfile()
     return { ...defaultProfile, accountName: cached.name, accountAvatar: cached.avatar }
@@ -28,6 +30,8 @@ export default function ProfilePage() {
   const [saved, setSaved] = useState(false)
   const saveTimer = useRef<number | null>(null)
   const mountedRef = useRef(false)
+  const memorySectionRef = useRef<HTMLElement | null>(null)
+  const memoryTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const rawSettingsRef = useRef<Record<string, unknown>>({})
   const latestProfileRef = useRef<ProfileSettings>(defaultProfile)
 
@@ -62,6 +66,22 @@ export default function ProfilePage() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    if (params.get('section') !== 'memory') return
+
+    const timer = window.setTimeout(() => {
+      memorySectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      try {
+        memoryTextareaRef.current?.focus({ preventScroll: true })
+      } catch {
+        memoryTextareaRef.current?.focus()
+      }
+    }, 80)
+
+    return () => window.clearTimeout(timer)
+  }, [location.search])
 
   function updateProfile(patch: Partial<ProfileSettings>) {
     setProfile((current) => {
@@ -155,7 +175,6 @@ export default function ProfilePage() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h1 className="text-xl font-semibold tracking-normal">个人资料</h1>
-                    <p className="mt-1 text-sm text-neutral-500">这些信息会作为 USER.md 风格的长期偏好提供给 Agent。</p>
                   </div>
                   <StatusBadge loading={loading || saving} saved={saved} />
                 </div>
@@ -174,7 +193,11 @@ export default function ProfilePage() {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+          <section
+            id="agent-memory"
+            ref={memorySectionRef}
+            className="scroll-mt-6 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm"
+          >
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-base font-semibold tracking-normal">希望 Agent 记住</h2>
@@ -185,6 +208,7 @@ export default function ProfilePage() {
               </span>
             </div>
             <textarea
+              ref={memoryTextareaRef}
               value={profile.accountMemory}
               onChange={(event) => updateProfile({ accountMemory: event.target.value })}
               className="mt-4 min-h-[260px] w-full resize-y rounded-xl border border-neutral-200 bg-[#fafaf7] p-4 text-sm leading-6 text-neutral-950 outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"

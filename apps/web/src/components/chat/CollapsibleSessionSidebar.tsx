@@ -1,6 +1,7 @@
 import SessionList from './SessionList'
 
 const sessionSidebarWidth = 340
+const sessionDockWidth = 68
 
 export default function CollapsibleSessionSidebar({
   collapsed,
@@ -11,23 +12,19 @@ export default function CollapsibleSessionSidebar({
 }) {
   return (
     <div
-      aria-hidden={collapsed}
       className="h-full shrink-0 overflow-hidden"
       style={{
-        width: collapsed ? 0 : sessionSidebarWidth,
+        width: collapsed ? sessionDockWidth : sessionSidebarWidth,
         transition: 'width 300ms cubic-bezier(0.4,0,0.2,1)',
       }}
     >
       <div
-        className={[
-          'h-full w-[340px] transform-gpu will-change-transform',
-          collapsed ? 'pointer-events-none -translate-x-full opacity-0' : 'translate-x-0 opacity-100',
-        ].join(' ')}
-        style={{
-          transition: 'opacity 300ms cubic-bezier(0.4,0,0.2,1), transform 300ms cubic-bezier(0.4,0,0.2,1)',
-        }}
+        className="h-full w-[340px] transform-gpu will-change-transform"
       >
-        <SessionList onCollapse={onCollapsedChange ? () => onCollapsedChange(!collapsed) : undefined} />
+        <SessionList
+          collapsed={collapsed}
+          onCollapse={onCollapsedChange ? () => onCollapsedChange(!collapsed) : undefined}
+        />
       </div>
     </div>
   )

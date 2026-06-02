@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, stat } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -9,6 +9,7 @@ import {
   agents,
   blackboardEntries,
   db,
+  desc,
   eq,
   executionLogs,
   messages,
@@ -29,7 +30,7 @@ import {
 } from '@agenthub/db'
 import { env } from '../env'
 import { AppError, AppErrorCodes } from '../lib/error'
-import { logger } from '../lib/logger'
+import { logger, serverFileLoggingEnabled, serverLogDir, serverLogPath } from '../lib/logger'
 import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/auth'
 import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
@@ -69,7 +70,6 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
     const appSettings = parseAppSettings(map.APP_SETTINGS)
     const appDataDir = resolve(env.AGENTHUB_APP_DATA_DIR?.trim() || process.cwd())
     const configDir = env.AGENTHUB_CONFIG_DIR?.trim() || appDataDir
-    const logDir = env.AGENTHUB_LOG_DIR?.trim() || join(appDataDir, 'logs')
     const databasePath = resolve(env.DATABASE_URL)
     const activeDataDir = dirname(databasePath)
     const dataPath = appSettings.dataPath?.trim() || activeDataDir
@@ -97,7 +97,7 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       storage: {
         appDataDir,
         configDir,
-        logDir,
+        logDir: serverLogDir,
         activeDataDir,
         dataPath,
         workspaceStorageRoot,
@@ -118,6 +118,65 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       sandbox,
       git,
       python,
+    })
+  })
+  .get('/console-logs', async (c) => {
+    const user = c.get('user')
+    const limitParam = Number(c.req.query('limit') ?? 120)
+    const limit = Number.isFinite(limitParam) ? Math.min(Math.max(Math.trunc(limitParam), 20), 300) : 120
+    const [serverLogRows, traceRows, eventRows] = await Promise.all([
+      readServerConsoleLogRows(serverLogPath, Math.ceil(limit / 3)),
+      db
+        .select({
+          id: executionLogs.id,
+          createdAt: executionLogs.createdAt,
+          agentId: executionLogs.agentId,
+          taskId: executionLogs.taskId,
+          type: executionLogs.type,
+          input: executionLogs.input,
+          output: executionLogs.output,
+          durationMs: executionLogs.durationMs,
+        })
+        .from(executionLogs)
+        .innerJoin(orchestratorRuns, eq(executionLogs.runId, orchestratorRuns.id))
+        .innerJoin(workspaces, eq(orchestratorRuns.workspaceId, workspaces.id))
+        .where(eq(workspaces.ownerId, user.sub))
+        .orderBy(desc(executionLogs.createdAt))
+        .limit(Math.ceil(limit / 3)),
+      db
+        .select({
+          id: orchestratorRunEvents.id,
+          createdAt: orchestratorRunEvents.createdAt,
+          type: orchestratorRunEvents.type,
+          severity: orchestratorRunEvents.severity,
+          agentId: orchestratorRunEvents.agentId,
+          taskId: orchestratorRunEvents.taskId,
+          payload: orchestratorRunEvents.payload,
+        })
+        .from(orchestratorRunEvents)
+        .innerJoin(workspaces, eq(orchestratorRunEvents.workspaceId, workspaces.id))
+        .where(eq(workspaces.ownerId, user.sub))
+        .orderBy(desc(orchestratorRunEvents.createdAt))
+        .limit(Math.ceil(limit / 3)),
+    ])
+
+    const items = [
+      ...serverLogRows,
+      ...traceRows.map((row) => executionTraceToConsoleRow(row)),
+      ...eventRows.map((row) => runEventToConsoleRow(row)),
+    ]
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      .slice(0, limit)
+
+    return c.json({
+      items,
+      sources: {
+        serverLogPath,
+        serverLogExists: existsSync(serverLogPath),
+        serverLogEnabled: serverFileLoggingEnabled,
+        executionTraceCount: traceRows.length,
+        runEventCount: eventRows.length,
+      },
     })
   })
   .post('/sandbox/docker/setup', async (c) => {
@@ -242,6 +301,182 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ models: [] })
     }
   })
+
+type ConsoleLogLevel = 'Trace' | 'Debug' | 'Info' | 'Warn' | 'Error'
+type ConsoleLogSource = '后端' | '前端' | 'Agent' | '桌面端'
+
+interface ConsoleLogRow {
+  id: string
+  time: string
+  createdAt: string
+  level: ConsoleLogLevel
+  source: ConsoleLogSource
+  module: string
+  content: string
+}
+
+async function readServerConsoleLogRows(filePath: string, limit: number): Promise<ConsoleLogRow[]> {
+  if (!existsSync(filePath)) return []
+  try {
+    const content = await readFile(filePath, 'utf8')
+    const lines = content
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-Math.max(limit * 2, limit))
+
+    return lines
+      .map((line, index) => pinoLineToConsoleRow(line, `${filePath}:${index}`))
+      .filter((row): row is ConsoleLogRow => Boolean(row))
+      .slice(-limit)
+  } catch (error: any) {
+    return [{
+      id: `server-log-read-error-${Date.now()}`,
+      time: formatConsoleTime(new Date()),
+      createdAt: new Date().toISOString(),
+      level: 'Error',
+      source: '后端',
+      module: 'settings/console-logs',
+      content: `读取后端日志失败：${error?.message || String(error)}`,
+    }]
+  }
+}
+
+function pinoLineToConsoleRow(line: string, fallbackId: string): ConsoleLogRow | null {
+  try {
+    const payload = JSON.parse(line) as Record<string, unknown>
+    const date = typeof payload.time === 'number'
+      ? new Date(payload.time)
+      : typeof payload.time === 'string'
+        ? new Date(payload.time)
+        : new Date()
+    const msg = typeof payload.msg === 'string' ? payload.msg : line
+    const module = typeof payload.module === 'string'
+      ? payload.module
+      : typeof payload.requestId === 'string'
+        ? `request:${payload.requestId}`
+        : 'server'
+    const extra = summarizeObject(payload, ['time', 'level', 'msg', 'pid', 'hostname'])
+    return {
+      id: `server-${date.getTime()}-${String(payload.requestId ?? fallbackId)}`,
+      time: formatConsoleTime(date),
+      createdAt: date.toISOString(),
+      level: pinoLevelToConsoleLevel(payload.level),
+      source: '后端',
+      module,
+      content: extra ? `${msg} · ${extra}` : msg,
+    }
+  } catch {
+    const date = new Date()
+    return {
+      id: `server-raw-${date.getTime()}-${fallbackId}`,
+      time: formatConsoleTime(date),
+      createdAt: date.toISOString(),
+      level: 'Info',
+      source: '后端',
+      module: 'server',
+      content: line,
+    }
+  }
+}
+
+function executionTraceToConsoleRow(row: {
+  id: string
+  createdAt: Date
+  agentId: string
+  taskId: string | null
+  type: string
+  input: unknown
+  output: unknown
+  durationMs: number | null
+}): ConsoleLogRow {
+  const date = new Date(row.createdAt)
+  const duration = row.durationMs != null ? ` · ${row.durationMs}ms` : ''
+  const task = row.taskId ? ` · task=${row.taskId}` : ''
+  return {
+    id: `trace-${row.id}`,
+    time: formatConsoleTime(date),
+    createdAt: date.toISOString(),
+    level: row.type === 'error' ? 'Error' : 'Debug',
+    source: 'Agent',
+    module: row.type,
+    content: `agent=${row.agentId}${task}${duration} · ${summarizeTracePayload(row.input, row.output)}`,
+  }
+}
+
+function runEventToConsoleRow(row: {
+  id: string
+  createdAt: Date
+  type: string
+  severity: string
+  agentId: string | null
+  taskId: string | null
+  payload: Record<string, unknown>
+}): ConsoleLogRow {
+  const date = new Date(row.createdAt)
+  const parts = [
+    row.agentId ? `agent=${row.agentId}` : '',
+    row.taskId ? `task=${row.taskId}` : '',
+    summarizeObject(row.payload),
+  ].filter(Boolean)
+  return {
+    id: `event-${row.id}`,
+    time: formatConsoleTime(date),
+    createdAt: date.toISOString(),
+    level: runSeverityToConsoleLevel(row.severity),
+    source: 'Agent',
+    module: row.type,
+    content: parts.join(' · ') || row.type,
+  }
+}
+
+function pinoLevelToConsoleLevel(level: unknown): ConsoleLogLevel {
+  const value = Number(level)
+  if (value >= 50) return 'Error'
+  if (value >= 40) return 'Warn'
+  if (value >= 30) return 'Info'
+  if (value >= 20) return 'Debug'
+  return 'Trace'
+}
+
+function runSeverityToConsoleLevel(severity: string): ConsoleLogLevel {
+  if (severity === 'error') return 'Error'
+  if (severity === 'warning') return 'Warn'
+  if (severity === 'debug') return 'Debug'
+  return 'Info'
+}
+
+function summarizeTracePayload(input: unknown, output: unknown): string {
+  const inputText = summarizeValue(input)
+  const outputText = summarizeValue(output)
+  return [
+    inputText ? `input=${inputText}` : '',
+    outputText ? `output=${outputText}` : '',
+  ].filter(Boolean).join(' · ') || '无详细载荷'
+}
+
+function summarizeObject(value: Record<string, unknown>, omit: string[] = []): string {
+  return Object.entries(value)
+    .filter(([key, item]) => !omit.includes(key) && item !== undefined && item !== null && item !== '')
+    .slice(0, 8)
+    .map(([key, item]) => `${key}=${summarizeValue(item)}`)
+    .join(' ')
+}
+
+function summarizeValue(value: unknown): string {
+  if (value == null) return ''
+  if (typeof value === 'string') return value.length > 180 ? `${value.slice(0, 180)}...` : value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    const json = JSON.stringify(value)
+    return json.length > 180 ? `${json.slice(0, 180)}...` : json
+  } catch {
+    return String(value)
+  }
+}
+
+function formatConsoleTime(date: Date): string {
+  return date.toLocaleTimeString('zh-CN', { hour12: false })
+}
 
 function inferOpenAiEndpointFromAnthropicBaseUrl(value: string) {
   const trimmed = value.trim()

@@ -429,6 +429,91 @@ export interface CodingToolsStartupLifecycleResult {
   settingsChanged: boolean
 }
 
+export interface SettingsGeneralInfo {
+  debug: {
+    enabled: boolean
+    dir: string
+    logLevel: string
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+  }
+  storage: {
+    appDataDir: string
+    configDir: string
+    logDir: string
+    activeDataDir: string
+    dataPath: string
+    workspaceStorageRoot: string
+    workspaceStorageExists: boolean
+    workspaceStorageSizeBytes: number
+    workspaceStorageSizeLabel: string
+    databasePath: string
+    migrationPending: boolean
+    exists: boolean
+    sizeBytes: number
+    sizeLabel: string
+    databaseSizeBytes: number
+    databaseSizeLabel: string
+    scannedFiles: number
+    truncated: boolean
+    message: string
+  }
+  git: { runtime: string; path: string; ok: boolean; message: string }
+  python: { runtime: string; path: string; ok: boolean; message: string }
+  sandbox: {
+    defaultProvider: string
+    configuredProvider: string
+    providerConfigured: boolean
+    sbxInstalled: boolean
+    daemonReady: boolean
+    dockerLoggedIn: boolean
+    policyConfigured: boolean
+    sandboxRunnable: boolean
+    supportsPerAgentIsolation: boolean
+    cleanupMode: string
+    sandboxRoot: string
+    dockerSandbox: {
+      agent: string
+      available: boolean
+      probe: {
+        version?: string
+        exitCode: number
+        installed?: boolean
+        daemonReady?: boolean
+        message?: string
+      }
+      policy?: {
+        configured: boolean
+        authenticated: boolean
+        message: string
+        recommendedCommand?: string
+      } | null
+    }
+  }
+}
+
+export interface SettingsConsoleLog {
+  id: string
+  time: string
+  createdAt: string
+  level: 'Trace' | 'Debug' | 'Info' | 'Warn' | 'Error'
+  source: '后端' | '前端' | 'Agent' | '桌面端'
+  module: string
+  content: string
+}
+
+export interface SettingsConsoleLogsResponse {
+  items: SettingsConsoleLog[]
+  sources: {
+    serverLogPath: string
+    serverLogExists: boolean
+    serverLogEnabled: boolean
+    executionTraceCount: number
+    runEventCount: number
+  }
+}
+
 export interface OpencodeModelItem {
   id: string
   provider: string
@@ -1059,6 +1144,10 @@ export const api = {
     request<{ removedMessageId: string }>(`/messages/${sessionId}/${messageId}/regenerate`, {
       method: 'POST',
     }),
+  resendMessage: (sessionId: string, messageId: string) =>
+    request<{ removedMessageIds: string[] }>(`/messages/${sessionId}/${messageId}/resend`, {
+      method: 'POST',
+    }),
   pinMessage: (sessionId: string, messageId: string) =>
     request<Message>(`/messages/${sessionId}/${messageId}/pin`, { method: 'PATCH' }),
   unpinMessage: (sessionId: string, messageId: string) =>
@@ -1128,6 +1217,8 @@ export const api = {
       python: { runtime: string; path: string; ok: boolean; message: string }
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
+  getSettingsConsoleLogs: (limit = 160) =>
+    request<SettingsConsoleLogsResponse>(`/settings/console-logs?limit=${encodeURIComponent(String(limit))}`),
   setupDockerSandbox: () =>
     request<{ ok: boolean; message: string; steps: Array<{ command: string; ok: boolean; output: string }>; sandbox: SettingsGeneralInfo['sandbox'] }>(
       '/settings/sandbox/docker/setup',

@@ -9,7 +9,6 @@ import {
   FolderOpen,
   FolderPlus,
   Loader2,
-  PanelLeft,
   Paperclip,
   Search,
   Trash2,
@@ -30,7 +29,7 @@ import {
 } from '../lib/agentLibrary'
 import { useI18n } from '../lib/i18n'
 import { requestSettingsDialog } from '../lib/settingsDialog'
-import { isDesktopApp, pickWorkspaceFolder } from '../lib/native'
+import { pickWorkspaceFolder } from '../lib/native'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
@@ -50,7 +49,6 @@ export default function ChatPage() {
   const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
   const initWebSocket = useChatStore((state) => state.initWebSocket)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const desktop = isDesktopApp()
   const threadReady = Boolean(sessionId && currentSessionId === sessionId)
 
   function toggleSidebar() {
@@ -77,51 +75,19 @@ export default function ChatPage() {
   return (
     <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-[#F7F7F7] text-neutral-950">
       <div
-        aria-hidden={sidebarCollapsed}
         className="h-full shrink-0 overflow-hidden"
         style={{
-          width: sidebarCollapsed ? 0 : 340,
+          width: sidebarCollapsed ? 68 : 340,
           transition: 'width 300ms cubic-bezier(0.4,0,0.2,1)',
         }}
       >
         <div
-          className={[
-            'h-full w-[340px] transform-gpu will-change-transform',
-            sidebarCollapsed
-              ? 'pointer-events-none -translate-x-full opacity-0'
-              : 'translate-x-0 opacity-100',
-          ].join(' ')}
-          style={{
-            transition:
-              'opacity 300ms cubic-bezier(0.4,0,0.2,1), transform 300ms cubic-bezier(0.4,0,0.2,1)',
-          }}
+          className="h-full w-[340px] transform-gpu will-change-transform"
         >
-          <SessionList onCollapse={desktop ? undefined : toggleSidebar} />
+          <SessionList collapsed={sidebarCollapsed} onCollapse={toggleSidebar} />
         </div>
       </div>
-      <main
-        className="relative min-w-0 flex-1"
-        style={{
-          ['--agenthub-thread-header-left-offset' as string]:
-            desktop || sidebarCollapsed ? '3rem' : '0rem',
-        }}
-      >
-        {(desktop || sidebarCollapsed) && (
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            className="absolute left-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-md border border-neutral-200 bg-white text-neutral-500 shadow-sm transition hover:bg-neutral-50 hover:text-neutral-900"
-            aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
-            title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
-          >
-            <PanelLeft
-              className={[
-                'h-4 w-4 transition-transform',
-                sidebarCollapsed ? 'rotate-180' : '',
-              ].join(' ')}
-            />
-          </button>
-        )}
+      <main className="relative min-w-0 flex-1">
         {sessionId && threadReady ? (
           <AgentHubRuntimeProvider key={sessionId}>
             <Thread key={sessionId} />

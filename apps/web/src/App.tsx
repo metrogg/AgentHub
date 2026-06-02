@@ -2,6 +2,8 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import { type PointerEvent as ReactPointerEvent, Component, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import AgentConfigPage from './pages/AgentConfigPage'
+import AbilitiesPage from './pages/AbilitiesPage'
+import ArtifactsPage from './pages/ArtifactsPage'
 import ChatPage from './pages/ChatPage'
 import CodingToolsPage from './pages/CodingToolsPage'
 import { DesktopAppMenu } from './components/DesktopAppMenu'
@@ -106,6 +108,8 @@ function AppShell() {
     <Routes>
       <Route path="/" element={<ChatPage />} />
       <Route path="/chat/:sessionId" element={<ChatPage />} />
+      <Route path="/abilities" element={<AbilitiesPage />} />
+      <Route path="/artifacts" element={<ArtifactsPage />} />
       <Route path="/models" element={<ModelManagementPage />} />
       <Route path="/coding-tools" element={<CodingToolsPage />} />
       <Route path="/agent-config" element={<AgentConfigPage />} />
