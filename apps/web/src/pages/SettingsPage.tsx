@@ -89,6 +89,7 @@ interface AppSettings {
   gitEmail: string
   envVars: Array<{ id: string; key: string; value: string }>
   workspaceStorageRoot: string
+  sandboxProvider: 'local-workdir' | 'docker-sandbox' | 'cloud'
   worktreeRoot: string
   isolateWorktrees: boolean
   browserProvider: string
@@ -168,6 +169,7 @@ const defaultAppSettings: AppSettings = {
     { id: 'anthropic', key: 'ANTHROPIC_API_KEY', value: '' },
   ],
   workspaceStorageRoot: '',
+  sandboxProvider: 'local-workdir',
   worktreeRoot: '',
   isolateWorktrees: true,
   browserProvider: '内置浏览器',
@@ -756,6 +758,47 @@ function SettingsContent({
                 <button type="button" disabled={busyAction === 'debug-dir'} onClick={() => void runAction('debug-dir', openDebugDirectory)} className="settings-soft-button">{t('打开调试目录')}</button>
                 <button type="button" disabled={busyAction === 'general-info'} onClick={() => void runAction('general-info', refreshGeneralInfo)} className="settings-soft-button">{t('刷新状态')}</button>
               </div>
+            </InsetPanel>
+          </SettingsSection>
+          <SettingsSection
+            title="默认执行环境"
+            desc="决定新任务默认使用本地工作目录兼容隔离，还是 Docker Sandboxes。当前建议开发阶段优先本地，先保证单聊和群聊都能稳定运行。"
+          >
+            <InsetPanel>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <SegmentedControl
+                  value={settings.sandboxProvider}
+                  options={['local-workdir', 'docker-sandbox']}
+                  onChange={(sandboxProvider) =>
+                    patchSettings({ sandboxProvider: sandboxProvider as AppSettings['sandboxProvider'] })
+                  }
+                />
+                <StatusPill
+                  ok={settings.sandboxProvider === 'local-workdir' || Boolean(generalInfo?.sandbox.sandboxRunnable)}
+                  label={
+                    settings.sandboxProvider === 'local-workdir'
+                      ? '当前默认本地兼容隔离'
+                      : generalInfo?.sandbox.sandboxRunnable
+                        ? 'Docker Sandboxes 已就绪'
+                        : 'Docker Sandboxes 未就绪'
+                  }
+                />
+              </div>
+              <InfoRow
+                label="当前选择"
+                value={
+                  settings.sandboxProvider === 'local-workdir'
+                    ? '本地工作目录（推荐开发阶段使用）'
+                    : settings.sandboxProvider === 'docker-sandbox'
+                      ? 'Docker Sandboxes'
+                      : settings.sandboxProvider
+                }
+              />
+              <Notice>
+                {settings.sandboxProvider === 'local-workdir'
+                  ? '每个 Agent 仍会使用独立 workdir 与独立 temp/cache/config/home 目录，但不会提供容器级网络与文件系统隔离。'
+                  : '切到 Docker Sandboxes 后，群聊和单聊都会统一走容器隔离；若 Docker 未登录或策略未初始化，执行会直接失败。'}
+              </Notice>
             </InsetPanel>
           </SettingsSection>
           <SettingsSection
@@ -2266,7 +2309,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
       : !sandbox.daemonReady
       ? '你现在已经安装了 sbx CLI，但后台 daemon 没启动，所以隔离任务会在开始前被拦住。'
       : !sandbox.dockerLoggedIn
-        ? 'Docker Sandboxes daemon 已启动，但 Docker 账号还没有登录，所以无法创建沙箱。'
+      ? 'Docker Sandboxes daemon 已启动，但 Docker 账号还没有登录，所以无法创建沙箱。'
       : !sandbox.policyConfigured
         ? 'Docker Sandboxes daemon 已启动，但还没有配置默认网络策略，所以创建沙箱会被拒绝。'
         : 'Docker Sandboxes 还没有完成初始化。'
@@ -2284,13 +2327,19 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
               : !sandbox.policyConfigured
                 ? '默认网络策略未配置'
                 : 'Docker Sandboxes 未就绪'
-        : `当前为 ${sandbox.configuredProvider}`
+        : sandbox.configuredProvider === 'local-workdir'
+          ? '当前为本地兼容隔离'
+          : `当前为 ${sandbox.configuredProvider}`
     : '等待刷新'
   const sandboxDetail = sandbox
     ? [
         `默认 ${sandbox.defaultProvider}`,
         `清理 ${sandbox.cleanupMode}`,
-        sandbox.supportsPerAgentIsolation ? '支持每 Agent 独立隔离' : '隔离能力不足',
+        sandbox.configuredProvider === 'local-workdir'
+          ? '支持每 Agent 独立 workdir/config/cache 隔离'
+          : sandbox.supportsPerAgentIsolation
+            ? '支持每 Agent 独立隔离'
+            : '隔离能力不足',
         sandbox.dockerSandbox.probe.message
           ? sandbox.dockerSandbox.probe.message
           : sandbox.dockerSandbox.policy && !sandbox.policyConfigured
@@ -2590,7 +2639,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             >
               <div className="font-semibold">如何启用 Docker Sandboxes</div>
               <div className="mt-2 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-                AgentHub 默认会把每个 Agent 的任务放进独立 Docker Sandboxes 运行，避免多个 OpenCode、Claude Code、Codex 同时共享同一个执行环境。{sandboxSetupReason}
+                只有当你把默认执行环境切到 Docker Sandboxes 时，AgentHub 才会把每个 Agent 的任务放进独立容器运行。{sandboxSetupReason}
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button type="button" onClick={() => void loginDockerSandbox()} disabled={busy === 'sandbox-login'} className="settings-soft-button">
@@ -2617,7 +2666,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                 <code className="block break-all font-mono text-xs">{sandboxPolicyCommand}</code>
               </div>
               <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-                如果你只想先跑起来，点击“一键初始化”就够了。若仍提示未登录，先点“登录 Docker”，完成后再回来刷新。开发时也可以切回 `AGENTHUB_SANDBOX_PROVIDER=local-workdir`，但那只是兼容模式。
+                如果你只想先稳定跑起来，建议默认保持 `local-workdir`。等 Docker 登录和策略都准备好后，再切到 Docker Sandboxes。
               </div>
             </div>
           )}

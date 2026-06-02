@@ -1226,12 +1226,20 @@ function buildModelHealth(
 
 function buildSandboxHealth(info: SettingsGeneralInfo): NonNullable<AgentComboHealth['sandbox']> {
   const provider = info.sandbox.configuredProvider
+  if (provider === 'local-workdir') {
+    return {
+      ok: true,
+      label: 'Local Workdir',
+      provider,
+      message: '当前默认使用本地 workdir 兼容隔离。开发阶段可正常用于单聊和群聊，多 Agent 会各自使用独立 workdir 与运行时目录。',
+    }
+  }
   if (provider !== 'docker-sandbox') {
     return {
       ok: false,
-      label: 'Docker Sandboxes',
+      label: 'Sandbox Provider',
       provider,
-      message: `当前 provider 是 ${provider}，不是默认 Docker Sandboxes。`,
+      message: `当前 provider 是 ${provider}。`,
     }
   }
   const docker = info.sandbox.dockerSandbox
@@ -1255,12 +1263,17 @@ function buildSandboxHealth(info: SettingsGeneralInfo): NonNullable<AgentComboHe
 
 function buildIsolationHealth(info: SettingsGeneralInfo): NonNullable<AgentComboHealth['isolation']> {
   const cleanup = info.sandbox.cleanupMode
-  const ok = Boolean(info.sandbox.supportsPerAgentIsolation)
+  const ok =
+    info.sandbox.configuredProvider === 'local-workdir'
+      ? true
+      : Boolean(info.sandbox.supportsPerAgentIsolation)
   return {
     ok,
     label: '配置隔离',
     message: ok
-      ? `每次任务使用独立 sandbox root/home/cache/config/tmp；清理策略 ${cleanup}。`
+      ? info.sandbox.configuredProvider === 'local-workdir'
+        ? `每次任务使用独立 sandbox root/home/cache/config/tmp；当前为本地兼容隔离，清理策略 ${cleanup}。`
+        : `每次任务使用独立 sandbox root/home/cache/config/tmp；清理策略 ${cleanup}。`
       : '当前无法确认 microVM 级隔离；可能退化为本地 workdir 兼容隔离。',
   }
 }

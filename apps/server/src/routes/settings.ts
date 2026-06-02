@@ -303,14 +303,26 @@ function applyRuntimeSettings(map: Record<string, string>) {
   logger.level = appSettings.debugMode ? 'debug' : env.LOG_LEVEL
 }
 
-function parseAppSettings(value?: string): { dataPath?: string; workspaceStorageRoot?: string; debugMode?: boolean } {
+function parseAppSettings(value?: string): {
+  dataPath?: string
+  workspaceStorageRoot?: string
+  debugMode?: boolean
+  sandboxProvider?: 'local-workdir' | 'docker-sandbox' | 'cloud'
+} {
   if (!value) return {}
   try {
     const parsed = JSON.parse(value)
+    const sandboxProvider =
+      parsed?.sandboxProvider === 'docker-sandbox' ||
+      parsed?.sandboxProvider === 'cloud' ||
+      parsed?.sandboxProvider === 'local-workdir'
+        ? parsed.sandboxProvider
+        : undefined
     return {
       dataPath: typeof parsed?.dataPath === 'string' ? parsed.dataPath : undefined,
       workspaceStorageRoot: typeof parsed?.workspaceStorageRoot === 'string' ? parsed.workspaceStorageRoot : undefined,
       debugMode: Boolean(parsed?.debugMode),
+      sandboxProvider,
     }
   } catch {
     return {}

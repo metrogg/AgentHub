@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync } from 'node:fs'
 import { platform } from 'node:os'
 import { resolve } from 'node:path'
+import { db, eq, settings } from '@agenthub/db'
 import { env } from '../../env'
 import type { AgentWorkdir } from './agent-workdir'
 import { prepareAgentWorkdir } from './agent-workdir'
@@ -268,12 +269,13 @@ export function normalizeSandboxProviderKind(value?: string | null): SandboxProv
   return 'local-workdir'
 }
 
-export function configuredSandboxProviderKind(): SandboxProviderKind {
-  return normalizeSandboxProviderKind(readEnv('AGENTHUB_SANDBOX_PROVIDER') || 'docker-sandbox')
+export async function configuredSandboxProviderKind(): Promise<SandboxProviderKind> {
+  const stored = await readSandboxProviderSetting()
+  return normalizeSandboxProviderKind(stored || readEnv('AGENTHUB_SANDBOX_PROVIDER') || 'local-workdir')
 }
 
 export async function acquireExecutionSandbox(spec: SandboxSpec): Promise<SandboxLease> {
-  const kind = spec.provider ?? configuredSandboxProviderKind()
+  const kind = spec.provider ?? (await configuredSandboxProviderKind())
   if (kind === 'local-workdir') return localWorkdirProvider.acquire(spec)
   if (kind === 'docker-sandbox') return dockerSbxProvider.acquire(spec)
   throw new SandboxProviderUnavailableError(kind)
@@ -282,7 +284,7 @@ export async function acquireExecutionSandbox(spec: SandboxSpec): Promise<Sandbo
 export async function describeSandboxRuntimeStatus() {
   const [sbxAvailable, sbxProbe] = await probeSbxAvailability()
   const policy = sbxProbe.daemonReady ? await probeSbxPolicy() : null
-  const sandboxProvider = configuredSandboxProviderKind()
+  const sandboxProvider = await configuredSandboxProviderKind()
   const sbxInstalled = Boolean(sbxProbe.installed)
   const daemonReady = Boolean(sbxProbe.daemonReady)
   const dockerLoggedIn = policy?.authenticated ?? false
@@ -295,7 +297,7 @@ export async function describeSandboxRuntimeStatus() {
     policyConfigured &&
     sbxAvailable
   return {
-    defaultProvider: 'docker-sandbox',
+    defaultProvider: 'local-workdir',
     configuredProvider: sandboxProvider,
     providerConfigured: Boolean(sandboxProvider),
     sbxInstalled,
@@ -372,6 +374,17 @@ function readEnv(key: string) {
   const configured = (env as Record<string, unknown>)[key]
   if (typeof configured === 'string' && configured.trim()) return configured.trim()
   return Bun.env[key]?.trim() || process.env[key]?.trim() || ''
+}
+
+async function readSandboxProviderSetting(): Promise<string> {
+  try {
+    const [row] = await db.select().from(settings).where(eq(settings.key, 'APP_SETTINGS')).limit(1)
+    if (!row?.value) return ''
+    const parsed = JSON.parse(row.value) as { sandboxProvider?: unknown }
+    return typeof parsed?.sandboxProvider === 'string' ? parsed.sandboxProvider.trim() : ''
+  } catch {
+    return ''
+  }
 }
 
 function buildDockerSandboxEnv(input: {
