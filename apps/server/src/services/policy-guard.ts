@@ -6,7 +6,7 @@ export type RiskLevel = 'none' | 'low' | 'medium' | 'high'
 export interface PolicyDecision {
   allowed: boolean
   riskLevel: RiskLevel
-  sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandboxPolicy: 'workspace-write' | 'danger-full-access'
   approvalRequired: boolean
   toolPermissions: string[]
   reason: string
@@ -34,9 +34,9 @@ export class PolicyGuard {
     let decision: PolicyDecision = {
       allowed: true,
       riskLevel: 'low',
-      sandboxPolicy: 'read-only',
+      sandboxPolicy: 'workspace-write',
       approvalRequired: false,
-      toolPermissions: ['chat'],
+      toolPermissions: ['chat', 'workspace:read'],
       reason: '默认自动执行策略',
     }
 
@@ -57,16 +57,17 @@ export class PolicyGuard {
       decision.riskLevel = 'medium'
       decision.reason = '代码任务需要写权限'
     } else if (taskType === 'test' || taskType === 'verify') {
-      decision.sandboxPolicy = 'read-only'
+      decision.sandboxPolicy = 'workspace-write'
       decision.toolPermissions = ['chat', 'workspace:read']
       decision.approvalRequired = false
       decision.riskLevel = 'low'
-      decision.reason = '验证任务只读'
+      decision.reason = '验证任务使用低风险工具权限'
     } else if (taskType === 'review') {
-      decision.sandboxPolicy = 'read-only'
+      decision.sandboxPolicy = 'workspace-write'
+      decision.toolPermissions = ['chat', 'workspace:read']
       decision.approvalRequired = false
       decision.riskLevel = 'low'
-      decision.reason = '审查任务只读'
+      decision.reason = '审查任务使用低风险工具权限'
     }
 
     // 危险操作检测
@@ -103,9 +104,7 @@ export class PolicyGuard {
           decision.riskLevel = 'high'
           decision.approvalRequired = true
           decision.reason = `触及敏感路径: ${path}`
-          if (decision.sandboxPolicy !== 'read-only') {
-            decision.allowed = false
-          }
+          decision.allowed = false
           break
         }
       }
@@ -138,6 +137,6 @@ export class PolicyGuard {
    * 判断是否需要 Git 分支隔离
    */
   static needsBranchIsolation(sandboxPolicy: string): boolean {
-    return sandboxPolicy !== 'read-only'
+    return sandboxPolicy === 'workspace-write' || sandboxPolicy === 'danger-full-access'
   }
 }

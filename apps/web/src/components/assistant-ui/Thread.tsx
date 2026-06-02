@@ -64,7 +64,6 @@ import {
   Rocket,
   Search,
   Shield,
-  ShieldAlert,
   ShieldOff,
   Sheet,
   Square,
@@ -1084,6 +1083,7 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
   const selectAgentTab = useChatStore((state) => state.selectAgentTab)
   const selectSession = useChatStore((state) => state.selectSession)
   const navigate = useNavigate()
+  const [pendingChildNoticeTaskId, setPendingChildNoticeTaskId] = useState<string | null>(null)
 
   if (!taskBoard) {
     const phaseLabel =
@@ -1192,9 +1192,16 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
           const tab = agentTabs.find((item) => item.taskId === task.id)
           const childSessionId = tab?.childSessionId || task.childSessionId || null
           const canOpenChild = Boolean(childSessionId)
+          const showChildNotice = pendingChildNoticeTaskId === task.id && !canOpenChild
           const artifacts = task.artifactCount ?? task.artifacts?.length ?? 0
           const openChildSession = async () => {
-            if (!childSessionId) return
+            if (!childSessionId) {
+              setPendingChildNoticeTaskId(task.id)
+              window.setTimeout(() => {
+                setPendingChildNoticeTaskId((current) => (current === task.id ? null : current))
+              }, 1800)
+              return
+            }
             selectAgentTab(task.id)
             await selectSession(childSessionId)
             navigate(`/chat/${childSessionId}`)
@@ -1226,6 +1233,11 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
                 <TaskRuntimeStrip executionConfig={task.executionConfig} />
                 {task.outputSummary && (
                   <p className="mt-1 line-clamp-2 text-xs text-neutral-600">{task.outputSummary}</p>
+                )}
+                {showChildNotice && (
+                  <p className="mt-1 text-xs text-blue-600">
+                    子对话正在准备，正式分配后会自动变为可打开。
+                  </p>
                 )}
                 {task.artifacts && task.artifacts.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1285,17 +1297,21 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
               </div>
               <button
                 type="button"
-                disabled={!canOpenChild}
                 onClick={() => void openChildSession()}
                 className={cn(
                   'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition',
                   canOpenChild
                     ? 'border-neutral-200 bg-white text-neutral-700 hover:border-blue-200 hover:text-blue-700'
-                    : 'cursor-not-allowed border-neutral-100 bg-neutral-50 text-neutral-400',
+                    : 'border-neutral-100 bg-neutral-50 text-neutral-400 hover:border-blue-100 hover:text-blue-600',
                 )}
+                title={canOpenChild ? '打开任务子对话' : '子对话准备中'}
               >
-                <ExternalLink className="h-3.5 w-3.5" />
-                子对话
+                {canOpenChild ? (
+                  <ExternalLink className="h-3.5 w-3.5" />
+                ) : (
+                  <Clock3 className="h-3.5 w-3.5" />
+                )}
+                {canOpenChild ? '子对话' : '准备中'}
               </button>
             </div>
           )
@@ -2987,7 +3003,6 @@ function mentionInitial(title: string) {
 }
 
 const SAFETY_MODES = [
-  { key: 'read-only', label: '只读', desc: '禁止写操作', Icon: ShieldAlert, color: 'text-neutral-500' },
   { key: 'ask', label: '询问', desc: '敏感操作前询问', Icon: Shield, color: 'text-blue-500' },
   { key: 'full-access', label: '完全访问', desc: '无需逐条确认', Icon: ShieldOff, color: 'text-orange-500' },
 ] as const
@@ -2998,7 +3013,7 @@ const SafetyModeButton: FC<{ mode: string; onChange: (mode: string) => void }> =
 }) => {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  const current = SAFETY_MODES.find((m) => m.key === mode) ?? SAFETY_MODES[1]
+  const current = SAFETY_MODES.find((m) => m.key === mode) ?? SAFETY_MODES[0]
 
   useEffect(() => {
     if (!open) return

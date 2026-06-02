@@ -319,6 +319,20 @@ export default function SessionList({
     })
   }, [activeSession?.workspaceId, sessionTree])
 
+  useEffect(() => {
+    if (!taskBoard?.sessionId) return
+    const groupSession =
+      sessions.find((session) => session.id === taskBoard.sessionId) ??
+      (currentSession?.id === taskBoard.sessionId ? currentSession : null)
+    if (!groupSession?.workspaceId) return
+    setExpandedWorkspaces((current) => {
+      if (current.has(groupSession.workspaceId!)) return current
+      const next = new Set(current)
+      next.add(groupSession.workspaceId!)
+      return next
+    })
+  }, [currentSession, sessions, taskBoard?.sessionId])
+
   function requestDelete(event: React.MouseEvent, session: Session) {
     event.stopPropagation()
     event.preventDefault()
@@ -759,15 +773,21 @@ export default function SessionList({
                     ? groupSessionAgents(item.parent, groupWorkspaceAgents[workspaceId] ?? [])
                     : []
                 const visibleChildren = item.children.filter(isStableAgentChildSession)
+                const visibleChildIds = new Set(visibleChildren.map((child) => child.id))
                 const previewChildren =
                   isGroupParent && taskBoard?.sessionId === item.parent.id
                     ? taskBoard.tasks.filter(
-                        (task) => task.agentId && task.agentName && !task.childSessionId,
+                        (task) =>
+                          task.agentId &&
+                          task.agentName &&
+                          (!task.childSessionId || !visibleChildIds.has(task.childSessionId)),
                       )
                     : []
                 const hasChildren = visibleChildren.length > 0 || previewChildren.length > 0
                 const expanded = Boolean(workspaceId && expandedWorkspaces.has(workspaceId))
-                const childActive = visibleChildren.some((child) => child.id === sessionId)
+                const childActive =
+                  visibleChildren.some((child) => child.id === sessionId) ||
+                  previewChildren.some((task) => task.childSessionId === sessionId)
                 const active = sessionId === item.parent.id
                 const pinned = pinnedIds.has(item.parent.id)
                 const archived = archivedIds.has(item.parent.id)
@@ -1074,16 +1094,63 @@ export default function SessionList({
                           const childAgent = workspaceAgents.find(
                             (agent) => agent.id === task.agentId,
                           )
+                          const childSessionId = task.childSessionId ?? null
+                          const canOpenChild = Boolean(childSessionId)
+                          const opening = childSessionId ? openingSessionId === childSessionId : false
+                          const taskStateText = canOpenChild
+                            ? childTaskStatusText(task.status)
+                            : '准备中'
+                          const openTaskChild = async () => {
+                            if (!childSessionId) {
+                              showHint('子对话准备中，正式分配后即可打开')
+                              return
+                            }
+                            if (openingSessionId === childSessionId) return
+                            setOpeningSessionId(childSessionId)
+                            try {
+                              navigate(`/chat/${childSessionId}`)
+                              if (currentSessionId !== childSessionId) {
+                                await selectSession(childSessionId)
+                              }
+                            } catch (error) {
+                              navigate(`/chat/${item.parent.id}`, { replace: true })
+                              showHint(friendlyErrorMessage(error, '打开子对话失败'))
+                            } finally {
+                              setOpeningSessionId(null)
+                            }
+                          }
                           return (
                             <li
                               key={`planned-${task.id}`}
-                              className="flex items-center gap-1 rounded-lg opacity-80"
+                              onClick={() => void openTaskChild()}
+                              className={cn(
+                                'flex items-center gap-1 rounded-lg transition',
+                                childSessionId === sessionId
+                                  ? 'bg-[#F7F7F7] shadow-sm'
+                                  : canOpenChild
+                                    ? 'cursor-pointer hover:bg-[#F7F7F7]'
+                                    : 'cursor-default opacity-80',
+                              )}
                             >
                               <button
                                 type="button"
-                                disabled
-                                className="flex min-w-0 flex-1 cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-neutral-400"
-                                title="任务已规划，等待正式分配后才能打开子对话"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void openTaskChild()
+                                }}
+                                className={cn(
+                                  'flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition',
+                                  canOpenChild
+                                    ? childSessionId === sessionId
+                                      ? 'text-neutral-950'
+                                      : 'text-neutral-500 hover:text-neutral-800'
+                                    : 'text-neutral-400',
+                                )}
+                                title={
+                                  canOpenChild
+                                    ? '打开任务子对话'
+                                    : '任务已规划，等待正式分配后即可打开子对话'
+                                }
                               >
                                 <span className="relative h-5 w-5 shrink-0">
                                   <span className="grid h-5 w-5 place-items-center overflow-hidden rounded-full bg-neutral-200 text-[10px] font-semibold text-neutral-500">
@@ -1107,10 +1174,16 @@ export default function SessionList({
                                 <span className="min-w-0 flex-1">
                                   <span className="block truncate">{task.agentName}</span>
                                   <span className="block truncate text-[10px] text-neutral-400">
-                                    {task.title} · 待正式分配
+                                    {task.title} · {taskStateText}
                                   </span>
                                 </span>
-                                <Clock className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
+                                {opening ? (
+                                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-neutral-300" />
+                                ) : canOpenChild ? (
+                                  <MessageCircle className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
+                                ) : (
+                                  <Clock className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
+                                )}
                               </button>
                             </li>
                           )
@@ -1656,6 +1729,23 @@ function groupMemberCount(session: Session, childCount: number, loadedCount?: nu
   if (explicitAgentIds.length) return explicitAgentIds.length + 1
   if (loadedCount && loadedCount > 0) return loadedCount
   return Math.max(1, childCount + 1)
+}
+
+function childTaskStatusText(status?: string) {
+  switch (status) {
+    case 'running':
+      return '执行中'
+    case 'done':
+      return '已完成'
+    case 'failed':
+    case 'blocked':
+      return '异常'
+    case 'cancelled':
+      return '已取消'
+    case 'pending':
+    default:
+      return '等待执行'
+  }
 }
 
 function groupSessionAgents(session: Session, agents: WorkspaceAgent[]) {

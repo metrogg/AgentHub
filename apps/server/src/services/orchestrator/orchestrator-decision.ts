@@ -198,7 +198,7 @@ async function generateDecisionWithCodeAgent(
     codeAgentType,
     capabilityTags: orchestrator.capabilityTags ?? [],
     toolPermissions: orchestrator.toolPermissions ?? [],
-    sandboxPolicy: 'read-only',
+    sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     approvalRequired: false,
     projectPath: workspacePath ?? null,

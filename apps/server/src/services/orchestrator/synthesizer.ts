@@ -121,7 +121,7 @@ ${JSON.stringify(sections, null, 2)}
       ...orchestratorProfile,
       runtimeType: 'code-agent',
       codeAgentType: orchestratorProfile.codeAgentType,
-      sandboxPolicy: 'read-only',
+      sandboxPolicy: 'workspace-write',
       toolPermissions: ['chat', 'workspace:read'],
       approvalRequired: false,
     }

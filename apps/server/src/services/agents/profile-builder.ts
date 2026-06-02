@@ -64,7 +64,7 @@ export function buildAgentProfile(
     capabilityTags: agent.capabilityTags ?? [],
     skillIds: agent.skillIds ?? [],
     toolPermissions: overrides?.toolPermissions ?? agent.toolPermissions ?? [],
-    sandboxPolicy: (overrides?.sandboxPolicy ?? agent.sandboxPolicy ?? 'workspace-write') as AgentRunProfile['sandboxPolicy'],
+    sandboxPolicy: normalizeSandboxPolicy(overrides?.sandboxPolicy ?? agent.sandboxPolicy),
     contextPolicy: (overrides?.contextPolicy ?? agent.contextPolicy ?? 'workspace-aware') as AgentRunProfile['contextPolicy'],
     approvalRequired: overrides?.approvalRequired ?? agent.approvalRequired ?? false,
     projectPath: projectPath?.trim() || null,
@@ -98,6 +98,11 @@ function normalizeCodeAgentType(agent: AgentRow): AgentRunProfile['codeAgentType
     return agent.codeAgentType
   }
   return 'codex'
+}
+
+function normalizeSandboxPolicy(value?: string | null): AgentRunProfile['sandboxPolicy'] {
+  if (value === 'danger-full-access') return 'danger-full-access'
+  return 'workspace-write'
 }
 
 function stringValue(value: unknown): string | null {

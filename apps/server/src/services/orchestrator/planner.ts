@@ -226,7 +226,7 @@ export class Planner {
       codeAgentType: plannerAgent.codeAgentType,
       capabilityTags: plannerAgent.capabilityTags,
       toolPermissions: plannerAgent.toolPermissions,
-      sandboxPolicy: 'read-only',
+      sandboxPolicy: 'workspace-write',
       contextPolicy: 'workspace-aware',
       approvalRequired: false,
       projectPath: workspacePath ?? null,

@@ -15,7 +15,7 @@ export interface AgentProfile {
   capabilityTags: string[]
   skillIds?: string[]
   toolPermissions: string[]
-  sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandboxPolicy: 'workspace-write' | 'danger-full-access'
   contextPolicy: 'recent-only' | 'pinned-recent' | 'workspace-aware'
   approvalRequired: boolean
   projectPath?: string | null

@@ -1058,8 +1058,6 @@ function toAgentProfile(
 
 function applySafetyMode(profile: AgentRunProfile, mode: string): AgentRunProfile {
   switch (mode) {
-    case 'read-only':
-      return { ...profile, sandboxPolicy: 'workspace-write', approvalRequired: true }
     case 'full-access':
       return { ...profile, sandboxPolicy: 'workspace-write', approvalRequired: false }
     case 'ask':

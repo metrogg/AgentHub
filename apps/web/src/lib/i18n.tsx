@@ -388,8 +388,6 @@ const zhToEn: Record<string, string> = {
   '普通 LLM Agent': 'Standard LLM Agent',
   '不绑定 CLI': 'No CLI binding',
   自动模型: 'Auto model',
-  只读: 'Read-only',
-  只读权限: 'Read-only',
   工作区写入: 'Workspace write',
   完全访问: 'Full access',
   仅最近上下文: 'Recent context only',
@@ -428,8 +426,8 @@ const zhToEn: Record<string, string> = {
   对话式修改: 'Conversational Edit',
   '可以直接说：把当前 Agent 改成 Codex 实现者，关闭风险确认，标签加 frontend。':
     'Try: change this agent into a Codex implementer, turn off risk confirmation, and add the frontend tag.',
-  '例如：改成 Claude Code 审查员，沙箱只读，标签加 review、安全':
-    'Example: change to a Claude Code reviewer, read-only sandbox, add review and security tags',
+  '例如：改成 Claude Code 审查员，使用工作区写入策略，标签加 review、安全':
+    'Example: change to a Claude Code reviewer, use workspace-write policy, add review and security tags',
   应用并保存: 'Apply and Save',
   '还没有 Agent': 'No agents yet',
   '保存 Agent': 'Save Agent',

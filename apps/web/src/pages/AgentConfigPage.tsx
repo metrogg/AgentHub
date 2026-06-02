@@ -810,7 +810,6 @@ export default function AgentConfigPage() {
                           {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
                         </SelectField>
                         <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
-                          <option value="read-only">{t('只读')}</option>
                           <option value="workspace-write">{t('工作区写入')}</option>
                           <option value="danger-full-access">{t('完全访问')}</option>
                         </SelectField>
