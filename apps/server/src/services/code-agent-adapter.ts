@@ -156,7 +156,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
     promptMode: 'stdin',
     buildArgs: (prompt, options) => {
       const cfg = options?.toolConfig ?? {}
-      const sandbox = String(cfg['sandbox'] ?? toCodexSandbox(options?.sandboxPolicy))
+      const sandbox = readStringConfig(cfg, 'sandbox') ?? toCodexSandbox(options?.sandboxPolicy)
       const args: string[] = [
         'exec',
         '--skip-git-repo-check',
@@ -250,7 +250,7 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       const args = ['run']
       if (options?.cwd) args.push('--dir', options.cwd)
       if (options?.modelId) {
-        const provider = options.modelProvider || String(cfg['provider'] ?? 'agenthub')
+        const provider = options.modelProvider || readStringConfig(cfg, 'provider') || 'agenthub'
         const modelId = options.nativeOpenCodeRef
           ? options.modelId
           : `${provider}/${options.modelId}`
@@ -595,29 +595,91 @@ async function resolveCodeAgentModelTarget(
   agentModelId?: string | null,
   toolConfig?: Record<string, unknown>,
 ): Promise<CodeAgentModelTarget | null> {
-  for (const candidate of resolveCodeAgentModelCandidates(agentModelId, toolConfig)) {
-    const selected = await resolveModelConfig(candidate)
-    if (!selected?.modelId) continue
-
-    const providerKey = safeProviderKey(selected.provider || selected.id)
-    const openaiBaseUrl = selected.apiEndpoint?.replace(/\/$/, '')
-    const anthropicBaseUrl =
-      selected.anthropicEndpoint?.replace(/\/$/, '') ||
-      (isAnthropicLike(selected.provider, selected.apiEndpoint) ? openaiBaseUrl : undefined)
-
-    return {
-      catalogId: selected.id,
-      provider: selected.provider,
-      providerKey,
-      modelId: selected.modelId,
-      apiKey: selected.apiKey,
-      apiKeySource: selected.apiKeySource,
-      openaiBaseUrl,
-      anthropicBaseUrl,
-    }
+  const explicitAgentModelId = typeof agentModelId === 'string' ? agentModelId.trim() : ''
+  if (explicitAgentModelId) {
+    return (
+      (await resolveCatalogCodeAgentModelTarget(explicitAgentModelId)) ??
+      resolveToolConfigModelTarget(toolConfig, explicitAgentModelId)
+    )
   }
 
-  return null
+  return (
+    resolveToolConfigModelTarget(toolConfig) ??
+    (await resolveCatalogCodeAgentModelTarget(readStringConfig(toolConfig ?? {}, 'modelId')))
+  )
+}
+
+async function resolveCatalogCodeAgentModelTarget(
+  modelId?: string | null,
+): Promise<CodeAgentModelTarget | null> {
+  const selected = await resolveModelConfig(modelId)
+  if (!selected?.modelId) return null
+
+  const providerKey = safeProviderKey(selected.provider || selected.id)
+  const openaiBaseUrl = selected.apiEndpoint?.replace(/\/$/, '')
+  const anthropicBaseUrl =
+    selected.anthropicEndpoint?.replace(/\/$/, '') ||
+    (isAnthropicLike(selected.provider, selected.apiEndpoint) ? openaiBaseUrl : undefined)
+
+  return {
+    catalogId: selected.id,
+    provider: selected.provider,
+    providerKey,
+    modelId: selected.modelId,
+    apiKey: selected.apiKey,
+    apiKeySource: selected.apiKeySource,
+    openaiBaseUrl,
+    anthropicBaseUrl,
+  }
+}
+
+function resolveToolConfigModelTarget(
+  toolConfig?: Record<string, unknown>,
+  expectedModelId?: string | null,
+): CodeAgentModelTarget | null {
+  if (!toolConfig) return null
+
+  const modelId = readStringConfig(toolConfig, 'modelId')
+  const baseUrl = readStringConfig(toolConfig, 'baseUrl')?.replace(/\/+$/, '')
+  if (!modelId || !baseUrl) return null
+  if (expectedModelId?.trim() && expectedModelId.trim() !== modelId) return null
+
+  const provider = inferToolConfigProvider(toolConfig, baseUrl)
+  const apiKeyEnv = readStringConfig(toolConfig, 'apiKeyEnv')
+  const apiKey = apiKeyEnv ? readEnv(apiKeyEnv) : undefined
+  const anthropicBaseUrl = isAnthropicLike(provider, baseUrl) ? baseUrl : undefined
+  const openaiBaseUrl = anthropicBaseUrl ? undefined : baseUrl
+
+  return {
+    provider,
+    providerKey: safeProviderKey(provider),
+    modelId,
+    apiKey,
+    apiKeySource: apiKey ? apiKeyEnv : 'coding-tools-config',
+    openaiBaseUrl,
+    anthropicBaseUrl,
+  }
+}
+
+function inferToolConfigProvider(toolConfig: Record<string, unknown>, baseUrl: string) {
+  const explicitProvider = readStringConfig(toolConfig, 'provider')
+  if (explicitProvider) return explicitProvider
+
+  const protocol = readStringConfig(toolConfig, 'protocol')
+  if (protocol === 'anthropic-messages') return 'anthropic'
+  if (protocol === 'openai-responses') return 'openai'
+
+  const normalizedBaseUrl = baseUrl.toLowerCase()
+  if (normalizedBaseUrl.includes('deepseek')) return 'deepseek'
+  if (normalizedBaseUrl.includes('dashscope') || normalizedBaseUrl.includes('aliyuncs')) {
+    return 'dashscope'
+  }
+  if (normalizedBaseUrl.includes('openrouter')) return 'openrouter'
+  if (normalizedBaseUrl.includes('generativelanguage.googleapis.com')) return 'gemini'
+  if (normalizedBaseUrl.includes('anthropic.com') || normalizedBaseUrl.includes('/anthropic')) {
+    return 'anthropic'
+  }
+  return 'openai-compatible'
 }
 
 async function resolveRuntimeModelTarget(
@@ -2589,11 +2651,16 @@ function activeToolConfig(
   config: Record<string, unknown>,
 ) {
   if (settingsMap.CODE_AGENT_ACTIVE_TOOL !== toolId) return config
-  if (settingsMap.CODE_AGENT_ACTIVE_MODEL) config.modelId = settingsMap.CODE_AGENT_ACTIVE_MODEL
-  if (settingsMap.CODE_AGENT_ACTIVE_BASE_URL) config.baseUrl = settingsMap.CODE_AGENT_ACTIVE_BASE_URL
-  if (settingsMap.CODE_AGENT_ACTIVE_API_KEY_ENV)
-    config.apiKeyEnv = settingsMap.CODE_AGENT_ACTIVE_API_KEY_ENV
-  if (settingsMap.CODE_AGENT_ACTIVE_PROTOCOL) config.protocol = settingsMap.CODE_AGENT_ACTIVE_PROTOCOL
+
+  const activeModel = settingsMap.CODE_AGENT_ACTIVE_MODEL
+  const activeBaseUrl = settingsMap.CODE_AGENT_ACTIVE_BASE_URL
+  const activeKeyEnv = settingsMap.CODE_AGENT_ACTIVE_API_KEY_ENV
+  const activeProtocol = settingsMap.CODE_AGENT_ACTIVE_PROTOCOL
+
+  if (activeModel && !config.modelId) config.modelId = activeModel
+  if (activeBaseUrl && !config.baseUrl) config.baseUrl = activeBaseUrl
+  if (activeKeyEnv && !config.apiKeyEnv) config.apiKeyEnv = activeKeyEnv
+  if (activeProtocol && !config.protocol) config.protocol = activeProtocol
   return config
 }
 
@@ -3035,6 +3102,10 @@ function resolveClaudePermissionMode(
 ): ClaudePermissionMode {
   if (sandboxPolicy === 'read-only') return 'plan'
 
+  if (cfg['skipPermissions'] === true || cfg['dangerouslySkipPermissions'] === true) {
+    return 'bypassPermissions'
+  }
+
   const configured =
     readStringConfig(cfg, 'permissionMode') ??
     readStringConfig(cfg, 'permission-mode') ??
@@ -3042,10 +3113,6 @@ function resolveClaudePermissionMode(
   if (configured) {
     const normalized = normalizeClaudePermissionMode(configured)
     if (normalized) return normalized
-  }
-
-  if (cfg['skipPermissions'] === true || cfg['dangerouslySkipPermissions'] === true) {
-    return 'bypassPermissions'
   }
 
   return 'acceptEdits'

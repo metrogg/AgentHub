@@ -120,6 +120,26 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       python,
     })
   })
+  .post('/sandbox/docker/setup', async (c) => {
+    const result = await setupDockerSandbox()
+    logger.warn({ result }, 'Docker Sandboxes setup requested from settings')
+    return c.json({
+      ok: result.ok,
+      message: result.message,
+      steps: result.steps,
+      sandbox: await describeSandboxRuntimeStatus(),
+    })
+  })
+  .post('/sandbox/docker/login', async (c) => {
+    const result = await launchDockerSandboxLogin()
+    logger.warn({ result }, 'Docker Sandboxes login requested from settings')
+    return c.json({
+      ok: result.ok,
+      message: result.message,
+      started: result.started,
+      sandbox: await describeSandboxRuntimeStatus(),
+    })
+  })
   .post('/storage/ensure', async (c) => {
     const input: { path?: string } = await c.req.json<{ path?: string }>().catch(() => ({}))
     const target = input.path?.trim()
@@ -408,6 +428,81 @@ async function openSystemPath(path: string) {
     return { ok: true, message: '' }
   } catch (error: any) {
     return { ok: false, message: error?.message || String(error) }
+  }
+}
+
+async function setupDockerSandbox() {
+  const steps: Array<{ command: string; ok: boolean; output: string }> = []
+  const daemon = await runSbxCommand(['daemon', 'start', '--detach', '--policy', 'balanced'])
+  steps.push({ command: 'sbx daemon start --detach --policy balanced', ok: daemon.ok, output: daemon.output })
+  const policy = await runSbxCommand(['policy', 'set-default', 'balanced'])
+  const policyOutput = /default policy is already set/i.test(policy.output) ? 'default policy already set' : policy.output
+  steps.push({ command: 'sbx policy set-default balanced', ok: policy.ok || /default policy is already set/i.test(policy.output), output: policyOutput })
+
+  const ok = steps.every((step) => step.ok)
+  return {
+    ok,
+    message: ok
+      ? 'Docker Sandboxes 已启动并配置为 balanced。'
+      : steps.find((step) => !step.ok)?.output || 'Docker Sandboxes 初始化失败。',
+    steps,
+  }
+}
+
+async function launchDockerSandboxLogin() {
+  try {
+    const proc = Bun.spawn(['sbx', 'login'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      stdin: 'ignore',
+      env: process.env,
+    })
+    const result = await Promise.race([
+      proc.exited.then(async (code) => ({
+        started: true,
+        ok: code === 0,
+        message: (await new Response(proc.stderr).text()).trim() || 'Docker Sandboxes login completed.',
+      })),
+      new Promise<{ started: boolean; ok: boolean; message: string }>((resolve) =>
+        setTimeout(
+          () =>
+            resolve({
+              started: true,
+              ok: true,
+              message:
+                'Docker Sandboxes login flow has been launched. Complete sign-in if a browser window appears, then come back and refresh.',
+            }),
+          3000,
+        ),
+      ),
+    ])
+    return result
+  } catch (error: any) {
+    return { started: false, ok: false, message: error?.message || 'Docker Sandboxes login failed.' }
+  }
+}
+
+async function runSbxCommand(args: string[]) {
+  try {
+    const proc = Bun.spawn(['sbx', ...args], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      stdin: 'ignore',
+      env: process.env,
+    })
+    const code = await Promise.race([
+      proc.exited,
+      new Promise<number>((resolve) => setTimeout(() => resolve(124), 20_000)),
+    ])
+    const stdout = (await new Response(proc.stdout).text()).trim()
+    const stderr = (await new Response(proc.stderr).text()).trim()
+    return {
+      ok: code === 0 || /default policy is already set/i.test(stderr + stdout),
+      code,
+      output: [stdout, stderr].filter(Boolean).join('\n').trim(),
+    }
+  } catch (error: any) {
+    return { ok: false, code: -1, output: error?.message || 'sbx command failed.' }
   }
 }
 

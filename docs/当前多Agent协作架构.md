@@ -164,6 +164,14 @@ A2A message/send
 
 A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库或 Planner 输出中。
 
+每个专家 Agent 的最终配置是一个独立组合，而不是共享默认值：
+
+```text
+Agent = CLI 运行器 × 模型绑定 × Skills/MCP 能力 × 沙箱策略 × 上下文策略
+```
+
+例如可以同时存在 `Claude Code × DeepSeek`、`Claude Code × Kimi`、`OpenCode × MiMo`，它们只共享“专家角色语义”，不共享运行态、模型凭据或工具会话。
+
 ## 工作目录
 
 当前优先采用“一个项目工作区 + 每个 Agent 一个执行目录”的设计。这里的隔离是本地 workdir 隔离，不是 Docker/VM 级别的 OS 沙箱。

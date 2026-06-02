@@ -282,14 +282,16 @@ export async function acquireExecutionSandbox(spec: SandboxSpec): Promise<Sandbo
 
 export async function describeSandboxRuntimeStatus() {
   const [sbxAvailable, sbxProbe] = await probeSbxAvailability()
+  const policy = sbxProbe.daemonReady ? await probeSbxPolicy() : null
   const sandboxProvider = configuredSandboxProviderKind()
   return {
     defaultProvider: 'docker-sandbox',
     configuredProvider: sandboxProvider,
     dockerSandbox: {
       agent: readEnv('AGENTHUB_DOCKER_SANDBOX_AGENT') || 'auto',
-      available: sbxAvailable,
+      available: sbxAvailable && (policy?.configured ?? true),
       probe: sbxProbe,
+      policy,
     },
     cleanupMode: normalizeCleanupMode('delete'),
     sandboxRoot: agentHubUserCacheRoot(),
@@ -492,7 +494,96 @@ async function createDockerSandbox(input: {
     }
   }
   const stderr = (await new Response(proc.stderr).text()).trim()
-  throw new Error(`Docker Sandboxes failed to create sandbox "${input.sandboxName}": ${stderr || `exit code ${code}`}`)
+  throw new Error(
+    normalizeDockerSandboxError(
+      `Docker Sandboxes failed to create sandbox "${input.sandboxName}": ${stderr || `exit code ${code}`}`,
+    ),
+  )
+}
+
+async function probeSbxPolicy(): Promise<{
+  configured: boolean
+  authenticated: boolean
+  message: string
+  recommendedCommand?: string
+}> {
+  try {
+    const proc = Bun.spawn(['sbx', 'policy', 'ls'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      stdin: 'ignore',
+      env: process.env,
+    })
+    let timedOut = false
+    const timeout = setTimeout(() => {
+      timedOut = true
+      try {
+        proc.kill()
+      } catch {
+        // Best-effort only.
+      }
+    }, 3000)
+    const code = await proc.exited.finally(() => clearTimeout(timeout))
+    const stdout = (await new Response(proc.stdout).text()).trim()
+    const stderr = (await new Response(proc.stderr).text()).trim()
+    const output = `${stdout}\n${stderr}`.trim()
+
+    if (timedOut) {
+      return {
+        configured: false,
+        authenticated: false,
+        message: 'Docker Sandboxes network policy probe timed out. Try restarting the sbx daemon.',
+      }
+    }
+    if (code === 0) {
+      return {
+        configured: true,
+        authenticated: true,
+        message: stdout || 'Docker Sandboxes network policy is configured.',
+      }
+    }
+    if (/default network policy has not been configured/i.test(output)) {
+      return {
+        configured: false,
+        authenticated: true,
+        message:
+          'Docker Sandboxes default network policy has not been configured. Set the recommended balanced policy before running isolated agents.',
+        recommendedCommand: 'sbx policy set-default balanced',
+      }
+    }
+    if (/not authenticated to Docker|no valid user session|sign in to Docker|status 401/i.test(output)) {
+      return {
+        configured: false,
+        authenticated: false,
+        message:
+          'Docker Sandboxes needs a valid Docker sign-in session before it can list policies or create sandboxes.',
+        recommendedCommand: 'sbx login',
+      }
+    }
+    return {
+      configured: false,
+      authenticated: false,
+      message: output || `Docker Sandboxes policy probe failed with exit code ${code}.`,
+    }
+  } catch (error: any) {
+    return {
+      configured: false,
+      authenticated: false,
+      message: error?.message || 'Docker Sandboxes policy probe failed.',
+    }
+  }
+}
+
+function normalizeDockerSandboxError(message: string) {
+  if (/default network policy has not been configured/i.test(message)) {
+    return [
+      'Docker Sandboxes 已启动，但还没有配置默认网络策略。',
+      '首次使用前需要执行：sbx policy set-default balanced',
+      'balanced 是 Docker Sandboxes 推荐的开发默认策略，会允许常见 AI 服务、包管理器等开发流量。',
+      message,
+    ].join('\n')
+  }
+  return message
 }
 
 async function removeDockerSandbox(sandboxName: string) {

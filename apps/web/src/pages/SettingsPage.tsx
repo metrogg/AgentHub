@@ -2179,13 +2179,26 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const agentCount = logs.filter((row) => row.source === 'Agent').length
   const backendCount = logs.filter((row) => row.source === '后端').length
   const sandbox = generalInfo?.sandbox
-  const sandboxStartCommand = 'sbx daemon start'
+  const sandboxPolicyCommand = sandbox?.dockerSandbox.policy?.recommendedCommand ?? 'sbx policy set-default balanced'
   const sandboxOk = sandbox?.configuredProvider === 'docker-sandbox' && Boolean(sandbox?.dockerSandbox.available)
+  const sandboxPolicyConfigured = sandbox?.dockerSandbox.policy?.configured ?? false
+  const sandboxAuthenticated = sandbox?.dockerSandbox.policy?.authenticated ?? false
+  const sandboxSetupReason = sandbox
+    ? !sandbox.dockerSandbox.probe.daemonReady
+      ? '你现在已经安装了 sbx CLI，但后台 daemon 没启动，所以隔离任务会在开始前被拦住。'
+      : !sandboxAuthenticated
+        ? 'Docker Sandboxes daemon 已启动，但 Docker 账号还没有登录，所以无法创建沙箱。'
+      : !sandboxPolicyConfigured
+        ? 'Docker Sandboxes daemon 已启动，但还没有配置默认网络策略，所以创建沙箱会被拒绝。'
+        : 'Docker Sandboxes 还没有完成初始化。'
+    : '正在读取 Docker Sandboxes 状态。'
   const sandboxStatus = sandbox
     ? sandboxOk
       ? 'Docker Sandboxes 可用'
       : sandbox.configuredProvider === 'docker-sandbox'
-        ? 'Docker Sandboxes 未就绪'
+        ? sandboxAuthenticated
+          ? 'Docker Sandboxes 未就绪'
+          : 'Docker 账号未登录'
         : `当前为 ${sandbox.configuredProvider}`
     : '等待刷新'
   const sandboxDetail = sandbox
@@ -2194,7 +2207,9 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         `清理 ${sandbox.cleanupMode}`,
         sandbox.dockerSandbox.probe.message
           ? sandbox.dockerSandbox.probe.message
-          : sandbox.dockerSandbox.probe.version || `探测退出码 ${sandbox.dockerSandbox.probe.exitCode}`,
+          : sandbox.dockerSandbox.policy && !sandbox.dockerSandbox.policy.configured
+            ? sandbox.dockerSandbox.policy.message
+            : sandbox.dockerSandbox.probe.version || `探测退出码 ${sandbox.dockerSandbox.probe.exitCode}`,
       ].join(' · ')
     : '每个 Agent 任务会创建独立执行沙箱'
   const sandboxNeedsSetup = sandbox?.configuredProvider === 'docker-sandbox' && !sandboxOk
@@ -2278,18 +2293,70 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     }
   }
 
-  async function copySandboxStartCommand() {
+  async function copySandboxPolicyCommand() {
     try {
-      await navigator.clipboard.writeText(sandboxStartCommand)
-      showNotice(t('Docker Sandboxes 启动命令已复制'))
+      await navigator.clipboard.writeText(sandboxPolicyCommand)
+      showNotice(t('Docker Sandboxes 网络策略命令已复制'))
       appendLog({
         level: 'Info',
         source: '前端',
         module: 'sandbox',
-        content: `copied command: ${sandboxStartCommand}`,
+        content: `copied command: ${sandboxPolicyCommand}`,
       })
     } catch {
       showNotice(t('复制失败，请手动复制命令'))
+    }
+  }
+
+  async function setupDockerSandbox() {
+    setBusy('sandbox-setup')
+    try {
+      const result = await api.setupDockerSandbox()
+      setGeneralInfo((current) => current ? { ...current, sandbox: result.sandbox } : current)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'sandbox/setup',
+        content: result.message,
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: 'sandbox/setup',
+        content: error?.message || 'Docker Sandboxes 初始化失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function loginDockerSandbox() {
+    setBusy('sandbox-login')
+    try {
+      const result = await api.loginDockerSandbox()
+      setGeneralInfo((current) => current ? { ...current, sandbox: result.sandbox } : current)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'sandbox/login',
+        content: result.message,
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: 'sandbox/login',
+        content: error?.message || 'Docker Sandboxes 登录失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -2437,20 +2504,34 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             >
               <div className="font-semibold">如何启用 Docker Sandboxes</div>
               <div className="mt-2 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-                AgentHub 默认会把每个 Agent 的任务放进独立 Docker Sandboxes 运行，避免多个 OpenCode、Claude Code、Codex 同时共享同一个执行环境。你现在已经安装了 sbx CLI，但后台 daemon 没启动，所以隔离任务会在开始前被拦住。
+                AgentHub 默认会把每个 Agent 的任务放进独立 Docker Sandboxes 运行，避免多个 OpenCode、Claude Code、Codex 同时共享同一个执行环境。{sandboxSetupReason}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" onClick={() => void loginDockerSandbox()} disabled={busy === 'sandbox-login'} className="settings-soft-button">
+                  {busy === 'sandbox-login' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+                  登录 Docker
+                </button>
+                <button type="button" onClick={() => void setupDockerSandbox()} disabled={busy === 'sandbox-setup'} className="settings-soft-button">
+                  {busy === 'sandbox-setup' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                  一键初始化
+                </button>
+                <button type="button" onClick={() => void refreshDiagnostics()} disabled={busy === 'refresh'} className="settings-soft-button">
+                  <RefreshCw className={cn('h-3.5 w-3.5', busy === 'refresh' && 'animate-spin')} />
+                  刷新状态
+                </button>
               </div>
               <div className="mt-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--settings-border)', background: 'var(--settings-panel-muted)' }}>
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>在终端执行</span>
-                  <button type="button" onClick={() => void copySandboxStartCommand()} className="settings-soft-button h-7 px-2 text-xs">
+                  <span className="text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>默认网络策略</span>
+                  <button type="button" onClick={() => void copySandboxPolicyCommand()} className="settings-soft-button h-7 px-2 text-xs">
                     <Copy className="h-3.5 w-3.5" />
                     复制
                   </button>
                 </div>
-                <code className="block break-all font-mono text-xs">{sandboxStartCommand}</code>
+                <code className="block break-all font-mono text-xs">{sandboxPolicyCommand}</code>
               </div>
               <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-                启动后回到这里点“刷新状态”。如果只是临时开发、不需要真实沙箱，可以在启动服务前设置 AGENTHUB_SANDBOX_PROVIDER=local-workdir；这是兼容模式，不提供真正的系统级隔离。
+                如果你只想先跑起来，点击“一键初始化”就够了。若仍提示未登录，先点“登录 Docker”，完成后再回来刷新。开发时也可以切回 `AGENTHUB_SANDBOX_PROVIDER=local-workdir`，但那只是兼容模式。
               </div>
             </div>
           )}

@@ -435,6 +435,12 @@ export interface SettingsGeneralInfo {
         daemonReady?: boolean
         message?: string
       }
+      policy?: {
+        configured: boolean
+        authenticated: boolean
+        message: string
+        recommendedCommand?: string
+      } | null
     }
   }
 }
@@ -597,6 +603,12 @@ export interface SettingsGeneralInfo {
         daemonReady?: boolean
         message?: string
       }
+      policy?: {
+        configured: boolean
+        authenticated: boolean
+        message: string
+        recommendedCommand?: string
+      } | null
     }
   }
 }
@@ -1116,6 +1128,20 @@ export const api = {
       python: { runtime: string; path: string; ok: boolean; message: string }
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
+  setupDockerSandbox: () =>
+    request<{ ok: boolean; message: string; steps: Array<{ command: string; ok: boolean; output: string }>; sandbox: SettingsGeneralInfo['sandbox'] }>(
+      '/settings/sandbox/docker/setup',
+      {
+        method: 'POST',
+      },
+    ),
+  loginDockerSandbox: () =>
+    request<{ ok: boolean; started: boolean; message: string; sandbox: SettingsGeneralInfo['sandbox'] }>(
+      '/settings/sandbox/docker/login',
+      {
+        method: 'POST',
+      },
+    ),
   startMobilePairing: () =>
     request<MobilePairStartResult>('/mobile/pair/start', { method: 'POST' }),
   getMobileConnectivity: () => request<MobileConnectivityStatus>('/mobile/connectivity'),
