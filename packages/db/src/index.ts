@@ -189,6 +189,53 @@ function ensureLegacySchema(database: Database) {
     'role_profile',
     'ALTER TABLE workspace_agents ADD COLUMN role_profile text',
   )
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'skill_ids',
+    "ALTER TABLE workspace_agents ADD COLUMN skill_ids text DEFAULT '[]' NOT NULL",
+  )
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'capability_tags',
+    "ALTER TABLE workspace_agents ADD COLUMN capability_tags text DEFAULT '[]' NOT NULL",
+  )
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'tool_permissions',
+    "ALTER TABLE workspace_agents ADD COLUMN tool_permissions text DEFAULT '[]' NOT NULL",
+  )
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'sandbox_policy',
+    "ALTER TABLE workspace_agents ADD COLUMN sandbox_policy text DEFAULT 'workspace-write' NOT NULL",
+  )
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'context_policy',
+    "ALTER TABLE workspace_agents ADD COLUMN context_policy text DEFAULT 'workspace-aware' NOT NULL",
+  )
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'auto_invoke',
+    'ALTER TABLE workspace_agents ADD COLUMN auto_invoke integer DEFAULT true NOT NULL',
+  )
+  ensureColumn(
+    database,
+    'workspace_agents',
+    'approval_required',
+    'ALTER TABLE workspace_agents ADD COLUMN approval_required integer DEFAULT true NOT NULL',
+  )
+  if (hasColumn(database, 'workspace_agents', 'sandbox_policy')) {
+    database.exec(
+      "UPDATE workspace_agents SET sandbox_policy = 'workspace-write' WHERE sandbox_policy = 'read-only'",
+    )
+  }
 
   ensureTable(
     database,

@@ -29,6 +29,14 @@ Before changing code, identify which layer you are working on:
 - Collaboration contracts: user-explicit Specs may describe scope, allowed paths, required outputs, and acceptance criteria; they must not be trigger-based scenario templates.
 - Workspace and state: the system default workspace root, `.agenthub/workdirs`, `.agenthub/handoff`, blackboard entries, execution logs, run events, and persisted task state.
 
+Configuration truth is split deliberately:
+
+- Model Management: model catalog, endpoints, credentials, model connectivity tests.
+- Coding Tools: CLI readiness, native auth/config, platform diagnostics only.
+- Agent Configuration: the only place allowed to choose `code agent × model × skills × sandbox`.
+
+Keep the internal default model visible and separate. It is only for internal LLM paths such as welcome prompts, Orchestrator, Planner, and Synthesizer.
+
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
 
 ## Stack
@@ -157,6 +165,7 @@ Rules:
 - If the user did not choose a project workspace, AgentHub creates an auto workspace under the system user data directory, such as `%LOCALAPPDATA%\AgentHub\workspaces` on Windows. Do not fall back to the AgentHub source repository.
 - Each task also gets a sandbox root under the system cache directory, used for temp/cache/config isolation for CLI runtimes.
 - Execution isolation is behind `SandboxProvider`; the default provider is now `docker-sandbox`, with `local-workdir` only as a compatibility fallback. `local-workdir` hardens workdir plus process env, but it is not an OS/network permission sandbox.
+- For code agents, user-facing sandbox choices are now only `workspace-write` and `danger-full-access`. Do not reintroduce `read-only` as a public code-agent option.
 - Upstream artifacts that can be reused by downstream agents are copied into `.agenthub/handoff/...`.
 - Downstream prompts must prefer `handoffPath`.
 - If a blackboard entry only has `filePath` or `path`, treat it as an upstream record, not as proof that the file exists in the current workdir.

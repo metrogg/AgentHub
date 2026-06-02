@@ -58,6 +58,14 @@ AgentHub 的目标不是做一个固定角色模板系统，而是把多 Coding 
 
 完整分层和业内方案对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)。
 
+当前配置真相也分三层：
+
+- `模型管理`：模型目录、双端点、密钥、模型测试。
+- `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
+- `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
+
+另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、Orchestrator / Planner / Synthesizer 等内部模型调用。
+
 ## 技术栈
 
 | 层面 | 技术 |
@@ -156,6 +164,8 @@ bun test
 如果没有选择工作区，系统会自动在默认工作空间存储路径下创建一个可写工作区。默认位置使用系统用户数据目录，例如 Windows 的 `%LOCALAPPDATA%\AgentHub\workspaces`，避免写进 AgentHub 源码目录。可在设置里调整默认工作区存储路径。
 
 当前默认不再把 Git 分支隔离作为主路径，也不把本地 workdir 伪装成容器沙箱。执行层已经抽出 `SandboxProvider` 边界，默认 provider 是 `docker-sandbox`；`local-workdir` 只作为兼容降级路径。
+
+对于 Code Agent，当前用户可选沙箱只保留 `workspace-write` 和 `danger-full-access`。不要再把 `read-only` 当作公开的 code-agent 配置选项。
 
 如需临时回退到本地工作目录隔离，可显式设置：
 

@@ -839,7 +839,7 @@ function normalizeCodeAgentType(value?: string | null) {
 }
 
 function normalizeSandboxPolicy(value?: string | null) {
-  const allowed = ['read-only', 'workspace-write', 'danger-full-access']
+  const allowed = ['workspace-write', 'danger-full-access']
   return allowed.includes(value ?? '') ? value! as any : 'workspace-write'
 }
 

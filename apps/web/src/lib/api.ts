@@ -91,7 +91,7 @@ export function friendlyErrorMessage(error: unknown, context?: string): string {
     if (error.status === 500 && error.message === 'Internal Server Error') {
       return prefix + '服务端暂不可用，请确认后端服务已启动后重试'
     }
-    return prefix + error.message
+    return prefix + normalizeErrorMessage(error.message, `HTTP ${error.status}`)
   }
   if (error instanceof Error) {
     const msg = error.message.toLowerCase()
@@ -101,9 +101,9 @@ export function friendlyErrorMessage(error: unknown, context?: string): string {
     if (msg.includes('abort')) {
       return prefix + '请求超时，请稍后重试'
     }
-    return prefix + error.message
+    return prefix + normalizeErrorMessage(error.message)
   }
-  return prefix + '请求失败'
+  return prefix + normalizeUnknownError(error)
 }
 
 async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt = 0): Promise<T> {
@@ -139,10 +139,7 @@ async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt 
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }))
       const errorPayload = body?.error ?? {}
-      const message =
-        typeof errorPayload === 'string'
-          ? errorPayload
-          : (errorPayload.message ?? body?.error ?? body?.message ?? `HTTP ${res.status}`)
+      const message = extractApiErrorMessage(body, res.status)
       const code = typeof errorPayload === 'object' ? errorPayload.code : undefined
       const requestId = typeof errorPayload === 'object' ? errorPayload.requestId : undefined
       throw new ApiError(res.status, message, code, requestId)
@@ -176,6 +173,50 @@ async function requestWithRetry<T>(path: string, init?: RequestOptions, attempt 
 
 async function request<T>(path: string, init?: RequestOptions): Promise<T> {
   return requestWithRetry<T>(path, init)
+}
+
+function extractApiErrorMessage(body: any, status: number): string {
+  const candidates = [
+    body?.error?.message,
+    body?.error,
+    body?.message,
+    body?.details,
+    body,
+  ]
+  for (const candidate of candidates) {
+    const normalized = normalizeUnknownError(candidate)
+    if (normalized && normalized !== '请求失败' && normalized !== '[object Object]') return normalized
+  }
+  return `HTTP ${status}`
+}
+
+function normalizeErrorMessage(message: string, fallback = '请求失败'): string {
+  const trimmed = message.trim()
+  if (!trimmed || trimmed === '[object Object]') return fallback
+  return trimmed
+}
+
+function normalizeUnknownError(error: unknown): string {
+  if (typeof error === 'string') return normalizeErrorMessage(error)
+  if (error instanceof Error) return normalizeErrorMessage(error.message)
+  if (!error || typeof error !== 'object') return '请求失败'
+
+  const record = error as Record<string, unknown>
+  const nestedCandidates = [record.message, record.error, record.details, record.reason]
+  for (const candidate of nestedCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+    if (candidate && typeof candidate === 'object') {
+      const nested = normalizeUnknownError(candidate)
+      if (nested && nested !== '请求失败') return nested
+    }
+  }
+
+  try {
+    const serialized = JSON.stringify(error)
+    return serialized && serialized !== '{}' ? serialized : '请求失败'
+  } catch {
+    return '请求失败'
+  }
 }
 
 export interface Session {
@@ -388,63 +429,6 @@ export interface CodingToolsStartupLifecycleResult {
   settingsChanged: boolean
 }
 
-export interface SettingsGeneralInfo {
-  debug: {
-    enabled: boolean
-    dir: string
-    logLevel: string
-    exists: boolean
-    sizeBytes: number
-    sizeLabel: string
-  }
-  storage: {
-    appDataDir: string
-    configDir: string
-    logDir: string
-    activeDataDir: string
-    dataPath: string
-    workspaceStorageRoot: string
-    workspaceStorageExists: boolean
-    workspaceStorageSizeBytes: number
-    workspaceStorageSizeLabel: string
-    databasePath: string
-    migrationPending: boolean
-    exists: boolean
-    sizeBytes: number
-    sizeLabel: string
-    databaseSizeBytes: number
-    databaseSizeLabel: string
-    scannedFiles: number
-    truncated: boolean
-    message: string
-  }
-  git: { runtime: string; path: string; ok: boolean; message: string }
-  python: { runtime: string; path: string; ok: boolean; message: string }
-  sandbox: {
-    defaultProvider: string
-    configuredProvider: string
-    cleanupMode: string
-    sandboxRoot: string
-    dockerSandbox: {
-      agent: string
-      available: boolean
-      probe: {
-        version?: string
-        exitCode: number
-        installed?: boolean
-        daemonReady?: boolean
-        message?: string
-      }
-      policy?: {
-        configured: boolean
-        authenticated: boolean
-        message: string
-        recommendedCommand?: string
-      } | null
-    }
-  }
-}
-
 export interface OpencodeModelItem {
   id: string
   provider: string
@@ -591,6 +575,13 @@ export interface SettingsGeneralInfo {
   sandbox: {
     defaultProvider: string
     configuredProvider: string
+    providerConfigured: boolean
+    sbxInstalled: boolean
+    daemonReady: boolean
+    dockerLoggedIn: boolean
+    policyConfigured: boolean
+    sandboxRunnable: boolean
+    supportsPerAgentIsolation: boolean
     cleanupMode: string
     sandboxRoot: string
     dockerSandbox: {

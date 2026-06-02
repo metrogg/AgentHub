@@ -43,7 +43,7 @@ export interface AgentRolePreset {
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   toolPermissions: string[]
-  sandboxPolicy: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandboxPolicy: 'workspace-write' | 'danger-full-access'
   contextPolicy: 'recent-only' | 'pinned-recent' | 'workspace-aware'
   autoInvoke: boolean
   approvalRequired: boolean
@@ -76,7 +76,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     codeAgentType: 'opencode',
     capabilityTags: ['orchestrate', 'plan', 'dispatch', 'coordinate', 'synthesize'],
     toolPermissions: ['chat', 'workspace:read'],
-    sandboxPolicy: 'read-only',
+    sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: false,
@@ -107,7 +107,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     runtimeType: 'llm',
     capabilityTags: ['clarify', 'requirements', 'acceptance'],
     toolPermissions: ['chat'],
-    sandboxPolicy: 'read-only',
+    sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: false,
@@ -134,7 +134,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     codeAgentType: 'opencode',
     capabilityTags: ['design', 'ux', 'information-architecture', 'visual-direction'],
     toolPermissions: ['chat', 'workspace:read'],
-    sandboxPolicy: 'read-only',
+    sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: false,
@@ -161,7 +161,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     codeAgentType: 'opencode',
     capabilityTags: ['research', 'sources', 'images', 'facts', 'analysis'],
     toolPermissions: ['chat', 'workspace:read', 'skills:read'],
-    sandboxPolicy: 'read-only',
+    sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: false,
@@ -215,7 +215,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     codeAgentType: 'opencode',
     capabilityTags: ['verify', 'test', 'build', 'typecheck', 'lint'],
     toolPermissions: ['chat', 'workspace:read'],
-    sandboxPolicy: 'read-only',
+    sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: false,
@@ -242,7 +242,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     codeAgentType: 'opencode',
     capabilityTags: ['review', 'qa', 'quality', 'test', 'acceptance'],
     toolPermissions: ['chat', 'workspace:read'],
-    sandboxPolicy: 'read-only',
+    sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: false,
@@ -269,7 +269,7 @@ export const ROLE_PRESETS: Record<Exclude<AgentRoleType, 'custom'>, AgentRolePre
     codeAgentType: 'opencode',
     capabilityTags: ['synthesize', 'delivery', 'summary'],
     toolPermissions: ['chat', 'workspace:read'],
-    sandboxPolicy: 'read-only',
+    sandboxPolicy: 'workspace-write',
     contextPolicy: 'workspace-aware',
     autoInvoke: true,
     approvalRequired: false,

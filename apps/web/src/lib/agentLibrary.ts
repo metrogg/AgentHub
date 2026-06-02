@@ -227,7 +227,7 @@ export function createSavedAgent(
     capabilityTags: input.capabilityTags ?? [],
     skillIds: input.skillIds ?? [],
     toolPermissions: input.toolPermissions ?? [],
-    sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
+    sandboxPolicy: normalizeSandboxPolicy(input.sandboxPolicy),
     contextPolicy: input.contextPolicy ?? 'workspace-aware',
     autoInvoke: input.autoInvoke ?? true,
     approvalRequired: input.approvalRequired ?? (runtimeType === 'code-agent' ? false : true),
@@ -253,7 +253,7 @@ export function toAgentConfigInput(agent: SavedAgentConfig): AgentConfigInput {
     capabilityTags: [...(agent.capabilityTags ?? [])],
     skillIds: [...(agent.skillIds ?? [])],
     toolPermissions: [...(agent.toolPermissions ?? [])],
-    sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
+    sandboxPolicy: normalizeSandboxPolicy(agent.sandboxPolicy),
     contextPolicy: agent.contextPolicy ?? 'workspace-aware',
     autoInvoke: agent.autoInvoke ?? true,
     approvalRequired: runtimeType === 'code-agent' ? false : (agent.approvalRequired ?? true),
@@ -310,7 +310,7 @@ function normalizeSavedAgent(value: unknown): SavedAgentConfig | null {
       Array.isArray(input.toolPermissions) && input.toolPermissions.length
         ? input.toolPermissions
         : [],
-    sandboxPolicy: input.sandboxPolicy ?? 'workspace-write',
+    sandboxPolicy: normalizeSandboxPolicy(input.sandboxPolicy),
     contextPolicy: input.contextPolicy ?? 'workspace-aware',
     autoInvoke: input.autoInvoke ?? true,
     approvalRequired: runtimeType === 'code-agent' ? false : (input.approvalRequired ?? true),
@@ -379,6 +379,10 @@ function dedupeSavedAgents(agents: SavedAgentConfig[]) {
 
 function normalizeRuntimeType(value?: string | null): SavedAgentConfig['runtimeType'] {
   return value === 'llm' ? 'llm' : 'code-agent'
+}
+
+function normalizeSandboxPolicy(value?: string | null): SavedAgentConfig['sandboxPolicy'] {
+  return value === 'danger-full-access' ? 'danger-full-access' : 'workspace-write'
 }
 
 function normalizeSavedRelation(value: unknown): SavedAgentRelation | null {
