@@ -1189,15 +1189,6 @@ export default function SessionList({ onCollapse }: { onCollapse?: () => void })
           </div>
         )}
 
-        <div className={cn('bg-[#f5f5f1] p-2', activeTab !== 'me' && 'hidden')}>
-          <button
-            onClick={requestSettingsDialog}
-            className="flex h-10 w-full items-center gap-3 rounded-lg px-2 text-sm text-neutral-700 transition hover:bg-[#F7F7F7]"
-          >
-            <Settings2 className="h-4 w-4 text-neutral-500" />
-            {t('设置')}
-          </button>
-        </div>
       </div>
 
       {deleteTarget && (

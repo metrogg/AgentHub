@@ -445,6 +445,27 @@ export interface SettingsGeneralInfo {
   }
 }
 
+export interface SettingsConsoleLog {
+  id: string
+  time: string
+  createdAt: string
+  level: 'Trace' | 'Debug' | 'Info' | 'Warn' | 'Error'
+  source: '后端' | '前端' | 'Agent' | '桌面端'
+  module: string
+  content: string
+}
+
+export interface SettingsConsoleLogsResponse {
+  items: SettingsConsoleLog[]
+  sources: {
+    serverLogPath: string
+    serverLogExists: boolean
+    serverLogEnabled: boolean
+    executionTraceCount: number
+    runEventCount: number
+  }
+}
+
 export interface OpencodeModelItem {
   id: string
   provider: string
@@ -1137,6 +1158,8 @@ export const api = {
       python: { runtime: string; path: string; ok: boolean; message: string }
     }>('/settings/runtime-info'),
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
+  getSettingsConsoleLogs: (limit = 160) =>
+    request<SettingsConsoleLogsResponse>(`/settings/console-logs?limit=${encodeURIComponent(String(limit))}`),
   setupDockerSandbox: () =>
     request<{ ok: boolean; message: string; steps: Array<{ command: string; ok: boolean; output: string }>; sandbox: SettingsGeneralInfo['sandbox'] }>(
       '/settings/sandbox/docker/setup',

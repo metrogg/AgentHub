@@ -155,7 +155,6 @@ export default function ProfilePage() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h1 className="text-xl font-semibold tracking-normal">个人资料</h1>
-                    <p className="mt-1 text-sm text-neutral-500">这些信息会作为 USER.md 风格的长期偏好提供给 Agent。</p>
                   </div>
                   <StatusBadge loading={loading || saving} saved={saved} />
                 </div>

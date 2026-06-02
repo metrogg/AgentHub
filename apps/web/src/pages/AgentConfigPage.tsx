@@ -118,6 +118,7 @@ export default function AgentConfigPage() {
   const [assistantReply, setAssistantReply] = useState('可以直接说：把当前 Agent 改成 Codex 实现者，关闭风险确认，标签加 frontend。')
   const [saved, setSaved] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [showImportPanel, setShowImportPanel] = useState(false)
   const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([])
   const [comboHealth, setComboHealth] = useState<AgentComboHealth>({ state: 'idle' })
   const selectedExpertProfile = expertProfileForId(expertProfileIdFromDraft(draft))
@@ -562,111 +563,122 @@ export default function AgentConfigPage() {
 
         <div className="min-h-0 flex-1 overflow-hidden">
           <section className="h-full min-w-0 overflow-y-auto px-8 py-7">
-            <div className="mx-auto max-w-6xl">
-              <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <div className="inline-flex h-7 items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 text-xs text-neutral-500">
-                    <Settings2 className="h-3.5 w-3.5" />
-                    {t('全局 Agent 配置库')}
+            <div className="w-full max-w-[1400px]">
+              <div className="mb-5 rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="inline-flex h-7 items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-2.5 text-xs text-neutral-500">
+                      <Settings2 className="h-3.5 w-3.5" />
+                      {t('全局 Agent 配置库')}
+                    </div>
+                    <h1 className="mt-3 text-2xl font-semibold tracking-normal">{t('Agent 通讯录')}</h1>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                      <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-neutral-600">
+                        {agents.length} 个 Agent
+                      </span>
+                      <span className="rounded-full bg-neutral-100 px-2.5 py-1 text-neutral-600">
+                        {agents.filter((agent) => agent.runtimeType === 'code-agent').length} 个 Coding Tools
+                      </span>
+                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">
+                        {savedExpertProfileIds.size} 个模板已导入
+                      </span>
+                    </div>
                   </div>
-                  <h1 className="mt-4 text-3xl font-semibold tracking-normal">{t('管理所有 Agent')}</h1>
-                  <p className="mt-2 max-w-2xl text-sm leading-7 text-neutral-500">
-                    {t('这里保存的是唯一的全局 Agent 通讯录。新建群聊时像微信拉群一样邀请这些 Agent，无需再维护另一套群组配置。')}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button type="button" onClick={duplicateAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm hover:bg-neutral-50 disabled:text-neutral-300">
-                    <Copy className="h-4 w-4" />
-                    {t('复制')}
-                  </button>
-                  <button type="button" onClick={deleteAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50 disabled:text-neutral-300">
-                    <Trash2 className="h-4 w-4" />
-                    {t('删除')}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowImportPanel((open) => !open)}
+                      className={cn(
+                        'inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-sm font-medium shadow-sm transition',
+                        showImportPanel
+                          ? 'border-teal-200 bg-teal-50 text-teal-700'
+                          : 'border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50',
+                      )}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      {showImportPanel ? t('收起导入') : t('导入专家')}
+                    </button>
+                    <button type="button" onClick={duplicateAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 text-sm font-medium shadow-sm hover:bg-neutral-50 disabled:text-neutral-300">
+                      <Copy className="h-4 w-4" />
+                      {t('复制')}
+                    </button>
+                    <button type="button" onClick={deleteAgent} disabled={!selectedAgent} className="inline-flex h-9 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 text-sm font-medium text-red-500 shadow-sm hover:bg-red-50 disabled:text-neutral-300">
+                      <Trash2 className="h-4 w-4" />
+                      {t('删除')}
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <section className="mb-6 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold text-neutral-900">预装专家库</div>
-                      <p className="mt-1 text-xs leading-5 text-neutral-500">
-                        这些是可导入的 Agent 配置画像。导入后才会进入左侧全局通讯录；不会自动组队，也不会替 Orchestrator 固定分工。
-                      </p>
+              {showImportPanel && (
+                <section className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                  <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-neutral-900">专家模板</div>
+                      <div className="text-xs text-neutral-400">
+                        {allExpertProfiles.length} 个可导入 · {savedExpertProfileIds.size} 个已导入
+                      </div>
                     </div>
-                    <div className="text-xs text-neutral-400">
-                      {allExpertProfiles.length} 个专家 · {savedExpertProfileIds.size} 个已导入
+                    <div className="mt-3 grid max-h-56 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
+                      {allExpertProfiles.map((profile) => {
+                        const imported = savedExpertProfileIds.has(profile.id)
+                        return (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            onClick={() => void importExpertProfile(profile.id)}
+                            className={cn(
+                              'rounded-xl border px-3 py-2.5 text-left transition',
+                              imported
+                                ? 'border-emerald-100 bg-emerald-50/40'
+                                : 'border-neutral-200 bg-neutral-50 hover:border-neutral-300 hover:bg-white',
+                            )}
+                          >
+                            <span className="flex items-center gap-2">
+                              <span
+                                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-semibold text-white"
+                                style={{ background: profile.color }}
+                              >
+                                {profile.name.slice(0, 1).toUpperCase()}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium text-neutral-900">
+                                  {profile.name}
+                                </span>
+                                <span className="block truncate text-[11px] text-neutral-400">
+                                  {expertCategoryLabels[profile.category]} · {runtimeLabel(profile.runtimeType)}
+                                </span>
+                              </span>
+                              <span className={cn('shrink-0 text-[11px]', imported ? 'text-emerald-600' : 'text-neutral-400')}>
+                                {imported ? '已导入' : '导入'}
+                              </span>
+                            </span>
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
-                  <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
-                    {allExpertProfiles.map((profile) => {
-                      const imported = savedExpertProfileIds.has(profile.id)
-                      return (
+
+                  <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+                    <div className="text-sm font-semibold text-neutral-900">专家团</div>
+                    <div className="mt-3 space-y-2">
+                      {allExpertTeamProfiles.map((team) => (
                         <button
-                          key={profile.id}
+                          key={team.id}
                           type="button"
-                          onClick={() => void importExpertProfile(profile.id)}
-                          className={cn(
-                            'rounded-xl border px-3 py-3 text-left transition',
-                            imported
-                              ? 'border-emerald-100 bg-emerald-50/40'
-                              : 'border-neutral-200 bg-neutral-50 hover:border-neutral-300 hover:bg-white',
-                          )}
+                          onClick={() => void importExpertTeam(team.id)}
+                          className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2.5 text-left transition hover:border-neutral-300 hover:bg-white"
                         >
-                          <span className="flex items-center gap-2">
-                            <span
-                              className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-semibold text-white"
-                              style={{ background: profile.color }}
-                            >
-                              {profile.name.slice(0, 1).toUpperCase()}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-medium text-neutral-900">
-                                {profile.name}
-                              </span>
-                              <span className="block truncate text-[11px] text-neutral-400">
-                                {expertCategoryLabels[profile.category]} · {runtimeLabel(profile.runtimeType)}
-                              </span>
-                            </span>
-                            <span className={cn('shrink-0 text-[11px]', imported ? 'text-emerald-600' : 'text-neutral-400')}>
-                              {imported ? '已导入' : '导入'}
-                            </span>
-                          </span>
-                          <span className="mt-2 line-clamp-2 block text-xs leading-5 text-neutral-500">
-                            {profile.description}
+                          <span className="flex items-center justify-between gap-3">
+                            <span className="truncate text-sm font-medium text-neutral-900">{team.name}</span>
+                            <span className="shrink-0 text-[11px] text-emerald-600">导入成员</span>
                           </span>
                         </button>
-                      )
-                    })}
+                      ))}
+                    </div>
                   </div>
-                </div>
-
-                <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
-                  <div className="text-sm font-semibold text-neutral-900">专家团建议</div>
-                  <p className="mt-1 text-xs leading-5 text-neutral-500">
-                    专家团只负责批量导入成员配置，真实协作仍由群聊里的 Orchestrator 动态规划。
-                  </p>
-                  <div className="mt-4 space-y-2">
-                    {allExpertTeamProfiles.map((team) => (
-                      <button
-                        key={team.id}
-                        type="button"
-                        onClick={() => void importExpertTeam(team.id)}
-                        className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3 text-left transition hover:border-neutral-300 hover:bg-white"
-                      >
-                        <span className="flex items-center justify-between gap-3">
-                          <span className="text-sm font-medium text-neutral-900">{team.name}</span>
-                          <span className="text-[11px] text-emerald-600">导入成员</span>
-                        </span>
-                        <span className="mt-1 line-clamp-2 block text-xs leading-5 text-neutral-500">
-                          {team.description}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </section>
+                </section>
+              )}
 
               {showEditor ? (
                 <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -684,15 +696,25 @@ export default function AgentConfigPage() {
                           </option>
                         ))}
                       </SelectField>
-                      <p className="mt-2 text-xs leading-5 text-neutral-400">
-                        模板只是帮你填充 Agent 配置，不是独立专家系统，也不会固定驱动分工。
-                      </p>
                     </div>
-                    <div className="mb-4 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs leading-5 text-neutral-600">
-                      <div className="font-medium text-neutral-800">运行组合</div>
-                      <div className="mt-1">{runtimeComboLabel}</div>
-                      <div className="mt-1">
-                        模型管理负责把模型、Base URL、API Key 配好；Coding Tools 负责本机 CLI 可用；这里负责给每个专家绑定自己的 CLI、模型和 Skills。
+                    <div className="mb-4 grid gap-2 rounded-xl border border-neutral-200 bg-neutral-50 p-3 text-xs md:grid-cols-3">
+                      <div className="rounded-lg bg-white px-3 py-2">
+                        <div className="text-neutral-400">基底</div>
+                        <div className="mt-1 truncate font-medium text-neutral-800">
+                          {runtimeType === 'code-agent' ? labelForCodeAgentType(draft.codeAgentType ?? 'codex') : 'LLM'}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-white px-3 py-2">
+                        <div className="text-neutral-400">模型</div>
+                        <div className="mt-1 truncate font-medium text-neutral-800">
+                          {modelName(draft.modelId ?? null, models)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-white px-3 py-2">
+                        <div className="text-neutral-400">Skills</div>
+                        <div className="mt-1 truncate font-medium text-neutral-800">
+                          {(draft.skillIds ?? []).length} 个已绑定
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-start gap-4">

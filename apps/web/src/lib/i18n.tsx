@@ -223,8 +223,6 @@ const zhToEn: Record<string, string> = {
     'Type an @Agent name to have that member reply in the group chat. If no member is specified, Orchestrator takes over.',
   项目文件夹: 'Project folder',
   '本机 Coding Tools 工具台': 'Local Coding Tools Desk',
-  '直接检测和配置 Windows 本机 CLI，不再使用容器路径或远端工作区映射。':
-    'Detect and configure Windows local CLIs directly, without container paths or remote workspace mapping.',
   '本机运行的 OpenAI 编程代理，用于仓库理解、修改和验证。':
     'Local OpenAI coding agent for repository understanding, edits, and verification.',
   'Anthropic 终端编程助手，适合长上下文代码协作。':
@@ -266,6 +264,8 @@ const zhToEn: Record<string, string> = {
   沙箱策略: 'Sandbox policy',
   同步到模型配置: 'Sync to model config',
   测试连接: 'Test connection',
+  运行预览: 'Runtime preview',
+  隐藏运行预览: 'Hide runtime preview',
   本机运行预览: 'Local runtime preview',
   'Agent 会在工作区真实路径下启动，不再转换为容器内路径。':
     'Agents will start in the real workspace path instead of a container-mapped path.',
@@ -408,9 +408,10 @@ const zhToEn: Record<string, string> = {
   个配置: 'configs',
   '没有匹配的 Agent': 'No matching agents',
   '全局 Agent 配置库': 'Global Agent Config Library',
+  'Agent 通讯录': 'Agent Contacts',
+  导入专家: 'Import Experts',
+  收起导入: 'Collapse Import',
   '管理所有 Agent': 'Manage All Agents',
-  '这里保存的是唯一的全局 Agent 通讯录。新建群聊时像微信拉群一样邀请这些 Agent，无需再维护另一套群组配置。':
-    'This is the single global Agent contact list. Create a group chat by inviting these Agents, without maintaining a second group configuration.',
   复制: 'Duplicate',
   简介: 'Description',
   运行时: 'Runtime',
@@ -599,11 +600,13 @@ const zhToEn: Record<string, string> = {
   '配置启动行为、语言、保存策略和基础交互习惯。': 'Configure startup behavior, language, save policy, and basic interaction habits.',
   '调整主题、强调色、字体尺寸和聊天阅读密度。': 'Adjust theme, accent color, font size, and chat reading density.',
   '管理高频操作快捷键，提升聊天和编程效率。': 'Manage frequent shortcuts to improve chat and coding efficiency.',
-  '管理可用模型、API 端点、密钥变量和连接测试状态。': 'Manage available models, API endpoints, key variables, and connection test status.',
   '选择默认模型，并让聊天后端同步使用当前模型配置。': 'Choose the default model and sync it to the chat backend.',
   '配置 Agent 可调用的工具、MCP 服务、自动化钩子和敏感操作确认。': 'Configure agent tools, MCP services, automation hooks, and sensitive operation confirmations.',
   '管理归档会话的保留、恢复和清理策略。': 'Manage retention, recovery, and cleanup policies for archived chats.',
-  '管理外部连接、Git、本地环境、工作树和浏览器预览环境。': 'Manage external connections, Git, local environment, worktrees, and browser preview settings.',
+  '查看日志与本机诊断状态。': 'View logs and local diagnostics.',
+  运行日志: 'Runtime logs',
+  本机诊断: 'Local diagnostics',
+  '目录、运行时和执行隔离状态': 'Directory, runtime, and execution isolation status',
   '查看 AgentHub 客户端和本机运行信息。': 'View AgentHub client and local runtime information.',
   'Settings': 'Settings',
   'Close settings': 'Close settings',

@@ -32,7 +32,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, type Message, type MobileConnectivityStatus, type Session, type SettingsGeneralInfo } from '../lib/api'
+import { api, type Message, type MobileConnectivityStatus, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
@@ -935,22 +935,32 @@ function SettingsContent({
     case '关于':
       return (
         <SettingsStack>
-          <SettingsSection title="关于" desc="查看当前产品信息与联系方式。">
-            <div className="max-w-[720px] rounded-xl border border-neutral-200 bg-white p-5">
-              <div className="mb-5 border-b border-neutral-200 pb-5">
-                <div className="h-5 w-24 rounded bg-neutral-200" />
-                <div className="mt-3 h-4 w-40 rounded bg-neutral-100" />
-              </div>
-              <div className="grid max-w-md grid-cols-[6rem_1fr] gap-y-4 text-sm">
-                <span className="text-neutral-500">{t('应用')}</span><span className="font-medium">AgentHub</span>
-                <span className="text-neutral-500">{t('版本')}</span><span className="font-medium">0.1.0</span>
-                <span className="text-neutral-500">{t('开发组织')}</span><span className="font-medium">AgentHub</span>
-                <span className="text-neutral-500">{t('联系邮箱')}</span><span className="font-medium">771473941@qq.com</span>
-                <span className="text-neutral-500">{t('版本来源')}</span><span className="font-medium">{t('本地开发版')}</span>
-                <span className="text-neutral-500">{t('上次检查')}</span><span><button type="button" disabled className="settings-soft-button opacity-50">{t('检查更新')}</button></span>
-              </div>
+          <div className="max-w-[720px] rounded-xl border border-neutral-200 bg-white p-5">
+            <div className="mb-5 border-b border-neutral-200 pb-5">
+              <div className="h-5 w-24 rounded bg-neutral-200" />
+              <div className="mt-3 h-4 w-40 rounded bg-neutral-100" />
             </div>
-          </SettingsSection>
+            <div className="grid max-w-md grid-cols-[6rem_1fr] gap-y-4 text-sm">
+              <span className="text-neutral-500">{t('应用')}</span><span className="font-medium">AgentHub</span>
+              <span className="text-neutral-500">{t('版本')}</span><span className="font-medium">0.1.0</span>
+              <span className="text-neutral-500">{t('开发组织')}</span><span className="font-medium">AgentHub</span>
+              <span className="text-neutral-500">{t('联系邮箱')}</span><span className="font-medium">771473941@qq.com</span>
+              <span className="text-neutral-500">GitHub</span>
+              <span>
+                <a
+                  href="https://github.com/metrogg/AgentHub"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-medium text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  GitHub
+                </a>
+              </span>
+              <span className="text-neutral-500">{t('版本来源')}</span><span className="font-medium">{t('本地开发版')}</span>
+              <span className="text-neutral-500">{t('上次检查')}</span><span><button type="button" disabled className="settings-soft-button opacity-50">{t('检查更新')}</button></span>
+            </div>
+          </div>
         </SettingsStack>
       )
     default:
@@ -2127,36 +2137,21 @@ function ToolPermissionTable({
 }
 
 type ConsoleLogLevel = 'Trace' | 'Debug' | 'Info' | 'Warn' | 'Error'
-type ConsoleLogSource = '后端' | '前端' | 'Agent' | '桌面端'
-
-interface ConsoleLogRow {
-  id: string
-  time: string
-  level: ConsoleLogLevel
-  source: ConsoleLogSource
-  module: string
-  content: string
-}
+type ConsoleLogRow = SettingsConsoleLog
 
 const consoleLevelOptions = ['全部级别', 'Trace', 'Debug', 'Info', 'Warn', 'Error']
 const consoleSourceOptions = ['全部来源', '后端', '前端', 'Agent', '桌面端']
 
-function createConsoleSeedRows(): ConsoleLogRow[] {
-  const now = new Date()
-  const at = (minutesAgo: number) => new Date(now.getTime() - minutesAgo * 60 * 1000).toLocaleTimeString('zh-CN', { hour12: false })
-  return [
-    { id: 'log-1', time: at(0), level: 'Info', source: '后端', module: 'settings', content: '控制台已连接本地服务，等待诊断输出' },
-    { id: 'log-2', time: at(1), level: 'Debug', source: 'Agent', module: 'agent-runtime', content: 'code agent stream connected, waiting for output chunks' },
-    { id: 'log-3', time: at(3), level: 'Info', source: '前端', module: 'settings', content: 'settings panel rendered and preferences persisted' },
-    { id: 'log-4', time: at(5), level: 'Warn', source: '后端', module: 'workspace', content: 'dev server preview is not attached to a workspace session' },
-    { id: 'log-5', time: at(8), level: 'Error', source: '后端', module: 'asset_db::watcher', content: 'worker 1 error processing workspace icons: No GUID in generated file metadata' },
-    { id: 'log-6', time: at(10), level: 'Trace', source: '桌面端', module: 'sidecar', content: 'sidecar heartbeat received; service window is healthy' },
-  ]
-}
-
 function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const { t } = useI18n()
-  const [logs, setLogs] = useState<ConsoleLogRow[]>(() => createConsoleSeedRows())
+  const [logs, setLogs] = useState<ConsoleLogRow[]>([])
+  const [consoleSources, setConsoleSources] = useState<{
+    serverLogPath: string
+    serverLogExists: boolean
+    serverLogEnabled: boolean
+    executionTraceCount: number
+    runEventCount: number
+  } | null>(null)
   const [level, setLevel] = useState('全部级别')
   const [source, setSource] = useState('全部来源')
   const [query, setQuery] = useState('')
@@ -2172,7 +2167,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
       if (source !== '全部来源' && row.source !== source) return false
       if (!keyword) return true
       return [row.module, row.content, row.source, row.level].join(' ').toLowerCase().includes(keyword)
-    })
+    }).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
   }, [level, logs, query, source])
   const errorCount = logs.filter((row) => row.level === 'Error').length
   const warningCount = logs.filter((row) => row.level === 'Warn').length
@@ -2223,13 +2218,17 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     tableRef.current?.scrollTo({ top: tableRef.current.scrollHeight, behavior: 'smooth' })
   }, [autoScroll, filteredLogs.length])
 
-  function appendLog(row: Omit<ConsoleLogRow, 'id' | 'time'>) {
+  function appendLog(row: Omit<ConsoleLogRow, 'id' | 'time' | 'createdAt'> & { createdAt?: string }) {
+    const createdAt = typeof row.createdAt === 'string'
+      ? row.createdAt
+      : new Date().toISOString()
     setLogs((current) => [
       ...current,
       {
         ...row,
         id: `log-${Date.now()}-${current.length}`,
-        time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+        time: new Date(createdAt).toLocaleTimeString('zh-CN', { hour12: false }),
+        createdAt,
       },
     ])
   }
@@ -2242,15 +2241,14 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   async function refreshDiagnostics(visible = true) {
     setBusy('refresh')
     try {
-      const info = await api.getSettingsGeneralInfo()
+      const [info, consoleLogs] = await Promise.all([
+        api.getSettingsGeneralInfo(),
+        api.getSettingsConsoleLogs(180),
+      ])
       setGeneralInfo(info)
-      appendLog({
-        level: 'Info',
-        source: '后端',
-        module: 'settings/general-info',
-        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.dockerSandbox.available ? 'ok' : 'missing'}`,
-      })
-      if (visible) showNotice(t('诊断信息已刷新'))
+      setConsoleSources(consoleLogs.sources)
+      setLogs(consoleLogs.items)
+      if (visible) showNotice(t('控制台已刷新'))
     } catch (error: any) {
       appendLog({
         level: 'Error',
@@ -2377,35 +2375,42 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {notice && (
         <div className="rounded-xl border px-3 py-2 text-sm shadow-sm" style={{ background: 'var(--settings-accent-soft)', borderColor: 'var(--settings-active-border)', color: 'var(--settings-accent)' }}>
           {notice}
         </div>
       )}
 
-      <div className="grid gap-3 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2">
         <ConsoleMetric icon={Server} label="后端日志" value={backendCount} detail={generalInfo?.storage.logDir ?? '等待刷新'} ok />
         <ConsoleMetric icon={Activity} label="Agent 事件" value={agentCount} detail="流式输出、命令和文件变更会进入这里" ok />
         <ConsoleMetric icon={AlertTriangle} label="警告 / 错误" value={warningCount + errorCount} detail={errorCount ? `${errorCount} 个错误需要处理` : '暂无阻塞错误'} ok={errorCount === 0} />
         <ConsoleMetric icon={Database} label="数据与调试" value={generalInfo?.debug.sizeLabel ?? '0 B'} detail={debugEnabled ? '调试模式已开启' : '调试模式已关闭'} ok={debugEnabled} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
-        <div className="rounded-2xl border p-4 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <SegmentedControl value={level} options={consoleLevelOptions} onChange={setLevel} />
-            <SegmentedControl value={source} options={consoleSourceOptions} onChange={setSource} />
-            <InlineSwitch checked={autoScroll} onChange={setAutoScroll} label="自动滚动" />
-            <div className="relative min-w-64 flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: 'var(--settings-muted-text)' }} />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="settings-input h-9 pl-9"
-                placeholder={t('按模块名或日志内容筛选')}
-              />
+      <div className="rounded-2xl border p-5 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-base font-semibold" style={{ color: 'var(--settings-text)' }}>{t('运行日志')}</div>
+            <div className="mt-1 text-sm" style={{ color: 'var(--settings-muted-text)' }}>
+              {filteredLogs.length} / {logs.length} {t('条记录')} · {debugEnabled ? t('调试模式已开启') : t('调试模式已关闭')}
             </div>
+            {consoleSources && (
+              <div className="mt-2 flex flex-wrap gap-2 text-xs" style={{ color: 'var(--settings-muted-text)' }}>
+                <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel-muted)' }}>
+                  后端日志{consoleSources.serverLogEnabled ? (consoleSources.serverLogExists ? '已接入' : '等待写入') : '不可用'}
+                </span>
+                <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel-muted)' }}>
+                  执行追踪 {consoleSources.executionTraceCount}
+                </span>
+                <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel-muted)' }}>
+                  编排事件 {consoleSources.runEventCount}
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
             <button type="button" disabled={busy === 'refresh'} onClick={() => void refreshDiagnostics()} className="settings-soft-button">
               <RefreshCw className={cn('h-3.5 w-3.5', busy === 'refresh' && 'animate-spin')} />
               {t('刷新')}
@@ -2420,127 +2425,169 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             </button>
             <button type="button" onClick={clearLogs} className="settings-soft-button">{t('清空日志')}</button>
           </div>
+        </div>
 
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm" style={{ color: 'var(--settings-muted-text)' }}>
-            <span>{filteredLogs.length} / {logs.length} {t('条记录')}</span>
-            <span>{debugEnabled ? t('调试模式已开启') : t('调试模式已关闭')}</span>
+        <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+          <div className="flex min-w-0 flex-wrap gap-2">
+            <SegmentedControl value={level} options={consoleLevelOptions} onChange={setLevel} />
+            <SegmentedControl value={source} options={consoleSourceOptions} onChange={setSource} />
           </div>
-
-          <div className="overflow-hidden rounded-xl border" style={{ borderColor: 'var(--settings-border)' }}>
-            <div className="grid grid-cols-[6rem_5rem_5rem_13rem_1fr] px-3 py-2 text-xs font-semibold" style={{ background: 'var(--settings-panel-muted)', color: 'var(--settings-muted-text)' }}>
-              <span>{t('时间')}</span><span>{t('级别')}</span><span>{t('来源')}</span><span>{t('模块')}</span><span>{t('内容')}</span>
-            </div>
-            <div ref={tableRef} className="max-h-[430px] overflow-auto">
-              {filteredLogs.length === 0 ? (
-                <div className="px-3 py-10 text-center text-sm" style={{ color: 'var(--settings-muted-text)' }}>
-                  {logs.length ? t('没有匹配的日志') : t('日志已清空，刷新后会重新写入诊断记录')}
-                </div>
-              ) : (
-                filteredLogs.map((row) => (
-                  <div
-                    key={row.id}
-                    className="grid grid-cols-[6rem_5rem_5rem_13rem_1fr] border-t px-3 py-3 text-sm"
-                    style={{
-                      borderColor: 'var(--settings-border)',
-                      background: row.level === 'Error' ? 'var(--settings-danger-bg)' : row.level === 'Warn' ? 'rgba(245, 158, 11, 0.08)' : 'transparent',
-                    }}
-                  >
-                    <span className="font-mono text-xs" style={{ color: 'var(--settings-muted-text)' }}>{row.time}</span>
-                    <span><ConsoleLevelPill level={row.level} /></span>
-                    <span className="font-medium" style={{ color: 'var(--settings-text)' }}>{t(row.source)}</span>
-                    <span className="truncate font-mono text-xs font-semibold" style={{ color: 'var(--settings-text)' }} title={row.module}>{row.module}</span>
-                    <span className="font-mono text-xs leading-5" style={{ color: 'var(--settings-text)' }}>{row.content}</span>
-                  </div>
-                ))
-              )}
-            </div>
+          <div className="relative min-w-0">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" style={{ color: 'var(--settings-muted-text)' }} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="settings-input h-9 pl-9"
+              placeholder={t('按模块名或日志内容筛选')}
+            />
+          </div>
+          <div className="flex justify-start lg:justify-end">
+            <InlineSwitch checked={autoScroll} onChange={setAutoScroll} label="自动滚动" />
           </div>
         </div>
 
-        <div className="space-y-3">
-          <ConsoleDiagnosticCard
-            icon={Database}
-            title="本地数据"
-            status={generalInfo?.storage.exists ? '目录可用' : '等待刷新'}
-            detail={generalInfo?.storage.activeDataDir ?? '会话、配置、日志会写入 App Data'}
-            action="打开日志目录"
-            busy={busy === 'log'}
-            onAction={() => void openPathWithFallback(generalInfo?.storage.logDir, 'log')}
-          />
-          <ConsoleDiagnosticCard
-            icon={TerminalSquare}
-            title="调试输出"
-            status={debugEnabled ? '正在记录' : '未开启'}
-            detail={generalInfo?.debug.dir ?? '可在通用设置中开启调试模式'}
-            action="打开调试目录"
-            busy={busy === 'debug'}
-            onAction={() => void openPathWithFallback(generalInfo?.debug.dir, 'debug')}
-          />
-          <ConsoleDiagnosticCard
-            icon={GitBranch}
-            title="Git 运行时"
-            status={generalInfo?.git.ok ? '可用' : '未检测到'}
-            detail={generalInfo?.git.runtime ?? '用于 diff、撤回和文件变更分析'}
-          />
-          <ConsoleDiagnosticCard
-            icon={FileText}
-            title="Python 运行时"
-            status={generalInfo?.python.ok ? '可用' : '未检测到'}
-            detail={generalInfo?.python.runtime ?? '用于脚本工具和文档处理'}
-          />
-          <ConsoleDiagnosticCard
-            icon={ShieldCheck}
-            title="执行隔离"
-            status={sandboxStatus}
-            detail={sandboxDetail}
-            action="刷新状态"
-            busy={busy === 'refresh'}
-            onAction={() => void refreshDiagnostics()}
-          />
-          {sandboxNeedsSetup && (
-            <div
-              className="rounded-2xl border p-4 text-sm leading-6 shadow-sm"
-              style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}
-            >
-              <div className="font-semibold">如何启用 Docker Sandboxes</div>
-              <div className="mt-2 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-                AgentHub 默认会把每个 Agent 的任务放进独立 Docker Sandboxes 运行，避免多个 OpenCode、Claude Code、Codex 同时共享同一个执行环境。{sandboxSetupReason}
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button type="button" onClick={() => void loginDockerSandbox()} disabled={busy === 'sandbox-login'} className="settings-soft-button">
-                  {busy === 'sandbox-login' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
-                  登录 Docker
-                </button>
-                <button type="button" onClick={() => void setupDockerSandbox()} disabled={busy === 'sandbox-setup'} className="settings-soft-button">
-                  {busy === 'sandbox-setup' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                  一键初始化
-                </button>
-                <button type="button" onClick={() => void refreshDiagnostics()} disabled={busy === 'refresh'} className="settings-soft-button">
-                  <RefreshCw className={cn('h-3.5 w-3.5', busy === 'refresh' && 'animate-spin')} />
-                  刷新状态
-                </button>
-              </div>
-              <div className="mt-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--settings-border)', background: 'var(--settings-panel-muted)' }}>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>默认网络策略</span>
-                  <button type="button" onClick={() => void copySandboxPolicyCommand()} className="settings-soft-button h-7 px-2 text-xs">
-                    <Copy className="h-3.5 w-3.5" />
-                    复制
-                  </button>
-                </div>
-                <code className="block break-all font-mono text-xs">{sandboxPolicyCommand}</code>
-              </div>
-              <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-                如果你只想先跑起来，点击“一键初始化”就够了。若仍提示未登录，先点“登录 Docker”，完成后再回来刷新。开发时也可以切回 `AGENTHUB_SANDBOX_PROVIDER=local-workdir`，但那只是兼容模式。
-              </div>
+        <div ref={tableRef} className="max-h-[460px] space-y-3 overflow-auto pr-1">
+          {filteredLogs.length === 0 ? (
+            <div className="rounded-xl border px-3 py-10 text-center text-sm" style={{ borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}>
+              {logs.length ? t('没有匹配的日志') : t('日志已清空，刷新后会重新写入诊断记录')}
             </div>
+          ) : (
+            filteredLogs.map((row) => (
+              <div
+                key={row.id}
+                className="rounded-xl border px-4 py-3"
+                style={{
+                  borderColor: 'var(--settings-border)',
+                  background: row.level === 'Error' ? 'var(--settings-danger-bg)' : row.level === 'Warn' ? 'rgba(245, 158, 11, 0.08)' : 'var(--settings-panel-muted)',
+                }}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <ConsoleLevelPill level={row.level} />
+                  <span className="font-mono text-xs" style={{ color: 'var(--settings-muted-text)' }}>{row.time}</span>
+                  <span className="rounded-full px-2 py-0.5 text-xs font-medium" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                    {t(row.source)}
+                  </span>
+                  <span className="min-w-0 truncate font-mono text-xs font-semibold" style={{ color: 'var(--settings-text)' }} title={row.module}>
+                    {row.module}
+                  </span>
+                </div>
+                <div className="mt-2 break-words font-mono text-xs leading-6" style={{ color: 'var(--settings-text)' }}>
+                  {row.content}
+                </div>
+              </div>
+            ))
           )}
         </div>
+      </div>
+
+      <div className="rounded-2xl border p-5 shadow-sm" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-base font-semibold" style={{ color: 'var(--settings-text)' }}>{t('本机诊断')}</div>
+            <div className="mt-1 text-sm" style={{ color: 'var(--settings-muted-text)' }}>
+              {t('目录、运行时和执行隔离状态')}
+            </div>
+          </div>
+          <button type="button" disabled={busy === 'refresh'} onClick={() => void refreshDiagnostics()} className="settings-soft-button">
+            <RefreshCw className={cn('h-3.5 w-3.5', busy === 'refresh' && 'animate-spin')} />
+            {t('刷新状态')}
+          </button>
+        </div>
+
+        <div className="flex gap-4 overflow-x-auto pb-1">
+          <div className="min-w-[17rem] flex-1">
+            <ConsoleDiagnosticCard
+              icon={Database}
+              title="本地数据"
+              status={generalInfo?.storage.exists ? '目录可用' : '等待刷新'}
+              detail={generalInfo?.storage.activeDataDir ?? '会话、配置、日志会写入 App Data'}
+              action="打开日志目录"
+              busy={busy === 'log'}
+              onAction={() => void openPathWithFallback(generalInfo?.storage.logDir, 'log')}
+            />
+          </div>
+          <div className="min-w-[17rem] flex-1">
+            <ConsoleDiagnosticCard
+              icon={TerminalSquare}
+              title="调试输出"
+              status={debugEnabled ? '正在记录' : '未开启'}
+              detail={generalInfo?.debug.dir ?? '可在通用设置中开启调试模式'}
+              action="打开调试目录"
+              busy={busy === 'debug'}
+              onAction={() => void openPathWithFallback(generalInfo?.debug.dir, 'debug')}
+            />
+          </div>
+          <div className="min-w-[17rem] flex-1">
+            <ConsoleDiagnosticCard
+              icon={GitBranch}
+              title="Git 运行时"
+              status={generalInfo?.git.ok ? '可用' : '未检测到'}
+              detail={generalInfo?.git.runtime ?? '用于 diff、撤回和文件变更分析'}
+            />
+          </div>
+          <div className="min-w-[17rem] flex-1">
+            <ConsoleDiagnosticCard
+              icon={FileText}
+              title="Python 运行时"
+              status={generalInfo?.python.ok ? '可用' : '未检测到'}
+              detail={generalInfo?.python.runtime ?? '用于脚本工具和文档处理'}
+            />
+          </div>
+          <div className="min-w-[17rem] flex-1">
+            <ConsoleDiagnosticCard
+              icon={ShieldCheck}
+              title="执行隔离"
+              status={sandboxStatus}
+              detail={sandboxDetail}
+              action="刷新状态"
+              busy={busy === 'refresh'}
+              onAction={() => void refreshDiagnostics()}
+            />
+          </div>
+        </div>
+
+        {sandboxNeedsSetup && (
+          <div
+            className="mt-4 rounded-2xl border p-4 text-sm leading-6 shadow-sm"
+            style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}
+          >
+            <div className="font-semibold">如何启用 Docker Sandboxes</div>
+            <div className="mt-2 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+              AgentHub 默认会把每个 Agent 的任务放进独立 Docker Sandboxes 运行，避免多个 OpenCode、Claude Code、Codex 同时共享同一个执行环境。{sandboxSetupReason}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" onClick={() => void loginDockerSandbox()} disabled={busy === 'sandbox-login'} className="settings-soft-button">
+                {busy === 'sandbox-login' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+                登录 Docker
+              </button>
+              <button type="button" onClick={() => void setupDockerSandbox()} disabled={busy === 'sandbox-setup'} className="settings-soft-button">
+                {busy === 'sandbox-setup' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                一键初始化
+              </button>
+              <button type="button" onClick={() => void refreshDiagnostics()} disabled={busy === 'refresh'} className="settings-soft-button">
+                <RefreshCw className={cn('h-3.5 w-3.5', busy === 'refresh' && 'animate-spin')} />
+                刷新状态
+              </button>
+            </div>
+            <div className="mt-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--settings-border)', background: 'var(--settings-panel)' }}>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>默认网络策略</span>
+                <button type="button" onClick={() => void copySandboxPolicyCommand()} className="settings-soft-button h-7 px-2 text-xs">
+                  <Copy className="h-3.5 w-3.5" />
+                  复制
+                </button>
+              </div>
+              <code className="block break-all font-mono text-xs">{sandboxPolicyCommand}</code>
+            </div>
+            <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+              如果你只想先跑起来，点击“一键初始化”就够了。若仍提示未登录，先点“登录 Docker”，完成后再回来刷新。开发时也可以切回 `AGENTHUB_SANDBOX_PROVIDER=local-workdir`，但那只是兼容模式。
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
 }
-
 function ConsoleMetric({ icon: Icon, label, value, detail, ok }: { icon: LucideIcon; label: string; value: number | string; detail: string; ok: boolean }) {
   const { t } = useI18n()
   return (
@@ -2553,7 +2600,7 @@ function ConsoleMetric({ icon: Icon, label, value, detail, ok }: { icon: LucideI
       </div>
       <div className="text-2xl font-semibold" style={{ color: 'var(--settings-text)' }}>{value}</div>
       <div className="mt-1 text-sm font-medium" style={{ color: 'var(--settings-text)' }}>{t(label)}</div>
-      <div className="mt-2 truncate text-xs" style={{ color: 'var(--settings-muted-text)' }} title={detail}>{t(detail)}</div>
+      <div className="mt-2 break-words text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }} title={detail}>{t(detail)}</div>
     </div>
   )
 }
@@ -2651,7 +2698,7 @@ function sectionDescription(section: SectionKey) {
     快捷键: '管理高频操作快捷键，提升聊天和编程效率。',
     工具权限: '配置 Agent 可调用的工具、MCP 服务、自动化钩子和敏感操作确认。',
     归档会话: '管理归档会话的保留、恢复和清理策略。',
-    控制台: '管理外部连接、Git、本地环境、工作树和浏览器预览环境。',
+    控制台: '查看日志与本机诊断状态。',
     关于: '查看 AgentHub 客户端和本机运行信息。',
   }
   return descriptions[section]

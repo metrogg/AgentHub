@@ -4834,7 +4834,7 @@ private fun DocumentPreviewPlaceholder(
 @Composable
 private fun AgentHubLogo(size: androidx.compose.ui.unit.Dp) {
     Image(
-        painter = painterResource(R.drawable.ic_agenthub),
+        painter = painterResource(R.drawable.ic_agenthub_logo),
         contentDescription = "AgentHub",
         modifier = Modifier
             .size(size)

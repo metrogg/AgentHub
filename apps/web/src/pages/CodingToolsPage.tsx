@@ -210,6 +210,7 @@ export default function CodingToolsPage() {
   const [codexAuthFileMessage, setCodexAuthFileMessage] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [toolPage, setToolPage] = useState(0)
+  const [runPreviewOpen, setRunPreviewOpen] = useState(false)
   const [executionEnabled, setExecutionEnabled] = useState<boolean | null>(null)
   const [executionBusy, setExecutionBusy] = useState(false)
   const [focusedAgentToolKey, setFocusedAgentToolKey] = useState<string | null>(null)
@@ -815,11 +816,6 @@ export default function CodingToolsPage() {
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">
                 Coding Tools
               </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-600">
-                {t(
-                  '直接检测和配置 Windows 本机 CLI，不再使用容器路径或远端工作区映射。',
-                )}
-              </p>
               {executionEnabled !== null && (
                 <div className="mt-3 flex items-center gap-3">
                   <button
@@ -1291,36 +1287,56 @@ export default function CodingToolsPage() {
             </div>
 
             <aside className="space-y-4">
-              <div className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
-                <div className="text-sm font-semibold">{t('本机运行预览')}</div>
-                <p className="mt-2 text-xs leading-5 text-neutral-500">
-                  {t('Agent 会在工作区真实路径下启动，不再转换为容器内路径。')}
-                </p>
-                <div className="mt-4 text-xs font-medium text-neutral-600">
-                  {t('环境变量')}
-                </div>
-                <CodeBlock value={envSnippet} />
+              <div className="flex justify-end">
                 <button
                   type="button"
-                  onClick={() => copy(envSnippet, '环境变量')}
-                  className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-neutral-200 text-sm hover:bg-neutral-50"
+                  onClick={() => setRunPreviewOpen((open) => !open)}
+                  className="inline-flex h-8 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-700 shadow-sm transition hover:bg-neutral-50"
+                  aria-expanded={runPreviewOpen}
                 >
-                  <Copy className="h-4 w-4" />
-                  {t('复制环境变量')}
-                </button>
-                <div className="mt-4 text-xs font-medium text-neutral-600">
-                  {t('命令预览')}
-                </div>
-                <CodeBlock value={runCommand} />
-                <button
-                  type="button"
-                  onClick={() => copy(runCommand, '运行命令')}
-                  className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-neutral-200 text-sm hover:bg-neutral-50"
-                >
-                  <Copy className="h-4 w-4" />
-                  {t('复制命令')}
+                  <Terminal className="h-3.5 w-3.5 text-teal-700" />
+                  {runPreviewOpen ? t('隐藏运行预览') : t('运行预览')}
+                  <ChevronDown
+                    className={cn(
+                      'h-3.5 w-3.5 text-neutral-400 transition-transform',
+                      runPreviewOpen && 'rotate-180',
+                    )}
+                  />
                 </button>
               </div>
+
+              {runPreviewOpen && (
+                <div className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
+                  <div className="text-sm font-semibold">{t('本机运行预览')}</div>
+                  <p className="mt-2 text-xs leading-5 text-neutral-500">
+                    {t('Agent 会在工作区真实路径下启动，不再转换为容器内路径。')}
+                  </p>
+                  <div className="mt-4 text-xs font-medium text-neutral-600">
+                    {t('环境变量')}
+                  </div>
+                  <CodeBlock value={envSnippet} />
+                  <button
+                    type="button"
+                    onClick={() => copy(envSnippet, '环境变量')}
+                    className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-neutral-200 text-sm hover:bg-neutral-50"
+                  >
+                    <Copy className="h-4 w-4" />
+                    {t('复制环境变量')}
+                  </button>
+                  <div className="mt-4 text-xs font-medium text-neutral-600">
+                    {t('命令预览')}
+                  </div>
+                  <CodeBlock value={runCommand} />
+                  <button
+                    type="button"
+                    onClick={() => copy(runCommand, '运行命令')}
+                    className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-neutral-200 text-sm hover:bg-neutral-50"
+                  >
+                    <Copy className="h-4 w-4" />
+                    {t('复制命令')}
+                  </button>
+                </div>
+              )}
 
               {(cliMessage || cliOutput) && (
                 <div className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
@@ -1407,9 +1423,6 @@ function CodeAgentAdvancedSettings({
     <div className="mt-5 rounded-lg border border-neutral-200 bg-neutral-50 p-4">
       <div>
         <div className="text-sm font-semibold text-neutral-800">{t(title)}</div>
-        <p className="mt-1 text-xs leading-5 text-neutral-500">
-          {t('这些参数会在运行时自动传递给 CLI，不修改本机配置文件。Agent 绑定的模型、Skills 和沙箱策略优先由专家配置决定。')}
-        </p>
       </div>
 
       {tool.id === 'codex' && (

@@ -197,9 +197,6 @@ export default function ModelManagementPage() {
                 {t('模型目录')}
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">{t('模型管理')}</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-600">
-                {t('管理可用模型、API 端点、密钥变量和连接测试状态。')}
-              </p>
             </div>
             <div className="flex items-center gap-2">
               <button
