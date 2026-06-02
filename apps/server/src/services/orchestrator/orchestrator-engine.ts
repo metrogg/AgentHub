@@ -134,12 +134,26 @@ export class OrchestratorEngine {
       where: eq(workspaceTasks.runId, runId),
     })
 
-    for (const task of allTasks) {
+    const resumedTasks = allTasks.map((task) => ({ ...task }))
+    for (const task of resumedTasks) {
       if (task.status === 'running') {
         await db
           .update(workspaceTasks)
-          .set({ status: 'pending' })
+          .set({
+            status: TaskStatus.Pending,
+            startedAt: null,
+            completedAt: null,
+            errorLog: '服务重启后恢复运行，任务已重新排队。',
+            progressPercent: 0,
+            progressStatus: '服务重启后恢复运行，等待重新分发。',
+          })
           .where(eq(workspaceTasks.id, task.id))
+        task.status = TaskStatus.Pending
+        task.startedAt = null
+        task.completedAt = null
+        task.errorLog = '服务重启后恢复运行，任务已重新排队。'
+        task.progressPercent = 0
+        task.progressStatus = '服务重启后恢复运行，等待重新分发。'
       }
     }
 
@@ -151,7 +165,7 @@ export class OrchestratorEngine {
     const projectPath = workspaceRecord?.projectPath ?? null
 
     const childSessions = new Map<string, ChildSessionInfo>()
-    for (const task of allTasks) {
+    for (const task of resumedTasks) {
       if (task.sessionId) {
         childSessions.set(task.id, {
           sessionId: task.sessionId,
@@ -171,7 +185,7 @@ export class OrchestratorEngine {
     OrchestratorEngine.activeEngines.set(runId, engine)
 
     const pendingTasks = plan.tasks.filter((t) => {
-      const dbTask = allTasks.find((dt) => dt.id === t.id)
+      const dbTask = resumedTasks.find((dt) => dt.id === t.id)
       return dbTask && dbTask.status === 'pending'
     })
 
@@ -1302,6 +1316,22 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       executionPath: profile.projectPath ?? childInfo.projectPath ?? null,
       requestedSandboxPolicy: profile.sandboxPolicy,
     })
+
+    await db
+      .update(workspaceTasks)
+      .set({
+        status: TaskStatus.Running,
+        startedAt: new Date(),
+        completedAt: null,
+        errorLog: null,
+        progressPercent: 3,
+        progressStatus: buildExecutionProgressStatus({
+          agentName: agent.name,
+          taskTitle: task.title,
+          executionConfig,
+        }),
+      })
+      .where(eq(workspaceTasks.id, task.id))
 
     // 发送 orchestrator 特有的事件
     await emitRunEvent({
@@ -2594,6 +2624,13 @@ function startTaskHeartbeat(input: {
       .where(eq(workspaceTasks.id, input.taskId))
       .catch((err: any) => {
         logger.warn({ err: err?.message, taskId: input.taskId }, 'Failed to persist task heartbeat')
+      })
+    await db
+      .update(orchestratorRuns)
+      .set({ updatedAt: new Date() })
+      .where(eq(orchestratorRuns.id, input.runId))
+      .catch((err: any) => {
+        logger.warn({ err: err?.message, runId: input.runId }, 'Failed to persist run heartbeat')
       })
   }
 
