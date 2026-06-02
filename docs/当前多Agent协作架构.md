@@ -7,18 +7,20 @@
 当前事实总览见 `docs/当前状态与下一步路线.md`。
 更完整的分层架构与业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
 Spec Kit 契约化和 AG-UI 事件收敛路线见 `docs/SpecKit契约与AGUI事件落地路线.md`。
+产品北极星与 Coze 对标拆解见 `docs/Coze新版本对标拆解与开源复刻路线.md`。
 
 ## 设计目标
 
-AgentHub 要做的是通用多 Agent 协作平台，而不是针对某个固定任务的 Team 模板。
+AgentHub 要做的是通用多 Agent 协作平台，而不是针对某个固定任务的 Team 模板。更进一步说，这套多 Agent 运行时是未来 `开源 Coze` 产品壳下面的执行内核。
 
-用户体验应接近 WorkBuddy / Agent Team 类产品：
+当前运行时体验应接近 WorkBuddy / Agent Team 类产品，同时产品壳会逐步向 Coze 风格的 AI 工作台演进：
 
 - 主群聊承载用户目标、Orchestrator 计划、调度进度、成员汇报和最终总结。
 - 每个成员在自己的子对话里接收任务并输出。
 - 用户可以查看每个成员的真实执行过程。
 - 产物要能被主群聊看到，也能被下游 Agent 接力。
 - 系统不再自动注入默认团队、经典模板或关键词路由，所有执行分工都应来自 Orchestrator/Planner 的模型输出。
+- 后续产品层要在这套运行时之上形成 Space、Task Center、Asset Center、Expert Center、Eval / Trace 等一等页面。
 
 ## 当前分层架构
 
