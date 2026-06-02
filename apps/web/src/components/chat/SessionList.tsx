@@ -82,6 +82,7 @@ export default function SessionList({
   const { sessionId } = useParams()
   const sessions = useChatStore((state) => state.sessions)
   const currentSession = useChatStore((state) => state.currentSession)
+  const taskBoard = useChatStore((state) => state.taskBoard)
   const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
   const loadingSessions = useChatStore((state) => state.loadingSessions)
   const currentSessionId = useChatStore((state) => state.currentSessionId)
@@ -758,7 +759,13 @@ export default function SessionList({
                     ? groupSessionAgents(item.parent, groupWorkspaceAgents[workspaceId] ?? [])
                     : []
                 const visibleChildren = item.children.filter(isStableAgentChildSession)
-                const hasChildren = visibleChildren.length > 0
+                const previewChildren =
+                  isGroupParent && taskBoard?.sessionId === item.parent.id
+                    ? taskBoard.tasks.filter(
+                        (task) => task.agentId && task.agentName && !task.childSessionId,
+                      )
+                    : []
+                const hasChildren = visibleChildren.length > 0 || previewChildren.length > 0
                 const expanded = Boolean(workspaceId && expandedWorkspaces.has(workspaceId))
                 const childActive = visibleChildren.some((child) => child.id === sessionId)
                 const active = sessionId === item.parent.id
@@ -768,10 +775,11 @@ export default function SessionList({
                 const memberCount = isGroupParent
                   ? groupMemberCount(
                       item.parent,
-                      visibleChildren.length,
+                      visibleChildren.length + previewChildren.length,
                       groupMemberCounts[workspaceId ?? ''],
                     )
                   : 0
+                const childCount = visibleChildren.length + previewChildren.length
                 return (
                   <li key={item.parent.id} className="space-y-1">
                     <div
@@ -874,7 +882,7 @@ export default function SessionList({
                               </span>
                               <span className="block truncate text-[11px] text-neutral-400">
                                 {hasChildren
-                                  ? `${formatSubtopicCount(item.children.length, language, t)} · ${relativeTime(item.latestUpdatedAt, language)}`
+                                  ? `${formatSubtopicCount(childCount, language, t)} · ${relativeTime(item.latestUpdatedAt, language)}`
                                   : item.parent.lastMessage?.content
                                     ? item.parent.lastMessage.content
                                     : relativeTime(item.latestUpdatedAt, language)}
@@ -1058,6 +1066,51 @@ export default function SessionList({
                                 title={t('删除')}
                               >
                                 <Trash2 className="h-3 w-3" />
+                              </button>
+                            </li>
+                          )
+                        })}
+                        {previewChildren.map((task) => {
+                          const childAgent = workspaceAgents.find(
+                            (agent) => agent.id === task.agentId,
+                          )
+                          return (
+                            <li
+                              key={`planned-${task.id}`}
+                              className="flex items-center gap-1 rounded-lg opacity-80"
+                            >
+                              <button
+                                type="button"
+                                disabled
+                                className="flex min-w-0 flex-1 cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-neutral-400"
+                                title="任务已规划，等待正式分配后才能打开子对话"
+                              >
+                                <span className="relative h-5 w-5 shrink-0">
+                                  <span className="grid h-5 w-5 place-items-center overflow-hidden rounded-full bg-neutral-200 text-[10px] font-semibold text-neutral-500">
+                                    {childAgent ? (
+                                      childAgent.avatar ? (
+                                        <img
+                                          src={childAgent.avatar}
+                                          alt={childAgent.name}
+                                          className="h-full w-full bg-white object-contain"
+                                          decoding="async"
+                                          draggable={false}
+                                        />
+                                      ) : (
+                                        childAgent.name.slice(0, 1).toUpperCase()
+                                      )
+                                    ) : (
+                                      task.agentName.slice(0, 1).toUpperCase()
+                                    )}
+                                  </span>
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate">{task.agentName}</span>
+                                  <span className="block truncate text-[10px] text-neutral-400">
+                                    {task.title} · 待正式分配
+                                  </span>
+                                </span>
+                                <Clock className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
                               </button>
                             </li>
                           )
