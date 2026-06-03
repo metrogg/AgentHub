@@ -1330,6 +1330,7 @@ export const api = {
       replyToMessageId?: string | null
       quotedMessage?: QuotedMessagePreview | null
       safetyMode?: string
+      mentions?: string[]
     },
   ) =>
     request<Message>(`/messages/${sessionId}`, {

@@ -250,16 +250,16 @@ function providerEnvApiKey(provider: string, baseUrl?: string): { value?: string
   if (direct) return { value: direct, source: directName }
 
   if (isAnthropicProvider(provider, baseUrl)) {
-    const value = clean(env.ANTHROPIC_API_KEY)
+    const value = readEnv('ANTHROPIC_API_KEY')
     return value ? { value, source: 'ANTHROPIC_API_KEY' } : {}
   }
 
   if (isOpenAiProvider(provider, baseUrl)) {
-    const openAiValue = clean(env.OPENAI_API_KEY)
+    const openAiValue = readEnv('OPENAI_API_KEY')
     if (openAiValue) return { value: openAiValue, source: 'OPENAI_API_KEY' }
   }
 
-  const generic = clean(env.LLM_API_KEY)
+  const generic = readEnv('LLM_API_KEY')
   return generic ? { value: generic, source: 'LLM_API_KEY' } : {}
 }
 
@@ -335,13 +335,14 @@ export async function resolveLlmRuntimeConfig(selectedModelId?: string): Promise
     logger.warn({ err: redactSensitive(error?.message || String(error)) }, 'Failed to load model settings')
   }
 
-  const provider = normalizeProvider(env.LLM_PROVIDER)
+  const provider = normalizeProvider(readEnv('LLM_PROVIDER') ?? env.LLM_PROVIDER)
+  const llmApiKey = readEnv('LLM_API_KEY')
   return withDebugSettings(normalizeConfig(
     {
-      apiKey: clean(env.LLM_API_KEY),
-      apiKeySource: clean(env.LLM_API_KEY) ? 'LLM_API_KEY' : undefined,
-      baseUrl: clean(env.LLM_BASE_URL),
-      model: clean(env.LLM_MODEL),
+      apiKey: llmApiKey ?? undefined,
+      apiKeySource: llmApiKey ? 'LLM_API_KEY' : undefined,
+      baseUrl: readEnv('LLM_BASE_URL') ?? clean(env.LLM_BASE_URL),
+      model: readEnv('LLM_MODEL') ?? clean(env.LLM_MODEL),
       provider,
     },
     'env'
