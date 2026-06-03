@@ -1,5 +1,6 @@
 import {
   emitManagerDecisionEvents,
+  managerLoopStep,
   processPendingHumanInterrupts,
   startManagerLoopRun,
   type ManagerDecisionEventContext,
@@ -475,6 +476,12 @@ export class RunController {
       },
     })
     await processPendingHumanInterrupts({ run })
+
+    // Run ManagerLoop.step() to drive the Observe → Think → Act cycle.
+    // This is the HiClaw pattern: after every reconcile, the Manager decides
+    // what needs to happen next — dispatch, review, or synthesize.
+    managerLoopStep(run.runId).catch(() => {})
+
     return snapshot
   }
 

@@ -455,3 +455,187 @@ async function persistManagerLoopMessage(input: {
 
   return message ?? null
 }
+
+/**
+ * ManagerLoopStepResult — the outcome of one HiClaw-style Observe → Think → Act cycle.
+ *
+ * In HiClaw, the Manager doesn't just react to user messages. It continuously:
+ *   1. Observe: check WorkLedger, TaskThreads, WorkerInstances
+ *   2. Think:   decide the next action
+ *   3. Act:     execute the action
+ *   4. Review:  verify outcomes
+ *   5. Adjust:  update ledger, retry, reassign
+ *
+ * ManagerLoop.step() brings this cycle to AgentHub as a discrete, callable unit.
+ */
+export interface ManagerLoopStepResult {
+  action: 'dispatch_pending' | 'review_running' | 'synthesize' | 'waiting' | 'blocked' | 'completed'
+  reason: string
+  dispatchedTaskIds: string[]
+  reviewedTaskIds: string[]
+  completedRun: boolean
+}
+
+interface StepContext {
+  runId: string
+  workspaceId: string
+  groupSessionId: string
+  actorId: string | null
+  actorName: string
+}
+
+export async function managerLoopStep(runId: string): Promise<ManagerLoopStepResult> {
+  const terminalStatuses = new Set(['done', 'failed', 'cancelled', 'skipped'])
+
+  // Observe: load current state
+  const [run] = await db
+    .select()
+    .from(orchestratorRuns)
+    .where(eq(orchestratorRuns.id, runId))
+    .limit(1)
+  if (!run) {
+    return { action: 'waiting', reason: 'Run not found', dispatchedTaskIds: [], reviewedTaskIds: [], completedRun: false }
+  }
+  if (run.status !== 'running') {
+    return { action: 'waiting', reason: `Run status is ${run.status}`, dispatchedTaskIds: [], reviewedTaskIds: [], completedRun: false }
+  }
+
+  const ctx: StepContext = {
+    runId,
+    workspaceId: run.workspaceId,
+    groupSessionId: run.groupSessionId,
+    actorId: null,
+    actorName: 'Manager',
+  }
+
+  const tasks = await db
+    .select()
+    .from(workspaceTasks)
+    .where(eq(workspaceTasks.runId, runId))
+    .orderBy(asc(workspaceTasks.orderIdx), asc(workspaceTasks.createdAt))
+
+  const threads = await db
+    .select()
+    .from(taskThreads)
+    .where(eq(taskThreads.runId, runId))
+    .orderBy(asc(taskThreads.createdAt))
+
+  const threadByTaskId = new Map(threads.map((t) => [t.taskId, t]))
+
+  // Classify tasks
+  const pendingTasks = tasks.filter((t) => t.status === 'pending' || t.status === 'blocked')
+  const runningTasks = tasks.filter((t) => t.status === 'running')
+  const terminalTasks = tasks.filter((t) => terminalStatuses.has(t.status))
+  const totalTasks = tasks.length
+
+  // Think: determine action
+  // If all tasks are terminal, we should synthesize → complete
+  if (totalTasks > 0 && terminalTasks.length === totalTasks) {
+    const allDone = terminalTasks.every((t) => t.status === 'done')
+    const anyFailed = terminalTasks.some((t) => t.status === 'failed')
+
+    // Emit observation
+    await emitRunEvent({
+      runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
+      type: 'manager.next_action',
+      payload: {
+        action: 'review_outcomes',
+        reason: allDone
+          ? 'All tasks completed successfully. Manager is preparing the final summary.'
+          : anyFailed
+            ? 'Some tasks failed. Manager will report partial results.'
+            : 'All tasks have reached terminal state.',
+        completedTasks: terminalTasks.length,
+        failedTasks: terminalTasks.filter((t) => t.status === 'failed').length,
+        doneTasks: terminalTasks.filter((t) => t.status === 'done').length,
+      },
+    })
+
+    return {
+      action: 'synthesize',
+      reason: `All ${totalTasks} tasks reached terminal state (${terminalTasks.filter((t) => t.status === 'done').length} done, ${terminalTasks.filter((t) => t.status === 'failed').length} failed)`,
+      dispatchedTaskIds: [],
+      reviewedTaskIds: terminalTasks.map((t) => t.id),
+      completedRun: true,
+    }
+  }
+
+  // If there are pending tasks that have no thread yet → dispatch them
+  if (pendingTasks.length > 0) {
+    const needsDispatch = pendingTasks.filter((t) => !threadByTaskId.has(t.id) || threadByTaskId.get(t.id)?.status === 'prepared')
+
+    if (needsDispatch.length > 0) {
+      await emitRunEvent({
+        runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
+        type: 'manager.next_action',
+        payload: {
+          action: 'dispatch_pending',
+          reason: `${needsDispatch.length} task(s) are pending dispatch. Manager is preparing to assign workers.`,
+          pendingTaskIds: needsDispatch.map((t) => t.id),
+          pendingTaskTitles: needsDispatch.map((t) => t.title),
+        },
+      })
+
+      // Post a visible status message in the group chat
+      await persistManagerLoopMessage({
+        sessionId: ctx.groupSessionId,
+        senderId: 'system',
+        senderType: 'system',
+        content: `当前还有 ${needsDispatch.length} 个任务等待分派：${needsDispatch.map((t) => t.title).join('、')}`,
+        metadata: {
+          kind: 'manager-loop-status',
+          systemEvent: 'manager_loop_dispatch_pending',
+          orchestratorRunId: runId,
+          pendingTaskIds: needsDispatch.map((t) => t.id),
+        },
+      })
+
+      return {
+        action: 'dispatch_pending',
+        reason: `${needsDispatch.length} pending task(s) ready for dispatch`,
+        dispatchedTaskIds: needsDispatch.map((t) => t.id),
+        reviewedTaskIds: [],
+        completedRun: false,
+      }
+    }
+  }
+
+  // If there are running tasks → review them
+  if (runningTasks.length > 0) {
+    const reviewableTasks = runningTasks.filter((t) => {
+      const thread = threadByTaskId.get(t.id)
+      return thread && thread.status === 'active'
+    })
+
+    if (reviewableTasks.length > 0) {
+      return {
+        action: 'review_running',
+        reason: `${reviewableTasks.length} task(s) are currently executing. Manager is supervising progress.`,
+        dispatchedTaskIds: [],
+        reviewedTaskIds: reviewableTasks.map((t) => t.id),
+        completedRun: false,
+      }
+    }
+  }
+
+  // All tasks are in some intermediate state (prepared threads without running tasks)
+  // → Manager is waiting for the scheduler or external trigger
+  if (pendingTasks.length > 0) {
+    return {
+      action: 'waiting',
+      reason: `${pendingTasks.length} task(s) are queued. Waiting for scheduler or external trigger.`,
+      dispatchedTaskIds: [],
+      reviewedTaskIds: [],
+      completedRun: false,
+    }
+  }
+
+  // No tasks at all? That's unexpected for a running run.
+  return {
+    action: 'blocked',
+    reason: 'No tasks in the run. Run may be stuck.',
+    dispatchedTaskIds: [],
+    reviewedTaskIds: [],
+    completedRun: false,
+  }
+}

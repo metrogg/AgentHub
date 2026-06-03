@@ -16,6 +16,7 @@ import { workerController } from './worker-controller'
 import { emitRunEvent } from './run-events'
 import { updateTaskThreadStatus } from './task-thread-service'
 import { markRuntimeLeaseStale, markWorkerInstanceState } from './worker-runtime-resources'
+import { managerLoopStep } from './manager-loop'
 
 export interface PatrolResult {
   checkedRuns: number
@@ -298,6 +299,11 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
         }
       }
     }
+
+    // Trigger ManagerLoop.step() for this active run so the Manager can
+    // decide the next action (dispatch, review, synthesize) based on the
+    // latest observed state — not just report issues.
+    managerLoopStep(run.id).catch(() => {})
   }
 
   return {
