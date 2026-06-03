@@ -80,6 +80,7 @@ AgentHub 需要把以下层次分开设计：
 当前已经落下几刀：
 
 - 当群聊存在 `planning / running / synthesizing` 的活跃 run 时，用户在主群聊补充一句新要求，不再默认新开 run；系统会把它登记成当前 run 的 `human_interrupt`，由 Manager 在主群聊可见确认，并同步到活跃 TaskThread，形成可审计的过程痕迹。
+- 当用户进入某个 `orchestrator-task` 子对话后补充或纠偏，消息也会进入同一条 `human_interrupt` 控制面，而不是被当作普通 Agent 私聊回复。系统会按该 TaskThread 绑定的 `runId` 精确挂接当前 run，并在 blackboard / RunEvent 中保留 `source=task_thread`、`taskThreadId`、`taskId`、`childSessionId`。
 - `RunController.reconcile()` 现在会继续消费尚未处理的 `human_interrupt`，把约束并入未完成任务描述，写入 `manager_actions/human_interrupts/*` 黑板记录，并发出 `run.replanned(strategy=human_interrupt)` / `task.rework_requested` 事件，让“人类插话”开始成为控制面事实，而不是只停在聊天可见性上。
 - 对 active TaskThread，这条控制链还会继续下探到执行层：Manager 会中断对应的 live agent reply，把相关 `runtimeLease` 标为 stale，并把 `workerInstance` 收回 idle。这样“新要求来了，先收住旧执行”开始有了真实的 Worker 生命周期语义。
 - Worker 在主群聊的可见输出继续增强：接单开工、显式进度、澄清请求和长任务心跳都会以该 Worker 的 agent 消息出现，并带上 `orchestratorRunId / orchestratorTaskId / childSessionId / taskThreadId / workerInstanceId / runtimeLeaseId` 等真实执行 metadata。
@@ -153,6 +154,7 @@ metadata.taskThreadId != null
 - 在 `prepared` 阶段作为稳定任务房间存在，即使尚未正式分配 Agent 也可点击查看“等待 Manager 分发/准备中”。
 - 保存 Orchestrator 发给 Agent 的任务提示。
 - 保存 Agent 的真实执行过程、流式输出、工具输出和最终消息。
+- 接收 Human 的任务级补充、纠偏和验收意见，并把这些消息登记到当前 run 的 `human_interrupt` 黑板记录和 RunEvent 中，由 Manager 统一吸收、打断或重排。
 - 作为任务看板“子对话”按钮的目标。
 
 注意：`workspaceAgentId` 在任务正式分配前可以为空；进入 `assigned / active` 后必须由 `TaskThread` 回填到 session 和 metadata。左侧树不能再因为缺少 `workspaceAgentId` 隐藏 prepared 子对话。
@@ -312,7 +314,8 @@ Agent 产物的新事实中心应是共享任务目录和 ArtifactStore：
 
 - `.agenthub/shared/tasks/{taskId}/meta.json`：任务状态、负责人、运行时、产物引用。
 - `.agenthub/shared/tasks/{taskId}/spec.md`：Manager 给 Worker 的本次任务说明和验收标准。
-- `.agenthub/shared/tasks/{taskId}/plan.md` / `result.md`：Worker 计划与结果摘要。
+- `.agenthub/shared/tasks/{taskId}/plan.md`：Worker 执行计划。
+- `.agenthub/shared/tasks/{taskId}/result.md`：Worker 结果契约，采用 `STATUS / SUMMARY / DELIVERABLES / NOTES` 可解析格式；`STATUS` 只允许 `SUCCESS / SUCCESS_WITH_NOTES / REVISION_NEEDED / BLOCKED / INTERRUPTED`。最终汇总前会读取并校验该文件，把结果状态映射回任务状态、TaskThread 状态、RunEvent 和最终交付复核，不再只从 Worker 散文输出里猜。
 - `.agenthub/shared/tasks/{taskId}/artifacts/...`：下游 Agent 可读取的交接产物。
 - `artifacts` 表：产物资源登记、去重、状态和 UI 投影。
 

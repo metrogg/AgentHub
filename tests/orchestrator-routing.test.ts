@@ -197,4 +197,31 @@ describe('orchestrator routing', () => {
 
     expect(target).toBeNull()
   })
+
+  test('recognizes only orchestrator task direct sessions as TaskThread rooms', () => {
+    const taskSession = {
+      type: 'direct',
+      metadata: {
+        kind: 'orchestrator-task',
+        taskThreadId: 'thread-1',
+        groupSessionId: 'group-1',
+      },
+    }
+    const agentDirectSession = {
+      type: 'direct',
+      metadata: {
+        kind: 'agent-direct',
+      },
+    }
+    const groupSession = {
+      type: 'group',
+      metadata: {
+        kind: 'orchestrator-task',
+      },
+    }
+
+    expect(__messageRouteTestHooks.isOrchestratorTaskSession(taskSession as any)).toBe(true)
+    expect(__messageRouteTestHooks.isOrchestratorTaskSession(agentDirectSession as any)).toBe(false)
+    expect(__messageRouteTestHooks.isOrchestratorTaskSession(groupSession as any)).toBe(false)
+  })
 })

@@ -1829,6 +1829,189 @@ describe('AgentHub smoke tests', () => {
     expect(updatedWorker?.observedState).toBe('idle')
   })
 
+  test('TaskThread room message becomes a scoped human interrupt on the owning run', async () => {
+    const now = new Date()
+    const full = await json<{ workspace: { id: string } }>(
+      await postJson('/api/workspaces', {
+        name: 'TaskThread interrupt workspace',
+        goal: 'Let humans intervene inside worker rooms',
+        projectPath: process.cwd(),
+      }),
+    )
+    const orchestrator = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Orchestrator',
+      role: '总指挥',
+      roleType: 'orchestrator',
+      sandboxPolicy: 'workspace-write',
+      systemPrompt: 'Coordinate the team briefly.',
+    })
+    const builder = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Builder',
+      role: '工程实现',
+      roleType: 'coder',
+      sandboxPolicy: 'workspace-write',
+      systemPrompt: 'Build the assigned task briefly.',
+    })
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
+    )
+
+    const runId = crypto.randomUUID()
+    const taskId = crypto.randomUUID()
+    const childSessionId = crypto.randomUUID()
+    const threadId = crypto.randomUUID()
+    const workerInstanceId = crypto.randomUUID()
+
+    await dbApi.db.insert(dbApi.orchestratorRuns).values({
+      id: runId,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      status: 'running',
+      plan: {
+        runId,
+        title: 'TaskThread interrupt test run',
+        goal: 'Let humans intervene inside worker rooms',
+        agents: [],
+        tasks: [
+          {
+            id: taskId,
+            title: '实现报告页面',
+            description: '根据需求完成报告页面',
+            agentId: builder.id,
+            dependencies: [],
+          },
+        ],
+      },
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.workerInstances).values({
+      id: workerInstanceId,
+      workspaceId: full.workspace.id,
+      workspaceAgentId: builder.id,
+      runtimeFamily: 'worker',
+      runtimeBase: 'llm-fallback',
+      sandboxPolicy: 'workspace-write',
+      desiredState: 'running',
+      observedState: 'busy',
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.sessions).values({
+      id: childSessionId,
+      title: 'Builder / 实现报告页面',
+      type: 'direct',
+      ownerId: 'default-user',
+      workspaceId: full.workspace.id,
+      workspaceAgentId: builder.id,
+      metadata: {
+        kind: 'orchestrator-task',
+        taskThreadId: threadId,
+        groupSessionId: group.session.id,
+        orchestratorRunId: runId,
+        orchestratorTaskId: taskId,
+        workspaceAgentId: builder.id,
+        workerInstanceId,
+        taskThreadStatus: 'active',
+      },
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.workspaceTasks).values({
+      id: taskId,
+      workspaceId: full.workspace.id,
+      agentId: builder.id,
+      title: '实现报告页面',
+      description: '根据需求完成报告页面',
+      status: 'running',
+      sessionId: childSessionId,
+      runId,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await dbApi.db.insert(dbApi.taskThreads).values({
+      id: threadId,
+      workspaceId: full.workspace.id,
+      runId,
+      taskId,
+      groupSessionId: group.session.id,
+      workspaceAgentId: builder.id,
+      workerInstanceId,
+      sessionId: childSessionId,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    const response = await json<{ id: string }>(
+      await postJson(`/api/messages/${childSessionId}`, {
+        content: '这里方向不对，报告页面要更偏商业分析，少一些工程说明。',
+        type: 'text',
+      }),
+    )
+
+    const namespace = `workspace/${full.workspace.id}/run/${runId}`
+    const interruptEntries = await dbApi.db
+      .select()
+      .from(dbApi.blackboardEntries)
+      .where(dbApi.eq(dbApi.blackboardEntries.namespace, namespace))
+    const interruptEntry = interruptEntries.find(
+      (entry) => entry.key === `human_interrupts/${response.id}`,
+    )
+    expect(interruptEntry).toBeTruthy()
+    expect((interruptEntry?.value as Record<string, unknown> | undefined)?.source).toBe('task_thread')
+    expect((interruptEntry?.value as Record<string, unknown> | undefined)?.taskThreadId).toBe(threadId)
+    expect((interruptEntry?.value as Record<string, unknown> | undefined)?.childSessionId).toBe(childSessionId)
+    expect((interruptEntry?.value as Record<string, unknown> | undefined)?.taskId).toBe(taskId)
+
+    const runEvents = await dbApi.db
+      .select()
+      .from(dbApi.orchestratorRunEvents)
+      .where(dbApi.eq(dbApi.orchestratorRunEvents.runId, runId))
+    expect(
+      runEvents.some(
+        (event) =>
+          event.type === 'blackboard.written' &&
+          event.taskId === taskId &&
+          event.threadId === threadId &&
+          event.payload?.interruptSource === 'task_thread',
+      ),
+    ).toBe(true)
+    expect(
+      runEvents.some(
+        (event) =>
+          event.type === 'manager.next_action' &&
+          event.payload?.action === 'human_interrupt_received',
+      ),
+    ).toBe(true)
+
+    const groupMessages = await dbApi.db
+      .select()
+      .from(dbApi.messages)
+      .where(dbApi.eq(dbApi.messages.sessionId, group.session.id))
+    expect(
+      groupMessages.some(
+        (message) =>
+          message.senderId === orchestrator.id &&
+          message.metadata?.kind === 'manager-human-interrupt' &&
+          message.metadata?.interruptSource === 'task_thread' &&
+          message.metadata?.sourceTaskThreadId === threadId,
+      ),
+    ).toBe(true)
+
+    const childMessages = await dbApi.db
+      .select()
+      .from(dbApi.messages)
+      .where(dbApi.eq(dbApi.messages.sessionId, childSessionId))
+    expect(
+      childMessages.some(
+        (message) =>
+          message.metadata?.kind === 'manager-human-interrupt-forwarded' &&
+          message.metadata?.interruptSource === 'task_thread',
+      ),
+    ).toBe(true)
+  })
+
   test('manager-interrupted active tasks are requeued and resumed inside the executor loop', async () => {
     const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {

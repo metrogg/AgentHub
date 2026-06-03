@@ -513,6 +513,17 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed'),
         )
       } else {
+        if (session && isOrchestratorTaskSession(session)) {
+          const attachedToTaskThread = await handleHumanInterruptFromTaskThreadSession({
+            session,
+            ownerId: user.sub,
+            content,
+            userMessageId: msg.id,
+          })
+          if (attachedToTaskThread) {
+            return c.json(msg)
+          }
+        }
         let profile = session ? await profileForDirectSession(session) : undefined
         if (profile && metadata?.safetyMode && typeof metadata.safetyMode === 'string') {
           profile = applySafetyMode(profile, metadata.safetyMode)
@@ -1158,6 +1169,16 @@ async function findLatestInterruptibleRun(groupSessionId: string) {
   return runs.find((run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status)) ?? null
 }
 
+async function findInterruptibleRunById(runId: string, groupSessionId: string) {
+  const [run] = await db
+    .select()
+    .from(orchestratorRuns)
+    .where(and(eq(orchestratorRuns.id, runId), eq(orchestratorRuns.groupSessionId, groupSessionId)))
+    .limit(1)
+
+  return run && INTERRUPTIBLE_RUN_STATUSES.has(run.status) ? run : null
+}
+
 async function persistSessionTransparencyMessage(input: {
   sessionId: string
   senderId: string
@@ -1194,8 +1215,19 @@ async function handleHumanInterruptForActiveRun(params: {
   content: string
   userMessageId: string
   orchestrator: typeof workspaceAgents.$inferSelect
+  runId?: string | null
+  source?: {
+    kind: 'group' | 'task_thread'
+    taskThreadId?: string | null
+    taskId?: string | null
+    childSessionId?: string | null
+    workerInstanceId?: string | null
+    workspaceAgentId?: string | null
+  }
 }) {
-  const activeRun = await findLatestInterruptibleRun(params.groupSessionId)
+  const activeRun = params.runId
+    ? await findInterruptibleRunById(params.runId, params.groupSessionId)
+    : await findLatestInterruptibleRun(params.groupSessionId)
   if (!activeRun) return false
 
   const namespace = Blackboard.namespace(params.workspaceId, activeRun.id)
@@ -1206,8 +1238,14 @@ async function handleHumanInterruptForActiveRun(params: {
     key: interruptKey,
     value: {
       kind: 'human_interrupt',
+      source: params.source?.kind ?? 'group',
       messageId: params.userMessageId,
       groupSessionId: params.groupSessionId,
+      taskThreadId: params.source?.taskThreadId ?? null,
+      taskId: params.source?.taskId ?? null,
+      childSessionId: params.source?.childSessionId ?? null,
+      workerInstanceId: params.source?.workerInstanceId ?? null,
+      workspaceAgentId: params.source?.workspaceAgentId ?? null,
       content: params.content,
       actorType: 'user',
       actorId: params.ownerId,
@@ -1218,20 +1256,35 @@ async function handleHumanInterruptForActiveRun(params: {
       createdAt,
     },
     agentId: params.orchestrator.id,
-    tags: ['human-interrupt', 'hitl'],
+    taskId: params.source?.taskId ?? undefined,
+    tags: [
+      'human-interrupt',
+      'hitl',
+      ...(params.source?.kind === 'task_thread' ? ['task-thread'] : []),
+    ],
   })
 
   await emitRunEvent({
     runId: activeRun.id,
     workspaceId: params.workspaceId,
     groupSessionId: params.groupSessionId,
+    taskId: params.source?.taskId ?? undefined,
+    threadId: params.source?.taskThreadId ?? undefined,
+    workerInstanceId: params.source?.workerInstanceId ?? undefined,
     agentId: params.orchestrator.id,
     type: 'blackboard.written',
     payload: {
       key: interruptKey,
       version: note.version,
-      summary: 'Human provided an in-flight correction for the current run.',
+      summary:
+        params.source?.kind === 'task_thread'
+          ? 'Human provided an in-flight correction inside a TaskThread room.'
+          : 'Human provided an in-flight correction for the current run.',
       source: 'human_interrupt',
+      interruptSource: params.source?.kind ?? 'group',
+      taskThreadId: params.source?.taskThreadId ?? null,
+      childSessionId: params.source?.childSessionId ?? null,
+      taskId: params.source?.taskId ?? null,
       taskTitle: 'Human interrupt',
       agentName: params.orchestrator.name,
       contentPreview: params.content.slice(0, 200),
@@ -1251,7 +1304,10 @@ async function handleHumanInterruptForActiveRun(params: {
     {
       action: 'human_interrupt_received',
       reason: 'A human participant added or corrected requirements while the run is active.',
-      message: `Merged a new human instruction into the active run: ${params.content.slice(0, 160)}`,
+      message:
+        params.source?.kind === 'task_thread'
+          ? `Merged a TaskThread human instruction into the active run: ${params.content.slice(0, 160)}`
+          : `Merged a new human instruction into the active run: ${params.content.slice(0, 160)}`,
     },
   )
 
@@ -1266,9 +1322,13 @@ async function handleHumanInterruptForActiveRun(params: {
   )
 
   const groupAckContent =
-    forwardTargets.length > 0
-      ? `收到新的补充要求，我已并入当前协作，并同步给 ${forwardTargets.length} 个进行中的任务。`
-      : '收到新的补充要求，我已并入当前协作，并会在后续调度中按这个约束继续推进。'
+    params.source?.kind === 'task_thread'
+      ? forwardTargets.length > 0
+        ? `我看到你在任务子对话里的补充要求，已并入当前协作，并同步给 ${forwardTargets.length} 个进行中的任务。`
+        : '我看到你在任务子对话里的补充要求，已并入当前协作，并会在后续调度中按这个约束继续推进。'
+      : forwardTargets.length > 0
+        ? `收到新的补充要求，我已并入当前协作，并同步给 ${forwardTargets.length} 个进行中的任务。`
+        : '收到新的补充要求，我已并入当前协作，并会在后续调度中按这个约束继续推进。'
 
   await persistSessionTransparencyMessage({
     sessionId: params.groupSessionId,
@@ -1280,6 +1340,10 @@ async function handleHumanInterruptForActiveRun(params: {
       systemEvent: 'manager_human_interrupt_ack',
       orchestratorRunId: activeRun.id,
       sourceMessageId: params.userMessageId,
+      interruptSource: params.source?.kind ?? 'group',
+      sourceTaskThreadId: params.source?.taskThreadId ?? null,
+      sourceChildSessionId: params.source?.childSessionId ?? null,
+      sourceTaskId: params.source?.taskId ?? null,
       blackboardRef: note,
       forwardedThreadCount: forwardTargets.length,
     },
@@ -1297,6 +1361,10 @@ async function handleHumanInterruptForActiveRun(params: {
         orchestratorRunId: activeRun.id,
         orchestratorTaskThreadId: thread.id,
         sourceMessageId: params.userMessageId,
+        interruptSource: params.source?.kind ?? 'group',
+        sourceTaskThreadId: params.source?.taskThreadId ?? null,
+        sourceChildSessionId: params.source?.childSessionId ?? null,
+        sourceTaskId: params.source?.taskId ?? null,
         blackboardRef: note,
       },
     })
@@ -1311,6 +1379,109 @@ async function handleHumanInterruptForActiveRun(params: {
       name: params.orchestrator.name,
     },
   })
+
+  return true
+}
+
+function isOrchestratorTaskSession(session: typeof sessions.$inferSelect | null | undefined) {
+  if (!session || session.type !== 'direct') return false
+  const metadata =
+    session.metadata && typeof session.metadata === 'object'
+      ? (session.metadata as Record<string, unknown>)
+      : null
+  return metadata?.kind === 'orchestrator-task'
+}
+
+async function handleHumanInterruptFromTaskThreadSession(params: {
+  session: typeof sessions.$inferSelect
+  ownerId: string
+  content: string
+  userMessageId: string
+}) {
+  if (!isOrchestratorTaskSession(params.session)) return false
+
+  const [thread] = await db
+    .select()
+    .from(taskThreads)
+    .where(eq(taskThreads.sessionId, params.session.id))
+    .limit(1)
+
+  if (!thread) {
+    await persistSessionTransparencyMessage({
+      sessionId: params.session.id,
+      senderId: 'system',
+      senderType: 'system',
+      content: '这条消息已保留在任务子对话里，但没有找到对应的 TaskThread 资源，无法接入当前协作控制面。',
+      metadata: {
+        kind: 'task-thread-human-interrupt-unlinked',
+        systemEvent: 'task_thread_human_interrupt_unlinked',
+        sourceMessageId: params.userMessageId,
+      },
+    })
+    return true
+  }
+
+  const [orchestrator] = await db
+    .select()
+    .from(workspaceAgents)
+    .where(and(eq(workspaceAgents.workspaceId, thread.workspaceId), eq(workspaceAgents.roleType, 'orchestrator')))
+    .orderBy(asc(workspaceAgents.orderIdx))
+    .limit(1)
+
+  if (!orchestrator) {
+    await persistSessionTransparencyMessage({
+      sessionId: params.session.id,
+      senderId: 'system',
+      senderType: 'system',
+      content: '这条消息已保留在任务子对话里，但当前工作区没有 Orchestrator，无法把它并入协作控制面。',
+      metadata: {
+        kind: 'task-thread-human-interrupt-no-orchestrator',
+        systemEvent: 'task_thread_human_interrupt_no_orchestrator',
+        sourceMessageId: params.userMessageId,
+        taskThreadId: thread.id,
+        orchestratorRunId: thread.runId,
+        orchestratorTaskId: thread.taskId,
+        groupSessionId: thread.groupSessionId,
+      },
+    })
+    return true
+  }
+
+  const attached = await handleHumanInterruptForActiveRun({
+    groupSessionId: thread.groupSessionId,
+    workspaceId: thread.workspaceId,
+    ownerId: params.ownerId,
+    content: params.content,
+    userMessageId: params.userMessageId,
+    orchestrator,
+    runId: thread.runId,
+    source: {
+      kind: 'task_thread',
+      taskThreadId: thread.id,
+      taskId: thread.taskId,
+      childSessionId: params.session.id,
+      workerInstanceId: thread.workerInstanceId,
+      workspaceAgentId: thread.workspaceAgentId,
+    },
+  })
+
+  if (!attached) {
+    await persistSessionTransparencyMessage({
+      sessionId: params.session.id,
+      senderId: orchestrator.id,
+      senderType: 'agent',
+      content: '我看到你在这个任务子对话里的补充，但当前没有可接管的运行。请回到主群聊继续发起或恢复协作。',
+      metadata: {
+        kind: 'task-thread-human-interrupt-inactive',
+        systemEvent: 'task_thread_human_interrupt_inactive',
+        sourceMessageId: params.userMessageId,
+        taskThreadId: thread.id,
+        orchestratorRunId: thread.runId,
+        orchestratorTaskId: thread.taskId,
+        groupSessionId: thread.groupSessionId,
+      },
+    })
+  }
 
   return true
 }
@@ -1684,6 +1855,7 @@ function chooseDirectWorkerReplyTarget(input: {
 
 export const __messageRouteTestHooks = {
   chooseDirectWorkerReplyTarget,
+  isOrchestratorTaskSession,
 }
 
 function resolveMentionedAgents(

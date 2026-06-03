@@ -249,3 +249,6 @@ bun test tests/orchestrator-routing.test.ts
 - `apps/web/src/components/chat/TaskBoard.tsx`: 任务看板。
 - `apps/web/src/components/chat/SessionList.tsx`: 左侧会话树。
 - `apps/web/src/stores/chatStore.ts`: 聊天状态和 WS 事件消费。
+
+<br />
+
