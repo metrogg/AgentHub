@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { SessionType, type Session } from '../apps/web/src/lib/api'
-import { buildSessionTree } from '../apps/web/src/lib/sessionTree'
+import { buildSessionTree, isStableOrchestratorTaskSession } from '../apps/web/src/lib/sessionTree'
 
 function session(partial: Partial<Session> & Pick<Session, 'id' | 'title' | 'type'>): Session {
   return {
@@ -15,6 +15,26 @@ function session(partial: Partial<Session> & Pick<Session, 'id' | 'title' | 'typ
 }
 
 describe('session tree', () => {
+  test('treats prepared orchestrator task sessions as stable before agent assignment', () => {
+    const preparedThread = session({
+      id: 'thread-session-1',
+      title: 'Research group / Market task',
+      type: SessionType.Direct,
+      workspaceId: 'workspace-1',
+      workspaceAgentId: null,
+      metadata: {
+        kind: 'orchestrator-task',
+        groupSessionId: 'group-1',
+        orchestratorRunId: 'run-1',
+        orchestratorTaskId: 'task-1',
+        taskThreadId: 'thread-1',
+        taskThreadStatus: 'prepared',
+      },
+    })
+
+    expect(isStableOrchestratorTaskSession(preparedThread)).toBe(true)
+  })
+
   test('shows prepared orchestrator task threads under their group without requiring an agent id', () => {
     const group = session({
       id: 'group-1',

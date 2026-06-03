@@ -48,7 +48,11 @@ import {
 } from '../../lib/sessionArchive'
 import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { settingsUpdatedEvent } from '../../lib/shortcuts'
-import { buildSessionTree, filterSessionTree } from '../../lib/sessionTree'
+import {
+  buildSessionTree,
+  filterSessionTree,
+  isStableOrchestratorTaskSession,
+} from '../../lib/sessionTree'
 import {
   getCachedAccountProfile,
   loadAccountProfileFromSettings,
@@ -289,7 +293,7 @@ export default function SessionList({
     if (
       !activeSession?.workspaceId ||
       activeSession.type !== 'direct' ||
-      !activeSession.workspaceAgentId
+      (!activeSession.workspaceAgentId && !isStableOrchestratorTaskSession(activeSession))
     )
       return
     setExpandedWorkspaces((current) => {
@@ -1675,13 +1679,8 @@ function filterAgents(agents: SavedAgentConfig[], query: string) {
 }
 
 function isStableAgentChildSession(session: Session) {
-  if (session.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
-  const metadata = session.metadata ?? {}
-  return Boolean(
-    metadata.kind === 'orchestrator-task' ||
-      metadata.orchestratorTaskId ||
-      metadata.orchestratorRunId,
-  )
+  if (session.type !== 'direct' || !session.workspaceId) return false
+  return isStableOrchestratorTaskSession(session)
 }
 
 function isPrivateAgentSession(session: Session | null | undefined) {
