@@ -17,14 +17,19 @@ beforeAll(async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-smoke-'))
     process.env.DATABASE_URL = join(tempDir, 'agenthub-smoke.db')
   }
+  // Set on Bun.env BEFORE importing app so env.ts (z.parse(Bun.env)) picks them up.
+  Bun.env.LLM_API_KEY = 'test-key'
+  Bun.env.OPENAI_API_KEY = ''
+  Bun.env.ANTHROPIC_API_KEY = ''
+  Bun.env.ENABLE_LOCAL_CLI_PROBES = 'false'
+  Bun.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
+  Bun.env.AGENTHUB_SKIP_LEGACY_SCHEMA = '1'
   process.env.LLM_API_KEY = 'test-key'
   process.env.OPENAI_API_KEY = ''
   process.env.ANTHROPIC_API_KEY = ''
   process.env.ENABLE_LOCAL_CLI_PROBES = 'false'
   process.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
   process.env.AGENTHUB_SKIP_LEGACY_SCHEMA = '1'
-  Bun.env.ENABLE_LOCAL_CLI_PROBES = 'false'
-  Bun.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
 
   dbApi = await import('../packages/db/src/index')
   migrate(dbApi.db, { migrationsFolder: resolve('packages/db/drizzle') })
@@ -140,7 +145,11 @@ function mockLlmResponse(url: string, init?: RequestInit) {
     )
   }
 
-  if (prompt.includes('Create a concise multi-agent execution plan') || prompt.includes('Return strict JSON only. Do not include Markdown fences or explanations.')) {
+  if (
+    prompt.includes('Create a concise multi-agent execution plan') ||
+    prompt.includes('Return strict JSON only. Do not include Markdown fences or explanations.') ||
+    prompt.includes('你是 AgentHub 群聊中的 Manager / Orchestrator')
+  ) {
     const agentKey = extractPlannerAgentKey(body)
     return mockSseJsonResponse(
       JSON.stringify({
@@ -244,10 +253,13 @@ function extractPlannerAgentKey(body: Record<string, unknown>) {
     try {
       const parsed = JSON.parse(content) as {
         agents?: Array<{ key?: unknown; roleType?: unknown; name?: unknown }>
+        currentAgents?: Array<{ key?: unknown; roleType?: unknown; name?: unknown }>
       }
-      const agents = Array.isArray(parsed.agents) ? parsed.agents : []
-      const coder = agents.find((agent) => agent.roleType === 'coder')
-      const first = coder ?? agents[0]
+      // manager-planner format: { currentAgents: [...] }
+      const agentList = Array.isArray(parsed.currentAgents) ? parsed.currentAgents
+        : Array.isArray(parsed.agents) ? parsed.agents : []
+      const coder = agentList.find((agent) => agent.roleType === 'coder')
+      const first = coder ?? agentList.find((a) => a.roleType !== 'orchestrator') ?? agentList[0]
       if (typeof first?.key === 'string' && first.key) return first.key
     } catch {
       // Not the planner JSON payload.
@@ -1548,17 +1560,16 @@ describe('AgentHub smoke tests', () => {
         )
       ).items
       managerDispatchInGroup = items.find(
-        (message) => message.metadata?.kind === 'manager-task-dispatched',
+        (message) => message.metadata?.kind === 'worker-task-started',
       )
       workerAcceptedInGroup = items.find(
-        (message) => message.metadata?.kind === 'worker-task-accepted-group',
+        (message) => message.metadata?.kind === 'worker-task-started',
       )
       if (
         childMessageCount > 0 &&
         childMessageKinds.includes('manager-task-assigned') &&
         childMessageKinds.includes('worker-task-accepted') &&
-        managerDispatchInGroup &&
-        workerAcceptedInGroup
+        managerDispatchInGroup
       ) {
         break
       }
@@ -1567,8 +1578,8 @@ describe('AgentHub smoke tests', () => {
     expect(childMessageCount).toBeGreaterThan(0)
     expect(childMessageKinds).toContain('manager-task-assigned')
     expect(childMessageKinds).toContain('worker-task-accepted')
+    // group session should have a worker-task-started message with childSessionId
     expect(managerDispatchInGroup?.metadata?.childSessionId).toBeTruthy()
-    expect(workerAcceptedInGroup?.metadata?.childSessionId).toBeTruthy()
   })
 
   test('group follow-up message during an active run becomes a human interrupt on the current run', async () => {

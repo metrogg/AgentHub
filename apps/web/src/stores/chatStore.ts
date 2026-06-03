@@ -5,6 +5,7 @@ import {
   type ChatAttachment,
   type Message,
   type OrchestratorRunListItem,
+  type OrchestratorRunTaskBoardSnapshot,
   type QuotedMessagePreview,
   type Session,
   type Workspace,
