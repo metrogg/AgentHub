@@ -90,3 +90,6 @@ captures/
 # Browser automation / Playwright output
 output/
 SCRIPT
+
+# Reference source code (not part of the project)
+hiclaw源码参考/

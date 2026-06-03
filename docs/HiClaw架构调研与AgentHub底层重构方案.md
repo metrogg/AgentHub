@@ -57,7 +57,7 @@
 - `WorkerController` reconcile 模式已对齐 HiClaw：实现分阶段 reconcile loop（EnsureReady → AssignLease → ObserveHealth → RecoverStale），每阶段幂等检查当前状态 vs 期望状态。Worker 状态始终从 reconcile 写回，不再分散在多处散写。
 - HiClaw 风格 idle-stop 已落地：空闲超时自动转入 sleeping，新任务通过 `ensureReadyForTask()` 自动 wake + reconcile；服务重启通过 `recoverStaleOnStartup()` 恢复 stale lease。
 - Worker 心跳监控已启用：2 分钟宽限期 + 5 分钟超时检测，超时自动标记 Worker failed + RuntimeLease stale。
-- 尚未完成真正的 `ManagerLoop` / `RunController` 替代主流程；`OrchestratorEngine`、`TaskExecutionService`、现有 Planner 仍是迁移期执行主路径。
+- 尚未完成真正的 `ManagerLoop` / `RunController` 替代主流程；`OrchestratorEngine`、`TaskExecutionService` 仍是迁移期执行兼容层。现有 Planner 已从初始任务分工主路径退下，复杂任务现在先走 `manager-planner.ts` 的 Manager-first 行动方案生成；`planner.ts` 暂时保留为 JSON 抽取、校验和契约归一化工具来源。
 - ArtifactStore 已从散写迁移到统一注册入口：`ArtifactController.registerArtifactBatch()` 成为产物唯一注册点，每次注册自动发 `artifact.created` RunEvent。`workspace_tasks.artifacts` JSON 字段降级为缓存。
 - RunEvent replay API 已完整化：`GET /api/orchestrator-runs/:id/events?afterSequence=N` 支持增量重放 + 资源 snapshot 恢复。
 - TaskThread 专用查询端点已上线：`GET /api/orchestrator-runs/:id/task-threads` 替代前端从 sessions 反向推导旧模式。
@@ -93,13 +93,13 @@ AG-UI 是 RunEvent 面向前端的事件协议投影
 
 ## 1. 背景判断
 
-AgentHub 当前已经具备动态 Planner、A2A envelope、AG-UI event、任务子对话、Code Agent 适配和工作目录隔离等能力，但这些能力仍然挂在一条过程式调用链上：
+AgentHub 当前已经具备 Manager-first 行动方案生成、A2A envelope、AG-UI event、任务子对话、Code Agent 适配和工作目录隔离等能力，但这些能力仍然有一部分挂在过程式执行链上：
 
 ```text
 用户群聊消息
   -> messages.ts
   -> Orchestrator decision
-  -> Dynamic Planner
+  -> Manager-first action plan
   -> startPlanRunInExistingGroup()
   -> orchestrator_runs / workspace_tasks / sessions
   -> OrchestratorEngine
@@ -454,7 +454,7 @@ HiClaw 的 Manager 是一个长期在线的协调者：它接收人类目标，�
 
 AgentHub 现在最危险的误区，是把 `ManagerLoop` 做成 `Planner -> DAG -> Executor` 的新名字。正确方向是：
 
-- Planner 只生成或更新 WorkLedger。
+- Planning skill 只生成或更新 WorkLedger；旧 Planner 不再是必经第一步。
 - ManagerLoop 才决定下一步是澄清、分发、等待、催办、返工、补员、暂停、汇总还是请求 Human 决策。
 - RunController / WorkerController 只能执行 Manager 的明确意图，并保证资源状态收敛。
 - 代码不能用静态规则绕过 Manager 去判断任务是不是“值得规划”、应该找谁、是否追加 QA。
@@ -1483,7 +1483,7 @@ AG-UI 必须成为 UI runtime projection，而不是“执行过程中顺手广�
 用户发出复杂目标后：
   1. ManagerLoop 立即创建 run.started / manager.thinking
   2. Manager 在主群聊给出模型生成的承接说明；模型尚未返回时先显示 RunEvent 驱动的可见状态
-  3. ManagerLoop 调用现有 Planner 生成初版 WorkLedger
+  3. ManagerLoop 调用 Manager-first planning action 生成初版 WorkLedger；旧 Planner 只作为校验/兼容工具
   4. 每个 task 创建 shared/tasks/{taskId}/spec.md
   5. 每个 task 创建 TaskThread(prepared)，并写入透明系统状态
   6. RunEvent 记录 plan.created / task.planned / thread.prepared

@@ -12,8 +12,9 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 
 也就是说，群聊、私聊、任务子对话不是终点，而是我们当前承载复杂协作的交互外壳。核心体验不是“一个模型假装多人说话”，而是：
 
-- 用户在群聊里提出复杂目标。
-- Orchestrator 先理解任务、生成动态 DAG 计划。
+- 用户在群聊里提出目标。
+- Manager / Orchestrator 像团队负责人一样理解目标，决定回复、追问、补员、组队、派活或总结。
+- Planner 不再是主脑；结构化拆解只作为 Manager 可调用的 planning skill / action。
 - 多个 Agent 在各自的任务子对话里真实执行。
 - 主群聊只展示计划、进度、成员汇报、产物和最终综合结果。
 - 用户可以进入任一子对话查看该 Agent 的完整执行过程。
@@ -40,7 +41,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 修改代码前先确认自己正在改的是哪一层，不要把不同层的概念混用：
 
 - 产品交互层：IM 群聊、Agent 私聊、任务子对话、任务看板、产物卡。
-- 编排层：Orchestrator、Planner、DAG、TaskScheduler、Synthesizer、人工确认和运行生命周期。
+- 编排层：Manager / Orchestrator、Manager actions、WorkLedger / Task graph、TaskScheduler、Synthesizer、人工确认和运行生命周期。
 - 通信协议层：A2A 负责 Agent 间 message/task/artifact 语义；AG-UI 负责运行事件到前端 UI 的桥接。
 - 执行层：Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Agent 基底；`llm` 只作为内部/兜底能力。
 - 能力层：MCP、Skills、Rules、shell、文件系统、浏览器等是 Code Agent 能使用的工具能力，不是 Agent 类型。
@@ -52,7 +53,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 - `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
 - `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
 
-`内部 LLM 默认模型` 必须保持可见，且只作用于欢迎页动态提示、Orchestrator、Planner、Synthesizer 等内部模型链路。
+`内部 LLM 默认模型` 必须保持可见，且只作用于欢迎页动态提示、Manager / Orchestrator、planning skill、Synthesizer 等内部模型链路。
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
@@ -100,13 +101,13 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 ```text
 用户在群聊发消息
   -> messages.ts 作为 ChatIngress 写入用户消息、鉴权和加载群聊上下文
-  -> RunController / ManagerLoop 创建 run.started、manager.thinking，并调用 Orchestrator 模型决策下一步
+  -> RunController / ManagerLoop 创建 run.started、manager.thinking，并调用 Manager runtime 决策下一步
   -> 简单聊天：Orchestrator 直接回复
   -> 能力不足：Orchestrator 返回结构化 memberProposals，主群聊展示补员卡，用户确认后才创建/加入真实 Agent
-  -> 复杂任务：生成动态计划和任务看板
+  -> 复杂任务：Manager 生成团队行动方案和任务看板
   -> 用户确认/分发
-  -> 迁移期仍由 OrchestratorEngine.startRun()
-  -> Planner 生成或整理 DAG
+  -> 迁移期仍由 OrchestratorEngine.startRun() 作为执行兼容层
+  -> Manager planning action 生成可执行 Worker 任务；旧 Planner 只保留为兼容校验/工具函数来源
   -> TaskScheduler 按依赖层调度
   -> 每个任务创建 TaskThread，并投影为 orchestrator-task 子对话
   -> Orchestrator 将任务封装为 A2A message/send envelope
@@ -118,7 +119,7 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
   -> Synthesizer 生成最终总结
 ```
 
-迁移方向：`messages.ts` 不应继续扩展成编排主脑；新增 run 生命周期、Manager 决策、资源 reconcile 和恢复逻辑应优先进入 `RunController` / `ManagerLoop` / 后续 kernel controllers。
+迁移方向：`messages.ts` 不应继续扩展成编排主脑；新增 run 生命周期、Manager 决策、资源 reconcile 和恢复逻辑应优先进入 `RunController` / `ManagerLoop` / 后续 kernel controllers。`OrchestratorEngine` 不再被视为未来主脑，只能在迁移期作为执行兼容层逐步拆小。
 
 ## A2A 通信边界
 
@@ -226,11 +227,11 @@ bun test tests/orchestrator-routing.test.ts
 
 - 新增路由使用 `AppError`，不要继续新增裸 `HTTPException`。
 - 日志使用 `apps/server/src/lib/logger.ts`，不要新增 `console.log`。
-- 对复杂目标的意图判断、分工、追加任务和最终内容生成必须来自 Orchestrator/Planner/Synthesizer 的模型输出；系统代码只做 schema 校验、权限校验、状态记录和透明错误呈现。
-- Orchestrator 决策输出解析失败时要透明报错或提示检查模型配置，不允许用关键词启发式兜底成 `plan/reply/clarify`。
+- 对复杂目标的意图判断、分工、追加任务和最终内容生成必须来自 Manager / Orchestrator / Synthesizer 的模型输出；系统代码只做 schema 校验、权限校验、状态记录和透明错误呈现。
+- Manager / Orchestrator 决策输出解析失败时要透明报错或提示检查模型配置，不允许用关键词启发式兜底成 `plan/reply/clarify`。
 - 运行中补员只能来自 Orchestrator 明确输出的 `memberProposals`；前端只展示确认卡，后端只按用户确认创建/加入真实 workspace agent。
 - 不要恢复静态兜底提示词或固定模板计划。快速提示、任务拆解、协作计划都应由模型动态生成；失败时可以提示用户重试或检查模型配置。
-- 不要恢复静态 Agent 路由、关键词分工、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。系统只能校验 Orchestrator/Planner 的显式选择，不能偷偷改派或追加任务。
+- 不要恢复静态 Agent 路由、关键词分工、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。系统只能校验 Manager / Orchestrator 的显式选择，不能偷偷改派或追加任务。
 - 不要恢复内置 `.agenthub/specs/*.spec.yml` 场景模板，也不要让 `ensureHarnessPresets()` 把 specs 自动复制到新工作区。Spec 后续只可作为用户显式创建的协作契约。
 - 不要把旧 `GroupChatManager` 作为新路径入口。群聊统一从 `messages.ts` 进入 Orchestrator 路由。
 - 不要把旧 Git 分支隔离写成当前默认事实。当前默认是项目工作区 + `.agenthub/workdirs` + `.agenthub/shared/tasks`，`.agenthub/handoff` 只是兼容旧路径。
@@ -239,8 +240,9 @@ bun test tests/orchestrator-routing.test.ts
 ## 重要文件
 
 - `apps/server/src/routes/messages.ts`: 消息入口、意图判断、计划生成和分发入口。
-- `apps/server/src/services/orchestrator/orchestrator-engine.ts`: Orchestrator 总控。
-- `apps/server/src/services/orchestrator/planner.ts`: 动态 DAG 计划。
+- `apps/server/src/services/orchestrator/manager-planner.ts`: Manager-first 团队行动方案生成。
+- `apps/server/src/services/orchestrator/orchestrator-engine.ts`: 迁移期执行兼容层，后续继续拆小。
+- `apps/server/src/services/orchestrator/planner.ts`: 旧 Planner 兼容与计划校验工具来源，不是主脑。
 - `apps/server/src/services/orchestrator/task-scheduler.ts`: DAG 调度。
 - `apps/server/src/services/execution/task-execution-service.ts`: 任务执行服务。
 - `apps/server/src/services/execution/agent-workdir.ts`: Agent 工作目录。
@@ -251,4 +253,3 @@ bun test tests/orchestrator-routing.test.ts
 - `apps/web/src/stores/chatStore.ts`: 聊天状态和 WS 事件消费。
 
 <br />
-

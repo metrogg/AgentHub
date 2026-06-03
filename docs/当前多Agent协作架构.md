@@ -20,12 +20,12 @@ AgentHub 要做的是通用多 Agent 协作平台，而不是针对某个固定�
 - 每个成员在自己的子对话里接收任务并输出。
 - 用户可以查看每个成员的真实执行过程。
 - 产物要能被主群聊看到，也能被下游 Agent 接力。
-- 系统不再自动注入默认团队、经典模板或关键词路由，所有执行分工都应来自 Orchestrator/Planner 的模型输出。
+- 系统不再自动注入默认团队、经典模板或关键词路由，所有执行分工都应来自 Manager / Orchestrator 的模型输出。Planner 只能作为 Manager 可调用的 planning skill / action，不再是系统主脑。
 - 后续产品层要在这套运行时之上形成 Space、Task Center、Asset Center、Expert Center、Eval / Trace 等一等页面。
 
 ## 目标内核方向
 
-当前运行链路仍处在迁移期：`messages.ts` 已开始退成 ChatIngress，`RunController / ManagerLoop` 已接管 run 创建、Manager thinking、Orchestrator 决策事件、approval requested、run failed/completed 等生命周期动作；但任务计划生成、调度执行和最终汇总仍主要通过 `OrchestratorEngine`、`TaskScheduler` 和 `TaskExecutionService` 完成。这不是最终目标。
+当前运行链路仍处在迁移期：`messages.ts` 已开始退成 ChatIngress，`RunController / ManagerLoop` 已接管 run 创建、Manager thinking、Orchestrator 决策事件、approval requested、run failed/completed 等生命周期动作；初始任务分工已经改为 `manager-planner.ts` 的 Manager-first 行动方案生成，不再把旧 `Planner.createPlan()` 当必经主脑。但调度执行和最终汇总仍主要通过 `OrchestratorEngine`、`TaskScheduler` 和 `TaskExecutionService` 完成。这不是最终目标。
 
 后续底层应学习 HiClaw 的资源控制平面思想，但保持 AgentHub 的本地轻量体验和自研 IM / AG-UI 产品壳。目标是逐步形成 HiClaw-lite Kernel：
 
@@ -56,7 +56,7 @@ AgentHub 需要把以下层次分开设计：
 | 层 | 我们的当前设计 |
 | --- | --- |
 | 产品交互层 | IM 群聊、全局 Agent 私聊、群聊下任务子对话、任务看板、产物卡 |
-| 编排规划层 | Orchestrator 理解目标，Planner 生成动态 DAG，TaskScheduler 按依赖执行，Synthesizer 汇总 |
+| 编排规划层 | Manager / Orchestrator 理解目标并生成团队行动方案；planning skill 可辅助结构化拆解；TaskScheduler 按任务账本依赖执行；Synthesizer 汇总 |
 | 通信协议层 | A2A 作为 Agent 间 `message/send`、task、artifact 语义；AG-UI 作为运行事件到前端的桥接 |
 | Agent 身份层 | `code-agent` 是主路径；`llm` 是内部/兜底；A2A/MCP/Skills/Rules 都不是 Agent 类型 |
 | 执行运行时层 | Codex CLI、Claude Code、OpenCode、Gemini CLI 作为 Coding Agent 基底 |
@@ -94,7 +94,7 @@ AgentHub 需要把以下层次分开设计：
 - `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
 - `Agent 配置`：`code agent × model × skills × sandbox` 的实际装配。
 
-另有一个独立的 `内部 LLM 默认模型`，只供欢迎页动态提示、Orchestrator / Planner / Synthesizer 等内部模型链路使用。
+另有一个独立的 `内部 LLM 默认模型`，只供欢迎页动态提示、Manager / Orchestrator、planning skill、Synthesizer 等内部模型链路使用。
 
 ## 会话模型
 
@@ -184,10 +184,10 @@ metadata.taskThreadId != null
   -> RunController 调用 Orchestrator 模型观察用户目标并返回 next action
   -> 简单聊天：Orchestrator 直接回复
   -> 能力不足：Orchestrator 输出 memberProposals，RunController 写 approval.requested
-  -> 复杂任务：生成动态计划和任务看板
+  -> 复杂任务：Manager 生成团队行动方案和任务看板
   -> 用户点击分发执行
-  -> 迁移期进入 OrchestratorEngine.startRun()
-  -> Planner 生成/整理任务 DAG
+  -> 迁移期进入 OrchestratorEngine.startRun() 作为执行兼容层
+  -> Manager planning action 生成可执行 Worker 任务；旧 Planner 只保留兼容校验/工具函数
   -> 为每个任务创建 TaskThread，并投影为 orchestrator-task 子对话
   -> TaskScheduler 按依赖执行
   -> Orchestrator 生成 A2A message/send envelope
@@ -220,7 +220,7 @@ A2A message/send
   -> llm / code-agent
 ```
 
-也就是说，Codex CLI、Claude Code、OpenCode、Gemini CLI 是当前主要 Agent 执行基底；普通 LLM 只作为 Orchestrator/Planner/Synthesizer 和 fallback 能力。MCP、Skills、Rules 是 Code Agent 可使用的工具/能力层，不是 Agent 类型。黑板和 handoff 只作为 A2A artifact/metadata 的 AgentHub 扩展存在，不能再承担隐藏分工或静态路由职责。
+也就是说，Codex CLI、Claude Code、OpenCode、Gemini CLI 是当前主要 Agent 执行基底；普通 LLM 只作为 Manager / Orchestrator、planning skill、Synthesizer 和 fallback 能力。MCP、Skills、Rules 是 Code Agent 可使用的工具/能力层，不是 Agent 类型。黑板和 handoff 只作为 A2A artifact/metadata 的 AgentHub 扩展存在，不能再承担隐藏分工或静态路由职责。
 
 如果后续接入远程 A2A endpoint，也应作为协议层配置存在，例如 `roleProfile.protocol = "a2a"` 与 `roleProfile.a2aEndpoint`，不能恢复 `runtimeType = "a2a"`。
 
@@ -229,9 +229,9 @@ A2A message/send
 当前 `workspace_agents.runtimeType` 只有两类：
 
 - `code-agent`：主路径。用户自建 Agent 是在 Codex CLI、Claude Code、OpenCode、Gemini CLI 等 Coding Agent 基底上配置角色、系统提示词、skills/MCP 能力、工具权限和沙箱策略。
-- `llm`：兜底路径。用于纯文本能力、Orchestrator/Planner/Synthesizer 等内部模型调用或没有可用 Coding Tools 时的保障。
+- `llm`：兜底路径。用于纯文本能力、Manager / Orchestrator、planning skill、Synthesizer 等内部模型调用或没有可用 Coding Tools 时的保障。
 
-A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库或 Planner 输出中。
+A2A、MCP、Skills、Rules 都不能作为 Agent 类型出现在 UI、数据库或 Manager 行动方案中。
 
 每个专家 Agent 的最终配置是一个独立组合，而不是共享默认值：
 

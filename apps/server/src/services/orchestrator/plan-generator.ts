@@ -7,13 +7,13 @@ import {
   TaskStatus,
   TaskType,
 } from '@agenthub/shared'
-import { Planner } from './planner'
 import type { CollaborationMode, ExecutionPlan, TaskOutputContract, TaskValidation } from './types'
 import {
   formatContractsForPlanner,
   loadExplicitCollaborationContracts,
   type CollaborationContract,
 } from './collaboration-contract'
+import { createManagerActionPlan } from './manager-planner'
 
 type PlanAgent = {
   key: string
@@ -107,16 +107,17 @@ export async function buildDynamicOrchestratorPlan(
     throw new Error('当前群聊只有 Orchestrator，没有可执行任务的 Agent')
   }
 
-  const planner = new Planner()
   const collaborationContracts = await loadExplicitCollaborationContracts(workspacePath)
-  const executionPlan = await planner.createPlan({
+  const agentRelations = workspaceId ? await loadWorkspaceAgentRelationsForPlanning(workspaceId) : []
+  const executionPlan = await createManagerActionPlan({
     goal,
     agents: workerPlanningAgents.map(toExecutionAgent),
+    agentRelations,
     workspacePath,
     collaborationContracts,
-    plannerModelId: orchestratorAgent?.modelId,
-    plannerSystemPrompt: orchestratorAgent?.systemPrompt,
-    plannerAgent: orchestratorAgent ? toExecutionAgent(orchestratorAgent) : null,
+    managerModelId: orchestratorAgent?.modelId,
+    managerSystemPrompt: orchestratorAgent?.systemPrompt,
+    managerAgent: orchestratorAgent ? toExecutionAgent(orchestratorAgent) : null,
   })
 
   return executionPlanToOrchestratorPlan(executionPlan, workerPlanningAgents, collaborationContracts)
