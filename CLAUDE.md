@@ -1,10 +1,10 @@
 # AgentHub Development Guide
 
-This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md`, `AGENTS.md`, `docs/文档索引与权威口径.md`, `docs/当前状态与下一步路线.md`, and `docs/HiClaw架构调研与AgentHub底层重构方案.md`.
+This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md`, `AGENTS.md`, `docs/文档索引与权威口径.md`, `docs/当前状态与下一步路线.md`, `docs/AgentHub-HiClaw-lite开源内核重构方案.md`, and `docs/HiClaw架构调研与AgentHub底层重构方案.md`.
 
 ## Product Definition
 
-AgentHub is an IM-style multi-agent collaboration platform evolving toward an open-source Coze-style AI work platform. The expected behavior is:
+AgentHub is an open-source Coze/Kimi-style AI work platform shell evolving toward a HiClaw-lite open collaboration kernel. The expected behavior is:
 
 1. The user starts from a group chat.
 2. Manager / Orchestrator behaves like a team lead: it understands the request, decides whether to reply, clarify, request members, assign work, review, or summarize.
@@ -18,17 +18,40 @@ Role presets may be used as a manual creation library, but they must not auto-se
 Role prompts should follow the composition model: shared collaboration protocol + role background + bound skills + runtime task context + output contract. Group goals may drive member recommendations, but not fixed execution templates. If an existing group lacks needed capability, Orchestrator may propose adding a new agent; this must be visible and user-approved by default.
 Preinstalled agent templates and lightweight expert-team recommendations are agent configuration assets, not fixed execution teams. You may borrow structure from Claude Code subagents, BMAD, SuperClaude, awesome-cursor-skills, and MCP server ecosystems, but first adapt for license, safety boundaries, quality, and AgentHub schemas. Do not build a separate "my experts" system or full expert marketplace yet, and do not directly copy unaudited prompts or enable third-party MCP servers by default.
 
+## Current Kernel Direction
+
+The new architecture target is **AgentHub Product Shell + HiClaw-lite Open Kernel**:
+
+- Keep AgentHub's own product UI: group chat, task rooms, experts, task board, artifact cards, settings, trace/eval.
+- Use Matrix as the internal collaboration source of truth: Room, timeline, participant, and mention are first-class.
+- Learn Manager Runtime from HiClaw OpenClaw/QwenPaw: Manager is a real coordinator runtime, not a one-shot Planner function.
+- Learn Worker Runtime from HiClaw, while keeping AgentHub's coding-agent advantage: Claude Code, OpenCode, Codex, and Gemini are core Worker bases.
+- Use local filesystem first for shared storage, but design ArtifactStore/SharedStorage with S3-compatible semantics.
+- Abstract AI Gateway. Short term: LocalGateway/LiteLLM. Long term: Higress-style model/MCP/credential governance.
+- A2A is no longer the first-stage internal communication backbone. Keep it for external interoperability or optional task semantic envelopes inside Matrix events.
+- This is still development. Old sessions, tasks, database rows, and workspace/storage data are not architecture constraints. Prefer clearing/rebuilding old data over preserving old execution paths.
+
+The four highest-priority kernel modules are:
+
+1. Manager coordinator: runtime, persona config, skills, state, worker registry, Room communication, heartbeat/patrol.
+2. Worker runtime: real participant identity, model binding, skills/MCP scope, heartbeat, sleep/wake/stop, runtime lease.
+3. Matrix communication: real Room/timeline/participant/mention instead of session metadata pretending to be rooms.
+4. Shared storage: filesystem-first ArtifactStore/SharedStorage with MinIO/S3-compatible object key semantics.
+
+Use `docs/hiclaw-wiki.agent.final.md` and local `hiclaw源码参考/` as the main HiClaw reference materials.
+
 ## Layered Mental Model
 
 Before changing code, identify which layer you are working on:
 
 - Product interaction: IM group chat, global agent direct chat, task child conversations, task boards, artifact cards.
 - Orchestration: Manager / Orchestrator, Manager actions, WorkLedger / task graph, TaskScheduler, Synthesizer, approvals, cancellation, retry, resume.
-- Protocols: A2A for agent-to-agent message/task/artifact semantics; AG-UI for run events surfaced to the frontend.
+- Communication: Matrix for Room/timeline/participant/mention semantics. This is the future internal collaboration source of truth.
+- Protocol projection: AG-UI for frontend projections. A2A only for external interoperability or optional task semantic envelopes inside Matrix events.
 - Execution: Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary agent bases. `llm` is internal/fallback support.
 - Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
 - Collaboration contracts: user-explicit Specs may describe scope, allowed paths, required outputs, and acceptance criteria; they must not be trigger-based scenario templates.
-- Workspace and state: the system default workspace root, `.agenthub/workdirs`, `.agenthub/shared/tasks`, compatibility `.agenthub/handoff`, blackboard entries, execution logs, run events, and persisted task state.
+- Workspace, storage, and state: the system default workspace root, Worker workdirs, ArtifactStore/SharedStorage, filesystem adapter, compatibility-only old `.agenthub/handoff`, resource events, trace events, and persisted task state.
 
 Configuration truth is split deliberately:
 
@@ -40,7 +63,7 @@ Keep the internal default model visible and separate. It is only for internal LL
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
 
-The next architecture direction is a HiClaw-inspired but AgentHub-native kernel. Learn from HiClaw's declarative resource control plane, but do not add Matrix, MinIO, Higress, or Kubernetes as default dependencies. Gradually make `Run`, `Task`, `TaskThread`, `WorkerInstance`, `Artifact`, `RuntimeLease`, and `RunEvent` first-class resources. `messages.ts` should shrink toward chat ingress and lightweight routing; task boards, child conversations, progress, and artifact cards should be projected from resource state and AG-UI / RunEvent, not stitched together from legacy message metadata. See `docs/HiClaw架构调研与AgentHub底层重构方案.md` before changing orchestration, child-thread, artifact, event, or runtime lifecycle code.
+The next architecture direction is a HiClaw-lite open kernel, not more patches on the old DAG-first path. Matrix is the chosen communication layer. MinIO/Higress/Kubernetes-style enterprise pieces are not default first-stage dependencies, but their abstractions should shape ArtifactStore, Gateway, and Controller/Reconciler boundaries. Gradually make `Room`, `TimelineEvent`, `Run`, `Task`, `WorkerInstance`, `Artifact`, and `RuntimeLease` first-class resources. `messages.ts` should shrink toward chat ingress and lightweight routing; task boards, child conversations, progress, and artifact cards should be projected from Matrix timeline, resource state, and AG-UI, not stitched together from legacy message metadata. See `docs/AgentHub-HiClaw-lite开源内核重构方案.md` before changing orchestration, child-thread, artifact, event, or runtime lifecycle code.
 
 ## Stack
 
@@ -52,7 +75,7 @@ The next architecture direction is a HiClaw-inspired but AgentHub-native kernel.
 - State: Zustand
 - DB: SQLite via `bun:sqlite` + Drizzle ORM
 - LLM: OpenAI-compatible and Anthropic-compatible streaming client
-- Agent communication: A2A v0.3 `message/send` via AgentHub local transport
+- Agent communication: migration path still contains A2A v0.3 `message/send` via AgentHub local transport, but the target internal communication layer is Matrix Room/timeline.
 - Code agents: Codex CLI, Claude Code, OpenCode, Gemini CLI
 - MCP, Skills, and Rules are tool/capability layers for code agents, not agent runtime types.
 
@@ -121,18 +144,22 @@ messages.ts works as ChatIngress
 
 Migration rule: do not keep expanding `messages.ts` as the orchestration brain. New run lifecycle, Manager decisions, reconcile, recovery, and resource state transitions should move into `RunController`, `ManagerLoop`, and later kernel controllers. `OrchestratorEngine` is no longer the future brain; treat it as a migration-period execution compatibility layer to shrink.
 
-### A2A Boundary
+### Matrix / A2A Boundary
 
-Internal agent-to-agent task dispatch must use A2A objects, not a parallel hidden protocol:
+Target internal collaboration uses Matrix:
 
-- `apps/server/src/services/protocols/a2a-internal.ts` builds the internal `message/send` envelope and response `Task`.
-- `apps/server/src/services/execution/local-a2a-transport.ts` is the local transport facade.
-- Child conversation user messages persist the A2A request envelope in metadata.
-- Agent outputs and group task reports persist A2A response message/task metadata.
-- A2A is a communication protocol, not an agent runtime type. Remote A2A endpoints belong in `roleProfile.protocol = "a2a"` plus `roleProfile.a2aEndpoint`.
-- Blackboard, `.agenthub/shared/tasks`, and compatibility `.agenthub/handoff` remain AgentHub extensions to A2A artifacts, not separate static routing systems.
+- Human, Manager, and Worker are Room participants.
+- Manager assignment, Worker progress, clarification, failure, artifact refs, and Human interruption should appear on Room timelines.
+- AgentHub keeps its own UI; Element Web is not the default product shell.
 
-The current implementation is an internal A2A envelope plus AgentHub local transport. Do not reintroduce `runtimeType = "a2a"` or show A2A as a selectable agent kind.
+A2A is kept for interoperability:
+
+- A2A is a protocol, not an agent runtime type.
+- Remote A2A endpoints belong in `roleProfile.protocol = "a2a"` plus `roleProfile.a2aEndpoint`.
+- Old A2A envelopes may become optional `taskEnvelope` payloads inside Matrix events.
+- Do not reintroduce `runtimeType = "a2a"` or show A2A as a selectable agent kind.
+
+The current implementation still has internal A2A envelope plus AgentHub local transport. Treat it as a migration compatibility path, not the target backbone.
 
 ### Session Tree Rules
 

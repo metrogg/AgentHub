@@ -1,6 +1,6 @@
 # AgentHub
 
-AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平台”，而是朝着一套 `Coze 风格的开源 AI 工作平台` 演进。
+AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平台”，而是朝着一套 `Coze / Kimi 风格的开源 AI 工作平台` 演进。新的底层目标是 `AgentHub Product Shell + HiClaw-lite Open Kernel`：前端保留 AgentHub 自己的产品壳，底层协作内核学习 HiClaw，并尽量采用成熟开源组件。
 
 现阶段的主交互仍然是群聊、私聊和任务子对话，但这些只是工作台的承载外壳。我们真正要做的是：
 
@@ -9,9 +9,9 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - 多个 Agent 在真实子对话里执行，并交付网页、文档、报告、代码、应用等结果资产。
 - 平台逐步形成 `Space / Task Center / Asset Center / Expert Center / Eval & Trace` 的完整结构。
 
-当前项目仍处于快速迭代阶段，近期优先目标是先把“群聊主线 + A2A 任务分发 + 多 Agent 任务子对话 + 本地工作目录 + 产物交接”闭环跑稳，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
+当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向 HiClaw-lite 内核换血：先把 Matrix Room 通信、Manager Runtime、Worker Runtime、filesystem ArtifactStore 和本地轻量 Controller/Reconciler 跑通，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
 
-如果你是第一次接手项目，先读 [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)。它是当前事实总览，用来区分主路径、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
+如果你是第一次接手项目，先读 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)、[docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md) 和 [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)。它们是当前事实总览，用来区分新主线、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw 参考依据见 [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md) 和本地 `hiclaw源码参考/`。
 
 ## 核心体验
 
@@ -24,11 +24,12 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - **Agent 群聊 / 工作会话**：用户围绕目标发起协作，Manager / Orchestrator 负责理解、协调、分工、验收和总结。
 - **任务子对话**：每个成员在自己的子对话里真实接收任务并执行，主群聊只展示进度和汇报。
 - **Manager 行动方案**：由 Manager 模型生成团队行动方案和任务账本；DAG 只是恢复、依赖和看板视图，不是主脑。
-- **A2A 通信标准**：Orchestrator 给成员分发任务时统一生成 A2A v0.3 `message/send`，A2A 是通信协议，不是 Agent 类型。
+- **Matrix 通信主线**：新内核以 Matrix Room / timeline / participant / mention 作为协作事实源。Manager 怎么 @ Worker、Worker 怎么回应、用户怎么插话，都应该在 Room 中可见。
+- **A2A 外部互操作**：A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope；A2A 是协议，不是 Agent 类型。
 - **显式分工**：执行任务只接受 Manager / Orchestrator 的模型选择，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
 - **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI；自建 Agent 是在这些 Coding Agent 基底上配置角色、提示词、Skills/MCP 能力和权限。
-- **工作目录与共享任务目录**：每个 Agent 有自己的工作目录，每个任务有 `.agenthub/shared/tasks/{taskId}` 协作空间，上游产物优先通过 `artifacts/` 交给下游；`.agenthub/handoff` 仅保留兼容旧路径。
-- **产物可见**：文件、网页、diff、诊断产物会进入消息 metadata 和任务看板。
+- **工作目录与共享存储**：每个 Worker 有自己的工作目录和 RuntimeLease；共享存储第一阶段使用本地 filesystem，但按 MinIO/S3-compatible 语义设计 ArtifactStore / SharedStorage。
+- **产物可见**：文件、网页、diff、诊断产物进入 ArtifactStore，并从主群聊、任务 Room 和产物卡稳定投影。
 - **Coze 对标方向**：后续产品层要逐步补齐 Space、Task Center、Asset Center、Expert Center、Eval / Trace、部署与长期主动任务能力。
 
 ## 当前协作路径
@@ -36,13 +37,12 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 ```text
 用户在群聊发起任务
   -> Manager / Orchestrator 理解目标并决定下一步
-  -> 复杂任务生成团队行动方案和任务看板
-  -> 用户分发执行
-  -> 为每个任务创建 orchestrator-task 子对话
-  -> Orchestrator 生成 A2A message/send envelope
-  -> LocalA2ATransport 分发给本地执行宿主
-  -> Agent 在子对话里执行并输出
-  -> 产出以 A2A responseTask / artifact metadata 写入消息、黑板和 handoff 目录
+  -> Matrix Room 记录 Human / Manager / Worker 的可见交流
+  -> 复杂任务由 Manager 创建任务账本和 Task Room
+  -> Manager 在 Room 中 @ Worker 分配任务
+  -> WorkerRuntime 调用 Claude Code / OpenCode / Codex / Gemini 等真实执行
+  -> Worker 在 Task Room 汇报进度、错误、澄清请求和 artifact refs
+  -> ArtifactStore 登记产物
   -> 主群聊展示成员汇报、产物和最终总结
 ```
 
@@ -55,7 +55,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 
 当前权威文档索引见 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
-当前路径仍然偏过程式：消息入口会创建 run/task/session 并启动编排器。后续底层要向 HiClaw-lite Kernel 收敛：`Run`、`Task`、`TaskThread`、`WorkerInstance`、`Artifact`、`RuntimeLease`、`RunEvent` 都成为一等资源；任务看板、进度条、子对话入口和产物卡从资源状态与 AG-UI / RunEvent 投影出来。这个方向不是照搬 HiClaw 的 Matrix / MinIO / Kubernetes 重栈，而是吸收它的资源控制平面和生命周期设计。
+当前路径仍然偏过程式：消息入口会创建 run/task/session 并启动编排器。后续底层要向 HiClaw-lite Open Kernel 收敛：`Room`、`TimelineEvent`、`Run`、`Task`、`WorkerInstance`、`Artifact`、`RuntimeLease` 都成为一等资源；任务看板、进度条、子对话入口和产物卡从 Matrix timeline、资源状态与 AG-UI 投影出来。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
 
 ## 分层定位
 
@@ -65,11 +65,11 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | --- | --- |
 | 产品交互层 | 群聊、私聊、任务子对话、任务看板、产物卡，并逐步进化为 Space / Task / Asset 工作台 |
 | 编排层 | Manager / Orchestrator 生成团队行动方案，通过任务账本调度、取消、重试、验收和汇总 |
-| 通信协议层 | A2A 承载 Agent 间 message/task/artifact，AG-UI 承载运行事件到 UI |
+| 通信层 | Matrix 承载 Room / timeline / participant / mention，A2A 只保留为外部互操作或可选任务语义 envelope |
 | 执行层 | Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Agent 基底，LLM 为内部/兜底 |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
 | 协作契约层 | 用户显式 Spec/Contract 描述范围、产出、验收和路径边界，不做固定场景模板 |
-| 工作区层 | 系统默认工作空间根 + 项目根 + `.agenthub/workdirs` + `.agenthub/shared/tasks` + 兼容 `.agenthub/handoff` + blackboard |
+| 工作区与存储层 | 系统默认工作空间根 + Worker workdirs + RuntimeLease + filesystem ArtifactStore / SharedStorage，后续可接 MinIO/S3 |
 
 产品北极星与 Coze 对标判断见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw-lite Kernel 方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
@@ -94,7 +94,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 数据库 | SQLite + Drizzle ORM |
 | LLM | OpenAI-compatible + Anthropic-compatible streaming client，用于 Manager / Orchestrator、planning skill、Synthesizer 和 fallback |
 | Code Agent | Codex CLI / Claude Code / OpenCode / Gemini CLI |
-| Agent 通信 | A2A v0.3 message/send + AgentHub local/remote transport |
+| Agent 通信 | 当前迁移期仍有 A2A local transport；目标内核采用 Matrix Room/timeline，A2A 降为外部互操作 |
 
 ## 项目结构
 
@@ -198,10 +198,12 @@ AGENTHUB_SANDBOX_PROVIDER=local-workdir
 
 - [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)
 - [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)
+- [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)
 - [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)
 - [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)
 - [docs/使用指南.md](docs/使用指南.md)
 - [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md)
+- `hiclaw源码参考/`
 - [docs/Kimi-Claw群聊系统完整设计规格书(1).md](docs/Kimi-Claw群聊系统完整设计规格书%281%29.md)
 
 `docs/archive/` 和 `docs/old/` 中的内容只作为历史参考，不作为当前工程事实。凡是与上面几份权威文档冲突的，以权威文档为准。
