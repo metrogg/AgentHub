@@ -38,6 +38,7 @@ type RiskLevel = 'low' | 'medium' | 'high'
 type KindFilter = CapabilityKind | 'all'
 
 interface CapabilityCardData {
+  renderKey: string
   id: string
   kind: CapabilityKind
   title: string
@@ -82,7 +83,6 @@ export default function AbilitiesPage() {
   const [query, setQuery] = useState('')
   const [kindFilter, setKindFilter] = useState<KindFilter>('all')
   const deferredQuery = useDeferredValue(query)
-  const deferredKindFilter = useDeferredValue(kindFilter)
 
   async function refresh() {
     setLoading(true)
@@ -126,7 +126,7 @@ export default function AbilitiesPage() {
   const filteredCards = useMemo(() => {
     const keyword = deferredQuery.trim().toLowerCase()
     return cards.filter((card) => {
-      const matchesKind = deferredKindFilter === 'all' || card.kind === deferredKindFilter
+      const matchesKind = kindFilter === 'all' || card.kind === kindFilter
       const matchesQuery =
         !keyword ||
         [
@@ -145,11 +145,11 @@ export default function AbilitiesPage() {
           .includes(keyword)
       return matchesKind && matchesQuery
     })
-  }, [cards, deferredKindFilter, deferredQuery])
+  }, [cards, kindFilter, deferredQuery])
 
   const enabledCount = useMemo(() => cards.filter((card) => card.enabled).length, [cards])
   const highRiskCount = useMemo(() => cards.filter((card) => card.risk === 'high').length, [cards])
-  const filteringPending = deferredKindFilter !== kindFilter || deferredQuery !== query
+  const filteringPending = deferredQuery !== query
   const openCapabilityPath = useCallback((path: string) => navigate(path), [navigate])
 
   return (
@@ -257,7 +257,7 @@ export default function AbilitiesPage() {
                 style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(19rem, 1fr))' }}
               >
                 {filteredCards.map((card) => (
-                  <CapabilityCard key={`${card.kind}:${card.id}`} card={card} onOpen={openCapabilityPath} />
+                  <CapabilityCard key={card.renderKey} card={card} onOpen={openCapabilityPath} />
                 ))}
               </section>
             )}
@@ -320,7 +320,7 @@ const CapabilityCard = memo(function CapabilityCard({
   )
 })
 
-function buildCapabilityCards({
+export function buildCapabilityCards({
   adapters,
   agents,
   settingsInfo,
@@ -333,9 +333,10 @@ function buildCapabilityCards({
 }): CapabilityCardData[] {
   const cards: CapabilityCardData[] = []
 
-  for (const skill of skills) {
+  for (const skill of dedupeSkillsForAbilityCards(skills)) {
     const boundAgents = agents.filter((agent) => (agent.skillIds ?? []).includes(skill.id))
     cards.push({
+      renderKey: `skill:${skill.id}`,
       id: skill.id,
       kind: 'skill',
       title: skill.name || skill.id,
@@ -377,6 +378,7 @@ function buildCapabilityCards({
       (agent) => agent.runtimeType === 'code-agent' && agent.codeAgentType === adapter.id,
     )
     cards.push({
+      renderKey: `cli:${adapter.id}`,
       id: adapter.id,
       kind: 'cli',
       title: adapter.name || codeAgentLabel(adapter.id),
@@ -402,6 +404,7 @@ function buildCapabilityCards({
 
   const uniquePermissions = Array.from(new Set(agents.flatMap((agent) => agent.toolPermissions ?? [])))
   cards.push({
+    renderKey: 'rules:agent-rules',
     id: 'agent-rules',
     kind: 'rules',
     title: 'Rules / 工具权限策略',
@@ -419,6 +422,7 @@ function buildCapabilityCards({
   })
 
   cards.push({
+    renderKey: 'mcp:mcp-servers',
     id: 'mcp-servers',
     kind: 'mcp',
     title: 'MCP Server 外部工具连接',
@@ -439,6 +443,7 @@ function buildCapabilityCards({
   for (const policy of sandboxPolicies) {
     const boundAgents = agents.filter((agent) => agent.sandboxPolicy === policy)
     cards.push({
+      renderKey: `sandbox:${policy}`,
       id: `sandbox-${policy}`,
       kind: 'sandbox',
       title: sandboxPolicyLabel(policy),
@@ -462,6 +467,7 @@ function buildCapabilityCards({
   for (const policy of contextPolicies) {
     const boundAgents = agents.filter((agent) => agent.contextPolicy === policy)
     cards.push({
+      renderKey: `context:${policy}`,
       id: `context-${policy}`,
       kind: 'context',
       title: contextPolicyLabel(policy),
@@ -483,6 +489,29 @@ function buildCapabilityCards({
     if (a.enabled !== b.enabled) return Number(b.enabled) - Number(a.enabled)
     return kindOrder(a.kind) - kindOrder(b.kind)
   })
+}
+
+function dedupeSkillsForAbilityCards(skills: SkillSummary[]) {
+  const groups = new Map<string, SkillSummary[]>()
+  for (const skill of skills) {
+    const key = normalizeCapabilityToken(skill.id || skill.name)
+    if (!key) continue
+    groups.set(key, [...(groups.get(key) ?? []), skill])
+  }
+
+  return Array.from(groups.values()).map((group) => {
+    const [primary] = group
+    if (!primary || group.length === 1) return primary
+    const sources = Array.from(new Set(group.map((skill) => skill.source).filter(Boolean)))
+    return {
+      ...primary,
+      source: sources.join(' / ') || primary.source,
+    }
+  })
+}
+
+function normalizeCapabilityToken(value: string) {
+  return value.trim().toLowerCase()
 }
 
 function InfoBlock({ label, value }: { label: string; value: string }) {

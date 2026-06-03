@@ -1,219 +1,481 @@
 # AgentHub
 
-AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平台”，而是朝着一套 `Coze / Kimi 风格的开源 AI 工作平台` 演进。新的底层目标是 `AgentHub Product Shell + HiClaw-lite Open Kernel`：前端保留 AgentHub 自己的产品壳，底层协作内核学习 HiClaw，并尽量采用成熟开源组件。
+[中文](#中文) | [English](#english)
 
-现阶段的主交互仍然是群聊、私聊和任务子对话，但这些只是工作台的承载外壳。我们真正要做的是：
+## 产品界面速览 / Product Preview
 
-- 用户围绕一个工作目标发起协作，而不是只发起一段对话。
-- Manager / Orchestrator 像团队负责人一样理解目标，决定回复、追问、补员、派活、验收和总结。
-- 多个 Agent 在真实子对话里执行，并交付网页、文档、报告、代码、应用等结果资产。
-- 平台逐步形成 `Space / Task Center / Asset Center / Expert Center / Eval & Trace` 的完整结构。
+![AgentHub 主界面：IM 式多 Agent 协作入口、会话树、工作区与输入框](./public/readme/主界面.png)
 
-当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向 HiClaw-lite 内核换血：先把 Matrix Room 通信、Manager Runtime、Worker Runtime、filesystem ArtifactStore 和本地轻量 Controller/Reconciler 跑通，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
+AgentHub keeps the collaboration surface close to an IM product: group chats, Agent direct chats, task threads, work folders, and artifact-aware input stay in one place.
 
-如果你是第一次接手项目，先读 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)、[docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md) 和 [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)。它们是当前事实总览，用来区分新主线、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw 参考依据见 [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md) 和本地 `hiclaw源码参考/`。
+| Agent 私聊 / Agent Direct Chat | Agent 配置 / Agent Config |
+| --- | --- |
+| ![Agent 私聊：展示 Agent 输出、部署产物卡、右侧进度与工作文件夹](./public/readme/agent私聊.png) | ![Agent 配置：配置专家角色、运行方式、CLI、模型绑定和沙箱策略](./public/readme/agent配置.png) |
 
-## 核心体验
+| Coding Agent 适配 / Coding Agent Adapters | Skills 市场 / Skills Market |
+| --- | --- |
+| ![Coding Agent 适配：检测 Codex、Claude Code、OpenCode 等本地 CLI 并维护运行参数](./public/readme/coding-agent适配.png) | ![Skills 市场：搜索、浏览和安装可交给 Agent 使用的 SkillHub 能力](./public/readme/skills市场.png) |
 
-从当前版本到目标版本，AgentHub 的体验会分两层理解：
+| 移动端扫码连接 / Mobile QR Pairing |
+| --- |
+| ![移动端扫码连接：通过二维码把移动端接入桌面端 AgentHub 工作台](./public/readme/移动端适配扫码.png) |
 
-- 当前主路径：IM 风格的多 Agent 协作工作流。
-- 目标产品形态：Coze 风格的 AI 工作台与 AI 空间。
+## 中文
 
-- **Agent 私聊**：用户与单个 Agent 一对一对话。
-- **Agent 群聊 / 工作会话**：用户围绕目标发起协作，Manager / Orchestrator 负责理解、协调、分工、验收和总结。
-- **任务子对话**：每个成员在自己的子对话里真实接收任务并执行，主群聊只展示进度和汇报。
-- **Manager 行动方案**：由 Manager 模型生成团队行动方案和任务账本；DAG 只是恢复、依赖和看板视图，不是主脑。
-- **Matrix 通信主线**：新内核以 Matrix Room / timeline / participant / mention 作为协作事实源。Manager 怎么 @ Worker、Worker 怎么回应、用户怎么插话，都应该在 Room 中可见。
-- **A2A 外部互操作**：A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope；A2A 是协议，不是 Agent 类型。
-- **显式分工**：执行任务只接受 Manager / Orchestrator 的模型选择，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
-- **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI；自建 Agent 是在这些 Coding Agent 基底上配置角色、提示词、Skills/MCP 能力和权限。
-- **工作目录与共享存储**：每个 Worker 有自己的工作目录和 RuntimeLease；共享存储第一阶段使用本地 filesystem，但按 MinIO/S3-compatible 语义设计 ArtifactStore / SharedStorage。
-- **产物可见**：文件、网页、diff、诊断产物进入 ArtifactStore，并从主群聊、任务 Room 和产物卡稳定投影。
-- **Coze 对标方向**：后续产品层要逐步补齐 Space、Task Center、Asset Center、Expert Center、Eval / Trace、部署与长期主动任务能力。
+AgentHub 是一个正在开发中的 IM 式多 Coding Agent 协作平台。它的目标不是让一个模型在聊天里假装多人协作，而是让用户在群聊中提出目标，由 Manager / Orchestrator 像团队负责人一样规划、派活、跟进、验收，再让多个真实的 Coding Agent 在各自任务子对话中执行。
 
-## 当前协作路径
+中期产品北极星是：**Coze 风格的开源 AI 工作平台**。
+
+### 核心体验
 
 ```text
-用户在群聊发起任务
-  -> Manager / Orchestrator 理解目标并决定下一步
-  -> Matrix Room 记录 Human / Manager / Worker 的可见交流
-  -> 复杂任务由 Manager 创建任务账本和 Task Room
-  -> Manager 在 Room 中 @ Worker 分配任务
-  -> WorkerRuntime 调用 Claude Code / OpenCode / Codex / Gemini 等真实执行
-  -> Worker 在 Task Room 汇报进度、错误、澄清请求和 artifact refs
-  -> ArtifactStore 登记产物
-  -> 主群聊展示成员汇报、产物和最终总结
+用户在群聊里提出目标
+  -> Manager / Orchestrator 理解意图
+  -> 简单问题直接回复，复杂目标生成团队行动方案
+  -> 能力不足时提出补员建议，由用户确认
+  -> 多个 Coding Agent 在真实任务子对话中执行
+  -> 主群聊展示计划、任务看板、成员进度、产物卡和最终总结
+  -> 产物进入统一资产库，后续 Agent 可继续接力
 ```
 
-左侧会话树规则：
+AgentHub 当前强调四件事：
 
-- “Agent 私聊”只显示真正的全局私聊。
-- “群聊”显示主群聊。
-- 展开群聊后只显示真实任务子对话。
-- 旧的 `workspace-agent-child` 和历史占位入口不再作为当前 UI。
+- **真实协作**：每个 Worker 都有独立任务、上下文、工作目录和输出记录。
+- **透明过程**：主群聊看进度，任务子对话看完整执行过程，运行事件可回放。
+- **可组合专家**：Agent 由 Coding CLI、模型、Skills / MCP、Rules、沙箱和上下文策略组合而成。
+- **产物沉淀**：代码、网页预览、文档、PPT、handoff、blackboard 摘要等进入统一产物链路。
 
-当前权威文档索引见 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
+### 不是这些
 
-当前路径仍然偏过程式：消息入口会创建 run/task/session 并启动编排器。后续底层要向 HiClaw-lite Open Kernel 收敛：`Room`、`TimelineEvent`、`Run`、`Task`、`WorkerInstance`、`Artifact`、`RuntimeLease` 都成为一等资源；任务看板、进度条、子对话入口和产物卡从 Matrix timeline、资源状态与 AG-UI 投影出来。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
+AgentHub 当前不会把以下旧路径当作主线：
 
-## 分层定位
+- 固定团队模板或 `classic` 工作区模板。
+- 关键词路由、静态兜底计划、自动 Researcher / QA 注入。
+- 把 A2A、MCP、Skills、Rules 当成 Agent 类型。
+- 把 Git 分支隔离当作默认执行方式。
 
-AgentHub 的目标不是做一个固定角色模板系统，也不只是做一个聊天壳上的编排器，而是把多 Coding Agent 协作做成可见、可控、可追踪、可交付的 AI 工作平台：
+### 当前能力
 
-| 层 | 当前定位 |
-| --- | --- |
-| 产品交互层 | 群聊、私聊、任务子对话、任务看板、产物卡，并逐步进化为 Space / Task / Asset 工作台 |
-| 编排层 | Manager / Orchestrator 生成团队行动方案，通过任务账本调度、取消、重试、验收和汇总 |
-| 通信层 | Matrix 承载 Room / timeline / participant / mention，A2A 只保留为外部互操作或可选任务语义 envelope |
-| 执行层 | Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Agent 基底，LLM 为内部/兜底 |
-| 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
-| 协作契约层 | 用户显式 Spec/Contract 描述范围、产出、验收和路径边界，不做固定场景模板 |
-| 工作区与存储层 | 系统默认工作空间根 + Worker workdirs + RuntimeLease + filesystem ArtifactStore / SharedStorage，后续可接 MinIO/S3 |
+- IM 式会话：群聊、Agent 私聊、任务子对话。
+- Manager-first 协作：目标理解、行动方案、任务看板、动态补员确认、最终汇总。
+- Coding Agent 运行：Codex CLI、Claude Code、OpenCode、Gemini CLI。
+- 本地执行隔离：项目工作区、`.agenthub/workdirs`、local sandbox root、handoff。
+- 运行控制面：RunController、ManagerLoop、WorkerController、RuntimeLease、Worker 心跳和 idle-stop。
+- 事件与审计：RunEvent replay API、execution logs、AG-UI 前端状态投影。
+- 产物系统：ArtifactStore、产物卡、静态预览、文件和 diff 相关操作。
+- 能力中心：Skills 市场、能力审计页、MCP / Rules / CLI / 沙箱 / 上下文策略入口。
+- 多端入口：Web、Tauri Desktop、Android 移动端。
 
-产品北极星与 Coze 对标判断见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw-lite Kernel 方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
+部分能力仍在快速迭代中，尤其是 HiClaw-lite 内核迁移、Room / TimelineEvent 一等资源化、远程 A2A、Trace / Eval、移动端完整体验和更强的产物预览。
 
-当前配置真相也分三层：
-
-- `模型管理`：模型目录、双端点、密钥、模型测试。
-- `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
-- `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
-
-另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、Manager / Orchestrator、planning skill、Synthesizer 等内部模型调用。
-
-## 技术栈
-
-| 层面 | 技术 |
-| --- | --- |
-| 运行时 | Bun >= 1.1.0 |
-| Monorepo | Bun workspaces |
-| 后端 | Hono + Bun.serve + WebSocket |
-| 前端 | React 18 + Vite + TypeScript |
-| UI | Tailwind CSS + Radix UI + assistant-ui |
-| 状态 | Zustand |
-| 数据库 | SQLite + Drizzle ORM |
-| LLM | OpenAI-compatible + Anthropic-compatible streaming client，用于 Manager / Orchestrator、planning skill、Synthesizer 和 fallback |
-| Code Agent | Codex CLI / Claude Code / OpenCode / Gemini CLI |
-| Agent 通信 | 当前迁移期仍有 A2A local transport；目标内核采用 Matrix Room/timeline，A2A 降为外部互操作 |
-
-## 项目结构
+### 架构分层
 
 ```text
-apps/
-  server/
-    src/
-      routes/                 HTTP API
-      services/
-        orchestrator/         Manager-first planning、执行兼容层、Scheduler、Synthesizer
-        execution/            任务执行、工作目录、执行信封
-        runtime/              AgentRuntime 统一接口
-        workspace/            工作区和任务子会话管理
-        code-agent-adapter.ts CLI 适配
-        blackboard.ts         Agent 间黑板
-  web/
-    src/
-      components/chat/        Thread、TaskBoard、SessionList
-      stores/                 Zustand store
-      lib/                    API、WebSocket、会话树
-packages/
-  db/                         Drizzle schema 和 SQLite 连接
-  shared/                     共享 Zod schema、常量、类型
-docs/                         产品、架构、调研和使用说明
-tests/                        bun:test 测试
+Product Shell
+  Web / Desktop / Android
+  Chat, Task Board, Artifacts, Agent Config, Skills, Settings, Trace
+
+Manager-first Runtime
+  Manager / Orchestrator
+  ManagerLoop, RunController, WorkerController, TaskScheduler
+
+Protocol & Events
+  A2A message envelope for task semantics
+  AG-UI projection for frontend runtime state
+  RunEvent replay and execution logs
+
+Execution
+  Codex CLI, Claude Code, OpenCode, Gemini CLI
+  Local LLM fallback for internal chains
+
+Capabilities
+  Skills, MCP, Rules, shell, filesystem, browser, sandbox policies
+
+Workspace & State
+  SQLite / Drizzle
+  .agenthub/workdirs
+  .agenthub/shared/tasks
+  .agenthub/handoff
+  blackboard, artifacts, runtime leases
 ```
 
-## 快速开始
+下一阶段会逐步收敛为 **AgentHub Product Shell + HiClaw-lite Open Kernel**：保留 AgentHub 自己的 Coze / Kimi 风格界面，把底层协作内核迁移到 Room、ManagerRuntime、WorkerRuntime、ArtifactStore、GatewayAdapter、Controller / Reconciler 等资源化边界。
+
+### 项目结构
+
+```text
+apps/web        React + Vite 前端
+apps/server     Hono + Bun 后端服务
+apps/desktop    Tauri 桌面端
+apps/Android    Kotlin / Compose Android 客户端
+packages/db     Drizzle schema、migrations、SQLite 数据层
+packages/shared 共享类型、schema、常量
+tests           后端、前端和共享逻辑测试
+docs            当前状态、架构、使用指南和路线文档
+```
+
+### 快速开始
+
+#### 1. 安装依赖
+
+需要 Bun `>= 1.1.0`。
 
 ```bash
 bun install
+```
+
+#### 2. 配置环境变量
+
+```bash
+cp .env.example .env
+```
+
+至少配置一个可用的 LLM Key：
+
+```env
+LLM_PROVIDER=openai
+LLM_API_KEY=
+LLM_BASE_URL=
+LLM_MODEL=
+
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4.1-mini
+
+ANTHROPIC_API_KEY=
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_MODEL=claude-sonnet-4-6
+```
+
+常用执行配置：
+
+```env
+PORT=8000
+DATABASE_URL=./storage/agenthub.db
+CORS_ORIGIN=http://localhost:5173
+AGENTHUB_ENABLE_CODE_AGENT_EXECUTION=true
+AGENTHUB_CODE_AGENT_TIMEOUT_MS=600000
+AGENTHUB_SANDBOX_PROVIDER=local-workdir
+```
+
+#### 3. 初始化数据库
+
+```bash
+bun run db:migrate
+```
+
+#### 4. 启动 Web + Server
+
+```bash
 bun run dev
 ```
 
-开发服务会同时启动：
+- Web: <http://localhost:5173>
+- Server: <http://localhost:8000>
+- Health check: <http://localhost:8000/health>
 
-- Server: 默认从 `http://localhost:8000` 开始，端口占用时自动递增。
-- Web: Vite 默认从 `http://localhost:5173` 开始，端口占用时自动递增。
-
-单独启动：
+也可以单独启动：
 
 ```bash
 bun run dev:server
 bun run dev:web
 ```
 
-检查：
+#### 5. 启动桌面端
 
 ```bash
-bun run typecheck
-bun --filter @agenthub/server typecheck
-bun --filter @agenthub/web typecheck
-bun test
+bun run dev:desktop
 ```
 
-## 环境变量
+桌面端会通过 Tauri 启动本地 Web 和 Server sidecar。
 
-复制 `.env.example` 到 `.env`。常用项：
+#### 6. Android
 
-| 变量 | 说明 |
-| --- | --- |
-| `DATABASE_URL` | SQLite 文件路径，默认 `./storage/agenthub.db` |
-| `PORT` | Server 起始端口，默认 `8000` |
-| `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 默认模型配置 |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI-compatible 配置 |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Anthropic 配置 |
-| `ENABLE_LOCAL_CLI_PROBES` | 是否探测本机 CLI |
-| `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | 是否允许 Code Agent 执行 |
-| `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | Code Agent 超时，建议开发期 `600000` |
-| `AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS` | 是否启用模型动态生成快捷问题 |
+Android 位于 `apps/Android`，使用 Gradle / Kotlin 项目结构。Bun workspace 中的 Android 脚本只做提示，实际构建请进入该目录使用 Gradle：
 
-## 工作区与产物
+```bash
+cd apps/Android
+./gradlew assembleDebug
+```
 
-如果用户选择了本地工作区，AgentHub 会在该目录下写入：
+Windows PowerShell 可使用：
+
+```powershell
+cd apps/Android
+.\gradlew.bat assembleDebug
+```
+
+### Coding Agent CLI
+
+如需让 AgentHub 调用本机 Coding Agent，请至少安装一个 CLI：
+
+```bash
+npm install -g @openai/codex
+npm install -g @anthropic-ai/claude-code
+npm install -g @opencodeai/opencode
+```
+
+Gemini CLI 也可作为 Worker 基底接入。安装后可在前端的「设置 / Coding Tools」中检测 CLI 状态，再在「Agent 配置」中把 CLI、模型、Skills / MCP 和沙箱策略绑定到具体专家 Agent。
+
+### 常用命令
+
+```bash
+bun run dev
+bun run dev:server
+bun run dev:web
+bun run dev:desktop
+bun run build
+bun run build:desktop
+bun run typecheck
+bun test
+bun run db:generate
+bun run db:migrate
+bun run db:studio
+```
+
+### 推荐阅读
+
+- [AGENTS.md](./AGENTS.md)：AI Coding Agent 的工程口径。
+- [docs/当前状态与下一步路线.md](./docs/当前状态与下一步路线.md)：当前事实与近期路线。
+- [docs/AgentHub-HiClaw-lite开源内核重构方案.md](./docs/AgentHub-HiClaw-lite开源内核重构方案.md)：下一阶段内核重构总纲。
+- [docs/HiClaw架构调研与AgentHub底层重构方案.md](./docs/HiClaw架构调研与AgentHub底层重构方案.md)：HiClaw 调研和迁移方案。
+- [docs/使用指南.md](./docs/使用指南.md)：本地开发和使用方式。
+
+### 当前状态
+
+AgentHub 仍处于快速开发阶段。当前主路径已经从旧的 DAG-first 工作流转向 Manager-first 团队运行时，但部分旧兼容层仍存在，例如 `OrchestratorEngine`、A2A 内部 envelope 和 sessions metadata。新功能应优先向 Room / TimelineEvent / ManagerRuntime / WorkerRuntime / ArtifactStore / Controller 边界收敛。
+
+### 许可证
+
+仓库当前尚未提供 `LICENSE` 文件。正式许可证补齐前，请不要默认将本项目视为已完成开源授权。
+
+---
+
+## English
+
+AgentHub is a work-in-progress IM-style collaboration platform for multiple Coding Agents. It is not designed to make one model pretend to be a whole team. Instead, a user states a goal in a group chat, a Manager / Orchestrator plans and coordinates the work, and real Coding Agents execute their own tasks in auditable task threads.
+
+The mid-term product north star is: **an open-source Coze-style AI work platform**.
+
+### Core Experience
 
 ```text
-.agenthub/
-  workdirs/{runId}/{agentName}/{taskId}/   每个 Agent 的执行目录
-  handoff/{runId}/{taskId}/                可交接给下游的上游产物
+User states a goal in a group chat
+  -> Manager / Orchestrator understands the intent
+  -> Simple requests get direct replies; complex goals become team action plans
+  -> Missing capabilities become member proposals that require user approval
+  -> Coding Agents execute in real task conversations
+  -> The main group chat shows plan, task board, progress, artifacts, and final synthesis
+  -> Artifacts are stored for preview, handoff, and downstream work
 ```
 
-如果没有选择工作区，系统会自动在默认工作空间存储路径下创建一个可写工作区。默认位置使用系统用户数据目录，例如 Windows 的 `%LOCALAPPDATA%\AgentHub\workspaces`，避免写进 AgentHub 源码目录。可在设置里调整默认工作区存储路径。
+AgentHub focuses on four principles:
 
-当前默认不再把 Git 分支隔离作为主路径，也不把本地 workdir 伪装成容器沙箱。执行层已经抽出 `SandboxProvider` 边界，当前默认 provider 是 `local-workdir`；Docker Sandboxes 作为可选增强隔离路径，需要在设置中显式切换并完成初始化。
+- **Real collaboration**: each Worker has its own task, context, work directory, and output history.
+- **Transparent execution**: group chat shows progress, task threads show the full process, and runtime events can be replayed.
+- **Composable experts**: an Agent is a combination of Coding CLI, model, Skills / MCP, Rules, sandbox, and context policy.
+- **Durable artifacts**: code, static previews, documents, slides, handoff files, and blackboard summaries flow into the artifact layer.
 
-对于 Code Agent，当前用户可选沙箱只保留 `workspace-write` 和 `danger-full-access`。不要再把 `read-only` 当作公开的 code-agent 配置选项。
+### What It Is Not
 
-如需临时回退到本地工作目录隔离，可显式设置：
+AgentHub does not treat these deprecated paths as the current product direction:
+
+- Fixed team templates or `classic` workspaces.
+- Keyword routing, static fallback plans, or automatic Researcher / QA injection.
+- A2A, MCP, Skills, or Rules as Agent types.
+- Git branch isolation as the default execution model.
+
+### Current Capabilities
+
+- IM-style conversations: group chat, Agent direct chat, and task child conversations.
+- Manager-first coordination: intent handling, action plans, task board, member proposal confirmation, and final synthesis.
+- Coding Agent execution: Codex CLI, Claude Code, OpenCode, and Gemini CLI.
+- Local execution isolation: project workspace, `.agenthub/workdirs`, local sandbox root, and handoff.
+- Runtime control plane: RunController, ManagerLoop, WorkerController, RuntimeLease, Worker heartbeat, and idle-stop.
+- Events and auditability: RunEvent replay API, execution logs, and AG-UI state projection.
+- Artifact system: ArtifactStore, artifact cards, static preview, file operations, and diff-related workflows.
+- Capability center: Skills market, ability audit page, MCP / Rules / CLI / sandbox / context policy entries.
+- Multi-surface app: Web, Tauri Desktop, and Android.
+
+Some areas are still moving quickly, especially the HiClaw-lite kernel migration, Room / TimelineEvent as first-class resources, remote A2A, Trace / Eval, mobile UX, and richer artifact previews.
+
+### Architecture
+
+```text
+Product Shell
+  Web / Desktop / Android
+  Chat, Task Board, Artifacts, Agent Config, Skills, Settings, Trace
+
+Manager-first Runtime
+  Manager / Orchestrator
+  ManagerLoop, RunController, WorkerController, TaskScheduler
+
+Protocol & Events
+  A2A message envelope for task semantics
+  AG-UI projection for frontend runtime state
+  RunEvent replay and execution logs
+
+Execution
+  Codex CLI, Claude Code, OpenCode, Gemini CLI
+  Local LLM fallback for internal chains
+
+Capabilities
+  Skills, MCP, Rules, shell, filesystem, browser, sandbox policies
+
+Workspace & State
+  SQLite / Drizzle
+  .agenthub/workdirs
+  .agenthub/shared/tasks
+  .agenthub/handoff
+  blackboard, artifacts, runtime leases
+```
+
+The next architectural phase is **AgentHub Product Shell + HiClaw-lite Open Kernel**: keep AgentHub's own Coze / Kimi-style product surface, while moving the collaboration kernel toward Room, ManagerRuntime, WorkerRuntime, ArtifactStore, GatewayAdapter, and Controller / Reconciler boundaries.
+
+### Repository Layout
+
+```text
+apps/web        React + Vite frontend
+apps/server     Hono + Bun backend service
+apps/desktop    Tauri desktop app
+apps/Android    Kotlin / Compose Android client
+packages/db     Drizzle schema, migrations, SQLite data layer
+packages/shared Shared types, schemas, and constants
+tests           Backend, frontend, and shared logic tests
+docs            Current status, architecture, usage, and roadmap documents
+```
+
+### Quick Start
+
+#### 1. Install Dependencies
+
+AgentHub requires Bun `>= 1.1.0`.
+
+```bash
+bun install
+```
+
+#### 2. Configure Environment
+
+```bash
+cp .env.example .env
+```
+
+Configure at least one LLM provider:
 
 ```env
+LLM_PROVIDER=openai
+LLM_API_KEY=
+LLM_BASE_URL=
+LLM_MODEL=
+
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4.1-mini
+
+ANTHROPIC_API_KEY=
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_MODEL=claude-sonnet-4-6
+```
+
+Common runtime settings:
+
+```env
+PORT=8000
+DATABASE_URL=./storage/agenthub.db
+CORS_ORIGIN=http://localhost:5173
+AGENTHUB_ENABLE_CODE_AGENT_EXECUTION=true
+AGENTHUB_CODE_AGENT_TIMEOUT_MS=600000
 AGENTHUB_SANDBOX_PROVIDER=local-workdir
 ```
 
-`local-workdir` 会给每次任务创建系统缓存目录下的 sandbox root，并向 Code Agent 子进程注入独立 temp/cache/config 目录，用于减少 CLI 运行时污染。它不是 OS 级安全边界，不能真正限制网络或阻止进程读取任意本机路径。
+#### 3. Run Database Migrations
 
-## 数据清理
+```bash
+bun run db:migrate
+```
 
-开发阶段可以使用应用内“清除所有数据”能力恢复到近似首次启动状态。执行前请确认不需要保留旧会话、旧任务和旧产物索引。
+#### 4. Start Web + Server
 
-## 重要文档
+```bash
+bun run dev
+```
 
-- [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)
-- [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)
-- [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)
-- [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)
-- [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)
-- [docs/使用指南.md](docs/使用指南.md)
-- [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md)
-- `hiclaw源码参考/`
-- [docs/Kimi-Claw群聊系统完整设计规格书(1).md](docs/Kimi-Claw群聊系统完整设计规格书%281%29.md)
+- Web: <http://localhost:5173>
+- Server: <http://localhost:8000>
+- Health check: <http://localhost:8000/health>
 
-`docs/archive/` 和 `docs/old/` 中的内容只作为历史参考，不作为当前工程事实。凡是与上面几份权威文档冲突的，以权威文档为准。
+You can also start each service separately:
 
-## 开发注意
+```bash
+bun run dev:server
+bun run dev:web
+```
 
-- 不要恢复静态快捷提示词或固定任务模板，用户明确要求动态模型生成。
-- 不要恢复 `classic` 工作区、默认代码团队、`create-from-template`、关键词 Agent 路由或自动 QA/review/follow-up 任务注入。
-- 不要恢复旧的 `workspace-agent-child` 群聊入口。
-- 不要把“任务失败但已有部分产物”显示成完全无产物。
-- 不要让下游 Agent 假设上游相对路径存在；优先使用黑板中的 `handoffPath`。
-- `runtimeType` 只应为 `code-agent` 或 `llm`；A2A/MCP/Skills 都不是 Agent 类型。
-- UI 改动要保持主群聊、私聊、任务子对话的边界清晰。
+#### 5. Start Desktop
+
+```bash
+bun run dev:desktop
+```
+
+The desktop app is powered by Tauri and runs the local Web + Server sidecar flow.
+
+#### 6. Android
+
+The Android project lives in `apps/Android` and uses Gradle / Kotlin. The Bun workspace Android scripts are informational; build it through Gradle:
+
+```bash
+cd apps/Android
+./gradlew assembleDebug
+```
+
+On Windows PowerShell:
+
+```powershell
+cd apps/Android
+.\gradlew.bat assembleDebug
+```
+
+### Coding Agent CLIs
+
+To run local Coding Agents, install at least one supported CLI:
+
+```bash
+npm install -g @openai/codex
+npm install -g @anthropic-ai/claude-code
+npm install -g @opencodeai/opencode
+```
+
+Gemini CLI can also be used as a Worker base. After installation, check CLI status in the frontend under Settings / Coding Tools, then bind a CLI, model, Skills / MCP, and sandbox policy to an expert Agent in Agent Config.
+
+### Useful Commands
+
+```bash
+bun run dev
+bun run dev:server
+bun run dev:web
+bun run dev:desktop
+bun run build
+bun run build:desktop
+bun run typecheck
+bun test
+bun run db:generate
+bun run db:migrate
+bun run db:studio
+```
+
+### Recommended Reading
+
+- [AGENTS.md](./AGENTS.md): engineering guidance for AI Coding Agents.
+- [docs/当前状态与下一步路线.md](./docs/当前状态与下一步路线.md): current facts and near-term roadmap.
+- [docs/AgentHub-HiClaw-lite开源内核重构方案.md](./docs/AgentHub-HiClaw-lite开源内核重构方案.md): next-stage kernel refactor plan.
+- [docs/HiClaw架构调研与AgentHub底层重构方案.md](./docs/HiClaw架构调研与AgentHub底层重构方案.md): HiClaw research and migration plan.
+- [docs/使用指南.md](./docs/使用指南.md): local development and usage guide.
+
+### Project Status
+
+AgentHub is under active development. The current runtime path has moved from the old DAG-first workflow toward a Manager-first team runtime, but some migration layers still exist, including `OrchestratorEngine`, internal A2A envelopes, and session metadata compatibility. New work should converge toward Room / TimelineEvent / ManagerRuntime / WorkerRuntime / ArtifactStore / Controller boundaries.
+
+### License
+
+This repository does not currently include a `LICENSE` file. Until one is added, do not assume the project has a finalized open-source license.

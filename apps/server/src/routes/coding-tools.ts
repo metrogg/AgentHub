@@ -26,6 +26,45 @@ interface ToolProbe {
   command: string
 }
 
+type LocalAgentRuntimeFamily = 'coordinator' | 'worker'
+type LocalAgentRuntimeAdapterStatus = 'candidate' | 'available' | 'blocked'
+
+interface LocalAgentRuntimeCandidate {
+  adapterMessage: string
+  adapterStatus: LocalAgentRuntimeAdapterStatus
+  command: string
+  docsHint: string
+  docsUrl: string
+  id: string
+  installCommand: string
+  missingAdapterSteps: string[]
+  name: string
+  packageName: string
+  permissions: string[]
+  recommendedUse: string
+  runtimeBase: 'openclaw' | 'copaw'
+  runtimeFamily: LocalAgentRuntimeFamily
+}
+
+interface LocalAgentRuntimeProbeStatus {
+  diagnostics?: string
+  id: string
+  installed: boolean
+  version: string | null
+}
+
+interface LocalAgentRuntimeBinding {
+  adapterStatus: LocalAgentRuntimeAdapterStatus
+  addedAt: string
+  command: string
+  enabled: boolean
+  id: string
+  packageName: string
+  runtimeBase: 'openclaw' | 'copaw'
+  runtimeFamily: LocalAgentRuntimeFamily
+  version: string | null
+}
+
 interface OpencodeModelItem {
   id: string
   provider: string
@@ -77,6 +116,32 @@ const cliPackages: Record<string, string> = {
   gemini: '@google/gemini-cli',
 }
 
+const LOCAL_AGENT_RUNTIME_BINDINGS_KEY = 'LOCAL_AGENT_RUNTIME_BINDINGS'
+
+export const localAgentRuntimeCandidates: LocalAgentRuntimeCandidate[] = [
+  {
+    id: 'openclaw',
+    name: 'OpenClaw',
+    runtimeFamily: 'coordinator',
+    runtimeBase: 'openclaw',
+    command: 'openclaw',
+    packageName: 'openclaw',
+    installCommand: 'npm install -g openclaw@latest',
+    docsUrl: 'https://github.com/openclaw/openclaw',
+    docsHint: 'OpenClaw is detected as a local Manager / Coordinator runtime candidate.',
+    adapterStatus: 'candidate',
+    adapterMessage:
+      'OpenClaw is staged as a CoordinatorRuntime candidate. It is not used as a normal Coding Worker until the CoordinatorRuntime adapter, lifecycle control, and timeline projection are implemented.',
+    recommendedUse: 'Manager / Team Leader / Orchestrator runtime candidate',
+    permissions: ['local CLI process', 'workspace events', 'future runtime lifecycle control'],
+    missingAdapterSteps: [
+      'CoordinatorRuntime adapter',
+      'Room / TimelineEvent projection',
+      'Run lifecycle and stop / resume control',
+    ],
+  },
+]
+
 const chatGptAuthDisabledMessage =
   'ChatGPT device auth is disabled for runtime use. Configure OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL in the environment instead.'
 const routeDir = dirname(fileURLToPath(import.meta.url))
@@ -113,6 +178,51 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
         }
       }),
     })
+  })
+  .get('/local-agent-runtimes', async (c) => {
+    return c.json(await getLocalAgentRuntimeCatalog(), 200)
+  })
+  .post('/local-agent-runtimes/:id/add', async (c) => {
+    const id = c.req.param('id')
+    const candidate = localAgentRuntimeCandidates.find((item) => item.id === id)
+    if (!candidate) {
+      return c.json({ ok: false, message: 'Unsupported local Agent runtime.' }, 404)
+    }
+
+    const body = (await c.req.json().catch(() => ({}))) as { command?: unknown }
+    const command =
+      typeof body.command === 'string' && isSafeCommand(body.command.trim())
+        ? body.command.trim()
+        : candidate.command
+    const status = await probeLocalAgentRuntime(candidate, command)
+    const bindings = await readLocalAgentRuntimeBindings()
+    const existing = bindings.find((item) => item.id === candidate.id)
+    const binding: LocalAgentRuntimeBinding = {
+      id: candidate.id,
+      command,
+      packageName: candidate.packageName,
+      runtimeFamily: candidate.runtimeFamily,
+      runtimeBase: candidate.runtimeBase,
+      adapterStatus: candidate.adapterStatus,
+      enabled: status.installed,
+      version: status.version,
+      addedAt: existing?.addedAt ?? new Date().toISOString(),
+    }
+    const nextBindings = bindings.some((item) => item.id === candidate.id)
+      ? bindings.map((item) => (item.id === candidate.id ? binding : item))
+      : [...bindings, binding]
+    await writeLocalAgentRuntimeBindings(nextBindings)
+    return c.json(
+      {
+        ok: true,
+        binding,
+        catalog: await getLocalAgentRuntimeCatalog(),
+        message: status.installed
+          ? `${candidate.name} has been added as a local ${candidate.runtimeFamily} runtime candidate.`
+          : `${candidate.name} has been registered as a disabled candidate. Install it locally before enabling runtime use.`,
+      },
+      200,
+    )
   })
   .get('/native/status', async (c) => {
     const skills = await globalSkillRegistry.listSkills()
@@ -264,6 +374,129 @@ export async function getCodingToolsWorkbenchStatus() {
       }
     }),
   }
+}
+
+export async function getLocalAgentRuntimeCatalog() {
+  const bindings = await readLocalAgentRuntimeBindings()
+  const statuses = new Map(
+    await Promise.all(
+      localAgentRuntimeCandidates.map(async (candidate) => {
+        const binding = bindings.find((item) => item.id === candidate.id)
+        const command = binding?.command || candidate.command
+        return [candidate.id, await probeLocalAgentRuntime(candidate, command)] as const
+      }),
+    ),
+  )
+
+  return {
+    platform: process.platform,
+    localCliProbesEnabled: localCliProbesEnabled(),
+    items: localAgentRuntimeCandidates.map((candidate) => {
+      const binding = bindings.find((item) => item.id === candidate.id)
+      const status = statuses.get(candidate.id)
+      const installed = Boolean(status?.installed)
+      const registered = Boolean(binding)
+      const enabled = Boolean(binding?.enabled && installed)
+      return {
+        ...candidate,
+        command: binding?.command || candidate.command,
+        installed,
+        registered,
+        enabled,
+        ready: enabled && candidate.adapterStatus === 'available',
+        version: status?.version ?? binding?.version ?? null,
+        diagnostics: status?.diagnostics,
+        addedAt: binding?.addedAt ?? null,
+        configMessage: localAgentRuntimeMessage({
+          adapterStatus: candidate.adapterStatus,
+          command: binding?.command || candidate.command,
+          installed,
+          localCliProbesEnabled: localCliProbesEnabled(),
+          registered,
+          runtimeFamily: candidate.runtimeFamily,
+        }),
+      }
+    }),
+  }
+}
+
+async function probeLocalAgentRuntime(
+  candidate: LocalAgentRuntimeCandidate,
+  command = candidate.command,
+): Promise<LocalAgentRuntimeProbeStatus> {
+  const safeCommand = isSafeCommand(command) ? command : candidate.command
+  if (!localCliProbesEnabled()) {
+    return {
+      id: candidate.id,
+      installed: false,
+      version: null,
+      diagnostics: 'local-cli-probes=disabled',
+    }
+  }
+  const version = await runVersionProbe(safeCommand)
+  const reachable = await isCommandReachable(safeCommand)
+  return {
+    id: candidate.id,
+    installed: Boolean(version || reachable),
+    version,
+    diagnostics: `reachable=${reachable} version=${version ?? 'null'} command=${safeCommand}`,
+  }
+}
+
+function localAgentRuntimeMessage(options: {
+  adapterStatus: LocalAgentRuntimeAdapterStatus
+  command: string
+  installed: boolean
+  localCliProbesEnabled: boolean
+  registered: boolean
+  runtimeFamily: LocalAgentRuntimeFamily
+}) {
+  if (!options.localCliProbesEnabled) return 'Local CLI scanning is disabled.'
+  if (!options.installed) return `No local command detected for ${options.command}.`
+  if (!options.registered) return `Detected locally. Add it as a ${options.runtimeFamily} runtime candidate before using it in AgentHub.`
+  if (options.adapterStatus === 'candidate') {
+    return 'Registered as a pre-adapter candidate. It is not part of the normal Coding Worker execution path yet.'
+  }
+  if (options.adapterStatus === 'blocked') return 'Registered, but the runtime adapter is blocked.'
+  return 'Registered and adapter is available.'
+}
+
+async function readLocalAgentRuntimeBindings(): Promise<LocalAgentRuntimeBinding[]> {
+  const rows = await db.select().from(settings).where(eq(settings.key, LOCAL_AGENT_RUNTIME_BINDINGS_KEY)).limit(1)
+  const raw = rows[0]?.value
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(isLocalAgentRuntimeBinding)
+  } catch {
+    return []
+  }
+}
+
+async function writeLocalAgentRuntimeBindings(bindings: LocalAgentRuntimeBinding[]) {
+  const value = JSON.stringify(bindings)
+  const rows = await db.select().from(settings).where(eq(settings.key, LOCAL_AGENT_RUNTIME_BINDINGS_KEY)).limit(1)
+  if (rows.length) {
+    await db.update(settings).set({ value, updatedAt: new Date() }).where(eq(settings.key, LOCAL_AGENT_RUNTIME_BINDINGS_KEY))
+  } else {
+    await db.insert(settings).values({ key: LOCAL_AGENT_RUNTIME_BINDINGS_KEY, value })
+  }
+}
+
+function isLocalAgentRuntimeBinding(value: unknown): value is LocalAgentRuntimeBinding {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<LocalAgentRuntimeBinding>
+  return (
+    typeof item.id === 'string' &&
+    typeof item.command === 'string' &&
+    typeof item.packageName === 'string' &&
+    (item.runtimeFamily === 'coordinator' || item.runtimeFamily === 'worker') &&
+    (item.runtimeBase === 'openclaw' || item.runtimeBase === 'copaw') &&
+    (item.adapterStatus === 'candidate' || item.adapterStatus === 'available' || item.adapterStatus === 'blocked') &&
+    typeof item.enabled === 'boolean' &&
+    typeof item.addedAt === 'string'
+  )
 }
 
 async function ensureCodingToolsStartupLifecycle() {
