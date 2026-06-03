@@ -31,30 +31,45 @@ export const __orchestratorDecisionTestHooks = {
   buildHeuristicDecision,
 }
 
-interface DecideInput {
+export interface DecideInput {
   content: string
   agents: PlanningAgentInput[]
   workspaceGoal?: string | null
   workspacePath?: string | null
+  recentMessages?: Array<{
+    senderType: 'user' | 'agent' | 'system'
+    senderName?: string | null
+    content: string
+  }>
 }
 
 const DECISION_SYSTEM = [
   '你是 AgentHub 群聊里的主 Agent（Orchestrator）。',
   '你收到用户在 Agent 群聊中的消息后，需要自己判断下一步动作。',
+  '这个群聊首先是“房间里的团队协作”，不是工单系统。不是所有消息都要进入规划流程。',
   '只能输出 JSON，不要 Markdown、不要解释、不要代码块。',
   '',
   '动作定义：',
-  '- reply：普通寒暄、非常简单的问题、无需其他 Agent 干活的解释说明。',
+  '- reply：普通寒暄、打招呼、追问进度、让某个成员自我介绍、轻量讨论、无需多人正式开工的说明或协调。',
   '- clarify：需要先问用户补充关键信息，否则无法合理分工。',
   '- plan：用户要求创建、开发、实现、设计、调研、分析、输出产物、修改项目、生成文件、做网页/应用/游戏/文档/报告/PDF/PPT/HTML，或任何需要多个 Agent 协作完成的工作。',
   '',
   '重要原则：',
   '- Orchestrator 只负责判断、协调、拆解和汇总，不亲自执行代码或产出文件。',
-  '- 只要用户是在要求“做出某个东西”或“完成一项工作”，优先 action=plan。',
+  '- 只有当用户明确在要求“做出某个东西”或“完成一项工作”时，优先 action=plan。',
+  '- 如果用户只是在聊天、寒暄、点名、催进度、确认状态、让成员打招呼或自我介绍，优先 action=reply。',
+  '- 如果消息本身更像房间内自然交流，而不是新的交付目标，不要为了显得主动就进入 plan。',
   '- 如果当前成员能力明显不足，但可用核心模板里有合适的 Agent，请 action=clarify，并在 memberProposals 里给出 1-3 个建议补充的 Agent；不要静默创建或假装已有成员。',
   '- memberProposals[].expertProfileId 必须来自“可建议补充的核心 Agent 模板”，不能编造。',
   '- 不要因为用户没有写明技术栈、文件类型或“游戏/网页”等关键词就回避计划；你要理解自然语言意图。',
   '- 如果只是缺少可选细节，但仍可合理默认，请 action=plan，不要过度追问。',
+  '',
+  '示例：',
+  '- “大家好”“你们在吗”“alice 出来汇报一下” => action=reply。',
+  '- “给我做一个深圳技术大学介绍网站” => action=plan。',
+  '- “你们现在做到哪了，谁在负责前端？” => action=reply。',
+  '- “请调研今天 A 股港股美股并输出 HTML 报告” => action=plan。',
+  '- “这个群现在缺少谁来做测试？”且确实缺少关键成员 => action=clarify。',
   '',
   '输出格式：{"action":"reply|clarify|plan","message":"给用户看的简短中文内容","reason":"内部判断理由","memberProposals":[{"expertProfileId":"模板 id","reason":"为什么需要","expectedContribution":"加入后负责什么"}]}',
 ].join('\n')
@@ -66,6 +81,10 @@ export async function decideOrchestratorAction(input: DecideInput): Promise<Orch
     `用户消息：${input.content}`,
     input.workspaceGoal ? `群聊目标：${input.workspaceGoal}` : '',
     '',
+    input.recentMessages?.length
+      ? ['最近房间对话：', ...input.recentMessages.map(formatRecentMessage)].join('\n')
+      : '',
+    input.recentMessages?.length ? '' : '',
     '当前成员：',
     ...input.agents.map((agent) =>
       [
@@ -310,6 +329,14 @@ function readExpertProfileId(roleProfile: unknown) {
 
 function normalizeText(value?: string | null) {
   return (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function formatRecentMessage(message: NonNullable<DecideInput['recentMessages']>[number]) {
+  const role =
+    message.senderType === 'user' ? '用户' : message.senderType === 'agent' ? '成员' : '系统'
+  const name = normalizeMessage(message.senderName).slice(0, 80)
+  const prefix = name ? `${role}(${name})` : role
+  return `- ${prefix}: ${normalizeMessage(message.content)}`
 }
 
 function buildHeuristicDecision(

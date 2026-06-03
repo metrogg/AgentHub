@@ -1,6 +1,6 @@
 # AgentHub
 
-本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前状态与下一步路线.md`、`docs/Coze新版本对标拆解与开源复刻路线.md`、`docs/当前多Agent协作架构.md`、`docs/场景角色团队协作调研.md`、`docs/角色提示词与动态组队设计.md`、`docs/专家库与开源角色Skill生态调研.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
+本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前状态与下一步路线.md`、`docs/Coze新版本对标拆解与开源复刻路线.md`、`docs/HiClaw架构调研与AgentHub底层重构方案.md`、`docs/当前多Agent协作架构.md`、`docs/场景角色团队协作调研.md`、`docs/角色提示词与动态组队设计.md`、`docs/专家库与开源角色Skill生态调研.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
 更完整的分层设计和业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
 
 ## 当前目标
@@ -44,7 +44,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 - 通信协议层：A2A 负责 Agent 间 message/task/artifact 语义；AG-UI 负责运行事件到前端 UI 的桥接。
 - 执行层：Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Agent 基底；`llm` 只作为内部/兜底能力。
 - 能力层：MCP、Skills、Rules、shell、文件系统、浏览器等是 Code Agent 能使用的工具能力，不是 Agent 类型。
-- 工作区与状态层：系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/handoff`、blackboard、execution logs、run events。
+- 工作区与状态层：系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/shared/tasks`、兼容 `.agenthub/handoff`、blackboard、execution logs、run events。
 
 配置真相也要分层：
 
@@ -55,6 +55,16 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 `内部 LLM 默认模型` 必须保持可见，且只作用于欢迎页动态提示、Orchestrator、Planner、Synthesizer 等内部模型链路。
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
+
+底层重构方向已经进一步明确：学习 HiClaw 的资源控制平面思想，但不直接照搬 Matrix / MinIO / Higress / Kubernetes 作为默认依赖。目标是建设 AgentHub 自己的 HiClaw-lite Kernel：
+
+- `Run`、`Task`、`TaskThread`、`WorkerInstance`、`Artifact`、`RuntimeLease`、`RunEvent` 都应逐步成为一等资源。
+- `messages.ts` 后续只应承担 chat ingress 和轻量路由，不再继续膨胀成创建 task/session/event 并启动执行的总控模块。
+- 子对话、产物卡、任务看板和进度条应从资源状态与 AG-UI / RunEvent 投影出来，不再靠多个旧 metadata 状态拼接。
+- OpenClaw / CoPaw 应优先作为 Orchestrator / Team Leader / Manager 这类指挥型 runtime 候选；Codex / Claude Code / OpenCode / Gemini CLI 更偏执行型 Coding Worker。不要把 OpenClaw 简单硬塞成普通 `codeAgentType`，后续应拆出 `coordinator runtime` 与 `worker runtime`。
+- 第一阶段优先做 `RunEvent` 单一 UI 真相源和 `TaskThread` 一等资源化；再推进 `ArtifactStore`、`WorkerInstance`、`RuntimeLease` 和新的 `RunController`。
+
+详细方案见 `docs/HiClaw架构调研与AgentHub底层重构方案.md`。后续涉及多 Agent 底层执行、子对话、产物、运行事件、生命周期的改动，应优先向该方案收敛，而不是继续给旧流程链打补丁。
 
 ## 关键交互边界
 
@@ -75,7 +85,8 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 `direct + metadata.kind === "orchestrator-task"` 是群聊下的真实任务子对话。它必须：
 
-- 绑定 `workspaceId`、`workspaceAgentId`、`orchestratorRunId`、`orchestratorTaskId`。
+- 绑定 `workspaceId`、`orchestratorRunId`、`orchestratorTaskId`、`taskThreadId`。
+- `prepared` 阶段可以暂时没有 `workspaceAgentId`；正式分配给 Worker 后必须回填 `workspaceAgentId` / `workerInstanceId`，并同步更新对应 session metadata。
 - 在左侧群聊展开后作为子项显示。
 - 不出现在全局“Agent 私聊”里。
 - 保存 Orchestrator 发给该 Agent 的任务提示和 Agent 真实输出。
@@ -88,23 +99,26 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 ```text
 用户在群聊发消息
-  -> messages.ts 判断意图
+  -> messages.ts 作为 ChatIngress 写入用户消息、鉴权和加载群聊上下文
+  -> RunController / ManagerLoop 创建 run.started、manager.thinking，并调用 Orchestrator 模型决策下一步
   -> 简单聊天：Orchestrator 直接回复
   -> 能力不足：Orchestrator 返回结构化 memberProposals，主群聊展示补员卡，用户确认后才创建/加入真实 Agent
   -> 复杂任务：生成动态计划和任务看板
   -> 用户确认/分发
-  -> OrchestratorEngine.dispatch()
+  -> 迁移期仍由 OrchestratorEngine.startRun()
   -> Planner 生成或整理 DAG
   -> TaskScheduler 按依赖层调度
-  -> 每个任务创建 orchestrator-task 子对话
+  -> 每个任务创建 TaskThread，并投影为 orchestrator-task 子对话
   -> Orchestrator 将任务封装为 A2A message/send envelope
   -> TaskExecutionService 准备工作目录并经 LocalA2ATransport 派发
   -> 本地执行宿主适配到 LLM fallback / Code Agent
   -> 子对话保存完整过程
-  -> 黑板写入任务摘要、产物、决策和 handoff（作为 A2A artifact metadata 扩展）
+  -> shared task directory / ArtifactStore / 黑板写入任务摘要、产物、决策和 handoff refs
   -> 主群聊广播成员汇报和产物卡
   -> Synthesizer 生成最终总结
 ```
+
+迁移方向：`messages.ts` 不应继续扩展成编排主脑；新增 run 生命周期、Manager 决策、资源 reconcile 和恢复逻辑应优先进入 `RunController` / `ManagerLoop` / 后续 kernel controllers。
 
 ## A2A 通信边界
 
@@ -115,7 +129,7 @@ Agent 之间的任务分发统一以 A2A v0.3 `message/send` 为内部通信标�
 - 成员输出消息 metadata 必须保存 A2A `responseMessage` 或 `responseTask`。
 - 本地 LLM fallback 和 Code Agent 都通过 `agenthub-local` transport 承接 A2A envelope。
 - A2A 是通信协议，不是 runtimeType；远程 A2A endpoint 应通过 `roleProfile.protocol = "a2a"` + `roleProfile.a2aEndpoint` 配置。
-- `blackboard` 和 `.agenthub/handoff` 是 AgentHub 对 A2A artifact/metadata 的扩展，不是绕过 A2A 的第二套分工协议。
+- `blackboard`、`.agenthub/shared/tasks` 和兼容 `.agenthub/handoff` 是 AgentHub 对 A2A artifact/metadata 的扩展，不是绕过 A2A 的第二套分工协议。
 
 当前实现是“内部 A2A envelope + AgentHub local transport”。远程 A2A endpoint 可作为后续协议配置扩展，但不能恢复 `runtimeType = "a2a"`，也不能把 A2A 作为可创建的 Agent 类型展示给用户。
 
@@ -134,8 +148,9 @@ Agent 之间的任务分发统一以 A2A v0.3 `message/send` 为内部通信标�
 - 每个 Agent 在自己的任务目录中执行，避免互相踩文件。
 - 如果用户没有选择项目工作区，自动工作空间默认创建在系统用户数据目录下，例如 `%LOCALAPPDATA%\AgentHub\workspaces`，不能回落到 AgentHub 源码目录。
 - 每个任务还会有自己的本地 sandbox root，位于系统缓存目录下的 `AgentHub/sandboxes/{runId}/{agentName-agentId}/{taskId}`，用于隔离 CLI 的 temp/cache/config 目录。
-- 执行隔离通过 `SandboxProvider` 抽象承载；当前默认 provider 是 `docker-sandbox`，`local-workdir` 只作为兼容降级路径。`local-workdir` 会硬化本地 workdir、temp/cache/config env 和进程生命周期，但不会提供真正的 OS 网络或文件权限沙箱。
-- 上游可交接文件会复制到 `.agenthub/handoff/{runId}/{taskId}/...`。
+- 执行隔离通过 `SandboxProvider` 抽象承载；当前默认 provider 是 `local-workdir`，因为它最贴近本地 Coding Agent 的轻量体验。`local-workdir` 会硬化本地 workdir、temp/cache/config env 和进程生命周期，但不会提供真正的 OS 网络或文件权限沙箱。`docker-sandbox` 是可选隔离层，只有在用户/策略明确启用且 `sandboxRunnable=true` 时才作为执行 provider。
+- 当前新任务会创建 `.agenthub/shared/tasks/{taskId}/`，其中 `meta.json`、`spec.md`、`plan.md`、`result.md` 和 `artifacts/` 构成本次任务的共享协作空间。
+- 上游可交接文件优先复制到 `.agenthub/shared/tasks/{taskId}/artifacts/...`，`.agenthub/handoff/{runId}/{taskId}/...` 只作为旧历史路径或兼容别名处理。
 - 下游 Agent 只能优先读取黑板中明确给出的 `handoffPath`。
 - 如果黑板只有 `filePath/path`，那只是上游记录，不能假设它存在于当前执行目录。
 
@@ -218,7 +233,7 @@ bun test tests/orchestrator-routing.test.ts
 - 不要恢复静态 Agent 路由、关键词分工、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。系统只能校验 Orchestrator/Planner 的显式选择，不能偷偷改派或追加任务。
 - 不要恢复内置 `.agenthub/specs/*.spec.yml` 场景模板，也不要让 `ensureHarnessPresets()` 把 specs 自动复制到新工作区。Spec 后续只可作为用户显式创建的协作契约。
 - 不要把旧 `GroupChatManager` 作为新路径入口。群聊统一从 `messages.ts` 进入 Orchestrator 路由。
-- 不要把旧 Git 分支隔离写成当前默认事实。当前默认是项目工作区 + `.agenthub/workdirs` + `.agenthub/handoff`。
+- 不要把旧 Git 分支隔离写成当前默认事实。当前默认是项目工作区 + `.agenthub/workdirs` + `.agenthub/shared/tasks`，`.agenthub/handoff` 只是兼容旧路径。
 - 修改 UI 时要保持 IM 产品感：左侧树清晰、主群聊和子对话不重复、运行状态可见、产物入口明确。
 
 ## 重要文件

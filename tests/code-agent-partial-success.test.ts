@@ -90,4 +90,82 @@ describe('code agent partial success handling', () => {
     expect(message).toContain('model=mimo-v2.5')
     expect(message).not.toContain('Base URL 不可用')
   })
+
+  test('injects the shared task directory contract into Code Agent prompts', async () => {
+    const { __codeAgentAdapterTestHooks } = await import(
+      '../apps/server/src/services/code-agent-adapter'
+    )
+
+    const prompt = __codeAgentAdapterTestHooks.buildCodeAgentPrompt(
+      {
+        id: 'agent-1',
+        name: 'Builder',
+        role: 'Frontend Builder',
+        description: 'Build deliverables',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        capabilityTags: [],
+        toolPermissions: ['workspace-write'],
+        sandboxPolicy: 'workspace-write',
+        contextPolicy: 'workspace-aware',
+        approvalRequired: false,
+        projectPath: 'C:/project',
+      },
+      {
+        id: 'msg-1',
+        sessionId: 'session-1',
+        senderId: 'user',
+        senderType: 'user',
+        type: 'text',
+        content: 'Build the report page.',
+        metadata: null,
+        createdAt: new Date(),
+      },
+      [],
+      'C:/project/.agenthub/workdirs/run-1/Builder/task-1',
+      '',
+      {
+        runId: 'run-1',
+        taskId: 'task-1',
+        agentId: 'agent-1',
+        agentName: 'Builder',
+        projectPath: 'C:/project',
+        worktreePath: 'C:/project/.agenthub/workdirs/run-1/Builder/task-1',
+        sandboxPolicy: 'workspace-write',
+        envAllowlist: [],
+        a2a: {
+          protocolVersion: '0.3.0',
+          method: 'message/send',
+          contextId: 'group-1',
+          taskId: 'task-1',
+          runId: 'run-1',
+          workspaceId: 'ws-1',
+          groupSessionId: 'group-1',
+          childSessionId: 'child-1',
+          taskThreadId: 'thread-1',
+          sharedTaskRelativeRoot: '.agenthub/shared/tasks/task-1',
+          sharedTaskSpecPath: '.agenthub/shared/tasks/task-1/spec.md',
+          fromAgentId: 'orch-1',
+          fromAgentName: 'Orchestrator',
+          toAgentId: 'agent-1',
+          toAgentName: 'Builder',
+          referenceTaskIds: [],
+          params: {
+            message: {
+              kind: 'message',
+              messageId: 'msg-1',
+              role: 'user',
+              parts: [{ kind: 'text', text: 'Build the report page.' }],
+            },
+          },
+        },
+      },
+    )
+
+    expect(prompt).toContain('AgentHub 共享任务目录协议')
+    expect(prompt).toContain('.agenthub/shared/tasks/task-1/spec.md')
+    expect(prompt).toContain('.agenthub/shared/tasks/task-1/plan.md')
+    expect(prompt).toContain('.agenthub/shared/tasks/task-1/result.md')
+    expect(prompt).toContain('.agenthub/shared/tasks/task-1/artifacts/')
+  })
 })

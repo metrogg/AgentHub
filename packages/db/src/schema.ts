@@ -129,6 +129,50 @@ export interface AgentArtifact {
   logs?: string[]
 }
 
+export const artifacts = sqliteTable(
+  'artifacts',
+  {
+    id: id(),
+    workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+    runId: text('run_id').references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
+    taskId: text('task_id').references(() => workspaceTasks.id, { onDelete: 'set null' }),
+    taskThreadId: text('task_thread_id').references(() => taskThreads.id, { onDelete: 'set null' }),
+    workspaceAgentId: text('workspace_agent_id').references(() => workspaceAgents.id, { onDelete: 'set null' }),
+    workerInstanceId: text('worker_instance_id'),
+    kind: text('kind', {
+      enum: ['file', 'directory', 'preview', 'report', 'log', 'diff', 'url'],
+    }).notNull().default('file'),
+    title: text('title').notNull(),
+    description: text('description'),
+    sourcePath: text('source_path'),
+    handoffPath: text('handoff_path'),
+    relativePath: text('relative_path'),
+    mimeType: text('mime_type'),
+    size: integer('size'),
+    checksum: text('checksum'),
+    status: text('status', {
+      enum: ['discovered', 'registered', 'verified', 'partial', 'failed'],
+    }).notNull().default('registered'),
+    visibility: text('visibility', {
+      enum: ['private', 'team', 'user'],
+    }).notNull().default('team'),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: now(),
+    updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    workspaceIdIdx: index('artifacts_workspace_id_idx').on(table.workspaceId),
+    runIdIdx: index('artifacts_run_id_idx').on(table.runId),
+    taskIdIdx: index('artifacts_task_id_idx').on(table.taskId),
+    taskThreadIdIdx: index('artifacts_task_thread_id_idx').on(table.taskThreadId),
+    taskPathUnique: uniqueIndex('artifacts_task_relative_path_unique').on(
+      table.taskId,
+      table.relativePath,
+      table.checksum,
+    ),
+  }),
+)
+
 export const workspaceTasks = sqliteTable(
   'workspace_tasks',
   {
@@ -234,18 +278,134 @@ export const orchestratorRuns = sqliteTable('orchestrator_runs', {
   updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
 })
 
-export const orchestratorRunEvents = sqliteTable('orchestrator_run_events', {
-  id: id(),
-  runId: text('run_id').notNull().references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
-  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
-  groupSessionId: text('group_session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
-  taskId: text('task_id'),
-  agentId: text('agent_id'),
-  type: text('type').notNull(),
-  payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
-  severity: text('severity', { enum: ['debug', 'info', 'warning', 'error'] }).notNull().default('info'),
-  createdAt: now(),
-})
+export const workerInstances = sqliteTable(
+  'worker_instances',
+  {
+    id: id(),
+    workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+    workspaceAgentId: text('workspace_agent_id').notNull().references(() => workspaceAgents.id, { onDelete: 'cascade' }),
+    runtimeFamily: text('runtime_family', { enum: ['coordinator', 'worker', 'fallback'] })
+      .notNull()
+      .default('worker'),
+    runtimeBase: text('runtime_base', {
+      enum: ['openclaw', 'copaw', 'codex', 'claude-code', 'opencode', 'gemini', 'llm-fallback'],
+    }).notNull(),
+    modelId: text('model_id'),
+    skillIds: text('skill_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    mcpServerIds: text('mcp_server_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    sandboxPolicy: text('sandbox_policy', { enum: ['workspace-write', 'danger-full-access'] })
+      .notNull()
+      .default('workspace-write'),
+    desiredState: text('desired_state', { enum: ['running', 'sleeping', 'stopped'] })
+      .notNull()
+      .default('running'),
+    observedState: text('observed_state', { enum: ['provisioning', 'ready', 'busy', 'idle', 'sleeping', 'stopped', 'failed'] })
+      .notNull()
+      .default('provisioning'),
+    health: text('health', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    runtimeHome: text('runtime_home'),
+    runtimeConfigPath: text('runtime_config_path'),
+    lastHeartbeatAt: ts('last_heartbeat_at'),
+    message: text('message'),
+    createdAt: now(),
+    updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    workspaceIdIdx: index('worker_instances_workspace_id_idx').on(table.workspaceId),
+    workspaceAgentIdIdx: index('worker_instances_workspace_agent_id_idx').on(table.workspaceAgentId),
+    uniqueWorkspaceAgent: uniqueIndex('worker_instances_workspace_agent_unique').on(
+      table.workspaceId,
+      table.workspaceAgentId,
+    ),
+  }),
+)
+
+export const runtimeLeases = sqliteTable(
+  'runtime_leases',
+  {
+    id: id(),
+    workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+    runId: text('run_id').references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
+    taskId: text('task_id').references(() => workspaceTasks.id, { onDelete: 'set null' }),
+    workerInstanceId: text('worker_instance_id').references(() => workerInstances.id, { onDelete: 'set null' }),
+    provider: text('provider', { enum: ['local-workdir', 'docker-sandbox', 'remote-container'] })
+      .notNull()
+      .default('local-workdir'),
+    status: text('status', { enum: ['creating', 'ready', 'running', 'cleaning', 'released', 'failed', 'stale'] })
+      .notNull()
+      .default('creating'),
+    cwd: text('cwd'),
+    homeDir: text('home_dir'),
+    configDir: text('config_dir'),
+    cacheDir: text('cache_dir'),
+    tmpDir: text('tmp_dir'),
+    dataDir: text('data_dir'),
+    containerId: text('container_id'),
+    sandboxId: text('sandbox_id'),
+    pid: integer('pid'),
+    startedAt: ts('started_at'),
+    releasedAt: ts('released_at'),
+    error: text('error'),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: now(),
+    updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    workspaceIdIdx: index('runtime_leases_workspace_id_idx').on(table.workspaceId),
+    runIdIdx: index('runtime_leases_run_id_idx').on(table.runId),
+    taskIdIdx: index('runtime_leases_task_id_idx').on(table.taskId),
+    workerInstanceIdIdx: index('runtime_leases_worker_instance_id_idx').on(table.workerInstanceId),
+  }),
+)
+
+export const taskThreads = sqliteTable(
+  'task_threads',
+  {
+    id: id(),
+    workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+    runId: text('run_id').notNull().references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
+    taskId: text('task_id').notNull().references(() => workspaceTasks.id, { onDelete: 'cascade' }),
+    groupSessionId: text('group_session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+    workspaceAgentId: text('workspace_agent_id').references(() => workspaceAgents.id, { onDelete: 'set null' }),
+    workerInstanceId: text('worker_instance_id'),
+    sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+    status: text('status', {
+      enum: ['prepared', 'assigned', 'active', 'completed', 'failed', 'cancelled'],
+    }).notNull().default('prepared'),
+    lastEventId: text('last_event_id'),
+    createdAt: now(),
+    updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    runTaskUnique: uniqueIndex('task_threads_run_task_unique').on(table.runId, table.taskId),
+    runIdIdx: index('task_threads_run_id_idx').on(table.runId),
+    sessionIdIdx: index('task_threads_session_id_idx').on(table.sessionId),
+    workspaceIdIdx: index('task_threads_workspace_id_idx').on(table.workspaceId),
+  }),
+)
+
+export const orchestratorRunEvents = sqliteTable(
+  'orchestrator_run_events',
+  {
+    id: id(),
+    runId: text('run_id').notNull().references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+    groupSessionId: text('group_session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+    taskId: text('task_id'),
+    threadId: text('thread_id').references(() => taskThreads.id, { onDelete: 'set null' }),
+    workerInstanceId: text('worker_instance_id'),
+    agentId: text('agent_id'),
+    type: text('type').notNull(),
+    payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    severity: text('severity', { enum: ['debug', 'info', 'warning', 'error'] }).notNull().default('info'),
+    sequence: integer('sequence').notNull().default(0),
+    createdAt: now(),
+  },
+  (table) => ({
+    runIdIdx: index('orchestrator_run_events_run_id_idx').on(table.runId),
+    threadIdIdx: index('orchestrator_run_events_thread_id_idx').on(table.threadId),
+  }),
+)
 
 export const taskClarifications = sqliteTable('task_clarifications', {
   id: id(),

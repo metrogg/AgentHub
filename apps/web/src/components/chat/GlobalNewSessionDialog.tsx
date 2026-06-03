@@ -160,11 +160,15 @@ function NewSessionDialog({
     () => selectedAgents.filter(isOrchestratorAgent),
     [selectedAgents],
   )
+  const selectedWorkers = useMemo(
+    () => selectedAgents.filter((agent) => !isOrchestratorAgent(agent)),
+    [selectedAgents],
+  )
   const groupValidationMessage =
     selectedAgents.length > 1 && selectedOrchestrators.length === 0
-      ? '多成员群聊需要 1 个 Orchestrator 作为总指挥。'
+      ? '协作房间需要 1 位 Manager / Orchestrator 负责统筹。'
       : selectedOrchestrators.length > 1
-        ? '一个群聊只能有 1 个 Orchestrator，请只保留一个总指挥。'
+        ? '一个协作房间只保留 1 位 Manager / Orchestrator。'
         : ''
   const groupTitle = defaultConversationTitle(selectedAgents)
   const filteredWorkspaces = useMemo(() => {
@@ -331,7 +335,7 @@ function NewSessionDialog({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="relative flex h-16 shrink-0 items-center justify-center border-b border-neutral-200/80 bg-[#f7f7f5]/95">
-          <h2 className="text-sm font-semibold tracking-wide text-neutral-950">发起群聊</h2>
+          <h2 className="text-sm font-semibold tracking-wide text-neutral-950">创建协作房间</h2>
           <button
             type="button"
             onClick={handleClose}
@@ -350,13 +354,13 @@ function NewSessionDialog({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索"
+                placeholder="搜索专家 / 成员"
                 className="min-w-0 flex-1 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400"
               />
             </div>
 
             <div className="mt-4 flex items-center justify-between px-1 text-xs text-neutral-500">
-              <span>选择成员</span>
+              <span>选择 Manager 与 Worker</span>
               <span>
                 {selectedAgents.length}/{libraryAgents.length}
               </span>
@@ -365,6 +369,7 @@ function NewSessionDialog({
             <div className="min-h-0 flex-1 overflow-y-auto py-2 pr-1">
               {filteredAgents.map((agent) => {
                 const selected = selectedIds.has(agent.id)
+                const roleBadge = isOrchestratorAgent(agent) ? 'Manager' : 'Worker'
                 return (
                   <button
                     key={agent.id}
@@ -390,7 +395,19 @@ function NewSessionDialog({
                       {agent.name.slice(0, 1).toUpperCase()}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm text-neutral-900">{agent.name}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="block truncate text-sm text-neutral-900">{agent.name}</span>
+                        <span
+                          className={cn(
+                            'inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[10px] font-medium',
+                            isOrchestratorAgent(agent)
+                              ? 'bg-blue-50 text-blue-700'
+                              : 'bg-neutral-100 text-neutral-600',
+                          )}
+                        >
+                          {roleBadge}
+                        </span>
+                      </span>
                       <span className="mt-0.5 block truncate text-xs text-neutral-500">{agent.role}</span>
                     </span>
                   </button>
@@ -398,7 +415,7 @@ function NewSessionDialog({
               })}
               {!filteredAgents.length && (
                 <div className="px-3 py-8 text-center text-sm text-neutral-400">
-                  {libraryAgents.length ? '没有匹配的 Agent' : '还没有全局 Agent'}
+                  {libraryAgents.length ? '没有匹配的专家' : '还没有可用专家'}
                 </div>
               )}
             </div>
@@ -409,30 +426,47 @@ function NewSessionDialog({
                 onClick={onManageAgents}
                 className="text-xs text-neutral-400 transition hover:text-neutral-700"
               >
-                管理 Agent
+                管理专家配置
               </button>
             </div>
           </div>
 
           <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white">
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              <div className="text-sm font-semibold text-neutral-950">已选成员</div>
-              <div className="mt-1 text-xs text-neutral-500">选择后即可创建群聊，标题会用于工作区和会话列表。</div>
+              <div className="text-sm font-semibold text-neutral-950">房间设置</div>
+              <div className="mt-1 text-xs text-neutral-500">先确定项目目标和成员关系，再创建这个协作房间。</div>
+              <div className="mt-4 grid gap-3 rounded-2xl border border-neutral-200 bg-[#fafafa] p-3 sm:grid-cols-3">
+                <div className="rounded-2xl bg-white px-3 py-3">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">Manager</div>
+                  <div className="mt-1 text-lg font-semibold text-neutral-950">{selectedOrchestrators.length}</div>
+                  <div className="mt-1 text-xs leading-5 text-neutral-500">负责理解目标、协调成员、推进协作。</div>
+                </div>
+                <div className="rounded-2xl bg-white px-3 py-3">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">Workers</div>
+                  <div className="mt-1 text-lg font-semibold text-neutral-950">{selectedWorkers.length}</div>
+                  <div className="mt-1 text-xs leading-5 text-neutral-500">负责具体执行、产出文件和阶段汇报。</div>
+                </div>
+                <div className="rounded-2xl bg-white px-3 py-3">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">Workspace</div>
+                  <div className="mt-1 text-sm font-semibold text-neutral-950">{workspaceChoiceLabel()}</div>
+                  <div className="mt-1 text-xs leading-5 text-neutral-500">房间运行时的默认项目目录与协作空间。</div>
+                </div>
+              </div>
               <label className="mt-4 block">
-                <span className="mb-2 block text-xs font-medium text-neutral-500">群聊名称</span>
+                <span className="mb-2 block text-xs font-medium text-neutral-500">房间名称</span>
                 <input
                   value={title}
                   onChange={(event) => setTitle(event.target.value)}
-                  placeholder={groupTitle || '未命名群聊'}
+                  placeholder={groupTitle || '未命名协作房间'}
                   className="h-11 w-full rounded-2xl border border-neutral-200 bg-[#fafafa] px-4 text-sm text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-emerald-400"
                 />
               </label>
               <label className="mt-4 block">
-                <span className="mb-2 block text-xs font-medium text-neutral-500">群聊目标</span>
+                <span className="mb-2 block text-xs font-medium text-neutral-500">项目目标</span>
                 <textarea
                   value={goal}
                   onChange={(event) => setGoal(event.target.value)}
-                  placeholder="可选。比如：调研全球主流 AI 编程工具，输出 PDF 和 HTML。目标会写入工作区，真正分工仍由 Orchestrator 动态规划。"
+                  placeholder="比如：调研全球主流 AI 编程工具，输出 PDF 和 HTML 网页报告。Manager 会基于这个目标理解需求、组织协作并安排执行。"
                   rows={3}
                   className="w-full resize-none rounded-2xl border border-neutral-200 bg-[#fafafa] px-4 py-3 text-sm leading-6 text-neutral-900 outline-none transition placeholder:text-neutral-400 focus:border-emerald-400"
                 />
@@ -466,7 +500,7 @@ function NewSessionDialog({
                   ))}
                 </div>
                 <div className="mt-2 px-1 text-[11px] leading-5 text-neutral-400">
-                  这里只是显式帮你创建并选中 Agent 配置，不会替 Orchestrator 做固定分工。
+                  这里只是帮你挑出一组比较合适的专家，不会替 Manager 预先写死分工。
                 </div>
               </div>
               <div className="mt-4 min-w-0 rounded-2xl border border-neutral-200 bg-[#fafafa] p-2">
@@ -492,7 +526,7 @@ function NewSessionDialog({
                   <input
                     value={workspaceQuery}
                     onChange={(event) => setWorkspaceQuery(event.target.value)}
-                    placeholder="搜索历史工作区"
+                    placeholder="搜索历史项目空间"
                     className="min-w-0 flex-1 bg-transparent text-xs text-neutral-900 outline-none placeholder:text-neutral-400"
                   />
                 </div>
@@ -548,9 +582,9 @@ function NewSessionDialog({
               <div className="mt-5 rounded-2xl border border-neutral-200 bg-[#fafafa] p-3">
                 <div className="mb-3 flex items-center justify-between gap-3 px-1">
                   <div>
-                    <div className="text-xs font-medium text-neutral-500">已选成员预览</div>
+                    <div className="text-xs font-medium text-neutral-500">房间成员预览</div>
                     <div className="mt-0.5 text-[11px] text-neutral-400">
-                      这里展示将被加入群聊的 Agent。
+                      这里展示创建后会进入房间的 Manager 与 Worker。
                     </div>
                   </div>
                   <div className="text-[11px] text-neutral-400">
@@ -573,7 +607,19 @@ function NewSessionDialog({
                           {agent.name.slice(0, 1).toUpperCase()}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm text-neutral-950">{agent.name}</span>
+                          <span className="flex items-center gap-2">
+                            <span className="block truncate text-sm text-neutral-950">{agent.name}</span>
+                            <span
+                              className={cn(
+                                'inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[10px] font-medium',
+                                isOrchestratorAgent(agent)
+                                  ? 'bg-blue-50 text-blue-700'
+                                  : 'bg-neutral-100 text-neutral-600',
+                              )}
+                            >
+                              {isOrchestratorAgent(agent) ? 'Manager' : 'Worker'}
+                            </span>
+                          </span>
                           <span className="block truncate text-xs text-neutral-500">{agent.role}</span>
                         </span>
                       </button>
@@ -581,7 +627,7 @@ function NewSessionDialog({
                   </div>
                 ) : (
                   <div className="flex min-h-24 items-center justify-center rounded-2xl border border-dashed border-neutral-200 bg-white px-6 text-center text-sm text-neutral-400">
-                    从左侧选择一个或多个 Agent，马上就能发起群聊。
+                    从左侧选择专家，先组出一个像样的小团队。
                   </div>
                 )}
               </div>
@@ -598,7 +644,7 @@ function NewSessionDialog({
                       onClick={addOrchestratorToSelection}
                       className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 font-medium text-amber-700 transition hover:bg-amber-100"
                     >
-                      添加 Orchestrator
+                      添加 Manager
                     </button>
                   )}
                 </div>
@@ -609,7 +655,7 @@ function NewSessionDialog({
                 disabled={!selectedAgents.length || Boolean(creatingChoice) || Boolean(groupValidationMessage)}
                 className="inline-flex h-11 min-w-[120px] items-center justify-center rounded-2xl bg-neutral-100 px-5 text-sm font-medium text-neutral-400 transition enabled:bg-emerald-500 enabled:text-white enabled:hover:bg-emerald-600 disabled:cursor-not-allowed"
               >
-                {submittingSelected ? <Loader2 className="h-4 w-4 animate-spin" /> : '创建群聊'}
+                {submittingSelected ? <Loader2 className="h-4 w-4 animate-spin" /> : '创建房间'}
               </button>
               <button
                 type="button"

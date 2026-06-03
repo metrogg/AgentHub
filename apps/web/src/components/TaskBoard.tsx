@@ -10,61 +10,10 @@ import {
   ShieldCheck,
   TerminalSquare,
 } from 'lucide-react'
-
-interface TaskBoardTask {
-  id: string
-  phaseId: string
-  title: string
-  description: string
-  agentName: string
-  status: 'pending' | 'running' | 'done' | 'failed' | 'blocked' | 'cancelled'
-  progress?: number
-  progressStatus?: string
-  dependencies: string[]
-  childSessionId?: string | null
-  artifactCount?: number
-  artifacts?: Array<{ artifactId?: string; id?: string; title?: string; filePath?: string }>
-  outputSummary?: string
-  validationStatus?: 'passed' | 'failed' | 'skipped' | 'not_run'
-  contractStatus?: 'passed' | 'failed'
-  resultError?: string
-  executionConfig?: {
-    runtimeType?: string
-    codeAgentType?: string
-    adapterName?: string
-    modelId?: string | null
-    modelLabel?: string
-    baseUrlHost?: string | null
-    readinessStatus?: string
-    sandboxPolicy?: string
-    sandboxProvider?: string
-    isolation?: string
-    workdirRelativePath?: string | null
-    executionPath?: string | null
-  }
-}
-
-interface TaskBoardPhase {
-  id: string
-  title: string
-  purpose: string
-  taskIds: string[]
-  status: 'pending' | 'active' | 'completed'
-}
-
-interface TaskBoardData {
-  runId: string
-  title: string
-  goal: string
-  collaborationMode: string
-  phases: TaskBoardPhase[]
-  tasks: TaskBoardTask[]
-  status: 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
-  sessionId: string
-}
+import type { TaskBoardPanelProjection } from '@/stores/chatStore'
 
 interface TaskBoardProps {
-  data: TaskBoardData
+  data: TaskBoardPanelProjection
   onCancel?: () => void
   onRetryFailed?: () => void
 }
@@ -74,6 +23,8 @@ function StatusIcon({ status }: { status: string }) {
   switch (status) {
     case 'pending':
       return <Clock className={`${iconClass} text-gray-400`} />
+    case 'assigned':
+      return <MessagesSquare className={`${iconClass} text-indigo-500`} />
     case 'running':
       return <Loader2 className={`${iconClass} text-blue-500 animate-spin`} />
     case 'done':
@@ -115,7 +66,7 @@ function RunStatusBadge({ status }: { status: string }) {
   )
 }
 
-function validationLabel(status?: TaskBoardTask['validationStatus']) {
+function validationLabel(status?: TaskBoardPanelProjection['phases'][number]['tasks'][number]['validationStatus']) {
   const labels: Record<string, string> = {
     passed: '校验通过',
     failed: '校验失败',
@@ -125,14 +76,14 @@ function validationLabel(status?: TaskBoardTask['validationStatus']) {
   return status ? labels[status] || status : ''
 }
 
-function validationClass(status?: TaskBoardTask['validationStatus']) {
+function validationClass(status?: TaskBoardPanelProjection['phases'][number]['tasks'][number]['validationStatus']) {
   if (status === 'passed') return 'border-green-200 bg-green-50 text-green-700'
   if (status === 'failed') return 'border-red-200 bg-red-50 text-red-700'
   if (status === 'skipped') return 'border-amber-200 bg-amber-50 text-amber-700'
   return 'border-gray-200 bg-white text-gray-500'
 }
 
-function RuntimeStrip({ config }: { config?: TaskBoardTask['executionConfig'] }) {
+function RuntimeStrip({ config }: { config?: TaskBoardPanelProjection['phases'][number]['tasks'][number]['executionConfig'] }) {
   if (!config) return null
   const runtime =
     config.adapterName ||
@@ -182,29 +133,20 @@ function compactPath(value?: string | null) {
   return `${parts[parts.length - 3]}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
 }
 
+function compactId(value?: string | null) {
+  if (!value) return null
+  if (value.length <= 10) return value
+  return value.slice(0, 8)
+}
+
 export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
-  const { title, goal, phases, tasks, status, collaborationMode } = data
-
-  const getPhaseTasks = (phaseId: string) => tasks.filter((t) => t.phaseId === phaseId)
-
-  const getPhaseStatus = (phase: TaskBoardPhase): 'pending' | 'active' | 'completed' => {
-    if (phase.status === 'completed') return 'completed'
-    if (phase.status === 'active') return 'active'
-    const phaseTasks = getPhaseTasks(phase.id)
-    if (phaseTasks.length === 0) return 'pending'
-    const allDone = phaseTasks.every((t) => t.status === 'done')
-    if (allDone) return 'completed'
-    const anyActive = phaseTasks.some((t) => t.status === 'running' || t.status === 'done')
-    return anyActive ? 'active' : 'pending'
-  }
+  const { title, goal, phases, status, collaborationMode, taskCount, phaseCount, hasFailedTasks, emptyStateLabel } = data
 
   const modeLabels: Record<string, string> = {
     pipeline: '流水线',
     mapreduce: '并行汇总',
     supervisor: '监督者',
   }
-
-  const hasFailed = tasks.some((t) => t.status === 'failed')
 
   return (
     <div className="flex flex-col h-full bg-gray-50/80">
@@ -219,9 +161,9 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
         <div className="flex items-center gap-2 text-xs text-gray-400">
           <span>{modeLabels[collaborationMode] || collaborationMode}</span>
           <span>·</span>
-          <span>{tasks.length} 个任务</span>
+          <span>{taskCount} 个任务</span>
           <span>·</span>
-          <span>{phases.length} 个阶段</span>
+          <span>{phaseCount} 个阶段</span>
         </div>
       </div>
 
@@ -235,7 +177,7 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
               ⏸ 暂停
             </button>
           )}
-          {hasFailed && onRetryFailed && (
+          {hasFailedTasks && onRetryFailed && (
             <button
               onClick={onRetryFailed}
               className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors"
@@ -248,8 +190,8 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
 
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
         {phases.map((phase) => {
-          const phaseTasks = getPhaseTasks(phase.id)
-          const phaseStatus = getPhaseStatus(phase)
+          const phaseTasks = phase.tasks
+          const phaseStatus = phase.status
 
           return (
             <div key={phase.id} className="bg-white rounded-lg border border-gray-200 p-3">
@@ -265,7 +207,7 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
                 />
                 <h4 className="text-sm font-medium text-gray-800">{phase.title}</h4>
                 <span className="text-xs text-gray-400">
-                  {phaseTasks.filter((t) => t.status === 'done').length}/{phaseTasks.length}
+                  {phase.completedTaskCount}/{phase.totalTaskCount}
                 </span>
               </div>
               {phase.purpose && <p className="text-xs text-gray-500 mb-2">{phase.purpose}</p>}
@@ -273,28 +215,20 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
               <div className="space-y-2">
                 {phaseTasks.map((task) => {
                   const progressColor =
-                    task.progress !== undefined
-                      ? task.progress < 30
-                        ? 'bg-red-500'
-                        : task.progress < 70
-                          ? 'bg-yellow-500'
-                          : 'bg-green-500'
-                      : 'bg-blue-500'
-                  const artifactCount = task.artifactCount ?? task.artifacts?.length ?? 0
-                  const hasResultLine =
-                    artifactCount > 0 ||
-                    Boolean(task.outputSummary) ||
-                    Boolean(task.validationStatus) ||
-                    Boolean(task.childSessionId) ||
-                    Boolean(task.resultError) ||
-                    Boolean(task.executionConfig)
+                    task.progressTone === 'red'
+                      ? 'bg-red-500'
+                      : task.progressTone === 'yellow'
+                        ? 'bg-yellow-500'
+                        : task.progressTone === 'green'
+                          ? 'bg-green-500'
+                          : 'bg-blue-500'
                   return (
                     <div
                       key={task.id}
                       className={`flex items-start gap-2 p-2 rounded-lg text-xs transition-colors ${
-                        task.status === 'running'
+                        task.statusTone === 'running'
                           ? 'bg-blue-50 border border-blue-200'
-                          : task.status === 'failed'
+                          : task.statusTone === 'failed'
                             ? 'bg-red-50 border border-red-200'
                             : 'bg-gray-50'
                       }`}
@@ -329,13 +263,13 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
                           </div>
                         )}
 
-                        {hasResultLine && (
+                        {task.hasResultLine && (
                           <div className="mt-2 space-y-1.5">
                             <div className="flex flex-wrap items-center gap-1.5">
-                              {artifactCount > 0 && (
+                              {task.artifactCountResolved > 0 && (
                                 <span className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-600">
                                   <FileText className="h-3 w-3" />
-                                  {artifactCount} 产物
+                                  {task.artifactCountResolved} 产物
                                 </span>
                               )}
                               {task.validationStatus && (
@@ -350,6 +284,30 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
                                 <span className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700">
                                   <MessagesSquare className="h-3 w-3" />
                                   成员对话
+                                </span>
+                              )}
+                              {task.taskThreadId && (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded border border-blue-100 bg-white px-1.5 py-0.5 text-[11px] text-blue-600"
+                                  title={task.taskThreadId}
+                                >
+                                  线程 {compactId(task.taskThreadId)}
+                                </span>
+                              )}
+                              {task.workerInstanceId && (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-500"
+                                  title={task.workerInstanceId}
+                                >
+                                  Worker {compactId(task.workerInstanceId)}
+                                </span>
+                              )}
+                              {task.runtimeLeaseId && (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[11px] text-gray-500"
+                                  title={task.runtimeLeaseId}
+                                >
+                                  租约 {compactId(task.runtimeLeaseId)}
                                 </span>
                               )}
                             </div>
@@ -375,9 +333,7 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
         })}
 
         {phases.length === 0 && (
-          <div className="text-center text-gray-400 text-sm py-8">
-            {status === 'planning' ? '正在生成执行计划...' : '暂无阶段信息'}
-          </div>
+          <div className="text-center text-gray-400 text-sm py-8">{emptyStateLabel}</div>
         )}
       </div>
     </div>

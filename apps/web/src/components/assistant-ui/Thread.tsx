@@ -141,6 +141,7 @@ import {
   type ThreadCodeAgentRunData,
 } from '../../lib/runtime'
 import { useChatStore } from '../../stores/chatStore'
+import { buildHeaderAgentStatusProjection, type HeaderAgentStatusProjection } from '../../stores/chatStore'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
@@ -238,6 +239,7 @@ const attachmentInputAccept = [
 ].join(',')
 const composerSyncEvent = 'agenthub:composer-sync'
 const artifactPreviewEvent = 'agenthub:artifact-preview'
+const roomTasksDrawerEvent = 'agenthub:open-room-tasks'
 const previewPanelWidthStorageKey = 'agenthub:preview-panel-width'
 const defaultPreviewPanelWidth = 560
 
@@ -313,10 +315,11 @@ export const Thread: FC = () => {
   const showContextRail = Boolean(currentSession?.workspaceId || railTaskBoard || planningActivity)
   const isOrchestratorTaskChild = sessionKind === 'orchestrator-task'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
+  const [groupTasksOpen, setGroupTasksOpen] = useState(false)
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
   const [previewCollapsed, setPreviewCollapsed] = useState(false)
-  const showInlineContextRail = showContextRail && (!previewItem || previewCollapsed)
+  const showInlineContextRail = !isGroupSession && showContextRail && (!previewItem || previewCollapsed)
 
   async function openGroupConversation() {
     selectAgentTab(null)
@@ -328,6 +331,7 @@ export const Thread: FC = () => {
 
   useEffect(() => {
     setGroupDetailsOpen(false)
+    setGroupTasksOpen(false)
     setChildDetailsOpen(false)
   }, [currentSession?.id])
 
@@ -342,6 +346,15 @@ export const Thread: FC = () => {
     window.addEventListener(artifactPreviewEvent, handlePreview)
     return () => window.removeEventListener(artifactPreviewEvent, handlePreview)
   }, [])
+
+  useEffect(() => {
+    if (!isGroupSession) return
+    function handleOpenRoomTasks() {
+      setGroupTasksOpen(true)
+    }
+    window.addEventListener(roomTasksDrawerEvent, handleOpenRoomTasks)
+    return () => window.removeEventListener(roomTasksDrawerEvent, handleOpenRoomTasks)
+  }, [isGroupSession])
 
   return (
     <ThreadPrimitive.Root
@@ -387,29 +400,34 @@ export const Thread: FC = () => {
       )}
       <div className="flex min-h-0 flex-1 pt-14">
         <div className="flex min-w-0 flex-1 flex-col">
-          {isGroupSession && visibleTaskBoard && selectedAgentTab === null && (
-            <LeaderViewBanner taskBoard={visibleTaskBoard} agentTabs={agentTabs} />
+          {isGroupSession && selectedAgentTab === null && (visibleTaskBoard || planningActivity) && (
+            <LeaderViewBanner
+              taskBoard={visibleTaskBoard}
+              agentTabs={agentTabs}
+              activity={planningActivity}
+              onOpenTasks={() => setGroupTasksOpen(true)}
+            />
           )}
           <ThreadPrimitive.Viewport className="agenthub-thread-viewport flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
             <ThreadWelcome />
             <ThreadPrimitive.Messages
               components={{ UserMessage, AssistantMessage, SystemMessage }}
             />
-            {isGroupSession &&
-              selectedAgentTab === null &&
-              (visibleTaskBoard || planningActivity) && (
-                <TeamExecutionPanel
-                  taskBoard={visibleTaskBoard}
-                  agentTabs={agentTabs}
-                  activity={planningActivity}
-                />
-              )}
             <ThreadPrimitive.If empty={false}>
               <div className="min-h-28" />
             </ThreadPrimitive.If>
           </ThreadPrimitive.Viewport>
           <Composer />
         </div>
+        {isGroupSession && (
+          <RoomTaskDrawer
+            open={groupTasksOpen}
+            onClose={() => setGroupTasksOpen(false)}
+            taskBoard={visibleTaskBoard}
+            agentTabs={agentTabs}
+            activity={planningActivity}
+          />
+        )}
         {previewItem && !previewCollapsed && (
           <ArtifactPreviewPanel item={previewItem} onClose={() => setPreviewItem(null)} />
         )}
@@ -437,15 +455,6 @@ type PreviewHeaderControlProps = {
   previewCollapsed?: boolean
   previewAvailable?: boolean
   onTogglePreview?: () => void
-}
-
-type HeaderAgentStatusTone = 'idle' | 'thinking' | 'working' | 'synthesizing' | 'warning'
-
-type HeaderAgentStatus = {
-  label: string
-  detail?: string
-  tone: HeaderAgentStatusTone
-  live: boolean
 }
 
 const HeaderPreviewButton: FC<PreviewHeaderControlProps> = ({
@@ -507,7 +516,7 @@ const HeaderAgentStatusIndicator: FC = () => {
   )
 }
 
-function useHeaderAgentStatus(): HeaderAgentStatus {
+function useHeaderAgentStatus(): HeaderAgentStatusProjection {
   const currentSession = useChatStore((state) => state.currentSession)
   const agentTyping = useChatStore((state) => state.agentTyping)
   const agentActivity = useChatStore((state) => state.agentActivity)
@@ -515,95 +524,15 @@ function useHeaderAgentStatus(): HeaderAgentStatus {
   const streamingCodeAgentRun = useChatStore((state) => state.streamingCodeAgentRun)
   const taskBoard = useChatStore((state) => state.taskBoard)
   const agentTabs = useChatStore((state) => state.agentTabs)
-  const sessionId = currentSession?.id ?? null
-
-  if (streamingCodeAgentRun?.status === 'running') {
-    return {
-      label: '工作中',
-      detail: codeAgentRuntimeLabel(streamingCodeAgentRun.runtime),
-      tone: 'working',
-      live: true,
-    }
-  }
-
-  if (streamingMessage) {
-    return {
-      label: '工作中',
-      detail: streamingMessage.agentName ?? '正在输出',
-      tone: 'working',
-      live: true,
-    }
-  }
-
-  if (agentTyping) {
-    const phase = agentActivity?.phase ?? 'replying'
-    if (phase === 'thinking' || phase === 'planning') {
-      return {
-        label: phase === 'planning' ? '规划中' : '思考中',
-        detail: agentActivity?.agentName ?? 'Orchestrator',
-        tone: 'thinking',
-        live: true,
-      }
-    }
-    if (phase === 'synthesizing') {
-      return {
-        label: '汇总中',
-        detail: agentActivity?.agentName ?? 'Synthesizer',
-        tone: 'synthesizing',
-        live: true,
-      }
-    }
-    return {
-      label: '工作中',
-      detail: agentActivity?.agentName ?? '正在处理',
-      tone: 'working',
-      live: true,
-    }
-  }
-
-  const currentTask =
-    sessionId && taskBoard
-      ? taskBoard.tasks.find((task) => task.childSessionId === sessionId) ??
-        taskBoard.tasks.find((task) => task.status === 'running') ??
-        null
-      : null
-  const currentTab =
-    sessionId && agentTabs.length
-      ? agentTabs.find((tab) => tab.childSessionId === sessionId) ??
-        agentTabs.find((tab) => tab.status === 'running') ??
-        null
-      : null
-
-  if (currentTask?.status === 'running' || currentTab?.status === 'running') {
-    return {
-      label: '工作中',
-      detail: currentTask?.agentName ?? currentTab?.agentName ?? 'Agent',
-      tone: 'working',
-      live: true,
-    }
-  }
-
-  if (taskBoard && sessionId === taskBoard.sessionId) {
-    if (taskBoard.status === 'planning') {
-      return { label: '规划中', detail: 'Orchestrator', tone: 'thinking', live: true }
-    }
-    if (taskBoard.status === 'synthesizing') {
-      return { label: '汇总中', detail: 'Synthesizer', tone: 'synthesizing', live: true }
-    }
-    if (taskBoard.status === 'running') {
-      return { label: '工作中', detail: '多 Agent 协作', tone: 'working', live: true }
-    }
-    if (taskBoard.status === 'failed' || taskBoard.status === 'cancelled') {
-      return {
-        label: taskBoard.status === 'failed' ? '需关注' : '已停止',
-        detail: runStatusLabel[taskBoard.status],
-        tone: 'warning',
-        live: false,
-      }
-    }
-  }
-
-  return { label: '空闲中', detail: '等待新任务', tone: 'idle', live: false }
+  return buildHeaderAgentStatusProjection({
+    sessionId: currentSession?.id ?? null,
+    taskBoard,
+    agentTabs,
+    agentTyping,
+    agentActivity,
+    streamingMessage,
+    streamingCodeAgentRun,
+  })
 }
 
 const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => void }> = ({
@@ -818,50 +747,70 @@ const RegularChatHeader: FC<PreviewHeaderControlProps> = ({
 }
 
 interface LeaderViewBannerProps {
-  taskBoard: NonNullable<ReturnType<typeof useChatStore.getState>['taskBoard']>
+  taskBoard: ReturnType<typeof useChatStore.getState>['taskBoard']
   agentTabs: ReturnType<typeof useChatStore.getState>['agentTabs']
+  activity: LiveAgentActivity | null
+  onOpenTasks: () => void
 }
 
-const LeaderViewBanner: FC<LeaderViewBannerProps> = ({ taskBoard, agentTabs }) => {
+const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
+  taskBoard,
+  agentTabs,
+  activity,
+  onOpenTasks,
+}) => {
   const runningCount = agentTabs.filter((t) => t.status === 'running').length
   const doneCount = agentTabs.filter((t) => t.status === 'done').length
   const failedCount = agentTabs.filter((t) => t.status === 'failed').length
+  const title = taskBoard?.title || taskBoard?.goal || 'Manager 正在组织协作'
+  const phaseLabel = taskBoard
+    ? runStatusLabel[taskBoard.status] ?? taskBoard.status
+    : activity?.phase === 'synthesizing'
+      ? '汇总中'
+      : activity?.phase === 'planning'
+        ? '规划中'
+        : '理解中'
 
   return (
-    <div className="shrink-0 bg-[#f5f5f1] px-6 py-2.5">
-      <div className="flex items-center gap-2 text-xs">
-        <Bot className="h-4 w-4 text-blue-600" />
-        <span className="font-semibold text-neutral-700">主对话</span>
-        <span className="text-neutral-400">·</span>
-        <span className="text-neutral-500">
-          {taskBoard.goal
-            ? taskBoard.goal.slice(0, 40) + (taskBoard.goal.length > 40 ? '...' : '')
-            : '任务执行中'}
+    <div className="shrink-0 border-b border-neutral-100 bg-[#fcfcfb] px-6 py-2.5">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-neutral-700">
+          <Bot className="h-3.5 w-3.5 text-blue-600" />
+          <span className="font-medium">房间动态</span>
         </span>
-      </div>
-      <div className="flex items-center gap-3 mt-1 ml-7">
+        <span className="max-w-[24rem] truncate text-neutral-600" title={title}>
+          {title}
+        </span>
+        <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700">
+          {phaseLabel}
+        </span>
         {runningCount > 0 && (
           <span className="inline-flex items-center gap-1 text-xs text-blue-600">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
-            </span>
-            {runningCount} 执行中
+            <Loader2 className="h-3 w-3 animate-spin" />
+            {runningCount} 位成员忙碌中
           </span>
         )}
         {doneCount > 0 && (
           <span className="inline-flex items-center gap-1 text-xs text-green-600">
             <CheckCircle2 className="w-3 h-3" />
-            {doneCount} 已完成
+            {doneCount} 段结果已落地
           </span>
         )}
         {failedCount > 0 && (
           <span className="inline-flex items-center gap-1 text-xs text-red-600">
             <XCircle className="w-3 h-3" />
-            {failedCount} 失败
+            {failedCount} 处异常
           </span>
         )}
-        <span className="text-xs text-neutral-400">共 {agentTabs.length} 个 Agent</span>
+        <span className="text-xs text-neutral-400">{agentTabs.length} 位协作者</span>
+        <button
+          type="button"
+          onClick={onOpenTasks}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-xs text-neutral-600 transition hover:border-blue-200 hover:text-blue-700"
+        >
+          <ListTodo className="h-3.5 w-3.5" />
+          任务与线程
+        </button>
       </div>
     </div>
   )
@@ -869,12 +818,6 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({ taskBoard, agentTabs }) =
 
 type LiveTaskBoard = NonNullable<ReturnType<typeof useChatStore.getState>['taskBoard']>
 type LiveAgentActivity = NonNullable<ReturnType<typeof useChatStore.getState>['agentActivity']>
-
-interface TeamExecutionPanelProps {
-  taskBoard: LiveTaskBoard | null
-  agentTabs: ReturnType<typeof useChatStore.getState>['agentTabs']
-  activity: LiveAgentActivity | null
-}
 
 const ThreadContextRail: FC<{
   taskBoard: LiveTaskBoard | null
@@ -1166,6 +1109,7 @@ const runStatusLabel: Record<string, string> = {
 
 const taskStatusLabel: Record<string, string> = {
   pending: '等待',
+  assigned: '已分配',
   running: '执行中',
   done: '已完成',
   failed: '失败',
@@ -1174,6 +1118,7 @@ const taskStatusLabel: Record<string, string> = {
 }
 
 function taskStatusClass(status: string) {
+  if (status === 'assigned') return 'border-amber-200 bg-amber-50 text-amber-700'
   if (status === 'running') return 'border-blue-200 bg-blue-50 text-blue-700'
   if (status === 'done') return 'border-green-200 bg-green-50 text-green-700'
   if (status === 'failed' || status === 'blocked') return 'border-red-200 bg-red-50 text-red-700'
@@ -1181,6 +1126,7 @@ function taskStatusClass(status: string) {
 }
 
 function taskStatusIcon(status: string) {
+  if (status === 'assigned') return <Clock3 className="h-4 w-4 text-amber-600" />
   if (status === 'running') return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
   if (status === 'done') return <CheckCircle2 className="h-4 w-4 text-green-600" />
   if (status === 'failed' || status === 'blocked')
@@ -1266,244 +1212,351 @@ function compactPath(value?: string | null) {
   return `${parts[parts.length - 3]}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
 }
 
-const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs, activity }) => {
+type RoomThreadSection = {
+  id: string
+  title: string
+  tasks: LiveTaskBoard['tasks']
+}
+
+function taskArtifactPreviewItem(
+  artifact: NonNullable<LiveTaskBoard['tasks'][number]['artifacts']>[number],
+  taskId: string,
+  index: number,
+): ArtifactPreviewItem {
+  const title = artifact.title || artifact.filePath || artifact.url || `产物 ${index + 1}`
+  const kind: ArtifactPreviewItem['kind'] =
+    artifact.type === 'diff'
+      ? 'diff'
+      : artifact.type === 'preview'
+        ? 'web'
+        : artifact.type === 'deploy'
+          ? 'deploy'
+          : artifact.type === 'workflow'
+            ? 'workflow'
+            : artifact.url
+              ? 'web'
+              : /\.(png|jpg|jpeg|webp|gif)$/i.test(artifact.filePath ?? '')
+                ? 'image'
+                : 'file'
+  return {
+    id:
+      artifact.artifactId ??
+      artifact.id ??
+      artifact.filePath ??
+      artifact.url ??
+      `${taskId}-${index}`,
+    title,
+    kind,
+    url: artifact.url ?? undefined,
+    path: artifact.filePath ?? undefined,
+    source: artifact.source ?? undefined,
+  }
+}
+
+function buildRoomThreadSections(tasks: LiveTaskBoard['tasks']): RoomThreadSection[] {
+  const running = tasks.filter((task) => task.status === 'running')
+  const queued = tasks.filter((task) => ['pending', 'assigned'].includes(task.status))
+  const done = tasks.filter((task) => task.status === 'done')
+  const issues = tasks.filter((task) => ['failed', 'blocked', 'cancelled'].includes(task.status))
+  return [
+    { id: 'running', title: '进行中的线程', tasks: running },
+    { id: 'queued', title: '等待中的线程', tasks: queued },
+    { id: 'done', title: '已完成的线程', tasks: done },
+    { id: 'issues', title: '异常与受阻', tasks: issues },
+  ].filter((section) => section.tasks.length > 0)
+}
+
+const RoomTaskDrawer: FC<{
+  open: boolean
+  onClose: () => void
+  taskBoard: LiveTaskBoard | null
+  agentTabs: ReturnType<typeof useChatStore.getState>['agentTabs']
+  activity: LiveAgentActivity | null
+}> = ({ open, onClose, taskBoard, agentTabs, activity }) => {
   const selectAgentTab = useChatStore((state) => state.selectAgentTab)
   const selectSession = useChatStore((state) => state.selectSession)
   const navigate = useNavigate()
   const [pendingChildNoticeTaskId, setPendingChildNoticeTaskId] = useState<string | null>(null)
-
-  if (!taskBoard) {
-    const phaseLabel =
-      activity?.phase === 'synthesizing'
-        ? '正在汇总'
-        : activity?.phase === 'thinking'
-          ? '正在理解目标'
-          : '正在规划'
-    return (
-      <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
-        <div className="flex items-start gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
-            <Loader2 className="h-4 w-4 animate-spin" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-neutral-900">
-                {activity?.agentName ?? 'Orchestrator'} {phaseLabel}
-              </span>
-              <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-xs text-blue-700">
-                {activity?.phase === 'synthesizing' ? '等待最终汇总' : '等待任务拆解'}
-              </span>
-            </div>
-            <p className="mt-1 text-sm text-neutral-600">
-              Orchestrator 正在分析目标、成员能力和任务依赖。计划生成后会在这里展开任务、成员状态和子对话入口。
-            </p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  const tasks = taskBoard.tasks
-  const runningTasks = tasks.filter((task) => task.status === 'running')
+  const title = taskBoard?.title || taskBoard?.goal || '房间任务'
+  const subtitle = taskBoard
+    ? `${runStatusLabel[taskBoard.status] ?? taskBoard.status} · ${taskBoard.tasks.length} 个线程`
+    : activity
+      ? `${activity.agentName ?? 'Manager'} ${activityLabel(activity)}`
+      : '当前没有进行中的协作任务'
+  const stats = taskProgressStats(taskBoard)
+  const tasks = taskBoard?.tasks ?? []
+  const sections = useMemo(() => buildRoomThreadSections(tasks), [tasks])
+  const runningCount = tasks.filter((task) => task.status === 'running').length
   const doneCount = tasks.filter((task) => task.status === 'done').length
-  const failedCount = tasks.filter(
-    (task) => task.status === 'failed' || task.status === 'blocked',
+  const issueCount = tasks.filter((task) =>
+    ['failed', 'blocked', 'cancelled'].includes(task.status),
   ).length
   const artifactCount = tasks.reduce(
     (total, task) => total + (task.artifactCount ?? task.artifacts?.length ?? 0),
     0,
   )
-  const completedLike =
-    doneCount + failedCount + tasks.filter((task) => task.status === 'cancelled').length
-  const progress = tasks.length > 0 ? Math.round((completedLike / tasks.length) * 100) : 0
-  const visibleTasks = [
-    ...runningTasks,
-    ...tasks.filter((task) => task.status === 'pending'),
-    ...tasks.filter((task) => task.status === 'done'),
-    ...tasks.filter((task) => task.status === 'failed' || task.status === 'blocked'),
-  ].slice(0, 6)
+  const newestArtifacts = tasks
+    .flatMap((task) =>
+      (task.artifacts ?? []).map((artifact, index) => ({
+        item: taskArtifactPreviewItem(artifact, task.id, index),
+        taskTitle: task.title,
+      })),
+    )
+    .slice(0, 6)
+
+  async function openChildSession(taskId: string, childSessionId?: string | null) {
+    if (!childSessionId) {
+      setPendingChildNoticeTaskId(taskId)
+      window.setTimeout(() => {
+        setPendingChildNoticeTaskId((current) => (current === taskId ? null : current))
+      }, 1800)
+      return
+    }
+    selectAgentTab(taskId)
+    await selectSession(childSessionId)
+    navigate(`/chat/${childSessionId}`)
+  }
 
   return (
-    <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-neutral-200 bg-white shadow-sm">
-      <div className="border-b border-neutral-100 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <ListTodo className="h-4 w-4 text-blue-600" />
-              <h3 className="truncate text-sm font-semibold text-neutral-900">
-                {taskBoard.title || '团队任务'}
-              </h3>
-              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
-                {runStatusLabel[taskBoard.status] ?? taskBoard.status}
-              </span>
+    <div
+      className={cn(
+        'absolute inset-0 z-30 flex justify-end overflow-hidden transition',
+        open ? 'pointer-events-auto' : 'pointer-events-none',
+      )}
+      aria-hidden={!open}
+    >
+      <button
+        type="button"
+        aria-label="关闭任务抽屉"
+        onClick={onClose}
+        className={cn(
+          'absolute inset-0 bg-black/5 transition-opacity duration-200',
+          open ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+      <aside
+        className={cn(
+          'relative h-full w-[440px] max-w-[94vw] border-l border-neutral-200 bg-[#FBFBFB] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          open ? 'translate-x-0' : 'translate-x-full',
+        )}
+      >
+        <div className="flex h-full flex-col overflow-hidden">
+          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-neutral-200 bg-white px-5 py-4">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-neutral-950">房间线程</div>
+              <div className="mt-1 truncate text-xs text-neutral-500" title={title}>
+                {title}
+              </div>
+              <div className="mt-1 text-[11px] text-neutral-400">{subtitle}</div>
             </div>
-            {taskBoard.goal && (
-              <p className="mt-1 line-clamp-2 text-sm text-neutral-600">{taskBoard.goal}</p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-neutral-100 text-neutral-500 transition hover:bg-neutral-200 hover:text-neutral-900"
+              title="关闭"
+              aria-label="关闭"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+            {!taskBoard ? (
+              <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-blue-600 ring-1 ring-blue-100">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-neutral-900">
+                        {activity?.agentName ?? 'Manager'} {activityLabel(activity)}
+                      </span>
+                      <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-xs text-blue-700">
+                        等待线程出现
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm leading-6 text-neutral-600">
+                      Manager 正在理解目标、协调成员并准备线程。正式分发后，这里会出现每位成员的工作线程和对应产物。
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-neutral-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">
+                          线程概览
+                        </div>
+                        <div className="mt-1 text-lg font-semibold text-neutral-950">
+                          {stats.done}/{stats.total || 0}
+                        </div>
+                      </div>
+                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-[11px] text-neutral-600">
+                        {runStatusLabel[taskBoard.status] ?? taskBoard.status}
+                      </span>
+                    </div>
+                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-neutral-100">
+                      <div
+                        className="h-full rounded-full bg-neutral-900 transition-all duration-500"
+                        style={{ width: `${Math.min(100, Math.max(0, stats.percent))}%` }}
+                      />
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-neutral-500">
+                      <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700">
+                        {runningCount} 进行中
+                      </span>
+                      <span className="rounded-full border border-green-200 bg-green-50 px-2 py-1 text-green-700">
+                        {doneCount} 已完成
+                      </span>
+                      {issueCount > 0 && (
+                        <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-red-700">
+                          {issueCount} 异常
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-neutral-200 bg-white p-4">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">
+                      房间产物
+                    </div>
+                    <div className="mt-1 text-lg font-semibold text-neutral-950">{artifactCount}</div>
+                    <div className="mt-1 text-xs leading-5 text-neutral-500">
+                      线程产出的文件、网页预览和流程结果都从这里进入。
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {newestArtifacts.length > 0 ? (
+                        newestArtifacts.map(({ item, taskTitle }) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => requestArtifactPreview(item)}
+                            className="inline-flex max-w-full items-center gap-1 rounded-full border border-neutral-200 bg-neutral-50 px-2 py-1 text-[11px] text-neutral-700 transition hover:border-blue-200 hover:text-blue-700"
+                            title={`${taskTitle} · ${item.title}`}
+                          >
+                            <FileText className="h-3 w-3 shrink-0" />
+                            <span className="max-w-[10rem] truncate">{item.title}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <span className="text-[11px] text-neutral-400">还没有产物</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {sections.map((section) => (
+                  <div key={section.id} className="rounded-2xl border border-neutral-200 bg-white">
+                    <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-3">
+                      <div className="text-sm font-medium text-neutral-900">{section.title}</div>
+                      <div className="text-[11px] text-neutral-400">{section.tasks.length}</div>
+                    </div>
+                    <div className="divide-y divide-neutral-100">
+                      {section.tasks.map((task) => {
+                        const tab = agentTabs.find((item) => item.taskId === task.id)
+                        const childSessionId = tab?.childSessionId || task.childSessionId || null
+                        const canOpenChild = Boolean(childSessionId)
+                        const artifactTotal = task.artifactCount ?? task.artifacts?.length ?? 0
+                        const summary =
+                          task.progressStatus || task.outputSummary || task.description || task.agentName
+                        return (
+                          <div key={task.id} className="px-4 py-3">
+                            <div className="flex items-start gap-3">
+                              <div className="mt-0.5 shrink-0">{taskStatusIcon(task.status)}</div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="truncate text-sm font-medium text-neutral-900">
+                                    {task.title}
+                                  </span>
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[11px] ${taskStatusClass(task.status)}`}
+                                  >
+                                    {taskStatusLabel[task.status] ?? task.status}
+                                  </span>
+                                </div>
+                                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                                  <span>{task.agentName || 'Worker'}</span>
+                                  {task.taskThreadStatus && (
+                                    <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] text-neutral-500">
+                                      {task.taskThreadStatus}
+                                    </span>
+                                  )}
+                                  {artifactTotal > 0 && (
+                                    <span className="inline-flex items-center gap-1 text-neutral-600">
+                                      <FileText className="h-3.5 w-3.5" />
+                                      {artifactTotal} 个产物
+                                    </span>
+                                  )}
+                                </div>
+                                <TaskRuntimeStrip executionConfig={task.executionConfig} />
+                                {summary && (
+                                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-600">
+                                    {summary}
+                                  </p>
+                                )}
+                                {pendingChildNoticeTaskId === task.id && !canOpenChild && (
+                                  <p className="mt-1 text-xs text-blue-600">
+                                    线程正在准备，正式分配后会自动变为可打开。
+                                  </p>
+                                )}
+                                {task.artifacts && task.artifacts.length > 0 && (
+                                  <div className="mt-2 flex flex-wrap gap-1.5">
+                                    {task.artifacts.slice(0, 3).map((artifact, index) => {
+                                      const item = taskArtifactPreviewItem(artifact, task.id, index)
+                                      return (
+                                        <button
+                                          key={item.id}
+                                          type="button"
+                                          onClick={() => requestArtifactPreview(item)}
+                                          className="inline-flex max-w-full items-center gap-1 rounded-full border border-neutral-200 bg-white px-2 py-1 text-[11px] text-neutral-600 transition hover:border-blue-200 hover:text-blue-700"
+                                        >
+                                          <FileText className="h-3 w-3 shrink-0" />
+                                          <span className="max-w-32 truncate">{item.title}</span>
+                                        </button>
+                                      )
+                                    })}
+                                    {task.artifacts.length > 3 && (
+                                      <span className="inline-flex items-center rounded-full border border-neutral-200 bg-neutral-50 px-2 py-1 text-[11px] text-neutral-500">
+                                        +{task.artifacts.length - 3}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void openChildSession(task.id, childSessionId)}
+                                className={cn(
+                                  'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition',
+                                  canOpenChild
+                                    ? 'border-neutral-200 bg-white text-neutral-700 hover:border-blue-200 hover:text-blue-700'
+                                    : 'border-neutral-100 bg-neutral-50 text-neutral-400 hover:border-blue-100 hover:text-blue-600',
+                                )}
+                                title={canOpenChild ? '打开成员线程' : '线程准备中'}
+                              >
+                                {canOpenChild ? (
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                ) : (
+                                  <Clock3 className="h-3.5 w-3.5" />
+                                )}
+                                {canOpenChild ? '线程' : '准备中'}
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
-          <div className="shrink-0 text-right text-xs text-neutral-500">
-            <div>
-              {doneCount}/{tasks.length} 完成
-            </div>
-            <div>{agentTabs.length || tasks.length} 个成员任务</div>
-          </div>
         </div>
-
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-neutral-100">
-          <div
-            className="h-full rounded-full bg-blue-600 transition-all duration-500"
-            style={{ width: `${Math.max(4, progress)}%` }}
-          />
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2 text-xs">
-          <span className="rounded-full border border-neutral-200 px-2 py-1 text-neutral-600">
-            {runningTasks.length} 执行中
-          </span>
-          <span className="rounded-full border border-green-200 bg-green-50 px-2 py-1 text-green-700">
-            {doneCount} 已完成
-          </span>
-          {failedCount > 0 && (
-            <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-red-700">
-              {failedCount} 异常
-            </span>
-          )}
-          <span className="rounded-full border border-neutral-200 px-2 py-1 text-neutral-600">
-            {artifactCount} 个产物
-          </span>
-        </div>
-      </div>
-
-      <div className="divide-y divide-neutral-100">
-        {visibleTasks.map((task) => {
-          const tab = agentTabs.find((item) => item.taskId === task.id)
-          const childSessionId = tab?.childSessionId || task.childSessionId || null
-          const canOpenChild = Boolean(childSessionId)
-          const showChildNotice = pendingChildNoticeTaskId === task.id && !canOpenChild
-          const artifacts = task.artifactCount ?? task.artifacts?.length ?? 0
-          const openChildSession = async () => {
-            if (!childSessionId) {
-              setPendingChildNoticeTaskId(task.id)
-              window.setTimeout(() => {
-                setPendingChildNoticeTaskId((current) => (current === task.id ? null : current))
-              }, 1800)
-              return
-            }
-            selectAgentTab(task.id)
-            await selectSession(childSessionId)
-            navigate(`/chat/${childSessionId}`)
-          }
-          return (
-            <div key={task.id} className="flex items-start gap-3 p-3">
-              <div className="mt-0.5">{taskStatusIcon(task.status)}</div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-medium text-neutral-800">
-                    {task.title}
-                  </span>
-                  <span
-                    className={`rounded-full border px-2 py-0.5 text-[11px] ${taskStatusClass(task.status)}`}
-                  >
-                    {taskStatusLabel[task.status] ?? task.status}
-                  </span>
-                </div>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                  <span>{task.agentName || 'Agent'}</span>
-                  {task.progressStatus && <span className="truncate">{task.progressStatus}</span>}
-                  {artifacts > 0 && (
-                    <span className="inline-flex items-center gap-1 text-neutral-600">
-                      <FileText className="h-3.5 w-3.5" />
-                      {artifacts} 个产物
-                    </span>
-                  )}
-                </div>
-                <TaskRuntimeStrip executionConfig={task.executionConfig} />
-                {task.outputSummary && (
-                  <p className="mt-1 line-clamp-2 text-xs text-neutral-600">{task.outputSummary}</p>
-                )}
-                {showChildNotice && (
-                  <p className="mt-1 text-xs text-blue-600">
-                    子对话正在准备，正式分配后会自动变为可打开。
-                  </p>
-                )}
-                {task.artifacts && task.artifacts.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {task.artifacts.slice(0, 3).map((artifact, index) => {
-                      const title =
-                        artifact.title ||
-                        artifact.filePath ||
-                        artifact.url ||
-                        `产物 ${index + 1}`
-                      const kind =
-                        artifact.type === 'diff'
-                          ? 'diff'
-                          : artifact.type === 'preview'
-                            ? 'web'
-                            : artifact.type === 'deploy'
-                              ? 'deploy'
-                              : artifact.type === 'workflow'
-                                ? 'workflow'
-                                : artifact.url
-                                  ? 'web'
-                                  : /\.(png|jpg|jpeg|webp|gif)$/i.test(artifact.filePath ?? '')
-                                    ? 'image'
-                                    : 'file'
-                      return (
-                        <button
-                          key={artifact.artifactId ?? artifact.id ?? artifact.filePath ?? `${task.id}-${index}`}
-                          type="button"
-                          onClick={() =>
-                            requestArtifactPreview({
-                              id:
-                                artifact.artifactId ??
-                                artifact.id ??
-                                artifact.filePath ??
-                                artifact.url ??
-                                `${task.id}-${index}`,
-                              title,
-                              kind,
-                              url: artifact.url ?? undefined,
-                              path: artifact.filePath ?? undefined,
-                              source: artifact.source ?? undefined,
-                            })
-                          }
-                          className="inline-flex items-center gap-1 rounded-full border border-neutral-200 bg-white px-2 py-1 text-[11px] text-neutral-600 transition hover:border-blue-200 hover:text-blue-700"
-                        >
-                          <FileText className="h-3 w-3" />
-                          <span className="max-w-32 truncate">{title}</span>
-                        </button>
-                      )
-                    })}
-                    {task.artifacts.length > 3 && (
-                      <span className="inline-flex items-center rounded-full border border-neutral-200 bg-neutral-50 px-2 py-1 text-[11px] text-neutral-500">
-                        +{task.artifacts.length - 3}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => void openChildSession()}
-                className={cn(
-                  'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition',
-                  canOpenChild
-                    ? 'border-neutral-200 bg-white text-neutral-700 hover:border-blue-200 hover:text-blue-700'
-                    : 'border-neutral-100 bg-neutral-50 text-neutral-400 hover:border-blue-100 hover:text-blue-600',
-                )}
-                title={canOpenChild ? '打开任务子对话' : '子对话准备中'}
-              >
-                {canOpenChild ? (
-                  <ExternalLink className="h-3.5 w-3.5" />
-                ) : (
-                  <Clock3 className="h-3.5 w-3.5" />
-                )}
-                {canOpenChild ? '子对话' : '准备中'}
-              </button>
-            </div>
-          )
-        })}
-      </div>
+      </aside>
     </div>
   )
 }
@@ -1809,7 +1862,8 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
   const deleteSession = useChatStore((state) => state.deleteSession)
   const fetchSessions = useChatStore((state) => state.fetchSessions)
   const memberCount = agents.length + 1
-  const groupTitle = session?.title || workspace?.name || 'Agent 群聊'
+  const groupTitle = session?.title || workspace?.name || 'Project 群聊'
+  const currentUser = getCachedAccountProfile()
   const [titleDraft, setTitleDraft] = useState(groupTitle)
   const [libraryAgents, setLibraryAgents] = useState<SavedAgentConfig[]>([])
   const [inviteOpen, setInviteOpen] = useState(false)
@@ -1835,9 +1889,11 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
     (candidate) =>
       !agents.some((agent) => agent.name.toLowerCase() === candidate.name.toLowerCase()),
   )
+  const managerAgent = agents.find((agent) => agent.roleType === 'orchestrator') ?? null
+  const workerAgents = managerAgent ? agents.filter((agent) => agent.id !== managerAgent.id) : agents
 
   async function saveGroupTitle() {
-    const next = titleDraft.trim() || 'Agent 群聊'
+    const next = titleDraft.trim() || 'Project 群聊'
     if (!session || next === groupTitle || busyAction) return
     setBusyAction('rename')
     try {
@@ -1922,9 +1978,9 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
         <div className="flex h-full flex-col overflow-hidden">
           <div className="flex shrink-0 items-center justify-between gap-3 bg-[#f5f5f1] px-4 py-4">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-neutral-950">群聊设置</div>
+              <div className="text-sm font-semibold text-neutral-950">房间资料</div>
               <div className="mt-1 truncate text-xs text-neutral-500">
-                {workspace?.name ?? 'Agent 群聊'} · {memberCount} 位成员
+                {workspace?.name ?? 'Project 群聊'} · {memberCount} 位成员
               </div>
             </div>
             <button
@@ -1980,18 +2036,26 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                 className="mt-4 h-9 max-w-[18rem] rounded-lg bg-transparent px-2 text-center text-base font-semibold text-neutral-950 outline-none transition focus:bg-white focus:ring-1 focus:ring-neutral-200 disabled:opacity-60"
               />
               <div className="mt-1 max-w-[18rem] truncate text-xs text-neutral-400">
-                {workspace?.projectPath || `${memberCount} 位成员 · AgentHub 群聊`}
+                {workspace?.projectPath || `${memberCount} 位成员 · Project 房间`}
+              </div>
+              <div className="mt-4 rounded-2xl border border-neutral-200 bg-white px-3 py-3 text-left">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">协作关系</div>
+                <div className="mt-2 text-sm text-neutral-700">
+                  你提出目标，<span className="font-medium text-neutral-950">Manager</span> 负责理解和分发，
+                  <span className="font-medium text-neutral-950">Workers</span> 在各自线程里执行并回报结果。
+                </div>
               </div>
             </div>
 
             <div className="relative mt-8 grid grid-cols-3 gap-3">
               <button
                 type="button"
-                onClick={() => setInviteOpen((value) => !value)}
-                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70"
+                onClick={() => workspace?.projectPath && void openPath(workspace.projectPath)}
+                disabled={!workspace?.projectPath}
+                className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70 disabled:opacity-50"
               >
-                <User className="h-5 w-5" />
-                <span className="text-xs">邀请朋友</span>
+                <FolderOpen className="h-5 w-5" />
+                <span className="text-xs">打开项目</span>
               </button>
               <button
                 type="button"
@@ -2000,7 +2064,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                 className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70 disabled:opacity-50"
               >
                 <Plus className="h-5 w-5" />
-                <span className="text-xs">添加Agent</span>
+                <span className="text-xs">补充成员</span>
               </button>
               <button
                 type="button"
@@ -2012,7 +2076,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                 className="flex h-[72px] flex-col items-center justify-center gap-2 rounded-2xl bg-[#F3F3F3] text-neutral-700 transition hover:bg-neutral-200/70"
               >
                 <Pencil className="h-5 w-5" />
-                <span className="text-xs">编辑群信息</span>
+                <span className="text-xs">编辑房间</span>
               </button>
               {inviteOpen && (
                 <div className="absolute left-0 right-0 top-[5rem] z-20 rounded-2xl border border-neutral-200 bg-white p-1.5 shadow-xl">
@@ -2058,27 +2122,58 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
             </div>
 
             <div className="mt-7">
-              <div className="mb-2 px-4 text-xs text-neutral-500">人类</div>
+              <div className="mb-2 px-4 text-xs text-neutral-500">你</div>
               <div className="rounded-2xl bg-[#F3F3F3] px-4 py-3">
                 <div className="flex items-center gap-3">
-                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-neutral-900 text-sm font-semibold text-white">
-                    Y
-                  </span>
+                  <UserAvatar profile={currentUser} className="h-10 w-10 ring-0 shadow-none" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-semibold text-neutral-950">You</span>
-                      <MemberRolePill label="群主" tone="owner" />
+                      <span className="truncate text-sm font-semibold text-neutral-950">
+                        {currentUser.name?.trim() || '你'}
+                      </span>
+                      <MemberRolePill label="房间发起人" tone="owner" />
                     </div>
-                    <div className="mt-0.5 text-xs text-neutral-400">发起人与决策者</div>
+                    <div className="mt-0.5 text-xs text-neutral-400">负责提出目标与确认协作方向</div>
                   </div>
                 </div>
               </div>
             </div>
 
+            {managerAgent && (
+              <div className="mt-5">
+                <div className="mb-2 px-4 text-xs text-neutral-500">Manager</div>
+                <button
+                  type="button"
+                  onClick={() => insertComposerMention(managerAgent.name)}
+                  className="flex w-full items-center gap-3 rounded-2xl bg-[#F3F3F3] px-4 py-3 text-left transition hover:bg-neutral-200/60"
+                >
+                  <span
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white"
+                    style={{ background: managerAgent.color ?? '#2563eb' }}
+                  >
+                    {managerAgent.name.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium text-neutral-950">
+                        {managerAgent.name}
+                      </span>
+                      <MemberRolePill color={managerAgent.color} label={managerAgent.role} />
+                    </span>
+                    <span className="mt-1 block truncate text-xs text-neutral-400">
+                      负责理解目标、安排成员、汇总阶段结果
+                    </span>
+                  </span>
+                </button>
+              </div>
+            )}
+
             <div className="mt-5">
-              <div className="mb-2 px-4 text-xs text-neutral-500">Agent</div>
+              <div className="mb-2 px-4 text-xs text-neutral-500">Workers</div>
               <div className="overflow-hidden rounded-2xl bg-[#F3F3F3]">
-                {monitorRows.map((row, index) => (
+                {monitorRows
+                  .filter((row) => workerAgents.some((agent) => agent.id === row.id))
+                  .map((row, index) => (
                   <button
                     key={row.id}
                     type="button"
@@ -2113,9 +2208,9 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
                     </span>
                   </button>
                 ))}
-                {!monitorRows.length && (
+                {!workerAgents.length && (
                   <div className="px-4 py-6 text-center text-xs text-neutral-400">
-                    还没有 Agent，点击上方添加。
+                    还没有 Worker，点击上方补充成员。
                   </div>
                 )}
               </div>
@@ -2127,7 +2222,7 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
               disabled={busyAction === 'delete'}
               className="mt-5 flex h-11 w-full items-center justify-center rounded-xl bg-[#F3F3F3] text-sm font-medium text-red-500 transition hover:bg-red-50 disabled:opacity-60"
             >
-              {busyAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : '解散群聊'}
+              {busyAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : '关闭房间'}
             </button>
           </div>
         </div>
@@ -2827,7 +2922,10 @@ const Composer: FC = () => {
     setAgentMentionRange(null)
     setComposerSubmitting(true)
     try {
-      await sendMessage(text, { safetyMode })
+      await sendMessage(text, {
+        safetyMode,
+        mentions: extractMentionedAgentIds(text, workspaceAgents),
+      })
     } catch (error) {
       showHint(friendlyErrorMessage(error, '发送失败'))
     } finally {
@@ -7000,21 +7098,43 @@ function fileStatusLabel(status: CodeAgentRunMetadata['files'][number]['status']
 function TaskBoardCard({ data }: { data: any }) {
   const liveTaskBoard = useChatStore((s) => s.taskBoard)
   const taskBoard = liveTaskBoard?.runId === data?.runId ? liveTaskBoard : data
+  const stats = taskProgressStats(taskBoard)
+  const runningCount = taskBoard?.tasks?.filter((task: any) => task.status === 'running').length ?? 0
+  const artifactCount =
+    taskBoard?.tasks?.reduce(
+      (total: number, task: any) => total + (task.artifactCount ?? task.artifacts?.length ?? 0),
+      0,
+    ) ?? 0
 
   return (
-    <div className="not-prose my-3 rounded-lg border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-900">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
-          <ListTodo className="h-4 w-4" />
+    <button
+      type="button"
+      onClick={() => window.dispatchEvent(new CustomEvent(roomTasksDrawerEvent))}
+      className="not-prose my-2 block w-full rounded-2xl border border-neutral-200 bg-white px-3 py-2.5 text-left text-sm text-neutral-800 transition hover:border-blue-200 hover:bg-blue-50/30"
+    >
+      <div className="flex items-center gap-3">
+        <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-blue-50 text-blue-600">
+          <ListTodo className="h-3.5 w-3.5" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="font-semibold">{taskBoard?.title || '团队执行计划已生成'}</div>
-          <p className="mt-0.5 text-xs leading-5 text-blue-700">
-            任务状态、成员对话和产物统一在右侧任务看板与左侧成员栏查看，这里不再重复展示旧任务卡片。
+          <div className="flex flex-wrap items-center gap-2 text-[13px]">
+            <div className="font-medium text-neutral-900">
+              {taskBoard?.title || '房间任务'}
+            </div>
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700">
+              {taskBoard ? runStatusLabel[taskBoard.status] ?? taskBoard.status : '查看任务'}
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs leading-5 text-neutral-500">
+            {stats.total > 0
+              ? `${stats.done}/${stats.total} 已完成，${runningCount} 执行中，${artifactCount} 个产物。`
+              : '任务状态、线程入口和产物都收进任务抽屉里。'}
           </p>
         </div>
+        <span className="shrink-0 text-[11px] text-neutral-400">展开</span>
+        <ChevronRight className="h-4 w-4 shrink-0 text-neutral-400" />
       </div>
-    </div>
+    </button>
   )
 }
 
@@ -7301,7 +7421,7 @@ const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...prop
 )
 
 function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
-  const aliases = mentionAliases(agents)
+  const aliases = mentionAliasEntries(agents).map((entry) => entry.alias)
   if (!aliases.length) return text
 
   const pattern = new RegExp(
@@ -7326,15 +7446,53 @@ function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
   return parts.length ? parts : text
 }
 
-function mentionAliases(agents: WorkspaceAgent[]) {
-  const aliases: string[] = []
+function mentionAliasEntries(agents: WorkspaceAgent[]) {
+  const entries: Array<{ alias: string; agentId: string }> = []
   for (const agent of agents) {
-    aliases.push(agent.name, agent.role)
+    entries.push(
+      { alias: agent.name, agentId: agent.id },
+      { alias: agent.role, agentId: agent.id },
+    )
     if (agent.roleType === 'orchestrator') {
-      aliases.push('orchestrator', 'coordinator', '总指挥', '协调器', '调度')
+      entries.push(
+        { alias: 'orchestrator', agentId: agent.id },
+        { alias: 'coordinator', agentId: agent.id },
+        { alias: '总指挥', agentId: agent.id },
+        { alias: '协调器', agentId: agent.id },
+        { alias: '调度', agentId: agent.id },
+      )
     }
   }
-  return Array.from(new Set(aliases.filter(Boolean))).sort((a, b) => b.length - a.length)
+  const deduped = new Map<string, string>()
+  for (const entry of entries) {
+    const alias = entry.alias.trim()
+    if (!alias) continue
+    const key = alias.toLowerCase()
+    if (!deduped.has(key)) deduped.set(key, entry.agentId)
+  }
+  return Array.from(deduped.entries())
+    .map(([alias, agentId]) => ({ alias, agentId }))
+    .sort((a, b) => b.alias.length - a.alias.length)
+}
+
+function extractMentionedAgentIds(text: string, agents: WorkspaceAgent[]) {
+  const entries = mentionAliasEntries(agents)
+  if (!entries.length) return []
+  const pattern = new RegExp(
+    `@(${entries.map((entry) => escapeRegExp(entry.alias)).join('|')})(?=$|\\s|[，,。.!！?？:：；;）)\\]】])`,
+    'gi',
+  )
+  const aliasToAgentId = new Map(entries.map((entry) => [entry.alias.toLowerCase(), entry.agentId]))
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const match of text.matchAll(pattern)) {
+    const rawAlias = (match[1] ?? '').trim().toLowerCase()
+    const agentId = aliasToAgentId.get(rawAlias)
+    if (!agentId || seen.has(agentId)) continue
+    seen.add(agentId)
+    ids.push(agentId)
+  }
+  return ids
 }
 
 function escapeRegExp(value: string) {

@@ -133,8 +133,11 @@ export async function runAgentReply(
   userMsg: MessageRow,
   profile?: AgentProfile,
   envelope?: AgentExecutionEnvelope,
+  externalSignal?: AbortSignal,
 ): Promise<AgentRunResult> {
-  return withRunLock(sessionId, () => _runAgentReply(sessionId, userMsg, profile, envelope))
+  return withRunLock(sessionId, () =>
+    _runAgentReply(sessionId, userMsg, profile, envelope, externalSignal),
+  )
 }
 
 async function _runAgentReply(
@@ -142,10 +145,20 @@ async function _runAgentReply(
   userMsg: MessageRow,
   profile?: AgentProfile,
   envelope?: AgentExecutionEnvelope,
+  externalSignal?: AbortSignal,
 ): Promise<AgentRunResult> {
   cancelAgentReply(sessionId)
   const run = { cancelled: false, controller: new AbortController() }
   activeRuns.set(sessionId, run)
+  const abortFromExternal = () => {
+    run.cancelled = true
+    run.controller.abort(externalSignal?.reason ?? new Error('外部任务控制已停止当前 Agent 运行'))
+  }
+  if (externalSignal?.aborted) {
+    abortFromExternal()
+  } else {
+    externalSignal?.addEventListener('abort', abortFromExternal, { once: true })
+  }
 
   const agentId = profile?.id ?? 'claude'
   const agentName = profile?.name ?? 'Claude'
@@ -315,6 +328,7 @@ async function _runAgentReply(
     }
   }
 
+  externalSignal?.removeEventListener('abort', abortFromExternal)
   if (activeRuns.get(sessionId) === run) activeRuns.delete(sessionId)
   if (looksLikeAgentFailure(fullContent)) failed = true
 

@@ -48,7 +48,11 @@ import {
 } from '../../lib/sessionArchive'
 import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { settingsUpdatedEvent } from '../../lib/shortcuts'
-import { buildSessionTree, filterSessionTree } from '../../lib/sessionTree'
+import {
+  buildSessionTree,
+  filterSessionTree,
+  isStableOrchestratorTaskSession,
+} from '../../lib/sessionTree'
 import {
   getCachedAccountProfile,
   loadAccountProfileFromSettings,
@@ -155,6 +159,10 @@ export default function SessionList({
     () => new Set(libraryAgents.map((agent) => agent.id)),
     [libraryAgents],
   )
+  const savedAgentById = useMemo(
+    () => new Map(libraryAgents.map((agent) => [agent.id, agent] as const)),
+    [libraryAgents],
+  )
   const agentDirectSessionsBySavedId = useMemo(() => {
     const byAgentId = new Map<string, Session>()
     for (const session of sessions) {
@@ -191,6 +199,24 @@ export default function SessionList({
         })
         .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
     [libraryAgents, query, savedAgentIds, sessions],
+  )
+  const managerPrivateSessions = useMemo(
+    () =>
+      privateAgentSessions.filter((session) => {
+        const savedAgentId = readSavedAgentId(session)
+        const savedAgent = savedAgentId ? savedAgentById.get(savedAgentId) : null
+        return isManagerSavedAgent(savedAgent)
+      }),
+    [privateAgentSessions, savedAgentById],
+  )
+  const workerPrivateSessions = useMemo(
+    () =>
+      privateAgentSessions.filter((session) => {
+        const savedAgentId = readSavedAgentId(session)
+        const savedAgent = savedAgentId ? savedAgentById.get(savedAgentId) : null
+        return !isManagerSavedAgent(savedAgent)
+      }),
+    [privateAgentSessions, savedAgentById],
   )
 
   useEffect(() => {
@@ -289,7 +315,7 @@ export default function SessionList({
     if (
       !activeSession?.workspaceId ||
       activeSession.type !== 'direct' ||
-      !activeSession.workspaceAgentId
+      (!activeSession.workspaceAgentId && !isStableOrchestratorTaskSession(activeSession))
     )
       return
     setExpandedWorkspaces((current) => {
@@ -557,8 +583,8 @@ export default function SessionList({
               type="button"
               onClick={() => setQuickCreateOpen((open) => !open)}
               className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-neutral-600 transition hover:bg-[#F7F7F7] hover:text-neutral-950"
-              aria-label="新建"
-              title="新建"
+              aria-label="创建协作空间"
+              title="创建协作空间"
             >
               <Plus className="h-4 w-4" />
             </button>
@@ -571,7 +597,7 @@ export default function SessionList({
                   className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-[#F7F7F7]"
                 >
                   <MessageCircle className="h-4 w-4 text-neutral-600" />
-                  新建群聊
+                  创建房间
                 </button>
                 <button
                   type="button"
@@ -579,7 +605,7 @@ export default function SessionList({
                   className="relative flex h-9 w-full items-center gap-2 px-3 text-left text-neutral-800 hover:bg-[#F7F7F7]"
                 >
                   <UserPlus className="h-4 w-4 text-neutral-600" />
-                  添加 Agent
+                  添加专家
                 </button>
               </div>
             )}
@@ -685,7 +711,7 @@ export default function SessionList({
           {!showArchived && (
             <div className="mb-3">
               <div className="mb-1 flex items-center justify-between px-2 text-xs text-neutral-400">
-                <span>Agent 私聊</span>
+                <span>Manager 私聊</span>
                 <button
                   type="button"
                   onClick={() => setTabOverride('agents')}
@@ -694,13 +720,66 @@ export default function SessionList({
                   全部
                 </button>
               </div>
-              {privateAgentSessions.length > 0 ? (
+              {managerPrivateSessions.length > 0 ? (
                 <div className="space-y-0.5 px-2">
-                  {privateAgentSessions.map((session) => {
+                  {managerPrivateSessions.map((session) => {
                     const savedAgentId = readSavedAgentId(session)
-                    const savedAgent = savedAgentId
-                      ? libraryAgents.find((agent) => agent.id === savedAgentId)
-                      : null
+                    const savedAgent = savedAgentId ? savedAgentById.get(savedAgentId) : null
+                    const active = session.id === sessionId
+                    return (
+                      <button
+                        key={session.id}
+                        type="button"
+                        onClick={() => void openExistingSession(session)}
+                        className={cn(
+                          'flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left transition disabled:opacity-60',
+                          active
+                            ? 'bg-[#F7F7F7] text-neutral-950 shadow-sm'
+                            : 'text-neutral-700 hover:bg-[#F7F7F7]',
+                        )}
+                        title={sessionDisplayTitle(savedAgent?.name ?? session.title, t)}
+                      >
+                        <span
+                          className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold text-white"
+                          style={{ background: savedAgent?.color ?? '#111827' }}
+                        >
+                          {(savedAgent?.name ?? session.title).slice(0, 1).toUpperCase()}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium">
+                            {savedAgent?.name ?? sessionDisplayTitle(session.title, t)}
+                          </span>
+                          <span className="block truncate text-[10px] text-neutral-400">
+                            {session.lastMessage?.content
+                              ? session.lastMessage.content
+                              : relativeTime(session.updatedAt, language)}
+                          </span>
+                        </span>
+                        <MessageCircle
+                          className={cn(
+                            'h-3.5 w-3.5 shrink-0',
+                            active ? 'text-neutral-700' : 'text-neutral-300',
+                          )}
+                        />
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="mx-2 rounded-xl border border-dashed border-neutral-200 bg-white px-3 py-3 text-xs text-neutral-400">
+                  还没有 Manager 私聊，先创建或选择一个指挥型专家。
+                </div>
+              )}
+            </div>
+          )}
+          {!showArchived && (
+            <div className="mb-3">
+              <div className="mb-1 px-2 text-xs text-neutral-400">Worker 私聊</div>
+              {workerPrivateSessions.length > 0 ? (
+                <div className="space-y-0.5 px-2">
+                  {workerPrivateSessions.map((session) => {
+                    const savedAgentId = readSavedAgentId(session)
+                    const savedAgent = savedAgentId ? savedAgentById.get(savedAgentId) : null
                     const active = session.id === sessionId
                     return (
                       <button
@@ -748,12 +827,12 @@ export default function SessionList({
                   className="mx-2 flex h-10 w-[calc(100%-1rem)] items-center justify-center gap-2 rounded-xl border border-dashed border-neutral-200 bg-white text-xs text-neutral-500 transition hover:bg-[#F7F7F7] hover:text-neutral-900"
                 >
                   <UserPlus className="h-3.5 w-3.5" />
-                  去添加 Agent
+                  去添加 Worker
                 </button>
               )}
             </div>
           )}
-          <div className="mb-1 px-2 text-xs text-neutral-400">{t('群聊')}</div>
+          <div className="mb-1 px-2 text-xs text-neutral-400">Project 群聊</div>
           {sessionTree.length === 0 ? (
             <div className="px-2 py-4 text-xs text-neutral-400">
               {query.trim()
@@ -1215,11 +1294,11 @@ export default function SessionList({
               className="mb-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#F7F7F7] text-sm font-medium text-neutral-800 shadow-sm transition hover:bg-neutral-100"
             >
               <UserPlus className="h-4 w-4 text-neutral-500" />
-              添加 Agent
+              添加专家
             </button>
 
             <div className="mb-2 flex items-center justify-between px-1 text-xs text-neutral-500">
-              <span>{isAgentConfigRoute ? 'Agent 配置' : 'Agent 私聊'}</span>
+              <span>{isAgentConfigRoute ? '专家配置' : '专家私聊'}</span>
               <span>{filteredLibraryAgents.length}</span>
             </div>
 
@@ -1308,8 +1387,8 @@ export default function SessionList({
                             ? 'opacity-100'
                             : 'opacity-0 group-hover/agent:opacity-100',
                         )}
-                        title="Agent 配置"
-                        aria-label="Agent 配置"
+                        title="专家配置"
+                        aria-label="专家配置"
                       >
                         <Settings2 className="h-4 w-4" />
                       </button>
@@ -1319,7 +1398,7 @@ export default function SessionList({
               })}
               {!filteredLibraryAgents.length && (
                 <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-6 text-center text-xs text-neutral-400">
-                  {agentQuery.trim() ? '没有匹配的 Agent' : '还没有可用 Agent，请先新建一个。'}
+                  {agentQuery.trim() ? '没有匹配的专家' : '还没有可用专家，请先新建一个。'}
                 </div>
               )}
             </div>
@@ -1675,19 +1754,29 @@ function filterAgents(agents: SavedAgentConfig[], query: string) {
 }
 
 function isStableAgentChildSession(session: Session) {
-  if (session.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
-  const metadata = session.metadata ?? {}
-  return Boolean(
-    metadata.kind === 'orchestrator-task' ||
-      metadata.orchestratorTaskId ||
-      metadata.orchestratorRunId,
-  )
+  if (session.type !== 'direct' || !session.workspaceId) return false
+  return isStableOrchestratorTaskSession(session)
 }
 
 function isPrivateAgentSession(session: Session | null | undefined) {
   if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
   const metadata = session.metadata ?? {}
   return metadata.kind === 'agent-direct'
+}
+
+function isManagerSavedAgent(agent: SavedAgentConfig | null | undefined) {
+  if (!agent) return false
+  if (agent.roleType === 'orchestrator') return true
+  const name = agent.name.trim().toLowerCase()
+  const role = agent.role.trim().toLowerCase()
+  return (
+    name.includes('manager') ||
+    name.includes('orchestrator') ||
+    role.includes('manager') ||
+    role.includes('orchestrator') ||
+    role.includes('协调') ||
+    role.includes('总指挥')
+  )
 }
 
 function readSavedAgentId(session: Session) {
@@ -1714,9 +1803,9 @@ function sessionDisplayTitle(title: string | undefined, t: (text: string) => str
 }
 
 function groupSessionDisplayTitle(title: string | undefined) {
-  const normalized = title?.trim() || 'Agent 群聊'
+  const normalized = title?.trim() || 'Project 群聊'
   const withoutSuffix = normalized.replace(/\s*\/\s*Agent Group\s*$/i, '').trim()
-  return withoutSuffix || 'Agent 群聊'
+  return withoutSuffix || 'Project 群聊'
 }
 
 function groupMemberCount(session: Session, childCount: number, loadedCount?: number) {

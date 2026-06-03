@@ -31,6 +31,7 @@ import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
 import type { SandboxContainerSpec } from './execution/sandbox-provider'
+import { buildSharedTaskDirectoryProtocolBlock } from './protocols/a2a-internal'
 import {
   DEFAULT_ENV_ALLOWLIST,
   validateEnvelope,
@@ -292,6 +293,7 @@ export const __codeAgentAdapterTestHooks = {
   isOpenCodeNativeModelRef,
   formatModelTargetLabel,
   createNativeOpenCodeModelTarget,
+  buildCodeAgentPrompt,
   friendlyCodeAgentError: (output: string, displayName = 'Coding Tools') =>
     friendlyCodeAgentError(output, { displayName } as CodeAgentAdapter),
 }
@@ -426,7 +428,7 @@ export async function* streamCodeAgentReply(
     [profile.systemPrompt, profile.description, userMsg.content].filter(Boolean).join('\n\n'),
     { capabilityTags: profile.capabilityTags, limit: 3 },
   )
-  const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext)
+  const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext, envelope)
   const toolConfig = await resolveToolConfig(type)
   const requestedModelId = resolveCodeAgentModelId(profile.modelId, toolConfig)
   let modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
@@ -866,9 +868,14 @@ function buildCodeAgentPrompt(
   history: Array<{ senderType: string; content: string }>,
   workspacePath: string,
   skillContext = '',
+  envelope?: AgentExecutionEnvelope,
 ) {
   const sourcePath = profile.originalProjectPath?.trim() || null
   const executionPath = workspacePath.trim()
+  const sharedTaskProtocol = buildSharedTaskDirectoryProtocolBlock({
+    sharedTaskRelativeRoot: envelope?.a2a?.sharedTaskRelativeRoot,
+    sharedTaskSpecPath: envelope?.a2a?.sharedTaskSpecPath,
+  })
   const recent = history
     .slice(-12)
     .map((message) => ({
@@ -897,6 +904,7 @@ function buildCodeAgentPrompt(
       ? `原项目根路径（只读参考）：${sourcePath}。请从这里读取已有代码和文档，不要直接写入这里。`
       : '',
     `Agent 执行目录：${executionPath}。新的文件、临时产物和中间结果优先放在这里。`,
+    sharedTaskProtocol,
     skillContext,
     '',
     recent ? '最近群聊上下文：' : '',

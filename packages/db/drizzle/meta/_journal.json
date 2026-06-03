@@ -134,6 +134,34 @@
       "when": 1780300000000,
       "tag": "0018_agent_skill_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1780390000000,
+      "tag": "0019_task_threads_and_run_event_replay",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1780470000000,
+      "tag": "0020_artifact_store",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1780550000000,
+      "tag": "0021_worker_runtime_resources",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1780630000000,
+      "tag": "0022_runtime_leases_backfill",
+      "breakpoints": true
     }
   ]
 }

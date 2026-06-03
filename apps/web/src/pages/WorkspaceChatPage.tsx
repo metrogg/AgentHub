@@ -4,7 +4,11 @@ import { X, ExternalLink } from 'lucide-react'
 import { Thread } from '@/components/assistant-ui/Thread'
 import { TaskBoard } from '@/components/TaskBoard'
 import { AgentTabs } from '@/components/AgentTabs'
-import { useChatStore } from '@/stores/chatStore'
+import {
+  buildControlPanelProjection,
+  buildTaskBoardPanelProjection,
+  useChatStore,
+} from '@/stores/chatStore'
 import { AgentHubRuntimeProvider } from '@/lib/runtime'
 
 export function WorkspaceChatPage() {
@@ -16,8 +20,16 @@ export function WorkspaceChatPage() {
   const agentTabs = useChatStore((s) => s.agentTabs)
   const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
   const selectAgentTab = useChatStore((s) => s.selectAgentTab)
+  const agentTyping = useChatStore((s) => s.agentTyping)
+  const agentActivity = useChatStore((s) => s.agentActivity)
 
-  const activeAgentCount = agentTabs.filter((t) => t.status === 'running').length
+  const controlPanel = buildControlPanelProjection({
+    taskBoard,
+    agentTabs,
+    agentTyping,
+    agentActivity,
+  })
+  const taskBoardPanel = buildTaskBoardPanelProjection(taskBoard)
 
   const handleCancel = () => {
     if (!taskBoard?.runId) return
@@ -42,13 +54,14 @@ export function WorkspaceChatPage() {
 
   return (
     <div className="flex h-full">
-      {taskBoard && agentTabs.length > 0 && (
+      {controlPanel && controlPanel.tabs.length > 0 && (
         <AgentTabs
-          tabs={agentTabs}
+          tabs={controlPanel.tabs}
           selectedTab={selectedAgentTab}
           onSelect={selectAgentTab}
-          activeAgentCount={activeAgentCount}
-          runStatus={taskBoard.status}
+          activeAgentCount={controlPanel.activeAgentCount}
+          runStatus={controlPanel.runStatus}
+          currentActivity={controlPanel.currentActivity}
         />
       )}
 
@@ -60,10 +73,10 @@ export function WorkspaceChatPage() {
         </AgentHubRuntimeProvider>
       </div>
 
-      {taskBoard && (
+      {taskBoardPanel && (
         <div className="w-96 flex-shrink-0 overflow-hidden">
           <TaskBoard
-            data={taskBoard}
+            data={taskBoardPanel}
             onCancel={handleCancel}
             onRetryFailed={handleRetryFailed}
           />

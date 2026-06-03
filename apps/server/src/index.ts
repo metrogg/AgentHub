@@ -5,10 +5,12 @@ import { env } from './env'
 import { logger } from './lib/logger'
 import { setRuntimeServerPort } from './lib/runtime-server'
 import { joinRoom, cleanupWebSocket, cancelAllAgentReplies } from './services/agent-runner'
-import { db, users, eq, and, sql, orchestratorRuns, workspaceTasks } from '@agenthub/db'
+import { db, users, eq, orchestratorRuns } from '@agenthub/db'
 import { DEFAULT_USER } from './middleware/auth'
-import { OrchestratorRunStatus, TaskStatus, WsEvent } from '@agenthub/shared'
+import { WsEvent } from '@agenthub/shared'
 import { OrchestratorEngine } from './services/orchestrator/orchestrator-engine'
+import { markInterruptedRuntimeLeasesStale } from './services/orchestrator/worker-runtime-resources'
+import { runController } from './services/orchestrator/run-controller'
 
 // Seed the local default user (single-user mode, no auth)
 async function seedDefaultUser() {
@@ -127,25 +129,47 @@ async function shutdown(reason: string) {
 
   await Promise.allSettled(
     activeRunIds.map(async (runId) => {
-      await db
-        .update(orchestratorRuns)
-        .set({ status: OrchestratorRunStatus.Cancelled, updatedAt: new Date() })
-        .where(eq(orchestratorRuns.id, runId))
-      await db
-        .update(workspaceTasks)
-        .set({
-          status: TaskStatus.Cancelled,
-          completedAt: new Date(),
-          errorLog: `Server shutdown: ${reason}`,
+      const [run] = await db
+        .select({
+          id: orchestratorRuns.id,
+          workspaceId: orchestratorRuns.workspaceId,
+          groupSessionId: orchestratorRuns.groupSessionId,
         })
-        .where(
-          and(
-            eq(workspaceTasks.runId, runId),
-            sql`${workspaceTasks.status} in ('pending', 'running')`,
-          ),
-        )
+        .from(orchestratorRuns)
+        .where(eq(orchestratorRuns.id, runId))
+        .limit(1)
+      if (!run) return
+      await runController.cancel(
+        {
+          runId: run.id,
+          workspaceId: run.workspaceId,
+          groupSessionId: run.groupSessionId,
+        },
+        {
+          reason: 'server_shutdown',
+          summary: `Run cancelled because the server is shutting down (${reason}).`,
+          taskErrorLog: `Server shutdown: ${reason}`,
+          activeRunCancelled: true,
+          payload: {
+            shutdownReason: reason,
+          },
+        },
+      )
     }),
   )
+
+  const staleLeases = await markInterruptedRuntimeLeasesStale({
+    reason: `Server shutdown: ${reason}`,
+  })
+  if (staleLeases.staleLeaseCount > 0) {
+    logger.warn(
+      {
+        staleLeaseCount: staleLeases.staleLeaseCount,
+        affectedWorkerInstanceIds: staleLeases.affectedWorkerInstanceIds,
+      },
+      'Marked active runtime leases as stale before process exit',
+    )
+  }
 
   // Let AbortSignal handlers taskkill spawned Code Agent process trees.
   await new Promise((resolve) => setTimeout(resolve, 500))
@@ -164,6 +188,28 @@ if (process.stdin) {
 const runningRuns = await db.query.orchestratorRuns.findMany({
   where: eq(orchestratorRuns.status, 'running'),
 })
+const staleLeases = await markInterruptedRuntimeLeasesStale({
+  reason: 'Server startup recovery: previous process ended before runtime lease cleanup.',
+})
+if (staleLeases.staleLeaseCount > 0) {
+  logger.warn(
+    {
+      staleLeaseCount: staleLeases.staleLeaseCount,
+      affectedWorkerInstanceIds: staleLeases.affectedWorkerInstanceIds,
+    },
+    '[Recovery] Marked interrupted runtime leases as stale',
+  )
+}
+
+// Also recover any busy worker instances whose leases are now stale
+const { workerController } = await import('./services/orchestrator/worker-controller')
+const { recoveredLeaseCount, affectedWorkerIds } = await workerController.recoverStaleOnStartup()
+if (recoveredLeaseCount > 0) {
+  logger.warn(
+    { recoveredLeaseCount, affectedWorkerIds },
+    '[Recovery] WorkerController recovered stale worker instances on startup',
+  )
+}
 for (const run of runningRuns) {
   OrchestratorEngine.resumeRun(run.id).catch((err) => {
     logger.error({ err, runId: run.id }, '[Recovery] Failed to resume run')
@@ -172,3 +218,24 @@ for (const run of runningRuns) {
 if (runningRuns.length > 0) {
   logger.info({ count: runningRuns.length }, '[Recovery] Resuming unfinished orchestrator runs')
 }
+
+// HiClaw-style Manager patrol: periodically check active runs, worker health,
+// and task timeouts. The patrol makes the Manager's supervision visible rather
+// than waiting passively for the next user message.
+const PATROL_INTERVAL_MS = 2 * 60 * 1000 // 2 minutes (HiClaw default: configurable)
+const patrolTimer = setInterval(() => {
+  import('./services/orchestrator/manager-patrol').then(({ patrolAndLog }) => {
+    patrolAndLog().catch(() => {})
+  })
+}, PATROL_INTERVAL_MS)
+if (process.env.AGENTHUB_ENABLE_MANAGER_PATROL !== '0') {
+  logger.info({ intervalMs: PATROL_INTERVAL_MS }, '[Patrol] Manager patrol timer started')
+  // Run an initial patrol after a short delay to catch any issues from startup
+  setTimeout(() => {
+    import('./services/orchestrator/manager-patrol').then(({ patrolAndLog }) => {
+      patrolAndLog().catch(() => {})
+    })
+  }, 30_000)
+}
+// Clean up on shutdown
+process.once('beforeExit', () => clearInterval(patrolTimer))

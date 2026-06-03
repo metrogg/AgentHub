@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { writeFile, unlink } from 'node:fs/promises'
 import { basename, extname, resolve, relative, isAbsolute, join, normalize, sep } from 'node:path'
+import { Buffer } from 'node:buffer'
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
@@ -51,6 +52,35 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
         'Content-Type': 'text/html; charset=utf-8',
         'X-Frame-Options': 'SAMEORIGIN',
       },
+    })
+  })
+  .get('/preview-dir/*', async (c) => {
+    const urlPath = c.req.path
+    const prefix = '/api/artifacts/preview-dir/'
+    const rest = urlPath.startsWith(prefix) ? urlPath.slice(prefix.length) : ''
+    if (!rest) {
+      throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少预览参数')
+    }
+    const slashIdx = rest.indexOf('/')
+    const rootEncoded = slashIdx >= 0 ? rest.slice(0, slashIdx) : rest
+    const entry = slashIdx >= 0 ? rest.slice(slashIdx + 1) : null
+    if (!entry) {
+      throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少文件路径')
+    }
+
+    const root = Buffer.from(rootEncoded, 'base64url').toString('utf8')
+    const resolvedRoot = resolve(root)
+    const filePath = resolve(join(resolvedRoot, decodeURIComponent(entry)))
+    // Security: ensure the resolved path stays under the preview root
+    if (!filePath.startsWith(resolvedRoot)) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在预览目录内')
+    }
+    if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+      throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, '文件不存在')
+    }
+
+    return new Response(Bun.file(filePath), {
+      headers: { 'Content-Type': contentType(filePath) },
     })
   })
   .get('/file', async (c) => {

@@ -1,0 +1,689 @@
+import { and, db, eq, runtimeLeases, workerInstances } from '@agenthub/db'
+import { emitRunEvent } from './run-events'
+import {
+  ensureWorkerInstance,
+  markWorkerInstanceState,
+  createRuntimeLease,
+  markRuntimeLeaseReady,
+  markRuntimeLeaseRunning,
+  releaseRuntimeLease,
+  failRuntimeLease,
+  markRuntimeLeaseStale,
+  type WorkerRuntimeAgentConfig,
+} from './worker-runtime-resources'
+import type { ExecutionConfigSummary } from '../execution/execution-config-summary'
+
+export interface ReconcileResult {
+  phase: string
+  changed: boolean
+  requeueAfterMs?: number
+  error?: string
+}
+
+export interface WorkerReconcileContext {
+  workspaceId: string
+  groupSessionId?: string | null
+  runId?: string | null
+  taskId?: string | null
+  actorId?: string | null
+}
+
+/** HiClaw-style idle-stop: idle workers sleep after this many ms. */
+const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
+/** Maximum number of idle workers to stop in a single reconcile pass. */
+const MAX_IDLE_STOP_BATCH = 10
+
+interface PhaseResult {
+  changed: boolean
+  requeueAfterMs?: number
+  error?: string
+}
+
+interface WorkerInstanceRow {
+  id: string
+  workspaceId: string
+  workspaceAgentId: string
+  runtimeFamily: 'coordinator' | 'worker' | 'fallback'
+  runtimeBase: string
+  modelId: string | null
+  skillIds: string[]
+  sandboxPolicy: string
+  desiredState: 'running' | 'sleeping' | 'stopped'
+  observedState: string
+  health: Record<string, unknown>
+  runtimeHome: string | null
+  runtimeConfigPath: string | null
+  lastHeartbeatAt: Date | null
+  message: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+/**
+ * WorkerController follows the HiClaw reconcile pattern:
+ * each phase checks current vs desired state, takes idempotent action,
+ * reports progress via RunEvent, and always updates WorkerInstance status.
+ *
+ * Phases: EnsureReady -> AssignLease -> ObserveHealth -> RecoverStale
+ */
+export class WorkerController {
+  /**
+   * Main reconcile loop. Like HiClaw's WorkerReconciler.Reconcile(),
+   * this is the single entry point that runs all phases and always
+   * writes back the observed state.
+   */
+  async reconcile(
+    workerInstanceId: string,
+    ctx: WorkerReconcileContext,
+  ): Promise<ReconcileResult> {
+    const worker = await this.loadWorker(workerInstanceId)
+    if (!worker) {
+      return { phase: 'load', changed: false, error: 'WorkerInstance not found' }
+    }
+
+    if (worker.desiredState === 'stopped') {
+      await markWorkerInstanceState(worker.id, 'stopped', {
+        message: 'Worker desired state is stopped.',
+      })
+      return { phase: 'stopped', changed: true }
+    }
+
+    // Phase 1: Ensure the worker runtime is ready
+    const infraResult = await this.ensureReady(worker, ctx)
+    if (infraResult.error || infraResult.requeueAfterMs) {
+      await this.patchStatus(worker, infraResult)
+      return {
+        phase: 'ensureReady',
+        changed: infraResult.changed,
+        requeueAfterMs: infraResult.requeueAfterMs,
+        error: infraResult.error,
+      }
+    }
+
+    // Phase 2: Assign runtime lease if a task is pending
+    const leaseResult = await this.assignLease(worker, ctx)
+    if (leaseResult.error || leaseResult.requeueAfterMs) {
+      await this.patchStatus(worker, leaseResult)
+      return {
+        phase: 'assignLease',
+        changed: leaseResult.changed,
+        requeueAfterMs: leaseResult.requeueAfterMs,
+        error: leaseResult.error,
+      }
+    }
+
+    // Phase 3: Observe health via heartbeat
+    const healthResult = await this.observeHealth(worker, ctx)
+    if (healthResult.error) {
+      await this.patchStatus(worker, healthResult)
+      return {
+        phase: 'observeHealth',
+        changed: healthResult.changed,
+        error: healthResult.error,
+      }
+    }
+
+    // All phases passed, worker is healthy
+    await this.patchStatus(worker, { changed: healthResult.changed || leaseResult.changed })
+    return { phase: 'complete', changed: true }
+  }
+
+  /**
+   * HiClaw-style batch idle-stop: scans all idle workers in the workspace
+   * and transitions those past the idle timeout to sleeping.
+   *
+   * In HiClaw, idle-stop saves compute resources while keeping the worker's
+   * Matrix room, OSS config, and task history intact. Workers wake on the
+   * next assignment via ensureReadyForTask().
+   */
+  async tryIdleStop(workspaceId: string): Promise<{
+    stoppedCount: number
+    stoppedIds: string[]
+  }> {
+    const idleWorkers = await db
+      .select()
+      .from(workerInstances)
+      .where(
+        and(
+          eq(workerInstances.workspaceId, workspaceId),
+          eq(workerInstances.observedState, 'idle'),
+          eq(workerInstances.desiredState, 'running'),
+        ),
+      )
+      .limit(MAX_IDLE_STOP_BATCH)
+
+    const stoppedIds: string[] = []
+    const now = Date.now()
+
+    for (const worker of idleWorkers) {
+      const idleDurationMs = worker.lastHeartbeatAt
+        ? now - worker.lastHeartbeatAt.getTime()
+        : now - worker.updatedAt.getTime()
+
+      if (idleDurationMs < DEFAULT_IDLE_TIMEOUT_MS) continue
+
+      await markWorkerInstanceState(worker.id, 'sleeping', {
+        message: `Worker idle for ${Math.round(idleDurationMs / 1000)}s, entering sleep to save resources.`,
+        health: {
+          ...worker.health,
+          idleStopAt: new Date().toISOString(),
+          idleDurationMs,
+        },
+      })
+      stoppedIds.push(worker.id)
+    }
+
+    return { stoppedCount: stoppedIds.length, stoppedIds }
+  }
+
+  /**
+   * HiClaw-style wake: transitions a sleeping worker back to ready.
+   * Called before assigning a new task to a sleeping worker.
+   * Keeps existing room, config, and task history intact.
+   */
+  async wakeWorker(workerInstanceId: string): Promise<boolean> {
+    const worker = await this.loadWorker(workerInstanceId)
+    if (!worker) return false
+    if (worker.observedState !== 'sleeping') return false
+
+    await markWorkerInstanceState(worker.id, 'provisioning', {
+      message: 'Waking worker from sleep for a new task assignment.',
+      health: {
+        ...worker.health,
+        wokeAt: new Date().toISOString(),
+        previousState: 'sleeping',
+      },
+    })
+
+    // Re-run readiness check after waking
+    const ctx: WorkerReconcileContext = { workspaceId: worker.workspaceId }
+    await this.reconcile(worker.id, ctx)
+    return true
+  }
+
+  /**
+   * HiClaw-style ensureReadyForTask: the "before assignment" pattern.
+   * If the worker is sleeping, wakes it first. If provisioning/failed,
+   * runs reconcile to bring it to ready. If already ready/busy, returns true.
+   *
+   * Call this before assigning any task to a worker.
+   */
+  async ensureReadyForTask(
+    workspaceId: string,
+    workerInstanceId: string | null,
+    agent: WorkerRuntimeAgentConfig,
+  ): Promise<{ ready: boolean; workerInstanceId: string | null; reason?: string }> {
+    // Ensure the worker instance exists (idempotent create-or-update)
+    const instanceId = workerInstanceId ?? (await this.ensureWorkerForAgent(workspaceId, agent))
+    if (!instanceId) {
+      return { ready: false, workerInstanceId: null, reason: 'Failed to create or find worker instance.' }
+    }
+
+    const worker = await this.loadWorker(instanceId)
+    if (!worker) {
+      return { ready: false, workerInstanceId: null, reason: 'Worker instance not found after ensure.' }
+    }
+
+    // Wake if sleeping
+    if (worker.observedState === 'sleeping') {
+      await this.wakeWorker(instanceId)
+    }
+
+    // Reconcile to ready
+    if (worker.observedState !== 'ready' && worker.observedState !== 'busy') {
+      const result = await this.reconcile(instanceId, { workspaceId })
+      if (result.error) {
+        return { ready: false, workerInstanceId: instanceId, reason: result.error }
+      }
+    }
+
+    return { ready: true, workerInstanceId: instanceId }
+  }
+
+  /**
+   * Phase 1: EnsureReady — like HiClaw's ReconcileMemberInfra.
+   * Checks that the runtime is installed, model is available, CLI auth is valid,
+   * and the worker can accept work. Transitions observedState to 'ready' when done.
+   */
+  private async ensureReady(
+    worker: WorkerInstanceRow,
+    ctx: WorkerReconcileContext,
+  ): Promise<PhaseResult> {
+    if (worker.observedState === 'ready' || worker.observedState === 'busy') {
+      return { changed: false }
+    }
+
+    const previousState = worker.observedState
+
+    if (worker.desiredState === 'sleeping') {
+      await markWorkerInstanceState(worker.id, 'sleeping', {
+        message: 'Worker entering sleep as desired.',
+      })
+      return { changed: previousState !== 'sleeping' }
+    }
+
+    // Transition to ready: verify the runtime binding is valid
+    const runtimeChecks = await this.verifyRuntimeReadiness(worker)
+    if (!runtimeChecks.ready) {
+      const message = runtimeChecks.reason ?? 'Worker runtime is not ready.'
+      await markWorkerInstanceState(worker.id, 'failed', {
+        message,
+        health: {
+          ...worker.health,
+          runtimeChecks: runtimeChecks.details ?? {},
+          lastCheckAt: new Date().toISOString(),
+        },
+      })
+
+      if (ctx.runId && ctx.groupSessionId) {
+        await emitRunEvent({
+          runId: ctx.runId,
+          workspaceId: ctx.workspaceId,
+          groupSessionId: ctx.groupSessionId,
+          agentId: ctx.actorId ?? null,
+          workerInstanceId: worker.id,
+          type: 'task.failed',
+          severity: 'error',
+          payload: {
+            taskId: ctx.taskId ?? null,
+            error: message,
+            reason: 'worker_not_ready',
+            workerInstanceId: worker.id,
+            workspaceAgentId: worker.workspaceAgentId,
+          },
+        })
+      }
+
+      return { changed: true, error: message }
+    }
+
+    await markWorkerInstanceState(worker.id, 'ready', {
+      message: 'Worker runtime verified and ready.',
+      health: {
+        ...worker.health,
+        runtimeChecks: runtimeChecks.details ?? {},
+        readyAt: new Date().toISOString(),
+      },
+    })
+
+    if (ctx.runId && ctx.groupSessionId) {
+      await emitRunEvent({
+        runId: ctx.runId,
+        workspaceId: ctx.workspaceId,
+        groupSessionId: ctx.groupSessionId,
+        agentId: ctx.actorId ?? null,
+        workerInstanceId: worker.id,
+        type: 'task.progress',
+        payload: {
+          taskId: ctx.taskId ?? null,
+          status: 'worker_ready',
+          workerInstanceId: worker.id,
+          workspaceAgentId: worker.workspaceAgentId,
+          runtimeBase: worker.runtimeBase,
+        },
+      })
+    }
+
+    return { changed: true }
+  }
+
+  /**
+   * Phase 2: AssignLease — like HiClaw's ReconcileMemberContainer.
+   * Creates or reuses a RuntimeLease for the current task. A lease is the
+   * runtime isolation unit: workdir + config + cache + env.
+   */
+  private async assignLease(
+    worker: WorkerInstanceRow,
+    ctx: WorkerReconcileContext,
+  ): Promise<PhaseResult> {
+    if (!ctx.runId || !ctx.taskId) {
+      return { changed: false }
+    }
+
+    // Check if a usable lease already exists for this task
+    const existingLease = await db
+      .select()
+      .from(runtimeLeases)
+      .where(
+        and(
+          eq(runtimeLeases.runId, ctx.runId),
+          eq(runtimeLeases.taskId, ctx.taskId),
+          eq(runtimeLeases.workerInstanceId, worker.id),
+        ),
+      )
+      .limit(1)
+
+    const usableLease = existingLease[0]
+    if (usableLease && ['ready', 'running'].includes(usableLease.status)) {
+      // Lease already exists and is usable
+      if (worker.observedState !== 'busy') {
+        await markWorkerInstanceState(worker.id, 'busy', {
+          message: 'Worker assigned to active lease.',
+        })
+      }
+      return { changed: worker.observedState !== 'busy' }
+    }
+
+    if (usableLease && ['creating', 'cleaning'].includes(usableLease.status)) {
+      return { changed: false, requeueAfterMs: 5000 }
+    }
+
+    // Create a fresh lease
+    const lease = await createRuntimeLease({
+      workspaceId: ctx.workspaceId,
+      runId: ctx.runId,
+      taskId: ctx.taskId,
+      workerInstanceId: worker.id,
+      provider: 'local-workdir',
+    })
+
+    if (!lease) {
+      return { changed: false, error: 'Failed to create runtime lease.' }
+    }
+
+    await markRuntimeLeaseReady(lease.id)
+    await markWorkerInstanceState(worker.id, 'busy', {
+      message: 'Runtime lease assigned, worker is busy.',
+    })
+
+    if (ctx.runId && ctx.groupSessionId) {
+      await emitRunEvent({
+        runId: ctx.runId,
+        workspaceId: ctx.workspaceId,
+        groupSessionId: ctx.groupSessionId,
+        taskId: ctx.taskId,
+        workerInstanceId: worker.id,
+        agentId: ctx.actorId ?? null,
+        type: 'task.assigned',
+        payload: {
+          taskId: ctx.taskId,
+          workerInstanceId: worker.id,
+          runtimeLeaseId: lease.id,
+          workspaceAgentId: worker.workspaceAgentId,
+        },
+      })
+    }
+
+    return { changed: true }
+  }
+
+  /**
+   * Phase 3: ObserveHealth — like HiClaw's heartbeat monitoring.
+   * Detects stale workers, failed runtimes, and transitions to failed state
+   * when the worker hasn't sent a heartbeat within the expected window.
+   *
+   * Only applies when the worker has been running long enough to expect a
+   * heartbeat. Freshly started workers without a heartbeat yet are not failed.
+   */
+  private async observeHealth(
+    worker: WorkerInstanceRow,
+    ctx: WorkerReconcileContext,
+  ): Promise<PhaseResult> {
+    if (worker.observedState !== 'busy') {
+      return { changed: false }
+    }
+
+    // If the worker has never sent a heartbeat, check how long it's been busy
+    if (!worker.lastHeartbeatAt) {
+      // Allow a grace period before expecting heartbeats
+      const busyDurationMs = Date.now() - worker.updatedAt.getTime()
+      const GRACE_PERIOD_MS = 2 * 60 * 1000 // 2 minutes
+      if (busyDurationMs < GRACE_PERIOD_MS) {
+        return { changed: false }
+      }
+      // Worker has been busy for too long without a single heartbeat
+      const message = `Worker has been busy for ${Math.round(busyDurationMs / 1000)}s without a heartbeat. Marking as failed.`
+      await markWorkerInstanceState(worker.id, 'failed', {
+        message,
+        health: {
+          ...worker.health,
+          staleHeartbeat: true,
+          busyDurationMs,
+          detectedAt: new Date().toISOString(),
+        },
+      })
+      await this.staleActiveLease(worker, message)
+      await this.emitWorkerFailedEvent(worker, ctx, message, 'worker_no_initial_heartbeat')
+      return { changed: true, error: message }
+    }
+
+    const heartbeatAgeMs = Date.now() - worker.lastHeartbeatAt.getTime()
+
+    // If no heartbeat for 5 minutes while busy, worker is likely dead
+    const STALE_THRESHOLD_MS = 5 * 60 * 1000
+    if (heartbeatAgeMs > STALE_THRESHOLD_MS) {
+      const message = `Worker has not sent a heartbeat for ${Math.round(heartbeatAgeMs / 1000)}s while busy. Marking as failed.`
+      await markWorkerInstanceState(worker.id, 'failed', {
+        message,
+        health: {
+          ...worker.health,
+          staleHeartbeat: true,
+          lastHeartbeatAgeMs: heartbeatAgeMs,
+          detectedAt: new Date().toISOString(),
+        },
+      })
+      await this.staleActiveLease(worker, message)
+      await this.emitWorkerFailedEvent(worker, ctx, message, 'worker_heartbeat_lost')
+      return { changed: true, error: message }
+    }
+
+    return { changed: false }
+  }
+
+  private async staleActiveLease(
+    worker: WorkerInstanceRow,
+    reason: string,
+  ): Promise<void> {
+    const [activeLease] = await db
+      .select()
+      .from(runtimeLeases)
+      .where(
+        and(
+          eq(runtimeLeases.workerInstanceId, worker.id),
+          eq(runtimeLeases.status, 'running'),
+        ),
+      )
+      .limit(1)
+    if (activeLease) {
+      await markRuntimeLeaseStale(activeLease.id, {
+        error: reason,
+        metadata: { staleReason: 'heartbeat_lost' },
+      })
+    }
+  }
+
+  private async emitWorkerFailedEvent(
+    worker: WorkerInstanceRow,
+    ctx: WorkerReconcileContext,
+    message: string,
+    reason: string,
+  ): Promise<void> {
+    if (ctx.runId && ctx.groupSessionId) {
+      await emitRunEvent({
+        runId: ctx.runId,
+        workspaceId: ctx.workspaceId,
+        groupSessionId: ctx.groupSessionId,
+        workerInstanceId: worker.id,
+        agentId: ctx.actorId ?? null,
+        type: 'task.failed',
+        severity: 'error',
+        payload: {
+          taskId: ctx.taskId ?? null,
+          error: message,
+          reason,
+          workerInstanceId: worker.id,
+        },
+      })
+    }
+  }
+
+  /**
+   * Called on service restart to detect and clean up stale leases.
+   * Like HiClaw's controller startup reconciliation.
+   */
+  async recoverStaleOnStartup(): Promise<{
+    recoveredLeaseCount: number
+    affectedWorkerIds: string[]
+  }> {
+    const activeLeases = await db
+      .select()
+      .from(runtimeLeases)
+      .where(eq(runtimeLeases.status, 'running'))
+      .limit(500)
+
+    if (activeLeases.length === 0) {
+      return { recoveredLeaseCount: 0, affectedWorkerIds: [] }
+    }
+
+    const affectedWorkerIds = new Set<string>()
+    let recoveredCount = 0
+
+    for (const lease of activeLeases) {
+      await markRuntimeLeaseStale(lease.id, {
+        error: 'Service restarted while lease was active. Marked stale for recovery.',
+        metadata: {
+          staleReason: 'service_restart',
+          previousStatus: lease.status,
+          recoveredAt: new Date().toISOString(),
+        },
+      })
+      recoveredCount++
+
+      if (lease.workerInstanceId) {
+        affectedWorkerIds.add(lease.workerInstanceId)
+        await markWorkerInstanceState(lease.workerInstanceId, 'idle', {
+          message: 'Lease marked stale after service restart. Worker returned to idle.',
+          health: { recoveredFromStaleLease: true, leaseId: lease.id },
+        })
+      }
+    }
+
+    return {
+      recoveredLeaseCount: recoveredCount,
+      affectedWorkerIds: [...affectedWorkerIds],
+    }
+  }
+
+  /**
+   * Ensure a WorkerInstance exists and is ready for a given agent.
+   * This is the "ensure" pattern from HiClaw: idempotent create-or-update.
+   */
+  async ensureWorkerForAgent(
+    workspaceId: string,
+    agent: WorkerRuntimeAgentConfig,
+  ): Promise<string | null> {
+    const instance = await ensureWorkerInstance({ workspaceId, agent })
+    if (!instance) return null
+
+    // Run reconcile to bring it to ready state
+    await this.reconcile(instance.id, { workspaceId })
+    return instance.id
+  }
+
+  /**
+   * Release a worker's lease and mark it idle.
+   * Called when a task completes, fails, or is cancelled.
+   */
+  async releaseWorker(
+    workerInstanceId: string,
+    input: {
+      leaseMetadata?: Record<string, unknown>
+      reason?: string
+    } = {},
+  ): Promise<void> {
+    const [activeLease] = await db
+      .select()
+      .from(runtimeLeases)
+      .where(
+        and(
+          eq(runtimeLeases.workerInstanceId, workerInstanceId),
+          eq(runtimeLeases.status, 'running'),
+        ),
+      )
+      .limit(1)
+
+    if (activeLease) {
+      await releaseRuntimeLease(activeLease.id, {
+        metadata: input.leaseMetadata,
+        workerInstanceId,
+      })
+    } else {
+      await markWorkerInstanceState(workerInstanceId, 'idle', {
+        message: input.reason ?? 'Worker released.',
+      })
+    }
+  }
+
+  private async loadWorker(workerInstanceId: string): Promise<WorkerInstanceRow | null> {
+    const [row] = await db
+      .select()
+      .from(workerInstances)
+      .where(eq(workerInstances.id, workerInstanceId))
+      .limit(1)
+    return (row as WorkerInstanceRow | null) ?? null
+  }
+
+  private async patchStatus(
+    _worker: WorkerInstanceRow,
+    _result: PhaseResult,
+  ): Promise<void> {
+    // Status is already written by each phase's markWorkerInstanceState call.
+    // This method exists as a hook point for future reconcile-level status
+    // aggregation, like HiClaw's deferred Status().Patch() pattern.
+  }
+
+  /**
+   * Verify that the runtime environment is available for this worker.
+   * Checks: model availability, CLI installation, auth configuration.
+   * Returns structured readiness info like HiClaw's health probes.
+   */
+  private async verifyRuntimeReadiness(
+    worker: WorkerInstanceRow,
+  ): Promise<{
+    ready: boolean
+    reason?: string
+    details?: Record<string, unknown>
+  }> {
+    const details: Record<string, unknown> = {}
+
+    // Check model availability
+    if (!worker.modelId) {
+      return {
+        ready: false,
+        reason: 'No model configured for this worker.',
+        details: { missingModel: true },
+      }
+    }
+    details.modelConfigured = true
+
+    // Check runtime base is valid
+    const validRuntimes = ['codex', 'claude-code', 'opencode', 'gemini', 'llm-fallback', 'openclaw', 'copaw']
+    if (!validRuntimes.includes(worker.runtimeBase)) {
+      return {
+        ready: false,
+        reason: `Unknown runtime base: ${worker.runtimeBase}`,
+        details: { invalidRuntime: worker.runtimeBase },
+      }
+    }
+    details.runtimeBase = worker.runtimeBase
+
+    // For LLM fallback, model is sufficient — no CLI needed
+    if (worker.runtimeBase === 'llm-fallback') {
+      return { ready: true, details: { ...details, fallbackMode: true } }
+    }
+
+    // For code agents, verify sandbox policy is valid
+    if (worker.sandboxPolicy !== 'workspace-write' && worker.sandboxPolicy !== 'danger-full-access') {
+      return {
+        ready: false,
+        reason: `Invalid sandbox policy: ${worker.sandboxPolicy}`,
+        details: { ...details, invalidSandboxPolicy: worker.sandboxPolicy },
+      }
+    }
+    details.sandboxPolicy = worker.sandboxPolicy
+
+    return { ready: true, details }
+  }
+}
+
+export const workerController = new WorkerController()

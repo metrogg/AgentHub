@@ -180,14 +180,19 @@ function resolveCatalogRuntime(item: ModelCatalogItem): ProviderCandidate {
   const apiEndpoint = clean(item.apiEndpoint)
   const anthropicEndpoint = clean(item.anthropicEndpoint)
   const declaredAnthropic = rawProvider === 'anthropic' || rawProvider === 'claude'
+  // When both endpoints are present, apiEndpoint is the primary.
+  // Only use Anthropic runtime exclusively when there's an anthropicEndpoint
+  // and the apiEndpoint either doesn't exist or also looks anthropic.
+  const hasNonAnthropicApi = Boolean(apiEndpoint) && !endpointLooksAnthropic(apiEndpoint)
   const useAnthropicRuntime =
-    declaredAnthropic && (!apiEndpoint || endpointLooksAnthropic(apiEndpoint))
+    declaredAnthropic &&
+    (!hasNonAnthropicApi || (Boolean(anthropicEndpoint) && !apiEndpoint))
   const baseUrl = useAnthropicRuntime
     ? anthropicEndpoint ?? apiEndpoint
     : apiEndpoint ?? anthropicEndpoint
   const provider = useAnthropicRuntime
     ? rawProvider
-    : declaredAnthropic
+    : declaredAnthropic && hasNonAnthropicApi
       ? inferProviderFromEndpoint(apiEndpoint)
       : rawProvider
   const key = configuredApiKey(item)
@@ -207,7 +212,8 @@ function resolveDirectRuntime(input: TestConnectionInput): ProviderCandidate {
   const anthropicEndpoint = clean(input.anthropicEndpoint)
   const declaredAnthropic = rawProvider === 'anthropic' || rawProvider === 'claude'
   const useAnthropicRuntime =
-    declaredAnthropic && (!apiEndpoint || endpointLooksAnthropic(apiEndpoint))
+    declaredAnthropic &&
+    (Boolean(anthropicEndpoint) || !apiEndpoint || endpointLooksAnthropic(apiEndpoint))
   const baseUrl = useAnthropicRuntime
     ? anthropicEndpoint ?? apiEndpoint
     : apiEndpoint ?? anthropicEndpoint
@@ -708,7 +714,7 @@ export function formatLlmTransportError(
     const endpoint = host ? `（${host}）` : ''
     return [
       `TLS 证书校验失败${endpoint}。`,
-      '请检查模型 Base URL 是否正确，代理/网关是否使用自签名证书，或目标服务是否缺少完整证书链。',
+      '请检查模型 Base URL 是否正确，代理或网关是否使用自签名证书，或者目标服务是否缺少完整证书链。',
       '如果你在使用公司代理、抓包代理或自签名中转服务，请把对应 CA 证书加入系统信任链；开发环境也可以设置 NODE_EXTRA_CA_CERTS 指向 CA 证书文件后重启 AgentHub。',
       '不建议使用 NODE_TLS_REJECT_UNAUTHORIZED=0 关闭证书校验。',
       `原始错误：${raw}`,

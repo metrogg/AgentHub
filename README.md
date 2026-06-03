@@ -11,7 +11,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 
 当前项目仍处于快速迭代阶段，近期优先目标是先把“群聊主线 + A2A 任务分发 + 多 Agent 任务子对话 + 本地工作目录 + 产物交接”闭环跑稳，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
 
-如果你是第一次接手项目，先读 [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)。它是当前事实总览，用来区分主路径、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。
+如果你是第一次接手项目，先读 [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)。它是当前事实总览，用来区分主路径、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
 ## 核心体验
 
@@ -27,7 +27,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - **A2A 通信标准**：Orchestrator 给成员分发任务时统一生成 A2A v0.3 `message/send`，A2A 是通信协议，不是 Agent 类型。
 - **显式分工**：执行任务只接受 Orchestrator/Planner 的模型指派，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
 - **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI；自建 Agent 是在这些 Coding Agent 基底上配置角色、提示词、Skills/MCP 能力和权限。
-- **工作目录与 handoff**：每个 Agent 有自己的工作目录，上游产物通过 `.agenthub/handoff` 交给下游。
+- **工作目录与共享任务目录**：每个 Agent 有自己的工作目录，每个任务有 `.agenthub/shared/tasks/{taskId}` 协作空间，上游产物优先通过 `artifacts/` 交给下游；`.agenthub/handoff` 仅保留兼容旧路径。
 - **产物可见**：文件、网页、diff、诊断产物会进入消息 metadata 和任务看板。
 - **Coze 对标方向**：后续产品层要逐步补齐 Space、Task Center、Asset Center、Expert Center、Eval / Trace、部署与长期主动任务能力。
 
@@ -55,6 +55,8 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 
 更详细的当前架构见 [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)，分层和业内对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)，Spec Kit 契约化与 AG-UI 收敛路线见 [docs/SpecKit契约与AGUI事件落地路线.md](docs/SpecKit契约与AGUI事件落地路线.md)。
 
+当前路径仍然偏过程式：消息入口会创建 run/task/session 并启动编排器。后续底层要向 HiClaw-lite Kernel 收敛：`Run`、`Task`、`TaskThread`、`WorkerInstance`、`Artifact`、`RuntimeLease`、`RunEvent` 都成为一等资源；任务看板、进度条、子对话入口和产物卡从资源状态与 AG-UI / RunEvent 投影出来。这个方向不是照搬 HiClaw 的 Matrix / MinIO / Kubernetes 重栈，而是吸收它的资源控制平面和生命周期设计。
+
 ## 分层定位
 
 AgentHub 的目标不是做一个固定角色模板系统，也不只是做一个聊天壳上的编排器，而是把多 Coding Agent 协作做成可见、可控、可追踪、可交付的 AI 工作平台：
@@ -67,7 +69,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 执行层 | Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Agent 基底，LLM 为内部/兜底 |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
 | 协作契约层 | 用户显式 Spec/Contract 描述范围、产出、验收和路径边界，不做固定场景模板 |
-| 工作区层 | 系统默认工作空间根 + 项目根 + `.agenthub/workdirs` + `.agenthub/handoff` + blackboard |
+| 工作区层 | 系统默认工作空间根 + 项目根 + `.agenthub/workdirs` + `.agenthub/shared/tasks` + 兼容 `.agenthub/handoff` + blackboard |
 
 完整分层和业内方案对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)。产品北极星与 Coze 对标判断见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。
 

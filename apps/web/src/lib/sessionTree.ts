@@ -10,23 +10,21 @@ export function buildSessionTree(
   sessions: Session[],
   pinnedIds = new Set<string>(),
 ): SessionGroup[] {
-  const childrenByWorkspace = new Map<string, Session[]>()
+  const childrenByGroupSession = new Map<string, Session[]>()
   const hiddenIds = new Set<string>()
-  const groupWorkspaceIds = new Set(
-    sessions
-      .filter((session) => session.type === SessionType.Group && session.workspaceId)
-      .map((session) => session.workspaceId!),
+  const groupSessionIds = new Set(
+    sessions.filter((session) => session.type === SessionType.Group).map((session) => session.id),
   )
 
   for (const session of sessions) {
-    const visibility = agentSessionVisibility(session, groupWorkspaceIds)
+    const visibility = agentSessionVisibility(session, groupSessionIds)
     if (visibility === 'child') {
-      const workspaceId = session.workspaceId
-      if (!workspaceId) continue
+      const groupSessionId = readGroupSessionId(session)
+      if (!groupSessionId) continue
       hiddenIds.add(session.id)
-      const children = childrenByWorkspace.get(workspaceId) ?? []
+      const children = childrenByGroupSession.get(groupSessionId) ?? []
       children.push(session)
-      childrenByWorkspace.set(workspaceId, children)
+      childrenByGroupSession.set(groupSessionId, children)
     } else if (visibility === 'hidden') {
       hiddenIds.add(session.id)
     }
@@ -36,8 +34,8 @@ export function buildSessionTree(
     .filter((session) => !hiddenIds.has(session.id))
     .map((parent) => {
       const children =
-        parent.type === SessionType.Group && parent.workspaceId
-          ? [...(childrenByWorkspace.get(parent.workspaceId) ?? [])].sort(
+        parent.type === SessionType.Group
+          ? [...(childrenByGroupSession.get(parent.id) ?? [])].sort(
               (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
             )
           : []
@@ -53,26 +51,37 @@ export function buildSessionTree(
 
 function agentSessionVisibility(
   session: Session,
-  groupWorkspaceIds: Set<string>,
+  groupSessionIds: Set<string>,
 ): 'top' | 'child' | 'hidden' {
-  if (session.type !== SessionType.Direct || !session.workspaceId || !session.workspaceAgentId)
-    return 'top'
+  if (session.type !== SessionType.Direct || !session.workspaceId) return 'top'
   const metadata = session.metadata ?? {}
   if (metadata.kind === 'agent-direct') return 'top'
-  if (isCompleteOrchestratorTaskSession(session, metadata))
-    return groupWorkspaceIds.has(session.workspaceId) ? 'child' : 'hidden'
+  if (isStableOrchestratorTaskSession(session, metadata))
+    return groupSessionIds.has(readGroupSessionId(session) ?? '') ? 'child' : 'hidden'
+  if (!session.workspaceAgentId && metadata.kind === 'orchestrator-task') return 'hidden'
   return 'hidden'
 }
 
-function isCompleteOrchestratorTaskSession(session: Session, metadata: Record<string, unknown>) {
+export function isStableOrchestratorTaskSession(
+  session: Session,
+  metadata: Record<string, unknown> = (session.metadata ?? {}) as Record<string, unknown>,
+) {
   return (
+    session.type === SessionType.Direct &&
     metadata.kind === 'orchestrator-task' &&
     typeof metadata.orchestratorTaskId === 'string' &&
     metadata.orchestratorTaskId.length > 0 &&
     typeof metadata.orchestratorRunId === 'string' &&
     metadata.orchestratorRunId.length > 0 &&
-    Boolean(session.workspaceId && session.workspaceAgentId)
+    typeof metadata.groupSessionId === 'string' &&
+    metadata.groupSessionId.length > 0 &&
+    Boolean(session.workspaceId)
   )
+}
+
+function readGroupSessionId(session: Session) {
+  const value = session.metadata?.groupSessionId
+  return typeof value === 'string' && value.trim() ? value : null
 }
 
 export function filterSessionTree(

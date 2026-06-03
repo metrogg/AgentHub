@@ -957,6 +957,64 @@ export interface OrchestratorRunListItem {
   workspaceName: string
   sessionTitle: string
   tasks?: OrchestratorRunTaskSnapshot[]
+  resourceSnapshot?: OrchestratorRunResourceSnapshot
+  agUiEvents?: AgUiRunEvent[]
+  runtimeActivitySnapshot?: OrchestratorRunRuntimeActivitySnapshot
+  taskBoardSnapshot?: OrchestratorRunTaskBoardSnapshot
+}
+
+export interface OrchestratorRunRuntimeActivitySnapshot {
+  agentTyping: boolean
+  agentActivity: {
+    sessionId: string
+    agentId: string | null
+    agentName: string | null
+    phase: string | null
+    startedAt: string | null
+  } | null
+  source: 'task-board' | 'ag-ui' | 'none'
+}
+
+export interface OrchestratorRunTaskBoardSnapshot {
+  runId: string
+  title: string
+  goal: string
+  collaborationMode: string
+  phases: Array<{
+    id: string
+    title: string
+    purpose: string
+    taskIds: string[]
+    status: 'pending' | 'active' | 'completed'
+  }>
+  tasks: Array<{
+    id: string
+    phaseId: string
+    title: string
+    description: string
+    agentId: string
+    agentName: string
+    taskType?: string
+    status: 'pending' | 'assigned' | 'running' | 'done' | 'failed' | 'blocked' | 'cancelled'
+    progress?: number
+    progressStatus?: string
+    dependencies: string[]
+    childSessionId?: string | null
+    taskThreadId?: string | null
+    taskThreadStatus?: 'prepared' | 'assigned' | 'active' | 'completed' | 'failed' | 'cancelled' | null
+    workerInstanceId?: string | null
+    runtimeLeaseId?: string | null
+    sharedTaskRelativeRoot?: string | null
+    sharedTaskSpecPath?: string | null
+    artifactCount?: number
+    artifacts?: Array<Record<string, unknown>>
+    outputSummary?: string
+    validationStatus?: 'passed' | 'failed' | 'skipped' | 'not_run'
+    contractStatus?: 'passed' | 'failed'
+    executionConfig?: Record<string, unknown>
+  }>
+  status: 'planning' | 'running' | 'synthesizing' | 'completed' | 'failed' | 'cancelled'
+  sessionId: string
 }
 
 export interface OrchestratorRunTaskSnapshot {
@@ -968,16 +1026,154 @@ export interface OrchestratorRunTaskSnapshot {
   status: TaskStatus
   sessionId: string | null
   childSessionId: string | null
+  taskThreadId?: string | null
+  taskThreadSessionId?: string | null
+  taskThreadStatus?: string | null
+  sharedTaskRelativeRoot?: string | null
+  sharedTaskSpecPath?: string | null
+  workerInstanceId?: string | null
+  runtimeLeaseId?: string | null
+  runtimeLease?: OrchestratorRunRuntimeLeaseSnapshot | null
   orderIdx: number
   runId: string | null
   phaseId: string | null
   dependencies: string[]
-  artifacts: unknown[]
+  artifacts: OrchestratorRunArtifactSnapshot[]
   progressPercent: number | null
   progressStatus: string | null
   startedAt: string | null
   completedAt: string | null
   errorLog: string | null
+}
+
+export interface OrchestratorRunRuntimeLeaseSnapshot {
+  id: string
+  runtimeLeaseId: string
+  workerInstanceId: string | null
+  provider: 'local-workdir' | 'docker-sandbox' | 'remote-container'
+  status: 'creating' | 'ready' | 'running' | 'cleaning' | 'released' | 'failed' | 'stale'
+  cwd: string | null
+  homeDir: string | null
+  configDir: string | null
+  cacheDir: string | null
+  tmpDir: string | null
+  dataDir: string | null
+  containerId: string | null
+  sandboxId: string | null
+  pid: number | null
+  startedAt: string | null
+  releasedAt: string | null
+  error: string | null
+  metadata: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OrchestratorRunArtifactSnapshot {
+  artifactId: string
+  id: string
+  kind: 'file' | 'directory' | 'preview' | 'report' | 'log' | 'diff' | 'url'
+  artifactKind: 'file' | 'directory' | 'preview' | 'report' | 'log' | 'diff' | 'url'
+  title: string
+  description?: string
+  filePath?: string
+  path?: string
+  sourcePath?: string
+  handoffPath?: string
+  handoffRelativePath?: string
+  mimeType?: string
+  size?: number
+  checksum?: string
+  status: 'discovered' | 'registered' | 'verified' | 'partial' | 'failed'
+  visibility: 'private' | 'team' | 'user'
+  source: 'artifact-store'
+  taskId: string | null
+  taskThreadId: string | null
+  workspaceAgentId: string | null
+  workerInstanceId?: string | null
+  metadata: Record<string, unknown>
+  createdAt: string
+}
+
+export interface OrchestratorRunResourceSnapshot {
+  run: {
+    id: string
+    workspaceId: string
+    groupSessionId: string
+    status: OrchestratorRunStatus
+    planMessageId: string | null
+    summaryMessageId: string | null
+    createdAt: string
+    updatedAt: string
+  } | null
+  counts: {
+    tasksByStatus: Record<string, number>
+    taskThreadsByStatus: Record<string, number>
+    artifactsByStatus: Record<string, number>
+    runtimeLeasesByStatus: Record<string, number>
+    workerInstancesByState: Record<string, number>
+    totalTasks: number
+    totalTaskThreads: number
+    totalArtifacts: number
+    totalRuntimeLeases: number
+    totalWorkerInstances: number
+  }
+  tasks: Array<{
+    id: string
+    workspaceId: string
+    agentId: string | null
+    title: string
+    description: string
+    status: TaskStatus
+    sessionId: string | null
+    orderIdx: number
+    runId: string | null
+    phaseId: string | null
+    dependencies: string[]
+    progressPercent: number | null
+    progressStatus: string | null
+    startedAt: string | null
+    completedAt: string | null
+    errorLog: string | null
+  }>
+  taskThreads: Array<{
+    id: string
+    workspaceId: string
+    runId: string
+    taskId: string
+    groupSessionId: string
+    workspaceAgentId: string | null
+    workerInstanceId: string | null
+    sessionId: string
+    status: 'prepared' | 'assigned' | 'active' | 'completed' | 'failed' | 'cancelled'
+    lastEventId: string | null
+    sharedTaskRelativeRoot?: string | null
+    sharedTaskSpecPath?: string | null
+    createdAt: string
+    updatedAt: string
+  }>
+  artifacts: OrchestratorRunArtifactSnapshot[]
+  runtimeLeases: OrchestratorRunRuntimeLeaseSnapshot[]
+  workerInstances: Array<{
+    id: string
+    workspaceId: string
+    workspaceAgentId: string
+    runtimeFamily: 'coordinator' | 'worker' | 'fallback'
+    runtimeBase: 'openclaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | 'llm-fallback'
+    modelId: string | null
+    skillIds: string[]
+    mcpServerIds: string[]
+    sandboxPolicy: 'workspace-write' | 'danger-full-access'
+    desiredState: 'running' | 'sleeping' | 'stopped'
+    observedState: 'provisioning' | 'ready' | 'busy' | 'idle' | 'sleeping' | 'stopped' | 'failed'
+    health: Record<string, unknown>
+    runtimeHome: string | null
+    runtimeConfigPath: string | null
+    lastHeartbeatAt: string | null
+    message: string | null
+    createdAt: string
+    updatedAt: string
+  }>
 }
 
 export interface ExecutionLog {
@@ -1004,6 +1200,8 @@ export interface OrchestratorRunEvent {
   workspaceId: string
   groupSessionId: string
   taskId: string | null
+  threadId?: string | null
+  workerInstanceId?: string | null
   agentId: string | null
   type: OrchestratorRunEventType
   payload: Record<string, unknown>
@@ -1139,6 +1337,7 @@ export const api = {
       body: JSON.stringify({
         content: data.content,
         type: (data.type ?? 'text') as MessageType,
+        ...(data.mentions?.length ? { mentions: data.mentions } : {}),
         metadata: {
           ...(data.modelId ? { modelId: data.modelId } : {}),
           ...(data.skipAgentReply ? { skipAgentReply: true } : {}),
@@ -1493,6 +1692,10 @@ export const api = {
     }),
   getOrchestratorRunEvents: (id: string) =>
     request<{ items: OrchestratorRunEvent[] }>(`/orchestrator-runs/${id}/events`),
+  getOrchestratorRunArtifacts: (id: string) =>
+    request<{ items: OrchestratorRunArtifactSnapshot[] }>(`/orchestrator-runs/${id}/artifacts`),
+  getOrchestratorRunResourceSnapshot: (id: string) =>
+    request<OrchestratorRunResourceSnapshot>(`/orchestrator-runs/${id}/resource-snapshot`),
   getAgUiRunEvents: (id: string) =>
     request<{ items: AgUiRunEvent[] }>(`/protocols/ag-ui/runs/${id}/events`),
   getOrchestratorRunBlackboard: (id: string, schemaType?: BlackboardSchemaType) =>

@@ -1,12 +1,14 @@
 import { Bot, CheckCircle2, Clock, MessagesSquare, XCircle } from 'lucide-react'
+import type { ControlPanelProjection } from '@/stores/chatStore'
 
 export interface AgentTab {
   taskId: string
   agentId: string
   agentName: string
   taskTitle: string
-  status: 'pending' | 'running' | 'done' | 'failed'
+  status: 'pending' | 'assigned' | 'running' | 'done' | 'failed'
   childSessionId: string | null
+  taskThreadStatus?: 'prepared' | 'assigned' | 'active' | 'completed' | 'failed' | 'cancelled' | null
   progress?: number
   progressStatus?: string
 }
@@ -17,10 +19,13 @@ interface AgentTabsProps {
   onSelect: (taskId: string | null) => void
   activeAgentCount: number
   runStatus: string
+  currentActivity?: ControlPanelProjection['currentActivity']
 }
 
 function StatusIndicator({ status }: { status: AgentTab['status'] }) {
   switch (status) {
+    case 'assigned':
+      return <MessagesSquare className="w-4 h-4 text-indigo-500" />
     case 'running':
       return (
         <span className="relative flex h-2.5 w-2.5">
@@ -43,6 +48,7 @@ export function AgentTabs({
   onSelect,
   activeAgentCount,
   runStatus,
+  currentActivity = null,
 }: AgentTabsProps) {
   const statusLabels: Record<string, string> = {
     planning: '规划中',
@@ -73,6 +79,12 @@ export function AgentTabs({
             <span className="text-[11px] text-blue-600 font-medium">{activeAgentCount} 活跃</span>
           )}
         </div>
+        {currentActivity?.agentName && (
+          <p className="mt-1 text-[10px] text-gray-400 truncate">
+            {currentActivity.agentName}
+            {currentActivity.label ? ` · ${currentActivity.label}` : ''}
+          </p>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -119,8 +131,11 @@ export function AgentTabs({
                 </div>
               )}
 
-              {isDisabled && tab.status === 'pending' && (
+              {tab.taskThreadStatus === 'prepared' && (
                 <p className="text-[10px] text-gray-400 mt-0.5 ml-6">等待分配</p>
+              )}
+              {tab.taskThreadStatus === 'assigned' && (
+                <p className="text-[10px] text-indigo-500 mt-0.5 ml-6">已派发，等待执行</p>
               )}
             </div>
           )

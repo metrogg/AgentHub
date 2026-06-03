@@ -1,34 +1,19 @@
 import { describe, expect, test } from 'bun:test'
-import {
-  defaultAgentAvatarPath,
-  resolveAgentAvatarSrc,
-  resolveAgentColor,
-} from '../apps/web/src/lib/agentVisuals'
+import { resolveAgentAvatarSrc, resolveAgentColor, resolveAgentInitial } from '../apps/web/src/lib/agentVisuals'
 
 describe('agent visuals', () => {
-  test('maps known role presets to bundled avatar assets', () => {
-    expect(defaultAgentAvatarPath({ roleType: 'orchestrator' })).toBe(
-      '/avatars/orchestrator_avatar.png',
+  test('returns the configured avatar as-is', () => {
+    expect(resolveAgentAvatarSrc({ roleType: 'coder', avatar: '/avatars/my.png' })).toBe(
+      '/avatars/my.png',
     )
-    expect(defaultAgentAvatarPath({ roleType: 'architect' })).toBe(
-      '/avatars/designer_avatar.png',
-    )
-    expect(defaultAgentAvatarPath({ roleType: 'researcher' })).toBe(
-      '/avatars/researcher_avatar.png',
-    )
-    expect(defaultAgentAvatarPath({ roleType: 'coder' })).toBe('/avatars/builder_avatar.png')
-    expect(defaultAgentAvatarPath({ roleType: 'reviewer' })).toBe(
-      '/avatars/qa_reviewer_avatar.png',
-    )
+    expect(resolveAgentAvatarSrc({ roleType: 'orchestrator' })).toBe(null)
+    expect(resolveAgentAvatarSrc({ roleType: 'researcher', avatar: '' })).toBe(null)
   })
 
-  test('switches to white avatar assets in dark theme', () => {
-    expect(resolveAgentAvatarSrc({ roleType: 'orchestrator' }, 'dark')).toBe(
-      '/avatars/orchestrator_avatar_white.png',
-    )
-    expect(resolveAgentAvatarSrc({ roleType: 'coder' }, 'dark')).toBe(
-      '/avatars/builder_avatar_white.png',
-    )
+  test('resolves agent initials from name', () => {
+    expect(resolveAgentInitial({ name: 'Orchestrator' })).toBe('O')
+    expect(resolveAgentInitial({ name: '' })).toBe('+')
+    expect(resolveAgentInitial({ name: '' }, 'D')).toBe('D')
   })
 
   test('replaces neutral fallback colors with preset colors', () => {

@@ -128,6 +128,8 @@ describe('protocol adapters', () => {
         tasks: [],
       },
       prompt: 'Please research current AI coding tools.',
+      sharedTaskRelativeRoot: '.agenthub/shared/tasks/task-1',
+      sharedTaskSpecPath: '.agenthub/shared/tasks/task-1/spec.md',
       task: {
         id: 'task-1',
         title: 'Research current tools',
@@ -147,7 +149,18 @@ describe('protocol adapters', () => {
     expect(dispatch.params.message.metadata?.[A2A_AGENTHUB_METADATA_KEY]).toMatchObject({
       runId: 'run-1',
       toAgentName: 'Researcher',
+      sharedTaskRelativeRoot: '.agenthub/shared/tasks/task-1',
+      sharedTaskSpecPath: '.agenthub/shared/tasks/task-1/spec.md',
     })
+    const messageText = dispatch.params.message.parts?.[0] as
+      | { kind: 'text'; text?: string }
+      | undefined
+    expect(messageText?.kind).toBe('text')
+    expect(messageText?.text).toContain('AgentHub 共享任务目录协议')
+    expect(messageText?.text).toContain('.agenthub/shared/tasks/task-1/spec.md')
+    expect(messageText?.text).toContain('.agenthub/shared/tasks/task-1/plan.md')
+    expect(messageText?.text).toContain('.agenthub/shared/tasks/task-1/result.md')
+    expect(messageText?.text).toContain('.agenthub/shared/tasks/task-1/artifacts/')
 
     const task = buildA2AExecutionTask({
       envelope: dispatch,

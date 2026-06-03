@@ -201,10 +201,17 @@ export class TaskScheduler {
         return
       }
 
-      graph.setStatus(task.id, result.status === 'done' ? 'done' : 'failed')
+      graph.setStatus(
+        task.id,
+        result.status === 'done'
+          ? 'done'
+          : result.status === 'cancelled'
+            ? 'cancelled'
+            : 'failed',
+      )
       results.set(task.id, result)
 
-      if (result.status !== 'done') {
+      if (result.status !== 'done' && result.status !== 'cancelled') {
         recordBlockedResults()
       }
     } catch (error: any) {

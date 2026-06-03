@@ -1,6 +1,6 @@
 # AgentHub Development Guide
 
-This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md` and `docs/当前状态与下一步路线.md`, then read `docs/当前多Agent协作架构.md`, `docs/场景角色团队协作调研.md`, `docs/角色提示词与动态组队设计.md`, `docs/专家库与开源角色Skill生态调研.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
+This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md` and `docs/当前状态与下一步路线.md`, then read `docs/HiClaw架构调研与AgentHub底层重构方案.md`, `docs/当前多Agent协作架构.md`, `docs/场景角色团队协作调研.md`, `docs/角色提示词与动态组队设计.md`, `docs/专家库与开源角色Skill生态调研.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
 
 ## Product Definition
 
@@ -27,7 +27,7 @@ Before changing code, identify which layer you are working on:
 - Execution: Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary agent bases. `llm` is internal/fallback support.
 - Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
 - Collaboration contracts: user-explicit Specs may describe scope, allowed paths, required outputs, and acceptance criteria; they must not be trigger-based scenario templates.
-- Workspace and state: the system default workspace root, `.agenthub/workdirs`, `.agenthub/handoff`, blackboard entries, execution logs, run events, and persisted task state.
+- Workspace and state: the system default workspace root, `.agenthub/workdirs`, `.agenthub/shared/tasks`, compatibility `.agenthub/handoff`, blackboard entries, execution logs, run events, and persisted task state.
 
 Configuration truth is split deliberately:
 
@@ -38,6 +38,8 @@ Configuration truth is split deliberately:
 Keep the internal default model visible and separate. It is only for internal LLM paths such as welcome prompts, Orchestrator, Planner, and Synthesizer.
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
+
+The next architecture direction is a HiClaw-inspired but AgentHub-native kernel. Learn from HiClaw's declarative resource control plane, but do not add Matrix, MinIO, Higress, or Kubernetes as default dependencies. Gradually make `Run`, `Task`, `TaskThread`, `WorkerInstance`, `Artifact`, `RuntimeLease`, and `RunEvent` first-class resources. `messages.ts` should shrink toward chat ingress and lightweight routing; task boards, child conversations, progress, and artifact cards should be projected from resource state and AG-UI / RunEvent, not stitched together from legacy message metadata. See `docs/HiClaw架构调研与AgentHub底层重构方案.md` before changing orchestration, child-thread, artifact, event, or runtime lifecycle code.
 
 ## Stack
 
@@ -98,19 +100,24 @@ Core files:
 Execution flow:
 
 ```text
-OrchestratorEngine.dispatch()
+messages.ts works as ChatIngress
+  -> RunController / ManagerLoop creates run.started + manager.thinking
+  -> RunController asks the Orchestrator model for next action
+  -> migration path still enters OrchestratorEngine.startRun() for execution
   -> Planner produces ExecutionPlan
   -> workspace_tasks + orchestrator_runs persist run state
-  -> ensureOrchestratorTaskSession() creates child sessions
+  -> TaskThread projection creates orchestrator-task child sessions
   -> TaskScheduler executes dependency layers
   -> Orchestrator builds A2A message/send envelope
   -> TaskExecutionService sends through LocalA2ATransport
   -> local execution host adapts to LLM fallback / Code Agent runtime
   -> blackboard stores summaries, decisions, artifact refs as A2A metadata/artifact extensions
-  -> .agenthub/handoff materializes readable upstream artifacts
+  -> .agenthub/shared/tasks/{taskId}/artifacts materializes readable upstream artifacts
   -> main group chat receives task result messages
   -> Synthesizer writes final summary
 ```
+
+Migration rule: do not keep expanding `messages.ts` as the orchestration brain. New run lifecycle, Manager decisions, reconcile, recovery, and resource state transitions should move into `RunController`, `ManagerLoop`, and later kernel controllers.
 
 ### A2A Boundary
 
@@ -121,7 +128,7 @@ Internal agent-to-agent task dispatch must use A2A objects, not a parallel hidde
 - Child conversation user messages persist the A2A request envelope in metadata.
 - Agent outputs and group task reports persist A2A response message/task metadata.
 - A2A is a communication protocol, not an agent runtime type. Remote A2A endpoints belong in `roleProfile.protocol = "a2a"` plus `roleProfile.a2aEndpoint`.
-- Blackboard and `.agenthub/handoff` remain AgentHub extensions to A2A artifacts, not separate static routing systems.
+- Blackboard, `.agenthub/shared/tasks`, and compatibility `.agenthub/handoff` remain AgentHub extensions to A2A artifacts, not separate static routing systems.
 
 The current implementation is an internal A2A envelope plus AgentHub local transport. Do not reintroduce `runtimeType = "a2a"` or show A2A as a selectable agent kind.
 
@@ -160,13 +167,13 @@ Important files:
 
 Rules:
 
-- Write-capable agents execute in `.agenthub/workdirs/...`.
-- Read-only agents may read the project root.
+- Code agents execute in `.agenthub/workdirs/...` with `workspace-write` by default.
+- `read-only` is no longer a public code-agent sandbox option; express research/review safety through role duties, tool permissions, context policy, and approval policy.
 - If the user did not choose a project workspace, AgentHub creates an auto workspace under the system user data directory, such as `%LOCALAPPDATA%\AgentHub\workspaces` on Windows. Do not fall back to the AgentHub source repository.
 - Each task also gets a sandbox root under the system cache directory, used for temp/cache/config isolation for CLI runtimes.
-- Execution isolation is behind `SandboxProvider`; the default provider is now `docker-sandbox`, with `local-workdir` only as a compatibility fallback. `local-workdir` hardens workdir plus process env, but it is not an OS/network permission sandbox.
+- Execution isolation is behind `SandboxProvider`; the current default provider is `local-workdir` because it best matches the lightweight local Coding Agent experience. `docker-sandbox` is optional and should run only when explicitly enabled and `sandboxRunnable=true`. `local-workdir` hardens workdir plus process env, but it is not an OS/network permission sandbox.
 - For code agents, user-facing sandbox choices are now only `workspace-write` and `danger-full-access`. Do not reintroduce `read-only` as a public code-agent option.
-- Upstream artifacts that can be reused by downstream agents are copied into `.agenthub/handoff/...`.
+- New upstream artifacts that can be reused by downstream agents are copied first into `.agenthub/shared/tasks/{taskId}/artifacts/...`; `.agenthub/handoff/...` is only a compatibility or historical path.
 - Downstream prompts must prefer `handoffPath`.
 - If a blackboard entry only has `filePath` or `path`, treat it as an upstream record, not as proof that the file exists in the current workdir.
 

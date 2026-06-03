@@ -54,6 +54,7 @@ export const protocolRoutes = new Hono<{ Variables: AuthVariables }>()
         'CUSTOM:agenthub.blackboard.written',
         'CUSTOM:agenthub.task.clarification_needed',
         'CUSTOM:agenthub.run.status',
+        'CUSTOM:agenthub.manager.status',
       ],
       sampleTaskStatusEvent: buildAgUiTaskStatusEvent({
         agentName: 'Researcher',
@@ -160,10 +161,13 @@ function normalizeRunEvent(event: {
   runId: string
   groupSessionId: string
   taskId: string | null
+  threadId?: string | null
+  workerInstanceId?: string | null
   agentId: string | null
   type: string
   payload: Record<string, unknown>
   severity: string
+  sequence?: number
   createdAt?: Date | string
 }) {
   const timestampMs =
@@ -176,9 +180,16 @@ function normalizeRunEvent(event: {
     runId: event.runId,
     groupSessionId: event.groupSessionId,
     taskId: event.taskId,
+    threadId: event.threadId ?? null,
+    workerInstanceId: event.workerInstanceId ?? null,
     agentId: event.agentId,
     type: event.type,
-    payload: event.payload,
+    payload: {
+      ...event.payload,
+      sequence: event.sequence,
+      taskThreadId: event.threadId ?? event.payload?.taskThreadId,
+      workerInstanceId: event.workerInstanceId ?? event.payload?.workerInstanceId,
+    },
     severity: event.severity,
     timestampMs: Number.isFinite(timestampMs) ? timestampMs : undefined,
   }
