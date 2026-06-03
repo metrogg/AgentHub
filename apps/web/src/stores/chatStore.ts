@@ -2461,6 +2461,7 @@ interface ChatState {
       displayContent?: string
       replyToMessageId?: string | null
       safetyMode?: string
+      usePendingAttachments?: boolean
     },
   ) => Promise<void>
   sendMessageToSession: (
@@ -2470,6 +2471,7 @@ interface ChatState {
       displayContent?: string
       replyToMessageId?: string | null
       safetyMode?: string
+      usePendingAttachments?: boolean
     },
   ) => Promise<void>
   editMessage: (messageId: string, content: string) => Promise<void>

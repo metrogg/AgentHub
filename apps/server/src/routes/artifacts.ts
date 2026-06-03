@@ -20,7 +20,7 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     const workspaceId = c.req.query('workspaceId')?.trim()
     if (!rawPath) throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少预览路径', { field: 'path' })
 
-    const filePath = resolve(rawPath)
+    let filePath = resolve(rawPath)
     const ext = extname(filePath).toLowerCase()
     if (ext !== '.html' && ext !== '.htm') {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '仅支持 HTML 文件预览')
@@ -30,6 +30,10 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     if (workspaceId) {
       const user = c.get('user')
       const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+      if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
+        throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, 'Workspace not found')
+      }
+      filePath = resolveWorkspaceFilePath(rawPath, resolve(ws.projectPath))
       if (ws && ws.ownerId === user.sub && ws.projectPath) {
         const allowedRoot = resolve(ws.projectPath)
         const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
@@ -89,7 +93,6 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, 'Missing workspace id', { field: 'workspaceId' })
     }
 
-    const filePath = resolve(rawPath)
     const user = c.get('user')
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
     if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
@@ -97,6 +100,7 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     const allowedRoot = resolve(ws.projectPath)
+    const filePath = resolveWorkspaceFilePath(rawPath, allowedRoot)
     const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
     if (filePath !== allowedRoot && !filePath.startsWith(rootWithSep)) {
       throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, 'Access denied: path outside workspace')
@@ -236,7 +240,7 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       const checkCode = await check.exited
       if (checkCode !== 0) {
         const stderr = await new Response(check.stderr).text()
-        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Diff 验证失败: ${stderr.trim()}`)
+        throw AppError.fromCode(AppErrorCodes.DIFF_VALIDATION_FAILED, `Diff 验证失败: ${stderr.trim()}`)
       }
       // Apply
       const apply = Bun.spawn(['git', 'apply', tmpFile], {
@@ -248,14 +252,14 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       const applyCode = await apply.exited
       if (applyCode !== 0) {
         const stderr = await new Response(apply.stderr).text()
-        throw AppError.internal(AppErrorCodes.INTERNAL_ERROR, `Diff 应用失败: ${stderr.trim()}`)
+        throw AppError.internal(AppErrorCodes.DIFF_APPLY_FAILED, `Diff 应用失败: ${stderr.trim()}`)
       }
       logger.info({ projectPath: resolvedPath }, 'Diff applied successfully')
       return c.json({ success: true, message: 'Diff applied successfully' })
     } catch (err: any) {
       if (err instanceof AppError) throw err
       logger.error({ err: err?.message, projectPath: resolvedPath }, 'Diff apply error')
-      throw AppError.internal(AppErrorCodes.INTERNAL_ERROR, err?.message || 'Diff 应用失败')
+      throw AppError.internal(AppErrorCodes.DIFF_APPLY_FAILED, err?.message || 'Diff 应用失败')
     } finally {
       try { await unlink(tmpFile) } catch {}
     }
@@ -357,4 +361,9 @@ function contentType(filePath: string) {
   if (ext === '.woff') return 'font/woff'
   if (ext === '.ttf') return 'font/ttf'
   return 'application/octet-stream'
+}
+
+function resolveWorkspaceFilePath(rawPath: string, workspaceRoot: string) {
+  const normalizedPath = normalize(rawPath)
+  return isAbsolute(normalizedPath) ? resolve(normalizedPath) : resolve(workspaceRoot, normalizedPath)
 }

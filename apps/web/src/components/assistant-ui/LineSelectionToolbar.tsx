@@ -1,9 +1,10 @@
 import type { FC } from 'react'
-import { Pencil, Quote, X } from 'lucide-react'
+import { MessageSquare, Pencil, Quote, X } from 'lucide-react'
 
 interface LineSelectionToolbarProps {
   selectedCount: number
   onReference: () => void
+  onLocalChange?: () => void
   onEdit?: () => void
   onClear: () => void
 }
@@ -11,6 +12,7 @@ interface LineSelectionToolbarProps {
 const LineSelectionToolbar: FC<LineSelectionToolbarProps> = ({
   selectedCount,
   onReference,
+  onLocalChange,
   onEdit,
   onClear,
 }) => {
@@ -22,9 +24,24 @@ const LineSelectionToolbar: FC<LineSelectionToolbarProps> = ({
         已选 {selectedCount} 行
       </span>
       <div className="agenthub-line-selection-actions">
+        {onLocalChange && (
+          <button
+            type="button"
+            className="agenthub-line-selection-btn agenthub-line-selection-btn-primary"
+            onClick={onLocalChange}
+            title="在聊天中描述如何修改选中代码"
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            局部修改
+          </button>
+        )}
         <button
           type="button"
-          className="agenthub-line-selection-btn agenthub-line-selection-btn-primary"
+          className={
+            onLocalChange
+              ? 'agenthub-line-selection-btn'
+              : 'agenthub-line-selection-btn agenthub-line-selection-btn-primary'
+          }
           onClick={onReference}
           title="引用选中行到对话输入框"
         >

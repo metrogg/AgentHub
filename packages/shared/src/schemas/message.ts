@@ -14,7 +14,7 @@ export type Message = z.infer<typeof messageSchema>
 
 export const sendMessageSchema = z.object({
   content: z.string().min(1).max(10000),
-  type: z.enum(['text', 'markdown']).default('text'),
+  type: z.enum(['text', 'markdown', 'image', 'file']).default('text'),
   mentions: z.array(z.string()).default([]),
   metadata: z.record(z.unknown()).optional(),
 })

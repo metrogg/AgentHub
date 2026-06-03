@@ -9,6 +9,27 @@ import { describeRuntimeActivity, useChatStore } from '../stores/chatStore'
 import type { AgentArtifact, ChatAttachment, Message } from './api'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 
+type CodeAgentRunSummaryCounts = {
+  artifacts: number
+  commands: number
+  files: number
+  logs: number
+  steps: number
+  toolCalls: number
+}
+
+export type ThreadCodeAgentRunData = CodeAgentRunMetadata & {
+  __agenthubFullRunId?: string
+  __agenthubSummaryCounts?: CodeAgentRunSummaryCounts
+  __agenthubSummaryOnly?: boolean
+}
+
+const fullCodeAgentRunCache = new Map<string, CodeAgentRunMetadata>()
+
+export function getCachedCodeAgentRunMetadata(id?: string | null): CodeAgentRunMetadata | null {
+  return id ? (fullCodeAgentRunCache.get(id) ?? null) : null
+}
+
 function toThreadMessage(message: Message): ThreadMessageLike {
   if (message.senderType === 'system') {
     return {
@@ -66,7 +87,9 @@ function toThreadMessage(message: Message): ThreadMessageLike {
       : `**${senderLabel}**`
     : displayContent
   const artifacts = readArtifacts(message.metadata?.artifacts, rawCodeAgentRun)
-  const codeAgentRun = rawCodeAgentRun ? { ...rawCodeAgentRun, artifacts } : null
+  const codeAgentRun = rawCodeAgentRun
+    ? toThreadCodeAgentRunData(message.id, rawCodeAgentRun, artifacts)
+    : null
   const artifactPart = artifacts.length
     ? [{ type: 'data' as const, name: 'agent_artifacts', data: { items: artifacts } }]
     : []
@@ -111,6 +134,43 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   }
 }
 
+function toThreadCodeAgentRunData(
+  messageId: string,
+  metadata: CodeAgentRunMetadata,
+  artifacts: AgentArtifact[],
+): ThreadCodeAgentRunData {
+  const fullMetadata: CodeAgentRunMetadata = { ...metadata, artifacts }
+  fullCodeAgentRunCache.set(messageId, fullMetadata)
+
+  if (metadata.status !== 'completed') return fullMetadata
+
+  return {
+    type: metadata.type,
+    status: metadata.status,
+    runtime: metadata.runtime,
+    command: metadata.command,
+    cwd: metadata.cwd,
+    durationMs: metadata.durationMs,
+    exitCode: metadata.exitCode,
+    commands: [],
+    files: [],
+    finalMessage: metadata.finalMessage,
+    partialSuccess: metadata.partialSuccess,
+    reviewRequired: metadata.reviewRequired,
+    warning: metadata.warning,
+    __agenthubFullRunId: messageId,
+    __agenthubSummaryOnly: true,
+    __agenthubSummaryCounts: {
+      artifacts: artifacts.length,
+      commands: metadata.commands.length,
+      files: metadata.files.length,
+      logs: metadata.logs?.length ?? 0,
+      steps: metadata.steps?.length ?? 0,
+      toolCalls: metadata.toolCalls?.length ?? 0,
+    },
+  }
+}
+
 function isCodeAgentRunMetadata(value: unknown): value is CodeAgentRunMetadata {
   return Boolean(
     value && typeof value === 'object' && (value as { type?: unknown }).type === 'code-agent-run',
@@ -142,12 +202,12 @@ function readChatAttachments(value: unknown): ChatAttachment[] {
     const attachment = item as Partial<ChatAttachment>
     return (
       typeof attachment.id === 'string' &&
-      attachment.type === 'image' &&
+      (attachment.type === 'image' || attachment.type === 'file') &&
       typeof attachment.name === 'string' &&
       typeof attachment.mimeType === 'string' &&
       typeof attachment.size === 'number' &&
       typeof attachment.dataUrl === 'string' &&
-      attachment.dataUrl.startsWith('data:image/')
+      attachment.dataUrl.startsWith('data:')
     )
   })
 }
