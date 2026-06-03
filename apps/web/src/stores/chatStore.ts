@@ -5,6 +5,7 @@ import {
   type ChatAttachment,
   type Message,
   type OrchestratorRunListItem,
+  type QuotedMessagePreview,
   type Session,
   type Workspace,
   type WorkspaceAgent,
@@ -86,6 +87,39 @@ function upsertMessage(messages: Message[], message: Message): Message[] {
       ? messages.map((item) => (item.id === message.id ? message : item))
       : [...messages, message],
   )
+}
+
+function createQuotedMessagePreview(
+  message: Message,
+  kind: QuotedMessagePreview['kind'] = 'reply',
+): QuotedMessagePreview {
+  const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+  const displayContent =
+    typeof metadata.displayContent === 'string' && metadata.displayContent.trim()
+      ? metadata.displayContent
+      : typeof metadata.codeAgentRun === 'object' &&
+          metadata.codeAgentRun !== null &&
+          typeof (metadata.codeAgentRun as { finalMessage?: unknown }).finalMessage === 'string'
+        ? ((metadata.codeAgentRun as { finalMessage: string }).finalMessage || message.content)
+        : message.content
+  const content = displayContent
+    .replace(/```[\s\S]*?```/g, '[代码块]')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const agentName = typeof metadata.agentName === 'string' ? metadata.agentName.trim() : ''
+  const senderName = typeof metadata.senderName === 'string' ? metadata.senderName.trim() : ''
+  return {
+    messageId: message.id,
+    senderName:
+      message.senderType === SenderType.User
+        ? '我'
+        : message.senderType === SenderType.System
+          ? '系统'
+          : agentName || senderName || 'Agent',
+    senderType: message.senderType,
+    kind,
+    content: content ? content.slice(0, 240) : message.type === MessageType.Diff ? '[代码 Diff]' : '[消息]',
+  }
 }
 
 function sessionWorkspaceAgents(session: Session | null | undefined, agents: WorkspaceAgent[]) {
@@ -1260,6 +1294,7 @@ interface ChatState {
   agentActivity: AgentActivity | null
   replyingToMessageId: string | null
   replyingToMessage: Message | null
+  replyingToKind: NonNullable<QuotedMessagePreview['kind']>
   sessionsBootstrapped: boolean
   taskBoard: {
     runId: string
@@ -1301,6 +1336,7 @@ interface ChatState {
     options?: {
       displayContent?: string
       replyToMessageId?: string | null
+      quotedMessage?: QuotedMessagePreview | null
       safetyMode?: string
       usePendingAttachments?: boolean
     },
@@ -1311,6 +1347,7 @@ interface ChatState {
     options?: {
       displayContent?: string
       replyToMessageId?: string | null
+      quotedMessage?: QuotedMessagePreview | null
       safetyMode?: string
       usePendingAttachments?: boolean
     },
@@ -1326,7 +1363,10 @@ interface ChatState {
   clearPendingAttachments: () => void
   setSafetyMode: (mode: string) => void
   cancelRun: () => Promise<void>
-  setReplyingTo: (messageId: string | null) => void
+  setReplyingTo: (
+    messageId: string | null,
+    kind?: NonNullable<QuotedMessagePreview['kind']>,
+  ) => void
   setPreviewUrl: (
     url: string | null,
     fileType?: 'html' | 'markdown' | 'image' | null,
@@ -1362,6 +1402,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   agentActivity: null,
   replyingToMessageId: null,
   replyingToMessage: null,
+  replyingToKind: 'reply',
   sessionsBootstrapped: false,
   taskBoard: null,
   previewUrl: null,
@@ -1431,6 +1472,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       agentActivity: null,
       replyingToMessageId: null,
       replyingToMessage: null,
+      replyingToKind: 'reply',
       taskBoard: keepTaskBoard ? state.taskBoard : null,
       agentTabs: keepTaskBoard ? state.agentTabs : [],
       selectedAgentTab: keepTaskBoard
@@ -1677,15 +1719,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const messageType = messageTypeForOutgoingContent(attachments)
     const displayContent =
       options?.displayContent ?? (attachments.length ? content : contentForAgent)
+    const state = get()
+    const replyToMessageId = options?.replyToMessageId ?? state.replyingToMessageId
+    const replyToKind = options?.quotedMessage?.kind ?? state.replyingToKind ?? 'reply'
+    const quotedSource =
+      replyToMessageId && state.replyingToMessage?.id === replyToMessageId
+        ? state.replyingToMessage
+        : replyToMessageId
+          ? state.messages.find((message) => message.id === replyToMessageId) ?? null
+          : null
+    const quotedMessage =
+      options?.quotedMessage ??
+      (replyToMessageId && quotedSource ? createQuotedMessagePreview(quotedSource, replyToKind) : null)
+    const optimisticMetadataValue = {
+      ...(attachments.length ? { attachments } : {}),
+      ...(options?.displayContent !== undefined || attachments.length ? { displayContent } : {}),
+      ...(quotedMessage ? { quotedMessage } : {}),
+    }
     const optimisticMetadata =
-      attachments.length || options?.displayContent !== undefined
-        ? {
-            ...(attachments.length ? { attachments } : {}),
-            ...(options?.displayContent !== undefined || attachments.length
-              ? { displayContent }
-              : {}),
-          }
-        : null
+      Object.keys(optimisticMetadataValue).length > 0 ? optimisticMetadataValue : null
     const optimisticId = `local-${crypto.randomUUID()}`
     const optimisticMessage: Message = {
       id: optimisticId,
@@ -1695,7 +1747,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       type: messageType,
       content: displayContent,
       metadata: optimisticMetadata,
-      replyToMessageId: options?.replyToMessageId ?? get().replyingToMessageId,
+      replyToMessageId,
       createdAt: new Date().toISOString(),
     }
     set((s) => ({
@@ -1703,15 +1755,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       pendingAttachments: shouldUsePendingAttachments ? [] : s.pendingAttachments,
       replyingToMessageId: null,
       replyingToMessage: null,
+      replyingToKind: 'reply',
     }))
     try {
-      const replyToMessageId = optimisticMessage.replyToMessageId ?? undefined
       const msg = await api.sendMessageWithModel(sessionId, {
         content: contentForAgent,
         type: messageType,
         attachments,
         displayContent: options?.displayContent ?? (attachments.length ? content : undefined),
-        replyToMessageId,
+        replyToMessageId: replyToMessageId ?? undefined,
+        quotedMessage,
         safetyMode: options?.safetyMode,
       })
       updateCachedMessages(sessionId, (messages) => upsertMessage(messages, msg))
@@ -1894,13 +1947,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  setReplyingTo(messageId) {
+  setReplyingTo(messageId, kind = 'reply') {
     if (!messageId) {
-      set({ replyingToMessageId: null, replyingToMessage: null })
+      set({ replyingToMessageId: null, replyingToMessage: null, replyingToKind: 'reply' })
       return
     }
     const msg = get().messages.find((m) => m.id === messageId) ?? null
-    set({ replyingToMessageId: messageId, replyingToMessage: msg })
+    set({ replyingToMessageId: messageId, replyingToMessage: msg, replyingToKind: kind })
   },
 
   setPreviewUrl(url, _fileType = null, fileName = null) {

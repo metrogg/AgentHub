@@ -262,6 +262,14 @@ export interface Message {
   createdAt: string
 }
 
+export interface QuotedMessagePreview {
+  messageId: string
+  senderName: string
+  senderType?: string
+  kind?: 'reply' | 'quote'
+  content: string
+}
+
 export interface ChatAttachment {
   id: string
   type: 'image' | 'file'
@@ -1122,6 +1130,7 @@ export const api = {
       attachments?: ChatAttachment[]
       displayContent?: string
       replyToMessageId?: string | null
+      quotedMessage?: QuotedMessagePreview | null
       safetyMode?: string
     },
   ) =>
@@ -1136,6 +1145,7 @@ export const api = {
           ...(data.attachments?.length ? { attachments: data.attachments } : {}),
           ...(data.displayContent !== undefined ? { displayContent: data.displayContent } : {}),
           ...(data.replyToMessageId ? { replyToMessageId: data.replyToMessageId } : {}),
+          ...(data.quotedMessage ? { quotedMessage: data.quotedMessage } : {}),
           ...(data.safetyMode ? { safetyMode: data.safetyMode } : {}),
         },
       }),
