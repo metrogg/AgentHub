@@ -200,6 +200,16 @@ if (staleLeases.staleLeaseCount > 0) {
     '[Recovery] Marked interrupted runtime leases as stale',
   )
 }
+
+// Also recover any busy worker instances whose leases are now stale
+const { workerController } = await import('./services/orchestrator/worker-controller')
+const { recoveredLeaseCount, affectedWorkerIds } = await workerController.recoverStaleOnStartup()
+if (recoveredLeaseCount > 0) {
+  logger.warn(
+    { recoveredLeaseCount, affectedWorkerIds },
+    '[Recovery] WorkerController recovered stale worker instances on startup',
+  )
+}
 for (const run of runningRuns) {
   OrchestratorEngine.resumeRun(run.id).catch((err) => {
     logger.error({ err, runId: run.id }, '[Recovery] Failed to resume run')

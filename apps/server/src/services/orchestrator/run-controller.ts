@@ -4,6 +4,7 @@ import {
   startManagerLoopRun,
   type ManagerDecisionEventContext,
 } from './manager-loop'
+import { workerController } from './worker-controller'
 import {
   artifacts,
   and,
@@ -404,6 +405,20 @@ export class RunController {
 
   async reconcile(run: RunControllerRunContext): Promise<RunResourceSnapshot> {
     const snapshot = await this.loadResourceSnapshot(run.runId)
+
+    // Reconcile each worker instance that needs attention
+    const busyOrFailedWorkers = snapshot.workerInstances.filter(
+      (w) => w.observedState === 'busy' || w.observedState === 'failed' || w.observedState === 'provisioning',
+    )
+    for (const worker of busyOrFailedWorkers) {
+      await workerController.reconcile(worker.id, {
+        workspaceId: run.workspaceId,
+        groupSessionId: run.groupSessionId,
+        runId: run.runId,
+        actorId: run.actor?.id ?? null,
+      })
+    }
+
     await emitRunEvent({
       runId: run.runId,
       workspaceId: run.workspaceId,
