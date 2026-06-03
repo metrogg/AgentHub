@@ -2095,14 +2095,13 @@ function FontDisplayPanel({ settings, patchSettings }: { settings: AppSettings; 
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('字体大小')}</div>
               <SegmentedControl value={settings.fontSize} options={fontSizeOptions} onChange={(fontSize) => patchSettings({ fontSize })} />
             </div>
-            <div>
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('消息样式')}</div>
-              <SegmentedControl
-                value={normalizeMessageStyleSetting(settings.bubbleStyle)}
-                options={messageStyleOptions}
-                onChange={(bubbleStyle) => patchSettings({ bubbleStyle: normalizeMessageStyleSetting(bubbleStyle) })}
-              />
-            </div>
+            <MessageStylePicker
+              value={normalizeMessageStyleSetting(settings.bubbleStyle)}
+              accent={accentColor(settings.accent)}
+              onChange={(bubbleStyle) =>
+                patchSettings({ bubbleStyle: normalizeMessageStyleSetting(bubbleStyle) })
+              }
+            />
           </div>
 
           <button
@@ -2126,6 +2125,120 @@ function FontDisplayPanel({ settings, patchSettings }: { settings: AppSettings; 
         <FontPreview settings={settings} />
       </div>
     </InsetPanel>
+  )
+}
+
+function MessageStylePicker({
+  accent,
+  onChange,
+  value,
+}: {
+  accent: string
+  onChange: (value: string) => void
+  value: string
+}) {
+  const { t } = useI18n()
+
+  return (
+    <div className="md:col-span-2">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t('消息样式')}</div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {messageStyleOptions.map((option) => (
+          <MessageStylePreviewOption
+            key={option}
+            active={value === option}
+            accent={accent}
+            label={t(option)}
+            mode={normalizeMessageStyleMode(option)}
+            onClick={() => onChange(option)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function MessageStylePreviewOption({
+  accent,
+  active,
+  label,
+  mode,
+  onClick,
+}: {
+  accent: string
+  active: boolean
+  label: string
+  mode: 'bubble' | 'flat'
+  onClick: () => void
+}) {
+  const isFlat = mode === 'flat'
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group rounded-xl border p-3 text-left transition hover:-translate-y-0.5 hover:shadow-sm"
+      style={{
+        background: active ? 'var(--settings-active-bg)' : 'var(--settings-control-bg)',
+        borderColor: active ? accent : 'var(--settings-border)',
+        boxShadow: active ? `0 0 0 1px ${accent}22, 0 10px 24px rgba(15, 23, 42, 0.08)` : undefined,
+      }}
+    >
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-sm font-semibold" style={{ color: 'var(--settings-text)' }}>
+          {label}
+        </span>
+        <span
+          className="grid h-4 w-4 place-items-center rounded-full border"
+          style={{
+            borderColor: active ? accent : 'var(--settings-border)',
+            background: active ? accent : 'var(--settings-panel-muted)',
+          }}
+          aria-hidden="true"
+        >
+          {active && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+        </span>
+      </div>
+
+      <div
+        className="overflow-hidden rounded-lg border p-3"
+        style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)' }}
+      >
+        {isFlat ? (
+          <div className="space-y-2">
+            <div className="flex gap-2 border-b pb-2" style={{ borderColor: 'var(--settings-border)' }}>
+              <span className="h-5 w-5 shrink-0 rounded-full bg-neutral-300" />
+              <span className="min-w-0 flex-1 space-y-1.5">
+                <span className="block h-1.5 w-16 rounded-full bg-neutral-500/70" />
+                <span className="block h-1.5 w-5/6 rounded-full bg-neutral-300" />
+              </span>
+            </div>
+            <div className="flex justify-end border-r-2 pr-2" style={{ borderColor: accent }}>
+              <span className="w-2/3 space-y-1.5">
+                <span className="ml-auto block h-1.5 w-14 rounded-full" style={{ background: accent }} />
+                <span className="ml-auto block h-1.5 w-full rounded-full bg-neutral-300" />
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <span className="h-5 w-5 shrink-0 rounded-full bg-neutral-300" />
+              <span className="max-w-[72%] rounded-[14px] border border-neutral-200 bg-white px-3 py-2 shadow-sm">
+                <span className="block h-1.5 w-20 rounded-full bg-neutral-400" />
+                <span className="mt-1.5 block h-1.5 w-28 rounded-full bg-neutral-200" />
+              </span>
+            </div>
+            <div className="flex justify-end">
+              <span className="max-w-[70%] rounded-[14px] px-3 py-2" style={{ background: accent }}>
+                <span className="block h-1.5 w-24 rounded-full bg-white/90" />
+                <span className="mt-1.5 block h-1.5 w-16 rounded-full bg-white/70" />
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </button>
   )
 }
 

@@ -104,6 +104,7 @@ import {
   type MemberProposal,
   type Message,
   type ModelCatalogItem,
+  type QuotedMessagePreview,
   type SkillSummary,
   type WelcomeQuickPrompt,
   type Workspace,
@@ -407,7 +408,7 @@ export const Thread: FC = () => {
               onOpenTasks={() => setGroupTasksOpen(true)}
             />
           )}
-          <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
+          <ThreadPrimitive.Viewport className="agenthub-thread-viewport flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
             <ThreadWelcome />
             <ThreadPrimitive.Messages
               components={{ UserMessage, AssistantMessage, SystemMessage }}
@@ -2410,14 +2411,42 @@ function messageDisplaySnippet(message: Message, limit = 96) {
   return `${text.slice(0, limit - 1)}…`
 }
 
-function quoteMessageText(message: Message) {
-  const name = messageDisplayName(message)
-  const content = messageDisplayContent(message).trim() || messageDisplaySnippet(message)
-  const trimmed = content.length > 1800 ? `${content.slice(0, 1800)}…` : content
-  const quoteLines = [`引用 ${name}:`, ...trimmed.split(/\r?\n/)]
-    .map((line) => `> ${line}`)
-    .join('\n')
-  return `${quoteLines}\n\n`
+function quotedPreviewFromMessage(
+  message: Message,
+  kind: NonNullable<QuotedMessagePreview['kind']> = 'reply',
+): QuotedMessagePreview {
+  return {
+    messageId: message.id,
+    senderName: messageDisplayName(message),
+    senderType: message.senderType,
+    kind,
+    content: messageDisplaySnippet(message, 180),
+  }
+}
+
+function quotedPreviewFromValue(value: unknown): QuotedMessagePreview | null {
+  const record = nestedRecord(value)
+  if (!record) return null
+  const messageId = typeof record.messageId === 'string' ? record.messageId.trim() : ''
+  const senderName = typeof record.senderName === 'string' ? record.senderName.trim() : ''
+  const content = typeof record.content === 'string' ? record.content.trim() : ''
+  if (!messageId || !senderName || !content) return null
+  return {
+    messageId,
+    senderName,
+    senderType: typeof record.senderType === 'string' ? record.senderType : undefined,
+    kind: record.kind === 'quote' ? 'quote' : 'reply',
+    content: content.length > 240 ? `${content.slice(0, 239)}…` : content,
+  }
+}
+
+function quotedPreviewForMessage(message: Message, messages: Message[]): QuotedMessagePreview | null {
+  const metadataQuote = quotedPreviewFromValue(messageMetadata(message).quotedMessage)
+  if (metadataQuote) return metadataQuote
+  const replyToMessageId = typeof message.replyToMessageId === 'string' ? message.replyToMessageId : ''
+  if (!replyToMessageId) return null
+  const source = messages.find((item) => item.id === replyToMessageId)
+  return source ? quotedPreviewFromMessage(source) : null
 }
 
 type LocalChangeTarget = {
@@ -2515,29 +2544,61 @@ const ThreadWelcomeContent: FC = () => {
   )
 }
 
-const ReplyContextBar: FC<{ message: Message; onCancel: () => void }> = ({ message, onCancel }) => (
-  <div className="mb-2 flex items-center gap-2 rounded-2xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-left">
-    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white text-neutral-500 ring-1 ring-neutral-200">
-      <MessageCircleReply className="h-3.5 w-3.5" />
-    </span>
-    <span className="min-w-0 flex-1">
-      <span className="block text-[11px] font-medium text-neutral-500">
-        回复 {messageDisplayName(message)}
-      </span>
-      <span className="block truncate text-xs text-neutral-700">
-        {messageDisplaySnippet(message, 120)}
-      </span>
-    </span>
-    <button
-      type="button"
-      onClick={onCancel}
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-neutral-400 transition hover:bg-white hover:text-neutral-700"
-      aria-label="取消回复"
-      title="取消回复"
+const QuotedMessageCard: FC<{
+  quote: QuotedMessagePreview
+  variant?: 'composer' | 'bubble'
+  onCancel?: () => void
+}> = ({ quote, variant = 'bubble', onCancel }) => {
+  const isQuote = quote.kind === 'quote'
+  const label = isQuote ? '引用' : '回复'
+  const Icon = isQuote ? TextQuote : MessageCircleReply
+
+  return (
+    <div
+      className={cn(
+        'flex min-w-0 items-start gap-2 rounded-xl border py-2 pl-2.5 pr-2 text-left',
+        variant === 'composer'
+          ? 'mb-2 border-neutral-200 bg-neutral-50 shadow-sm'
+          : 'mb-2 border-white/70 bg-white/70',
+      )}
     >
-      <X className="h-3.5 w-3.5" />
-    </button>
-  </div>
+      <span className="mt-0.5 h-8 w-1 shrink-0 rounded-full bg-sky-500" aria-hidden="true" />
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-1 text-[11px] font-semibold text-neutral-600">
+          <Icon className="h-3 w-3 shrink-0 text-sky-500" />
+          <span className="truncate">
+            {label} {quote.senderName}
+          </span>
+        </span>
+        <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-neutral-700">
+          {quote.content || '[消息]'}
+        </span>
+      </span>
+      {onCancel && (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-neutral-400 transition hover:bg-white hover:text-neutral-800"
+          aria-label={`取消${label}`}
+          title={`取消${label}`}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  )
+}
+
+const ReplyContextBar: FC<{
+  message: Message
+  kind: NonNullable<QuotedMessagePreview['kind']>
+  onCancel: () => void
+}> = ({ message, kind, onCancel }) => (
+  <QuotedMessageCard
+    quote={quotedPreviewFromMessage(message, kind)}
+    variant="composer"
+    onCancel={onCancel}
+  />
 )
 
 const LocalChangeComposer: FC<{
@@ -2665,6 +2726,7 @@ const Composer: FC = () => {
   const addPendingAttachments = useChatStore((state) => state.addPendingAttachments)
   const removePendingAttachment = useChatStore((state) => state.removePendingAttachment)
   const replyingToMessage = useChatStore((state) => state.replyingToMessage)
+  const replyingToKind = useChatStore((state) => state.replyingToKind)
   const setReplyingTo = useChatStore((state) => state.setReplyingTo)
   const sendMessage = useChatStore((state) => state.sendMessage)
   const agentTyping = useChatStore((state) => state.agentTyping)
@@ -3185,6 +3247,7 @@ const Composer: FC = () => {
           {replyingToMessage && (
             <ReplyContextBar
               message={replyingToMessage}
+              kind={replyingToKind}
               onCancel={() => setReplyingTo(null)}
             />
           )}
@@ -4097,6 +4160,7 @@ const UserMessage: FC = () => {
   const messageStyleMode = useMessageStyleMode()
   const isFlatMessageStyle = messageStyleMode === 'flat'
   const messageId = useMessage((message) => message.id)
+  const allMessages = useChatStore((state) => state.messages)
   const sourceMessage = useChatStore((state) =>
     state.messages.find((message) => message.id === messageId),
   )
@@ -4111,6 +4175,7 @@ const UserMessage: FC = () => {
     typeof sourceMessage?.metadata?.displayContent === 'string'
       ? sourceMessage.metadata.displayContent
       : (sourceMessage?.content ?? '')
+  const quotedPreview = sourceMessage ? quotedPreviewForMessage(sourceMessage, allMessages) : null
 
   function startEdit(event?: React.MouseEvent<HTMLButtonElement>) {
     event?.preventDefault()
@@ -4167,98 +4232,200 @@ const UserMessage: FC = () => {
     }
   }
 
+  const userActions =
+    canEdit && !editing ? (
+      <UserMessageActionBar
+        busy={busy}
+        onEdit={startEdit}
+        onWithdraw={withdraw}
+      />
+    ) : null
+  const timestamp = sourceMessage?.createdAt ? formatTime(sourceMessage.createdAt) : ''
+
+  if (editing) {
+    return (
+      <MessagePrimitive.Root
+        className={cn(
+          'group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start gap-3 py-3',
+          isFlatMessageStyle ? 'justify-start' : 'justify-end',
+        )}
+      >
+        {isFlatMessageStyle && <Avatar role="user" />}
+        <div
+          className={cn(
+            'flex w-full max-w-[36rem] flex-col gap-1.5',
+            isFlatMessageStyle ? 'items-start' : 'items-end',
+          )}
+        >
+          <UserMessageEditor
+            busy={busy}
+            draft={draft}
+            onCancel={cancelEdit}
+            onChange={setDraft}
+            onKeyDown={handleEditKeyDown}
+            onSave={saveEdit}
+          />
+          {timestamp && (
+            <MessageTimestamp align={isFlatMessageStyle ? 'left' : 'right'} value={timestamp} />
+          )}
+        </div>
+        {!isFlatMessageStyle && <Avatar role="user" />}
+      </MessagePrimitive.Root>
+    )
+  }
+
   return (
-    <MessagePrimitive.Root className={cn(
-      'group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start justify-end gap-3',
-      isFlatMessageStyle ? 'border-b border-neutral-100 py-3' : 'py-3',
-    )}>
-      <div className={cn(
-        'flex flex-col items-end gap-1.5',
-        editing ? 'w-full max-w-[36rem]' : isFlatMessageStyle ? 'w-full max-w-none' : 'max-w-[68%]',
-      )}>
+    <MessagePrimitive.Root
+      className={cn(
+        'group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start gap-3',
+        isFlatMessageStyle ? 'justify-start border-b border-neutral-100 py-3' : 'justify-end py-3',
+      )}
+    >
+      {isFlatMessageStyle && <Avatar role="user" />}
+      <div
+        className={cn(
+          'flex flex-col gap-1.5',
+          isFlatMessageStyle ? 'w-full max-w-none items-start' : 'max-w-[68%] items-end',
+        )}
+      >
         <div
           className={cn(
             'w-full text-sm leading-6 text-neutral-900 transition-colors',
-            editing
-              ? 'rounded-2xl border border-neutral-200 bg-white p-2.5 shadow-sm'
-              : isFlatMessageStyle
-                ? 'border-r-2 border-neutral-300 bg-transparent py-0 pr-4 text-right shadow-none'
-                : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none',
+            isFlatMessageStyle
+              ? 'border-l-2 border-neutral-300 bg-transparent py-0 pl-4 text-left shadow-none'
+              : 'rounded-[18px] bg-[#f1f1f1] px-5 py-2.5 shadow-none',
           )}
         >
-          {editing ? (
-            <div className="flex flex-col gap-2">
-              <textarea
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={handleEditKeyDown}
-                placeholder="编辑消息"
-                className="max-h-36 min-h-16 resize-y rounded-xl bg-neutral-50 px-3 py-2 text-sm leading-6 text-neutral-900 outline-none ring-1 ring-transparent transition placeholder:text-neutral-400 focus:bg-white focus:ring-neutral-200"
-                autoFocus
-              />
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-[11px] text-neutral-400">Ctrl/⌘ + Enter 发送，Esc 取消</span>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={cancelEdit}
-                    className="h-7 rounded-full border border-neutral-200 bg-white px-2.5 text-[11px] font-medium text-neutral-600 transition hover:bg-neutral-50 hover:text-neutral-900"
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    onClick={saveEdit}
-                    disabled={busy === 'edit' || !draft.trim()}
-                    className="h-7 rounded-full bg-neutral-950 px-3 text-[11px] font-semibold text-white shadow-sm transition hover:bg-neutral-800 disabled:bg-neutral-300"
-                  >
-                    {busy === 'edit' ? '发送中' : '发送'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <MessagePrimitive.Parts
-              components={{
-                data: { by_name: { chat_attachments: ChatAttachmentsPart } },
-              }}
-            />
-          )}
+          <UserMessageParts quotedPreview={quotedPreview} />
         </div>
-        {canEdit && !editing && (
-          <div className="flex items-center gap-1 pr-1 text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">
-            <ToolButton
-              type="button"
-              aria-label="修改"
-              title="修改"
-              onClick={startEdit}
-              disabled={Boolean(busy)}
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </ToolButton>
-            <ToolButton
-              type="button"
-              aria-label="撤回"
-              title="撤回并尝试回滚修改"
-              onClick={withdraw}
-              disabled={Boolean(busy)}
-            >
-              {busy === 'withdraw' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
-            </ToolButton>
-          </div>
-        )}
-        {sourceMessage?.createdAt && (
-          <div className="pr-1 text-[11px] text-neutral-400">
-            {formatTime(sourceMessage.createdAt)}
-          </div>
+        {userActions}
+        {timestamp && (
+          <MessageTimestamp align={isFlatMessageStyle ? 'left' : 'right'} value={timestamp} />
         )}
       </div>
-      <Avatar role="user" />
+      {!isFlatMessageStyle && <Avatar role="user" />}
     </MessagePrimitive.Root>
+  )
+}
+
+type UserMessageBusy = 'edit' | 'withdraw' | null
+
+function UserMessageParts({
+  quotedPreview,
+}: {
+  quotedPreview: QuotedMessagePreview | null
+}) {
+  return (
+    <>
+      {quotedPreview && <QuotedMessageCard quote={quotedPreview} />}
+      <MessagePrimitive.Parts
+        components={{
+          data: { by_name: { chat_attachments: ChatAttachmentsPart } },
+        }}
+      />
+    </>
+  )
+}
+
+function UserMessageEditor({
+  busy,
+  draft,
+  onCancel,
+  onChange,
+  onKeyDown,
+  onSave,
+}: {
+  busy: UserMessageBusy
+  draft: string
+  onCancel: () => void
+  onChange: (value: string) => void
+  onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void
+  onSave: () => void
+}) {
+  return (
+    <div className="w-full rounded-2xl border border-neutral-200 bg-white p-2.5 text-sm leading-6 text-neutral-900 shadow-sm">
+      <div className="flex flex-col gap-2">
+        <textarea
+          value={draft}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="编辑消息"
+          className="max-h-36 min-h-16 resize-y rounded-xl bg-neutral-50 px-3 py-2 text-sm leading-6 text-neutral-900 outline-none ring-1 ring-transparent transition placeholder:text-neutral-400 focus:bg-white focus:ring-neutral-200"
+          autoFocus
+        />
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[11px] text-neutral-400">Ctrl/⌘ + Enter 发送，Esc 取消</span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="h-7 rounded-full border border-neutral-200 bg-white px-2.5 text-[11px] font-medium text-neutral-600 transition hover:bg-neutral-50 hover:text-neutral-900"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={busy === 'edit' || !draft.trim()}
+              className="h-7 rounded-full bg-neutral-950 px-3 text-[11px] font-semibold text-white shadow-sm transition hover:bg-neutral-800 disabled:bg-neutral-300"
+            >
+              {busy === 'edit' ? '发送中' : '发送'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function UserMessageActionBar({
+  busy,
+  onEdit,
+  onWithdraw,
+}: {
+  busy: UserMessageBusy
+  onEdit: (event?: React.MouseEvent<HTMLButtonElement>) => void
+  onWithdraw: (event?: React.MouseEvent<HTMLButtonElement>) => void
+}) {
+  return (
+    <div className="flex items-center gap-1 pr-1 text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">
+      <ToolButton
+        type="button"
+        aria-label="修改"
+        title="修改"
+        onClick={onEdit}
+        disabled={Boolean(busy)}
+      >
+        <Pencil className="h-3.5 w-3.5" />
+      </ToolButton>
+      <ToolButton
+        type="button"
+        aria-label="撤回"
+        title="撤回并尝试回滚修改"
+        onClick={onWithdraw}
+        disabled={Boolean(busy)}
+      >
+        {busy === 'withdraw' ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Trash2 className="h-3.5 w-3.5" />
+        )}
+      </ToolButton>
+    </div>
+  )
+}
+
+function MessageTimestamp({
+  align = 'left',
+  value,
+}: {
+  align?: 'left' | 'right'
+  value: string
+}) {
+  return (
+    <div className={cn('text-[11px] text-neutral-400', align === 'right' && 'pr-1 text-right')}>
+      {value}
+    </div>
   )
 }
 
@@ -4276,44 +4443,59 @@ const AssistantMessage: FC = () => {
   const messageStyleMode = useMessageStyleMode()
   const isFlatMessageStyle = messageStyleMode === 'flat'
   const messageId = useMessage((message) => message.id)
-  const createdAt = useChatStore(
-    (state) => state.messages.find((message) => message.id === messageId)?.createdAt,
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
   )
+  const timestamp = sourceMessage?.createdAt ? formatTime(sourceMessage.createdAt) : ''
+
   return (
-    <MessagePrimitive.Root className={cn(
-      'mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3',
-      isFlatMessageStyle ? 'border-b border-neutral-100 py-3' : 'py-4',
-    )}>
+    <MessagePrimitive.Root
+      className={cn(
+        'mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3',
+        isFlatMessageStyle ? 'border-b border-neutral-100 py-3' : 'py-4',
+      )}
+    >
       <Avatar role="assistant" />
       <div className={cn('min-w-0 flex-1', isFlatMessageStyle ? 'pl-1' : '')}>
-        <div className={cn('text-sm text-neutral-950', isFlatMessageStyle ? 'leading-6' : 'leading-7')}>
-          <MessagePrimitive.Parts
-            components={{
-              Text: MarkdownText,
-              Empty: AssistantThinking,
-              data: {
-                by_name: {
-                  agent_avatar: AgentAvatarPart,
-                  task_board: TaskBoardCard,
-                  code_agent_run: CodeAgentRunCard,
-                  agent_artifacts: AgentArtifactsCard,
-                  chat_attachments: ChatAttachmentsPart,
-                  clarification_card: ClarificationCardWrapper,
-                  member_proposal_card: MemberProposalCard,
-                  file_card: FileCardMessage,
-                  delivery_report: DeliveryReportMessage,
-                },
-              },
-            }}
-          />
+        <div
+          className={cn(
+            'text-sm text-neutral-950',
+            isFlatMessageStyle
+              ? 'leading-6'
+              : 'rounded-[18px] border border-neutral-200 bg-white px-4 py-3 leading-7 shadow-[0_1px_2px_rgba(15,23,42,0.04)]',
+          )}
+        >
+          <AssistantMessageParts />
         </div>
         <AssistantActionBar />
         <BranchPicker />
-        {createdAt && (
-          <div className="mt-1 text-[11px] text-neutral-400">{formatTime(createdAt)}</div>
-        )}
+        {timestamp && <div className="mt-1 text-[11px] text-neutral-400">{timestamp}</div>}
       </div>
     </MessagePrimitive.Root>
+  )
+}
+
+function AssistantMessageParts() {
+  return (
+    <MessagePrimitive.Parts
+      components={{
+        Text: MarkdownText,
+        Empty: AssistantThinking,
+        data: {
+          by_name: {
+            agent_avatar: AgentAvatarPart,
+            task_board: TaskBoardCard,
+            code_agent_run: CodeAgentRunCard,
+            agent_artifacts: AgentArtifactsCard,
+            chat_attachments: ChatAttachmentsPart,
+            clarification_card: ClarificationCardWrapper,
+            member_proposal_card: MemberProposalCard,
+            file_card: FileCardMessage,
+            delivery_report: DeliveryReportMessage,
+          },
+        },
+      }}
+    />
   )
 }
 
@@ -6976,13 +7158,14 @@ const AssistantActionBar: FC = () => {
 
   function reply() {
     if (!canUseMessage) return
-    setReplyingTo(messageId)
+    setReplyingTo(messageId, 'reply')
     focusComposerInput()
   }
 
   function quote() {
-    if (!sourceMessage) return
-    insertTextIntoComposer(quoteMessageText(sourceMessage))
+    if (!canUseMessage) return
+    setReplyingTo(messageId, 'quote')
+    focusComposerInput()
   }
 
   async function regenerate() {
@@ -7013,9 +7196,9 @@ const AssistantActionBar: FC = () => {
       </MessageActionButton>
       <MessageActionButton
         aria-label="引用"
-        title="引用到输入框"
+        title="引用为卡片"
         onClick={quote}
-        disabled={!sourceMessage}
+        disabled={!canUseMessage}
         icon={<TextQuote className="h-3.5 w-3.5" />}
       >
         引用
@@ -7071,7 +7254,7 @@ const BranchPicker: FC = () => (
   </BranchPickerPrimitive.Root>
 )
 
-const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
+const Avatar: FC<{ role: 'user' | 'assistant'; className?: string }> = ({ className, role }) => {
   const messageId = useMessage((message) => message.id)
   const sourceMessage = useChatStore((state) => state.messages.find((m) => m.id === messageId))
   const streamingMessage = useChatStore((state) => state.streamingMessage)
@@ -7098,7 +7281,10 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
   if (role === 'assistant' && senderAgent) {
     return (
       <div
-        className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full text-sm font-semibold text-white shadow-sm"
+        className={cn(
+          'grid shrink-0 place-items-center overflow-hidden rounded-full text-sm font-semibold text-white shadow-sm',
+          className ?? 'h-9 w-9',
+        )}
         style={{ background: senderAgent.color ?? '#111827' }}
       >
         {senderAgent.avatar ? (
@@ -7119,13 +7305,16 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
   if (role === 'assistant' && runtime) {
     return (
       <div
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-neutral-200 bg-white shadow-sm"
+        className={cn(
+          'grid shrink-0 place-items-center rounded-full border border-neutral-200 bg-white shadow-sm',
+          className ?? 'h-9 w-9',
+        )}
         title={codeAgentRuntimeLabel(runtime)}
       >
         <img
           src={codeAgentLogoSrc(runtime)}
           alt={codeAgentRuntimeLabel(runtime)}
-          className="h-5 w-5 object-contain"
+          className={cn('object-contain', className ? 'h-3.5 w-3.5' : 'h-5 w-5')}
           decoding="async"
           draggable={false}
         />
@@ -7134,14 +7323,15 @@ const Avatar: FC<{ role: 'user' | 'assistant' }> = ({ role }) => {
   }
 
   if (role === 'user') {
-    return <UserAvatar />
+    return <UserAvatar className={className} />
   }
 
   return (
     <div
       className={cn(
-        'grid h-9 w-9 shrink-0 place-items-center rounded-full',
+        'grid shrink-0 place-items-center rounded-full',
         role === 'assistant' ? 'bg-[#eef8f6] text-[#87a9a4]' : 'bg-blue-500 text-white',
+        className ?? 'h-9 w-9',
       )}
     >
       {role === 'assistant' ? <Bot className="h-4 w-4" /> : <User className="h-4 w-4" />}
@@ -7538,7 +7728,7 @@ function closeUnterminatedCodeFence(text: string) {
 }
 
 const MarkdownText: FC = () => (
-  <div className="not-prose mt-1 inline-block w-fit max-w-full rounded-[20px] rounded-tl-md bg-[#f4f5f1] px-4 py-2.5 text-neutral-900 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+  <div className="not-prose mt-1 max-w-full text-neutral-900">
     <MarkdownTextPrimitive
       remarkPlugins={[remarkGfm]}
       smooth={false}
