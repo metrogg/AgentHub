@@ -1,6 +1,6 @@
-import { writeFile, readFile } from 'node:fs/promises'
+import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { existsSync, statSync } from 'node:fs'
-import { resolve, sep } from 'node:path'
+import { dirname, isAbsolute, resolve, sep } from 'node:path'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
@@ -17,6 +17,25 @@ const writeFileSchema = z.object({
   startLine: z.number().int().positive().optional(),
   endLine: z.number().int().positive().optional(),
 })
+
+export function resolveWorkspaceWritePath(filePath: string, workspaceRoot: string) {
+  const allowedRoot = resolve(workspaceRoot)
+  const normalizedFilePath = filePath.trim()
+  if (!normalizedFilePath) {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '文件路径不能为空')
+  }
+
+  const resolvedPath = isAbsolute(normalizedFilePath)
+    ? resolve(normalizedFilePath)
+    : resolve(allowedRoot, normalizedFilePath)
+  const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
+
+  if (resolvedPath !== allowedRoot && !resolvedPath.startsWith(rootWithSep)) {
+    throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
+  }
+
+  return { allowedRoot, resolvedPath }
+}
 
 export const fileRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -41,14 +60,7 @@ export const fileRoutes = new Hono<{ Variables: AuthVariables }>()
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '工作区无项目路径')
     }
 
-    // Resolve and validate path is within workspace
-    const resolvedPath = resolve(filePath)
-    const allowedRoot = resolve(ws.projectPath)
-    const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
-
-    if (resolvedPath !== allowedRoot && !resolvedPath.startsWith(rootWithSep)) {
-      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
-    }
+    const { resolvedPath } = resolveWorkspaceWritePath(filePath, ws.projectPath)
 
     // Line-range replacement
     if (startLine !== undefined && endLine !== undefined) {
@@ -77,6 +89,7 @@ export const fileRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     // Full file write
+    await mkdir(dirname(resolvedPath), { recursive: true })
     await writeFile(resolvedPath, content, 'utf-8')
 
     logger.info({ filePath: resolvedPath, workspaceId }, 'File updated (full)')

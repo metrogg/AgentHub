@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { writeFile, unlink } from 'node:fs/promises'
-import { basename, extname, resolve, relative, isAbsolute, join, normalize, sep } from 'node:path'
+import { basename, extname, resolve, isAbsolute, join, normalize, posix, sep } from 'node:path'
 import { Buffer } from 'node:buffer'
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
@@ -227,41 +227,21 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!existsSync(resolvedPath) || !statSync(resolvedPath).isDirectory()) {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '项目路径不存在')
     }
-    const tmpFile = join(tmpdir(), `agenthub-diff-${Date.now()}.patch`)
     try {
-      await writeFile(tmpFile, diff, 'utf8')
-      // Validate first
-      const check = Bun.spawn(['git', 'apply', '--check', tmpFile], {
-        cwd: resolvedPath,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: process.env,
-      })
-      const checkCode = await check.exited
-      if (checkCode !== 0) {
-        const stderr = await new Response(check.stderr).text()
-        throw AppError.fromCode(AppErrorCodes.DIFF_VALIDATION_FAILED, `Diff 验证失败: ${stderr.trim()}`)
-      }
-      // Apply
-      const apply = Bun.spawn(['git', 'apply', tmpFile], {
-        cwd: resolvedPath,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: process.env,
-      })
-      const applyCode = await apply.exited
-      if (applyCode !== 0) {
-        const stderr = await new Response(apply.stderr).text()
-        throw AppError.internal(AppErrorCodes.DIFF_APPLY_FAILED, `Diff 应用失败: ${stderr.trim()}`)
-      }
-      logger.info({ projectPath: resolvedPath }, 'Diff applied successfully')
-      return c.json({ success: true, message: 'Diff applied successfully' })
+      const result = await acceptDiffInWorkspace(resolvedPath, diff)
+      logger.info(
+        {
+          projectPath: resolvedPath,
+          stagedFiles: result.stagedFiles,
+          appliedPatch: result.appliedPatch,
+        },
+        'Diff accepted and staged successfully',
+      )
+      return c.json({ success: true, message: result.message, stagedFiles: result.stagedFiles })
     } catch (err: any) {
       if (err instanceof AppError) throw err
       logger.error({ err: err?.message, projectPath: resolvedPath }, 'Diff apply error')
       throw AppError.internal(AppErrorCodes.DIFF_APPLY_FAILED, err?.message || 'Diff 应用失败')
-    } finally {
-      try { await unlink(tmpFile) } catch {}
     }
   })
   .get('/zip-download', async (c) => {
@@ -337,6 +317,208 @@ export async function serveDeployStatic(workspaceId: string, subPath: string): P
   return new Response(Bun.file(filePath), {
     headers: { 'Content-Type': contentType(filePath) },
   })
+}
+
+interface GitCommandResult {
+  code: number
+  stdout: string
+  stderr: string
+}
+
+interface AcceptDiffResult {
+  appliedPatch: boolean
+  message: string
+  stagedFiles: string[]
+}
+
+async function runGit(cwd: string, args: string[]): Promise<GitCommandResult> {
+  const proc = Bun.spawn(['git', ...args], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: process.env,
+  })
+  const [code, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ])
+  return { code, stdout, stderr }
+}
+
+function unquoteDiffPath(value: string) {
+  const trimmed = value.trim()
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      return JSON.parse(trimmed) as string
+    } catch {
+      return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+    }
+  }
+  return trimmed
+}
+
+function splitDiffGitHeaderPaths(header: string) {
+  const paths: string[] = []
+  const pattern = /"((?:\\.|[^"\\])*)"|(\S+)/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(header))) {
+    const token = match[0]
+    paths.push(unquoteDiffPath(token))
+  }
+  return paths
+}
+
+function normalizeDiffTargetPath(value: string): string | null {
+  const withoutTimestamp = value.split('\t')[0]?.trim() ?? ''
+  const unquoted = unquoteDiffPath(withoutTimestamp)
+  if (!unquoted || unquoted === '/dev/null' || unquoted === 'dev/null') return null
+
+  const withoutPrefix = unquoted.replace(/^[ab]\//, '')
+  const normalized = posix.normalize(withoutPrefix.replace(/\\/g, '/')).replace(/^\.\//, '')
+  if (!normalized || normalized === '.') return null
+  return normalized
+}
+
+export function extractDiffTargetPaths(diff: string): string[] {
+  const paths = new Set<string>()
+  for (const rawLine of diff.replace(/\r\n/g, '\n').split('\n')) {
+    const line = rawLine.trimEnd()
+    if (line.startsWith('diff --git ')) {
+      const headerPaths = splitDiffGitHeaderPaths(line.slice('diff --git '.length))
+      for (const headerPath of headerPaths) {
+        const normalized = normalizeDiffTargetPath(headerPath)
+        if (normalized) paths.add(normalized)
+      }
+      continue
+    }
+    if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+      const normalized = normalizeDiffTargetPath(line.slice(4))
+      if (normalized) paths.add(normalized)
+    }
+  }
+  return [...paths]
+}
+
+function assertDiffPathsStayInWorkspace(projectPath: string, paths: string[]) {
+  const root = resolve(projectPath)
+  const rootWithSep = root.endsWith(sep) ? root : `${root}${sep}`
+  for (const filePath of paths) {
+    if (
+      filePath.includes('\0') ||
+      filePath === '..' ||
+      filePath.startsWith('../') ||
+      filePath.startsWith('/') ||
+      /^[A-Za-z]:/.test(filePath)
+    ) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, `Diff 包含非法路径: ${filePath}`)
+    }
+    const resolved = resolve(root, filePath)
+    if (resolved !== root && !resolved.startsWith(rootWithSep)) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, `Diff 路径不在工作区范围内: ${filePath}`)
+    }
+  }
+}
+
+async function ensureGitRepository(projectPath: string) {
+  const probe = await runGit(projectPath, ['rev-parse', '--is-inside-work-tree'])
+  if (probe.code === 0 && probe.stdout.trim() === 'true') return
+
+  const init = await runGit(projectPath, ['init'])
+  if (init.code !== 0) {
+    throw AppError.internal(AppErrorCodes.DIFF_APPLY_FAILED, `Git 仓库初始化失败: ${init.stderr.trim()}`)
+  }
+}
+
+async function gitStatusForPaths(projectPath: string, paths: string[]) {
+  const status = await runGit(projectPath, ['status', '--porcelain', '--untracked-files=all', '--', ...paths])
+  if (status.code !== 0) {
+    throw AppError.internal(AppErrorCodes.DIFF_APPLY_FAILED, `读取 Git 状态失败: ${status.stderr.trim()}`)
+  }
+  return status.stdout.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean)
+}
+
+async function gitStagedFilesForPaths(projectPath: string, paths: string[]) {
+  const diff = await runGit(projectPath, ['diff', '--cached', '--name-only', '--', ...paths])
+  if (diff.code !== 0) {
+    throw AppError.internal(AppErrorCodes.DIFF_APPLY_FAILED, `读取暂存区失败: ${diff.stderr.trim()}`)
+  }
+  return diff.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+}
+
+async function tryApplyDiffPatch(projectPath: string, diff: string) {
+  const tmpFile = join(tmpdir(), `agenthub-diff-${Date.now()}-${Math.random().toString(16).slice(2)}.patch`)
+  try {
+    await writeFile(tmpFile, diff, 'utf8')
+    const check = await runGit(projectPath, ['apply', '--check', tmpFile])
+    if (check.code !== 0) {
+      return { applied: false, stderr: check.stderr.trim() }
+    }
+
+    const apply = await runGit(projectPath, ['apply', tmpFile])
+    if (apply.code !== 0) {
+      throw AppError.internal(AppErrorCodes.DIFF_APPLY_FAILED, `Diff 应用失败: ${apply.stderr.trim()}`)
+    }
+    return { applied: true, stderr: '' }
+  } finally {
+    try {
+      await unlink(tmpFile)
+    } catch {}
+  }
+}
+
+function isAlreadyMaterializedDiffFailure(stderr: string) {
+  return /already exists in working directory/i.test(stderr) || /already exists/i.test(stderr)
+}
+
+function buildDiffAcceptanceMessage(appliedPatch: boolean, stagedFiles: string[]) {
+  if (stagedFiles.length === 0) {
+    return 'Diff 对应文件没有新的可暂存变更。'
+  }
+  const preview = stagedFiles.slice(0, 3).join('、')
+  const suffix = stagedFiles.length > 3 ? ` 等 ${stagedFiles.length} 个文件` : ''
+  return appliedPatch
+    ? `已应用并暂存 ${preview}${suffix}。`
+    : `已暂存 ${preview}${suffix}。`
+}
+
+export async function acceptDiffInWorkspace(projectPath: string, diff: string): Promise<AcceptDiffResult> {
+  const targetPaths = extractDiffTargetPaths(diff)
+  if (targetPaths.length === 0) {
+    throw AppError.fromCode(AppErrorCodes.DIFF_VALIDATION_FAILED, 'Diff 中没有可识别的文件路径')
+  }
+
+  assertDiffPathsStayInWorkspace(projectPath, targetPaths)
+  await ensureGitRepository(projectPath)
+
+  let appliedPatch = false
+  const statusBefore = await gitStatusForPaths(projectPath, targetPaths)
+  if (statusBefore.length === 0) {
+    const applyResult = await tryApplyDiffPatch(projectPath, diff)
+    if (!applyResult.applied) {
+      if (!isAlreadyMaterializedDiffFailure(applyResult.stderr)) {
+        throw AppError.fromCode(AppErrorCodes.DIFF_VALIDATION_FAILED, `Diff 验证失败: ${applyResult.stderr}`)
+      }
+      logger.info(
+        { projectPath, targetPaths, stderr: applyResult.stderr },
+        'Diff patch already materialized in workspace; staging existing files',
+      )
+    } else {
+      appliedPatch = true
+    }
+  }
+
+  const add = await runGit(projectPath, ['add', '--all', '--', ...targetPaths])
+  if (add.code !== 0) {
+    throw AppError.internal(AppErrorCodes.DIFF_APPLY_FAILED, `暂存 Diff 失败: ${add.stderr.trim()}`)
+  }
+
+  const stagedFiles = await gitStagedFilesForPaths(projectPath, targetPaths)
+  return {
+    appliedPatch,
+    stagedFiles,
+    message: buildDiffAcceptanceMessage(appliedPatch, stagedFiles),
+  }
 }
 
 function contentType(filePath: string) {

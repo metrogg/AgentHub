@@ -83,6 +83,7 @@ import {
   type DragEvent,
   type FC,
   type FormEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useEffect,
@@ -267,6 +268,12 @@ type PreviewActionItem = {
   folder?: string
 }
 
+type DiffEditSaveParams = {
+  lineText: string
+  lineNumber?: number
+  fileContent?: string
+}
+
 function classifyAgentSession(
   session: ReturnType<typeof useChatStore.getState>['currentSession'],
 ) {
@@ -288,6 +295,8 @@ export const Thread: FC = () => {
   const isAgentDirectSession = sessionKind === 'agent-direct'
   const taskBoard = useChatStore((s) => s.taskBoard)
   const agentActivity = useChatStore((s) => s.agentActivity)
+  const messages = useChatStore((s) => s.messages)
+  const streamingCodeAgentRun = useChatStore((s) => s.streamingCodeAgentRun)
   const visibleTaskBoard =
     taskBoard &&
     taskBoard.sessionId === currentSession?.id &&
@@ -312,7 +321,35 @@ export const Thread: FC = () => {
     ['thinking', 'planning', 'synthesizing'].includes(agentActivity.phase ?? '')
       ? agentActivity
       : null
-  const showContextRail = Boolean(currentSession?.workspaceId || railTaskBoard || planningActivity)
+  const directActivity =
+    !isGroupSession && agentActivity?.sessionId === currentSession?.id ? agentActivity : null
+  const directRunProgress = useMemo(
+    () =>
+      isAgentDirectSession
+        ? buildDirectRunProgress({
+            activity: directActivity,
+            agentName:
+              currentSession?.workspaceAgentId
+                ? (workspaceAgents.find((a) => a.id === currentSession.workspaceAgentId)?.name ??
+                  currentSession.title)
+                : currentSession?.title,
+            messages,
+            streamingRun: streamingCodeAgentRun,
+          })
+        : null,
+    [
+      currentSession?.title,
+      currentSession?.workspaceAgentId,
+      directActivity,
+      isAgentDirectSession,
+      messages,
+      streamingCodeAgentRun,
+      workspaceAgents,
+    ],
+  )
+  const showContextRail = Boolean(
+    currentSession?.workspaceId || railTaskBoard || planningActivity || directRunProgress,
+  )
   const isOrchestratorTaskChild = sessionKind === 'orchestrator-task'
   const [groupDetailsOpen, setGroupDetailsOpen] = useState(false)
   const [groupTasksOpen, setGroupTasksOpen] = useState(false)
@@ -432,7 +469,11 @@ export const Thread: FC = () => {
           <ArtifactPreviewPanel item={previewItem} onClose={() => setPreviewItem(null)} />
         )}
         {showInlineContextRail && (
-          <ThreadContextRail taskBoard={railTaskBoard} activity={planningActivity} />
+          <ThreadContextRail
+            taskBoard={railTaskBoard}
+            activity={planningActivity}
+            directRunProgress={directRunProgress}
+          />
         )}
         {isGroupSession && (
           <GroupChatDetailsPanel
@@ -818,18 +859,39 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
 
 type LiveTaskBoard = NonNullable<ReturnType<typeof useChatStore.getState>['taskBoard']>
 type LiveAgentActivity = NonNullable<ReturnType<typeof useChatStore.getState>['agentActivity']>
+type DirectRunStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
+type DirectRunProgress = {
+  agentName?: string
+  done: number
+  percent: number
+  run: CodeAgentRunMetadata
+  status: CodeAgentRunMetadata['status']
+  steps: Array<{
+    id: string
+    status: DirectRunStepStatus
+    title: string
+    subtitle?: string
+    detail?: string
+  }>
+  subtitle: string
+  total: number
+}
 
 const ThreadContextRail: FC<{
   taskBoard: LiveTaskBoard | null
   activity: LiveAgentActivity | null
-}> = ({ taskBoard, activity }) => {
+  directRunProgress?: DirectRunProgress | null
+}> = ({ taskBoard, activity, directRunProgress }) => {
   const workspace = useChatStore((state) => state.currentWorkspace)
   const [progressOpen, setProgressOpen] = useState(true)
   const [workspaceOpen, setWorkspaceOpen] = useState(true)
   const stats = taskProgressStats(taskBoard)
   const files = useMemo(
-    () => collectRailFiles(taskBoard, workspace),
-    [taskBoard, workspace?.projectPath],
+    () =>
+      directRunProgress && !taskBoard
+        ? collectDirectRunFiles(directRunProgress, workspace)
+        : collectRailFiles(taskBoard, workspace),
+    [directRunProgress, taskBoard, workspace?.projectPath],
   )
   const activeTask =
     taskBoard?.tasks.find((task) => task.status === 'running') ??
@@ -839,67 +901,87 @@ const ThreadContextRail: FC<{
     workspace?.name ||
     (workspace?.projectPath ? workspaceNameFromPath(workspace.projectPath) : 'AgentHub')
   const workspacePath = workspace?.projectPath ?? null
-  const progressPercent = taskBoard ? stats.percent : activity ? 18 : 0
-  const planningText =
-    taskBoard?.goal ||
-    taskBoard?.title ||
-    (activity
-      ? `${activity.agentName ?? 'Orchestrator'} 正在生成目标规划`
-      : '发送一个复杂目标后，进度会同步到这里。')
+  const progressPercent = taskBoard
+    ? stats.percent
+    : directRunProgress
+      ? directRunProgress.percent
+      : activity
+        ? 18
+        : 0
+  const hasProgress = Boolean(taskBoard || directRunProgress || activity)
 
   return (
     <aside className="agenthub-context-rail pointer-events-none hidden h-full w-[18.5rem] shrink-0 bg-transparent px-5 pb-4 pt-4 lg:block xl:w-[19.5rem] xl:px-8">
       <div className="pointer-events-none max-h-full overflow-visible bg-transparent">
         <div className="flex w-full flex-col gap-3 bg-transparent">
-        <RailCard
-          title="进度"
-          subtitle="跟踪较长任务的进度"
-          open={progressOpen}
-          onToggle={() => setProgressOpen((open) => !open)}
-        >
-          <div className="space-y-3">
-            <div className="rounded-xl bg-neutral-50 px-3 py-2.5">
-              <div className="flex items-center justify-between gap-2 text-[11px] text-neutral-500">
-                <span>目标规划</span>
-                <span className="shrink-0">
-                  {taskBoard ? runStatusLabel[taskBoard.status] ?? taskBoard.status : activityLabel(activity)}
-                </span>
-              </div>
-              <p className="mt-1 line-clamp-3 text-xs leading-5 text-neutral-700">
-                {planningText}
-              </p>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between text-[11px] text-neutral-500">
-                <span>
-                  {stats.done}/{stats.total || 0} 完成
-                </span>
-                <span>{progressPercent}%</span>
-              </div>
-              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-neutral-100">
-                <div
-                  className="h-full rounded-full bg-neutral-900 transition-all duration-500"
-                  style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
-                />
-              </div>
-            </div>
-
-            {activeTask && (
-              <div className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
-                <div className="mt-0.5 shrink-0">{taskStatusIcon(activeTask.status)}</div>
-                <div className="min-w-0">
-                  <div className="truncate text-xs font-medium text-neutral-800">
-                    {activeTask.title}
-                  </div>
-                  <div className="mt-0.5 truncate text-[11px] text-neutral-500">
-                    {activeTask.progressStatus || activeTask.agentName || '等待成员执行'}
-                  </div>
+        {hasProgress && (
+          <RailCard
+            title="进度"
+            subtitle={directRunProgress?.subtitle}
+            open={progressOpen}
+            onToggle={() => setProgressOpen((open) => !open)}
+          >
+            <div className="space-y-3">
+              <div>
+                <div className="flex items-center justify-between text-[11px] text-neutral-500">
+                  <span>
+                    {directRunProgress
+                      ? `${directRunProgress.done}/${directRunProgress.total} 完成`
+                      : `${stats.done}/${stats.total || 0} 完成`}
+                  </span>
+                  <span>{progressPercent}%</span>
+                </div>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-neutral-100">
+                  <div
+                    className="h-full rounded-full bg-neutral-900 transition-all duration-500"
+                    style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                  />
                 </div>
               </div>
-            )}
-          </div>
-        </RailCard>
+
+              {directRunProgress ? (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-medium text-neutral-500">任务规划</div>
+                  {directRunProgress.steps.slice(0, 6).map((step) => (
+                    <div
+                      key={step.id}
+                      className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5"
+                    >
+                      <div className="mt-0.5 shrink-0">{directRunStepIcon(step.status)}</div>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-neutral-800">
+                          {step.title}
+                        </div>
+                        {step.subtitle && (
+                          <div className="mt-0.5 truncate text-[11px] text-neutral-500">
+                            {step.subtitle}
+                          </div>
+                        )}
+                        {step.detail && (
+                          <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-neutral-500">
+                            {step.detail}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : activeTask ? (
+                <div className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
+                  <div className="mt-0.5 shrink-0">{taskStatusIcon(activeTask.status)}</div>
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-medium text-neutral-800">
+                      {activeTask.title}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-neutral-500">
+                      {activeTask.progressStatus || activeTask.agentName || '等待成员执行'}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </RailCard>
+        )}
 
         <RailCard
           title="工作文件夹"
@@ -962,7 +1044,7 @@ const ThreadContextRail: FC<{
 
 const RailCard: FC<{
   title: string
-  subtitle: string
+  subtitle?: string
   open: boolean
   onToggle: () => void
   children: ReactNode
@@ -976,7 +1058,7 @@ const RailCard: FC<{
     >
       <span className="min-w-0">
         <span className="block text-sm font-medium text-neutral-950">{title}</span>
-        <span className="mt-1 block truncate text-xs text-neutral-500">{subtitle}</span>
+        {subtitle && <span className="mt-1 block truncate text-xs text-neutral-500">{subtitle}</span>}
       </span>
       <ChevronDown
         className={cn(
@@ -996,6 +1078,173 @@ type RailFileItem = {
   url?: string
   source?: string
   kind: ArtifactPreviewItem['kind']
+}
+
+function buildDirectRunProgress(input: {
+  activity: LiveAgentActivity | null
+  agentName?: string | null
+  messages: Message[]
+  streamingRun: CodeAgentRunMetadata | null
+}): DirectRunProgress | null {
+  const run = input.streamingRun ?? latestCodeAgentRunFromMessages(input.messages)
+  if (!run) return null
+
+  const steps = buildDirectRunSteps(run)
+  if (!steps.length) return null
+
+  const total = steps.length
+  const done = steps.filter((step) =>
+    step.status === 'done' || step.status === 'failed' || step.status === 'cancelled',
+  ).length
+  const rawPercent = Math.round((done / total) * 100)
+  const percent =
+    run.status === 'running'
+      ? Math.min(95, Math.max(8, rawPercent))
+      : run.status === 'completed'
+        ? 100
+        : Math.max(rawPercent, 100)
+  const summary = [
+    codeAgentRuntimeLabel(run.runtime),
+    codeAgentStatusLabel(run.status, Boolean(run.partialSuccess)),
+    input.agentName || input.activity?.agentName,
+  ].filter(Boolean).join(' · ')
+
+  return {
+    agentName: input.agentName ?? input.activity?.agentName,
+    done,
+    percent,
+    run,
+    status: run.status,
+    steps,
+    subtitle: summary,
+    total,
+  }
+}
+
+function latestCodeAgentRunFromMessages(messages: Message[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const value = messages[index]?.metadata?.codeAgentRun
+    if (isCodeAgentRunMetadataLike(value)) return value
+  }
+  return null
+}
+
+function isCodeAgentRunMetadataLike(value: unknown): value is CodeAgentRunMetadata {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      (value as { type?: unknown }).type === 'code-agent-run' &&
+      typeof (value as { status?: unknown }).status === 'string' &&
+      typeof (value as { runtime?: unknown }).runtime === 'string',
+  )
+}
+
+function buildDirectRunSteps(run: CodeAgentRunMetadata): DirectRunProgress['steps'] {
+  const steps = run.steps ?? []
+  if (steps.length) {
+    const rows = steps
+      .filter((step) => step.kind !== 'log')
+      .map((step) => ({
+        detail: step.detail ? trimLongText(step.detail, 120) : undefined,
+        id: step.id,
+        status: directRunStatusFromCodeAgent(step.status),
+        subtitle: [
+          step.subtitle,
+          step.toolName,
+          step.command,
+          step.path ? compactPath(step.path) : null,
+          step.fileStatus ? fileStatusLabel(step.fileStatus) : null,
+        ].filter(Boolean).join(' · ') || undefined,
+        title: step.title,
+      }))
+    const logSteps = steps.filter((step) => step.kind === 'log')
+    if (logSteps.length) {
+      const lastLog = logSteps[logSteps.length - 1]
+      rows.push({
+        detail: lastLog.detail ? trimLongText(lastLog.detail, 120) : undefined,
+        id: 'direct-log-summary',
+        status: logSteps.some((step) => step.status === 'failed') ? 'failed' : 'done',
+        subtitle: `${logSteps.length} 条运行日志`,
+        title: '整理过程输出',
+      })
+    }
+    return rows
+  }
+
+  const inferred: DirectRunProgress['steps'] = [
+    {
+      detail: run.cwd ? compactPath(run.cwd) ?? run.cwd : undefined,
+      id: 'direct-start',
+      status: run.status === 'running' ? 'running' : directRunStatusFromCodeAgent(run.status),
+      subtitle: [codeAgentRuntimeLabel(run.runtime), run.command].filter(Boolean).join(' · '),
+      title: '启动 Coding Tools',
+    },
+  ]
+
+  for (const command of (run.commands ?? []).slice(0, 3)) {
+    inferred.push({
+      detail: command.output ? trimLongText(command.output, 120) : undefined,
+      id: `direct-command-${command.id}`,
+      status: 'done',
+      subtitle: command.cwd ? compactPath(command.cwd) ?? command.cwd : undefined,
+      title: command.command,
+    })
+  }
+
+  for (const call of (run.toolCalls ?? []).slice(0, 3)) {
+    inferred.push({
+      detail: call.detail ? trimLongText(call.detail, 120) : undefined,
+      id: `direct-tool-${call.id}`,
+      status: 'done',
+      subtitle: [call.name, call.target].filter(Boolean).join(' · ') || undefined,
+      title: call.label,
+    })
+  }
+
+  for (const file of (run.files ?? []).slice(0, 4)) {
+    inferred.push({
+      id: `direct-file-${file.path}`,
+      status: directRunStatusFromCodeAgent(run.status === 'running' ? 'running' : 'completed'),
+      subtitle: fileStatusLabel(file.status),
+      title: compactPath(file.path) ?? file.path,
+    })
+  }
+
+  const artifacts = readFlowArtifacts(run.artifacts)
+  if (artifacts.length) {
+    inferred.push({
+      id: 'direct-artifacts',
+      status: directRunStatusFromCodeAgent(run.status === 'running' ? 'running' : 'completed'),
+      subtitle: `${artifacts.length} 个产物`,
+      title: '汇总产物',
+    })
+  }
+
+  if (run.status !== 'running') {
+    inferred.push({
+      detail: run.finalMessage ? trimLongText(run.finalMessage, 120) : undefined,
+      id: 'direct-finish',
+      status: directRunStatusFromCodeAgent(run.status),
+      title: codeAgentStatusLabel(run.status, Boolean(run.partialSuccess)),
+    })
+  }
+
+  return inferred
+}
+
+function directRunStatusFromCodeAgent(status: CodeAgentRunMetadata['status']): DirectRunStepStatus {
+  if (status === 'running') return 'running'
+  if (status === 'failed' || status === 'timed-out') return 'failed'
+  if (status === 'cancelled') return 'cancelled'
+  return 'done'
+}
+
+function directRunStepIcon(status: DirectRunStepStatus) {
+  if (status === 'running') return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+  if (status === 'failed') return <XCircle className="h-4 w-4 text-red-600" />
+  if (status === 'cancelled') return <Square className="h-4 w-4 text-neutral-400" />
+  if (status === 'done') return <CheckCircle2 className="h-4 w-4 text-green-600" />
+  return <Clock3 className="h-4 w-4 text-neutral-400" />
 }
 
 function taskProgressStats(taskBoard: LiveTaskBoard | null) {
@@ -1053,6 +1302,53 @@ function collectRailFiles(
         url: rawUrl,
       })
     }
+  }
+
+  return files.slice(0, 4)
+}
+
+function collectDirectRunFiles(
+  progress: DirectRunProgress,
+  workspace: Workspace | null,
+): RailFileItem[] {
+  const files: RailFileItem[] = []
+  const seen = new Set<string>()
+  const workspacePath = workspace?.projectPath ?? progress.run.cwd ?? null
+
+  const addFile = (item: RailFileItem) => {
+    const key = item.path ?? item.url ?? item.id
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    files.push(item)
+  }
+
+  for (const artifact of readFlowArtifacts(progress.run.artifacts)) {
+    const preview = previewItemFromArtifact(artifact)
+    const rawPath =
+      artifact.type === 'diff'
+        ? artifact.filePath
+        : artifact.type === 'file'
+          ? artifact.path
+          : undefined
+    const path = rawPath ? resolveWorkspacePath(rawPath, workspacePath) : preview.path
+    addFile({
+      id: artifact.id,
+      kind: preview.kind,
+      path,
+      source: preview.source,
+      title: preview.title,
+      url: preview.url,
+    })
+  }
+
+  for (const file of progress.run.files ?? []) {
+    addFile({
+      id: `direct-run-file-${file.path}`,
+      kind: file.diff ? 'diff' : railPreviewKind(undefined, file.path),
+      path: resolveWorkspacePath(file.path, workspacePath),
+      source: file.diff,
+      title: fileNameFromPath(file.path) ?? file.path,
+    })
   }
 
   return files.slice(0, 4)
@@ -4840,6 +5136,8 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   item,
   onClose,
 }) => {
+  const activeWorkspaceId = useChatStore((state) => state.currentSession?.workspaceId)
+  const previewWorkspaceId = item.workspaceId ?? activeWorkspaceId ?? undefined
   const canOpen = Boolean(item.url)
   const previewSourcePath = item.path ?? previewPathFromUrl(item.url) ?? undefined
   const canInspectSource =
@@ -4949,6 +5247,26 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   function updateActionItem(id: string, patch: Partial<PreviewActionItem>) {
     setActionItems((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)))
     setActionPanelOpen(true)
+  }
+
+  async function handleSaveDiffPreviewEdit(params: DiffEditSaveParams) {
+    if (!previewWorkspaceId || !item.path) return
+    if (params.fileContent !== undefined) {
+      await api.writeFile({
+        workspaceId: previewWorkspaceId,
+        filePath: item.path,
+        content: params.fileContent,
+      })
+      return
+    }
+    if (!params.lineNumber) throw new Error('当前 Diff 缺少可写入行号，无法保存。')
+    await api.writeFile({
+      workspaceId: previewWorkspaceId,
+      filePath: item.path,
+      content: params.lineText,
+      startLine: params.lineNumber,
+      endLine: params.lineNumber,
+    })
   }
 
   async function handleOpenDownloadedPath(path?: string) {
@@ -5347,7 +5665,14 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
               )
             ) : item.kind === 'diff' ? (
               <div className="h-full overflow-auto">
-                <DiffViewer diff={item.source ?? ''} maxHeightClassName="max-h-none" filePath={item.path} />
+                <DiffViewer
+                  diff={item.source ?? ''}
+                  maxHeightClassName="max-h-none"
+                  filePath={item.path}
+                  onSaveEdit={
+                    previewWorkspaceId && item.path ? handleSaveDiffPreviewEdit : undefined
+                  }
+                />
               </div>
             ) : item.kind === 'workflow' ? (
               <PreviewPlaceholder item={item} />
@@ -5838,7 +6163,13 @@ const TextFilePreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
                     >
                       {index + 1}
                     </td>
-                    <td className="agenthub-code-content">
+                    <td
+                      className="agenthub-code-content"
+                      onClick={(event) => {
+                        if (shouldSkipLineSelectionClick(event)) return
+                        selection.toggleLine(index, event.shiftKey)
+                      }}
+                    >
                       <span dangerouslySetInnerHTML={{ __html: highlightedLines[index] || '&nbsp;' }} />
                     </td>
                   </tr>
@@ -6427,8 +6758,17 @@ const InlineDiffReview: FC<{
     title: filePath,
   }
 
-  async function handleSaveEdit(params: { lineText: string; lineNumber: number }) {
+  async function handleSaveEdit(params: DiffEditSaveParams) {
     if (!workspaceId) return
+    if (params.fileContent !== undefined) {
+      await api.writeFile({
+        workspaceId,
+        filePath,
+        content: params.fileContent,
+      })
+      return
+    }
+    if (!params.lineNumber) throw new Error('当前 Diff 缺少可写入行号，无法保存。')
     await api.writeFile({
       workspaceId,
       filePath,
@@ -6443,7 +6783,7 @@ const InlineDiffReview: FC<{
     if (!workspaceId) {
       setOpen(true)
       setApplyResult('error')
-      setApplyMessage('当前会话未绑定工作区，无法应用 Diff。')
+      setApplyMessage('当前会话未绑定工作区，无法暂存 Diff。')
       return
     }
     setApplying(true)
@@ -6453,11 +6793,11 @@ const InlineDiffReview: FC<{
       const result = await api.applyDiff(workspaceId, diff)
       setOpen(true)
       setApplyResult('applied')
-      setApplyMessage(result.message || 'Diff 已应用到工作区。')
+      setApplyMessage(result.message || 'Diff 已暂存到 Git。')
     } catch (error) {
       setOpen(true)
       setApplyResult('error')
-      setApplyMessage(friendlyErrorMessage(error, '应用 Diff 失败'))
+      setApplyMessage(friendlyErrorMessage(error, '暂存 Diff 失败'))
     } finally {
       setApplying(false)
     }
@@ -6502,7 +6842,7 @@ const InlineDiffReview: FC<{
           ) : (
             <CheckCircle2 className="h-3 w-3" />
           )}
-          {applying ? '应用中' : applyResult === 'applied' ? '已应用' : '应用'}
+          {applying ? '暂存中' : applyResult === 'applied' ? '已暂存' : '暂存'}
         </button>
       </div>
       {applyMessage && (
@@ -6535,15 +6875,25 @@ const DiffViewer: FC<{
   diff: string
   maxHeightClassName?: string
   filePath?: string
-  /** Called when user saves an inline edit. Receives the new line text and the 1-based line number in the current file. */
-  onSaveEdit?: (params: { lineText: string; lineNumber: number }) => void
+  /** Called when user saves an inline edit. */
+  onSaveEdit?: (params: DiffEditSaveParams) => void | Promise<void>
 }> = ({
   diff,
   maxHeightClassName = 'max-h-96',
   filePath,
   onSaveEdit,
 }) => {
-  const rows = useMemo(() => parseDiffRows(diff), [diff])
+  const parsedRows = useMemo(() => parseDiffRows(diff), [diff])
+  const [rowTextOverrides, setRowTextOverrides] = useState<Record<number, string>>({})
+  const rows = useMemo(
+    () =>
+      parsedRows.map((row, index) =>
+        Object.prototype.hasOwnProperty.call(rowTextOverrides, index)
+          ? { ...row, text: rowTextOverrides[index] }
+          : row,
+      ),
+    [parsedRows, rowTextOverrides],
+  )
   // Only selectable rows are add/del/context (not hunk/meta)
   const selectableRows = useMemo(
     () => rows.map((row, i) => ({ ...row, _index: i })).filter((r) => r.kind === 'add' || r.kind === 'del' || r.kind === 'context'),
@@ -6554,7 +6904,18 @@ const DiffViewer: FC<{
   const [editingSelectableIndex, setEditingSelectableIndex] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [saving, setSaving] = useState(false)
+  const [editSaveNotice, setEditSaveNotice] = useState<{
+    tone: 'success' | 'error'
+    message: string
+  } | null>(null)
   const [localChangeTarget, setLocalChangeTarget] = useState<LocalChangeTarget | null>(null)
+
+  useEffect(() => {
+    setRowTextOverrides({})
+    setEditSaveNotice(null)
+    setEditingSelectableIndex(null)
+    setEditDraft('')
+  }, [diff])
 
   function isRowSelected(originalIndex: number) {
     const selIdx = selectableRows.findIndex((r) => r._index === originalIndex)
@@ -6564,6 +6925,14 @@ const DiffViewer: FC<{
   function handleLineNumberClick(originalIndex: number, shiftKey: boolean) {
     const selIdx = selectableRows.findIndex((r) => r._index === originalIndex)
     if (selIdx >= 0) selection.toggleLine(selIdx, shiftKey)
+  }
+
+  function handleDiffCodeClick(
+    originalIndex: number,
+    event: ReactMouseEvent<HTMLElement>,
+  ) {
+    if (window.getSelection()?.toString()) return
+    handleLineNumberClick(originalIndex, event.shiftKey)
   }
 
   function buildDiffTarget(): LocalChangeTarget | null {
@@ -6615,6 +6984,7 @@ const DiffViewer: FC<{
     if (selection.sortedSelected.length === 0) return
     const firstSelIdx = selection.sortedSelected[0]
     setEditingSelectableIndex(firstSelIdx)
+    setEditSaveNotice(null)
     const row = selectableRows[firstSelIdx]
     const marker = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' '
     setEditDraft(`${marker}${row.text}`)
@@ -6623,26 +6993,42 @@ const DiffViewer: FC<{
   function handleCancelEdit() {
     setEditingSelectableIndex(null)
     setEditDraft('')
+    setEditSaveNotice(null)
   }
 
   async function handleSaveEdit() {
     if (editingSelectableIndex === null || !onSaveEdit) return
     setSaving(true)
+    setEditSaveNotice(null)
     try {
       const row = selectableRows[editingSelectableIndex]
       // Determine the 1-based line number in the current file
       // For 'add' and 'context' rows, use newNumber; for 'del', use oldNumber
       const lineNumber = row.kind === 'del' ? row.oldNumber : row.newNumber
       if (!lineNumber) {
-        setSaving(false)
+        setEditSaveNotice({
+          tone: 'error',
+          message: '当前 Diff 缺少可写入行号，无法保存。',
+        })
         return
       }
       // The editDraft has a prefix marker (+, -, or space); strip it to get just the line text
       const lineText = editDraft.length > 1 ? editDraft.slice(1) : ''
-      await onSaveEdit({ lineText, lineNumber })
+      await onSaveEdit({
+        lineText,
+        lineNumber,
+        fileContent: buildEditableDiffFileContent(rows, row._index, lineText),
+      })
+      setRowTextOverrides((current) => ({ ...current, [row._index]: lineText }))
+      setEditSaveNotice({ tone: 'success', message: '已保存到工作区文件。' })
       setEditingSelectableIndex(null)
       setEditDraft('')
       clearDiffSelection()
+    } catch (error) {
+      setEditSaveNotice({
+        tone: 'error',
+        message: friendlyErrorMessage(error, '保存失败'),
+      })
     } finally {
       setSaving(false)
     }
@@ -6665,6 +7051,18 @@ const DiffViewer: FC<{
           onCancel={() => setLocalChangeTarget(null)}
           onSent={clearDiffSelection}
         />
+      )}
+      {editSaveNotice && (
+        <div
+          className={cn(
+            'border-t px-3 py-2 text-xs',
+            editSaveNotice.tone === 'error'
+              ? 'border-red-100 bg-red-50 text-red-700'
+              : 'border-emerald-100 bg-emerald-50 text-emerald-700',
+          )}
+        >
+          {editSaveNotice.message}
+        </div>
       )}
       <div
         className={cn(
@@ -6742,7 +7140,13 @@ const DiffViewer: FC<{
                     </div>
                   </div>
                 ) : (
-                  <code className="whitespace-pre px-3">
+                  <code
+                    className={cn(
+                      'whitespace-pre px-3',
+                      canSelect && 'agenthub-diff-code-selectable',
+                    )}
+                    onClick={canSelect ? (event) => handleDiffCodeClick(index, event) : undefined}
+                  >
                     <span
                       className={cn(
                         'mr-2 inline-block w-3 select-none',
@@ -7018,8 +7422,14 @@ function parseDiffRows(diff: string): DiffRow[] {
   const rows: DiffRow[] = []
   let oldLine: number | undefined
   let newLine: number | undefined
+  let oldFilePath: string | undefined
+  let newFilePath: string | undefined
+  const rawLines = diff.split(/\r?\n/)
 
-  for (const rawLine of diff.split(/\r?\n/)) {
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const rawLine = rawLines[index]
+    if (index === rawLines.length - 1 && rawLine === '' && diff.endsWith('\n')) continue
+
     if (rawLine.startsWith('@@')) {
       const match = rawLine.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)$/)
       oldLine = match ? Number(match[1]) : undefined
@@ -7031,32 +7441,79 @@ function parseDiffRows(diff: string): DiffRow[] {
     if (
       rawLine.startsWith('diff --git') ||
       rawLine.startsWith('index ') ||
-      rawLine.startsWith('--- ') ||
-      rawLine.startsWith('+++ ')
+      rawLine.startsWith('new file mode ') ||
+      rawLine.startsWith('deleted file mode ') ||
+      rawLine.startsWith('old mode ') ||
+      rawLine.startsWith('new mode ') ||
+      rawLine.startsWith('similarity index ') ||
+      rawLine.startsWith('dissimilarity index ') ||
+      rawLine.startsWith('rename from ') ||
+      rawLine.startsWith('rename to ')
     ) {
       rows.push({ kind: 'meta', marker: '', text: rawLine })
       continue
     }
 
+    if (rawLine.startsWith('--- ')) {
+      oldFilePath = rawLine.slice(4).trim()
+      oldLine = oldFilePath === '/dev/null' ? undefined : (oldLine ?? 1)
+      rows.push({ kind: 'meta', marker: '', text: rawLine })
+      continue
+    }
+
+    if (rawLine.startsWith('+++ ')) {
+      newFilePath = rawLine.slice(4).trim()
+      newLine = newFilePath === '/dev/null' ? undefined : (newLine ?? 1)
+      rows.push({ kind: 'meta', marker: '', text: rawLine })
+      continue
+    }
+
     if (rawLine.startsWith('+')) {
+      if (newLine === undefined && newFilePath && newFilePath !== '/dev/null') newLine = 1
       rows.push({ kind: 'add', marker: '+', newNumber: newLine, text: rawLine.slice(1) })
       if (newLine !== undefined) newLine += 1
       continue
     }
 
     if (rawLine.startsWith('-')) {
+      if (oldLine === undefined && oldFilePath && oldFilePath !== '/dev/null') oldLine = 1
       rows.push({ kind: 'del', marker: '-', oldNumber: oldLine, text: rawLine.slice(1) })
       if (oldLine !== undefined) oldLine += 1
       continue
     }
 
     const text = rawLine.startsWith(' ') ? rawLine.slice(1) : rawLine
+    if (oldLine === undefined && oldFilePath && oldFilePath !== '/dev/null') oldLine = 1
+    if (newLine === undefined && newFilePath && newFilePath !== '/dev/null') newLine = 1
     rows.push({ kind: 'context', marker: '', oldNumber: oldLine, newNumber: newLine, text })
     if (oldLine !== undefined) oldLine += 1
     if (newLine !== undefined) newLine += 1
   }
 
   return rows
+}
+
+function buildEditableDiffFileContent(
+  rows: DiffRow[],
+  editedOriginalIndex: number,
+  editedLineText: string,
+) {
+  const isNewFileDiff =
+    rows.some((row) => row.kind === 'meta' && row.text === '--- /dev/null') &&
+    rows.some(
+      (row) =>
+        row.kind === 'meta' &&
+        row.text.startsWith('+++ ') &&
+        row.text.trim() !== '+++ /dev/null',
+    )
+  if (!isNewFileDiff) return undefined
+
+  return rows
+    .flatMap((row, index) => {
+      if (row.kind !== 'add' && row.kind !== 'context') return []
+      return index === editedOriginalIndex ? [editedLineText] : [row.text]
+    })
+    .join('\n')
 }
 
 function guessLanguageFromPath(filePath: string): string {
@@ -7640,7 +8097,13 @@ const CodeSyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
                   >
                     {i + 1}
                   </td>
-                  <td className="agenthub-code-content">
+                  <td
+                    className="agenthub-code-content"
+                    onClick={(event) => {
+                      if (shouldSkipLineSelectionClick(event)) return
+                      selection.toggleLine(i, event.shiftKey)
+                    }}
+                  >
                     <span dangerouslySetInnerHTML={{ __html: highlightedLines[i] || '&nbsp;' }} />
                   </td>
                 </tr>
@@ -7891,6 +8354,12 @@ function storePreviewPanelWidth(width: number) {
   } catch {
     // localStorage can be unavailable in restricted browser contexts.
   }
+}
+
+function shouldSkipLineSelectionClick(event: ReactMouseEvent<HTMLElement>) {
+  const target = event.target instanceof HTMLElement ? event.target : null
+  if (target?.closest('button, input, textarea, select, a')) return true
+  return Boolean(window.getSelection()?.toString())
 }
 
 async function extractPreviewErrorMessage(response: Response) {

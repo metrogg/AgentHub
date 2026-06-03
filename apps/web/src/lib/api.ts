@@ -1660,7 +1660,7 @@ export const api = {
       body: JSON.stringify({ workspaceId }),
     }),
   applyDiff: (workspaceId: string, diff: string) =>
-    request<{ success: boolean; message: string }>('/artifacts/apply-diff', {
+    request<{ success: boolean; message: string; stagedFiles?: string[] }>('/artifacts/apply-diff', {
       method: 'POST',
       body: JSON.stringify({ workspaceId, diff }),
     }),
