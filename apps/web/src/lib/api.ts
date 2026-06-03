@@ -262,6 +262,14 @@ export interface Message {
   createdAt: string
 }
 
+export interface QuotedMessagePreview {
+  messageId: string
+  senderName: string
+  senderType?: string
+  kind?: 'reply' | 'quote'
+  content: string
+}
+
 export interface ChatAttachment {
   id: string
   type: 'image' | 'file'
@@ -1317,12 +1325,12 @@ export const api = {
       modelId?: string
       type?: MessageType
       skipAgentReply?: boolean
-        attachments?: ChatAttachment[]
-        displayContent?: string
-        replyToMessageId?: string | null
-        safetyMode?: string
-        mentions?: string[]
-      },
+      attachments?: ChatAttachment[]
+      displayContent?: string
+      replyToMessageId?: string | null
+      quotedMessage?: QuotedMessagePreview | null
+      safetyMode?: string
+    },
   ) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
@@ -1336,6 +1344,7 @@ export const api = {
           ...(data.attachments?.length ? { attachments: data.attachments } : {}),
           ...(data.displayContent !== undefined ? { displayContent: data.displayContent } : {}),
           ...(data.replyToMessageId ? { replyToMessageId: data.replyToMessageId } : {}),
+          ...(data.quotedMessage ? { quotedMessage: data.quotedMessage } : {}),
           ...(data.safetyMode ? { safetyMode: data.safetyMode } : {}),
         },
       }),

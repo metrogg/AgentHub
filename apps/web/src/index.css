@@ -1195,6 +1195,17 @@
     background: transparent;
   }
 
+  .agenthub-thread-viewport {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .agenthub-thread-viewport::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
   .agenthub-welcome-composer-dock {
     background: transparent;
   }
