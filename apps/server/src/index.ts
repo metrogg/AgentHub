@@ -218,3 +218,24 @@ for (const run of runningRuns) {
 if (runningRuns.length > 0) {
   logger.info({ count: runningRuns.length }, '[Recovery] Resuming unfinished orchestrator runs')
 }
+
+// HiClaw-style Manager patrol: periodically check active runs, worker health,
+// and task timeouts. The patrol makes the Manager's supervision visible rather
+// than waiting passively for the next user message.
+const PATROL_INTERVAL_MS = 2 * 60 * 1000 // 2 minutes (HiClaw default: configurable)
+const patrolTimer = setInterval(() => {
+  import('./services/orchestrator/manager-patrol').then(({ patrolAndLog }) => {
+    patrolAndLog().catch(() => {})
+  })
+}, PATROL_INTERVAL_MS)
+if (process.env.AGENTHUB_ENABLE_MANAGER_PATROL !== '0') {
+  logger.info({ intervalMs: PATROL_INTERVAL_MS }, '[Patrol] Manager patrol timer started')
+  // Run an initial patrol after a short delay to catch any issues from startup
+  setTimeout(() => {
+    import('./services/orchestrator/manager-patrol').then(({ patrolAndLog }) => {
+      patrolAndLog().catch(() => {})
+    })
+  }, 30_000)
+}
+// Clean up on shutdown
+process.once('beforeExit', () => clearInterval(patrolTimer))
