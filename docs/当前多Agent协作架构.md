@@ -77,11 +77,13 @@ AgentHub 需要把以下层次分开设计：
   - Manager 吸收新约束并继续当前 run，而不是机械重开流程
   - 在补员、返工、高风险动作、结果验收等节点保留清晰的人机边界
 
-当前已经落下两刀：
+当前已经落下几刀：
 
 - 当群聊存在 `planning / running / synthesizing` 的活跃 run 时，用户在主群聊补充一句新要求，不再默认新开 run；系统会把它登记成当前 run 的 `human_interrupt`，由 Manager 在主群聊可见确认，并同步到活跃 TaskThread，形成可审计的过程痕迹。
 - `RunController.reconcile()` 现在会继续消费尚未处理的 `human_interrupt`，把约束并入未完成任务描述，写入 `manager_actions/human_interrupts/*` 黑板记录，并发出 `run.replanned(strategy=human_interrupt)` / `task.rework_requested` 事件，让“人类插话”开始成为控制面事实，而不是只停在聊天可见性上。
 - 对 active TaskThread，这条控制链还会继续下探到执行层：Manager 会中断对应的 live agent reply，把相关 `runtimeLease` 标为 stale，并把 `workerInstance` 收回 idle。这样“新要求来了，先收住旧执行”开始有了真实的 Worker 生命周期语义。
+- Worker 在主群聊的可见输出继续增强：接单开工、显式进度、澄清请求和长任务心跳都会以该 Worker 的 agent 消息出现，并带上 `orchestratorRunId / orchestratorTaskId / childSessionId / taskThreadId / workerInstanceId / runtimeLeaseId` 等真实执行 metadata。
+- 群聊回复语义继续拆开：用户明确回复某条 Worker 房间消息时，入口会直接把这句话交给该活跃 Worker；普通运行中补充要求仍进入 `human_interrupt` 控制面，避免把任务约束绕过黑板、RunEvent 和 TaskThread 同步。
 
 ## 配置口径
 

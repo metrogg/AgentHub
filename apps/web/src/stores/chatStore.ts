@@ -139,10 +139,10 @@ function mergeAgentTabsFromTaskBoard(
     if (!next) continue
     nextTabsByTaskId.set(existing.taskId, {
       ...next,
-      childSessionId: existing.childSessionId ?? next.childSessionId,
-      taskThreadStatus: existing.taskThreadStatus ?? next.taskThreadStatus ?? null,
-      workerInstanceId: existing.workerInstanceId ?? next.workerInstanceId,
-      runtimeLeaseId: existing.runtimeLeaseId ?? next.runtimeLeaseId,
+      childSessionId: next.childSessionId ?? existing.childSessionId,
+      taskThreadStatus: next.taskThreadStatus ?? existing.taskThreadStatus ?? null,
+      workerInstanceId: next.workerInstanceId ?? existing.workerInstanceId,
+      runtimeLeaseId: next.runtimeLeaseId ?? existing.runtimeLeaseId,
       progress: next.progress ?? existing.progress,
       progressStatus: next.progressStatus ?? existing.progressStatus,
     })
@@ -201,6 +201,7 @@ function buildOptimisticOrchestratorTaskSession(
     task.taskThreadStatus === 'cancelled' ||
     task.status === 'assigned' ||
     task.status === 'running' ||
+    task.status === 'blocked' ||
     task.status === 'done' ||
     task.status === 'failed' ||
     task.status === 'cancelled'
@@ -439,7 +440,7 @@ function normalizeTaskThreadStatus(
 function deriveTaskThreadStatus(task: Pick<TaskBoardTask, 'taskThreadStatus' | 'status'>) {
   if (task.taskThreadStatus) return task.taskThreadStatus
   if (task.status === 'assigned') return 'assigned'
-  if (task.status === 'running') return 'active'
+  if (task.status === 'running' || task.status === 'blocked') return 'active'
   if (task.status === 'done') return 'completed'
   if (task.status === 'failed' || task.status === 'cancelled') return task.status
   return 'prepared'
@@ -847,6 +848,7 @@ function agentTabsFromRunSnapshot(
 function agentTabStatusFromTaskStatus(status: TaskBoardTask['status']): AgentTab['status'] {
   if (status === 'assigned') return 'assigned'
   if (status === 'running') return 'running'
+  if (status === 'blocked') return 'running'
   if (status === 'done') return 'done'
   if (status === 'failed') return 'failed'
   return 'pending'
@@ -987,7 +989,9 @@ function clearLiveRuntimeProjection(): LiveRuntimeProjection {
 function deriveRuntimeActivityFromTaskBoard(
   taskBoard: NonNullable<ChatState['taskBoard']>,
 ): RuntimeActivityProjection {
-  const runningTask = taskBoard.tasks.find((task) => task.status === 'running')
+  const runningTask = taskBoard.tasks.find(
+    (task) => task.status === 'running' || task.status === 'blocked',
+  )
   if (runningTask) {
     return buildRuntimeActivity(taskBoard.sessionId, {
       agentId: runningTask.agentId || undefined,
@@ -1294,7 +1298,7 @@ export function buildHeaderAgentStatusProjection(input: {
   const currentTask =
     sessionId && taskBoard
       ? taskBoard.tasks.find((task) => task.childSessionId === sessionId) ??
-        taskBoard.tasks.find((task) => task.status === 'running') ??
+        taskBoard.tasks.find((task) => task.status === 'running' || task.status === 'blocked') ??
         null
       : null
   const currentTab =
@@ -1304,11 +1308,11 @@ export function buildHeaderAgentStatusProjection(input: {
         null
       : null
 
-  if (currentTask?.status === 'running' || currentTab?.status === 'running') {
+  if (currentTask?.status === 'running' || currentTask?.status === 'blocked' || currentTab?.status === 'running') {
     return {
-      label: '工作中',
+      label: currentTask?.status === 'blocked' ? '等待补充' : '工作中',
       detail: currentTask?.agentName ?? currentTab?.agentName ?? 'Agent',
-      tone: 'working',
+      tone: currentTask?.status === 'blocked' ? 'warning' : 'working',
       live: true,
     }
   }
@@ -1406,7 +1410,7 @@ export function buildTaskBoardPanelProjection(
                 ? 'yellow'
                 : 'green'
         const statusTone: TaskBoardTaskPanelProjection['statusTone'] =
-          task.status === 'running'
+          task.status === 'running' || task.status === 'blocked'
             ? 'running'
             : task.status === 'failed'
               ? 'failed'
@@ -1945,7 +1949,10 @@ function applyAgUiTaskStatus(
   return applyTaskBoardTasks(taskBoard, tasks, {
     ensurePhaseId: phaseId,
     ensureTaskId: taskId,
-    status: status === 'assigned' || status === 'running' ? 'running' : taskBoard.status,
+    status:
+      status === 'assigned' || status === 'running' || status === 'blocked'
+        ? 'running'
+        : taskBoard.status,
   })
 }
 
@@ -2230,13 +2237,14 @@ function applyAgUiPlanCreated(
             contractStatus: existing.contractStatus ?? task.contractStatus,
             contractViolations: existing.contractViolations ?? task.contractViolations,
             resultError: existing.resultError ?? task.resultError,
-            childSessionId: existing.childSessionId ?? task.childSessionId,
-            taskThreadId: existing.taskThreadId ?? task.taskThreadId,
-            workerInstanceId: existing.workerInstanceId ?? task.workerInstanceId,
-            runtimeLeaseId: existing.runtimeLeaseId ?? task.runtimeLeaseId,
-            sharedTaskRelativeRoot: existing.sharedTaskRelativeRoot ?? task.sharedTaskRelativeRoot,
-            sharedTaskSpecPath: existing.sharedTaskSpecPath ?? task.sharedTaskSpecPath,
-            executionConfig: existing.executionConfig ?? task.executionConfig,
+            childSessionId: task.childSessionId ?? existing.childSessionId,
+            taskThreadId: task.taskThreadId ?? existing.taskThreadId,
+            taskThreadStatus: task.taskThreadStatus ?? existing.taskThreadStatus,
+            workerInstanceId: task.workerInstanceId ?? existing.workerInstanceId,
+            runtimeLeaseId: task.runtimeLeaseId ?? existing.runtimeLeaseId,
+            sharedTaskRelativeRoot: task.sharedTaskRelativeRoot ?? existing.sharedTaskRelativeRoot,
+            sharedTaskSpecPath: task.sharedTaskSpecPath ?? existing.sharedTaskSpecPath,
+            executionConfig: task.executionConfig ?? existing.executionConfig,
           }
         }),
       }
@@ -2271,15 +2279,20 @@ function buildOptimisticOrchestratorTaskSessions(
       task.taskThreadStatus === 'cancelled' ||
       task.status === 'assigned' ||
       task.status === 'running' ||
+      task.status === 'blocked' ||
       task.status === 'done' ||
       task.status === 'failed' ||
       task.status === 'cancelled'
         ? task.agentId
         : null
+    const computedTitle = `${assignedWorkspaceAgentId ? task.agentName : '准备中'} · ${task.title}`
     const session: Session = {
       id: task.childSessionId,
       ownerId: existing?.ownerId ?? groupSession.ownerId,
-      title: existing?.title || `${assignedWorkspaceAgentId ? task.agentName : '准备中'} · ${task.title}`,
+      title:
+        existing?.metadata?.kind === 'orchestrator-task'
+          ? computedTitle
+          : existing?.title || computedTitle,
       type: SessionType.Direct,
       workspaceId: existing?.workspaceId ?? workspaceId,
       workspaceAgentId: assignedWorkspaceAgentId,
@@ -2342,10 +2355,14 @@ function mergeSessionsWithRunProjection(
       entry.taskThreadStatus === 'cancelled'
         ? entry.agentId
         : null
+    const computedTitle = `${assignedWorkspaceAgentId ? entry.agentName : '准备中'} · ${entry.taskTitle}`
     const session: Session = {
       id: entry.childSessionId,
       ownerId: existing?.ownerId ?? groupSession.ownerId,
-      title: existing?.title || `${assignedWorkspaceAgentId ? entry.agentName : '准备中'} · ${entry.taskTitle}`,
+      title:
+        existing?.metadata?.kind === 'orchestrator-task'
+          ? computedTitle
+          : existing?.title || computedTitle,
       type: SessionType.Direct,
       workspaceId: existing?.workspaceId ?? groupSession.workspaceId,
       workspaceAgentId: assignedWorkspaceAgentId,

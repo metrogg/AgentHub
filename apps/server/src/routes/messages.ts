@@ -270,6 +270,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         agentRows,
         session.workspaceId,
         user.sub,
+        message,
       ).catch((err: any) =>
         logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed on resend'),
       )
@@ -390,6 +391,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         agentRows,
         session.workspaceId,
         user.sub,
+        previousUser,
       ).catch((err: any) =>
         logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed on regenerate'),
       )
@@ -452,6 +454,39 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           return c.json(msg)
         }
 
+        const activeTaskContext = await loadActiveTaskContext(sessionId)
+        const repliedToMessage = msg.replyToMessageId
+          ? ((await db.select().from(messages).where(eq(messages.id, msg.replyToMessageId)).limit(1))[0] as
+              | MessageRow
+              | undefined)
+          : undefined
+        const directWorkerTarget = chooseDirectWorkerReplyTarget({
+          sourceMessage: msg,
+          repliedToMessage,
+          activeTaskContext,
+          agentRows,
+        })
+        if (directWorkerTarget) {
+          const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
+          const profile = toAgentProfile(directWorkerTarget, workspace?.projectPath)
+          runAgentReply(
+            sessionId,
+            {
+              ...msg,
+              metadata: {
+                ...(msg.metadata && typeof msg.metadata === 'object' ? msg.metadata : {}),
+                directWorkerReply: true,
+                replyTargetAgentId: directWorkerTarget.id,
+                replyTargetAgentName: directWorkerTarget.name,
+              },
+            },
+            profile,
+          ).catch((err: any) =>
+            logger.error({ err: err?.message, sessionId }, 'Direct worker room reply failed'),
+          )
+          return c.json(msg)
+        }
+
         const orchestrator = agentRows.find((agent) => agent.roleType === 'orchestrator')
         if (orchestrator) {
           const attachedToActiveRun = await handleHumanInterruptForActiveRun({
@@ -473,6 +508,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           agentRows,
           session.workspaceId,
           user.sub,
+          msg,
         ).catch((err: any) =>
           logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed'),
         )
@@ -1285,6 +1321,7 @@ async function routeGroupMessageThroughOrchestrator(
   agentRows: typeof workspaceAgents.$inferSelect[],
   workspaceId: string,
   ownerId: string,
+  sourceMessage?: MessageRow,
 ) {
   const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
   if (!orchestrator) {
@@ -1310,6 +1347,7 @@ async function routeGroupMessageThroughOrchestrator(
 
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
   const recentMessages = await loadRecentRoomMessages(sessionId, agentRows)
+  const activeTaskContext = await loadActiveTaskContext(sessionId)
 
   let decision: Awaited<ReturnType<typeof decideOrchestratorAction>>
   try {
@@ -1318,6 +1356,7 @@ async function routeGroupMessageThroughOrchestrator(
       agents: agentRows,
       workspaceGoal: workspace?.goal ?? null,
       workspacePath: workspace?.projectPath ?? null,
+      activeTaskContext,
       recentMessages,
     })
   } catch (err: any) {
@@ -1373,19 +1412,51 @@ async function routeGroupMessageThroughOrchestrator(
     return
   }
 
-  const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
-  const agentUserMsg: MessageRow = {
-    id: randomUUID(),
-    sessionId,
-    senderId: orchestrator.id,
-    senderType: 'user',
-    type: 'text',
-    content,
-    metadata: { isOrchestratorHandoff: true, orchestratorDecision: decision.action, decisionReason: decision.reason },
-    createdAt: new Date(),
+  const decisionContent = decision.message?.trim() || ''
+  const replyTarget = resolveReplyTargetAgent(agentRows, orchestrator, decision)
+
+  if (decision.action === 'reply' && replyTarget && memberProposals.length === 0) {
+    const profile =
+      replyTarget.roleType === 'orchestrator'
+        ? toCoordinatorProfile(replyTarget, workspace?.projectPath)
+        : toAgentProfile(replyTarget, workspace?.projectPath)
+    const replyMessage: MessageRow = sourceMessage
+      ? {
+          ...sourceMessage,
+          metadata: {
+            ...(sourceMessage.metadata && typeof sourceMessage.metadata === 'object'
+              ? sourceMessage.metadata
+              : {}),
+            routedByOrchestrator: true,
+            orchestratorDecision: decision.action,
+            decisionReason: decision.reason,
+            replyTargetAgentId: replyTarget.id,
+            replyTargetAgentName: replyTarget.name,
+            ...(decisionContent ? { orchestratorRoutingHint: decisionContent } : {}),
+          },
+        }
+      : {
+          id: randomUUID(),
+          sessionId,
+          senderId: ownerId,
+          senderType: 'user',
+          type: 'text',
+          content,
+          metadata: {
+            routedByOrchestrator: true,
+            orchestratorDecision: decision.action,
+            decisionReason: decision.reason,
+            replyTargetAgentId: replyTarget.id,
+            replyTargetAgentName: replyTarget.name,
+            ...(decisionContent ? { orchestratorRoutingHint: decisionContent } : {}),
+          },
+          createdAt: new Date(),
+        }
+
+    await runAgentReply(sessionId, replyMessage, profile)
+    return
   }
 
-  const decisionContent = decision.message?.trim() || ''
   if (decisionContent || memberProposals.length) {
     const [message] = await db
       .insert(messages)
@@ -1418,11 +1489,43 @@ async function routeGroupMessageThroughOrchestrator(
     return
   }
 
+  const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
+  const agentUserMsg: MessageRow = {
+    id: randomUUID(),
+    sessionId,
+    senderId: orchestrator.id,
+    senderType: 'user',
+    type: 'text',
+    content,
+    metadata: { isOrchestratorHandoff: true, orchestratorDecision: decision.action, decisionReason: decision.reason },
+    createdAt: new Date(),
+  }
+
   try {
     await runAgentReply(sessionId, agentUserMsg, profile)
   } catch (err: any) {
     throw err
   }
+}
+
+function resolveReplyTargetAgent(
+  agentRows: typeof workspaceAgents.$inferSelect[],
+  orchestrator: typeof workspaceAgents.$inferSelect,
+  decision: Awaited<ReturnType<typeof decideOrchestratorAction>>,
+) {
+  const targetId = decision.replyTargetAgentId?.trim()
+  if (targetId) {
+    const byId = agentRows.find((agent) => agent.id === targetId)
+    if (byId) return byId
+  }
+
+  const targetName = decision.replyTargetAgentName?.trim().toLowerCase()
+  if (targetName) {
+    const byName = agentRows.find((agent) => agent.name.trim().toLowerCase() === targetName)
+    if (byName) return byName
+  }
+
+  return decision.action === 'reply' && orchestrator ? orchestrator : null
 }
 
 async function loadRecentRoomMessages(
@@ -1471,6 +1574,116 @@ async function loadRecentRoomMessages(
         content: message.content.trim(),
       }
     })
+}
+
+async function loadActiveTaskContext(sessionId: string) {
+  const tasks = await db
+    .select({
+      taskId: workspaceTasks.id,
+      taskTitle: workspaceTasks.title,
+      taskStatus: workspaceTasks.status,
+      progressStatus: workspaceTasks.progressStatus,
+      agentId: workspaceTasks.agentId,
+      threadStatus: taskThreads.status,
+      agentName: workspaceAgents.name,
+      clarificationCount: workspaceTasks.clarificationCount,
+      errorLog: workspaceTasks.errorLog,
+    })
+    .from(workspaceTasks)
+    .leftJoin(taskThreads, eq(taskThreads.taskId, workspaceTasks.id))
+    .leftJoin(workspaceAgents, eq(workspaceAgents.id, workspaceTasks.agentId))
+    .where(eq(taskThreads.groupSessionId, sessionId))
+    .orderBy(desc(taskThreads.updatedAt), desc(workspaceTasks.updatedAt))
+    .limit(8)
+
+  return tasks
+    .filter((task) => {
+      const threadStatus = task.threadStatus ?? null
+      const taskStatus = task.taskStatus ?? null
+      return (
+        threadStatus === 'prepared' ||
+        threadStatus === 'assigned' ||
+        threadStatus === 'active' ||
+        taskStatus === 'pending' ||
+        taskStatus === 'running' ||
+        taskStatus === 'blocked'
+      )
+    })
+    .map((task) => ({
+      taskId: task.taskId,
+      taskTitle: task.taskTitle,
+      taskStatus: task.taskStatus,
+      taskThreadStatus: task.threadStatus ?? null,
+      agentId: task.agentId ?? null,
+      agentName: task.agentName ?? null,
+      progressStatus: task.progressStatus ?? task.errorLog ?? null,
+      awaitingClarification: (task.clarificationCount ?? 0) > 0 || task.taskStatus === 'blocked',
+    }))
+}
+
+function chooseDirectWorkerReplyTarget(input: {
+  sourceMessage?: MessageRow
+  repliedToMessage?: MessageRow
+  activeTaskContext: Awaited<ReturnType<typeof loadActiveTaskContext>>
+  agentRows: typeof workspaceAgents.$inferSelect[]
+}) {
+  const metadata =
+    input.sourceMessage?.metadata && typeof input.sourceMessage.metadata === 'object'
+      ? (input.sourceMessage.metadata as Record<string, unknown>)
+      : null
+  const replyToMessageId =
+    input.sourceMessage?.replyToMessageId && typeof input.sourceMessage.replyToMessageId === 'string'
+      ? input.sourceMessage.replyToMessageId
+      : null
+
+  const mentionedAgentIds = Array.isArray(metadata?.mentions)
+    ? metadata!.mentions.filter((item): item is string => typeof item === 'string')
+    : []
+  if (mentionedAgentIds.length > 0) return null
+
+  const workersById = new Map(
+    input.agentRows.filter((agent) => agent.roleType !== 'orchestrator').map((agent) => [agent.id, agent] as const),
+  )
+  if (!replyToMessageId && !metadata?.replyToMessageId) return null
+
+  const repliedToMetadata =
+    input.repliedToMessage?.metadata && typeof input.repliedToMessage.metadata === 'object'
+      ? (input.repliedToMessage.metadata as Record<string, unknown>)
+      : null
+  if (!input.repliedToMessage || input.repliedToMessage.senderType !== 'agent') return null
+
+  const targetAgentId = typeof repliedToMetadata?.agentId === 'string'
+    ? repliedToMetadata.agentId
+    : typeof repliedToMetadata?.workerAgentId === 'string'
+      ? repliedToMetadata.workerAgentId
+      : typeof repliedToMetadata?.workspaceAgentId === 'string'
+        ? repliedToMetadata.workspaceAgentId
+        : input.repliedToMessage.senderId
+  const targetWorker = workersById.get(targetAgentId)
+  if (!targetWorker) return null
+
+  const repliedTaskId =
+    typeof repliedToMetadata?.orchestratorTaskId === 'string'
+      ? repliedToMetadata.orchestratorTaskId
+      : typeof repliedToMetadata?.taskId === 'string'
+        ? repliedToMetadata.taskId
+        : null
+  const relatedActiveTask = input.activeTaskContext.find((task) => {
+    if (task.agentId !== targetWorker.id) return false
+    if (repliedTaskId && task.taskId !== repliedTaskId) return false
+    return (
+      task.awaitingClarification ||
+      task.taskThreadStatus === 'active' ||
+      task.taskStatus === 'running' ||
+      task.taskStatus === 'blocked'
+    )
+  })
+
+  return relatedActiveTask ? targetWorker : null
+}
+
+export const __messageRouteTestHooks = {
+  chooseDirectWorkerReplyTarget,
 }
 
 function resolveMentionedAgents(

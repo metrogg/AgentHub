@@ -1177,4 +1177,60 @@ describe('chat store artifact snapshot projection', () => {
       statusTone: 'default',
     })
   })
+
+  test('blocked task threads keep stable worker child-session titles', () => {
+    const sessions = [
+      session({
+        id: 'group-1',
+        title: 'AI team',
+        type: SessionType.Group,
+        workspaceId: 'workspace-1',
+      }),
+    ]
+
+    const nextSessions = __chatStoreTestHooks.buildOptimisticOrchestratorTaskSessions(
+      {
+        sessions,
+        currentSession: sessions[0] ?? null,
+      },
+      {
+        runId: 'run-1',
+        title: 'Demo',
+        goal: 'Goal',
+        collaborationMode: 'pipeline',
+        sessionId: 'group-1',
+        status: 'running',
+        phases: [
+          {
+            id: 'analysis',
+            title: '分析',
+            purpose: '澄清问题',
+            taskIds: ['task-1'],
+            status: 'active',
+          },
+        ],
+        tasks: [
+          {
+            id: 'task-1',
+            phaseId: 'analysis',
+            title: 'Research market',
+            description: 'Investigate and ask for clarification',
+            agentId: 'agent-1',
+            agentName: 'Researcher',
+            status: 'blocked',
+            dependencies: [],
+            childSessionId: 'child-1',
+            taskThreadId: 'thread-1',
+            taskThreadStatus: 'active',
+            artifacts: [],
+          },
+        ],
+      } as any,
+    )
+
+    const child = nextSessions.find((item) => item.id === 'child-1')
+    expect(child?.title).toBe('Researcher · Research market')
+    expect(child?.workspaceAgentId).toBe('agent-1')
+    expect((child?.metadata as Record<string, unknown>)?.taskThreadStatus).toBe('active')
+  })
 })

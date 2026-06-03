@@ -25,10 +25,25 @@ export interface OrchestratorDecision {
   message?: string
   reason?: string
   memberProposals?: OrchestratorMemberProposal[]
+  replyTargetAgentId?: string
+  replyTargetAgentName?: string
+}
+
+export interface ActiveTaskContextItem {
+  taskId: string
+  taskTitle: string
+  taskStatus: string
+  taskThreadStatus?: string | null
+  agentId?: string | null
+  agentName?: string | null
+  progressStatus?: string | null
+  awaitingClarification?: boolean
+  updatedAt?: string | null
 }
 
 export const __orchestratorDecisionTestHooks = {
   buildHeuristicDecision,
+  chooseReplyTargetFromActiveContext,
 }
 
 export interface DecideInput {
@@ -36,6 +51,7 @@ export interface DecideInput {
   agents: PlanningAgentInput[]
   workspaceGoal?: string | null
   workspacePath?: string | null
+  activeTaskContext?: ActiveTaskContextItem[]
   recentMessages?: Array<{
     senderType: 'user' | 'agent' | 'system'
     senderName?: string | null
@@ -59,6 +75,9 @@ const DECISION_SYSTEM = [
   '- 只有当用户明确在要求“做出某个东西”或“完成一项工作”时，优先 action=plan。',
   '- 如果用户只是在聊天、寒暄、点名、催进度、确认状态、让成员打招呼或自我介绍，优先 action=reply。',
   '- 如果消息本身更像房间内自然交流，而不是新的交付目标，不要为了显得主动就进入 plan。',
+  '- 如果用户明显是在点某位现有成员发言、汇报、介绍自己，action=reply，并尽量填写 replyTargetAgentId；拿不准时可填写 replyTargetAgentName。',
+  '- 如果用户是在追问当前执行情况、回应某个进行中的任务、回答某个澄清问题，优先让当前正在执行或刚刚发起澄清的成员直接回复，而不是让 Orchestrator 代答。',
+  '- 如果房间里只有一个活跃中的 Worker，且用户是在追问进度/确认/补充信息，优先把 replyTarget 指向这个 Worker。',
   '- 如果当前成员能力明显不足，但可用核心模板里有合适的 Agent，请 action=clarify，并在 memberProposals 里给出 1-3 个建议补充的 Agent；不要静默创建或假装已有成员。',
   '- memberProposals[].expertProfileId 必须来自“可建议补充的核心 Agent 模板”，不能编造。',
   '- 不要因为用户没有写明技术栈、文件类型或“游戏/网页”等关键词就回避计划；你要理解自然语言意图。',
@@ -71,7 +90,7 @@ const DECISION_SYSTEM = [
   '- “请调研今天 A 股港股美股并输出 HTML 报告” => action=plan。',
   '- “这个群现在缺少谁来做测试？”且确实缺少关键成员 => action=clarify。',
   '',
-  '输出格式：{"action":"reply|clarify|plan","message":"给用户看的简短中文内容","reason":"内部判断理由","memberProposals":[{"expertProfileId":"模板 id","reason":"为什么需要","expectedContribution":"加入后负责什么"}]}',
+  '输出格式：{"action":"reply|clarify|plan","message":"给用户看的简短中文内容","reason":"内部判断理由","replyTargetAgentId":"应当直接回复的现有成员 id","replyTargetAgentName":"应当直接回复的现有成员名字","memberProposals":[{"expertProfileId":"模板 id","reason":"为什么需要","expectedContribution":"加入后负责什么"}]}',
 ].join('\n')
 
 export async function decideOrchestratorAction(input: DecideInput): Promise<OrchestratorDecision> {
@@ -85,6 +104,24 @@ export async function decideOrchestratorAction(input: DecideInput): Promise<Orch
       ? ['最近房间对话：', ...input.recentMessages.map(formatRecentMessage)].join('\n')
       : '',
     input.recentMessages?.length ? '' : '',
+    input.activeTaskContext?.length
+      ? [
+          '当前活跃任务上下文：',
+          ...input.activeTaskContext.map((task) =>
+            [
+              `- task=${task.taskTitle}`,
+              `status=${task.taskStatus}`,
+              task.taskThreadStatus ? `thread=${task.taskThreadStatus}` : '',
+              task.agentName ? `agent=${task.agentName}` : '',
+              task.awaitingClarification ? 'awaitingClarification=true' : '',
+              task.progressStatus ? `progress=${task.progressStatus}` : '',
+            ]
+              .filter(Boolean)
+              .join('；'),
+          ),
+        ].join('\n')
+      : '',
+    input.activeTaskContext?.length ? '' : '',
     '当前成员：',
     ...input.agents.map((agent) =>
       [
@@ -153,11 +190,20 @@ export async function decideOrchestratorAction(input: DecideInput): Promise<Orch
       memberProposals: normalizeMemberProposals(parsed.memberProposals, candidateProposals),
     }
   }
+  const activeContextTarget = chooseReplyTargetFromActiveContext({
+    action,
+    agents: input.agents,
+    activeTaskContext: input.activeTaskContext,
+  })
   return {
     action,
     message: normalizeMessage(parsed.message),
     reason: normalizeMessage(parsed.reason),
     memberProposals: normalizeMemberProposals(parsed.memberProposals, candidateProposals),
+    replyTargetAgentId:
+      normalizeOptionalString(parsed.replyTargetAgentId) ?? activeContextTarget?.id,
+    replyTargetAgentName:
+      normalizeOptionalString(parsed.replyTargetAgentName) ?? activeContextTarget?.name,
   }
 }
 
@@ -261,6 +307,71 @@ function normalizeCodeAgentType(value?: string | null): AgentProfile['codeAgentT
 
 function normalizeMessage(value: unknown) {
   return typeof value === 'string' ? value.trim().slice(0, 1200) : ''
+}
+
+function normalizeOptionalString(value: unknown) {
+  const normalized = normalizeMessage(value)
+  return normalized || undefined
+}
+
+function chooseReplyTargetFromActiveContext(input: {
+  action: OrchestratorDecisionAction
+  agents: PlanningAgentInput[]
+  activeTaskContext?: ActiveTaskContextItem[]
+}) {
+  if (input.action !== 'reply' || !input.activeTaskContext?.length) return null
+
+  const workersById = new Map(
+    input.agents
+      .filter((agent) => agent.roleType !== 'orchestrator')
+      .map((agent) => [agent.id, agent] as const),
+  )
+
+  const inflightTasks = input.activeTaskContext.filter((task) => {
+    const agentId = normalizeOptionalString(task.agentId)
+    return Boolean(agentId && workersById.has(agentId))
+  })
+  if (!inflightTasks.length) return null
+
+  const clarificationTargets = uniqueActiveTaskAgents(
+    inflightTasks.filter((task) => task.awaitingClarification),
+    workersById,
+  )
+  if (clarificationTargets.length === 1) return clarificationTargets[0] ?? null
+
+  const activeTargets = uniqueActiveTaskAgents(
+    inflightTasks.filter(
+      (task) =>
+        task.taskThreadStatus === 'active' ||
+        task.taskStatus === 'running' ||
+        task.taskStatus === 'blocked',
+    ),
+    workersById,
+  )
+  if (activeTargets.length === 1) return activeTargets[0] ?? null
+
+  const inflightTargets = uniqueActiveTaskAgents(inflightTasks, workersById)
+  if (inflightTargets.length === 1) return inflightTargets[0] ?? null
+
+  return null
+}
+
+function uniqueActiveTaskAgents(
+  tasks: ActiveTaskContextItem[],
+  workersById: Map<string, PlanningAgentInput>,
+) {
+  return Array.from(
+    new Map(
+      tasks
+        .map((task) => normalizeOptionalString(task.agentId))
+        .filter((agentId): agentId is string => Boolean(agentId))
+        .map((agentId) => {
+          const worker = workersById.get(agentId)
+          return worker ? [agentId, { id: worker.id, name: worker.name }] : null
+        })
+        .filter((entry): entry is [string, { id: string; name: string }] => Boolean(entry)),
+    ).values(),
+  )
 }
 
 function availableExpertProfiles(agents: PlanningAgentInput[]) {

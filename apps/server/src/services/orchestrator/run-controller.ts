@@ -980,6 +980,7 @@ export class RunController {
           threadId: run.groupSessionId,
           taskId: input.taskId,
           taskTitle: input.title ?? input.taskId,
+          childSessionId: input.childSessionId ?? undefined,
           taskThreadId: input.taskThreadId ?? null,
           agentId: input.agentId ?? null,
           agentName: input.agentName ?? undefined,

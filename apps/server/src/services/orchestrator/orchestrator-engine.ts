@@ -1639,12 +1639,42 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       })
     }
 
+    await persistThreadTransparencyMessage({
+      sessionId: groupSessionId,
+      senderId: agent.id,
+      senderType: 'agent',
+      content: buildWorkerGroupStartedMessage({
+        taskTitle: task.title,
+        executionConfig,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+      }),
+      metadata: {
+        kind: 'worker-task-started',
+        orchestratorRunId: runId,
+        orchestratorTaskId: task.id,
+        groupSessionId,
+        childSessionId: childInfo.sessionId,
+        taskThreadId: childInfo.taskThreadId ?? null,
+        workerInstanceId,
+        runtimeLeaseId,
+        agentName: agent.name,
+        taskStatus: TaskStatus.Running,
+        taskProgressUpdate: true,
+        progressPercent: 3,
+        progressStatus: initialProgressStatus,
+        executionConfig,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? undefined,
+        sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? undefined,
+      },
+    })
+
     const taskStartTime = Date.now()
     const stopHeartbeat = startTaskHeartbeat({
       runId,
       groupSessionId,
       workspaceId,
       taskId: task.id,
+      childSessionId: childInfo.sessionId,
       taskThreadId: childInfo.taskThreadId ?? null,
       workerInstanceId,
       runtimeLeaseId,
@@ -1935,14 +1965,29 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           .values({
             sessionId: groupSessionId,
             senderId: agent.id,
-            senderType: 'system',
+            senderType: 'agent',
             type: 'text',
-            content: `❓ **${agent.name} 需要确认**：${clarification.question}`,
+            content: buildWorkerClarificationGroupMessage({
+              question: clarification.question,
+              options: clarification.options,
+            }),
             metadata: {
+              kind: 'worker-clarification-needed',
               clarificationTaskId: task.id,
               clarificationOptions: clarification.options,
               clarificationStatus: 'pending',
               agentName: agent.name,
+              orchestratorRunId: runId,
+              orchestratorTaskId: task.id,
+              groupSessionId,
+              childSessionId: childInfo.sessionId,
+              taskThreadId: childInfo.taskThreadId ?? null,
+              workerInstanceId,
+              runtimeLeaseId,
+              taskStatus: 'blocked',
+              taskProgressUpdate: true,
+              progressStatus: clarification.question,
+              executionConfig,
             },
             createdAt: new Date(),
           })
@@ -2138,6 +2183,32 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
           },
         )
+        await persistThreadTransparencyMessage({
+          sessionId: groupSessionId,
+          senderId: agent.id,
+          senderType: 'agent',
+          content: buildWorkerProgressGroupMessage({
+            taskTitle: task.title,
+            percent: lastProgress.percent,
+            status: lastProgress.status,
+          }),
+          metadata: {
+            kind: 'worker-progress-update',
+            orchestratorRunId: runId,
+            orchestratorTaskId: task.id,
+            groupSessionId,
+            childSessionId: childInfo.sessionId,
+            taskThreadId: childInfo.taskThreadId ?? null,
+            workerInstanceId,
+            runtimeLeaseId,
+            agentName: agent.name,
+            taskStatus: TaskStatus.Running,
+            taskProgressUpdate: true,
+            progressPercent: lastProgress.percent,
+            progressStatus: lastProgress.status,
+            executionConfig,
+          },
+        })
       }
 
       await executionTracer.log({
@@ -3109,6 +3180,7 @@ function startTaskHeartbeat(input: {
   groupSessionId: string
   workspaceId: string
   taskId: string
+  childSessionId?: string | null
   taskThreadId?: string | null
   workerInstanceId?: string | null
   runtimeLeaseId?: string | null
@@ -3121,6 +3193,7 @@ function startTaskHeartbeat(input: {
 }) {
   let stopped = false
   let lastPersistAt = 0
+  let lastRoomPulseAt = Date.now()
   const runContext: RunControllerRunContext = {
     runId: input.runId,
     workspaceId: input.workspaceId,
@@ -3141,6 +3214,7 @@ function startTaskHeartbeat(input: {
     })
     const persistDb = Date.now() - lastPersistAt >= 30_000
     if (persistDb) lastPersistAt = Date.now()
+    const shouldPulseRoom = Date.now() - lastRoomPulseAt >= 30_000
     await runController
       .markTaskProgress(runContext, {
         taskId: input.taskId,
@@ -3149,7 +3223,7 @@ function startTaskHeartbeat(input: {
         agentName: input.agentName,
         percent,
         progressStatus: status,
-        childSessionId: null,
+        childSessionId: input.childSessionId ?? null,
         taskThreadId: input.taskThreadId ?? null,
         workerInstanceId: input.workerInstanceId ?? null,
         runtimeLeaseId: input.runtimeLeaseId ?? null,
@@ -3160,6 +3234,38 @@ function startTaskHeartbeat(input: {
       .catch((err: any) => {
         logger.warn({ err: err?.message, taskId: input.taskId }, 'Failed to persist task heartbeat')
       })
+
+    if (shouldPulseRoom) {
+      lastRoomPulseAt = Date.now()
+      await persistThreadTransparencyMessage({
+        sessionId: input.groupSessionId,
+        senderId: input.agentId,
+        senderType: 'agent',
+        content: buildWorkerHeartbeatGroupMessage({
+          taskTitle: input.taskTitle,
+          percent,
+          status,
+        }),
+        metadata: {
+          kind: 'worker-heartbeat',
+          taskProgressUpdate: true,
+          orchestratorRunId: input.runId,
+          orchestratorTaskId: input.taskId,
+          groupSessionId: input.groupSessionId,
+          childSessionId: input.childSessionId ?? null,
+          taskThreadId: input.taskThreadId ?? null,
+          workerInstanceId: input.workerInstanceId ?? null,
+          runtimeLeaseId: input.runtimeLeaseId ?? null,
+          agentName: input.agentName,
+          taskStatus: TaskStatus.Running,
+          progressPercent: percent,
+          progressStatus: status,
+          executionConfig: executionConfig,
+        },
+      }).catch((err: any) => {
+        logger.warn({ err: err?.message, taskId: input.taskId }, 'Failed to emit worker heartbeat room message')
+      })
+    }
   }
 
   tick().catch((err: any) => {
@@ -3284,6 +3390,59 @@ function buildWorkerAcceptedThreadMessage(input: {
     lines.push(`运行环境：${details.join(' · ')}`)
   }
   return lines.join('\n')
+}
+
+function buildWorkerGroupStartedMessage(input: {
+  taskTitle: string
+  executionConfig?: ExecutionConfigSummary
+  sharedTaskRelativeRoot?: string | null
+}) {
+  const runtime =
+    input.executionConfig?.adapterName ??
+    input.executionConfig?.codeAgentType ??
+    (input.executionConfig?.runtimeType === 'llm' ? 'LLM fallback' : 'Code Agent')
+  const model = input.executionConfig?.modelLabel || input.executionConfig?.modelId
+  const workdir =
+    input.executionConfig?.workdirRelativePath ||
+    shortPathLabel(input.executionConfig?.executionPath) ||
+    input.sharedTaskRelativeRoot
+  const details = [runtime, model, workdir ? `目录 ${workdir}` : null].filter(Boolean).join(' · ')
+  return details
+    ? `开始执行「${input.taskTitle}」。${details}`
+    : `开始执行「${input.taskTitle}」。`
+}
+
+function buildWorkerProgressGroupMessage(input: {
+  taskTitle: string
+  percent: number
+  status?: string | null
+}) {
+  const detail = input.status?.trim()
+  return detail
+    ? `[进度 ${input.percent}%] ${input.taskTitle}：${detail}`
+    : `[进度 ${input.percent}%] ${input.taskTitle}`
+}
+
+function buildWorkerHeartbeatGroupMessage(input: {
+  taskTitle: string
+  percent: number
+  status?: string | null
+}) {
+  const detail = input.status?.trim()
+  return detail
+    ? `还在继续推进「${input.taskTitle}」[${input.percent}%]：${detail}`
+    : `还在继续推进「${input.taskTitle}」[${input.percent}%]`
+}
+
+function buildWorkerClarificationGroupMessage(input: {
+  question: string
+  options?: string[]
+}) {
+  const options =
+    Array.isArray(input.options) && input.options.length > 0
+      ? `\n可选项：${input.options.join(' / ')}`
+      : ''
+  return `需要确认：${input.question}${options}`
 }
 
 function shortPathLabel(value?: string | null) {
