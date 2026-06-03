@@ -26,6 +26,38 @@ export interface SharedTaskDirectory {
   artifactsPath: string
 }
 
+export type SharedTaskResultStatus =
+  | 'SUCCESS'
+  | 'SUCCESS_WITH_NOTES'
+  | 'REVISION_NEEDED'
+  | 'BLOCKED'
+  | 'INTERRUPTED'
+
+export interface SharedTaskResult {
+  status: SharedTaskResultStatus
+  summary: string
+  deliverables: string[]
+  notes: string[]
+}
+
+export interface SharedTaskResultArtifact {
+  id: string
+  title: string
+  kind: 'file'
+  type: 'file'
+  path: string
+  relativePath: string
+  handoffRelativePath: string
+  sharedTaskRelativeRoot: string
+  source: 'shared-task-result'
+}
+
+export interface SharedTaskResultRead {
+  result: SharedTaskResult
+  resultPath: string
+  rawText: string
+}
+
 export interface UpdateSharedTaskDirectoryStatusInput {
   projectPath?: string | null
   sharedTaskRelativeRoot?: string | null
@@ -116,8 +148,143 @@ export async function updateSharedTaskDirectoryStatus(
 
   await writeFile(metaPath, JSON.stringify(nextMeta, null, 2), 'utf8')
 
-  if (input.status === 'completed' || input.status === 'failed' || input.status === 'cancelled') {
-    await writeFile(resultPath, buildResultMarkdown(input), 'utf8')
+  if (
+    input.status === 'completed' ||
+    input.status === 'failed' ||
+    input.status === 'cancelled' ||
+    input.status === 'blocked'
+  ) {
+    await writeFile(resultPath, renderSharedTaskResult(buildSharedTaskResult(input, relativeRoot)), 'utf8')
+  }
+}
+
+export async function readSharedTaskResult(input: {
+  projectPath?: string | null
+  sharedTaskRelativeRoot?: string | null
+}): Promise<SharedTaskResultRead | null> {
+  const projectPath = input.projectPath?.trim()
+  const relativeRoot = input.sharedTaskRelativeRoot?.trim()
+  if (!projectPath || !relativeRoot) return null
+
+  const resultPath = resolve(projectPath, relativeRoot, 'result.md')
+  let rawText = ''
+  try {
+    rawText = await readFile(resultPath, 'utf8')
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+
+  const result = parseSharedTaskResult(rawText)
+  validateSharedTaskResult(result, relativeRoot)
+  return { result, resultPath, rawText }
+}
+
+export function parseSharedTaskResult(text: string): SharedTaskResult {
+  let status = ''
+  let summary = ''
+  const deliverables: string[] = []
+  const notes: string[] = []
+  let section: 'deliverables' | 'notes' | '' = ''
+
+  for (const rawLine of (text || '').split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    if (line.startsWith('STATUS:')) {
+      status = line.slice('STATUS:'.length).trim()
+      section = ''
+      continue
+    }
+    if (line.startsWith('SUMMARY:')) {
+      summary = line.slice('SUMMARY:'.length).trim()
+      section = ''
+      continue
+    }
+    if (line === 'DELIVERABLES:') {
+      section = 'deliverables'
+      continue
+    }
+    if (line === 'NOTES:') {
+      section = 'notes'
+      continue
+    }
+    if (line.startsWith('- ')) {
+      const item = line.slice(2).trim()
+      if (!item) continue
+      if (section === 'deliverables') deliverables.push(item)
+      if (section === 'notes') notes.push(item)
+    }
+  }
+
+  const result = {
+    status: normalizeSharedTaskResultStatus(status),
+    summary,
+    deliverables,
+    notes,
+  }
+  validateSharedTaskResult(result)
+  return result
+}
+
+export function renderSharedTaskResult(result: SharedTaskResult): string {
+  validateSharedTaskResult(result)
+  const lines = [
+    `STATUS: ${result.status}`,
+    `SUMMARY: ${singleLine(result.summary)}`,
+    '',
+    'DELIVERABLES:',
+    ...result.deliverables.map((item) => `- ${item}`),
+  ]
+  if (result.notes.length > 0) {
+    lines.push('', 'NOTES:', ...result.notes.map((item) => `- ${item}`))
+  }
+  return `${lines.join('\n').replace(/\s+$/g, '')}\n`
+}
+
+export function mapSharedTaskResultStatus(
+  status: SharedTaskResultStatus,
+): 'done' | 'failed' | 'cancelled' | 'blocked' {
+  if (status === 'SUCCESS' || status === 'SUCCESS_WITH_NOTES') return 'done'
+  if (status === 'BLOCKED') return 'blocked'
+  if (status === 'INTERRUPTED') return 'cancelled'
+  return 'failed'
+}
+
+export function sharedTaskResultDeliverablesToArtifacts(input: {
+  taskId: string
+  deliverables: string[]
+  sharedTaskRelativeRoot: string
+}): SharedTaskResultArtifact[] {
+  return input.deliverables.map((path, index) => ({
+    id: `shared-task-${input.taskId}-${index}`,
+    title: path.split(/[\\/]/).filter(Boolean).pop() ?? 'artifact',
+    kind: 'file',
+    type: 'file',
+    path,
+    relativePath: path,
+    handoffRelativePath: path,
+    sharedTaskRelativeRoot: input.sharedTaskRelativeRoot,
+    source: 'shared-task-result',
+  }))
+}
+
+export function validateSharedTaskResult(result: SharedTaskResult, relativeRoot?: string | null) {
+  normalizeSharedTaskResultStatus(result.status)
+  if (!result.summary.trim()) {
+    throw new Error('Shared task result summary is required.')
+  }
+  const expectedPrefix = relativeRoot?.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  for (const deliverable of result.deliverables) {
+    const normalized = deliverable.trim().replace(/\\/g, '/')
+    if (!normalized) {
+      throw new Error('Shared task result deliverable path must be non-empty.')
+    }
+    if (hasUnsafePathSegment(normalized)) {
+      throw new Error(`Shared task result deliverable path is unsafe: ${deliverable}`)
+    }
+    if (expectedPrefix && !normalized.startsWith(`${expectedPrefix}/`)) {
+      throw new Error(`Shared task result deliverable must be under ${expectedPrefix}: ${deliverable}`)
+    }
   }
 }
 
@@ -179,28 +346,78 @@ function normalizeArtifactRef(artifact: Record<string, unknown>) {
   }
 }
 
-function buildResultMarkdown(input: UpdateSharedTaskDirectoryStatusInput) {
-  const lines = [
-    `# Task Result`,
-    '',
-    `Status: ${input.status}`,
-    `Updated At: ${input.timestamps?.updatedAt ?? new Date().toISOString()}`,
-  ]
-  if (input.summary) {
-    lines.push('', '## Summary', input.summary)
+function buildSharedTaskResult(
+  input: UpdateSharedTaskDirectoryStatusInput,
+  relativeRoot: string,
+): SharedTaskResult {
+  const artifacts = input.artifacts?.map(normalizeArtifactRef) ?? []
+  const deliverables = artifacts
+    .map((artifact) => artifact.handoffRelativePath ?? artifact.relativePath ?? null)
+    .filter((path): path is string => Boolean(path))
+    .map((path) => normalizeDeliverablePath(path, relativeRoot))
+    .filter((path): path is string => Boolean(path))
+
+  const notes = [
+    input.error ? `Error: ${input.error}` : '',
+    input.runtimeLeaseId ? `Runtime lease: ${input.runtimeLeaseId}` : '',
+    input.workerInstanceId ? `Worker instance: ${input.workerInstanceId}` : '',
+  ].filter(Boolean)
+
+  return {
+    status: sharedTaskStatusToResultStatus(input.status, Boolean(input.error)),
+    summary: input.summary?.trim() || fallbackResultSummary(input),
+    deliverables,
+    notes,
   }
-  if (input.error) {
-    lines.push('', '## Error', input.error)
+}
+
+function sharedTaskStatusToResultStatus(
+  status: UpdateSharedTaskDirectoryStatusInput['status'],
+  hasError: boolean,
+): SharedTaskResultStatus {
+  if (status === 'completed') return hasError ? 'SUCCESS_WITH_NOTES' : 'SUCCESS'
+  if (status === 'cancelled') return 'INTERRUPTED'
+  if (status === 'blocked') return 'BLOCKED'
+  return 'REVISION_NEEDED'
+}
+
+function fallbackResultSummary(input: UpdateSharedTaskDirectoryStatusInput) {
+  if (input.status === 'completed') return 'Task completed.'
+  if (input.status === 'cancelled') return 'Task was interrupted or cancelled before completion.'
+  if (input.status === 'blocked') return 'Task is blocked and requires Manager or Human follow-up.'
+  return input.error?.trim() || 'Task did not complete successfully.'
+}
+
+function normalizeDeliverablePath(path: string, relativeRoot: string): string | null {
+  const normalizedPath = path.trim().replace(/\\/g, '/').replace(/^\.?\//, '')
+  if (!normalizedPath || hasUnsafePathSegment(normalizedPath)) return null
+  const normalizedRoot = relativeRoot.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  if (normalizedPath.startsWith(`${normalizedRoot}/`)) return normalizedPath
+  if (normalizedPath.startsWith('artifacts/')) return `${normalizedRoot}/${normalizedPath}`
+  return `${normalizedRoot}/artifacts/${normalizedPath}`
+}
+
+function normalizeSharedTaskResultStatus(status: string): SharedTaskResultStatus {
+  const normalized = status.trim().toUpperCase()
+  if (
+    normalized === 'SUCCESS' ||
+    normalized === 'SUCCESS_WITH_NOTES' ||
+    normalized === 'REVISION_NEEDED' ||
+    normalized === 'BLOCKED' ||
+    normalized === 'INTERRUPTED'
+  ) {
+    return normalized
   }
-  if (input.artifacts?.length) {
-    lines.push('', '## Artifacts')
-    for (const artifact of input.artifacts) {
-      const ref = normalizeArtifactRef(artifact)
-      const path = ref.handoffPath ?? ref.handoffRelativePath ?? ref.relativePath ?? ref.sourcePath ?? ''
-      lines.push(`- ${ref.title}${path ? `: ${path}` : ''}`)
-    }
-  }
-  return `${lines.join('\n')}\n`
+  throw new Error(`Invalid shared task result status: ${status || '<missing>'}`)
+}
+
+function singleLine(value: string) {
+  return value.trim().replace(/\s+/g, ' ')
+}
+
+function hasUnsafePathSegment(value: string) {
+  if (/^[a-zA-Z]:\//.test(value) || value.startsWith('/') || value.startsWith('\\')) return true
+  return value.split('/').some((segment) => !segment || segment === '.' || segment === '..')
 }
 
 function stringValue(value: unknown) {
@@ -223,9 +440,23 @@ function buildTaskSpec(input: SharedTaskDirectoryInput, relativeRoot: string) {
     '## 任务目录协议',
     `- 请先阅读本文件：\`${relativeRoot}/spec.md\`。`,
     `- 如需写执行计划，请写入：\`${relativeRoot}/plan.md\`。`,
-    `- 最终结果摘要请写入：\`${relativeRoot}/result.md\`。`,
+    `- 最终结果请写入：\`${relativeRoot}/result.md\`，必须使用下面“结果契约”中的机器可读格式。`,
     `- 文件、报告、网页、日志等产物请放入：\`${relativeRoot}/artifacts/\`。`,
     '- 不要覆盖 `base/` 中的输入材料。',
+    '',
+    '## 结果契约',
+    '请让 `result.md` 保持以下格式，方便 Manager 稳定读取与验收：',
+    '',
+    '```text',
+    'STATUS: SUCCESS | SUCCESS_WITH_NOTES | REVISION_NEEDED | BLOCKED | INTERRUPTED',
+    'SUMMARY: 一句话总结任务结果',
+    '',
+    'DELIVERABLES:',
+    `- ${relativeRoot}/artifacts/<产物文件名>`,
+    '',
+    'NOTES:',
+    '- 可选补充说明、风险、未完成事项',
+    '```',
   ]
 
   if (input.dependencies?.length) {

@@ -83,11 +83,13 @@ describe('ag-ui adapter', () => {
     })
   })
 
-  test('maps task.clarification_needed to clarification event', () => {
+  test('maps task.clarification_needed to blocked task status plus clarification event', () => {
     const events = buildAgUiEventsFromRunEvent({
       runId: 'run-1',
       groupSessionId: 'group-1',
       taskId: 'task-1',
+      threadId: 'thread-1',
+      workerInstanceId: 'worker-1',
       agentId: 'agent-1',
       type: 'task.clarification_needed',
       payload: {
@@ -98,9 +100,17 @@ describe('ag-ui adapter', () => {
       },
     })
 
-    expect(events).toHaveLength(1)
-    const event = events[0] as { name?: string; value?: Record<string, unknown> }
-    expect(event.name).toBe('agenthub.task.clarification_needed')
-    expect(event.value?.question).toBe('请确认资料来源范围')
+    expect(events).toHaveLength(2)
+    const statusEvent = events[0] as { name?: string; value?: Record<string, unknown> }
+    const clarificationEvent = events[1] as { name?: string; value?: Record<string, unknown> }
+    expect(statusEvent.name).toBe('agenthub.task.status')
+    expect(statusEvent.value).toMatchObject({
+      status: 'blocked',
+      taskThreadStatus: 'active',
+      taskThreadId: 'thread-1',
+      workerInstanceId: 'worker-1',
+    })
+    expect(clarificationEvent.name).toBe('agenthub.task.clarification_needed')
+    expect(clarificationEvent.value?.question).toBe('请确认资料来源范围')
   })
 })

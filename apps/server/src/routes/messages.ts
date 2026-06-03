@@ -270,6 +270,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         agentRows,
         session.workspaceId,
         user.sub,
+        message,
       ).catch((err: any) =>
         logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed on resend'),
       )
@@ -390,6 +391,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         agentRows,
         session.workspaceId,
         user.sub,
+        previousUser,
       ).catch((err: any) =>
         logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed on regenerate'),
       )
@@ -452,6 +454,39 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           return c.json(msg)
         }
 
+        const activeTaskContext = await loadActiveTaskContext(sessionId)
+        const repliedToMessage = msg.replyToMessageId
+          ? ((await db.select().from(messages).where(eq(messages.id, msg.replyToMessageId)).limit(1))[0] as
+              | MessageRow
+              | undefined)
+          : undefined
+        const directWorkerTarget = chooseDirectWorkerReplyTarget({
+          sourceMessage: msg,
+          repliedToMessage,
+          activeTaskContext,
+          agentRows,
+        })
+        if (directWorkerTarget) {
+          const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
+          const profile = toAgentProfile(directWorkerTarget, workspace?.projectPath)
+          runAgentReply(
+            sessionId,
+            {
+              ...msg,
+              metadata: {
+                ...(msg.metadata && typeof msg.metadata === 'object' ? msg.metadata : {}),
+                directWorkerReply: true,
+                replyTargetAgentId: directWorkerTarget.id,
+                replyTargetAgentName: directWorkerTarget.name,
+              },
+            },
+            profile,
+          ).catch((err: any) =>
+            logger.error({ err: err?.message, sessionId }, 'Direct worker room reply failed'),
+          )
+          return c.json(msg)
+        }
+
         const orchestrator = agentRows.find((agent) => agent.roleType === 'orchestrator')
         if (orchestrator) {
           const attachedToActiveRun = await handleHumanInterruptForActiveRun({
@@ -473,10 +508,22 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
           agentRows,
           session.workspaceId,
           user.sub,
+          msg,
         ).catch((err: any) =>
           logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed'),
         )
       } else {
+        if (session && isOrchestratorTaskSession(session)) {
+          const attachedToTaskThread = await handleHumanInterruptFromTaskThreadSession({
+            session,
+            ownerId: user.sub,
+            content,
+            userMessageId: msg.id,
+          })
+          if (attachedToTaskThread) {
+            return c.json(msg)
+          }
+        }
         let profile = session ? await profileForDirectSession(session) : undefined
         if (profile && metadata?.safetyMode && typeof metadata.safetyMode === 'string') {
           profile = applySafetyMode(profile, metadata.safetyMode)
@@ -1122,6 +1169,16 @@ async function findLatestInterruptibleRun(groupSessionId: string) {
   return runs.find((run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status)) ?? null
 }
 
+async function findInterruptibleRunById(runId: string, groupSessionId: string) {
+  const [run] = await db
+    .select()
+    .from(orchestratorRuns)
+    .where(and(eq(orchestratorRuns.id, runId), eq(orchestratorRuns.groupSessionId, groupSessionId)))
+    .limit(1)
+
+  return run && INTERRUPTIBLE_RUN_STATUSES.has(run.status) ? run : null
+}
+
 async function persistSessionTransparencyMessage(input: {
   sessionId: string
   senderId: string
@@ -1158,8 +1215,19 @@ async function handleHumanInterruptForActiveRun(params: {
   content: string
   userMessageId: string
   orchestrator: typeof workspaceAgents.$inferSelect
+  runId?: string | null
+  source?: {
+    kind: 'group' | 'task_thread'
+    taskThreadId?: string | null
+    taskId?: string | null
+    childSessionId?: string | null
+    workerInstanceId?: string | null
+    workspaceAgentId?: string | null
+  }
 }) {
-  const activeRun = await findLatestInterruptibleRun(params.groupSessionId)
+  const activeRun = params.runId
+    ? await findInterruptibleRunById(params.runId, params.groupSessionId)
+    : await findLatestInterruptibleRun(params.groupSessionId)
   if (!activeRun) return false
 
   const namespace = Blackboard.namespace(params.workspaceId, activeRun.id)
@@ -1170,8 +1238,14 @@ async function handleHumanInterruptForActiveRun(params: {
     key: interruptKey,
     value: {
       kind: 'human_interrupt',
+      source: params.source?.kind ?? 'group',
       messageId: params.userMessageId,
       groupSessionId: params.groupSessionId,
+      taskThreadId: params.source?.taskThreadId ?? null,
+      taskId: params.source?.taskId ?? null,
+      childSessionId: params.source?.childSessionId ?? null,
+      workerInstanceId: params.source?.workerInstanceId ?? null,
+      workspaceAgentId: params.source?.workspaceAgentId ?? null,
       content: params.content,
       actorType: 'user',
       actorId: params.ownerId,
@@ -1182,20 +1256,35 @@ async function handleHumanInterruptForActiveRun(params: {
       createdAt,
     },
     agentId: params.orchestrator.id,
-    tags: ['human-interrupt', 'hitl'],
+    taskId: params.source?.taskId ?? undefined,
+    tags: [
+      'human-interrupt',
+      'hitl',
+      ...(params.source?.kind === 'task_thread' ? ['task-thread'] : []),
+    ],
   })
 
   await emitRunEvent({
     runId: activeRun.id,
     workspaceId: params.workspaceId,
     groupSessionId: params.groupSessionId,
+    taskId: params.source?.taskId ?? undefined,
+    threadId: params.source?.taskThreadId ?? undefined,
+    workerInstanceId: params.source?.workerInstanceId ?? undefined,
     agentId: params.orchestrator.id,
     type: 'blackboard.written',
     payload: {
       key: interruptKey,
       version: note.version,
-      summary: 'Human provided an in-flight correction for the current run.',
+      summary:
+        params.source?.kind === 'task_thread'
+          ? 'Human provided an in-flight correction inside a TaskThread room.'
+          : 'Human provided an in-flight correction for the current run.',
       source: 'human_interrupt',
+      interruptSource: params.source?.kind ?? 'group',
+      taskThreadId: params.source?.taskThreadId ?? null,
+      childSessionId: params.source?.childSessionId ?? null,
+      taskId: params.source?.taskId ?? null,
       taskTitle: 'Human interrupt',
       agentName: params.orchestrator.name,
       contentPreview: params.content.slice(0, 200),
@@ -1215,7 +1304,10 @@ async function handleHumanInterruptForActiveRun(params: {
     {
       action: 'human_interrupt_received',
       reason: 'A human participant added or corrected requirements while the run is active.',
-      message: `Merged a new human instruction into the active run: ${params.content.slice(0, 160)}`,
+      message:
+        params.source?.kind === 'task_thread'
+          ? `Merged a TaskThread human instruction into the active run: ${params.content.slice(0, 160)}`
+          : `Merged a new human instruction into the active run: ${params.content.slice(0, 160)}`,
     },
   )
 
@@ -1230,9 +1322,13 @@ async function handleHumanInterruptForActiveRun(params: {
   )
 
   const groupAckContent =
-    forwardTargets.length > 0
-      ? `收到新的补充要求，我已并入当前协作，并同步给 ${forwardTargets.length} 个进行中的任务。`
-      : '收到新的补充要求，我已并入当前协作，并会在后续调度中按这个约束继续推进。'
+    params.source?.kind === 'task_thread'
+      ? forwardTargets.length > 0
+        ? `我看到你在任务子对话里的补充要求，已并入当前协作，并同步给 ${forwardTargets.length} 个进行中的任务。`
+        : '我看到你在任务子对话里的补充要求，已并入当前协作，并会在后续调度中按这个约束继续推进。'
+      : forwardTargets.length > 0
+        ? `收到新的补充要求，我已并入当前协作，并同步给 ${forwardTargets.length} 个进行中的任务。`
+        : '收到新的补充要求，我已并入当前协作，并会在后续调度中按这个约束继续推进。'
 
   await persistSessionTransparencyMessage({
     sessionId: params.groupSessionId,
@@ -1244,6 +1340,10 @@ async function handleHumanInterruptForActiveRun(params: {
       systemEvent: 'manager_human_interrupt_ack',
       orchestratorRunId: activeRun.id,
       sourceMessageId: params.userMessageId,
+      interruptSource: params.source?.kind ?? 'group',
+      sourceTaskThreadId: params.source?.taskThreadId ?? null,
+      sourceChildSessionId: params.source?.childSessionId ?? null,
+      sourceTaskId: params.source?.taskId ?? null,
       blackboardRef: note,
       forwardedThreadCount: forwardTargets.length,
     },
@@ -1261,6 +1361,10 @@ async function handleHumanInterruptForActiveRun(params: {
         orchestratorRunId: activeRun.id,
         orchestratorTaskThreadId: thread.id,
         sourceMessageId: params.userMessageId,
+        interruptSource: params.source?.kind ?? 'group',
+        sourceTaskThreadId: params.source?.taskThreadId ?? null,
+        sourceChildSessionId: params.source?.childSessionId ?? null,
+        sourceTaskId: params.source?.taskId ?? null,
         blackboardRef: note,
       },
     })
@@ -1279,12 +1383,116 @@ async function handleHumanInterruptForActiveRun(params: {
   return true
 }
 
+function isOrchestratorTaskSession(session: typeof sessions.$inferSelect | null | undefined) {
+  if (!session || session.type !== 'direct') return false
+  const metadata =
+    session.metadata && typeof session.metadata === 'object'
+      ? (session.metadata as Record<string, unknown>)
+      : null
+  return metadata?.kind === 'orchestrator-task'
+}
+
+async function handleHumanInterruptFromTaskThreadSession(params: {
+  session: typeof sessions.$inferSelect
+  ownerId: string
+  content: string
+  userMessageId: string
+}) {
+  if (!isOrchestratorTaskSession(params.session)) return false
+
+  const [thread] = await db
+    .select()
+    .from(taskThreads)
+    .where(eq(taskThreads.sessionId, params.session.id))
+    .limit(1)
+
+  if (!thread) {
+    await persistSessionTransparencyMessage({
+      sessionId: params.session.id,
+      senderId: 'system',
+      senderType: 'system',
+      content: '这条消息已保留在任务子对话里，但没有找到对应的 TaskThread 资源，无法接入当前协作控制面。',
+      metadata: {
+        kind: 'task-thread-human-interrupt-unlinked',
+        systemEvent: 'task_thread_human_interrupt_unlinked',
+        sourceMessageId: params.userMessageId,
+      },
+    })
+    return true
+  }
+
+  const [orchestrator] = await db
+    .select()
+    .from(workspaceAgents)
+    .where(and(eq(workspaceAgents.workspaceId, thread.workspaceId), eq(workspaceAgents.roleType, 'orchestrator')))
+    .orderBy(asc(workspaceAgents.orderIdx))
+    .limit(1)
+
+  if (!orchestrator) {
+    await persistSessionTransparencyMessage({
+      sessionId: params.session.id,
+      senderId: 'system',
+      senderType: 'system',
+      content: '这条消息已保留在任务子对话里，但当前工作区没有 Orchestrator，无法把它并入协作控制面。',
+      metadata: {
+        kind: 'task-thread-human-interrupt-no-orchestrator',
+        systemEvent: 'task_thread_human_interrupt_no_orchestrator',
+        sourceMessageId: params.userMessageId,
+        taskThreadId: thread.id,
+        orchestratorRunId: thread.runId,
+        orchestratorTaskId: thread.taskId,
+        groupSessionId: thread.groupSessionId,
+      },
+    })
+    return true
+  }
+
+  const attached = await handleHumanInterruptForActiveRun({
+    groupSessionId: thread.groupSessionId,
+    workspaceId: thread.workspaceId,
+    ownerId: params.ownerId,
+    content: params.content,
+    userMessageId: params.userMessageId,
+    orchestrator,
+    runId: thread.runId,
+    source: {
+      kind: 'task_thread',
+      taskThreadId: thread.id,
+      taskId: thread.taskId,
+      childSessionId: params.session.id,
+      workerInstanceId: thread.workerInstanceId,
+      workspaceAgentId: thread.workspaceAgentId,
+    },
+  })
+
+  if (!attached) {
+    await persistSessionTransparencyMessage({
+      sessionId: params.session.id,
+      senderId: orchestrator.id,
+      senderType: 'agent',
+      content: '我看到你在这个任务子对话里的补充，但当前没有可接管的运行。请回到主群聊继续发起或恢复协作。',
+      metadata: {
+        kind: 'task-thread-human-interrupt-inactive',
+        systemEvent: 'task_thread_human_interrupt_inactive',
+        sourceMessageId: params.userMessageId,
+        taskThreadId: thread.id,
+        orchestratorRunId: thread.runId,
+        orchestratorTaskId: thread.taskId,
+        groupSessionId: thread.groupSessionId,
+      },
+    })
+  }
+
+  return true
+}
+
 async function routeGroupMessageThroughOrchestrator(
   sessionId: string,
   content: string,
   agentRows: typeof workspaceAgents.$inferSelect[],
   workspaceId: string,
   ownerId: string,
+  sourceMessage?: MessageRow,
 ) {
   const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
   if (!orchestrator) {
@@ -1310,6 +1518,7 @@ async function routeGroupMessageThroughOrchestrator(
 
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
   const recentMessages = await loadRecentRoomMessages(sessionId, agentRows)
+  const activeTaskContext = await loadActiveTaskContext(sessionId)
 
   let decision: Awaited<ReturnType<typeof decideOrchestratorAction>>
   try {
@@ -1318,6 +1527,7 @@ async function routeGroupMessageThroughOrchestrator(
       agents: agentRows,
       workspaceGoal: workspace?.goal ?? null,
       workspacePath: workspace?.projectPath ?? null,
+      activeTaskContext,
       recentMessages,
     })
   } catch (err: any) {
@@ -1373,19 +1583,51 @@ async function routeGroupMessageThroughOrchestrator(
     return
   }
 
-  const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
-  const agentUserMsg: MessageRow = {
-    id: randomUUID(),
-    sessionId,
-    senderId: orchestrator.id,
-    senderType: 'user',
-    type: 'text',
-    content,
-    metadata: { isOrchestratorHandoff: true, orchestratorDecision: decision.action, decisionReason: decision.reason },
-    createdAt: new Date(),
+  const decisionContent = decision.message?.trim() || ''
+  const replyTarget = resolveReplyTargetAgent(agentRows, orchestrator, decision)
+
+  if (decision.action === 'reply' && replyTarget && memberProposals.length === 0) {
+    const profile =
+      replyTarget.roleType === 'orchestrator'
+        ? toCoordinatorProfile(replyTarget, workspace?.projectPath)
+        : toAgentProfile(replyTarget, workspace?.projectPath)
+    const replyMessage: MessageRow = sourceMessage
+      ? {
+          ...sourceMessage,
+          metadata: {
+            ...(sourceMessage.metadata && typeof sourceMessage.metadata === 'object'
+              ? sourceMessage.metadata
+              : {}),
+            routedByOrchestrator: true,
+            orchestratorDecision: decision.action,
+            decisionReason: decision.reason,
+            replyTargetAgentId: replyTarget.id,
+            replyTargetAgentName: replyTarget.name,
+            ...(decisionContent ? { orchestratorRoutingHint: decisionContent } : {}),
+          },
+        }
+      : {
+          id: randomUUID(),
+          sessionId,
+          senderId: ownerId,
+          senderType: 'user',
+          type: 'text',
+          content,
+          metadata: {
+            routedByOrchestrator: true,
+            orchestratorDecision: decision.action,
+            decisionReason: decision.reason,
+            replyTargetAgentId: replyTarget.id,
+            replyTargetAgentName: replyTarget.name,
+            ...(decisionContent ? { orchestratorRoutingHint: decisionContent } : {}),
+          },
+          createdAt: new Date(),
+        }
+
+    await runAgentReply(sessionId, replyMessage, profile)
+    return
   }
 
-  const decisionContent = decision.message?.trim() || ''
   if (decisionContent || memberProposals.length) {
     const [message] = await db
       .insert(messages)
@@ -1418,11 +1660,43 @@ async function routeGroupMessageThroughOrchestrator(
     return
   }
 
+  const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
+  const agentUserMsg: MessageRow = {
+    id: randomUUID(),
+    sessionId,
+    senderId: orchestrator.id,
+    senderType: 'user',
+    type: 'text',
+    content,
+    metadata: { isOrchestratorHandoff: true, orchestratorDecision: decision.action, decisionReason: decision.reason },
+    createdAt: new Date(),
+  }
+
   try {
     await runAgentReply(sessionId, agentUserMsg, profile)
   } catch (err: any) {
     throw err
   }
+}
+
+function resolveReplyTargetAgent(
+  agentRows: typeof workspaceAgents.$inferSelect[],
+  orchestrator: typeof workspaceAgents.$inferSelect,
+  decision: Awaited<ReturnType<typeof decideOrchestratorAction>>,
+) {
+  const targetId = decision.replyTargetAgentId?.trim()
+  if (targetId) {
+    const byId = agentRows.find((agent) => agent.id === targetId)
+    if (byId) return byId
+  }
+
+  const targetName = decision.replyTargetAgentName?.trim().toLowerCase()
+  if (targetName) {
+    const byName = agentRows.find((agent) => agent.name.trim().toLowerCase() === targetName)
+    if (byName) return byName
+  }
+
+  return decision.action === 'reply' && orchestrator ? orchestrator : null
 }
 
 async function loadRecentRoomMessages(
@@ -1471,6 +1745,117 @@ async function loadRecentRoomMessages(
         content: message.content.trim(),
       }
     })
+}
+
+async function loadActiveTaskContext(sessionId: string) {
+  const tasks = await db
+    .select({
+      taskId: workspaceTasks.id,
+      taskTitle: workspaceTasks.title,
+      taskStatus: workspaceTasks.status,
+      progressStatus: workspaceTasks.progressStatus,
+      agentId: workspaceTasks.agentId,
+      threadStatus: taskThreads.status,
+      agentName: workspaceAgents.name,
+      clarificationCount: workspaceTasks.clarificationCount,
+      errorLog: workspaceTasks.errorLog,
+    })
+    .from(workspaceTasks)
+    .leftJoin(taskThreads, eq(taskThreads.taskId, workspaceTasks.id))
+    .leftJoin(workspaceAgents, eq(workspaceAgents.id, workspaceTasks.agentId))
+    .where(eq(taskThreads.groupSessionId, sessionId))
+    .orderBy(desc(taskThreads.updatedAt), desc(workspaceTasks.updatedAt))
+    .limit(8)
+
+  return tasks
+    .filter((task) => {
+      const threadStatus = task.threadStatus ?? null
+      const taskStatus = task.taskStatus ?? null
+      return (
+        threadStatus === 'prepared' ||
+        threadStatus === 'assigned' ||
+        threadStatus === 'active' ||
+        taskStatus === 'pending' ||
+        taskStatus === 'running' ||
+        taskStatus === 'blocked'
+      )
+    })
+    .map((task) => ({
+      taskId: task.taskId,
+      taskTitle: task.taskTitle,
+      taskStatus: task.taskStatus,
+      taskThreadStatus: task.threadStatus ?? null,
+      agentId: task.agentId ?? null,
+      agentName: task.agentName ?? null,
+      progressStatus: task.progressStatus ?? task.errorLog ?? null,
+      awaitingClarification: (task.clarificationCount ?? 0) > 0 || task.taskStatus === 'blocked',
+    }))
+}
+
+function chooseDirectWorkerReplyTarget(input: {
+  sourceMessage?: MessageRow
+  repliedToMessage?: MessageRow
+  activeTaskContext: Awaited<ReturnType<typeof loadActiveTaskContext>>
+  agentRows: typeof workspaceAgents.$inferSelect[]
+}) {
+  const metadata =
+    input.sourceMessage?.metadata && typeof input.sourceMessage.metadata === 'object'
+      ? (input.sourceMessage.metadata as Record<string, unknown>)
+      : null
+  const replyToMessageId =
+    input.sourceMessage?.replyToMessageId && typeof input.sourceMessage.replyToMessageId === 'string'
+      ? input.sourceMessage.replyToMessageId
+      : null
+
+  const mentionedAgentIds = Array.isArray(metadata?.mentions)
+    ? metadata!.mentions.filter((item): item is string => typeof item === 'string')
+    : []
+  if (mentionedAgentIds.length > 0) return null
+
+  const workersById = new Map(
+    input.agentRows.filter((agent) => agent.roleType !== 'orchestrator').map((agent) => [agent.id, agent] as const),
+  )
+  if (!replyToMessageId && !metadata?.replyToMessageId) return null
+
+  const repliedToMetadata =
+    input.repliedToMessage?.metadata && typeof input.repliedToMessage.metadata === 'object'
+      ? (input.repliedToMessage.metadata as Record<string, unknown>)
+      : null
+  if (!input.repliedToMessage || input.repliedToMessage.senderType !== 'agent') return null
+
+  const targetAgentId = typeof repliedToMetadata?.agentId === 'string'
+    ? repliedToMetadata.agentId
+    : typeof repliedToMetadata?.workerAgentId === 'string'
+      ? repliedToMetadata.workerAgentId
+      : typeof repliedToMetadata?.workspaceAgentId === 'string'
+        ? repliedToMetadata.workspaceAgentId
+        : input.repliedToMessage.senderId
+  const targetWorker = workersById.get(targetAgentId)
+  if (!targetWorker) return null
+
+  const repliedTaskId =
+    typeof repliedToMetadata?.orchestratorTaskId === 'string'
+      ? repliedToMetadata.orchestratorTaskId
+      : typeof repliedToMetadata?.taskId === 'string'
+        ? repliedToMetadata.taskId
+        : null
+  const relatedActiveTask = input.activeTaskContext.find((task) => {
+    if (task.agentId !== targetWorker.id) return false
+    if (repliedTaskId && task.taskId !== repliedTaskId) return false
+    return (
+      task.awaitingClarification ||
+      task.taskThreadStatus === 'active' ||
+      task.taskStatus === 'running' ||
+      task.taskStatus === 'blocked'
+    )
+  })
+
+  return relatedActiveTask ? targetWorker : null
+}
+
+export const __messageRouteTestHooks = {
+  chooseDirectWorkerReplyTarget,
+  isOrchestratorTaskSession,
 }
 
 function resolveMentionedAgents(

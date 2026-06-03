@@ -48,7 +48,7 @@
 - 已开始把 `workerInstanceId`、`taskThreadId`、artifact snapshot 投影进 RunEvent / AG-UI / 前端 store，但 UI 运行态还没有彻底只从 RunEvent 恢复。
 - `/api/orchestrator-runs/:id` 已开始前推 `runtimeActivitySnapshot`，把“当前谁在执行 / Orchestrator 是否还在 planning / synthesizing”作为服务端控制面事实返回；前端应优先消费该 snapshot，再把 AG-UI replay 与本地 task board 推导作为 fallback。
 - `TaskThread` 的 `prepared / assigned / active / completed` 语义要尽量一路保留到前端投影，不要在中途全部压扁为普通 task status。左侧子对话、Agent tabs、任务看板与主群聊汇报应优先体现 TaskThread 资源状态，再退回任务状态。
-- 已开始落地 `.agenthub/shared/tasks/{taskId}` 共享任务目录协议：任务准备阶段会写入 `spec.md` / `meta.json` / `artifacts/`，A2A `message/send` 正文和 Code Agent prompt 已注入 `spec.md -> plan.md -> result.md -> artifacts/` 执行契约。
+- 已开始落地 `.agenthub/shared/tasks/{taskId}` 共享任务目录协议：任务准备阶段会写入 `spec.md` / `meta.json` / `artifacts/`，A2A `message/send` 正文和 Code Agent prompt 已注入 `spec.md -> plan.md -> result.md -> artifacts/` 执行契约；最终汇总前会读取并校验 `result.md`，将 `SUCCESS / REVISION_NEEDED / BLOCKED / INTERRUPTED` 映射回控制面状态。
 - `RunController` 已开始下沉到 task 级生命周期控制：`resume` 的 running-task requeue、`blocked_by_dependency` 的失败投影，以及 `executeTask()` 的 `task.assigned / task.started / task.completed / task.failed / task.cancelled` 落库、线程状态同步与运行事件广播，正在从 `OrchestratorEngine` 散写迁移到统一控制面入口。
 - `retry / replan` 也开始往同一条控制面收口：手动重试、`retry_with_backoff`、`local_replan`、`agent_substitution` 这几条路径的旧 task reset 已抽成 `RunController.resetTaskForRetry()/resetTaskForReplan()`，统一处理 `workspace_tasks.pending + taskThread -> prepared + task.retrying/run.replanned`，不再各分支自己重置表状态。
 - 动态新任务注入也开始进入控制面：`supervisor supplement`、`task_split`、`global_replan` 三条路径新增任务时，`workspace_tasks` 插入与 `task.queued` 事件广播已收口到 `RunController.queueTask()`，不再每个分支重复写“insert task + emit queued event”。
@@ -57,7 +57,7 @@
 - `WorkerController` reconcile 模式已对齐 HiClaw：实现分阶段 reconcile loop（EnsureReady → AssignLease → ObserveHealth → RecoverStale），每阶段幂等检查当前状态 vs 期望状态。Worker 状态始终从 reconcile 写回，不再分散在多处散写。
 - HiClaw 风格 idle-stop 已落地：空闲超时自动转入 sleeping，新任务通过 `ensureReadyForTask()` 自动 wake + reconcile；服务重启通过 `recoverStaleOnStartup()` 恢复 stale lease。
 - Worker 心跳监控已启用：2 分钟宽限期 + 5 分钟超时检测，超时自动标记 Worker failed + RuntimeLease stale。
-- 尚未完成真正的 `ManagerLoop` / `RunController` 替代主流程；`OrchestratorEngine`、`TaskExecutionService`、现有 Planner 仍是迁移期执行主路径。
+- 尚未完成真正的 `ManagerLoop` / `RunController` 替代主流程；`OrchestratorEngine`、`TaskExecutionService` 仍是迁移期执行兼容层。现有 Planner 已从初始任务分工主路径退下，复杂任务现在先走 `manager-planner.ts` 的 Manager-first 行动方案生成；`planner.ts` 暂时保留为 JSON 抽取、校验和契约归一化工具来源。
 - ArtifactStore 已从散写迁移到统一注册入口：`ArtifactController.registerArtifactBatch()` 成为产物唯一注册点，每次注册自动发 `artifact.created` RunEvent。`workspace_tasks.artifacts` JSON 字段降级为缓存。
 - RunEvent replay API 已完整化：`GET /api/orchestrator-runs/:id/events?afterSequence=N` 支持增量重放 + 资源 snapshot 恢复。
 - TaskThread 专用查询端点已上线：`GET /api/orchestrator-runs/:id/task-threads` 替代前端从 sessions 反向推导旧模式。
@@ -93,13 +93,13 @@ AG-UI 是 RunEvent 面向前端的事件协议投影
 
 ## 1. 背景判断
 
-AgentHub 当前已经具备动态 Planner、A2A envelope、AG-UI event、任务子对话、Code Agent 适配和工作目录隔离等能力，但这些能力仍然挂在一条过程式调用链上：
+AgentHub 当前已经具备 Manager-first 行动方案生成、A2A envelope、AG-UI event、任务子对话、Code Agent 适配和工作目录隔离等能力，但这些能力仍然有一部分挂在过程式执行链上：
 
 ```text
 用户群聊消息
   -> messages.ts
   -> Orchestrator decision
-  -> Dynamic Planner
+  -> Manager-first action plan
   -> startPlanRunInExistingGroup()
   -> orchestrator_runs / workspace_tasks / sessions
   -> OrchestratorEngine
@@ -443,6 +443,110 @@ AgentHub 映射：
 - MCP server 凭证也应走 per-agent/per-task scope，不默认全局暴露。
 
 这部分可以先本地实现为“按 RuntimeLease 注入 env + 日志脱敏 + 不写全局配置”，以后再接 gateway provider。
+
+### 2.8 从 HiClaw wiki 得出的硬结论
+
+`docs/hiclaw-wiki.agent.final.md` 把 HiClaw 拆得很细，读完以后需要把几个结论变成 AgentHub 后续重构的硬约束，而不是停留在“参考了 HiClaw”这种空话。
+
+#### Manager 不是 Planner，也不是后端流程的皮肤
+
+HiClaw 的 Manager 是一个长期在线的协调者：它接收人类目标，调用管理 skills，创建/选择 Worker，维护任务账本，追踪进度，处理异常，再向人类汇报。Planner 只是 Manager 可能使用的一项能力。
+
+AgentHub 现在最危险的误区，是把 `ManagerLoop` 做成 `Planner -> DAG -> Executor` 的新名字。正确方向是：
+
+- Planning skill 只生成或更新 WorkLedger；旧 Planner 不再是必经第一步。
+- ManagerLoop 才决定下一步是澄清、分发、等待、催办、返工、补员、暂停、汇总还是请求 Human 决策。
+- RunController / WorkerController 只能执行 Manager 的明确意图，并保证资源状态收敛。
+- 代码不能用静态规则绕过 Manager 去判断任务是不是“值得规划”、应该找谁、是否追加 QA。
+
+验收标准不是“DAG 跑完”，而是用户能感到“我把事情交给了一个负责人，它在带团队推进”。
+
+#### TaskThread 不是 UI 子会话，而是 AgentHub 的 Room 资源
+
+HiClaw 的 Matrix Room 是真实通信资源：它有参与者、权限、历史消息、审计和明确用途。AgentHub 不用 Matrix，但 TaskThread 必须承担同等语义。
+
+这意味着：
+
+- TaskThread 创建失败时，任务必须 blocked，而不是前端补一个空入口。
+- TaskThread 要保存 Manager 分派、Worker 接单、Worker 过程、澄清、结果、artifact 引用和 Human 插话。
+- 主群聊只是 Manager 面向 Human 的高层汇报，不应该堆 Worker 原始执行日志。
+- 进入 TaskThread 后看到的内容必须是真实执行链路产生的内容，不是“为了 UI 展示”复制出来的假消息。
+- 切换会话、刷新、服务重启后，TaskThread 入口应由资源状态和 RunEvent replay 恢复，而不是从 session metadata 猜。
+
+所以后续所有“子对话稳定性”问题，本质都要回到 TaskThread 资源和 RunEvent 投影，而不是继续在 SessionList 里补丁式修。
+
+#### Shared task directory 不是附件目录，而是任务协作空间
+
+HiClaw 的 MinIO 共享任务树承担了“任务规格、上下游输入、过程计划、结果和产物”的协作空间。AgentHub 的 `.agenthub/shared/tasks/{taskId}` 也必须按这个心智推进。
+
+硬规则：
+
+- Manager 分派前先写 `spec.md / meta.json / base/`。
+- Worker 必须先读 `spec.md`，再写 `plan.md / result.md / artifacts/`。
+- Worker 完成后，ArtifactStore 登记的是任务目录中的产物，而不是临时 workdir 里扫到什么就算什么。
+- 下游任务读取 ArtifactStore 或 shared task refs，不能猜上游 Worker 的相对路径。
+- `.agenthub/handoff` 只能作为兼容别名，不能继续作为新的协作主路径。
+
+这条如果做实，产物卡、下游接力、最终汇总和失败后的 partial artifact 才会稳定。
+
+#### Worker 是可协调资源，不是一次 CLI 调用
+
+HiClaw 的 Worker 有 runtime、model、skills、MCP、Room、Storage、Credential、desired state 和 observed state。AgentHub 的 Coding Agent 也必须逐步从“执行参数”变成 WorkerInstance。
+
+后续 WorkerInstance / RuntimeLease 要继续补齐：
+
+- ensure-ready：分配任务前检查 CLI、模型、auth、skills、sandbox/local-workdir。
+- isolated runtime：每个 Worker/Task 的 home/config/cache/session/tmp 分离。
+- heartbeat：长任务无输出时 ManagerPatrol 能区分“仍在跑 / 阻塞 / 已死”。
+- stale recovery：服务重启或进程退出后，不能继续显示 running。
+- idle-stop / wake：空闲 worker 可以睡眠，新任务到来再唤醒。
+- reconfigure：切换 runtime/model/skills 时创建新 lease 或重建运行态，不能污染旧会话。
+
+这也是为什么“多 Agent 协作像不像真的多人”，最终不是 UI 问题，而是 Worker 有没有真实生命周期。
+
+#### Human-in-the-Loop 是协作网络的一等参与者
+
+HiClaw 的 OpenHuman 和 Matrix 权限体系说明了一件事：Human 不是最后验收的人，也不是偶尔点确认框的人，而是可以进入任意相关房间观察、纠偏、补充约束和接管决策的参与者。
+
+AgentHub 应继续强化：
+
+- 主群聊插话进入 `human_interrupt` 控制面。
+- TaskThread 插话也要进入 ManagerLoop 的上下文，而不是只影响当前聊天。
+- 高风险动作、补员、返工、范围收缩和最终验收要能请求 Human 决策。
+- Human 看得见 Worker 过程，但不需要盯每个 Worker 的每一步；Manager 负责替 Human 监督细节。
+- 事件和消息都要带 `actorType / actorId / permissionScope`，为以后多人协作留边界。
+
+#### Gateway 思想比“模型配置页”更重要
+
+HiClaw 的 Higress 价值不只是统一 baseURL，而是把 LLM/MCP 凭证集中在网关，Worker 只拿 consumer token。AgentHub 当前可以暂时不引入 Higress，但配置分层必须继续向这个方向靠：
+
+- 模型管理是库存和凭证层。
+- Agent 配置是组合选择层。
+- RuntimeLease 是本次执行的最小注入层。
+- Worker 日志、TaskThread、RunEvent 必须做 secret redaction。
+- MCP 权限应逐步变成 per-agent/per-task scope，而不是全局暴露。
+
+短期实现可以是本地 CredentialLease；长期可以接 gateway provider / reverse proxy / enterprise credential broker。
+
+#### 技术栈不照搬，控制平面思想必须照搬
+
+AgentHub 不应默认引入 Matrix、MinIO、Higress、Kubernetes，因为这会让比赛项目和本地用户体验过重。但 HiClaw 的控制平面思想必须学：
+
+```text
+Resource Spec      用户/Manager 声明期望
+Resource Status    Controller 观察实际状态
+Reconcile Loop     差异收敛、失败重试、事件记录
+Event Timeline     Human 可看、可审计、可恢复
+Runtime Adapter    本地/Docker/远程环境可替换
+```
+
+因此后续重构优先级应该是：
+
+1. 继续削 `messages.ts` 和 `OrchestratorEngine` 的总控职责。
+2. 把 `RunController.reconcile()` 和 `ManagerLoop.step()` 做成持续推进主路径。
+3. 把 TaskThread / ArtifactStore / WorkerInstance / RuntimeLease 的资源状态做实。
+4. 前端彻底从 resource snapshot + RunEvent / AG-UI replay 恢复 UI。
+5. 再评估 OpenClaw / CoPaw 作为 coordinator runtime，而不是先把它塞进普通 code agent 下拉。
 
 ## 3. AgentHub 目标架构：Manager-led HiClaw-lite Kernel
 
@@ -1379,7 +1483,7 @@ AG-UI 必须成为 UI runtime projection，而不是“执行过程中顺手广�
 用户发出复杂目标后：
   1. ManagerLoop 立即创建 run.started / manager.thinking
   2. Manager 在主群聊给出模型生成的承接说明；模型尚未返回时先显示 RunEvent 驱动的可见状态
-  3. ManagerLoop 调用现有 Planner 生成初版 WorkLedger
+  3. ManagerLoop 调用 Manager-first planning action 生成初版 WorkLedger；旧 Planner 只作为校验/兼容工具
   4. 每个 task 创建 shared/tasks/{taskId}/spec.md
   5. 每个 task 创建 TaskThread(prepared)，并写入透明系统状态
   6. RunEvent 记录 plan.created / task.planned / thread.prepared
@@ -1408,6 +1512,7 @@ AG-UI 必须成为 UI runtime projection，而不是“执行过程中顺手广�
 - `.agenthub/shared/tasks/{taskId}` 会生成 `meta.json`、`spec.md`、`base/`、`artifacts/`。
 - A2A `message/send` 的正文已注入共享任务目录协议，Worker 能在协议消息里看到 `spec.md -> plan.md -> result.md -> artifacts/` 的交付契约。
 - Code Agent prompt 已注入同一份共享任务目录协议，避免 CLI Worker 只看到普通 prompt 而不知道共享目录交付规则。
+- `result.md` 已采用 HiClaw taskflow 风格的机器可读结果契约：`STATUS / SUMMARY / DELIVERABLES / NOTES`。最终汇总前会读取并校验这份契约，成功产物会转成正式 artifact refs；`REVISION_NEEDED / BLOCKED / INTERRUPTED` 会同步回 `workspace_tasks`、`TaskThread` 和 RunEvent，而不是只在总结文本里提示。
 - Orchestrator 任务主路径已把登记后的 `ArtifactStore` 记录回流为 canonical artifacts，后续黑板写入、任务结果、事件载荷和最终汇总会优先沿用这份产物事实，而不是继续只依赖扫描结果或消息 metadata。
 - 前端 `taskBoard` 已进一步收敛为 `resourceSnapshot` 优先：当 run snapshot 中存在 task-thread / runtime-lease / artifact 事实时，任务卡会直接使用 snapshot 覆盖旧 task/message 投影，不再把旧 artifacts 和 canonical artifacts 混拼成双份来源。
 - 群聊最终总结消息现在会在加载 run snapshot 后，用 canonical `ArtifactStore` artifacts 回填 `artifacts / file_card / delivery_report.files`，主群聊交付卡不再只依赖消息写入当时留下的 metadata。
@@ -1440,12 +1545,14 @@ AG-UI 必须成为 UI runtime projection，而不是“执行过程中顺手广�
 - runtime activity 描述统一后，控制面投影测试同时覆盖了共享 label：当前执行成员的 `phase` 与 `label` 会一起进入 projection，保证左侧控制面和主线程提示不会再各自飘不同的阶段文案。
 - 右侧面板 projection 相关测试已补上：`chat store artifact snapshot projection > task board panel projection derives phase counters and task result badges from task board state`，确保 TaskBoard 的阶段计数、任务结果摘要显隐、产物徽标与运行态颜色开始由统一 projection 决定，而不是组件私下再推导一遍。
 - 运行中人类介入的第一条真实主链路已打通：当群聊存在活跃 run 时，主群聊里的新补充要求会被挂接到当前 run，登记成 `human_interrupt` blackboard entry，并投影成 Manager 在主群聊的确认消息与活跃 TaskThread 的同步消息，而不是再默认重开一轮 run。
+- TaskThread 级人类介入也已接入同一控制面：用户在 `orchestrator-task` 子对话中补充或纠偏时，消息不再走普通 direct agent reply，而是按该 TaskThread 绑定的 `runId` 精确写入 `human_interrupt`，并在 blackboard / RunEvent / Manager 可见消息里保留 `source=task_thread`、`taskThreadId`、`taskId`、`childSessionId`。这让 TaskThread 开始接近 HiClaw Room 的语义：Human 可以进入 Worker 房间干预，Manager 负责吸收并协调后续动作。
 - 这条链路已经开始接入控制面：`RunController.reconcile()` 现在会消费未处理的 `human_interrupt`，把约束并入未完成任务描述，登记 `manager_actions/human_interrupts/*`，并发出 `run.replanned(strategy=human_interrupt)` 与 `task.rework_requested`。这意味着 Human 的插话开始进入 Manager 账本，而不只是停留在聊天时间线上。
 - live worker interrupt 的第一刀也已落下：当 `human_interrupt` 命中 active task thread 时，Manager 现在会中断对应 session 的 agent reply，把相关 `runtimeLease` 标成 stale，并把 `workerInstance` 收回 idle。配套的 `TaskScheduler -> TaskExecutionService -> LocalA2ATransport -> runAgentReply` cancel/abort 链也已补通，`cancelled` 不再被错误吞成 `failed`。
 - runtime activity 分层相关测试已覆盖：`chat store artifact snapshot projection > runtime activity projection tracks manager, task execution, and synthesis states`，确保前端“谁在执行、执行到哪”开始有独立可验证的状态推进。
 - snapshot 恢复活动态相关测试已补上：`snapshot-derived runtime activity falls back to the running task when replay is unavailable` 与 `snapshot-derived runtime activity falls back to orchestrator planning and synthesizing states`，确保刷新恢复时即使不先 replay 全部事件，控制面也能从当前 taskBoard 快照恢复出基本活动态。
 - 线程语义直达前端的测试也已补上：`ag-ui adapter > maps task.started to task status with active task thread semantics` 与 `chat store artifact snapshot projection > task status event reprojects sessions and tabs from task thread semantics without resource snapshot`，确保实时 `task.status` 事件本身就能稳定驱动“谁在执行 / 子对话归谁 / 线程现在处于什么阶段”。
 - 恢复与阻塞任务的控制面测试也已补上：`run controller requeues running tasks for resume and resets task thread state` 与 `run controller marks blocked tasks through the control plane and syncs task threads`，确保服务重启恢复和依赖阻塞不再只是 task 表单点改写，而会连同 `TaskThread` 和事件流一起进入统一控制面。
+- 共享任务结果契约相关测试已补上：`tests/shared-task-directory.test.ts` 覆盖 `result.md` 写入、解析和路径校验；`tests/shared-task-result-contract.test.ts` 覆盖共享结果状态到控制面状态和 artifact refs 的映射。
 
 进行中：
 

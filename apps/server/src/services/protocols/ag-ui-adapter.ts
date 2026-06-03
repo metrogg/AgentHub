@@ -180,6 +180,7 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
     return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'assigned'))]
   if (event.type === 'task.clarification_needed') {
     return [
+      buildAgUiTaskStatusEvent(taskStatusPayload(event, 'blocked', 'active')),
       {
         name: 'agenthub.task.clarification_needed',
         runId: event.runId,
@@ -473,7 +474,11 @@ function taskStepName(params: { agentName?: string | null; taskId: string; taskT
   return [params.agentName, params.taskTitle || params.taskId].filter(Boolean).join(' · ')
 }
 
-function taskStatusPayload(event: AgentHubRunEventLike, status: string) {
+function taskStatusPayload(
+  event: AgentHubRunEventLike,
+  status: string,
+  taskThreadStatusOverride?: 'prepared' | 'assigned' | 'active' | 'completed' | 'failed' | 'cancelled',
+) {
   const payload = event.payload ?? {}
   return {
     agentId: event.agentId ?? stringValue(payload.agentId),
@@ -494,7 +499,9 @@ function taskStatusPayload(event: AgentHubRunEventLike, status: string) {
     sharedTaskSpecPath: stringValue(payload.sharedTaskSpecPath),
     status,
     taskThreadStatus:
-      explicitTaskThreadStatus(payload) ?? inferTaskThreadStatusFromEventType(event.type),
+      taskThreadStatusOverride ??
+      explicitTaskThreadStatus(payload) ??
+      inferTaskThreadStatusFromEventType(event.type),
     taskThreadId: event.threadId ?? stringValue(payload.taskThreadId) ?? stringValue(payload.threadId),
     taskId: event.taskId ?? stringValue(payload.taskId) ?? 'task',
     taskTitle:

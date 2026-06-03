@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { decideOrchestratorAction } from '../apps/server/src/services/orchestrator/orchestrator-decision'
+import {
+  decideOrchestratorAction,
+  __orchestratorDecisionTestHooks,
+} from '../apps/server/src/services/orchestrator/orchestrator-decision'
 import { runtimeRegistry, type AgentOutputChunk, type AgentRuntime, type ExecutionContext } from '../apps/server/src/services/runtime'
 import { CodeAgentRuntime } from '../apps/server/src/services/runtime/code-agent-runtime'
 
@@ -51,5 +54,118 @@ describe('orchestrator decision', () => {
     } finally {
       runtimeRegistry.register(new CodeAgentRuntime())
     }
+  })
+
+  test('prefers the only clarification-waiting worker as reply fallback target', () => {
+    const target = __orchestratorDecisionTestHooks.chooseReplyTargetFromActiveContext({
+      action: 'reply',
+      agents: [
+        {
+          id: 'orchestrator',
+          key: 'orchestrator',
+          name: 'Orchestrator',
+          role: '总指挥',
+          roleType: 'orchestrator',
+          runtimeType: 'code-agent',
+          codeAgentType: 'opencode',
+          capabilityTags: [],
+          toolPermissions: [],
+          sandboxPolicy: 'workspace-write',
+        },
+        {
+          id: 'researcher',
+          key: 'researcher',
+          name: 'Researcher',
+          role: '资料研究',
+          roleType: 'researcher',
+          runtimeType: 'code-agent',
+          codeAgentType: 'opencode',
+          capabilityTags: [],
+          toolPermissions: [],
+          sandboxPolicy: 'workspace-write',
+        },
+      ],
+      activeTaskContext: [
+        {
+          taskId: 'task-1',
+          taskTitle: 'Research market',
+          taskStatus: 'blocked',
+          taskThreadStatus: 'active',
+          agentId: 'researcher',
+          agentName: 'Researcher',
+          awaitingClarification: true,
+          progressStatus: '请确认市场范围',
+        },
+      ],
+    })
+
+    expect(target).toEqual({
+      id: 'researcher',
+      name: 'Researcher',
+    })
+  })
+
+  test('does not force a fallback reply target when multiple workers are active', () => {
+    const target = __orchestratorDecisionTestHooks.chooseReplyTargetFromActiveContext({
+      action: 'reply',
+      agents: [
+        {
+          id: 'orchestrator',
+          key: 'orchestrator',
+          name: 'Orchestrator',
+          role: '总指挥',
+          roleType: 'orchestrator',
+          runtimeType: 'code-agent',
+          codeAgentType: 'opencode',
+          capabilityTags: [],
+          toolPermissions: [],
+          sandboxPolicy: 'workspace-write',
+        },
+        {
+          id: 'researcher',
+          key: 'researcher',
+          name: 'Researcher',
+          role: '资料研究',
+          roleType: 'researcher',
+          runtimeType: 'code-agent',
+          codeAgentType: 'opencode',
+          capabilityTags: [],
+          toolPermissions: [],
+          sandboxPolicy: 'workspace-write',
+        },
+        {
+          id: 'builder',
+          key: 'builder',
+          name: 'Builder',
+          role: '工程实现',
+          roleType: 'coder',
+          runtimeType: 'code-agent',
+          codeAgentType: 'opencode',
+          capabilityTags: [],
+          toolPermissions: [],
+          sandboxPolicy: 'workspace-write',
+        },
+      ],
+      activeTaskContext: [
+        {
+          taskId: 'task-1',
+          taskTitle: 'Research market',
+          taskStatus: 'running',
+          taskThreadStatus: 'active',
+          agentId: 'researcher',
+          agentName: 'Researcher',
+        },
+        {
+          taskId: 'task-2',
+          taskTitle: 'Build page',
+          taskStatus: 'running',
+          taskThreadStatus: 'active',
+          agentId: 'builder',
+          agentName: 'Builder',
+        },
+      ],
+    })
+
+    expect(target).toBeNull()
   })
 })

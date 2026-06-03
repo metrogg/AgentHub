@@ -31,7 +31,13 @@ import { ReplanningEngine } from './replanning-engine'
 import { emitRunEvent } from './run-events'
 import { initializeRunLedger } from './run-ledger'
 import { prepareTaskRuntimeThread, updateTaskThreadStatus } from './task-thread-service'
-import { updateSharedTaskDirectoryStatus } from './shared-task-directory'
+import {
+  mapSharedTaskResultStatus,
+  readSharedTaskResult,
+  sharedTaskResultDeliverablesToArtifacts,
+  updateSharedTaskDirectoryStatus,
+  type SharedTaskResultStatus,
+} from './shared-task-directory'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from './artifact-store'
 import { runController, type RunControllerRunContext } from './run-controller'
 import {
@@ -1639,12 +1645,42 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       })
     }
 
+    await persistThreadTransparencyMessage({
+      sessionId: groupSessionId,
+      senderId: agent.id,
+      senderType: 'agent',
+      content: buildWorkerGroupStartedMessage({
+        taskTitle: task.title,
+        executionConfig,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+      }),
+      metadata: {
+        kind: 'worker-task-started',
+        orchestratorRunId: runId,
+        orchestratorTaskId: task.id,
+        groupSessionId,
+        childSessionId: childInfo.sessionId,
+        taskThreadId: childInfo.taskThreadId ?? null,
+        workerInstanceId,
+        runtimeLeaseId,
+        agentName: agent.name,
+        taskStatus: TaskStatus.Running,
+        taskProgressUpdate: true,
+        progressPercent: 3,
+        progressStatus: initialProgressStatus,
+        executionConfig,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? undefined,
+        sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? undefined,
+      },
+    })
+
     const taskStartTime = Date.now()
     const stopHeartbeat = startTaskHeartbeat({
       runId,
       groupSessionId,
       workspaceId,
       taskId: task.id,
+      childSessionId: childInfo.sessionId,
       taskThreadId: childInfo.taskThreadId ?? null,
       workerInstanceId,
       runtimeLeaseId,
@@ -1935,14 +1971,29 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           .values({
             sessionId: groupSessionId,
             senderId: agent.id,
-            senderType: 'system',
+            senderType: 'agent',
             type: 'text',
-            content: `❓ **${agent.name} 需要确认**：${clarification.question}`,
+            content: buildWorkerClarificationGroupMessage({
+              question: clarification.question,
+              options: clarification.options,
+            }),
             metadata: {
+              kind: 'worker-clarification-needed',
               clarificationTaskId: task.id,
               clarificationOptions: clarification.options,
               clarificationStatus: 'pending',
               agentName: agent.name,
+              orchestratorRunId: runId,
+              orchestratorTaskId: task.id,
+              groupSessionId,
+              childSessionId: childInfo.sessionId,
+              taskThreadId: childInfo.taskThreadId ?? null,
+              workerInstanceId,
+              runtimeLeaseId,
+              taskStatus: 'blocked',
+              taskProgressUpdate: true,
+              progressStatus: clarification.question,
+              executionConfig,
             },
             createdAt: new Date(),
           })
@@ -2138,6 +2189,32 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
           },
         )
+        await persistThreadTransparencyMessage({
+          sessionId: groupSessionId,
+          senderId: agent.id,
+          senderType: 'agent',
+          content: buildWorkerProgressGroupMessage({
+            taskTitle: task.title,
+            percent: lastProgress.percent,
+            status: lastProgress.status,
+          }),
+          metadata: {
+            kind: 'worker-progress-update',
+            orchestratorRunId: runId,
+            orchestratorTaskId: task.id,
+            groupSessionId,
+            childSessionId: childInfo.sessionId,
+            taskThreadId: childInfo.taskThreadId ?? null,
+            workerInstanceId,
+            runtimeLeaseId,
+            agentName: agent.name,
+            taskStatus: TaskStatus.Running,
+            taskProgressUpdate: true,
+            progressPercent: lastProgress.percent,
+            progressStatus: lastProgress.status,
+            executionConfig,
+          },
+        })
       }
 
       await executionTracer.log({
@@ -2834,19 +2911,101 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     const bbResults = typedBlackboardEntries.filter(
       (entry) => entry.key.startsWith('task_') && entry.key.endsWith('_output'),
     )
-    const enrichedResults: TaskResult[] = results.map((r) => {
+    const snapshot = await runController.loadResourceSnapshot(runId)
+    const taskThreadByTaskId = new Map(snapshot.taskThreads.map((thread) => [thread.taskId, thread]))
+    const taskRowByTaskId = new Map(snapshot.tasks.map((task) => [task.id, task]))
+    const enrichedResults: TaskResult[] = []
+    const sharedTaskReviewIssues: Array<{
+      taskId: string
+      taskTitle: string
+      error: string
+    }> = []
+
+    for (const r of results) {
       const bbEntry = bbResults.find((e) => e.key === `task_${r.taskId}_output`)
+      let nextResult = r
       if (bbEntry) {
         const val = bbEntry.value as { output: string; artifacts: Array<Record<string, unknown>> }
-        return {
+        nextResult = {
           ...r,
           output: val.output,
           artifacts: val.artifacts,
           outputRef: { namespace: bbNamespace, key: bbEntry.key, version: bbEntry.version },
         }
       }
-      return r
-    })
+
+      const thread = taskThreadByTaskId.get(r.taskId)
+      if (!thread?.sharedTaskRelativeRoot) {
+        enrichedResults.push(nextResult)
+        continue
+      }
+
+      try {
+        const sharedResult = await readSharedTaskResult({
+          projectPath: this.activeChildSessions.get(r.taskId)?.projectPath ?? null,
+          sharedTaskRelativeRoot: thread.sharedTaskRelativeRoot,
+        })
+        if (sharedResult) {
+          const sharedTaskStatus = mapSharedTaskResultStatus(sharedResult.result.status)
+          nextResult = applySharedTaskResultContract(nextResult, {
+            summary: sharedResult.result.summary,
+            status: sharedResult.result.status,
+            deliverables: sharedResult.result.deliverables,
+            notes: sharedResult.result.notes,
+            resultPath: sharedResult.resultPath,
+            sharedTaskRelativeRoot: thread.sharedTaskRelativeRoot,
+          })
+          const task = plan.tasks.find((item) => item.id === r.taskId)
+          const taskRow = taskRowByTaskId.get(r.taskId)
+          if (task && taskRow?.status !== sharedTaskStatus) {
+            await syncSharedTaskResultStatusToControlPlane({
+              run: runContext,
+              task,
+              result: nextResult,
+              status: sharedTaskStatus,
+              summary: sharedResult.result.summary,
+              sharedTaskResultStatus: sharedResult.result.status,
+              childSessionId: thread.sessionId,
+              taskThreadId: thread.id,
+              workerInstanceId: thread.workerInstanceId ?? null,
+              sharedTaskRelativeRoot: thread.sharedTaskRelativeRoot,
+              sharedTaskSpecPath: thread.sharedTaskSpecPath ?? null,
+            })
+          }
+        }
+      } catch (error: any) {
+        const task = plan.tasks.find((item) => item.id === r.taskId)
+        const message = error?.message || 'Shared task result contract is invalid.'
+        sharedTaskReviewIssues.push({
+          taskId: r.taskId,
+          taskTitle: task?.title ?? r.taskId,
+          error: message,
+        })
+        await emitRunEvent({
+          runId,
+          workspaceId,
+          groupSessionId,
+          taskId: r.taskId,
+          threadId: thread.id,
+          workerInstanceId: thread.workerInstanceId ?? null,
+          agentId: r.agentId,
+          type: 'manager.reviewed',
+          severity: 'warning',
+          payload: {
+            action: 'shared_task_result_contract_invalid',
+            taskTitle: task?.title ?? r.taskId,
+            sharedTaskRelativeRoot: thread.sharedTaskRelativeRoot,
+            error: message,
+          },
+        })
+        nextResult = {
+          ...nextResult,
+          status: TaskStatus.Failed,
+          error: message,
+        }
+      }
+      enrichedResults.push(nextResult)
+    }
 
     const summary = await this.synthesizer.synthesize(
       plan,
@@ -2878,7 +3037,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       cancelledTasks.length > 0 ||
       skippedTasks.length > 0 ||
       missingTasks.length > 0 ||
-      conflictReports.length > 0
+      conflictReports.length > 0 ||
+      sharedTaskReviewIssues.length > 0
     const successfulResults = enrichedResults.filter((result) => result.status === TaskStatus.Done)
     const unsuccessfulResults = enrichedResults.filter(
       (result) => result.status !== TaskStatus.Done,
@@ -2924,6 +3084,7 @@ ${diagnosticArtifacts.length > 0 ? `\n另有 ${diagnosticArtifacts.length} 个�
         return `- 跳过：${task?.title ?? result.taskId}${result.agentName ? `（${result.agentName}）` : ''}`
       }),
       ...missingTasks.map((task) => `- 未返回结果：${task.title}`),
+      ...sharedTaskReviewIssues.map((issue) => `- 结果契约异常：${issue.taskTitle}：${issue.error}`),
     ].slice(0, 12)
 
     const mergeNotice = hasBlockingFailures
@@ -3109,6 +3270,7 @@ function startTaskHeartbeat(input: {
   groupSessionId: string
   workspaceId: string
   taskId: string
+  childSessionId?: string | null
   taskThreadId?: string | null
   workerInstanceId?: string | null
   runtimeLeaseId?: string | null
@@ -3121,6 +3283,7 @@ function startTaskHeartbeat(input: {
 }) {
   let stopped = false
   let lastPersistAt = 0
+  let lastRoomPulseAt = Date.now()
   const runContext: RunControllerRunContext = {
     runId: input.runId,
     workspaceId: input.workspaceId,
@@ -3141,6 +3304,7 @@ function startTaskHeartbeat(input: {
     })
     const persistDb = Date.now() - lastPersistAt >= 30_000
     if (persistDb) lastPersistAt = Date.now()
+    const shouldPulseRoom = Date.now() - lastRoomPulseAt >= 30_000
     await runController
       .markTaskProgress(runContext, {
         taskId: input.taskId,
@@ -3149,7 +3313,7 @@ function startTaskHeartbeat(input: {
         agentName: input.agentName,
         percent,
         progressStatus: status,
-        childSessionId: null,
+        childSessionId: input.childSessionId ?? null,
         taskThreadId: input.taskThreadId ?? null,
         workerInstanceId: input.workerInstanceId ?? null,
         runtimeLeaseId: input.runtimeLeaseId ?? null,
@@ -3160,6 +3324,38 @@ function startTaskHeartbeat(input: {
       .catch((err: any) => {
         logger.warn({ err: err?.message, taskId: input.taskId }, 'Failed to persist task heartbeat')
       })
+
+    if (shouldPulseRoom) {
+      lastRoomPulseAt = Date.now()
+      await persistThreadTransparencyMessage({
+        sessionId: input.groupSessionId,
+        senderId: input.agentId,
+        senderType: 'agent',
+        content: buildWorkerHeartbeatGroupMessage({
+          taskTitle: input.taskTitle,
+          percent,
+          status,
+        }),
+        metadata: {
+          kind: 'worker-heartbeat',
+          taskProgressUpdate: true,
+          orchestratorRunId: input.runId,
+          orchestratorTaskId: input.taskId,
+          groupSessionId: input.groupSessionId,
+          childSessionId: input.childSessionId ?? null,
+          taskThreadId: input.taskThreadId ?? null,
+          workerInstanceId: input.workerInstanceId ?? null,
+          runtimeLeaseId: input.runtimeLeaseId ?? null,
+          agentName: input.agentName,
+          taskStatus: TaskStatus.Running,
+          progressPercent: percent,
+          progressStatus: status,
+          executionConfig: executionConfig,
+        },
+      }).catch((err: any) => {
+        logger.warn({ err: err?.message, taskId: input.taskId }, 'Failed to emit worker heartbeat room message')
+      })
+    }
   }
 
   tick().catch((err: any) => {
@@ -3286,6 +3482,59 @@ function buildWorkerAcceptedThreadMessage(input: {
   return lines.join('\n')
 }
 
+function buildWorkerGroupStartedMessage(input: {
+  taskTitle: string
+  executionConfig?: ExecutionConfigSummary
+  sharedTaskRelativeRoot?: string | null
+}) {
+  const runtime =
+    input.executionConfig?.adapterName ??
+    input.executionConfig?.codeAgentType ??
+    (input.executionConfig?.runtimeType === 'llm' ? 'LLM fallback' : 'Code Agent')
+  const model = input.executionConfig?.modelLabel || input.executionConfig?.modelId
+  const workdir =
+    input.executionConfig?.workdirRelativePath ||
+    shortPathLabel(input.executionConfig?.executionPath) ||
+    input.sharedTaskRelativeRoot
+  const details = [runtime, model, workdir ? `目录 ${workdir}` : null].filter(Boolean).join(' · ')
+  return details
+    ? `开始执行「${input.taskTitle}」。${details}`
+    : `开始执行「${input.taskTitle}」。`
+}
+
+function buildWorkerProgressGroupMessage(input: {
+  taskTitle: string
+  percent: number
+  status?: string | null
+}) {
+  const detail = input.status?.trim()
+  return detail
+    ? `[进度 ${input.percent}%] ${input.taskTitle}：${detail}`
+    : `[进度 ${input.percent}%] ${input.taskTitle}`
+}
+
+function buildWorkerHeartbeatGroupMessage(input: {
+  taskTitle: string
+  percent: number
+  status?: string | null
+}) {
+  const detail = input.status?.trim()
+  return detail
+    ? `还在继续推进「${input.taskTitle}」[${input.percent}%]：${detail}`
+    : `还在继续推进「${input.taskTitle}」[${input.percent}%]`
+}
+
+function buildWorkerClarificationGroupMessage(input: {
+  question: string
+  options?: string[]
+}) {
+  const options =
+    Array.isArray(input.options) && input.options.length > 0
+      ? `\n可选项：${input.options.join(' / ')}`
+      : ''
+  return `需要确认：${input.question}${options}`
+}
+
 function shortPathLabel(value?: string | null) {
   if (!value) return null
   const normalized = value.replace(/\\/g, '/')
@@ -3361,6 +3610,146 @@ function collectResultArtifacts(results: TaskResult[]) {
   }
 
   return artifacts
+}
+
+export function applySharedTaskResultContract(
+  result: TaskResult,
+  contract: {
+    status: SharedTaskResultStatus
+    summary: string
+    deliverables: string[]
+    notes: string[]
+    resultPath: string
+    sharedTaskRelativeRoot: string
+  },
+): TaskResult {
+  const contractStatus = mapSharedTaskResultStatus(contract.status)
+  const deliverableArtifacts = sharedTaskResultDeliverablesToArtifacts({
+    taskId: result.taskId,
+    deliverables: contract.deliverables,
+    sharedTaskRelativeRoot: contract.sharedTaskRelativeRoot,
+  })
+  const output = [
+    result.output.trim(),
+    '',
+    'Shared task result contract:',
+    `STATUS: ${contract.status}`,
+    `SUMMARY: ${contract.summary}`,
+    contract.deliverables.length > 0
+      ? `DELIVERABLES:\n${contract.deliverables.map((item) => `- ${item}`).join('\n')}`
+      : 'DELIVERABLES: none',
+    contract.notes.length > 0
+      ? `NOTES:\n${contract.notes.map((item) => `- ${item}`).join('\n')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+
+  return {
+    ...result,
+    status: contractStatus,
+    output,
+    artifacts: mergeTaskResultArtifacts(
+      result.artifacts,
+      deliverableArtifacts.map((artifact) => ({ ...artifact })),
+    ),
+    error:
+      contractStatus === TaskStatus.Done
+        ? result.error
+        : contract.notes[0] ?? contract.summary,
+  }
+}
+
+function mergeTaskResultArtifacts(
+  current: Array<Record<string, unknown>>,
+  additions: Array<Record<string, unknown>>,
+) {
+  const merged: Array<Record<string, unknown>> = []
+  const seen = new Set<string>()
+  for (const artifact of [...current, ...additions]) {
+    const key = String(
+      artifact.handoffRelativePath ??
+        artifact.relativePath ??
+        artifact.path ??
+        artifact.filePath ??
+        artifact.id ??
+        '',
+    )
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    merged.push(artifact)
+  }
+  return merged
+}
+
+async function syncSharedTaskResultStatusToControlPlane(input: {
+  run: RunControllerRunContext
+  task: ExecutionTask
+  result: TaskResult
+  status: 'done' | 'failed' | 'cancelled' | 'blocked'
+  summary: string
+  sharedTaskResultStatus: SharedTaskResultStatus
+  childSessionId?: string | null
+  taskThreadId?: string | null
+  workerInstanceId?: string | null
+  sharedTaskRelativeRoot?: string | null
+  sharedTaskSpecPath?: string | null
+}) {
+  const progressStatus = `shared-task-result:${input.sharedTaskResultStatus}`
+  const extraPayload = {
+    source: 'shared-task-result',
+    sharedTaskResultStatus: input.sharedTaskResultStatus,
+    summary: input.summary,
+  }
+  const base = {
+    taskId: input.task.id,
+    title: input.task.title,
+    agentId: input.result.agentId,
+    childSessionId: input.childSessionId ?? null,
+    taskThreadId: input.taskThreadId ?? null,
+    workerInstanceId: input.workerInstanceId ?? null,
+    sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
+    sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
+    extraPayload,
+  }
+
+  if (input.status === TaskStatus.Done) {
+    await runController.markTaskCompleted(input.run, {
+      ...base,
+      progressStatus,
+      artifacts: input.result.artifacts,
+    })
+    return
+  }
+
+  if (input.status === TaskStatus.Blocked) {
+    await runController.markTaskBlocked(input.run, {
+      taskId: input.task.id,
+      title: input.task.title,
+      agentId: input.result.agentId,
+      error: input.result.error ?? input.summary,
+      reason: progressStatus,
+    })
+    return
+  }
+
+  if (input.status === TaskStatus.Cancelled) {
+    await runController.markTaskCancelled(input.run, {
+      ...base,
+      reason: input.result.error ?? input.summary,
+      progressStatus,
+    })
+    return
+  }
+
+  await runController.markTaskFailed(input.run, {
+    ...base,
+    error: input.result.error ?? input.summary,
+    progressStatus,
+    artifacts: input.result.artifacts,
+    severity: 'warning',
+  })
 }
 
 function buildAutonomyInstructions(): string {
