@@ -53,7 +53,10 @@
 - `retry / replan` 也开始往同一条控制面收口：手动重试、`retry_with_backoff`、`local_replan`、`agent_substitution` 这几条路径的旧 task reset 已抽成 `RunController.resetTaskForRetry()/resetTaskForReplan()`，统一处理 `workspace_tasks.pending + taskThread -> prepared + task.retrying/run.replanned`，不再各分支自己重置表状态。
 - 动态新任务注入也开始进入控制面：`supervisor supplement`、`task_split`、`global_replan` 三条路径新增任务时，`workspace_tasks` 插入与 `task.queued` 事件广播已收口到 `RunController.queueTask()`，不再每个分支重复写“insert task + emit queued event”。
 - `RunController.cancel()` 的批量收尾也补上了 `TaskThread` 同步：取消 run 时，除了批量把未终态 task 置为 `cancelled`，还会把对应 `task_threads` 和子对话 metadata 一并更新到 `cancelled`，减少“run 已取消但子对话还显示 active/pending”的旧残留。
-- `human_interrupt` 已经从“可见提示”进入真实控制链：群聊存在 active run 时，新的用户要求会被登记成当前 run 的 `human_interrupt`，写入 blackboard / run events，并同步投影到活跃 TaskThread；Manager 处理它时会中断 live agent reply、回收 `runtimeLease` / `workerInstance`、把任务重置回 `pending + prepared`，执行器也开始支持在更新后的任务描述下恢复这次执行。
+- `human_interrupt` 已经从”可见提示”进入真实控制链：群聊存在 active run 时，新的用户要求会被登记成当前 run 的 `human_interrupt`，写入 blackboard / run events，并同步投影到活跃 TaskThread；Manager 处理它时会中断 live agent reply、回收 `runtimeLease` / `workerInstance`、把任务重置回 `pending + prepared`，执行器也开始支持在更新后的任务描述下恢复这次执行。
+- `WorkerController` reconcile 模式已对齐 HiClaw：实现分阶段 reconcile loop（EnsureReady → AssignLease → ObserveHealth → RecoverStale），每阶段幂等检查当前状态 vs 期望状态。Worker 状态始终从 reconcile 写回，不再分散在多处散写。
+- HiClaw 风格 idle-stop 已落地：空闲超时自动转入 sleeping，新任务通过 `ensureReadyForTask()` 自动 wake + reconcile；服务重启通过 `recoverStaleOnStartup()` 恢复 stale lease。
+- Worker 心跳监控已启用：2 分钟宽限期 + 5 分钟超时检测，超时自动标记 Worker failed + RuntimeLease stale。
 - 尚未完成真正的 `ManagerLoop` / `RunController` 替代主流程；`OrchestratorEngine`、`TaskExecutionService`、现有 Planner 仍是迁移期执行主路径。
 - 尚未完成 ArtifactStore 作为产物卡唯一事实源；当前仍处于 ArtifactStore、message metadata、blackboard 和 handoff 逐步收敛的迁移期。
 
