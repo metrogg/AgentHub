@@ -180,15 +180,19 @@ function resolveCatalogRuntime(item: ModelCatalogItem): ProviderCandidate {
   const apiEndpoint = clean(item.apiEndpoint)
   const anthropicEndpoint = clean(item.anthropicEndpoint)
   const declaredAnthropic = rawProvider === 'anthropic' || rawProvider === 'claude'
+  // When both endpoints are present, apiEndpoint is the primary.
+  // Only use Anthropic runtime exclusively when there's an anthropicEndpoint
+  // and the apiEndpoint either doesn't exist or also looks anthropic.
+  const hasNonAnthropicApi = Boolean(apiEndpoint) && !endpointLooksAnthropic(apiEndpoint)
   const useAnthropicRuntime =
     declaredAnthropic &&
-    (Boolean(anthropicEndpoint) || !apiEndpoint || endpointLooksAnthropic(apiEndpoint))
+    (!hasNonAnthropicApi || (Boolean(anthropicEndpoint) && !apiEndpoint))
   const baseUrl = useAnthropicRuntime
     ? anthropicEndpoint ?? apiEndpoint
     : apiEndpoint ?? anthropicEndpoint
   const provider = useAnthropicRuntime
     ? rawProvider
-    : declaredAnthropic
+    : declaredAnthropic && hasNonAnthropicApi
       ? inferProviderFromEndpoint(apiEndpoint)
       : rawProvider
   const key = configuredApiKey(item)

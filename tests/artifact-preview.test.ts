@@ -23,18 +23,15 @@ describe('artifact static preview', () => {
     expect(await asset.text()).toContain('background: black')
   })
 
-  test('keeps old preview-file links usable by redirecting to directory preview', async () => {
+  test('keeps old preview-file links working — serves the html file directly', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agenthub-preview-old-'))
     const filePath = join(root, 'index.html')
     writeFileSync(filePath, '<div>ok</div>')
 
-    const response = await app.request(`/api/artifacts/preview-file?path=${encodeURIComponent(filePath)}`, {
-      redirect: 'manual',
-    })
+    const response = await app.request(`/api/artifacts/preview-file?path=${encodeURIComponent(filePath)}`)
 
-    expect(response.status).toBe(302)
-    const location = response.headers.get('Location') ?? ''
-    expect(location).toContain('/api/artifacts/preview-dir/')
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('<div>ok</div>')
     expect(existsSync(filePath)).toBe(true)
   })
 })
