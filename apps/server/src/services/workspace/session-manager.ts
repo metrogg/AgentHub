@@ -63,60 +63,6 @@ async function ensureValidGroupOrchestrator(workspaceId: string, selectedAgentId
   )
 }
 
-/**
- * 创建或复用 Orchestrator 任务专用的子会话。
- * 每个 run/task 都应有独立会话，避免把普通 Agent direct 会话混进来。
- */
-export async function ensureOrchestratorTaskSession(
-  workspaceId: string,
-  workspaceName: string,
-  ownerId: string,
-  agent: { id: string; name: string } | null,
-  taskTitle: string | undefined,
-  runId: string,
-  taskId: string,
-) {
-  if (agent) {
-    const existingSessions = await db
-      .select()
-      .from(sessions)
-      .where(
-        and(
-          eq(sessions.ownerId, ownerId),
-          eq(sessions.type, 'direct'),
-          eq(sessions.workspaceId, workspaceId),
-          eq(sessions.workspaceAgentId, agent.id),
-        ),
-      )
-      .orderBy(desc(sessions.updatedAt))
-    const matched = existingSessions.find((session) => {
-      const metadata = session.metadata ?? {}
-      return isOrchestratorTaskSession(metadata) && metadata.orchestratorRunId === runId && metadata.orchestratorTaskId === taskId
-    })
-    if (matched) return matched
-  }
-
-  const [created] = await db
-    .insert(sessions)
-    .values({
-      title: agent
-        ? `${workspaceName} / ${agent.name} / ${taskTitle?.slice(0, 24) || 'Task'}`
-        : `${workspaceName} / ${taskTitle?.slice(0, 24) || 'Task'}`,
-      type: 'direct',
-      ownerId,
-      workspaceId,
-      workspaceAgentId: agent?.id ?? null,
-      metadata: {
-        kind: 'orchestrator-task',
-        orchestratorRunId: runId,
-        orchestratorTaskId: taskId,
-      },
-    })
-    .returning()
-  if (!created) throw AppError.fromCode(AppErrorCodes.SESSION_CREATE_FAILED, 'Agent 子会话创建失败')
-  return created
-}
-
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 async function findGroupSession(workspaceId: string) {
@@ -189,13 +135,4 @@ async function syncGroupMembers(
       updatedAt: new Date(),
     })
     .where(eq(sessions.id, sessionId))
-}
-
-function isOrchestratorTaskSession(metadata: Record<string, unknown> | null) {
-  return Boolean(
-    metadata?.orchestratorTaskId ||
-    metadata?.orchestratorRunId ||
-    metadata?.hiddenFromSessionTree ||
-    metadata?.kind === 'orchestrator-task',
-  )
 }

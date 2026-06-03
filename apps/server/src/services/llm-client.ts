@@ -181,7 +181,8 @@ function resolveCatalogRuntime(item: ModelCatalogItem): ProviderCandidate {
   const anthropicEndpoint = clean(item.anthropicEndpoint)
   const declaredAnthropic = rawProvider === 'anthropic' || rawProvider === 'claude'
   const useAnthropicRuntime =
-    declaredAnthropic && (!apiEndpoint || endpointLooksAnthropic(apiEndpoint))
+    declaredAnthropic &&
+    (Boolean(anthropicEndpoint) || !apiEndpoint || endpointLooksAnthropic(apiEndpoint))
   const baseUrl = useAnthropicRuntime
     ? anthropicEndpoint ?? apiEndpoint
     : apiEndpoint ?? anthropicEndpoint
@@ -207,7 +208,8 @@ function resolveDirectRuntime(input: TestConnectionInput): ProviderCandidate {
   const anthropicEndpoint = clean(input.anthropicEndpoint)
   const declaredAnthropic = rawProvider === 'anthropic' || rawProvider === 'claude'
   const useAnthropicRuntime =
-    declaredAnthropic && (!apiEndpoint || endpointLooksAnthropic(apiEndpoint))
+    declaredAnthropic &&
+    (Boolean(anthropicEndpoint) || !apiEndpoint || endpointLooksAnthropic(apiEndpoint))
   const baseUrl = useAnthropicRuntime
     ? anthropicEndpoint ?? apiEndpoint
     : apiEndpoint ?? anthropicEndpoint
@@ -482,7 +484,7 @@ export async function testLlmConnection(input: TestConnectionInput) {
 
     return { ok: true, status: 200, message: '连接成功。' }
   } catch (error: any) {
-    let message = redactSensitive(error?.message || '连接失败。', [apiKey])
+    let message = redactSensitive(formatLlmTransportError(error, config), [apiKey])
     if (error?.message?.includes('400') && isDefaultModel) {
       message += `（提示：未提供 modelId，使用了默认模型 "${config.model}"。如果使用的是第三方兼容 API，请在模型配置中填写正确的模型 ID。）`
     }
@@ -696,6 +698,65 @@ export function redactSensitive(value: string, extraSecrets: Array<string | null
     .replace(/Bearer\s+[A-Za-z0-9_*.:-]{6,}/gi, 'Bearer ***')
     .replace(/sk-[A-Za-z0-9_*.:-]{6,}/g, 'sk-***')
     .replace(/sess-[A-Za-z0-9_*.:-]{6,}/g, 'sess-***')
+}
+
+export function formatLlmTransportError(
+  error: unknown,
+  config?: Pick<LlmRuntimeConfig, 'baseUrl' | 'provider'>,
+): string {
+  const raw = collectErrorMessages(error).join(' | ') || '连接失败。'
+  if (looksLikeCertificateError(raw)) {
+    const host = safeEndpointHost(config?.baseUrl)
+    const endpoint = host ? `（${host}）` : ''
+    return [
+      `TLS 证书校验失败${endpoint}。`,
+      '请检查模型 Base URL 是否正确，代理或网关是否使用自签名证书，或者目标服务是否缺少完整证书链。',
+      '如果你在使用公司代理、抓包代理或自签名中转服务，请把对应 CA 证书加入系统信任链；开发环境也可以设置 NODE_EXTRA_CA_CERTS 指向 CA 证书文件后重启 AgentHub。',
+      '不建议使用 NODE_TLS_REJECT_UNAUTHORIZED=0 关闭证书校验。',
+      `原始错误：${raw}`,
+    ].join(' ')
+  }
+  return raw
+}
+
+function collectErrorMessages(error: unknown): string[] {
+  const messages: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  for (let i = 0; i < 6 && current && !seen.has(current); i += 1) {
+    seen.add(current)
+    if (current instanceof Error) {
+      if (current.message) messages.push(current.message)
+      const cause = (current as Error & { cause?: unknown }).cause
+      current = cause
+      continue
+    }
+    if (typeof current === 'object') {
+      const record = current as Record<string, unknown>
+      for (const key of ['message', 'code', 'name']) {
+        const value = record[key]
+        if (typeof value === 'string' && value) messages.push(value)
+      }
+      current = record.cause
+      continue
+    }
+    messages.push(String(current))
+    break
+  }
+  return Array.from(new Set(messages))
+}
+
+function looksLikeCertificateError(message: string): boolean {
+  return /certificate|cert_|cert\s|tls|ssl|x509|self[-\s]?signed|unable to verify|unable_to_verify|unknown certificate verification|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|ERR_TLS_CERT_ALTNAME_INVALID/i.test(message)
+}
+
+function safeEndpointHost(baseUrl?: string) {
+  if (!baseUrl) return ''
+  try {
+    return new URL(baseUrl).host
+  } catch {
+    return ''
+  }
 }
 
 function escapeRegex(value: string): string {

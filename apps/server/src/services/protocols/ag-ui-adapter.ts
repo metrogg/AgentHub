@@ -20,6 +20,8 @@ export interface AgentHubRunEventLike {
   runId: string
   groupSessionId: string
   taskId?: string | null
+  threadId?: string | null
+  workerInstanceId?: string | null
   agentId?: string | null
   type: string
   payload?: Record<string, unknown> | null
@@ -35,12 +37,63 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
     timestampMs: event.timestampMs,
   }
 
-  if (event.type === 'run.started') return [buildAgUiRunStartedEvent(baseRef)]
+  if (event.type === 'run.started') {
+    return [
+      buildAgUiRunStartedEvent(baseRef),
+      buildAgUiRunStatusEvent({
+        ref: baseRef,
+        status: stringValue(payload.status) ?? 'planning',
+        summary: stringValue(payload.goal),
+      }),
+    ]
+  }
+  if (event.type === 'manager.thinking') {
+    return [
+      buildAgUiManagerStatusEvent({
+        ref: baseRef,
+        value: {
+          ...payload,
+          status: 'thinking',
+          phase: stringValue(payload.stage) ?? 'thinking',
+        },
+      }),
+    ]
+  }
+  if (event.type === 'manager.intent_observed') {
+    return [
+      buildAgUiManagerStatusEvent({
+        ref: baseRef,
+        value: {
+          ...payload,
+          status: 'intent_observed',
+          phase: 'planning',
+        },
+      }),
+    ]
+  }
+  if (event.type === 'manager.next_action') {
+    return [
+      buildAgUiManagerStatusEvent({
+        ref: baseRef,
+        value: {
+          ...payload,
+          status: 'next_action',
+          phase: stringValue(payload.action) ?? 'planning',
+        },
+      }),
+    ]
+  }
   if (event.type === 'run.completed') {
     return [
       buildAgUiRunFinishedEvent(baseRef, {
         ...payload,
         status: 'completed',
+      }),
+      buildAgUiRunStatusEvent({
+        ref: baseRef,
+        status: 'completed',
+        artifactCount: numberValue(payload.artifactCount),
+        summary: stringValue(payload.summary),
       }),
     ]
   }
@@ -52,6 +105,15 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
           stringValue(payload.error) ?? stringValue(payload.message) ?? 'Orchestrator run failed',
         ref: baseRef,
       }),
+      buildAgUiRunStatusEvent({
+        ref: baseRef,
+        status: 'failed',
+        artifactCount: numberValue(payload.artifactCount),
+        summary:
+          stringValue(payload.error) ??
+          stringValue(payload.message) ??
+          stringValue(payload.summary),
+      }),
     ]
   }
   if (event.type === 'run.cancelled') {
@@ -59,6 +121,12 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
       buildAgUiRunFinishedEvent(baseRef, {
         ...payload,
         status: 'cancelled',
+      }),
+      buildAgUiRunStatusEvent({
+        ref: baseRef,
+        status: 'cancelled',
+        artifactCount: numberValue(payload.artifactCount),
+        summary: stringValue(payload.summary) ?? stringValue(payload.reason),
       }),
     ]
   }
@@ -70,6 +138,10 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
       }),
     ]
   }
+  if (event.type === 'task.planned')
+    return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'pending'))]
+  if (event.type === 'thread.prepared')
+    return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'pending'))]
   if (event.type === 'task.started') {
     return [
       buildAgUiTaskStartedEvent({
@@ -102,6 +174,10 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
     return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'cancelled'))]
   if (event.type === 'task.queued')
     return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'pending'))]
+  if (event.type === 'task.assigned')
+    return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'assigned'))]
+  if (event.type === 'worker.message.sent')
+    return [buildAgUiTaskStatusEvent(taskStatusPayload(event, 'assigned'))]
   if (event.type === 'task.clarification_needed') {
     return [
       {
@@ -148,6 +224,19 @@ export function buildAgUiEventsFromRunEvent(event: AgentHubRunEventLike): AGUIEv
         ref: baseRef,
         status: 'synthesizing',
         summary: stringValue(payload.summary) ?? '汇总团队产出',
+      }),
+    ]
+  }
+  if (event.type === 'manager.reviewed') {
+    return [
+      buildAgUiManagerStatusEvent({
+        ref: baseRef,
+        value: {
+          ...payload,
+          status: 'reviewed',
+          phase: 'reviewing',
+          taskId: event.taskId ?? stringValue(payload.taskId),
+        },
       }),
     ]
   }
@@ -265,12 +354,18 @@ export function buildAgUiTaskStatusEvent(params: {
   progressPercent?: number | null
   progressStatus?: string | null
   runId?: string
+  runtimeLeaseId?: string | null
+  sharedTaskRelativeRoot?: string | null
+  sharedTaskSpecPath?: string | null
   status: string
+  taskThreadStatus?: string | null
+  taskThreadId?: string | null
   taskId: string
   taskTitle: string
   taskType?: string
   threadId?: string
   timestampMs?: number
+  workerInstanceId?: string | null
 }): CustomEvent {
   const { timestampMs, ...value } = params
   return {
@@ -320,11 +415,27 @@ export function buildAgUiRunStatusEvent(params: {
   }
 }
 
+export function buildAgUiManagerStatusEvent(params: {
+  ref?: Partial<AgentHubRunRef> & { threadId?: string }
+  value: Record<string, unknown>
+}): CustomEvent {
+  return {
+    name: 'agenthub.manager.status',
+    parentRunId: params.ref?.parentRunId,
+    runId: params.ref?.runId,
+    threadId: params.ref?.threadId,
+    timestamp: eventTimestamp(params.ref?.timestampMs),
+    type: EventType.CUSTOM,
+    value: params.value,
+  }
+}
+
 export function buildAgUiArtifactEvent(params: {
   artifact: Record<string, unknown>
   ref?: AgentHubRunRef
   taskId: string
 }): CustomEvent {
+  const artifact = params.artifact
   return {
     name: 'agenthub.artifact.created',
     parentRunId: params.ref?.parentRunId,
@@ -332,7 +443,14 @@ export function buildAgUiArtifactEvent(params: {
     threadId: params.ref?.threadId,
     timestamp: eventTimestamp(params.ref?.timestampMs),
     type: EventType.CUSTOM,
-    value: params,
+    value: {
+      ...artifact,
+      artifact,
+      childSessionId: stringValue(artifact.childSessionId) ?? stringValue(artifact.sessionId),
+      taskId: params.taskId,
+      taskThreadId: stringValue(artifact.taskThreadId) ?? stringValue(artifact.threadId),
+      workerInstanceId: stringValue(artifact.workerInstanceId),
+    },
   }
 }
 
@@ -371,14 +489,51 @@ function taskStatusPayload(event: AgentHubRunEventLike, status: string) {
     progressPercent: numberValue(payload.progressPercent) ?? numberValue(payload.percent),
     progressStatus: stringValue(payload.progressStatus) ?? stringValue(payload.status),
     runId: event.runId,
+    runtimeLeaseId: stringValue(payload.runtimeLeaseId),
+    sharedTaskRelativeRoot: stringValue(payload.sharedTaskRelativeRoot),
+    sharedTaskSpecPath: stringValue(payload.sharedTaskSpecPath),
     status,
+    taskThreadStatus:
+      explicitTaskThreadStatus(payload) ?? inferTaskThreadStatusFromEventType(event.type),
+    taskThreadId: event.threadId ?? stringValue(payload.taskThreadId) ?? stringValue(payload.threadId),
     taskId: event.taskId ?? stringValue(payload.taskId) ?? 'task',
     taskTitle:
       stringValue(payload.taskTitle) ?? stringValue(payload.title) ?? event.taskId ?? '任务',
     taskType: stringValue(payload.taskType),
     threadId: event.groupSessionId,
     timestampMs: event.timestampMs,
+    workerInstanceId: event.workerInstanceId ?? stringValue(payload.workerInstanceId),
   }
+}
+
+function explicitTaskThreadStatus(payload: Record<string, unknown>): string | undefined {
+  const value = stringValue(payload.taskThreadStatus) ?? stringValue(payload.threadStatus)
+  return isTaskThreadStatus(value) ? value : undefined
+}
+
+function inferTaskThreadStatusFromEventType(type: string): string | undefined {
+  if (type === 'thread.prepared' || type === 'task.planned' || type === 'task.queued') {
+    return 'prepared'
+  }
+  if (type === 'task.assigned' || type === 'worker.message.sent') return 'assigned'
+  if (type === 'task.started' || type === 'task.progress') return 'active'
+  if (type === 'task.completed') return 'completed'
+  if (type === 'task.failed') return 'failed'
+  if (type === 'task.cancelled') return 'cancelled'
+  return undefined
+}
+
+function isTaskThreadStatus(
+  value: string | undefined,
+): value is 'prepared' | 'assigned' | 'active' | 'completed' | 'failed' | 'cancelled' {
+  return (
+    value === 'prepared' ||
+    value === 'assigned' ||
+    value === 'active' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'cancelled'
+  )
 }
 
 function eventTimestamp(value: number | undefined): number {

@@ -31,7 +31,7 @@ export const __orchestratorDecisionTestHooks = {
   buildHeuristicDecision,
 }
 
-interface DecideInput {
+export interface DecideInput {
   content: string
   agents: PlanningAgentInput[]
   workspaceGoal?: string | null

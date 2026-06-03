@@ -193,6 +193,7 @@ const maxPastedImageBytes = 5 * 1024 * 1024
 const composerSyncEvent = 'agenthub:composer-sync'
 const artifactPreviewEvent = 'agenthub:artifact-preview'
 const previewPanelWidthStorageKey = 'agenthub:preview-panel-width'
+const defaultPreviewPanelWidth = 560
 
 type ArtifactPreviewItem = {
   id: string
@@ -3708,6 +3709,16 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     document.addEventListener('pointercancel', handlePointerUp, { once: true })
   }
 
+  function handleResizeReset() {
+    const nextWidth = clampPreviewPanelWidth(
+      defaultPreviewPanelWidth,
+      getPreviewPanelWidthBounds(panelRef.current),
+    )
+    panelWidthRef.current = nextWidth
+    setPanelWidth(nextWidth)
+    storePreviewPanelWidth(nextWidth)
+  }
+
   function pushActionItem(item: Omit<PreviewActionItem, 'id'>) {
     const id = `${item.kind}-${Date.now()}-${Math.random().toString(16).slice(2)}`
     setActionItems((items) => [{ ...item, id }, ...items].slice(0, 8))
@@ -3956,11 +3967,14 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
             type="button"
             aria-label="Resize preview panel"
             onPointerDown={handleResizeStart}
+            onDoubleClick={handleResizeReset}
+            title="拖拽调整预览宽度，双击复位"
             className={cn(
-              'absolute inset-y-0 left-0 z-20 w-3 -translate-x-1/2 cursor-col-resize touch-none',
-              'after:absolute after:inset-y-3 after:left-1/2 after:w-px after:-translate-x-1/2 after:rounded-full after:bg-transparent after:transition',
-              'hover:after:bg-neutral-300 focus-visible:outline-none focus-visible:after:bg-neutral-400',
-              resizing && 'after:bg-neutral-400',
+              'group absolute inset-y-0 left-0 z-30 w-5 -translate-x-1/2 cursor-col-resize touch-none',
+              'before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-neutral-200',
+              'after:absolute after:left-1/2 after:top-1/2 after:h-16 after:w-1.5 after:-translate-x-1/2 after:-translate-y-1/2 after:rounded-full after:bg-neutral-300 after:shadow-sm after:transition',
+              'hover:after:h-24 hover:after:bg-blue-500 focus-visible:outline-none focus-visible:after:h-24 focus-visible:after:bg-blue-500',
+              resizing && 'after:h-28 after:bg-blue-600',
             )}
           />
         )}
@@ -5880,9 +5894,9 @@ function sanitizeDownloadFileName(value: string) {
 
 function getPreviewPanelWidthBounds(panel: HTMLElement | null) {
   const containerWidth = panel?.parentElement?.clientWidth ?? window.innerWidth
-  const reservedThreadWidth = Math.min(360, Math.max(280, Math.round(containerWidth * 0.38)))
-  const maxWidth = Math.max(320, containerWidth - reservedThreadWidth)
-  const minWidth = Math.min(420, maxWidth)
+  const reservedThreadWidth = Math.min(520, Math.max(300, Math.round(containerWidth * 0.34)))
+  const maxWidth = Math.max(360, containerWidth - reservedThreadWidth)
+  const minWidth = Math.min(360, Math.max(280, Math.round(containerWidth * 0.28)), maxWidth)
   return { maxWidth, minWidth }
 }
 
@@ -5891,12 +5905,11 @@ function clampPreviewPanelWidth(width: number, bounds: { maxWidth: number; minWi
 }
 
 function readStoredPreviewPanelWidth() {
-  const fallbackWidth = 520
   try {
     const storedWidth = Number(window.localStorage.getItem(previewPanelWidthStorageKey))
-    return Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : fallbackWidth
+    return Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : defaultPreviewPanelWidth
   } catch {
-    return fallbackWidth
+    return defaultPreviewPanelWidth
   }
 }
 

@@ -5,7 +5,7 @@ import {
   type AppendMessage,
   type ThreadMessageLike,
 } from '@assistant-ui/react'
-import { useChatStore } from '../stores/chatStore'
+import { describeRuntimeActivity, useChatStore } from '../stores/chatStore'
 import type { AgentArtifact, ChatAttachment, Message } from './api'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 
@@ -214,17 +214,9 @@ export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
         status: { type: 'running' },
       })
     } else if (agentTyping) {
-      const actor = agentActivity?.agentName ?? 'Agent'
-      const activityLabel =
-        agentActivity?.phase === 'planning'
-          ? '正在规划任务'
-          : agentActivity?.phase === 'thinking'
-            ? '正在理解目标'
-            : agentActivity?.phase === 'executing'
-              ? '正在执行任务'
-              : agentActivity?.phase === 'synthesizing'
-                ? '正在汇总结果'
-                : '正在处理'
+      const activity = describeRuntimeActivity(agentActivity)
+      const actor = activity?.agentName ?? 'Agent'
+      const activityLabel = activity?.label ?? '正在处理'
       list.push({
         id: 'agenthub-thinking',
         role: 'assistant',

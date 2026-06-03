@@ -33,6 +33,13 @@ export interface ExecutionConfigSummary {
   executionPath?: string | null
   workdirRelativePath?: string | null
   sandboxRoot?: string | null
+  sandboxHomeDir?: string | null
+  sandboxCacheDir?: string | null
+  sandboxConfigDir?: string | null
+  sandboxDataDir?: string | null
+  sandboxTempDir?: string | null
+  sandboxContainerName?: string | null
+  sandboxId?: string | null
   skillCount: number
   toolPermissions: string[]
   approvalRequired: boolean
@@ -98,6 +105,13 @@ export async function buildExecutionConfigSummary(input: {
       input.workdir?.relativePath ??
       relativeWorkdir(input.projectPath ?? input.profile.originalProjectPath, executionPath),
     sandboxRoot: input.sandboxLease?.rootDir ?? null,
+    sandboxHomeDir: input.sandboxLease?.homeDir ?? null,
+    sandboxCacheDir: input.sandboxLease?.cacheDir ?? null,
+    sandboxConfigDir: input.sandboxLease?.configDir ?? null,
+    sandboxDataDir: input.sandboxLease?.dataDir ?? null,
+    sandboxTempDir: input.sandboxLease?.tempDir ?? null,
+    sandboxContainerName: input.sandboxLease?.container?.containerName ?? null,
+    sandboxId: input.sandboxLease?.container?.sandboxName ?? null,
     skillCount: input.profile.skillIds?.length ?? 0,
     toolPermissions: input.profile.toolPermissions ?? [],
     approvalRequired: input.profile.approvalRequired,

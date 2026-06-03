@@ -132,6 +132,10 @@ export async function updateProgressLedgerFromEvent(input: EmitRunEventInput): P
       setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       break
     case 'task.retrying':
+      moveTask(progressLedger, taskId, TaskStatus.Pending)
+      setLedgerTaskStatus(taskLedger, taskId, TaskStatus.Pending)
+      progressLedger.status = OrchestratorRunStatus.Running
+      setCurrentPhaseFromTask(progressLedger, taskLedger, taskId)
       progressLedger.retryHistory = appendUnique(progressLedger.retryHistory, {
         taskId,
         attempt: typeof payload.attempt === 'number' ? payload.attempt : undefined,

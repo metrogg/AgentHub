@@ -32,6 +32,7 @@ export function validateTaskOutputContract(params: {
   task: Pick<ExecutionTask, 'id' | 'outputContract' | 'taskType'>
   artifacts: Array<Record<string, unknown>>
   writtenBlackboardKeys?: string[]
+  executionPath?: string | null
 }): TaskContractResult {
   const contract = params.task.outputContract
   if (!contract) return { status: 'passed', violations: [] }
@@ -83,14 +84,15 @@ export function validateTaskOutputContract(params: {
     for (const artifact of params.artifacts) {
       const filePath = artifactPath(artifact)
       if (!filePath) continue
-      const normalized = normalizePath(filePath)
-      if (isSafeRelativeArtifactPath(filePath) && !shouldEnforceAllowedPath(params.task, artifact)) continue
+      const matchPath = artifactPathForContractMatch(filePath, params.executionPath)
+      const normalized = matchPath.path
+      if (matchPath.safeRelative && !shouldEnforceAllowedPath(params.task, artifact)) continue
       if (!allowedPaths.some((pattern) => matchPathPattern(normalized, pattern))) {
         violations.push({
           type: 'path_not_allowed',
           message: `Artifact path "${filePath}" is outside allowed paths.`,
           expected: allowedPaths.join(', '),
-          actual: filePath,
+          actual: matchPath.safeRelative ? normalized : filePath,
         })
       }
     }
@@ -115,6 +117,53 @@ function normalizePathPattern(pattern: string): string {
 
 function normalizePath(value: string): string {
   return value.trim().replace(/\\/g, '/').replace(/^\.?\//, '')
+}
+
+function artifactPathForContractMatch(
+  filePath: string,
+  executionPath?: string | null,
+): { path: string; safeRelative: boolean } {
+  if (isSafeRelativeArtifactPath(filePath)) {
+    return { path: normalizePath(filePath), safeRelative: true }
+  }
+
+  const relativeToExecutionPath = absolutePathRelativeToBase(filePath, executionPath)
+  if (relativeToExecutionPath !== null && isSafeRelativeArtifactPath(relativeToExecutionPath)) {
+    return { path: normalizePath(relativeToExecutionPath), safeRelative: true }
+  }
+
+  return { path: normalizePath(filePath), safeRelative: false }
+}
+
+function absolutePathRelativeToBase(
+  filePath: string,
+  basePath?: string | null,
+): string | null {
+  if (!basePath) return null
+
+  const file = normalizeAbsolutePath(filePath)
+  const base = normalizeAbsolutePath(basePath)
+  if (!isAbsolutePath(file) || !isAbsolutePath(base)) return null
+
+  const compareCaseInsensitive = hasWindowsDrive(file) || hasWindowsDrive(base)
+  const comparableFile = compareCaseInsensitive ? file.toLowerCase() : file
+  const comparableBase = compareCaseInsensitive ? base.toLowerCase() : base
+
+  if (comparableFile === comparableBase) return ''
+  if (!comparableFile.startsWith(`${comparableBase}/`)) return null
+  return file.slice(base.length + 1)
+}
+
+function normalizeAbsolutePath(value: string): string {
+  return value.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+function isAbsolutePath(value: string): boolean {
+  return hasWindowsDrive(value) || value.startsWith('/')
+}
+
+function hasWindowsDrive(value: string): boolean {
+  return /^[a-zA-Z]:\//.test(value)
 }
 
 function isSafeRelativeArtifactPath(value: string): boolean {
