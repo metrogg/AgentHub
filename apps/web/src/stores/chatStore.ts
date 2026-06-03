@@ -14,6 +14,7 @@ import {
 import { wsClient, type WSEvent } from '../lib/ws'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { WsEvent, MessageType, SessionType, SenderType } from '@agenthub/shared'
+import { codeAgentRuntimeLabel } from '../lib/agentDisplay'
 
 let pendingStream: {
   messageId: string
@@ -269,6 +270,20 @@ export interface ControlPanelProjection {
     phase?: string
     label: string
   } | null
+}
+
+export type HeaderAgentStatusTone =
+  | 'idle'
+  | 'thinking'
+  | 'working'
+  | 'synthesizing'
+  | 'warning'
+
+export interface HeaderAgentStatusProjection {
+  label: string
+  detail?: string
+  tone: HeaderAgentStatusTone
+  live: boolean
 }
 
 export interface TaskBoardTaskPanelProjection extends TaskBoardTask {
@@ -1203,6 +1218,124 @@ export function describeRuntimeActivity(activity: AgentActivity | null | undefin
   }
 }
 
+function runStatusDetailLabel(status: NonNullable<ChatState['taskBoard']>['status']) {
+  if (status === 'planning') return '规划失败'
+  if (status === 'synthesizing') return '汇总中断'
+  if (status === 'running') return '运行中断'
+  if (status === 'failed') return '运行失败'
+  if (status === 'cancelled') return '已停止'
+  if (status === 'completed') return '已完成'
+  return status
+}
+
+export function buildHeaderAgentStatusProjection(input: {
+  sessionId: string | null | undefined
+  taskBoard: ChatState['taskBoard']
+  agentTabs: AgentTab[]
+  agentTyping: boolean
+  agentActivity: AgentActivity | null
+  streamingMessage: ChatState['streamingMessage']
+  streamingCodeAgentRun: CodeAgentRunMetadata | null
+}): HeaderAgentStatusProjection {
+  const {
+    sessionId,
+    taskBoard,
+    agentTabs,
+    agentTyping,
+    agentActivity,
+    streamingMessage,
+    streamingCodeAgentRun,
+  } = input
+
+  if (streamingCodeAgentRun?.status === 'running') {
+    return {
+      label: '工作中',
+      detail: codeAgentRuntimeLabel(streamingCodeAgentRun.runtime),
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  if (streamingMessage) {
+    return {
+      label: '工作中',
+      detail: streamingMessage.agentName ?? '正在输出',
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  if (agentTyping) {
+    const phase = agentActivity?.phase ?? 'replying'
+    if (phase === 'thinking' || phase === 'planning') {
+      return {
+        label: phase === 'planning' ? '规划中' : '思考中',
+        detail: agentActivity?.agentName ?? 'Orchestrator',
+        tone: 'thinking',
+        live: true,
+      }
+    }
+    if (phase === 'synthesizing') {
+      return {
+        label: '汇总中',
+        detail: agentActivity?.agentName ?? 'Synthesizer',
+        tone: 'synthesizing',
+        live: true,
+      }
+    }
+    return {
+      label: '工作中',
+      detail: agentActivity?.agentName ?? '正在处理',
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  const currentTask =
+    sessionId && taskBoard
+      ? taskBoard.tasks.find((task) => task.childSessionId === sessionId) ??
+        taskBoard.tasks.find((task) => task.status === 'running') ??
+        null
+      : null
+  const currentTab =
+    sessionId && agentTabs.length
+      ? agentTabs.find((tab) => tab.childSessionId === sessionId) ??
+        agentTabs.find((tab) => tab.status === 'running') ??
+        null
+      : null
+
+  if (currentTask?.status === 'running' || currentTab?.status === 'running') {
+    return {
+      label: '工作中',
+      detail: currentTask?.agentName ?? currentTab?.agentName ?? 'Agent',
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  if (taskBoard && sessionId === taskBoard.sessionId) {
+    if (taskBoard.status === 'planning') {
+      return { label: '规划中', detail: 'Orchestrator', tone: 'thinking', live: true }
+    }
+    if (taskBoard.status === 'synthesizing') {
+      return { label: '汇总中', detail: 'Synthesizer', tone: 'synthesizing', live: true }
+    }
+    if (taskBoard.status === 'running') {
+      return { label: '工作中', detail: '多 Agent 协作', tone: 'working', live: true }
+    }
+    if (taskBoard.status === 'failed' || taskBoard.status === 'cancelled') {
+      return {
+        label: taskBoard.status === 'failed' ? '需关注' : '已停止',
+        detail: runStatusDetailLabel(taskBoard.status),
+        tone: 'warning',
+        live: false,
+      }
+    }
+  }
+
+  return { label: '空闲中', detail: '等待新任务', tone: 'idle', live: false }
+}
+
 export function buildControlPanelProjection(input: {
   taskBoard: ChatState['taskBoard']
   agentTabs: AgentTab[]
@@ -1953,6 +2086,7 @@ export const __chatStoreTestHooks = {
   applyResourceSnapshotToTaskBoard,
   buildRunResourceTaskEntries,
   buildControlPanelProjection,
+  buildHeaderAgentStatusProjection,
   buildTaskBoardPanelProjection,
   buildOptimisticOrchestratorTaskSessions,
   deriveRuntimeActivityFromTaskBoard,
@@ -2459,6 +2593,7 @@ interface ChatState {
     content: string,
     options?: {
       displayContent?: string
+      mentions?: string[]
       replyToMessageId?: string | null
       safetyMode?: string
       usePendingAttachments?: boolean
@@ -2469,6 +2604,7 @@ interface ChatState {
     content: string,
     options?: {
       displayContent?: string
+      mentions?: string[]
       replyToMessageId?: string | null
       safetyMode?: string
       usePendingAttachments?: boolean
@@ -2830,21 +2966,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : (get().sessions.find((item) => item.id === sessionId) ?? null)
     const isGroupSession =
       targetSession?.type === SessionType.Group && Boolean(targetSession.workspaceId)
-    const orchestrator = isGroupSession
-      ? get().currentWorkspaceAgents.find((agent) => agent.roleType === 'orchestrator')
-      : null
     set({
-      agentTyping: true,
+      agentTyping: !isGroupSession,
       selectedAgentTab: isGroupSession ? null : get().selectedAgentTab,
-      agentActivity: isGroupSession
-        ? {
-            sessionId,
-            agentId: orchestrator?.id,
-            agentName: orchestrator?.name ?? 'Orchestrator',
-            phase: 'thinking',
-            startedAt: new Date().toISOString(),
-          }
-        : null,
+      agentActivity: null,
     })
     const attachments = get().pendingAttachments
     const contentForAgent = attachments.length
@@ -2876,6 +3001,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: contentForAgent,
         attachments,
         displayContent: options?.displayContent ?? (attachments.length ? content : undefined),
+        mentions: options?.mentions,
         replyToMessageId,
         safetyMode: options?.safetyMode,
       })

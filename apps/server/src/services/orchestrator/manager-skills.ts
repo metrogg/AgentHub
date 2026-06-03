@@ -1,15 +1,13 @@
 /**
- * ManagerSkills — AgentHub's built-in Manager capabilities, modeled on HiClaw's
- * 16 skill system. Each skill is a TypeScript function (not a shell script),
- * callable from ManagerLoop.step(), the patrol, or user-initiated actions.
+ * ManagerSkills — Manager/Orchestrator 可调用的内建能力草案。
  *
- * HiClaw pattern: SKILL.md (what + gotchas) + scripts/ (how) + references/ (details)
- * AgentHub pattern: function (what + how) + JSDoc gotchas + RunEvent feedback
+ * 注意：这里只有已经满足 AgentHub 当前分层约束的能力可以继续演进为主路径能力。
+ * 凡是会绕过模型管理、Code Agent、Sandbox、RuntimeLease 或平台权限边界的操作，
+ * 只能显式报错，不能假装自己已经是可用实现。
  */
 
 import { db, eq, and, workspaceAgents, settings, workerInstances } from '@agenthub/db'
 import { emitRunEvent } from './run-events'
-import { workerController } from './worker-controller'
 import { markWorkerInstanceState } from './worker-runtime-resources'
 
 // ─── Skill: Worker Management ────────────────────────────────────────────────
@@ -89,31 +87,16 @@ export interface ModelSwitchResult {
 }
 
 /**
- * model-switch — switch the active LLM model.
+ * model-switch — 历史草案入口，当前禁止直接切换全局活动模型。
  *
  * Gotchas:
- * - Always verify connectivity before switching
- * - If the new model is not in the catalog, it's added first
+ * - AgentHub 当前只允许“模型管理 / 内部 LLM 默认模型”链路管理内部模型配置
+ * - Manager 不能在运行时直接篡改 ACTIVE_MODEL_ID
  */
 export async function switchActiveModel(modelId: string): Promise<ModelSwitchResult> {
-  const [current] = await db
-    .select()
-    .from(settings)
-    .where(eq(settings.key, 'ACTIVE_MODEL_ID'))
-    .limit(1)
-
-  const previousModelId = current?.value ?? null
-
-  if (current) {
-    await db
-      .update(settings)
-      .set({ value: modelId, updatedAt: new Date() })
-      .where(eq(settings.key, 'ACTIVE_MODEL_ID'))
-  } else {
-    await db.insert(settings).values({ key: 'ACTIVE_MODEL_ID', value: modelId })
-  }
-
-  return { success: true, modelId, previousModelId }
+  throw new Error(
+    `Manager 不能直接切换全局活动模型（请求模型：${modelId}）。请通过模型管理或“内部 LLM 默认模型”设置修改内部模型链路。`,
+  )
 }
 
 // ─── Skill: Worker Model Switch ──────────────────────────────────────────────
@@ -158,43 +141,19 @@ export interface GitOperation {
 }
 
 /**
- * git-delegation-management — execute git operations on behalf of Workers.
+ * git-delegation-management — 历史草案入口，当前禁止 Manager 直接执行 shell git。
  *
  * Gotchas:
- * - Operations run in the task's workdir, not the project root
- * - Manager validates the workspace path before executing
- * - Worker must have workspace-write sandbox for this to work
+ * - Git / shell 操作必须通过 Worker Runtime、Code Agent 与 SandboxProvider 执行
+ * - Manager 直接 spawn shell 会绕过 RuntimeLease / 权限 / 隔离边界
  */
 export async function delegateGitOperation(op: GitOperation): Promise<{
   success: boolean
   output: string
 }> {
-  const lines: string[] = []
-  for (const cmd of op.operations) {
-    const trimmed = cmd.trim()
-    if (!trimmed.startsWith('git ')) {
-      lines.push(`SKIPPED (not a git command): ${trimmed}`)
-      continue
-    }
-    try {
-      const proc = Bun.spawn(['bash', '-c', trimmed], {
-        cwd: op.workspace,
-        stdout: 'pipe',
-        stderr: 'pipe',
-      })
-      const exitCode = await proc.exited
-      const stdout = await new Response(proc.stdout).text()
-      const stderr = await new Response(proc.stderr).text()
-      if (exitCode === 0) {
-        lines.push(`OK: ${trimmed}\n${stdout.trim()}`)
-      } else {
-        lines.push(`FAILED (exit ${exitCode}): ${trimmed}\n${stderr.trim() || stdout.trim()}`)
-      }
-    } catch (err: any) {
-      lines.push(`ERROR: ${trimmed}\n${err?.message || String(err)}`)
-    }
-  }
-  return { success: lines.every((l) => !l.startsWith('FAILED') && !l.startsWith('ERROR')), output: lines.join('\n\n') }
+  throw new Error(
+    `Manager 不能直接执行 git 命令（taskId=${op.taskId}）。请把 git 操作下发给具备对应权限的 Worker，并通过 RuntimeLease / Sandbox 执行。`,
+  )
 }
 
 // ─── Skill: MCP Server Management ────────────────────────────────────────────

@@ -60,9 +60,10 @@ export const agentConfigRoutes = new Hono<{ Variables: AuthVariables }>()
     const { instruction, draft } = c.req.valid('json')
 
     const system = [
-      '你是 AgentHub 的 Agent 配置编辑器。',
+      '你是 AgentHub 的内部 LLM 辅助配置编辑器。',
       '用户会给出当前 Agent 配置和自然语言修改要求。你要判断应该改哪些字段，并返回严格 JSON。',
       '只修改用户明确要求或强相关的字段；不要因为风格偏好重写整份配置。',
+      '你只负责生成字段补丁建议，不负责切换全局模型、改动 Coding Tools 配置或执行任何运行时动作。',
       '不要改变 AgentHub 的产品分层：Skills/MCP/Rules/CLI 是能力层，不是 Agent 类型。',
       'runtimeType 只能是 "code-agent" 或 "llm"；codeAgentType 只能是 "codex"、"claude-code"、"opencode"、"gemini" 或 null。',
       'sandboxPolicy 只能是 "workspace-write" 或 "danger-full-access"；不要输出 read-only。',

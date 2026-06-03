@@ -1474,28 +1474,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         a2aDispatch: a2aDispatch.params,
       },
     })
-    await persistThreadTransparencyMessage({
-      sessionId: groupSessionId,
-      senderId: orchestratorAgent?.id ?? 'orchestrator',
-      senderType: 'agent',
-      content: buildManagerGroupDispatchMessage({
-        managerName: orchestratorAgent?.name ?? 'Orchestrator',
-        workerName: agent.name,
-        taskTitle: task.title,
-      }),
-      metadata: {
-        systemEvent: 'manager_task_dispatched',
-        kind: 'manager-task-dispatched',
-        orchestratorRunId: runId,
-        orchestratorTaskId: task.id,
-        childSessionId: childInfo.sessionId,
-        taskThreadId: childInfo.taskThreadId ?? null,
-        workerInstanceId: childInfo.workerInstanceId ?? null,
-        managerName: orchestratorAgent?.name ?? 'Orchestrator',
-        workerName: agent.name,
-      },
-    })
-
     await runController.markTaskAssigned(runContext, {
       taskId: task.id,
       title: task.title,
@@ -1648,26 +1626,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         executionConfig,
         sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? undefined,
         sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? undefined,
-      },
-    })
-    await persistThreadTransparencyMessage({
-      sessionId: groupSessionId,
-      senderId: agent.id,
-      senderType: 'agent',
-      content: buildWorkerAcceptedGroupMessage({
-        workerName: agent.name,
-        taskTitle: task.title,
-      }),
-      metadata: {
-        systemEvent: 'worker_task_accepted',
-        kind: 'worker-task-accepted-group',
-        orchestratorRunId: runId,
-        orchestratorTaskId: task.id,
-        childSessionId: childInfo.sessionId,
-        taskThreadId: childInfo.taskThreadId ?? null,
-        workerInstanceId,
-        runtimeLeaseId,
-        workerName: agent.name,
       },
     })
     if (workerAcceptedMessage) {
@@ -3305,14 +3263,6 @@ function buildManagerDispatchThreadMessage(input: {
   return lines.join('\n')
 }
 
-function buildManagerGroupDispatchMessage(input: {
-  managerName: string
-  workerName: string
-  taskTitle: string
-}) {
-  return `${input.managerName}：@${input.workerName}，我把「${input.taskTitle}」分派给你了。请进入对应任务线程处理。`
-}
-
 function buildWorkerAcceptedThreadMessage(input: {
   workerName: string
   taskTitle: string
@@ -3328,19 +3278,12 @@ function buildWorkerAcceptedThreadMessage(input: {
     input.executionConfig?.workdirRelativePath ||
     shortPathLabel(input.executionConfig?.executionPath) ||
     input.sharedTaskRelativeRoot
-  const lines = [`${input.workerName}：已接单，开始处理「${input.taskTitle}」。`]
+  const lines = [`${input.workerName}：开始处理「${input.taskTitle}」。`]
   const details = [runtime, model, workdir ? `workdir=${workdir}` : null].filter(Boolean)
   if (details.length > 0) {
     lines.push(`运行环境：${details.join(' · ')}`)
   }
   return lines.join('\n')
-}
-
-function buildWorkerAcceptedGroupMessage(input: {
-  workerName: string
-  taskTitle: string
-}) {
-  return `${input.workerName}：收到，我已经开始处理「${input.taskTitle}」，进展会在任务线程里同步。`
 }
 
 function shortPathLabel(value?: string | null) {
@@ -3694,28 +3637,19 @@ function buildAgentGroupResultContent(
   summary: TaskOutputSummary,
   artifacts: Array<Record<string, unknown>>,
 ): string {
-  const lines = [`**${agentName} / ${taskTitle}**`, '', summary.brief.trim() || '已完成该任务。']
+  const brief = summary.brief.trim() || '已完成该任务。'
+  const fileChangeCount = summary.filesCreated.length + summary.filesModified.length
+  const details = [
+    fileChangeCount > 0 ? `${fileChangeCount} 处文件变更` : null,
+    summary.decisions.length > 0 ? `${summary.decisions.length} 个关键判断` : null,
+    artifacts.length > 0 ? `${artifacts.length} 个产物` : null,
+  ].filter(Boolean)
 
-  const files = [
-    ...summary.filesCreated.map((file) => ({ file, label: '新建' })),
-    ...summary.filesModified.map((file) => ({ file, label: '修改' })),
-  ].slice(0, 8)
-
-  if (files.length > 0) {
-    lines.push('', '**文件变更**')
-    for (const item of files) lines.push(`- ${item.label}：${item.file}`)
-  }
-
-  if (summary.decisions.length > 0) {
-    lines.push('', '**关键判断**')
-    for (const decision of summary.decisions.slice(0, 5)) lines.push(`- ${decision}`)
-  }
-
-  if (artifacts.length > 0) {
-    lines.push('', `已附带 ${artifacts.length} 个产物，可在消息产物卡或任务看板中查看。`)
-  }
-
-  return lines.join('\n')
+  return [
+    `${agentName} 已完成「${taskTitle}」。`,
+    brief,
+    details.length > 0 ? `${details.join('，')}，详细过程见任务线程。` : '详细过程见任务线程。',
+  ].join('\n')
 }
 
 export function buildTaskResultReport(params: {
@@ -3799,25 +3733,23 @@ function buildAgentGroupFailureContent(
   artifacts: Array<Record<string, unknown>>,
 ): string {
   const hasPartialArtifacts = artifacts.length > 0
-  const lines = [
-    `**${agentName} / ${taskTitle}**`,
-    '',
-    hasPartialArtifacts
-      ? '该任务执行失败，最终结果未确认；已保留执行过程中产生的部分产物与文件变更，供排查或后续接力使用。'
-      : '该任务执行失败，未产生可交付结果。',
-  ]
-  lines.push('', '**失败原因**', error.trim() || 'Unknown error')
-
+  const reason = (error.trim() || 'Unknown error').slice(0, 280)
   const detail = output.trim()
-  if (detail && detail !== error.trim()) {
-    lines.push('', '**Agent 输出摘录**', detail.slice(0, 1200))
-  }
+  const detailLine =
+    detail && detail !== error.trim() ? `Agent 输出摘录：${detail.slice(0, 240)}` : null
+  const artifactLine = hasPartialArtifacts
+    ? `已保留 ${artifacts.length} 个部分产物，可继续排查或接力。`
+    : '当前没有可交付产物。'
 
-  if (hasPartialArtifacts) {
-    lines.push('', `已保留 ${artifacts.length} 个部分产物，可在消息产物卡或任务看板中查看。`)
-  }
-
-  return lines.join('\n')
+  return [
+    `${agentName} 在「${taskTitle}」上遇到问题。`,
+    `失败原因：${reason}`,
+    artifactLine,
+    detailLine,
+    '详细过程见任务线程。',
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 async function summarizeTaskOutput(

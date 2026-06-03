@@ -1317,17 +1317,19 @@ export const api = {
       modelId?: string
       type?: MessageType
       skipAgentReply?: boolean
-      attachments?: ChatAttachment[]
-      displayContent?: string
-      replyToMessageId?: string | null
-      safetyMode?: string
-    },
+        attachments?: ChatAttachment[]
+        displayContent?: string
+        replyToMessageId?: string | null
+        safetyMode?: string
+        mentions?: string[]
+      },
   ) =>
     request<Message>(`/messages/${sessionId}`, {
       method: 'POST',
       body: JSON.stringify({
         content: data.content,
         type: (data.type ?? 'text') as MessageType,
+        ...(data.mentions?.length ? { mentions: data.mentions } : {}),
         metadata: {
           ...(data.modelId ? { modelId: data.modelId } : {}),
           ...(data.skipAgentReply ? { skipAgentReply: true } : {}),
