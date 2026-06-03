@@ -1,7 +1,7 @@
 # AgentHub
 
-本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/文档索引与权威口径.md`、`docs/当前状态与下一步路线.md`、`docs/HiClaw架构调研与AgentHub底层重构方案.md`、`docs/Coze新版本对标拆解与开源复刻路线.md` 和 `docs/使用指南.md`。
-`docs/hiclaw-wiki.agent.final.md`、`docs/Kimi-Claw群聊系统完整设计规格书(1).md`、`docs/Coze新版本对标拆解与开源复刻路线.md` 是重要参考资料，但如果与当前工程事实冲突，以 `AGENTS.md`、`README.md`、`docs/当前状态与下一步路线.md` 和 `docs/HiClaw架构调研与AgentHub底层重构方案.md` 为准。
+本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/文档索引与权威口径.md`、`docs/当前状态与下一步路线.md`、`docs/AgentHub-HiClaw-lite开源内核重构方案.md`、`docs/HiClaw架构调研与AgentHub底层重构方案.md`、`docs/Coze新版本对标拆解与开源复刻路线.md` 和 `docs/使用指南.md`。
+`docs/hiclaw-wiki.agent.final.md` 和本地 `hiclaw源码参考/` 是本轮 HiClaw-lite 内核重构的主要参考依据；`docs/Kimi-Claw群聊系统完整设计规格书(1).md`、`docs/Coze新版本对标拆解与开源复刻路线.md` 是重要产品参考。如果参考资料与当前工程口径冲突，以 `AGENTS.md`、`README.md`、`docs/文档索引与权威口径.md`、`docs/当前状态与下一步路线.md` 和 `docs/AgentHub-HiClaw-lite开源内核重构方案.md` 为准。
 
 ## 当前目标
 
@@ -9,6 +9,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 
 - 近期运行时主路径：IM 式多 Agent 协作。
 - 中期产品目标：`Coze 风格的开源 AI 工作平台`。
+- 底层重构目标：`AgentHub Product Shell + HiClaw-lite Open Kernel`。
 
 也就是说，群聊、私聊、任务子对话不是终点，而是我们当前承载复杂协作的交互外壳。核心体验不是“一个模型假装多人说话”，而是：
 
@@ -18,6 +19,17 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 - 多个 Agent 在各自的任务子对话里真实执行。
 - 主群聊只展示计划、进度、成员汇报、产物和最终综合结果。
 - 用户可以进入任一子对话查看该 Agent 的完整执行过程。
+
+新的内核方向不是继续修补旧 DAG-first 流程，而是：
+
+- 前端产品壳保留 AgentHub 自己的 Coze / Kimi 风格界面。
+- 通信层采用 Matrix：Room / timeline / participant / mention 是协作事实源。
+- Manager Runtime 学 OpenClaw / QwenPaw：Manager 是真实协调器，不是一次性 Planner。
+- Worker Runtime 学 HiClaw，但保留 AgentHub 的 Coding Agent 优势：Claude Code / OpenCode / Codex / Gemini 是核心 Worker 基底。
+- 共享存储第一阶段使用本地 filesystem，但按 MinIO/S3-compatible 语义设计 ArtifactStore / SharedStorage。
+- AI Gateway 抽象化：短期 Local/LiteLLM，长期 Higress；不要让 Worker 到处拿真实 key。
+- A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope。
+- 当前仍处开发阶段，旧会话、旧任务、旧数据库和旧 workspace/storage 数据不是架构约束；必要时可以清库重建，不能为了旧数据保留旧路径。
 
 后续产品层必须逐步补齐 Coze 风格的：
 
@@ -42,10 +54,11 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 
 - 产品交互层：IM 群聊、Agent 私聊、任务子对话、任务看板、产物卡。
 - 编排层：Manager / Orchestrator、Manager actions、WorkLedger / Task graph、TaskScheduler、Synthesizer、人工确认和运行生命周期。
-- 通信协议层：A2A 负责 Agent 间 message/task/artifact 语义；AG-UI 负责运行事件到前端 UI 的桥接。
+- 通信层：Matrix 负责 Room / timeline / participant / mention，是新内核的协作事实源。
+- 协议投影层：AG-UI 负责运行事件到前端 UI 的桥接；A2A 只作为外部互操作或 Matrix event 中的可选任务语义 envelope，不再是内部主通信路径。
 - 执行层：Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Agent 基底；`llm` 只作为内部/兜底能力。
 - 能力层：MCP、Skills、Rules、shell、文件系统、浏览器等是 Code Agent 能使用的工具能力，不是 Agent 类型。
-- 工作区与状态层：系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/shared/tasks`、兼容 `.agenthub/handoff`、blackboard、execution logs、run events。
+- 工作区、存储与状态层：系统默认工作空间根、Worker workdirs、ArtifactStore / SharedStorage、本地 filesystem adapter、兼容旧 `.agenthub/handoff` 的只读读取、run/resource events。
 
 配置真相也要分层：
 
@@ -57,15 +70,24 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
-底层重构方向已经进一步明确：学习 HiClaw 的资源控制平面思想，但不直接照搬 Matrix / MinIO / Higress / Kubernetes 作为默认依赖。目标是建设 AgentHub 自己的 HiClaw-lite Kernel：
+底层重构方向已经进一步明确：建设 AgentHub 自己的 HiClaw-lite Open Kernel，而不是继续手搓低配协作层。第一阶段不默认引入 Kubernetes、完整 MinIO 集群、完整 Higress 集群、企业多租户等重能力，但通信层明确采用 Matrix，存储层按 S3-compatible 设计，Gateway 保留 Higress/LiteLLM adapter 抽象。
 
-- `Run`、`Task`、`TaskThread`、`WorkerInstance`、`Artifact`、`RuntimeLease`、`RunEvent` 都应逐步成为一等资源。
+四个最高优先级模块：
+
+- Manager 协调器：对齐 HiClaw Manager 章节，Manager 要有 runtime、人格配置、skills、state、Worker registry、Room 通信和 heartbeat/patrol。
+- Worker 运行时：对齐 HiClaw Worker 章节，Worker 是真实运行实体，有身份、状态、模型、skills/MCP、Room、heartbeat、sleep/wake/stop。
+- Matrix 通信层：对齐 HiClaw Matrix/Tuwunel 章节，Room / timeline / participant / mention 是协作事实源。
+- 共享存储层：对齐 HiClaw MinIO 章节，第一阶段用 filesystem，但语义按 MinIO/S3 设计，产物和 handoff ref 进入 ArtifactStore / SharedStorage。
+
+目标资源：
+
+- `Room`、`TimelineEvent`、`Run`、`Task`、`WorkerInstance`、`Artifact`、`RuntimeLease` 都应逐步成为一等资源。
 - `messages.ts` 后续只应承担 chat ingress 和轻量路由，不再继续膨胀成创建 task/session/event 并启动执行的总控模块。
-- 子对话、产物卡、任务看板和进度条应从资源状态与 AG-UI / RunEvent 投影出来，不再靠多个旧 metadata 状态拼接。
+- 子对话、产物卡、任务看板和进度条应从 Matrix timeline、资源状态与 AG-UI 投影出来，不再靠多个旧 metadata 状态拼接。
 - OpenClaw / CoPaw 应优先作为 Orchestrator / Team Leader / Manager 这类指挥型 runtime 候选；Codex / Claude Code / OpenCode / Gemini CLI 更偏执行型 Coding Worker。不要把 OpenClaw 简单硬塞成普通 `codeAgentType`，后续应拆出 `coordinator runtime` 与 `worker runtime`。
-- 第一阶段优先做 `RunEvent` 单一 UI 真相源和 `TaskThread` 一等资源化；再推进 `ArtifactStore`、`WorkerInstance`、`RuntimeLease` 和新的 `RunController`。
+- 第一阶段优先做 `RoomService + Matrix Adapter`、`CoordinatorRuntime`、`WorkerRuntime`、`ArtifactStore` 和 Controller/Reconciler 资源化。
 
-详细方案见 `docs/HiClaw架构调研与AgentHub底层重构方案.md`。后续涉及多 Agent 底层执行、子对话、产物、运行事件、生命周期的改动，应优先向该方案收敛，而不是继续给旧流程链打补丁。
+详细方案见 `docs/AgentHub-HiClaw-lite开源内核重构方案.md`。后续涉及多 Agent 底层执行、子对话、产物、运行事件、生命周期的改动，应优先向该方案收敛，而不是继续给旧流程链打补丁。
 
 ## 关键交互边界
 
@@ -121,18 +143,23 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 迁移方向：`messages.ts` 不应继续扩展成编排主脑；新增 run 生命周期、Manager 决策、资源 reconcile 和恢复逻辑应优先进入 `RunController` / `ManagerLoop` / 后续 kernel controllers。`OrchestratorEngine` 不再被视为未来主脑，只能在迁移期作为执行兼容层逐步拆小。
 
-## A2A 通信边界
+## Matrix / A2A 通信边界
 
-Agent 之间的任务分发统一以 A2A v0.3 `message/send` 为内部通信标准：
+新内核以 Matrix 作为内部通信事实源：
 
-- Orchestrator 发给成员的任务必须先构造成 A2A `MessageSendParams`。
-- 子对话中的 user message metadata 必须保存 `a2a` 请求信封。
-- 成员输出消息 metadata 必须保存 A2A `responseMessage` 或 `responseTask`。
-- 本地 LLM fallback 和 Code Agent 都通过 `agenthub-local` transport 承接 A2A envelope。
+- Human、Manager、Worker 都是 Matrix Room participant。
+- Manager 分配任务、@ Worker、Worker 回复、澄清、进度、失败、产物引用，都应进入 Room timeline。
+- 主群聊、任务子对话、Manager/Worker DM 都应逐步变成 RoomService / MatrixRoomAdapter 管理的真实 Room。
+- AgentHub 前端继续自研，不使用 Element Web 作为默认 UI。
+
+A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径：
+
 - A2A 是通信协议，不是 runtimeType；远程 A2A endpoint 应通过 `roleProfile.protocol = "a2a"` + `roleProfile.a2aEndpoint` 配置。
-- `blackboard`、`.agenthub/shared/tasks` 和兼容 `.agenthub/handoff` 是 AgentHub 对 A2A artifact/metadata 的扩展，不是绕过 A2A 的第二套分工协议。
+- 旧 A2A envelope 可以迁移为 Matrix event 的可选 `taskEnvelope` 字段。
+- 远程 Agent、外部系统调用 AgentHub Agent、跨平台互操作时再启用 A2A。
+- 不允许恢复 `runtimeType = "a2a"`，也不能把 A2A 作为可创建的 Agent 类型展示给用户。
 
-当前实现是“内部 A2A envelope + AgentHub local transport”。远程 A2A endpoint 可作为后续协议配置扩展，但不能恢复 `runtimeType = "a2a"`，也不能把 A2A 作为可创建的 Agent 类型展示给用户。
+当前代码仍有“内部 A2A envelope + AgentHub local transport”的迁移期实现，但它不是新内核目标。后续通信改造应把 `LocalA2ATransport` 降级为兼容/外部互操作适配，不再继续扩展为内部主干。
 
 相关文件：
 
