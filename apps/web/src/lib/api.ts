@@ -86,6 +86,12 @@ export function friendlyErrorMessage(error: unknown, context?: string): string {
       [AppErrorCodes.DIFF_VALIDATION_FAILED]: '代码补丁校验失败',
     }
     if (error.code && codeMap[error.code]) {
+      if (
+        error.code === AppErrorCodes.DIFF_APPLY_FAILED ||
+        error.code === AppErrorCodes.DIFF_VALIDATION_FAILED
+      ) {
+        return prefix + normalizeErrorMessage(error.message, codeMap[error.code])
+      }
       return prefix + codeMap[error.code]
     }
     if (error.status === 500 && error.message === 'Internal Server Error') {
@@ -258,11 +264,14 @@ export interface Message {
 
 export interface ChatAttachment {
   id: string
-  type: 'image'
+  type: 'image' | 'file'
   name: string
   mimeType: string
   size: number
   dataUrl: string
+  extension?: string
+  previewKind?: 'image' | 'text' | 'document' | 'binary'
+  text?: string
 }
 
 export type AgentArtifact =
@@ -800,6 +809,15 @@ export interface AgentConfigInput {
   approvalRequired?: boolean
 }
 
+export interface AgentConfigEditResult {
+  summary: string
+  patch: Partial<AgentConfigInput>
+}
+
+export type AgentConfigEditStreamEvent =
+  | { type: 'chunk'; text: string }
+  | { type: 'result'; result: AgentConfigEditResult }
+
 export type AgentDraft = Required<
   Omit<AgentConfigInput, 'avatar' | 'modelId' | 'codeAgentType'>
 > & {
@@ -1122,10 +1140,17 @@ export const api = {
         },
       }),
     }),
-  cancelMessage: (sessionId: string) =>
-    request<{ cancelled: boolean }>(`/messages/${sessionId}/cancel`, {
-      method: 'POST',
-    }),
+  cancelMessage: (
+    sessionId: string,
+    data?: { persistTerminatedMessage?: boolean; content?: string },
+  ) =>
+    request<{ cancelled: boolean; activeRunCancelled?: boolean; message?: Message }>(
+      `/messages/${sessionId}/cancel`,
+      {
+        method: 'POST',
+        body: data ? JSON.stringify(data) : undefined,
+      },
+    ),
   clearMessages: (sessionId: string) =>
     request<{ deleted: boolean }>(`/messages/${sessionId}/all`, {
       method: 'DELETE',
@@ -1340,6 +1365,12 @@ export const api = {
   }) => request<WorkspaceFull>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
   createAutoWorkspace: (data: { name?: string; goal?: string }) =>
     request<WorkspaceFull>('/workspaces/auto', { method: 'POST', body: JSON.stringify(data) }),
+  cloneGithubWorkspace: (data: { repoUrl: string; name?: string; goal?: string }) =>
+    request<WorkspaceFull>('/workspaces/clone-github', {
+      method: 'POST',
+      timeout: 240_000,
+      body: JSON.stringify(data),
+    }),
   openWorkspaceFolder: (projectPath?: string | null) =>
     request<WorkspaceFolderOpenResult>('/workspaces/open-folder', {
       method: 'POST',
@@ -1419,10 +1450,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ workspaceId }),
     }),
-  applyDiff: (projectPath: string, diff: string) =>
+  applyDiff: (workspaceId: string, diff: string) =>
     request<{ success: boolean; message: string }>('/artifacts/apply-diff', {
       method: 'POST',
-      body: JSON.stringify({ projectPath, diff }),
+      body: JSON.stringify({ workspaceId, diff }),
     }),
   downloadZip: async (workspaceId: string) => {
     const res = await fetch(
@@ -1505,6 +1536,62 @@ export const api = {
         if (!payload) continue
         yield payload
       }
+    }
+  },
+  editAgentConfig: async function* (
+    draft: AgentConfigInput,
+    instruction: string,
+  ): AsyncGenerator<AgentConfigEditStreamEvent> {
+    const res = await fetch(`${API_BASE}/agent-config/edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ draft, instruction }),
+    })
+    if (!res.ok) throw new Error(`Agent 配置修改失败: ${res.status}`)
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let eventName = 'message'
+    let dataLines: string[] = []
+
+    const flushEvent = (): AgentConfigEditStreamEvent | null => {
+      const data = dataLines.join('\n')
+      eventName = eventName || 'message'
+      dataLines = []
+      if (eventName === 'done') return null
+      if (eventName === 'error') throw new Error(data || 'Agent 配置修改失败')
+      if (!data) return null
+      if (eventName === 'result') {
+        return { type: 'result', result: JSON.parse(data) as AgentConfigEditResult }
+      }
+      return { type: 'chunk', text: data }
+    }
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const rawLine of lines) {
+        const line = rawLine.trimEnd()
+        if (!line) {
+          const event = flushEvent()
+          eventName = 'message'
+          if (event) yield event
+          continue
+        }
+        if (line.startsWith('event: ')) {
+          eventName = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          dataLines.push(line.slice(6))
+        }
+      }
+    }
+    if (buffer || dataLines.length) {
+      const event = flushEvent()
+      if (event) yield event
     }
   },
 

@@ -46,11 +46,13 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  Github,
   Globe2,
   ImagePlus,
   ListTodo,
   Loader2,
   Maximize2,
+  MessageCircleReply,
   Minimize2,
   Monitor,
   MoreHorizontal,
@@ -68,6 +70,7 @@ import {
   Sheet,
   Square,
   TerminalSquare,
+  TextQuote,
   Building2,
   Trash2,
   User,
@@ -77,11 +80,11 @@ import {
 import {
   type ClipboardEvent,
   type ComponentPropsWithoutRef,
+  type DragEvent,
   type FC,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -99,6 +102,7 @@ import {
   type AgentArtifact,
   type ChatAttachment,
   type MemberProposal,
+  type Message,
   type ModelCatalogItem,
   type SkillSummary,
   type WelcomeQuickPrompt,
@@ -131,6 +135,10 @@ import {
   workspaceSubtitle,
 } from '../../lib/workspaceFilters'
 import { useI18n } from '../../lib/i18n'
+import {
+  getCachedCodeAgentRunMetadata,
+  type ThreadCodeAgentRunData,
+} from '../../lib/runtime'
 import { useChatStore } from '../../stores/chatStore'
 import {
   QuickPromptBubbles,
@@ -189,10 +197,48 @@ const languageAliases: Record<string, string> = {
 
 const autoHighlightLanguages = Object.keys(highlightLanguageMap)
 type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
-const maxPastedImageBytes = 5 * 1024 * 1024
+const maxAttachmentBytes = 5 * 1024 * 1024
+const maxAttachmentTextBytes = 256 * 1024
+const maxPendingAttachments = 6
+const attachmentInputAccept = [
+  'image/*',
+  '.txt',
+  '.md',
+  '.markdown',
+  '.json',
+  '.jsonl',
+  '.csv',
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.py',
+  '.html',
+  '.htm',
+  '.css',
+  '.scss',
+  '.xml',
+  '.yaml',
+  '.yml',
+  '.sql',
+  '.sh',
+  '.bat',
+  '.ps1',
+  '.log',
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.ppt',
+  '.pptx',
+  '.xls',
+  '.xlsx',
+].join(',')
 const composerSyncEvent = 'agenthub:composer-sync'
 const artifactPreviewEvent = 'agenthub:artifact-preview'
 const previewPanelWidthStorageKey = 'agenthub:preview-panel-width'
+const defaultPreviewPanelWidth = 560
 
 type ArtifactPreviewItem = {
   id: string
@@ -269,6 +315,7 @@ export const Thread: FC = () => {
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
   const [previewCollapsed, setPreviewCollapsed] = useState(false)
+  const showInlineContextRail = showContextRail && (!previewItem || previewCollapsed)
 
   async function openGroupConversation() {
     selectAgentTab(null)
@@ -287,7 +334,8 @@ export const Thread: FC = () => {
     function handlePreview(event: Event) {
       const item = (event as CustomEvent<ArtifactPreviewItem>).detail
       if (!item?.id) return
-      setPreviewItem(item)
+      const workspaceId = item.workspaceId ?? useChatStore.getState().currentSession?.workspaceId
+      setPreviewItem(enrichPreviewItem(item, workspaceId ?? undefined))
       setPreviewCollapsed(false)
     }
     window.addEventListener(artifactPreviewEvent, handlePreview)
@@ -299,47 +347,45 @@ export const Thread: FC = () => {
       className="agenthub-thread-root relative flex h-full flex-col overflow-hidden bg-white"
       style={{ ['--thread-max-width' as string]: '56rem' }}
     >
-      <div className="flex min-h-0 flex-1">
+      {isGroupSession && !isOrchestratorTaskChild && (
+        <GroupChatHeader
+          onToggleDetails={() => setGroupDetailsOpen((open) => !open)}
+          previewCollapsed={previewCollapsed}
+          previewAvailable={Boolean(previewItem)}
+          onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+        />
+      )}
+      {isOrchestratorTaskChild && (
+        <OrchestratorChildHeader
+          agentName={
+            currentSession?.workspaceAgentId
+              ? (workspaceAgents.find((a) => a.id === currentSession.workspaceAgentId)?.name ??
+                'Agent')
+              : 'Agent'
+          }
+          onBack={() => void openGroupConversation()}
+          previewCollapsed={previewCollapsed}
+          previewAvailable={Boolean(previewItem)}
+          onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+        />
+      )}
+      {!isGroupSession && !isOrchestratorTaskChild && isAgentDirectSession && (
+        <AgentChatHeader
+          onToggleDetails={() => setChildDetailsOpen((open) => !open)}
+          previewCollapsed={previewCollapsed}
+          previewAvailable={Boolean(previewItem)}
+          onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+        />
+      )}
+      {!isGroupSession && !isOrchestratorTaskChild && !isAgentDirectSession && (
+        <RegularChatHeader
+          previewCollapsed={previewCollapsed}
+          previewAvailable={Boolean(previewItem)}
+          onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
+        />
+      )}
+      <div className="flex min-h-0 flex-1 pt-14">
         <div className="flex min-w-0 flex-1 flex-col">
-          {isGroupSession && !isOrchestratorTaskChild && (
-            <GroupChatHeader
-              onToggleDetails={() => setGroupDetailsOpen((open) => !open)}
-              previewCollapsed={previewCollapsed}
-              previewAvailable={Boolean(previewItem)}
-              onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
-            />
-          )}
-          {isOrchestratorTaskChild && (
-            <OrchestratorChildHeader
-              agentName={
-                currentSession?.workspaceAgentId
-                  ? (workspaceAgents.find((a) => a.id === currentSession.workspaceAgentId)
-                      ?.name ?? 'Agent')
-                  : 'Agent'
-              }
-              onBack={() => void openGroupConversation()}
-              previewCollapsed={previewCollapsed}
-              previewAvailable={Boolean(previewItem)}
-              onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
-            />
-          )}
-          {!isGroupSession &&
-            !isOrchestratorTaskChild &&
-            isAgentDirectSession && (
-              <AgentChatHeader
-                onToggleDetails={() => setChildDetailsOpen((open) => !open)}
-                previewCollapsed={previewCollapsed}
-                previewAvailable={Boolean(previewItem)}
-                onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
-              />
-            )}
-          {!isGroupSession && !isOrchestratorTaskChild && !isAgentDirectSession && (
-            <RegularChatHeader
-              previewCollapsed={previewCollapsed}
-              previewAvailable={Boolean(previewItem)}
-              onTogglePreview={() => setPreviewCollapsed((collapsed) => !collapsed)}
-            />
-          )}
           {isGroupSession && visibleTaskBoard && selectedAgentTab === null && (
             <LeaderViewBanner taskBoard={visibleTaskBoard} agentTabs={agentTabs} />
           )}
@@ -366,7 +412,7 @@ export const Thread: FC = () => {
         {previewItem && !previewCollapsed && (
           <ArtifactPreviewPanel item={previewItem} onClose={() => setPreviewItem(null)} />
         )}
-        {showContextRail && (!previewItem || previewCollapsed) && (
+        {showInlineContextRail && (
           <ThreadContextRail taskBoard={railTaskBoard} activity={planningActivity} />
         )}
         {isGroupSession && (
@@ -390,6 +436,15 @@ type PreviewHeaderControlProps = {
   previewCollapsed?: boolean
   previewAvailable?: boolean
   onTogglePreview?: () => void
+}
+
+type HeaderAgentStatusTone = 'idle' | 'thinking' | 'working' | 'synthesizing' | 'warning'
+
+type HeaderAgentStatus = {
+  label: string
+  detail?: string
+  tone: HeaderAgentStatusTone
+  live: boolean
 }
 
 const HeaderPreviewButton: FC<PreviewHeaderControlProps> = ({
@@ -423,6 +478,133 @@ const HeaderPreviewButton: FC<PreviewHeaderControlProps> = ({
   )
 }
 
+const HeaderAgentStatusIndicator: FC = () => {
+  const status = useHeaderAgentStatus()
+
+  return (
+    <div
+      className={cn(
+        'agenthub-agent-status hidden max-w-[18rem] items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium md:inline-flex',
+        status.tone === 'idle' && 'agenthub-agent-status-idle',
+        status.tone === 'thinking' && 'agenthub-agent-status-thinking',
+        status.tone === 'working' && 'agenthub-agent-status-working',
+        status.tone === 'synthesizing' && 'agenthub-agent-status-synthesizing',
+        status.tone === 'warning' && 'agenthub-agent-status-warning',
+      )}
+      data-live={status.live ? 'true' : 'false'}
+      title={status.detail ? `${status.label} · ${status.detail}` : status.label}
+      aria-label={status.detail ? `Agent 状态：${status.label}，${status.detail}` : `Agent 状态：${status.label}`}
+    >
+      <span className="agenthub-agent-status-dot" aria-hidden="true" />
+      <span className="shrink-0">{status.label}</span>
+      {status.detail && (
+        <span className="hidden min-w-0 truncate font-normal opacity-70 xl:inline">
+          {status.detail}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function useHeaderAgentStatus(): HeaderAgentStatus {
+  const currentSession = useChatStore((state) => state.currentSession)
+  const agentTyping = useChatStore((state) => state.agentTyping)
+  const agentActivity = useChatStore((state) => state.agentActivity)
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const streamingCodeAgentRun = useChatStore((state) => state.streamingCodeAgentRun)
+  const taskBoard = useChatStore((state) => state.taskBoard)
+  const agentTabs = useChatStore((state) => state.agentTabs)
+  const sessionId = currentSession?.id ?? null
+
+  if (streamingCodeAgentRun?.status === 'running') {
+    return {
+      label: '工作中',
+      detail: codeAgentRuntimeLabel(streamingCodeAgentRun.runtime),
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  if (streamingMessage) {
+    return {
+      label: '工作中',
+      detail: streamingMessage.agentName ?? '正在输出',
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  if (agentTyping) {
+    const phase = agentActivity?.phase ?? 'replying'
+    if (phase === 'thinking' || phase === 'planning') {
+      return {
+        label: phase === 'planning' ? '规划中' : '思考中',
+        detail: agentActivity?.agentName ?? 'Orchestrator',
+        tone: 'thinking',
+        live: true,
+      }
+    }
+    if (phase === 'synthesizing') {
+      return {
+        label: '汇总中',
+        detail: agentActivity?.agentName ?? 'Synthesizer',
+        tone: 'synthesizing',
+        live: true,
+      }
+    }
+    return {
+      label: '工作中',
+      detail: agentActivity?.agentName ?? '正在处理',
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  const currentTask =
+    sessionId && taskBoard
+      ? taskBoard.tasks.find((task) => task.childSessionId === sessionId) ??
+        taskBoard.tasks.find((task) => task.status === 'running') ??
+        null
+      : null
+  const currentTab =
+    sessionId && agentTabs.length
+      ? agentTabs.find((tab) => tab.childSessionId === sessionId) ??
+        agentTabs.find((tab) => tab.status === 'running') ??
+        null
+      : null
+
+  if (currentTask?.status === 'running' || currentTab?.status === 'running') {
+    return {
+      label: '工作中',
+      detail: currentTask?.agentName ?? currentTab?.agentName ?? 'Agent',
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  if (taskBoard && sessionId === taskBoard.sessionId) {
+    if (taskBoard.status === 'planning') {
+      return { label: '规划中', detail: 'Orchestrator', tone: 'thinking', live: true }
+    }
+    if (taskBoard.status === 'synthesizing') {
+      return { label: '汇总中', detail: 'Synthesizer', tone: 'synthesizing', live: true }
+    }
+    if (taskBoard.status === 'running') {
+      return { label: '工作中', detail: '多 Agent 协作', tone: 'working', live: true }
+    }
+    if (taskBoard.status === 'failed' || taskBoard.status === 'cancelled') {
+      return {
+        label: taskBoard.status === 'failed' ? '需关注' : '已停止',
+        detail: runStatusLabel[taskBoard.status],
+        tone: 'warning',
+        live: false,
+      }
+    }
+  }
+
+  return { label: '空闲中', detail: '等待新任务', tone: 'idle', live: false }
+}
+
 const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => void }> = ({
   onToggleDetails,
   previewCollapsed,
@@ -444,7 +626,7 @@ const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
   }
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="agenthub-thread-header flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <GroupAvatar agents={agents} size="md" title={title} />
         <div className="flex min-w-0 items-center text-sm">
@@ -453,6 +635,7 @@ const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
         </div>
       </div>
       <div className="flex items-center gap-1">
+        <HeaderAgentStatusIndicator />
         <button
           type="button"
           onClick={onToggleDetails}
@@ -505,7 +688,7 @@ const AgentChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
   const navigate = useNavigate()
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="agenthub-thread-header flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-3">
         <div
           className="grid h-8 w-8 shrink-0 place-items-center rounded-xl text-sm font-semibold text-white shadow-sm"
@@ -519,6 +702,7 @@ const AgentChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
         </div>
       </div>
       <div className="flex items-center gap-1">
+        <HeaderAgentStatusIndicator />
         <button
           type="button"
           onClick={onToggleDetails}
@@ -560,7 +744,7 @@ const OrchestratorChildHeader: FC<
   const navigate = useNavigate()
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="agenthub-thread-header flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <button
           type="button"
@@ -577,6 +761,7 @@ const OrchestratorChildHeader: FC<
         </span>
       </div>
       <div className="flex items-center gap-1">
+        <HeaderAgentStatusIndicator />
         <button
           type="button"
           onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
@@ -606,11 +791,12 @@ const RegularChatHeader: FC<PreviewHeaderControlProps> = ({
   const title = session?.title || '新会话'
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
+    <header className="agenthub-thread-header flex h-14 shrink-0 items-center justify-between gap-3 bg-[#f8f8f5] pb-0 pl-[calc(1.25rem+var(--agenthub-thread-header-left-offset,0rem))] pr-5 pt-0 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="truncate text-sm font-semibold text-neutral-950">{title}</span>
       </div>
       <div className="flex items-center gap-1">
+        <HeaderAgentStatusIndicator />
         <button
           type="button"
           onClick={() => navigate(`/office?session=${session?.id ?? ''}`)}
@@ -718,9 +904,9 @@ const ThreadContextRail: FC<{
       : '发送一个复杂目标后，进度会同步到这里。')
 
   return (
-    <div className="pointer-events-none absolute right-5 top-16 z-30 hidden w-[15.5rem] bg-transparent lg:block xl:right-8">
-      <div className="pointer-events-none max-h-[calc(100vh-5.5rem)] overflow-visible bg-transparent">
-        <div className="flex flex-col gap-3 bg-transparent">
+    <aside className="agenthub-context-rail pointer-events-none hidden h-full w-[18.5rem] shrink-0 bg-transparent px-5 pb-4 pt-4 lg:block xl:w-[19.5rem] xl:px-8">
+      <div className="pointer-events-none max-h-full overflow-visible bg-transparent">
+        <div className="flex w-full flex-col gap-3 bg-transparent">
         <RailCard
           title="进度"
           subtitle="跟踪较长任务的进度"
@@ -826,7 +1012,7 @@ const ThreadContextRail: FC<{
         </RailCard>
         </div>
       </div>
-    </div>
+    </aside>
   )
 }
 
@@ -1093,7 +1279,7 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
           ? '正在理解目标'
           : '正在规划'
     return (
-      <div className="ml-0 mr-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
+      <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-blue-200 bg-blue-50/70 p-4 shadow-sm">
         <div className="flex items-start gap-3">
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -1137,7 +1323,7 @@ const TeamExecutionPanel: FC<TeamExecutionPanelProps> = ({ taskBoard, agentTabs,
   ].slice(0, 6)
 
   return (
-    <div className="ml-0 mr-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-neutral-200 bg-white shadow-sm">
+    <div className="mx-auto mt-4 w-full max-w-[var(--thread-max-width)] rounded-lg border border-neutral-200 bg-white shadow-sm">
       <div className="border-b border-neutral-100 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -2020,6 +2206,12 @@ function insertComposerMention(name: string) {
   insertTextIntoComposer(value)
 }
 
+function focusComposerInput() {
+  window.setTimeout(() => {
+    document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')?.focus()
+  }, 0)
+}
+
 function insertTextIntoComposer(
   value: string,
   inputType = 'insertText',
@@ -2068,6 +2260,112 @@ function dispatchComposerInput(input: HTMLTextAreaElement, data: string, inputTy
       detail: { value: input.value, scrollTop: input.scrollTop },
     }),
   )
+}
+
+function messageMetadata(message: Message): Record<string, unknown> {
+  return message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+}
+
+function nestedRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function messageDisplayName(message: Message) {
+  const metadata = messageMetadata(message)
+  if (message.senderType === 'user') {
+    const profile = getCachedAccountProfile()
+    return profile.name?.trim() || '我'
+  }
+  if (message.senderType === 'system') return '系统'
+  const agentName = metadata.agentName
+  const senderName = metadata.senderName
+  if (typeof agentName === 'string' && agentName.trim()) return agentName.trim()
+  if (typeof senderName === 'string' && senderName.trim()) return senderName.trim()
+  return 'Agent'
+}
+
+function messageDisplayContent(message: Message) {
+  const metadata = messageMetadata(message)
+  const displayContent = metadata.displayContent
+  if (typeof displayContent === 'string' && displayContent.trim()) return displayContent
+
+  const codeAgentRun = nestedRecord(metadata.codeAgentRun)
+  const finalMessage = codeAgentRun?.finalMessage
+  if (typeof finalMessage === 'string' && finalMessage.trim()) return finalMessage
+
+  if (message.content.trim()) return message.content
+
+  const attachments = metadata.attachments
+  if (Array.isArray(attachments) && attachments.length) {
+    return `[${attachments.length} 个附件]`
+  }
+  return ''
+}
+
+function messageDisplaySnippet(message: Message, limit = 96) {
+  const text = messageDisplayContent(message)
+    .replace(/```[\s\S]*?```/g, '[代码块]')
+    .replace(/[#>*_`[\]()]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return message.type === 'diff' ? '[代码 Diff]' : '[消息]'
+  if (text.length <= limit) return text
+  return `${text.slice(0, limit - 1)}…`
+}
+
+function quoteMessageText(message: Message) {
+  const name = messageDisplayName(message)
+  const content = messageDisplayContent(message).trim() || messageDisplaySnippet(message)
+  const trimmed = content.length > 1800 ? `${content.slice(0, 1800)}…` : content
+  const quoteLines = [`引用 ${name}:`, ...trimmed.split(/\r?\n/)]
+    .map((line) => `> ${line}`)
+    .join('\n')
+  return `${quoteLines}\n\n`
+}
+
+type LocalChangeTarget = {
+  filePath?: string
+  language?: string
+  lineLabel: string
+  selectedText: string
+  sourceLabel: string
+}
+
+function formatLineRangeLabel(start?: number | string, end?: number | string) {
+  const first = start ?? '?'
+  const last = end ?? first
+  if (`${first}` === `${last}`) return `第 ${first} 行`
+  return `第 ${first}-${last} 行`
+}
+
+function codeFenceForContent(content: string, language?: string) {
+  const fence = content.includes('```') ? '````' : '```'
+  const normalizedLanguage = (language ?? '').trim().split(/\s+/)[0]?.replace(/[^\w+-]/g, '') ?? ''
+  return `${fence}${normalizedLanguage}\n${content}\n${fence}`
+}
+
+function buildLocalChangePrompt(target: LocalChangeTarget, instruction: string) {
+  return [
+    '请根据下面选中的代码片段做对话式局部修改。',
+    target.filePath ? `文件：${target.filePath}` : '文件：当前预览或消息中的代码片段',
+    `范围：${target.lineLabel}`,
+    `来源：${target.sourceLabel}`,
+    '',
+    '选中代码：',
+    codeFenceForContent(target.selectedText, target.language),
+    '',
+    '修改要求：',
+    instruction.trim(),
+    '',
+    '请优先直接修改对应文件并返回可审查的 diff；如果无法定位文件，请返回修改后的完整片段并说明原因。',
+  ].join('\n')
+}
+
+function buildLocalChangeDisplay(target: LocalChangeTarget, instruction: string) {
+  const location = [target.filePath, target.lineLabel].filter(Boolean).join(' ')
+  return [`局部修改${location ? `：${location}` : ''}`, instruction.trim()].join('\n')
 }
 
 const ThreadWelcome: FC = () => {
@@ -2122,6 +2420,143 @@ const ThreadWelcomeContent: FC = () => {
   )
 }
 
+const ReplyContextBar: FC<{ message: Message; onCancel: () => void }> = ({ message, onCancel }) => (
+  <div className="mb-2 flex items-center gap-2 rounded-2xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-left">
+    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white text-neutral-500 ring-1 ring-neutral-200">
+      <MessageCircleReply className="h-3.5 w-3.5" />
+    </span>
+    <span className="min-w-0 flex-1">
+      <span className="block text-[11px] font-medium text-neutral-500">
+        回复 {messageDisplayName(message)}
+      </span>
+      <span className="block truncate text-xs text-neutral-700">
+        {messageDisplaySnippet(message, 120)}
+      </span>
+    </span>
+    <button
+      type="button"
+      onClick={onCancel}
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-neutral-400 transition hover:bg-white hover:text-neutral-700"
+      aria-label="取消回复"
+      title="取消回复"
+    >
+      <X className="h-3.5 w-3.5" />
+    </button>
+  </div>
+)
+
+const LocalChangeComposer: FC<{
+  target: LocalChangeTarget
+  onCancel: () => void
+  onSent: () => void
+  className?: string
+}> = ({ target, onCancel, onSent, className }) => {
+  const sendMessage = useChatStore((state) => state.sendMessage)
+  const safetyMode = useChatStore((state) => state.safetyMode)
+  const currentSessionId = useChatStore((state) => state.currentSessionId)
+  const agentTyping = useChatStore((state) => state.agentTyping)
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const [draft, setDraft] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const targetSignature = `${target.filePath ?? ''}|${target.lineLabel}|${target.sourceLabel}|${target.selectedText}`
+  const running = agentTyping || Boolean(streamingMessage)
+  const disabledReason = !currentSessionId
+    ? '请先选择一个会话'
+    : running
+      ? 'Agent 正在输出，稍后再发送局部修改'
+      : ''
+
+  useEffect(() => {
+    setDraft('')
+    setError('')
+  }, [targetSignature])
+
+  async function submitLocalChange() {
+    const instruction = draft.trim()
+    if (!instruction || submitting || disabledReason) return
+    setSubmitting(true)
+    setError('')
+    try {
+      await sendMessage(buildLocalChangePrompt(target, instruction), {
+        displayContent: buildLocalChangeDisplay(target, instruction),
+        safetyMode,
+        usePendingAttachments: false,
+      })
+      setDraft('')
+      onSent()
+    } catch (submitError) {
+      setError(friendlyErrorMessage(submitError, '发送局部修改失败'))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form
+      className={cn('agenthub-local-change-box', className)}
+      onSubmit={(event) => {
+        event.preventDefault()
+        void submitLocalChange()
+      }}
+    >
+      <div className="agenthub-local-change-header">
+        <div className="agenthub-local-change-title">
+          <TextQuote className="h-3.5 w-3.5" />
+          局部修改
+        </div>
+        <div className="agenthub-local-change-meta" title={target.filePath ?? target.sourceLabel}>
+          <span>{target.filePath ?? target.sourceLabel}</span>
+          <span>{target.lineLabel}</span>
+        </div>
+      </div>
+      <textarea
+        className="agenthub-local-change-textarea"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+            event.preventDefault()
+            void submitLocalChange()
+          }
+        }}
+        placeholder="描述你希望 Agent 怎么修改这段代码..."
+        rows={3}
+        autoFocus
+      />
+      <div className="agenthub-local-change-footer">
+        <span
+          className={cn(
+            'agenthub-local-change-hint',
+            error && 'agenthub-local-change-hint-error',
+          )}
+        >
+          {error || disabledReason || 'Ctrl / ⌘ + Enter 发送'}
+        </span>
+        <div className="agenthub-local-change-actions">
+          <button
+            type="button"
+            className="agenthub-local-change-btn"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            <X className="h-3.5 w-3.5" />
+            取消
+          </button>
+          <button
+            type="submit"
+            className="agenthub-local-change-btn agenthub-local-change-btn-send"
+            disabled={!draft.trim() || submitting || Boolean(disabledReason)}
+          >
+            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-3.5 w-3.5" />}
+            发送
+          </button>
+        </div>
+      </div>
+    </form>
+  )
+}
+
 const Composer: FC = () => {
   const { sendMode } = useShortcutSettings()
   const { t } = useI18n()
@@ -2134,8 +2569,14 @@ const Composer: FC = () => {
   const pendingAttachments = useChatStore((state) => state.pendingAttachments)
   const addPendingAttachments = useChatStore((state) => state.addPendingAttachments)
   const removePendingAttachment = useChatStore((state) => state.removePendingAttachment)
+  const replyingToMessage = useChatStore((state) => state.replyingToMessage)
+  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
+  const sendMessage = useChatStore((state) => state.sendMessage)
+  const agentTyping = useChatStore((state) => state.agentTyping)
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
   const safetyMode = useChatStore((state) => state.safetyMode)
   const setSafetyMode = useChatStore((state) => state.setSafetyMode)
+  const cancelRun = useChatStore((state) => state.cancelRun)
   const [menu, setMenu] = useState<'tools' | 'agents' | 'workspace' | null>(null)
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -2157,6 +2598,9 @@ const Composer: FC = () => {
   const [planMode, setPlanMode] = useState(false)
   const [composerText, setComposerText] = useState('')
   const [composerScrollTop, setComposerScrollTop] = useState(0)
+  const [dragActive, setDragActive] = useState(false)
+  const [composerSubmitting, setComposerSubmitting] = useState(false)
+  const composerRunning = agentTyping || Boolean(streamingMessage)
   const currentProjectWorkspace =
     currentWorkspace && isProjectWorkspace(currentWorkspace) ? currentWorkspace : null
 
@@ -2207,27 +2651,69 @@ const Composer: FC = () => {
 
   async function handleFiles(files: FileList | File[] | null) {
     const list = Array.from(files ?? [])
-    const imageFiles = list.filter((file) => file.type.startsWith('image/'))
-    if (!imageFiles.length) {
-      if (list.length) showHint('当前只支持图片附件')
+    if (!list.length) return
+
+    const availableSlots = maxPendingAttachments - pendingAttachments.length
+    if (availableSlots <= 0) {
+      showHint(`最多添加 ${maxPendingAttachments} 个附件`)
       return
     }
-    const accepted = imageFiles.filter((file) => file.size <= maxPastedImageBytes)
-    if (accepted.length !== imageFiles.length) showHint('已跳过超过 5MB 的图片')
+
+    const withinLimit = list.filter((file) => file.size <= maxAttachmentBytes)
+    const accepted = withinLimit.slice(0, availableSlots)
+    const skippedBySize = list.length - withinLimit.length
+    const skippedBySlot = Math.max(0, withinLimit.length - accepted.length)
+    if (skippedBySize > 0) showHint(`已跳过超过 ${formatBytes(maxAttachmentBytes)} 的文件`)
+    if (skippedBySlot > 0) showHint(`最多添加 ${maxPendingAttachments} 个附件，已添加前 ${accepted.length} 个`)
     if (!accepted.length) return
-    const attachments = await Promise.all(accepted.map(fileToChatAttachment))
-    addPendingAttachments(attachments)
-    showHint(`已添加 ${attachments.length} 张图片`)
-    if (!composerText.trim()) insertComposerText('请看这张图片')
+
+    try {
+      const attachments = await Promise.all(accepted.map(fileToChatAttachment))
+      addPendingAttachments(attachments)
+      showHint(`已添加 ${attachments.length} 个附件`)
+    } catch (error) {
+      showHint(friendlyErrorMessage(error, '读取附件失败'))
+    }
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const files = Array.from(event.clipboardData.files).filter((file) =>
-      file.type.startsWith('image/'),
-    )
+    const files = Array.from(event.clipboardData.files)
     if (!files.length) return
     event.preventDefault()
     void handleFiles(files)
+  }
+
+  function handleDragEnter(event: DragEvent<HTMLDivElement>) {
+    if (!isDragWithFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    setDragActive(true)
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!isDragWithFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    setDragActive(true)
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+    if (!isDragWithFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const nextTarget = event.relatedTarget
+    if (!nextTarget || !event.currentTarget.contains(nextTarget as Node)) {
+      setDragActive(false)
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    if (!isDragWithFiles(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    setDragActive(false)
+    void handleFiles(event.dataTransfer.files)
   }
 
   function insertComposerText(value: string) {
@@ -2246,6 +2732,47 @@ const Composer: FC = () => {
     }
   }
 
+  function clearComposerInput(input?: HTMLTextAreaElement | null) {
+    const target =
+      input ?? document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
+    if (target) {
+      target.focus()
+      target.setSelectionRange(0, target.value.length)
+      target.setRangeText('', 0, target.value.length, 'end')
+      dispatchComposerInput(target, '', 'deleteContentBackward')
+    }
+    setComposerText('')
+    setComposerScrollTop(0)
+    setSkillPanelOpen(false)
+    setSkillCommandRange(null)
+    setSkillQuery('')
+  }
+
+  async function submitComposerMessage(input?: HTMLTextAreaElement | null) {
+    if (composerSubmitting || composerRunning) return
+    if (!currentSessionId) {
+      showHint('请先选择或新建一个会话')
+      return
+    }
+    const target =
+      input ?? document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
+    const text = target?.value ?? composerText
+    if (!text.trim() && pendingAttachments.length === 0) return
+
+    clearComposerInput(target)
+    setMenu(null)
+    setAgentMenuMode(null)
+    setAgentMentionRange(null)
+    setComposerSubmitting(true)
+    try {
+      await sendMessage(text, { safetyMode })
+    } catch (error) {
+      showHint(friendlyErrorMessage(error, '发送失败'))
+    } finally {
+      setComposerSubmitting(false)
+    }
+  }
+
   function handleComposerInput(event: FormEvent<HTMLTextAreaElement>) {
     const input = event.currentTarget
     const nextText = input.value
@@ -2254,7 +2781,14 @@ const Composer: FC = () => {
     const mention = readMentionCommand(nextText, cursor)
     setComposerText(nextText)
     setComposerScrollTop(input.scrollTop)
-    if (command) {
+    if (nextText.trim().toLowerCase() === '/stop') {
+      setMenu(null)
+      setAgentMenuMode(null)
+      setAgentMentionRange(null)
+      setSkillPanelOpen(false)
+      setSkillCommandRange(null)
+      setSkillQuery('')
+    } else if (command) {
       setMenu(null)
       setAgentMenuMode(null)
       setAgentMentionRange(null)
@@ -2388,6 +2922,45 @@ const Composer: FC = () => {
     }
   }
 
+  async function cloneGithubWorkspaceFromComposer(repoUrl: string, deployAfterClone: boolean) {
+    if (workspaceBusy) return
+    if (!currentSessionId) {
+      showHint('请先选择或新建一个会话')
+      return
+    }
+    const normalizedRepoUrl = repoUrl.trim()
+    if (!normalizedRepoUrl) {
+      showHint('请粘贴 GitHub 仓库地址')
+      return
+    }
+
+    setWorkspaceBusy(true)
+    showHint('正在从 GitHub 拉取...')
+    try {
+      const full = await api.cloneGithubWorkspace({
+        repoUrl: normalizedRepoUrl,
+        goal: '',
+      })
+      setWorkspaces((items) => [
+        full.workspace,
+        ...items.filter((item) => item.id !== full.workspace.id),
+      ])
+      setOpeningWorkspaceId(full.workspace.id)
+      await setSessionWorkspace(currentSessionId, full.workspace.id)
+      setMenu(null)
+      await fetchSessions()
+      showHint(deployAfterClone ? '已拉取，正在部署...' : 'GitHub 仓库已应用到当前会话')
+      if (deployAfterClone) {
+        await sendMessage('部署', { usePendingAttachments: false })
+      }
+    } catch (err) {
+      showHint(friendlyErrorMessage(err, 'GitHub 拉取失败'))
+    } finally {
+      setWorkspaceBusy(false)
+      setOpeningWorkspaceId(null)
+    }
+  }
+
   function syncComposerTextFromInput() {
     const input = document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
     setComposerText(input?.value ?? '')
@@ -2408,7 +2981,7 @@ const Composer: FC = () => {
   return (
     <div className="agenthub-composer-dock shrink-0 px-6 pb-6 pt-3">
       <ComposerPrimitive.Root
-        className="ml-0 mr-auto w-full max-w-[var(--thread-max-width)]"
+        className="mx-auto w-full max-w-[var(--thread-max-width)]"
         onSubmitCapture={syncComposerTextAfterComposerAction}
         onClickCapture={(event) => {
           if ((event.target as HTMLElement).closest('button[aria-label="发送"]')) {
@@ -2417,13 +2990,43 @@ const Composer: FC = () => {
         }}
         onKeyDownCapture={(event) => {
           if (sendModeShouldSubmit(sendMode, event)) {
+            const input =
+              event.target instanceof HTMLTextAreaElement
+                ? event.target
+                : document.querySelector<HTMLTextAreaElement>('[data-agenthub-composer="true"]')
+            const text = input?.value ?? composerText
+            if (text.trim() === '/stop') {
+              event.preventDefault()
+              event.stopPropagation()
+              event.nativeEvent.stopImmediatePropagation()
+              clearComposerInput(input)
+              void cancelRun()
+              showHint('已发送停止命令')
+              return
+            }
+            if (pendingAttachments.length > 0) {
+              event.preventDefault()
+              event.stopPropagation()
+              event.nativeEvent.stopImmediatePropagation()
+              void submitComposerMessage(input)
+              return
+            }
             syncComposerTextAfterComposerAction()
           } else if (shouldInsertNewline(sendMode, event)) {
             event.stopPropagation()
           }
         }}
       >
-        <div className="relative rounded-3xl border border-neutral-200 bg-white p-3 focus-within:border-neutral-300">
+        <div
+          className={cn(
+            'relative rounded-3xl border border-neutral-200 bg-white p-3 transition focus-within:border-neutral-300',
+            dragActive && 'border-neutral-400 bg-neutral-50/80 shadow-[0_0_0_4px_rgba(15,23,42,0.06)]',
+          )}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        >
           {menu && (
             <ComposerMenu
               key={menu}
@@ -2438,6 +3041,9 @@ const Composer: FC = () => {
               onOpenWorkspace={(workspaceId) => void openWorkspace(workspaceId)}
               onCreateBlankWorkspace={() => void createBlankWorkspace()}
               onOpenFolderWorkspace={() => void openFolderFromComposer()}
+              onCloneGithubWorkspace={(repoUrl, deployAfterClone) =>
+                void cloneGithubWorkspaceFromComposer(repoUrl, deployAfterClone)
+              }
               onPlanMode={(next) => {
                 setPlanMode(next)
                 showHint(next ? '已开启计划模式' : '已关闭计划模式')
@@ -2478,31 +3084,68 @@ const Composer: FC = () => {
               {hint}
             </div>
           )}
+          {replyingToMessage && (
+            <ReplyContextBar
+              message={replyingToMessage}
+              onCancel={() => setReplyingTo(null)}
+            />
+          )}
           {pendingAttachments.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-2">
               {pendingAttachments.map((attachment) => (
                 <div
                   key={attachment.id}
-                  className="group relative h-16 w-16 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => requestArtifactPreview(attachmentToPreviewItem(attachment))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      requestArtifactPreview(attachmentToPreviewItem(attachment))
+                    }
+                  }}
+                  className="group relative flex h-16 max-w-full items-center gap-2 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50 px-2.5 pr-8 text-left transition hover:border-neutral-300 hover:bg-white sm:w-56"
+                  title={attachment.name}
                 >
-                  <img
-                    src={attachment.dataUrl}
-                    alt={attachment.name}
-                    className="h-full w-full object-cover"
-                  />
+                  <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border border-neutral-200 bg-white text-neutral-500">
+                    {attachment.type === 'image' ? (
+                      <img
+                        src={attachment.dataUrl}
+                        alt={attachment.name}
+                        className="h-full w-full object-cover"
+                        draggable={false}
+                      />
+                    ) : (
+                      attachmentIcon(attachment, 'h-4 w-4')
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-neutral-800">
+                      {attachment.name}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[11px] text-neutral-400">
+                      {attachmentKindLabel(attachment)} · {formatBytes(attachment.size)}
+                    </span>
+                  </span>
                   <button
                     type="button"
-                    onClick={() => removePendingAttachment(attachment.id)}
-                    className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/70 text-[11px] text-white opacity-90 transition hover:bg-black"
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      removePendingAttachment(attachment.id)
+                    }}
+                    className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-neutral-400 opacity-80 transition hover:bg-neutral-200 hover:text-neutral-900"
                     aria-label={`移除 ${attachment.name}`}
                   >
-                    x
+                    <X className="h-3 w-3" />
                   </button>
-                  <div className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-[10px] text-white">
-                    {attachment.name}
-                  </div>
                 </div>
               ))}
+            </div>
+          )}
+          {dragActive && (
+            <div className="pointer-events-none absolute inset-2 z-20 grid place-items-center rounded-2xl border border-dashed border-neutral-400 bg-white/82 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur-sm">
+              松开即可添加附件
             </div>
           )}
           <div className="relative min-h-12">
@@ -2576,7 +3219,7 @@ const Composer: FC = () => {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept={attachmentInputAccept}
                 multiple
                 className="hidden"
                 onChange={(event) => {
@@ -2599,7 +3242,11 @@ const Composer: FC = () => {
               <SafetyModeButton mode={safetyMode} onChange={setSafetyMode} />
             </div>
             <div className="flex items-center gap-2">
-              <ComposerAction />
+              <ComposerAction
+                hasPendingAttachments={pendingAttachments.length > 0}
+                isSubmitting={composerSubmitting}
+                onSendAttachments={() => void submitComposerMessage()}
+              />
             </div>
           </div>
         </div>
@@ -2721,6 +3368,7 @@ const ComposerMenu: FC<{
   onOpenWorkspace: (workspaceId: string) => void
   onCreateBlankWorkspace: () => void
   onOpenFolderWorkspace: () => void
+  onCloneGithubWorkspace: (repoUrl: string, deployAfterClone: boolean) => void
   onPlanMode: (enabled: boolean) => void
   onPick: (value: string) => void
   onClose: () => void
@@ -2736,11 +3384,13 @@ const ComposerMenu: FC<{
   onOpenWorkspace,
   onCreateBlankWorkspace,
   onOpenFolderWorkspace,
+  onCloneGithubWorkspace,
   onPlanMode,
   onPick,
   onClose,
 }) => {
   const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [githubRepoUrl, setGithubRepoUrl] = useState('')
   const normalizedAgentQuery = agentQuery.trim().toLowerCase()
   const agentRows = agents.map((agent) => ({
     title: `@${agent.name}`,
@@ -2935,6 +3585,55 @@ const ComposerMenu: FC<{
               <FolderOpen className="h-4 w-4 shrink-0 text-neutral-600" />
               <span className="min-w-0 flex-1 truncate">打开本地工作空间</span>
             </button>
+            <form
+              className="mt-1 rounded-xl border border-neutral-200 bg-neutral-50/80 p-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                onCloneGithubWorkspace(githubRepoUrl, false)
+              }}
+            >
+              <div className="flex items-center gap-2 text-xs font-medium text-neutral-500">
+                <Github className="h-3.5 w-3.5" />
+                <span>从 GitHub 拉取</span>
+              </div>
+              <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2 py-1.5">
+                <GitBranch className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                <input
+                  value={githubRepoUrl}
+                  onChange={(event) => setGithubRepoUrl(event.target.value)}
+                  disabled={workspaceBusy}
+                  className="min-w-0 flex-1 bg-transparent text-xs text-neutral-900 outline-none placeholder:text-neutral-400"
+                  placeholder="github.com/owner/repo"
+                />
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                <button
+                  type="submit"
+                  disabled={workspaceBusy || !githubRepoUrl.trim()}
+                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2 text-xs font-medium text-neutral-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {workspaceBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Github className="h-3.5 w-3.5" />
+                  )}
+                  拉取
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCloneGithubWorkspace(githubRepoUrl, true)}
+                  disabled={workspaceBusy || !githubRepoUrl.trim()}
+                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-neutral-950 px-2 text-xs font-medium text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {workspaceBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Rocket className="h-3.5 w-3.5" />
+                  )}
+                  拉取并部署
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -2956,22 +3655,207 @@ export function readSlashCommand(text: string, cursor: number) {
   }
 }
 
-function fileToChatAttachment(file: File): Promise<ChatAttachment> {
-  return new Promise((resolve, reject) => {
+function isDragWithFiles(event: DragEvent<HTMLElement>) {
+  return Array.from(event.dataTransfer.types).includes('Files')
+}
+
+async function fileToChatAttachment(file: File): Promise<ChatAttachment> {
+  const extension = extensionFromName(file.name)
+  const mimeType = file.type || mimeFromExtension(extension) || 'application/octet-stream'
+  const previewKind = attachmentPreviewKind(mimeType, extension)
+  const dataUrl = await readFileAsDataUrl(file)
+  const text =
+    previewKind === 'text' ? await readFileAsTextPreview(file).catch(() => undefined) : undefined
+
+  return {
+    id: crypto.randomUUID(),
+    type: mimeType.startsWith('image/') ? 'image' : 'file',
+    name: file.name || fallbackAttachmentName(mimeType, extension),
+    mimeType,
+    size: file.size,
+    dataUrl,
+    extension,
+    previewKind,
+    text,
+  }
+}
+
+function fallbackAttachmentName(mimeType: string, extension?: string) {
+  if (mimeType.startsWith('image/')) {
+    const ext = extension || mimeType.split('/').pop() || 'png'
+    return `pasted-image-${Date.now()}.${ext}`
+  }
+  return `attachment-${Date.now()}${extension ? `.${extension}` : ''}`
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
-    reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
-    reader.onload = () => {
-      resolve({
-        id: crypto.randomUUID(),
-        type: 'image',
-        name: file.name || `pasted-image-${Date.now()}.png`,
-        mimeType: file.type || 'image/png',
-        size: file.size,
-        dataUrl: String(reader.result ?? ''),
-      })
-    }
+    reader.onerror = () => reject(reader.error ?? new Error('读取附件失败'))
+    reader.onload = () => resolve(String(reader.result ?? ''))
     reader.readAsDataURL(file)
   })
+}
+
+async function readFileAsTextPreview(file: File) {
+  const truncated = file.size > maxAttachmentTextBytes
+  const blob = truncated ? file.slice(0, maxAttachmentTextBytes) : file
+  const text = await blob.text()
+  return truncated ? `${text}\n\n...` : text
+}
+
+function extensionFromName(name?: string | null) {
+  const match = (name ?? '').trim().match(/\.([A-Za-z0-9]{1,12})$/)
+  return match?.[1]?.toLowerCase()
+}
+
+function mimeFromExtension(extension?: string) {
+  if (!extension) return undefined
+  const map: Record<string, string> = {
+    bat: 'text/plain',
+    cjs: 'text/javascript',
+    css: 'text/css',
+    csv: 'text/csv',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    htm: 'text/html',
+    html: 'text/html',
+    jpeg: 'image/jpeg',
+    jpg: 'image/jpeg',
+    js: 'text/javascript',
+    json: 'application/json',
+    jsonl: 'application/jsonl',
+    log: 'text/plain',
+    markdown: 'text/markdown',
+    md: 'text/markdown',
+    mjs: 'text/javascript',
+    pdf: 'application/pdf',
+    png: 'image/png',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ps1: 'text/plain',
+    py: 'text/x-python',
+    scss: 'text/css',
+    sh: 'text/x-shellscript',
+    sql: 'application/sql',
+    svg: 'image/svg+xml',
+    ts: 'text/typescript',
+    tsx: 'text/tsx',
+    txt: 'text/plain',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    xml: 'application/xml',
+    yaml: 'application/yaml',
+    yml: 'application/yaml',
+  }
+  return map[extension]
+}
+
+function attachmentPreviewKind(
+  mimeType: string,
+  extension?: string,
+): NonNullable<ChatAttachment['previewKind']> {
+  if (mimeType.startsWith('image/')) return 'image'
+  if (isTextLikeAttachment(mimeType, extension)) return 'text'
+  if (isDocumentLikeAttachment(mimeType, extension)) return 'document'
+  return 'binary'
+}
+
+function isTextLikeAttachment(mimeType: string, extension?: string) {
+  if (mimeType.startsWith('text/')) return true
+  if (
+    [
+      'application/json',
+      'application/jsonl',
+      'application/sql',
+      'application/xml',
+      'application/yaml',
+      'image/svg+xml',
+    ].includes(mimeType)
+  ) {
+    return true
+  }
+  return Boolean(
+    extension &&
+      [
+        'bat',
+        'cjs',
+        'css',
+        'csv',
+        'htm',
+        'html',
+        'js',
+        'json',
+        'jsonl',
+        'log',
+        'markdown',
+        'md',
+        'mjs',
+        'ps1',
+        'py',
+        'scss',
+        'sh',
+        'sql',
+        'svg',
+        'ts',
+        'tsx',
+        'txt',
+        'xml',
+        'yaml',
+        'yml',
+      ].includes(extension),
+  )
+}
+
+function isDocumentLikeAttachment(mimeType: string, extension?: string) {
+  return (
+    mimeType === 'application/pdf' ||
+    mimeType.includes('wordprocessingml') ||
+    mimeType.includes('presentationml') ||
+    mimeType.includes('spreadsheetml') ||
+    Boolean(extension && ['doc', 'docx', 'pdf', 'ppt', 'pptx', 'xls', 'xlsx'].includes(extension))
+  )
+}
+
+function attachmentToPreviewItem(attachment: ChatAttachment): ArtifactPreviewItem {
+  const isImage = attachment.type === 'image' || attachment.previewKind === 'image'
+  return {
+    id: attachment.id,
+    kind: isImage ? 'image' : 'file',
+    mimeType: attachment.mimeType,
+    path: attachment.name,
+    source: attachment.text,
+    subtitle: `${attachmentKindLabel(attachment)} · ${formatBytes(attachment.size)}`,
+    title: attachment.name,
+    url: attachment.dataUrl,
+  }
+}
+
+function attachmentIcon(attachment: ChatAttachment, className = 'h-3.5 w-3.5') {
+  const lower = `${attachment.mimeType} ${attachment.name}`.toLowerCase()
+  if (attachment.type === 'image' || lower.includes('image/')) {
+    return <ImagePlus className={className} />
+  }
+  if (/\.(pptx?|key)$/.test(lower) || lower.includes('presentation')) {
+    return <Presentation className={className} />
+  }
+  if (/\.(xlsx?|csv)$/.test(lower) || lower.includes('spreadsheet') || lower.includes('excel')) {
+    return <Sheet className={className} />
+  }
+  if (attachment.previewKind === 'text' || /\.(md|txt|json|ts|tsx|js|py|html|css|xml|ya?ml|sql|log)$/.test(lower)) {
+    return <FileText className={className} />
+  }
+  return <File className={className} />
+}
+
+function attachmentKindLabel(attachment: ChatAttachment) {
+  if (attachment.type === 'image' || attachment.previewKind === 'image') return '图片'
+  if (attachment.previewKind === 'text') return '文本'
+  const lower = `${attachment.mimeType} ${attachment.name}`.toLowerCase()
+  if (/\.(pptx?|key)$/.test(lower) || lower.includes('presentation')) return '演示文稿'
+  if (/\.(xlsx?|csv)$/.test(lower) || lower.includes('spreadsheet') || lower.includes('excel')) return '表格'
+  if (/\.(docx?|pdf)$/.test(lower) || attachment.previewKind === 'document') return '文档'
+  return '文件'
 }
 
 const MenuRow: FC<{ title: string; desc: string; color?: string; onClick: () => void }> = ({
@@ -3063,27 +3947,50 @@ const SafetyModeButton: FC<{ mode: string; onChange: (mode: string) => void }> =
   )
 }
 
-const ComposerAction: FC = () => (
+type ComposerActionProps = {
+  hasPendingAttachments: boolean
+  isSubmitting: boolean
+  onSendAttachments: () => void
+}
+
+const ComposerAction: FC<ComposerActionProps> = ({
+  hasPendingAttachments,
+  isSubmitting,
+  onSendAttachments,
+}) => (
   <>
     <ThreadPrimitive.If running={false}>
-      <ComposerPrimitive.Send asChild>
+      {hasPendingAttachments ? (
         <button
+          type="button"
+          onClick={onSendAttachments}
+          disabled={isSubmitting}
           className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:pointer-events-none disabled:bg-neutral-200"
           aria-label="发送"
         >
-          <ArrowUp className="h-4 w-4" />
+          {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
         </button>
-      </ComposerPrimitive.Send>
+      ) : (
+        <ComposerPrimitive.Send asChild>
+          <button
+            className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:pointer-events-none disabled:bg-neutral-200"
+            aria-label="发送"
+          >
+            <ArrowUp className="h-4 w-4" />
+          </button>
+        </ComposerPrimitive.Send>
+      )}
     </ThreadPrimitive.If>
     <ThreadPrimitive.If running>
-      <ComposerPrimitive.Cancel asChild>
-        <button
-          className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white"
-          aria-label="停止生成"
-        >
-          <Square className="h-3.5 w-3.5" />
-        </button>
-      </ComposerPrimitive.Cancel>
+      <button
+        type="button"
+        disabled
+        className="grid h-9 w-9 cursor-not-allowed place-items-center rounded-full bg-neutral-200 text-neutral-400"
+        aria-label="发送中"
+        title="输入 /stop 强制停止"
+      >
+        <ArrowUp className="h-4 w-4" />
+      </button>
     </ThreadPrimitive.If>
   </>
 )
@@ -3164,7 +4071,7 @@ const UserMessage: FC = () => {
 
   return (
     <MessagePrimitive.Root className={cn(
-      'group ml-0 mr-auto flex w-full max-w-[var(--thread-max-width)] items-start justify-end gap-3',
+      'group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start justify-end gap-3',
       isFlatMessageStyle ? 'border-b border-neutral-100 py-3' : 'py-3',
     )}>
       <div className={cn(
@@ -3191,23 +4098,25 @@ const UserMessage: FC = () => {
                 className="max-h-36 min-h-16 resize-y rounded-xl bg-neutral-50 px-3 py-2 text-sm leading-6 text-neutral-900 outline-none ring-1 ring-transparent transition placeholder:text-neutral-400 focus:bg-white focus:ring-neutral-200"
                 autoFocus
               />
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-3">
                 <span className="text-[11px] text-neutral-400">Ctrl/⌘ + Enter 发送，Esc 取消</span>
-                <button
-                  type="button"
-                  onClick={cancelEdit}
-                  className="h-8 rounded-full border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 transition hover:bg-neutral-50 hover:text-neutral-900"
-                >
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={saveEdit}
-                  disabled={busy === 'edit' || !draft.trim()}
-                  className="h-8 rounded-full bg-neutral-950 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-neutral-800 disabled:bg-neutral-300"
-                >
-                  {busy === 'edit' ? '发送中' : '发送'}
-                </button>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={cancelEdit}
+                    className="h-7 rounded-full border border-neutral-200 bg-white px-2.5 text-[11px] font-medium text-neutral-600 transition hover:bg-neutral-50 hover:text-neutral-900"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveEdit}
+                    disabled={busy === 'edit' || !draft.trim()}
+                    className="h-7 rounded-full bg-neutral-950 px-3 text-[11px] font-semibold text-white shadow-sm transition hover:bg-neutral-800 disabled:bg-neutral-300"
+                  >
+                    {busy === 'edit' ? '发送中' : '发送'}
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
@@ -3274,7 +4183,7 @@ const AssistantMessage: FC = () => {
   )
   return (
     <MessagePrimitive.Root className={cn(
-      'ml-0 mr-auto flex w-full max-w-[var(--thread-max-width)] gap-3',
+      'mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3',
       isFlatMessageStyle ? 'border-b border-neutral-100 py-3' : 'py-4',
     )}>
       <Avatar role="assistant" />
@@ -3601,27 +4510,46 @@ const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data 
         <button
           key={item.id}
           type="button"
-          onClick={() =>
-            requestArtifactPreview({
-              id: item.id,
-              kind: 'image',
-              mimeType: item.mimeType,
-              subtitle: `${formatBytes(item.size)} · 图片附件`,
-              title: item.name,
-              url: item.dataUrl,
-            })
-          }
-          className="group overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm"
+          onClick={() => requestArtifactPreview(attachmentToPreviewItem(item))}
+          className={cn(
+            'group overflow-hidden rounded-xl border border-neutral-200 bg-white text-left shadow-sm transition hover:border-neutral-300 hover:shadow-md',
+            item.type === 'image' ? 'block' : 'flex min-h-20 items-center gap-3 px-3 py-3',
+          )}
         >
-          <img
-            src={item.dataUrl}
-            alt={item.name}
-            className="aspect-video w-full bg-neutral-100 object-cover transition group-hover:scale-[1.015]"
-          />
-          <div className="flex items-center gap-2 px-3 py-2 text-xs text-neutral-500">
-            <ImagePlus className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{item.name}</span>
-          </div>
+          {item.type === 'image' ? (
+            <>
+              <img
+                src={item.dataUrl}
+                alt={item.name}
+                className="aspect-video w-full bg-neutral-100 object-cover transition group-hover:scale-[1.015]"
+                draggable={false}
+              />
+              <div className="flex items-center gap-2 px-3 py-2 text-xs text-neutral-500">
+                <ImagePlus className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                <span className="shrink-0">{formatBytes(item.size)}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500">
+                {attachmentIcon(item, 'h-5 w-5')}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-neutral-900">
+                  {item.name}
+                </span>
+                <span className="mt-1 block truncate text-xs text-neutral-500">
+                  {attachmentKindLabel(item)} · {formatBytes(item.size)}
+                </span>
+                {item.text && (
+                  <span className="mt-1 block truncate text-[11px] text-neutral-400">
+                    可预览文本内容
+                  </span>
+                )}
+              </span>
+            </>
+          )}
         </button>
       ))}
     </div>
@@ -3633,10 +4561,15 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   onClose,
 }) => {
   const canOpen = Boolean(item.url)
+  const previewSourcePath = item.path ?? previewPathFromUrl(item.url) ?? undefined
+  const canInspectSource =
+    Boolean(item.source?.trim()) || canFetchWorkspaceTextSource(item, previewSourcePath)
+  const runnablePreview = (item.kind === 'web' || item.kind === 'deploy') && Boolean(item.url)
   const [maximized, setMaximized] = useState(false)
   const [visible, setVisible] = useState(false)
   const [panelWidth, setPanelWidth] = useState(() => readStoredPreviewPanelWidth())
   const [resizing, setResizing] = useState(false)
+  const [previewMode, setPreviewMode] = useState<'preview' | 'source'>('preview')
   const [loadingState, setLoadingState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
     item.kind === 'web' || item.kind === 'deploy' ? 'loading' : 'ready',
   )
@@ -3657,6 +4590,14 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     const frame = requestAnimationFrame(() => setVisible(true))
     return () => cancelAnimationFrame(frame)
   }, [])
+
+  useEffect(() => {
+    setPreviewMode('preview')
+  }, [item.id])
+
+  useEffect(() => {
+    if (!canInspectSource && previewMode === 'source') setPreviewMode('preview')
+  }, [canInspectSource, previewMode])
 
   function handleClose() {
     setVisible(false)
@@ -3706,6 +4647,16 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     document.addEventListener('pointermove', handlePointerMove)
     document.addEventListener('pointerup', handlePointerUp, { once: true })
     document.addEventListener('pointercancel', handlePointerUp, { once: true })
+  }
+
+  function handleResizeReset() {
+    const nextWidth = clampPreviewPanelWidth(
+      defaultPreviewPanelWidth,
+      getPreviewPanelWidthBounds(panelRef.current),
+    )
+    panelWidthRef.current = nextWidth
+    setPanelWidth(nextWidth)
+    storePreviewPanelWidth(nextWidth)
   }
 
   function pushActionItem(item: Omit<PreviewActionItem, 'id'>) {
@@ -3790,6 +4741,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   async function handleDownload() {
     if (!item.url) return
     const resolvedUrl = normalizePreviewUrl(item.url)?.href ?? item.url
+    const isDataUrl = resolvedUrl.startsWith('data:')
     const filename = downloadFileName(item)
     const desktopApp = isDesktopApp()
     const actionId = pushActionItem({
@@ -3800,7 +4752,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     })
 
     try {
-      if (desktopApp) {
+      if (desktopApp && !isDataUrl) {
         let nativeDownloadError: unknown = null
         const result = await downloadExternalUrl(resolvedUrl, filename).catch((error) => {
           nativeDownloadError = error
@@ -3956,11 +4908,14 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
             type="button"
             aria-label="Resize preview panel"
             onPointerDown={handleResizeStart}
+            onDoubleClick={handleResizeReset}
+            title="拖拽调整预览宽度，双击复位"
             className={cn(
-              'absolute inset-y-0 left-0 z-20 w-3 -translate-x-1/2 cursor-col-resize touch-none',
-              'after:absolute after:inset-y-3 after:left-1/2 after:w-px after:-translate-x-1/2 after:rounded-full after:bg-transparent after:transition',
-              'hover:after:bg-neutral-300 focus-visible:outline-none focus-visible:after:bg-neutral-400',
-              resizing && 'after:bg-neutral-400',
+              'group absolute inset-y-0 left-0 z-30 w-5 -translate-x-1/2 cursor-col-resize touch-none',
+              'before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-neutral-200',
+              'after:absolute after:left-1/2 after:top-1/2 after:h-16 after:w-1.5 after:-translate-x-1/2 after:-translate-y-1/2 after:rounded-full after:bg-neutral-300 after:shadow-sm after:transition',
+              'hover:after:h-24 hover:after:bg-blue-500 focus-visible:outline-none focus-visible:after:h-24 focus-visible:after:bg-blue-500',
+              resizing && 'after:h-28 after:bg-blue-600',
             )}
           />
         )}
@@ -3984,6 +4939,44 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
           </div>
 
           <div className="flex shrink-0 items-center gap-1">
+            {runnablePreview && canInspectSource && (
+              <div
+                className="mr-1 inline-flex h-9 items-center rounded-xl border border-neutral-200 bg-white p-0.5 shadow-sm"
+                role="tablist"
+                aria-label="预览模式"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={previewMode === 'preview'}
+                  onClick={() => setPreviewMode('preview')}
+                  className={cn(
+                    'inline-flex h-8 items-center gap-1.5 rounded-[10px] px-2.5 text-xs font-medium transition',
+                    previewMode === 'preview'
+                      ? 'bg-neutral-950 text-white shadow-sm'
+                      : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900',
+                  )}
+                >
+                  <Monitor className="h-3.5 w-3.5" />
+                  预览
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={previewMode === 'source'}
+                  onClick={() => setPreviewMode('source')}
+                  className={cn(
+                    'inline-flex h-8 items-center gap-1.5 rounded-[10px] px-2.5 text-xs font-medium transition',
+                    previewMode === 'source'
+                      ? 'bg-neutral-950 text-white shadow-sm'
+                      : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900',
+                  )}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  源码
+                </button>
+              </div>
+            )}
             {canOpen && (
               <>
                 <button
@@ -4053,6 +5046,8 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
                   draggable={false}
                 />
               </div>
+            ) : runnablePreview && previewMode === 'source' && canInspectSource ? (
+              <TextFilePreview item={item} />
             ) : (item.kind === 'web' || item.kind === 'deploy') && item.url ? (
               loadingState === 'error' ? (
                 <PreviewErrorState
@@ -4076,6 +5071,12 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
               </div>
             ) : item.kind === 'workflow' ? (
               <PreviewPlaceholder item={item} />
+            ) : isDocxPreviewItem(item) ? (
+              <WordDocumentPreview item={item} />
+            ) : isPptxPreviewItem(item) ? (
+              <PresentationDocumentPreview item={item} />
+            ) : item.source ? (
+              <TextFilePreview item={item} />
             ) : (
               <DocumentPreviewPlaceholder item={item} />
             )}
@@ -4210,6 +5211,189 @@ const PreviewErrorState: FC<{ error: string; onRetry: () => void; title: string 
     </div>
   </div>
 )
+
+const WordDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const styleRef = useRef<HTMLDivElement | null>(null)
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [error, setError] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
+
+  useEffect(() => {
+    const bodyEl = bodyRef.current
+    const styleEl = styleRef.current
+    if (!bodyEl || !styleEl) return
+    const bodyContainer: HTMLElement = bodyEl
+    const styleContainer: HTMLElement = styleEl
+
+    let cancelled = false
+    bodyContainer.innerHTML = ''
+    styleContainer.innerHTML = ''
+    setStatus('loading')
+    setError('')
+
+    async function renderDocument() {
+      const [{ renderAsync }, data] = await Promise.all([
+        import('docx-preview'),
+        loadPreviewArrayBuffer(item),
+      ])
+      if (cancelled) return
+      await renderAsync(data, bodyContainer, styleContainer, {
+        breakPages: true,
+        className: 'agenthub-docx',
+        ignoreFonts: false,
+        inWrapper: true,
+        renderFooters: true,
+        renderHeaders: true,
+        useBase64URL: true,
+      })
+      if (!cancelled) setStatus('ready')
+    }
+
+    void renderDocument().catch((err) => {
+      if (cancelled) return
+      setStatus('error')
+      setError(formatPreviewError(err))
+    })
+
+    return () => {
+      cancelled = true
+      bodyContainer.innerHTML = ''
+      styleContainer.innerHTML = ''
+    }
+  }, [item.id, item.path, item.url, item.workspaceId, reloadToken])
+
+  if (status === 'error') {
+    return (
+      <PreviewErrorState
+        title={item.title}
+        error={error}
+        onRetry={() => setReloadToken((value) => value + 1)}
+      />
+    )
+  }
+
+  return (
+    <div className="agenthub-office-preview flex h-full flex-col bg-[#f6f7f9]">
+      <OfficePreviewHeader item={item} label="Word" />
+      <div className="relative min-h-0 flex-1 overflow-auto">
+        {status === 'loading' && (
+          <div className="absolute inset-0 z-10">
+            <PreviewLoadingState item={item} />
+          </div>
+        )}
+        <div className="agenthub-docx-host">
+          <div ref={styleRef} />
+          <div ref={bodyRef} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const PresentationDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [error, setError] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
+  const [renderWidth, setRenderWidth] = useState(900)
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+
+    const updateWidth = () => {
+      const nextWidth = Math.max(320, Math.min(1120, Math.floor(scrollEl.clientWidth - 32)))
+      setRenderWidth((current) => (Math.abs(current - nextWidth) > 24 ? nextWidth : current))
+    }
+
+    updateWidth()
+    const observer = new ResizeObserver(updateWidth)
+    observer.observe(scrollEl)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const hostEl = hostRef.current
+    if (!hostEl) return
+    const hostContainer: HTMLElement = hostEl
+
+    let cancelled = false
+    let previewer: { destroy?: () => void } | null = null
+    hostContainer.innerHTML = ''
+    setStatus('loading')
+    setError('')
+
+    async function renderPresentation() {
+      const [{ init }, data] = await Promise.all([
+        import('pptx-preview'),
+        loadPreviewArrayBuffer(item),
+      ])
+      if (cancelled) return
+      const width = Math.max(320, Math.floor(renderWidth))
+      const height = Math.round(width * 0.5625)
+      const nextPreviewer = init(hostContainer, { height, mode: 'list', width })
+      previewer = nextPreviewer
+      await nextPreviewer.preview(data)
+      if (!cancelled) setStatus('ready')
+    }
+
+    void renderPresentation().catch((err) => {
+      if (cancelled) return
+      setStatus('error')
+      setError(formatPreviewError(err))
+    })
+
+    return () => {
+      cancelled = true
+      previewer?.destroy?.()
+      hostContainer.innerHTML = ''
+    }
+  }, [item.id, item.path, item.url, item.workspaceId, reloadToken, renderWidth])
+
+  if (status === 'error') {
+    return (
+      <PreviewErrorState
+        title={item.title}
+        error={error}
+        onRetry={() => setReloadToken((value) => value + 1)}
+      />
+    )
+  }
+
+  return (
+    <div className="agenthub-office-preview flex h-full flex-col bg-[#f6f7f9]">
+      <OfficePreviewHeader item={item} label="PowerPoint" />
+      <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-auto">
+        {status === 'loading' && (
+          <div className="absolute inset-0 z-10">
+            <PreviewLoadingState item={item} />
+          </div>
+        )}
+        <div className="agenthub-pptx-host">
+          <div ref={hostRef} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const OfficePreviewHeader: FC<{ item: ArtifactPreviewItem; label: string }> = ({
+  item,
+  label,
+}) => (
+  <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 bg-white px-3 text-xs text-neutral-500">
+    {isPptxPreviewItem(item) ? (
+      <Presentation className="h-4 w-4 text-neutral-400" />
+    ) : (
+      <FileText className="h-4 w-4 text-neutral-400" />
+    )}
+    <span className="min-w-0 flex-1 truncate">{previewFileName(item)}</span>
+    <span className="rounded-md bg-[#f6f7f9] px-2 py-1">{label}</span>
+  </div>
+)
+
 const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
   const fileName = item.path ?? item.title
   return (
@@ -4237,6 +5421,157 @@ const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item })
   )
 }
 
+const TextFilePreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
+  const resolvedPath = item.path ?? previewPathFromUrl(item.url) ?? undefined
+  const fileName = resolvedPath ?? item.title
+  const language = guessLanguageFromPath(fileName) || 'text'
+  const canLoadWorkspaceSource = canFetchWorkspaceTextSource(item, resolvedPath)
+  const [loadedSource, setLoadedSource] = useState<string | null>(null)
+  const [sourceLoadState, setSourceLoadState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle',
+  )
+  const [sourceLoadError, setSourceLoadError] = useState('')
+  const source = loadedSource ?? item.source ?? ''
+  const lines = useMemo(() => source.replace(/\n$/, '').split('\n'), [source])
+  const highlightedLines = useMemo(
+    () => lines.map((line) => highlightCode(line, language)),
+    [lines, language],
+  )
+  const selection = useLineSelection(lines.length)
+  const [localChangeTarget, setLocalChangeTarget] = useState<LocalChangeTarget | null>(null)
+
+  useEffect(() => {
+    selection.clearSelection()
+    setLocalChangeTarget(null)
+  }, [source, selection.clearSelection])
+
+  useEffect(() => {
+    setLoadedSource(null)
+    setSourceLoadError('')
+    setSourceLoadState('idle')
+    if (!canLoadWorkspaceSource || !item.workspaceId || !resolvedPath) return
+
+    const controller = new AbortController()
+    setSourceLoadState('loading')
+
+    fetch(artifactFileUrl(item.workspaceId, resolvedPath), {
+      credentials: 'include',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await extractPreviewErrorMessage(response))
+        return response.text()
+      })
+      .then((text) => {
+        setLoadedSource(text)
+        setSourceLoadState('ready')
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        setSourceLoadState('error')
+        setSourceLoadError(formatPreviewError(error))
+      })
+
+    return () => controller.abort()
+  }, [canLoadWorkspaceSource, item.id, item.workspaceId, resolvedPath])
+
+  function buildTextFileTarget(): LocalChangeTarget | null {
+    const selected = selection.sortedSelected
+    if (selected.length === 0) return null
+    const selectedLines = selected.map((index) => lines[index])
+    return {
+      filePath: resolvedPath,
+      language,
+      lineLabel: formatLineRangeLabel(selected[0] + 1, selected[selected.length - 1] + 1),
+      selectedText: selectedLines.join('\n'),
+      sourceLabel: '文件预览',
+    }
+  }
+
+  function handleReference() {
+    const target = buildTextFileTarget()
+    if (!target) return
+    const header = target.filePath
+      ? `\`${target.filePath}\` ${target.lineLabel}:\n`
+      : `${target.lineLabel}:\n`
+    insertTextIntoComposer(`${header}${codeFenceForContent(target.selectedText, language)}\n`)
+    selection.clearSelection()
+    setLocalChangeTarget(null)
+  }
+
+  function handleLocalChange() {
+    const target = buildTextFileTarget()
+    if (target) setLocalChangeTarget(target)
+  }
+
+  function clearTextSelection() {
+    selection.clearSelection()
+    setLocalChangeTarget(null)
+  }
+
+  return (
+    <div className="flex h-full flex-col bg-white">
+      <div className="flex h-11 shrink-0 items-center gap-2 bg-[#f5f5f1] px-3 text-xs text-neutral-500">
+        <FileText className="h-4 w-4 text-neutral-400" />
+        <span className="min-w-0 flex-1 truncate">{fileName}</span>
+        <span className="rounded-md bg-[#F7F7F7] px-2 py-1">{language}</span>
+        {sourceLoadState === 'loading' && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-blue-600">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            读取源码
+          </span>
+        )}
+        {sourceLoadState === 'error' && (
+          <span className="max-w-[12rem] truncate rounded-md bg-amber-50 px-2 py-1 text-amber-700" title={sourceLoadError}>
+            使用缓存源码
+          </span>
+        )}
+      </div>
+      <div className="agenthub-file-code-preview min-h-0 flex-1 overflow-auto bg-[#0f172a]">
+        {selection.selectedCount > 0 && (
+          <LineSelectionToolbar
+            selectedCount={selection.selectedCount}
+            onReference={handleReference}
+            onLocalChange={handleLocalChange}
+            onClear={clearTextSelection}
+          />
+        )}
+        {localChangeTarget && (
+          <LocalChangeComposer
+            target={localChangeTarget}
+            onCancel={() => setLocalChangeTarget(null)}
+            onSent={clearTextSelection}
+          />
+        )}
+        <pre className="agenthub-code-pre agenthub-file-code-pre not-prose">
+          <code className={cn('agenthub-code', `language-${language}`)}>
+            <table className="agenthub-code-table">
+              <tbody>
+                {lines.map((_line, index) => (
+                  <tr
+                    key={index}
+                    className={selection.isSelected(index) ? 'agenthub-code-row-selected' : undefined}
+                  >
+                    <td
+                      className="agenthub-code-ln"
+                      onClick={(event) => selection.toggleLine(index, event.shiftKey)}
+                    >
+                      {index + 1}
+                    </td>
+                    <td className="agenthub-code-content">
+                      <span dangerouslySetInnerHTML={{ __html: highlightedLines[index] || '&nbsp;' }} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </code>
+        </pre>
+      </div>
+    </div>
+  )
+}
+
 const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
   <div className="grid h-full place-items-center bg-[#F7F7F7] p-8">
     <div className="max-w-md rounded-2xl border border-neutral-200 bg-white p-6 text-center shadow-sm">
@@ -4251,17 +5586,26 @@ const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
   </div>
 )
 
-const CodeAgentRunCard: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+const CodeAgentRunCard: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) => {
   return <CodeAgentLiveActivity data={data} />
 }
 
-const CodeAgentLiveActivity: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => {
+const CodeAgentLiveActivity: FC<{ data: ThreadCodeAgentRunData }> = ({ data }) => {
   const runtimeLabel = codeAgentRuntimeLabel(data.runtime)
-  const artifacts = readFlowArtifacts(data.artifacts)
-  const summary = buildCodeAgentRunSummary(data)
   const [detailsOpen, setDetailsOpen] = useState(() =>
     data.status === 'running' || data.status === 'failed' || data.status === 'timed-out',
   )
+  const detailsData = useMemo(
+    () =>
+      detailsOpen
+        ? (getCachedCodeAgentRunMetadata(data.__agenthubFullRunId) ?? data)
+        : data,
+    [data, detailsOpen],
+  )
+  const artifacts = detailsOpen ? readFlowArtifacts(detailsData.artifacts) : []
+  const summary = buildCodeAgentRunSummary(data)
+  const warning = detailsData.warning ?? data.warning
+  const diagnostics = detailsData.diagnostics
 
   return (
     <div className="not-prose mt-2 max-w-[48rem] text-sm leading-6 text-neutral-700">
@@ -4311,15 +5655,15 @@ const CodeAgentLiveActivity: FC<{ data: CodeAgentRunMetadata }> = ({ data }) => 
       </div>
       {detailsOpen && (
         <>
-          {data.warning && (
+          {warning && (
             <div className="mb-2 flex items-start gap-2 text-[12px] leading-5 text-amber-700">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>{data.warning}</span>
+              <span>{warning}</span>
             </div>
           )}
           <FlowRail>
-            <CodeAgentProcessRows data={data} />
-            {data.diagnostics && <CodeAgentFailureNotice data={data} />}
+            <CodeAgentProcessRows data={detailsData} />
+            {diagnostics && <CodeAgentFailureNotice data={detailsData} />}
           </FlowRail>
           {artifacts.length > 0 && (
             <div className="mt-3">
@@ -4373,10 +5717,10 @@ const CodeAgentFailureNotice: FC<{ data: CodeAgentRunMetadata }> = ({ data }) =>
 }
 
 const CodeAgentTypingDots: FC = () => (
-  <span className="inline-flex shrink-0 items-center gap-1 pl-0.5" aria-hidden="true">
-    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400 [animation-delay:-0.2s]" />
-    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400 [animation-delay:-0.1s]" />
-    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400" />
+  <span className="agenthub-steady-dots inline-flex shrink-0 items-center gap-1 pl-0.5" aria-hidden="true">
+    <span className="h-1.5 w-1.5 rounded-full bg-neutral-400" />
+    <span className="h-1.5 w-1.5 rounded-full bg-neutral-400" />
+    <span className="h-1.5 w-1.5 rounded-full bg-neutral-400" />
   </span>
 )
 
@@ -4548,7 +5892,9 @@ function buildCodeAgentProcessRows(data: CodeAgentRunMetadata): FlowRow[] {
           tone: fileTone(file.status),
           title: file.path,
           subtitle: file.status ? fileStatusLabel(file.status) : undefined,
-          detail: file.diff ? summarizeDiff(file.diff) : undefined,
+          detail: file.diff ? (
+            <InlineDiffReview diff={file.diff} filePath={file.path} compact />
+          ) : undefined,
         })
       }
     }
@@ -4562,6 +5908,19 @@ function buildCodeAgentProcessRows(data: CodeAgentRunMetadata): FlowRow[] {
         title: '过程输出',
         subtitle: `${data.logs.length} 条运行日志`,
         detail: trimLongText(lastLog.text, 220),
+      })
+    }
+  }
+
+  if (steps.length > 0 && data.files?.some((file) => file.diff)) {
+    for (const file of data.files.filter((item) => item.diff)) {
+      rows.push({
+        key: `file-review-${file.path}`,
+        icon: <FileText className="h-3.5 w-3.5" />,
+        tone: fileTone(file.status),
+        title: file.path,
+        subtitle: `${fileStatusLabel(file.status)} · 代码变更待审查`,
+        detail: <InlineDiffReview diff={file.diff ?? ''} filePath={file.path} compact />,
       })
     }
   }
@@ -4626,14 +5985,20 @@ function stepIcon(
   return <CheckCircle2 className="h-3.5 w-3.5" />
 }
 
-function buildCodeAgentRunSummary(data: CodeAgentRunMetadata) {
-  const artifactCount = readFlowArtifacts(data.artifacts).length
+function buildCodeAgentRunSummary(data: ThreadCodeAgentRunData) {
+  const counts = data.__agenthubSummaryCounts
+  const stepCount = counts?.steps ?? data.steps?.length ?? 0
+  const toolCallCount = counts?.toolCalls ?? data.toolCalls?.length ?? 0
+  const commandCount = counts?.commands ?? data.commands?.length ?? 0
+  const fileCount = counts?.files ?? data.files?.length ?? 0
+  const logCount = counts?.logs ?? data.logs?.length ?? 0
+  const artifactCount = counts?.artifacts ?? readFlowArtifacts(data.artifacts).length
   const parts = [
-    data.steps?.length ? `${data.steps.length} 步骤` : null,
-    data.toolCalls?.length ? `${data.toolCalls.length} 工具` : null,
-    data.commands?.length ? `${data.commands.length} 命令` : null,
-    data.files?.length ? `${data.files.length} 文件` : null,
-    data.logs?.length ? `${data.logs.length} 日志` : null,
+    stepCount ? `${stepCount} 步骤` : null,
+    toolCallCount ? `${toolCallCount} 工具` : null,
+    commandCount ? `${commandCount} 命令` : null,
+    fileCount ? `${fileCount} 文件` : null,
+    logCount ? `${logCount} 日志` : null,
     artifactCount ? `${artifactCount} 产物` : null,
   ].filter(Boolean)
   return parts.join(' · ')
@@ -4717,7 +6082,8 @@ const ArtifactCard: FC<{ artifact: AgentArtifact }> = ({ artifact }) => {
 const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> }> = ({
   artifact,
 }) => {
-  const item = previewItemFromArtifact(artifact)
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
+  const item = enrichPreviewItem(previewItemFromArtifact(artifact), workspaceId ?? undefined)
   return (
     <FlowRowShell
       icon={<FileText className="h-3.5 w-3.5" />}
@@ -4743,22 +6109,9 @@ const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> 
 const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> }> = ({
   artifact,
 }) => {
-  const [open, setOpen] = useState(false)
   const lines = artifact.diff.split(/\r?\n/)
   const additions = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
   const deletions = lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
-  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
-
-  async function handleSaveEdit(params: { lineText: string; lineNumber: number }) {
-    if (!workspaceId) return
-    await api.writeFile({
-      workspaceId,
-      filePath: artifact.filePath,
-      content: params.lineText,
-      startLine: params.lineNumber,
-      endLine: params.lineNumber,
-    })
-  }
 
   return (
     <FlowRowShell
@@ -4767,39 +6120,134 @@ const DiffArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'diff' }> 
       title={artifact.title || artifact.filePath}
       subtitle={`${fileStatusLabel(artifact.status ?? 'modified')} · Diff · +${additions} / -${deletions}`}
       detail={artifact.description ?? artifact.filePath}
-      action={
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => requestArtifactPreview(previewItemFromArtifact(artifact))}
-            className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
-          >
-            <GitBranch className="h-3 w-3" />
-            Diff
-          </button>
-          <button
-            type="button"
-            onClick={() => setOpen((value) => !value)}
-            className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
-          >
-            <ChevronDown
-              className={cn('h-3 w-3 transition-transform', open && 'rotate-180')}
-            />
-            {open ? '收起' : '展开'}
-          </button>
+      expand={<InlineDiffReview diff={artifact.diff} filePath={artifact.filePath} previewId={artifact.id} />}
+    />
+  )
+}
+
+const InlineDiffReview: FC<{
+  diff: string
+  filePath: string
+  compact?: boolean
+  previewId?: string
+}> = ({ compact = false, diff, filePath, previewId }) => {
+  const workspaceId = useChatStore((s) => s.currentSession?.workspaceId)
+  const [open, setOpen] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const [applyResult, setApplyResult] = useState<'applied' | 'error' | null>(null)
+  const [applyMessage, setApplyMessage] = useState('')
+  const summary = summarizeDiff(diff)
+
+  const previewItem: ArtifactPreviewItem = {
+    id: previewId ?? `diff-${filePath}`,
+    kind: 'diff',
+    path: filePath,
+    source: diff,
+    subtitle: '代码 Diff',
+    title: filePath,
+  }
+
+  async function handleSaveEdit(params: { lineText: string; lineNumber: number }) {
+    if (!workspaceId) return
+    await api.writeFile({
+      workspaceId,
+      filePath,
+      content: params.lineText,
+      startLine: params.lineNumber,
+      endLine: params.lineNumber,
+    })
+  }
+
+  async function applyCurrentDiff() {
+    if (applying) return
+    if (!workspaceId) {
+      setOpen(true)
+      setApplyResult('error')
+      setApplyMessage('当前会话未绑定工作区，无法应用 Diff。')
+      return
+    }
+    setApplying(true)
+    setApplyResult(null)
+    setApplyMessage('')
+    try {
+      const result = await api.applyDiff(workspaceId, diff)
+      setOpen(true)
+      setApplyResult('applied')
+      setApplyMessage(result.message || 'Diff 已应用到工作区。')
+    } catch (error) {
+      setOpen(true)
+      setApplyResult('error')
+      setApplyMessage(friendlyErrorMessage(error, '应用 Diff 失败'))
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <div className={cn('not-prose', compact ? 'mt-1' : 'mt-2')}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {compact && <span className="mr-1 text-[12px] text-neutral-500">{summary}</span>}
+        <button
+          type="button"
+          onClick={() => requestArtifactPreview(previewItem)}
+          className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
+        >
+          <GitBranch className="h-3 w-3" />
+          预览
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
+          aria-expanded={open}
+        >
+          <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
+          {open ? '收起' : '展开'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void applyCurrentDiff()}
+          disabled={applying || applyResult === 'applied'}
+          className={cn(
+            'inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition disabled:pointer-events-none',
+            applyResult === 'applied'
+              ? 'bg-emerald-50 text-emerald-700'
+              : 'bg-neutral-900 text-white hover:bg-neutral-700 disabled:bg-neutral-200 disabled:text-neutral-400',
+          )}
+        >
+          {applying ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : applyResult === 'applied' ? (
+            <Check className="h-3 w-3" />
+          ) : (
+            <CheckCircle2 className="h-3 w-3" />
+          )}
+          {applying ? '应用中' : applyResult === 'applied' ? '已应用' : '应用'}
+        </button>
+      </div>
+      {applyMessage && (
+        <div
+          className={cn(
+            'mt-2 rounded-xl px-3 py-2 text-[12px] leading-5',
+            applyResult === 'error'
+              ? 'bg-red-50 text-red-700'
+              : 'bg-emerald-50 text-emerald-700',
+          )}
+        >
+          {applyMessage}
         </div>
-      }
-      expand={
-        open ? (
+      )}
+      {open && (
+        <div className="mt-2 overflow-hidden rounded-xl border border-neutral-200">
           <DiffViewer
-            diff={artifact.diff}
-            maxHeightClassName="max-h-96"
-            filePath={artifact.filePath}
+            diff={diff}
+            maxHeightClassName={compact ? 'max-h-72' : 'max-h-96'}
+            filePath={filePath}
             onSaveEdit={workspaceId ? handleSaveEdit : undefined}
           />
-        ) : undefined
-      }
-    />
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -4826,6 +6274,7 @@ const DiffViewer: FC<{
   const [editingSelectableIndex, setEditingSelectableIndex] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [saving, setSaving] = useState(false)
+  const [localChangeTarget, setLocalChangeTarget] = useState<LocalChangeTarget | null>(null)
 
   function isRowSelected(originalIndex: number) {
     const selIdx = selectableRows.findIndex((r) => r._index === originalIndex)
@@ -4837,27 +6286,49 @@ const DiffViewer: FC<{
     if (selIdx >= 0) selection.toggleLine(selIdx, shiftKey)
   }
 
-  function buildReferenceText() {
+  function buildDiffTarget(): LocalChangeTarget | null {
     const selected = selection.sortedSelected.map((si) => selectableRows[si])
-    if (selected.length === 0) return ''
+    if (selected.length === 0) return null
     const lines = selected.map((r) => {
       const marker = r.kind === 'add' ? '+' : r.kind === 'del' ? '-' : ' '
       return `${marker}${r.text}`
     })
-    const lineRange = selected.length === 1
-      ? `第 ${selected[0].newNumber ?? selected[0].oldNumber ?? '?'} 行`
-      : `第 ${selected[0].newNumber ?? selected[0].oldNumber ?? '?'}-${selected[selected.length - 1].newNumber ?? selected[selected.length - 1].oldNumber ?? '?'} 行`
+    const startLine = selected[0].newNumber ?? selected[0].oldNumber ?? '?'
+    const endLine =
+      selected[selected.length - 1].newNumber ?? selected[selected.length - 1].oldNumber ?? startLine
+    return {
+      filePath,
+      language: filePath ? guessLanguageFromPath(filePath) : 'diff',
+      lineLabel: formatLineRangeLabel(startLine, endLine),
+      selectedText: lines.join('\n'),
+      sourceLabel: 'Diff 预览',
+    }
+  }
+
+  function buildReferenceText() {
+    const target = buildDiffTarget()
+    if (!target) return ''
     const langGuess = filePath ? guessLanguageFromPath(filePath) : ''
     const header = filePath
-      ? `\`${filePath}\` ${lineRange}:\n`
-      : `${lineRange}:\n`
-    return `${header}\`\`\`${langGuess}\n${lines.join('\n')}\n\`\`\`\n`
+      ? `\`${filePath}\` ${target.lineLabel}:\n`
+      : `${target.lineLabel}:\n`
+    return `${header}${codeFenceForContent(target.selectedText, langGuess)}\n`
   }
 
   function handleReference() {
     const text = buildReferenceText()
     if (text) insertTextIntoComposer(text)
+    clearDiffSelection()
+  }
+
+  function handleLocalChange() {
+    const target = buildDiffTarget()
+    if (target) setLocalChangeTarget(target)
+  }
+
+  function clearDiffSelection() {
     selection.clearSelection()
+    setLocalChangeTarget(null)
   }
 
   function handleStartEdit() {
@@ -4891,7 +6362,7 @@ const DiffViewer: FC<{
       await onSaveEdit({ lineText, lineNumber })
       setEditingSelectableIndex(null)
       setEditDraft('')
-      selection.clearSelection()
+      clearDiffSelection()
     } finally {
       setSaving(false)
     }
@@ -4903,8 +6374,16 @@ const DiffViewer: FC<{
         <LineSelectionToolbar
           selectedCount={selection.selectedCount}
           onReference={handleReference}
+          onLocalChange={handleLocalChange}
           onEdit={onSaveEdit ? handleStartEdit : undefined}
-          onClear={selection.clearSelection}
+          onClear={clearDiffSelection}
+        />
+      )}
+      {localChangeTarget && (
+        <LocalChangeComposer
+          target={localChangeTarget}
+          onCancel={() => setLocalChangeTarget(null)}
+          onSent={clearDiffSelection}
         />
       )}
       <div
@@ -5358,7 +6837,7 @@ function TaskBoardCard({ data }: { data: any }) {
 }
 
 const SystemMessage: FC = () => (
-  <MessagePrimitive.Root className="ml-0 mr-auto w-full max-w-[var(--thread-max-width)] py-2">
+  <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] py-2">
     <div className="rounded-2xl bg-neutral-100 px-3 py-2 text-xs text-neutral-500">
       <MessagePrimitive.Parts />
     </div>
@@ -5367,8 +6846,24 @@ const SystemMessage: FC = () => (
 
 const AssistantActionBar: FC = () => {
   const messageId = useMessage((message) => message.id)
+  const sourceMessage = useChatStore((state) =>
+    state.messages.find((message) => message.id === messageId),
+  )
+  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
   const regenerateMessage = useChatStore((state) => state.regenerateMessage)
   const [regenerating, setRegenerating] = useState(false)
+  const canUseMessage = Boolean(sourceMessage && messageId !== 'agenthub-thinking')
+
+  function reply() {
+    if (!canUseMessage) return
+    setReplyingTo(messageId)
+    focusComposerInput()
+  }
+
+  function quote() {
+    if (!sourceMessage) return
+    insertTextIntoComposer(quoteMessageText(sourceMessage))
+  }
 
   async function regenerate() {
     if (messageId === 'agenthub-thinking' || regenerating) return
@@ -5385,29 +6880,55 @@ const AssistantActionBar: FC = () => {
       hideWhenRunning
       autohide="not-last"
       autohideFloat="single-branch"
-      className="mt-2 flex items-center gap-1 text-neutral-400"
+      className="mt-2 flex flex-wrap items-center gap-1.5 text-neutral-500"
     >
-      <ActionBarPrimitive.Copy asChild>
-        <ToolButton aria-label="复制" title="复制">
-          <MessagePrimitive.If copied>
-            <Check className="h-3.5 w-3.5" />
-          </MessagePrimitive.If>
-          <MessagePrimitive.If copied={false}>
-            <Copy className="h-3.5 w-3.5" />
-          </MessagePrimitive.If>
-        </ToolButton>
-      </ActionBarPrimitive.Copy>
-      <ToolButton
+      <MessageActionButton
+        aria-label="回复"
+        title="回复"
+        onClick={reply}
+        disabled={!canUseMessage}
+        icon={<MessageCircleReply className="h-3.5 w-3.5" />}
+      >
+        回复
+      </MessageActionButton>
+      <MessageActionButton
+        aria-label="引用"
+        title="引用到输入框"
+        onClick={quote}
+        disabled={!sourceMessage}
+        icon={<TextQuote className="h-3.5 w-3.5" />}
+      >
+        引用
+      </MessageActionButton>
+      <MessageActionButton
         aria-label="重新生成"
         title="重新生成"
         onClick={regenerate}
-        disabled={regenerating}
+        disabled={!canUseMessage || regenerating}
+        icon={<RefreshCw className={cn('h-3.5 w-3.5', regenerating && 'animate-spin')} />}
       >
-        <RefreshCw className={cn('h-3.5 w-3.5', regenerating && 'animate-spin')} />
-      </ToolButton>
+        重新生成
+      </MessageActionButton>
     </ActionBarPrimitive.Root>
   )
+
 }
+
+const MessageActionButton: FC<
+  ComponentPropsWithoutRef<'button'> & { icon: ReactNode }
+> = ({ children, className, icon, ...props }) => (
+  <button
+    type="button"
+    className={cn(
+      'inline-flex h-7 items-center gap-1 rounded-full bg-neutral-100 px-2.5 text-[11px] font-medium text-neutral-600 transition hover:bg-neutral-200 hover:text-neutral-950 disabled:pointer-events-none disabled:opacity-45',
+      className,
+    )}
+    {...props}
+  >
+    {icon}
+    <span>{children}</span>
+  </button>
+)
 
 const BranchPicker: FC = () => (
   <BranchPickerPrimitive.Root
@@ -5701,23 +7222,42 @@ const CodeSyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
     [lines, normalizedLanguage],
   )
   const langLabel = normalizedLanguage || 'text'
-  const filePath = guessFilePathFromLanguage(langLabel)
+  const filePath = guessFilePathFromLanguage(language ?? '') ?? guessFilePathFromLanguage(langLabel)
   const selection = useLineSelection(lines.length)
+  const [localChangeTarget, setLocalChangeTarget] = useState<LocalChangeTarget | null>(null)
 
-  const handleReference = useCallback(() => {
+  function buildCodeBlockTarget(): LocalChangeTarget | null {
     const selected = selection.sortedSelected
-    if (selected.length === 0) return
+    if (selected.length === 0) return null
     const selectedLines = selected.map((i) => lines[i])
-    const lineRange = selected.length === 1
-      ? `第 ${selected[0] + 1} 行`
-      : `第 ${selected[0] + 1}-${selected[selected.length - 1] + 1} 行`
+    return {
+      filePath,
+      language: langLabel,
+      lineLabel: formatLineRangeLabel(selected[0] + 1, selected[selected.length - 1] + 1),
+      selectedText: selectedLines.join('\n'),
+      sourceLabel: '消息代码块',
+    }
+  }
+
+  function handleReference() {
+    const target = buildCodeBlockTarget()
+    if (!target) return
     const header = filePath
-      ? `\`${filePath}\` ${lineRange}:\n`
-      : `${lineRange}:\n`
-    const text = `${header}\`\`\`${langLabel}\n${selectedLines.join('\n')}\n\`\`\`\n`
-    insertTextIntoComposer(text)
+      ? `\`${filePath}\` ${target.lineLabel}:\n`
+      : `${target.lineLabel}:\n`
+    insertTextIntoComposer(`${header}${codeFenceForContent(target.selectedText, langLabel)}\n`)
+    clearCodeSelection()
+  }
+
+  function handleLocalChange() {
+    const target = buildCodeBlockTarget()
+    if (target) setLocalChangeTarget(target)
+  }
+
+  function clearCodeSelection() {
     selection.clearSelection()
-  }, [selection, lines, filePath, langLabel])
+    setLocalChangeTarget(null)
+  }
 
   // Always render table layout with line numbers for consistent UX
   return (
@@ -5726,7 +7266,15 @@ const CodeSyntaxHighlighter: FC<SyntaxHighlighterProps> = ({
         <LineSelectionToolbar
           selectedCount={selection.selectedCount}
           onReference={handleReference}
-          onClear={() => { selection.clearSelection() }}
+          onLocalChange={handleLocalChange}
+          onClear={clearCodeSelection}
+        />
+      )}
+      {localChangeTarget && (
+        <LocalChangeComposer
+          target={localChangeTarget}
+          onCancel={() => setLocalChangeTarget(null)}
+          onSent={clearCodeSelection}
         />
       )}
       <Pre className="agenthub-code-pre not-prose">
@@ -5857,6 +7405,96 @@ function normalizePreviewUrl(url?: string) {
   }
 }
 
+function previewPathFromUrl(url?: string) {
+  const parsed = normalizePreviewUrl(url)
+  if (!parsed) return undefined
+  const path = parsed.searchParams.get('path')?.trim()
+  return path || undefined
+}
+
+function canFetchWorkspaceTextSource(item: ArtifactPreviewItem, path?: string) {
+  if (!item.workspaceId || !path) return false
+  const extension = extensionFromName(path)
+  const mimeType = item.mimeType?.toLowerCase() || mimeFromExtension(extension) || 'text/plain'
+  return isTextLikeAttachment(mimeType, extension)
+}
+
+function enrichPreviewItem(item: ArtifactPreviewItem, workspaceId?: string): ArtifactPreviewItem {
+  const next: ArtifactPreviewItem = {
+    ...item,
+    workspaceId: item.workspaceId ?? workspaceId,
+  }
+  if (!next.workspaceId || !next.path) return next
+
+  if (next.kind === 'web' && isHtmlPreviewItem(next)) {
+    const url = normalizePreviewUrl(next.url)
+    if (!url || url.pathname === '/api/artifacts/preview-file') {
+      next.url = artifactPreviewFileUrl(next.workspaceId, next.path)
+    }
+    return next
+  }
+
+  if ((next.kind === 'file' || next.kind === 'image') && !next.url) {
+    next.url = artifactFileUrl(next.workspaceId, next.path)
+  }
+
+  return next
+}
+
+function artifactPreviewFileUrl(workspaceId: string, path: string) {
+  return `/api/artifacts/preview-file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`
+}
+
+function artifactFileUrl(workspaceId: string, path: string) {
+  return `/api/artifacts/file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`
+}
+
+function previewFileName(item: ArtifactPreviewItem) {
+  return fileNameFromPath(item.path) || fileNameFromPath(item.url) || item.title || 'preview'
+}
+
+function previewFileExtension(item: ArtifactPreviewItem) {
+  const fileName = previewFileName(item).split(/[?#]/)[0]
+  return fileName.match(/\.([A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase() ?? ''
+}
+
+function isHtmlPreviewItem(item: ArtifactPreviewItem) {
+  if (item.kind !== 'web') return false
+  const mimeType = item.mimeType?.toLowerCase() ?? ''
+  const extension = previewFileExtension(item)
+  return extension === 'html' || extension === 'htm' || extension === 'xhtml' || mimeType.includes('text/html')
+}
+
+function isDocxPreviewItem(item: ArtifactPreviewItem) {
+  const extension = previewFileExtension(item)
+  const mimeType = item.mimeType?.toLowerCase() ?? ''
+  return extension === 'docx' || mimeType.includes('wordprocessingml.document')
+}
+
+function isPptxPreviewItem(item: ArtifactPreviewItem) {
+  const extension = previewFileExtension(item)
+  const mimeType = item.mimeType?.toLowerCase() ?? ''
+  return extension === 'pptx' || mimeType.includes('presentationml.presentation')
+}
+
+function officePreviewUrl(item: ArtifactPreviewItem) {
+  if (item.url) return item.url
+  if (item.workspaceId && item.path) return artifactFileUrl(item.workspaceId, item.path)
+  return undefined
+}
+
+async function loadPreviewArrayBuffer(item: ArtifactPreviewItem) {
+  const url = officePreviewUrl(item)
+  if (!url) {
+    throw new Error('This file is missing a preview URL.')
+  }
+  const response = await fetch(url, url.startsWith('data:') ? undefined : { credentials: 'include' })
+  if (!response.ok) {
+    throw new Error(await extractPreviewErrorMessage(response))
+  }
+  return response.arrayBuffer()
+}
+
 function downloadFileName(item: ArtifactPreviewItem) {
   const source = item.path || normalizePreviewUrl(item.url)?.pathname || item.title || 'preview'
   const rawName = source.split(/[\\/]/).filter(Boolean).pop() || item.title || 'preview'
@@ -5880,9 +7518,9 @@ function sanitizeDownloadFileName(value: string) {
 
 function getPreviewPanelWidthBounds(panel: HTMLElement | null) {
   const containerWidth = panel?.parentElement?.clientWidth ?? window.innerWidth
-  const reservedThreadWidth = Math.min(360, Math.max(280, Math.round(containerWidth * 0.38)))
-  const maxWidth = Math.max(320, containerWidth - reservedThreadWidth)
-  const minWidth = Math.min(420, maxWidth)
+  const reservedThreadWidth = Math.min(520, Math.max(300, Math.round(containerWidth * 0.34)))
+  const maxWidth = Math.max(360, containerWidth - reservedThreadWidth)
+  const minWidth = Math.min(360, Math.max(280, Math.round(containerWidth * 0.28)), maxWidth)
   return { maxWidth, minWidth }
 }
 
@@ -5891,12 +7529,11 @@ function clampPreviewPanelWidth(width: number, bounds: { maxWidth: number; minWi
 }
 
 function readStoredPreviewPanelWidth() {
-  const fallbackWidth = 520
   try {
     const storedWidth = Number(window.localStorage.getItem(previewPanelWidthStorageKey))
-    return Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : fallbackWidth
+    return Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : defaultPreviewPanelWidth
   } catch {
-    return fallbackWidth
+    return defaultPreviewPanelWidth
   }
 }
 

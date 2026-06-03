@@ -427,20 +427,19 @@ export default function SessionList({
     })
   }
 
-  async function openExistingSession(session: Session) {
+  function openExistingSession(session: Session) {
     if (openingSessionId === session.id) return
+    navigate(`/chat/${session.id}`)
+    if (currentSessionId === session.id) return
     setOpeningSessionId(session.id)
-    try {
-      navigate(`/chat/${session.id}`)
-      if (currentSessionId !== session.id) {
-        await selectSession(session.id)
-      }
-    } catch (error) {
-      navigate('/', { replace: true })
-      showHint(friendlyErrorMessage(error, '打开会话失败'))
-    } finally {
-      setOpeningSessionId(null)
-    }
+    void selectSession(session.id)
+      .catch((error) => {
+        navigate('/', { replace: true })
+        showHint(friendlyErrorMessage(error, '打开会话失败'))
+      })
+      .finally(() => {
+        setOpeningSessionId((current) => (current === session.id ? null : current))
+      })
   }
 
   async function openAgentSession(agent: SavedAgentConfig) {
@@ -449,7 +448,7 @@ export default function SessionList({
     try {
       const session = await startAgentConversation({ agents: [agent] })
       await fetchSessions()
-      await openExistingSession(session)
+      openExistingSession(session)
     } catch (error) {
       showHint(friendlyErrorMessage(error, `打开 ${agent.name} 失败`))
     } finally {
@@ -1100,24 +1099,25 @@ export default function SessionList({
                           const taskStateText = canOpenChild
                             ? childTaskStatusText(task.status)
                             : '准备中'
-                          const openTaskChild = async () => {
+                          const openTaskChild = () => {
                             if (!childSessionId) {
                               showHint('子对话准备中，正式分配后即可打开')
                               return
                             }
                             if (openingSessionId === childSessionId) return
+                            navigate(`/chat/${childSessionId}`)
+                            if (currentSessionId === childSessionId) return
                             setOpeningSessionId(childSessionId)
-                            try {
-                              navigate(`/chat/${childSessionId}`)
-                              if (currentSessionId !== childSessionId) {
-                                await selectSession(childSessionId)
-                              }
-                            } catch (error) {
-                              navigate(`/chat/${item.parent.id}`, { replace: true })
-                              showHint(friendlyErrorMessage(error, '打开子对话失败'))
-                            } finally {
-                              setOpeningSessionId(null)
-                            }
+                            void selectSession(childSessionId)
+                              .catch((error) => {
+                                navigate(`/chat/${item.parent.id}`, { replace: true })
+                                showHint(friendlyErrorMessage(error, '打开子对话失败'))
+                              })
+                              .finally(() => {
+                                setOpeningSessionId((current) =>
+                                  current === childSessionId ? null : current,
+                                )
+                              })
                           }
                           return (
                             <li

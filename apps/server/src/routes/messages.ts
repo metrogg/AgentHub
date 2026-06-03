@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
+import { existsSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { unlink, writeFile } from 'node:fs/promises'
@@ -15,6 +16,7 @@ import {
   TaskType,
   WsEvent,
   CORE_AGENT_EXPERT_PROFILES,
+  type DeployArtifact,
   type AgentExpertProfile,
 } from '@agenthub/shared'
 import { logger } from '../lib/logger'
@@ -32,6 +34,7 @@ import {
   eq,
   asc,
   desc,
+  sql,
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
@@ -80,6 +83,11 @@ const confirmMemberProposalsSchema = z.object({
 
 const updateMessageSchema = z.object({
   content: z.string().min(1).max(10000),
+})
+
+const cancelMessageSchema = z.object({
+  persistTerminatedMessage: z.boolean().optional(),
+  content: z.string().trim().min(1).max(200).optional(),
 })
 
 type PlanAgent = {
@@ -174,8 +182,18 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
+    const rawBody = await c.req.json().catch(() => ({}))
+    const parsed = cancelMessageSchema.safeParse(rawBody)
+    if (!parsed.success) {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '停止参数错误')
+    }
     const { cancelAgentReply } = await import('../services/agent-runner')
-    return c.json({ cancelled: cancelAgentReply(sessionId) })
+    const cancelled = cancelAgentReply(sessionId)
+    const activeRunCancelled = await cancelSessionOrchestratorRun(session)
+    const message = parsed.data.persistTerminatedMessage && (cancelled || activeRunCancelled)
+      ? await persistTerminatedAgentMessage(sessionId, parsed.data.content || '已终止对话')
+      : undefined
+    return c.json({ cancelled, activeRunCancelled, message })
   })
   .patch('/:sessionId/:messageId', zValidator('json', updateMessageSchema), async (c) => {
     const user = c.get('user')
@@ -419,7 +437,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     // Trigger agent reply asynchronously (do not await to keep response fast).
     if (msg && !metadata?.skipAgentReply) {
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-      if (session?.type === 'group' && session.workspaceId) {
+      if (session && isDeployCommand(content)) {
+        runDeployCommandReply({
+          origin: new URL(c.req.url).origin,
+          session,
+          sessionId,
+        }).catch((err: any) =>
+          logger.error({ err: err?.message, sessionId }, 'Deploy command failed'),
+        )
+      } else if (session?.type === 'group' && session.workspaceId) {
         broadcastSessionEvent(sessionId, {
           type: WsEvent.AgentTyping,
           payload: {
@@ -783,6 +809,253 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
 function readString(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+async function cancelSessionOrchestratorRun(session: typeof sessions.$inferSelect) {
+  const metadata = session.metadata && typeof session.metadata === 'object' ? session.metadata : {}
+  const explicitRunId =
+    typeof metadata.orchestratorRunId === 'string' && metadata.orchestratorRunId.trim()
+      ? metadata.orchestratorRunId.trim()
+      : null
+
+  const activeStatusFilter = sql`${orchestratorRuns.status} in ('planning', 'running', 'synthesizing')`
+  const [run] = explicitRunId
+    ? await db
+        .select({
+          id: orchestratorRuns.id,
+          workspaceId: orchestratorRuns.workspaceId,
+          groupSessionId: orchestratorRuns.groupSessionId,
+          status: orchestratorRuns.status,
+        })
+        .from(orchestratorRuns)
+        .where(eq(orchestratorRuns.id, explicitRunId))
+        .limit(1)
+    : session.type === 'group'
+      ? await db
+          .select({
+            id: orchestratorRuns.id,
+            workspaceId: orchestratorRuns.workspaceId,
+            groupSessionId: orchestratorRuns.groupSessionId,
+            status: orchestratorRuns.status,
+          })
+          .from(orchestratorRuns)
+          .where(and(eq(orchestratorRuns.groupSessionId, session.id), activeStatusFilter))
+          .orderBy(desc(orchestratorRuns.createdAt))
+          .limit(1)
+      : await db
+          .select({
+            id: orchestratorRuns.id,
+            workspaceId: orchestratorRuns.workspaceId,
+            groupSessionId: orchestratorRuns.groupSessionId,
+            status: orchestratorRuns.status,
+          })
+          .from(orchestratorRuns)
+          .leftJoin(workspaceTasks, eq(workspaceTasks.runId, orchestratorRuns.id))
+          .where(and(eq(workspaceTasks.sessionId, session.id), activeStatusFilter))
+          .orderBy(desc(orchestratorRuns.createdAt))
+          .limit(1)
+
+  if (!run) return false
+  if (run.status === 'cancelled' || run.status === 'completed' || run.status === 'failed') {
+    return false
+  }
+  const activeRunCancelled = OrchestratorEngine.cancelActiveRun(run.id)
+  await db
+    .update(orchestratorRuns)
+    .set({ status: 'cancelled', updatedAt: new Date() })
+    .where(eq(orchestratorRuns.id, run.id))
+  await db
+    .update(workspaceTasks)
+    .set({
+      status: 'cancelled',
+      completedAt: new Date(),
+      errorLog: 'Run cancelled by /stop',
+    })
+    .where(
+      and(
+        eq(workspaceTasks.runId, run.id),
+        sql`${workspaceTasks.status} in ('pending', 'running')`,
+      ),
+    )
+  await emitRunEvent({
+    runId: run.id,
+    workspaceId: run.workspaceId,
+    groupSessionId: run.groupSessionId,
+    type: 'run.cancelled',
+    severity: 'warning',
+    payload: { reason: 'stop_command', activeRunCancelled },
+  })
+  return true
+}
+
+async function persistTerminatedAgentMessage(sessionId: string, content: string) {
+  const [message] = await db
+    .insert(messages)
+    .values({
+      sessionId,
+      senderId: 'agenthub-system',
+      senderType: 'agent',
+      type: 'text',
+      content,
+      metadata: {
+        agentName: 'AgentHub',
+        terminatedByCommand: true,
+      },
+    })
+    .returning()
+  if (message) {
+    broadcastSessionEvent(sessionId, {
+      type: WsEvent.MessageCompleted,
+      payload: { sessionId, message },
+    })
+  }
+  return message
+}
+
+function isDeployCommand(content: string) {
+  const normalized = content
+    .trim()
+    .toLowerCase()
+    .replace(/[。.!！\s]+$/g, '')
+  return ['部署', '发布', '上线', 'deploy', '/deploy'].includes(normalized)
+}
+
+function buildDeployArtifact(params: {
+  id: string
+  logs?: string
+  status: DeployArtifact['status']
+  url?: string
+}): DeployArtifact {
+  return {
+    id: params.id,
+    type: 'deploy',
+    provider: 'static',
+    status: params.status,
+    title: '静态部署',
+    description: '将当前工作区作为静态站点发布预览。',
+    logs: params.logs,
+    url: params.url,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+async function runDeployCommandReply(params: {
+  origin: string
+  session: typeof sessions.$inferSelect
+  sessionId: string
+}) {
+  const { origin, session, sessionId } = params
+  const artifactId = `deploy-${randomUUID()}`
+  const runningArtifact = buildDeployArtifact({
+    id: artifactId,
+    status: 'running',
+    logs: '正在检查工作区并准备静态部署。',
+  })
+  const [message] = await db
+    .insert(messages)
+    .values({
+      sessionId,
+      senderId: 'agenthub-deploy',
+      senderType: 'agent',
+      type: 'text',
+      content: '正在部署当前工作区。',
+      metadata: {
+        agentName: 'AgentHub Deploy',
+        artifacts: [runningArtifact],
+        deployCommand: true,
+        deployStatus: 'running',
+      },
+    })
+    .returning()
+  if (!message) return
+
+  broadcastSessionEvent(sessionId, {
+    type: WsEvent.MessageCompleted,
+    payload: { sessionId, message },
+  })
+
+  try {
+    if (!session.workspaceId) {
+      throw new Error('当前会话未绑定工作区，无法部署。')
+    }
+
+    const [workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, session.workspaceId))
+      .limit(1)
+    if (!workspace || workspace.ownerId !== session.ownerId) {
+      throw new Error('工作区不存在或无权访问。')
+    }
+    if (!workspace.projectPath) {
+      throw new Error('工作区未设置项目路径。')
+    }
+    if (!existsSync(workspace.projectPath) || !statSync(workspace.projectPath).isDirectory()) {
+      throw new Error('项目路径不存在或不是目录。')
+    }
+
+    const indexPath = join(workspace.projectPath, 'index.html')
+    if (!existsSync(indexPath) || !statSync(indexPath).isFile()) {
+      throw new Error('静态部署需要工作区根目录存在 index.html。')
+    }
+
+    const deployUrl = `${origin}/deploy/${session.workspaceId}/`
+    const readyArtifact = buildDeployArtifact({
+      id: artifactId,
+      status: 'ready',
+      url: deployUrl,
+      logs: `部署完成：${deployUrl}`,
+    })
+    const [updated] = await db
+      .update(messages)
+      .set({
+        content: '部署完成，静态预览已就绪。',
+        metadata: {
+          agentName: 'AgentHub Deploy',
+          artifacts: [readyArtifact],
+          deployCommand: true,
+          deployStatus: 'ready',
+          deployUrl,
+          workspaceId: session.workspaceId,
+        },
+      })
+      .where(eq(messages.id, message.id))
+      .returning()
+    if (updated) {
+      broadcastSessionEvent(sessionId, {
+        type: WsEvent.MessageCompleted,
+        payload: { sessionId, message: updated },
+      })
+    }
+  } catch (err: any) {
+    const error = err?.message || '部署失败'
+    const failedArtifact = buildDeployArtifact({
+      id: artifactId,
+      status: 'failed',
+      logs: error,
+    })
+    const [updated] = await db
+      .update(messages)
+      .set({
+        content: `部署失败：${error}`,
+        metadata: {
+          agentName: 'AgentHub Deploy',
+          artifacts: [failedArtifact],
+          deployCommand: true,
+          deployStatus: 'failed',
+          deployError: error,
+          workspaceId: session.workspaceId,
+        },
+      })
+      .where(eq(messages.id, message.id))
+      .returning()
+    if (updated) {
+      broadcastSessionEvent(sessionId, {
+        type: WsEvent.MessageCompleted,
+        payload: { sessionId, message: updated },
+      })
+    }
+  }
 }
 
 async function findPreviousUserMessageContent(sessionId: string, beforeMessageId: string) {

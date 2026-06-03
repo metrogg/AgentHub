@@ -57,6 +57,39 @@ describe('validateTaskOutputContract', () => {
     }
   })
 
+  test('matches absolute artifact paths inside the task execution path as workdir-relative paths', () => {
+    const executionPath =
+      'C:\\Users\\Mozero\\AppData\\Local\\AgentHub\\workspaces\\2026-06-02-task-4\\.agenthub\\workdirs\\run-1\\Product-Manager\\task-1'
+    const result = validateTaskOutputContract({
+      task: task({ taskType: TaskType.Code }),
+      artifacts: [
+        {
+          type: 'file',
+          path: `${executionPath}\\docs\\requirements.md`,
+        },
+      ],
+      writtenBlackboardKeys: ['task_task-research_output'],
+      executionPath,
+    })
+
+    expect(result.status).toBe('passed')
+  })
+
+  test('rejects absolute artifact paths outside the task execution path even when execution path is known', () => {
+    const executionPath =
+      'C:\\Users\\Mozero\\AppData\\Local\\AgentHub\\workspaces\\2026-06-02-task-4\\.agenthub\\workdirs\\run-1\\Product-Manager\\task-1'
+    const result = validateTaskOutputContract({
+      task: task(),
+      artifacts: [{ type: 'file', path: 'C:\\Users\\Mozero\\secret.md' }],
+      writtenBlackboardKeys: ['task_task-research_output'],
+      executionPath,
+    })
+
+    expect(result.status).toBe('failed')
+    expect(result.violations.some((violation) => violation.type === 'path_not_allowed')).toBe(true)
+    expect(hasFatalTaskContractViolations(result.violations, [{ type: 'file', path: 'C:\\Users\\Mozero\\secret.md' }])).toBe(true)
+  })
+
   test('keeps allowedPaths strict for code diffs', () => {
     const result = validateTaskOutputContract({
       task: task({

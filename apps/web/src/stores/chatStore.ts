@@ -25,6 +25,7 @@ let pendingSessionRefreshTimer: number | null = null
 const cancelledSessions = new Set<string>()
 const messageCache = new Map<string, Message[]>()
 const workspaceDetailsCache = new Map<string, { workspace: Workspace; agents: WorkspaceAgent[] }>()
+const selectSessionInflight = new Map<string, Promise<void>>()
 
 function updateCachedMessages(sessionId: string, updater: (messages: Message[]) => Message[]) {
   const cached = messageCache.get(sessionId)
@@ -1301,6 +1302,7 @@ interface ChatState {
       displayContent?: string
       replyToMessageId?: string | null
       safetyMode?: string
+      usePendingAttachments?: boolean
     },
   ) => Promise<void>
   sendMessageToSession: (
@@ -1310,6 +1312,7 @@ interface ChatState {
       displayContent?: string
       replyToMessageId?: string | null
       safetyMode?: string
+      usePendingAttachments?: boolean
     },
   ) => Promise<void>
   editMessage: (messageId: string, content: string) => Promise<void>
@@ -1404,15 +1407,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       optimisticSession?.workspaceId &&
       state.currentSession?.workspaceId === optimisticSession.workspaceId
     const cachedMessages = messageCache.get(sessionId)
-    const shouldRestoreTaskBoard =
-      optimisticSession?.type === SessionType.Group ||
-      (optimisticSession?.metadata?.kind === 'orchestrator-task' &&
-        typeof optimisticSession.metadata?.orchestratorRunId === 'string')
-    const taskBoardSnapshot =
-      !keepTaskBoard && optimisticSession && shouldRestoreTaskBoard
-        ? loadTaskBoardSnapshotForSession(optimisticSession).catch(() => null)
-        : Promise.resolve(null)
-
     set({
       sessions: optimisticSession
         ? upsertSessionList(state.sessions, optimisticSession)
@@ -1428,7 +1422,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             cachedWorkspace?.agents ?? (canReuseWorkspace ? state.currentWorkspaceAgents : []),
           )
         : [],
-      loadingMessages: true,
+      loadingMessages: !cachedMessages,
       messages: cachedMessages ? sortMessages(cachedMessages) : [],
       streamingMessage: null,
       streamingCodeAgentRun: null,
@@ -1444,95 +1438,115 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : null,
     })
     wsClient.joinSessions(taskBoardSessionIds(keepTaskBoard ? state.taskBoard : null, sessionId))
-    try {
-      const [session, { items }] = await Promise.all([
-        api.getSession(sessionId),
-        api.listMessages(sessionId),
-      ])
-      messageCache.set(sessionId, sortMessages(items))
-      if (session.workspaceId) {
-        const [full, snapshot] = await Promise.all([
-          api.getWorkspace(session.workspaceId),
-          taskBoardSnapshot,
+
+    const inflight = selectSessionInflight.get(sessionId)
+    if (inflight) return inflight
+
+    const loadPromise = (async () => {
+      try {
+        const [session, { items }] = await Promise.all([
+          api.getSession(sessionId),
+          api.listMessages(sessionId),
         ])
-        const resolvedSnapshot =
-          snapshot ?? (!keepTaskBoard ? await loadTaskBoardSnapshotForSession(session).catch(() => null) : null)
-        workspaceDetailsCache.set(session.workspaceId, {
-          workspace: full.workspace,
-          agents: full.agents,
-        })
+        const sortedItems = sortMessages(items)
+        messageCache.set(sessionId, sortedItems)
         if (get().currentSessionId !== sessionId) return
-        const currentAgents = sessionWorkspaceAgents(session, full.agents)
-        if (resolvedSnapshot) {
-          wsClient.joinSessions(taskBoardSessionIds(resolvedSnapshot.taskBoard, sessionId))
-        }
+
+        const liveState = get()
+        const cachedFull = session.workspaceId
+          ? workspaceDetailsCache.get(session.workspaceId)
+          : null
+        const canReuseLiveWorkspace =
+          session.workspaceId && liveState.currentWorkspace?.id === session.workspaceId
+        const knownWorkspaceAgents =
+          cachedFull?.agents ?? (canReuseLiveWorkspace ? liveState.currentWorkspaceAgents : [])
+
         set((s) => ({
           currentSession: session,
-          currentWorkspace: full.workspace,
-          currentWorkspaceAgents: currentAgents,
+          currentWorkspace: session.workspaceId
+            ? (cachedFull?.workspace ?? (canReuseLiveWorkspace ? s.currentWorkspace : null))
+            : null,
+          currentWorkspaceAgents: session.workspaceId
+            ? sessionWorkspaceAgents(session, knownWorkspaceAgents)
+            : [],
           sessions: upsertSessionList(s.sessions, session),
-          messages: sortMessages(items),
+          messages: sortedItems,
           loadingMessages: false,
-          ...(resolvedSnapshot
-              ? {
-                  taskBoard: resolvedSnapshot.taskBoard,
-                  agentTabs: resolvedSnapshot.agentTabs,
-                  selectedAgentTab: selectedTaskForSession(
-                    sessionId,
-                    resolvedSnapshot.taskBoard,
-                    resolvedSnapshot.agentTabs,
-                  ),
-                }
-              : {}),
         }))
-        if (resolvedSnapshot?.agUiEvents.length) {
-          set((state) =>
-            resolvedSnapshot.agUiEvents.reduce(
-              (next, event) => applyAgUiEventToState(next, event, sessionId),
-              state,
-            ),
-          )
-        }
-      } else {
-        const snapshot =
-          (await taskBoardSnapshot) ??
-          (!keepTaskBoard ? await loadTaskBoardSnapshotForSession(session).catch(() => null) : null)
+
+        void (async () => {
+          const shouldHydrateTaskBoard =
+            !keepTaskBoard &&
+            (session.type === SessionType.Group ||
+              (session.metadata?.kind === 'orchestrator-task' &&
+                typeof session.metadata?.orchestratorRunId === 'string'))
+          const workspacePromise: Promise<WorkspaceFull | null> = session.workspaceId
+            ? api.getWorkspace(session.workspaceId).catch(() => null)
+            : Promise.resolve(null)
+          const taskBoardPromise: Promise<TaskBoardSnapshot | null> = shouldHydrateTaskBoard
+            ? loadTaskBoardSnapshotForSession(session).catch(() => null)
+            : Promise.resolve(null)
+          const [full, snapshot] = await Promise.all([workspacePromise, taskBoardPromise])
+
+          if (full && session.workspaceId) {
+            workspaceDetailsCache.set(session.workspaceId, {
+              workspace: full.workspace,
+              agents: full.agents,
+            })
+          }
+
+          if (get().currentSessionId !== sessionId) return
+
+          if (snapshot) {
+            wsClient.joinSessions(taskBoardSessionIds(snapshot.taskBoard, sessionId))
+          }
+
+          if (full || snapshot) {
+            if (get().currentSessionId !== sessionId) return
+            set({
+              ...(full
+                ? {
+                    currentWorkspace: full.workspace,
+                    currentWorkspaceAgents: sessionWorkspaceAgents(session, full.agents),
+                  }
+                : {}),
+              ...(snapshot
+                ? {
+                    taskBoard: snapshot.taskBoard,
+                    agentTabs: snapshot.agentTabs,
+                    selectedAgentTab: selectedTaskForSession(
+                      sessionId,
+                      snapshot.taskBoard,
+                      snapshot.agentTabs,
+                    ),
+                  }
+                : {}),
+            })
+          }
+
+          if (snapshot?.agUiEvents.length && get().currentSessionId === sessionId) {
+            set((state) =>
+              snapshot.agUiEvents.reduce(
+                (next, event) => applyAgUiEventToState(next, event, sessionId),
+                state,
+              ),
+            )
+          }
+        })().catch(() => undefined)
+      } catch (error) {
         if (get().currentSessionId !== sessionId) return
-        if (snapshot) {
-          wsClient.joinSessions(taskBoardSessionIds(snapshot.taskBoard, sessionId))
-        }
-        set((s) => ({
-          currentSession: session,
-          currentWorkspace: null,
-          currentWorkspaceAgents: [],
-          sessions: upsertSessionList(s.sessions, session),
-          messages: sortMessages(items),
-          loadingMessages: false,
-          ...(snapshot
-            ? {
-                taskBoard: snapshot.taskBoard,
-                agentTabs: snapshot.agentTabs,
-                selectedAgentTab: selectedTaskForSession(
-                  sessionId,
-                  snapshot.taskBoard,
-                  snapshot.agentTabs,
-                ),
-              }
-            : {}),
-        }))
-        if (snapshot?.agUiEvents.length) {
-          set((state) =>
-            snapshot.agUiEvents.reduce(
-              (next, event) => applyAgUiEventToState(next, event, sessionId),
-              state,
-            ),
-          )
-        }
+        set({ loadingMessages: false })
+        throw error
       }
-    } catch (error) {
-      if (get().currentSessionId !== sessionId) return
-      set({ loadingMessages: false })
-      throw error
+    })()
+
+    selectSessionInflight.set(sessionId, loadPromise)
+    try {
+      await loadPromise
+    } finally {
+      if (selectSessionInflight.get(sessionId) === loadPromise) {
+        selectSessionInflight.delete(sessionId)
+      }
     }
   },
 
@@ -1627,6 +1641,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async sendMessageToSession(sessionId, content, options) {
+    if (content.trim() === '/stop') {
+      await get().cancelRun()
+      return
+    }
+
+    const shouldUsePendingAttachments = options?.usePendingAttachments !== false
+    const attachments = shouldUsePendingAttachments ? get().pendingAttachments : []
+    const contentForAgent = attachments.length
+      ? appendAttachmentNote(content, attachments)
+      : content
     cancelledSessions.delete(sessionId)
     const targetSession =
       get().currentSession?.id === sessionId
@@ -1650,27 +1674,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
         : null,
     })
-    const attachments = get().pendingAttachments
-    const contentForAgent = attachments.length
-      ? appendAttachmentNote(content, attachments)
-      : content
+    const messageType = messageTypeForOutgoingContent(attachments)
     const displayContent =
       options?.displayContent ?? (attachments.length ? content : contentForAgent)
+    const optimisticMetadata =
+      attachments.length || options?.displayContent !== undefined
+        ? {
+            ...(attachments.length ? { attachments } : {}),
+            ...(options?.displayContent !== undefined || attachments.length
+              ? { displayContent }
+              : {}),
+          }
+        : null
     const optimisticId = `local-${crypto.randomUUID()}`
     const optimisticMessage: Message = {
       id: optimisticId,
       sessionId,
       senderId: 'default-user',
       senderType: SenderType.User,
-      type: MessageType.Text,
+      type: messageType,
       content: displayContent,
-      metadata: null,
+      metadata: optimisticMetadata,
       replyToMessageId: options?.replyToMessageId ?? get().replyingToMessageId,
       createdAt: new Date().toISOString(),
     }
     set((s) => ({
       messages: upsertMessage(s.messages, optimisticMessage),
-      pendingAttachments: [],
+      pendingAttachments: shouldUsePendingAttachments ? [] : s.pendingAttachments,
       replyingToMessageId: null,
       replyingToMessage: null,
     }))
@@ -1678,6 +1708,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const replyToMessageId = optimisticMessage.replyToMessageId ?? undefined
       const msg = await api.sendMessageWithModel(sessionId, {
         content: contentForAgent,
+        type: messageType,
         attachments,
         displayContent: options?.displayContent ?? (attachments.length ? content : undefined),
         replyToMessageId,
@@ -1854,7 +1885,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingMessage: null,
       streamingCodeAgentRun: null,
     })
-    await api.cancelMessage(sessionId).catch(() => undefined)
+    const result = await api
+      .cancelMessage(sessionId, { persistTerminatedMessage: true, content: '已终止对话' })
+      .catch(() => null)
+    if (result?.message) {
+      updateCachedMessages(sessionId, (messages) => upsertMessage(messages, result.message!))
+      set((s) => ({ messages: upsertMessage(s.messages, result.message!) }))
+    }
   },
 
   setReplyingTo(messageId) {
@@ -2131,9 +2168,51 @@ function normalizeMatchText(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase()
 }
 
+function messageTypeForOutgoingContent(attachments: ChatAttachment[]): MessageType {
+  if (!attachments.length) return MessageType.Text
+  return attachments.every((attachment) => attachment.type === 'image')
+    ? MessageType.Image
+    : MessageType.File
+}
+
 function appendAttachmentNote(content: string, attachments: ChatAttachment[]) {
+  const header = content.trim() || '请查看附件'
   const note = attachments
-    .map((attachment) => `- ${attachment.name} (${attachment.mimeType})`)
+    .map((attachment) => {
+      const meta = [
+        attachment.mimeType,
+        Number.isFinite(attachment.size) ? formatAttachmentBytes(attachment.size) : null,
+      ]
+        .filter(Boolean)
+        .join(', ')
+      return `- ${attachment.name}${meta ? ` (${meta})` : ''}`
+    })
     .join('\n')
-  return `${content.trim()}\n\n[已附加图片]\n${note}`.trim()
+  const textPreview = attachments
+    .filter((attachment) => typeof attachment.text === 'string' && attachment.text.trim())
+    .map((attachment) => {
+      const language = attachment.extension || 'text'
+      const snippet = trimAttachmentText(attachment.text ?? '', 1800)
+      return `### ${attachment.name}\n\n\`\`\`${language}\n${snippet}\n\`\`\``
+    })
+    .join('\n\n')
+  const next = `${header}\n\n[已附加文件]\n${note}${textPreview ? `\n\n[附件文本预览]\n${textPreview}` : ''}`
+  return trimAttachmentText(next.trim(), 9800)
+}
+
+function trimAttachmentText(text: string, limit: number) {
+  if (text.length <= limit) return text
+  return `${text.slice(0, Math.max(0, limit - 18)).trimEnd()}\n...（已截断）`
+}
+
+function formatAttachmentBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
 }

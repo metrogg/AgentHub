@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises'
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
@@ -41,6 +42,12 @@ const updateWorkspaceSchema = z.object({
 
 const openWorkspaceFolderSchema = z.object({
   projectPath: z.string().max(1000).nullable().optional(),
+})
+
+const cloneGithubWorkspaceSchema = z.object({
+  repoUrl: z.string().min(1).max(1000),
+  name: z.string().max(120).optional(),
+  goal: z.string().max(2000).default(''),
 })
 
 const createAgentSchema = z.object({
@@ -141,6 +148,128 @@ function normalizeRuntimeType(value?: string | null): 'llm' | 'code-agent' {
   return value === 'llm' ? 'llm' : 'code-agent'
 }
 
+type GithubRepoRemote = {
+  cloneUrl: string
+  owner: string
+  repo: string
+  repoName: string
+  safeRef: string
+}
+
+function normalizeGithubRepoUrl(value: string): GithubRepoRemote {
+  const trimmed = value.trim()
+  const scpLike = /^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(trimmed)
+  if (scpLike?.[1] && scpLike[2]) {
+    return buildGithubRemote(scpLike[1], scpLike[2], 'ssh')
+  }
+
+  const shortRef = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/i.exec(trimmed)
+  if (shortRef?.[1] && shortRef[2]) {
+    return buildGithubRemote(shortRef[1], shortRef[2], 'https')
+  }
+
+  const urlValue = /^github\.com\//i.test(trimmed) ? `https://${trimmed}` : trimmed
+  let url: URL
+  try {
+    url = new URL(urlValue)
+  } catch {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请填写有效的 GitHub 仓库地址')
+  }
+
+  if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'github.com') {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '仅支持 github.com 仓库地址')
+  }
+  if (url.username || url.password) {
+    throw AppError.fromCode(
+      AppErrorCodes.VALIDATION_FAILED,
+      '仓库地址不要包含密钥或账号密码；私有仓库请使用本机 Git 凭据或 SSH',
+    )
+  }
+
+  const parts = url.pathname.split('/').filter(Boolean)
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请粘贴 GitHub 仓库首页地址，例如 https://github.com/owner/repo')
+  }
+  return buildGithubRemote(parts[0], parts[1], 'https')
+}
+
+function buildGithubRemote(owner: string, repoValue: string, protocol: 'https' | 'ssh'): GithubRepoRemote {
+  const repo = repoValue.replace(/\.git$/i, '')
+  if (!isSafeGithubPathPart(owner) || !isSafeGithubPathPart(repo)) {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'GitHub 仓库地址包含不支持的字符')
+  }
+  const cloneUrl =
+    protocol === 'ssh'
+      ? `git@github.com:${owner}/${repo}.git`
+      : `https://github.com/${owner}/${repo}.git`
+  return {
+    cloneUrl,
+    owner,
+    repo,
+    repoName: repo.slice(0, 120),
+    safeRef: `${owner}/${repo}`,
+  }
+}
+
+function isSafeGithubPathPart(value: string) {
+  return /^[A-Za-z0-9_.-]+$/.test(value) && value.length > 0 && value.length <= 100
+}
+
+async function cloneGithubRepository(remote: GithubRepoRemote, targetPath: string) {
+  const args = ['clone', '--depth=1', remote.cloneUrl, targetPath]
+  try {
+    const proc = Bun.spawn(['git', ...args], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: process.env,
+    })
+    const timeoutMs = 180_000
+    const killTimer = setTimeout(() => {
+      try {
+        proc.kill()
+      } catch {
+        // Process may have already exited.
+      }
+    }, timeoutMs)
+    const exitTimeout = new Promise<number>((resolve) => {
+      const timer = setTimeout(() => resolve(124), timeoutMs + 500)
+      proc.exited.finally(() => clearTimeout(timer))
+    })
+    const [code, stdout, stderr] = await Promise.all([
+      Promise.race([proc.exited, exitTimeout]),
+      new Response(proc.stdout).text().catch(() => ''),
+      new Response(proc.stderr).text().catch(() => ''),
+    ])
+    clearTimeout(killTimer)
+
+    if (code === 0) return
+    if (code === 124) {
+      throw AppError.fromCode(AppErrorCodes.TIMEOUT, 'GitHub 克隆超时，请稍后重试或检查网络连接')
+    }
+    const output = summarizeGitCloneOutput([stderr, stdout].filter(Boolean).join('\n'))
+    throw AppError.fromCode(
+      AppErrorCodes.WORKSPACE_CREATE_FAILED,
+      output ? `GitHub 克隆失败：${output}` : 'GitHub 克隆失败，请检查仓库地址或本机 Git 凭据',
+      { exitCode: code, repo: remote.safeRef },
+    )
+  } catch (error) {
+    if (error instanceof AppError) throw error
+    throw AppError.fromCode(
+      AppErrorCodes.CODING_TOOL_NOT_FOUND,
+      '未找到 Git，请先安装 Git 并确认已加入 PATH',
+      { repo: remote.safeRef, reason: error instanceof Error ? error.message : String(error) },
+    )
+  }
+}
+
+function summarizeGitCloneOutput(output: string) {
+  return output
+    .replace(/https?:\/\/[^@\s]+@github\.com/gi, 'https://***@github.com')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500)
+}
+
 // ---------- Routes ----------
 
 export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -231,6 +360,39 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     }
     logger.info({ userId: user.sub, projectPath }, 'New project path, creating workspace')
     return c.json({ cancelled: false as const, projectPath, workspace: null })
+  })
+
+  // Clone a GitHub repository into AgentHub's managed workspace storage.
+  .post('/clone-github', zValidator('json', cloneGithubWorkspaceSchema), async (c) => {
+    const user = c.get('user')
+    const input = c.req.valid('json')
+    const remote = normalizeGithubRepoUrl(input.repoUrl)
+    const folder = await createAutoWorkspaceFolder(remote.repoName)
+    const workspaceName = (input.name?.trim() || remote.repoName).slice(0, 120)
+
+    try {
+      await cloneGithubRepository(remote, folder.projectPath)
+      const [ws] = await db
+        .insert(workspaces)
+        .values({
+          ownerId: user.sub,
+          name: workspaceName,
+          goal: input.goal,
+          projectPath: folder.projectPath,
+        })
+        .returning()
+      if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
+
+      ensureHarnessPresets(folder.projectPath)
+      logger.info(
+        { userId: user.sub, workspaceId: ws.id, repo: remote.safeRef },
+        'GitHub repository cloned into workspace',
+      )
+      return c.json(await loadWorkspaceFull(ws.id, user.sub))
+    } catch (error) {
+      await rm(folder.projectPath, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    }
   })
 
   // Get full workspace
