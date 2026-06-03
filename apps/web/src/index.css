@@ -2374,6 +2374,15 @@
     background-color: rgba(59, 130, 246, 0.08);
   }
 
+  .agenthub-diff-code-selectable {
+    cursor: pointer;
+    transition: background-color 100ms ease;
+  }
+
+  .agenthub-diff-code-selectable:hover {
+    background-color: rgba(59, 130, 246, 0.06);
+  }
+
   .agenthub-diff-row-selected {
     background-color: rgba(59, 130, 246, 0.12) !important;
     border-left-color: #3b82f6 !important;
@@ -2427,7 +2436,13 @@
   }
 
   .agenthub-code-table .agenthub-code-content {
+    cursor: pointer;
     padding: 0 1rem 0 0.75rem;
+    transition: background-color 100ms ease;
+  }
+
+  .agenthub-code-table .agenthub-code-content:hover {
+    background-color: rgba(59, 130, 246, 0.08);
   }
 
   .agenthub-file-code-preview {
