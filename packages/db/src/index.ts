@@ -239,6 +239,95 @@ function ensureLegacySchema(database: Database) {
 
   ensureTable(
     database,
+    'worker_instances',
+    `CREATE TABLE worker_instances (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      workspace_agent_id TEXT NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      runtime_family TEXT NOT NULL DEFAULT 'worker',
+      runtime_base TEXT NOT NULL,
+      model_id TEXT,
+      skill_ids TEXT NOT NULL DEFAULT '[]',
+      mcp_server_ids TEXT NOT NULL DEFAULT '[]',
+      sandbox_policy TEXT NOT NULL DEFAULT 'workspace-write',
+      desired_state TEXT NOT NULL DEFAULT 'running',
+      observed_state TEXT NOT NULL DEFAULT 'provisioning',
+      health TEXT NOT NULL DEFAULT '{}',
+      runtime_home TEXT,
+      runtime_config_path TEXT,
+      last_heartbeat_at INTEGER,
+      message TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  )
+  ensureIndex(
+    database,
+    'worker_instances_workspace_id_idx',
+    'CREATE INDEX worker_instances_workspace_id_idx ON worker_instances(workspace_id)',
+  )
+  ensureIndex(
+    database,
+    'worker_instances_workspace_agent_id_idx',
+    'CREATE INDEX worker_instances_workspace_agent_id_idx ON worker_instances(workspace_agent_id)',
+  )
+  ensureIndex(
+    database,
+    'worker_instances_workspace_agent_unique',
+    'CREATE UNIQUE INDEX worker_instances_workspace_agent_unique ON worker_instances(workspace_id, workspace_agent_id)',
+  )
+
+  ensureTable(
+    database,
+    'runtime_leases',
+    `CREATE TABLE runtime_leases (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES orchestrator_runs(id) ON DELETE CASCADE,
+      task_id TEXT REFERENCES workspace_tasks(id) ON DELETE SET NULL,
+      worker_instance_id TEXT REFERENCES worker_instances(id) ON DELETE SET NULL,
+      provider TEXT NOT NULL DEFAULT 'local-workdir',
+      status TEXT NOT NULL DEFAULT 'creating',
+      cwd TEXT,
+      home_dir TEXT,
+      config_dir TEXT,
+      cache_dir TEXT,
+      tmp_dir TEXT,
+      data_dir TEXT,
+      container_id TEXT,
+      sandbox_id TEXT,
+      pid INTEGER,
+      started_at INTEGER,
+      released_at INTEGER,
+      error TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  )
+  ensureIndex(
+    database,
+    'runtime_leases_workspace_id_idx',
+    'CREATE INDEX runtime_leases_workspace_id_idx ON runtime_leases(workspace_id)',
+  )
+  ensureIndex(
+    database,
+    'runtime_leases_run_id_idx',
+    'CREATE INDEX runtime_leases_run_id_idx ON runtime_leases(run_id)',
+  )
+  ensureIndex(
+    database,
+    'runtime_leases_task_id_idx',
+    'CREATE INDEX runtime_leases_task_id_idx ON runtime_leases(task_id)',
+  )
+  ensureIndex(
+    database,
+    'runtime_leases_worker_instance_id_idx',
+    'CREATE INDEX runtime_leases_worker_instance_id_idx ON runtime_leases(worker_instance_id)',
+  )
+
+  ensureTable(
+    database,
     'workspace_states',
     `CREATE TABLE workspace_states (
       workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -276,6 +365,127 @@ function ensureLegacySchema(database: Database) {
       created_at INTEGER NOT NULL
     )`,
   )
+
+  ensureTable(
+    database,
+    'task_threads',
+    `CREATE TABLE task_threads (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES orchestrator_runs(id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL REFERENCES workspace_tasks(id) ON DELETE CASCADE,
+      group_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      workspace_agent_id TEXT REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      worker_instance_id TEXT,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'prepared',
+      last_event_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  )
+  ensureIndex(
+    database,
+    'task_threads_run_task_unique',
+    'CREATE UNIQUE INDEX task_threads_run_task_unique ON task_threads(run_id, task_id)',
+  )
+  ensureIndex(
+    database,
+    'task_threads_run_id_idx',
+    'CREATE INDEX task_threads_run_id_idx ON task_threads(run_id)',
+  )
+  ensureIndex(
+    database,
+    'task_threads_session_id_idx',
+    'CREATE INDEX task_threads_session_id_idx ON task_threads(session_id)',
+  )
+  ensureIndex(
+    database,
+    'task_threads_workspace_id_idx',
+    'CREATE INDEX task_threads_workspace_id_idx ON task_threads(workspace_id)',
+  )
+
+  ensureColumn(
+    database,
+    'orchestrator_run_events',
+    'thread_id',
+    'ALTER TABLE orchestrator_run_events ADD COLUMN thread_id text',
+  )
+  ensureColumn(
+    database,
+    'orchestrator_run_events',
+    'worker_instance_id',
+    'ALTER TABLE orchestrator_run_events ADD COLUMN worker_instance_id text',
+  )
+  ensureColumn(
+    database,
+    'orchestrator_run_events',
+    'sequence',
+    'ALTER TABLE orchestrator_run_events ADD COLUMN sequence integer DEFAULT 0 NOT NULL',
+  )
+  ensureIndex(
+    database,
+    'orchestrator_run_events_run_id_idx',
+    'CREATE INDEX orchestrator_run_events_run_id_idx ON orchestrator_run_events(run_id)',
+  )
+  ensureIndex(
+    database,
+    'orchestrator_run_events_thread_id_idx',
+    'CREATE INDEX orchestrator_run_events_thread_id_idx ON orchestrator_run_events(thread_id)',
+  )
+
+  ensureTable(
+    database,
+    'artifacts',
+    `CREATE TABLE artifacts (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES orchestrator_runs(id) ON DELETE CASCADE,
+      task_id TEXT REFERENCES workspace_tasks(id) ON DELETE SET NULL,
+      task_thread_id TEXT REFERENCES task_threads(id) ON DELETE SET NULL,
+      workspace_agent_id TEXT REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      worker_instance_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'file',
+      title TEXT NOT NULL,
+      description TEXT,
+      source_path TEXT,
+      handoff_path TEXT,
+      relative_path TEXT,
+      mime_type TEXT,
+      size INTEGER,
+      checksum TEXT,
+      status TEXT NOT NULL DEFAULT 'registered',
+      visibility TEXT NOT NULL DEFAULT 'team',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  )
+  ensureIndex(
+    database,
+    'artifacts_workspace_id_idx',
+    'CREATE INDEX artifacts_workspace_id_idx ON artifacts(workspace_id)',
+  )
+  ensureIndex(
+    database,
+    'artifacts_run_id_idx',
+    'CREATE INDEX artifacts_run_id_idx ON artifacts(run_id)',
+  )
+  ensureIndex(
+    database,
+    'artifacts_task_id_idx',
+    'CREATE INDEX artifacts_task_id_idx ON artifacts(task_id)',
+  )
+  ensureIndex(
+    database,
+    'artifacts_task_thread_id_idx',
+    'CREATE INDEX artifacts_task_thread_id_idx ON artifacts(task_thread_id)',
+  )
+  ensureIndex(
+    database,
+    'artifacts_task_relative_path_unique',
+    'CREATE UNIQUE INDEX artifacts_task_relative_path_unique ON artifacts(task_id, relative_path, checksum)',
+  )
 }
 
 function ensureColumn(database: Database, table: string, column: string, statement: string) {
@@ -293,6 +503,14 @@ function hasColumn(database: Database, table: string, column: string) {
 
 function ensureTable(database: Database, table: string, statement: string) {
   if (tableExists(database, table)) return
+  database.exec(statement)
+}
+
+function ensureIndex(database: Database, indexName: string, statement: string) {
+  const row = database
+    .query('SELECT name FROM sqlite_master WHERE type = ? AND name = ?')
+    .get('index', indexName)
+  if (row) return
   database.exec(statement)
 }
 

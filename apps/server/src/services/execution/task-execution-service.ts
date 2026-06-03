@@ -200,6 +200,7 @@ export class TaskExecutionService {
           profile: executionProfile,
           envelope,
           a2a: input.a2a,
+          signal: effectiveSignal,
         }),
         timeoutPromise,
       ])
@@ -289,6 +290,22 @@ export class TaskExecutionService {
       return { status: TaskStatus.Done, output, artifacts, durationMs: taskDuration, executionPath, executionConfig }
     } catch (error: any) {
       const taskDuration = Date.now() - taskStartTime
+      const cancelled = signal?.aborted || isAbortError(error)
+      if (cancelled) {
+        await db
+          .update(workspaceTasks)
+          .set({ status: TaskStatus.Cancelled, completedAt: new Date(), errorLog: '任务已取消' })
+          .where(eq(workspaceTasks.id, taskId))
+        return {
+          status: TaskStatus.Cancelled,
+          output: '',
+          artifacts: [],
+          error: '任务已取消',
+          durationMs: taskDuration,
+          executionPath,
+          executionConfig,
+        }
+      }
       await db
         .update(workspaceTasks)
         .set({ status: TaskStatus.Failed, completedAt: new Date(), errorLog: error?.message || 'Unknown error' })
@@ -322,6 +339,10 @@ export function shouldAcceptPartialExecution(
   if (!taskType) return false
   if (artifacts.length === 0) return false
   return !STRICT_TASK_TYPES.has(taskType)
+}
+
+function isAbortError(error: any) {
+  return error?.name === 'AbortError' || /abort|cancel|任务已取消/i.test(error?.message || '')
 }
 
 async function attachA2AMetadata(message: MessageRow, a2a?: AgentHubA2AEnvelope): Promise<MessageRow> {

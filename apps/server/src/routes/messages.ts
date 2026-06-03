@@ -28,6 +28,7 @@ import {
   workspaces,
   workspaceTasks,
   orchestratorRuns,
+  taskThreads,
   and,
   eq,
   asc,
@@ -52,13 +53,16 @@ import type {
 } from '../services/orchestrator/types'
 import { emitRunEvent } from '../services/orchestrator/run-events'
 import { initializeRunLedger } from '../services/orchestrator/run-ledger'
+import { prepareTaskRuntimeThread } from '../services/orchestrator/task-thread-service'
 import { checkInputGuardrails } from '../services/orchestrator/input-guardrails'
+import { type ManagerDecisionEventContext } from '../services/orchestrator/manager-loop'
+import { runController, type RunControllerRunContext } from '../services/orchestrator/run-controller'
 import { buildAgUiMemberProposalContinueEvent } from '../services/protocols'
+import { blackboard, Blackboard } from '../services/blackboard'
 import {
   buildDynamicOrchestratorPlan,
   loadWorkspaceAgentRelationsForPlanning,
 } from '../services/orchestrator/plan-generator'
-import { decideOrchestratorAction } from '../services/orchestrator/orchestrator-decision'
 import {
   confirmAgentDraftSchema,
   type AgentDraft,
@@ -68,7 +72,6 @@ import {
 } from '../services/agent-draft'
 
 import { buildAgentProfile } from '../services/agents/profile-builder'
-import { ensureOrchestratorTaskSession } from '../services/workspace/session-manager'
 
 const agentDraftSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -137,6 +140,8 @@ type OrchestratorPlan = {
   phases?: PlanPhase[]
   tasks: PlanTask[]
 }
+
+const INTERRUPTIBLE_RUN_STATUSES = new Set(['planning', 'running', 'synthesizing'])
 
 type DispatchMonitor = {
   dispatchId: string
@@ -420,19 +425,35 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (msg && !metadata?.skipAgentReply) {
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
       if (session?.type === 'group' && session.workspaceId) {
-        broadcastSessionEvent(sessionId, {
-          type: WsEvent.AgentTyping,
-          payload: {
-            sessionId,
-            agentName: 'Orchestrator',
-            phase: 'thinking',
-          },
-        })
         const agentRows = await db
           .select()
           .from(workspaceAgents)
           .where(eq(workspaceAgents.workspaceId, session.workspaceId))
           .orderBy(asc(workspaceAgents.orderIdx))
+
+        const orchestrator = agentRows.find((agent) => agent.roleType === 'orchestrator')
+        if (orchestrator) {
+          const attachedToActiveRun = await handleHumanInterruptForActiveRun({
+            groupSessionId: sessionId,
+            workspaceId: session.workspaceId,
+            ownerId: user.sub,
+            content,
+            userMessageId: msg.id,
+            orchestrator,
+          })
+          if (attachedToActiveRun) {
+            return c.json(msg)
+          }
+        }
+
+        broadcastSessionEvent(sessionId, {
+          type: WsEvent.AgentTyping,
+          payload: {
+            sessionId,
+            agentName: orchestrator?.name ?? 'Orchestrator',
+            phase: 'thinking',
+          },
+        })
 
         routeGroupMessageThroughOrchestrator(
           sessionId,
@@ -1078,6 +1099,174 @@ function toCoordinatorProfile(
   }
 }
 
+async function findLatestInterruptibleRun(groupSessionId: string) {
+  const runs = await db
+    .select()
+    .from(orchestratorRuns)
+    .where(eq(orchestratorRuns.groupSessionId, groupSessionId))
+    .orderBy(desc(orchestratorRuns.updatedAt), desc(orchestratorRuns.createdAt))
+    .limit(20)
+
+  return runs.find((run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status)) ?? null
+}
+
+async function persistSessionTransparencyMessage(input: {
+  sessionId: string
+  senderId: string
+  senderType: 'agent' | 'system'
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  const [message] = await db
+    .insert(messages)
+    .values({
+      sessionId: input.sessionId,
+      senderId: input.senderId,
+      senderType: input.senderType,
+      type: 'text',
+      content: input.content,
+      metadata: input.metadata,
+    })
+    .returning()
+
+  if (message) {
+    broadcastSessionEvent(input.sessionId, {
+      type: WsEvent.MessageCompleted,
+      payload: { sessionId: input.sessionId, message },
+    })
+  }
+
+  return message ?? null
+}
+
+async function handleHumanInterruptForActiveRun(params: {
+  groupSessionId: string
+  workspaceId: string
+  ownerId: string
+  content: string
+  userMessageId: string
+  orchestrator: typeof workspaceAgents.$inferSelect
+}) {
+  const activeRun = await findLatestInterruptibleRun(params.groupSessionId)
+  if (!activeRun) return false
+
+  const namespace = Blackboard.namespace(params.workspaceId, activeRun.id)
+  const interruptKey = `human_interrupts/${params.userMessageId}`
+  const createdAt = new Date().toISOString()
+  const note = await blackboard.write({
+    namespace,
+    key: interruptKey,
+    value: {
+      kind: 'human_interrupt',
+      messageId: params.userMessageId,
+      groupSessionId: params.groupSessionId,
+      content: params.content,
+      actorType: 'user',
+      actorId: params.ownerId,
+      acknowledgedBy: {
+        agentId: params.orchestrator.id,
+        agentName: params.orchestrator.name,
+      },
+      createdAt,
+    },
+    agentId: params.orchestrator.id,
+    tags: ['human-interrupt', 'hitl'],
+  })
+
+  await emitRunEvent({
+    runId: activeRun.id,
+    workspaceId: params.workspaceId,
+    groupSessionId: params.groupSessionId,
+    agentId: params.orchestrator.id,
+    type: 'blackboard.written',
+    payload: {
+      key: interruptKey,
+      version: note.version,
+      summary: 'Human provided an in-flight correction for the current run.',
+      source: 'human_interrupt',
+      taskTitle: 'Human interrupt',
+      agentName: params.orchestrator.name,
+      contentPreview: params.content.slice(0, 200),
+    },
+  })
+
+  await runController.recordDecision(
+    {
+      runId: activeRun.id,
+      workspaceId: params.workspaceId,
+      groupSessionId: params.groupSessionId,
+      actor: {
+        id: params.orchestrator.id,
+        name: params.orchestrator.name,
+      },
+    },
+    {
+      action: 'human_interrupt_received',
+      reason: 'A human participant added or corrected requirements while the run is active.',
+      message: `Merged a new human instruction into the active run: ${params.content.slice(0, 160)}`,
+    },
+  )
+
+  const liveThreads = await db
+    .select()
+    .from(taskThreads)
+    .where(eq(taskThreads.runId, activeRun.id))
+    .orderBy(desc(taskThreads.updatedAt), desc(taskThreads.createdAt))
+
+  const forwardTargets = liveThreads.filter((thread) =>
+    ['prepared', 'assigned', 'active'].includes(thread.status),
+  )
+
+  const groupAckContent =
+    forwardTargets.length > 0
+      ? `收到新的补充要求，我已并入当前协作，并同步给 ${forwardTargets.length} 个进行中的任务。`
+      : '收到新的补充要求，我已并入当前协作，并会在后续调度中按这个约束继续推进。'
+
+  await persistSessionTransparencyMessage({
+    sessionId: params.groupSessionId,
+    senderId: params.orchestrator.id,
+    senderType: 'agent',
+    content: groupAckContent,
+    metadata: {
+      kind: 'manager-human-interrupt',
+      systemEvent: 'manager_human_interrupt_ack',
+      orchestratorRunId: activeRun.id,
+      sourceMessageId: params.userMessageId,
+      blackboardRef: note,
+      forwardedThreadCount: forwardTargets.length,
+    },
+  })
+
+  for (const thread of forwardTargets) {
+    await persistSessionTransparencyMessage({
+      sessionId: thread.sessionId,
+      senderId: params.orchestrator.id,
+      senderType: 'agent',
+      content: `用户补充了一条新的约束，请以此为准继续当前任务：${params.content}`,
+      metadata: {
+        kind: 'manager-human-interrupt-forwarded',
+        systemEvent: 'manager_human_interrupt_forwarded',
+        orchestratorRunId: activeRun.id,
+        orchestratorTaskThreadId: thread.id,
+        sourceMessageId: params.userMessageId,
+        blackboardRef: note,
+      },
+    })
+  }
+
+  await runController.reconcile({
+    runId: activeRun.id,
+    workspaceId: params.workspaceId,
+    groupSessionId: params.groupSessionId,
+    actor: {
+      id: params.orchestrator.id,
+      name: params.orchestrator.name,
+    },
+  })
+
+  return true
+}
+
 async function routeGroupMessageThroughOrchestrator(
   sessionId: string,
   content: string,
@@ -1116,11 +1305,18 @@ async function routeGroupMessageThroughOrchestrator(
       phase: 'thinking',
     },
   })
+  const managerRun = await runController.start({
+    workspaceId,
+    groupSessionId: sessionId,
+    goal: content,
+    actor: orchestrator,
+  })
+  const { runId } = managerRun
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
 
-  let decision: Awaited<ReturnType<typeof decideOrchestratorAction>>
+  let decision: Awaited<ReturnType<typeof runController.decideNextAction>>
   try {
-    decision = await decideOrchestratorAction({
+    decision = await runController.decideNextAction(managerRun, {
       content,
       agents: agentRows,
       workspaceGoal: workspace?.goal ?? null,
@@ -1129,6 +1325,10 @@ async function routeGroupMessageThroughOrchestrator(
   } catch (err: any) {
     const message = err?.message || '模型没有返回有效的 Orchestrator 决策'
     logger.warn({ err: message, sessionId }, 'Orchestrator decision failed')
+    await runController.fail(managerRun, {
+      error: message,
+      stage: 'decision',
+    })
     const [failedMessage] = await db
       .insert(messages)
       .values({
@@ -1152,8 +1352,18 @@ async function routeGroupMessageThroughOrchestrator(
     return
   }
 
+  const memberProposals = Array.isArray(decision.memberProposals) ? decision.memberProposals : []
+
   if (decision.action === 'plan') {
-    await generatePlanAndPushTaskBoard(sessionId, content, agentRows, workspaceId, ownerId)
+    await generatePlanAndPushTaskBoard(sessionId, content, agentRows, workspaceId, ownerId, {
+      run: managerRun,
+      decision: {
+        action: decision.action,
+        reason: decision.reason,
+        message: decision.message,
+        memberProposalCount: memberProposals.length,
+      },
+    })
     return
   }
 
@@ -1169,13 +1379,8 @@ async function routeGroupMessageThroughOrchestrator(
     createdAt: new Date(),
   }
 
-  const memberProposals = Array.isArray(decision.memberProposals) ? decision.memberProposals : []
-  const decisionContent =
-    decision.message?.trim() ||
-    (memberProposals.length
-      ? '当前群聊成员能力可能不够完整，Orchestrator 建议先补充下面的 Agent。'
-      : '')
-  if (decisionContent) {
+  const decisionContent = decision.message?.trim() || ''
+  if (decisionContent || memberProposals.length) {
     const [message] = await db
       .insert(messages)
       .values({
@@ -1183,7 +1388,7 @@ async function routeGroupMessageThroughOrchestrator(
         senderId: orchestrator.id,
         senderType: 'agent',
         type: 'text',
-        content: decisionContent,
+        content: decisionContent || '模型返回了补员建议，但没有提供可展示说明。请在下方确认建议成员。',
         metadata: {
           systemEvent: 'orchestrator_decision',
           orchestratorDecision: decision.action,
@@ -1203,11 +1408,35 @@ async function routeGroupMessageThroughOrchestrator(
         type: WsEvent.MessageCompleted,
         payload: { sessionId, message },
       })
+      if (memberProposals.length) {
+        await runController.requestApproval(managerRun, {
+          kind: 'member_proposal',
+          messageId: message.id,
+          reason: decision.reason ?? null,
+          memberProposalCount: memberProposals.length,
+          goal: content,
+        })
+      }
+      await runController.complete(managerRun, {
+        summary: decisionContent || '模型返回了补员建议，等待用户确认。',
+      })
     }
     return
   }
 
-  await runAgentReply(sessionId, agentUserMsg, profile)
+  try {
+    await runAgentReply(sessionId, agentUserMsg, profile)
+    await runController.complete(managerRun, {
+      summary: 'Orchestrator 已完成直接回复。',
+    })
+  } catch (err: any) {
+    const error = err?.message || 'Orchestrator 直接回复失败'
+    await runController.fail(managerRun, {
+      error,
+      stage: 'direct-reply',
+    })
+    throw err
+  }
 }
 
 async function profileForDirectSession(session: typeof sessions.$inferSelect) {
@@ -1371,6 +1600,8 @@ async function startPlanRunInExistingGroup(params: {
   workspaceId: string
   ownerId: string
   planMessageId?: string | null
+  runId?: string
+  run?: RunControllerRunContext
 }): Promise<DispatchMonitor> {
   const { sessionId, plan, workspaceId, ownerId, planMessageId } = params
 
@@ -1408,7 +1639,25 @@ async function startPlanRunInExistingGroup(params: {
 
   const childSessions = new Map<
     string,
-    { sessionId: string; workspaceId: string; projectPath?: string | null }
+    {
+      sessionId: string
+      workspaceId: string
+      projectPath?: string | null
+      taskThreadId?: string | null
+      workerInstanceId?: string | null
+      sharedTaskRelativeRoot?: string | null
+      sharedTaskSpecPath?: string | null
+    }
+  >()
+  const taskThreadsByTaskId = new Map<
+    string,
+    {
+      threadId: string
+      sessionId: string
+      workerInstanceId?: string | null
+      sharedTaskRelativeRoot?: string | null
+      sharedTaskSpecPath?: string | null
+    }
   >()
 
   const [workspaceRecord] = await db
@@ -1417,17 +1666,13 @@ async function startPlanRunInExistingGroup(params: {
     .where(eq(workspaces.id, workspaceId))
     .limit(1)
   const projectPath = workspaceRecord?.projectPath ?? null
-  const runId = crypto.randomUUID()
-  const taskIdRemap = new Map<string, string>()
-
-  await db.insert(orchestratorRuns).values({
-    id: runId,
+  const runId = params.runId ?? randomUUID()
+  const managerRun: RunControllerRunContext = params.run ?? {
+    runId,
     workspaceId,
     groupSessionId: sessionId,
-    planMessageId: planMessageId ?? undefined,
-    status: 'running',
-    plan: null,
-  })
+  }
+  const taskIdRemap = new Map<string, string>()
 
   for (const [index, task] of plan.tasks.entries()) {
     const agent = agentsByKey.get(task.agentKey)
@@ -1438,22 +1683,12 @@ async function startPlanRunInExistingGroup(params: {
       .where(eq(workspaceTasks.id, taskId))
       .limit(1)
     if (existingTask.length > 0) {
-      taskId = crypto.randomUUID()
+      taskId = randomUUID()
       taskIdRemap.set(task.id, taskId)
       task.id = taskId
     }
     const dependencies = (task.dependencies ?? []).map((depId) => taskIdRemap.get(depId) ?? depId)
     task.dependencies = dependencies
-
-    const childSession = await ensureOrchestratorTaskSession(
-      workspaceId,
-      workspaceRecord?.name ?? plan.title,
-      ownerId,
-      agent ?? null,
-      task.title,
-      runId,
-      taskId,
-    )
 
     const [workspaceTask] = await db
       .insert(workspaceTasks)
@@ -1464,7 +1699,7 @@ async function startPlanRunInExistingGroup(params: {
         title: task.title,
         description: task.description,
         status: 'pending',
-        sessionId: childSession.id,
+        sessionId: null,
         orderIdx: index,
         runId,
         phaseId: task.phaseId,
@@ -1474,7 +1709,42 @@ async function startPlanRunInExistingGroup(params: {
       })
       .returning()
 
-    if (workspaceTask) childSessions.set(task.id, { sessionId: childSession.id, workspaceId, projectPath })
+    if (!workspaceTask) continue
+
+    const outputContract = normalizeTaskOutputContract(task.outputContract, taskId)
+    const runtimeThread = await prepareTaskRuntimeThread({
+      workspaceId,
+      ownerId,
+      runId,
+      taskId,
+      groupSessionId: sessionId,
+      workspaceName: workspaceRecord?.name ?? plan.title,
+      projectPath,
+      taskTitle: task.title,
+      taskDescription: task.description,
+      goal: plan.goal,
+      agent,
+      dependencies,
+      acceptanceCriteria: outputContract?.acceptanceCriteria,
+      requiredArtifacts: outputContract?.requiredArtifacts,
+    })
+
+    childSessions.set(task.id, {
+      sessionId: runtimeThread.sessionId,
+      workspaceId: runtimeThread.workspaceId,
+      projectPath: runtimeThread.projectPath,
+      taskThreadId: runtimeThread.taskThreadId,
+      workerInstanceId: runtimeThread.workerInstanceId ?? null,
+      sharedTaskRelativeRoot: runtimeThread.sharedTaskRelativeRoot ?? null,
+      sharedTaskSpecPath: runtimeThread.sharedTaskSpecPath ?? null,
+    })
+    taskThreadsByTaskId.set(task.id, {
+      threadId: runtimeThread.taskThreadId,
+      sessionId: runtimeThread.sessionId,
+      workerInstanceId: runtimeThread.workerInstanceId ?? null,
+      sharedTaskRelativeRoot: runtimeThread.sharedTaskRelativeRoot ?? null,
+      sharedTaskSpecPath: runtimeThread.sharedTaskSpecPath ?? null,
+    })
   }
 
   if (taskIdRemap.size > 0 && plan.phases) {
@@ -1534,17 +1804,12 @@ async function startPlanRunInExistingGroup(params: {
   }
   const executionPlan = initializeRunLedger(rawExecutionPlan)
 
-  await db
-    .update(orchestratorRuns)
-    .set({ plan: executionPlan as unknown as Record<string, unknown>, updatedAt: new Date() })
-    .where(eq(orchestratorRuns.id, runId))
-
-  await emitRunEvent({
-    runId,
-    workspaceId,
-    groupSessionId: sessionId,
-    type: 'run.started',
-    payload: { title: executionPlan.title, goal: executionPlan.goal },
+  await runController.prepareForDispatch(managerRun, {
+    plan: executionPlan as unknown as Record<string, unknown>,
+    planMessageId: planMessageId ?? null,
+    taskCount: executionPlan.tasks.length,
+    agentCount: executionPlan.agents.length,
+    phaseCount: executionPlan.phases?.length ?? 0,
   })
   await emitRunEvent({
     runId,
@@ -1572,6 +1837,10 @@ async function startPlanRunInExistingGroup(params: {
           dependencies: t.dependencies || [],
           taskType: t.taskType,
           childSessionId: childSessions.get(t.id)?.sessionId ?? null,
+          taskThreadId: childSessions.get(t.id)?.taskThreadId ?? null,
+          workerInstanceId: childSessions.get(t.id)?.workerInstanceId ?? null,
+          sharedTaskRelativeRoot: childSessions.get(t.id)?.sharedTaskRelativeRoot ?? null,
+          sharedTaskSpecPath: childSessions.get(t.id)?.sharedTaskSpecPath ?? null,
         })),
         agents: executionPlan.agents,
       },
@@ -1581,19 +1850,77 @@ async function startPlanRunInExistingGroup(params: {
     },
   })
 
-  const engine = new OrchestratorEngine()
-  engine
-    .startRun({ runId, groupSessionId: sessionId, workspaceId, plan: executionPlan, childSessions })
-    .catch(async (err: any) => {
-      logger.error({ err: err?.message, runId }, 'Auto orchestrator engine start failed')
-      await db.update(orchestratorRuns).set({ status: 'failed' }).where(eq(orchestratorRuns.id, runId))
+  for (const task of executionPlan.tasks) {
+    const threadInfo = taskThreadsByTaskId.get(task.id)
+    await emitRunEvent({
+      runId,
+      workspaceId,
+      groupSessionId: sessionId,
+      taskId: task.id,
+      threadId: threadInfo?.threadId ?? null,
+      agentId: task.agentId,
+      type: 'task.planned',
+      payload: {
+        taskId: task.id,
+        title: task.title,
+        description: task.description,
+        workspaceAgentId: task.agentId,
+        workerInstanceId: threadInfo?.workerInstanceId ?? childSessions.get(task.id)?.workerInstanceId ?? null,
+        dependencies: task.dependencies ?? [],
+        childSessionId: threadInfo?.sessionId ?? childSessions.get(task.id)?.sessionId ?? null,
+        sessionId: threadInfo?.sessionId ?? childSessions.get(task.id)?.sessionId ?? null,
+        taskThreadId: threadInfo?.threadId ?? childSessions.get(task.id)?.taskThreadId ?? null,
+        groupSessionId: sessionId,
+        sharedTaskRelativeRoot: threadInfo?.sharedTaskRelativeRoot ?? null,
+        sharedTaskSpecPath: threadInfo?.sharedTaskSpecPath ?? null,
+      },
+    })
+    if (threadInfo) {
       await emitRunEvent({
         runId,
         workspaceId,
         groupSessionId: sessionId,
-        type: 'run.failed',
-        severity: 'error',
-        payload: { error: err?.message || '编排器引擎启动失败' },
+        taskId: task.id,
+        threadId: threadInfo.threadId,
+        agentId: task.agentId,
+        type: 'thread.prepared',
+        payload: {
+          taskId: task.id,
+          threadId: threadInfo.threadId,
+          taskThreadId: threadInfo.threadId,
+          sessionId: threadInfo.sessionId,
+          childSessionId: threadInfo.sessionId,
+          groupSessionId: sessionId,
+          workerInstanceId: threadInfo.workerInstanceId ?? null,
+          status: 'prepared',
+          sharedTaskRelativeRoot: threadInfo.sharedTaskRelativeRoot ?? null,
+          sharedTaskSpecPath: threadInfo.sharedTaskSpecPath ?? null,
+        },
+      })
+    }
+  }
+
+  await runController.reconcile({
+    runId,
+    workspaceId,
+    groupSessionId: sessionId,
+  })
+
+  const engine = new OrchestratorEngine()
+  engine
+    .startRun({
+      runId,
+      groupSessionId: sessionId,
+      workspaceId,
+      plan: executionPlan,
+      childSessions,
+      run: managerRun,
+    })
+    .catch(async (err: any) => {
+      logger.error({ err: err?.message, runId }, 'Auto orchestrator engine start failed')
+      await runController.fail(managerRun, {
+        error: err?.message || '编排器引擎启动失败',
+        stage: 'engine-start',
       })
     })
   return {
@@ -1609,7 +1936,12 @@ async function generatePlanAndPushTaskBoard(
   agents: any[],
   workspaceId: string,
   ownerId: string,
-  options: { propagateErrors?: boolean } = {},
+  options: {
+    propagateErrors?: boolean
+    decision?: ManagerDecisionEventContext
+    run?: RunControllerRunContext
+    runId?: string
+  } = {},
 ): Promise<DispatchMonitor | null> {
   const orchestratorAgent = agents.find((a: any) => a.roleType === 'orchestrator')
 
@@ -1636,6 +1968,12 @@ async function generatePlanAndPushTaskBoard(
         payload: { sessionId, message: blockedMessage },
       })
     }
+    if (options.run) {
+      await runController.fail(options.run, {
+        error: `请求被安全策略拦截：${guardrails.violations.join('；')}`,
+        stage: 'guardrails',
+      })
+    }
     return null
   }
 
@@ -1649,12 +1987,34 @@ async function generatePlanAndPushTaskBoard(
     },
   })
 
+  const managerRun =
+    options.run ??
+    (await runController.start({
+      workspaceId,
+      groupSessionId: sessionId,
+      goal: content,
+      actor: orchestratorAgent,
+      decision: options.decision ?? null,
+    }))
+  const runId = options.runId ?? managerRun.runId
+
   try {
     const plan = await buildDynamicOrchestratorPlan(content, agents, workspaceId)
-    return await startPlanRunInExistingGroup({ sessionId, plan, workspaceId, ownerId })
+    return await startPlanRunInExistingGroup({
+      sessionId,
+      plan,
+      workspaceId,
+      ownerId,
+      runId,
+      run: managerRun,
+    })
   } catch (err: any) {
     const message = err?.message || '模型没有返回可执行的任务计划'
     logger.warn({ err: message, sessionId }, 'Dynamic orchestrator plan failed')
+    await runController.fail(managerRun, {
+      error: message,
+      stage: 'planning',
+    })
     const [failedMessage] = await db
       .insert(messages)
       .values({

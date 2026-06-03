@@ -10,6 +10,7 @@ export interface LocalA2ASendInput {
   profile?: AgentProfile
   envelope?: AgentExecutionEnvelope
   a2a?: AgentHubA2AEnvelope
+  signal?: AbortSignal
 }
 
 export class LocalA2ATransport {
@@ -20,7 +21,13 @@ export class LocalA2ATransport {
           a2a: input.a2a ?? input.envelope.a2a,
         }
       : undefined
-    return runAgentReply(input.sessionId, input.userMessage, input.profile, envelope)
+    return runAgentReply(
+      input.sessionId,
+      input.userMessage,
+      input.profile,
+      envelope,
+      input.signal,
+    )
   }
 }
 

@@ -8,6 +8,7 @@
 更完整的分层架构与业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
 Spec Kit 契约化和 AG-UI 事件收敛路线见 `docs/SpecKit契约与AGUI事件落地路线.md`。
 产品北极星与 Coze 对标拆解见 `docs/Coze新版本对标拆解与开源复刻路线.md`。
+HiClaw 资源控制平面调研和后续底层重构方案见 `docs/HiClaw架构调研与AgentHub底层重构方案.md`。
 
 ## 设计目标
 
@@ -22,6 +23,32 @@ AgentHub 要做的是通用多 Agent 协作平台，而不是针对某个固定�
 - 系统不再自动注入默认团队、经典模板或关键词路由，所有执行分工都应来自 Orchestrator/Planner 的模型输出。
 - 后续产品层要在这套运行时之上形成 Space、Task Center、Asset Center、Expert Center、Eval / Trace 等一等页面。
 
+## 目标内核方向
+
+当前运行链路仍处在迁移期：`messages.ts` 已开始退成 ChatIngress，`RunController / ManagerLoop` 已接管 run 创建、Manager thinking、Orchestrator 决策事件、approval requested、run failed/completed 等生命周期动作；但任务计划生成、调度执行和最终汇总仍主要通过 `OrchestratorEngine`、`TaskScheduler` 和 `TaskExecutionService` 完成。这不是最终目标。
+
+后续底层应学习 HiClaw 的资源控制平面思想，但保持 AgentHub 的本地轻量体验和自研 IM / AG-UI 产品壳。目标是逐步形成 HiClaw-lite Kernel：
+
+```text
+Run
+Task
+TaskThread
+WorkerInstance
+Artifact
+RuntimeLease
+RunEvent
+```
+
+这些对象应成为一等资源，拥有稳定 ID、desired state、observed status 和可恢复的生命周期。任务看板、进度条、子对话入口和产物卡应从这些资源以及 AG-UI / RunEvent 投影出来，不再依赖多个消息 metadata 和临时 UI 状态拼接。
+
+第一阶段优先级：
+
+1. `RunEvent` 成为前端运行状态的唯一真相源。
+2. `TaskThread` 一等资源化，确保计划一生成就能看到准备中的稳定子对话。
+3. `ArtifactStore` 一等资源化，产物不再主要依赖执行后扫描和消息 metadata。
+4. `WorkerInstance` / `RuntimeLease` 一等资源化，让每个专家 Agent 成为真实可观察执行实体。
+5. 新 `RunController` 逐步替代 `OrchestratorEngine` 的过程式主流程。
+
 ## 当前分层架构
 
 AgentHub 需要把以下层次分开设计：
@@ -35,9 +62,26 @@ AgentHub 需要把以下层次分开设计：
 | 执行运行时层 | Codex CLI、Claude Code、OpenCode、Gemini CLI 作为 Coding Agent 基底 |
 | 能力工具层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 可用能力 |
 | 协作契约层 | 用户显式提供的 Spec / Contract 只描述范围、产出、验收和路径边界，不做固定模板或意图路由 |
-| 工作区与状态层 | 系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/handoff`、local sandbox root、blackboard、execution logs、run events |
+| 工作区与状态层 | 系统默认工作空间根、`.agenthub/workdirs`、`.agenthub/shared/tasks`、兼容 `.agenthub/handoff`、local sandbox root、blackboard、execution logs、run events |
 
 产品层应学习 WorkBuddy / Kimi 群聊 / Claude Code subagents 的“主对话可见、子任务可进、过程可信”；编排层应学习 LangGraph / Microsoft Agent Framework 的 DAG、checkpoint、resume、HITL；协议层应坚持 A2A / AG-UI / MCP 各管一层，不互相冒充。
+
+这里的 HITL 不是“加几个确认弹窗”就算完成，而是要贯彻到整条协作链：
+
+- Human 是 Team Runtime 的一等公民，而不是系统外部的旁观者。
+- Human 主要关注高层目标、约束、审批、纠偏和验收，不应该被迫盯每个 Worker 的低层执行细节。
+- Manager / Orchestrator 的职责之一，就是替 Human 持续监督 Worker，把执行监督负担从人身上拿走。
+- 因此主群聊、TaskThread、RunController、ManagerLoop、AG-UI 投影，都必须支持：
+  - Human 随时观察
+  - Human 在主群聊或任务线程插话
+  - Manager 吸收新约束并继续当前 run，而不是机械重开流程
+  - 在补员、返工、高风险动作、结果验收等节点保留清晰的人机边界
+
+当前已经落下两刀：
+
+- 当群聊存在 `planning / running / synthesizing` 的活跃 run 时，用户在主群聊补充一句新要求，不再默认新开 run；系统会把它登记成当前 run 的 `human_interrupt`，由 Manager 在主群聊可见确认，并同步到活跃 TaskThread，形成可审计的过程痕迹。
+- `RunController.reconcile()` 现在会继续消费尚未处理的 `human_interrupt`，把约束并入未完成任务描述，写入 `manager_actions/human_interrupts/*` 黑板记录，并发出 `run.replanned(strategy=human_interrupt)` / `task.rework_requested` 事件，让“人类插话”开始成为控制面事实，而不是只停在聊天可见性上。
+- 对 active TaskThread，这条控制链还会继续下探到执行层：Manager 会中断对应的 live agent reply，把相关 `runtimeLease` 标为 stale，并把 `workerInstance` 收回 idle。这样“新要求来了，先收住旧执行”开始有了真实的 Worker 生命周期语义。
 
 ## 配置口径
 
@@ -95,16 +139,23 @@ workspaceId != null
 session.type = direct
 metadata.kind = orchestrator-task
 workspaceId != null
-workspaceAgentId != null
+metadata.orchestratorRunId != null
+metadata.orchestratorTaskId != null
+metadata.taskThreadId != null
 ```
 
 展示位置：对应群聊展开后的子项。
 
 职责：
 
+- 在 `prepared` 阶段作为稳定任务房间存在，即使尚未正式分配 Agent 也可点击查看“等待 Manager 分发/准备中”。
 - 保存 Orchestrator 发给 Agent 的任务提示。
 - 保存 Agent 的真实执行过程、流式输出、工具输出和最终消息。
 - 作为任务看板“子对话”按钮的目标。
+
+注意：`workspaceAgentId` 在任务正式分配前可以为空；进入 `assigned / active` 后必须由 `TaskThread` 回填到 session 和 metadata。左侧树不能再因为缺少 `workspaceAgentId` 隐藏 prepared 子对话。
+
+前端恢复链路要继续向控制面资源收敛：`run.taskBoardSnapshot` 负责任务看板主体，`run.resourceSnapshot.taskThreads/tasks` 负责补齐子对话入口、TaskThread 状态、Agent tabs 和 prepared/assigned/active 语义；浏览器本地不应再单独发明一套平行状态机。
 
 ## 明确废弃的旧设计
 
@@ -124,20 +175,22 @@ workspaceAgentId != null
 
 ```text
 用户发送群聊消息
-  -> messages.ts 写入用户消息
-  -> intentRouter 判断简单聊天或复杂任务
+  -> messages.ts 作为 ChatIngress 写入用户消息、鉴权并加载群聊上下文
+  -> RunController / ManagerLoop 创建 run.started 与 manager.thinking
+  -> RunController 调用 Orchestrator 模型观察用户目标并返回 next action
   -> 简单聊天：Orchestrator 直接回复
+  -> 能力不足：Orchestrator 输出 memberProposals，RunController 写 approval.requested
   -> 复杂任务：生成动态计划和任务看板
   -> 用户点击分发执行
-  -> OrchestratorEngine.dispatch()
+  -> 迁移期进入 OrchestratorEngine.startRun()
   -> Planner 生成/整理任务 DAG
-  -> 为每个任务创建 orchestrator-task 子对话
+  -> 为每个任务创建 TaskThread，并投影为 orchestrator-task 子对话
   -> TaskScheduler 按依赖执行
   -> Orchestrator 生成 A2A message/send envelope
   -> TaskExecutionService 准备执行目录和 local sandbox lease
   -> LocalA2ATransport 派发给本地执行宿主
   -> 本地执行宿主适配 LLM fallback / Code Agent
-  -> 写入黑板和产物（以 A2A artifact/metadata 扩展记录）
+  -> 写入 shared task directory / ArtifactStore / 黑板（以 A2A artifact/metadata 扩展记录）
   -> 主群聊发布成员汇报
   -> Synthesizer 汇总最终结果
 ```
@@ -186,7 +239,7 @@ Agent = CLI 运行器 × 模型绑定 × Skills/MCP 能力 × 沙箱策略 × �
 
 ## 工作目录
 
-当前优先采用“一个项目工作区 + 每个 Agent 一个执行目录”的设计。默认隔离层是 Docker Sandboxes；`local-workdir` 只作为兼容降级路径。
+当前优先采用“一个项目工作区 + 每个 Agent 一个执行目录”的设计。默认执行隔离 provider 是 `local-workdir`；Docker Sandboxes 是可选增强隔离路径，只有用户/策略明确启用并通过诊断后才使用。
 
 ```text
 {projectRoot}/.agenthub/
@@ -202,8 +255,8 @@ Agent = CLI 运行器 × 模型绑定 × Skills/MCP 能力 × 沙箱策略 × �
 规则：
 
 - 用户选择本地工作区后，项目根就是 `projectRoot`。
-- 写入型 Agent 在 `.agenthub/workdirs/...` 中执行。
-- 只读 Agent 可以读取项目根。
+- Code Agent 默认以 `workspace-write` 在 `.agenthub/workdirs/...` 中执行。
+- 当前不再把 `read-only` 作为公开的 Code Agent 配置项；研究/审查的低风险语义应通过角色职责、工具权限、上下文策略和审批策略表达。
 - 显式协作契约放在 `.agenthub/contracts/*.contract.json|yml`；旧的 `.agenthub/specs/*.spec.yml` 只作为历史残留，不再参与主路径。
 - 如果用户未选择工作区，系统会在默认工作空间存储路径下自动创建一个可写工作区。
 - 默认工作空间存储路径必须位于系统用户数据目录，例如 Windows 的 `%LOCALAPPDATA%\AgentHub\workspaces`，不能回落到 AgentHub 源码仓库。
@@ -211,8 +264,8 @@ Agent = CLI 运行器 × 模型绑定 × Skills/MCP 能力 × 沙箱策略 × �
 
 执行隔离通过 `SandboxProvider` 抽象承载。当前可用 provider：
 
-- `docker-sandbox`：默认路径，Code Agent CLI 会通过 Docker Sandboxes 的 `sbx` CLI 在沙箱里执行。
-- `local-workdir`：兼容降级路径，本机进程 + 独立 workdir/temp/cache/config。
+- `local-workdir`：当前默认路径，本机进程 + 独立 workdir/temp/cache/config，最贴近本地 Coding Agent 的轻量体验。
+- `docker-sandbox`：可选隔离路径；只有用户/策略明确启用，并且 `sandboxRunnable=true` 时，Code Agent CLI 才会通过 Docker Sandboxes 的 `sbx` CLI 在沙箱里执行。
 
 云沙箱或远程开发容器可以作为后续 provider 接入，但在真正实现前不能把它们描述为已启用。
 
@@ -231,9 +284,9 @@ Agent = CLI 运行器 × 模型绑定 × Skills/MCP 能力 × 沙箱策略 × �
 - 不能阻止恶意 CLI 读取沙箱外路径；它是工作目录和环境隔离，不是 OS 权限边界。
 - 默认不强制改写 `HOME/USERPROFILE`，以免破坏 Codex / Claude Code / OpenCode 的本机登录态。需要更强 HOME 隔离时可设置 `AGENTHUB_SANDBOX_ISOLATE_HOME=true`，但应优先确保模型凭据从 AgentHub 设置注入。
 
-`docker-sandbox` provider 当前实际做了这些事：
+`docker-sandbox` provider 当前作为可选增强路径，计划/已实现能力包括：
 
-- 默认启用 `AGENTHUB_SANDBOX_PROVIDER=docker-sandbox`，依赖 Docker Sandboxes 的 `sbx` CLI。
+- 用户或策略显式选择 `AGENTHUB_SANDBOX_PROVIDER=docker-sandbox` 时，依赖 Docker Sandboxes 的 `sbx` CLI。
 - 根据 Agent 的 `codeAgentType` 自动选择 `sbx create` 的 agent 类型：Codex、Claude、OpenCode、Gemini。
 - 将 Agent 的实际执行目录作为 sandbox workspace，temp/cache/config/data/home 目录作为额外 workspace。
 - OpenCode prompt file、Codex last-message 文件和运行时配置都放在已挂载的 sandbox temp/config 目录中。
@@ -251,23 +304,33 @@ Agent = CLI 运行器 × 模型绑定 × Skills/MCP 能力 × 沙箱策略 × �
 
 只有 `sandboxRunnable=true` 才表示 Docker Sandboxes 当前真的可运行；只有 `supportsPerAgentIsolation=true` 才表示当前默认隔离层满足“每个 Agent 独立运行态”的要求。
 
-## 产物和 handoff
+## 产物和共享任务目录
 
-Agent 产物有三层：
+Agent 产物的新事实中心应是共享任务目录和 ArtifactStore：
 
-- 子对话消息 metadata 中的 artifacts。
-- `workspace_tasks.artifacts` 中的任务产物记录。
-- `blackboard_entries` 中的结构化摘要和 artifact ref。
+- `.agenthub/shared/tasks/{taskId}/meta.json`：任务状态、负责人、运行时、产物引用。
+- `.agenthub/shared/tasks/{taskId}/spec.md`：Manager 给 Worker 的本次任务说明和验收标准。
+- `.agenthub/shared/tasks/{taskId}/plan.md` / `result.md`：Worker 计划与结果摘要。
+- `.agenthub/shared/tasks/{taskId}/artifacts/...`：下游 Agent 可读取的交接产物。
+- `artifacts` 表：产物资源登记、去重、状态和 UI 投影。
 
-对于需要被下游 Agent 使用的文件，Orchestrator 会尽量复制到：
+迁移期仍保留兼容投影：
+
+- 子对话消息 metadata 中的 artifact refs。
+- `workspace_tasks.artifacts` 中的旧任务产物记录。
+- `blackboard_entries` 中的结构化摘要和 artifact refs。
+- `.agenthub/handoff/{runId}/{taskId}/...` 作为旧历史路径或兼容别名。
+
+对于需要被下游 Agent 使用的文件，Orchestrator 会优先复制到：
 
 ```text
-.agenthub/handoff/{runId}/{taskId}/...
+.agenthub/shared/tasks/{taskId}/artifacts/...
 ```
 
 下游提示词规则：
 
 - 优先读取黑板中明确给出的 `handoffPath`。
+- 当前新任务的 `handoffPath` 应优先指向 `shared/tasks/{taskId}/artifacts/...`。
 - `filePath/path` 只是上游记录，不代表该路径存在于当前 Agent 工作目录。
 - 不允许下游 Agent 读取自己目录里臆造的相对路径。
 

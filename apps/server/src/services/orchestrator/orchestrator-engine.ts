@@ -30,11 +30,24 @@ import { ExecutionMergeResolver, type MergeReport } from './conflict-resolver'
 import { ReplanningEngine } from './replanning-engine'
 import { emitRunEvent } from './run-events'
 import { initializeRunLedger } from './run-ledger'
+import { prepareTaskRuntimeThread, updateTaskThreadStatus } from './task-thread-service'
+import { updateSharedTaskDirectoryStatus } from './shared-task-directory'
+import { registerTaskArtifact, toCanonicalArtifactRecord } from './artifact-store'
+import { runController, type RunControllerRunContext } from './run-controller'
+import {
+  createRuntimeLease,
+  failRuntimeLease,
+  markRuntimeLeaseReady,
+  markRuntimeLeaseRunning,
+  markWorkerInstanceState,
+  releaseRuntimeLease,
+} from './worker-runtime-resources'
 import {
   hasFatalTaskContractViolations,
   validateTaskOutputContract,
   type TaskContractResult,
 } from './task-contract'
+import { appendHumanInterruptConstraint, type HumanInterruptPayload } from './human-interrupts'
 import { runTaskValidation, type TaskValidationResult } from './task-validation'
 import type {
   CollaborationMode,
@@ -46,7 +59,6 @@ import type {
 import { PolicyGuard } from '../policy-guard'
 import { streamReply } from '../llm'
 import { buildAgentProfile, buildAgentProfileWithExecutionDir } from '../agents/profile-builder'
-import { ensureOrchestratorTaskSession } from '../workspace/session-manager'
 import { DEFAULT_ENV_ALLOWLIST, resolveDefaultWorkDir } from '../execution/agent-execution-envelope'
 import { buildA2ADispatchEnvelope, buildA2AExecutionTask } from '../protocols/a2a-internal'
 import { buildAgUiTaskStatusEvent } from '../protocols'
@@ -62,6 +74,10 @@ interface ChildSessionInfo {
   sessionId: string
   workspaceId: string
   projectPath?: string | null
+  taskThreadId?: string | null
+  workerInstanceId?: string | null
+  sharedTaskRelativeRoot?: string | null
+  sharedTaskSpecPath?: string | null
 }
 
 interface TaskResultReport {
@@ -90,6 +106,28 @@ interface TaskResultReport {
   error?: string
 }
 
+interface EnsureTaskRuntimeThreadInput {
+  workspaceId: string
+  workspaceName: string
+  ownerId: string
+  groupSessionId: string
+  runId: string
+  plan: ExecutionPlan
+  task: ExecutionTask
+  agent: ExecutionAgent | null
+  projectPath?: string | null
+}
+
+interface DynamicTaskRegistration {
+  task: ExecutionTask
+  childInfo: ChildSessionInfo
+  agentName?: string | null
+  strategy: string
+  reason?: string | null
+  round?: number | null
+  severity?: 'info' | 'warning' | 'error'
+}
+
 export class OrchestratorEngine {
   private static activeEngines = new Map<string, OrchestratorEngine>()
   private planner = new Planner()
@@ -97,6 +135,9 @@ export class OrchestratorEngine {
   private synthesizer = new Synthesizer()
   private mergeResolver = new ExecutionMergeResolver()
   private replanningEngine = new ReplanningEngine()
+  private activePlan: ExecutionPlan | null = null
+  private activeChildSessions = new Map<string, ChildSessionInfo>()
+  private activeRunContext: RunControllerRunContext | null = null
 
   static cancelActiveRun(runId: string): boolean {
     const engine = OrchestratorEngine.activeEngines.get(runId)
@@ -117,6 +158,18 @@ export class OrchestratorEngine {
     return runIds
   }
 
+  static applyHumanInterruptToActiveRun(
+    runId: string,
+    input: HumanInterruptPayload & { targetTaskIds?: string[] | null },
+  ): { memoryPlanUpdated: boolean; updatedTaskIds: string[] } {
+    const engine = OrchestratorEngine.activeEngines.get(runId)
+    if (!engine) {
+      return { memoryPlanUpdated: false, updatedTaskIds: [] }
+    }
+
+    return engine.applyHumanInterruptToPlan(input)
+  }
+
   static async resumeRun(runId: string): Promise<void> {
     const run = await db.query.orchestratorRuns.findFirst({
       where: eq(orchestratorRuns.id, runId),
@@ -124,6 +177,11 @@ export class OrchestratorEngine {
     if (!run || run.status !== 'running') {
       logger.warn({ runId, status: run?.status }, 'Cannot resume orchestrator run')
       return
+    }
+    const runContext: RunControllerRunContext = {
+      runId,
+      workspaceId: run.workspaceId,
+      groupSessionId: run.groupSessionId,
     }
 
     const engine = new OrchestratorEngine()
@@ -135,26 +193,15 @@ export class OrchestratorEngine {
     })
 
     const resumedTasks = allTasks.map((task) => ({ ...task }))
+    const requeuedTaskIds = new Set(await runController.requeueRunningTasksForResume(runContext))
     for (const task of resumedTasks) {
-      if (task.status === 'running') {
-        await db
-          .update(workspaceTasks)
-          .set({
-            status: TaskStatus.Pending,
-            startedAt: null,
-            completedAt: null,
-            errorLog: '服务重启后恢复运行，任务已重新排队。',
-            progressPercent: 0,
-            progressStatus: '服务重启后恢复运行，等待重新分发。',
-          })
-          .where(eq(workspaceTasks.id, task.id))
-        task.status = TaskStatus.Pending
-        task.startedAt = null
-        task.completedAt = null
-        task.errorLog = '服务重启后恢复运行，任务已重新排队。'
-        task.progressPercent = 0
-        task.progressStatus = '服务重启后恢复运行，等待重新分发。'
-      }
+      if (!requeuedTaskIds.has(task.id)) continue
+      task.status = TaskStatus.Pending
+      task.startedAt = null
+      task.completedAt = null
+      task.errorLog = '服务重启后恢复运行，任务已重新排队。'
+      task.progressPercent = 0
+      task.progressStatus = '服务重启后恢复运行，等待重新分发。'
     }
 
     const [workspaceRecord] = await db
@@ -183,6 +230,9 @@ export class OrchestratorEngine {
     const ownerId = groupSessionRecord?.ownerId ?? 'user'
 
     OrchestratorEngine.activeEngines.set(runId, engine)
+    engine.activePlan = plan
+    engine.activeChildSessions = childSessions
+    engine.activeRunContext = runContext
 
     const pendingTasks = plan.tasks.filter((t) => {
       const dbTask = resumedTasks.find((dt) => dt.id === t.id)
@@ -230,19 +280,12 @@ export class OrchestratorEngine {
         if (result.status === 'blocked') {
           const task = plan.tasks.find((t) => t.id === result.taskId)
           if (task) {
-            await db
-              .update(workspaceTasks)
-              .set({ status: 'blocked', completedAt: new Date(), errorLog: result.error })
-              .where(eq(workspaceTasks.id, task.id))
-            await emitRunEvent({
-              runId,
-              workspaceId: run.workspaceId,
-              groupSessionId: run.groupSessionId,
+            await runController.markTaskBlocked(runContext, {
               taskId: task.id,
+              title: task.title,
               agentId: task.agentId,
-              type: 'task.failed',
-              severity: 'warning',
-              payload: { title: task.title, error: result.error, reason: 'blocked_by_dependency' },
+              error: result.error,
+              reason: 'blocked_by_dependency',
             })
           }
         }
@@ -255,36 +298,23 @@ export class OrchestratorEngine {
         .limit(1)
       if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
         logger.info({ runId }, 'Orchestrator run cancelled before synthesis (resumed)')
-        await emitRunEvent({
-          runId,
-          workspaceId: run.workspaceId,
-          groupSessionId: run.groupSessionId,
-          type: 'run.cancelled',
-          severity: 'warning',
-          payload: { status: OrchestratorRunStatus.Cancelled },
-        })
         return
       }
 
       await engine.synthesizeAndReport(runId, run.groupSessionId, run.workspaceId, plan, results)
     } catch (error: any) {
       logger.error({ err: error?.message, runId }, 'Resumed scheduler execution failed')
-      await db
-        .update(orchestratorRuns)
-        .set({ status: OrchestratorRunStatus.Failed })
-        .where(eq(orchestratorRuns.id, runId))
-      await emitRunEvent({
-        runId,
-        workspaceId: run.workspaceId,
-        groupSessionId: run.groupSessionId,
-        type: 'run.failed',
-        severity: 'error',
-        payload: { error: error?.message || 'Resumed scheduler execution failed' },
+      await runController.fail(runContext, {
+        error: error?.message || 'Resumed scheduler execution failed',
+        stage: 'resume-scheduler-execution',
       })
     } finally {
       if (OrchestratorEngine.activeEngines.get(runId) === engine) {
         OrchestratorEngine.activeEngines.delete(runId)
       }
+      engine.activePlan = null
+      engine.activeChildSessions = new Map()
+      engine.activeRunContext = null
       blackboard.clearNamespace(Blackboard.namespace(run.workspaceId, runId))
     }
   }
@@ -295,30 +325,41 @@ export class OrchestratorEngine {
     workspaceId: string
     task: ExecutionTask
     childSessions: Map<string, ChildSessionInfo>
+    run?: RunControllerRunContext
   }): Promise<TaskResult> {
     const { runId, groupSessionId, workspaceId, task, childSessions } = params
-
-    await db
-      .update(workspaceTasks)
-      .set({ status: TaskStatus.Pending, completedAt: null, errorLog: null })
-      .where(eq(workspaceTasks.id, task.id))
-
-    await emitRunEvent({
-      runId,
-      workspaceId,
-      groupSessionId,
-      taskId: task.id,
-      agentId: task.agentId,
-      type: 'task.retrying',
-      severity: 'warning',
-      payload: { title: task.title, reason: 'User triggered retry' },
-    })
+    const runContext: RunControllerRunContext =
+      params.run ?? {
+        runId,
+        workspaceId,
+        groupSessionId,
+      }
 
     const [runRow] = await db
       .select({ plan: orchestratorRuns.plan })
       .from(orchestratorRuns)
       .where(eq(orchestratorRuns.id, runId))
       .limit(1)
+
+    await runController.markRunning(runContext, {
+      plan:
+        runRow?.plan && typeof runRow.plan === 'object'
+          ? (runRow.plan as Record<string, unknown>)
+          : undefined,
+      taskCount: 1,
+    })
+
+    const existingChild = childSessions.get(task.id)
+    await runController.resetTaskForRetry(runContext, {
+      taskId: task.id,
+      title: task.title,
+      agentId: task.agentId,
+      reason: 'User triggered retry',
+      attempt: 0,
+      childSessionId: existingChild?.sessionId ?? null,
+      taskThreadId: existingChild?.taskThreadId ?? null,
+      workerInstanceId: existingChild?.workerInstanceId ?? null,
+    })
 
     const plan = (runRow?.plan as ExecutionPlan | undefined) ?? {
       runId,
@@ -345,6 +386,25 @@ export class OrchestratorEngine {
       groupSession?.ownerId ?? 'user',
     )
 
+    if (result.status === TaskStatus.Failed || result.status === TaskStatus.Blocked) {
+      await runController.fail(runContext, {
+        error:
+          result.error ??
+          result.output ??
+          `Retry failed for task ${task.title}`,
+        stage: 'task-retry',
+      })
+    } else if (result.status === TaskStatus.Cancelled) {
+      await runController.cancel(runContext, {
+        reason: 'task_retry_cancelled',
+        summary: `Retry for task "${task.title}" was cancelled.`,
+        taskErrorLog: result.error ?? 'Task retry cancelled',
+        payload: {
+          taskId: task.id,
+        },
+      })
+    }
+
     return result
   }
 
@@ -362,18 +422,23 @@ export class OrchestratorEngine {
     workspaceId: string
     plan: ExecutionPlan
     childSessions: Map<string, ChildSessionInfo>
+    run?: RunControllerRunContext
   }): Promise<void> {
     const { runId, groupSessionId, workspaceId, childSessions } = params
     const plan = initializeRunLedger(params.plan)
     OrchestratorEngine.activeEngines.set(runId, this)
-
-    await db
-      .update(orchestratorRuns)
-      .set({
-        status: OrchestratorRunStatus.Running,
-        plan: plan as unknown as Record<string, unknown>,
-      })
-      .where(eq(orchestratorRuns.id, runId))
+    const runContext: RunControllerRunContext = params.run ?? {
+      runId,
+      workspaceId,
+      groupSessionId,
+    }
+    this.activePlan = plan
+    this.activeChildSessions = childSessions
+    this.activeRunContext = runContext
+    await runController.markRunning(runContext, {
+      plan: plan as unknown as Record<string, unknown>,
+      taskCount: plan.tasks.length,
+    })
 
     const [groupSessionRecord] = await db
       .select()
@@ -416,19 +481,12 @@ export class OrchestratorEngine {
         if (result.status === 'blocked') {
           const task = plan.tasks.find((t) => t.id === result.taskId)
           if (task) {
-            await db
-              .update(workspaceTasks)
-              .set({ status: 'blocked', completedAt: new Date(), errorLog: result.error })
-              .where(eq(workspaceTasks.id, task.id))
-            await emitRunEvent({
-              runId,
-              workspaceId,
-              groupSessionId,
+            await runController.markTaskBlocked(runContext, {
               taskId: task.id,
+              title: task.title,
               agentId: task.agentId,
-              type: 'task.failed',
-              severity: 'warning',
-              payload: { title: task.title, error: result.error, reason: 'blocked_by_dependency' },
+              error: result.error,
+              reason: 'blocked_by_dependency',
             })
           }
         }
@@ -441,14 +499,6 @@ export class OrchestratorEngine {
         .limit(1)
       if (currentRun?.status === OrchestratorRunStatus.Cancelled) {
         logger.info({ runId }, 'Orchestrator run cancelled before synthesis')
-        await emitRunEvent({
-          runId,
-          workspaceId,
-          groupSessionId,
-          type: 'run.cancelled',
-          severity: 'warning',
-          payload: { status: OrchestratorRunStatus.Cancelled },
-        })
         return
       }
 
@@ -516,7 +566,7 @@ export class OrchestratorEngine {
 
             if (!supplementPlan || !supplementPlan.tasks.length) break
 
-            const newTasks: ExecutionTask[] = []
+            const registrations: DynamicTaskRegistration[] = []
             for (const pt of supplementPlan.tasks) {
               const agent = plan.agents.find((a) => a.key === pt.agentKey)
               if (!agent) continue
@@ -533,66 +583,39 @@ export class OrchestratorEngine {
                 phaseId: pt.phaseId,
               }
 
-              const childSession = await ensureOrchestratorTaskSession(
+              const childInfo = await ensureTaskRuntimeThread({
                 workspaceId,
-                plan.title,
+                workspaceName: plan.title,
                 ownerId,
-                agent,
-                task.title,
+                groupSessionId,
                 runId,
-                task.id,
-              )
-              childSessions.set(task.id, {
-                sessionId: childSession.id,
-                workspaceId,
+                plan,
+                task,
+                agent,
                 projectPath: childSessions.get(plan.tasks[0]?.id ?? '')?.projectPath,
               })
+              childSessions.set(task.id, childInfo)
 
-              await db.insert(workspaceTasks).values({
-                id: task.id,
-                workspaceId,
-                agentId: task.agentId,
-                title: task.title,
-                description: task.description,
-                status: TaskStatus.Pending,
-                sessionId: childSession.id,
-                orderIdx: plan.tasks.length,
-                runId,
-                phaseId: task.phaseId,
-                dependencies: task.dependencies,
-                parallelGroup: task.parallelGroup,
-                maxRetries: task.maxRetries,
-              })
-
-              await emitRunEvent({
-                runId,
-                workspaceId,
-                groupSessionId,
-                taskId: task.id,
-                agentId: task.agentId,
-                type: 'task.queued',
+              registrations.push({
+                task,
+                childInfo,
+                strategy: 'supervisor_supplement',
+                agentName: agent.name,
+                round: supervisorRound,
                 severity: 'info',
-                payload: {
-                  strategy: 'supervisor_supplement',
-                  title: task.title,
-                  description: task.description,
-                  phaseId: task.phaseId,
-                  taskType: task.taskType,
-                  agentName: agent.name,
-                  agentId: task.agentId,
-                  childSessionId: childSession.id,
-                  dependencies: task.dependencies ?? [],
-                  round: supervisorRound,
-                },
               })
-
-              newTasks.push(task)
             }
 
-            for (const newTask of newTasks) {
-              if (!plan.tasks.some((existing) => existing.id === newTask.id)) {
-                plan.tasks.push(newTask)
-              }
+            const newTasks = await this.registerDynamicTasks(
+              runContext,
+              plan,
+              workspaceId,
+              registrations,
+              { attachToActiveRun: false },
+            )
+
+            if (newTasks.length === 0) {
+              break
             }
 
             const supplementResults = await this.scheduler.executePlan(
@@ -688,25 +711,21 @@ export class OrchestratorEngine {
         plan,
         results,
         mergeReports,
+        runContext,
       )
     } catch (error: any) {
       logger.error({ err: error?.message, runId }, 'Scheduler execution failed')
-      await db
-        .update(orchestratorRuns)
-        .set({ status: OrchestratorRunStatus.Failed })
-        .where(eq(orchestratorRuns.id, runId))
-      await emitRunEvent({
-        runId,
-        workspaceId,
-        groupSessionId,
-        type: 'run.failed',
-        severity: 'error',
-        payload: { error: error?.message || 'Scheduler execution failed' },
+      await runController.fail(runContext, {
+        error: error?.message || 'Scheduler execution failed',
+        stage: 'scheduler-execution',
       })
     } finally {
       if (OrchestratorEngine.activeEngines.get(runId) === this) {
         OrchestratorEngine.activeEngines.delete(runId)
       }
+      this.activePlan = null
+      this.activeChildSessions = new Map()
+      this.activeRunContext = null
       // Run 结束，清理黑板内存缓存
       blackboard.clearNamespace(Blackboard.namespace(workspaceId, runId))
     }
@@ -724,6 +743,123 @@ export class OrchestratorEngine {
       .where(eq(workspaceAgents.workspaceId, workspaceId))
     const orchestrator = agents.find((agent) => agent.roleType === 'orchestrator')
     return orchestrator ? buildAgentProfile(orchestrator, workspace?.projectPath) : null
+  }
+
+  private ensurePlanContainsTask(plan: ExecutionPlan, task: ExecutionTask) {
+    if (!plan.tasks.some((existing) => existing.id === task.id)) {
+      plan.tasks.push(task)
+    }
+
+    const phaseId = task.phaseId ?? 'execution'
+    if (!plan.phases) {
+      plan.phases = [
+        {
+          id: phaseId,
+          title: phaseId === 'execution' ? '执行' : phaseId,
+          purpose: phaseId === 'execution' ? '完成当前协作任务' : phaseId,
+          taskIds: [task.id],
+        },
+      ]
+      return
+    }
+
+    let phase = plan.phases.find((item) => item.id === phaseId)
+    if (!phase) {
+      phase = {
+        id: phaseId,
+        title: phaseId === 'execution' ? '执行' : phaseId,
+        purpose: phaseId === 'execution' ? '完成当前协作任务' : phaseId,
+        taskIds: [],
+      }
+      plan.phases.push(phase)
+    }
+    if (!phase.taskIds.includes(task.id)) {
+      phase.taskIds.push(task.id)
+    }
+  }
+
+  private applyHumanInterruptToPlan(
+    input: HumanInterruptPayload & { targetTaskIds?: string[] | null },
+  ): { memoryPlanUpdated: boolean; updatedTaskIds: string[] } {
+    if (!this.activePlan) {
+      return { memoryPlanUpdated: false, updatedTaskIds: [] }
+    }
+
+    const targetTaskIds =
+      input.targetTaskIds && input.targetTaskIds.length > 0
+        ? new Set(input.targetTaskIds)
+        : new Set(this.activePlan.tasks.map((task) => task.id))
+
+    const updatedTaskIds: string[] = []
+    for (const task of this.activePlan.tasks) {
+      if (!targetTaskIds.has(task.id)) continue
+      const nextDescription = appendHumanInterruptConstraint(task.description, input)
+      if (nextDescription === task.description) continue
+      task.description = nextDescription
+      updatedTaskIds.push(task.id)
+    }
+
+    return {
+      memoryPlanUpdated: updatedTaskIds.length > 0,
+      updatedTaskIds,
+    }
+  }
+
+  private async registerDynamicTasks(
+    run: RunControllerRunContext,
+    plan: ExecutionPlan,
+    workspaceId: string,
+    registrations: DynamicTaskRegistration[],
+    options?: {
+      attachToActiveRun?: boolean
+    },
+  ): Promise<ExecutionTask[]> {
+    const accepted: ExecutionTask[] = []
+    let nextOrderIdx = plan.tasks.length
+
+    for (const registration of registrations) {
+      if (
+        accepted.some((task) => task.id === registration.task.id) ||
+        plan.tasks.some((task) => task.id === registration.task.id)
+      ) {
+        continue
+      }
+
+      await runController.queueTask(run, {
+        taskId: registration.task.id,
+        workspaceId,
+        agentId: registration.task.agentId,
+        title: registration.task.title,
+        description: registration.task.description,
+        sessionId: registration.childInfo.sessionId,
+        childSessionId: registration.childInfo.sessionId,
+        taskThreadId: registration.childInfo.taskThreadId ?? null,
+        sharedTaskRelativeRoot: registration.childInfo.sharedTaskRelativeRoot ?? null,
+        sharedTaskSpecPath: registration.childInfo.sharedTaskSpecPath ?? null,
+        workerInstanceId: registration.childInfo.workerInstanceId ?? null,
+        orderIdx: nextOrderIdx,
+        phaseId: registration.task.phaseId,
+        dependencies: registration.task.dependencies ?? [],
+        parallelGroup: registration.task.parallelGroup,
+        maxRetries: registration.task.maxRetries,
+        strategy: registration.strategy,
+        taskType: registration.task.taskType ?? null,
+        agentName: registration.agentName ?? null,
+        round: registration.round ?? null,
+        reason: registration.reason ?? null,
+        severity: registration.severity ?? 'info',
+      })
+
+      this.ensurePlanContainsTask(plan, registration.task)
+      accepted.push(registration.task)
+      nextOrderIdx++
+    }
+
+    if ((options?.attachToActiveRun ?? true) && accepted.length > 0) {
+      this.scheduler.addTasksToRun(run.runId, accepted)
+    }
+
+    return accepted
   }
 
   private createTaskExecutor(
@@ -803,24 +939,22 @@ export class OrchestratorEngine {
 
         if (replan.strategy === 'retry_with_backoff') {
           const delayMs = replan.delayMs ?? 1000
-          await emitRunEvent({
-            runId,
-            workspaceId,
-            groupSessionId,
-            taskId: currentTask.id,
-            agentId: currentTask.agentId,
-            type: 'task.retrying',
-            severity: 'warning',
-            payload: { attempt: currentAttempt, delayMs, reason: replan.reason },
-          })
-          await new Promise((r) => setTimeout(r, delayMs))
           const childInfo = childSessions.get(currentTask.id)
-          if (childInfo) {
-            await db
-              .update(workspaceTasks)
-              .set({ status: TaskStatus.Pending, errorLog: replan.reason })
-              .where(eq(workspaceTasks.id, currentTask.id))
-          }
+          await runController.resetTaskForRetry(
+            { runId, workspaceId, groupSessionId },
+            {
+              taskId: currentTask.id,
+              title: currentTask.title,
+              agentId: currentTask.agentId,
+              reason: replan.reason,
+              attempt: currentAttempt,
+              delayMs,
+              childSessionId: childInfo?.sessionId ?? null,
+              taskThreadId: childInfo?.taskThreadId ?? null,
+              workerInstanceId: childInfo?.workerInstanceId ?? null,
+            },
+          )
+          await new Promise((r) => setTimeout(r, delayMs))
           continue
         }
 
@@ -828,116 +962,83 @@ export class OrchestratorEngine {
           const previousAgentId = currentTask.agentId
           currentTask = replan.updatedTask
           currentAttempt = 0
-          await emitRunEvent({
-            runId,
-            workspaceId,
-            groupSessionId,
-            taskId: currentTask.id,
-            agentId: currentTask.agentId,
-            type: 'task.reassigned',
-            severity: 'warning',
-            payload: {
-              fromAgentId: previousAgentId,
-              toAgentId: currentTask.agentId,
-              reason: replan.reason,
-            },
-          })
           const childInfo = childSessions.get(currentTask.id)
-          if (childInfo) {
-            await db
-              .update(workspaceTasks)
-              .set({
-                agentId: currentTask.agentId,
-                status: TaskStatus.Pending,
-                retryCount: 0,
-                errorLog: replan.reason,
-              })
-              .where(eq(workspaceTasks.id, currentTask.id))
-          }
+          await runController.resetTaskForReplan(
+            { runId, workspaceId, groupSessionId },
+            {
+              taskId: currentTask.id,
+              title: currentTask.title,
+              agentId: previousAgentId,
+              nextAgentId: currentTask.agentId,
+              reason: replan.reason,
+              strategy: 'agent_substitution',
+              changedTaskIds: [currentTask.id],
+              childSessionId: childInfo?.sessionId ?? null,
+              taskThreadId: childInfo?.taskThreadId ?? null,
+              workerInstanceId: childInfo?.workerInstanceId ?? null,
+              retryCount: 0,
+              extraPayload: {
+                fromAgentId: previousAgentId,
+                toAgentId: currentTask.agentId,
+              },
+            },
+          )
           continue
         }
 
         if (replan.strategy === 'local_replan' && replan.updatedTask) {
           currentTask = replan.updatedTask
           currentAttempt = 0
-          await emitRunEvent({
-            runId,
-            workspaceId,
-            groupSessionId,
-            taskId: currentTask.id,
-            agentId: currentTask.agentId,
-            type: 'run.replanned',
-            severity: 'warning',
-            payload: {
-              strategy: 'local_replan',
-              reason: replan.reason,
-              changedTaskIds: [currentTask.id],
-            },
-          })
           const childInfo = childSessions.get(currentTask.id)
-          if (childInfo) {
-            await db
-              .update(workspaceTasks)
-              .set({ status: TaskStatus.Pending, retryCount: 0, errorLog: replan.reason })
-              .where(eq(workspaceTasks.id, currentTask.id))
-          }
+          await runController.resetTaskForReplan(
+            { runId, workspaceId, groupSessionId },
+            {
+              taskId: currentTask.id,
+              title: currentTask.title,
+              agentId: currentTask.agentId,
+              reason: replan.reason,
+              strategy: 'local_replan',
+              changedTaskIds: [currentTask.id],
+              childSessionId: childInfo?.sessionId ?? null,
+              taskThreadId: childInfo?.taskThreadId ?? null,
+              workerInstanceId: childInfo?.workerInstanceId ?? null,
+              retryCount: 0,
+            },
+          )
           continue
         }
 
         if (replan.strategy === 'task_split' && replan.newTasks && replan.newTasks.length > 0) {
+          const registrations: DynamicTaskRegistration[] = []
           for (const newTask of replan.newTasks) {
             const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
-            const childSession = await ensureOrchestratorTaskSession(
+            const childInfo = await ensureTaskRuntimeThread({
               workspaceId,
-              plan.title,
+              workspaceName: plan.title,
               ownerId,
-              newAgent ?? null,
-              newTask.title,
+              groupSessionId,
               runId,
-              newTask.id,
-            )
-            await db.insert(workspaceTasks).values({
-              id: newTask.id,
-              workspaceId,
-              agentId: newTask.agentId,
-              title: newTask.title,
-              description: newTask.description,
-              status: TaskStatus.Pending,
-              sessionId: childSession.id,
-              orderIdx: plan.tasks.length,
-              runId,
-              phaseId: newTask.phaseId,
-              dependencies: newTask.dependencies ?? [],
-              parallelGroup: newTask.parallelGroup,
-              maxRetries: newTask.maxRetries ?? 2,
-            })
-            childSessions.set(newTask.id, {
-              sessionId: childSession.id,
-              workspaceId,
+              plan,
+              task: newTask,
+              agent: newAgent ?? null,
               projectPath: childSessions.get(currentTask.id)?.projectPath,
             })
-            await emitRunEvent({
-              runId,
-              workspaceId,
-              groupSessionId,
-              taskId: newTask.id,
-              agentId: newTask.agentId,
-              type: 'task.queued',
+            childSessions.set(newTask.id, childInfo)
+            registrations.push({
+              task: newTask,
+              childInfo,
+              strategy: 'task_split',
+              agentName: newAgent?.name ?? newTask.agentId,
+              reason: replan.reason,
               severity: 'warning',
-              payload: {
-                strategy: 'task_split',
-                title: newTask.title,
-                description: newTask.description,
-                phaseId: newTask.phaseId,
-                taskType: newTask.taskType,
-                agentName: newAgent?.name ?? newTask.agentId,
-                agentId: newTask.agentId,
-                childSessionId: childSession.id,
-                dependencies: newTask.dependencies ?? [],
-                reason: replan.reason,
-              },
             })
           }
+          const queuedTasks = await this.registerDynamicTasks(
+            { runId, workspaceId, groupSessionId },
+            plan,
+            workspaceId,
+            registrations,
+          )
           await emitRunEvent({
             runId,
             workspaceId,
@@ -949,12 +1050,11 @@ export class OrchestratorEngine {
             payload: {
               strategy: 'task_split',
               reason: replan.reason,
-              changedTaskIds: replan.newTasks.map((t) => t.id),
+              changedTaskIds: queuedTasks.map((t) => t.id),
             },
           })
-          this.scheduler.addTasksToRun(runId, replan.newTasks)
           logger.info(
-            { taskId: currentTask.id, newTaskCount: replan.newTasks.length },
+            { taskId: currentTask.id, newTaskCount: queuedTasks.length },
             'Task split into subtasks',
           )
           return {
@@ -975,59 +1075,35 @@ export class OrchestratorEngine {
             const existingIds = new Set(plan.tasks.map((t) => t.id))
             const tasksToAdd = newPlan.tasks.filter((t) => !existingIds.has(t.id))
             if (tasksToAdd.length > 0) {
+              const registrations: DynamicTaskRegistration[] = []
               for (const newTask of tasksToAdd) {
                 const newAgent = plan.agents.find((a) => a.id === newTask.agentId)
-                const childSession = await ensureOrchestratorTaskSession(
+                const childInfo = await ensureTaskRuntimeThread({
                   workspaceId,
-                  plan.title,
+                  workspaceName: plan.title,
                   ownerId,
-                  newAgent ?? null,
-                  newTask.title,
+                  groupSessionId,
                   runId,
-                  newTask.id,
-                )
-                await db.insert(workspaceTasks).values({
-                  id: newTask.id,
-                  workspaceId,
-                  agentId: newTask.agentId,
-                  title: newTask.title,
-                  description: newTask.description,
-                  status: TaskStatus.Pending,
-                  sessionId: childSession.id,
-                  orderIdx: plan.tasks.length,
-                  runId,
-                  phaseId: newTask.phaseId,
-                  dependencies: newTask.dependencies ?? [],
-                  parallelGroup: newTask.parallelGroup,
-                  maxRetries: newTask.maxRetries ?? 2,
-                })
-                childSessions.set(newTask.id, {
-                  sessionId: childSession.id,
-                  workspaceId,
+                  plan,
+                  task: newTask,
+                  agent: newAgent ?? null,
                   projectPath: childSessions.get(currentTask.id)?.projectPath,
                 })
-                await emitRunEvent({
-                  runId,
-                  workspaceId,
-                  groupSessionId,
-                  taskId: newTask.id,
-                  agentId: newTask.agentId,
-                  type: 'task.queued',
+                childSessions.set(newTask.id, childInfo)
+                registrations.push({
+                  task: newTask,
+                  childInfo,
+                  strategy: 'global_replan',
+                  agentName: newAgent?.name ?? newTask.agentId,
                   severity: 'warning',
-                  payload: {
-                    strategy: 'global_replan',
-                    title: newTask.title,
-                    description: newTask.description,
-                    phaseId: newTask.phaseId,
-                    taskType: newTask.taskType,
-                    agentName: newAgent?.name ?? newTask.agentId,
-                    agentId: newTask.agentId,
-                    childSessionId: childSession.id,
-                    dependencies: newTask.dependencies ?? [],
-                  },
                 })
               }
-              this.scheduler.addTasksToRun(runId, tasksToAdd)
+              const queuedTasks = await this.registerDynamicTasks(
+                { runId, workspaceId, groupSessionId },
+                plan,
+                workspaceId,
+                registrations,
+              )
               await emitRunEvent({
                 runId,
                 workspaceId,
@@ -1039,11 +1115,11 @@ export class OrchestratorEngine {
                 payload: {
                   strategy: 'global_replan',
                   reason: replan.reason,
-                  changedTaskIds: tasksToAdd.map((t) => t.id),
+                  changedTaskIds: queuedTasks.map((t) => t.id),
                 },
               })
               logger.info(
-                { taskId: currentTask.id, addedCount: tasksToAdd.length },
+                { taskId: currentTask.id, addedCount: queuedTasks.length },
                 'Global replan added new tasks',
               )
               continue
@@ -1160,6 +1236,11 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     attemptCount = 0,
     ownerId = 'user',
   ): Promise<TaskResult> {
+    const runContext: RunControllerRunContext = {
+      runId,
+      workspaceId,
+      groupSessionId,
+    }
     const agent = plan.agents.find((a) => a.id === task.agentId)
     if (!agent) {
       await emitRunEvent({
@@ -1215,25 +1296,22 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     }
 
     if (shouldRepairChildSession) {
-      const repairedSession = await ensureOrchestratorTaskSession(
+      childInfo = await ensureTaskRuntimeThread({
         workspaceId,
-        plan.title || 'Agent Group',
+        workspaceName: plan.title || 'Agent Group',
         ownerId,
-        agent,
-        task.title,
+        groupSessionId,
         runId,
-        task.id,
-      )
-      childInfo = {
-        sessionId: repairedSession.id,
-        workspaceId,
+        plan,
+        task,
+        agent,
         projectPath:
           childInfo?.projectPath ?? childSessions.values().next().value?.projectPath ?? null,
-      }
+      })
       childSessions.set(task.id, childInfo)
       await db
         .update(workspaceTasks)
-        .set({ sessionId: repairedSession.id })
+        .set({ sessionId: childInfo.sessionId, progressStatus: 'thread-prepared' })
         .where(eq(workspaceTasks.id, task.id))
     }
 
@@ -1271,7 +1349,11 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       input: { taskTitle: task.title, attemptCount },
     })
 
-    const prompt = await buildTaskPrompt(task, plan, blackboard, bbNamespace)
+    const prompt = await buildTaskPrompt(task, plan, blackboard, bbNamespace, {
+      taskThreadId: childInfo.taskThreadId ?? null,
+      sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+      sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+    })
 
     const userMessageId = crypto.randomUUID()
     const a2aDispatch = buildA2ADispatchEnvelope({
@@ -1282,6 +1364,9 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       workspaceId,
       groupSessionId,
       childSessionId: childInfo.sessionId,
+      taskThreadId: childInfo.taskThreadId ?? null,
+      sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+      sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
       userMessageId,
     })
 
@@ -1310,51 +1395,237 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       }
     }
 
+    const orchestratorAgent = plan.agents.find((item) => item.roleType === 'orchestrator')
+    const managerDispatchMessage = await persistThreadTransparencyMessage({
+      sessionId: childInfo.sessionId,
+      senderId: orchestratorAgent?.id ?? 'orchestrator',
+      senderType: 'agent',
+      content: buildManagerDispatchThreadMessage({
+        managerName: orchestratorAgent?.name ?? 'Orchestrator',
+        workerName: agent.name,
+        taskTitle: task.title,
+        sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+      }),
+      metadata: {
+        kind: 'manager-task-assigned',
+        orchestratorRunId: runId,
+        orchestratorTaskId: task.id,
+        groupSessionId,
+        taskThreadId: childInfo.taskThreadId ?? null,
+        workerInstanceId: childInfo.workerInstanceId ?? null,
+        managerName: orchestratorAgent?.name ?? 'Orchestrator',
+        workerName: agent.name,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? undefined,
+        sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? undefined,
+        a2aDispatch: a2aDispatch.params,
+      },
+    })
+    await persistThreadTransparencyMessage({
+      sessionId: groupSessionId,
+      senderId: orchestratorAgent?.id ?? 'orchestrator',
+      senderType: 'agent',
+      content: buildManagerGroupDispatchMessage({
+        managerName: orchestratorAgent?.name ?? 'Orchestrator',
+        workerName: agent.name,
+        taskTitle: task.title,
+      }),
+      metadata: {
+        systemEvent: 'manager_task_dispatched',
+        kind: 'manager-task-dispatched',
+        orchestratorRunId: runId,
+        orchestratorTaskId: task.id,
+        childSessionId: childInfo.sessionId,
+        taskThreadId: childInfo.taskThreadId ?? null,
+        workerInstanceId: childInfo.workerInstanceId ?? null,
+        managerName: orchestratorAgent?.name ?? 'Orchestrator',
+        workerName: agent.name,
+      },
+    })
+
+    await runController.markTaskAssigned(runContext, {
+      taskId: task.id,
+      title: task.title,
+      agentId: agent.id,
+      workerInstanceId: childInfo.workerInstanceId ?? null,
+      childSessionId: childInfo.sessionId,
+      taskThreadId: childInfo.taskThreadId ?? null,
+      sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+      sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+      messageId: userMsg.id,
+      extraPayload: {
+        agentName: agent.name,
+        sessionId: childInfo.sessionId,
+        assignmentMessageId: managerDispatchMessage?.id ?? null,
+      },
+    })
+    await this.syncSharedTaskDirectory({
+      childInfo,
+      status: 'assigned',
+      workerInstanceId: childInfo.workerInstanceId ?? null,
+      messageId: userMsg.id,
+      timestamps: { assignedAt: new Date().toISOString() },
+    })
+
     let executionConfig = await buildExecutionConfigSummary({
       profile,
       projectPath: childInfo.projectPath ?? null,
       executionPath: profile.projectPath ?? childInfo.projectPath ?? null,
       requestedSandboxPolicy: profile.sandboxPolicy,
     })
-
-    await db
-      .update(workspaceTasks)
-      .set({
-        status: TaskStatus.Running,
-        startedAt: new Date(),
-        completedAt: null,
-        errorLog: null,
-        progressPercent: 3,
-        progressStatus: buildExecutionProgressStatus({
-          agentName: agent.name,
-          taskTitle: task.title,
-          executionConfig,
-        }),
-      })
-      .where(eq(workspaceTasks.id, task.id))
-
-    // 发送 orchestrator 特有的事件
-    await emitRunEvent({
-      runId,
+    const workerInstanceId = childInfo.workerInstanceId ?? null
+    const runtimeLease = await createRuntimeLease({
       workspaceId,
-      groupSessionId,
+      runId,
       taskId: task.id,
+      workerInstanceId,
+      provider: executionConfig.sandboxProvider,
+      cwd: executionConfig.executionPath,
+      metadata: {
+        taskThreadId: childInfo.taskThreadId ?? null,
+        sessionId: childInfo.sessionId,
+        executionConfig,
+      },
+    })
+    const runtimeLeaseId = runtimeLease?.id ?? null
+    let runtimeLeaseFinalized = false
+    const finalizeRuntimeLease = async (
+      status: 'released' | 'failed',
+      metadata?: Record<string, unknown>,
+      error?: string | null,
+    ) => {
+      if (!runtimeLeaseId || runtimeLeaseFinalized) return
+      runtimeLeaseFinalized = true
+      if (status === 'released') {
+        await releaseRuntimeLease(runtimeLeaseId, {
+          workerInstanceId,
+          metadata: {
+            taskStatus: metadata?.taskStatus ?? TaskStatus.Done,
+            executionConfig,
+            ...metadata,
+          },
+        })
+        return
+      }
+      await failRuntimeLease(runtimeLeaseId, {
+        workerInstanceId,
+        error,
+        metadata: {
+          taskStatus: TaskStatus.Failed,
+          executionConfig,
+          ...metadata,
+        },
+      })
+    }
+    await markWorkerInstanceState(workerInstanceId, 'ready', {
+      message: `${agent.name} runtime lease prepared.`,
+      health: {
+        readinessStatus: executionConfig.readinessStatus,
+        blockers: executionConfig.blockers ?? [],
+      },
+    })
+
+    const initialProgressStatus = buildExecutionProgressStatus({
+      agentName: agent.name,
+      taskTitle: task.title,
+      executionConfig,
+    })
+    await runController.markTaskActive(runContext, {
+      taskId: task.id,
+      title: task.title,
       agentId: agent.id,
-      type: 'task.started',
-      payload: {
-        title: task.title,
+      workerInstanceId,
+      runtimeLeaseId,
+      childSessionId: childInfo.sessionId,
+      taskThreadId: childInfo.taskThreadId ?? null,
+      sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+      sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+      progressPercent: 3,
+      progressStatus: initialProgressStatus,
+      executionConfig: executionConfig as unknown as Record<string, unknown>,
+      extraPayload: {
         agentName: agent.name,
         attempt: attemptCount,
         sessionId: childInfo.sessionId,
-        childSessionId: childInfo.sessionId,
-        executionConfig,
-        progressStatus: buildExecutionProgressStatus({
-          agentName: agent.name,
-          taskTitle: task.title,
-          executionConfig,
-        }),
       },
     })
+    await this.syncSharedTaskDirectory({
+      childInfo,
+      status: 'running',
+      workerInstanceId,
+      runtimeLeaseId,
+      executionConfig: executionConfig as unknown as Record<string, unknown>,
+      timestamps: { startedAt: new Date().toISOString() },
+    })
+    await markRuntimeLeaseReady(runtimeLeaseId, {
+      provider: executionConfig.sandboxProvider,
+      cwd: executionConfig.executionPath,
+      executionConfig,
+    })
+    await markWorkerInstanceState(workerInstanceId, 'busy', {
+      message: `${agent.name} is executing "${task.title}".`,
+      runtimeHome: executionConfig.sandboxHomeDir ?? null,
+      runtimeConfigPath: executionConfig.sandboxConfigDir ?? null,
+      health: {
+        readinessStatus: executionConfig.readinessStatus,
+        sandboxProvider: executionConfig.sandboxProvider,
+        isolation: executionConfig.isolation,
+      },
+    })
+
+    const workerAcceptedMessage = await persistThreadTransparencyMessage({
+      sessionId: childInfo.sessionId,
+      senderId: agent.id,
+      senderType: 'agent',
+      content: buildWorkerAcceptedThreadMessage({
+        workerName: agent.name,
+        taskTitle: task.title,
+        executionConfig,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+      }),
+      metadata: {
+        kind: 'worker-task-accepted',
+        orchestratorRunId: runId,
+        orchestratorTaskId: task.id,
+        groupSessionId,
+        taskThreadId: childInfo.taskThreadId ?? null,
+        workerInstanceId,
+        runtimeLeaseId,
+        workerName: agent.name,
+        executionConfig,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? undefined,
+        sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? undefined,
+      },
+    })
+    await persistThreadTransparencyMessage({
+      sessionId: groupSessionId,
+      senderId: agent.id,
+      senderType: 'agent',
+      content: buildWorkerAcceptedGroupMessage({
+        workerName: agent.name,
+        taskTitle: task.title,
+      }),
+      metadata: {
+        systemEvent: 'worker_task_accepted',
+        kind: 'worker-task-accepted-group',
+        orchestratorRunId: runId,
+        orchestratorTaskId: task.id,
+        childSessionId: childInfo.sessionId,
+        taskThreadId: childInfo.taskThreadId ?? null,
+        workerInstanceId,
+        runtimeLeaseId,
+        workerName: agent.name,
+      },
+    })
+    if (workerAcceptedMessage) {
+      await executionTracer.log({
+        runId,
+        sessionId: childInfo.sessionId,
+        agentId: agent.id,
+        taskId: task.id,
+        type: 'tool_call',
+        input: { kind: 'worker_task_accepted', messageId: workerAcceptedMessage.id },
+      })
+    }
 
     const taskStartTime = Date.now()
     const stopHeartbeat = startTaskHeartbeat({
@@ -1362,6 +1633,9 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
       groupSessionId,
       workspaceId,
       taskId: task.id,
+      taskThreadId: childInfo.taskThreadId ?? null,
+      workerInstanceId,
+      runtimeLeaseId,
       agentId: agent.id,
       agentName: agent.name,
       taskTitle: task.title,
@@ -1415,29 +1689,53 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         existingUserMessageId: userMsg.id,
         deferCompletionStatus: true,
         a2a: a2aDispatch,
-        onExecutionConfigReady: async (config) => {
+      onExecutionConfigReady: async (config) => {
           executionConfig = config
-          await emitRunEvent({
-            runId,
-            workspaceId,
-            groupSessionId,
-            taskId: task.id,
-            agentId: agent.id,
-            type: 'task.progress',
-            payload: {
-              taskTitle: task.title,
+          await markRuntimeLeaseRunning(runtimeLeaseId, {
+            provider: config.sandboxProvider,
+            cwd: config.executionPath,
+            executionConfig: config,
+          })
+          await markWorkerInstanceState(workerInstanceId, 'busy', {
+            message: `${agent.name} is running in ${config.sandboxProvider ?? 'local-workdir'}.`,
+            runtimeHome: config.sandboxHomeDir ?? null,
+            runtimeConfigPath: config.sandboxConfigDir ?? null,
+            health: {
+              readinessStatus: config.readinessStatus,
+              sandboxProvider: config.sandboxProvider,
+              isolation: config.isolation,
+              blockers: config.blockers ?? [],
+            },
+          })
+          await this.syncSharedTaskDirectory({
+            childInfo,
+            status: 'running',
+            workerInstanceId,
+            runtimeLeaseId,
+            executionConfig: config as unknown as Record<string, unknown>,
+          })
+          await runController.markTaskProgress(
+            { runId, workspaceId, groupSessionId },
+            {
+              taskId: task.id,
+              title: task.title,
               agentId: agent.id,
               agentName: agent.name,
-              childSessionId: childInfo.sessionId,
-              executionConfig,
-              progressPercent: 5,
+              percent: 5,
               progressStatus: buildExecutionProgressStatus({
                 agentName: agent.name,
                 taskTitle: task.title,
                 executionConfig,
               }),
+              childSessionId: childInfo.sessionId,
+              taskThreadId: childInfo.taskThreadId ?? null,
+              workerInstanceId,
+              runtimeLeaseId,
+              sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+              sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+              executionConfig: config as unknown as Record<string, unknown>,
             },
-          })
+          )
         },
       })
       stopHeartbeat()
@@ -1501,6 +1799,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         artifacts,
         projectRoot: childInfo.projectPath ?? defaultWorkDir,
         executionPath: execResult.executionPath ?? null,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
       })
 
       const progressMatches = output.match(/\[PROGRESS:\s*(\d+)%\]\s*(.*)/g)
@@ -1510,47 +1809,48 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         if (match) {
           const percent = parseInt(match[1]!, 10)
           const status = match[2]?.trim() || ''
-          await db
-            .update(workspaceTasks)
-            .set({ progressPercent: percent, progressStatus: status })
-            .where(eq(workspaceTasks.id, task.id))
-          await emitRunEvent({
-            runId,
-            workspaceId,
-            groupSessionId,
-            taskId: task.id,
-            agentId: agent.id,
-            type: 'task.progress',
-            payload: {
-              taskTitle: task.title,
+          await runController.markTaskProgress(
+            { runId, workspaceId, groupSessionId },
+            {
+              taskId: task.id,
+              title: task.title,
               agentId: agent.id,
               agentName: agent.name,
               percent,
-              progressPercent: percent,
-              status,
               progressStatus: status,
               childSessionId: childInfo.sessionId,
-              executionConfig,
+              taskThreadId: childInfo.taskThreadId ?? null,
+              workerInstanceId,
+              runtimeLeaseId,
+              sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+              sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+              executionConfig: executionConfig as unknown as Record<string, unknown>,
             },
-          })
+          )
         }
       }
 
       if (execResult.status === TaskStatus.Cancelled) {
-        await emitRunEvent({
-          runId,
-          workspaceId,
-          groupSessionId,
+        await finalizeRuntimeLease('released', {
+          taskStatus: TaskStatus.Cancelled,
+          reason: 'task_cancelled',
+        })
+        await runController.markTaskCancelled(runContext, {
           taskId: task.id,
+          title: task.title,
           agentId: agent.id,
-          type: 'task.cancelled',
-          severity: 'warning',
-          payload: {
-            title: task.title,
+          reason: 'task_cancelled',
+          progressStatus: 'cancelled',
+          childSessionId: childInfo.sessionId,
+          taskThreadId: childInfo.taskThreadId ?? null,
+          workerInstanceId,
+          runtimeLeaseId,
+          sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+          sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+          executionConfig: executionConfig as unknown as Record<string, unknown>,
+          extraPayload: {
             agentName: agent.name,
             sessionId: childInfo.sessionId,
-            childSessionId: childInfo.sessionId,
-            executionConfig,
           },
         })
         return {
@@ -1569,12 +1869,23 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         throw new Error(execResult.error || 'Agent 执行失败')
       }
 
-      await updateTaskProgress({
-        groupSessionId,
-        taskId: task.id,
-        percent: 95,
-        status: `${agent.name} 正在整理产物与任务摘要。`,
-      })
+      await runController.markTaskProgress(
+        { runId, workspaceId, groupSessionId },
+        {
+          taskId: task.id,
+          title: task.title,
+          agentId: agent.id,
+          agentName: agent.name,
+          percent: 95,
+          progressStatus: `${agent.name} 正在整理产物与任务摘要。`,
+          childSessionId: childInfo.sessionId,
+          taskThreadId: childInfo.taskThreadId ?? null,
+          workerInstanceId,
+          runtimeLeaseId,
+          sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+          sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+        },
+      )
 
       const signals = parseAgentAutonomySignals(output)
 
@@ -1615,6 +1926,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           workspaceId,
           groupSessionId,
           taskId: task.id,
+          threadId: childInfo.taskThreadId ?? null,
+          workerInstanceId,
           agentId: task.agentId,
           type: 'task.clarification_needed',
           severity: 'warning',
@@ -1622,10 +1935,17 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             taskId: task.id,
             agentId: task.agentId,
             agentName: agent.name,
+            workerInstanceId,
+            runtimeLeaseId,
             question: clarification.question,
             options: clarification.options,
             messageId: clarMsg[0]?.id,
             runId,
+            childSessionId: childInfo.sessionId,
+            taskThreadId: childInfo.taskThreadId ?? null,
+            sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+            sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+            executionConfig,
           },
         })
 
@@ -1638,6 +1958,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           .update(workspaceTasks)
           .set({ clarificationCount: 1 })
           .where(eq(workspaceTasks.id, task.id))
+
+        await finalizeRuntimeLease('released', {
+          taskStatus: 'awaiting_clarification',
+          reason: 'worker_requested_clarification',
+          clarificationQuestion: clarification.question,
+        })
 
         /**
          * Clarification 处理策略：
@@ -1671,11 +1997,24 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           workspaceId,
           groupSessionId,
           taskId: task.id,
+          threadId: childInfo.taskThreadId ?? null,
+          workerInstanceId,
+          agentId: agent.id,
           type: 'task.reassigned' as any,
           severity: 'warning',
           payload: {
+            taskTitle: task.title,
+            agentId: agent.id,
+            agentName: agent.name,
+            workerInstanceId,
+            runtimeLeaseId,
             reason: rejection.reason,
             suggestedAgent: rejection.suggestedAgent,
+            childSessionId: childInfo.sessionId,
+            taskThreadId: childInfo.taskThreadId ?? null,
+            sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+            sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+            executionConfig,
           },
         })
 
@@ -1689,6 +2028,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
               { taskId: task.id, reason: rejection.reason, newAgent: fallbackAgent.name },
               'Task rejected and reassigned to suggested agent',
             )
+            await finalizeRuntimeLease('released', {
+              taskStatus: TaskStatus.Failed,
+              reason: 'worker_rejected_reassigned',
+              suggestedAgent: fallbackAgent.name,
+              rejectionReason: rejection.reason,
+            })
             return {
               taskId: task.id,
               agentId: task.agentId,
@@ -1709,6 +2054,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
               { taskId: task.id, reason: rejection.reason, fallbackAgent: fallbackAgent.name },
               'Task rejected and reassigned to fallback agent',
             )
+            await finalizeRuntimeLease('released', {
+              taskStatus: TaskStatus.Failed,
+              reason: 'worker_rejected_fallback',
+              suggestedAgent: fallbackAgent.name,
+              rejectionReason: rejection.reason,
+            })
             return {
               taskId: task.id,
               agentId: task.agentId,
@@ -1721,6 +2072,11 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           }
         }
 
+        await finalizeRuntimeLease('released', {
+          taskStatus: TaskStatus.Failed,
+          reason: 'worker_rejected',
+          rejectionReason: rejection.reason,
+        })
         return {
           taskId: task.id,
           agentId: task.agentId,
@@ -1738,24 +2094,23 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           .update(workspaceTasks)
           .set({ progressPercent: lastProgress.percent, progressStatus: lastProgress.status })
           .where(eq(workspaceTasks.id, task.id))
-        await emitRunEvent({
-          runId,
-          workspaceId,
-          groupSessionId,
-          taskId: task.id,
-          agentId: agent.id,
-          type: 'task.progress',
-          payload: {
-            taskTitle: task.title,
+        await runController.markTaskProgress(
+          { runId, workspaceId, groupSessionId },
+          {
+            taskId: task.id,
+            title: task.title,
             agentId: agent.id,
             agentName: agent.name,
             percent: lastProgress.percent,
-            progressPercent: lastProgress.percent,
-            status: lastProgress.status,
             progressStatus: lastProgress.status,
             childSessionId: childInfo.sessionId,
+            taskThreadId: childInfo.taskThreadId ?? null,
+            workerInstanceId,
+            runtimeLeaseId,
+            sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+            sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
           },
-        })
+        )
       }
 
       await executionTracer.log({
@@ -1839,6 +2194,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         workspaceId,
         groupSessionId,
         taskId: task.id,
+        threadId: childInfo.taskThreadId ?? null,
+        workerInstanceId,
         agentId: agent.id,
         type: 'blackboard.written',
         payload: {
@@ -1846,26 +2203,55 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           key: `task_${task.id}_output`,
           version: outputRef.version,
           summary: summary.brief,
+          agentId: agent.id,
           agentName: agent.name,
           taskTitle: task.title,
+          workerInstanceId,
+          runtimeLeaseId,
+          childSessionId: childInfo.sessionId,
+          taskThreadId: childInfo.taskThreadId ?? null,
+          sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+          sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
         },
       })
 
+      const canonicalArtifacts: Array<Record<string, unknown>> = []
       for (const artifact of artifacts) {
         const artifactId =
           typeof artifact.id === 'string' && artifact.id ? artifact.id : `artifact-${task.id}`
         const artifactKind = String(artifact.kind ?? artifact.type ?? 'artifact')
         const artifactTitle = String(artifact.title ?? artifactId)
+        const registeredArtifact = await registerTaskArtifact({
+          workspaceId,
+          runId,
+          taskId: task.id,
+          taskThreadId: childInfo.taskThreadId ?? null,
+          workspaceAgentId: agent.id,
+          workerInstanceId,
+          artifact,
+          status: execResult.status === TaskStatus.Failed ? 'partial' : 'registered',
+        })
+        const canonicalArtifact = registeredArtifact
+          ? toCanonicalArtifactRecord(registeredArtifact)
+          : ({
+              ...artifact,
+              source: artifact.source ?? 'task',
+              artifactKind,
+              kind: artifact.kind ?? artifact.type ?? 'file',
+              type: artifact.type ?? artifact.kind ?? 'file',
+            } as Record<string, unknown>)
+        canonicalArtifacts.push(canonicalArtifact)
         await blackboard.write({
           namespace: bbNamespace,
-          key: `artifacts/${artifactId}`,
+          key: `artifacts/${registeredArtifact?.id ?? artifactId}`,
           value: {
             schemaType: 'artifact_ref',
             summary: artifactTitle,
             confidence: 0.8,
             sourceAgentId: agent.id,
             taskId: task.id,
-            artifactId,
+            artifactId: registeredArtifact?.id ?? artifactId,
+            legacyArtifactId: artifactId,
             artifactKind,
             title: artifactTitle,
             filePath:
@@ -1891,24 +2277,35 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           workspaceId,
           groupSessionId,
           taskId: task.id,
+          threadId: childInfo.taskThreadId ?? null,
+          workerInstanceId,
           agentId: agent.id,
           type: 'artifact.created',
           payload: {
-            artifactId,
+            artifactId: registeredArtifact?.id ?? artifactId,
+            legacyArtifactId: artifactId,
+            workerInstanceId,
+            runtimeLeaseId,
             artifactKind,
             title: artifactTitle,
             filePath: artifact.filePath ?? artifact.path,
+            sourcePath: registeredArtifact?.sourcePath ?? artifact.sourcePath,
+            handoffPath: registeredArtifact?.handoffPath ?? artifact.handoffPath,
+            handoffRelativePath: registeredArtifact?.relativePath ?? artifact.handoffRelativePath,
             url: artifact.url,
             size: artifact.size,
             source: 'task',
+            artifactStatus: registeredArtifact?.status,
             taskTitle: task.title,
             childSessionId: childInfo.sessionId,
+            taskThreadId: childInfo.taskThreadId ?? null,
             artifact,
             agentName: agent.name,
             agentId: agent.id,
           },
         })
       }
+      artifacts.splice(0, artifacts.length, ...canonicalArtifacts)
 
       // 修复 Bug 24: 没有有效项目路径时跳过 validation，避免在服务器 CWD 执行
       const validationCwd = execResult.executionPath ?? childInfo.projectPath ?? null
@@ -1943,6 +2340,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           workspaceId,
           groupSessionId,
           taskId: task.id,
+          threadId: childInfo.taskThreadId ?? null,
+          workerInstanceId,
           agentId: agent.id,
           type: 'blackboard.written',
           severity: validation.status === 'failed' ? 'warning' : 'info',
@@ -1950,6 +2349,12 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             namespace: bbNamespace,
             key: validationKey,
             schemaType: 'test_result',
+            agentId: agent.id,
+            agentName: agent.name,
+            workerInstanceId,
+            runtimeLeaseId,
+            childSessionId: childInfo.sessionId,
+            taskThreadId: childInfo.taskThreadId ?? null,
             command: validation.command,
             status: validation.status,
             durationMs: validation.durationMs,
@@ -1977,6 +2382,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         task,
         artifacts,
         writtenBlackboardKeys,
+        executionPath: execResult.executionPath ?? null,
       })
       lastContractResult = contractResult
       if (contractResult.status === 'failed') {
@@ -2028,13 +2434,20 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             workspaceId,
             groupSessionId,
             taskId: task.id,
+            threadId: childInfo.taskThreadId ?? null,
+            workerInstanceId,
             agentId: agent.id,
             type: 'task.progress',
             severity: 'warning',
             payload: {
               title: task.title,
               agentName: agent.name,
+              workerInstanceId,
+              runtimeLeaseId,
               childSessionId: childInfo.sessionId,
+              taskThreadId: childInfo.taskThreadId ?? null,
+              sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+              sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
               executionConfig,
               progressPercent: 95,
               progressStatus: '产物已生成，路径合约存在偏差，已转为复核警告。',
@@ -2049,13 +2462,20 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
             workspaceId,
             groupSessionId,
             taskId: task.id,
+            threadId: childInfo.taskThreadId ?? null,
+            workerInstanceId,
             agentId: agent.id,
             type: 'task.failed',
             severity: 'error',
             payload: {
               title: task.title,
               agentName: agent.name,
+              workerInstanceId,
+              runtimeLeaseId,
               childSessionId: childInfo.sessionId,
+              taskThreadId: childInfo.taskThreadId ?? null,
+              sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+              sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
               executionConfig,
               error: contractError,
               violations: contractResult.violations,
@@ -2080,15 +2500,6 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
           summary: output.slice(0, 200),
         },
       })
-
-      await db
-        .update(workspaceTasks)
-        .set({
-          status: TaskStatus.Done,
-          completedAt: new Date(),
-          artifacts: (artifacts as unknown as import('@agenthub/db').AgentArtifact[]) ?? [],
-        })
-        .where(eq(workspaceTasks.id, task.id))
 
       const taskResultReport = buildTaskResultReport({
         runId,
@@ -2147,21 +2558,38 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         })
       }
 
-      await emitRunEvent({
-        runId,
-        workspaceId,
-        groupSessionId,
+      await finalizeRuntimeLease('released', {
+        taskStatus: TaskStatus.Done,
+        artifactCount: artifacts.length,
+        durationMs: taskDuration,
+      })
+      await this.syncSharedTaskDirectory({
+        childInfo,
+        status: 'completed',
+        workerInstanceId,
+        runtimeLeaseId,
+        summary: summary.brief,
+        artifacts,
+        executionConfig: executionConfig as unknown as Record<string, unknown>,
+        timestamps: { completedAt: new Date().toISOString() },
+      })
+      await runController.markTaskCompleted(runContext, {
         taskId: task.id,
+        title: task.title,
         agentId: agent.id,
-        type: 'task.completed',
-        payload: {
-          title: task.title,
+        progressStatus: 'completed',
+        artifacts,
+        childSessionId: childInfo.sessionId,
+        taskThreadId: childInfo.taskThreadId ?? null,
+        workerInstanceId,
+        runtimeLeaseId,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+        sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+        durationMs: taskDuration,
+        executionConfig: executionConfig as unknown as Record<string, unknown>,
+        extraPayload: {
           agentName: agent.name,
           sessionId: childInfo.sessionId,
-          childSessionId: childInfo.sessionId,
-          durationMs: taskDuration,
-          artifactCount: artifacts.length,
-          executionConfig,
           ...taskResultReportEventPayload(taskResultReport),
         },
       })
@@ -2176,6 +2604,8 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         outputRef,
       }
     } catch (error: any) {
+      const failureDurationMs = Date.now() - taskStartTime
+      const failureError = error?.message || 'Unknown error'
       const failureReport = buildTaskResultReport({
         runId,
         task,
@@ -2186,11 +2616,11 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         artifacts: lastArtifacts,
         validationResults: lastValidationResults,
         contractResult: lastContractResult,
-        durationMs: Date.now() - taskStartTime,
+        durationMs: failureDurationMs,
         childSessionId: childInfo.sessionId,
         blackboardKeys: lastBlackboardKeys,
         executionConfig,
-        error: error?.message || 'Unknown error',
+        error: failureError,
       })
       await executionTracer.log({
         runId,
@@ -2201,43 +2631,48 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         output: {
           taskTitle: task.title,
           error: error?.message,
-          durationMs: Date.now() - taskStartTime,
+          durationMs: failureDurationMs,
         },
       })
-      // TaskExecutionService 已更新 task 状态，此处只处理 post-processing 错误
-      // 如果是 post-processing 错误，需要手动更新状态
-      const existingTask = await db
-        .select()
-        .from(workspaceTasks)
-        .where(eq(workspaceTasks.id, task.id))
-        .limit(1)
-      if (existingTask[0]?.status !== TaskStatus.Failed) {
-        await db
-          .update(workspaceTasks)
-          .set({
-            status: TaskStatus.Failed,
-            completedAt: new Date(),
-            errorLog: error?.message || 'Unknown error',
-          })
-          .where(eq(workspaceTasks.id, task.id))
-      }
 
-      await emitRunEvent({
-        runId,
-        workspaceId,
-        groupSessionId,
+      await finalizeRuntimeLease(
+        'failed',
+        {
+          taskStatus: TaskStatus.Failed,
+          partialArtifactCount: lastArtifacts.length,
+          durationMs: failureDurationMs,
+        },
+        failureError,
+      )
+      await this.syncSharedTaskDirectory({
+        childInfo,
+        status: 'failed',
+        workerInstanceId,
+        runtimeLeaseId,
+        error: failureError,
+        summary: lastSummary?.brief,
+        artifacts: lastArtifacts,
+        executionConfig: executionConfig as unknown as Record<string, unknown>,
+        timestamps: { failedAt: new Date().toISOString() },
+      })
+      await runController.markTaskFailed(runContext, {
         taskId: task.id,
+        title: task.title,
         agentId: agent.id,
-        type: 'task.failed',
-        severity: 'error',
-        payload: {
-          title: task.title,
+        error: failureError,
+        progressStatus: 'failed',
+        artifacts: lastArtifacts,
+        childSessionId: childInfo.sessionId,
+        taskThreadId: childInfo.taskThreadId ?? null,
+        workerInstanceId,
+        runtimeLeaseId,
+        sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
+        sharedTaskSpecPath: childInfo.sharedTaskSpecPath ?? null,
+        durationMs: failureDurationMs,
+        executionConfig: executionConfig as unknown as Record<string, unknown>,
+        extraPayload: {
           agentName: agent.name,
           sessionId: childInfo.sessionId,
-          childSessionId: childInfo.sessionId,
-          error: error?.message || 'Unknown error',
-          durationMs: Date.now() - taskStartTime,
-          executionConfig,
           ...taskResultReportEventPayload(failureReport),
         },
       })
@@ -2275,7 +2710,7 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
                 envelope: a2aDispatch,
                 status: TaskStatus.Failed,
                 output: lastAgentOutput,
-                error: error?.message || 'Unknown error',
+                error: failureError,
                 artifacts: lastArtifacts,
               }),
             },
@@ -2297,10 +2732,49 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         status: TaskStatus.Failed,
         output: lastAgentOutput,
         artifacts: lastArtifacts,
-        error: error?.message || 'Unknown error',
+        error: failureError,
       }
     } finally {
       stopHeartbeat()
+    }
+  }
+
+  private async syncSharedTaskDirectory(input: {
+    childInfo: ChildSessionInfo
+    status: Parameters<typeof updateSharedTaskDirectoryStatus>[0]['status']
+    workerInstanceId?: string | null
+    runtimeLeaseId?: string | null
+    messageId?: string | null
+    error?: string | null
+    summary?: string | null
+    artifacts?: Array<Record<string, unknown>>
+    executionConfig?: Record<string, unknown> | null
+    timestamps?: Parameters<typeof updateSharedTaskDirectoryStatus>[0]['timestamps']
+  }) {
+    try {
+      await updateSharedTaskDirectoryStatus({
+        projectPath: input.childInfo.projectPath ?? null,
+        sharedTaskRelativeRoot: input.childInfo.sharedTaskRelativeRoot ?? null,
+        status: input.status,
+        workerInstanceId: input.workerInstanceId ?? input.childInfo.workerInstanceId ?? null,
+        runtimeLeaseId: input.runtimeLeaseId ?? null,
+        messageId: input.messageId ?? null,
+        error: input.error ?? null,
+        summary: input.summary ?? null,
+        artifacts: input.artifacts,
+        executionConfig: input.executionConfig ?? null,
+        timestamps: input.timestamps,
+      })
+    } catch (error: any) {
+      logger.warn(
+        {
+          err: error?.message || error,
+          taskThreadId: input.childInfo.taskThreadId,
+          sharedTaskRelativeRoot: input.childInfo.sharedTaskRelativeRoot,
+          status: input.status,
+        },
+        'Failed to update shared task directory status',
+      )
     }
   }
 
@@ -2311,21 +2785,16 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
     plan: ExecutionPlan,
     results: TaskResult[],
     conflictReports: import('./conflict-resolver').ConflictReport[] = [],
+    run?: RunControllerRunContext,
   ) {
-    await db
-      .update(orchestratorRuns)
-      .set({ status: 'synthesizing' })
-      .where(eq(orchestratorRuns.id, runId))
-    await emitRunEvent({
+    const runContext: RunControllerRunContext = run ?? {
       runId,
       workspaceId,
       groupSessionId,
-      type: 'run.synthesizing',
-      payload: {
-        taskCount: results.length,
-        succeeded: results.filter((result) => result.status === TaskStatus.Done).length,
-        failed: results.filter((result) => result.status === TaskStatus.Failed).length,
-      },
+    }
+    await runController.markSynthesizing(runContext, {
+      taskCount: results.length,
+      summary: 'Manager 正在汇总团队产出。',
     })
     const orchestratorProfile = await this.loadOrchestratorProfile(workspaceId)
 
@@ -2543,17 +3012,11 @@ ${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.leng
       })
       .returning()
 
-    await db
-      .update(orchestratorRuns)
-      .set({ status: finalRunStatus, summaryMessageId: summaryMsg?.id ?? null })
-      .where(eq(orchestratorRuns.id, runId))
-
-    await emitRunEvent({
-      runId,
-      workspaceId,
-      groupSessionId,
-      type: finalRunStatus === OrchestratorRunStatus.Failed ? 'run.failed' : 'run.completed',
-      severity: finalRunStatus === OrchestratorRunStatus.Failed ? 'warning' : 'info',
+    await runController.finish(runContext, {
+      status: finalRunStatus === OrchestratorRunStatus.Failed ? 'failed' : 'completed',
+      summary: finalSummary,
+      summaryMessageId: summaryMsg?.id ?? null,
+      conflictReport: conflictReports,
       payload: {
         summaryMessageId: summaryMsg?.id ?? null,
         taskCount: plan.tasks.length,
@@ -2572,11 +3035,56 @@ ${issueLines.length > 0 ? `${issueLines.join('\n')}\n` : ''}${failedReviews.leng
   }
 }
 
+async function ensureTaskRuntimeThread(
+  input: EnsureTaskRuntimeThreadInput,
+): Promise<ChildSessionInfo> {
+  const prepared = await prepareTaskRuntimeThread({
+    workspaceId: input.workspaceId,
+    workspaceName: input.workspaceName,
+    ownerId: input.ownerId,
+    runId: input.runId,
+    taskId: input.task.id,
+    groupSessionId: input.groupSessionId,
+    projectPath: input.projectPath ?? null,
+    taskTitle: input.task.title,
+    taskDescription: input.task.description,
+    goal: input.plan.goal,
+    agent: input.agent
+      ? {
+          id: input.agent.id,
+          name: input.agent.name,
+          role: input.agent.role,
+          runtimeType: input.agent.runtimeType,
+          codeAgentType: input.agent.codeAgentType,
+          modelId: input.agent.modelId,
+          skillIds: input.agent.roleProfile?.skillIds as string[] | undefined,
+          sandboxPolicy: input.agent.sandboxPolicy,
+        }
+      : null,
+    dependencies: input.task.dependencies ?? [],
+    acceptanceCriteria: input.task.outputContract?.acceptanceCriteria,
+    requiredArtifacts: input.task.outputContract?.requiredArtifacts,
+  })
+
+  return {
+    sessionId: prepared.sessionId,
+    workspaceId: prepared.workspaceId,
+    projectPath: prepared.projectPath ?? null,
+    taskThreadId: prepared.taskThreadId,
+    workerInstanceId: prepared.workerInstanceId ?? null,
+    sharedTaskRelativeRoot: prepared.sharedTaskRelativeRoot ?? null,
+    sharedTaskSpecPath: prepared.sharedTaskSpecPath ?? null,
+  }
+}
+
 function startTaskHeartbeat(input: {
   runId: string
   groupSessionId: string
   workspaceId: string
   taskId: string
+  taskThreadId?: string | null
+  workerInstanceId?: string | null
+  runtimeLeaseId?: string | null
   agentId: string
   agentName: string
   taskTitle: string
@@ -2586,6 +3094,11 @@ function startTaskHeartbeat(input: {
 }) {
   let stopped = false
   let lastPersistAt = 0
+  const runContext: RunControllerRunContext = {
+    runId: input.runId,
+    workspaceId: input.workspaceId,
+    groupSessionId: input.groupSessionId,
+  }
 
   const tick = async () => {
     if (stopped) return
@@ -2599,38 +3112,26 @@ function startTaskHeartbeat(input: {
       elapsedMs,
       timeoutMs: input.timeoutMs,
     })
-
-    broadcastSessionEvent(input.groupSessionId, {
-      type: WsEvent.AgUiEvent,
-      payload: buildAgUiTaskStatusEvent({
+    const persistDb = Date.now() - lastPersistAt >= 30_000
+    if (persistDb) lastPersistAt = Date.now()
+    await runController
+      .markTaskProgress(runContext, {
+        taskId: input.taskId,
+        title: input.taskTitle,
         agentId: input.agentId,
         agentName: input.agentName,
-        executionConfig: executionConfig as unknown as Record<string, unknown> | undefined,
-        progressPercent: percent,
+        percent,
         progressStatus: status,
-        runId: input.runId,
-        status: 'running',
-        taskId: input.taskId,
-        taskTitle: input.taskTitle,
-        threadId: input.groupSessionId,
-      }),
-    })
-
-    if (Date.now() - lastPersistAt < 30_000) return
-    lastPersistAt = Date.now()
-    await db
-      .update(workspaceTasks)
-      .set({ progressPercent: percent, progressStatus: status })
-      .where(eq(workspaceTasks.id, input.taskId))
+        childSessionId: null,
+        taskThreadId: input.taskThreadId ?? null,
+        workerInstanceId: input.workerInstanceId ?? null,
+        runtimeLeaseId: input.runtimeLeaseId ?? null,
+        executionConfig: executionConfig as unknown as Record<string, unknown> | undefined,
+        persistEvent: false,
+        persistRunUpdatedAt: persistDb,
+      })
       .catch((err: any) => {
         logger.warn({ err: err?.message, taskId: input.taskId }, 'Failed to persist task heartbeat')
-      })
-    await db
-      .update(orchestratorRuns)
-      .set({ updatedAt: new Date() })
-      .where(eq(orchestratorRuns.id, input.runId))
-      .catch((err: any) => {
-        logger.warn({ err: err?.message, runId: input.runId }, 'Failed to persist run heartbeat')
       })
   }
 
@@ -2691,35 +3192,94 @@ function buildExecutionProgressStatus(input: {
   return `${input.agentName} 正在通过 ${runtime} 执行「${input.taskTitle}」${elapsed}${waitHint}${detail ? `（${detail}）` : ''}`
 }
 
+async function persistThreadTransparencyMessage(input: {
+  sessionId: string
+  senderId: string
+  senderType: 'agent' | 'system'
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  const [message] = await db
+    .insert(messages)
+    .values({
+      sessionId: input.sessionId,
+      senderId: input.senderId,
+      senderType: input.senderType,
+      type: 'text',
+      content: input.content,
+      metadata: {
+        transparencyVisible: true,
+        ...input.metadata,
+      },
+    })
+    .returning()
+  if (message) {
+    broadcastSessionEvent(input.sessionId, {
+      type: WsEvent.MessageCompleted,
+      payload: { sessionId: input.sessionId, message },
+    })
+  }
+  return message ?? null
+}
+
+function buildManagerDispatchThreadMessage(input: {
+  managerName: string
+  workerName: string
+  taskTitle: string
+  sharedTaskSpecPath?: string | null
+}) {
+  const lines = [`${input.managerName}：@${input.workerName}，请接手任务「${input.taskTitle}」。`]
+  if (input.sharedTaskSpecPath) {
+    lines.push(`先阅读任务说明：${input.sharedTaskSpecPath}`)
+  }
+  lines.push('执行过程会持续同步到这个任务线程。')
+  return lines.join('\n')
+}
+
+function buildManagerGroupDispatchMessage(input: {
+  managerName: string
+  workerName: string
+  taskTitle: string
+}) {
+  return `${input.managerName}：@${input.workerName}，我把「${input.taskTitle}」分派给你了。请进入对应任务线程处理。`
+}
+
+function buildWorkerAcceptedThreadMessage(input: {
+  workerName: string
+  taskTitle: string
+  executionConfig?: ExecutionConfigSummary
+  sharedTaskRelativeRoot?: string | null
+}) {
+  const runtime =
+    input.executionConfig?.adapterName ??
+    input.executionConfig?.codeAgentType ??
+    (input.executionConfig?.runtimeType === 'llm' ? 'LLM fallback' : 'Code Agent')
+  const model = input.executionConfig?.modelLabel || input.executionConfig?.modelId
+  const workdir =
+    input.executionConfig?.workdirRelativePath ||
+    shortPathLabel(input.executionConfig?.executionPath) ||
+    input.sharedTaskRelativeRoot
+  const lines = [`${input.workerName}：已接单，开始处理「${input.taskTitle}」。`]
+  const details = [runtime, model, workdir ? `workdir=${workdir}` : null].filter(Boolean)
+  if (details.length > 0) {
+    lines.push(`运行环境：${details.join(' · ')}`)
+  }
+  return lines.join('\n')
+}
+
+function buildWorkerAcceptedGroupMessage(input: {
+  workerName: string
+  taskTitle: string
+}) {
+  return `${input.workerName}：收到，我已经开始处理「${input.taskTitle}」，进展会在任务线程里同步。`
+}
+
 function shortPathLabel(value?: string | null) {
   if (!value) return null
   const normalized = value.replace(/\\/g, '/')
   const parts = normalized.split('/').filter(Boolean)
   if (parts.length <= 3) return normalized
   return `${parts[parts.length - 3]}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
-}
-
-async function updateTaskProgress(input: {
-  groupSessionId: string
-  taskId: string
-  percent: number
-  status: string
-}) {
-  await db
-    .update(workspaceTasks)
-    .set({ progressPercent: input.percent, progressStatus: input.status })
-    .where(eq(workspaceTasks.id, input.taskId))
-  broadcastSessionEvent(input.groupSessionId, {
-    type: WsEvent.AgUiEvent,
-    payload: buildAgUiTaskStatusEvent({
-      progressPercent: input.percent,
-      progressStatus: input.status,
-      status: 'running',
-      taskId: input.taskId,
-      taskTitle: input.taskId,
-      threadId: input.groupSessionId,
-    }),
-  })
 }
 
 function formatDuration(ms: number) {
@@ -2885,12 +3445,34 @@ async function buildTaskPrompt(
   plan: ExecutionPlan,
   blackboard: Blackboard,
   bbNamespace: string,
+  threadContext?: {
+    taskThreadId?: string | null
+    sharedTaskRelativeRoot?: string | null
+    sharedTaskSpecPath?: string | null
+  },
 ): Promise<string> {
   const parts: string[] = []
 
   parts.push(`# 项目总目标\n${plan.goal}\n`)
 
   parts.push(`# 你的任务：${task.title}\n${task.description}\n`)
+
+  if (threadContext?.taskThreadId || threadContext?.sharedTaskSpecPath) {
+    parts.push('# 任务房间与共享任务目录')
+    if (threadContext.taskThreadId) {
+      parts.push(`- 当前 TaskThread：${threadContext.taskThreadId}`)
+    }
+    if (threadContext.sharedTaskSpecPath) {
+      parts.push(`- 请先阅读任务说明：\`${threadContext.sharedTaskSpecPath}\``)
+    }
+    if (threadContext.sharedTaskRelativeRoot) {
+      parts.push(`- 任务目录：\`${threadContext.sharedTaskRelativeRoot}\``)
+      parts.push(`- 执行计划写入：\`${threadContext.sharedTaskRelativeRoot}/plan.md\``)
+      parts.push(`- 最终结果摘要写入：\`${threadContext.sharedTaskRelativeRoot}/result.md\``)
+      parts.push(`- 文件、报告、网页、日志等产物放入：\`${threadContext.sharedTaskRelativeRoot}/artifacts/\``)
+    }
+    parts.push('')
+  }
 
   if (task.outputContract) {
     parts.push('# 交付要求')
@@ -3321,8 +3903,13 @@ function materializeArtifactHandoffs(params: {
   artifacts: Array<Record<string, unknown>>
   projectRoot: string
   executionPath: string | null
+  sharedTaskRelativeRoot?: string | null
 }) {
-  const handoffRoot = join(params.projectRoot, '.agenthub', 'handoff', params.runId, params.taskId)
+  const sharedArtifactsRoot = params.sharedTaskRelativeRoot
+    ? join(params.projectRoot, params.sharedTaskRelativeRoot, 'artifacts')
+    : null
+  const legacyHandoffRoot = join(params.projectRoot, '.agenthub', 'handoff', params.runId, params.taskId)
+  const handoffRoot = sharedArtifactsRoot ?? legacyHandoffRoot
   for (const artifact of params.artifacts) {
     const rawPath =
       typeof artifact.filePath === 'string'
@@ -3349,6 +3936,10 @@ function materializeArtifactHandoffs(params: {
       mkdirSync(dirname(targetPath), { recursive: true })
       copyFileSync(sourcePath, targetPath)
       artifact.sourcePath = sourcePath
+      if (sharedArtifactsRoot) {
+        artifact.legacyHandoffRoot = legacyHandoffRoot
+        artifact.sharedTaskArtifactPath = targetPath
+      }
       artifact.handoffPath = targetPath
       artifact.handoffRelativePath = relative(params.projectRoot, targetPath).replace(/\\/g, '/')
     } catch (error: any) {
