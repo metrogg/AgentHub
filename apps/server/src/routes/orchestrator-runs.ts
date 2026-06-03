@@ -317,6 +317,71 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json(response)
   })
 
+  // Get first-class TaskThread resources for a run — the authoritative source
+  // for task child sessions, replacing metadata-based reverse-engineering.
+  .get('/:id/task-threads', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+
+    const [run] = await db
+      .select({ id: orchestratorRuns.id })
+      .from(orchestratorRuns)
+      .innerJoin(workspaces, eq(workspaces.id, orchestratorRuns.workspaceId))
+      .where(and(eq(orchestratorRuns.id, id), eq(workspaces.ownerId, user.sub)))
+      .limit(1)
+
+    if (!run) {
+      throw new HTTPException(404, { message: 'Run not found' })
+    }
+
+    const threads = await db
+      .select({
+        id: taskThreads.id,
+        workspaceId: taskThreads.workspaceId,
+        runId: taskThreads.runId,
+        taskId: taskThreads.taskId,
+        groupSessionId: taskThreads.groupSessionId,
+        workspaceAgentId: taskThreads.workspaceAgentId,
+        workerInstanceId: taskThreads.workerInstanceId,
+        sessionId: taskThreads.sessionId,
+        status: taskThreads.status,
+        lastEventId: taskThreads.lastEventId,
+        createdAt: taskThreads.createdAt,
+        updatedAt: taskThreads.updatedAt,
+        sessionTitle: sessions.title,
+        sessionMetadata: sessions.metadata,
+      })
+      .from(taskThreads)
+      .leftJoin(sessions, eq(sessions.id, taskThreads.sessionId))
+      .where(eq(taskThreads.runId, id))
+      .orderBy(asc(taskThreads.createdAt))
+
+    const items = threads.map((thread) => ({
+      id: thread.id,
+      runId: thread.runId,
+      taskId: thread.taskId,
+      groupSessionId: thread.groupSessionId,
+      workspaceAgentId: thread.workspaceAgentId,
+      workerInstanceId: thread.workerInstanceId,
+      sessionId: thread.sessionId,
+      sessionTitle: thread.sessionTitle,
+      status: thread.status,
+      lastEventId: thread.lastEventId,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+      sharedTaskRelativeRoot:
+        typeof thread.sessionMetadata === 'object' && thread.sessionMetadata
+          ? (thread.sessionMetadata as Record<string, unknown>).sharedTaskRelativeRoot ?? null
+          : null,
+      sharedTaskSpecPath:
+        typeof thread.sessionMetadata === 'object' && thread.sessionMetadata
+          ? (thread.sessionMetadata as Record<string, unknown>).sharedTaskSpecPath ?? null
+          : null,
+    }))
+
+    return c.json({ items })
+  })
+
   // Get first-class artifacts registered for a run
   .get('/:id/artifacts', async (c) => {
     const user = c.get('user')
