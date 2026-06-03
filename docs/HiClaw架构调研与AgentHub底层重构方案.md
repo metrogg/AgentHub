@@ -58,7 +58,11 @@
 - HiClaw 风格 idle-stop 已落地：空闲超时自动转入 sleeping，新任务通过 `ensureReadyForTask()` 自动 wake + reconcile；服务重启通过 `recoverStaleOnStartup()` 恢复 stale lease。
 - Worker 心跳监控已启用：2 分钟宽限期 + 5 分钟超时检测，超时自动标记 Worker failed + RuntimeLease stale。
 - 尚未完成真正的 `ManagerLoop` / `RunController` 替代主流程；`OrchestratorEngine`、`TaskExecutionService`、现有 Planner 仍是迁移期执行主路径。
-- 尚未完成 ArtifactStore 作为产物卡唯一事实源；当前仍处于 ArtifactStore、message metadata、blackboard 和 handoff 逐步收敛的迁移期。
+- ArtifactStore 已从散写迁移到统一注册入口：`ArtifactController.registerArtifactBatch()` 成为产物唯一注册点，每次注册自动发 `artifact.created` RunEvent。`workspace_tasks.artifacts` JSON 字段降级为缓存。
+- RunEvent replay API 已完整化：`GET /api/orchestrator-runs/:id/events?afterSequence=N` 支持增量重放 + 资源 snapshot 恢复。
+- TaskThread 专用查询端点已上线：`GET /api/orchestrator-runs/:id/task-threads` 替代前端从 sessions 反向推导旧模式。
+- ManagerPatrol 主动巡检已落地：每 2 分钟扫描 Worker 健康 + 任务超时，发 RunEvent + 群聊可见消息。
+- ManagerLoop.step() Observe-Think-Act 主循环已落地：自动决定 dispatch_pending / review_running / synthesize。
 
 如果本文档中的“建议表结构”和当前 schema 有细节差异，优先读取当前 `packages/db/src/schema.ts`、最新 migration 和对应 service 文件，再按本文档的资源语义补齐缺口。不要因为文档措辞回到旧入口，也不要重复创建平行表。
 
