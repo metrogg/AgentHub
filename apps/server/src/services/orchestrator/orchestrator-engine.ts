@@ -1856,6 +1856,21 @@ ${taskOutputs.map((t) => `- [${t.agentName}] ${t.taskTitle}: ${t.output.slice(0,
         sharedTaskRelativeRoot: childInfo.sharedTaskRelativeRoot ?? null,
       })
 
+      // Register artifacts through ArtifactController — the single convergence point.
+      if (artifacts.length > 0) {
+        const { registerArtifactBatch } = await import('./artifact-controller')
+        registerArtifactBatch({
+          workspaceId,
+          runId,
+          taskId: task.id,
+          taskThreadId: childInfo.taskThreadId ?? null,
+          workspaceAgentId: task.agentId ?? null,
+          workerInstanceId: childInfo.workerInstanceId ?? null,
+          groupSessionId,
+          artifacts,
+        }).catch(() => {})
+      }
+
       const progressMatches = output.match(/\[PROGRESS:\s*(\d+)%\]\s*(.*)/g)
       if (progressMatches) {
         const lastProgress = progressMatches[progressMatches.length - 1]!

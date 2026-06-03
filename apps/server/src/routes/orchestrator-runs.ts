@@ -236,10 +236,13 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     return c.json({ ok: true, result })
   })
 
-  // Get timeline events for a run
+  // Get timeline events for a run. Supports ?afterSequence=N for incremental
+  // replay (frontend recovery after disconnect). When afterSequence=0, also
+  // includes a resource snapshot for full state reconstruction.
   .get('/:id/events', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
+    const afterSequence = parseInt(c.req.query('afterSequence') ?? '', 10) || undefined
 
     const [run] = await db
       .select({ id: orchestratorRuns.id })
@@ -252,8 +255,66 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       throw new HTTPException(404, { message: 'Run not found' })
     }
 
-    const events = await listRunEvents(id)
-    return c.json({ items: events })
+    const events = await listRunEvents(id, { afterSequence })
+    const response: Record<string, unknown> = { items: events }
+
+    // Include resource snapshot when recovering from sequence 0
+    if (afterSequence === 0 || afterSequence === undefined) {
+      const snapshot = await runController.loadResourceSnapshot(id)
+      response.snapshot = {
+        run: snapshot.run
+          ? { id: snapshot.run.id, status: snapshot.run.status, goal: (snapshot.run.plan as Record<string, unknown> | null)?.goal ?? null }
+          : null,
+        tasks: snapshot.tasks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          status: t.status,
+          agentId: t.agentId,
+          dependencies: t.dependencies,
+          artifacts: t.artifacts,
+          progressPercent: t.progressPercent,
+          progressStatus: t.progressStatus,
+        })),
+        taskThreads: snapshot.taskThreads.map((thread) => ({
+          id: thread.id,
+          taskId: thread.taskId,
+          sessionId: thread.sessionId,
+          workspaceAgentId: thread.workspaceAgentId,
+          workerInstanceId: thread.workerInstanceId,
+          status: thread.status,
+          sharedTaskRelativeRoot: thread.sharedTaskRelativeRoot ?? null,
+          sharedTaskSpecPath: thread.sharedTaskSpecPath ?? null,
+        })),
+        runtimeLeases: snapshot.runtimeLeases.map((lease) => ({
+          id: lease.id,
+          taskId: lease.taskId,
+          workerInstanceId: lease.workerInstanceId,
+          provider: lease.provider,
+          status: lease.status,
+          cwd: lease.cwd,
+        })),
+        artifacts: snapshot.artifacts.map((artifact) => ({
+          id: artifact.id,
+          taskId: artifact.taskId,
+          kind: artifact.kind,
+          title: artifact.title,
+          handoffPath: artifact.handoffPath,
+          relativePath: artifact.relativePath,
+          status: artifact.status,
+        })),
+        workerInstances: snapshot.workerInstances.map((worker) => ({
+          id: worker.id,
+          workspaceAgentId: worker.workspaceAgentId,
+          runtimeFamily: worker.runtimeFamily,
+          runtimeBase: worker.runtimeBase,
+          observedState: worker.observedState,
+          desiredState: worker.desiredState,
+        })),
+        counts: snapshot.counts,
+      }
+    }
+
+    return c.json(response)
   })
 
   // Get first-class artifacts registered for a run

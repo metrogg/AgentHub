@@ -1,4 +1,4 @@
-import { db, orchestratorRunEvents, and, asc, desc, eq, databasePath } from '@agenthub/db'
+import { db, orchestratorRunEvents, and, asc, desc, eq, sql, databasePath } from '@agenthub/db'
 import { Database } from 'bun:sqlite'
 import { WsEvent } from '@agenthub/shared'
 import { broadcastSessionEvent } from '../agent-runner'
@@ -163,8 +163,23 @@ async function findDuplicateRunEvent(input: EmitRunEventInput): Promise<Orchestr
   )
 }
 
-export async function listRunEvents(runId: string): Promise<OrchestratorRunEvent[]> {
+export async function listRunEvents(
+  runId: string,
+  options: { afterSequence?: number } = {},
+): Promise<OrchestratorRunEvent[]> {
   ensureRunEventReplaySchema()
+  if (typeof options.afterSequence === 'number' && options.afterSequence > 0) {
+    return db
+      .select()
+      .from(orchestratorRunEvents)
+      .where(
+        and(
+          eq(orchestratorRunEvents.runId, runId),
+          sql`${orchestratorRunEvents.sequence} > ${options.afterSequence}`,
+        ),
+      )
+      .orderBy(asc(orchestratorRunEvents.sequence), asc(orchestratorRunEvents.createdAt))
+  }
   return db
     .select()
     .from(orchestratorRunEvents)
