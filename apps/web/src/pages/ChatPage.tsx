@@ -15,13 +15,9 @@ import {
 } from 'lucide-react'
 import SessionList from '../components/chat/SessionList'
 import { TypewriterHeading } from '../components/chat/TypewriterHeading'
-import {
-  readMentionCommand,
-  readSlashCommand,
-  SkillCommandPanel,
-  Thread,
-} from '../components/assistant-ui/Thread'
+import { SkillCommandPanel, Thread } from '../components/assistant-ui/Thread'
 import { api, friendlyErrorMessage, type SkillSummary, type Workspace, type WelcomeQuickPrompt } from '../lib/api'
+import { readMentionCommand, readSlashCommand } from '../lib/composerCommands'
 import {
   agentLibraryChangeEvent,
   loadAgentLibrary,

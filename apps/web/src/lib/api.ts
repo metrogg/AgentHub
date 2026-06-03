@@ -947,6 +947,39 @@ export type WorkspaceFolderOpenResult =
   | { cancelled: true; projectPath: null; workspace?: null }
   | { cancelled: false; projectPath: string; workspace?: Workspace | null }
 
+export interface WorkspaceFileEntry {
+  name: string
+  path: string
+  type: 'directory' | 'file'
+  size: number
+  sizeLabel: string
+  modifiedAt: string
+  extension?: string
+  hidden: boolean
+}
+
+export interface WorkspaceFileListResponse {
+  workspaceId: string
+  rootName: string
+  path: string
+  parentPath: string | null
+  items: WorkspaceFileEntry[]
+  total: number
+  truncated: boolean
+}
+
+export interface WorkspaceFileContentResponse {
+  workspaceId: string
+  name: string
+  path: string
+  mimeType: string
+  size: number
+  sizeLabel: string
+  binary: boolean
+  content: string
+  truncated: boolean
+}
+
 export interface ClarificationQuestion {
   id: string
   question: string
@@ -1654,6 +1687,14 @@ export const api = {
   getWorkspaceSessions: (id: string) => request<{ items: Session[] }>(`/workspaces/${id}/sessions`),
   getWorkspaceActiveRuns: (id: string) =>
     request<{ items: WorkspaceActiveRun[] }>(`/workspaces/${id}/active-runs`),
+  listWorkspaceFiles: (id: string, path?: string | null) =>
+    request<WorkspaceFileListResponse>(
+      `/workspaces/${id}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`,
+    ),
+  readWorkspaceFile: (id: string, path: string) =>
+    request<WorkspaceFileContentResponse>(
+      `/workspaces/${id}/files/content?path=${encodeURIComponent(path)}`,
+    ),
   updateWorkspace: (
     id: string,
     data: { name?: string; goal?: string; projectPath?: string | null },

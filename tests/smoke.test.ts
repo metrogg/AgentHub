@@ -864,6 +864,63 @@ describe('AgentHub smoke tests', () => {
     expect(existsSync(full.workspace.projectPath!)).toBe(true)
   })
 
+  test('workspace file browser lists and reads files without escaping project root', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'agenthub-files-'))
+    mkdirSync(join(projectRoot, 'src'), { recursive: true })
+    writeFileSync(join(projectRoot, 'README.md'), '# Workspace Files\n')
+    writeFileSync(join(projectRoot, 'src', 'app.ts'), 'export const answer = 42\n')
+
+    const full = await json<{
+      workspace: { id: string; projectPath: string | null }
+    }>(
+      await postJson('/api/workspaces', {
+        name: 'File browser workspace',
+        goal: 'Verify file explorer',
+        projectPath: projectRoot,
+      }),
+    )
+
+    const rootList = await json<{
+      path: string
+      parentPath: string | null
+      items: Array<{ name: string; path: string; type: 'directory' | 'file' }>
+    }>(await app.request(`/api/workspaces/${full.workspace.id}/files`))
+    expect(rootList.path).toBe('')
+    expect(rootList.parentPath).toBeNull()
+    expect(rootList.items.some((item) => item.name === 'src' && item.type === 'directory')).toBe(true)
+    expect(rootList.items.some((item) => item.name === 'README.md' && item.type === 'file')).toBe(true)
+
+    const srcList = await json<{
+      path: string
+      parentPath: string | null
+      items: Array<{ name: string; path: string; type: 'directory' | 'file' }>
+    }>(await app.request(`/api/workspaces/${full.workspace.id}/files?path=src`))
+    expect(srcList.path).toBe('src')
+    expect(srcList.parentPath).toBe('')
+    expect(srcList.items).toContainEqual(expect.objectContaining({ name: 'app.ts', path: 'src/app.ts', type: 'file' }))
+
+    const content = await json<{
+      path: string
+      binary: boolean
+      content: string
+      truncated: boolean
+    }>(await app.request(`/api/workspaces/${full.workspace.id}/files/content?path=src%2Fapp.ts`))
+    expect(content.path).toBe('src/app.ts')
+    expect(content.binary).toBe(false)
+    expect(content.truncated).toBe(false)
+    expect(content.content).toContain('answer = 42')
+
+    const escapedList = await app.request(
+      `/api/workspaces/${full.workspace.id}/files?path=${encodeURIComponent('../')}`,
+    )
+    expect(escapedList.status).toBe(403)
+
+    const escapedContent = await app.request(
+      `/api/workspaces/${full.workspace.id}/files/content?path=${encodeURIComponent('../README.md')}`,
+    )
+    expect(escapedContent.status).toBe(403)
+  })
+
   test('agent workdir stays isolated from workspace files', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'agenthub-workdir-'))
     writeFileSync(join(projectRoot, 'index.html'), '<main>hello</main>')

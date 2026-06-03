@@ -101,7 +101,6 @@ import {
   api,
   friendlyErrorMessage,
   type AgentArtifact,
-  type ChatAttachment,
   type MemberProposal,
   type Message,
   type ModelCatalogItem,
@@ -113,6 +112,29 @@ import {
 } from '../../lib/api'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
+import {
+  artifactFileUrl,
+  artifactPreviewEvent,
+  canFetchWorkspaceTextSource,
+  clampPreviewPanelWidth,
+  defaultPreviewPanelWidth,
+  downloadFileName,
+  enrichPreviewItem,
+  extractPreviewErrorMessage,
+  fileNameFromPath,
+  formatPreviewError,
+  getPreviewPanelWidthBounds,
+  isDocxPreviewItem,
+  isPptxPreviewItem,
+  loadPreviewArrayBuffer,
+  normalizePreviewUrl,
+  previewFileName,
+  previewPathFromUrl,
+  readStoredPreviewPanelWidth,
+  requestArtifactPreview,
+  storePreviewPanelWidth,
+  type ArtifactPreviewItem,
+} from '../../lib/artifactPreview'
 import {
   downloadExternalUrl,
   isDesktopApp,
@@ -129,7 +151,15 @@ import {
 } from '../../lib/shortcuts'
 import { requestSettingsDialog } from '../../lib/settingsDialog'
 import { useMessageStyleMode } from '../../lib/messageStyle'
-import { cn } from '../../lib/utils'
+import { classifyAgentSession } from '../../lib/sessionTree'
+import { cn, compactPath, formatBytes, trimLongText } from '../../lib/utils'
+import {
+  extractMentionedAgentIds,
+  mentionAliasEntries,
+  mentionPatternForAliases,
+  readMentionCommand,
+  readSlashCommand,
+} from '../../lib/composerCommands'
 import { getCachedAccountProfile } from '../../lib/accountProfile'
 import {
   isProjectWorkspace,
@@ -150,6 +180,16 @@ import {
 } from '../chat/QuickPromptBubbles'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
 import { GroupAvatar } from '../chat/GroupAvatar'
+import { WorkspaceFileExplorer, type RailFileItem } from './WorkspaceFileExplorer'
+import {
+  ChatAttachmentsPart,
+  PendingAttachmentList,
+  attachmentInputAccept,
+  fileToChatAttachment,
+  isDragWithFiles,
+  maxAttachmentBytes,
+  maxPendingAttachments,
+} from './ChatAttachments'
 import {
   agentLibraryChangeEvent,
   flushAgentLibraryServerSync,
@@ -200,63 +240,8 @@ const languageAliases: Record<string, string> = {
 
 const autoHighlightLanguages = Object.keys(highlightLanguageMap)
 type MarkdownComponents = NonNullable<MarkdownTextPrimitiveProps['components']>
-const maxAttachmentBytes = 5 * 1024 * 1024
-const maxAttachmentTextBytes = 256 * 1024
-const maxPendingAttachments = 6
-const attachmentInputAccept = [
-  'image/*',
-  '.txt',
-  '.md',
-  '.markdown',
-  '.json',
-  '.jsonl',
-  '.csv',
-  '.ts',
-  '.tsx',
-  '.js',
-  '.jsx',
-  '.mjs',
-  '.cjs',
-  '.py',
-  '.html',
-  '.htm',
-  '.css',
-  '.scss',
-  '.xml',
-  '.yaml',
-  '.yml',
-  '.sql',
-  '.sh',
-  '.bat',
-  '.ps1',
-  '.log',
-  '.pdf',
-  '.doc',
-  '.docx',
-  '.ppt',
-  '.pptx',
-  '.xls',
-  '.xlsx',
-].join(',')
 const composerSyncEvent = 'agenthub:composer-sync'
-const artifactPreviewEvent = 'agenthub:artifact-preview'
 const roomTasksDrawerEvent = 'agenthub:open-room-tasks'
-const previewPanelWidthStorageKey = 'agenthub:preview-panel-width'
-const defaultPreviewPanelWidth = 560
-
-type ArtifactPreviewItem = {
-  id: string
-  title: string
-  subtitle?: string
-  description?: string
-  kind: 'web' | 'file' | 'image' | 'diff' | 'deploy' | 'workflow'
-  url?: string
-  path?: string
-  mimeType?: string
-  source?: string
-  /** 用于构造 HTML 预览 URL 的 workspaceId */
-  workspaceId?: string
-}
 
 type PreviewActionItem = {
   id: string
@@ -272,19 +257,6 @@ type DiffEditSaveParams = {
   lineText: string
   lineNumber?: number
   fileContent?: string
-}
-
-function classifyAgentSession(
-  session: ReturnType<typeof useChatStore.getState>['currentSession'],
-) {
-  if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId)
-    return 'regular'
-  const metadata = session.metadata ?? {}
-  if (metadata.kind === 'agent-direct') return 'agent-direct'
-  if (metadata.orchestratorTaskId || metadata.orchestratorRunId || metadata.hiddenFromSessionTree) {
-    return 'orchestrator-task'
-  }
-  return 'agent-direct'
 }
 
 export const Thread: FC = () => {
@@ -989,52 +961,7 @@ const ThreadContextRail: FC<{
           open={workspaceOpen}
           onToggle={() => setWorkspaceOpen((open) => !open)}
         >
-          <div>
-            <button
-              type="button"
-              disabled={!workspacePath}
-              onClick={() => workspacePath && void openPath(workspacePath)}
-              className="mb-2 block max-w-full truncate text-left text-sm text-neutral-400 transition hover:text-neutral-700 disabled:cursor-default disabled:hover:text-neutral-400"
-              title={workspacePath ?? workspaceName}
-            >
-              {workspaceName}
-            </button>
-
-            <div className="space-y-1.5">
-              {files.map((file) => (
-                <button
-                  key={file.id}
-                  type="button"
-                  onClick={() => openRailFile(file)}
-                  className="flex min-h-8 w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition hover:bg-neutral-50"
-                  title={file.path ?? file.url ?? file.title}
-                >
-                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-neutral-100 text-neutral-500">
-                    <FileText className="h-3.5 w-3.5" />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-900">
-                    {file.title}
-                  </span>
-                </button>
-              ))}
-
-              {files.length === 0 && (
-                <button
-                  type="button"
-                  disabled={!workspacePath}
-                  onClick={() => workspacePath && void openPath(workspacePath)}
-                  className="flex min-h-9 w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left text-sm text-neutral-600 transition hover:bg-neutral-50 disabled:cursor-default disabled:text-neutral-400 disabled:hover:bg-transparent"
-                >
-                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-neutral-100 text-neutral-500">
-                    <FolderOpen className="h-3.5 w-3.5" />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">
-                    {workspacePath ? '打开工作文件夹' : '尚未选择工作文件夹'}
-                  </span>
-                </button>
-              )}
-            </div>
-          </div>
+          <WorkspaceFileExplorer workspace={workspace} quickFiles={files} />
         </RailCard>
         </div>
       </div>
@@ -1070,15 +997,6 @@ const RailCard: FC<{
     {open && <div className="mt-3">{children}</div>}
   </section>
 )
-
-type RailFileItem = {
-  id: string
-  title: string
-  path?: string
-  url?: string
-  source?: string
-  kind: ArtifactPreviewItem['kind']
-}
 
 function buildDirectRunProgress(input: {
   activity: LiveAgentActivity | null
@@ -1367,31 +1285,12 @@ function railPreviewKind(
   return 'file'
 }
 
-function openRailFile(file: RailFileItem) {
-  if (file.path) {
-    void openPath(file.path)
-      .then((opened) => {
-        if (!opened) requestArtifactPreview(file)
-      })
-      .catch(() => requestArtifactPreview(file))
-    return
-  }
-  requestArtifactPreview(file)
-}
-
 function resolveWorkspacePath(path: string, workspacePath?: string | null) {
   if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('/') || path.startsWith('\\\\')) {
     return path
   }
   if (!workspacePath) return path
   return `${workspacePath.replace(/[\\/]+$/, '')}\\${path.replace(/^[\\/]+/, '')}`
-}
-
-function fileNameFromPath(value?: string | null) {
-  if (!value) return null
-  const normalized = value.replace(/\\/g, '/')
-  const withoutQuery = normalized.split(/[?#]/)[0]
-  return withoutQuery.split('/').filter(Boolean).pop() ?? value
 }
 
 const runStatusLabel: Record<string, string> = {
@@ -1499,13 +1398,6 @@ function TaskRuntimeStrip({
       )}
     </div>
   )
-}
-
-function compactPath(value?: string | null) {
-  if (!value) return null
-  const parts = value.replace(/\\/g, '/').split('/').filter(Boolean)
-  if (parts.length <= 3) return value
-  return `${parts[parts.length - 3]}/${parts[parts.length - 2]}/${parts[parts.length - 1]}`
 }
 
 type RoomThreadSection = {
@@ -2627,20 +2519,6 @@ function replaceTextRangeInComposer(value: string, range: { start: number; end: 
   return insertTextIntoComposer(value, 'insertReplacementText', range)
 }
 
-export function readMentionCommand(text: string, cursor: number) {
-  const before = text.slice(0, cursor)
-  const match = /(^|\s)@([^\s@]*)$/.exec(before)
-  if (!match) return null
-  const suffix = /^[^\s]*/.exec(text.slice(cursor))?.[0] ?? ''
-  const start = match.index + match[1].length
-  const prefix = match[2] ?? ''
-  return {
-    start,
-    end: cursor + suffix.length,
-    query: `${prefix}${suffix}`,
-  }
-}
-
 function dispatchComposerInput(input: HTMLTextAreaElement, data: string, inputType = 'insertText') {
   try {
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType, data }))
@@ -3547,59 +3425,10 @@ const Composer: FC = () => {
               onCancel={() => setReplyingTo(null)}
             />
           )}
-          {pendingAttachments.length > 0 && (
-            <div className="mb-3 flex flex-wrap gap-2">
-              {pendingAttachments.map((attachment) => (
-                <div
-                  key={attachment.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => requestArtifactPreview(attachmentToPreviewItem(attachment))}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      requestArtifactPreview(attachmentToPreviewItem(attachment))
-                    }
-                  }}
-                  className="group relative flex h-16 max-w-full items-center gap-2 overflow-hidden rounded-xl border border-neutral-200 bg-neutral-50 px-2.5 pr-8 text-left transition hover:border-neutral-300 hover:bg-white sm:w-56"
-                  title={attachment.name}
-                >
-                  <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg border border-neutral-200 bg-white text-neutral-500">
-                    {attachment.type === 'image' ? (
-                      <img
-                        src={attachment.dataUrl}
-                        alt={attachment.name}
-                        className="h-full w-full object-cover"
-                        draggable={false}
-                      />
-                    ) : (
-                      attachmentIcon(attachment, 'h-4 w-4')
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium text-neutral-800">
-                      {attachment.name}
-                    </span>
-                    <span className="mt-0.5 block truncate text-[11px] text-neutral-400">
-                      {attachmentKindLabel(attachment)} · {formatBytes(attachment.size)}
-                    </span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      removePendingAttachment(attachment.id)
-                    }}
-                    className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-neutral-400 opacity-80 transition hover:bg-neutral-200 hover:text-neutral-900"
-                    aria-label={`移除 ${attachment.name}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          <PendingAttachmentList
+            attachments={pendingAttachments}
+            onRemove={removePendingAttachment}
+          />
           {dragActive && (
             <div className="pointer-events-none absolute inset-2 z-20 grid place-items-center rounded-2xl border border-dashed border-neutral-400 bg-white/82 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur-sm">
               松开即可添加附件
@@ -4096,223 +3925,6 @@ const ComposerMenu: FC<{
       )}
     </div>
   )
-}
-
-export function readSlashCommand(text: string, cursor: number) {
-  const before = text.slice(0, cursor)
-  const match = /(^|\s)\/([^\s/]*)$/.exec(before)
-  if (!match) return null
-  const suffix = /^[^\s]*/.exec(text.slice(cursor))?.[0] ?? ''
-  const start = match.index + match[1].length
-  const prefix = match[2] ?? ''
-  return {
-    start,
-    end: cursor + suffix.length,
-    query: `${prefix}${suffix}`,
-  }
-}
-
-function isDragWithFiles(event: DragEvent<HTMLElement>) {
-  return Array.from(event.dataTransfer.types).includes('Files')
-}
-
-async function fileToChatAttachment(file: File): Promise<ChatAttachment> {
-  const extension = extensionFromName(file.name)
-  const mimeType = file.type || mimeFromExtension(extension) || 'application/octet-stream'
-  const previewKind = attachmentPreviewKind(mimeType, extension)
-  const dataUrl = await readFileAsDataUrl(file)
-  const text =
-    previewKind === 'text' ? await readFileAsTextPreview(file).catch(() => undefined) : undefined
-
-  return {
-    id: crypto.randomUUID(),
-    type: mimeType.startsWith('image/') ? 'image' : 'file',
-    name: file.name || fallbackAttachmentName(mimeType, extension),
-    mimeType,
-    size: file.size,
-    dataUrl,
-    extension,
-    previewKind,
-    text,
-  }
-}
-
-function fallbackAttachmentName(mimeType: string, extension?: string) {
-  if (mimeType.startsWith('image/')) {
-    const ext = extension || mimeType.split('/').pop() || 'png'
-    return `pasted-image-${Date.now()}.${ext}`
-  }
-  return `attachment-${Date.now()}${extension ? `.${extension}` : ''}`
-}
-
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(reader.error ?? new Error('读取附件失败'))
-    reader.onload = () => resolve(String(reader.result ?? ''))
-    reader.readAsDataURL(file)
-  })
-}
-
-async function readFileAsTextPreview(file: File) {
-  const truncated = file.size > maxAttachmentTextBytes
-  const blob = truncated ? file.slice(0, maxAttachmentTextBytes) : file
-  const text = await blob.text()
-  return truncated ? `${text}\n\n...` : text
-}
-
-function extensionFromName(name?: string | null) {
-  const match = (name ?? '').trim().match(/\.([A-Za-z0-9]{1,12})$/)
-  return match?.[1]?.toLowerCase()
-}
-
-function mimeFromExtension(extension?: string) {
-  if (!extension) return undefined
-  const map: Record<string, string> = {
-    bat: 'text/plain',
-    cjs: 'text/javascript',
-    css: 'text/css',
-    csv: 'text/csv',
-    doc: 'application/msword',
-    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    htm: 'text/html',
-    html: 'text/html',
-    jpeg: 'image/jpeg',
-    jpg: 'image/jpeg',
-    js: 'text/javascript',
-    json: 'application/json',
-    jsonl: 'application/jsonl',
-    log: 'text/plain',
-    markdown: 'text/markdown',
-    md: 'text/markdown',
-    mjs: 'text/javascript',
-    pdf: 'application/pdf',
-    png: 'image/png',
-    ppt: 'application/vnd.ms-powerpoint',
-    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    ps1: 'text/plain',
-    py: 'text/x-python',
-    scss: 'text/css',
-    sh: 'text/x-shellscript',
-    sql: 'application/sql',
-    svg: 'image/svg+xml',
-    ts: 'text/typescript',
-    tsx: 'text/tsx',
-    txt: 'text/plain',
-    xls: 'application/vnd.ms-excel',
-    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    xml: 'application/xml',
-    yaml: 'application/yaml',
-    yml: 'application/yaml',
-  }
-  return map[extension]
-}
-
-function attachmentPreviewKind(
-  mimeType: string,
-  extension?: string,
-): NonNullable<ChatAttachment['previewKind']> {
-  if (mimeType.startsWith('image/')) return 'image'
-  if (isTextLikeAttachment(mimeType, extension)) return 'text'
-  if (isDocumentLikeAttachment(mimeType, extension)) return 'document'
-  return 'binary'
-}
-
-function isTextLikeAttachment(mimeType: string, extension?: string) {
-  if (mimeType.startsWith('text/')) return true
-  if (
-    [
-      'application/json',
-      'application/jsonl',
-      'application/sql',
-      'application/xml',
-      'application/yaml',
-      'image/svg+xml',
-    ].includes(mimeType)
-  ) {
-    return true
-  }
-  return Boolean(
-    extension &&
-      [
-        'bat',
-        'cjs',
-        'css',
-        'csv',
-        'htm',
-        'html',
-        'js',
-        'json',
-        'jsonl',
-        'log',
-        'markdown',
-        'md',
-        'mjs',
-        'ps1',
-        'py',
-        'scss',
-        'sh',
-        'sql',
-        'svg',
-        'ts',
-        'tsx',
-        'txt',
-        'xml',
-        'yaml',
-        'yml',
-      ].includes(extension),
-  )
-}
-
-function isDocumentLikeAttachment(mimeType: string, extension?: string) {
-  return (
-    mimeType === 'application/pdf' ||
-    mimeType.includes('wordprocessingml') ||
-    mimeType.includes('presentationml') ||
-    mimeType.includes('spreadsheetml') ||
-    Boolean(extension && ['doc', 'docx', 'pdf', 'ppt', 'pptx', 'xls', 'xlsx'].includes(extension))
-  )
-}
-
-function attachmentToPreviewItem(attachment: ChatAttachment): ArtifactPreviewItem {
-  const isImage = attachment.type === 'image' || attachment.previewKind === 'image'
-  return {
-    id: attachment.id,
-    kind: isImage ? 'image' : 'file',
-    mimeType: attachment.mimeType,
-    path: attachment.name,
-    source: attachment.text,
-    subtitle: `${attachmentKindLabel(attachment)} · ${formatBytes(attachment.size)}`,
-    title: attachment.name,
-    url: attachment.dataUrl,
-  }
-}
-
-function attachmentIcon(attachment: ChatAttachment, className = 'h-3.5 w-3.5') {
-  const lower = `${attachment.mimeType} ${attachment.name}`.toLowerCase()
-  if (attachment.type === 'image' || lower.includes('image/')) {
-    return <ImagePlus className={className} />
-  }
-  if (/\.(pptx?|key)$/.test(lower) || lower.includes('presentation')) {
-    return <Presentation className={className} />
-  }
-  if (/\.(xlsx?|csv)$/.test(lower) || lower.includes('spreadsheet') || lower.includes('excel')) {
-    return <Sheet className={className} />
-  }
-  if (attachment.previewKind === 'text' || /\.(md|txt|json|ts|tsx|js|py|html|css|xml|ya?ml|sql|log)$/.test(lower)) {
-    return <FileText className={className} />
-  }
-  return <File className={className} />
-}
-
-function attachmentKindLabel(attachment: ChatAttachment) {
-  if (attachment.type === 'image' || attachment.previewKind === 'image') return '图片'
-  if (attachment.previewKind === 'text') return '文本'
-  const lower = `${attachment.mimeType} ${attachment.name}`.toLowerCase()
-  if (/\.(pptx?|key)$/.test(lower) || lower.includes('presentation')) return '演示文稿'
-  if (/\.(xlsx?|csv)$/.test(lower) || lower.includes('spreadsheet') || lower.includes('excel')) return '表格'
-  if (/\.(docx?|pdf)$/.test(lower) || attachment.previewKind === 'document') return '文档'
-  return '文件'
 }
 
 const MenuRow: FC<{ title: string; desc: string; color?: string; onClick: () => void }> = ({
@@ -5071,65 +4683,6 @@ function FileCardMessage({ data }: { data?: { files?: FileCardEntry[] } | null }
 function DeliveryReportMessage({ data }: { data?: DeliveryReportData | null }) {
   if (!data) return null
   return <DeliveryReport data={data} />
-}
-
-function requestArtifactPreview(item: ArtifactPreviewItem) {
-  window.dispatchEvent(new CustomEvent<ArtifactPreviewItem>(artifactPreviewEvent, { detail: item }))
-}
-
-const ChatAttachmentsPart: FC<{ data: { items?: ChatAttachment[] } }> = ({ data }) => {
-  const items = Array.isArray(data.items) ? data.items : []
-  if (!items.length) return null
-  return (
-    <div className="not-prose mt-3 grid gap-2 sm:grid-cols-2">
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          onClick={() => requestArtifactPreview(attachmentToPreviewItem(item))}
-          className={cn(
-            'group overflow-hidden rounded-xl border border-neutral-200 bg-white text-left shadow-sm transition hover:border-neutral-300 hover:shadow-md',
-            item.type === 'image' ? 'block' : 'flex min-h-20 items-center gap-3 px-3 py-3',
-          )}
-        >
-          {item.type === 'image' ? (
-            <>
-              <img
-                src={item.dataUrl}
-                alt={item.name}
-                className="aspect-video w-full bg-neutral-100 object-cover transition group-hover:scale-[1.015]"
-                draggable={false}
-              />
-              <div className="flex items-center gap-2 px-3 py-2 text-xs text-neutral-500">
-                <ImagePlus className="h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                <span className="shrink-0">{formatBytes(item.size)}</span>
-              </div>
-            </>
-          ) : (
-            <>
-              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-500">
-                {attachmentIcon(item, 'h-5 w-5')}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-neutral-900">
-                  {item.name}
-                </span>
-                <span className="mt-1 block truncate text-xs text-neutral-500">
-                  {attachmentKindLabel(item)} · {formatBytes(item.size)}
-                </span>
-                {item.text && (
-                  <span className="mt-1 block truncate text-[11px] text-neutral-400">
-                    可预览文本内容
-                  </span>
-                )}
-              </span>
-            </>
-          )}
-        </button>
-      ))}
-    </div>
-  )
 }
 
 const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void }> = ({
@@ -6624,12 +6177,6 @@ function formatDurationMs(value: number) {
   return `${minutes}m${seconds.toString().padStart(2, '0')}s`
 }
 
-function trimLongText(text: string, limit: number) {
-  const normalized = text.replace(/\s+/g, ' ').trim()
-  if (normalized.length <= limit) return normalized
-  return `${normalized.slice(0, limit - 1)}…`
-}
-
 function summarizeDiff(diff: string) {
   const lines = diff.split(/\r?\n/)
   const additions = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
@@ -7398,18 +6945,6 @@ function previewIcon(item: ArtifactPreviewItem) {
   return <FileText className="h-4 w-4" />
 }
 
-function formatBytes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let size = value
-  let unitIndex = 0
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024
-    unitIndex += 1
-  }
-  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
-}
-
 type DiffRow = {
   kind: 'add' | 'context' | 'del' | 'hunk' | 'meta'
   marker: string
@@ -7879,12 +7414,8 @@ const ToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...prop
 
 function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
   const aliases = mentionAliasEntries(agents).map((entry) => entry.alias)
-  if (!aliases.length) return text
-
-  const pattern = new RegExp(
-    `@(${aliases.map(escapeRegExp).join('|')})(?=$|\\s|[，,。.!！?？:：；;）)\\]】])`,
-    'gi',
-  )
+  const pattern = mentionPatternForAliases(aliases)
+  if (!pattern) return text
   const parts: ReactNode[] = []
   let lastIndex = 0
 
@@ -7901,59 +7432,6 @@ function renderMentionHighlights(text: string, agents: WorkspaceAgent[]) {
 
   if (lastIndex < text.length) parts.push(text.slice(lastIndex))
   return parts.length ? parts : text
-}
-
-function mentionAliasEntries(agents: WorkspaceAgent[]) {
-  const entries: Array<{ alias: string; agentId: string }> = []
-  for (const agent of agents) {
-    entries.push(
-      { alias: agent.name, agentId: agent.id },
-      { alias: agent.role, agentId: agent.id },
-    )
-    if (agent.roleType === 'orchestrator') {
-      entries.push(
-        { alias: 'orchestrator', agentId: agent.id },
-        { alias: 'coordinator', agentId: agent.id },
-        { alias: '总指挥', agentId: agent.id },
-        { alias: '协调器', agentId: agent.id },
-        { alias: '调度', agentId: agent.id },
-      )
-    }
-  }
-  const deduped = new Map<string, string>()
-  for (const entry of entries) {
-    const alias = entry.alias.trim()
-    if (!alias) continue
-    const key = alias.toLowerCase()
-    if (!deduped.has(key)) deduped.set(key, entry.agentId)
-  }
-  return Array.from(deduped.entries())
-    .map(([alias, agentId]) => ({ alias, agentId }))
-    .sort((a, b) => b.alias.length - a.alias.length)
-}
-
-function extractMentionedAgentIds(text: string, agents: WorkspaceAgent[]) {
-  const entries = mentionAliasEntries(agents)
-  if (!entries.length) return []
-  const pattern = new RegExp(
-    `@(${entries.map((entry) => escapeRegExp(entry.alias)).join('|')})(?=$|\\s|[，,。.!！?？:：；;）)\\]】])`,
-    'gi',
-  )
-  const aliasToAgentId = new Map(entries.map((entry) => [entry.alias.toLowerCase(), entry.agentId]))
-  const ids: string[] = []
-  const seen = new Set<string>()
-  for (const match of text.matchAll(pattern)) {
-    const rawAlias = (match[1] ?? '').trim().toLowerCase()
-    const agentId = aliasToAgentId.get(rawAlias)
-    if (!agentId || seen.has(agentId)) continue
-    seen.add(agentId)
-    ids.push(agentId)
-  }
-  return ids
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 const ComposerToolButton: FC<ComponentPropsWithoutRef<'button'>> = ({ className, ...props }) => (
@@ -8207,179 +7685,8 @@ const MarkdownText: FC = () => (
   </div>
 )
 
-function normalizePreviewUrl(url?: string) {
-  if (!url) return null
-  try {
-    return new URL(url, window.location.origin)
-  } catch {
-    return null
-  }
-}
-
-function previewPathFromUrl(url?: string) {
-  const parsed = normalizePreviewUrl(url)
-  if (!parsed) return undefined
-  const path = parsed.searchParams.get('path')?.trim()
-  return path || undefined
-}
-
-function canFetchWorkspaceTextSource(item: ArtifactPreviewItem, path?: string) {
-  if (!item.workspaceId || !path) return false
-  const extension = extensionFromName(path)
-  const mimeType = item.mimeType?.toLowerCase() || mimeFromExtension(extension) || 'text/plain'
-  return isTextLikeAttachment(mimeType, extension)
-}
-
-function enrichPreviewItem(item: ArtifactPreviewItem, workspaceId?: string): ArtifactPreviewItem {
-  const next: ArtifactPreviewItem = {
-    ...item,
-    workspaceId: item.workspaceId ?? workspaceId,
-  }
-  if (!next.workspaceId || !next.path) return next
-
-  if (next.kind === 'web' && isHtmlPreviewItem(next)) {
-    const url = normalizePreviewUrl(next.url)
-    if (!url || url.pathname === '/api/artifacts/preview-file') {
-      next.url = artifactPreviewFileUrl(next.workspaceId, next.path)
-    }
-    return next
-  }
-
-  if ((next.kind === 'file' || next.kind === 'image') && !next.url) {
-    next.url = artifactFileUrl(next.workspaceId, next.path)
-  }
-
-  return next
-}
-
-function artifactPreviewFileUrl(workspaceId: string, path: string) {
-  return `/api/artifacts/preview-file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`
-}
-
-function artifactFileUrl(workspaceId: string, path: string) {
-  return `/api/artifacts/file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`
-}
-
-function previewFileName(item: ArtifactPreviewItem) {
-  return fileNameFromPath(item.path) || fileNameFromPath(item.url) || item.title || 'preview'
-}
-
-function previewFileExtension(item: ArtifactPreviewItem) {
-  const fileName = previewFileName(item).split(/[?#]/)[0]
-  return fileName.match(/\.([A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase() ?? ''
-}
-
-function isHtmlPreviewItem(item: ArtifactPreviewItem) {
-  if (item.kind !== 'web') return false
-  const mimeType = item.mimeType?.toLowerCase() ?? ''
-  const extension = previewFileExtension(item)
-  return extension === 'html' || extension === 'htm' || extension === 'xhtml' || mimeType.includes('text/html')
-}
-
-function isDocxPreviewItem(item: ArtifactPreviewItem) {
-  const extension = previewFileExtension(item)
-  const mimeType = item.mimeType?.toLowerCase() ?? ''
-  return extension === 'docx' || mimeType.includes('wordprocessingml.document')
-}
-
-function isPptxPreviewItem(item: ArtifactPreviewItem) {
-  const extension = previewFileExtension(item)
-  const mimeType = item.mimeType?.toLowerCase() ?? ''
-  return extension === 'pptx' || mimeType.includes('presentationml.presentation')
-}
-
-function officePreviewUrl(item: ArtifactPreviewItem) {
-  if (item.url) return item.url
-  if (item.workspaceId && item.path) return artifactFileUrl(item.workspaceId, item.path)
-  return undefined
-}
-
-async function loadPreviewArrayBuffer(item: ArtifactPreviewItem) {
-  const url = officePreviewUrl(item)
-  if (!url) {
-    throw new Error('This file is missing a preview URL.')
-  }
-  const response = await fetch(url, url.startsWith('data:') ? undefined : { credentials: 'include' })
-  if (!response.ok) {
-    throw new Error(await extractPreviewErrorMessage(response))
-  }
-  return response.arrayBuffer()
-}
-
-function downloadFileName(item: ArtifactPreviewItem) {
-  const source = item.path || normalizePreviewUrl(item.url)?.pathname || item.title || 'preview'
-  const rawName = source.split(/[\\/]/).filter(Boolean).pop() || item.title || 'preview'
-  const hasExtension = /\.[A-Za-z0-9]{1,8}$/.test(rawName)
-  const fallbackExtension = item.mimeType?.includes('image/')
-    ? item.mimeType.split('/').pop()
-    : 'html'
-  const name = hasExtension ? rawName : `${rawName}.${fallbackExtension || 'html'}`
-  return sanitizeDownloadFileName(name)
-}
-
-function sanitizeDownloadFileName(value: string) {
-  return (
-    value
-      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 160) || 'preview.html'
-  )
-}
-
-function getPreviewPanelWidthBounds(panel: HTMLElement | null) {
-  const containerWidth = panel?.parentElement?.clientWidth ?? window.innerWidth
-  const reservedThreadWidth = Math.min(520, Math.max(300, Math.round(containerWidth * 0.34)))
-  const maxWidth = Math.max(360, containerWidth - reservedThreadWidth)
-  const minWidth = Math.min(360, Math.max(280, Math.round(containerWidth * 0.28)), maxWidth)
-  return { maxWidth, minWidth }
-}
-
-function clampPreviewPanelWidth(width: number, bounds: { maxWidth: number; minWidth: number }) {
-  return Math.min(bounds.maxWidth, Math.max(bounds.minWidth, width))
-}
-
-function readStoredPreviewPanelWidth() {
-  try {
-    const storedWidth = Number(window.localStorage.getItem(previewPanelWidthStorageKey))
-    return Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : defaultPreviewPanelWidth
-  } catch {
-    return defaultPreviewPanelWidth
-  }
-}
-
-function storePreviewPanelWidth(width: number) {
-  try {
-    window.localStorage.setItem(previewPanelWidthStorageKey, String(Math.round(width)))
-  } catch {
-    // localStorage can be unavailable in restricted browser contexts.
-  }
-}
-
 function shouldSkipLineSelectionClick(event: ReactMouseEvent<HTMLElement>) {
   const target = event.target instanceof HTMLElement ? event.target : null
   if (target?.closest('button, input, textarea, select, a')) return true
   return Boolean(window.getSelection()?.toString())
-}
-
-async function extractPreviewErrorMessage(response: Response) {
-  const text = await response.text().catch(() => '')
-  if (!text.trim()) return 'HTTP ' + response.status
-  try {
-    const parsed = JSON.parse(text)
-    const payload = parsed?.error ?? parsed
-    if (typeof payload === 'string') return payload
-    if (payload && typeof payload === 'object') {
-      return payload.message ?? payload.details?.message ?? text
-    }
-  } catch {
-    // ignore
-  }
-  return text
-}
-
-function formatPreviewError(error: unknown) {
-  if (error instanceof Error) return error.message
-  if (typeof error === 'string') return error
-  return 'Preview request failed'
 }

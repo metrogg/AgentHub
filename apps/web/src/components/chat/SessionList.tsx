@@ -51,7 +51,8 @@ import { settingsUpdatedEvent } from '../../lib/shortcuts'
 import {
   buildSessionTree,
   filterSessionTree,
-  isStableOrchestratorTaskSession,
+  isAgentDirectSession,
+  isOrchestratorTaskSession,
 } from '../../lib/sessionTree'
 import {
   getCachedAccountProfile,
@@ -129,7 +130,7 @@ export default function SessionList({
   )
   const messageSessions = useMemo(
     () =>
-      sessions.filter((session) => !isPrivateAgentSession(session)),
+      sessions.filter((session) => !isAgentDirectSession(session)),
     [sessions],
   )
   const baseSessionTree = useMemo(
@@ -166,7 +167,7 @@ export default function SessionList({
   const agentDirectSessionsBySavedId = useMemo(() => {
     const byAgentId = new Map<string, Session>()
     for (const session of sessions) {
-      if (!isPrivateAgentSession(session)) continue
+      if (!isAgentDirectSession(session)) continue
       const savedAgentId = readSavedAgentId(session)
       if (!savedAgentId || !savedAgentIds.has(savedAgentId)) continue
       if (byAgentId.has(savedAgentId)) continue
@@ -182,7 +183,7 @@ export default function SessionList({
     () =>
       sessions
         .filter((session) => {
-          if (!isPrivateAgentSession(session)) return false
+          if (!isAgentDirectSession(session)) return false
           const savedAgentId = readSavedAgentId(session)
           if (!savedAgentId || !savedAgentIds.has(savedAgentId)) return false
           if (!query.trim()) return true
@@ -315,7 +316,7 @@ export default function SessionList({
     if (
       !activeSession?.workspaceId ||
       activeSession.type !== 'direct' ||
-      (!activeSession.workspaceAgentId && !isStableOrchestratorTaskSession(activeSession))
+      (!activeSession.workspaceAgentId && !isOrchestratorTaskSession(activeSession))
     )
       return
     setExpandedWorkspaces((current) => {
@@ -850,7 +851,7 @@ export default function SessionList({
                   isGroupParent && workspaceId
                     ? groupSessionAgents(item.parent, groupWorkspaceAgents[workspaceId] ?? [])
                     : []
-                const visibleChildren = item.children.filter(isStableAgentChildSession)
+                const visibleChildren = item.children.filter(isOrchestratorTaskSession)
                 const visibleChildIds = new Set(visibleChildren.map((child) => child.id))
                 const previewChildren =
                   isGroupParent && taskBoard?.sessionId === item.parent.id
@@ -1751,17 +1752,6 @@ function filterAgents(agents: SavedAgentConfig[], query: string) {
       .toLowerCase()
       .includes(keyword),
   )
-}
-
-function isStableAgentChildSession(session: Session) {
-  if (session.type !== 'direct' || !session.workspaceId) return false
-  return isStableOrchestratorTaskSession(session)
-}
-
-function isPrivateAgentSession(session: Session | null | undefined) {
-  if (session?.type !== 'direct' || !session.workspaceId || !session.workspaceAgentId) return false
-  const metadata = session.metadata ?? {}
-  return metadata.kind === 'agent-direct'
 }
 
 function isManagerSavedAgent(agent: SavedAgentConfig | null | undefined) {

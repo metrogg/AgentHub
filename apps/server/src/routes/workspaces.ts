@@ -1,4 +1,16 @@
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs'
 import { rm } from 'node:fs/promises'
+import { basename, extname, isAbsolute, normalize, relative, resolve, sep } from 'node:path'
+import { Buffer } from 'node:buffer'
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
@@ -8,7 +20,6 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 
 import {
-  cleanProjectPath,
   ensureProjectDirectory,
   findWorkspaceByProjectPath,
   touchWorkspace,
@@ -48,6 +59,14 @@ const cloneGithubWorkspaceSchema = z.object({
   repoUrl: z.string().min(1).max(1000),
   name: z.string().max(120).optional(),
   goal: z.string().max(2000).default(''),
+})
+
+const workspaceFileListQuerySchema = z.object({
+  path: z.string().max(1000).optional(),
+})
+
+const workspaceFileContentQuerySchema = z.object({
+  path: z.string().min(1).max(1000),
 })
 
 const createAgentSchema = z.object({
@@ -270,6 +289,270 @@ function summarizeGitCloneOutput(output: string) {
     .slice(0, 500)
 }
 
+const MAX_WORKSPACE_FILE_ENTRIES = 300
+const MAX_WORKSPACE_TEXT_PREVIEW_BYTES = 512 * 1024
+const BINARY_SNIFF_BYTES = 8192
+
+type WorkspaceFileEntry = {
+  name: string
+  path: string
+  type: 'directory' | 'file'
+  size: number
+  sizeLabel: string
+  modifiedAt: string
+  extension?: string
+  hidden: boolean
+}
+
+function ensureProjectRoot(projectPath?: string | null) {
+  if (!projectPath) {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '工作区未设置项目路径')
+  }
+  const root = resolve(projectPath)
+  if (!existsSync(root) || !statSync(root).isDirectory()) {
+    throw AppError.fromCode(AppErrorCodes.PROJECT_PATH_NOT_FOUND, '项目路径不存在')
+  }
+  return { root, realRoot: realpathSync(root) }
+}
+
+function resolveWorkspaceBrowserPath(root: string, realRoot: string, rawPath?: string | null) {
+  const normalizedInput = (rawPath ?? '').trim().replace(/\\/g, '/')
+  if (/^[a-zA-Z]:\//.test(normalizedInput) || isAbsolute(normalizedInput) || normalizedInput.startsWith('/')) {
+    throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
+  }
+  const parts = normalizedInput.split('/').filter(Boolean)
+  if (parts.some((part) => part === '..')) {
+    throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
+  }
+
+  const candidate = resolve(root, normalize(parts.join(sep) || '.'))
+  assertPathUnderRoot(candidate, root)
+  if (existsSync(candidate)) {
+    assertPathUnderRoot(realpathSync(candidate), realRoot)
+  }
+
+  return {
+    absolutePath: candidate,
+    relativePath: toWorkspaceRelativePath(root, candidate),
+  }
+}
+
+function assertPathUnderRoot(candidate: string, root: string) {
+  const resolvedRoot = resolve(root)
+  const resolvedCandidate = resolve(candidate)
+  const rootWithSep = resolvedRoot.endsWith(sep) ? resolvedRoot : `${resolvedRoot}${sep}`
+  if (resolvedCandidate !== resolvedRoot && !resolvedCandidate.startsWith(rootWithSep)) {
+    throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
+  }
+}
+
+function toWorkspaceRelativePath(root: string, absolutePath: string) {
+  const value = relative(root, absolutePath).replace(/\\/g, '/')
+  return value === '.' ? '' : value
+}
+
+function parentWorkspacePath(path: string) {
+  if (!path) return null
+  const parts = path.split('/').filter(Boolean)
+  parts.pop()
+  return parts.length ? parts.join('/') : ''
+}
+
+function listWorkspaceDirectory(root: string, realRoot: string, absolutePath: string): {
+  items: WorkspaceFileEntry[]
+  total: number
+  truncated: boolean
+} {
+  if (!existsSync(absolutePath)) {
+    throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, '目录不存在')
+  }
+  if (!statSync(absolutePath).isDirectory()) {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '路径不是目录')
+  }
+
+  const entries = readdirSync(absolutePath, { withFileTypes: true })
+  const items: WorkspaceFileEntry[] = []
+
+  for (const entry of entries) {
+    const entryPath = resolve(absolutePath, entry.name)
+    try {
+      const realEntryPath = realpathSync(entryPath)
+      assertPathUnderRoot(realEntryPath, realRoot)
+      const linkStat = lstatSync(entryPath)
+      const fileStat = statSync(entryPath)
+      const type = fileStat.isDirectory() ? 'directory' : fileStat.isFile() ? 'file' : null
+      if (!type) continue
+      const extension = type === 'file' ? extname(entry.name).replace(/^\./, '').toLowerCase() : undefined
+      items.push({
+        name: entry.name,
+        path: toWorkspaceRelativePath(root, entryPath),
+        type,
+        size: type === 'file' ? fileStat.size : 0,
+        sizeLabel: type === 'file' ? formatBytes(fileStat.size) : '',
+        modifiedAt: fileStat.mtime.toISOString(),
+        extension,
+        hidden: entry.name.startsWith('.') || linkStat.isSymbolicLink(),
+      })
+    } catch {
+      continue
+    }
+  }
+
+  items.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+  })
+
+  return {
+    items: items.slice(0, MAX_WORKSPACE_FILE_ENTRIES),
+    total: items.length,
+    truncated: items.length > MAX_WORKSPACE_FILE_ENTRIES,
+  }
+}
+
+function readWorkspaceTextPreview(filePath: string) {
+  if (!existsSync(filePath)) {
+    throw AppError.fromCode(AppErrorCodes.FILE_NOT_FOUND, '文件不存在')
+  }
+  const fileStat = statSync(filePath)
+  if (!fileStat.isFile()) {
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '路径不是文件')
+  }
+
+  const extension = extname(filePath).replace(/^\./, '').toLowerCase()
+  const mimeType = workspaceMimeType(filePath)
+  const sniff = readFilePrefix(filePath, Math.min(BINARY_SNIFF_BYTES, fileStat.size))
+  const binary = !isTextLikeWorkspaceFile(mimeType, extension) && (isBinaryWorkspaceMime(mimeType) || sniff.includes(0))
+  if (binary) {
+    return {
+      binary: true,
+      content: '',
+      mimeType,
+      size: fileStat.size,
+      sizeLabel: formatBytes(fileStat.size),
+      truncated: false,
+    }
+  }
+
+  const limit = Math.min(MAX_WORKSPACE_TEXT_PREVIEW_BYTES, fileStat.size)
+  const buffer = readFilePrefix(filePath, limit)
+  return {
+    binary: false,
+    content: buffer.toString('utf8'),
+    mimeType,
+    size: fileStat.size,
+    sizeLabel: formatBytes(fileStat.size),
+    truncated: fileStat.size > MAX_WORKSPACE_TEXT_PREVIEW_BYTES,
+  }
+}
+
+function readFilePrefix(filePath: string, length: number) {
+  const buffer = Buffer.alloc(length)
+  if (length <= 0) return buffer
+  const fd = openSync(filePath, 'r')
+  try {
+    const bytesRead = readSync(fd, buffer, 0, length, 0)
+    return bytesRead === length ? buffer : buffer.subarray(0, bytesRead)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function workspaceMimeType(filePath: string) {
+  const ext = extname(filePath).toLowerCase()
+  if (ext === '.html' || ext === '.htm') return 'text/html; charset=utf-8'
+  if (ext === '.js' || ext === '.mjs' || ext === '.cjs') return 'text/javascript; charset=utf-8'
+  if (ext === '.ts' || ext === '.tsx') return 'text/typescript; charset=utf-8'
+  if (ext === '.css' || ext === '.scss') return 'text/css; charset=utf-8'
+  if (ext === '.json' || ext === '.jsonl') return 'application/json; charset=utf-8'
+  if (ext === '.md' || ext === '.markdown') return 'text/markdown; charset=utf-8'
+  if (ext === '.svg') return 'image/svg+xml'
+  if (ext === '.png') return 'image/png'
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.gif') return 'image/gif'
+  if (ext === '.webp') return 'image/webp'
+  if (ext === '.pdf') return 'application/pdf'
+  if (ext === '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  if (ext === '.pptx') return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  if (ext === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  if (['.txt', '.log', '.xml', '.yaml', '.yml', '.sql', '.sh', '.ps1', '.bat'].includes(ext)) {
+    return 'text/plain; charset=utf-8'
+  }
+  return 'application/octet-stream'
+}
+
+function isTextLikeWorkspaceFile(mimeType: string, extension?: string) {
+  const type = mimeType.toLowerCase()
+  if (type.startsWith('text/')) return true
+  if (type.includes('json') || type.includes('xml') || type.includes('yaml')) return true
+  return Boolean(
+    extension &&
+      [
+        'bat',
+        'c',
+        'cpp',
+        'cs',
+        'css',
+        'go',
+        'h',
+        'html',
+        'java',
+        'js',
+        'json',
+        'jsonl',
+        'jsx',
+        'kt',
+        'log',
+        'md',
+        'mjs',
+        'php',
+        'ps1',
+        'py',
+        'rs',
+        'scss',
+        'sh',
+        'sql',
+        'svg',
+        'swift',
+        'toml',
+        'ts',
+        'tsx',
+        'txt',
+        'vue',
+        'xml',
+        'yaml',
+        'yml',
+      ].includes(extension),
+  )
+}
+
+function isBinaryWorkspaceMime(mimeType: string) {
+  const type = mimeType.toLowerCase()
+  return (
+    type.startsWith('image/') ||
+    type === 'application/pdf' ||
+    type.includes('wordprocessingml') ||
+    type.includes('presentationml') ||
+    type.includes('spreadsheetml') ||
+    type === 'application/msword' ||
+    type === 'application/vnd.ms-powerpoint' ||
+    type === 'application/vnd.ms-excel'
+  )
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  const precision = value >= 10 || unitIndex === 0 ? 0 : 1
+  return `${value.toFixed(precision)} ${units[unitIndex]}`
+}
+
 // ---------- Routes ----------
 
 export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -393,6 +676,45 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       await rm(folder.projectPath, { recursive: true, force: true }).catch(() => undefined)
       throw error
     }
+  })
+
+  .get('/:id/files/content', zValidator('query', workspaceFileContentQuerySchema), async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const input = c.req.valid('query')
+    const ws = await ensureWorkspace(id, user.sub)
+    const { root, realRoot } = ensureProjectRoot(ws.projectPath)
+    const { absolutePath, relativePath } = resolveWorkspaceBrowserPath(root, realRoot, input.path)
+    assertPathUnderRoot(absolutePath, root)
+    if (existsSync(absolutePath)) {
+      assertPathUnderRoot(realpathSync(absolutePath), realRoot)
+    }
+    const preview = readWorkspaceTextPreview(absolutePath)
+    return c.json({
+      workspaceId: id,
+      name: basename(absolutePath),
+      path: relativePath,
+      ...preview,
+    })
+  })
+
+  .get('/:id/files', zValidator('query', workspaceFileListQuerySchema), async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    const input = c.req.valid('query')
+    const ws = await ensureWorkspace(id, user.sub)
+    const { root, realRoot } = ensureProjectRoot(ws.projectPath)
+    const { absolutePath, relativePath } = resolveWorkspaceBrowserPath(root, realRoot, input.path)
+    const list = listWorkspaceDirectory(root, realRoot, absolutePath)
+    return c.json({
+      workspaceId: id,
+      rootName: basename(root) || ws.name || 'workspace',
+      path: relativePath,
+      parentPath: parentWorkspacePath(relativePath),
+      items: list.items,
+      total: list.total,
+      truncated: list.truncated,
+    })
   })
 
   // Get full workspace

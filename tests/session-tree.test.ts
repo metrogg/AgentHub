@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { SessionType, type Session } from '../apps/web/src/lib/api'
-import { buildSessionTree, isStableOrchestratorTaskSession } from '../apps/web/src/lib/sessionTree'
+import {
+  buildSessionTree,
+  classifyAgentSession,
+  isAgentDirectSession,
+  isOrchestratorTaskSession,
+  isStableOrchestratorTaskSession,
+} from '../apps/web/src/lib/sessionTree'
 
 function session(partial: Partial<Session> & Pick<Session, 'id' | 'title' | 'type'>): Session {
   return {
@@ -33,6 +39,25 @@ describe('session tree', () => {
     })
 
     expect(isStableOrchestratorTaskSession(preparedThread)).toBe(true)
+    expect(isOrchestratorTaskSession(preparedThread)).toBe(true)
+    expect(classifyAgentSession(preparedThread)).toBe('orchestrator-task')
+  })
+
+  test('classifies saved agent direct sessions as top-level private agent chats', () => {
+    const direct = session({
+      id: 'agent-direct-1',
+      title: 'Frontend Expert',
+      type: SessionType.Direct,
+      workspaceId: 'workspace-1',
+      workspaceAgentId: 'agent-1',
+      metadata: {
+        kind: 'agent-direct',
+        savedAgentId: 'saved-agent-1',
+      },
+    })
+
+    expect(isAgentDirectSession(direct)).toBe(true)
+    expect(classifyAgentSession(direct)).toBe('agent-direct')
   })
 
   test('shows prepared orchestrator task threads under their group without requiring an agent id', () => {
