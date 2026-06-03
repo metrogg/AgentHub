@@ -931,7 +931,7 @@ apps/server/src/kernel/
 动作：
 
 - 新增本文档。
-- 更新 `AGENTS.md`、`docs/当前多Agent协作架构.md`，说明后续方向是 HiClaw-lite Kernel。
+- 更新 `AGENTS.md`、`README.md` 和 `docs/当前状态与下一步路线.md`，说明后续方向是 HiClaw-lite Kernel。
 - 明确不直接引入 Matrix / MinIO / K8s 作为默认依赖。
 
 验收：

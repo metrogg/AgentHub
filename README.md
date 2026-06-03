@@ -5,7 +5,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 现阶段的主交互仍然是群聊、私聊和任务子对话，但这些只是工作台的承载外壳。我们真正要做的是：
 
 - 用户围绕一个工作目标发起协作，而不是只发起一段对话。
-- Orchestrator 动态理解目标、规划任务、调度多个 Coding Agent。
+- Manager / Orchestrator 像团队负责人一样理解目标，决定回复、追问、补员、派活、验收和总结。
 - 多个 Agent 在真实子对话里执行，并交付网页、文档、报告、代码、应用等结果资产。
 - 平台逐步形成 `Space / Task Center / Asset Center / Expert Center / Eval & Trace` 的完整结构。
 
@@ -21,11 +21,11 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - 目标产品形态：Coze 风格的 AI 工作台与 AI 空间。
 
 - **Agent 私聊**：用户与单个 Agent 一对一对话。
-- **Agent 群聊 / 工作会话**：用户围绕目标发起协作，Orchestrator 负责理解、规划、分工和总结。
+- **Agent 群聊 / 工作会话**：用户围绕目标发起协作，Manager / Orchestrator 负责理解、协调、分工、验收和总结。
 - **任务子对话**：每个成员在自己的子对话里真实接收任务并执行，主群聊只展示进度和汇报。
-- **动态任务 DAG**：由模型生成计划，按依赖顺序执行，不使用固定场景模板。
+- **Manager 行动方案**：由 Manager 模型生成团队行动方案和任务账本；DAG 只是恢复、依赖和看板视图，不是主脑。
 - **A2A 通信标准**：Orchestrator 给成员分发任务时统一生成 A2A v0.3 `message/send`，A2A 是通信协议，不是 Agent 类型。
-- **显式分工**：执行任务只接受 Orchestrator/Planner 的模型指派，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
+- **显式分工**：执行任务只接受 Manager / Orchestrator 的模型选择，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
 - **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI；自建 Agent 是在这些 Coding Agent 基底上配置角色、提示词、Skills/MCP 能力和权限。
 - **工作目录与共享任务目录**：每个 Agent 有自己的工作目录，每个任务有 `.agenthub/shared/tasks/{taskId}` 协作空间，上游产物优先通过 `artifacts/` 交给下游；`.agenthub/handoff` 仅保留兼容旧路径。
 - **产物可见**：文件、网页、diff、诊断产物会进入消息 metadata 和任务看板。
@@ -35,8 +35,8 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 
 ```text
 用户在群聊发起任务
-  -> Orchestrator 判断复杂度
-  -> 复杂任务生成动态 DAG 和任务看板
+  -> Manager / Orchestrator 理解目标并决定下一步
+  -> 复杂任务生成团队行动方案和任务看板
   -> 用户分发执行
   -> 为每个任务创建 orchestrator-task 子对话
   -> Orchestrator 生成 A2A message/send envelope
@@ -53,7 +53,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - 展开群聊后只显示真实任务子对话。
 - 旧的 `workspace-agent-child` 和历史占位入口不再作为当前 UI。
 
-更详细的当前架构见 [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)，分层和业内对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)，Spec Kit 契约化与 AG-UI 收敛路线见 [docs/SpecKit契约与AGUI事件落地路线.md](docs/SpecKit契约与AGUI事件落地路线.md)。
+当前权威文档索引见 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
 当前路径仍然偏过程式：消息入口会创建 run/task/session 并启动编排器。后续底层要向 HiClaw-lite Kernel 收敛：`Run`、`Task`、`TaskThread`、`WorkerInstance`、`Artifact`、`RuntimeLease`、`RunEvent` 都成为一等资源；任务看板、进度条、子对话入口和产物卡从资源状态与 AG-UI / RunEvent 投影出来。这个方向不是照搬 HiClaw 的 Matrix / MinIO / Kubernetes 重栈，而是吸收它的资源控制平面和生命周期设计。
 
@@ -64,14 +64,14 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 层 | 当前定位 |
 | --- | --- |
 | 产品交互层 | 群聊、私聊、任务子对话、任务看板、产物卡，并逐步进化为 Space / Task / Asset 工作台 |
-| 编排层 | Orchestrator 动态规划 DAG，调度、取消、重试、汇总 |
+| 编排层 | Manager / Orchestrator 生成团队行动方案，通过任务账本调度、取消、重试、验收和汇总 |
 | 通信协议层 | A2A 承载 Agent 间 message/task/artifact，AG-UI 承载运行事件到 UI |
 | 执行层 | Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Agent 基底，LLM 为内部/兜底 |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
 | 协作契约层 | 用户显式 Spec/Contract 描述范围、产出、验收和路径边界，不做固定场景模板 |
 | 工作区层 | 系统默认工作空间根 + 项目根 + `.agenthub/workdirs` + `.agenthub/shared/tasks` + 兼容 `.agenthub/handoff` + blackboard |
 
-完整分层和业内方案对比见 [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)。产品北极星与 Coze 对标判断见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。
+产品北极星与 Coze 对标判断见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw-lite Kernel 方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
 当前配置真相也分三层：
 
@@ -79,7 +79,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 - `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
 - `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
 
-另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、Orchestrator / Planner / Synthesizer 等内部模型调用。
+另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、Manager / Orchestrator、planning skill、Synthesizer 等内部模型调用。
 
 ## 技术栈
 
@@ -92,7 +92,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | UI | Tailwind CSS + Radix UI + assistant-ui |
 | 状态 | Zustand |
 | 数据库 | SQLite + Drizzle ORM |
-| LLM | OpenAI-compatible + Anthropic-compatible streaming client，用于 Orchestrator/Planner/Synthesizer 和 fallback |
+| LLM | OpenAI-compatible + Anthropic-compatible streaming client，用于 Manager / Orchestrator、planning skill、Synthesizer 和 fallback |
 | Code Agent | Codex CLI / Claude Code / OpenCode / Gemini CLI |
 | Agent 通信 | A2A v0.3 message/send + AgentHub local/remote transport |
 
@@ -104,7 +104,7 @@ apps/
     src/
       routes/                 HTTP API
       services/
-        orchestrator/         Orchestrator、Planner、Scheduler、Synthesizer
+        orchestrator/         Manager-first planning、执行兼容层、Scheduler、Synthesizer
         execution/            任务执行、工作目录、执行信封
         runtime/              AgentRuntime 统一接口
         workspace/            工作区和任务子会话管理
@@ -197,14 +197,12 @@ AGENTHUB_SANDBOX_PROVIDER=local-workdir
 ## 重要文档
 
 - [docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md)
-- [docs/当前多Agent协作架构.md](docs/当前多Agent协作架构.md)
-- [docs/多Agent协作分层架构与业内对比.md](docs/多Agent协作分层架构与业内对比.md)
+- [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)
+- [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)
+- [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)
 - [docs/使用指南.md](docs/使用指南.md)
-- [docs/SpecKit契约与AGUI事件落地路线.md](docs/SpecKit契约与AGUI事件落地路线.md)
-- [docs/功能设计文档.md](docs/功能设计文档.md)
-- [docs/技术实现补充文档.md](docs/技术实现补充文档.md)
-- [docs/一些资料/minimax一个agent不够.md](docs/一些资料/minimax一个agent不够.md)
-- [docs/一些资料/讯飞agent_team.md](docs/一些资料/讯飞agent_team.md)
+- [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md)
+- [docs/Kimi-Claw群聊系统完整设计规格书(1).md](docs/Kimi-Claw群聊系统完整设计规格书%281%29.md)
 
 `docs/archive/` 和 `docs/old/` 中的内容只作为历史参考，不作为当前工程事实。凡是与上面几份权威文档冲突的，以权威文档为准。
 

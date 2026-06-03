@@ -1,28 +1,29 @@
 # AgentHub Development Guide
 
-This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md` and `docs/当前状态与下一步路线.md`, then read `docs/HiClaw架构调研与AgentHub底层重构方案.md`, `docs/当前多Agent协作架构.md`, `docs/场景角色团队协作调研.md`, `docs/角色提示词与动态组队设计.md`, `docs/专家库与开源角色Skill生态调研.md`, `docs/SpecKit契约与AGUI事件落地路线.md`, and `docs/多Agent协作分层架构与业内对比.md`.
+This file is for Claude Code and other coding agents working inside this repository. For product context, first read `README.md`, `AGENTS.md`, `docs/文档索引与权威口径.md`, `docs/当前状态与下一步路线.md`, and `docs/HiClaw架构调研与AgentHub底层重构方案.md`.
 
 ## Product Definition
 
-AgentHub is an IM-style multi-agent collaboration platform. The expected behavior is:
+AgentHub is an IM-style multi-agent collaboration platform evolving toward an open-source Coze-style AI work platform. The expected behavior is:
 
 1. The user starts from a group chat.
-2. Orchestrator reasons about the request and creates a dynamic task DAG.
-3. Multiple agents receive concrete tasks in their own child conversations.
-4. The main group chat shows orchestration progress, member reports, artifacts, and final synthesis.
-5. Users can open child conversations to inspect each agent's real execution trace.
+2. Manager / Orchestrator behaves like a team lead: it understands the request, decides whether to reply, clarify, request members, assign work, review, or summarize.
+3. Planner is not the brain. Structured decomposition is only a planning skill/action that Manager may call.
+4. Multiple agents receive concrete tasks in their own child conversations.
+5. The main group chat shows Manager progress, member reports, artifacts, and final synthesis.
+6. Users can open child conversations to inspect each agent's real execution trace.
 
 Do not implement fixed scenario templates as the core path. The platform must stay general-purpose first.
 Role presets may be used as a manual creation library, but they must not auto-seed a workspace, define a default team, or override model-generated assignments.
-Role prompts should follow `docs/角色提示词与动态组队设计.md`: shared collaboration protocol + role background + bound skills + runtime task context + output contract. Group goals may drive member recommendations, but not fixed execution templates. If an existing group lacks needed capability, Orchestrator may propose adding a new agent; this must be visible and user-approved by default.
-Preinstalled agent templates and lightweight expert-team recommendations live in `docs/专家库与开源角色Skill生态调研.md`. You may borrow structure from Claude Code subagents, BMAD, SuperClaude, awesome-cursor-skills, and MCP server ecosystems, but first adapt for license, safety boundaries, quality, and AgentHub schemas. Do not build a separate "my experts" system or full expert marketplace yet, and do not directly copy unaudited prompts or enable third-party MCP servers by default.
+Role prompts should follow the composition model: shared collaboration protocol + role background + bound skills + runtime task context + output contract. Group goals may drive member recommendations, but not fixed execution templates. If an existing group lacks needed capability, Orchestrator may propose adding a new agent; this must be visible and user-approved by default.
+Preinstalled agent templates and lightweight expert-team recommendations are agent configuration assets, not fixed execution teams. You may borrow structure from Claude Code subagents, BMAD, SuperClaude, awesome-cursor-skills, and MCP server ecosystems, but first adapt for license, safety boundaries, quality, and AgentHub schemas. Do not build a separate "my experts" system or full expert marketplace yet, and do not directly copy unaudited prompts or enable third-party MCP servers by default.
 
 ## Layered Mental Model
 
 Before changing code, identify which layer you are working on:
 
 - Product interaction: IM group chat, global agent direct chat, task child conversations, task boards, artifact cards.
-- Orchestration: Orchestrator, Planner, dynamic DAG, TaskScheduler, Synthesizer, approvals, cancellation, retry, resume.
+- Orchestration: Manager / Orchestrator, Manager actions, WorkLedger / task graph, TaskScheduler, Synthesizer, approvals, cancellation, retry, resume.
 - Protocols: A2A for agent-to-agent message/task/artifact semantics; AG-UI for run events surfaced to the frontend.
 - Execution: Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary agent bases. `llm` is internal/fallback support.
 - Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
@@ -35,7 +36,7 @@ Configuration truth is split deliberately:
 - Coding Tools: CLI readiness, native auth/config, platform diagnostics only.
 - Agent Configuration: the only place allowed to choose `code agent × model × skills × sandbox`.
 
-Keep the internal default model visible and separate. It is only for internal LLM paths such as welcome prompts, Orchestrator, Planner, and Synthesizer.
+Keep the internal default model visible and separate. It is only for internal LLM paths such as welcome prompts, Manager / Orchestrator, planning skill, and Synthesizer.
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
 
@@ -80,8 +81,8 @@ POST /api/messages/:sessionId
   -> direct chat: run target agent
   -> group simple chat: Orchestrator replies directly
   -> group capability gap: Orchestrator emits structured memberProposals; UI shows an approval card; confirmed proposals create/join real workspace agents
-  -> group complex task: create dynamic plan + task board
-  -> dispatch: OrchestratorEngine.dispatch()
+  -> group complex task: Manager creates a team action plan + task board
+  -> dispatch: migration path starts the execution compatibility layer
 ```
 
 Old `GroupChatManager` is deprecated. Do not reintroduce it as the active group path.
@@ -91,6 +92,7 @@ Old `GroupChatManager` is deprecated. Do not reintroduce it as the active group 
 Core files:
 
 - `apps/server/src/services/orchestrator/orchestrator-engine.ts`
+- `apps/server/src/services/orchestrator/manager-planner.ts`
 - `apps/server/src/services/orchestrator/planner.ts`
 - `apps/server/src/services/orchestrator/task-scheduler.ts`
 - `apps/server/src/services/orchestrator/task-graph.ts`
@@ -102,9 +104,9 @@ Execution flow:
 ```text
 messages.ts works as ChatIngress
   -> RunController / ManagerLoop creates run.started + manager.thinking
-  -> RunController asks the Orchestrator model for next action
-  -> migration path still enters OrchestratorEngine.startRun() for execution
-  -> Planner produces ExecutionPlan
+  -> RunController asks the Manager runtime for next action
+  -> Manager-first planning action produces executable Worker tasks
+  -> migration path still enters OrchestratorEngine.startRun() as an execution compatibility layer
   -> workspace_tasks + orchestrator_runs persist run state
   -> TaskThread projection creates orchestrator-task child sessions
   -> TaskScheduler executes dependency layers
@@ -117,7 +119,7 @@ messages.ts works as ChatIngress
   -> Synthesizer writes final summary
 ```
 
-Migration rule: do not keep expanding `messages.ts` as the orchestration brain. New run lifecycle, Manager decisions, reconcile, recovery, and resource state transitions should move into `RunController`, `ManagerLoop`, and later kernel controllers.
+Migration rule: do not keep expanding `messages.ts` as the orchestration brain. New run lifecycle, Manager decisions, reconcile, recovery, and resource state transitions should move into `RunController`, `ManagerLoop`, and later kernel controllers. `OrchestratorEngine` is no longer the future brain; treat it as a migration-period execution compatibility layer to shrink.
 
 ### A2A Boundary
 
@@ -270,7 +272,7 @@ bun test
 - A2A/MCP/Skills as runtime types: removed from the active identity model. They are protocol/capability layers.
 - Static fallback plan templates: avoid as normal UX. Prefer model-generated dynamic plans.
 - Built-in `.agenthub/specs/*.spec.yml` scenario templates and trigger-based Spec matching are removed. Specs may return only as user-explicit collaboration contracts.
-- Static agent routing, keyword-based task reassignment, auto Researcher injection, and artifact-extension follow-up tasks are removed from the active path. Do not reintroduce them; validate explicit Orchestrator/Planner assignments instead.
+- Static agent routing, keyword-based task reassignment, auto Researcher injection, and artifact-extension follow-up tasks are removed from the active path. Do not reintroduce them; validate explicit Manager / Orchestrator choices instead.
 - Do not add keyword heuristic fallbacks for Orchestrator decisions. If the Orchestrator output is not parseable, surface a transparent model/config error.
 - Runtime member additions must be driven by structured `memberProposals` from Orchestrator and explicit user approval. Do not silently create agents.
 - `classic` workspace seeding, default code teams, and `create-from-template` are removed from the active product path.

@@ -1,7 +1,7 @@
 # AgentHub
 
-本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/当前状态与下一步路线.md`、`docs/Coze新版本对标拆解与开源复刻路线.md`、`docs/HiClaw架构调研与AgentHub底层重构方案.md`、`docs/当前多Agent协作架构.md`、`docs/场景角色团队协作调研.md`、`docs/角色提示词与动态组队设计.md`、`docs/专家库与开源角色Skill生态调研.md`、`docs/SpecKit契约与AGUI事件落地路线.md` 和 `docs/使用指南.md`。
-更完整的分层设计和业内方案对比见 `docs/多Agent协作分层架构与业内对比.md`。
+本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/文档索引与权威口径.md`、`docs/当前状态与下一步路线.md`、`docs/HiClaw架构调研与AgentHub底层重构方案.md`、`docs/Coze新版本对标拆解与开源复刻路线.md` 和 `docs/使用指南.md`。
+`docs/hiclaw-wiki.agent.final.md`、`docs/Kimi-Claw群聊系统完整设计规格书(1).md`、`docs/Coze新版本对标拆解与开源复刻路线.md` 是重要参考资料，但如果与当前工程事实冲突，以 `AGENTS.md`、`README.md`、`docs/当前状态与下一步路线.md` 和 `docs/HiClaw架构调研与AgentHub底层重构方案.md` 为准。
 
 ## 当前目标
 
@@ -32,9 +32,9 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 
 角色预设可以作为“创建 Agent 时的参考库”存在，但不能作为默认团队、默认关系或执行模板自动驱动运行。新工作区默认不自动注入 Orchestrator/Researcher/Designer/Builder/QA，也不支持 `classic` 团队模板或 `create-from-template` 入口。
 
-角色设计要按 `docs/角色提示词与动态组队设计.md` 的组合模型推进：公共协作协议 + 角色背景 + 专属 Skill 包 + 任务上下文 + 输出契约。群聊目标可以用于智能推荐成员，但不能变成固定模板；已有群聊能力不足时，Orchestrator 可以提出补员申请，默认必须用户确认，不能静默拉新 Agent。
+角色设计按“公共协作协议 + 角色背景 + 专属 Skill 包 + 任务上下文 + 输出契约”的组合模型推进。群聊目标可以用于智能推荐成员，但不能变成固定模板；已有群聊能力不足时，Orchestrator 可以提出补员申请，默认必须用户确认，不能静默拉新 Agent。
 
-预装 Agent 模板和轻量专家团建议见 `docs/专家库与开源角色Skill生态调研.md`。可以借鉴 Claude Code subagents、BMAD、SuperClaude、awesome-cursor-skills、MCP server 生态等开源资产，但必须经过许可证、安全边界、质量和 AgentHub schema 适配；近期不做“我的专家”或完整专家市场，不要直接复制未审计 prompt 或默认启用第三方 MCP。
+预装 Agent 模板和轻量专家团只作为 Agent 配置资产，不作为固定执行模板。可以借鉴 Claude Code subagents、BMAD、SuperClaude、awesome-cursor-skills、MCP server 生态等开源资产，但必须经过许可证、安全边界、质量和 AgentHub schema 适配；近期不做“我的专家”或完整专家市场，不要直接复制未审计 prompt 或默认启用第三方 MCP。
 
 ## 分层架构判断
 
