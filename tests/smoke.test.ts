@@ -1792,8 +1792,17 @@ describe('AgentHub smoke tests', () => {
       .from(dbApi.workspaceTasks)
       .where(dbApi.eq(dbApi.workspaceTasks.id, taskId))
       .limit(1)
+    expect(updatedTask?.status).toBe('pending')
+    expect(updatedTask?.progressStatus).toBe('thread-prepared')
     expect(updatedTask?.description).toContain(`[Manager Update ${response.id}]`)
     expect(updatedTask?.description).toContain('首页必须适配移动端')
+
+    const [updatedThread] = await dbApi.db
+      .select()
+      .from(dbApi.taskThreads)
+      .where(dbApi.eq(dbApi.taskThreads.id, threadId))
+      .limit(1)
+    expect(updatedThread?.status).toBe('prepared')
 
     const [updatedRun] = await dbApi.db
       .select()
@@ -1818,6 +1827,194 @@ describe('AgentHub smoke tests', () => {
       .where(dbApi.eq(dbApi.workerInstances.id, workerInstanceId))
       .limit(1)
     expect(updatedWorker?.observedState).toBe('idle')
+  })
+
+  test('manager-interrupted active tasks are requeued and resumed inside the executor loop', async () => {
+    const full = await json<{ workspace: { id: string } }>(
+      await postJson('/api/workspaces', {
+        name: 'Interrupt resume workspace',
+        goal: 'Resume interrupted task execution',
+        projectPath: process.cwd(),
+      }),
+    )
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
+    )
+    const builder = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Builder',
+      role: '工程实现',
+      roleType: 'coder',
+      sandboxPolicy: 'workspace-write',
+      systemPrompt: 'Build the assigned task briefly.',
+    })
+
+    const runId = crypto.randomUUID()
+    const taskId = crypto.randomUUID()
+    const childSessionId = crypto.randomUUID()
+    const taskThreadId = crypto.randomUUID()
+    const workerInstanceId = crypto.randomUUID()
+
+    await dbApi.db.insert(dbApi.orchestratorRuns).values({
+      id: runId,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      status: 'running',
+      plan: {
+        runId,
+        title: 'Interrupt resume plan',
+        goal: 'Resume interrupted execution',
+        agents: [{ id: builder.id, name: 'Builder' }],
+        tasks: [
+          {
+            id: taskId,
+            title: 'Resume task',
+            description:
+              'Do the work.\n\n[Manager Update human-msg-1]\n\nHuman added or changed this requirement:\nUse the updated requirement.',
+            agentId: builder.id,
+            dependencies: [],
+          },
+        ],
+      },
+    })
+    await dbApi.db.insert(dbApi.sessions).values({
+      id: childSessionId,
+      title: 'Builder / Resume task',
+      type: 'direct',
+      ownerId: 'default-user',
+      workspaceId: full.workspace.id,
+      workspaceAgentId: builder.id,
+      metadata: {
+        kind: 'orchestrator-task',
+        orchestratorRunId: runId,
+        orchestratorTaskId: taskId,
+      },
+    })
+    await dbApi.db.insert(dbApi.workspaceTasks).values({
+      id: taskId,
+      workspaceId: full.workspace.id,
+      agentId: builder.id,
+      title: 'Resume task',
+      description:
+        'Do the work.\n\n[Manager Update human-msg-1]\n\nHuman added or changed this requirement:\nUse the updated requirement.',
+      status: 'running',
+      sessionId: childSessionId,
+      runId,
+    })
+    await dbApi.db.insert(dbApi.taskThreads).values({
+      id: taskThreadId,
+      workspaceId: full.workspace.id,
+      runId,
+      taskId,
+      groupSessionId: group.session.id,
+      workspaceAgentId: builder.id,
+      workerInstanceId,
+      sessionId: childSessionId,
+      status: 'active',
+    })
+
+    const { OrchestratorEngine } = await import(
+      '../apps/server/src/services/orchestrator/orchestrator-engine'
+    )
+    const { listRunEvents } = await import('../apps/server/src/services/orchestrator/run-events')
+
+    const engine = new OrchestratorEngine() as any
+    let executeCount = 0
+    engine.executeTask = async () => {
+      executeCount += 1
+      if (executeCount === 1) {
+        return {
+          taskId,
+          agentId: builder.id,
+          agentName: 'Builder',
+          status: 'cancelled',
+          output: 'cancelled after manager interrupt',
+          artifacts: [],
+        }
+      }
+      return {
+        taskId,
+        agentId: builder.id,
+        agentName: 'Builder',
+        status: 'done',
+        output: 'rerun finished',
+        artifacts: [],
+      }
+    }
+
+    const plan = {
+      runId,
+      title: 'Interrupt resume plan',
+      goal: 'Resume interrupted execution',
+      agents: [{ id: builder.id, name: 'Builder' }],
+      tasks: [
+        {
+          id: taskId,
+          title: 'Resume task',
+          description:
+            'Do the work.\n\n[Manager Update human-msg-1]\n\nHuman added or changed this requirement:\nUse the updated requirement.',
+          agentId: builder.id,
+          dependencies: [],
+        },
+      ],
+    } as any
+
+    const childSessions = new Map([
+      [
+        taskId,
+        {
+          sessionId: childSessionId,
+          workspaceId: full.workspace.id,
+          projectPath: process.cwd(),
+          taskThreadId,
+          workerInstanceId,
+        },
+      ],
+    ])
+
+    const executor = engine.createTaskExecutor(
+      runId,
+      group.session.id,
+      full.workspace.id,
+      plan,
+      childSessions,
+      'default-user',
+    )
+
+    const result = await executor(plan.tasks[0], new AbortController().signal)
+
+    expect(executeCount).toBe(2)
+    expect(result.status).toBe('done')
+
+    const [taskRow] = await dbApi.db
+      .select()
+      .from(dbApi.workspaceTasks)
+      .where(dbApi.eq(dbApi.workspaceTasks.id, taskId))
+      .limit(1)
+    expect(taskRow?.status).toBe('pending')
+    expect(taskRow?.progressStatus).toBe('thread-prepared')
+
+    const [threadRow] = await dbApi.db
+      .select()
+      .from(dbApi.taskThreads)
+      .where(dbApi.eq(dbApi.taskThreads.id, taskThreadId))
+      .limit(1)
+    expect(threadRow?.status).toBe('prepared')
+
+    const events = await listRunEvents(runId)
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'run.replanned' &&
+          (event.payload as any)?.strategy === 'human_interrupt_resume',
+      ),
+    ).toBe(true)
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'manager.next_action' &&
+          (event.payload as any)?.action === 'resuming_interrupted_task',
+      ),
+    ).toBe(true)
   })
 
   test('task.queued events persist dynamic tasks into the run ledger and plan', async () => {

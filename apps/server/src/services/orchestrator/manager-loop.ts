@@ -16,6 +16,7 @@ import { blackboard, Blackboard } from '../blackboard'
 import { OrchestratorEngine } from './orchestrator-engine'
 import { appendHumanInterruptConstraint } from './human-interrupts'
 import { emitRunEvent } from './run-events'
+import { updateTaskThreadStatus } from './task-thread-service'
 import type { ExecutionPlan } from './types'
 import { markRuntimeLeaseStale, markWorkerInstanceState } from './worker-runtime-resources'
 
@@ -311,6 +312,20 @@ export async function processPendingHumanInterrupts(input: {
           interruptMessageId: messageId,
         },
       })
+
+      await db
+        .update(workspaceTasks)
+        .set({
+          status: TaskStatus.Pending,
+          startedAt: null,
+          completedAt: null,
+          errorLog: 'Manager interrupted active work after a new human requirement.',
+          progressPercent: 0,
+          progressStatus: 'thread-prepared',
+          updatedAt: new Date(),
+        })
+        .where(eq(workspaceTasks.id, task.id))
+      await updateTaskThreadStatus(thread.id, 'prepared')
     }
 
     for (const task of liveTasks) {

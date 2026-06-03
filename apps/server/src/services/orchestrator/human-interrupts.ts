@@ -17,3 +17,7 @@ export function appendHumanInterruptConstraint(
   const sections = [base, marker, 'Human added or changed this requirement:', content].filter(Boolean)
   return sections.join('\n\n')
 }
+
+export function hasHumanInterruptConstraint(description: string | null | undefined): boolean {
+  return /\[Manager Update [^\]]+\]/.test(description ?? '')
+}

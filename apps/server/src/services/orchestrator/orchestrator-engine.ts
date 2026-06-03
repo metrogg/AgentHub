@@ -47,7 +47,11 @@ import {
   validateTaskOutputContract,
   type TaskContractResult,
 } from './task-contract'
-import { appendHumanInterruptConstraint, type HumanInterruptPayload } from './human-interrupts'
+import {
+  appendHumanInterruptConstraint,
+  hasHumanInterruptConstraint,
+  type HumanInterruptPayload,
+} from './human-interrupts'
 import { runTaskValidation, type TaskValidationResult } from './task-validation'
 import type {
   CollaborationMode,
@@ -873,6 +877,7 @@ export class OrchestratorEngine {
     return async (task, signal) => {
       let currentTask = task
       let currentAttempt = 0
+      const resumedHumanInterruptDescriptions = new Set<string>()
       const taskExecutionStartedAt = Date.now()
 
       while (true) {
@@ -904,7 +909,56 @@ export class OrchestratorEngine {
           currentAttempt,
           ownerId,
         )
-        if (result.status === TaskStatus.Done || result.status === TaskStatus.Cancelled) {
+        if (result.status === TaskStatus.Done) {
+          return result
+        }
+
+        if (result.status === TaskStatus.Cancelled) {
+          const descriptionKey = currentTask.description ?? ''
+          if (
+            !signal.aborted &&
+            hasHumanInterruptConstraint(descriptionKey) &&
+            !resumedHumanInterruptDescriptions.has(descriptionKey)
+          ) {
+            resumedHumanInterruptDescriptions.add(descriptionKey)
+            const childInfo = childSessions.get(currentTask.id)
+            await runController.resetTaskForReplan(
+              { runId, workspaceId, groupSessionId },
+              {
+                taskId: currentTask.id,
+                title: currentTask.title,
+                agentId: currentTask.agentId,
+                reason: 'Manager resumed task after a human requirement interruption.',
+                strategy: 'human_interrupt_resume',
+                changedTaskIds: [currentTask.id],
+                childSessionId: childInfo?.sessionId ?? null,
+                taskThreadId: childInfo?.taskThreadId ?? null,
+                workerInstanceId: childInfo?.workerInstanceId ?? null,
+                retryCount: currentAttempt,
+              },
+            )
+            await emitRunEvent({
+              runId,
+              workspaceId,
+              groupSessionId,
+              taskId: currentTask.id,
+              threadId: childInfo?.taskThreadId ?? null,
+              workerInstanceId: childInfo?.workerInstanceId ?? null,
+              agentId: currentTask.agentId,
+              type: 'manager.next_action',
+              severity: 'warning',
+              payload: {
+                action: 'resuming_interrupted_task',
+                reason: 'Manager is resuming a task that was interrupted by a human requirement update.',
+                taskId: currentTask.id,
+                taskTitle: currentTask.title,
+                childSessionId: childInfo?.sessionId ?? null,
+                taskThreadId: childInfo?.taskThreadId ?? null,
+                taskThreadStatus: 'prepared',
+              },
+            })
+            continue
+          }
           return result
         }
 
