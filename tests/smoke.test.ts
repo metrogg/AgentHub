@@ -1061,6 +1061,43 @@ describe('AgentHub smoke tests', () => {
     expect(catalog.items.find((item) => item.id === 'codex')?.command).toBe('codex')
   })
 
+  test('local agent runtime catalog keeps OpenClaw as a coordinator candidate', async () => {
+    const catalog = await json<{
+      localCliProbesEnabled: boolean
+      items: Array<{
+        id: string
+        command: string
+        runtimeFamily: string
+        runtimeBase: string
+        adapterStatus: string
+        registered: boolean
+      }>
+    }>(await app.request('/api/coding-tools/local-agent-runtimes'))
+
+    const openclaw = catalog.items.find((item) => item.id === 'openclaw')
+    expect(openclaw?.command).toBe('openclaw')
+    expect(openclaw?.runtimeFamily).toBe('coordinator')
+    expect(openclaw?.runtimeBase).toBe('openclaw')
+    expect(openclaw?.adapterStatus).toBe('candidate')
+
+    const added = await json<{
+      binding: { id: string; runtimeFamily: string; runtimeBase: string; enabled: boolean }
+      catalog: {
+        items: Array<{ id: string; registered: boolean; runtimeFamily: string }>
+      }
+    }>(
+      await postJson('/api/coding-tools/local-agent-runtimes/openclaw/add', {
+        command: 'openclaw',
+      }),
+    )
+
+    expect(added.binding.id).toBe('openclaw')
+    expect(added.binding.runtimeFamily).toBe('coordinator')
+    expect(added.binding.runtimeBase).toBe('openclaw')
+    expect(added.binding.enabled).toBe(false)
+    expect(added.catalog.items.find((item) => item.id === 'openclaw')?.registered).toBe(true)
+  })
+
   test('agent draft can be confirmed into a workspace agent', async () => {
     const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {

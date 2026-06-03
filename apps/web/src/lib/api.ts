@@ -428,6 +428,59 @@ export interface AgentAdapterCatalogResponse {
   items: AgentAdapterCatalogItem[]
 }
 
+export type LocalAgentRuntimeFamily = 'coordinator' | 'worker'
+export type LocalAgentRuntimeAdapterStatus = 'candidate' | 'available' | 'blocked'
+
+export interface LocalAgentRuntimeCatalogItem {
+  adapterMessage: string
+  adapterStatus: LocalAgentRuntimeAdapterStatus
+  addedAt: string | null
+  command: string
+  configMessage: string
+  diagnostics?: string
+  docsHint: string
+  docsUrl: string
+  enabled: boolean
+  id: string
+  installCommand: string
+  installed: boolean
+  missingAdapterSteps: string[]
+  name: string
+  packageName: string
+  permissions: string[]
+  ready: boolean
+  recommendedUse: string
+  registered: boolean
+  runtimeBase: 'openclaw' | 'copaw'
+  runtimeFamily: LocalAgentRuntimeFamily
+  version: string | null
+}
+
+export interface LocalAgentRuntimeBinding {
+  adapterStatus: LocalAgentRuntimeAdapterStatus
+  addedAt: string
+  command: string
+  enabled: boolean
+  id: string
+  packageName: string
+  runtimeBase: 'openclaw' | 'copaw'
+  runtimeFamily: LocalAgentRuntimeFamily
+  version: string | null
+}
+
+export interface LocalAgentRuntimeCatalogResponse {
+  platform: string
+  localCliProbesEnabled: boolean
+  items: LocalAgentRuntimeCatalogItem[]
+}
+
+export interface LocalAgentRuntimeAddResponse {
+  ok: boolean
+  binding: LocalAgentRuntimeBinding
+  catalog: LocalAgentRuntimeCatalogResponse
+  message: string
+}
+
 export interface CliInstallAction {
   code?: number
   items?: CodingToolStatus[]
@@ -1517,6 +1570,16 @@ export const api = {
         })
       : request<CodingToolStatusResponse>('/coding-tools/status'),
   getAgentAdapters: () => request<AgentAdapterCatalogResponse>('/coding-tools/agent-adapters'),
+  getLocalAgentRuntimes: () =>
+    request<LocalAgentRuntimeCatalogResponse>('/coding-tools/local-agent-runtimes'),
+  addLocalAgentRuntime: (id: string, data?: { command?: string }) =>
+    request<LocalAgentRuntimeAddResponse>(
+      `/coding-tools/local-agent-runtimes/${encodeURIComponent(id)}/add`,
+      {
+        method: 'POST',
+        body: data ? JSON.stringify(data) : undefined,
+      },
+    ),
   installAllCliTools: () =>
     request<CliInstallAction>('/coding-tools/cli/install', { method: 'POST' }),
   ensureCodingToolsStartupLifecycle: () =>

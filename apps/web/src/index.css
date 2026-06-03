@@ -1163,6 +1163,10 @@
     border-color: transparent;
   }
 
+  .agenthub-chat-shell .agenthub-context-rail .agenthub-rail-card {
+    box-shadow: none;
+  }
+
   .agenthub-chat-shell .agenthub-session-sidebar,
   .agenthub-chat-shell .agenthub-session-sidebar > div,
   .agenthub-thread-root > div > div > aside {

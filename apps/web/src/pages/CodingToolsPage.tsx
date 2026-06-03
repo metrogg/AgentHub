@@ -13,9 +13,12 @@ import {
   KeyRound,
   Loader2,
   LogOut,
+  Network,
   PanelLeft,
+  PlusCircle,
   RefreshCw,
   Save,
+  ShieldCheck,
   Terminal,
   XCircle,
 } from 'lucide-react'
@@ -25,6 +28,7 @@ import {
   api,
   type CodexAuthStatus,
   type CodingToolStatus,
+  type LocalAgentRuntimeCatalogItem,
   type OpencodeModelItem,
 } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -150,6 +154,10 @@ export default function CodingToolsPage() {
   const [executionEnabled, setExecutionEnabled] = useState<boolean | null>(null)
   const [executionBusy, setExecutionBusy] = useState(false)
   const [focusedAgentToolKey, setFocusedAgentToolKey] = useState<string | null>(null)
+  const [localAgentRuntimes, setLocalAgentRuntimes] = useState<LocalAgentRuntimeCatalogItem[]>([])
+  const [localAgentBusy, setLocalAgentBusy] = useState(false)
+  const [localAgentMessage, setLocalAgentMessage] = useState('')
+  const [localAgentScanningEnabled, setLocalAgentScanningEnabled] = useState<boolean | null>(null)
 
   useEffect(() => {
     api
@@ -186,6 +194,7 @@ export default function CodingToolsPage() {
       void refreshCodexConfig()
       void refreshCodexAuthFile()
       void refreshOpencodeModels()
+      void refreshLocalAgentRuntimes()
     })
   }, [])
 
@@ -263,6 +272,39 @@ export default function CodingToolsPage() {
       setCliMessage(error?.message || 'Failed to load local OpenCode models.')
     } finally {
       setOpencodeModelBusy(false)
+    }
+  }
+
+  async function refreshLocalAgentRuntimes() {
+    setLocalAgentBusy(true)
+    try {
+      const result = await api.getLocalAgentRuntimes()
+      setLocalAgentRuntimes(result.items)
+      setLocalAgentScanningEnabled(result.localCliProbesEnabled)
+      setLocalAgentMessage(
+        result.localCliProbesEnabled
+          ? `已扫描 ${result.items.length} 个本地 Agent Runtime 候选。`
+          : '本地 CLI 扫描已关闭，暂时无法检测 OpenClaw 等本地 Agent。',
+      )
+    } catch (error: any) {
+      setLocalAgentMessage(error?.message || '扫描本地 Agent Runtime 失败')
+    } finally {
+      setLocalAgentBusy(false)
+    }
+  }
+
+  async function addLocalAgentRuntime(runtime: LocalAgentRuntimeCatalogItem) {
+    setLocalAgentBusy(true)
+    try {
+      const result = await api.addLocalAgentRuntime(runtime.id, { command: runtime.command })
+      setLocalAgentRuntimes(result.catalog.items)
+      setLocalAgentScanningEnabled(result.catalog.localCliProbesEnabled)
+      setLocalAgentMessage(result.message)
+      showSaved()
+    } catch (error: any) {
+      setLocalAgentMessage(error?.message || `添加 ${runtime.name} 失败`)
+    } finally {
+      setLocalAgentBusy(false)
     }
   }
 
@@ -765,6 +807,15 @@ export default function CodingToolsPage() {
               </>
             )}
           </section>
+
+          <LocalAgentRuntimePanel
+            busy={localAgentBusy}
+            items={localAgentRuntimes}
+            message={localAgentMessage}
+            scanningEnabled={localAgentScanningEnabled}
+            onAdd={addLocalAgentRuntime}
+            onRefresh={refreshLocalAgentRuntimes}
+          />
 
           <section className="mt-5 grid items-start gap-5">
             <div className="rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
@@ -1383,6 +1434,192 @@ function normalizeCodexAuthMessage(message: string) {
     return '授权页返回 Route Error。请复制授权链接，在普通浏览器或无痕窗口打开，并确认 ChatGPT 已登录。'
   }
   return message
+}
+
+function LocalAgentRuntimePanel({
+  busy,
+  items,
+  message,
+  scanningEnabled,
+  onAdd,
+  onRefresh,
+}: {
+  busy: boolean
+  items: LocalAgentRuntimeCatalogItem[]
+  message: string
+  scanningEnabled: boolean | null
+  onAdd: (runtime: LocalAgentRuntimeCatalogItem) => void | Promise<void>
+  onRefresh: () => void | Promise<void>
+}) {
+  const { t } = useI18n()
+  const detectedCount = items.filter((item) => item.installed).length
+  const registeredCount = items.filter((item) => item.registered).length
+
+  return (
+    <section className="mt-5 rounded-lg border border-neutral-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-semibold text-neutral-950">
+            <Network className="h-4 w-4 text-teal-700" />
+            {t('本地 Agent Runtime')}
+          </div>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-neutral-500">
+            {t('用于扫描 OpenClaw 这类本地 Manager / Coordinator 候选。它不会进入普通 Coding Tools 执行器下拉，也不会静默启动本地进程。')}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={busy}
+          className="inline-flex h-9 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-600 transition hover:bg-neutral-50 disabled:opacity-50"
+        >
+          <RefreshCw className={cn('h-4 w-4', busy && 'animate-spin')} />
+          {t('扫描本地 Agent')}
+        </button>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_15rem]">
+        <div className="grid gap-3">
+          {items.length ? (
+            items.map((runtime) => (
+              <article
+                key={runtime.id}
+                className="rounded-lg border border-neutral-200 bg-[#fbfbf8] p-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-neutral-950 text-white">
+                      <ShieldCheck className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-semibold text-neutral-950">{runtime.name}</h3>
+                        <LocalRuntimeBadge runtime={runtime} />
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-xs text-neutral-500">
+                        <span>{runtime.command}</span>
+                        {runtime.version && <span>{runtime.version}</span>}
+                      </div>
+                      <p className="mt-2 text-xs leading-5 text-neutral-600">
+                        {runtime.configMessage}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                    <a
+                      href={runtime.docsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 text-xs text-neutral-600 transition hover:bg-neutral-50"
+                    >
+                      {t('文档')}
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => onAdd(runtime)}
+                      disabled={busy || runtime.registered}
+                      className={cn(
+                        'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition disabled:cursor-default',
+                        runtime.registered
+                          ? 'border border-emerald-100 bg-emerald-50 text-emerald-700'
+                          : 'bg-teal-700 text-white hover:bg-teal-800 disabled:bg-neutral-300',
+                      )}
+                    >
+                      <PlusCircle className="h-3.5 w-3.5" />
+                      {runtime.registered ? t('已添加') : t('添加候选')}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <RuntimeInfoTile label="定位" value={runtime.recommendedUse} />
+                  <RuntimeInfoTile label="安装" value={runtime.installCommand} mono />
+                  <RuntimeInfoTile
+                    label="预适配"
+                    value={runtime.missingAdapterSteps.join(' / ')}
+                  />
+                </div>
+              </article>
+            ))
+          ) : (
+            <div className="rounded-lg border border-dashed border-neutral-200 bg-neutral-50 p-5 text-sm text-neutral-500">
+              {busy ? t('正在扫描本地 Agent Runtime...') : t('还没有本地 Agent Runtime 扫描结果。')}
+            </div>
+          )}
+        </div>
+
+        <aside className="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
+          <div className="text-xs font-medium text-neutral-500">{t('扫描结果')}</div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Stat value={detectedCount} label="已检测" />
+            <Stat value={registeredCount} label="已添加" />
+          </div>
+          <div className="mt-3 rounded-md bg-white px-3 py-2 text-xs leading-5 text-neutral-600">
+            {message || t('OpenClaw 将作为 CoordinatorRuntime 候选登记。')}
+          </div>
+          {scanningEnabled === false && (
+            <div className="mt-2 rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+              {t('ENABLE_LOCAL_CLI_PROBES 当前关闭。')}
+            </div>
+          )}
+        </aside>
+      </div>
+    </section>
+  )
+}
+
+function LocalRuntimeBadge({ runtime }: { runtime: LocalAgentRuntimeCatalogItem }) {
+  const { t } = useI18n()
+  const label = runtime.ready
+    ? '可用'
+    : runtime.registered
+      ? '候选'
+      : runtime.installed
+        ? '已检测'
+        : '未安装'
+
+  return (
+    <span
+      className={cn(
+        'inline-flex h-6 items-center rounded-md px-2 text-xs',
+        runtime.ready
+          ? 'bg-emerald-50 text-emerald-700'
+          : runtime.registered
+            ? 'bg-sky-50 text-sky-700'
+            : runtime.installed
+              ? 'bg-amber-50 text-amber-700'
+              : 'bg-neutral-100 text-neutral-500',
+      )}
+    >
+      {t(label)}
+    </span>
+  )
+}
+
+function RuntimeInfoTile({
+  label,
+  mono,
+  value,
+}: {
+  label: string
+  mono?: boolean
+  value: string
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="rounded-md border border-neutral-200 bg-white px-3 py-2">
+      <div className="text-xs text-neutral-400">{t(label)}</div>
+      <div
+        className={cn(
+          'mt-1 line-clamp-2 text-xs leading-5 text-neutral-700',
+          mono && 'font-mono',
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  )
 }
 
 function ToolIcon({ toolId, name }: { toolId: string; name: string }) {
