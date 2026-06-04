@@ -31,7 +31,7 @@ import { env } from '../env'
 import { getBooleanSetting } from './settings-helper'
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
 import type { SandboxContainerSpec } from './execution/sandbox-provider'
-import { buildSharedTaskDirectoryProtocolBlock } from './protocols/a2a-internal'
+import { buildSharedTaskDirectoryProtocolBlock } from './orchestrator/shared-task-directory'
 import {
   DEFAULT_ENV_ALLOWLIST,
   validateEnvelope,

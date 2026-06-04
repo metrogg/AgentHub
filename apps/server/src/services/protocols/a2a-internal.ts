@@ -1,31 +1,12 @@
-import type { Message, MessageSendParams, Task } from '@a2a-js/sdk'
+import type { MessageSendParams, Task } from '@a2a-js/sdk'
 import { TaskStatus } from '@agenthub/shared'
 import type { AgentArtifact } from '@agenthub/db'
 import type { ExecutionAgent, ExecutionPlan, ExecutionTask } from '../orchestrator/types'
-import { buildA2AArtifact, buildA2AMessage, toA2ATaskState } from './a2a-adapter'
+import type { AgentHubA2AEnvelope } from '../execution/agent-execution-envelope'
+import { buildA2AAgentMessage, buildA2AArtifact, buildA2AMessage, toA2ATaskState } from './a2a-adapter'
 
 export const A2A_INTERNAL_EXTENSION_URI = 'https://agenthub.dev/extensions/a2a/internal/v1'
 export const A2A_AGENTHUB_METADATA_KEY = 'agenthub.dev/a2a/internal'
-
-export interface AgentHubA2AEnvelope {
-  protocolVersion: '0.3.0'
-  method: 'message/send'
-  params: MessageSendParams
-  contextId: string
-  taskId: string
-  runId: string
-  workspaceId: string
-  groupSessionId: string
-  childSessionId: string
-  taskThreadId?: string | null
-  sharedTaskRelativeRoot?: string | null
-  sharedTaskSpecPath?: string | null
-  fromAgentId: string
-  fromAgentName: string
-  toAgentId: string
-  toAgentName: string
-  referenceTaskIds: string[]
-}
 
 export function buildA2ADispatchEnvelope(params: {
   task: ExecutionTask
@@ -155,38 +136,6 @@ export function buildSharedTaskDirectoryProtocolBlock(params: {
   lines.push('- 不要覆盖共享任务目录中的 `base/` 输入材料。')
   lines.push('- 最终回复请说明已写入的 result/artifacts 路径，方便 Manager 验收和接力。')
   return lines.join('\n')
-}
-
-export function buildA2AAgentMessage(params: {
-  envelope: AgentHubA2AEnvelope
-  content: string
-  messageId: string
-  artifacts?: Array<Record<string, unknown> | AgentArtifact>
-}): Message {
-  const message = buildA2AMessage({
-    id: params.messageId,
-    role: 'agent',
-    content: params.content,
-    contextId: params.envelope.contextId,
-    taskId: params.envelope.taskId,
-    metadata: {
-      [A2A_AGENTHUB_METADATA_KEY]: {
-        runId: params.envelope.runId,
-        workspaceId: params.envelope.workspaceId,
-        childSessionId: params.envelope.childSessionId,
-        taskThreadId: params.envelope.taskThreadId ?? null,
-        sharedTaskRelativeRoot: params.envelope.sharedTaskRelativeRoot ?? null,
-        sharedTaskSpecPath: params.envelope.sharedTaskSpecPath ?? null,
-        fromAgentId: params.envelope.toAgentId,
-        fromAgentName: params.envelope.toAgentName,
-        toAgentId: params.envelope.fromAgentId,
-        toAgentName: params.envelope.fromAgentName,
-        artifactCount: params.artifacts?.length ?? 0,
-      },
-    },
-  })
-  message.extensions = [A2A_INTERNAL_EXTENSION_URI]
-  return message
 }
 
 export function buildA2AExecutionTask(params: {

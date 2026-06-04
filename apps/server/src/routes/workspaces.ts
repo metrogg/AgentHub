@@ -12,7 +12,6 @@ import {
   ensureProjectDirectory,
   findWorkspaceByProjectPath,
   touchWorkspace,
-  ensureHarnessPresets,
 } from '../services/workspace/utils'
 import { pickNativeFolder } from '../services/workspace/folder-picker'
 import { loadWorkspaceFull, ensureWorkspace } from '../services/workspace/workspace-queries'
@@ -297,7 +296,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .returning()
     if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
 
-    ensureHarnessPresets(projectPath)
     return c.json(await loadWorkspaceFull(ws.id, user.sub))
   })
 
@@ -318,7 +316,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .returning()
     if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
 
-    ensureHarnessPresets(folder.projectPath)
     return c.json(await loadWorkspaceFull(ws.id, user.sub))
   })
 
@@ -383,7 +380,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
         .returning()
       if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
 
-      ensureHarnessPresets(folder.projectPath)
       logger.info(
         { userId: user.sub, workspaceId: ws.id, repo: remote.safeRef },
         'GitHub repository cloned into workspace',
@@ -413,9 +409,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       updatedAt: new Date(),
     }
     await db.update(workspaces).set(patch).where(eq(workspaces.id, id))
-    if (input.projectPath !== undefined) {
-      ensureHarnessPresets(patch.projectPath)
-    }
     return c.json(await loadWorkspaceFull(id, user.sub))
   })
 

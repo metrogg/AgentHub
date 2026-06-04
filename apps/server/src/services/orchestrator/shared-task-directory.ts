@@ -2,6 +2,35 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { putSharedObject, sharedTaskObjectKey, type SharedObjectRef } from './shared-storage'
 
+/** 构建共享任务目录协议提示块（用于 Code Agent prompt）。 */
+export function buildSharedTaskDirectoryProtocolBlock(params: {
+  sharedTaskRelativeRoot?: string | null
+  sharedTaskSpecPath?: string | null
+}) {
+  const root = params.sharedTaskRelativeRoot?.trim()
+  const specPath = params.sharedTaskSpecPath?.trim()
+  if (!root && !specPath) return ''
+
+  const planPath = root ? `${root}/plan.md` : null
+  const resultPath = root ? `${root}/result.md` : null
+  const artifactsPath = root ? `${root}/artifacts/` : null
+  const lines = [
+    '# AgentHub 共享任务目录协议',
+    '',
+    '这是本任务的执行契约，也是 Manager 与 Worker 交接任务和产物的事实来源。',
+  ]
+  if (specPath) lines.push(`- 开始执行前必须先阅读：\`${specPath}\`。`)
+  if (root) lines.push(`- 当前共享任务目录：\`${root}\`。`)
+  if (planPath) lines.push(`- 如需写执行计划，写入：\`${planPath}\`。`)
+  if (resultPath) lines.push(`- 最终结果摘要写入：\`${resultPath}\`。`)
+  if (artifactsPath) {
+    lines.push(`- 文件、报告、网页、日志、截图等交付产物放入：\`${artifactsPath}\`。`)
+  }
+  lines.push('- 不要覆盖共享任务目录中的 `base/` 输入材料。')
+  lines.push('- 最终回复请说明已写入的 result/artifacts 路径，方便 Manager 验收和接力。')
+  return lines.join('\n')
+}
+
 export interface SharedTaskDirectoryInput {
   projectPath?: string | null
   runId: string

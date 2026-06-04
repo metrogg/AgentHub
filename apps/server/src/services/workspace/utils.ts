@@ -46,6 +46,7 @@ const serviceDir = dirname(fileURLToPath(import.meta.url))
 const presetAgenthubDir = resolve(serviceDir, '../../../../../.agenthub')
 const presetAgenthubEntries = ['rules', 'skills'] as const
 
+/** @deprecated 不再自动复制内置模板到新工作区；Spec 只作为用户显式创建的协作契约。 */
 export function ensureHarnessPresets(projectPath: string | null | undefined) {
   if (!projectPath) return
   const targetDir = resolve(projectPath, '.agenthub')

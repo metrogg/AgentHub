@@ -126,7 +126,7 @@ export function cancelAllAgentReplies() {
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
 import { DEFAULT_ENV_ALLOWLIST } from './execution/agent-execution-envelope'
 import { isCodeAgentProfile } from './runtime'
-import { buildA2AAgentMessage } from './protocols/a2a-internal'
+import { buildA2AAgentMessage } from './protocols/a2a-adapter'
 
 export async function runAgentReply(
   sessionId: string,
