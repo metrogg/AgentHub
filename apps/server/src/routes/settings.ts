@@ -35,6 +35,13 @@ import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/
 import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
 import { testLlmConnection } from '../services/llm-client'
+import {
+  getActiveManagerProvider,
+  getConfiguredRuntimeType,
+  getManagerProvider,
+  listManagerProviders,
+  type ManagerRuntimeType,
+} from '../services/manager-runtime'
 import { describeMatrixDiagnostics } from '../services/rooms/matrix-diagnostics'
 import { resolveWorkspaceStorageRoot } from '../services/workspace/auto-workspace'
 
@@ -220,6 +227,74 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       output: result.output,
       config,
       diagnostics: await describeMatrixDiagnostics(),
+    })
+  })
+  .get('/manager-runtime/status', async (c) => {
+    const activeProvider = getActiveManagerProvider()
+    const [providers, activeStatus, activeHealth] = await Promise.all([
+      listManagerProviders(),
+      activeProvider.status(),
+      activeProvider.healthCheck?.().catch((error: any) => ({
+        healthy: false,
+        error: error?.message || String(error),
+      })),
+    ])
+    return c.json({
+      configuredRuntimeType: getConfiguredRuntimeType(),
+      activeRuntimeType: activeProvider.runtimeType,
+      activeStatus,
+      activeHealth: activeHealth ?? null,
+      providers,
+      message: managerRuntimeStatusMessage(activeStatus),
+    })
+  })
+  .post('/manager-runtime/:type/start', async (c) => {
+    const type = parseManagerRuntimeType(c.req.param('type'))
+    const provider = getManagerProvider(type)
+    if (!provider) return c.json({ ok: false, message: `未知 Manager runtime：${type}` }, 404)
+    const status = provider.ensureStarted
+      ? await provider.ensureStarted()
+      : await provider.status()
+    const health = await provider.healthCheck?.().catch((error: any) => ({
+      healthy: false,
+      error: error?.message || String(error),
+    }))
+    logger.warn({ type, status, health }, 'Manager runtime start requested from settings')
+    return c.json({
+      ok: !status.error,
+      status,
+      health: health ?? null,
+      message: managerRuntimeStatusMessage(status),
+    })
+  })
+  .post('/manager-runtime/:type/stop', async (c) => {
+    const type = parseManagerRuntimeType(c.req.param('type'))
+    const provider = getManagerProvider(type)
+    if (!provider) return c.json({ ok: false, message: `未知 Manager runtime：${type}` }, 404)
+    const status = provider.stop ? await provider.stop() : await provider.status()
+    logger.warn({ type, status }, 'Manager runtime stop requested from settings')
+    return c.json({
+      ok: true,
+      status,
+      message: `${type} Manager runtime 已停止或无需停止。`,
+    })
+  })
+  .post('/manager-runtime/:type/health', async (c) => {
+    const type = parseManagerRuntimeType(c.req.param('type'))
+    const provider = getManagerProvider(type)
+    if (!provider) return c.json({ ok: false, message: `未知 Manager runtime：${type}` }, 404)
+    const [status, health] = await Promise.all([
+      provider.status(),
+      provider.healthCheck?.().catch((error: any) => ({
+        healthy: false,
+        error: error?.message || String(error),
+      })),
+    ])
+    return c.json({
+      ok: health?.healthy ?? status.running,
+      status,
+      health: health ?? null,
+      message: managerRuntimeStatusMessage(status),
     })
   })
   .post('/storage/ensure', async (c) => {
@@ -725,6 +800,37 @@ function applyLocalMatrixRuntimeConfig() {
     autoInviteParticipants: true,
     autoJoinParticipants: true,
   }
+}
+
+function parseManagerRuntimeType(value: string): ManagerRuntimeType {
+  if (value === 'local-skill-runtime' || value === 'openclaw' || value === 'qwenpaw') return value
+  throw AppError.fromCode(
+    AppErrorCodes.VALIDATION_FAILED,
+    `不支持的 Manager runtime：${value}`,
+  )
+}
+
+function managerRuntimeStatusMessage(status: {
+  runtimeType: ManagerRuntimeType
+  available: boolean
+  running: boolean
+  syncReady?: boolean
+  endpoint?: string | null
+  error?: string | null
+}) {
+  if (status.runtimeType === 'openclaw') {
+    if (status.syncReady) {
+      return 'OpenClaw Manager endpoint 已配置，AgentHub 可以通过 POST /step 调用它。'
+    }
+    if (status.available) {
+      return '已检测到 OpenClaw 生命周期能力，但还没有配置 AGENTHUB_OPENCLAW_MANAGER_ENDPOINT；暂不能作为同步 Manager 主脑。'
+    }
+    return status.error || '未检测到 OpenClaw，也没有配置 Manager endpoint。'
+  }
+  if (status.runtimeType === 'qwenpaw') {
+    return status.error || 'QwenPaw Manager runtime 尚未接入。'
+  }
+  return '当前使用 AgentHub 内置 local skill Manager runtime。'
 }
 
 async function startLocalTuwunel() {

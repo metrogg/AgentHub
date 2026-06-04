@@ -4,7 +4,11 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
 import { LocalManagerRuntime } from './local-manager-runtime'
-import { RemoteManagerRuntimeAdapter } from './remote-manager-runtime-adapter'
+import {
+  RemoteManagerRuntimeAdapter,
+  resolveHealthEndpoint,
+  resolveStepEndpoint,
+} from './remote-manager-runtime-adapter'
 import type { ManagerRuntime } from './types'
 
 // ─── Manager Runtime Types ────────────────────────────────────────────
@@ -14,13 +18,17 @@ export type ManagerRuntimeType = 'local-skill-runtime' | 'openclaw' | 'qwenpaw'
 export interface ManagerRuntimeStatus {
   runtimeType: ManagerRuntimeType
   available: boolean
+  syncReady?: boolean
   running: boolean
   pid: number | null
   workspace: string
   configPath: string | null
   binaryPath: string | null
   endpoint: string | null
+  stepEndpoint?: string | null
+  healthEndpoint?: string | null
   error: string | null
+  diagnostics?: Record<string, unknown>
   startedAt: string | null
   uptime: number | null
 }
@@ -67,13 +75,24 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     return {
       runtimeType: this.runtimeType,
       available: binaryPath !== null || endpoint !== null,
+      syncReady: endpoint !== null,
       running,
       pid: running ? this.process!.pid ?? null : null,
       workspace: this.managerWorkspace,
       configPath: this.getConfigPath(),
       binaryPath,
       endpoint,
+      stepEndpoint: endpoint ? resolveStepEndpoint(endpoint) : null,
+      healthEndpoint: endpoint ? resolveHealthEndpoint(endpoint) : null,
       error: !binaryPath && !endpoint ? 'OpenClaw binary not found and no endpoint configured' : null,
+      diagnostics: {
+        binaryInstalled: binaryPath !== null,
+        endpointConfigured: endpoint !== null,
+        synchronousStepReady: endpoint !== null,
+        note: endpoint
+          ? 'OpenClaw Manager endpoint is configured; AgentHub can call POST /step.'
+          : 'OpenClaw binary availability only means lifecycle can be managed. Configure AGENTHUB_OPENCLAW_MANAGER_ENDPOINT for synchronous Manager steps.',
+      },
       startedAt: this.startedAt,
       uptime: this.startedAt ? Date.now() - new Date(this.startedAt).getTime() : null,
     }
@@ -118,7 +137,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     if (st.endpoint) {
       try {
         const start = Date.now()
-        const resp = await fetch(`${st.endpoint}/health`, { signal: AbortSignal.timeout(5000) })
+        const resp = await fetch(resolveHealthEndpoint(st.endpoint), { signal: AbortSignal.timeout(5000) })
         return { healthy: resp.ok, latencyMs: Date.now() - start }
       } catch (e) {
         return { healthy: false, error: `Endpoint unreachable: ${e}` }
@@ -350,13 +369,20 @@ export class LocalSkillRuntimeProvider implements ManagerRuntimeProvider {
     return {
       runtimeType: this.runtimeType,
       available: true,
+      syncReady: true,
       running: true, // always "running" since it's in-process
       pid: process.pid,
       workspace: join(agentHubUserDataRoot(), 'manager', 'global'),
       configPath: null,
       binaryPath: null,
       endpoint: null,
+      stepEndpoint: null,
+      healthEndpoint: null,
       error: null,
+      diagnostics: {
+        inProcess: true,
+        note: 'Local skill runtime runs inside AgentHub server process.',
+      },
       startedAt: null,
       uptime: null,
     }
@@ -384,13 +410,20 @@ export class QwenPawManagerRuntimeProvider implements ManagerRuntimeProvider {
     return {
       runtimeType: this.runtimeType,
       available: false,
+      syncReady: false,
       running: false,
       pid: null,
       workspace: join(agentHubUserDataRoot(), 'manager', 'global'),
       configPath: null,
       binaryPath: null,
       endpoint: null,
+      stepEndpoint: null,
+      healthEndpoint: null,
       error: 'QwenPaw Manager runtime not yet implemented',
+      diagnostics: {
+        implemented: false,
+        note: 'QwenPaw provider is reserved but not wired yet.',
+      },
       startedAt: null,
       uptime: null,
     }

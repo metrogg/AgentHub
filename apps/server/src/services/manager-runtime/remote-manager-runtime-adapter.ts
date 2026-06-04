@@ -9,6 +9,7 @@ import type {
 
 export interface RemoteManagerRuntimeAdapterOptions {
   endpoint?: string | null
+  stepPath?: string
 }
 
 /**
@@ -48,7 +49,7 @@ export class RemoteManagerRuntimeAdapter implements ManagerRuntime {
           'AgentHub will not silently fall back to an internal LLM Manager.',
       )
     }
-    const response = await fetch(endpoint, {
+    const response = await fetch(resolveStepEndpoint(endpoint, this.options.stepPath), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -160,4 +161,25 @@ function parseJson(value: string) {
   } catch (error) {
     throw new Error(`ManagerRuntime returned invalid JSON: ${(error as Error).message}. Output: ${value.slice(0, 500)}`)
   }
+}
+
+export function resolveStepEndpoint(endpoint: string, stepPath = '/step') {
+  const trimmed = endpoint.trim()
+  if (!trimmed) return trimmed
+  const url = new URL(trimmed)
+  const normalizedPath = url.pathname.replace(/\/+$/, '')
+  if (/\/step$/i.test(normalizedPath)) return url.toString()
+  url.pathname = `${normalizedPath || ''}${stepPath.startsWith('/') ? stepPath : `/${stepPath}`}`
+  return url.toString()
+}
+
+export function resolveHealthEndpoint(endpoint: string) {
+  const trimmed = endpoint.trim()
+  if (!trimmed) return trimmed
+  const url = new URL(trimmed)
+  const normalizedPath = url.pathname.replace(/\/+$/, '')
+  url.pathname = /\/step$/i.test(normalizedPath)
+    ? normalizedPath.replace(/\/step$/i, '/health')
+    : `${normalizedPath || ''}/health`
+  return url.toString()
 }

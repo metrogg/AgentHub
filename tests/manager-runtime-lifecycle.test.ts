@@ -23,7 +23,7 @@ describe('Manager Runtime Lifecycle', () => {
       expect(st.runtimeType).toBe('openclaw')
       // OpenClaw may or may not be installed on this machine
       if (st.available) {
-        expect(st.binaryPath).toBeTruthy()
+        expect(Boolean(st.binaryPath || st.endpoint)).toBe(true)
         expect(st.error).toBeNull()
       } else {
         expect(st.available).toBe(false)
@@ -39,6 +39,9 @@ describe('Manager Runtime Lifecycle', () => {
       const st = await provider.status()
       expect(st.available).toBe(true)
       expect(st.endpoint).toBe('http://localhost:18799')
+      expect(st.syncReady).toBe(true)
+      expect(st.stepEndpoint).toBe('http://localhost:18799/step')
+      expect(st.healthEndpoint).toBe('http://localhost:18799/health')
     })
 
     test('healthCheck fails when not running and no endpoint', async () => {
@@ -58,10 +61,65 @@ describe('Manager Runtime Lifecycle', () => {
     test('getEndpointOrCommand returns null when nothing configured', () => {
       const provider = new OpenClawManagerRuntimeProvider()
       const result = provider.getEndpointOrCommand()
-      // May return command if binary is found, or null
-      if (result) {
-        expect(result.command).toContain('openclaw')
+      expect(result).toBeNull()
+    })
+
+    test('createRuntime calls configured endpoint /step and normalizes actions', async () => {
+      const requests: Array<{ url: string; body: unknown }> = []
+      const server = Bun.serve({
+        port: 0,
+        fetch: async (req) => {
+          const url = new URL(req.url)
+          if (url.pathname === '/step') {
+            requests.push({ url: req.url, body: await req.json() })
+            return Response.json({
+              actions: [{ type: 'reply', message: 'ok from openclaw' }],
+            })
+          }
+          if (url.pathname === '/health') return Response.json({ ok: true })
+          return new Response('not found', { status: 404 })
+        },
+      })
+
+      try {
+        const provider = new OpenClawManagerRuntimeProvider({
+          endpoint: `http://127.0.0.1:${server.port}`,
+        })
+        const runtime = provider.createRuntime()
+        const events = []
+        const result = await collectRuntimeStep(runtime.step({
+          context: {
+            roomId: 'room-1',
+            ownerId: 'default-user',
+            workers: [],
+          },
+          timeline: [],
+        }), events)
+
+        expect(result.runtimeType).toBe('openclaw')
+        expect(result.actions).toEqual([{ type: 'reply', message: 'ok from openclaw' }])
+        expect(events.map((event) => event.type)).toEqual(['thinking', 'completed'])
+        expect(requests).toHaveLength(1)
+        expect(new URL(requests[0]!.url).pathname).toBe('/step')
+        expect((requests[0]!.body as any).runtimeType).toBe('openclaw')
+      } finally {
+        server.stop(true)
       }
+    })
+
+    test('createRuntime fails transparently without endpoint', async () => {
+      const provider = new OpenClawManagerRuntimeProvider()
+      const runtime = provider.createRuntime()
+      const iterator = runtime.step({
+        context: {
+          roomId: 'room-1',
+          ownerId: 'default-user',
+          workers: [],
+        },
+        timeline: [],
+      })
+      await iterator.next()
+      await expect(iterator.next()).rejects.toThrow('requires an endpoint')
     })
 
     test('stop is safe when not running', async () => {
@@ -140,3 +198,14 @@ describe('Manager Runtime Lifecycle', () => {
     })
   })
 })
+
+async function collectRuntimeStep<TEvent, TResult>(
+  iterator: AsyncGenerator<TEvent, TResult>,
+  events: TEvent[],
+): Promise<TResult> {
+  while (true) {
+    const next = await iterator.next()
+    if (next.done) return next.value
+    events.push(next.value)
+  }
+}

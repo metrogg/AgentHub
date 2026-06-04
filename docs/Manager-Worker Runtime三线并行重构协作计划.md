@@ -363,3 +363,29 @@ interface WorkerRuntimeService {
   - `AGENTHUB_MANAGER_RUNTIME=openclaw` 且未配置 `AGENTHUB_OPENCLAW_MANAGER_ENDPOINT` 时会透明报错，不会回退 local，这是刻意设计。
 - 需要其他线配合：后续需要补真实 Matrix identity + OpenClaw Manager endpoint contract，并把 resident worker process / listener 接到 WorkerController。
 - 下一步：做真实 OpenClaw Manager endpoint contract 测试；然后做 Human message -> ManagerRuntime provider -> assign -> task room -> resident/ephemeral worker dispatch 的联合验收。
+
+### 2026-06-04 20:26 - ABC 串联第二轮 / Codex
+
+- 改动文件：
+  - `apps/server/src/services/manager-runtime/remote-manager-runtime-adapter.ts`
+  - `apps/server/src/services/manager-runtime/openclaw-provider.ts`
+  - `apps/server/src/routes/settings.ts`
+  - `tests/manager-runtime-lifecycle.test.ts`
+  - `tests/worker-runtime-modes.test.ts`
+- 完成内容：
+  - ABC7: 明确 OpenClaw remote Manager endpoint 合约：Provider 填基础 endpoint 时，AgentHub 调用 `POST /step`；如果用户直接填完整 `/step` 地址则不重复追加。health check 对应 `GET /health`。
+  - ABC8: `OpenClawManagerRuntimeProvider.status()` 增加 `syncReady / stepEndpoint / healthEndpoint / diagnostics`，把“binary 已安装”“endpoint 已配置”“可同步 stepRoom 调用”拆成三个不同状态。
+  - ABC9: `settings.ts` 新增 Manager Runtime 诊断与生命周期接口：`GET /api/settings/manager-runtime/status`、`POST /api/settings/manager-runtime/:type/start`、`POST /api/settings/manager-runtime/:type/stop`、`POST /api/settings/manager-runtime/:type/health`。
+  - ABC10: lifecycle 测试锁定 OpenClaw endpoint `/step` 调用和“未配置 endpoint 透明失败，不回退内部 LLM”的行为。
+  - ABC11: resident worker dispatch 测试补充 listener metadata 断言，确认派发任务时会尝试启动 Matrix participant listener；local room 兼容模式下会明确返回 `room_is_not_matrix`。
+- 当前验证：
+  - `bun test tests/manager-runtime-lifecycle.test.ts` PASS，16 pass / 0 fail。
+  - `bun test tests/manager-runtime-routing.test.ts` PASS，2 pass / 0 fail。
+  - `bun test tests/worker-runtime-modes.test.ts` PASS，7 pass / 0 fail。
+  - `bun --filter @agenthub/server typecheck` PASS。
+- 已知问题：
+  - 当前只定义并测试了 AgentHub 侧的 OpenClaw bridge contract，还没有真实启动 OpenClaw bridge 服务做端到端验证。
+  - settings API 已有后端接口，但前端设置页尚未接入 Manager Runtime 诊断卡。
+  - Matrix listener 目前能被 resident dispatch 触发，但真实 Matrix homeserver + Worker identity + access token 的 e2e 还需要继续补。
+- 需要其他线配合：Manager Runtime / Worker Runtime 继续把真实 OpenClaw bridge、Matrix identity 和 Worker 常驻进程串起来；前端需要把 Manager Runtime 状态展示出来。
+- 下一步：做真实 Matrix room e2e：创建 manager/worker Matrix identity，确保 room participant 能启动 listener，并验证 @mention assignment 经 Matrix timeline 回流到 AgentHub。

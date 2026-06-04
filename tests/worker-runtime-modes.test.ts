@@ -75,6 +75,10 @@ describe('WorkerRuntime modes', () => {
     const result = await running
     expect(result.status).toBe('waiting_for_human')
     expect(result.metadata?.dispatched).toBe(true)
+    expect(result.metadata?.listener).toMatchObject({
+      started: false,
+      reason: 'room_is_not_matrix',
+    })
 
     const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
     const assignmentEvent = events.find(
