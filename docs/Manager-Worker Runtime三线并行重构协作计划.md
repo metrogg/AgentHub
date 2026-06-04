@@ -389,3 +389,110 @@ interface WorkerRuntimeService {
   - Matrix listener 目前能被 resident dispatch 触发，但真实 Matrix homeserver + Worker identity + access token 的 e2e 还需要继续补。
 - 需要其他线配合：Manager Runtime / Worker Runtime 继续把真实 OpenClaw bridge、Matrix identity 和 Worker 常驻进程串起来；前端需要把 Manager Runtime 状态展示出来。
 - 下一步：做真实 Matrix room e2e：创建 manager/worker Matrix identity，确保 room participant 能启动 listener，并验证 @mention assignment 经 Matrix timeline 回流到 AgentHub。
+
+### 2026-06-04 20:38 - 对齐检查与旧旁路清理 / Codex
+
+- 改动文件：
+  - `apps/server/src/services/coordinator-runtime/types.ts`
+  - `apps/server/src/services/coordinator-runtime/runtime-registry.ts`
+  - `apps/server/src/services/coordinator-runtime/index.ts`
+  - `apps/server/src/services/coordinator-runtime/coordinator-service.ts`
+  - `apps/server/src/services/coordinator-runtime/external-coordinator-runtime.ts`（删除）
+  - `apps/server/src/services/manager-runtime/openclaw-launcher.ts`
+  - `tests/coordinator-runtime.test.ts`
+- 完成内容：
+  - ALIGN1: 检查发现旧 `CoordinatorRuntime` 仍保留 `OpenClawCoordinatorRuntime / QwenPawCoordinatorRuntime` 和 `AGENTHUB_OPENCLAW_COORDINATOR_ENDPOINT` 旁路；这会和“OpenClaw 只能作为 ManagerRuntimeProvider”冲突。
+  - ALIGN2: 删除旧 `external-coordinator-runtime.ts`，`coordinator-runtime/index.ts` 不再导出外部 coordinator runtime。
+  - ALIGN3: `CoordinatorRuntimeType` 收敛为 `local-llm`，旧 `CoordinatorRuntime` 只作为显式注入测试/迁移兼容层；默认主路径仍由 `CoordinatorService -> ManagerRuntimeService -> ManagerRuntimeProvider` 承担。
+  - ALIGN4: `openclaw-launcher.configureFromUserOpenClaw()` 改写 `AGENTHUB_OPENCLAW_MANAGER_ENDPOINT`，不再写旧 `AGENTHUB_OPENCLAW_COORDINATOR_ENDPOINT`。
+  - ALIGN5: `CoordinatorService` 返回类型允许承载 `ManagerRuntimeType`，避免新主线的 `openclaw/qwenpaw/local-skill-runtime` 被旧 `CoordinatorRuntimeType` 限制。
+- 当前验证：
+  - 搜索确认 `OpenClawCoordinatorRuntime / QwenPawCoordinatorRuntime / AGENTHUB_OPENCLAW_COORDINATOR_*` 只剩无关测试 helper 里的 `runtimeBase === 'openclaw'`。
+  - `bun test tests/coordinator-runtime.test.ts tests/manager-runtime-lifecycle.test.ts tests/manager-runtime-routing.test.ts tests/worker-runtime-modes.test.ts` PASS，28 pass / 0 fail。
+  - `bun --filter @agenthub/server typecheck` PASS。
+- 已知问题：
+  - 旧 `LocalCoordinatorRuntime` 仍会调用内部 LLM，但它现在只在显式注入旧 `CoordinatorRuntime` 或旧兼容测试时使用；主路径不应再扩展它。
+  - `openclaw-launcher.ts` 仍是较老的 launcher/worker helper，后续应继续向 `OpenClawManagerRuntimeProvider` 和 Worker provider/service 收敛。
+- 需要其他线配合：后续任何 OpenClaw/QwenPaw 接入都必须走 `manager-runtime` provider registry 或 resident worker path，不能恢复 coordinator-runtime 旁路。
+- 下一步：接前端 Manager Runtime 诊断卡；随后做真实 Matrix room e2e。
+
+### 2026-06-04 21:10 - 群聊入口收口与设置页控制面 / Codex
+
+- 改动文件：
+  - `apps/server/src/routes/messages.ts`
+  - `apps/server/src/services/rooms/room-chat-bridge.ts`
+  - `apps/web/src/lib/api.ts`
+  - `apps/web/src/pages/SettingsPage.tsx`
+  - `docs/当前状态与下一步路线.md`
+  - `docs/OpenClaw接入指南.md`
+  - `tests/room-chat-bridge.test.ts`
+- 完成内容：
+  - UI1: 普通群聊、重发和重新生成入口不再回落 `routeGroupMessageThroughOrchestrator()`；旧函数已删除。
+  - UI2: ManagerRuntime 无 action、返回 unsupported action 或 assign dispatch 失败时，`room-chat-bridge` 会写入 `coordinator.runtime-blocked` system timeline event，并标记 `noLegacyFallback=true`，不再静默掉回旧 Planner/Orchestrator。
+  - UI3: 补员确认后的“继续分发”改为写入 Room-first human message，再调用 `stepCoordinatorForGroupMessage()` 交给 ManagerRuntime 继续决策；不再调用 `generatePlanAndPushTaskBoard()` 作为旧动态规划 fallback。
+  - UI4: 前端设置页控制台新增 Manager Runtime 诊断卡和详情面板；支持刷新 active provider、providers 列表、OpenClaw step/health endpoint、workspace/config，并提供启动 OpenClaw、停止 OpenClaw、健康检查按钮。
+  - UI5: `api.ts` 新增 Manager Runtime status/action 类型和 `/settings/manager-runtime/*` 客户端方法。
+  - UI6: `OpenClaw接入指南.md` 改用 `AGENTHUB_OPENCLAW_MANAGER_ENDPOINT`；`当前状态与下一步路线.md` 修正“默认 openclaw / ExternalCoordinatorRuntime / ManagerRuntime 死代码”等过期口径。
+- 当前验证：
+  - `bun test tests/room-chat-bridge.test.ts` PASS，11 pass / 0 fail。
+  - `bun test tests/coordinator-runtime.test.ts tests/manager-runtime-lifecycle.test.ts tests/manager-runtime-routing.test.ts tests/worker-runtime-modes.test.ts` PASS，28 pass / 0 fail。
+  - `bun --filter @agenthub/server typecheck` PASS。
+  - `bun --filter @agenthub/web typecheck` PASS。
+- 已知问题：
+  - 已在 2026-06-04 22:10 后续切片中处理：显式 @Worker 不再走 `runAgentReply()` 旧直接回复路径，改为创建真实 run/task/task room 并写入 Matrix mention-first 派发事件。
+  - 已在 2026-06-04 22:10 后续切片中处理：`generatePlanAndPushTaskBoard()` / `startPlanRunWithCoordinatorAssignBatch()` 已迁入 `coordinator-runtime/planning-dispatcher.ts`，`messages.ts` 不再携带旧动态 Planner 兼容实现。
+  - 真实 OpenClaw Manager bridge endpoint 还没做 e2e；设置页现在能检查和启动，但不能替代端到端验收。
+- 下一步：启动真实 Tuwunel/Synapse/Conduit 和真实 OpenClaw Manager bridge 做现场验收；随后把 ephemeral WorkerRuntime 的 service dispatch 进一步收敛到 resident Worker / Matrix listener 接单。
+
+### 2026-06-04 21:32 - Matrix / OpenClaw 端到端契约验收 / Codex
+
+- 改动文件：
+  - `tests/matrix-room-e2e.test.ts`（新增）
+  - `tests/openclaw-bridge-e2e.test.ts`（新增）
+  - `docs/Manager-Worker Runtime三线并行重构协作计划.md`
+  - `docs/当前状态与下一步路线.md`
+  - `docs/OpenClaw接入指南.md`
+- 完成内容：
+  - E2E1: 新增 Matrix room adapter 协议级 e2e。测试用本地 fake Matrix homeserver 覆盖真实 Client-Server API 形态，验证 `MatrixRoomAdapter + RoomService` 会创建 Matrix-backed group room、注册 Human / Manager / Worker 三类 Matrix identity、执行 invite / join、使用 participant token 发言，并发送带 `m.mentions.user_ids` 的 @mention message。
+  - E2E2: 新增 OpenClaw bridge contract e2e。测试通过 `AGENTHUB_OPENCLAW_MANAGER_ENDPOINT` 激活真实 `OpenClawManagerRuntimeProvider -> RemoteManagerRuntimeAdapter -> POST /step` 链路，fake bridge 返回 `assign` 后，AgentHub 继续创建 run / workspace task / TaskThread / task room / RuntimeLease，并通过 `WorkerRuntimeService` 写入 started / progress / artifact / completed。
+  - E2E3: 验证群聊入口未显式注入 fake coordinator runtime 时，会走 `CoordinatorService -> ManagerRuntimeService -> ManagerRuntimeProvider`，不会回旧 Planner / Orchestrator，也不会在 assign 成功后写 `coordinator.runtime-blocked`。
+  - E2E4: 自动化验收覆盖 Matrix provider event id、Matrix membership metadata、Matrix mention payload、OpenClaw `/step` 输入 timeline、run plan schema、task room timeline、RuntimeLease release 和 ArtifactStore object key。
+- 当前验证：
+  - `bun test tests/matrix-room-e2e.test.ts tests/openclaw-bridge-e2e.test.ts` PASS，2 pass / 0 fail。
+  - `bun test tests/room-chat-bridge.test.ts tests/coordinator-runtime.test.ts tests/manager-runtime-lifecycle.test.ts tests/manager-runtime-routing.test.ts tests/worker-runtime-modes.test.ts tests/matrix-room-e2e.test.ts tests/openclaw-bridge-e2e.test.ts` PASS，41 pass / 0 fail。
+  - `bun --filter @agenthub/server typecheck` PASS。
+  - `bun --filter @agenthub/web typecheck` PASS。
+- 已知问题：
+  - 这次验证的是 AgentHub 侧真实 adapter/provider 链路与协议契约，Matrix homeserver 和 OpenClaw bridge 用 fake HTTP server 模拟。还没有在本机真实 Tuwunel/Synapse/Conduit + 真实 OpenClaw 进程上做现场验收。
+  - Manager -> Worker 当前已是 Matrix mention-first：task room assignment 会写 `m.mentions`/mention metadata，并绑定 Worker participant / WorkerInstance；但 ephemeral WorkerRuntime 仍由 AgentHub service dispatch 启动，还不是完整 HiClaw 式“Worker 只靠 Matrix listener 接单执行”的总线。
+- 下一步：
+  - 启动真实 Tuwunel 或 Synapse，跑同一条 Matrix room e2e against real homeserver。
+  - 启动真实 OpenClaw Manager bridge endpoint，跑“群聊消息 -> OpenClaw Manager -> assign -> task room -> WorkerRuntime”的现场验收。
+  - 继续把 ephemeral WorkerRuntime 的 service dispatch 收敛到 ResidentWorkerRuntime / Matrix listener 接单。
+
+### 2026-06-04 22:10 - 显式 @Worker 与 planning helper 收口 / Codex
+
+- 改动文件：
+  - `apps/server/src/routes/messages.ts`
+  - `apps/server/src/services/coordinator-runtime/assign-dispatcher.ts`
+  - `apps/server/src/services/coordinator-runtime/planning-dispatcher.ts`（新增）
+  - `apps/server/src/services/rooms/local-matrix-compatible-adapter.ts`
+  - `apps/server/src/services/rooms/room-controller.ts`
+  - `apps/server/src/services/rooms/room-service.ts`
+  - `tests/dynamic-plan-coordinator-dispatch.test.ts`
+  - `tests/room-chat-bridge.test.ts`
+  - `tests/openclaw-bridge-e2e.test.ts`
+- 完成内容：
+  - M1: 群聊显式 @Worker 不再调用 `runAgentReply()`；`routeGroupMessageToMentionedAgents()` 现在把显式 Worker mentions 转成 Coordinator `assign` batch，创建真实 run / task / TaskThread / task room / RuntimeLease。
+  - M2: 群聊中回复活跃 Worker 消息时，优先把人类补充复制到对应 task room，并调用 `stepTaskRoomAfterHumanMessage()` 进入 HITL / WorkerRuntime resume 链路；找不到 task room 时再交给 ManagerRuntime。
+  - M3: Coordinator assign 写入 group room 的可见 `task.assigned` 后，task room 内会优先调用 `appendMentionTimelineEvent()`，写入 `matrixExecutionBus=true`、`coordinationSource=matrix-mention`、`mentionParticipantId` 和 WorkerInstance 绑定。真实 Matrix adapter 会发送 `m.mentions.user_ids`；本地 adapter 会保留同构 mention metadata。
+  - M4: `RoomService.addWorkerParticipant()` 和 `RoomController` 已能把 task room Worker participant 与 `workerInstanceId` 绑定，Matrix mention dispatcher 能追踪到具体 WorkerInstance。
+  - M5: `generatePlanAndPushTaskBoard()` / `startPlanRunWithCoordinatorAssignBatch()` / `coordinatorAssignActionsFromPlan()` 已从 `messages.ts` 迁到 `coordinator-runtime/planning-dispatcher.ts`；动态 plan 测试直接 import 新 service，`messages.ts` 测试 hook 只保留轻量路由判断。
+  - M6: `room-chat-bridge` 和 `openclaw-bridge-e2e` 测试已加严：不仅要求 task room 有 assignment，还要求 assignment 是 Matrix mention-first，并能回查 Worker participant / WorkerInstance。
+- 当前验证：
+  - `bun test tests/room-chat-bridge.test.ts tests/openclaw-bridge-e2e.test.ts tests/dynamic-plan-coordinator-dispatch.test.ts tests/orchestrator-routing.test.ts` PASS，20 pass / 0 fail。
+  - `bun --filter @agenthub/server typecheck` PASS。
+  - `bun --filter @agenthub/web typecheck` PASS。
+- 已知问题：
+  - 真实 Matrix homeserver 和真实 OpenClaw 进程仍未现场验收。
+  - 当前是 Matrix mention-first + AgentHub service dispatch 过渡态；完整 HiClaw 式执行总线还需要 ResidentWorkerRuntime / OpenClaw Worker 通过 Matrix listener 自主接单。

@@ -1,5 +1,4 @@
 import { LocalCoordinatorRuntime } from './local-coordinator-runtime'
-import { OpenClawCoordinatorRuntime, QwenPawCoordinatorRuntime } from './external-coordinator-runtime'
 import type { CoordinatorRuntime, CoordinatorRuntimeType } from './types'
 
 export interface CoordinatorRuntimeSelection {
@@ -11,19 +10,7 @@ export interface CoordinatorRuntimeSelection {
 export function resolveCoordinatorRuntime(
   selection: CoordinatorRuntimeSelection = {},
 ): CoordinatorRuntime {
-  const type = normalizeCoordinatorRuntimeType(selection.type, { allowLocalLlm: true })
-  if (type === 'openclaw') {
-    return new OpenClawCoordinatorRuntime({
-      endpoint: selection.endpoint ?? process.env.AGENTHUB_OPENCLAW_COORDINATOR_ENDPOINT,
-      command: selection.command ?? process.env.AGENTHUB_OPENCLAW_COORDINATOR_COMMAND,
-    })
-  }
-  if (type === 'qwenpaw') {
-    return new QwenPawCoordinatorRuntime({
-      endpoint: selection.endpoint ?? process.env.AGENTHUB_QWENPAW_COORDINATOR_ENDPOINT,
-      command: selection.command ?? process.env.AGENTHUB_QWENPAW_COORDINATOR_COMMAND,
-    })
-  }
+  normalizeCoordinatorRuntimeType(selection.type, { allowLocalLlm: true })
   return new LocalCoordinatorRuntime()
 }
 
@@ -37,9 +24,6 @@ export function normalizeCoordinatorRuntimeType(
   value: unknown,
   options: { allowLocalLlm?: boolean } = {},
 ): CoordinatorRuntimeType {
-  if (value === 'openclaw' || value === 'qwenpaw' || value === 'local-skill-runtime') {
-    return value
-  }
   if (value === 'local-llm' && options.allowLocalLlm) return value
-  return 'openclaw'
+  return 'local-llm'
 }

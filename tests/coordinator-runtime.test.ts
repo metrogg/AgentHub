@@ -20,11 +20,12 @@ type CoordinatorStepInput = coordinatorApi.CoordinatorStepInput
 type CoordinatorStepResult = coordinatorApi.CoordinatorStepResult
 
 describe('CoordinatorRuntime Room timeline integration', () => {
-  test('resolves OpenClaw as the default CoordinatorRuntime and keeps local-llm explicit only', async () => {
-    expect(resolveCoordinatorRuntime().runtimeType).toBe('openclaw')
+  test('CoordinatorRuntime remains a local LLM compatibility layer', async () => {
+    expect(resolveCoordinatorRuntime().runtimeType).toBe('local-llm')
     expect(resolveCoordinatorRuntime({ type: 'local-llm' }).runtimeType).toBe('local-llm')
-    expect(resolveCoordinatorRuntime({ type: 'openclaw' }).runtimeType).toBe('openclaw')
-    expect(resolveCoordinatorRuntime({ type: 'qwenpaw' }).runtimeType).toBe('qwenpaw')
+    expect(resolveCoordinatorRuntime({ type: 'local-skill-runtime' as any }).runtimeType).toBe('local-llm')
+    expect(resolveCoordinatorRuntime({ type: 'openclaw' as any }).runtimeType).toBe('local-llm')
+    expect(resolveCoordinatorRuntime({ type: 'qwenpaw' as any }).runtimeType).toBe('local-llm')
   })
 
   test('observes ordinary room chat and appends a manager reply event', async () => {

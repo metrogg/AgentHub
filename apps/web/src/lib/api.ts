@@ -652,6 +652,55 @@ export interface LocalMatrixActionResult {
   diagnostics: MatrixDiagnostics
 }
 
+export type ManagerRuntimeType = 'local-skill-runtime' | 'openclaw' | 'qwenpaw'
+
+export interface ManagerRuntimeStatus {
+  runtimeType: ManagerRuntimeType
+  available: boolean
+  syncReady?: boolean
+  running: boolean
+  pid: number | null
+  workspace: string
+  configPath: string | null
+  binaryPath: string | null
+  endpoint: string | null
+  stepEndpoint?: string | null
+  healthEndpoint?: string | null
+  error: string | null
+  diagnostics?: Record<string, unknown>
+  startedAt: string | null
+  uptime: number | null
+}
+
+export interface ManagerRuntimeHealth {
+  healthy: boolean
+  latencyMs?: number
+  error?: string
+}
+
+export interface ManagerRuntimeProviderSummary {
+  type: ManagerRuntimeType
+  available: boolean
+  running: boolean
+  error: string | null
+}
+
+export interface ManagerRuntimeStatusResponse {
+  configuredRuntimeType: ManagerRuntimeType
+  activeRuntimeType: ManagerRuntimeType
+  activeStatus: ManagerRuntimeStatus
+  activeHealth: ManagerRuntimeHealth | null
+  providers: ManagerRuntimeProviderSummary[]
+  message: string
+}
+
+export interface ManagerRuntimeActionResult {
+  ok: boolean
+  status: ManagerRuntimeStatus
+  health?: ManagerRuntimeHealth | null
+  message: string
+}
+
 export interface OpencodeModelItem {
   id: string
   provider: string
@@ -1607,6 +1656,22 @@ export const api = {
     request<LocalMatrixActionResult>('/settings/matrix/local/configure', { method: 'POST' }),
   startLocalMatrix: () =>
     request<LocalMatrixActionResult>('/settings/matrix/local/start', { method: 'POST', timeout: 70_000 }),
+  getManagerRuntimeStatus: () => request<ManagerRuntimeStatusResponse>('/settings/manager-runtime/status'),
+  startManagerRuntime: (type: ManagerRuntimeType) =>
+    request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/start`, {
+      method: 'POST',
+      timeout: 70_000,
+    }),
+  stopManagerRuntime: (type: ManagerRuntimeType) =>
+    request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/stop`, {
+      method: 'POST',
+      timeout: 30_000,
+    }),
+  checkManagerRuntimeHealth: (type: ManagerRuntimeType) =>
+    request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/health`, {
+      method: 'POST',
+      timeout: 20_000,
+    }),
   setupDockerSandbox: () =>
     request<{ ok: boolean; message: string; steps: Array<{ command: string; ok: boolean; output: string }>; sandbox: SettingsGeneralInfo['sandbox'] }>(
       '/settings/sandbox/docker/setup',

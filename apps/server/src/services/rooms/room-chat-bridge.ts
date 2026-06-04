@@ -195,10 +195,16 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
     runtime: input.runtime,
   })
   if (result.actions.length === 0) {
+    await appendCoordinatorRuntimeBlockedEvent({
+      roomId: room.id,
+      sourceMessageId: input.message.id,
+      reason: 'ManagerRuntime returned no actions.',
+      runtimeType: result.runtimeType,
+    })
     return {
       roomId: room.id,
-      consumed: false,
-      reason: 'Coordinator returned no actions; keeping legacy orchestrator fallback.',
+      consumed: true,
+      reason: 'ManagerRuntime returned no actions; no legacy orchestrator fallback will run.',
       actions: [],
       mirroredMessageIds: [],
     }
@@ -207,10 +213,16 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
     (action) => !MESSAGE_ACTION_TYPES.has(action.type) && action.type !== 'assign',
   )
   if (unsupportedAction) {
+    await appendCoordinatorRuntimeBlockedEvent({
+      roomId: room.id,
+      sourceMessageId: input.message.id,
+      reason: `ManagerRuntime returned unsupported action ${unsupportedAction.type}.`,
+      runtimeType: result.runtimeType,
+    })
     return {
       roomId: room.id,
-      consumed: false,
-      reason: `Coordinator returned unsupported action ${unsupportedAction.type}; keeping legacy orchestrator fallback.`,
+      consumed: true,
+      reason: `ManagerRuntime returned unsupported action ${unsupportedAction.type}; no legacy orchestrator fallback will run.`,
       actions: result.actions,
       mirroredMessageIds: [],
     }
@@ -230,9 +242,15 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
         executeInline: input.executeInline,
       })
     } catch (error: any) {
+      await appendCoordinatorRuntimeBlockedEvent({
+        roomId: room.id,
+        sourceMessageId: input.message.id,
+        reason: `ManagerRuntime assign dispatch failed: ${error?.message || 'unknown error'}`,
+        runtimeType: result.runtimeType,
+      })
       return {
         roomId: room.id,
-        consumed: false,
+        consumed: true,
         reason: `Coordinator assign dispatch failed: ${error?.message || 'unknown error'}`,
         actions: result.actions,
         mirroredMessageIds: [],
@@ -267,6 +285,27 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
     actions: result.actions,
     mirroredMessageIds,
   }
+}
+
+async function appendCoordinatorRuntimeBlockedEvent(input: {
+  roomId: string
+  sourceMessageId: string
+  reason: string
+  runtimeType: string
+}) {
+  return roomService.appendTimelineEvent({
+    roomId: input.roomId,
+    senderType: 'manager',
+    type: 'system',
+    body: `Manager Runtime 未能继续执行：${input.reason}`,
+    metadata: {
+      kind: 'coordinator.runtime-blocked',
+      sourceMessageId: input.sourceMessageId,
+      runtimeType: input.runtimeType,
+      reason: input.reason,
+      noLegacyFallback: true,
+    },
+  })
 }
 
 async function appendCoordinatorObservingEvent(input: {

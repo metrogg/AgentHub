@@ -1,5 +1,6 @@
 import { db, eq, roomParticipants, rooms, workspaceAgents } from '@agenthub/db'
 import { managerRuntimeService, type ManagerRuntimeService } from '../manager-runtime/manager-runtime-service'
+import type { ManagerRuntimeType } from '../manager-runtime/types'
 import { roomService } from '../rooms'
 import { getDefaultCoordinatorRuntime } from './runtime-registry'
 import type {
@@ -22,8 +23,9 @@ export interface StepRoomInput {
   signal?: AbortSignal
 }
 
-export interface StepRoomResult extends CoordinatorStepResult {
+export interface StepRoomResult extends Omit<CoordinatorStepResult, 'runtimeType'> {
   roomId: string
+  runtimeType: CoordinatorStepResult['runtimeType'] | ManagerRuntimeType
   appendedEventIds: string[]
 }
 

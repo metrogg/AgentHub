@@ -3,7 +3,9 @@ import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
 const { runController } = await import('../apps/server/src/services/orchestrator/run-controller')
-const { __messageRouteTestHooks } = await import('../apps/server/src/routes/messages')
+const { startPlanRunWithCoordinatorAssignBatch } = await import(
+  '../apps/server/src/services/coordinator-runtime/planning-dispatcher'
+)
 
 const {
   db,
@@ -41,7 +43,7 @@ describe('dynamic plan dispatch through CoordinatorRuntime', () => {
       },
     })
 
-    const monitor = await __messageRouteTestHooks.startPlanRunWithCoordinatorAssignBatch({
+    const monitor = await startPlanRunWithCoordinatorAssignBatch({
       sessionId: session.id,
       workspaceId: workspace.id,
       ownerId: 'default-user',

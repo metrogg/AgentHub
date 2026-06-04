@@ -33,7 +33,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
+import { api, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
@@ -2408,6 +2408,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const [autoScroll, setAutoScroll] = useState(true)
   const [generalInfo, setGeneralInfo] = useState<SettingsGeneralInfo | null>(null)
   const [matrixDiagnostics, setMatrixDiagnostics] = useState<MatrixDiagnostics | null>(null)
+  const [managerRuntime, setManagerRuntime] = useState<ManagerRuntimeStatusResponse | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
   const tableRef = useRef<HTMLDivElement | null>(null)
@@ -2497,6 +2498,29 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         matrixDiagnostics.homeserver.error ? `error=${matrixDiagnostics.homeserver.error}` : null,
       ].filter(Boolean).join(' · ')
     : 'Room、身份、@mention 和 Worker 监听状态会显示在这里'
+  const managerRuntimeStatus = managerRuntime
+    ? managerRuntime.activeRuntimeType === 'openclaw'
+      ? managerRuntime.activeStatus.syncReady
+        ? managerRuntime.activeHealth?.healthy === false
+          ? 'OpenClaw endpoint 异常'
+          : 'OpenClaw Manager 可调用'
+        : managerRuntime.activeStatus.available
+          ? 'OpenClaw 未配置同步 endpoint'
+          : 'OpenClaw 未就绪'
+      : managerRuntime.activeRuntimeType === 'qwenpaw'
+        ? 'QwenPaw 尚未接入'
+        : '内置 Manager Runtime'
+    : '等待刷新'
+  const managerRuntimeDetail = managerRuntime
+    ? [
+        `active=${managerRuntime.activeRuntimeType}`,
+        `configured=${managerRuntime.configuredRuntimeType}`,
+        managerRuntime.activeStatus.endpoint ? `endpoint=${managerRuntime.activeStatus.endpoint}` : null,
+        managerRuntime.activeStatus.stepEndpoint ? `step=${managerRuntime.activeStatus.stepEndpoint}` : null,
+        managerRuntime.activeHealth?.healthy === false ? `health=${managerRuntime.activeHealth.error ?? 'failed'}` : null,
+        managerRuntime.activeStatus.error ? `error=${managerRuntime.activeStatus.error}` : null,
+      ].filter(Boolean).join(' · ')
+    : 'Manager 负责理解目标、追问、补员、派活和复盘'
 
   useEffect(() => {
     void refreshDiagnostics(false)
@@ -2530,7 +2554,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   async function refreshDiagnostics(visible = true) {
     setBusy('refresh')
     try {
-      const [info, consoleLogs, matrix] = await Promise.all([
+      const [info, consoleLogs, matrix, manager] = await Promise.all([
         api.getSettingsGeneralInfo(),
         api.getSettingsConsoleLogs(180),
         api.getMatrixDiagnostics().catch((error) => {
@@ -2542,16 +2566,26 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
           })
           return null
         }),
+        api.getManagerRuntimeStatus().catch((error) => {
+          appendLog({
+            level: 'Warn',
+            source: '前端',
+            module: 'settings/manager-runtime',
+            content: error?.message || 'Manager Runtime 诊断接口不可用',
+          })
+          return null
+        }),
       ])
       setGeneralInfo(info)
       setMatrixDiagnostics(matrix)
+      setManagerRuntime(manager)
       setConsoleSources(consoleLogs.sources)
       setLogs(consoleLogs.items)
       appendLog({
         level: 'Info',
         source: '后端',
         module: 'settings/general-info',
-        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}`,
+        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}, manager=${manager?.activeRuntimeType ?? 'unknown'}/${manager?.activeHealth?.healthy === false ? 'blocked' : 'ok'}`,
       })
       if (visible) showNotice(t('诊断信息已刷新'))
     } catch (error: any) {
@@ -2715,6 +2749,37 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     }
   }
 
+  async function runManagerRuntimeAction(type: ManagerRuntimeType, action: 'start' | 'stop' | 'health') {
+    const busyKey = `manager-${type}-${action}`
+    setBusy(busyKey)
+    try {
+      const result =
+        action === 'start'
+          ? await api.startManagerRuntime(type)
+          : action === 'stop'
+            ? await api.stopManagerRuntime(type)
+            : await api.checkManagerRuntimeHealth(type)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: `manager-runtime/${type}/${action}`,
+        content: result.health?.error ? `${result.message} · ${result.health.error}` : result.message,
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: `manager-runtime/${type}/${action}`,
+        content: error?.message || 'Manager Runtime 操作失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   function exportLogs() {
     const blob = new Blob([formatConsoleLogs(filteredLogs)], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -2865,6 +2930,17 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
           </div>
           <div className="min-w-[17rem] flex-1">
             <ConsoleDiagnosticCard
+              icon={Activity}
+              title="Manager Runtime"
+              status={managerRuntimeStatus}
+              detail={managerRuntimeDetail}
+              action="健康检查"
+              busy={busy === `manager-${managerRuntime?.activeRuntimeType ?? 'openclaw'}-health`}
+              onAction={() => void runManagerRuntimeAction(managerRuntime?.activeRuntimeType ?? 'openclaw', 'health')}
+            />
+          </div>
+          <div className="min-w-[17rem] flex-1">
+            <ConsoleDiagnosticCard
               icon={Database}
               title="本地数据"
               status={generalInfo?.storage.exists ? '目录可用' : '等待刷新'}
@@ -2913,6 +2989,81 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             />
           </div>
         </div>
+
+        {managerRuntime && (
+          <div
+            className="mt-4 rounded-2xl border p-4 text-sm shadow-sm"
+            style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">Manager Runtime 控制面</div>
+                <div className="mt-1 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                  {managerRuntime.message}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runManagerRuntimeAction('openclaw', 'start')}
+                  disabled={busy === 'manager-openclaw-start'}
+                  className="settings-soft-button h-8 px-3 text-xs"
+                >
+                  {busy === 'manager-openclaw-start' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
+                  启动 OpenClaw
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runManagerRuntimeAction('openclaw', 'health')}
+                  disabled={busy === 'manager-openclaw-health'}
+                  className="settings-soft-button h-8 px-3 text-xs"
+                >
+                  {busy === 'manager-openclaw-health' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                  检查 OpenClaw
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runManagerRuntimeAction('openclaw', 'stop')}
+                  disabled={busy === 'manager-openclaw-stop'}
+                  className="settings-soft-button h-8 px-3 text-xs"
+                >
+                  {busy === 'manager-openclaw-stop' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                  停止 OpenClaw
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <InfoRow label="当前主脑" value={managerRuntime.activeRuntimeType} />
+              <InfoRow label="配置来源" value={managerRuntime.configuredRuntimeType} />
+              <InfoRow label="同步 step endpoint" value={managerRuntime.activeStatus.stepEndpoint ?? '未配置'} />
+              <InfoRow label="health endpoint" value={managerRuntime.activeStatus.healthEndpoint ?? '未配置'} />
+              <InfoRow label="workspace" value={managerRuntime.activeStatus.workspace || '未创建'} />
+              <InfoRow label="config" value={managerRuntime.activeStatus.configPath ?? '未生成'} />
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              {managerRuntime.providers.map((provider) => (
+                <div
+                  key={provider.type}
+                  className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[10rem_6rem_6rem_minmax(0,1fr)]"
+                  style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}
+                >
+                  <div className="font-mono font-semibold" style={{ color: 'var(--settings-text)' }}>{provider.type}</div>
+                  <div style={{ color: provider.available ? '#047857' : 'var(--settings-muted-text)' }}>{provider.available ? 'available' : 'missing'}</div>
+                  <div style={{ color: provider.running ? '#047857' : 'var(--settings-muted-text)' }}>{provider.running ? 'running' : 'stopped'}</div>
+                  <div className="min-w-0 truncate" style={{ color: provider.error ? '#b91c1c' : 'var(--settings-muted-text)' }} title={provider.error ?? ''}>
+                    {provider.error ?? 'ok'}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+              OpenClaw 是 Manager Runtime provider，不是普通 Agent 类型。检测到 OpenClaw CLI 只代表可管理生命周期；只有配置了 Manager endpoint 后，群聊才能通过 POST /step 同步调用它。
+            </div>
+          </div>
+        )}
 
         {matrixDiagnostics && (
           <div

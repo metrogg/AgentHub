@@ -129,13 +129,14 @@ export class RoomService {
     }
   }
 
-  async addWorkerParticipant(roomId: string, workspaceAgentId: string) {
+  async addWorkerParticipant(roomId: string, workspaceAgentId: string, workerInstanceId?: string | null) {
     const [agent] = await db.select().from(workspaceAgents).where(eq(workspaceAgents.id, workspaceAgentId)).limit(1)
     if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
     return this.addParticipant({
       roomId,
       participantType: 'worker',
       workspaceAgentId,
+      workerInstanceId: workerInstanceId ?? null,
       displayName: agent.name,
       role: 'member',
     })

@@ -85,7 +85,7 @@ AgentHub 会：
 openclaw gateway run --verbose --force
 
 # 告诉 AgentHub 连哪里
-export AGENTHUB_OPENCLAW_COORDINATOR_ENDPOINT=http://localhost:18799
+export AGENTHUB_OPENCLAW_MANAGER_ENDPOINT=http://localhost:18799
 ```
 
 AgentHub 会：
@@ -177,4 +177,32 @@ Worker 运行时选择：
 - `LocalManagerRuntime` 是**备用方案**，在 OpenClaw 不可用时使用
 - `OpenClawLauncher` 是**正式方案**，启动真正的 OpenClaw 进程
 - 两者的 `ManagerRuntime` 接口相同，可以无缝切换
-- 通过 `AGENTHUB_COORDINATOR_RUNTIME` 环境变量选择
+- 通过 `AGENTHUB_MANAGER_RUNTIME` 环境变量选择
+
+## 当前验收状态
+
+截至 2026-06-04：
+
+- AgentHub 侧 OpenClaw provider / bridge contract 已有自动化端到端测试：`tests/openclaw-bridge-e2e.test.ts`。
+- 该测试通过 `AGENTHUB_OPENCLAW_MANAGER_ENDPOINT` 激活 `OpenClawManagerRuntimeProvider`，调用 `POST /step`，并验证返回 `assign` 后能创建 run / task / TaskThread / task room / RuntimeLease；task room assignment 必须是 Matrix mention-first，能回查 Worker participant / WorkerInstance，再继续驱动 WorkerRuntime 写入进度、产物和完成事件。
+- 这证明 AgentHub 侧链路已经贯通，但测试里的 OpenClaw endpoint 是 fake bridge。它不能替代真实 OpenClaw 进程现场验收。
+
+真实验收要额外完成：
+
+1. 启动真实 Tuwunel/Synapse/Conduit Matrix homeserver。
+2. 启动真实 OpenClaw Manager bridge，并暴露 `GET /health` 与 `POST /step`。
+3. 设置 `AGENTHUB_OPENCLAW_MANAGER_ENDPOINT=http://127.0.0.1:<port>`。
+4. 在 AgentHub 群聊发送任务，确认链路为：
+
+```text
+group room human.message
+  -> ManagerRuntimeService
+  -> OpenClawManagerRuntimeProvider
+  -> POST /step
+  -> assign action
+  -> task room Matrix mention-first assignment / RuntimeLease
+  -> WorkerRuntime
+  -> task room timeline + ArtifactStore
+```
+
+设置页“控制台”里的 Manager Runtime 卡片只能说明当前 provider、endpoint 和健康检查状态；最终仍要以群聊任务端到端跑通为准。当前 AgentHub 侧是 Matrix mention-first + service dispatch 过渡态，真实 OpenClaw 进程和 resident Worker 通过 Matrix listener 自主接单仍需要现场验收。

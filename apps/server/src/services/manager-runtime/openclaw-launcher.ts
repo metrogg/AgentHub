@@ -563,11 +563,10 @@ export class OpenClawLauncher {
 
     // Mode 2: User already has OpenClaw running, just set endpoint
     if (input.endpoint) {
-      // Store endpoint for ExternalCoordinatorRuntime
-      process.env.AGENTHUB_OPENCLAW_COORDINATOR_ENDPOINT = input.endpoint
+      process.env.AGENTHUB_OPENCLAW_MANAGER_ENDPOINT = input.endpoint
       return {
         mode: 'external',
-        details: `Connecting to external OpenClaw at ${input.endpoint}. AgentHub will use it as CoordinatorRuntime.`,
+        details: `Connecting to external OpenClaw at ${input.endpoint}. AgentHub will use it as ManagerRuntimeProvider endpoint.`,
       }
     }
 
@@ -586,7 +585,7 @@ export class OpenClawLauncher {
     workerCount: number
   } {
     const binaryPath = this.config.openclawPath || this.findOpenClawBinary()
-    const endpoint = process.env.AGENTHUB_OPENCLAW_COORDINATOR_ENDPOINT || null
+    const endpoint = process.env.AGENTHUB_OPENCLAW_MANAGER_ENDPOINT || null
 
     let mode: 'managed' | 'external' | 'none' = 'none'
     if (this.isRunning()) mode = 'managed'

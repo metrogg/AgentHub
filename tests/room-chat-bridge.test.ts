@@ -9,6 +9,7 @@ const {
   db,
   artifacts,
   messages,
+  roomParticipants,
   rooms,
   runtimeLeases,
   workerInstances,
@@ -273,7 +274,24 @@ describe('Room chat bridge', () => {
       .select()
       .from(timelineEvents)
       .where(eq(timelineEvents.roomId, taskRoomRows[0]!.id))
-    expect(taskTimeline.some((event) => event.type === 'task.assigned')).toBe(true)
+    const assignedEvent = taskTimeline.find(
+      (event) => event.type === 'task.assigned' && event.metadata?.kind === 'coordinator.assign.dispatched',
+    )
+    expect(assignedEvent?.metadata).toMatchObject({
+      kind: 'coordinator.assign.dispatched',
+      matrixExecutionBus: true,
+      coordinationSource: 'matrix-mention',
+    })
+    expect(assignedEvent?.metadata?.mentionParticipantId).toBeTruthy()
+    expect(assignedEvent?.metadata?.matrix).toMatchObject({
+      localFallback: true,
+    })
+    const [workerParticipant] = await db
+      .select()
+      .from(roomParticipants)
+      .where(eq(roomParticipants.id, assignedEvent!.metadata!.mentionParticipantId as string))
+    expect(workerParticipant?.workspaceAgentId).toBe(agentId)
+    expect(workerParticipant?.workerInstanceId).toBe(threadRows[0]?.workerInstanceId)
     expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.progress')).toBe(true)
     expect(taskTimeline.some((event) => event.type === 'artifact.created')).toBe(true)
     expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.completed')).toBe(true)
@@ -344,7 +362,15 @@ describe('Room chat bridge', () => {
 
     for (const taskRoom of taskRoomRows) {
       const taskTimeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, taskRoom.id))
-      expect(taskTimeline.some((event) => event.type === 'task.assigned')).toBe(true)
+      const assignedEvent = taskTimeline.find(
+        (event) => event.type === 'task.assigned' && event.metadata?.kind === 'coordinator.assign.dispatched',
+      )
+      expect(assignedEvent?.metadata).toMatchObject({
+        kind: 'coordinator.assign.dispatched',
+        matrixExecutionBus: true,
+        coordinationSource: 'matrix-mention',
+      })
+      expect(assignedEvent?.metadata?.mentionParticipantId).toBeTruthy()
       expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.started')).toBe(true)
       expect(taskTimeline.some((event) => event.type === 'artifact.created')).toBe(true)
       expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.completed')).toBe(true)
@@ -496,7 +522,7 @@ describe('Room chat bridge', () => {
     expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.waiting-for-human')).toBe(true)
   })
 
-  test('does not consume a room message when coordinator returns no action', async () => {
+  test('records a blocked event instead of falling back when ManagerRuntime returns no action', async () => {
     const { session, message } = await createGroupMessage()
     const result = await stepCoordinatorForGroupMessage({
       session,
@@ -506,14 +532,16 @@ describe('Room chat bridge', () => {
       runtime: new EmptyRuntime(),
     })
 
-    expect(result.consumed).toBe(false)
+    expect(result.consumed).toBe(true)
     expect(result.reason).toContain('no actions')
     const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
-    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
+    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message', 'system'])
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
+    expect(timeline[2]?.metadata?.kind).toBe('coordinator.runtime-blocked')
+    expect(timeline[2]?.metadata?.noLegacyFallback).toBe(true)
   })
 
-  test('does not consume assign when dispatch cannot resolve a worker', async () => {
+  test('records a blocked event instead of falling back when assign dispatch fails', async () => {
     const { session, message } = await createGroupMessage()
     const result = await stepCoordinatorForGroupMessage({
       session,
@@ -525,11 +553,13 @@ describe('Room chat bridge', () => {
       executeInline: true,
     })
 
-    expect(result.consumed).toBe(false)
+    expect(result.consumed).toBe(true)
     expect(result.reason).toContain('dispatch failed')
     const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
-    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
+    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message', 'system'])
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
+    expect(timeline[2]?.metadata?.kind).toBe('coordinator.runtime-blocked')
+    expect(timeline[2]?.metadata?.noLegacyFallback).toBe(true)
   })
 })
 

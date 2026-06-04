@@ -6,6 +6,7 @@ import {
   db,
   eq,
   messages,
+  roomParticipants,
   sessions,
   workspaceAgents,
   workspaces,
@@ -355,15 +356,51 @@ async function prepareCoordinatorAssignedTask(input: {
     body: input.spec.action.message || `Manager 已将任务「${input.spec.taskTitle}」派给 ${input.spec.worker.name}。`,
     metadata: assignmentMetadata,
   })
-  await roomService.appendTimelineEvent({
-    roomId: taskRoom.id,
-    senderType: 'manager',
-    type: 'task.assigned',
-    body:
-      input.spec.action.message ||
-      `@${input.spec.worker.name} 请接手：${input.spec.taskTitle}\n\n${input.spec.taskDescription}`,
-    metadata: assignmentMetadata,
-  })
+  const taskRoomWorkerParticipant = await resolveTaskRoomWorkerParticipant(taskRoom.id, input.spec.worker.id)
+  const taskRoomAssignmentBody =
+    input.spec.action.message ||
+    `@${input.spec.worker.name} 请接手：${input.spec.taskTitle}\n\n${input.spec.taskDescription}`
+  if (taskRoomWorkerParticipant) {
+    await roomService.appendMentionTimelineEvent({
+      roomId: taskRoom.id,
+      mentionParticipantId: taskRoomWorkerParticipant.id,
+      senderType: 'manager',
+      type: 'task.assigned',
+      body: taskRoomAssignmentBody,
+      metadata: {
+        ...assignmentMetadata,
+        matrixExecutionBus: true,
+        coordinationSource: 'matrix-mention',
+        mentionParticipantId: taskRoomWorkerParticipant.id,
+        workerInstanceId: taskRoomWorkerParticipant.workerInstanceId ?? runtimeThread.workerInstanceId ?? null,
+      },
+    })
+  } else {
+    await roomService.appendTimelineEvent({
+      roomId: taskRoom.id,
+      senderType: 'system',
+      type: 'system',
+      body: `任务房间缺少 ${input.spec.worker.name} 的 Worker participant，无法写入 Matrix @mention；已降级为普通派发事件。`,
+      metadata: {
+        kind: 'coordinator.assign.mention-missing',
+        runId: input.run.runId,
+        taskId: task.id,
+        taskRoomId: taskRoom.id,
+        targetWorkerId: input.spec.worker.id,
+      },
+    })
+    await roomService.appendTimelineEvent({
+      roomId: taskRoom.id,
+      senderType: 'manager',
+      type: 'task.assigned',
+      body: taskRoomAssignmentBody,
+      metadata: {
+        ...assignmentMetadata,
+        matrixExecutionBus: false,
+        coordinationSource: 'service-dispatch-fallback',
+      },
+    })
+  }
 
   await runController.markTaskAssigned(input.run, {
     taskId: task.id,
@@ -407,6 +444,15 @@ async function prepareCoordinatorAssignedTask(input: {
     ownerId: input.ownerId,
     workerRuntime: input.workerRuntime,
   }
+}
+
+async function resolveTaskRoomWorkerParticipant(roomId: string, workspaceAgentId: string) {
+  const [participant] = await db
+    .select()
+    .from(roomParticipants)
+    .where(and(eq(roomParticipants.roomId, roomId), eq(roomParticipants.workspaceAgentId, workspaceAgentId)))
+    .limit(1)
+  return participant ?? null
 }
 
 async function executeCoordinatorAssignBatch(input: {

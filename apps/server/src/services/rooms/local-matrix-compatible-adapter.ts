@@ -3,6 +3,7 @@ import { gt } from 'drizzle-orm'
 import { asc, db, desc, eq, and, roomParticipants, rooms, sql, timelineEvents } from '@agenthub/db'
 import type {
   AddParticipantInput,
+  AppendMentionTimelineEventInput,
   AppendTimelineEventInput,
   CreateRoomInput,
   EnsureRoomForSessionInput,
@@ -186,6 +187,28 @@ export class LocalMatrixCompatibleRoomAdapter implements RoomAdapter {
     if (!event) throw new Error('Timeline event create failed')
     await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, input.roomId))
     return event
+  }
+
+  async appendMentionTimelineEvent(input: AppendMentionTimelineEventInput) {
+    const [participant] = await db
+      .select()
+      .from(roomParticipants)
+      .where(eq(roomParticipants.id, input.mentionParticipantId))
+      .limit(1)
+    return this.appendTimelineEvent({
+      ...input,
+      metadata: {
+        ...(input.metadata ?? {}),
+        matrix: {
+          roomId: null,
+          senderUserId: null,
+          usedParticipantToken: false,
+          mentions: participant?.providerUserId ? [participant.providerUserId] : [],
+          localFallback: true,
+        },
+        mentionParticipantId: input.mentionParticipantId,
+      },
+    })
   }
 
   async listTimelineEvents(input: ListTimelineEventsInput) {
