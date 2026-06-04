@@ -29,7 +29,6 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '仅支持 HTML 文件预览')
     }
 
-    // 强制基于 workspace 的 projectPath 做归属与范围校验，禁止读取任意 HTML 文件
     const user = c.get('user')
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
     if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
@@ -70,9 +69,6 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const root = Buffer.from(rootEncoded, 'base64url').toString('utf8')
     const resolvedRoot = resolve(root)
-
-    // 安全：解码出的 root 必须落在当前用户拥有的 workspace projectPath，
-    // 或 AgentHub 受管的数据/缓存根目录内，禁止预览任意目录。
     const user = c.get('user')
     if (!(await isPreviewRootAllowed(resolvedRoot, user.sub))) {
       throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '预览目录不在允许范围内')
@@ -565,12 +561,6 @@ function isPathUnder(child: string, parent: string) {
   return child === resolvedParent || child.startsWith(parentWithSep)
 }
 
-/**
- * 预览目录归属校验：解码出的 root 只能是
- * 1) AgentHub 受管的数据/缓存根目录（workdirs / artifacts / execution 都在其下）
- * 2) 当前用户拥有的某个 workspace 的 projectPath
- * 其它任意目录一律拒绝，防止登录用户构造 base64 root 读取宿主机任意文件。
- */
 async function isPreviewRootAllowed(resolvedRoot: string, ownerId: string): Promise<boolean> {
   const managedRoots = [agentHubUserCacheRoot(), agentHubUserDataRoot()]
   if (managedRoots.some((managed) => isPathUnder(resolvedRoot, managed))) {

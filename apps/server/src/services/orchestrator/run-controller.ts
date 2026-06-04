@@ -117,11 +117,11 @@ export interface RunResourceSnapshot {
 }
 
 /**
- * RunController is the first resource-control seam for the HiClaw-lite kernel.
+ * RunController owns Run lifecycle reconciliation for the HiClaw-lite kernel.
  *
- * It intentionally stays thin for now: existing ManagerLoop and OrchestratorEngine
- * still execute the old path, while callers stop mutating run lifecycle directly.
- * Future slices should grow reconcile()/step() here instead of expanding routes.
+ * ManagerLoop drives Observe -> Think -> Act, while RunController is the single
+ * place callers use to mutate run/task/thread status and to resume or cancel
+ * unfinished work. Old OrchestratorEngine paths must not regain ownership here.
  */
 export class RunController {
   async start(input: RunControllerStartInput): Promise<RunControllerRunContext> {
@@ -1315,6 +1315,98 @@ export class RunController {
         progressPercent: input.progressPercent ?? 3,
         progressStatus: input.progressStatus ?? 'running',
         executionConfig: input.executionConfig ?? null,
+        ...(input.extraPayload ?? {}),
+      },
+    })
+  }
+
+  async markTaskWaitingForHuman(
+    run: RunControllerRunContext,
+    input: {
+      taskId: string
+      title?: string | null
+      agentId?: string | null
+      question?: string | null
+      clarificationId?: string | null
+      childSessionId?: string | null
+      taskThreadId?: string | null
+      workerInstanceId?: string | null
+      runtimeLeaseId?: string | null
+      sharedTaskRelativeRoot?: string | null
+      sharedTaskSpecPath?: string | null
+      artifacts?: Array<Record<string, unknown>> | null
+      extraPayload?: Record<string, unknown>
+    },
+  ): Promise<void> {
+    await db
+      .update(workspaceTasks)
+      .set({
+        status: TaskStatus.Blocked,
+        completedAt: null,
+        errorLog: input.question ?? 'Waiting for human clarification.',
+        progressPercent: 50,
+        progressStatus: 'awaiting_human_clarification',
+        artifacts: ((input.artifacts ?? []) as unknown as AgentArtifact[]) ?? [],
+        updatedAt: new Date(),
+      })
+      .where(eq(workspaceTasks.id, input.taskId))
+
+    const [thread] = input.taskThreadId
+      ? await db
+          .select({
+            id: taskThreads.id,
+            sessionId: taskThreads.sessionId,
+            workerInstanceId: taskThreads.workerInstanceId,
+          })
+          .from(taskThreads)
+          .where(eq(taskThreads.id, input.taskThreadId))
+          .limit(1)
+      : await db
+          .select({
+            id: taskThreads.id,
+            sessionId: taskThreads.sessionId,
+            workerInstanceId: taskThreads.workerInstanceId,
+          })
+          .from(taskThreads)
+          .where(
+            and(
+              eq(taskThreads.runId, run.runId),
+              eq(taskThreads.taskId, input.taskId),
+            ),
+          )
+          .limit(1)
+
+    if (thread?.id) {
+      await updateTaskThreadStatus(thread.id, 'waiting_for_human')
+    }
+
+    await emitRunEvent({
+      runId: run.runId,
+      workspaceId: run.workspaceId,
+      groupSessionId: run.groupSessionId,
+      taskId: input.taskId,
+      threadId: thread?.id ?? input.taskThreadId ?? null,
+      workerInstanceId: input.workerInstanceId ?? thread?.workerInstanceId ?? null,
+      agentId: input.agentId ?? null,
+      type: 'approval.requested',
+      severity: 'warning',
+      payload: {
+        kind: 'worker_clarification',
+        title: input.title ?? input.taskId,
+        taskTitle: input.title ?? input.taskId,
+        question: input.question ?? null,
+        clarificationId: input.clarificationId ?? null,
+        childSessionId: input.childSessionId ?? thread?.sessionId ?? null,
+        taskThreadId: thread?.id ?? input.taskThreadId ?? null,
+        taskThreadStatus: 'waiting_for_human',
+        workerInstanceId: input.workerInstanceId ?? thread?.workerInstanceId ?? null,
+        runtimeLeaseId: input.runtimeLeaseId ?? null,
+        sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
+        sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
+        progressPercent: 50,
+        progressStatus: 'awaiting_human_clarification',
+        artifactCount: input.artifacts?.length ?? 0,
+        status: 'awaiting_user',
         ...(input.extraPayload ?? {}),
       },
     })

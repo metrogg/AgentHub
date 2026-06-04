@@ -1,7 +1,9 @@
 import { and, db, desc, eq, messages, sessions, taskThreads, workspaceTasks } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { prepareSharedTaskDirectory } from './shared-task-directory'
-import { ensureWorkerInstance, type WorkerRuntimeAgentConfig } from './worker-runtime-resources'
+import { type WorkerRuntimeAgentConfig } from './worker-runtime-resources'
+import { workerController } from './worker-controller'
+import { roomController, roomService } from '../rooms'
 
 export interface EnsureTaskThreadInput {
   workspaceId: string
@@ -16,6 +18,7 @@ export interface EnsureTaskThreadInput {
   agentName?: string | null
   sharedTaskRelativeRoot?: string | null
   sharedTaskSpecPath?: string | null
+  sharedTaskObjects?: Record<string, unknown> | null
 }
 
 export interface PrepareTaskRuntimeThreadInput {
@@ -43,6 +46,7 @@ export interface PreparedTaskRuntimeThread {
   workerInstanceId?: string | null
   sharedTaskRelativeRoot?: string | null
   sharedTaskSpecPath?: string | null
+  sharedTaskObjects?: Record<string, unknown> | null
 }
 
 export async function prepareTaskRuntimeThread(
@@ -77,11 +81,8 @@ export async function prepareTaskRuntimeThread(
     taskId: input.taskId,
     groupSessionId: input.groupSessionId,
   })
-  const workerInstance = input.agent
-    ? await ensureWorkerInstance({
-        workspaceId: input.workspaceId,
-        agent: input.agent,
-      })
+  const workerInstanceId = input.agent
+    ? await workerController.ensureWorkerForAgent(input.workspaceId, input.agent)
     : null
 
   const taskThread = await ensureTaskThread({
@@ -90,13 +91,14 @@ export async function prepareTaskRuntimeThread(
     taskId: input.taskId,
     groupSessionId: input.groupSessionId,
     workspaceAgentId: input.agent?.id ?? null,
-    workerInstanceId: workerInstance?.id ?? null,
+    workerInstanceId: workerInstanceId ?? null,
     sessionId: childSession.id,
     ownerId: input.ownerId,
     taskTitle: input.taskTitle,
     agentName: input.agent?.name ?? null,
     sharedTaskRelativeRoot: sharedTaskDirectory?.relativeRoot ?? null,
     sharedTaskSpecPath: sharedTaskDirectory ? `${sharedTaskDirectory.relativeRoot}/spec.md` : null,
+    sharedTaskObjects: sharedTaskDirectory?.objects ?? null,
   })
 
   await db
@@ -113,9 +115,10 @@ export async function prepareTaskRuntimeThread(
     workspaceId: input.workspaceId,
     projectPath: input.projectPath ?? null,
     taskThreadId: taskThread.id,
-    workerInstanceId: workerInstance?.id ?? null,
+    workerInstanceId: workerInstanceId ?? null,
     sharedTaskRelativeRoot: sharedTaskDirectory?.relativeRoot ?? null,
     sharedTaskSpecPath: sharedTaskDirectory ? `${sharedTaskDirectory.relativeRoot}/spec.md` : null,
+    sharedTaskObjects: sharedTaskDirectory?.objects ?? null,
   }
 }
 
@@ -158,8 +161,10 @@ export async function ensureTaskThread(input: EnsureTaskThreadInput) {
       status: current.status,
       sharedTaskRelativeRoot: input.sharedTaskRelativeRoot,
       sharedTaskSpecPath: input.sharedTaskSpecPath,
+      sharedTaskObjects: input.sharedTaskObjects,
     })
     await ensurePreparedThreadBootstrapMessage(input, current.id)
+    await ensureTaskThreadRoomTimeline(input, current.id)
     return current
   }
 
@@ -191,14 +196,16 @@ export async function ensureTaskThread(input: EnsureTaskThreadInput) {
     status: created.status,
     sharedTaskRelativeRoot: input.sharedTaskRelativeRoot,
     sharedTaskSpecPath: input.sharedTaskSpecPath,
+    sharedTaskObjects: input.sharedTaskObjects,
   })
   await ensurePreparedThreadBootstrapMessage(input, created.id)
+  await ensureTaskThreadRoomTimeline(input, created.id)
   return created
 }
 
 export async function updateTaskThreadStatus(
   taskThreadId: string | null | undefined,
-  status: 'prepared' | 'assigned' | 'active' | 'completed' | 'failed' | 'cancelled',
+  status: 'prepared' | 'assigned' | 'active' | 'waiting_for_human' | 'completed' | 'failed' | 'cancelled',
   lastEventId?: string | null,
 ) {
   if (!taskThreadId) return null
@@ -368,6 +375,7 @@ async function syncTaskThreadSessionMetadata(
     status?: string | null
     sharedTaskRelativeRoot?: string | null
     sharedTaskSpecPath?: string | null
+    sharedTaskObjects?: Record<string, unknown> | null
   },
 ) {
   const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
@@ -388,6 +396,7 @@ async function syncTaskThreadSessionMetadata(
         taskThreadStatus: metadata.status ?? undefined,
         sharedTaskRelativeRoot: metadata.sharedTaskRelativeRoot ?? undefined,
         sharedTaskSpecPath: metadata.sharedTaskSpecPath ?? undefined,
+        sharedTaskObjects: metadata.sharedTaskObjects ?? undefined,
       },
       updatedAt: new Date(),
     })
@@ -422,6 +431,50 @@ async function ensurePreparedThreadBootstrapMessage(input: EnsureTaskThreadInput
       status: 'prepared',
       sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? undefined,
       sharedTaskSpecPath: input.sharedTaskSpecPath ?? undefined,
+      sharedTaskObjects: input.sharedTaskObjects ?? undefined,
+    },
+  })
+}
+
+async function ensureTaskThreadRoomTimeline(input: EnsureTaskThreadInput, taskThreadId: string) {
+  const room = await roomController.ensureTaskThreadRoomFromInput({
+    ownerId: input.ownerId,
+    workspaceId: input.workspaceId,
+    groupSessionId: input.groupSessionId,
+    sessionId: input.sessionId,
+    runId: input.runId,
+    taskId: input.taskId,
+    taskThreadId,
+    title: input.taskTitle,
+    workspaceAgentId: input.workspaceAgentId,
+    workerInstanceId: input.workerInstanceId,
+    metadata: {
+      sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
+      sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
+      sharedTaskObjects: input.sharedTaskObjects ?? null,
+    },
+  })
+  const events = await roomService.listTimelineEvents({ roomId: room.id, limit: 20 })
+  const hasPreparedEvent = events.some((event) => event.metadata?.kind === 'task-thread-prepared')
+  if (hasPreparedEvent) return
+  await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: 'manager',
+    type: 'task.assigned',
+    body: input.agentName
+      ? `Manager 已准备任务：${input.taskTitle}\n预计负责人：${input.agentName}`
+      : `Manager 已准备任务：${input.taskTitle}\n预计负责人：待分配`,
+    metadata: {
+      kind: 'task-thread-prepared',
+      taskThreadId,
+      runId: input.runId,
+      taskId: input.taskId,
+      groupSessionId: input.groupSessionId,
+      workspaceAgentId: input.workspaceAgentId ?? null,
+      workerInstanceId: input.workerInstanceId ?? null,
+      sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
+      sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
+      sharedTaskObjects: input.sharedTaskObjects ?? null,
     },
   })
 }

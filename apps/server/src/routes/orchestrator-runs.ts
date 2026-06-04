@@ -4,11 +4,13 @@ import { alias } from 'drizzle-orm/sqlite-core'
 import { db, eq, and, desc, asc, sql } from '@agenthub/db'
 import {
   artifacts as artifactRecords,
+  type ConflictReport,
   orchestratorRuns,
   executionLogs,
   workspaces,
   sessions,
   runtimeLeases,
+  rooms,
   workspaceTasks,
   taskThreads,
 } from '@agenthub/db'
@@ -16,11 +18,10 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { listRunEvents } from '../services/orchestrator/run-events'
 import { blackboard, Blackboard } from '../services/blackboard'
 import type { BlackboardSchemaType } from '../services/blackboard-schemas'
-import { OrchestratorEngine, type ExecutionTask } from '../services/orchestrator/orchestrator-engine'
-import type { ConflictReport } from '../services/orchestrator/conflict-resolver'
 import { runController, type RunResourceSnapshot } from '../services/orchestrator/run-controller'
 import { buildAgUiEventsFromRunEvent } from '../services/protocols'
 import { OrchestratorRunStatus } from '@agenthub/shared'
+import { workerRuntimeService } from '../services/worker-runtime'
 
 const taskThreadSessions = alias(sessions, 'task_thread_sessions')
 
@@ -134,7 +135,6 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ run, activeRunCancelled: false })
     }
 
-    const activeRunCancelled = OrchestratorEngine.cancelActiveRun(id)
     await runController.cancel({
       runId: id,
       workspaceId: run.workspaceId,
@@ -142,7 +142,10 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     }, {
       reason: 'cancelled_by_user',
       taskErrorLog: 'Run cancelled by user',
-      activeRunCancelled,
+      activeRunCancelled: false,
+      payload: {
+        coordinationSource: 'run-controller',
+      },
     })
 
     const [updated] = await db
@@ -156,7 +159,7 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       .where(eq(orchestratorRuns.id, id))
       .limit(1)
 
-    return c.json({ run: updated ?? { ...run, status: OrchestratorRunStatus.Cancelled }, activeRunCancelled })
+    return c.json({ run: updated ?? { ...run, status: OrchestratorRunStatus.Cancelled }, activeRunCancelled: false })
   })
 
   // Retry a failed task within a run
@@ -196,41 +199,71 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       return c.json({ ok: false, message: 'Only failed or cancelled tasks can be retried' }, 400)
     }
 
-    const plan = run.plan as { tasks?: Array<{ id: string; agentId: string; title: string; description: string; dependencies: string[]; taskType?: string; maxRetries?: number; outputContract?: unknown; validation?: unknown }> } | null
-    const planTask = plan?.tasks?.find((t) => t.id === taskId)
-    if (!planTask) {
-      throw new HTTPException(404, { message: 'Task not found in run plan' })
+    const [thread] = await db
+      .select({
+        id: taskThreads.id,
+        sessionId: taskThreads.sessionId,
+        workspaceAgentId: taskThreads.workspaceAgentId,
+        workerInstanceId: taskThreads.workerInstanceId,
+      })
+      .from(taskThreads)
+      .where(and(eq(taskThreads.runId, id), eq(taskThreads.taskId, taskId)))
+      .limit(1)
+    if (!thread?.id) {
+      return c.json({
+        ok: false,
+        message: '该任务没有 TaskThread，无法通过 WorkerRuntime 重试。旧 OrchestratorEngine retry 已不再作为主路径。',
+      }, 409)
     }
 
-    const engine = new OrchestratorEngine()
-    const childSessions = new Map<string, { sessionId: string; workspaceId: string; projectPath?: string | null }>()
-    childSessions.set(taskId, {
-      sessionId: taskRow.sessionId ?? '',
-      workspaceId: run.workspaceId,
-      projectPath: null,
-    })
+    const [taskRoom] = await db
+      .select({
+        id: rooms.id,
+      })
+      .from(rooms)
+      .where(and(eq(rooms.runId, id), eq(rooms.taskId, taskId), eq(rooms.taskThreadId, thread.id)))
+      .limit(1)
+    if (!taskRoom?.id) {
+      return c.json({
+        ok: false,
+        message: '该任务没有 task room，无法通过 WorkerRuntime 重试。请重新发起任务或等待迁移旧运行数据。',
+      }, 409)
+    }
 
-    const result = await engine.retryTask({
-      runId: id,
-      groupSessionId: run.groupSessionId,
-      workspaceId: run.workspaceId,
-      run: {
+    await runController.resetTaskForRetry(
+      {
         runId: id,
         workspaceId: run.workspaceId,
         groupSessionId: run.groupSessionId,
       },
-      task: {
-        id: taskId,
-        agentId: planTask.agentId,
-        title: planTask.title,
-        description: planTask.description ?? '',
-        dependencies: planTask.dependencies ?? [],
-        taskType: planTask.taskType as ExecutionTask['taskType'],
-        maxRetries: planTask.maxRetries ?? 2,
-        outputContract: planTask.outputContract as ExecutionTask['outputContract'],
-        validation: planTask.validation as ExecutionTask['validation'],
+      {
+        taskId,
+        title: taskRow.title,
+        agentId: taskRow.agentId,
+        reason: 'manual_retry_via_worker_runtime',
+        taskThreadId: thread.id,
+        childSessionId: thread.sessionId,
+        workerInstanceId: thread.workerInstanceId ?? null,
+        preserveAgentId: taskRow.agentId,
+        retryCount: (taskRow.retryCount ?? 0) + 1,
+        extraPayload: {
+          source: 'orchestrator-runs.retry-task',
+          taskRoomId: taskRoom.id,
+        },
       },
-      childSessions,
+    )
+    await runController.markRunning({
+      runId: id,
+      workspaceId: run.workspaceId,
+      groupSessionId: run.groupSessionId,
+    })
+
+    const result = await workerRuntimeService.rerunTaskRoom({
+      roomId: taskRoom.id,
+      ownerId: user.sub,
+      workspaceAgentId: taskRow.agentId,
+      prompt: taskRow.description,
+      source: 'orchestrator-runs.retry-task',
     })
 
     return c.json({ ok: true, result })
@@ -576,6 +609,7 @@ async function loadRunArtifacts(runId: string) {
         workspaceId: artifactRecords.workspaceId,
         runId: artifactRecords.runId,
         taskId: artifactRecords.taskId,
+        roomId: artifactRecords.roomId,
         taskThreadId: artifactRecords.taskThreadId,
         workspaceAgentId: artifactRecords.workspaceAgentId,
         workerInstanceId: artifactRecords.workerInstanceId,
@@ -585,6 +619,10 @@ async function loadRunArtifacts(runId: string) {
         sourcePath: artifactRecords.sourcePath,
         handoffPath: artifactRecords.handoffPath,
         relativePath: artifactRecords.relativePath,
+        storageProvider: artifactRecords.storageProvider,
+        bucket: artifactRecords.bucket,
+        objectKey: artifactRecords.objectKey,
+        storagePath: artifactRecords.storagePath,
         mimeType: artifactRecords.mimeType,
         size: artifactRecords.size,
         checksum: artifactRecords.checksum,
@@ -1219,7 +1257,12 @@ function normalizeArtifactRowForTask(artifact: Awaited<ReturnType<typeof loadRun
     visibility: artifact.visibility,
     source: 'artifact-store',
     taskId: artifact.taskId,
+    roomId: artifact.roomId,
     taskThreadId: artifact.taskThreadId,
+    storageProvider: artifact.storageProvider,
+    bucket: artifact.bucket,
+    objectKey: artifact.objectKey ?? undefined,
+    storagePath: artifact.storagePath ?? undefined,
     workspaceAgentId: artifact.workspaceAgentId,
     workerInstanceId: artifact.workerInstanceId,
     metadata: artifact.metadata,

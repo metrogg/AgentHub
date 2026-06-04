@@ -5,12 +5,11 @@ import { env } from './env'
 import { logger } from './lib/logger'
 import { setRuntimeServerPort } from './lib/runtime-server'
 import { joinRoom, cleanupWebSocket, cancelAllAgentReplies } from './services/agent-runner'
-import { db, users, eq, orchestratorRuns } from '@agenthub/db'
+import { db, users, eq, orchestratorRuns, sql } from '@agenthub/db'
 import { DEFAULT_USER } from './middleware/auth'
 import { WsEvent } from '@agenthub/shared'
-import { OrchestratorEngine } from './services/orchestrator/orchestrator-engine'
-import { markInterruptedRuntimeLeasesStale } from './services/orchestrator/worker-runtime-resources'
 import { runController } from './services/orchestrator/run-controller'
+import { runtimeLeaseController } from './services/orchestrator/runtime-lease-controller'
 
 // Seed the local default user (single-user mode, no auth)
 async function seedDefaultUser() {
@@ -117,8 +116,16 @@ async function shutdown(reason: string) {
   shuttingDown = true
   logger.info({ reason }, 'AgentHub server shutting down')
 
-  const activeRunIds = OrchestratorEngine.cancelAllActiveRuns()
   const activeSessionIds = cancelAllAgentReplies()
+  const activeRuns = await db
+    .select({
+      id: orchestratorRuns.id,
+      workspaceId: orchestratorRuns.workspaceId,
+      groupSessionId: orchestratorRuns.groupSessionId,
+    })
+    .from(orchestratorRuns)
+    .where(sql`${orchestratorRuns.status} in ('planning', 'running', 'synthesizing')`)
+  const activeRunIds = activeRuns.map((run) => run.id)
 
   if (activeRunIds.length > 0 || activeSessionIds.length > 0) {
     logger.warn(
@@ -128,17 +135,7 @@ async function shutdown(reason: string) {
   }
 
   await Promise.allSettled(
-    activeRunIds.map(async (runId) => {
-      const [run] = await db
-        .select({
-          id: orchestratorRuns.id,
-          workspaceId: orchestratorRuns.workspaceId,
-          groupSessionId: orchestratorRuns.groupSessionId,
-        })
-        .from(orchestratorRuns)
-        .where(eq(orchestratorRuns.id, runId))
-        .limit(1)
-      if (!run) return
+    activeRuns.map(async (run) => {
       await runController.cancel(
         {
           runId: run.id,
@@ -149,16 +146,17 @@ async function shutdown(reason: string) {
           reason: 'server_shutdown',
           summary: `Run cancelled because the server is shutting down (${reason}).`,
           taskErrorLog: `Server shutdown: ${reason}`,
-          activeRunCancelled: true,
+          activeRunCancelled: false,
           payload: {
             shutdownReason: reason,
+            coordinationSource: 'run-controller',
           },
         },
       )
     }),
   )
 
-  const staleLeases = await markInterruptedRuntimeLeasesStale({
+  const staleLeases = await runtimeLeaseController.recoverInterruptedLeases({
     reason: `Server shutdown: ${reason}`,
   })
   if (staleLeases.staleLeaseCount > 0) {
@@ -188,7 +186,7 @@ if (process.stdin) {
 const runningRuns = await db.query.orchestratorRuns.findMany({
   where: eq(orchestratorRuns.status, 'running'),
 })
-const staleLeases = await markInterruptedRuntimeLeasesStale({
+const staleLeases = await runtimeLeaseController.recoverInterruptedLeases({
   reason: 'Server startup recovery: previous process ended before runtime lease cleanup.',
 })
 if (staleLeases.staleLeaseCount > 0) {
@@ -210,13 +208,40 @@ if (recoveredLeaseCount > 0) {
     '[Recovery] WorkerController recovered stale worker instances on startup',
   )
 }
-for (const run of runningRuns) {
-  OrchestratorEngine.resumeRun(run.id).catch((err) => {
-    logger.error({ err, runId: run.id }, '[Recovery] Failed to resume run')
-  })
+const { matrixRuntimeSupervisor } = await import('./services/rooms/matrix-runtime-supervisor')
+const matrixListeners = await matrixRuntimeSupervisor.startActiveParticipantListeners({
+  reason: 'server-startup-recovery',
+}).catch((err) => {
+  logger.warn({ err }, '[Recovery] Matrix runtime listener recovery failed')
+  return null
+})
+if (matrixListeners && (matrixListeners.startedCount > 0 || matrixListeners.skippedCount > 0)) {
+  logger.info(
+    {
+      startedCount: matrixListeners.startedCount,
+      skippedCount: matrixListeners.skippedCount,
+    },
+    '[Recovery] Matrix runtime listeners reconciled',
+  )
 }
 if (runningRuns.length > 0) {
-  logger.info({ count: runningRuns.length }, '[Recovery] Resuming unfinished orchestrator runs')
+  logger.info({ count: runningRuns.length }, '[Recovery] Reconciling unfinished runs through RunController')
+  for (const run of runningRuns) {
+    const runContext = {
+      runId: run.id,
+      workspaceId: run.workspaceId,
+      groupSessionId: run.groupSessionId,
+    }
+    runController
+      .requeueRunningTasksForResume(runContext, {
+        reason: '服务重启后恢复运行，任务已重新排队。',
+        progressStatus: '服务重启后恢复运行，等待 Manager 重新分发。',
+      })
+      .then(() => runController.reconcile(runContext))
+      .catch((err) => {
+        logger.error({ err, runId: run.id }, '[Recovery] Failed to reconcile run')
+      })
+  }
 }
 
 // HiClaw-style Manager patrol: periodically check active runs, worker health,

@@ -34,7 +34,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
+import { api, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
@@ -2424,6 +2424,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const [query, setQuery] = useState('')
   const [autoScroll, setAutoScroll] = useState(true)
   const [generalInfo, setGeneralInfo] = useState<SettingsGeneralInfo | null>(null)
+  const [matrixDiagnostics, setMatrixDiagnostics] = useState<MatrixDiagnostics | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
   const tableRef = useRef<HTMLDivElement | null>(null)
@@ -2488,6 +2489,31 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
       ].join(' · ')
     : '每个 Agent 任务会创建独立执行沙箱'
   const sandboxNeedsSetup = sandbox?.configuredProvider === 'docker-sandbox' && !sandboxOk
+  const matrixListenerErrorCount = matrixDiagnostics?.listeners.rows.filter((row) => row.consecutiveErrors > 0).length ?? 0
+  const matrixRunningListenerCount = matrixDiagnostics?.listeners.runningIdentityIds.length ?? 0
+  const matrixOk = Boolean(matrixDiagnostics?.configured && matrixDiagnostics.homeserver.reachable)
+  const matrixStatus = matrixDiagnostics
+    ? matrixOk
+      ? matrixListenerErrorCount > 0
+        ? 'Homeserver 可达，监听有错误'
+        : '真实 Matrix 可用'
+      : matrixDiagnostics.configured
+        ? 'Homeserver 不可达'
+        : matrixDiagnostics.provider === 'matrix'
+          ? 'Matrix 未配置完整'
+          : '当前为本地兼容通信'
+    : '等待刷新'
+  const matrixDetail = matrixDiagnostics
+    ? [
+        `provider=${matrixDiagnostics.provider}`,
+        matrixDiagnostics.homeserver.url ?? '未配置 homeserver',
+        `rooms=${matrixDiagnostics.resources.activeMatrixRoomCount}/${matrixDiagnostics.resources.matrixRoomCount}`,
+        `identities=${matrixDiagnostics.resources.identityWithTokenCount}/${matrixDiagnostics.resources.identityCount}`,
+        `listeners=${matrixRunningListenerCount}`,
+        matrixListenerErrorCount ? `errors=${matrixListenerErrorCount}` : null,
+        matrixDiagnostics.homeserver.error ? `error=${matrixDiagnostics.homeserver.error}` : null,
+      ].filter(Boolean).join(' · ')
+    : 'Room、身份、@mention 和 Worker 监听状态会显示在这里'
 
   useEffect(() => {
     void refreshDiagnostics(false)
@@ -2521,18 +2547,28 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   async function refreshDiagnostics(visible = true) {
     setBusy('refresh')
     try {
-      const [info, consoleLogs] = await Promise.all([
+      const [info, consoleLogs, matrix] = await Promise.all([
         api.getSettingsGeneralInfo(),
         api.getSettingsConsoleLogs(180),
+        api.getMatrixDiagnostics().catch((error) => {
+          appendLog({
+            level: 'Warn',
+            source: '前端',
+            module: 'rooms/matrix/diagnostics',
+            content: error?.message || 'Matrix 诊断接口不可用',
+          })
+          return null
+        }),
       ])
       setGeneralInfo(info)
+      setMatrixDiagnostics(matrix)
       setConsoleSources(consoleLogs.sources)
       setLogs(consoleLogs.items)
       appendLog({
         level: 'Info',
         source: '后端',
         module: 'settings/general-info',
-        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}`,
+        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}`,
       })
       if (visible) showNotice(t('诊断信息已刷新'))
     } catch (error: any) {
@@ -2637,6 +2673,58 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         source: '后端',
         module: 'sandbox/login',
         content: error?.message || 'Docker Sandboxes 登录失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function configureLocalMatrix() {
+    setBusy('matrix-configure')
+    try {
+      const result = await api.configureLocalMatrix()
+      setMatrixDiagnostics(result.diagnostics)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'matrix/configure',
+        content: result.message,
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: 'matrix/configure',
+        content: error?.message || '应用本地 Matrix 配置失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function startLocalMatrix() {
+    setBusy('matrix-start')
+    try {
+      const result = await api.startLocalMatrix()
+      setMatrixDiagnostics(result.diagnostics)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'matrix/start',
+        content: result.output ? `${result.message} · ${result.output}` : result.message,
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: 'matrix/start',
+        content: error?.message || '启动 Tuwunel 失败',
       })
       showNotice(error?.message || t('操作失败'))
     } finally {
@@ -2783,6 +2871,17 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         <div className="flex gap-4 overflow-x-auto pb-1">
           <div className="min-w-[17rem] flex-1">
             <ConsoleDiagnosticCard
+              icon={MessageSquare}
+              title="Matrix 通信层"
+              status={matrixStatus}
+              detail={matrixDetail}
+              action="刷新状态"
+              busy={busy === 'refresh'}
+              onAction={() => void refreshDiagnostics()}
+            />
+          </div>
+          <div className="min-w-[17rem] flex-1">
+            <ConsoleDiagnosticCard
               icon={Database}
               title="本地数据"
               status={generalInfo?.storage.exists ? '目录可用' : '等待刷新'}
@@ -2831,6 +2930,88 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             />
           </div>
         </div>
+
+        {matrixDiagnostics && (
+          <div
+            className="mt-4 rounded-2xl border p-4 text-sm shadow-sm"
+            style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">Matrix Room 事实源</div>
+                <div className="mt-1 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                  {matrixDiagnostics.homeserver.serverName} · {matrixDiagnostics.homeserver.url ?? '未配置 homeserver'} · {matrixDiagnostics.homeserver.versions.slice(0, 3).join(', ') || '未读取版本'}
+                </div>
+              </div>
+              <div className="flex flex-col items-start gap-2 sm:items-end">
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                    active rooms {matrixDiagnostics.resources.activeMatrixRoomCount}
+                  </span>
+                  <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                    identities {matrixDiagnostics.resources.identityWithTokenCount}/{matrixDiagnostics.resources.identityCount}
+                  </span>
+                  <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                    listeners {matrixRunningListenerCount}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void configureLocalMatrix()} disabled={busy === 'matrix-configure'} className="settings-soft-button h-8 px-3 text-xs">
+                    {busy === 'matrix-configure' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Settings className="h-3.5 w-3.5" />}
+                    应用本地配置
+                  </button>
+                  <button type="button" onClick={() => void startLocalMatrix()} disabled={busy === 'matrix-start'} className="settings-soft-button h-8 px-3 text-xs">
+                    {busy === 'matrix-start' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
+                    启动 Tuwunel
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {matrixDiagnostics.homeserver.error && (
+              <div
+                className="mt-3 rounded-xl border px-3 py-2 text-xs leading-5"
+                style={{ background: 'var(--settings-danger-bg)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}
+              >
+                {matrixDiagnostics.homeserver.error}
+              </div>
+            )}
+
+            <div className="mt-4 max-h-52 space-y-2 overflow-auto pr-1">
+              {matrixDiagnostics.listeners.rows.length === 0 ? (
+                <div className="rounded-xl border px-3 py-6 text-center text-xs" style={{ borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}>
+                  还没有 Manager / Worker Matrix identity。创建群聊并分配任务后会出现在这里。
+                </div>
+              ) : (
+                matrixDiagnostics.listeners.rows.slice(0, 12).map((row) => (
+                  <div
+                    key={row.identityId}
+                    className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[minmax(0,1.3fr)_auto_auto]"
+                    style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-mono font-semibold" style={{ color: 'var(--settings-text)' }} title={row.userId}>
+                        {row.userId}
+                      </div>
+                      <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }}>
+                        {row.ownerType}:{row.ownerId}
+                      </div>
+                    </div>
+                    <span
+                      className={cn('inline-flex h-6 items-center rounded-full px-2 font-medium', row.runningInMemory ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-600')}
+                    >
+                      {row.runningInMemory ? 'listening' : 'stopped'}
+                    </span>
+                    <div className="text-right" style={{ color: row.consecutiveErrors > 0 ? '#b91c1c' : 'var(--settings-muted-text)' }}>
+                      <div>{row.lastOkAt ? relativeTime(row.lastOkAt) : '未同步'}</div>
+                      {row.consecutiveErrors > 0 && <div className="mt-1">errors {row.consecutiveErrors}</div>}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
 
         {sandboxNeedsSetup && (
           <div

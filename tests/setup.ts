@@ -15,6 +15,7 @@ process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || ''
 process.env.ENABLE_LOCAL_CLI_PROBES = 'false'
 process.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
 process.env.AGENTHUB_SKIP_LEGACY_SCHEMA = '1'
+process.env.AGENTHUB_ROOM_PROVIDER = 'local-matrix-compatible'
 
 Bun.env.DATABASE_URL = process.env.DATABASE_URL
 Bun.env.AGENTHUB_TEST_DATABASE_URL_LOCKED = '1'
@@ -25,6 +26,7 @@ Bun.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 Bun.env.ENABLE_LOCAL_CLI_PROBES = 'false'
 Bun.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
 Bun.env.AGENTHUB_SKIP_LEGACY_SCHEMA = '1'
+Bun.env.AGENTHUB_ROOM_PROVIDER = 'local-matrix-compatible'
 
 const dbApi = await import('../packages/db/src/index')
 migrate(dbApi.db, { migrationsFolder: resolve('packages/db/drizzle') })

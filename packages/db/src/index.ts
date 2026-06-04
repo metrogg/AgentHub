@@ -442,6 +442,7 @@ function ensureLegacySchema(database: Database) {
       workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       run_id TEXT REFERENCES orchestrator_runs(id) ON DELETE CASCADE,
       task_id TEXT REFERENCES workspace_tasks(id) ON DELETE SET NULL,
+      room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL,
       task_thread_id TEXT REFERENCES task_threads(id) ON DELETE SET NULL,
       workspace_agent_id TEXT REFERENCES workspace_agents(id) ON DELETE SET NULL,
       worker_instance_id TEXT,
@@ -451,6 +452,10 @@ function ensureLegacySchema(database: Database) {
       source_path TEXT,
       handoff_path TEXT,
       relative_path TEXT,
+      storage_provider TEXT NOT NULL DEFAULT 'local-filesystem',
+      bucket TEXT NOT NULL DEFAULT 'agenthub-artifacts',
+      object_key TEXT,
+      storage_path TEXT,
       mime_type TEXT,
       size INTEGER,
       checksum TEXT,
@@ -481,10 +486,184 @@ function ensureLegacySchema(database: Database) {
     'artifacts_task_thread_id_idx',
     'CREATE INDEX artifacts_task_thread_id_idx ON artifacts(task_thread_id)',
   )
+  ensureColumn(
+    database,
+    'artifacts',
+    'storage_provider',
+    "ALTER TABLE artifacts ADD COLUMN storage_provider TEXT NOT NULL DEFAULT 'local-filesystem'",
+  )
+  ensureColumn(
+    database,
+    'artifacts',
+    'bucket',
+    "ALTER TABLE artifacts ADD COLUMN bucket TEXT NOT NULL DEFAULT 'agenthub-artifacts'",
+  )
+  ensureColumn(database, 'artifacts', 'object_key', 'ALTER TABLE artifacts ADD COLUMN object_key TEXT')
+  ensureColumn(database, 'artifacts', 'storage_path', 'ALTER TABLE artifacts ADD COLUMN storage_path TEXT')
+  ensureColumn(
+    database,
+    'artifacts',
+    'room_id',
+    'ALTER TABLE artifacts ADD COLUMN room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL',
+  )
+  ensureIndex(
+    database,
+    'artifacts_object_key_idx',
+    'CREATE INDEX artifacts_object_key_idx ON artifacts(object_key)',
+  )
+  ensureIndex(
+    database,
+    'artifacts_room_id_idx',
+    'CREATE INDEX artifacts_room_id_idx ON artifacts(room_id)',
+  )
   ensureIndex(
     database,
     'artifacts_task_relative_path_unique',
     'CREATE UNIQUE INDEX artifacts_task_relative_path_unique ON artifacts(task_id, relative_path, checksum)',
+  )
+
+  ensureTable(
+    database,
+    'rooms',
+    `CREATE TABLE rooms (
+      id TEXT PRIMARY KEY NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'local-matrix-compatible',
+      provider_room_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+      session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      run_id TEXT REFERENCES orchestrator_runs(id) ON DELETE SET NULL,
+      task_id TEXT REFERENCES workspace_tasks(id) ON DELETE SET NULL,
+      task_thread_id TEXT REFERENCES task_threads(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      topic TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  )
+  ensureIndex(
+    database,
+    'rooms_provider_room_id_unique',
+    'CREATE UNIQUE INDEX rooms_provider_room_id_unique ON rooms(provider, provider_room_id)',
+  )
+  ensureIndex(database, 'rooms_owner_id_idx', 'CREATE INDEX rooms_owner_id_idx ON rooms(owner_id)')
+  ensureIndex(database, 'rooms_workspace_id_idx', 'CREATE INDEX rooms_workspace_id_idx ON rooms(workspace_id)')
+  ensureIndex(database, 'rooms_session_id_idx', 'CREATE INDEX rooms_session_id_idx ON rooms(session_id)')
+  ensureIndex(database, 'rooms_run_id_idx', 'CREATE INDEX rooms_run_id_idx ON rooms(run_id)')
+  ensureIndex(database, 'rooms_task_thread_id_idx', 'CREATE INDEX rooms_task_thread_id_idx ON rooms(task_thread_id)')
+
+  ensureTable(
+    database,
+    'room_participants',
+    `CREATE TABLE room_participants (
+      id TEXT PRIMARY KEY NOT NULL,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      provider_user_id TEXT,
+      participant_type TEXT NOT NULL,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      workspace_agent_id TEXT REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      worker_instance_id TEXT REFERENCES worker_instances(id) ON DELETE SET NULL,
+      display_name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      status TEXT NOT NULL DEFAULT 'joined',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      joined_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  )
+  ensureIndex(
+    database,
+    'room_participants_room_id_idx',
+    'CREATE INDEX room_participants_room_id_idx ON room_participants(room_id)',
+  )
+  ensureIndex(
+    database,
+    'room_participants_user_id_idx',
+    'CREATE INDEX room_participants_user_id_idx ON room_participants(user_id)',
+  )
+  ensureIndex(
+    database,
+    'room_participants_workspace_agent_id_idx',
+    'CREATE INDEX room_participants_workspace_agent_id_idx ON room_participants(workspace_agent_id)',
+  )
+  ensureIndex(
+    database,
+    'room_participants_worker_instance_id_idx',
+    'CREATE INDEX room_participants_worker_instance_id_idx ON room_participants(worker_instance_id)',
+  )
+
+  ensureTable(
+    database,
+    'timeline_events',
+    `CREATE TABLE timeline_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      provider_event_id TEXT NOT NULL,
+      sender_participant_id TEXT REFERENCES room_participants(id) ON DELETE SET NULL,
+      sender_type TEXT NOT NULL,
+      type TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      sequence INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL
+    )`,
+  )
+  ensureIndex(
+    database,
+    'timeline_events_room_id_idx',
+    'CREATE INDEX timeline_events_room_id_idx ON timeline_events(room_id)',
+  )
+  ensureIndex(
+    database,
+    'timeline_events_room_sequence_unique',
+    'CREATE UNIQUE INDEX timeline_events_room_sequence_unique ON timeline_events(room_id, sequence)',
+  )
+  ensureIndex(
+    database,
+    'timeline_events_provider_event_id_unique',
+    'CREATE UNIQUE INDEX timeline_events_provider_event_id_unique ON timeline_events(room_id, provider_event_id)',
+  )
+  ensureIndex(
+    database,
+    'timeline_events_sender_participant_id_idx',
+    'CREATE INDEX timeline_events_sender_participant_id_idx ON timeline_events(sender_participant_id)',
+  )
+
+  ensureTable(
+    database,
+    'matrix_identities',
+    `CREATE TABLE matrix_identities (
+      id TEXT PRIMARY KEY NOT NULL,
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      server_name TEXT NOT NULL,
+      localpart TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      access_token TEXT,
+      password TEXT,
+      display_name TEXT NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  )
+  ensureIndex(
+    database,
+    'matrix_identities_owner_unique',
+    'CREATE UNIQUE INDEX matrix_identities_owner_unique ON matrix_identities(owner_type, owner_id, server_name)',
+  )
+  ensureIndex(
+    database,
+    'matrix_identities_user_id_unique',
+    'CREATE UNIQUE INDEX matrix_identities_user_id_unique ON matrix_identities(user_id)',
+  )
+  ensureIndex(
+    database,
+    'matrix_identities_localpart_idx',
+    'CREATE INDEX matrix_identities_localpart_idx ON matrix_identities(localpart)',
   )
 }
 

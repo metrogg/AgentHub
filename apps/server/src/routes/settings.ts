@@ -35,6 +35,7 @@ import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/
 import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
 import { testLlmConnection } from '../services/llm-client'
+import { describeMatrixDiagnostics } from '../services/rooms/matrix-diagnostics'
 import { resolveWorkspaceStorageRoot } from '../services/workspace/auto-workspace'
 
 const execFileAsync = promisify(execFile)
@@ -197,6 +198,28 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       message: result.message,
       started: result.started,
       sandbox: await describeSandboxRuntimeStatus(),
+    })
+  })
+  .post('/matrix/local/configure', async (c) => {
+    const config = applyLocalMatrixRuntimeConfig()
+    logger.warn({ config }, 'Local Matrix runtime config applied from settings')
+    return c.json({
+      ok: true,
+      message: '已将当前 AgentHub 进程切换到本地 Tuwunel 配置。',
+      config,
+      diagnostics: await describeMatrixDiagnostics(),
+    })
+  })
+  .post('/matrix/local/start', async (c) => {
+    const config = applyLocalMatrixRuntimeConfig()
+    const result = await startLocalTuwunel()
+    logger.warn({ result }, 'Local Tuwunel start requested from settings')
+    return c.json({
+      ok: result.ok,
+      message: result.message,
+      output: result.output,
+      config,
+      diagnostics: await describeMatrixDiagnostics(),
     })
   })
   .post('/storage/ensure', async (c) => {
@@ -675,6 +698,62 @@ async function openSystemPath(path: string) {
     return { ok: true, message: '' }
   } catch (error: any) {
     return { ok: false, message: error?.message || String(error) }
+  }
+}
+
+function applyLocalMatrixRuntimeConfig() {
+  const config = {
+    provider: 'matrix',
+    homeserverUrl: process.env.AGENTHUB_MATRIX_HOMESERVER_URL?.trim() || 'http://127.0.0.1:6167',
+    serverName: process.env.AGENTHUB_MATRIX_SERVER_NAME?.trim() || 'agenthub.local',
+    registrationToken:
+      process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN?.trim() || 'agenthub-dev-registration-token',
+    autoInviteParticipants: 'true',
+    autoJoinParticipants: 'true',
+  }
+  process.env.AGENTHUB_ROOM_PROVIDER = config.provider
+  process.env.AGENTHUB_MATRIX_HOMESERVER_URL = config.homeserverUrl
+  process.env.AGENTHUB_MATRIX_SERVER_NAME = config.serverName
+  process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN = config.registrationToken
+  process.env.AGENTHUB_MATRIX_AUTO_INVITE_PARTICIPANTS = config.autoInviteParticipants
+  process.env.AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS = config.autoJoinParticipants
+  return {
+    provider: config.provider,
+    homeserverUrl: config.homeserverUrl,
+    serverName: config.serverName,
+    registrationTokenConfigured: Boolean(config.registrationToken),
+    autoInviteParticipants: true,
+    autoJoinParticipants: true,
+  }
+}
+
+async function startLocalTuwunel() {
+  const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
+  if (!existsSync(composeFile)) {
+    return {
+      ok: false,
+      output: '',
+      message: `找不到 Matrix compose 文件：${composeFile}`,
+    }
+  }
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      'docker',
+      ['compose', '-f', composeFile, 'up', '-d', 'tuwunel'],
+      { timeout: 60_000, windowsHide: true },
+    )
+    const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+    return {
+      ok: true,
+      output,
+      message: 'Tuwunel 已启动，稍等几秒后刷新状态。',
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      output: [error?.stdout, error?.stderr].filter(Boolean).join('\n').trim(),
+      message: error?.message || '启动 Tuwunel 失败，请确认 Docker Desktop 正在运行。',
+    }
   }
 }
 

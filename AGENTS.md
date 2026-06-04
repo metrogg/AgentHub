@@ -26,7 +26,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 - 通信层采用 Matrix：Room / timeline / participant / mention 是协作事实源。
 - Manager Runtime 学 OpenClaw / QwenPaw：Manager 是真实协调器，不是一次性 Planner。
 - Worker Runtime 学 HiClaw，但保留 AgentHub 的 Coding Agent 优势：Claude Code / OpenCode / Codex / Gemini 是核心 Worker 基底。
-- 共享存储第一阶段使用本地 filesystem，但按 MinIO/S3-compatible 语义设计 ArtifactStore / SharedStorage。
+- 共享存储默认采用本地 filesystem，但必须按 MinIO/S3-compatible object key 语义设计；MinIO/S3 只是后续可替换 adapter，不是第一阶段默认主路径。
 - AI Gateway 抽象化：短期 Local/LiteLLM，长期 Higress；不要让 Worker 到处拿真实 key。
 - A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope。
 - 当前仍处开发阶段，旧会话、旧任务、旧数据库和旧 workspace/storage 数据不是架构约束；必要时可以清库重建，不能为了旧数据保留旧路径。
@@ -53,38 +53,38 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 修改代码前先确认自己正在改的是哪一层，不要把不同层的概念混用：
 
 - 产品交互层：IM 群聊、Agent 私聊、任务子对话、任务看板、产物卡。
-- 编排层：Manager / Orchestrator、Manager actions、WorkLedger / Task graph、TaskScheduler、Synthesizer、人工确认和运行生命周期。
+- 编排层：Manager / Orchestrator、Manager actions、WorkLedger / dependency 校验、Manager final review、人工确认和运行生命周期。
 - 通信层：Matrix 负责 Room / timeline / participant / mention，是新内核的协作事实源。
 - 协议投影层：AG-UI 负责运行事件到前端 UI 的桥接；A2A 只作为外部互操作或 Matrix event 中的可选任务语义 envelope，不再是内部主通信路径。
-- 执行层：Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Agent 基底；`llm` 只作为内部/兜底能力。
+- 执行层：OpenClaw / QwenPaw 是 Manager / Team Leader 优先基底；Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Worker Agent 基底。不要把普通内部 LLM 当作产品主路径 Agent runtime。
 - 能力层：MCP、Skills、Rules、shell、文件系统、浏览器等是 Code Agent 能使用的工具能力，不是 Agent 类型。
-- 工作区、存储与状态层：系统默认工作空间根、Worker workdirs、ArtifactStore / SharedStorage、本地 filesystem adapter、兼容旧 `.agenthub/handoff` 的只读读取、run/resource events。
+- 工作区、存储与状态层：系统默认工作空间根、Worker workdirs、ArtifactStore / SharedStorage、本地 filesystem object store、可选 MinIO/S3 adapter、兼容旧 `.agenthub/handoff` 的只读读取、run/resource events。
 
 配置真相也要分层：
 
 - `模型管理`：模型目录、端点、密钥、模型测试。
-- `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
+- `Agent Runtimes / Agent Bases`：Claude Code、OpenCode、Codex、Gemini、OpenClaw、QwenPaw 等基底的安装状态、原生 auth/config、平台级诊断。旧 UI 里仍可能显示 `Coding Tools`，但架构口径不再把它当作 Agent 类型。
 - `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
 
-`内部 LLM 默认模型` 必须保持可见，且只作用于欢迎页动态提示、Manager / Orchestrator、planning skill、Synthesizer 等内部模型链路。
+`内部 LLM 默认模型` 只允许作为非核心体验的辅助/兜底链路，例如欢迎页动态提示或临时诊断。Manager / Orchestrator 的目标主路径必须接 OpenClaw / QwenPaw 这类真实 Agent runtime，不能默认回退到内部 LLM 主脑。
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
-底层重构方向已经进一步明确：建设 AgentHub 自己的 HiClaw-lite Open Kernel，而不是继续手搓低配协作层。第一阶段不默认引入 Kubernetes、完整 MinIO 集群、完整 Higress 集群、企业多租户等重能力，但通信层明确采用 Matrix，存储层按 S3-compatible 设计，Gateway 保留 Higress/LiteLLM adapter 抽象。
+底层重构方向已经进一步明确：建设 AgentHub 自己的轻量版 HiClaw Open Kernel，而不是继续手搓低配协作层，也不是照搬 HiClaw 的企业部署栈。第一阶段默认形态是单进程 AgentHub 服务 + CLI 子进程 Worker + 自研 UI + 本地 filesystem 共享存储；通信层保留 Matrix Room/timeline/participant/mention 语义，并提供真实 Matrix homeserver adapter（优先 Tuwunel，兼容 Synapse/Conduit），但本地开发可用 RoomService/local adapter；Gateway 保留 Higress/LiteLLM adapter 抽象。
 
 四个最高优先级模块：
 
 - Manager 协调器：对齐 HiClaw Manager 章节，Manager 要有 runtime、人格配置、skills、state、Worker registry、Room 通信和 heartbeat/patrol。
 - Worker 运行时：对齐 HiClaw Worker 章节，Worker 是真实运行实体，有身份、状态、模型、skills/MCP、Room、heartbeat、sleep/wake/stop。
-- Matrix 通信层：对齐 HiClaw Matrix/Tuwunel 章节，Room / timeline / participant / mention 是协作事实源。
-- 共享存储层：对齐 HiClaw MinIO 章节，第一阶段用 filesystem，但语义按 MinIO/S3 设计，产物和 handoff ref 进入 ArtifactStore / SharedStorage。
+- Matrix 通信层：对齐 HiClaw Matrix/Tuwunel 章节，Room / timeline / participant / mention 是协作事实源；`LocalMatrixCompatibleRoomAdapter` 只能作为测试/开发 fallback，不能被当成真实通信层。
+- 共享存储层：对齐 HiClaw MinIO 章节的“共享任务树/产物引用”思想，但第一阶段默认由本地 filesystem object store 实现；产物、任务契约和 handoff ref 进入 ArtifactStore / SharedStorage，object key 语义保持 S3-compatible，后续可切 MinIO/S3 adapter。
 
 目标资源：
 
 - `Room`、`TimelineEvent`、`Run`、`Task`、`WorkerInstance`、`Artifact`、`RuntimeLease` 都应逐步成为一等资源。
 - `messages.ts` 后续只应承担 chat ingress 和轻量路由，不再继续膨胀成创建 task/session/event 并启动执行的总控模块。
 - 子对话、产物卡、任务看板和进度条应从 Matrix timeline、资源状态与 AG-UI 投影出来，不再靠多个旧 metadata 状态拼接。
-- OpenClaw / CoPaw 应优先作为 Orchestrator / Team Leader / Manager 这类指挥型 runtime 候选；Codex / Claude Code / OpenCode / Gemini CLI 更偏执行型 Coding Worker。不要把 OpenClaw 简单硬塞成普通 `codeAgentType`，后续应拆出 `coordinator runtime` 与 `worker runtime`。
+- OpenClaw / QwenPaw 应优先作为 Orchestrator / Team Leader / Manager 这类指挥型 runtime 候选；Codex / Claude Code / OpenCode / Gemini CLI 更偏执行型 Coding Worker。不要把 OpenClaw 简单硬塞成普通 `codeAgentType`，后续应拆出 `coordinator runtime` 与 `worker runtime`。
 - 第一阶段优先做 `RoomService + Matrix Adapter`、`CoordinatorRuntime`、`WorkerRuntime`、`ArtifactStore` 和 Controller/Reconciler 资源化。
 
 详细方案见 `docs/AgentHub-HiClaw-lite开源内核重构方案.md`。后续涉及多 Agent 底层执行、子对话、产物、运行事件、生命周期的改动，应优先向该方案收敛，而不是继续给旧流程链打补丁。
@@ -122,26 +122,47 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 ```text
 用户在群聊发消息
-  -> messages.ts 作为 ChatIngress 写入用户消息、鉴权和加载群聊上下文
-  -> RunController / ManagerLoop 创建 run.started、manager.thinking，并调用 Manager runtime 决策下一步
-  -> 简单聊天：Orchestrator 直接回复
-  -> 能力不足：Orchestrator 返回结构化 memberProposals，主群聊展示补员卡，用户确认后才创建/加入真实 Agent
-  -> 复杂任务：Manager 生成团队行动方案和任务看板
-  -> 用户确认/分发
-  -> 迁移期仍由 OrchestratorEngine.startRun() 作为执行兼容层
-  -> Manager planning action 生成可执行 Worker 任务；旧 Planner 只保留为兼容校验/工具函数来源
-  -> TaskScheduler 按依赖层调度
-  -> 每个任务创建 TaskThread，并投影为 orchestrator-task 子对话
-  -> Orchestrator 将任务封装为 A2A message/send envelope
-  -> TaskExecutionService 准备工作目录并经 LocalA2ATransport 派发
-  -> 本地执行宿主适配到 LLM fallback / Code Agent
-  -> 子对话保存完整过程
-  -> shared task directory / ArtifactStore / 黑板写入任务摘要、产物、决策和 handoff refs
-  -> 主群聊广播成员汇报和产物卡
-  -> Synthesizer 生成最终总结
+  -> messages.ts 作为 ChatIngress 做鉴权、加载群聊上下文和轻量路由
+  -> RoomController 确保 group room，用户消息先进入 Room timeline
+  -> messages 仅生成 room:{timelineEventId} 兼容投影，供旧 UI/API 过渡读取
+  -> OpenClaw/QwenPaw CoordinatorRuntime / ManagerLoop 判断下一步：回复、追问、补员、派活或总结
+  -> 简单聊天：Manager 直接写回 group room timeline，并兼容镜像到 messages
+  -> 能力不足：Manager 输出结构化 memberProposals，用户确认后才创建/加入真实 Agent
+  -> 复杂任务：Manager 生成 assign actions / 行动方案，RunController 创建 run 生命周期
+  -> dispatchCoordinatorAssignBatch() 创建 workspace_tasks / TaskThread / task room
+  -> RoomController 确保 task room 和 Worker participant
+  -> WorkerController 确保 WorkerInstance ready / wake / reconcile
+  -> RuntimeLeaseController 创建并推进 RuntimeLease（ready/running/waiting/released/stale）
+  -> WorkerRuntimeService.runTaskRoom() 从 task room 接单并调用本地 Coding Worker runtime
+  -> Worker 进度、澄清、失败、部分产物和最终结果写回 task room timeline
+  -> ArtifactController / ArtifactStore 登记产物，workspace_tasks.artifacts 只作为缓存
+  -> RunController 同步 task/thread/run 状态并发 RunEvent / AG-UI 投影事件
+  -> ManagerLoop 基于 Run/Task/TaskThread/Room timeline/ArtifactStore 做最终复盘
+  -> 主群聊展示 Manager review、成员汇报、产物卡和最终结果
 ```
 
-迁移方向：`messages.ts` 不应继续扩展成编排主脑；新增 run 生命周期、Manager 决策、资源 reconcile 和恢复逻辑应优先进入 `RunController` / `ManagerLoop` / 后续 kernel controllers。`OrchestratorEngine` 不再被视为未来主脑，只能在迁移期作为执行兼容层逐步拆小。
+`OrchestratorEngine`、`TaskExecutionService`、`LocalA2ATransport` 已删除。所有任务执行通过 `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `ManagerLoop` / `WorkerRuntimeService`。`messages.ts` 不应继续扩展成编排主脑。
+
+### Worker Runtime 状态机
+
+WorkerInstance.observedState 已扩展为 HiClaw 风格状态机：
+
+```
+provisioning -> ready -> listening -> assigned -> busy -> waiting_for_human -> resuming -> idle -> sleeping -> stopped / failed
+```
+
+- `listening`：Worker Matrix listener 已启动，等待被 @ 接单。
+- `assigned`：Worker 在 task room 中被 @ 后自己 claim 任务，尚未启动 CLI。
+- `busy`：CLI 子进程正在执行。
+- `resuming`：人类回答澄清后，Worker 恢复执行前的过渡状态。
+
+Worker 本地 workspace 目录位于 `{agentHubUserDataRoot()}/workers/{workerInstanceId}/`，包含 `profile.json`、`SOUL.md`、`AGENTS.md`、`skills/`、`state.json`、`rooms.json`。`WorkerController.ensureReady()` 会在 reconcile 时自动创建该目录并从 DB 同步技能和配置。
+
+### Worker Runtime Phase 2 能力
+
+- **AbortController / 进程清理做实**：`Bun.spawn` 已绑定 `AbortSignal`；`killProcessTree()` 增强为 async，具备进程存活检测、优雅终止（SIGTERM / `taskkill /t`）、5 秒超时等待、强制终止（SIGKILL / `taskkill /t /f`）和二次等待。`WorkerRuntimeService` 维护 `runningControllers` Map，每个 task room 有独立的 `AbortController`；`/stop` 或 `cancelTaskRoom` 时调用 `stopTaskRoom()` 真正终止 CLI 子进程。
+- **per-agent config/cache/session 隔离**：`RuntimeLease` 的 `homeDir/configDir/cacheDir/tmpDir/dataDir` 通过 `sandboxEnv` 注入 CLI 子进程环境变量（`HOME`、`XDG_CONFIG_HOME`、`XDG_CACHE_HOME`、`XDG_DATA_HOME`、`TMPDIR`、`TEMP`、`TMP`、`CODEX_HOME`），确保不同 Worker 的 CLI 配置和缓存互不干扰。
+- **Clarification resume 原生化 + 多轮澄清链**：`runCodeAgentCommand` 支持 `continueSession` / `sessionId` 参数，Claude Code 可利用 `--session-id` / `--continue` 保持同一 CLI context。首次运行后 `sessionId` 保存到 `runtimeLeases.metadata`；resume 时从 lease 读取并传入，实现真正的会话恢复而非重启新进程。`taskClarifications` 表天然支持多轮澄清链，timeline 历史在 resume 时完整保留。
 
 ## Matrix / A2A 通信边界
 
@@ -151,6 +172,10 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 - Manager 分配任务、@ Worker、Worker 回复、澄清、进度、失败、产物引用，都应进入 Room timeline。
 - 主群聊、任务子对话、Manager/Worker DM 都应逐步变成 RoomService / MatrixRoomAdapter 管理的真实 Room。
 - AgentHub 前端继续自研，不使用 Element Web 作为默认 UI。
+- 当前 `MatrixRoomAdapter` 已拆出 `MatrixClient` / `MatrixIdentityService`：Controller 会为 Human、Manager、Worker 确保真实 Matrix account，持久化 `matrix_identities`，邀请/加入真实 room，并在写 timeline 时优先使用 sender participant 自己的 Matrix access token 发送 `m.room.message`。SQLite 只作为 AgentHub UI 索引和资源投影，不再被称为 Matrix 实现。
+- 当前还新增了 `MatrixRuntimeListener`、`MatrixRuntimeSupervisor` 和 `MatrixRoomEventDispatcher`：可以用真实 Matrix identity token 调 `/sync`，把真实 room event 导入 AgentHub timeline，解析 `m.mentions` / 可见 `matrix.to` mention 和 `m.file/m.image/...` 文件引用，并把人类群聊消息调给 Manager、把 task room 中 @ Worker 的消息调给 WorkerRuntime。`MatrixRuntimeSupervisor` 会在 Room participant reconcile、TaskThread room reconcile、Worker ready 和 server startup recovery 时托管 Manager / Worker listener；Worker stopped / stale-failed 时会停掉对应 listener。`/sync` 临时失败会记录到 `matrix_identities.metadata.matrixSync` 并退避重试，不会让常驻 listener 直接退出。
+- Matrix Room 内的基础控制消息已经接入控制面：task room 中 `/stop` / `/cancel` 会取消对应 task、释放 RuntimeLease 并写回 timeline；`/approve` / `/deny` 会作为人工控制事件进入 timeline 并触发 Manager 重新观察；`m.file/m.image/m.video/m.audio` 文件事件会优先通过 Matrix media API 下载真实 `mxc://` 内容，并物化到 ArtifactStore / MinIO/S3-compatible object store，失败时才透明降级为保留文件引用和下载错误的 `partial` artifact。下一步通信层继续补 typing/presence、人工确认与 pending proposal 的强绑定、OpenClaw/QwenPaw 原生 Matrix runtime 进程化、TokenVault，以及前端更 Matrix-sync-native 的投影；不能退回后端函数直接写伪 timeline 事件来假装 Agent 交流。
+- 本地开发如需真实基础设施，先用 `infra/docker-compose.hiclaw-lite.yml` 启动 Tuwunel 和 MinIO，再配置 `AGENTHUB_ROOM_PROVIDER=matrix`、`AGENTHUB_MATRIX_HOMESERVER_URL`、`AGENTHUB_MATRIX_ACCESS_TOKEN`、`AGENTHUB_OBJECT_STORE_PROVIDER=s3` 等环境变量。
 
 A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径：
 
@@ -159,12 +184,11 @@ A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径�
 - 远程 Agent、外部系统调用 AgentHub Agent、跨平台互操作时再启用 A2A。
 - 不允许恢复 `runtimeType = "a2a"`，也不能把 A2A 作为可创建的 Agent 类型展示给用户。
 
-当前代码仍有“内部 A2A envelope + AgentHub local transport”的迁移期实现，但它不是新内核目标。后续通信改造应把 `LocalA2ATransport` 降级为兼容/外部互操作适配，不再继续扩展为内部主干。
+旧 `LocalA2ATransport` 和 `TaskExecutionService` 已删除。`a2a-internal.ts` 仅保留为可选 taskEnvelope 序列化工具，不再作为内部通信路径。
 
 相关文件：
 
-- `apps/server/src/services/protocols/a2a-internal.ts`: 内部 A2A envelope、message 和 task 映射。
-- `apps/server/src/services/execution/local-a2a-transport.ts`: 本地 A2A transport，负责把 `message/send` 派发到本地 runtime。
+- `apps/server/src/services/protocols/a2a-internal.ts`: 可选 A2A envelope 序列化（仅外部互操作）。
 - `apps/server/src/services/protocols/a2a-adapter.ts`: 对外 A2A AgentCard / Task / Artifact 映射。
 
 ## 工作目录与产物交接
@@ -210,7 +234,7 @@ A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径�
 主要表：
 
 - `sessions`: `direct` / `group` 会话，依赖 `metadata.kind` 区分私聊、群聊任务子对话和旧会话。
-- `messages`: 聊天消息、任务结果消息、产物 metadata。
+- `messages`: 迁移期 UI projection/cache。新发送主路径先写 `timeline_events`，再生成 `room:{timelineEventId}` 兼容消息；不要把它当通信事实源。
 - `workspaces`: 项目工作区。
 - `workspace_agents`: 工作区成员。
 - `workspace_tasks`: DAG 任务、状态、进度、子会话、产物。
@@ -254,24 +278,31 @@ bun test tests/orchestrator-routing.test.ts
 
 - 新增路由使用 `AppError`，不要继续新增裸 `HTTPException`。
 - 日志使用 `apps/server/src/lib/logger.ts`，不要新增 `console.log`。
-- 对复杂目标的意图判断、分工、追加任务和最终内容生成必须来自 Manager / Orchestrator / Synthesizer 的模型输出；系统代码只做 schema 校验、权限校验、状态记录和透明错误呈现。
+- 对复杂目标的意图判断、分工、追加任务和最终内容生成必须来自 Manager / Orchestrator / final-review skill 的模型输出；系统代码只做 schema 校验、权限校验、状态记录和透明错误呈现。
 - Manager / Orchestrator 决策输出解析失败时要透明报错或提示检查模型配置，不允许用关键词启发式兜底成 `plan/reply/clarify`。
 - 运行中补员只能来自 Orchestrator 明确输出的 `memberProposals`；前端只展示确认卡，后端只按用户确认创建/加入真实 workspace agent。
 - 不要恢复静态兜底提示词或固定模板计划。快速提示、任务拆解、协作计划都应由模型动态生成；失败时可以提示用户重试或检查模型配置。
 - 不要恢复静态 Agent 路由、关键词分工、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。系统只能校验 Manager / Orchestrator 的显式选择，不能偷偷改派或追加任务。
 - 不要恢复内置 `.agenthub/specs/*.spec.yml` 场景模板，也不要让 `ensureHarnessPresets()` 把 specs 自动复制到新工作区。Spec 后续只可作为用户显式创建的协作契约。
-- 不要把旧 `GroupChatManager` 作为新路径入口。群聊统一从 `messages.ts` 进入 Orchestrator 路由。
+- 不要把旧 `GroupChatManager` 作为新路径入口。群聊统一从 `messages.ts` 作为 ChatIngress 进入 Room-first / Manager / Run 主线。
 - 不要把旧 Git 分支隔离写成当前默认事实。当前默认是项目工作区 + `.agenthub/workdirs` + `.agenthub/shared/tasks`，`.agenthub/handoff` 只是兼容旧路径。
 - 修改 UI 时要保持 IM 产品感：左侧树清晰、主群聊和子对话不重复、运行状态可见、产物入口明确。
 
 ## 重要文件
 
-- `apps/server/src/routes/messages.ts`: 消息入口、意图判断、计划生成和分发入口。
+- `apps/server/src/routes/messages.ts`: ChatIngress，负责鉴权、Room-first 写入入口、`messages` 兼容投影读取和进入 Manager/Run 主线；不要继续扩成编排主脑。
+- `apps/server/src/services/orchestrator/manager-loop.ts`: Manager observe/act/review loop。
+- `apps/server/src/services/coordinator-runtime/assign-dispatcher.ts`: Coordinator assign 到 Run/TaskThread/task room/WorkerRuntime 的派发入口。
+- `apps/server/src/services/orchestrator/run-controller.ts`: Run 与 task 生命周期控制面。
+- `apps/server/src/services/rooms/room-controller.ts`: group/task room 与 participant reconcile 控制面。
+- `apps/server/src/services/rooms/matrix-runtime-supervisor.ts`: Manager / Worker Matrix listener 生命周期托管；Room participant reconcile、TaskThread room reconcile、Worker ready 和服务启动恢复会通过它启动监听。
+- `apps/server/src/services/rooms/matrix-event-dispatcher.ts`: 真实 Matrix `/sync` 导入事件的调度入口；处理群聊人类消息、task room @ Worker、`/stop`、`/approve` / `/deny` 和 Matrix 文件引用。
+- `apps/server/src/services/orchestrator/worker-controller.ts`: WorkerInstance reconcile 与 lease 分配控制面。
+- `apps/server/src/services/orchestrator/runtime-lease-controller.ts`: RuntimeLease 生命周期控制面。
+- `apps/server/src/services/worker-runtime/worker-runtime-service.ts`: 当前 Worker task room 执行入口。
+- `apps/server/src/services/worker-runtime/worker-workspace.ts`: Worker 本地 workspace 目录管理（profile/SOUL/skills）。
 - `apps/server/src/services/orchestrator/manager-planner.ts`: Manager-first 团队行动方案生成。
-- `apps/server/src/services/orchestrator/orchestrator-engine.ts`: 迁移期执行兼容层，后续继续拆小。
 - `apps/server/src/services/orchestrator/planner.ts`: 旧 Planner 兼容与计划校验工具来源，不是主脑。
-- `apps/server/src/services/orchestrator/task-scheduler.ts`: DAG 调度。
-- `apps/server/src/services/execution/task-execution-service.ts`: 任务执行服务。
 - `apps/server/src/services/execution/agent-workdir.ts`: Agent 工作目录。
 - `apps/server/src/services/blackboard.ts`: 黑板。
 - `apps/server/src/services/code-agent-adapter.ts`: CLI 适配。

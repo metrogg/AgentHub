@@ -1,4 +1,4 @@
-import { Bot, CheckCircle2, Clock, MessagesSquare, XCircle } from 'lucide-react'
+import { Ban, Bot, CheckCircle2, Clock, MessagesSquare, XCircle } from 'lucide-react'
 import type { ControlPanelProjection } from '@/stores/chatStore'
 
 export interface AgentTab {
@@ -6,9 +6,9 @@ export interface AgentTab {
   agentId: string
   agentName: string
   taskTitle: string
-  status: 'pending' | 'assigned' | 'running' | 'done' | 'failed'
+  status: 'pending' | 'assigned' | 'running' | 'waiting' | 'done' | 'failed'
   childSessionId: string | null
-  taskThreadStatus?: 'prepared' | 'assigned' | 'active' | 'completed' | 'failed' | 'cancelled' | null
+  taskThreadStatus?: 'prepared' | 'assigned' | 'active' | 'waiting_for_human' | 'completed' | 'failed' | 'cancelled' | null
   progress?: number
   progressStatus?: string
 }
@@ -33,6 +33,8 @@ function StatusIndicator({ status }: { status: AgentTab['status'] }) {
           <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
         </span>
       )
+    case 'waiting':
+      return <Ban className="w-4 h-4 text-yellow-500" />
     case 'done':
       return <CheckCircle2 className="w-4 h-4 text-green-500" />
     case 'failed':
@@ -136,6 +138,11 @@ export function AgentTabs({
               )}
               {tab.taskThreadStatus === 'assigned' && (
                 <p className="text-[10px] text-indigo-500 mt-0.5 ml-6">已派发，等待执行</p>
+              )}
+              {(tab.status === 'waiting' || tab.taskThreadStatus === 'waiting_for_human') && (
+                <p className="text-[10px] text-yellow-600 mt-0.5 ml-6 truncate">
+                  {tab.progressStatus || '等待用户澄清'}
+                </p>
               )}
             </div>
           )

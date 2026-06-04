@@ -6,6 +6,7 @@ export interface ArtifactBatchInput {
   workspaceId: string
   runId: string
   taskId: string
+  roomId?: string | null
   taskThreadId?: string | null
   workspaceAgentId?: string | null
   workerInstanceId?: string | null
@@ -46,6 +47,7 @@ export async function registerArtifactBatch(input: ArtifactBatchInput): Promise<
         workspaceId: input.workspaceId,
         runId: input.runId,
         taskId: input.taskId,
+        roomId: input.roomId ?? null,
         taskThreadId: input.taskThreadId ?? null,
         workspaceAgentId: input.workspaceAgentId ?? null,
         workerInstanceId: input.workerInstanceId ?? null,
@@ -81,10 +83,14 @@ export async function registerArtifactBatch(input: ArtifactBatchInput): Promise<
           payload: {
             artifactId: record.id,
             taskId: input.taskId,
+            roomId: input.roomId ?? null,
             kind: record.kind,
             title: record.title,
             handoffPath: record.handoffPath ?? null,
             relativePath: record.relativePath ?? null,
+            objectKey: record.objectKey ?? null,
+            storageProvider: record.storageProvider,
+            storagePath: record.storagePath ?? null,
             mimeType: record.mimeType ?? null,
             size: record.size ?? null,
             status: record.status,

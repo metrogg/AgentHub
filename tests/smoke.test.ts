@@ -4,6 +4,12 @@ import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
 import { existsSync, mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import type {
+  WorkerRuntime,
+  WorkerRuntimeContext,
+  WorkerRuntimeEvent,
+  WorkerRuntimeResult,
+} from '../apps/server/src/services/worker-runtime'
 
 let app: { request: (input: string, init?: RequestInit) => Promise<Response> }
 let dbApi: typeof import('../packages/db/src/index')
@@ -17,19 +23,14 @@ beforeAll(async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'agenthub-smoke-'))
     process.env.DATABASE_URL = join(tempDir, 'agenthub-smoke.db')
   }
-  // Set on Bun.env BEFORE importing app so env.ts (z.parse(Bun.env)) picks them up.
-  Bun.env.LLM_API_KEY = 'test-key'
-  Bun.env.OPENAI_API_KEY = ''
-  Bun.env.ANTHROPIC_API_KEY = ''
-  Bun.env.ENABLE_LOCAL_CLI_PROBES = 'false'
-  Bun.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
-  Bun.env.AGENTHUB_SKIP_LEGACY_SCHEMA = '1'
   process.env.LLM_API_KEY = 'test-key'
   process.env.OPENAI_API_KEY = ''
   process.env.ANTHROPIC_API_KEY = ''
   process.env.ENABLE_LOCAL_CLI_PROBES = 'false'
   process.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
   process.env.AGENTHUB_SKIP_LEGACY_SCHEMA = '1'
+  Bun.env.ENABLE_LOCAL_CLI_PROBES = 'false'
+  Bun.env.ENABLE_CODEX_CHATGPT_AUTH = 'false'
 
   dbApi = await import('../packages/db/src/index')
   migrate(dbApi.db, { migrationsFolder: resolve('packages/db/drizzle') })
@@ -145,11 +146,7 @@ function mockLlmResponse(url: string, init?: RequestInit) {
     )
   }
 
-  if (
-    prompt.includes('Create a concise multi-agent execution plan') ||
-    prompt.includes('Return strict JSON only. Do not include Markdown fences or explanations.') ||
-    prompt.includes('你是 AgentHub 群聊中的 Manager / Orchestrator')
-  ) {
+  if (prompt.includes('Create a concise multi-agent execution plan') || prompt.includes('Return strict JSON only. Do not include Markdown fences or explanations.')) {
     const agentKey = extractPlannerAgentKey(body)
     return mockSseJsonResponse(
       JSON.stringify({
@@ -253,13 +250,10 @@ function extractPlannerAgentKey(body: Record<string, unknown>) {
     try {
       const parsed = JSON.parse(content) as {
         agents?: Array<{ key?: unknown; roleType?: unknown; name?: unknown }>
-        currentAgents?: Array<{ key?: unknown; roleType?: unknown; name?: unknown }>
       }
-      // manager-planner format: { currentAgents: [...] }
-      const agentList = Array.isArray(parsed.currentAgents) ? parsed.currentAgents
-        : Array.isArray(parsed.agents) ? parsed.agents : []
-      const coder = agentList.find((agent) => agent.roleType === 'coder')
-      const first = coder ?? agentList.find((a) => a.roleType !== 'orchestrator') ?? agentList[0]
+      const agents = Array.isArray(parsed.agents) ? parsed.agents : []
+      const coder = agents.find((agent) => agent.roleType === 'coder')
+      const first = coder ?? agents[0]
       if (typeof first?.key === 'string' && first.key) return first.key
     } catch {
       // Not the planner JSON payload.
@@ -1118,44 +1112,6 @@ describe('AgentHub smoke tests', () => {
     expect(catalog.items.find((item) => item.id === 'codex')?.command).toBe('codex')
   })
 
-  test('local agent runtime catalog exposes OpenClaw as an available worker runtime', async () => {
-    const catalog = await json<{
-      localCliProbesEnabled: boolean
-      items: Array<{
-        id: string
-        command: string
-        installed: boolean
-        runtimeFamily: string
-        runtimeBase: string
-        adapterStatus: string
-        registered: boolean
-      }>
-    }>(await app.request('/api/coding-tools/local-agent-runtimes'))
-
-    const openclaw = catalog.items.find((item) => item.id === 'openclaw')
-    expect(openclaw?.command).toBe('openclaw')
-    expect(openclaw?.runtimeFamily).toBe('worker')
-    expect(openclaw?.runtimeBase).toBe('openclaw')
-    expect(openclaw?.adapterStatus).toBe('available')
-
-    const added = await json<{
-      binding: { id: string; runtimeFamily: string; runtimeBase: string; enabled: boolean }
-      catalog: {
-        items: Array<{ id: string; registered: boolean; runtimeFamily: string }>
-      }
-    }>(
-      await postJson('/api/coding-tools/local-agent-runtimes/openclaw/add', {
-        command: 'openclaw',
-      }),
-    )
-
-    expect(added.binding.id).toBe('openclaw')
-    expect(added.binding.runtimeFamily).toBe('worker')
-    expect(added.binding.runtimeBase).toBe('openclaw')
-    expect(added.binding.enabled).toBe(Boolean(openclaw?.installed))
-    expect(added.catalog.items.find((item) => item.id === 'openclaw')?.registered).toBe(true)
-  })
-
   test('agent draft can be confirmed into a workspace agent', async () => {
     const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {
@@ -1354,48 +1310,6 @@ describe('AgentHub smoke tests', () => {
           event.value?.status === 'completed',
       ),
     ).toBe(true)
-  })
-
-  test('TaskGraph topological sort and cycle detection', async () => {
-    const { TaskGraph } = await import('../apps/server/src/services/orchestrator/task-graph')
-    const tasks = [
-      { id: 'a', title: 'A', description: '', agentId: '1', dependencies: [], maxRetries: 2 },
-      { id: 'b', title: 'B', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
-      { id: 'c', title: 'C', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
-      {
-        id: 'd',
-        title: 'D',
-        description: '',
-        agentId: '1',
-        dependencies: ['b', 'c'],
-        maxRetries: 2,
-      },
-    ]
-    const graph = new TaskGraph(tasks)
-
-    expect(graph.detectCycles()).toBe(false)
-    const order = graph.getExecutionOrder()
-    expect(order.indexOf('a')).toBeLessThan(order.indexOf('b'))
-    expect(order.indexOf('a')).toBeLessThan(order.indexOf('c'))
-    expect(order.indexOf('b')).toBeLessThan(order.indexOf('d'))
-    expect(order.indexOf('c')).toBeLessThan(order.indexOf('d'))
-
-    graph.setStatus('a', 'done')
-    graph.setStatus('b', 'running')
-    expect(graph.getReadyTasks().map((t) => t.id)).toContain('c')
-    expect(graph.getReadyTasks().map((t) => t.id)).not.toContain('b')
-    expect(graph.getReadyTasks().map((t) => t.id)).not.toContain('d')
-  })
-
-  test('TaskGraph detects circular dependencies', async () => {
-    const { TaskGraph } = await import('../apps/server/src/services/orchestrator/task-graph')
-    const tasks = [
-      { id: 'a', title: 'A', description: '', agentId: '1', dependencies: ['c'], maxRetries: 2 },
-      { id: 'b', title: 'B', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
-      { id: 'c', title: 'C', description: '', agentId: '1', dependencies: ['b'], maxRetries: 2 },
-    ]
-    const graph = new TaskGraph(tasks)
-    expect(graph.detectCycles()).toBe(true)
   })
 
   test('agent router explains selected coder with reviewer and fallback relations', async () => {
@@ -1655,16 +1569,17 @@ describe('AgentHub smoke tests', () => {
         )
       ).items
       managerDispatchInGroup = items.find(
-        (message) => message.metadata?.kind === 'worker-task-started',
+        (message) => message.metadata?.kind === 'manager-task-dispatched',
       )
       workerAcceptedInGroup = items.find(
-        (message) => message.metadata?.kind === 'worker-task-started',
+        (message) => message.metadata?.kind === 'worker-task-accepted-group',
       )
       if (
         childMessageCount > 0 &&
         childMessageKinds.includes('manager-task-assigned') &&
         childMessageKinds.includes('worker-task-accepted') &&
-        managerDispatchInGroup
+        managerDispatchInGroup &&
+        workerAcceptedInGroup
       ) {
         break
       }
@@ -1673,8 +1588,8 @@ describe('AgentHub smoke tests', () => {
     expect(childMessageCount).toBeGreaterThan(0)
     expect(childMessageKinds).toContain('manager-task-assigned')
     expect(childMessageKinds).toContain('worker-task-accepted')
-    // group session should have a worker-task-started message with childSessionId
     expect(managerDispatchInGroup?.metadata?.childSessionId).toBeTruthy()
+    expect(workerAcceptedInGroup?.metadata?.childSessionId).toBeTruthy()
   })
 
   test('group follow-up message during an active run becomes a human interrupt on the current run', async () => {
@@ -1890,6 +1805,46 @@ describe('AgentHub smoke tests', () => {
     expect(
       childMessages.some(
         (message) => message.metadata?.kind === 'manager-human-interrupt-forwarded',
+      ),
+    ).toBe(true)
+
+    const [groupRoom] = await dbApi.db
+      .select()
+      .from(dbApi.rooms)
+      .where(dbApi.eq(dbApi.rooms.sessionId, group.session.id))
+      .limit(1)
+    expect(groupRoom).toBeTruthy()
+    const groupTimeline = await dbApi.db
+      .select()
+      .from(dbApi.timelineEvents)
+      .where(dbApi.eq(dbApi.timelineEvents.roomId, groupRoom!.id))
+    expect(
+      groupTimeline.some(
+        (event) =>
+          event.type === 'manager.message' &&
+          event.metadata?.kind === 'human_interrupt_applied' &&
+          event.metadata?.coordinationSource === 'room-timeline' &&
+          event.metadata?.sourceMessageId === response.id,
+      ),
+    ).toBe(true)
+
+    const [taskRoom] = await dbApi.db
+      .select()
+      .from(dbApi.rooms)
+      .where(dbApi.eq(dbApi.rooms.taskThreadId, threadId))
+      .limit(1)
+    expect(taskRoom).toBeTruthy()
+    const taskTimeline = await dbApi.db
+      .select()
+      .from(dbApi.timelineEvents)
+      .where(dbApi.eq(dbApi.timelineEvents.roomId, taskRoom!.id))
+    expect(
+      taskTimeline.some(
+        (event) =>
+          event.type === 'task.progress' &&
+          event.metadata?.kind === 'human_interrupt_task_update' &&
+          event.metadata?.coordinationSource === 'room-timeline' &&
+          event.metadata?.sourceMessageId === response.id,
       ),
     ).toBe(true)
 
@@ -2116,9 +2071,29 @@ describe('AgentHub smoke tests', () => {
           message.metadata?.interruptSource === 'task_thread',
       ),
     ).toBe(true)
+
+    const [taskRoom] = await dbApi.db
+      .select()
+      .from(dbApi.rooms)
+      .where(dbApi.eq(dbApi.rooms.taskThreadId, threadId))
+      .limit(1)
+    expect(taskRoom).toBeTruthy()
+    const taskTimeline = await dbApi.db
+      .select()
+      .from(dbApi.timelineEvents)
+      .where(dbApi.eq(dbApi.timelineEvents.roomId, taskRoom!.id))
+    expect(
+      taskTimeline.some(
+        (event) =>
+          event.type === 'task.progress' &&
+          event.metadata?.kind === 'human_interrupt_task_update' &&
+          event.metadata?.coordinationSource === 'room-timeline' &&
+          event.metadata?.sourceMessageId === response.id,
+      ),
+    ).toBe(true)
   })
 
-  test('manager-interrupted active tasks are requeued and resumed inside the executor loop', async () => {
+  test('manager-interrupted active task rooms are requeued by RunController and resumed by WorkerRuntime', async () => {
     const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {
         name: 'Interrupt resume workspace',
@@ -2200,110 +2175,171 @@ describe('AgentHub smoke tests', () => {
       sessionId: childSessionId,
       status: 'active',
     })
+    await dbApi.db.insert(dbApi.workerInstances).values({
+      id: workerInstanceId,
+      workspaceId: full.workspace.id,
+      workspaceAgentId: builder.id,
+      runtimeFamily: 'worker',
+      runtimeBase: 'llm-fallback',
+      sandboxPolicy: 'workspace-write',
+      desiredState: 'running',
+      observedState: 'busy',
+      health: { source: 'smoke-human-interrupt' },
+    })
+    await dbApi.db.insert(dbApi.runtimeLeases).values({
+      workspaceId: full.workspace.id,
+      runId,
+      taskId,
+      workerInstanceId,
+      provider: 'local-workdir',
+      status: 'running',
+      cwd: process.cwd(),
+      homeDir: `test-home-${taskId}`,
+      configDir: `test-config-${taskId}`,
+      cacheDir: `test-cache-${taskId}`,
+      tmpDir: `test-tmp-${taskId}`,
+      dataDir: `test-data-${taskId}`,
+      metadata: { source: 'smoke-human-interrupt' },
+    })
 
-    const { OrchestratorEngine } = await import(
-      '../apps/server/src/services/orchestrator/orchestrator-engine'
-    )
+    const { roomService } = await import('../apps/server/src/services/rooms')
+    const taskRoom = await roomService.ensureRoomForTaskThread({
+      ownerId: 'default-user',
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      sessionId: childSessionId,
+      runId,
+      taskId,
+      taskThreadId,
+      title: 'Builder / Resume task',
+      workspaceAgentId: builder.id,
+      workerInstanceId,
+    })
+    await roomService.addWorkerParticipant(taskRoom.id, builder.id)
+    await roomService.appendTimelineEvent({
+      roomId: taskRoom.id,
+      senderType: 'manager',
+      type: 'task.assigned',
+      body: 'Do the work.',
+      metadata: {
+        kind: 'task-thread-prepared',
+        taskDescription: 'Do the work.',
+        taskId,
+        taskThreadId,
+        runId,
+      },
+    })
+
+    const { blackboard, Blackboard } = await import('../apps/server/src/services/blackboard')
+    const namespace = Blackboard.namespace(full.workspace.id, runId)
+    await blackboard.write({
+      namespace,
+      key: 'human_interrupts/human-msg-1',
+      value: {
+        kind: 'human_interrupt',
+        source: 'task_thread',
+        messageId: 'human-msg-1',
+        content: 'Use the updated requirement.',
+        taskThreadId,
+        childSessionId,
+        taskId,
+        workerInstanceId,
+        workspaceAgentId: builder.id,
+        createdAt: new Date().toISOString(),
+      },
+      agentId: builder.id,
+      taskId,
+      tags: ['human-interrupt', 'task-thread'],
+    })
+    const { runController } = await import('../apps/server/src/services/orchestrator/run-controller')
     const { listRunEvents } = await import('../apps/server/src/services/orchestrator/run-events')
 
-    const engine = new OrchestratorEngine() as any
-    let executeCount = 0
-    engine.executeTask = async () => {
-      executeCount += 1
-      if (executeCount === 1) {
-        return {
-          taskId,
-          agentId: builder.id,
-          agentName: 'Builder',
-          status: 'cancelled',
-          output: 'cancelled after manager interrupt',
-          artifacts: [],
-        }
-      }
-      return {
-        taskId,
-        agentId: builder.id,
-        agentName: 'Builder',
-        status: 'done',
-        output: 'rerun finished',
-        artifacts: [],
-      }
-    }
-
-    const plan = {
+    await runController.reconcile({
       runId,
-      title: 'Interrupt resume plan',
-      goal: 'Resume interrupted execution',
-      agents: [{ id: builder.id, name: 'Builder' }],
-      tasks: [
-        {
-          id: taskId,
-          title: 'Resume task',
-          description:
-            'Do the work.\n\n[Manager Update human-msg-1]\n\nHuman added or changed this requirement:\nUse the updated requirement.',
-          agentId: builder.id,
-          dependencies: [],
-        },
-      ],
-    } as any
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      actor: { id: builder.id, name: 'Builder' },
+    })
 
-    const childSessions = new Map([
-      [
-        taskId,
-        {
-          sessionId: childSessionId,
-          workspaceId: full.workspace.id,
-          projectPath: process.cwd(),
-          taskThreadId,
-          workerInstanceId,
-        },
-      ],
-    ])
-
-    const executor = engine.createTaskExecutor(
-      runId,
-      group.session.id,
-      full.workspace.id,
-      plan,
-      childSessions,
-      'default-user',
-    )
-
-    const result = await executor(plan.tasks[0], new AbortController().signal)
-
-    expect(executeCount).toBe(2)
-    expect(result.status).toBe('done')
-
-    const [taskRow] = await dbApi.db
+    let [taskRow] = await dbApi.db
       .select()
       .from(dbApi.workspaceTasks)
       .where(dbApi.eq(dbApi.workspaceTasks.id, taskId))
       .limit(1)
     expect(taskRow?.status).toBe('pending')
     expect(taskRow?.progressStatus).toBe('thread-prepared')
+    expect(taskRow?.description).toContain('Use the updated requirement.')
 
-    const [threadRow] = await dbApi.db
+    let [threadRow] = await dbApi.db
       .select()
       .from(dbApi.taskThreads)
       .where(dbApi.eq(dbApi.taskThreads.id, taskThreadId))
       .limit(1)
     expect(threadRow?.status).toBe('prepared')
 
+    const [staleLease] = await dbApi.db
+      .select()
+      .from(dbApi.runtimeLeases)
+      .where(dbApi.eq(dbApi.runtimeLeases.taskId, taskId))
+      .limit(1)
+    expect(staleLease?.status).toBe('stale')
+    const [idleWorker] = await dbApi.db
+      .select()
+      .from(dbApi.workerInstances)
+      .where(dbApi.eq(dbApi.workerInstances.id, workerInstanceId))
+      .limit(1)
+    expect(idleWorker?.observedState).toBe('idle')
+
     const events = await listRunEvents(runId)
     expect(
       events.some(
         (event) =>
           event.type === 'run.replanned' &&
-          (event.payload as any)?.strategy === 'human_interrupt_resume',
+          (event.payload as any)?.strategy === 'human_interrupt' &&
+          (event.payload as any)?.coordinationSource === 'room-timeline',
       ),
     ).toBe(true)
     expect(
       events.some(
         (event) =>
-          event.type === 'manager.next_action' &&
-          (event.payload as any)?.action === 'resuming_interrupted_task',
+          event.type === 'task.rework_requested' &&
+          (event.payload as any)?.taskThreadId === taskThreadId,
       ),
     ).toBe(true)
+
+    const { WorkerRuntimeService } = await import('../apps/server/src/services/worker-runtime')
+    const service = new WorkerRuntimeService()
+    const result = await service.rerunTaskRoom({
+      roomId: taskRoom.id,
+      ownerId: 'default-user',
+      workspaceAgentId: builder.id,
+      prompt: taskRow!.description,
+      runtime: new SmokeCompletingWorkerRuntime('rerun finished'),
+      source: 'smoke.human-interrupt-rerun',
+    })
+    expect(result.status).toBe('completed')
+
+    ;[taskRow] = await dbApi.db
+      .select()
+      .from(dbApi.workspaceTasks)
+      .where(dbApi.eq(dbApi.workspaceTasks.id, taskId))
+      .limit(1)
+    expect(taskRow?.status).toBe('done')
+    expect(taskRow?.progressStatus).toBe('completed')
+    ;[threadRow] = await dbApi.db
+      .select()
+      .from(dbApi.taskThreads)
+      .where(dbApi.eq(dbApi.taskThreads.id, taskThreadId))
+      .limit(1)
+    expect(threadRow?.status).toBe('completed')
+
+    const taskTimeline = await dbApi.db
+      .select()
+      .from(dbApi.timelineEvents)
+      .where(dbApi.eq(dbApi.timelineEvents.roomId, taskRoom.id))
+    expect(taskTimeline.some((event) => event.metadata?.kind === 'human_interrupt_task_update')).toBe(true)
+    expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.started')).toBe(true)
+    expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.completed')).toBe(true)
   })
 
   test('task.queued events persist dynamic tasks into the run ledger and plan', async () => {
@@ -2488,34 +2524,6 @@ describe('AgentHub smoke tests', () => {
     expect(parsed.title).toBe('坦克大战')
     expect(parsed.url).toBe('https://example.com/a//b')
     expect(parsed.tasks).toHaveLength(1)
-  })
-
-  test('ConflictResolver detects file conflicts across agents', async () => {
-    const { ConflictResolver } =
-      await import('../apps/server/src/services/orchestrator/conflict-resolver')
-    const resolver = new ConflictResolver()
-    const results = [
-      {
-        agentId: 'agent-1',
-        agentName: 'Coder A',
-        artifacts: [
-          { kind: 'diff', filePath: 'src/app.ts', diff: '+line A', fullContent: 'line A' },
-        ],
-      },
-      {
-        agentId: 'agent-2',
-        agentName: 'Coder B',
-        artifacts: [
-          { kind: 'diff', filePath: 'src/app.ts', diff: '+line B', fullContent: 'line B' },
-        ],
-      },
-    ]
-
-    const reports = await resolver.detectAndResolve(results)
-    expect(reports.length).toBe(1)
-    expect(reports[0]!.filePath).toBe('src/app.ts')
-    expect(reports[0]!.variants.length).toBe(2)
-    expect(reports[0]!.resolution).toBe('needs-human')
   })
 
   test('orchestrator run events are persisted and exposed in order', async () => {
@@ -2989,62 +2997,6 @@ describe('AgentHub smoke tests', () => {
           event.value?.phase === 'executing',
       ),
     ).toBe(true)
-  })
-
-  test('task result reports normalize artifacts and validation metadata', async () => {
-    const { buildTaskResultReport, taskResultReportEventPayload } = await import(
-      '../apps/server/src/services/orchestrator/orchestrator-engine'
-    )
-
-    const report = buildTaskResultReport({
-      runId: 'report-run',
-      task: {
-        id: 'report-task',
-        title: 'Report task',
-        description: '',
-        agentId: 'report-agent',
-        dependencies: [],
-        maxRetries: 0,
-      } as any,
-      agent: {
-        id: 'report-agent',
-        key: 'report-agent',
-        name: 'Reporter',
-        role: 'Coder',
-        runtimeType: 'llm',
-        capabilityTags: [],
-        toolPermissions: [],
-        sandboxPolicy: 'read-only',
-      } as any,
-      status: 'done' as any,
-      summary: {
-        filesCreated: ['apps/web/src/foo.ts'],
-        filesModified: [],
-        interfaces: [],
-        dependencies: [],
-        decisions: ['采用分层收口'],
-        brief: '已完成收口',
-      },
-      outputRef: { key: 'task_report-task_output', version: 2 } as any,
-      artifacts: [{ id: 'artifact-1', type: 'file', title: 'foo.ts', filePath: 'foo.ts' }],
-      validationResults: [
-        { command: 'bun test', status: 'passed', durationMs: 12, outputSummary: 'ok' } as any,
-      ],
-      contractResult: { status: 'passed', violations: [] } as any,
-      durationMs: 1234,
-      childSessionId: 'child-report',
-      blackboardKeys: ['task_report-task_output', 'artifacts/artifact-1'],
-    })
-
-    expect(report.schemaType).toBe('task_result_report')
-    expect(report.artifactCount).toBe(1)
-    expect(report.validationStatus).toBe('passed')
-    expect(report.blackboardKeys).toContain('task_report-task_output')
-
-    const payload = taskResultReportEventPayload(report)
-    expect(payload.taskResultReport).toBe(report)
-    expect(payload.artifactCount).toBe(1)
-    expect(payload.childSessionId).toBe('child-report')
   })
 
   test('run controller requeues running tasks for resume and resets task thread state', async () => {
@@ -3980,6 +3932,162 @@ describe('AgentHub smoke tests', () => {
     })
   })
 
+  test('manager loop final review completes terminal runs through room timeline resources', async () => {
+    const full = await json<{ workspace: { id: string } }>(
+      await postJson('/api/workspaces', {
+        name: 'Manager final review workspace',
+        goal: 'Summarize finished work through rooms',
+      }),
+    )
+    const group = await json<{ session: { id: string } }>(
+      await postJson(`/api/workspaces/${full.workspace.id}/group-session`, {}),
+    )
+    const worker = await createLlmWorkspaceAgent(full.workspace.id, {
+      name: 'Review Worker',
+      role: '执行并汇报',
+      roleType: 'coder',
+    })
+
+    const runId = crypto.randomUUID()
+    const taskId = crypto.randomUUID()
+    const childSessionId = crypto.randomUUID()
+    const taskThreadId = crypto.randomUUID()
+    const now = new Date()
+
+    await dbApi.db.insert(dbApi.sessions).values({
+      id: childSessionId,
+      title: 'Review Worker / Terminal Task',
+      type: 'direct',
+      ownerId: 'default-user',
+      workspaceId: full.workspace.id,
+      workspaceAgentId: worker.id,
+      metadata: {
+        kind: 'orchestrator-task',
+        groupSessionId: group.session.id,
+        orchestratorRunId: runId,
+        orchestratorTaskId: taskId,
+        taskThreadId,
+        taskThreadStatus: 'completed',
+      },
+    })
+    await dbApi.db.insert(dbApi.orchestratorRuns).values({
+      id: runId,
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      status: 'running',
+      plan: {
+        runId,
+        title: 'Manager final review run',
+        goal: 'Summarize finished work through rooms',
+        tasks: [{ id: taskId, title: '完成报告', agentId: worker.id }],
+      },
+    })
+    await dbApi.db.insert(dbApi.workspaceTasks).values({
+      id: taskId,
+      workspaceId: full.workspace.id,
+      agentId: worker.id,
+      title: '完成报告',
+      description: '整理最终报告。',
+      status: 'done',
+      sessionId: childSessionId,
+      orderIdx: 0,
+      runId,
+      progressPercent: 100,
+      progressStatus: '报告已完成',
+      completedAt: now,
+    })
+    await dbApi.db.insert(dbApi.taskThreads).values({
+      id: taskThreadId,
+      workspaceId: full.workspace.id,
+      runId,
+      taskId,
+      groupSessionId: group.session.id,
+      workspaceAgentId: worker.id,
+      sessionId: childSessionId,
+      status: 'completed',
+    })
+
+    const { roomService } = await import('../apps/server/src/services/rooms')
+    const taskRoomInput = await roomService.buildTaskThreadRoomInput(taskThreadId, 'default-user')
+    const taskRoom = await roomService.ensureRoomForTaskThread(taskRoomInput)
+    await roomService.addWorkerParticipant(taskRoom.id, worker.id)
+    await roomService.appendTimelineEvent({
+      roomId: taskRoom.id,
+      senderType: 'worker',
+      type: 'worker.message',
+      body: '我已完成报告，核心产物是 report.html。',
+      metadata: { taskId, taskThreadId, runId },
+    })
+    await dbApi.db.insert(dbApi.artifacts).values({
+      workspaceId: full.workspace.id,
+      runId,
+      taskId,
+      roomId: taskRoom.id,
+      taskThreadId,
+      workspaceAgentId: worker.id,
+      kind: 'report',
+      title: 'report.html',
+      relativePath: 'report.html',
+      objectKey: `workspaces/${full.workspace.id}/runs/${runId}/tasks/${taskId}/report.html`,
+      storagePath: 'C:/agenthub-test/report.html',
+      status: 'registered',
+    })
+
+    const { managerLoopStep } = await import('../apps/server/src/services/orchestrator/manager-loop')
+    const { listRunEvents } = await import('../apps/server/src/services/orchestrator/run-events')
+    const result = await managerLoopStep(runId)
+    expect(result.action).toBe('synthesize')
+    expect(result.completedRun).toBe(true)
+
+    const [runRow] = await dbApi.db
+      .select()
+      .from(dbApi.orchestratorRuns)
+      .where(dbApi.eq(dbApi.orchestratorRuns.id, runId))
+      .limit(1)
+    expect(runRow?.status).toBe('completed')
+    expect(runRow?.summaryMessageId).toBeTruthy()
+
+    const events = await listRunEvents(runId)
+    expect(events.map((event) => event.type)).toContain('run.synthesizing')
+    expect(events.map((event) => event.type)).toContain('run.completed')
+
+    const [groupRoom] = await dbApi.db
+      .select()
+      .from(dbApi.rooms)
+      .where(dbApi.eq(dbApi.rooms.sessionId, group.session.id))
+      .limit(1)
+    expect(groupRoom).toBeTruthy()
+    const groupTimeline = await dbApi.db
+      .select()
+      .from(dbApi.timelineEvents)
+      .where(dbApi.eq(dbApi.timelineEvents.roomId, groupRoom!.id))
+    expect(
+      groupTimeline.some(
+        (event) =>
+          event.type === 'manager.message' &&
+          event.metadata?.kind === 'manager-review-started' &&
+          event.metadata?.status === 'synthesizing',
+      ),
+    ).toBe(true)
+    expect(
+      groupTimeline.some(
+        (event) =>
+          event.type === 'manager.message' &&
+          event.metadata?.kind === 'manager-final-review' &&
+          event.body.includes('Manager 最终复盘') &&
+          event.body.includes('report.html'),
+      ),
+    ).toBe(true)
+
+    const [summaryMessage] = await dbApi.db
+      .select()
+      .from(dbApi.messages)
+      .where(dbApi.eq(dbApi.messages.id, runRow!.summaryMessageId!))
+      .limit(1)
+    expect(summaryMessage?.content).toContain('Manager 最终复盘')
+    expect(summaryMessage?.content).toContain('没有调用旧 OrchestratorEngine')
+  })
+
   test('orchestrator run can be cancelled and marks unfinished tasks', async () => {
     const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {
@@ -4239,7 +4347,7 @@ describe('AgentHub smoke tests', () => {
     expect(updatedPlan?.progressLedger?.replanHistory[0]?.strategy).toBe('local_replan')
   })
 
-  test('retry task re-enters run execution lifecycle and records retry events', async () => {
+  test('retry task re-enters run execution lifecycle through task room WorkerRuntime', async () => {
     const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {
         name: 'Retry lifecycle workspace',
@@ -4257,6 +4365,9 @@ describe('AgentHub smoke tests', () => {
 
     const runId = crypto.randomUUID()
     const taskId = 'retry-task-1'
+    const childSessionId = crypto.randomUUID()
+    const taskThreadId = crypto.randomUUID()
+    const workerInstanceId = crypto.randomUUID()
     const { initializeRunLedger } =
       await import('../apps/server/src/services/orchestrator/run-ledger')
     await dbApi.db.insert(dbApi.orchestratorRuns).values({
@@ -4281,64 +4392,132 @@ describe('AgentHub smoke tests', () => {
         ],
       } as any) as unknown as Record<string, unknown>,
     })
+    await dbApi.db.insert(dbApi.sessions).values({
+      id: childSessionId,
+      title: 'Retry Agent / Retry target',
+      type: 'direct',
+      ownerId: 'default-user',
+      workspaceId: full.workspace.id,
+      workspaceAgentId: retryAgent.id,
+      metadata: {
+        kind: 'orchestrator-task',
+        orchestratorRunId: runId,
+        orchestratorTaskId: taskId,
+        groupSessionId: group.session.id,
+        taskThreadId,
+        workspaceAgentId: retryAgent.id,
+        workerInstanceId,
+        taskThreadStatus: 'failed',
+      },
+    })
     await dbApi.db.insert(dbApi.workspaceTasks).values({
       id: taskId,
       workspaceId: full.workspace.id,
       agentId: retryAgent.id,
       title: 'Retry target',
-      description: 'This retry will fail immediately because the plan omits the assigned agent.',
+      description: 'Retry this task through the task room WorkerRuntime.',
       status: 'failed',
       orderIdx: 0,
       runId,
-      sessionId: null,
+      sessionId: childSessionId,
     })
-
-    const { OrchestratorEngine } = await import(
-      '../apps/server/src/services/orchestrator/orchestrator-engine'
-    )
-    const { listRunEvents } = await import('../apps/server/src/services/orchestrator/run-events')
-    const engine = new OrchestratorEngine()
-    const result = await engine.retryTask({
-      runId,
-      groupSessionId: group.session.id,
+    await dbApi.db.insert(dbApi.workerInstances).values({
+      id: workerInstanceId,
       workspaceId: full.workspace.id,
-      run: {
-        runId,
-        workspaceId: full.workspace.id,
-        groupSessionId: group.session.id,
-      },
-      task: {
-        id: taskId,
-        agentId: retryAgent.id,
-        title: 'Retry target',
-        description: 'This retry will fail immediately because the plan omits the assigned agent.',
-        dependencies: [],
-        maxRetries: 0,
-      } as any,
-      childSessions: new Map(),
+      workspaceAgentId: retryAgent.id,
+      runtimeFamily: 'worker',
+      runtimeBase: 'llm-fallback',
+      sandboxPolicy: 'workspace-write',
+      desiredState: 'running',
+      observedState: 'failed',
+      health: { source: 'smoke-retry' },
+    })
+    await dbApi.db.insert(dbApi.taskThreads).values({
+      id: taskThreadId,
+      workspaceId: full.workspace.id,
+      runId,
+      taskId,
+      groupSessionId: group.session.id,
+      workspaceAgentId: retryAgent.id,
+      workerInstanceId,
+      sessionId: childSessionId,
+      status: 'failed',
+    })
+    await dbApi.db.insert(dbApi.runtimeLeases).values({
+      workspaceId: full.workspace.id,
+      runId,
+      taskId,
+      workerInstanceId,
+      provider: 'local-workdir',
+      status: 'failed',
+      cwd: process.cwd(),
+      homeDir: `test-home-${taskId}`,
+      configDir: `test-config-${taskId}`,
+      cacheDir: `test-cache-${taskId}`,
+      tmpDir: `test-tmp-${taskId}`,
+      dataDir: `test-data-${taskId}`,
+      metadata: { source: 'smoke-retry' },
     })
 
-    expect(result.status).toBe('failed')
-    expect(result.output).toContain(retryAgent.id)
+    const { roomService } = await import('../apps/server/src/services/rooms')
+    const taskRoom = await roomService.ensureRoomForTaskThread({
+      ownerId: 'default-user',
+      workspaceId: full.workspace.id,
+      groupSessionId: group.session.id,
+      sessionId: childSessionId,
+      runId,
+      taskId,
+      taskThreadId,
+      title: 'Retry Agent / Retry target',
+      workspaceAgentId: retryAgent.id,
+      workerInstanceId,
+    })
+    await roomService.addWorkerParticipant(taskRoom.id, retryAgent.id)
+    await roomService.appendTimelineEvent({
+      roomId: taskRoom.id,
+      senderType: 'manager',
+      type: 'task.assigned',
+      body: 'Retry this task through the task room WorkerRuntime.',
+      metadata: {
+        kind: 'task-thread-prepared',
+        taskDescription: 'Retry this task through the task room WorkerRuntime.',
+        taskId,
+        taskThreadId,
+        runId,
+      },
+    })
+
+    const { listRunEvents } = await import('../apps/server/src/services/orchestrator/run-events')
+    const retryResponse = await json<{
+      ok: boolean
+      result: { status: string; appendedEventIds: string[] }
+    }>(await postJson(`/api/orchestrator-runs/${runId}/retry-task/${taskId}`, {}))
+
+    expect(retryResponse.ok).toBe(true)
+    expect(retryResponse.result.status).toBe('completed')
+    expect(retryResponse.result.appendedEventIds.length).toBeGreaterThan(0)
 
     const [runRow] = await dbApi.db
       .select()
       .from(dbApi.orchestratorRuns)
       .where(dbApi.eq(dbApi.orchestratorRuns.id, runId))
       .limit(1)
-    expect(runRow?.status).toBe('failed')
+    expect(runRow?.status).toBe('running')
 
-    const plan = runRow?.plan as {
-      progressLedger?: {
-        status?: string
-        pendingTaskIds?: string[]
-        failedTaskIds?: string[]
-        retryHistory?: Array<{ taskId?: string; reason?: string }>
-      }
-    } | null
-    expect(plan?.progressLedger?.status).toBe('failed')
-    expect(plan?.progressLedger?.failedTaskIds).toContain(taskId)
-    expect(plan?.progressLedger?.retryHistory?.some((entry) => entry.taskId === taskId)).toBe(true)
+    const [taskRow] = await dbApi.db
+      .select()
+      .from(dbApi.workspaceTasks)
+      .where(dbApi.eq(dbApi.workspaceTasks.id, taskId))
+      .limit(1)
+    expect(taskRow?.status).toBe('done')
+    expect(taskRow?.progressStatus).toBe('completed')
+
+    const [threadRow] = await dbApi.db
+      .select()
+      .from(dbApi.taskThreads)
+      .where(dbApi.eq(dbApi.taskThreads.id, taskThreadId))
+      .limit(1)
+    expect(threadRow?.status).toBe('completed')
 
     const events = await listRunEvents(runId)
     expect(events.map((event) => event.type)).toContain('task.retrying')
@@ -4349,7 +4528,14 @@ describe('AgentHub smoke tests', () => {
           (event.payload as { action?: string } | null)?.action === 'executing',
       ),
     ).toBe(true)
-    expect(events.map((event) => event.type)).toContain('run.failed')
+    expect(events.map((event) => event.type)).toContain('task.completed')
+
+    const taskTimeline = await dbApi.db
+      .select()
+      .from(dbApi.timelineEvents)
+      .where(dbApi.eq(dbApi.timelineEvents.roomId, taskRoom.id))
+    expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.started')).toBe(true)
+    expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.completed')).toBe(true)
   })
 
   test('typed blackboard entries are validated and exposed through run detail API', async () => {
@@ -4611,3 +4797,24 @@ describe('AgentHub smoke tests', () => {
     expect(afterCleanup).not.toBe(0)
   }, 60_000)
 })
+
+class SmokeCompletingWorkerRuntime implements WorkerRuntime {
+  readonly runtimeType = 'llm' as const
+
+  constructor(private readonly finalMessage: string) {}
+
+  async *executeTask(
+    context: WorkerRuntimeContext,
+  ): AsyncGenerator<WorkerRuntimeEvent, WorkerRuntimeResult, unknown> {
+    yield {
+      type: 'progress',
+      message: `WorkerRuntime received task room prompt: ${context.prompt.slice(0, 80)}`,
+      progressPercent: 50,
+    }
+    return {
+      runtimeType: this.runtimeType,
+      status: 'completed',
+      message: this.finalMessage,
+    }
+  }
+}

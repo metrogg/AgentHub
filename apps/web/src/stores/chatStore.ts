@@ -7,11 +7,15 @@ import {
   type OrchestratorRunListItem,
   type OrchestratorRunTaskBoardSnapshot,
   type QuotedMessagePreview,
+  type Room,
+  type RoomParticipant,
   type Session,
+  type TimelineEvent,
   type Workspace,
   type WorkspaceAgent,
   type WorkspaceFull,
 } from '../lib/api'
+import { projectRoomTimeline, type RoomTimelineProjection } from '../lib/roomTimeline'
 import { wsClient, type WSEvent } from '../lib/ws'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { WsEvent, MessageType, SessionType, SenderType } from '@agenthub/shared'
@@ -103,6 +107,10 @@ function upsertMessage(messages: Message[], message: Message): Message[] {
       ? messages.map((item) => (item.id === message.id ? message : item))
       : [...messages, message],
   )
+}
+
+function mergeMessages(messages: Message[], incoming: Message[]): Message[] {
+  return incoming.reduce((items, message) => upsertMessage(items, message), messages)
 }
 
 function createQuotedMessagePreview(
@@ -244,6 +252,7 @@ function buildOptimisticOrchestratorTaskSession(
   const assignedWorkspaceAgentId =
     task.taskThreadStatus === 'assigned' ||
     task.taskThreadStatus === 'active' ||
+    task.taskThreadStatus === 'waiting_for_human' ||
     task.taskThreadStatus === 'completed' ||
     task.taskThreadStatus === 'failed' ||
     task.taskThreadStatus === 'cancelled' ||
@@ -283,9 +292,9 @@ interface AgentTab {
   agentId: string
   agentName: string
   taskTitle: string
-  status: 'pending' | 'assigned' | 'running' | 'done' | 'failed'
+  status: 'pending' | 'assigned' | 'running' | 'waiting' | 'done' | 'failed'
   childSessionId: string | null
-  taskThreadStatus?: 'prepared' | 'assigned' | 'active' | 'completed' | 'failed' | 'cancelled' | null
+  taskThreadStatus?: 'prepared' | 'assigned' | 'active' | 'waiting_for_human' | 'completed' | 'failed' | 'cancelled' | null
   workerInstanceId?: string | null
   runtimeLeaseId?: string | null
   progress?: number
@@ -307,7 +316,7 @@ export interface TaskBoardTaskPanelProjection extends TaskBoardTask {
   artifactCountResolved: number
   hasResultLine: boolean
   progressTone: 'blue' | 'red' | 'yellow' | 'green'
-  statusTone: 'running' | 'failed' | 'default'
+  statusTone: 'running' | 'waiting' | 'failed' | 'default'
 }
 
 export interface TaskBoardPhasePanelProjection {
@@ -344,6 +353,11 @@ interface TaskBoardArtifact {
   sourcePath?: string
   handoffPath?: string
   handoffRelativePath?: string
+  roomId?: string | null
+  storageProvider?: string
+  bucket?: string
+  objectKey?: string
+  storagePath?: string
   artifactKind?: string
   kind?: string
   type?: string
@@ -404,7 +418,7 @@ interface TaskBoardTask {
   dependencies: string[]
   childSessionId?: string | null
   taskThreadId?: string | null
-  taskThreadStatus?: 'prepared' | 'assigned' | 'active' | 'completed' | 'failed' | 'cancelled' | null
+  taskThreadStatus?: 'prepared' | 'assigned' | 'active' | 'waiting_for_human' | 'completed' | 'failed' | 'cancelled' | null
   workerInstanceId?: string | null
   runtimeLeaseId?: string | null
   sharedTaskRelativeRoot?: string | null
@@ -432,6 +446,7 @@ function normalizeTaskStatusFromTaskThread(value: unknown): TaskBoardTask['statu
   if (value === 'prepared') return 'pending'
   if (value === 'assigned') return 'assigned'
   if (value === 'active') return 'running'
+  if (value === 'waiting_for_human') return 'blocked'
   if (value === 'completed') return 'done'
   if (value === 'failed' || value === 'cancelled') return value
   return null
@@ -444,6 +459,7 @@ function normalizeTaskThreadStatus(
     value === 'prepared' ||
     value === 'assigned' ||
     value === 'active' ||
+    value === 'waiting_for_human' ||
     value === 'completed' ||
     value === 'failed' ||
     value === 'cancelled'
@@ -456,7 +472,8 @@ function normalizeTaskThreadStatus(
 function deriveTaskThreadStatus(task: Pick<TaskBoardTask, 'taskThreadStatus' | 'status'>) {
   if (task.taskThreadStatus) return task.taskThreadStatus
   if (task.status === 'assigned') return 'assigned'
-  if (task.status === 'running' || task.status === 'blocked') return 'active'
+  if (task.status === 'blocked') return 'waiting_for_human'
+  if (task.status === 'running') return 'active'
   if (task.status === 'done') return 'completed'
   if (task.status === 'failed' || task.status === 'cancelled') return task.status
   return 'prepared'
@@ -810,9 +827,11 @@ function buildRunResourceTaskEntries(
                 ? 'running'
                 : taskThreadStatus === 'completed'
                   ? 'done'
-                  : taskThreadStatus === 'failed'
-                    ? 'failed'
-                    : boardTask?.status ?? 'pending',
+                  : taskThreadStatus === 'waiting_for_human'
+                    ? 'blocked'
+                    : taskThreadStatus === 'failed'
+                      ? 'failed'
+                      : boardTask?.status ?? 'pending',
         ),
         progress: boardTask?.progress,
         progressStatus: boardTask?.progressStatus,
@@ -864,7 +883,7 @@ function agentTabsFromRunSnapshot(
 function agentTabStatusFromTaskStatus(status: TaskBoardTask['status']): AgentTab['status'] {
   if (status === 'assigned') return 'assigned'
   if (status === 'running') return 'running'
-  if (status === 'blocked') return 'running'
+  if (status === 'blocked') return 'waiting'
   if (status === 'done') return 'done'
   if (status === 'failed') return 'failed'
   return 'pending'
@@ -939,6 +958,429 @@ async function loadTaskBoardSnapshotForSession(session: Session): Promise<TaskBo
   }
 }
 
+interface AgUiEventPayload {
+  type?: string
+  name?: string
+  value?: unknown
+  runId?: string
+  threadId?: string
+  stepName?: string
+  message?: string
+  code?: string
+  result?: unknown
+}
+
+function clearRuntimeActivity(): RuntimeActivityProjection {
+  return {
+    agentTyping: false,
+    agentActivity: null,
+  }
+}
+
+function buildRuntimeActivity(
+  sessionId: string,
+  input: {
+    agentId?: string | undefined
+    agentName?: string | undefined
+    phase?: string | undefined
+  },
+): RuntimeActivityProjection {
+  return {
+    agentTyping: true,
+    agentActivity: {
+      sessionId,
+      agentId: input.agentId,
+      agentName: input.agentName,
+      phase: input.phase,
+      startedAt: new Date().toISOString(),
+    },
+  }
+}
+
+function buildReplyingRuntimeProjection(
+  sessionId: string,
+  input: {
+    agentId?: string | undefined
+    agentName?: string | undefined
+    phase?: string | undefined
+  },
+): LiveRuntimeProjection {
+  const activity = buildRuntimeActivity(sessionId, input)
+  return {
+    ...activity,
+    streamingMessage: null,
+    streamingCodeAgentRun: null,
+  }
+}
+
+function clearLiveRuntimeProjection(): LiveRuntimeProjection {
+  return {
+    ...clearRuntimeActivity(),
+    streamingMessage: null,
+    streamingCodeAgentRun: null,
+  }
+}
+
+function deriveRuntimeActivityFromTaskBoard(
+  taskBoard: NonNullable<ChatState['taskBoard']>,
+): RuntimeActivityProjection {
+  const runningTask = taskBoard.tasks.find(
+    (task) => task.status === 'running' || task.status === 'blocked',
+  )
+  if (runningTask) {
+    return buildRuntimeActivity(taskBoard.sessionId, {
+      agentId: runningTask.agentId || undefined,
+      agentName: runningTask.agentName || undefined,
+      phase: 'executing',
+    })
+  }
+
+  if (taskBoard.status === 'planning') {
+    return buildRuntimeActivity(taskBoard.sessionId, {
+      agentName: 'Orchestrator',
+      phase: 'planning',
+    })
+  }
+
+  if (taskBoard.status === 'synthesizing') {
+    return buildRuntimeActivity(taskBoard.sessionId, {
+      agentName: 'Orchestrator',
+      phase: 'synthesizing',
+    })
+  }
+
+  return clearRuntimeActivity()
+}
+
+function runtimeActivityFromSnapshot(input: {
+  taskBoard: NonNullable<ChatState['taskBoard']>
+  agUiEvents: AgUiEventPayload[]
+  serverRuntimeActivity?: OrchestratorRunListItem['runtimeActivitySnapshot']
+}): RuntimeActivityProjection {
+  const { taskBoard, agUiEvents, serverRuntimeActivity } = input
+  if (serverRuntimeActivity) {
+    return {
+      agentTyping: serverRuntimeActivity.agentTyping,
+      agentActivity: serverRuntimeActivity.agentActivity
+        ? {
+            sessionId: serverRuntimeActivity.agentActivity.sessionId,
+            agentId: serverRuntimeActivity.agentActivity.agentId ?? undefined,
+            agentName: serverRuntimeActivity.agentActivity.agentName ?? undefined,
+            phase: serverRuntimeActivity.agentActivity.phase ?? undefined,
+            startedAt:
+              serverRuntimeActivity.agentActivity.startedAt ?? new Date().toISOString(),
+          }
+        : null,
+    }
+  }
+  if (!agUiEvents.length) return deriveRuntimeActivityFromTaskBoard(taskBoard)
+
+  const reduced = agUiEvents.reduce(
+    (current, event) => reduceRuntimeActivityProjection(current, event, taskBoard.sessionId),
+    clearRuntimeActivity(),
+  )
+
+  if (reduced.agentTyping || reduced.agentActivity) return reduced
+  return deriveRuntimeActivityFromTaskBoard(taskBoard)
+}
+
+function applyLiveMessageStreamProjection(
+  current: LiveRuntimeProjection,
+  pending: {
+    messageId: string
+    delta: string
+    agentId?: string
+    agentName?: string
+  },
+): LiveRuntimeProjection {
+  const streamingMessage =
+    current.streamingMessage?.id === pending.messageId
+      ? {
+          id: pending.messageId,
+          content: current.streamingMessage.content + pending.delta,
+          agentId: pending.agentId ?? current.streamingMessage.agentId,
+          agentName: pending.agentName ?? current.streamingMessage.agentName,
+        }
+      : {
+          id: pending.messageId,
+          content: pending.delta,
+          agentId: pending.agentId,
+          agentName: pending.agentName,
+        }
+
+  return {
+    ...clearRuntimeActivity(),
+    streamingMessage,
+    streamingCodeAgentRun: current.streamingCodeAgentRun,
+  }
+}
+
+function applyLiveMessageMetadataProjection(
+  current: LiveRuntimeProjection,
+  input: {
+    messageId: string
+    codeAgentRun: Partial<CodeAgentRunMetadata>
+    agentId?: string
+    agentName?: string
+  },
+): LiveRuntimeProjection {
+  const nextCodeAgentRun =
+    current.streamingCodeAgentRun && input.codeAgentRun
+      ? ({ ...current.streamingCodeAgentRun, ...input.codeAgentRun } as CodeAgentRunMetadata)
+      : (input.codeAgentRun as CodeAgentRunMetadata)
+
+  return {
+    ...clearRuntimeActivity(),
+    streamingMessage:
+      current.streamingMessage?.id === input.messageId
+        ? {
+            ...current.streamingMessage,
+            agentId: input.agentId ?? current.streamingMessage.agentId,
+            agentName: input.agentName ?? current.streamingMessage.agentName,
+          }
+        : {
+            id: input.messageId,
+            content: current.streamingMessage?.content ?? '',
+            agentId: input.agentId,
+            agentName: input.agentName,
+          },
+    streamingCodeAgentRun: nextCodeAgentRun,
+  }
+}
+
+function reduceRuntimeActivityProjection(
+  current: RuntimeActivityProjection,
+  event: AgUiEventPayload,
+  sessionId: string,
+): RuntimeActivityProjection {
+  if (event.type === 'RUN_STARTED') {
+    return buildRuntimeActivity(sessionId, { phase: 'planning' })
+  }
+
+  if (event.type === 'STEP_STARTED') {
+    return buildRuntimeActivity(sessionId, {
+      agentName: asString(event.stepName) ?? undefined,
+      phase: 'executing',
+    })
+  }
+
+  if (
+    event.type === 'STEP_FINISHED' ||
+    event.type === 'RUN_FINISHED' ||
+    event.type === 'RUN_ERROR'
+  ) {
+    return clearRuntimeActivity()
+  }
+
+  if (event.type !== 'CUSTOM') {
+    return current
+  }
+
+  const value = asRecord(event.value)
+  if (!value) return current
+
+  if (event.name === 'agenthub.plan.created') {
+    return buildRuntimeActivity(sessionId, { phase: 'planning' })
+  }
+
+  if (event.name === 'agenthub.task.status') {
+    const taskStatus = normalizeAgUiTaskStatus(asString(value.status))
+    const taskId = asString(value.taskId)
+    if (taskStatus === 'running') {
+      return buildRuntimeActivity(sessionId, {
+        agentId: asString(value.agentId) ?? undefined,
+        agentName: asString(value.agentName) ?? undefined,
+        phase: 'executing',
+      })
+    }
+    if (taskId && taskStatus) {
+      return clearRuntimeActivity()
+    }
+    return current
+  }
+
+  if (event.name === 'agenthub.run.status') {
+    const status = asString(value.status)
+    if (status === 'synthesizing') {
+      return buildRuntimeActivity(sessionId, { phase: 'synthesizing' })
+    }
+    if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+      return clearRuntimeActivity()
+    }
+    return current
+  }
+
+  if (event.name === 'agenthub.manager.status') {
+    const status = asString(value.status)
+    if (status === 'reviewed') {
+      return clearRuntimeActivity()
+    }
+    return buildRuntimeActivity(sessionId, {
+      agentId: asString(value.agentId) ?? asString(value.actorAgentId) ?? undefined,
+      agentName:
+        asString(value.agentName) ?? asString(value.actorName) ?? 'Orchestrator',
+      phase: asString(value.phase) ?? asString(value.action) ?? status ?? 'thinking',
+    })
+  }
+
+  if (event.name === 'agenthub.member_proposal.continue') {
+    const status = asString(value.status)
+    if (status === 'running') {
+      return buildRuntimeActivity(sessionId, {
+        agentName: 'Orchestrator',
+        phase: 'planning',
+      })
+    }
+    if (status === 'completed' || status === 'failed') {
+      return clearRuntimeActivity()
+    }
+  }
+
+  return current
+}
+
+export function runtimeActivityLabel(phase?: string | null) {
+  if (phase === 'planning') return '正在规划任务'
+  if (phase === 'thinking') return '正在理解目标'
+  if (phase === 'executing') return '正在执行任务'
+  if (phase === 'synthesizing') return '正在汇总结果'
+  if (phase === 'replying') return '正在回复'
+  return '正在处理'
+}
+
+export function describeRuntimeActivity(activity: AgentActivity | null | undefined) {
+  if (!activity) return null
+  return {
+    agentName: activity.agentName ?? 'Agent',
+    phase: activity.phase,
+    label: runtimeActivityLabel(activity.phase),
+  }
+}
+
+function runStatusDetailLabel(status: NonNullable<ChatState['taskBoard']>['status']) {
+  if (status === 'planning') return '规划失败'
+  if (status === 'synthesizing') return '汇总中断'
+  if (status === 'running') return '运行中断'
+  if (status === 'failed') return '运行失败'
+  if (status === 'cancelled') return '已停止'
+  if (status === 'completed') return '已完成'
+  return status
+}
+
+export function buildHeaderAgentStatusProjection(input: {
+  sessionId: string | null | undefined
+  taskBoard: ChatState['taskBoard']
+  agentTabs: AgentTab[]
+  agentTyping: boolean
+  agentActivity: AgentActivity | null
+  streamingMessage: ChatState['streamingMessage']
+  streamingCodeAgentRun: CodeAgentRunMetadata | null
+}): HeaderAgentStatusProjection {
+  const {
+    sessionId,
+    taskBoard,
+    agentTabs,
+    agentTyping,
+    agentActivity,
+    streamingMessage,
+    streamingCodeAgentRun,
+  } = input
+
+  if (streamingCodeAgentRun?.status === 'running') {
+    return {
+      label: '工作中',
+      detail: codeAgentRuntimeLabel(streamingCodeAgentRun.runtime),
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  if (streamingMessage) {
+    return {
+      label: '工作中',
+      detail: streamingMessage.agentName ?? '正在输出',
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  if (agentTyping) {
+    const phase = agentActivity?.phase ?? 'replying'
+    if (phase === 'thinking' || phase === 'planning') {
+      return {
+        label: phase === 'planning' ? '规划中' : '思考中',
+        detail: agentActivity?.agentName ?? 'Orchestrator',
+        tone: 'thinking',
+        live: true,
+      }
+    }
+    if (phase === 'synthesizing') {
+      return {
+        label: '汇总中',
+        detail: agentActivity?.agentName ?? 'Synthesizer',
+        tone: 'synthesizing',
+        live: true,
+      }
+    }
+    return {
+      label: '工作中',
+      detail: agentActivity?.agentName ?? '正在处理',
+      tone: 'working',
+      live: true,
+    }
+  }
+
+  const currentTask =
+    sessionId && taskBoard
+      ? taskBoard.tasks.find((task) => task.childSessionId === sessionId) ??
+        taskBoard.tasks.find((task) => task.status === 'running' || task.status === 'blocked') ??
+        null
+      : null
+  const currentTab =
+    sessionId && agentTabs.length
+      ? agentTabs.find((tab) => tab.childSessionId === sessionId) ??
+        agentTabs.find((tab) => tab.status === 'running' || tab.status === 'waiting') ??
+        null
+      : null
+
+  if (
+    currentTask?.status === 'running' ||
+    currentTask?.status === 'blocked' ||
+    currentTab?.status === 'running' ||
+    currentTab?.status === 'waiting'
+  ) {
+    const waiting = currentTask?.status === 'blocked' || currentTab?.status === 'waiting'
+    return {
+      label: waiting ? '等待补充' : '工作中',
+      detail: currentTask?.agentName ?? currentTab?.agentName ?? 'Agent',
+      tone: waiting ? 'warning' : 'working',
+      live: true,
+    }
+  }
+
+  if (taskBoard && sessionId === taskBoard.sessionId) {
+    if (taskBoard.status === 'planning') {
+      return { label: '规划中', detail: 'Orchestrator', tone: 'thinking', live: true }
+    }
+    if (taskBoard.status === 'synthesizing') {
+      return { label: '汇总中', detail: 'Synthesizer', tone: 'synthesizing', live: true }
+    }
+    if (taskBoard.status === 'running') {
+      return { label: '工作中', detail: '多 Agent 协作', tone: 'working', live: true }
+    }
+    if (taskBoard.status === 'failed' || taskBoard.status === 'cancelled') {
+      return {
+        label: taskBoard.status === 'failed' ? '需关注' : '已停止',
+        detail: runStatusDetailLabel(taskBoard.status),
+        tone: 'warning',
+        live: false,
+      }
+    }
+  }
+
+  return { label: '空闲中', detail: '等待新任务', tone: 'idle', live: false }
+}
+
 export function buildControlPanelProjection(input: {
   taskBoard: ChatState['taskBoard']
   agentTabs: AgentTab[]
@@ -958,7 +1400,7 @@ export function buildControlPanelProjection(input: {
       const matchesAgent =
         (executingAgentId && tab.agentId === executingAgentId) ||
         (executingAgentName && tab.agentName === executingAgentName)
-      if (!matchesAgent || tab.status === 'done' || tab.status === 'failed') return tab
+      if (!matchesAgent || tab.status === 'done' || tab.status === 'failed' || tab.status === 'waiting') return tab
       return {
         ...tab,
         status: 'running',
@@ -968,7 +1410,7 @@ export function buildControlPanelProjection(input: {
 
   const activeAgentIds = new Set(
     tabs
-      .filter((tab) => tab.status === 'assigned' || tab.status === 'running')
+      .filter((tab) => tab.status === 'assigned' || tab.status === 'running' || tab.status === 'waiting')
       .map((tab) => tab.agentId),
   )
 
@@ -1009,7 +1451,9 @@ export function buildTaskBoardPanelProjection(
                 ? 'yellow'
                 : 'green'
         const statusTone: TaskBoardTaskPanelProjection['statusTone'] =
-          task.status === 'running' || task.status === 'blocked'
+          task.status === 'blocked'
+            ? 'waiting'
+            : task.status === 'running'
             ? 'running'
             : task.status === 'failed'
               ? 'failed'
@@ -1078,6 +1522,64 @@ async function loadAgUiReplayEvents(runId: string): Promise<AgUiEventPayload[]> 
   }
 }
 
+interface RoomTimelineWsPayload {
+  sessionId?: string
+  room?: Room
+  event?: TimelineEvent
+  participants?: RoomParticipant[]
+}
+
+async function loadRoomTimelineProjectionForSession(
+  session: Session,
+): Promise<RoomTimelineProjection | null> {
+  try {
+    const room = await ensureRoomForSessionKind(session)
+    const [{ items: participants }, { items: timeline }] = await Promise.all([
+      api.listRoomParticipants(room.id),
+      api.listRoomTimeline(room.id, { limit: 300 }),
+    ])
+    return projectRoomTimeline({
+      room,
+      participants,
+      timeline,
+      sessionId: session.id,
+    })
+  } catch {
+    return null
+  }
+}
+
+async function ensureRoomForSessionKind(session: Session): Promise<Room> {
+  const taskThreadId =
+    session.metadata?.kind === 'orchestrator-task' &&
+    typeof session.metadata.taskThreadId === 'string' &&
+    session.metadata.taskThreadId.trim()
+      ? session.metadata.taskThreadId
+      : null
+  if (taskThreadId) return api.ensureTaskThreadRoom(taskThreadId)
+  return api.ensureSessionRoom(session.id)
+}
+
+function projectRoomTimelineWsPayload(
+  payload: RoomTimelineWsPayload,
+  fallbackSessionId: string | null,
+) {
+  const room = payload.room
+  const event = payload.event
+  if (!room || !event) return null
+  const sessionId = room.sessionId ?? payload.sessionId ?? fallbackSessionId
+  if (!sessionId) return null
+  return {
+    sessionId,
+    projection: projectRoomTimeline({
+      room,
+      participants: payload.participants ?? [],
+      timeline: [event],
+      sessionId,
+    }),
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -1141,6 +1643,11 @@ function readTaskBoardArtifacts(value: unknown): TaskBoardArtifact[] {
       sourcePath: asString(item.sourcePath),
       handoffPath: asString(item.handoffPath),
       handoffRelativePath: asString(item.handoffRelativePath),
+      roomId: asString(item.roomId) ?? null,
+      storageProvider: asString(item.storageProvider),
+      bucket: asString(item.bucket),
+      objectKey: asString(item.objectKey),
+      storagePath: asString(item.storagePath),
       artifactKind: asString(item.artifactKind),
       kind: asString(item.kind),
       type: asString(item.type),
@@ -1163,6 +1670,8 @@ function artifactDisplayPath(artifact: TaskBoardArtifact) {
     artifact.handoffRelativePath ??
     artifact.handoffPath ??
     artifact.sourcePath ??
+    artifact.storagePath ??
+    artifact.objectKey ??
     artifact.path ??
     null
   )
@@ -1276,7 +1785,13 @@ function mergeTaskArtifacts(
   const seen = new Set<string>()
   for (const artifact of [...(existing ?? []), ...incoming]) {
     const key =
-      artifact.artifactId ?? artifact.id ?? artifact.filePath ?? artifact.url ?? artifact.title
+      artifact.artifactId ??
+      artifact.id ??
+      artifact.objectKey ??
+      artifact.storagePath ??
+      artifact.filePath ??
+      artifact.url ??
+      artifact.title
     if (!key || seen.has(key)) continue
     seen.add(key)
     merged.push(artifact)
@@ -1300,6 +1815,11 @@ function artifactFromRunPayload(payload: Record<string, unknown>): TaskBoardArti
     sourcePath: asString(payload.sourcePath) ?? asString(artifact.sourcePath),
     handoffPath: asString(payload.handoffPath) ?? asString(artifact.handoffPath),
     handoffRelativePath: asString(payload.handoffRelativePath) ?? asString(artifact.handoffRelativePath),
+    roomId: asString(payload.roomId) ?? asString(artifact.roomId) ?? null,
+    storageProvider: asString(payload.storageProvider) ?? asString(artifact.storageProvider),
+    bucket: asString(payload.bucket) ?? asString(artifact.bucket),
+    objectKey: asString(payload.objectKey) ?? asString(artifact.objectKey),
+    storagePath: asString(payload.storagePath) ?? asString(artifact.storagePath),
     artifactKind: asString(payload.artifactKind),
     kind: asString(artifact.kind),
     type: asString(artifact.type),
@@ -1480,6 +2000,97 @@ function applyTaskBoardRunStatus(
   }
 }
 
+function ensureTaskBoardForTaskEvent(
+  taskBoard: ChatState['taskBoard'],
+  event: AgUiEventPayload,
+  currentSessionId: string,
+): ChatState['taskBoard'] {
+  if (taskBoard) return taskBoard
+  if (event.type !== 'CUSTOM') return taskBoard
+  if (event.name !== 'agenthub.task.status' && event.name !== 'agenthub.artifact.created') {
+    return taskBoard
+  }
+  const value = asRecord(event.value)
+  if (!value) return taskBoard
+  const taskId = asString(value.taskId)
+  const runId = asString(event.runId) ?? asString(value.runId)
+  if (!taskId || !runId) return taskBoard
+
+  const phaseId = asString(value.phaseId) ?? 'execution'
+  const taskTitle = asString(value.taskTitle) ?? asString(value.title) ?? taskId
+  const taskStatus =
+    normalizeAgUiTaskStatus(asString(value.status)) ??
+    normalizeTaskStatusFromTaskThread(asString(value.taskThreadStatus)) ??
+    'pending'
+  const taskThreadStatus =
+    normalizeTaskThreadStatus(value.taskThreadStatus) ??
+    normalizeTaskThreadStatus(value.threadStatus) ??
+    (taskStatus === 'assigned'
+      ? 'assigned'
+      : taskStatus === 'running'
+        ? 'active'
+        : taskStatus === 'blocked'
+          ? 'waiting_for_human'
+        : taskStatus === 'done'
+          ? 'completed'
+          : taskStatus === 'failed' || taskStatus === 'cancelled'
+            ? taskStatus
+            : null)
+  const task: TaskBoardTask = {
+    id: taskId,
+    phaseId,
+    title: taskTitle,
+    description: asString(value.taskDescription) ?? asString(value.description) ?? '',
+    agentId: asString(value.agentId) ?? taskId,
+    agentName: asString(value.agentName) ?? asString(value.workerName) ?? 'Agent',
+    taskType: asString(value.taskType),
+    status: taskStatus,
+    progress: asNumber(value.progressPercent),
+    progressStatus: asString(value.progressStatus),
+    dependencies: asStringArray(value.dependencies) ?? [],
+    childSessionId: asString(value.childSessionId) ?? asString(value.sessionId) ?? null,
+    taskThreadId: asString(value.taskThreadId) ?? null,
+    taskThreadStatus,
+    workerInstanceId: asString(value.workerInstanceId) ?? null,
+    runtimeLeaseId: asString(value.runtimeLeaseId) ?? null,
+    sharedTaskRelativeRoot: asString(value.sharedTaskRelativeRoot) ?? null,
+    sharedTaskSpecPath: asString(value.sharedTaskSpecPath) ?? null,
+    artifactCount: event.name === 'agenthub.artifact.created' ? 0 : asNumber(value.artifactCount),
+    artifacts: [],
+    executionConfig: readExecutionConfig(value.executionConfig),
+  }
+  return {
+    runId,
+    title: asString(value.runTitle) ?? asString(value.planTitle) ?? '协作任务',
+    goal: asString(value.goal) ?? asString(value.taskDescription) ?? taskTitle,
+    collaborationMode: 'room-timeline',
+    phases: [
+      {
+        id: phaseId,
+        title: phaseTitleFromId(phaseId),
+        purpose: phasePurposeFromId(phaseId),
+        taskIds: [taskId],
+        status:
+          task.status === 'assigned' || task.status === 'running' || task.status === 'blocked'
+            ? 'active'
+            : task.status === 'done' || task.status === 'failed' || task.status === 'cancelled'
+              ? 'completed'
+              : 'pending',
+      },
+    ],
+    tasks: [task],
+    status:
+      task.status === 'done'
+        ? 'completed'
+        : task.status === 'failed'
+          ? 'failed'
+          : task.status === 'cancelled'
+            ? 'cancelled'
+            : 'running',
+    sessionId: currentSessionId,
+  }
+}
+
 function applyAgUiTaskStatus(
   taskBoard: NonNullable<ChatState['taskBoard']>,
   value: Record<string, unknown>,
@@ -1503,6 +2114,8 @@ function applyAgUiTaskStatus(
       ? 'assigned'
       : status === 'running'
         ? 'active'
+        : status === 'blocked'
+          ? 'waiting_for_human'
         : status === 'done'
           ? 'completed'
           : status === 'failed' || status === 'cancelled'
@@ -1873,6 +2486,7 @@ function buildOptimisticOrchestratorTaskSessions(
     const assignedWorkspaceAgentId =
       task.taskThreadStatus === 'assigned' ||
       task.taskThreadStatus === 'active' ||
+      task.taskThreadStatus === 'waiting_for_human' ||
       task.taskThreadStatus === 'completed' ||
       task.taskThreadStatus === 'failed' ||
       task.taskThreadStatus === 'cancelled' ||
@@ -1949,6 +2563,7 @@ function mergeSessionsWithRunProjection(
     const assignedWorkspaceAgentId =
       entry.taskThreadStatus === 'assigned' ||
       entry.taskThreadStatus === 'active' ||
+      entry.taskThreadStatus === 'waiting_for_human' ||
       entry.taskThreadStatus === 'completed' ||
       entry.taskThreadStatus === 'failed' ||
       entry.taskThreadStatus === 'cancelled'
@@ -2062,6 +2677,7 @@ function applyAgUiEventToState(
 
   if (event.type === 'CUSTOM') {
     const value = asRecord(event.value)
+    nextTaskBoard = ensureTaskBoardForTaskEvent(nextTaskBoard, event, sessionId)
     if (value && event.name === 'agenthub.plan.created') {
       const previousRunId = nextTaskBoard?.runId
       nextTaskBoard = applyAgUiPlanCreated(nextTaskBoard, event, sessionId)
@@ -2381,9 +2997,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ])
       const normalizedItems = sortMessages(items)
       if (session.workspaceId) {
-        const [full, snapshot] = await Promise.all([
+        const [full, snapshot, roomProjection] = await Promise.all([
           api.getWorkspace(session.workspaceId),
           taskBoardSnapshot,
+          loadRoomTimelineProjectionForSession(session),
         ])
         const resolvedSnapshot =
           snapshot ?? (!keepTaskBoard ? await loadTaskBoardSnapshotForSession(session).catch(() => null) : null)
@@ -2393,9 +3010,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         if (get().currentSessionId !== sessionId) return
         const currentAgents = sessionWorkspaceAgents(session, full.agents)
-        const normalizedMessages = resolvedSnapshot
+        const snapshotMessages = resolvedSnapshot
           ? applyCanonicalArtifactsToSummaryMessages(normalizedItems, resolvedSnapshot.run)
           : normalizedItems
+        const normalizedMessages = roomProjection?.messages.length
+          ? mergeMessages(snapshotMessages, roomProjection.messages)
+          : snapshotMessages
         messageCache.set(sessionId, normalizedMessages)
         if (resolvedSnapshot) {
           wsClient.joinSessions(taskBoardSessionIds(resolvedSnapshot.taskBoard, sessionId))
@@ -2436,14 +3056,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ),
           )
         }
+        if (roomProjection?.events.length) {
+          set((state) =>
+            roomProjection.events.reduce(
+              (next, event) => applyAgUiEventToState(next, event, sessionId),
+              state,
+            ),
+          )
+          wsClient.joinSessions(taskBoardSessionIds(get().taskBoard, get().currentSessionId))
+        }
       } else {
-        const snapshot =
-          (await taskBoardSnapshot) ??
-          (!keepTaskBoard ? await loadTaskBoardSnapshotForSession(session).catch(() => null) : null)
+        const [snapshot, roomProjection] = await Promise.all([
+          taskBoardSnapshot.then((snapshot) =>
+            snapshot ?? (!keepTaskBoard ? loadTaskBoardSnapshotForSession(session).catch(() => null) : null),
+          ),
+          loadRoomTimelineProjectionForSession(session),
+        ])
         if (get().currentSessionId !== sessionId) return
-        const normalizedMessages = snapshot
+        const snapshotMessages = snapshot
           ? applyCanonicalArtifactsToSummaryMessages(normalizedItems, snapshot.run)
           : normalizedItems
+        const normalizedMessages = roomProjection?.messages.length
+          ? mergeMessages(snapshotMessages, roomProjection.messages)
+          : snapshotMessages
         messageCache.set(sessionId, normalizedMessages)
         if (snapshot) {
           wsClient.joinSessions(taskBoardSessionIds(snapshot.taskBoard, sessionId))
@@ -2483,6 +3118,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
               state,
             ),
           )
+        }
+        if (roomProjection?.events.length) {
+          set((state) =>
+            roomProjection.events.reduce(
+              (next, event) => applyAgUiEventToState(next, event, sessionId),
+              state,
+            ),
+          )
+          wsClient.joinSessions(taskBoardSessionIds(get().taskBoard, get().currentSessionId))
         }
       }
     } catch (error) {
@@ -2978,6 +3622,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
           messages: upsertMessage(s.messages, message),
           ...clearLiveRuntimeProjection(),
         }))
+        break
+      }
+      case WsEvent.RoomTimelineEvent: {
+        const projected = projectRoomTimelineWsPayload(
+          (e.payload ?? {}) as RoomTimelineWsPayload,
+          eventSessionId,
+        )
+        if (!projected) break
+        const projectedSessionId = projected.sessionId
+        const projectedMessages = projected.projection.messages
+        if (projectedMessages.length) {
+          updateCachedMessages(projectedSessionId, (messages) =>
+            mergeMessages(messages, projectedMessages),
+          )
+          if (projectedSessionId === sessionId) {
+            set((s) => ({
+              messages: mergeMessages(s.messages, projectedMessages),
+            }))
+          }
+        }
+        if (projected.projection.events.length) {
+          set((state) =>
+            projected.projection.events.reduce(
+              (next, event) => applyAgUiEventToState(next, event, sessionId),
+              state,
+            ),
+          )
+          wsClient.joinSessions(taskBoardSessionIds(get().taskBoard, get().currentSessionId))
+          if (
+            projected.projection.events.some((event) => agUiEventShouldRefreshSessions(event))
+          ) {
+            scheduleSessionRefresh(() => get().fetchSessions())
+          }
+        }
         break
       }
       case WsEvent.MessageCancelled: {

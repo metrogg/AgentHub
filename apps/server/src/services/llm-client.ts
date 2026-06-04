@@ -8,6 +8,7 @@ import type { FetchFunction } from '@ai-sdk/provider-utils'
 import { INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING } from '@agenthub/shared'
 import { env } from '../env'
 import { logger } from '../lib/logger'
+import { safeJsonParse, tryJsonParse } from '../lib/safe-json'
 
 export const DEFAULT_AGENT_INSTRUCTIONS =
   '你是 AgentHub Assistant，运行在多 Agent 协作平台中的 AI 协作者。请始终使用中文回复，结合当前对话上下文，给出清晰、实用的下一步。'
@@ -85,22 +86,14 @@ async function getSettingsMap(): Promise<Record<string, string>> {
 
 function parseCatalog(value?: string): ModelCatalogItem[] {
   if (!value) return []
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
+  const parsed = safeJsonParse<unknown>(value, [], 'llm-client.MODEL_CATALOG')
+  return Array.isArray(parsed) ? parsed : []
 }
 
 function parseAppSettings(value?: string): { debugMode?: boolean } {
   if (!value) return {}
-  try {
-    const parsed = JSON.parse(value)
-    return { debugMode: Boolean(parsed?.debugMode) }
-  } catch {
-    return {}
-  }
+  const parsed = safeJsonParse<Record<string, unknown>>(value, {}, 'llm-client.APP_SETTINGS')
+  return { debugMode: Boolean(parsed?.debugMode) }
 }
 
 function defaultDebugDir() {
@@ -250,16 +243,16 @@ function providerEnvApiKey(provider: string, baseUrl?: string): { value?: string
   if (direct) return { value: direct, source: directName }
 
   if (isAnthropicProvider(provider, baseUrl)) {
-    const value = readEnv('ANTHROPIC_API_KEY')
+    const value = clean(env.ANTHROPIC_API_KEY)
     return value ? { value, source: 'ANTHROPIC_API_KEY' } : {}
   }
 
   if (isOpenAiProvider(provider, baseUrl)) {
-    const openAiValue = readEnv('OPENAI_API_KEY')
+    const openAiValue = clean(env.OPENAI_API_KEY)
     if (openAiValue) return { value: openAiValue, source: 'OPENAI_API_KEY' }
   }
 
-  const generic = readEnv('LLM_API_KEY')
+  const generic = clean(env.LLM_API_KEY)
   return generic ? { value: generic, source: 'LLM_API_KEY' } : {}
 }
 
@@ -335,14 +328,13 @@ export async function resolveLlmRuntimeConfig(selectedModelId?: string): Promise
     logger.warn({ err: redactSensitive(error?.message || String(error)) }, 'Failed to load model settings')
   }
 
-  const provider = normalizeProvider(readEnv('LLM_PROVIDER') ?? env.LLM_PROVIDER)
-  const llmApiKey = readEnv('LLM_API_KEY')
+  const provider = normalizeProvider(env.LLM_PROVIDER)
   return withDebugSettings(normalizeConfig(
     {
-      apiKey: llmApiKey ?? undefined,
-      apiKeySource: llmApiKey ? 'LLM_API_KEY' : undefined,
-      baseUrl: readEnv('LLM_BASE_URL') ?? clean(env.LLM_BASE_URL),
-      model: readEnv('LLM_MODEL') ?? clean(env.LLM_MODEL),
+      apiKey: clean(env.LLM_API_KEY),
+      apiKeySource: clean(env.LLM_API_KEY) ? 'LLM_API_KEY' : undefined,
+      baseUrl: clean(env.LLM_BASE_URL),
+      model: clean(env.LLM_MODEL),
       provider,
     },
     'env'
@@ -658,11 +650,8 @@ function headersToRecord(headers: RequestInit['headers'] | undefined) {
 
 function redactRequestBody(body: RequestInit['body'] | null | undefined, apiKey: string | null) {
   if (typeof body !== 'string') return body ? '[non-string body]' : undefined
-  try {
-    return redactJson(JSON.parse(body), apiKey)
-  } catch {
-    return redactSensitive(body, [apiKey])
-  }
+  const parsed = tryJsonParse<unknown>(body, 'llm-client.debug.requestBody')
+  return parsed === null ? redactSensitive(body, [apiKey]) : redactJson(parsed, apiKey)
 }
 
 function redactJson(value: unknown, apiKey?: string | null): unknown {

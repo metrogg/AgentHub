@@ -7,6 +7,7 @@ import {
   orchestratorRuns,
   runtimeLeases,
   taskThreads,
+  workspaces,
   workerInstances,
   workspaceTasks,
 } from '@agenthub/db'
@@ -15,8 +16,10 @@ import { broadcastSessionEvent } from '../agent-runner'
 import { workerController } from './worker-controller'
 import { emitRunEvent } from './run-events'
 import { updateTaskThreadStatus } from './task-thread-service'
-import { markRuntimeLeaseStale, markWorkerInstanceState } from './worker-runtime-resources'
+import { runtimeLeaseController } from './runtime-lease-controller'
+import { markWorkerInstanceState } from './worker-runtime-resources'
 import { managerLoopStep } from './manager-loop'
+import { roomService } from '../rooms'
 
 export interface PatrolResult {
   checkedRuns: number
@@ -66,6 +69,13 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
     .limit(50)
 
   for (const run of activeRuns) {
+    const [workspace] = await db
+      .select({ ownerId: workspaces.ownerId })
+      .from(workspaces)
+      .where(eq(workspaces.id, run.workspaceId))
+      .limit(1)
+    const ownerId = workspace?.ownerId ?? null
+
     // Get all non-terminal tasks for this run
     const terminalStatuses = new Set(['done', 'failed', 'cancelled', 'skipped'])
     const activeTasks = await db
@@ -103,12 +113,13 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
     ]
 
     if (busyWorkerIds.length > 0) {
+      const busyWorkerIdSet = new Set(busyWorkerIds)
       const workers = await db
         .select()
         .from(workerInstances)
         .where(eq(workerInstances.observedState, 'busy'))
 
-      for (const worker of workers) {
+      for (const worker of workers.filter((candidate) => busyWorkerIdSet.has(candidate.id))) {
         checkedWorkers++
 
         // Reconcile worker health
@@ -120,9 +131,12 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
 
         if (reconcileResult.error) {
           staleWorkerCount++
+          const workerThread = threads.find((t) => t.workerInstanceId === worker.id)
           actions.push({
             kind: 'worker_failed',
             runId: run.id,
+            taskId: workerThread?.taskId ?? null,
+            threadId: workerThread?.id ?? null,
             workerInstanceId: worker.id,
             groupSessionId: run.groupSessionId,
             message: `Patrol detected unhealthy worker ${worker.id}: ${reconcileResult.error}`,
@@ -141,6 +155,22 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
               workerInstanceId: worker.id,
               runtimeBase: worker.runtimeBase,
               observedState: worker.observedState,
+            },
+          })
+          await appendPatrolRoomTimeline({
+            ownerId,
+            groupSessionId: run.groupSessionId,
+            runId: run.id,
+            taskId: workerThread?.taskId ?? null,
+            threadId: workerThread?.id ?? null,
+            workerInstanceId: worker.id,
+            kind: 'worker_failed',
+            severity: 'error',
+            body: `Manager 巡检发现 Worker ${worker.id} 异常：${reconcileResult.error}`,
+            metadata: {
+              reason: 'patrol_worker_unhealthy',
+              runtimeBase: worker.runtimeBase,
+              reconcilePhase: reconcileResult.phase,
             },
           })
         }
@@ -167,7 +197,7 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
             .limit(1)
 
           if (activeLease) {
-            await markRuntimeLeaseStale(activeLease.id, {
+            await runtimeLeaseController.markStale(activeLease.id, {
               error: message,
               metadata: { staleReason: 'patrol_heartbeat_lost', lastHeartbeatAgeMs: heartbeatAgeMs },
             })
@@ -221,6 +251,22 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
             groupSessionId: run.groupSessionId,
             message,
           })
+          await appendPatrolRoomTimeline({
+            ownerId,
+            groupSessionId: run.groupSessionId,
+            runId: run.id,
+            taskId: workerThread?.taskId ?? null,
+            threadId: workerThread?.id ?? null,
+            workerInstanceId: worker.id,
+            kind: 'worker_stale',
+            severity: 'error',
+            body: message,
+            metadata: {
+              reason: 'patrol_worker_stale',
+              runtimeBase: worker.runtimeBase,
+              heartbeatAgeMs,
+            },
+          })
         }
       }
     }
@@ -244,6 +290,22 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
         threadId: thread?.id ?? null,
         groupSessionId: run.groupSessionId,
         message,
+      })
+      await appendPatrolRoomTimeline({
+        ownerId,
+        groupSessionId: run.groupSessionId,
+        runId: run.id,
+        taskId: task.id,
+        threadId: thread?.id ?? null,
+        workerInstanceId: thread?.workerInstanceId ?? null,
+        kind: 'task_timeout',
+        severity: 'warning',
+        body: `Manager 正在检查任务 "${task.title}" 的进度：已经运行 ${Math.round(elapsedMs / 1000 / 60)} 分钟，尚未完成报告。`,
+        metadata: {
+          reason: 'patrol_task_timeout',
+          taskTitle: task.title,
+          elapsedMs,
+        },
       })
 
       // Emit a progress-check event in the group chat
@@ -335,4 +397,61 @@ export async function patrolAndLog(): Promise<PatrolResult> {
     )
   }
   return result
+}
+
+async function appendPatrolRoomTimeline(input: {
+  ownerId?: string | null
+  groupSessionId?: string | null
+  runId: string
+  taskId?: string | null
+  threadId?: string | null
+  workerInstanceId?: string | null
+  kind: 'worker_stale' | 'worker_failed' | 'task_timeout'
+  severity: 'warning' | 'error'
+  body: string
+  metadata?: Record<string, unknown>
+}) {
+  if (!input.ownerId) return
+  const metadata = {
+    kind: 'manager-patrol-check',
+    patrolKind: input.kind,
+    severity: input.severity,
+    runId: input.runId,
+    taskId: input.taskId ?? null,
+    threadId: input.threadId ?? null,
+    workerInstanceId: input.workerInstanceId ?? null,
+    coordinationSource: 'room-timeline',
+    ...(input.metadata ?? {}),
+  }
+
+  if (input.groupSessionId) {
+    try {
+      const groupRoom = await roomService.ensureRoomForSession(input.groupSessionId, input.ownerId)
+      await roomService.appendTimelineEvent({
+        roomId: groupRoom.id,
+        senderType: 'manager',
+        type: 'manager.message',
+        body: input.body,
+        metadata,
+      })
+    } catch {
+      // Patrol timeline writes are best-effort; RunEvent and legacy message remain as fallback.
+    }
+  }
+
+  if (input.threadId) {
+    try {
+      const taskRoomInput = await roomService.buildTaskThreadRoomInput(input.threadId, input.ownerId)
+      const taskRoom = await roomService.ensureRoomForTaskThread(taskRoomInput)
+      await roomService.appendTimelineEvent({
+        roomId: taskRoom.id,
+        senderType: 'manager',
+        type: 'task.progress',
+        body: input.body,
+        metadata,
+      })
+    } catch {
+      // Legacy or partially migrated tasks may not have task rooms yet.
+    }
+  }
 }

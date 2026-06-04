@@ -47,7 +47,7 @@ export interface AgentExecutionEnvelope {
     openaiBaseUrl?: string
     anthropicBaseUrl?: string
   }
-  /** 内部 Agent 间通信统一使用的 A2A message/send 信封 */
+  /** 可选 A2A task envelope，仅用于外部互操作或任务语义序列化；内部通信事实源是 Room timeline。 */
   a2a?: AgentHubA2AEnvelope
   /** 当前执行隔离 provider。默认是 Docker Sandboxes。 */
   sandboxProvider?: 'local-workdir' | 'docker-sandbox' | 'cloud'

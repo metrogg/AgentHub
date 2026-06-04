@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { putSharedObject, sharedTaskObjectKey, type SharedObjectRef } from './shared-storage'
 
 export interface SharedTaskDirectoryInput {
   projectPath?: string | null
@@ -19,11 +20,18 @@ export interface SharedTaskDirectoryInput {
 }
 
 export interface SharedTaskDirectory {
-  rootPath: string
+  rootPath: string | null
   relativeRoot: string
-  specPath: string
-  metaPath: string
-  artifactsPath: string
+  specPath: string | null
+  metaPath: string | null
+  planPath: string | null
+  resultPath: string | null
+  artifactsPath: string | null
+  objects: {
+    meta: SharedObjectRef
+    spec: SharedObjectRef
+    plan: SharedObjectRef
+  }
 }
 
 export type SharedTaskResultStatus =
@@ -61,6 +69,7 @@ export interface SharedTaskResultRead {
 export interface UpdateSharedTaskDirectoryStatusInput {
   projectPath?: string | null
   sharedTaskRelativeRoot?: string | null
+  taskId?: string | null
   status:
     | 'prepared'
     | 'assigned'
@@ -86,46 +95,87 @@ export interface UpdateSharedTaskDirectoryStatusInput {
   }
 }
 
+export interface UpdateSharedTaskDirectoryStatusResult {
+  meta?: SharedObjectRef
+  result?: SharedObjectRef
+}
+
 export async function prepareSharedTaskDirectory(
   input: SharedTaskDirectoryInput,
 ): Promise<SharedTaskDirectory | null> {
   const projectPath = input.projectPath?.trim()
-  if (!projectPath) return null
 
   const relativeRoot = ['.agenthub', 'shared', 'tasks', safePathSegment(input.taskId)].join('/')
-  const rootPath = resolve(projectPath, relativeRoot)
-  const basePath = join(rootPath, 'base')
-  const artifactsPath = join(rootPath, 'artifacts')
-  await mkdir(basePath, { recursive: true })
-  await mkdir(artifactsPath, { recursive: true })
+  const metaText = JSON.stringify(buildTaskMeta(input, relativeRoot), null, 2)
+  const specText = buildTaskSpec(input, relativeRoot)
+  const planText = buildInitialPlan(input, relativeRoot)
+  const objects = {
+    meta: await putSharedObject({
+      objectKey: sharedTaskObjectKey(input.taskId, 'meta.json'),
+      content: metaText,
+      mimeType: 'application/json; charset=utf-8',
+    }),
+    spec: await putSharedObject({
+      objectKey: sharedTaskObjectKey(input.taskId, 'spec.md'),
+      content: specText,
+      mimeType: 'text/markdown; charset=utf-8',
+    }),
+    plan: await putSharedObject({
+      objectKey: sharedTaskObjectKey(input.taskId, 'plan.md'),
+      content: planText,
+      mimeType: 'text/markdown; charset=utf-8',
+    }),
+  }
 
-  const metaPath = join(rootPath, 'meta.json')
-  const specPath = join(rootPath, 'spec.md')
-  await writeFile(metaPath, JSON.stringify(buildTaskMeta(input, relativeRoot), null, 2), 'utf8')
-  await writeFile(specPath, buildTaskSpec(input, relativeRoot), 'utf8')
+  let rootPath: string | null = null
+  let metaPath: string | null = null
+  let specPath: string | null = null
+  let planPath: string | null = null
+  let resultPath: string | null = null
+  let artifactsPath: string | null = null
+
+  if (projectPath) {
+    rootPath = resolve(projectPath, relativeRoot)
+    const basePath = join(rootPath, 'base')
+    artifactsPath = join(rootPath, 'artifacts')
+    await mkdir(basePath, { recursive: true })
+    await mkdir(artifactsPath, { recursive: true })
+
+    metaPath = join(rootPath, 'meta.json')
+    specPath = join(rootPath, 'spec.md')
+    planPath = join(rootPath, 'plan.md')
+    resultPath = join(rootPath, 'result.md')
+    await writeFile(metaPath, metaText, 'utf8')
+    await writeFile(specPath, specText, 'utf8')
+    await writeFile(planPath, planText, 'utf8')
+  }
 
   return {
     rootPath,
     relativeRoot,
     specPath,
     metaPath,
+    planPath,
+    resultPath,
     artifactsPath,
+    objects,
   }
 }
 
 export async function updateSharedTaskDirectoryStatus(
   input: UpdateSharedTaskDirectoryStatusInput,
-): Promise<void> {
+): Promise<UpdateSharedTaskDirectoryStatusResult> {
   const projectPath = input.projectPath?.trim()
   const relativeRoot = input.sharedTaskRelativeRoot?.trim()
-  if (!projectPath || !relativeRoot) return
+  const taskId = input.taskId?.trim() || (relativeRoot ? taskIdFromRelativeRoot(relativeRoot) : null)
+  if (!relativeRoot || !taskId) return {}
 
-  const rootPath = resolve(projectPath, relativeRoot)
-  const metaPath = join(rootPath, 'meta.json')
-  const resultPath = join(rootPath, 'result.md')
-  await mkdir(rootPath, { recursive: true })
+  const rootPath = projectPath ? resolve(projectPath, relativeRoot) : null
+  const metaPath = rootPath ? join(rootPath, 'meta.json') : null
+  const resultPath = rootPath ? join(rootPath, 'result.md') : null
+  if (rootPath) await mkdir(rootPath, { recursive: true })
 
-  const existingMeta = await readJsonObject(metaPath)
+  const existingMeta = metaPath ? await readJsonObject(metaPath) : {}
   const now = new Date().toISOString()
   const artifacts = input.artifacts?.map(normalizeArtifactRef) ?? undefined
   const nextMeta = {
@@ -146,7 +196,15 @@ export async function updateSharedTaskDirectoryStatus(
     ...(input.timestamps?.cancelledAt ? { cancelledAt: input.timestamps.cancelledAt } : {}),
   }
 
-  await writeFile(metaPath, JSON.stringify(nextMeta, null, 2), 'utf8')
+  const metaText = JSON.stringify(nextMeta, null, 2)
+  if (metaPath) await writeFile(metaPath, metaText, 'utf8')
+  const result: UpdateSharedTaskDirectoryStatusResult = {
+    meta: await putSharedObject({
+      objectKey: sharedTaskObjectKey(taskId, 'meta.json'),
+      content: metaText,
+      mimeType: 'application/json; charset=utf-8',
+    }),
+  }
 
   if (
     input.status === 'completed' ||
@@ -154,8 +212,15 @@ export async function updateSharedTaskDirectoryStatus(
     input.status === 'cancelled' ||
     input.status === 'blocked'
   ) {
-    await writeFile(resultPath, renderSharedTaskResult(buildSharedTaskResult(input, relativeRoot)), 'utf8')
+    const resultText = renderSharedTaskResult(buildSharedTaskResult(input, relativeRoot))
+    if (resultPath) await writeFile(resultPath, resultText, 'utf8')
+    result.result = await putSharedObject({
+      objectKey: sharedTaskObjectKey(taskId, 'result.md'),
+      content: resultText,
+      mimeType: 'text/markdown; charset=utf-8',
+    })
   }
+  return result
 }
 
 export async function readSharedTaskResult(input: {
@@ -472,6 +537,29 @@ function buildTaskSpec(input: SharedTaskDirectoryInput, relativeRoot: string) {
   }
 
   return `${lines.join('\n')}\n`
+}
+
+function buildInitialPlan(input: SharedTaskDirectoryInput, relativeRoot: string) {
+  const lines = [
+    `# Plan: ${input.taskTitle}`,
+    '',
+    'STATUS: PREPARED',
+    '',
+    '## Contract refs',
+    `- spec: ${relativeRoot}/spec.md`,
+    `- result: ${relativeRoot}/result.md`,
+    `- artifacts: ${relativeRoot}/artifacts/`,
+    '',
+    'Worker should replace this file with its execution plan before or during work.',
+  ]
+  if (input.dependencies?.length) {
+    lines.push('', '## Dependencies', ...input.dependencies.map((id) => `- ${id}`))
+  }
+  return `${lines.join('\n')}\n`
+}
+
+function taskIdFromRelativeRoot(relativeRoot: string) {
+  return relativeRoot.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? 'task'
 }
 
 function safePathSegment(value: string) {

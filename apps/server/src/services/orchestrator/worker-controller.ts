@@ -1,16 +1,13 @@
-import { and, db, eq, runtimeLeases, workerInstances } from '@agenthub/db'
+import { and, db, eq, runtimeLeases, workerInstances, workspaceAgents } from '@agenthub/db'
 import { emitRunEvent } from './run-events'
 import {
   ensureWorkerInstance,
   markWorkerInstanceState,
-  createRuntimeLease,
-  markRuntimeLeaseReady,
-  markRuntimeLeaseRunning,
-  releaseRuntimeLease,
-  failRuntimeLease,
-  markRuntimeLeaseStale,
   type WorkerRuntimeAgentConfig,
 } from './worker-runtime-resources'
+import { runtimeLeaseController } from './runtime-lease-controller'
+import { ensureWorkerWorkspace } from '../worker-runtime/worker-workspace'
+import { logger } from '../../lib/logger'
 import type { ExecutionConfigSummary } from '../execution/execution-config-summary'
 
 export interface ReconcileResult {
@@ -85,6 +82,7 @@ export class WorkerController {
       await markWorkerInstanceState(worker.id, 'stopped', {
         message: 'Worker desired state is stopped.',
       })
+      await stopMatrixWorkerListeners(worker.id)
       return { phase: 'stopped', changed: true }
     }
 
@@ -229,8 +227,13 @@ export class WorkerController {
       await this.wakeWorker(instanceId)
     }
 
-    // Reconcile to ready
-    if (worker.observedState !== 'ready' && worker.observedState !== 'busy') {
+    // Reconcile to ready if not already in a ready/active state
+    const isReadyLike =
+      worker.observedState === 'ready' ||
+      worker.observedState === 'listening' ||
+      worker.observedState === 'assigned' ||
+      worker.observedState === 'busy'
+    if (!isReadyLike) {
       const result = await this.reconcile(instanceId, { workspaceId })
       if (result.error) {
         return { ready: false, workerInstanceId: instanceId, reason: result.error }
@@ -249,7 +252,12 @@ export class WorkerController {
     worker: WorkerInstanceRow,
     ctx: WorkerReconcileContext,
   ): Promise<PhaseResult> {
-    if (worker.observedState === 'ready' || worker.observedState === 'busy') {
+    if (
+      worker.observedState === 'ready' ||
+      worker.observedState === 'listening' ||
+      worker.observedState === 'assigned' ||
+      worker.observedState === 'busy'
+    ) {
       return { changed: false }
     }
 
@@ -306,6 +314,31 @@ export class WorkerController {
       },
     })
 
+    // Ensure Worker workspace directory (SOUL.md, AGENTS.md, skills/)
+    const [agent] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.id, worker.workspaceAgentId))
+      .limit(1)
+    if (agent) {
+      await ensureWorkerWorkspace(worker.id, agent).catch((err) => {
+        logger.warn({ err, workerId: worker.id }, 'Failed to ensure worker workspace; continuing.')
+      })
+    }
+
+    // Start Matrix listener and transition to listening
+    const listenerResults = await startMatrixWorkerListeners(worker.id)
+    const anyListenerStarted = listenerResults.some((r) => r.started)
+    if (anyListenerStarted) {
+      await markWorkerInstanceState(worker.id, 'listening', {
+        message: 'Worker Matrix listener started and waiting for tasks.',
+        health: {
+          ...worker.health,
+          listeningAt: new Date().toISOString(),
+        },
+      })
+    }
+
     if (ctx.runId && ctx.groupSessionId) {
       await emitRunEvent({
         runId: ctx.runId,
@@ -316,7 +349,7 @@ export class WorkerController {
         type: 'task.progress',
         payload: {
           taskId: ctx.taskId ?? null,
-          status: 'worker_ready',
+          status: anyListenerStarted ? 'worker_listening' : 'worker_ready',
           workerInstanceId: worker.id,
           workspaceAgentId: worker.workspaceAgentId,
           runtimeBase: worker.runtimeBase,
@@ -356,12 +389,12 @@ export class WorkerController {
     const usableLease = existingLease[0]
     if (usableLease && ['ready', 'running'].includes(usableLease.status)) {
       // Lease already exists and is usable
-      if (worker.observedState !== 'busy') {
+      if (worker.observedState !== 'busy' && worker.observedState !== 'assigned') {
         await markWorkerInstanceState(worker.id, 'busy', {
           message: 'Worker assigned to active lease.',
         })
       }
-      return { changed: worker.observedState !== 'busy' }
+      return { changed: worker.observedState !== 'busy' && worker.observedState !== 'assigned' }
     }
 
     if (usableLease && ['creating', 'cleaning'].includes(usableLease.status)) {
@@ -369,7 +402,7 @@ export class WorkerController {
     }
 
     // Create a fresh lease
-    const lease = await createRuntimeLease({
+    const lease = await runtimeLeaseController.create({
       workspaceId: ctx.workspaceId,
       runId: ctx.runId,
       taskId: ctx.taskId,
@@ -381,7 +414,7 @@ export class WorkerController {
       return { changed: false, error: 'Failed to create runtime lease.' }
     }
 
-    await markRuntimeLeaseReady(lease.id)
+    await runtimeLeaseController.markReady(lease.id)
     await markWorkerInstanceState(worker.id, 'busy', {
       message: 'Runtime lease assigned, worker is busy.',
     })
@@ -442,6 +475,7 @@ export class WorkerController {
           detectedAt: new Date().toISOString(),
         },
       })
+      await stopMatrixWorkerListeners(worker.id)
       await this.staleActiveLease(worker, message)
       await this.emitWorkerFailedEvent(worker, ctx, message, 'worker_no_initial_heartbeat')
       return { changed: true, error: message }
@@ -462,6 +496,7 @@ export class WorkerController {
           detectedAt: new Date().toISOString(),
         },
       })
+      await stopMatrixWorkerListeners(worker.id)
       await this.staleActiveLease(worker, message)
       await this.emitWorkerFailedEvent(worker, ctx, message, 'worker_heartbeat_lost')
       return { changed: true, error: message }
@@ -485,7 +520,7 @@ export class WorkerController {
       )
       .limit(1)
     if (activeLease) {
-      await markRuntimeLeaseStale(activeLease.id, {
+      await runtimeLeaseController.markStale(activeLease.id, {
         error: reason,
         metadata: { staleReason: 'heartbeat_lost' },
       })
@@ -539,7 +574,7 @@ export class WorkerController {
     let recoveredCount = 0
 
     for (const lease of activeLeases) {
-      await markRuntimeLeaseStale(lease.id, {
+      await runtimeLeaseController.markStale(lease.id, {
         error: 'Service restarted while lease was active. Marked stale for recovery.',
         metadata: {
           staleReason: 'service_restart',
@@ -603,7 +638,7 @@ export class WorkerController {
       .limit(1)
 
     if (activeLease) {
-      await releaseRuntimeLease(activeLease.id, {
+      await runtimeLeaseController.release(activeLease.id, {
         metadata: input.leaseMetadata,
         workerInstanceId,
       })
@@ -687,3 +722,20 @@ export class WorkerController {
 }
 
 export const workerController = new WorkerController()
+
+async function startMatrixWorkerListeners(workerInstanceId: string) {
+  const { matrixRuntimeSupervisor } = await import('../rooms/matrix-runtime-supervisor')
+  const results = await matrixRuntimeSupervisor
+    .startWorkerInstanceListeners(workerInstanceId, {
+      reason: 'worker-runtime-ready',
+    })
+    .catch(() => [] as { started: boolean; reason: string }[])
+  return results
+}
+
+async function stopMatrixWorkerListeners(workerInstanceId: string) {
+  const { matrixRuntimeSupervisor } = await import('../rooms/matrix-runtime-supervisor')
+  await matrixRuntimeSupervisor.stopWorkerInstanceListeners(workerInstanceId).catch(() => {
+    // Listener shutdown is best-effort; worker state is still the control-plane source.
+  })
+}

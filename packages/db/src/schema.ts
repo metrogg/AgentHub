@@ -136,6 +136,7 @@ export const artifacts = sqliteTable(
     workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
     runId: text('run_id').references(() => orchestratorRuns.id, { onDelete: 'cascade' }),
     taskId: text('task_id').references(() => workspaceTasks.id, { onDelete: 'set null' }),
+    roomId: text('room_id').references(() => rooms.id, { onDelete: 'set null' }),
     taskThreadId: text('task_thread_id').references(() => taskThreads.id, { onDelete: 'set null' }),
     workspaceAgentId: text('workspace_agent_id').references(() => workspaceAgents.id, { onDelete: 'set null' }),
     workerInstanceId: text('worker_instance_id'),
@@ -147,6 +148,10 @@ export const artifacts = sqliteTable(
     sourcePath: text('source_path'),
     handoffPath: text('handoff_path'),
     relativePath: text('relative_path'),
+    storageProvider: text('storage_provider').notNull().default('local-filesystem'),
+    bucket: text('bucket').notNull().default('agenthub-artifacts'),
+    objectKey: text('object_key'),
+    storagePath: text('storage_path'),
     mimeType: text('mime_type'),
     size: integer('size'),
     checksum: text('checksum'),
@@ -164,7 +169,9 @@ export const artifacts = sqliteTable(
     workspaceIdIdx: index('artifacts_workspace_id_idx').on(table.workspaceId),
     runIdIdx: index('artifacts_run_id_idx').on(table.runId),
     taskIdIdx: index('artifacts_task_id_idx').on(table.taskId),
+    roomIdIdx: index('artifacts_room_id_idx').on(table.roomId),
     taskThreadIdIdx: index('artifacts_task_thread_id_idx').on(table.taskThreadId),
+    objectKeyIdx: index('artifacts_object_key_idx').on(table.objectKey),
     taskPathUnique: uniqueIndex('artifacts_task_relative_path_unique').on(
       table.taskId,
       table.relativePath,
@@ -226,6 +233,121 @@ export const sessionMembers = sqliteTable(
   },
   (table) => ({
     sessionIdIdx: index('session_members_session_id_idx').on(table.sessionId),
+  }),
+)
+
+export const rooms = sqliteTable(
+  'rooms',
+  {
+    id: id(),
+    provider: text('provider', { enum: ['local-matrix-compatible', 'matrix'] })
+      .notNull()
+      .default('local-matrix-compatible'),
+    providerRoomId: text('provider_room_id').notNull(),
+    kind: text('kind', { enum: ['group', 'manager_dm', 'task', 'direct', 'human_intervention'] })
+      .notNull(),
+    ownerId: text('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'set null' }),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    runId: text('run_id').references(() => orchestratorRuns.id, { onDelete: 'set null' }),
+    taskId: text('task_id').references(() => workspaceTasks.id, { onDelete: 'set null' }),
+    taskThreadId: text('task_thread_id').references(() => taskThreads.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    topic: text('topic'),
+    status: text('status', { enum: ['active', 'archived', 'failed'] }).notNull().default('active'),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: now(),
+    updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    providerRoomIdUnique: uniqueIndex('rooms_provider_room_id_unique').on(table.provider, table.providerRoomId),
+    ownerIdIdx: index('rooms_owner_id_idx').on(table.ownerId),
+    workspaceIdIdx: index('rooms_workspace_id_idx').on(table.workspaceId),
+    sessionIdIdx: index('rooms_session_id_idx').on(table.sessionId),
+    runIdIdx: index('rooms_run_id_idx').on(table.runId),
+    taskThreadIdIdx: index('rooms_task_thread_id_idx').on(table.taskThreadId),
+  }),
+)
+
+export const roomParticipants = sqliteTable(
+  'room_participants',
+  {
+    id: id(),
+    roomId: text('room_id').notNull().references(() => rooms.id, { onDelete: 'cascade' }),
+    providerUserId: text('provider_user_id'),
+    participantType: text('participant_type', { enum: ['human', 'manager', 'worker', 'system'] }).notNull(),
+    userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+    workspaceAgentId: text('workspace_agent_id').references(() => workspaceAgents.id, { onDelete: 'set null' }),
+    workerInstanceId: text('worker_instance_id').references(() => workerInstances.id, { onDelete: 'set null' }),
+    displayName: text('display_name').notNull(),
+    role: text('role', { enum: ['owner', 'manager', 'member', 'observer', 'system'] }).notNull().default('member'),
+    status: text('status', { enum: ['joined', 'invited', 'left'] }).notNull().default('joined'),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    joinedAt: ts('joined_at').notNull().$defaultFn(() => new Date()),
+    updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    roomIdIdx: index('room_participants_room_id_idx').on(table.roomId),
+    userIdIdx: index('room_participants_user_id_idx').on(table.userId),
+    workspaceAgentIdIdx: index('room_participants_workspace_agent_id_idx').on(table.workspaceAgentId),
+    workerInstanceIdIdx: index('room_participants_worker_instance_id_idx').on(table.workerInstanceId),
+  }),
+)
+
+export const matrixIdentities = sqliteTable(
+  'matrix_identities',
+  {
+    id: id(),
+    ownerType: text('owner_type', { enum: ['human', 'manager', 'worker', 'system'] }).notNull(),
+    ownerId: text('owner_id').notNull(),
+    serverName: text('server_name').notNull(),
+    localpart: text('localpart').notNull(),
+    userId: text('user_id').notNull(),
+    accessToken: text('access_token'),
+    password: text('password'),
+    displayName: text('display_name').notNull(),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: now(),
+    updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    ownerUnique: uniqueIndex('matrix_identities_owner_unique').on(table.ownerType, table.ownerId, table.serverName),
+    userIdUnique: uniqueIndex('matrix_identities_user_id_unique').on(table.userId),
+    localpartIdx: index('matrix_identities_localpart_idx').on(table.localpart),
+  }),
+)
+
+export const timelineEvents = sqliteTable(
+  'timeline_events',
+  {
+    id: id(),
+    roomId: text('room_id').notNull().references(() => rooms.id, { onDelete: 'cascade' }),
+    providerEventId: text('provider_event_id').notNull(),
+    senderParticipantId: text('sender_participant_id').references(() => roomParticipants.id, { onDelete: 'set null' }),
+    senderType: text('sender_type', { enum: ['human', 'manager', 'worker', 'system'] }).notNull(),
+    type: text('type', {
+      enum: [
+        'human.message',
+        'manager.message',
+        'worker.message',
+        'task.assigned',
+        'task.progress',
+        'artifact.created',
+        'approval.requested',
+        'file.shared',
+        'system',
+      ],
+    }).notNull(),
+    body: text('body').notNull().default(''),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    sequence: integer('sequence').notNull().default(0),
+    createdAt: now(),
+  },
+  (table) => ({
+    roomIdIdx: index('timeline_events_room_id_idx').on(table.roomId),
+    roomSequenceIdx: uniqueIndex('timeline_events_room_sequence_unique').on(table.roomId, table.sequence),
+    providerEventIdUnique: uniqueIndex('timeline_events_provider_event_id_unique').on(table.roomId, table.providerEventId),
+    senderParticipantIdIdx: index('timeline_events_sender_participant_id_idx').on(table.senderParticipantId),
   }),
 )
 
@@ -299,7 +421,7 @@ export const workerInstances = sqliteTable(
     desiredState: text('desired_state', { enum: ['running', 'sleeping', 'stopped'] })
       .notNull()
       .default('running'),
-    observedState: text('observed_state', { enum: ['provisioning', 'ready', 'busy', 'idle', 'sleeping', 'stopped', 'failed'] })
+    observedState: text('observed_state', { enum: ['provisioning', 'ready', 'listening', 'assigned', 'busy', 'waiting_for_human', 'resuming', 'idle', 'sleeping', 'stopped', 'failed'] })
       .notNull()
       .default('provisioning'),
     health: text('health', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
@@ -331,7 +453,7 @@ export const runtimeLeases = sqliteTable(
     provider: text('provider', { enum: ['local-workdir', 'docker-sandbox', 'remote-container'] })
       .notNull()
       .default('local-workdir'),
-    status: text('status', { enum: ['creating', 'ready', 'running', 'cleaning', 'released', 'failed', 'stale'] })
+    status: text('status', { enum: ['creating', 'ready', 'running', 'waiting_for_human', 'cleaning', 'released', 'failed', 'stale'] })
       .notNull()
       .default('creating'),
     cwd: text('cwd'),
@@ -370,7 +492,7 @@ export const taskThreads = sqliteTable(
     workerInstanceId: text('worker_instance_id'),
     sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
     status: text('status', {
-      enum: ['prepared', 'assigned', 'active', 'completed', 'failed', 'cancelled'],
+      enum: ['prepared', 'assigned', 'active', 'waiting_for_human', 'completed', 'failed', 'cancelled'],
     }).notNull().default('prepared'),
     lastEventId: text('last_event_id'),
     createdAt: now(),
@@ -469,10 +591,41 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
   messages: many(messages),
   tasks: many(tasks),
   members: many(sessionMembers),
+  rooms: many(rooms),
 }))
 
 export const messagesRelations = relations(messages, ({ one }) => ({
   session: one(sessions, { fields: [messages.sessionId], references: [sessions.id] }),
+}))
+
+export const roomsRelations = relations(rooms, ({ one, many }) => ({
+  owner: one(users, { fields: [rooms.ownerId], references: [users.id] }),
+  workspace: one(workspaces, { fields: [rooms.workspaceId], references: [workspaces.id] }),
+  session: one(sessions, { fields: [rooms.sessionId], references: [sessions.id] }),
+  participants: many(roomParticipants),
+  timelineEvents: many(timelineEvents),
+}))
+
+export const roomParticipantsRelations = relations(roomParticipants, ({ one, many }) => ({
+  room: one(rooms, { fields: [roomParticipants.roomId], references: [rooms.id] }),
+  user: one(users, { fields: [roomParticipants.userId], references: [users.id] }),
+  workspaceAgent: one(workspaceAgents, {
+    fields: [roomParticipants.workspaceAgentId],
+    references: [workspaceAgents.id],
+  }),
+  workerInstance: one(workerInstances, {
+    fields: [roomParticipants.workerInstanceId],
+    references: [workerInstances.id],
+  }),
+  timelineEvents: many(timelineEvents),
+}))
+
+export const timelineEventsRelations = relations(timelineEvents, ({ one }) => ({
+  room: one(rooms, { fields: [timelineEvents.roomId], references: [rooms.id] }),
+  senderParticipant: one(roomParticipants, {
+    fields: [timelineEvents.senderParticipantId],
+    references: [roomParticipants.id],
+  }),
 }))
 
 export const blackboardEntries = sqliteTable(

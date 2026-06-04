@@ -1069,6 +1069,7 @@ function eventSummary(event: AgUiRunEvent) {
   if (event.name === 'agenthub.task.status') {
     const prefix = agentName || 'Agent'
     if (status === 'running') return `${prefix} 正在处理${taskTitle ? `：${taskTitle}` : '任务'}。`
+    if (status === 'blocked') return `${prefix} 正在等待用户补充${taskTitle ? `：${taskTitle}` : '任务'}。`
     if (status === 'done') return `${prefix} 完成${taskTitle ? `：${taskTitle}` : '任务'}。`
     if (status === 'failed') return `${prefix} 执行失败。`
     if (status === 'pending') return `${taskTitle || '任务'} 已入队等待执行。`

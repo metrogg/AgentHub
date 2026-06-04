@@ -228,6 +228,8 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
                       className={`flex items-start gap-2 p-2 rounded-lg text-xs transition-colors ${
                         task.statusTone === 'running'
                           ? 'bg-blue-50 border border-blue-200'
+                          : task.statusTone === 'waiting'
+                            ? 'bg-yellow-50 border border-yellow-200'
                           : task.statusTone === 'failed'
                             ? 'bg-red-50 border border-red-200'
                             : 'bg-gray-50'
@@ -244,6 +246,11 @@ export function TaskBoard({ data, onCancel, onRetryFailed }: TaskBoardProps) {
                             {task.title}
                           </span>
                         </div>
+                        {task.status === 'blocked' && task.progressStatus && (
+                          <p className="mt-1 text-[11px] leading-4 text-yellow-700">
+                            {task.progressStatus}
+                          </p>
+                        )}
                         <span className="text-gray-400">{task.agentName}</span>
                         <RuntimeStrip config={task.executionConfig} />
 
