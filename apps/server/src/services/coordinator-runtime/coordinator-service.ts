@@ -1,4 +1,5 @@
 import { db, eq, roomParticipants, rooms, workspaceAgents } from '@agenthub/db'
+import { managerRuntimeService, type ManagerRuntimeService } from '../manager-runtime/manager-runtime-service'
 import { roomService } from '../rooms'
 import { getDefaultCoordinatorRuntime } from './runtime-registry'
 import type {
@@ -26,10 +27,43 @@ export interface StepRoomResult extends CoordinatorStepResult {
   appendedEventIds: string[]
 }
 
+export interface CoordinatorServiceOptions {
+  managerService?: ManagerRuntimeService
+  useManagerRuntimeByDefault?: boolean
+}
+
 export class CoordinatorService {
-  constructor(private readonly defaultRuntime: CoordinatorRuntime = getDefaultCoordinatorRuntime()) {}
+  private readonly defaultRuntime: CoordinatorRuntime
+  private readonly managerService: ManagerRuntimeService
+  private readonly useManagerRuntimeByDefault: boolean
+
+  constructor(defaultRuntime?: CoordinatorRuntime, options: CoordinatorServiceOptions = {}) {
+    this.defaultRuntime = defaultRuntime ?? getDefaultCoordinatorRuntime()
+    this.managerService = options.managerService ?? managerRuntimeService
+    this.useManagerRuntimeByDefault = options.useManagerRuntimeByDefault ?? !defaultRuntime
+  }
 
   async stepRoom(input: StepRoomInput): Promise<StepRoomResult> {
+    if (!input.runtime && this.useManagerRuntimeByDefault) {
+      const result = await this.managerService.stepRoom({
+        roomId: input.roomId,
+        ownerId: input.ownerId,
+        afterSequence: input.afterSequence,
+        limit: input.limit,
+        allowedActionTypes: input.allowedActionTypes,
+        appendActions: input.appendActions,
+        signal: input.signal,
+        source: 'coordinator-service',
+      })
+      return {
+        roomId: result.roomId,
+        runtimeType: result.runtimeType,
+        actions: result.actions,
+        rawOutput: result.rawOutput,
+        appendedEventIds: result.appendedEventIds,
+      }
+    }
+
     const room = await roomService.getRoomForOwner(input.roomId, input.ownerId)
     const timelineRows = await roomService.listTimelineEvents({
       roomId: room.id,

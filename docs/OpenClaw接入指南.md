@@ -38,51 +38,69 @@ HiClaw 的 Manager 和 Worker 都是 OpenClaw 实例，只是配置不同。
 └─────────────────┘   └─────────────┘
 ```
 
-## 安装步骤
+## 三种接入方式
 
-### 1. 安装 OpenClaw
+### 方式 A：AgentHub 自带 OpenClaw（推荐新手）
+
+AgentHub 自动克隆、构建、配置 OpenClaw。
 
 ```bash
+# 1. 安装 OpenClaw
 bash infra/setup-openclaw.sh
-```
 
-这会：
-- 克隆 OpenClaw 仓库到 `.openclaw-runtime/`
-- 构建 OpenClaw（pnpm install + build）
-- 创建 symlink 到 `/usr/local/bin/openclaw`
-- 设置 Manager 工作空间
-
-### 2. 启动 Tuwunel（Matrix homeserver）
-
-```bash
+# 2. 启动 Tuwunel
 docker compose -f infra/docker-compose.hiclaw-lite.yml up -d tuwunel
-```
 
-### 3. 启动 AgentHub Server
-
-```bash
+# 3. 启动 AgentHub
 bun run dev:server
-```
 
-### 4. 配置 Manager
-
-编辑 `infra/manager-openclaw.json`，填入：
-- Matrix homeserver URL
-- Manager Matrix access token（从 Tuwunel 注册获取）
-- LLM provider 配置
-
-然后复制到 Manager 工作空间：
-```bash
-cp infra/manager-openclaw.json ~/.local/share/AgentHub/manager/global/openclaw.json
-```
-
-### 5. 启动 Manager
-
-```bash
+# 4. 启动 Manager
 openclaw gateway run --verbose --force
 ```
 
-或通过 AgentHub Server 自动启动（开发中）。
+### 方式 B：用户已有 OpenClaw，AgentHub 管理启动
+
+用户已有 OpenClaw 安装，AgentHub 生成配置并启动。
+
+```bash
+# 告诉 AgentHub OpenClaw 在哪
+export OPENCLAW_PATH=/usr/local/bin/openclaw
+
+# 或在代码中：
+# launcher.configureFromUserOpenClaw({ openclawPath: '/usr/local/bin/openclaw' })
+```
+
+AgentHub 会：
+1. 用你的 OpenClaw 二进制
+2. 生成 openclaw.json 指向 AgentHub 的 Tuwunel
+3. 复制 SOUL.md / AGENTS.md / skills
+4. 启动 OpenClaw 连接 Matrix
+
+### 方式 C：用户自己启动 OpenClaw，AgentHub 只连端点
+
+用户自己管理 OpenClaw 生命周期，AgentHub 通过 HTTP 通信。
+
+```bash
+# 用户自己启动 OpenClaw（可以用自己的配置）
+openclaw gateway run --verbose --force
+
+# 告诉 AgentHub 连哪里
+export AGENTHUB_OPENCLAW_COORDINATOR_ENDPOINT=http://localhost:18799
+```
+
+AgentHub 会：
+1. 通过 HTTP 调用 OpenClaw gateway API
+2. 不管理 OpenClaw 进程生命周期
+3. OpenClaw 可以用任意 Matrix homeserver、任意模型配置
+
+### 选择建议
+
+| 场景 | 推荐方式 |
+|------|---------|
+| 新手，快速体验 | 方式 A |
+| 已有 OpenClaw，想让 AgentHub 管理 | 方式 B |
+| 已有 OpenClaw 集群，AgentHub 只做编排 | 方式 C |
+| 生产环境 | 方式 C（OpenClaw 独立部署） |
 
 ## 文件结构
 

@@ -6,6 +6,12 @@ export type WorkerRuntimeType =
   | 'openclaw'
   | 'qwenpaw'
 
+/** Worker 运行模式：轻量一次性 CLI 执行 vs 常驻 Room Worker */
+export type WorkerRuntimeKind =
+  | 'ephemeral-code-agent'
+  | 'resident-openclaw'
+  | 'resident-qwenpaw'
+
 export type WorkerRuntimeEvent =
   | {
       type: 'progress'
@@ -61,6 +67,7 @@ export interface WorkerRuntimeContext {
 
 export interface WorkerRuntimeResult {
   runtimeType: WorkerRuntimeType
+  kind?: WorkerRuntimeKind
   status: 'completed' | 'failed' | 'cancelled' | 'waiting_for_human'
   message?: string
   artifacts?: AgentArtifact[]
@@ -70,6 +77,7 @@ export interface WorkerRuntimeResult {
 
 export interface WorkerRuntime {
   readonly runtimeType: WorkerRuntimeType
+  readonly kind: WorkerRuntimeKind
   executeTask(
     context: WorkerRuntimeContext,
     signal?: AbortSignal,

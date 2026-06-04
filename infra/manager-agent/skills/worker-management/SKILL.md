@@ -9,11 +9,9 @@ Manage the lifecycle of Worker agents. Workers are the execution units that hand
 
 ## Tools
 
-Use the AgentHub Controller API to manage workers:
-
 ### List Workers
 ```bash
-curl -s http://localhost:8000/api/workspaces/{workspaceId}/agents | jq .
+curl -s http://localhost:8000/api/workspaces/{workspaceId}/agents | head -50
 ```
 
 ### Create Worker
@@ -23,9 +21,16 @@ curl -s -X POST http://localhost:8000/api/workspaces/{workspaceId}/agents \
   -d '{"name":"builder","role":"Frontend Builder","roleType":"coder","runtimeType":"code-agent","codeAgentType":"opencode"}'
 ```
 
-### Get Worker Status
+### Get Worker Details
 ```bash
-curl -s http://localhost:8000/api/workspaces/{workspaceId}/agents/{agentId} | jq .
+curl -s http://localhost:8000/api/workspaces/{workspaceId}/agents/{agentId} | head -30
+```
+
+### Create Workspace (if needed)
+```bash
+curl -s -X POST http://localhost:8000/api/workspaces \
+  -H "Content-Type: application/json" \
+  -d '{"name":"My Project","goal":"Build a website"}'
 ```
 
 ## Rules
@@ -33,7 +38,7 @@ curl -s http://localhost:8000/api/workspaces/{workspaceId}/agents/{agentId} | jq
 - Prefer existing suitable workers before creating a new one.
 - New worker creation must be visible in the room — announce it.
 - Worker names must be lowercase alphanumeric with hyphens.
-- Each Worker needs: name, role, roleType, runtimeType, and optionally codeAgentType.
+- Each Worker needs: name, role, roleType, runtimeType.
 
 ## Decision Pattern
 

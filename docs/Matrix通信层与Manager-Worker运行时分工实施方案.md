@@ -78,6 +78,7 @@ AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS=true
 - Matrix 真实 room 创建、identity 注册或登录、invite / join、participant token 发言
 - 普通 group/direct 新消息 Room-first 写入：先写 Room timeline / Matrix event，再生成 `messages` 兼容投影
 - `GET /api/messages/:sessionId` 读取侧 Room-first：优先从 Room timeline 投影，旧 `messages` 表只补历史/特殊兼容行
+- 编辑、清空、撤回、重发关联撤回、重新生成关联撤回、pin/unpin 已写成 Room timeline 的 append-only `message.*` 控制事件，旧 `messages` 更新/删除只作为迁移期 UI 缓存同步
 - `/sync` 导入、mention 解析、file ref 解析、`mxc://` 下载到 ArtifactStore
 - `/stop` 取消 task room
 - `/approve` 和普通 human reply 回答 pending Worker clarification

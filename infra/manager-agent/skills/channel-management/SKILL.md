@@ -9,16 +9,23 @@ Create and maintain Matrix rooms, send messages, and manage room participants.
 
 ## Tools
 
-### Send a Message to a Room
-Use your built-in Matrix message tool to reply directly in the room where you received the message.
-
-### Create a Task Room
-Task rooms are created automatically when you assign a task through the orchestrator.
+### Get Room Info
+```bash
+curl -s http://localhost:8000/api/rooms/{roomId} | head -20
+```
 
 ### List Room Participants
 ```bash
-curl -s "http://localhost:8000/api/rooms/{roomId}/participants" | jq .
+curl -s http://localhost:8000/api/rooms/{roomId}/participants | head -30
 ```
+
+### Get Room Timeline
+```bash
+curl -s "http://localhost:8000/api/rooms/{roomId}/timeline?limit=50" | head -80
+```
+
+### Send Message to Room (via your built-in Matrix tool)
+Use your Matrix message tool to reply directly in the room where you received the message.
 
 ## Rules
 

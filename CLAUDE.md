@@ -117,6 +117,11 @@ Core files:
 - `apps/server/src/services/orchestrator/manager-planner.ts`
 - `apps/server/src/services/orchestrator/planner.ts`
 - `apps/server/src/services/orchestrator/run-events.ts`
+- `apps/server/src/services/manager-runtime/types.ts` — ManagerRuntime 接口、Tool/Action/Skill 类型
+- `apps/server/src/services/manager-runtime/skill-loader.ts` — 从 SKILL.md 加载 16 个技能
+- `apps/server/src/services/manager-runtime/tool-registry.ts` — 22 个 Controller API executor
+- `apps/server/src/services/manager-runtime/local-manager-runtime.ts` — LLM tool-calling loop
+- `apps/server/src/services/manager-runtime/openclaw-launcher.ts` — OpenClaw 进程管理
 
 Execution flow:
 

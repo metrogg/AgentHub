@@ -1,25 +1,25 @@
 #!/bin/bash
 # ─── OpenClaw Setup Script for AgentHub ───────────────────────────────
-# This script clones, builds, and configures OpenClaw as the Manager/Worker
-# runtime for AgentHub. Aligned with HiClaw's openclaw-base/Dockerfile.
+# Installs OpenClaw and configures it as the Manager/Worker runtime.
 #
-# Prerequisites: Node.js 22+, pnpm, git, build-essential (python3, make, g++)
-# Usage: bash infra/setup-openclaw.sh
+# Two installation modes:
+#   1. npm (default): `npm install -g openclaw` — fast, no compilation
+#   2. source: clone + pnpm build — for HiClaw-specific fork
+#
+# Prerequisites: Node.js 22+
+# Usage: bash infra/setup-openclaw.sh [--from-source]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-OPENCLAW_DIR="${OPENCLAW_DIR:-$PROJECT_ROOT/.openclaw-runtime}"
-OPENCLAW_BRANCH="hiclaw-2026.4.14"
-OPENCLAW_COMMIT="2f35b6fa6b65d012e3b0c9f24af3f8a4b617a6e0"
+FROM_SOURCE="${1:-}"
 
 echo "=== AgentHub OpenClaw Setup ==="
-echo "Install directory: $OPENCLAW_DIR"
 
-# ─── Step 1: Check prerequisites ─────────────────────────────────────
+# ─── Step 1: Check Node.js ───────────────────────────────────────────
 echo ""
-echo "[1/6] Checking prerequisites..."
+echo "[1/4] Checking prerequisites..."
 
 if ! command -v node &>/dev/null; then
   echo "ERROR: Node.js not found. Install Node.js 22+ first."
@@ -32,99 +32,124 @@ if [ "$NODE_VERSION" -lt 22 ]; then
   exit 1
 fi
 
-if ! command -v pnpm &>/dev/null; then
-  echo "Installing pnpm..."
-  npm install -g pnpm
-fi
+echo "Node.js $(node -v)"
 
-if ! command -v git &>/dev/null; then
-  echo "ERROR: git not found."
-  exit 1
-fi
-
-echo "Node.js $(node -v), pnpm $(pnpm -v), git $(git --version)"
-
-# ─── Step 2: Clone OpenClaw ──────────────────────────────────────────
+# ─── Step 2: Install OpenClaw ────────────────────────────────────────
 echo ""
-echo "[2/6] Cloning OpenClaw..."
 
-if [ -d "$OPENCLAW_DIR/.git" ]; then
-  echo "OpenClaw already cloned at $OPENCLAW_DIR, updating..."
-  cd "$OPENCLAW_DIR"
-  git fetch --depth 1 origin "$OPENCLAW_COMMIT" 2>/dev/null || true
-  git checkout "$OPENCLAW_COMMIT" 2>/dev/null || {
-    echo "Checking out branch $OPENCLAW_BRANCH..."
-    git checkout "$OPENCLAW_BRANCH"
-  }
+if [ "$FROM_SOURCE" = "--from-source" ]; then
+  echo "[2/4] Installing OpenClaw from source..."
+  OPENCLAW_DIR="$PROJECT_ROOT/.openclaw-runtime"
+  OPENCLAW_BRANCH="hiclaw-2026.4.14"
+
+  # Fix PATH for npm global binaries
+  NPM_GLOBAL="$(npm config get prefix 2>/dev/null)/bin"
+  if [ -d "$NPM_GLOBAL" ] && [[ ":$PATH:" != *":$NPM_GLOBAL:"* ]]; then
+    export PATH="$NPM_GLOBAL:$PATH"
+  fi
+
+  if ! command -v pnpm &>/dev/null; then
+    npm install -g pnpm
+  fi
+
+  if [ -d "$OPENCLAW_DIR/.git" ]; then
+    echo "OpenClaw already cloned at $OPENCLAW_DIR"
+    cd "$OPENCLAW_DIR"
+  else
+    CLONE_URLS=(
+      "https://github.com/higress-group/openclaw.git"
+      "https://gitee.com/mirrors/openclaw.git"
+    )
+    CLONED=false
+    for url in "${CLONE_URLS[@]}"; do
+      echo "Cloning from $url..."
+      rm -rf "$OPENCLAW_DIR" 2>/dev/null || true
+      if git clone --depth 1 --single-branch -b "$OPENCLAW_BRANCH" "$url" "$OPENCLAW_DIR" 2>&1; then
+        CLONED=true
+        break
+      fi
+    done
+    if [ "$CLONED" = false ]; then
+      echo "ERROR: Failed to clone. Try: npm install -g openclaw (without --from-source)"
+      exit 1
+    fi
+    cd "$OPENCLAW_DIR"
+  fi
+
+  pnpm install
+  pnpm build
+  chmod +x "$OPENCLAW_DIR/openclaw.mjs" 2>/dev/null || true
+  echo "OpenClaw built at: $OPENCLAW_DIR/openclaw.mjs"
+
 else
-  git clone --depth 1 --single-branch -b "$OPENCLAW_BRANCH" \
-    https://github.com/higress-group/openclaw.git "$OPENCLAW_DIR"
-  cd "$OPENCLAW_DIR"
-  git fetch --depth 1 origin "$OPENCLAW_COMMIT" 2>/dev/null || true
-  git checkout "$OPENCLAW_COMMIT" 2>/dev/null || true
+  echo "[2/4] Installing OpenClaw from npm..."
+  npm install -g openclaw
+
+  if ! command -v openclaw &>/dev/null; then
+    echo "ERROR: openclaw command not found after install."
+    echo "Try: npm install -g openclaw"
+    exit 1
+  fi
+
+  echo "OpenClaw installed: $(openclaw --version 2>/dev/null || echo 'unknown version')"
 fi
 
-echo "OpenClaw at: $(git rev-parse --short HEAD)"
-
-# ─── Step 3: Install dependencies and build ──────────────────────────
+# ─── Step 3: Create Manager workspace ────────────────────────────────
 echo ""
-echo "[3/6] Installing dependencies..."
-cd "$OPENCLAW_DIR"
-pnpm install
-
-echo ""
-echo "[4/6] Building OpenClaw..."
-pnpm build
-pnpm ui:build 2>/dev/null || echo "UI build skipped (optional)"
-
-# Make binary executable
-chmod +x "$OPENCLAW_DIR/openclaw.mjs" 2>/dev/null || true
-
-# Create symlink
-OPENCLAW_BIN="/usr/local/bin/openclaw"
-if [ -w "/usr/local/bin" ] 2>/dev/null; then
-  ln -sf "$OPENCLAW_DIR/openclaw.mjs" "$OPENCLAW_BIN"
-  echo "Symlinked: openclaw -> $OPENCLAW_DIR/openclaw.mjs"
-else
-  echo "NOTE: Cannot symlink to $OPENCLAW_BIN (no write permission)."
-  echo "Add to PATH manually: export PATH=\"$OPENCLAW_DIR:\$PATH\""
-fi
-
-# ─── Step 5: Verify Matrix crypto addon ──────────────────────────────
-echo ""
-echo "[5/6] Verifying Matrix E2EE crypto addon..."
-
-CRYPTO_NODE="$OPENCLAW_DIR/node_modules/@matrix-org/matrix-sdk-crypto-nodejs"
-if [ -d "$CRYPTO_NODE" ]; then
-  echo "Matrix crypto addon: OK"
-else
-  echo "Matrix crypto addon: NOT FOUND (E2EE will be disabled)"
-  echo "Install manually: cd $OPENCLAW_DIR && pnpm add @matrix-org/matrix-sdk-crypto-nodejs"
-fi
-
-# ─── Step 6: Create AgentHub Manager workspace ──────────────────────
-echo ""
-echo "[6/6] Setting up AgentHub Manager workspace..."
+echo "[3/4] Setting up Manager workspace..."
 
 AGENTHUB_DATA="${AGENTHUB_APP_DATA_DIR:-$HOME/.local/share}/AgentHub"
 MANAGER_WORKSPACE="$AGENTHUB_DATA/manager/global"
-MANAGER_SKILLS="$MANAGER_WORKSPACE/skills"
 
-mkdir -p "$MANAGER_WORKSPACE"
-mkdir -p "$MANAGER_SKILLS"
-mkdir -p "$AGENTHUB_DATA/openclaw-matrix"
+mkdir -p "$MANAGER_WORKSPACE/skills"
 
+# Copy agent files
+for file in SOUL.md AGENTS.md HEARTBEAT.md TOOLS.md; do
+  src="$SCRIPT_DIR/manager-agent/$file"
+  dst="$MANAGER_WORKSPACE/$file"
+  if [ -f "$src" ] && [ ! -f "$dst" ]; then
+    cp "$src" "$dst"
+    echo "  Copied $file"
+  fi
+done
+
+# Copy skills
+if [ -d "$SCRIPT_DIR/manager-agent/skills" ]; then
+  cp -rn "$SCRIPT_DIR/manager-agent/skills/"* "$MANAGER_WORKSPACE/skills/" 2>/dev/null || true
+  echo "  Copied skills/"
+fi
+
+# Ensure state files
+for file in state.json workers-registry.json; do
+  if [ ! -f "$MANAGER_WORKSPACE/$file" ]; then
+    echo '{"schemaVersion":1}' > "$MANAGER_WORKSPACE/$file"
+  fi
+done
+
+# ─── Step 4: Verify ─────────────────────────────────────────────────
+echo ""
+echo "[4/4] Verification..."
+
+OPENCLAW_BIN=""
+if command -v openclaw &>/dev/null; then
+  OPENCLAW_BIN="$(command -v openclaw)"
+elif [ -f "$PROJECT_ROOT/.openclaw-runtime/openclaw.mjs" ]; then
+  OPENCLAW_BIN="$PROJECT_ROOT/.openclaw-runtime/openclaw.mjs"
+fi
+
+if [ -n "$OPENCLAW_BIN" ]; then
+  echo "OpenClaw binary: $OPENCLAW_BIN"
+else
+  echo "WARNING: OpenClaw binary not found in PATH or .openclaw-runtime/"
+fi
+
+echo "Manager workspace: $MANAGER_WORKSPACE"
 echo ""
 echo "=== Setup Complete ==="
 echo ""
-echo "OpenClaw binary: $OPENCLAW_DIR/openclaw.mjs"
-echo "Manager workspace: $MANAGER_WORKSPACE"
-echo "Manager skills: $MANAGER_SKILLS"
-echo ""
 echo "Next steps:"
-echo "  1. Start Tuwunel (Matrix homeserver): docker compose -f infra/docker-compose.hiclaw-lite.yml up -d tuwunel"
-echo "  2. Start AgentHub server: bun run dev:server"
-echo "  3. Configure Manager: copy infra/manager-openclaw.json to $MANAGER_WORKSPACE/openclaw.json"
-echo "  4. Launch Manager: openclaw gateway run --verbose --force"
+echo "  1. Start Tuwunel: docker compose -f infra/docker-compose.hiclaw-lite.yml up -d tuwunel"
+echo "  2. Start AgentHub: bun run dev:server"
+echo "  3. OpenClaw will be launched automatically by AgentHub when needed"
 echo ""
-echo "Or use: bun run dev:manager (to launch everything together)"
+echo "Or manually: openclaw gateway run --verbose --force"

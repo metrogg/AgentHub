@@ -21,7 +21,7 @@ const {
   workspaces,
   eq,
 } = dbApi
-const { appendHumanMessageRoomFirst, stepCoordinatorForGroupMessage } = bridgeApi
+const { appendHumanMessageRoomFirst, appendMessageControlEvent, stepCoordinatorForGroupMessage } = bridgeApi
 const { listSessionMessagesRoomFirst } = projectionApi
 type CoordinatorRuntime = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorRuntime
 type CoordinatorStepInput = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorStepInput
@@ -111,6 +111,95 @@ describe('Room chat bridge', () => {
       eventId: event.id,
       eventType: 'human.message',
     })
+  })
+
+  test('projects message edit pin redact and clear from append-only Room control events', async () => {
+    const { session } = await createGroupSession()
+    const first = await appendHumanMessageRoomFirst({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      content: '旧内容',
+      type: 'text',
+      metadata: null,
+      replyToMessageId: null,
+    })
+    const second = await appendHumanMessageRoomFirst({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      content: '稍后撤回',
+      type: 'text',
+      metadata: null,
+      replyToMessageId: null,
+    })
+
+    await appendMessageControlEvent({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      kind: 'message.edit',
+      body: '新内容',
+      metadata: {
+        targetMessageId: first.message.id,
+        targetEventId: first.event.id,
+        content: '新内容',
+        editedAt: '2026-06-04T00:00:00.000Z',
+      },
+    })
+    await appendMessageControlEvent({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      kind: 'message.pin',
+      metadata: {
+        targetMessageId: first.message.id,
+        targetEventId: first.event.id,
+        pinned: true,
+      },
+    })
+    await appendMessageControlEvent({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      kind: 'message.redact',
+      metadata: {
+        targetMessageIds: [second.message.id],
+        targetEventIds: [second.event.id],
+      },
+    })
+
+    const legacyMessages = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, session.id))
+    const projected = await listSessionMessagesRoomFirst({
+      sessionId: session.id,
+      legacyMessages,
+    })
+
+    expect(projected).toHaveLength(1)
+    expect(projected[0]?.id).toBe(first.message.id)
+    expect(projected[0]?.content).toBe('新内容')
+    expect(projected[0]?.isPinned).toBe(true)
+    expect(projected[0]?.metadata?.roomTimelineEdit).toMatchObject({
+      source: 'room-timeline-control',
+      targetMessageId: first.message.id,
+    })
+
+    await appendMessageControlEvent({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      kind: 'message.clear',
+      metadata: { clearedAt: '2026-06-04T00:00:01.000Z' },
+    })
+
+    const afterClear = await listSessionMessagesRoomFirst({
+      sessionId: session.id,
+      legacyMessages,
+    })
+    expect(afterClear).toHaveLength(0)
   })
 
   test('records group chat in room timeline and mirrors a coordinator reply', async () => {

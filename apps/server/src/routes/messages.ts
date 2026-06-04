@@ -56,6 +56,7 @@ import { blackboard, Blackboard } from '../services/blackboard'
 import { buildDynamicOrchestratorPlan } from '../services/orchestrator/plan-generator'
 import { decideOrchestratorAction } from '../services/orchestrator/orchestrator-decision'
 import {
+  appendMessageControlEvent,
   appendHumanMessageRoomFirst,
   recordHumanMessageInRoomTimeline,
   stepCoordinatorForGroupMessage,
@@ -172,6 +173,14 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.clear',
+      body: '已清空本会话消息显示。',
+      metadata: { clearedAt: new Date().toISOString() },
+    })
     await db.delete(messages).where(eq(messages.sessionId, sessionId))
     return c.json({ deleted: true })
   })
@@ -205,6 +214,20 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const metadata =
       message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+    const editedAt = new Date().toISOString()
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.edit',
+      body: content,
+      metadata: {
+        targetMessageId: message.id,
+        targetEventId: extractRoomEventId(message),
+        content,
+        editedAt,
+      },
+    })
     const [updated] = await db
       .update(messages)
       .set({
@@ -212,7 +235,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         metadata: {
           ...metadata,
           ...(typeof metadata.displayContent === 'string' ? { displayContent: content } : {}),
-          editedAt: new Date().toISOString(),
+          editedAt,
         },
       })
       .where(eq(messages.id, messageId))
@@ -245,6 +268,17 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     const affected = collectAffectedMessages(list, messageIndex)
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.redact',
+      body: '已撤回旧回复，准备重新发送。',
+      metadata: buildMessageRedactionMetadata(affected, {
+        reason: 'resend',
+        sourceMessageId: message.id,
+      }),
+    })
     for (const item of affected) {
       await db.delete(messages).where(eq(messages.id, item.id))
     }
@@ -294,6 +328,19 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!message || message.sessionId !== sessionId)
       throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.pin',
+      body: '已置顶消息。',
+      metadata: {
+        targetMessageId: message.id,
+        targetEventId: extractRoomEventId(message),
+        pinned: true,
+        pinnedAt: new Date().toISOString(),
+      },
+    })
     const [updated] = await db
       .update(messages)
       .set({ isPinned: true })
@@ -312,6 +359,19 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!message || message.sessionId !== sessionId)
       throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.pin',
+      body: '已取消置顶消息。',
+      metadata: {
+        targetMessageId: message.id,
+        targetEventId: extractRoomEventId(message),
+        pinned: false,
+        unpinnedAt: new Date().toISOString(),
+      },
+    })
     const [updated] = await db
       .update(messages)
       .set({ isPinned: false })
@@ -345,6 +405,18 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       ? await rollbackCodeAgentChanges(session, affected)
       : { reverted: 0, failed: 0 }
     const ids = [target.id, ...affected.map((message) => message.id)]
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.redact',
+      body: '已撤回消息及其关联回复。',
+      metadata: buildMessageRedactionMetadata([target, ...affected], {
+        reason: 'delete',
+        rollback,
+        rollbackResult,
+      }),
+    })
     for (const id of ids) {
       await db.delete(messages).where(eq(messages.id, id))
     }
@@ -375,6 +447,17 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!previousUser)
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '没有可重新生成的用户消息')
 
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.redact',
+      body: '已撤回旧回复，准备重新生成。',
+      metadata: buildMessageRedactionMetadata([message], {
+        reason: 'regenerate',
+        sourceMessageId: previousUser.id,
+      }),
+    })
     await db.delete(messages).where(eq(messages.id, message.id))
     const { cancelAgentReply } = await import('../services/agent-runner')
     cancelAgentReply(sessionId)
@@ -2057,6 +2140,46 @@ function collectAffectedMessages(list: Array<typeof messages.$inferSelect>, targ
     affected.push(message)
   }
   return affected
+}
+
+function extractRoomEventId(message: typeof messages.$inferSelect) {
+  if (message.id.startsWith('room:')) return message.id.slice('room:'.length)
+  const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+  return (
+    readNestedString(metadata, ['roomTimeline', 'eventId']) ??
+    readNestedString(metadata, ['roomTimelineProjection', 'eventId'])
+  )
+}
+
+function buildMessageRedactionMetadata(
+  affected: Array<typeof messages.$inferSelect>,
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    ...extra,
+    redactedAt: new Date().toISOString(),
+    targetMessageIds: affected.map((message) => message.id),
+    targetEventIds: affected.map(extractRoomEventId).filter((id): id is string => Boolean(id)),
+    targetMessages: affected.map((message) => {
+      const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+      return {
+        messageId: message.id,
+        senderType: message.senderType,
+        sourceMessageId: typeof metadata.sourceMessageId === 'string' ? metadata.sourceMessageId : undefined,
+        actionType: typeof metadata.actionType === 'string' ? metadata.actionType : undefined,
+        roomId: readNestedString(metadata, ['roomTimeline', 'roomId']) ?? readNestedString(metadata, ['roomTimelineProjection', 'roomId']),
+      }
+    }),
+  }
+}
+
+function readNestedString(record: Record<string, unknown>, path: string[]) {
+  let current: unknown = record
+  for (const key of path) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return null
+    current = (current as Record<string, unknown>)[key]
+  }
+  return typeof current === 'string' && current.trim() ? current : null
 }
 
 async function rollbackCodeAgentChanges(

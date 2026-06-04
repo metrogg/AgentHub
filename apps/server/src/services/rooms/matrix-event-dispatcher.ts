@@ -343,7 +343,7 @@ async function cancelTaskRoomFromMatrix(input: {
     groupSessionId: thread?.groupSessionId ?? room.sessionId ?? room.id,
   }
 
-  const stopped = workerRuntimeService.stopTaskRoom(room.id)
+  const stopped = await workerRuntimeService.stopTaskRoom(room.id)
   if (stopped) {
     await roomService.appendTimelineEvent({
       roomId: room.id,

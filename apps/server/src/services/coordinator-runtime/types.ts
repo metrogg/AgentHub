@@ -1,6 +1,6 @@
 import type { TimelineEventType } from '../rooms'
 
-export type CoordinatorRuntimeType = 'local-llm' | 'openclaw' | 'qwenpaw'
+export type CoordinatorRuntimeType = 'local-llm' | 'local-skill-runtime' | 'openclaw' | 'qwenpaw'
 
 export type CoordinatorActionType =
   | 'reply'

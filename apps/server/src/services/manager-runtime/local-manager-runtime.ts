@@ -96,8 +96,9 @@ export class LocalManagerRuntime implements ManagerRuntime {
       const context = {
         roomId: input.context.roomId,
         workspaceId: input.context.workspaceId,
-        ownerId: 'default-user', // TODO: get from auth context
+        ownerId: input.context.ownerId,
         runId: input.context.runId,
+        groupSessionId: input.context.groupSessionId,
       }
 
       const assistantMessage = output

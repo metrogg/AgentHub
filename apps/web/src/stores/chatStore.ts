@@ -15,7 +15,11 @@ import {
   type WorkspaceAgent,
   type WorkspaceFull,
 } from '../lib/api'
-import { projectRoomTimeline, type RoomTimelineProjection } from '../lib/roomTimeline'
+import {
+  applyRoomTimelineMessageControl,
+  projectRoomTimeline,
+  type RoomTimelineProjection,
+} from '../lib/roomTimeline'
 import { wsClient, type WSEvent } from '../lib/ws'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { WsEvent, MessageType, SessionType, SenderType } from '@agenthub/shared'
@@ -3649,6 +3653,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         )
         if (!projected) break
         const projectedSessionId = projected.sessionId
+        const messageControl = projected.projection.messageControl
+        if (messageControl) {
+          updateCachedMessages(projectedSessionId, (messages) =>
+            applyRoomTimelineMessageControl(messages, messageControl),
+          )
+          if (projectedSessionId === sessionId) {
+            set((s) => ({
+              messages: applyRoomTimelineMessageControl(s.messages, messageControl),
+              ...(messageControl.kind === 'message.redact' || messageControl.kind === 'message.clear'
+                ? clearLiveRuntimeProjection()
+                : {}),
+            }))
+          }
+        }
         const projectedMessages = projected.projection.messages
         if (projectedMessages.length) {
           updateCachedMessages(projectedSessionId, (messages) =>

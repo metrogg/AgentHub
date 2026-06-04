@@ -1,4 +1,4 @@
-import { and, db, eq, runtimeLeases, workerInstances, workspaceAgents } from '@agenthub/db'
+import { and, db, eq, matrixIdentities, runtimeLeases, workerInstances, workspaceAgents } from '@agenthub/db'
 import { emitRunEvent } from './run-events'
 import {
   ensureWorkerInstance,
@@ -702,6 +702,43 @@ export class WorkerController {
     }
     details.runtimeBase = worker.runtimeBase
 
+    // Infer worker mode from runtimeBase
+    const mode: 'ephemeral' | 'resident' =
+      worker.runtimeBase === 'openclaw' || worker.runtimeBase === 'copaw' || worker.runtimeBase === 'qwenpaw'
+        ? 'resident'
+        : 'ephemeral'
+    details.mode = mode
+
+    // --- Resident mode checks ---
+    if (mode === 'resident') {
+      // Verify Matrix identity exists for this worker
+      const [identity] = await db
+        .select()
+        .from(matrixIdentities)
+        .where(and(eq(matrixIdentities.ownerType, 'worker'), eq(matrixIdentities.ownerId, worker.id)))
+        .limit(1)
+
+      if (!identity) {
+        return {
+          ready: false,
+          reason: `Resident Worker (${worker.runtimeBase}) 缺少 Matrix identity。`,
+          details: { ...details, missingMatrixIdentity: true },
+        }
+      }
+      if (!identity.accessToken) {
+        return {
+          ready: false,
+          reason: `Resident Worker (${worker.runtimeBase}) Matrix identity 没有 access token。`,
+          details: { ...details, missingMatrixAccessToken: true, matrixUserId: identity.userId },
+        }
+      }
+      details.matrixIdentity = { userId: identity.userId, serverName: identity.serverName }
+
+      // Resident workers do not need sandbox policy validation (they manage their own isolation)
+      return { ready: true, details }
+    }
+
+    // --- Ephemeral mode checks ---
     // For LLM fallback, model is sufficient — no CLI needed
     if (worker.runtimeBase === 'llm-fallback') {
       return { ready: true, details: { ...details, fallbackMode: true } }

@@ -114,6 +114,7 @@ export interface ManagerWorkerCandidate {
 export interface ManagerStepInput {
   context: {
     roomId: string
+    ownerId: string
     workspaceId?: string | null
     runId?: string | null
     groupSessionId?: string | null

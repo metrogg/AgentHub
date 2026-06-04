@@ -37,7 +37,7 @@ export function normalizeCoordinatorRuntimeType(
   value: unknown,
   options: { allowLocalLlm?: boolean } = {},
 ): CoordinatorRuntimeType {
-  if (value === 'openclaw' || value === 'qwenpaw') {
+  if (value === 'openclaw' || value === 'qwenpaw' || value === 'local-skill-runtime') {
     return value
   }
   if (value === 'local-llm' && options.allowLocalLlm) return value

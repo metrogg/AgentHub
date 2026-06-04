@@ -6,8 +6,9 @@ import type { WorkerRuntime, WorkerRuntimeContext, WorkerRuntimeEvent, WorkerRun
 
 type WorkspaceAgentRow = typeof workspaceAgents.$inferSelect
 
-export class LocalWorkerRuntimeAdapter implements WorkerRuntime {
+export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
   readonly runtimeType = 'code-agent' as const
+  readonly kind = 'ephemeral-code-agent' as const
 
   constructor(private readonly agent: WorkspaceAgentRow) {}
 

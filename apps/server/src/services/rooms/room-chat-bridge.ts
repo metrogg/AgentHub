@@ -34,6 +34,15 @@ export interface AppendHumanMessageRoomFirstInput {
   replyToMessageId?: string | null
 }
 
+export interface AppendMessageControlEventInput {
+  session: typeof sessions.$inferSelect
+  userId: string
+  userName?: string | null
+  kind: 'message.clear' | 'message.edit' | 'message.redact' | 'message.pin'
+  body?: string
+  metadata?: Record<string, unknown>
+}
+
 export interface CoordinatorFirstResult {
   roomId: string
   consumed: boolean
@@ -115,6 +124,32 @@ export async function appendHumanMessageRoomFirst(input: AppendHumanMessageRoomF
     .where(eq(timelineEvents.id, event.id))
 
   return { room, event, message }
+}
+
+export async function appendMessageControlEvent(input: AppendMessageControlEventInput) {
+  const room = await roomService.ensureRoomForSession(input.session.id, input.session.ownerId)
+  await ensureSessionRoomParticipants({
+    roomId: room.id,
+    session: input.session,
+    userId: input.userId,
+    userName: input.userName,
+  })
+  const human = await ensureHumanParticipant(room.id, input.userId, input.userName)
+  const event = await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderParticipantId: human.id,
+    senderType: 'human',
+    type: 'system',
+    body: input.body ?? '',
+    metadata: {
+      ...(input.metadata ?? {}),
+      kind: input.kind,
+      sessionId: input.session.id,
+      actorUserId: input.userId,
+      source: 'room-timeline-control',
+    },
+  })
+  return { room, event }
 }
 
 export async function recordHumanMessageInRoomTimeline(input: RecordHumanMessageInput) {
