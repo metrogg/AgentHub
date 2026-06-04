@@ -1,0 +1,96 @@
+import { describe, expect, test } from 'bun:test'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join, relative } from 'node:path'
+
+const sourceRoot = join(process.cwd(), 'apps/server/src')
+
+describe('HiClaw-lite kernel boundary', () => {
+  test('legacy execution chain stays isolated inside the migration layer', () => {
+    const files = listSourceFiles(sourceRoot)
+    const violations: string[] = []
+
+    for (const file of files) {
+      const rel = toRepoPath(file)
+      const text = readFileSync(file, 'utf8')
+
+      if (
+        rel !== 'apps/server/src/services/orchestrator/orchestrator-engine.ts' &&
+        references(text, 'task-execution-service')
+      ) {
+        violations.push(`${rel} imports task-execution-service`)
+      }
+
+      if (
+        rel !== 'apps/server/src/services/execution/task-execution-service.ts' &&
+        references(text, 'local-a2a-transport')
+      ) {
+        violations.push(`${rel} imports local-a2a-transport`)
+      }
+
+      if (
+        rel !== 'apps/server/src/services/orchestrator/orchestrator-engine.ts' &&
+        /\bnew\s+OrchestratorEngine\b/.test(text)
+      ) {
+        violations.push(`${rel} instantiates OrchestratorEngine`)
+      }
+
+      if (
+        rel !== 'apps/server/src/services/orchestrator/orchestrator-engine.ts' &&
+        /\bOrchestratorEngine\.(resumeRun|cancelActiveRun|applyHumanInterruptToActiveRun)\b/.test(text)
+      ) {
+        violations.push(`${rel} calls legacy OrchestratorEngine lifecycle statics`)
+      }
+    }
+
+    expect(violations).toEqual([])
+  })
+
+  test('new kernel modules do not use A2A as their internal task transport', () => {
+    const kernelDirs = [
+      'apps/server/src/services/rooms',
+      'apps/server/src/services/coordinator-runtime',
+      'apps/server/src/services/worker-runtime',
+    ]
+    const files = kernelDirs.flatMap((dir) => listSourceFiles(join(process.cwd(), dir)))
+    const violations: string[] = []
+
+    for (const file of files) {
+      const rel = toRepoPath(file)
+      const text = readFileSync(file, 'utf8')
+      if (references(text, 'a2a-internal') || references(text, 'local-a2a-transport')) {
+        violations.push(`${rel} references legacy A2A internal transport`)
+      }
+    }
+
+    expect(violations).toEqual([])
+  })
+})
+
+function listSourceFiles(root: string): string[] {
+  const entries = readdirSync(root)
+  const files: string[] = []
+  for (const entry of entries) {
+    const path = join(root, entry)
+    const stat = statSync(path)
+    if (stat.isDirectory()) {
+      files.push(...listSourceFiles(path))
+      continue
+    }
+    if (/\.(ts|tsx)$/.test(entry)) {
+      files.push(path)
+    }
+  }
+  return files
+}
+
+function references(text: string, moduleName: string) {
+  return new RegExp(`\\b(from|import)\\s*\\(?\\s*['"][^'"]*${escapeRegExp(moduleName)}['"]`).test(text)
+}
+
+function toRepoPath(path: string) {
+  return relative(process.cwd(), path).replace(/\\/g, '/')
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}

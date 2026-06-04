@@ -262,6 +262,70 @@ export interface Message {
   createdAt: string
 }
 
+export type RoomProvider = 'local-matrix-compatible' | 'matrix'
+export type RoomKind = 'group' | 'manager_dm' | 'task' | 'direct' | 'human_intervention'
+export type RoomStatus = 'active' | 'archived' | 'failed'
+export type RoomParticipantType = 'human' | 'manager' | 'worker' | 'system'
+export type RoomParticipantRole = 'owner' | 'manager' | 'member' | 'observer' | 'system'
+export type RoomParticipantStatus = 'joined' | 'invited' | 'left'
+export type TimelineEventType =
+  | 'human.message'
+  | 'manager.message'
+  | 'worker.message'
+  | 'task.assigned'
+  | 'task.progress'
+  | 'artifact.created'
+  | 'approval.requested'
+  | 'system'
+
+export interface Room {
+  id: string
+  provider: RoomProvider
+  providerRoomId: string
+  kind: RoomKind
+  ownerId: string
+  workspaceId: string | null
+  sessionId: string | null
+  runId: string | null
+  taskId: string | null
+  taskThreadId: string | null
+  title: string
+  topic: string | null
+  status: RoomStatus
+  metadata: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RoomParticipant {
+  id: string
+  roomId: string
+  providerUserId: string | null
+  participantType: RoomParticipantType
+  userId: string | null
+  workspaceAgentId: string | null
+  workerInstanceId: string | null
+  displayName: string
+  role: RoomParticipantRole
+  status: RoomParticipantStatus
+  metadata: Record<string, unknown>
+  joinedAt: string
+  updatedAt: string
+}
+
+export interface TimelineEvent {
+  id: string
+  roomId: string
+  providerEventId: string
+  senderParticipantId: string | null
+  senderType: RoomParticipantType
+  type: TimelineEventType
+  body: string
+  metadata: Record<string, unknown>
+  sequence: number
+  createdAt: string
+}
+
 export interface QuotedMessagePreview {
   messageId: string
   senderName: string
@@ -1310,6 +1374,33 @@ export const api = {
   deleteSession: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   deleteAllSessions: () => request<{ deleted: boolean }>('/sessions/all', { method: 'DELETE' }),
 
+  // Matrix-compatible rooms
+  listRooms: (workspaceId?: string | null) =>
+    request<{ items: Room[] }>(
+      `/rooms${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`,
+    ),
+  ensureSessionRoom: (sessionId: string) =>
+    request<Room>('/rooms/ensure/session', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    }),
+  ensureTaskThreadRoom: (taskThreadId: string) =>
+    request<Room>('/rooms/ensure/task-thread', {
+      method: 'POST',
+      body: JSON.stringify({ taskThreadId }),
+    }),
+  listRoomParticipants: (roomId: string) =>
+    request<{ items: RoomParticipant[] }>(`/rooms/${roomId}/participants`),
+  listRoomTimeline: (roomId: string, options: { afterSequence?: number; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (options.afterSequence !== undefined) params.set('afterSequence', String(options.afterSequence))
+    if (options.limit !== undefined) params.set('limit', String(options.limit))
+    const query = params.toString()
+    return request<{ items: TimelineEvent[] }>(
+      `/rooms/${roomId}/timeline${query ? `?${query}` : ''}`,
+    )
+  },
+
   // Messages
   listMessages: (sessionId: string) => request<{ items: Message[] }>(`/messages/${sessionId}`),
   sendMessage: (sessionId: string, data: { content: string; type?: MessageType }) =>
@@ -1330,6 +1421,7 @@ export const api = {
       replyToMessageId?: string | null
       quotedMessage?: QuotedMessagePreview | null
       safetyMode?: string
+      mentions?: string[]
     },
   ) =>
     request<Message>(`/messages/${sessionId}`, {

@@ -54,7 +54,15 @@ export async function ensureWorkerInstance(input: EnsureWorkerInstanceInput) {
 
 export async function markWorkerInstanceState(
   workerInstanceId: string | null | undefined,
-  state: 'provisioning' | 'ready' | 'busy' | 'idle' | 'sleeping' | 'stopped' | 'failed',
+  state:
+    | 'provisioning'
+    | 'ready'
+    | 'busy'
+    | 'waiting_for_human'
+    | 'idle'
+    | 'sleeping'
+    | 'stopped'
+    | 'failed',
   input: {
     message?: string | null
     health?: Record<string, unknown>
@@ -133,6 +141,29 @@ export async function markRuntimeLeaseRunning(
     status: 'running',
     startedAt: input.startedAt ?? new Date(),
   })
+}
+
+export async function markRuntimeLeaseWaitingForHuman(
+  runtimeLeaseId: string | null | undefined,
+  input: {
+    metadata?: Record<string, unknown>
+    workerInstanceId?: string | null
+    message?: string | null
+  } = {},
+) {
+  const waiting = await updateRuntimeLease(runtimeLeaseId, {
+    status: 'waiting_for_human',
+    metadata: input.metadata,
+  })
+  await markWorkerInstanceState(input.workerInstanceId, 'waiting_for_human', {
+    message: input.message ?? 'Worker is waiting for human clarification.',
+    health: {
+      waitingForHuman: true,
+      waitingSince: new Date().toISOString(),
+      ...(input.metadata ?? {}),
+    },
+  })
+  return waiting
 }
 
 export async function releaseRuntimeLease(

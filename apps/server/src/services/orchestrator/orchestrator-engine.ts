@@ -78,6 +78,14 @@ import { env } from '../../env'
 
 export { ExecutionPlan, ExecutionTask, TaskResult }
 
+// Migration-only compatibility layer.
+//
+// New HiClaw-lite kernel work should not add Manager decisions, Room semantics,
+// or lifecycle ownership here. Move new behavior toward RoomService,
+// CoordinatorRuntime, WorkerRuntime, ArtifactStore, and controller/reconciler
+// resources instead. This class remains only to keep the old execution path
+// working while those resources take over.
+
 const TASK_TIMEOUT_MS = env.AGENTHUB_CODE_AGENT_TIMEOUT_MS
 
 interface ChildSessionInfo {

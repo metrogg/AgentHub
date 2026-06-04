@@ -4,6 +4,13 @@ import { runAgentReply } from '../agent-runner'
 import type { AgentProfile } from '../runtime'
 import type { AgentHubA2AEnvelope } from '../protocols/a2a-internal'
 
+// Migration-only local transport.
+//
+// A2A is no longer the target internal communication backbone for the
+// HiClaw-lite kernel. New internal collaboration should go through RoomService
+// / Matrix-compatible timeline events. Keep this adapter for old execution
+// compatibility and future external interoperability only.
+
 export interface LocalA2ASendInput {
   sessionId: string
   userMessage: MessageRow

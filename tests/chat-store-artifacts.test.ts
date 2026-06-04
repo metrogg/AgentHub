@@ -1044,6 +1044,103 @@ describe('chat store artifact snapshot projection', () => {
     })
   })
 
+  test('room timeline task event creates a minimal task board and child session without an existing snapshot', () => {
+    const group = session({
+      id: 'group-room-1',
+      title: 'Room-first group',
+      type: SessionType.Group,
+      workspaceId: 'workspace-room-1',
+    })
+    const initialState = {
+      sessions: [group],
+      currentSession: group,
+      currentWorkspace: null,
+      currentWorkspaceAgents: [],
+      currentSessionId: group.id,
+      messages: [],
+      streamingMessage: null,
+      streamingCodeAgentRun: null,
+      pendingAttachments: [],
+      safetyMode: 'ask',
+      loadingSessions: false,
+      loadingMessages: false,
+      agentTyping: false,
+      agentActivity: null,
+      replyingToMessageId: null,
+      replyingToMessage: null,
+      replyingToKind: 'reply',
+      sessionsBootstrapped: true,
+      taskBoard: null,
+      previewUrl: null,
+      previewFileName: null,
+      selectedAgentTab: null,
+      agentTabs: [],
+    } as any
+
+    const nextState = __chatStoreTestHooks.applyAgUiEventToState(
+      initialState,
+      {
+        type: 'CUSTOM',
+        name: 'agenthub.task.status',
+        runId: 'run-room-1',
+        threadId: 'child-room-1',
+        value: {
+          taskId: 'task-room-1',
+          status: 'assigned',
+          taskThreadStatus: 'assigned',
+          taskThreadId: 'thread-room-1',
+          childSessionId: 'child-room-1',
+          workerInstanceId: 'worker-room-1',
+          agentId: 'agent-room-1',
+          agentName: 'Builder',
+          taskTitle: 'Build report',
+          taskDescription: 'Generate the first report.',
+          roomId: 'room-task-1',
+        },
+      },
+      group.id,
+    )
+
+    expect(nextState.taskBoard).toMatchObject({
+      runId: 'run-room-1',
+      sessionId: group.id,
+      status: 'running',
+      collaborationMode: 'room-timeline',
+    })
+    expect(nextState.taskBoard?.tasks[0]).toMatchObject({
+      id: 'task-room-1',
+      title: 'Build report',
+      status: 'assigned',
+      taskThreadStatus: 'assigned',
+      taskThreadId: 'thread-room-1',
+      childSessionId: 'child-room-1',
+      workerInstanceId: 'worker-room-1',
+      agentId: 'agent-room-1',
+      agentName: 'Builder',
+    })
+    expect(nextState.agentTabs[0]).toMatchObject({
+      taskId: 'task-room-1',
+      status: 'assigned',
+      childSessionId: 'child-room-1',
+      taskThreadStatus: 'assigned',
+    })
+    const child = nextState.sessions.find((item: Session) => item.id === 'child-room-1')
+    expect(child).toMatchObject({
+      type: SessionType.Direct,
+      workspaceId: 'workspace-room-1',
+      workspaceAgentId: 'agent-room-1',
+    })
+    expect(child?.metadata).toMatchObject({
+      kind: 'orchestrator-task',
+      groupSessionId: group.id,
+      orchestratorRunId: 'run-room-1',
+      orchestratorTaskId: 'task-room-1',
+      taskThreadId: 'thread-room-1',
+      workerInstanceId: 'worker-room-1',
+      taskThreadStatus: 'assigned',
+    })
+  })
+
   test('control panel projection reflects executing agent activity on top of task board tabs', () => {
     const projection = __chatStoreTestHooks.buildControlPanelProjection({
       taskBoard: {

@@ -162,6 +162,20 @@
       "when": 1780630000000,
       "tag": "0022_runtime_leases_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1780710000000,
+      "tag": "0023_rooms_timeline",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1780790000000,
+      "tag": "0024_artifact_object_storage",
+      "breakpoints": true
     }
   ]
 }
