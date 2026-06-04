@@ -1,5 +1,4 @@
 import { streamReply } from '../llm'
-import { runtimeRegistry, type AgentProfile } from '../runtime'
 import { extractJsonObject, normalizeTaskOutputContract, normalizeTaskValidation, parseJsonObject, titleFromGoal, validateRealWorkerAssignments } from './planner'
 import type { CollaborationContract } from './collaboration-contract'
 import { formatContractsForPlanner } from './collaboration-contract'
@@ -97,54 +96,9 @@ async function generateWithInternalLlm(input: ManagerPlanInput) {
 }
 
 async function generateWithManagerCodeAgent(input: ManagerPlanInput) {
-  const manager = input.managerAgent
-  if (!manager?.codeAgentType) {
-    throw new Error('Manager 配置为 Code Agent，但没有绑定 Coding Tools 类型')
-  }
-
-  const profile: AgentProfile = {
-    id: manager.id,
-    name: manager.name,
-    role: manager.role,
-    roleType: manager.roleType,
-    description: manager.description,
-    systemPrompt: [
-      manager.systemPrompt,
-      buildManagerPlanSystemPrompt(input),
-      '你本次只进行团队管理决策，不要修改文件、不要运行命令、不要创建本地计划文件。',
-      '最终只输出一个 JSON 对象。',
-    ]
-      .filter(Boolean)
-      .join('\n'),
-    color: manager.color,
-    modelId: manager.modelId,
-    runtimeType: 'code-agent',
-    codeAgentType: manager.codeAgentType,
-    capabilityTags: manager.capabilityTags,
-    toolPermissions: manager.toolPermissions,
-    sandboxPolicy: 'workspace-write',
-    contextPolicy: 'workspace-aware',
-    approvalRequired: false,
-    projectPath: input.workspacePath ?? null,
-    originalProjectPath: input.workspacePath ?? null,
-  }
-  const runtime = runtimeRegistry.resolve(profile)
-  const controller = new AbortController()
-  let output = ''
-  for await (const chunk of runtime.execute({
-    sessionId: `manager-plan-${crypto.randomUUID()}`,
-    prompt: buildManagerPlanUserPrompt(input),
-    history: [],
-    profile,
-    signal: controller.signal,
-    workspacePath: input.workspacePath,
-    rawFinalOutput: true,
-  })) {
-    if (chunk.kind !== 'text') continue
-    output += chunk.text
-    if (output.length > 24_000) break
-  }
-  return output
+  // Planning is model-only even when the Manager profile is bound to Coding Tools.
+  // Worker CLI execution starts only after a validated action plan exists.
+  return generateWithInternalLlm(input)
 }
 
 function buildManagerPlanSystemPrompt(input: ManagerPlanInput) {

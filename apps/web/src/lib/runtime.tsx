@@ -31,16 +31,7 @@ export function getCachedCodeAgentRunMetadata(id?: string | null): CodeAgentRunM
 }
 
 function toThreadMessage(message: Message): ThreadMessageLike {
-  if (message.senderType === 'system') {
-    return {
-      id: message.id,
-      role: 'assistant' as const,
-      content: [{ type: 'text' as const, text: message.content }],
-      createdAt: message.createdAt ? new Date(message.createdAt) : undefined,
-    }
-  }
-
-  const role: ThreadMessageLike['role'] = message.senderType === 'agent' ? 'assistant' : 'user'
+  const role: ThreadMessageLike['role'] = message.senderType === 'user' ? 'user' : 'assistant'
 
   const taskBoard =
     message.type === 'task_board' &&
@@ -59,6 +50,10 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const deliveryReport =
     message.metadata && 'delivery_report' in (message.metadata as Record<string, unknown>)
       ? (message.metadata as Record<string, unknown>).delivery_report
+      : null
+  const fileCard =
+    message.metadata && 'file_card' in (message.metadata as Record<string, unknown>)
+      ? (message.metadata as Record<string, unknown>).file_card
       : null
   const memberProposal =
     message.metadata && 'memberProposals' in (message.metadata as Record<string, unknown>)
@@ -102,6 +97,9 @@ function toThreadMessage(message: Message): ThreadMessageLike {
   const deliveryReportPart = deliveryReport
     ? [{ type: 'data' as const, name: 'delivery_report', data: deliveryReport }]
     : []
+  const fileCardPart = fileCard
+    ? [{ type: 'data' as const, name: 'file_card', data: fileCard }]
+    : []
   const memberProposalPart = memberProposal
     ? [{ type: 'data' as const, name: 'member_proposal_card', data: memberProposal }]
     : []
@@ -120,6 +118,7 @@ function toThreadMessage(message: Message): ThreadMessageLike {
                 ...attachmentPart,
                 ...memberProposalPart,
                 { type: 'data', name: 'code_agent_run', data: codeAgentRun },
+                ...fileCardPart,
                 ...deliveryReportPart,
               ]
             : [
@@ -128,10 +127,15 @@ function toThreadMessage(message: Message): ThreadMessageLike {
                 ...attachmentPart,
                 ...memberProposalPart,
                 ...artifactPart,
+                ...fileCardPart,
                 ...deliveryReportPart,
               ],
     createdAt: new Date(message.createdAt),
   }
+}
+
+export const __runtimeTestHooks = {
+  toThreadMessage,
 }
 
 function toThreadCodeAgentRunData(

@@ -63,6 +63,10 @@ import {
   buildDynamicOrchestratorPlan,
   loadWorkspaceAgentRelationsForPlanning,
 } from '../services/orchestrator/plan-generator'
+import {
+  buildPlanningFailureArtifactMetadata,
+  extractPlanningFailureArtifacts,
+} from '../services/orchestrator/planning-failure-artifacts'
 import { decideOrchestratorAction } from '../services/orchestrator/orchestrator-decision'
 import {
   confirmAgentDraftSchema,
@@ -150,6 +154,57 @@ type DispatchMonitor = {
   taskIds: string[]
 }
 
+async function projectPlanningFailureArtifacts(
+  list: Array<typeof messages.$inferSelect>,
+  workspaceId?: string | null,
+) {
+  if (!workspaceId || !list.some((message) => needsPlanningFailureArtifactProjection(message))) {
+    return list
+  }
+
+  const [workspaceRecord] = await db
+    .select({ projectPath: workspaces.projectPath })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1)
+  if (!workspaceRecord?.projectPath) return list
+
+  return list.map((message) => {
+    if (!needsPlanningFailureArtifactProjection(message)) return message
+
+    const metadata = asMessageMetadata(message.metadata)
+    const error = typeof metadata.error === 'string' ? metadata.error : message.content
+    const recoveredArtifacts = extractPlanningFailureArtifacts(error, workspaceRecord.projectPath)
+    if (!recoveredArtifacts.length) return message
+
+    const runId =
+      typeof metadata.runId === 'string' && metadata.runId.trim()
+        ? metadata.runId
+        : `planning-failure-${message.id}`
+    return {
+      ...message,
+      metadata: {
+        ...metadata,
+        ...buildPlanningFailureArtifactMetadata(recoveredArtifacts, runId, workspaceId),
+      },
+    }
+  })
+}
+
+function needsPlanningFailureArtifactProjection(message: typeof messages.$inferSelect) {
+  const metadata = asMessageMetadata(message.metadata)
+  if (metadata.systemEvent !== 'orchestrator_plan_failed') return false
+  if (metadata.recoveredPlanningArtifacts === true) return false
+  if (metadata.file_card) return false
+  return typeof metadata.error === 'string' || message.content.includes('Orchestrator')
+}
+
+function asMessageMetadata(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
 export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
   .get('/:sessionId', async (c) => {
@@ -163,7 +218,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .from(messages)
       .where(eq(messages.sessionId, sessionId))
       .orderBy(asc(messages.createdAt))
-    return c.json({ items: list })
+    const items = await projectPlanningFailureArtifacts(list, session.workspaceId)
+    return c.json({ items })
   })
   .delete('/:sessionId/all', async (c) => {
     const user = c.get('user')
@@ -2474,6 +2530,17 @@ async function generatePlanAndPushTaskBoard(
   } catch (err: any) {
     const message = err?.message || '模型没有返回可执行的任务计划'
     logger.warn({ err: message, sessionId }, 'Dynamic orchestrator plan failed')
+    const [workspaceRecord] = await db
+      .select({ projectPath: workspaces.projectPath })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1)
+    const recoveredArtifacts = extractPlanningFailureArtifacts(message, workspaceRecord?.projectPath)
+    const recoveredArtifactMetadata = buildPlanningFailureArtifactMetadata(
+      recoveredArtifacts,
+      runId,
+      workspaceId,
+    )
     await runController.fail(managerRun, {
       error: message,
       stage: 'planning',
@@ -2489,6 +2556,7 @@ async function generatePlanAndPushTaskBoard(
         metadata: {
           systemEvent: 'orchestrator_plan_failed',
           error: message,
+          ...recoveredArtifactMetadata,
         },
       })
       .returning()
