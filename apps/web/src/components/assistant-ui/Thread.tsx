@@ -175,8 +175,23 @@ import {
   getCachedCodeAgentRunMetadata,
   type ThreadCodeAgentRunData,
 } from '../../lib/runtime'
-import { useChatStore } from '../../stores/chatStore'
-import { buildHeaderAgentStatusProjection, type HeaderAgentStatusProjection } from '../../stores/chatStore'
+import { type HeaderAgentStatusProjection, useChatStore } from '../../stores/chatStore'
+import {
+  makeSelectDirectRunMessages,
+  makeSelectMessageAvatarState,
+  makeSelectMessageById,
+  makeSelectMessageWithQuoteSource,
+  selectAgentHeaderState,
+  selectComposerState,
+  selectCurrentSessionId,
+  selectCurrentWorkspaceId,
+  selectGroupHeaderState,
+  selectHeaderAgentStatus,
+  selectMessages,
+  selectThreadShellState,
+  useChatMessageById,
+  useChatStoreShallow,
+} from '../../stores/chatSelectors'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
@@ -616,7 +631,13 @@ const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
 
   async function handleClear() {
     if (!session) return
-    if (!window.confirm('确定清空当前会话的所有消息？此操作不可撤销。')) return
+    const confirmed = await requestConfirmDialog({
+      title: '清空当前会话？',
+      description: '会话内的所有消息都会被删除，此操作不可撤销。',
+      confirmLabel: '清空',
+      tone: 'danger',
+    })
+    if (!confirmed) return
     await clearMessages(session.id)
   }
 
@@ -2160,7 +2181,13 @@ const GroupChatDetailsPanel: FC<{ open: boolean; onClose: () => void }> = ({ ope
 
   async function deleteGroupChat() {
     if (!session || busyAction) return
-    if (!window.confirm('确定删除这个群聊吗？')) return
+    const confirmed = await requestConfirmDialog({
+      title: '删除这个群聊？',
+      description: '群聊和其中的消息会被移除，此操作不可撤销。',
+      confirmLabel: '删除',
+      tone: 'danger',
+    })
+    if (!confirmed) return
     setBusyAction('delete')
     try {
       await deleteSession(session.id)
@@ -4177,15 +4204,23 @@ const UserMessage: FC = () => {
     event?.preventDefault()
     event?.stopPropagation()
     if (!sourceMessage) return
-    const ok = window.confirm('撤回这条消息？如果后续 Agent 产生了文件修改，将尝试一并回滚。')
+    const ok = await requestConfirmDialog({
+      title: '撤回这条消息？',
+      description: '如果后续 Agent 产生了文件修改，系统会尝试一并回滚。',
+      confirmLabel: '撤回',
+      tone: 'warning',
+    })
     if (!ok) return
     setBusy('withdraw')
     try {
       const rollback = await withdrawMessage(sourceMessage.id)
       if (rollback?.failed) {
-        window.alert(
-          `消息已撤回，但有 ${rollback.failed} 个文件变更未能自动回滚，请检查 git diff。`,
-        )
+        await requestNoticeDialog({
+          title: '消息已撤回',
+          description: `有 ${rollback.failed} 个文件变更未能自动回滚，请检查 git diff。`,
+          confirmLabel: '知道了',
+          tone: 'warning',
+        })
       }
     } finally {
       setBusy(null)
@@ -6387,6 +6422,14 @@ const InlineDiffReview: FC<{
       setApplyMessage('当前会话未绑定工作区，无法暂存 Diff。')
       return
     }
+    const confirmed = await requestConfirmDialog({
+      title: '应用这段 Diff？',
+      description: '系统会把代码变更应用到当前工作区并暂存到 Git，应用后可继续检查 diff/status。',
+      detail: filePath,
+      confirmLabel: '应用 Diff',
+      tone: 'warning',
+    })
+    if (!confirmed) return
     setApplying(true)
     setApplyResult(null)
     setApplyMessage('')

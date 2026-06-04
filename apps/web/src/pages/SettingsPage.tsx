@@ -2,6 +2,7 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING } from '@agenthub/shared'
 import { useNavigate } from 'react-router-dom'
 import QRCode from 'qrcode'
+import { requestConfirmDialog } from '../components/ConfirmDialog'
 import {
   Activity,
   AlertTriangle,
@@ -907,11 +908,19 @@ function SettingsContent({
               type="button"
               disabled={busyAction === 'clear-all-sessions'}
               onClick={() => {
-                if (!window.confirm('确定要删除所有聊天记录吗？此操作不可恢复。')) return
-                void runAction('clear-all-sessions', async () => {
-                  await api.deleteAllSessions()
-                  showActionMessage('所有聊天记录已清空')
-                })
+                void (async () => {
+                  const confirmed = await requestConfirmDialog({
+                    title: '清空所有聊天记录？',
+                    description: '当前账号下的所有会话和消息记录都会被删除，此操作不可恢复。',
+                    confirmLabel: '清空',
+                    tone: 'danger',
+                  })
+                  if (!confirmed) return
+                  await runAction('clear-all-sessions', async () => {
+                    await api.deleteAllSessions()
+                    showActionMessage('所有聊天记录已清空')
+                  })
+                })()
               }}
               className="settings-danger-button"
             >
@@ -929,8 +938,16 @@ function SettingsContent({
               type="button"
               disabled={busyAction === 'cleanup-legacy-data'}
               onClick={() => {
-                if (!window.confirm('确定清理历史旧入口和遗留数据吗？当前有效群聊与真实任务子对话会保留。')) return
-                void runAction('cleanup-legacy-data', cleanupLegacyData)
+                void (async () => {
+                  const confirmed = await requestConfirmDialog({
+                    title: '清理历史旧入口？',
+                    description: '旧 Agent 子会话、无效任务子对话和遗留数据会被删除；当前有效群聊与真实任务子对话会保留。',
+                    confirmLabel: '清理',
+                    tone: 'warning',
+                  })
+                  if (!confirmed) return
+                  await runAction('cleanup-legacy-data', cleanupLegacyData)
+                })()
               }}
               className="settings-danger-button"
             >

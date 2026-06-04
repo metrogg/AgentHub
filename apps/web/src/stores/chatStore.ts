@@ -2587,7 +2587,7 @@ function applyAgUiEventToState(
   return state
 }
 
-interface ChatState {
+export interface ChatState {
   sessions: Session[]
   currentSession: Session | null
   currentWorkspace: Workspace | null

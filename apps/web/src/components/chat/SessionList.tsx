@@ -1,5 +1,5 @@
 import QRCode from 'qrcode'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -53,6 +53,7 @@ import {
   filterSessionTree,
   isAgentDirectSession,
   isOrchestratorTaskSession,
+  type SessionGroup,
 } from '../../lib/sessionTree'
 import {
   getCachedAccountProfile,
@@ -62,6 +63,8 @@ import {
 } from '../../lib/accountProfile'
 import { requestNewSessionDialog } from './GlobalNewSessionDialog'
 import { GroupAvatar } from './GroupAvatar'
+import { VirtualList } from '../VirtualList'
+import { selectSessionListState, useChatStoreShallow } from '../../stores/chatSelectors'
 type SidebarTab = 'messages' | 'agents' | 'artifacts' | 'abilities' | 'me'
 
 function activeTabFromPath(pathname: string): SidebarTab {
@@ -85,15 +88,17 @@ export default function SessionList({
   const { t, language } = useI18n()
   const location = useLocation()
   const { sessionId } = useParams()
-  const sessions = useChatStore((state) => state.sessions)
-  const currentSession = useChatStore((state) => state.currentSession)
-  const taskBoard = useChatStore((state) => state.taskBoard)
-  const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
-  const loadingSessions = useChatStore((state) => state.loadingSessions)
-  const currentSessionId = useChatStore((state) => state.currentSessionId)
-  const fetchSessions = useChatStore((state) => state.fetchSessions)
-  const selectSession = useChatStore((state) => state.selectSession)
-  const deleteSession = useChatStore((state) => state.deleteSession)
+  const {
+    sessions,
+    currentSession,
+    taskBoard,
+    sessionsBootstrapped,
+    loadingSessions,
+    currentSessionId,
+    fetchSessions,
+    selectSession,
+    deleteSession,
+  } = useChatStoreShallow(selectSessionListState)
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
@@ -113,6 +118,7 @@ export default function SessionList({
   const [groupWorkspaceAgents, setGroupWorkspaceAgents] = useState<
     Record<string, WorkspaceAgent[]>
   >({})
+  const messageListScrollRef = useRef<HTMLDivElement>(null)
   const pinnedIds = useMemo(() => new Set(prefs.pinned), [prefs.pinned])
   const archivedIds = useMemo(() => new Set(prefs.archived), [prefs.archived])
   const groupWorkspaceIds = useMemo(
@@ -700,6 +706,7 @@ export default function SessionList({
         <div className={cn('my-3', activeTab !== 'messages' && 'hidden')} />
 
         <div
+          ref={messageListScrollRef}
           className={cn('flex-1 overflow-y-auto px-2 pb-4', activeTab !== 'messages' && 'hidden')}
         >
           {hint && (
@@ -843,8 +850,16 @@ export default function SessionList({
                   : t('还没有会话')}
             </div>
           ) : (
-            <ul className="space-y-1">
-              {sessionTree.map((item) => {
+            <VirtualList
+              className="space-y-1"
+              scrollRef={messageListScrollRef}
+              items={sessionTree}
+              getKey={(item) => item.parent.id}
+              estimateSize={(item) =>
+                estimateProjectSessionGroupHeight(item, expandedWorkspaces, taskBoard?.sessionId)
+              }
+              overscanPx={700}
+              renderItem={(item) => {
                 const workspaceId = item.parent.workspaceId
                 const isGroupParent = item.parent.type === 'group' && Boolean(workspaceId)
                 const workspaceAgents =
@@ -1272,8 +1287,8 @@ export default function SessionList({
                     )}
                   </li>
                 )
-              })}
-            </ul>
+              }}
+            />
           )}
         </div>
 
@@ -1808,6 +1823,21 @@ function groupMemberCount(session: Session, childCount: number, loadedCount?: nu
   if (explicitAgentIds.length) return explicitAgentIds.length + 1
   if (loadedCount && loadedCount > 0) return loadedCount
   return Math.max(1, childCount + 1)
+}
+
+function estimateProjectSessionGroupHeight(
+  group: SessionGroup,
+  expandedWorkspaces: Set<string>,
+  taskBoardSessionId?: string | null,
+) {
+  const baseRowHeight = 48
+  const workspaceId = group.parent.workspaceId
+  const expanded = Boolean(workspaceId && expandedWorkspaces.has(workspaceId))
+  if (!expanded) return baseRowHeight
+
+  const childCount = group.children.filter(isOrchestratorTaskSession).length
+  const previewAllowance = taskBoardSessionId === group.parent.id ? 4 : 0
+  return baseRowHeight + Math.max(1, childCount + previewAllowance) * 34 + 10
 }
 
 function childTaskStatusText(status?: string) {

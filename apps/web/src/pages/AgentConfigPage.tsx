@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import CollapsibleSessionSidebar from '../components/chat/CollapsibleSessionSidebar'
+import { requestConfirmDialog, requestNoticeDialog } from '../components/ConfirmDialog'
 import {
   agentLibraryChangeEvent,
   createSavedAgent,
@@ -295,7 +296,13 @@ export default function AgentConfigPage() {
 
   async function deleteAgent() {
     if (!selectedAgent) return
-    const confirmed = window.confirm(`删除 Agent「${selectedAgent.name}」？已加入工作区的成员不会被自动删除。`)
+    const confirmed = await requestConfirmDialog({
+      title: '删除 Agent？',
+      description: '已加入工作区的成员不会被自动删除。',
+      detail: selectedAgent.name,
+      confirmLabel: '删除',
+      tone: 'danger',
+    })
     if (!confirmed) return
     try {
       const updated = agents.filter((agent) => agent.id !== selectedAgent.id)
@@ -380,7 +387,13 @@ export default function AgentConfigPage() {
 
   function toastSaveFailed(error: unknown) {
     const message = error instanceof Error ? error.message : String(error || '')
-    window.alert(`Agent 配置保存到服务端失败，请检查后端/客户端连接后重试。${message ? `\n${message}` : ''}`)
+    void requestNoticeDialog({
+      title: 'Agent 配置保存失败',
+      description: '请检查后端/客户端连接后重试。',
+      detail: message || undefined,
+      confirmLabel: '知道了',
+      tone: 'warning',
+    })
   }
 
   function applyExpertProfile(profileId: string) {

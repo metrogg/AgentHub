@@ -1,4 +1,4 @@
-import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { workspaceNameFromPath } from '@agenthub/shared'
 import {
@@ -26,6 +26,7 @@ import {
 import { useI18n } from '../lib/i18n'
 import { requestSettingsDialog } from '../lib/settingsDialog'
 import { pickWorkspaceFolder } from '../lib/native'
+import { requestConfirmDialog } from '../components/ConfirmDialog'
 import {
   QuickPromptBubbles,
   createQuickPromptSeed,
@@ -35,15 +36,26 @@ import { AgentHubRuntimeProvider } from '../lib/runtime'
 import { sendModeShouldSubmit, useShortcutSettings } from '../lib/shortcuts'
 import { isProjectWorkspace, workspaceSearchText, workspaceSubtitle } from '../lib/workspaceFilters'
 import { useChatStore } from '../stores/chatStore'
+import {
+  makeSelectSessionExists,
+  selectChatPageState,
+  useChatStoreShallow,
+} from '../stores/chatSelectors'
 
 export default function ChatPage() {
   const { sessionId } = useParams()
   const navigate = useNavigate()
-  const currentSessionId = useChatStore((state) => state.currentSessionId)
-  const selectSession = useChatStore((state) => state.selectSession)
-  const sessions = useChatStore((state) => state.sessions)
-  const sessionsBootstrapped = useChatStore((state) => state.sessionsBootstrapped)
-  const initWebSocket = useChatStore((state) => state.initWebSocket)
+  const {
+    currentSessionId,
+    selectSession,
+    sessionsBootstrapped,
+    initWebSocket,
+  } = useChatStoreShallow(selectChatPageState)
+  const selectRouteSessionExists = useMemo(
+    () => makeSelectSessionExists(sessionId),
+    [sessionId],
+  )
+  const routeSessionExists = useChatStore(selectRouteSessionExists)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const threadReady = Boolean(sessionId && currentSessionId === sessionId)
 
@@ -60,13 +72,19 @@ export default function ChatPage() {
     if (!sessionId) return
     if (sessionId === currentSessionId) return
     if (!sessionsBootstrapped) return
-    const exists = sessions.some((s) => s.id === sessionId)
-    if (!exists) {
+    if (!routeSessionExists) {
       navigate('/', { replace: true })
       return
     }
     void selectSession(sessionId).catch(() => navigate('/', { replace: true }))
-  }, [sessionId, currentSessionId, navigate, selectSession, sessions, sessionsBootstrapped])
+  }, [
+    sessionId,
+    currentSessionId,
+    navigate,
+    routeSessionExists,
+    selectSession,
+    sessionsBootstrapped,
+  ])
 
   return (
     <div className="agenthub-chat-shell flex h-screen overflow-hidden bg-[#F7F7F7] text-neutral-950">
@@ -367,7 +385,14 @@ function Welcome() {
     event.stopPropagation()
     if (workspaceBusy) return
     const name = workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId
-    if (!window.confirm(`确定要删除工作区「${name}」吗？此操作不可撤销。`)) return
+    const confirmed = await requestConfirmDialog({
+      title: '删除工作区？',
+      description: '此操作不可撤销。',
+      detail: name,
+      confirmLabel: '删除',
+      tone: 'danger',
+    })
+    if (!confirmed) return
     setWorkspaceBusy(true)
     try {
       await api.deleteWorkspace(workspaceId)

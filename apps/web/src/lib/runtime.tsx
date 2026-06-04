@@ -5,7 +5,8 @@ import {
   type AppendMessage,
   type ThreadMessageLike,
 } from '@assistant-ui/react'
-import { describeRuntimeActivity, useChatStore } from '../stores/chatStore'
+import { describeRuntimeActivity } from '../stores/chatStore'
+import { selectRuntimeState, useChatStoreShallow } from '../stores/chatSelectors'
 import type { AgentArtifact, ChatAttachment, Message } from './api'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 
@@ -233,15 +234,17 @@ function readAgentAvatarPart(
 }
 
 export function AgentHubRuntimeProvider({ children }: { children: ReactNode }) {
-  const messages = useChatStore((state) => state.messages)
-  const streamingMessage = useChatStore((state) => state.streamingMessage)
-  const streamingCodeAgentRun = useChatStore((state) => state.streamingCodeAgentRun)
-  const agentTyping = useChatStore((state) => state.agentTyping)
-  const agentActivity = useChatStore((state) => state.agentActivity)
-  const currentSessionId = useChatStore((state) => state.currentSessionId)
-  const sendMessage = useChatStore((state) => state.sendMessage)
-  const safetyMode = useChatStore((state) => state.safetyMode)
-  const cancelRun = useChatStore((state) => state.cancelRun)
+  const {
+    messages,
+    streamingMessage,
+    streamingCodeAgentRun,
+    agentTyping,
+    agentActivity,
+    currentSessionId,
+    sendMessage,
+    safetyMode,
+    cancelRun,
+  } = useChatStoreShallow(selectRuntimeState)
 
   const threadMessages = useMemo<ThreadMessageLike[]>(() => {
     const list = messages.map(toThreadMessage)
