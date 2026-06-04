@@ -26,7 +26,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 - 通信层采用 Matrix：Room / timeline / participant / mention 是协作事实源。
 - Manager Runtime 学 OpenClaw / QwenPaw：Manager 是真实协调器，不是一次性 Planner。
 - Worker Runtime 学 HiClaw，但保留 AgentHub 的 Coding Agent 优势：Claude Code / OpenCode / Codex / Gemini 是核心 Worker 基底。
-- 共享存储采用 MinIO/S3-compatible 语义；本地 filesystem 只能作为开发兼容 fallback，不再作为目标主路径。
+- 共享存储默认采用本地 filesystem，但必须按 MinIO/S3-compatible object key 语义设计；MinIO/S3 只是后续可替换 adapter，不是第一阶段默认主路径。
 - AI Gateway 抽象化：短期 Local/LiteLLM，长期 Higress；不要让 Worker 到处拿真实 key。
 - A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope。
 - 当前仍处开发阶段，旧会话、旧任务、旧数据库和旧 workspace/storage 数据不是架构约束；必要时可以清库重建，不能为了旧数据保留旧路径。
@@ -58,7 +58,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 - 协议投影层：AG-UI 负责运行事件到前端 UI 的桥接；A2A 只作为外部互操作或 Matrix event 中的可选任务语义 envelope，不再是内部主通信路径。
 - 执行层：OpenClaw / QwenPaw 是 Manager / Team Leader 优先基底；Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Worker Agent 基底。不要把普通内部 LLM 当作产品主路径 Agent runtime。
 - 能力层：MCP、Skills、Rules、shell、文件系统、浏览器等是 Code Agent 能使用的工具能力，不是 Agent 类型。
-- 工作区、存储与状态层：系统默认工作空间根、Worker workdirs、ArtifactStore / SharedStorage、MinIO/S3 adapter、本地 filesystem fallback、兼容旧 `.agenthub/handoff` 的只读读取、run/resource events。
+- 工作区、存储与状态层：系统默认工作空间根、Worker workdirs、ArtifactStore / SharedStorage、本地 filesystem object store、可选 MinIO/S3 adapter、兼容旧 `.agenthub/handoff` 的只读读取、run/resource events。
 
 配置真相也要分层：
 
@@ -70,14 +70,14 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
-底层重构方向已经进一步明确：建设 AgentHub 自己的 HiClaw-lite Open Kernel，而不是继续手搓低配协作层。第一阶段不默认引入 Kubernetes、完整 Higress 集群、企业多租户等重能力，但通信层必须采用真实 Matrix homeserver（优先 Tuwunel，兼容 Synapse/Conduit），存储层接真实 MinIO/S3-compatible adapter，Gateway 保留 Higress/LiteLLM adapter 抽象。
+底层重构方向已经进一步明确：建设 AgentHub 自己的轻量版 HiClaw Open Kernel，而不是继续手搓低配协作层，也不是照搬 HiClaw 的企业部署栈。第一阶段默认形态是单进程 AgentHub 服务 + CLI 子进程 Worker + 自研 UI + 本地 filesystem 共享存储；通信层保留 Matrix Room/timeline/participant/mention 语义，并提供真实 Matrix homeserver adapter（优先 Tuwunel，兼容 Synapse/Conduit），但本地开发可用 RoomService/local adapter；Gateway 保留 Higress/LiteLLM adapter 抽象。
 
 四个最高优先级模块：
 
 - Manager 协调器：对齐 HiClaw Manager 章节，Manager 要有 runtime、人格配置、skills、state、Worker registry、Room 通信和 heartbeat/patrol。
 - Worker 运行时：对齐 HiClaw Worker 章节，Worker 是真实运行实体，有身份、状态、模型、skills/MCP、Room、heartbeat、sleep/wake/stop。
 - Matrix 通信层：对齐 HiClaw Matrix/Tuwunel 章节，Room / timeline / participant / mention 是协作事实源；`LocalMatrixCompatibleRoomAdapter` 只能作为测试/开发 fallback，不能被当成真实通信层。
-- 共享存储层：对齐 HiClaw MinIO 章节，产物、任务契约和 handoff ref 进入 ArtifactStore / SharedStorage，并优先通过 MinIO/S3-compatible object store 保存。
+- 共享存储层：对齐 HiClaw MinIO 章节的“共享任务树/产物引用”思想，但第一阶段默认由本地 filesystem object store 实现；产物、任务契约和 handoff ref 进入 ArtifactStore / SharedStorage，object key 语义保持 S3-compatible，后续可切 MinIO/S3 adapter。
 
 目标资源：
 

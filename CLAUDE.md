@@ -26,7 +26,7 @@ The new architecture target is **AgentHub Product Shell + HiClaw-lite Open Kerne
 - Use Matrix as the internal collaboration source of truth: Room, timeline, participant, and mention are first-class.
 - Learn Manager Runtime from HiClaw OpenClaw/QwenPaw: Manager is a real coordinator runtime, not a one-shot Planner function.
 - Learn Worker Runtime from HiClaw, while keeping AgentHub's coding-agent advantage: Claude Code, OpenCode, Codex, and Gemini are core Worker bases.
-- Use MinIO/S3-compatible SharedStorage as the target contract store; local filesystem is only a development fallback and optional project mirror.
+- Use local filesystem SharedStorage as the default lightweight contract store, but keep S3-compatible object key semantics so MinIO/S3 can be swapped in later.
 - Abstract AI Gateway. Short term: LocalGateway/LiteLLM. Long term: Higress-style model/MCP/credential governance.
 - A2A is no longer the first-stage internal communication backbone. Keep it for external interoperability or optional task semantic envelopes inside Matrix events.
 - This is still development. Old sessions, tasks, database rows, and workspace/storage data are not architecture constraints. Prefer clearing/rebuilding old data over preserving old execution paths.
@@ -36,7 +36,7 @@ The four highest-priority kernel modules are:
 1. Manager coordinator: runtime, persona config, skills, state, worker registry, Room communication, heartbeat/patrol.
 2. Worker runtime: real participant identity, model binding, skills/MCP scope, heartbeat, sleep/wake/stop, runtime lease.
 3. Matrix communication: real Matrix homeserver Room/timeline/participant/mention instead of session metadata or local tables pretending to be rooms. Prefer Tuwunel; keep Synapse/Conduit compatible.
-4. Shared storage: MinIO/S3-compatible ArtifactStore/SharedStorage with canonical `shared/tasks/{taskId}/...` object refs.
+4. Shared storage: filesystem-first ArtifactStore/SharedStorage with canonical `shared/tasks/{taskId}/...` object refs and S3-compatible object key semantics.
 
 Use `docs/hiclaw-wiki.agent.final.md` and local `hiclaw源码参考/` as the main HiClaw reference materials.
 
@@ -51,7 +51,7 @@ Before changing code, identify which layer you are working on:
 - Execution: OpenClaw / QwenPaw are preferred Manager / Team Leader bases. Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary Worker bases. Plain `llm` is not a product-path runtime; keep it only for non-core fallback.
 - Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
 - Collaboration contracts: user-explicit Specs may describe scope, allowed paths, required outputs, and acceptance criteria; they must not be trigger-based scenario templates.
-- Workspace, storage, and state: the system default workspace root, Worker workdirs, ArtifactStore/SharedStorage, MinIO/S3 adapter, local filesystem fallback, compatibility-only old `.agenthub/handoff`, resource events, trace events, and persisted task state.
+- Workspace, storage, and state: the system default workspace root, Worker workdirs, filesystem-first ArtifactStore/SharedStorage, optional MinIO/S3 adapter, compatibility-only old `.agenthub/handoff`, resource events, trace events, and persisted task state.
 
 Configuration truth is split deliberately:
 
@@ -63,7 +63,7 @@ Keep the internal default model visible and separate. It is only for welcome pro
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
 
-The next architecture direction is a HiClaw-lite open kernel, not more patches on the old DAG-first path. Matrix/Tuwunel is the chosen communication layer, and MinIO/S3-compatible SharedStorage is the target artifact/task-contract store. Kubernetes/full Higress/enterprise tenancy are not default first-stage dependencies, but their abstractions should shape Gateway and Controller/Reconciler boundaries. Gradually make `Room`, `TimelineEvent`, `Run`, `Task`, `WorkerInstance`, `Artifact`, and `RuntimeLease` first-class resources. `messages.ts` should shrink toward chat ingress and lightweight routing; task boards, child conversations, progress, and artifact cards should be projected from Matrix timeline, resource state, and AG-UI, not stitched together from legacy message metadata. See `docs/AgentHub-HiClaw-lite开源内核重构方案.md` before changing orchestration, child-thread, artifact, event, or runtime lifecycle code.
+The next architecture direction is a lightweight HiClaw-style open kernel, not more patches on the old DAG-first path and not a direct copy of HiClaw's enterprise deployment stack. The default shape is one AgentHub server process plus CLI Worker subprocesses, AgentHub's own UI, Room/Matrix timeline semantics, and filesystem-first SharedStorage. Real Matrix/Tuwunel and MinIO/S3 remain adapters, not mandatory first-stage runtime dependencies. Kubernetes/full Higress/enterprise tenancy are not default first-stage dependencies, but their abstractions should shape Gateway and Controller/Reconciler boundaries. Gradually make `Room`, `TimelineEvent`, `Run`, `Task`, `WorkerInstance`, `Artifact`, and `RuntimeLease` first-class resources. `messages.ts` should shrink toward chat ingress and lightweight routing; task boards, child conversations, progress, and artifact cards should be projected from Room timeline, resource state, and AG-UI, not stitched together from legacy message metadata. See `docs/AgentHub-HiClaw-lite开源内核重构方案.md` before changing orchestration, child-thread, artifact, event, or runtime lifecycle code.
 
 ## Stack
 
@@ -152,7 +152,7 @@ A2A is kept for interoperability:
 - Old A2A envelopes may become optional `taskEnvelope` payloads inside Matrix events.
 - Do not reintroduce `runtimeType = "a2a"` or show A2A as a selectable agent kind.
 
-The current implementation still has internal A2A envelope plus AgentHub local transport. Treat it as a migration compatibility path, not the target backbone.
+`LocalA2ATransport` and the old internal A2A execution chain have been deleted. Keep only protocol mapping helpers for external interoperability or optional Matrix `taskEnvelope` payloads; do not rebuild a local A2A transport as the internal task path.
 
 ### Session Tree Rules
 

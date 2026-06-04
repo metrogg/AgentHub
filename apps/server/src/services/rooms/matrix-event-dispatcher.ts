@@ -53,6 +53,26 @@ export interface MatrixRoomEventDispatcherHandlers {
     command: 'approve' | 'deny'
     body: string
   }): Promise<unknown>
+  resumeTaskRoomAfterApproval?(input: {
+    roomId: string
+    ownerId: string
+    sourceEventId: string
+    answer: string
+    runAfterResume?: boolean
+  }): Promise<{ consumed: boolean; appendedEventIds: string[] } | unknown>
+  resumeTaskRoomAfterHumanAnswer?(input: {
+    roomId: string
+    ownerId: string
+    sourceEventId: string
+    answer: string
+    runAfterResume?: boolean
+  }): Promise<{ consumed: boolean; appendedEventIds: string[] } | unknown>
+  denyTaskRoomClarification?(input: {
+    roomId: string
+    ownerId: string
+    sourceEventId: string
+    reason: string
+  }): Promise<{ consumed: boolean; appendedEventIds: string[] } | unknown>
   registerFileArtifact?(input: {
     roomId: string
     ownerId: string
@@ -73,9 +93,25 @@ export class MatrixRoomEventDispatcher {
       }),
       cancelTaskRoom: (input) => cancelTaskRoomFromMatrix(input),
       recordApprovalControl: (input) => recordApprovalControlFromMatrix(input),
+      resumeTaskRoomAfterHumanAnswer: (input) =>
+        workerRuntimeService.resumeTaskRoomAfterHumanAnswer({
+          roomId: input.roomId,
+          ownerId: input.ownerId,
+          sourceEventId: input.sourceEventId,
+          answer: input.answer,
+          runAfterResume: input.runAfterResume,
+        }),
+      denyTaskRoomClarification: (input) =>
+        workerRuntimeService.denyTaskRoomClarification({
+          roomId: input.roomId,
+          ownerId: input.ownerId,
+          sourceEventId: input.sourceEventId,
+          reason: input.reason,
+        }),
       registerFileArtifact: (input) => registerMatrixFileArtifact(input),
       ...handlers,
     }
+    this.handlers.resumeTaskRoomAfterApproval ??= this.handlers.resumeTaskRoomAfterHumanAnswer
   }
 
   async dispatchImportedEvents(input: MatrixRoomEventDispatcherInput): Promise<MatrixRoomEventDispatcherResult> {
@@ -116,6 +152,24 @@ export class MatrixRoomEventDispatcher {
       return true
     }
     if (command?.type === 'approve' || command?.type === 'deny') {
+      if (command.type === 'approve' && room.kind === 'task') {
+        const resumeResult = await this.handlers.resumeTaskRoomAfterApproval?.({
+          roomId: room.id,
+          ownerId: room.ownerId,
+          sourceEventId: event.id,
+          answer: command.reason || '批准继续。',
+        })
+        if (isConsumedResult(resumeResult)) return true
+      }
+      if (command.type === 'deny' && room.kind === 'task') {
+        const denyResult = await this.handlers.denyTaskRoomClarification?.({
+          roomId: room.id,
+          ownerId: room.ownerId,
+          sourceEventId: event.id,
+          reason: command.reason || '用户拒绝当前澄清请求。',
+        })
+        if (isConsumedResult(denyResult)) return true
+      }
       await this.handlers.recordApprovalControl?.({
         roomId: room.id,
         ownerId: room.ownerId,
@@ -132,6 +186,16 @@ export class MatrixRoomEventDispatcher {
         })
       }
       return true
+    }
+
+    if (event.senderType === 'human' && room.kind === 'task') {
+      const resumeResult = await this.handlers.resumeTaskRoomAfterHumanAnswer?.({
+        roomId: room.id,
+        ownerId: room.ownerId,
+        sourceEventId: event.id,
+        answer: event.body,
+      })
+      if (isConsumedResult(resumeResult)) return true
     }
 
     const mentionedParticipantIds = matrixMentionedParticipantIds(event.metadata)
@@ -186,6 +250,10 @@ function parseMatrixControlCommand(body: string | null | undefined) {
   if (command === 'approve' || command === 'ok' || command === 'yes') return { type: 'approve' as const, reason: rest }
   if (command === 'deny' || command === 'reject' || command === 'no') return { type: 'deny' as const, reason: rest }
   return null
+}
+
+function isConsumedResult(result: unknown): result is { consumed: boolean } {
+  return Boolean(result && typeof result === 'object' && 'consumed' in result && (result as any).consumed === true)
 }
 
 async function cancelTaskRoomFromMatrix(input: {

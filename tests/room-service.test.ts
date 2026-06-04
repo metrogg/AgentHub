@@ -1,5 +1,5 @@
 import './setup'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 
@@ -7,6 +7,7 @@ const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
 const taskThreadApi = await import('../apps/server/src/services/orchestrator/task-thread-service')
 const agentRunnerApi = await import('../apps/server/src/services/agent-runner')
+const workerRuntimeApi = await import('../apps/server/src/services/worker-runtime/worker-runtime-service')
 const sharedApi = await import('../packages/shared/src/index')
 
 const {
@@ -23,6 +24,7 @@ const {
   workspaces,
   runtimeLeases,
   artifacts,
+  taskClarifications,
   eq,
 } = dbApi
 const { roomController, roomService } = roomsApi
@@ -35,7 +37,118 @@ const {
 } = roomsApi
 const { ensureTaskThread } = taskThreadApi
 const { cleanupWebSocket, joinRoom } = agentRunnerApi
+const { workerRuntimeService } = workerRuntimeApi
 const { WsEvent } = sharedApi
+
+async function createTaskRoomWithPendingClarification(label: string) {
+  const [workspace] = await db
+    .insert(workspaces)
+    .values({
+      ownerId: 'default-user',
+      name: `${label} Workspace`,
+      goal: 'Resume from Matrix clarification answer',
+    })
+    .returning()
+  const [groupSession] = await db
+    .insert(sessions)
+    .values({
+      title: `${label} Group`,
+      type: 'group',
+      ownerId: 'default-user',
+      workspaceId: workspace!.id,
+    })
+    .returning()
+  const [taskSession] = await db
+    .insert(sessions)
+    .values({
+      title: `${label} Task`,
+      type: 'direct',
+      ownerId: 'default-user',
+      workspaceId: workspace!.id,
+      metadata: { kind: 'orchestrator-task' },
+    })
+    .returning()
+  const [run] = await db
+    .insert(orchestratorRuns)
+    .values({
+      workspaceId: workspace!.id,
+      groupSessionId: groupSession!.id,
+      status: 'running',
+    })
+    .returning()
+  const [agent] = await db
+    .insert(workspaceAgents)
+    .values({
+      workspaceId: workspace!.id,
+      name: `${label} Worker`,
+      role: 'Worker',
+      modelId: 'test-model',
+      runtimeType: 'code-agent',
+      codeAgentType: 'opencode',
+    })
+    .returning()
+  const [worker] = await db
+    .insert(workerInstances)
+    .values({
+      workspaceId: workspace!.id,
+      workspaceAgentId: agent!.id,
+      runtimeFamily: 'worker',
+      runtimeBase: 'opencode',
+      modelId: 'test-model',
+      observedState: 'waiting_for_human',
+    })
+    .returning()
+  const [task] = await db
+    .insert(workspaceTasks)
+    .values({
+      workspaceId: workspace!.id,
+      runId: run!.id,
+      sessionId: taskSession!.id,
+      agentId: agent!.id,
+      title: `${label} clarification task`,
+      description: 'Ask human before continuing',
+      status: 'blocked',
+    })
+    .returning()
+  const thread = await ensureTaskThread({
+    workspaceId: workspace!.id,
+    runId: run!.id,
+    taskId: task!.id,
+    groupSessionId: groupSession!.id,
+    sessionId: taskSession!.id,
+    ownerId: 'default-user',
+    taskTitle: task!.title,
+    workspaceAgentId: agent!.id,
+    workerInstanceId: worker!.id,
+    agentName: agent!.name,
+  })
+  const room = await roomController.ensureTaskThreadRoom(thread.id, 'default-user')
+  const workerParticipant = await roomService.addWorkerParticipant(room.id, agent!.id)
+  const clarificationId = randomUUID()
+  await db.insert(taskClarifications).values({
+    id: clarificationId,
+    runId: run!.id,
+    taskId: task!.id,
+    agentId: agent!.id,
+    question: '是否按当前方案继续？',
+    options: ['继续', '停止'],
+    status: 'pending',
+    createdAt: new Date(),
+  })
+  await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: 'worker',
+    type: 'approval.requested',
+    body: '是否按当前方案继续？',
+    metadata: {
+      kind: 'worker-runtime.clarification-requested',
+      clarificationId,
+      question: '是否按当前方案继续？',
+      workspaceAgentId: agent!.id,
+    },
+  })
+  return { room, agent: agent!, workerParticipant, clarificationId }
+}
 
 describe('RoomService local Matrix-compatible adapter', () => {
   test('creates a Matrix-compatible room and appends ordered timeline events', async () => {
@@ -1057,6 +1170,137 @@ describe('RoomService local Matrix-compatible adapter', () => {
     expect(updatedLease?.status).toBe('released')
     const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
     expect(events.some((row) => row.metadata?.kind === 'matrix.control.stop.applied')).toBe(true)
+  })
+
+  test('Matrix dispatcher applies /approve as an answer to a pending Worker clarification', async () => {
+    const { room, clarificationId } = await createTaskRoomWithPendingClarification('Matrix Approve')
+    const approveEvent = await roomService.importTimelineEvent({
+      roomId: room.id,
+      providerEventId: '$matrix-approve',
+      senderType: 'human',
+      type: 'human.message',
+      body: '/approve 按这个方向继续',
+      metadata: { kind: 'matrix.sync.imported', matrix: { eventId: '$matrix-approve' } },
+    })
+
+    const dispatcher = new MatrixRoomEventDispatcher({
+      stepManagerRoom: async () => {},
+      runWorkerTaskRoom: async () => {},
+      resumeTaskRoomAfterApproval: (input: any) =>
+        workerRuntimeService.resumeTaskRoomAfterHumanAnswer({
+          roomId: input.roomId,
+          ownerId: input.ownerId,
+          sourceEventId: input.sourceEventId,
+          answer: input.answer,
+          runAfterResume: false,
+        }),
+    })
+    const result = await dispatcher.dispatchImportedEvents({ eventIds: [approveEvent.id] })
+    expect(result.dispatchedEventIds).toEqual([approveEvent.id])
+
+    const [answered] = await db
+      .select()
+      .from(taskClarifications)
+      .where(eq(taskClarifications.id, clarificationId))
+      .limit(1)
+    expect(answered?.status).toBe('answered')
+    expect(answered?.answer).toBe('按这个方向继续')
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+    const resumeEvent = events.find((row) => row.metadata?.kind === 'worker-runtime.resume-requested')
+    expect(resumeEvent?.metadata?.sourceEventId).toBe(approveEvent.id)
+    expect(resumeEvent?.metadata?.clarificationId).toBe(clarificationId)
+    expect(resumeEvent?.metadata?.answer).toBe('按这个方向继续')
+    expect(events.some((row) => row.metadata?.kind === 'matrix.control.approval')).toBe(false)
+  })
+
+  test('Matrix dispatcher treats plain task room replies as pending Worker clarification answers before mentions', async () => {
+    const { room, agent, workerParticipant, clarificationId } =
+      await createTaskRoomWithPendingClarification('Matrix Plain Reply')
+    const workerCalls: any[] = []
+    const replyEvent = await roomService.importTimelineEvent({
+      roomId: room.id,
+      providerEventId: '$matrix-plain-reply',
+      senderType: 'human',
+      type: 'human.message',
+      body: `${workerParticipant.providerUserId} 可以，继续执行。`,
+      metadata: {
+        kind: 'matrix.sync.imported',
+        matrix: {
+          eventId: '$matrix-plain-reply',
+          mentionedParticipantIds: [workerParticipant.id],
+        },
+      },
+    })
+
+    const dispatcher = new MatrixRoomEventDispatcher({
+      stepManagerRoom: async () => {},
+      runWorkerTaskRoom: async (input: any) => {
+        workerCalls.push(input)
+      },
+      resumeTaskRoomAfterHumanAnswer: (input: any) =>
+        workerRuntimeService.resumeTaskRoomAfterHumanAnswer({
+          roomId: input.roomId,
+          ownerId: input.ownerId,
+          sourceEventId: input.sourceEventId,
+          answer: input.answer,
+          runAfterResume: false,
+        }),
+    })
+    const result = await dispatcher.dispatchImportedEvents({ eventIds: [replyEvent.id] })
+    expect(result.dispatchedEventIds).toEqual([replyEvent.id])
+    expect(workerCalls).toHaveLength(0)
+
+    const [answered] = await db
+      .select()
+      .from(taskClarifications)
+      .where(eq(taskClarifications.id, clarificationId))
+      .limit(1)
+    expect(answered?.status).toBe('answered')
+    expect(answered?.answer).toBe(`${workerParticipant.providerUserId} 可以，继续执行。`)
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+    const resumeEvent = events.find((row) => row.metadata?.kind === 'worker-runtime.resume-requested')
+    expect(resumeEvent?.metadata?.sourceEventId).toBe(replyEvent.id)
+    expect(resumeEvent?.metadata?.clarificationId).toBe(clarificationId)
+    expect(resumeEvent?.metadata?.workspaceAgentId).toBeUndefined()
+    expect(agent.name).toBe('Matrix Plain Reply Worker')
+  })
+
+  test('Matrix dispatcher binds /deny to a pending Worker clarification without resuming the Worker', async () => {
+    const { room, clarificationId } = await createTaskRoomWithPendingClarification('Matrix Deny')
+    const denyEvent = await roomService.importTimelineEvent({
+      roomId: room.id,
+      providerEventId: '$matrix-deny',
+      senderType: 'human',
+      type: 'human.message',
+      body: '/deny 方向不对，先不要继续',
+      metadata: { kind: 'matrix.sync.imported', matrix: { eventId: '$matrix-deny' } },
+    })
+
+    const workerCalls: any[] = []
+    const dispatcher = new MatrixRoomEventDispatcher({
+      stepManagerRoom: async () => {},
+      runWorkerTaskRoom: async (input: any) => {
+        workerCalls.push(input)
+      },
+    })
+    const result = await dispatcher.dispatchImportedEvents({ eventIds: [denyEvent.id] })
+    expect(result.dispatchedEventIds).toEqual([denyEvent.id])
+    expect(workerCalls).toHaveLength(0)
+
+    const [answered] = await db
+      .select()
+      .from(taskClarifications)
+      .where(eq(taskClarifications.id, clarificationId))
+      .limit(1)
+    expect(answered?.status).toBe('answered')
+    expect(answered?.answer).toBe('[DENIED] 方向不对，先不要继续')
+    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+    const deniedEvent = events.find((row) => row.metadata?.kind === 'worker-runtime.clarification-denied')
+    expect(deniedEvent?.metadata?.sourceEventId).toBe(denyEvent.id)
+    expect(deniedEvent?.metadata?.clarificationId).toBe(clarificationId)
+    expect(deniedEvent?.metadata?.reason).toBe('方向不对，先不要继续')
+    expect(events.some((row) => row.metadata?.kind === 'worker-runtime.resume-requested')).toBe(false)
+    expect(events.some((row) => row.metadata?.kind === 'matrix.control.approval')).toBe(false)
   })
 
   test('Matrix dispatcher registers shared Matrix file refs as ArtifactStore records', async () => {

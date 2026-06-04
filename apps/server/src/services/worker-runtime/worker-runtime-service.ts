@@ -40,10 +40,12 @@ export interface RunTaskRoomResult extends WorkerRuntimeResult {
 export interface ResumeTaskRoomAfterHumanAnswerInput {
   roomId: string
   ownerId: string
-  sourceMessageId: string
+  sourceMessageId?: string
+  sourceEventId?: string
   answer: string
   runtime?: WorkerRuntime
   executeInline?: boolean
+  runAfterResume?: boolean
   signal?: AbortSignal
 }
 
@@ -52,6 +54,22 @@ export interface ResumeTaskRoomAfterHumanAnswerResult {
   consumed: boolean
   reason: string
   resumed: boolean
+  appendedEventIds: string[]
+}
+
+export interface DenyTaskRoomClarificationInput {
+  roomId: string
+  ownerId: string
+  sourceMessageId?: string
+  sourceEventId?: string
+  reason: string
+}
+
+export interface DenyTaskRoomClarificationResult {
+  roomId: string
+  consumed: boolean
+  reason: string
+  denied: boolean
   appendedEventIds: string[]
 }
 
@@ -323,12 +341,17 @@ export class WorkerRuntimeService {
     }
 
     const timeline = await roomService.listTimelineEvents({ roomId: room.id, limit: 500 })
-    const humanEvent = timeline.find((event) => event.metadata?.messageId === input.sourceMessageId)
+    const humanEvent = timeline.find(
+      (event) =>
+        (input.sourceMessageId ? event.metadata?.messageId === input.sourceMessageId : false) ||
+        (input.sourceEventId ? event.id === input.sourceEventId : false),
+    )
     const humanSequence = humanEvent?.sequence ?? Number.MAX_SAFE_INTEGER
     const duplicateResume = timeline.find(
       (event) =>
         event.metadata?.kind === 'worker-runtime.resume-requested' &&
-        event.metadata?.sourceMessageId === input.sourceMessageId,
+        ((input.sourceMessageId ? event.metadata?.sourceMessageId === input.sourceMessageId : false) ||
+          (input.sourceEventId ? event.metadata?.sourceEventId === input.sourceEventId : false)),
     )
     if (duplicateResume) {
       return {
@@ -412,6 +435,7 @@ export class WorkerRuntimeService {
         kind: 'worker-runtime.resume-requested',
         clarificationId: answeredClarification?.id ?? clarificationId,
         sourceMessageId: input.sourceMessageId,
+        sourceEventId: input.sourceEventId,
         clarificationEventId: clarification.id,
         question,
         answer,
@@ -442,11 +466,22 @@ export class WorkerRuntimeService {
           metadata: {
             kind: 'worker-runtime.resume-failed',
             sourceMessageId: input.sourceMessageId,
+            sourceEventId: input.sourceEventId,
             clarificationEventId: clarification.id,
             error: error?.message || String(error),
           },
         })
         appendedEventIds.push(failed.id)
+      }
+    }
+
+    if (input.runAfterResume === false) {
+      return {
+        roomId: room.id,
+        consumed: true,
+        reason: 'Human clarification answer recorded a WorkerRuntime resume request.',
+        resumed: false,
+        appendedEventIds,
       }
     }
 
@@ -462,6 +497,130 @@ export class WorkerRuntimeService {
       reason: 'Human clarification answer resumed the task room WorkerRuntime.',
       resumed: true,
       appendedEventIds,
+    }
+  }
+
+  async denyTaskRoomClarification(
+    input: DenyTaskRoomClarificationInput,
+  ): Promise<DenyTaskRoomClarificationResult> {
+    const room = await roomService.getRoomForOwner(input.roomId, input.ownerId)
+    if (room.kind !== 'task') {
+      return {
+        roomId: room.id,
+        consumed: false,
+        reason: 'Session room is not a task room.',
+        denied: false,
+        appendedEventIds: [],
+      }
+    }
+
+    const timeline = await roomService.listTimelineEvents({ roomId: room.id, limit: 500 })
+    const humanEvent = timeline.find(
+      (event) =>
+        (input.sourceMessageId ? event.metadata?.messageId === input.sourceMessageId : false) ||
+        (input.sourceEventId ? event.id === input.sourceEventId : false),
+    )
+    const humanSequence = humanEvent?.sequence ?? Number.MAX_SAFE_INTEGER
+    const duplicateDenial = timeline.find(
+      (event) =>
+        event.metadata?.kind === 'worker-runtime.clarification-denied' &&
+        ((input.sourceMessageId ? event.metadata?.sourceMessageId === input.sourceMessageId : false) ||
+          (input.sourceEventId ? event.metadata?.sourceEventId === input.sourceEventId : false)),
+    )
+    if (duplicateDenial) {
+      return {
+        roomId: room.id,
+        consumed: true,
+        reason: 'Human clarification denial was already recorded.',
+        denied: true,
+        appendedEventIds: [duplicateDenial.id],
+      }
+    }
+
+    const clarification = [...timeline]
+      .reverse()
+      .find(
+        (event) =>
+          event.sequence < humanSequence &&
+          event.type === 'approval.requested' &&
+          event.metadata?.kind === 'worker-runtime.clarification-requested',
+      )
+    if (!clarification) {
+      return {
+        roomId: room.id,
+        consumed: false,
+        reason: 'Task room has no pending Worker clarification request.',
+        denied: false,
+        appendedEventIds: [],
+      }
+    }
+
+    const laterDecisionOrCompletion = timeline.find(
+      (event) =>
+        event.sequence > clarification.sequence &&
+        event.sequence < humanSequence &&
+        (event.metadata?.kind === 'worker-runtime.resume-requested' ||
+          event.metadata?.kind === 'worker-runtime.clarification-denied' ||
+          (event.metadata?.kind === 'worker-runtime.completed' &&
+            event.metadata?.status === 'completed')),
+    )
+    if (laterDecisionOrCompletion) {
+      return {
+        roomId: room.id,
+        consumed: false,
+        reason: 'A later Worker decision/completion already superseded the clarification.',
+        denied: false,
+        appendedEventIds: [],
+      }
+    }
+
+    const manager = await ensureManagerParticipant(room.id)
+    const denialReason = input.reason.trim() || '用户拒绝当前澄清请求。'
+    const question =
+      typeof clarification.metadata?.question === 'string'
+        ? clarification.metadata.question
+        : clarification.body
+    const clarificationId =
+      typeof clarification.metadata?.clarificationId === 'string'
+        ? clarification.metadata.clarificationId
+        : null
+    const targetWorkerId =
+      typeof clarification.metadata?.workspaceAgentId === 'string'
+        ? clarification.metadata.workspaceAgentId
+        : null
+    const answeredClarification = await answerPendingTaskClarification({
+      clarificationId,
+      runId: room.runId,
+      taskId: room.taskId,
+      agentId: targetWorkerId,
+      answer: `[DENIED] ${denialReason}`,
+    })
+    const deniedEvent = await roomService.appendTimelineEvent({
+      roomId: room.id,
+      senderParticipantId: manager.id,
+      senderType: 'manager',
+      type: 'task.progress',
+      body: '已记录你的拒绝，当前 Worker 不会按该澄清继续；我会交给 Manager 判断后续是返工、取消还是重新分配。',
+      metadata: {
+        kind: 'worker-runtime.clarification-denied',
+        status: 'denied',
+        clarificationId: answeredClarification?.id ?? clarificationId,
+        sourceMessageId: input.sourceMessageId,
+        sourceEventId: input.sourceEventId,
+        clarificationEventId: clarification.id,
+        question,
+        reason: denialReason,
+        answer: `[DENIED] ${denialReason}`,
+        clarificationStatus: answeredClarification?.status ?? null,
+      },
+    })
+
+    return {
+      roomId: room.id,
+      consumed: true,
+      reason: 'Human clarification denial was recorded for Manager review.',
+      denied: true,
+      appendedEventIds: [deniedEvent.id],
     }
   }
 

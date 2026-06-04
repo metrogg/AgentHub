@@ -9,7 +9,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - 多个 Agent 在真实子对话里执行，并交付网页、文档、报告、代码、应用等结果资产。
 - 平台逐步形成 `Space / Task Center / Asset Center / Expert Center / Eval & Trace` 的完整结构。
 
-当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向 HiClaw-lite 内核换血：先接入真实 Matrix / Tuwunel Room 通信、OpenClaw / QwenPaw Manager Runtime、Worker Runtime、MinIO/S3-compatible SharedStorage 和本地轻量 Controller/Reconciler，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
+当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向轻量版 HiClaw 内核换血：保留 HiClaw 的 Room / Manager / Worker / HITL 架构范式，但默认用单进程 AgentHub 服务 + CLI 子进程替代容器编排，用自研 UI 替代 Element Web，用本地 filesystem SharedStorage 替代 MinIO 集群，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
 
 如果你是第一次接手项目，先读 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)、[docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md) 和 [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)。它们是当前事实总览，用来区分新主线、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw 参考依据见 [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md) 和本地 `hiclaw源码参考/`。
 
@@ -28,7 +28,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - **A2A 外部互操作**：A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope；A2A 是协议，不是 Agent 类型。
 - **显式分工**：执行任务只接受 Manager / Orchestrator 的模型选择，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
 - **Agent Runtime / Agent Base 执行**：OpenClaw / QwenPaw 优先作为 Manager / Team Leader 基底；Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Worker 基底。自建 Agent 是在这些基底上配置角色、提示词、Skills/MCP 能力和权限。
-- **工作目录与共享存储**：每个 Worker 有自己的工作目录和 RuntimeLease；任务契约优先发布为 `shared/tasks/{taskId}/meta.json|spec.md|plan.md|result.md` 对象引用，MinIO/S3-compatible SharedStorage 是目标主路径，本地 filesystem 只作为开发 fallback 和项目镜像。
+- **工作目录与共享存储**：每个 Worker 有自己的工作目录和 RuntimeLease；任务契约优先发布为 `shared/tasks/{taskId}/meta.json|spec.md|plan.md|result.md` 对象引用。默认 SharedStorage 是本地 filesystem object store，但 object key 语义保持 S3-compatible，后续可替换为 MinIO/S3。
 - **产物可见**：文件、网页、diff、诊断产物进入 ArtifactStore，并从主群聊、任务 Room 和产物卡稳定投影。
 - **Coze 对标方向**：后续产品层要逐步补齐 Space、Task Center、Asset Center、Expert Center、Eval / Trace、部署与长期主动任务能力。
 
@@ -69,7 +69,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 执行层 | OpenClaw / QwenPaw 为 Manager / Team Leader 优先基底；Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Worker 基底；普通内部 LLM 只作非核心 fallback |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
 | 协作契约层 | 用户显式 Spec/Contract 描述范围、产出、验收和路径边界，不做固定场景模板 |
-| 工作区与存储层 | 系统默认工作空间根 + Worker workdirs + RuntimeLease + MinIO/S3-compatible ArtifactStore / SharedStorage；本地 filesystem 只作开发 fallback |
+| 工作区与存储层 | 系统默认工作空间根 + Worker workdirs + RuntimeLease + filesystem-first ArtifactStore / SharedStorage；MinIO/S3-compatible adapter 后续可替换接入 |
 
 产品北极星与 Coze 对标判断见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw-lite Kernel 方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
