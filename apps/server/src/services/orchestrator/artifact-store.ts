@@ -184,7 +184,7 @@ function normalizeArtifact(artifact: Record<string, unknown>): NormalizedArtifac
     stringValue(artifact.id) ??
     '未命名产物'
   const metadata = {
-    ...artifact,
+    ...metadataSafeArtifact(artifact),
     originalArtifactId: stringValue(artifact.id) ?? null,
   }
   return {
@@ -249,11 +249,19 @@ function materializeLocalArtifactObject(input: ArtifactObjectInput): Materialize
   let size: number | null = input.normalized.size
   let checksum: string | null = input.normalized.checksum
   let materialized = false
-  let materializationMode: 'copy' | 'content' | 'descriptor' = 'descriptor'
+  let materializationMode: 'copy' | 'bytes' | 'content' | 'descriptor' = 'descriptor'
 
   try {
     mkdirSync(dirname(storagePath), { recursive: true })
-    if (sourcePath && existsSync(sourcePath)) {
+    const bytes = bytesValue(input.artifact.bytes)
+    if (bytes) {
+      writeFileSync(storagePath, bytes)
+      size = bytes.byteLength
+      checksum = checksum ?? checksumBuffer(bytes)
+      materialized = true
+      materializationMode = 'bytes'
+    }
+    if (!materialized && sourcePath && existsSync(sourcePath)) {
       const stat = statSync(sourcePath)
       if (stat.isFile()) {
         copyFileSync(sourcePath, storagePath)
@@ -323,9 +331,15 @@ async function materializeS3ArtifactObject(input: ArtifactObjectInput): Promise<
   let body: Uint8Array | string
   let size: number | null = input.normalized.size
   let checksum: string | null = input.normalized.checksum
-  let materializationMode: 'copy' | 'content' | 'descriptor' = 'descriptor'
+  let materializationMode: 'copy' | 'bytes' | 'content' | 'descriptor' = 'descriptor'
 
-  if (sourcePath && existsSync(sourcePath) && statSync(sourcePath).isFile()) {
+  const artifactBytes = bytesValue(input.artifact.bytes)
+  if (artifactBytes) {
+    body = artifactBytes
+    size = artifactBytes.byteLength
+    checksum = checksum ?? checksumBuffer(artifactBytes)
+    materializationMode = 'bytes'
+  } else if (sourcePath && existsSync(sourcePath) && statSync(sourcePath).isFile()) {
     const bytes = readFileSync(sourcePath)
     body = bytes
     size = bytes.byteLength
@@ -495,4 +509,18 @@ function stringValue(value: unknown) {
 
 function numberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function metadataSafeArtifact(artifact: Record<string, unknown>) {
+  const { bytes: _bytes, ...rest } = artifact
+  return rest
+}
+
+function bytesValue(value: unknown): Uint8Array | null {
+  if (value instanceof Uint8Array) return value
+  if (value instanceof ArrayBuffer) return new Uint8Array(value)
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+  }
+  return null
 }

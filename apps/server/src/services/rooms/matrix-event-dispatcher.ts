@@ -2,6 +2,7 @@ import {
   and,
   db,
   eq,
+  matrixIdentities,
   roomParticipants,
   rooms,
   runtimeLeases,
@@ -14,6 +15,7 @@ import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { workerRuntimeService } from '../worker-runtime/worker-runtime-service'
+import { createMatrixClientFromEnv } from './matrix-client'
 import { roomService } from './room-service'
 
 export interface MatrixRoomEventDispatcherInput {
@@ -305,6 +307,12 @@ async function registerMatrixFileArtifact(input: {
   const [thread] = room.taskThreadId
     ? await db.select().from(taskThreads).where(eq(taskThreads.id, room.taskThreadId)).limit(1)
     : []
+  const materialized = await materializeMatrixFileArtifact({
+    roomId: room.id,
+    sourceEventId: input.sourceEventId,
+    file,
+    senderParticipantId: event?.senderParticipantId ?? null,
+  })
   const artifact = await registerTaskArtifact({
     workspaceId: room.workspaceId,
     runId: room.runId,
@@ -317,32 +325,128 @@ async function registerMatrixFileArtifact(input: {
       kind: 'file',
       title: file.name ?? 'Matrix shared file',
       path: file.name ?? `matrix-file-${input.sourceEventId}.json`,
-      mimeType: file.info?.mimetype,
-      size: file.info?.size,
-      content: JSON.stringify({
-        source: 'matrix-file-ref',
-        matrix: file,
-        sourceEventId: input.sourceEventId,
-      }, null, 2),
+      mimeType: materialized.mimeType ?? file.info?.mimetype,
+      size: materialized.size ?? file.info?.size,
+      bytes: materialized.bytes,
+      content: materialized.content,
       matrixFile: file,
       sourceEventId: input.sourceEventId,
+      matrixDownload: materialized.metadata,
     },
-    status: 'registered',
+    status: materialized.status,
   })
   if (!artifact) return null
   return roomService.appendTimelineEvent({
     roomId: room.id,
     senderType: 'system',
     type: 'artifact.created',
-    body: `已登记 Matrix 文件引用：${artifact.title}`,
+    body: materialized.status === 'registered'
+      ? `已从 Matrix 下载并登记共享文件：${artifact.title}`
+      : `已登记 Matrix 文件引用，但下载原始文件失败：${artifact.title}`,
     metadata: {
       kind: 'matrix.file.artifact-registered',
       sourceEventId: input.sourceEventId,
       artifactId: artifact.id,
       artifact: toCanonicalArtifactRecord(artifact),
+      matrixDownload: materialized.metadata,
     },
   })
 }
+
+async function materializeMatrixFileArtifact(input: {
+  roomId: string
+  sourceEventId: string
+  file: MatrixFileRef
+  senderParticipantId?: string | null
+}): Promise<{
+  status: 'registered' | 'partial'
+  bytes?: Uint8Array
+  content?: string
+  mimeType?: string | null
+  size?: number | null
+  metadata: Record<string, unknown>
+}> {
+  if (!input.file.url?.startsWith('mxc://')) {
+    return descriptorMatrixFileArtifact(input.file, input.sourceEventId, {
+      reason: 'not_mxc_uri',
+    })
+  }
+
+  try {
+    const client = createMatrixClientFromEnv()
+    const accessToken = await resolveMatrixMediaAccessToken(input.roomId, input.senderParticipantId)
+    const downloaded = await client.downloadMedia(
+      {
+        mxcUrl: input.file.url,
+        fileName: input.file.name,
+      },
+      { accessToken },
+    )
+    return {
+      status: 'registered',
+      bytes: downloaded.bytes,
+      mimeType: downloaded.contentType ?? input.file.info?.mimetype ?? null,
+      size: downloaded.bytes.byteLength,
+      metadata: {
+        source: 'matrix-media-download',
+        downloaded: true,
+        endpoint: downloaded.endpoint,
+        contentType: downloaded.contentType,
+        contentDisposition: downloaded.contentDisposition,
+        fileName: downloaded.fileName ?? input.file.name ?? null,
+        usedParticipantToken: Boolean(accessToken),
+      },
+    }
+  } catch (error) {
+    return descriptorMatrixFileArtifact(input.file, input.sourceEventId, {
+      reason: 'download_failed',
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+function descriptorMatrixFileArtifact(
+  file: MatrixFileRef,
+  sourceEventId: string,
+  extra: Record<string, unknown>,
+) {
+  return {
+    status: 'partial' as const,
+    content: JSON.stringify({
+      source: 'matrix-file-ref',
+      matrix: file,
+      sourceEventId,
+      ...extra,
+    }, null, 2),
+    mimeType: 'application/json',
+    size: undefined,
+    metadata: {
+      source: 'matrix-file-ref',
+      downloaded: false,
+      ...extra,
+    },
+  }
+}
+
+async function resolveMatrixMediaAccessToken(roomId: string, preferredParticipantId?: string | null) {
+  const participants = await db.select().from(roomParticipants).where(eq(roomParticipants.roomId, roomId))
+  const preferred = preferredParticipantId
+    ? participants.find((participant) => participant.id === preferredParticipantId)
+    : null
+  for (const participant of [preferred, ...participants]) {
+    const userId = participant?.providerUserId
+    if (!userId) continue
+    const [identity] = await db
+      .select()
+      .from(matrixIdentities)
+      .where(eq(matrixIdentities.userId, userId))
+      .limit(1)
+    if (identity?.accessToken) return identity.accessToken
+  }
+  return null
+}
+
+type MatrixFileRef = NonNullable<ReturnType<typeof matrixFileRef>>
 
 function matrixFileRef(metadata: Record<string, unknown> | null | undefined) {
   const matrix = metadata?.matrix

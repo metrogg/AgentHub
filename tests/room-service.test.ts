@@ -1,4 +1,6 @@
 import './setup'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
@@ -1152,5 +1154,178 @@ describe('RoomService local Matrix-compatible adapter', () => {
     expect(artifactRows[0]?.metadata?.matrixFile?.url).toBe('mxc://agenthub.local/market-report')
     const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
     expect(events.some((row) => row.metadata?.kind === 'matrix.file.artifact-registered')).toBe(true)
+  })
+
+  test('Matrix dispatcher downloads mxc media into ArtifactStore with the sender identity token', async () => {
+    const previousHomeserver = process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+    const previousServerName = process.env.AGENTHUB_MATRIX_SERVER_NAME
+    process.env.AGENTHUB_MATRIX_HOMESERVER_URL = 'http://matrix.test'
+    process.env.AGENTHUB_MATRIX_SERVER_NAME = 'agenthub.local'
+    Bun.env.AGENTHUB_MATRIX_HOMESERVER_URL = 'http://matrix.test'
+    Bun.env.AGENTHUB_MATRIX_SERVER_NAME = 'agenthub.local'
+
+    const mediaBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x61, 0x67, 0x65, 0x6e, 0x74])
+    const calls: Array<{ path: string; auth: string | null }> = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const parsed = new URL(String(url))
+      const auth = init?.headers
+        ? ((init.headers as Record<string, string>).Authorization ?? null)
+        : null
+      calls.push({ path: parsed.pathname, auth })
+      if (parsed.pathname.includes('/_matrix/client/v1/media/download/agenthub.local/market-report')) {
+        return new Response(mediaBytes, {
+          headers: {
+            'content-type': 'application/pdf',
+            'content-disposition': 'attachment; filename="market-report.pdf"',
+          },
+        })
+      }
+      return Response.json({}, { status: 404 })
+    }) as typeof fetch
+
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Matrix Media Workspace',
+        goal: 'Download media',
+      })
+      .returning()
+    const [groupSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Matrix Media Group',
+        type: 'group',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+      })
+      .returning()
+    const [taskSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Matrix Media Task',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        metadata: { kind: 'orchestrator-task' },
+      })
+      .returning()
+    const [run] = await db
+      .insert(orchestratorRuns)
+      .values({
+        workspaceId: workspace!.id,
+        groupSessionId: groupSession!.id,
+        status: 'running',
+      })
+      .returning()
+    const [task] = await db
+      .insert(workspaceTasks)
+      .values({
+        workspaceId: workspace!.id,
+        runId: run!.id,
+        sessionId: taskSession!.id,
+        title: 'Read downloaded Matrix file',
+        description: 'Use Matrix media',
+        status: 'running',
+      })
+      .returning()
+    const thread = await ensureTaskThread({
+      workspaceId: workspace!.id,
+      runId: run!.id,
+      taskId: task!.id,
+      groupSessionId: groupSession!.id,
+      sessionId: taskSession!.id,
+      ownerId: 'default-user',
+      taskTitle: task!.title,
+      agentName: null,
+    })
+    const room = await roomController.ensureTaskThreadRoom(thread.id, 'default-user')
+    const [human] = await db
+      .insert(roomParticipants)
+      .values({
+        roomId: room.id,
+        providerUserId: '@human-media-user:agenthub.local',
+        participantType: 'human',
+        userId: 'default-user',
+        displayName: 'You',
+        role: 'owner',
+      })
+      .returning()
+    await db.insert(matrixIdentities).values({
+      ownerType: 'human',
+      ownerId: 'media-user',
+      serverName: 'agenthub.local',
+      localpart: 'human-media-user',
+      userId: '@human-media-user:agenthub.local',
+      accessToken: 'human-media-token',
+      password: 'human-password',
+      displayName: 'You',
+    })
+    const [event] = await db
+      .insert(timelineEvents)
+      .values({
+        roomId: room.id,
+        providerEventId: '$matrix-media-file',
+        senderParticipantId: human!.id,
+        senderType: 'human',
+        type: 'file.shared',
+        body: 'market-report.pdf',
+        metadata: {
+          kind: 'matrix.sync.imported',
+          matrix: {
+            eventId: '$matrix-media-file',
+            senderUserId: '@human-media-user:agenthub.local',
+            file: {
+              msgtype: 'm.file',
+              name: 'market-report.pdf',
+              url: 'mxc://agenthub.local/market-report',
+              info: { mimetype: 'application/pdf', size: mediaBytes.byteLength },
+            },
+          },
+        },
+        sequence: 2,
+      })
+      .returning()
+
+    try {
+      const dispatcher = new MatrixRoomEventDispatcher({
+        stepManagerRoom: async () => {},
+        runWorkerTaskRoom: async () => {},
+      })
+      const result = await dispatcher.dispatchImportedEvents({ eventIds: [event!.id] })
+      expect(result.dispatchedEventIds).toEqual([event!.id])
+
+      const artifactRows = await db.select().from(artifacts).where(eq(artifacts.taskId, task!.id))
+      expect(artifactRows).toHaveLength(1)
+      expect(artifactRows[0]?.status).toBe('registered')
+      expect(artifactRows[0]?.size).toBe(mediaBytes.byteLength)
+      expect(artifactRows[0]?.mimeType).toBe('application/pdf')
+      expect(artifactRows[0]?.checksum).toBe(createHash('sha256').update(mediaBytes).digest('hex'))
+      expect(readFileSync(artifactRows[0]!.storagePath!)).toEqual(Buffer.from(mediaBytes))
+      expect(artifactRows[0]?.metadata?.matrixDownload?.downloaded).toBe(true)
+      expect(artifactRows[0]?.metadata?.matrixDownload?.usedParticipantToken).toBe(true)
+      expect(calls.some((call) => call.auth === 'Bearer human-media-token')).toBe(true)
+
+      const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
+      const artifactEvent = events.find((row) => row.metadata?.kind === 'matrix.file.artifact-registered')
+      expect(artifactEvent?.body).toContain('已从 Matrix 下载并登记共享文件')
+    } finally {
+      globalThis.fetch = originalFetch
+      if (previousHomeserver === undefined) {
+        delete process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+        delete Bun.env.AGENTHUB_MATRIX_HOMESERVER_URL
+      } else {
+        process.env.AGENTHUB_MATRIX_HOMESERVER_URL = previousHomeserver
+        Bun.env.AGENTHUB_MATRIX_HOMESERVER_URL = previousHomeserver
+      }
+      if (previousServerName === undefined) {
+        delete process.env.AGENTHUB_MATRIX_SERVER_NAME
+        delete Bun.env.AGENTHUB_MATRIX_SERVER_NAME
+      } else {
+        process.env.AGENTHUB_MATRIX_SERVER_NAME = previousServerName
+        Bun.env.AGENTHUB_MATRIX_SERVER_NAME = previousServerName
+      }
+    }
   })
 })

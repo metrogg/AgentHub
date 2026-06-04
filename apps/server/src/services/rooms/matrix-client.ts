@@ -42,6 +42,14 @@ export interface MatrixSyncResponse {
   }
 }
 
+export interface MatrixMediaDownloadResult {
+  bytes: Uint8Array
+  contentType: string | null
+  contentDisposition: string | null
+  fileName: string | null
+  endpoint: string
+}
+
 export class MatrixClient {
   constructor(private readonly options: MatrixClientOptions) {}
 
@@ -208,6 +216,25 @@ export class MatrixClient {
     })
   }
 
+  async downloadMedia(
+    input: { mxcUrl: string; fileName?: string | null },
+    auth: MatrixRequestAuth = {},
+  ): Promise<MatrixMediaDownloadResult> {
+    const media = parseMxcUrl(input.mxcUrl)
+    const filenamePart = input.fileName ? `/${encodeURIComponent(input.fileName)}` : ''
+    const modernPath =
+      `/_matrix/client/v1/media/download/${encodeURIComponent(media.serverName)}/${encodeURIComponent(media.mediaId)}${filenamePart}`
+    const legacyPath =
+      `/_matrix/media/v3/download/${encodeURIComponent(media.serverName)}/${encodeURIComponent(media.mediaId)}${filenamePart}`
+
+    try {
+      return await this.downloadMediaFromPath(modernPath, auth)
+    } catch (error) {
+      if (!shouldTryLegacyMediaDownload(error)) throw error
+      return this.downloadMediaFromPath(legacyPath, auth)
+    }
+  }
+
   async sendTextMessage(
     roomId: string,
     body: string,
@@ -323,6 +350,46 @@ export class MatrixClient {
     if (response.status === 204) return {} as T
     return response.json() as Promise<T>
   }
+
+  private async downloadMediaFromPath(path: string, auth: MatrixRequestAuth): Promise<MatrixMediaDownloadResult> {
+    const response = await this.rawRequest(path, {
+      method: 'GET',
+      accessToken: auth.accessToken,
+      accept: '*/*',
+    })
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return {
+      bytes,
+      contentType: response.headers.get('content-type'),
+      contentDisposition: response.headers.get('content-disposition'),
+      fileName: fileNameFromContentDisposition(response.headers.get('content-disposition')),
+      endpoint: path,
+    }
+  }
+
+  private async rawRequest(
+    path: string,
+    init: { method: string; body?: string | Uint8Array; accessToken?: string | null; accept?: string },
+  ): Promise<Response> {
+    const token = init.accessToken ?? this.options.adminAccessToken
+    const headers: Record<string, string> = {}
+    if (init.accept) headers.Accept = init.accept
+    if (token) headers.Authorization = `Bearer ${token}`
+    const response = await fetch(`${this.options.homeserverUrl.replace(/\/+$/, '')}${path}`, {
+      method: init.method,
+      headers,
+      body: init.body,
+    })
+    if (!response.ok) {
+      const text = await response.text().catch(() => '')
+      throw new MatrixApiError(
+        `Matrix API ${init.method} ${path} failed: ${response.status} ${text.slice(0, 500)}`,
+        response.status,
+        text,
+      )
+    }
+    return response
+  }
 }
 
 export class MatrixApiError extends Error {
@@ -339,6 +406,30 @@ export class MatrixApiError extends Error {
 function isUserAlreadyExists(error: unknown) {
   if (!(error instanceof MatrixApiError)) return false
   return error.status === 400 && /M_USER_IN_USE|User ID already taken|already exists/i.test(error.responseBody)
+}
+
+function shouldTryLegacyMediaDownload(error: unknown) {
+  if (!(error instanceof MatrixApiError)) return false
+  return error.status === 404 || error.status === 405 || error.status === 501
+}
+
+function parseMxcUrl(mxcUrl: string) {
+  const match = mxcUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/)
+  if (!match?.[1] || !match[2]) {
+    throw new Error(`Invalid Matrix media URI: ${mxcUrl}`)
+  }
+  return {
+    serverName: decodeURIComponent(match[1]),
+    mediaId: decodeURIComponent(match[2]),
+  }
+}
+
+function fileNameFromContentDisposition(value: string | null) {
+  if (!value) return null
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1])
+  const asciiMatch = value.match(/filename="?([^";]+)"?/i)
+  return asciiMatch?.[1] ?? null
 }
 
 function escapeHtml(value: string) {
