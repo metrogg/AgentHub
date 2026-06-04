@@ -1,0 +1,162 @@
+# OpenClaw 接入指南
+
+最后更新：2026-06-04
+
+## 什么是 OpenClaw
+
+OpenClaw 是 HiClaw 生态中的 Agent 运行时框架，基于 Node.js。它提供：
+- Matrix 集成（sync loop，消息收发，E2EE）
+- 工具系统（exec = bash，MCP = 外部工具）
+- 技能加载（SKILL.md + scripts/ 目录）
+- 会话管理（上下文窗口，历史裁剪）
+- 网关模式（接收消息 → LLM 推理 → 工具调用 → 回复）
+
+HiClaw 的 Manager 和 Worker 都是 OpenClaw 实例，只是配置不同。
+
+## AgentHub 接入架构
+
+```text
+┌─────────────────────────────────────────────────┐
+│  AgentHub Server (Bun/TypeScript)                │
+│  ├── Tuwunel (Matrix homeserver, 端口 6167)     │
+│  ├── Controller API (Run/Task/Room/Worker/Lease) │
+│  ├── RoomService (timeline 投影)                 │
+│  ├── ArtifactStore (文件系统)                     │
+│  └── 前端 (React UI)                             │
+└─────────────────────────────────────────────────┘
+         │                    │
+         │ Matrix             │ HTTP (Controller API)
+         │                    │
+┌────────┴────────┐   ┌──────┴──────┐
+│  OpenClaw       │   │  OpenClaw   │
+│  Manager        │   │  Worker     │
+│  (独立进程)      │   │  (独立进程)  │
+│  @manager:local │   │  @worker-x  │
+│  SOUL.md        │   │  SOUL.md    │
+│  16 skills      │   │  exec skills│
+│  exec → curl    │   │  exec → CLI │
+└─────────────────┘   └─────────────┘
+```
+
+## 安装步骤
+
+### 1. 安装 OpenClaw
+
+```bash
+bash infra/setup-openclaw.sh
+```
+
+这会：
+- 克隆 OpenClaw 仓库到 `.openclaw-runtime/`
+- 构建 OpenClaw（pnpm install + build）
+- 创建 symlink 到 `/usr/local/bin/openclaw`
+- 设置 Manager 工作空间
+
+### 2. 启动 Tuwunel（Matrix homeserver）
+
+```bash
+docker compose -f infra/docker-compose.hiclaw-lite.yml up -d tuwunel
+```
+
+### 3. 启动 AgentHub Server
+
+```bash
+bun run dev:server
+```
+
+### 4. 配置 Manager
+
+编辑 `infra/manager-openclaw.json`，填入：
+- Matrix homeserver URL
+- Manager Matrix access token（从 Tuwunel 注册获取）
+- LLM provider 配置
+
+然后复制到 Manager 工作空间：
+```bash
+cp infra/manager-openclaw.json ~/.local/share/AgentHub/manager/global/openclaw.json
+```
+
+### 5. 启动 Manager
+
+```bash
+openclaw gateway run --verbose --force
+```
+
+或通过 AgentHub Server 自动启动（开发中）。
+
+## 文件结构
+
+```text
+infra/
+├── setup-openclaw.sh           # 安装脚本
+├── manager-openclaw.json       # Manager 配置模板
+├── docker-compose.hiclaw-lite.yml  # Tuwunel + MinIO
+└── manager-agent/
+    ├── SOUL.md                 # Manager 人格定义
+    ├── AGENTS.md               # Manager 行为规则
+    ├── HEARTBEAT.md            # 心跳检查清单
+    ├── TOOLS.md                # 工具快速参考
+    └── skills/
+        ├── worker-management/SKILL.md
+        ├── task-management/SKILL.md
+        └── channel-management/SKILL.md
+
+apps/server/src/services/manager-runtime/
+├── types.ts                    # 接口定义
+├── skill-loader.ts             # 技能加载器
+├── tool-registry.ts            # Controller API 映射
+├── local-manager-runtime.ts    # 本地 LLM tool-calling loop（备用）
+├── openclaw-launcher.ts        # OpenClaw 进程管理
+└── index.ts                    # 统一导出
+```
+
+## Manager 如何工作
+
+1. OpenClaw 启动，读取 `openclaw.json`，连接到 Tuwunel Matrix homeserver
+2. 用户在群聊中发消息，Matrix sync 推送到 OpenClaw
+3. OpenClaw 的 LLM 读取 SOUL.md + AGENTS.md + TOOLS.md，决定做什么
+4. 如果需要调用 Controller API，OpenClaw 使用 `exec` tool 运行 `curl` 命令
+5. 结果返回给 LLM，LLM 决定下一步或回复用户
+6. 回复通过 Matrix 写入 Room
+
+## Worker 运行时
+
+Worker 也可以用 OpenClaw，和 Manager 一样：
+
+```bash
+# 生成 Worker 配置并启动
+const launcher = new OpenClawLauncher({ matrixUrl, llmBaseUrl, ... })
+launcher.launchWorker('builder', { matrixUserId: '@worker-builder:local.agenthub' })
+```
+
+Worker 和 Manager 的区别：
+
+| 维度 | Manager | Worker |
+|------|---------|--------|
+| SOUL.md | 团队负责人人格 | 专业执行者人格 |
+| 技能 | worker/task/channel management | 执行技能（coding/file-sync） |
+| 工具 | exec → curl Controller API | exec → 写代码/跑命令 |
+| 心跳 | 1 小时 | 无 |
+| 并发 | maxConcurrent: 8 | maxConcurrent: 4 |
+| DM 白名单 | admin | admin + manager |
+
+### Worker 运行时选择
+
+```text
+Worker 运行时选择：
+├── OpenClaw Worker — 通用任务（调研、分析、文档、协调）
+│   ├── infra/worker-agent/SOUL.md
+│   ├── infra/worker-agent/AGENTS.md
+│   └── infra/worker-openclaw.json
+└── Code Agent Worker — 编码任务（Codex/Claude Code/OpenCode/Gemini）
+    └── 通过 WorkerRuntimeService.runTaskRoom() 调用 CLI
+```
+
+两种 Worker 都通过 Matrix Room 接收任务、汇报进度。选择哪种取决于任务类型。
+
+## 与旧 LocalManagerRuntime 的关系
+
+- `LocalManagerRuntime` 是**备用方案**，在 OpenClaw 不可用时使用
+- `OpenClawLauncher` 是**正式方案**，启动真正的 OpenClaw 进程
+- 两者的 `ManagerRuntime` 接口相同，可以无缝切换
+- 通过 `AGENTHUB_COORDINATOR_RUNTIME` 环境变量选择

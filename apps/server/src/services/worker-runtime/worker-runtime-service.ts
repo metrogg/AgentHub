@@ -1,6 +1,7 @@
 import {
   and,
   db,
+  desc,
   eq,
   roomParticipants,
   rooms,
@@ -20,6 +21,26 @@ import { LocalWorkerRuntimeAdapter } from './local-worker-runtime'
 import { answerPendingTaskClarification, createTaskClarification } from './task-clarification-store'
 import type { WorkerRuntime, WorkerRuntimeEvent, WorkerRuntimeResult } from './types'
 
+function buildSandboxEnvFromLease(lease: typeof runtimeLeases.$inferSelect | undefined): Record<string, string> | undefined {
+  if (!lease) return undefined
+  const env: Record<string, string> = {}
+  if (lease.homeDir) env.HOME = lease.homeDir
+  if (lease.configDir) {
+    env.XDG_CONFIG_HOME = lease.configDir
+    // Codex uses CODEX_HOME, Claude Code uses ~/.claude under HOME
+    env.CODEX_HOME = lease.configDir
+  }
+  if (lease.cacheDir) env.XDG_CACHE_HOME = lease.cacheDir
+  if (lease.dataDir) env.XDG_DATA_HOME = lease.dataDir
+  if (lease.tmpDir) {
+    env.TMPDIR = lease.tmpDir
+    env.TEMP = lease.tmpDir
+    env.TMP = lease.tmpDir
+  }
+  if (Object.keys(env).length === 0) return undefined
+  return env
+}
+
 export interface RunTaskRoomInput {
   roomId: string
   ownerId: string
@@ -29,6 +50,8 @@ export interface RunTaskRoomInput {
   source?: string
   signal?: AbortSignal
   heartbeatIntervalMs?: number
+  resumeSessionId?: string
+  continueSession?: boolean
 }
 
 export interface RunTaskRoomResult extends WorkerRuntimeResult {
@@ -85,6 +108,15 @@ export interface RerunTaskRoomInput {
 }
 
 export class WorkerRuntimeService {
+  private readonly runningControllers = new Map<string, AbortController>()
+
+  stopTaskRoom(roomId: string): boolean {
+    const controller = this.runningControllers.get(roomId)
+    if (!controller) return false
+    controller.abort()
+    return true
+  }
+
   async runTaskRoom(input: RunTaskRoomInput): Promise<RunTaskRoomResult> {
     const room = await roomService.getRoomForOwner(input.roomId, input.ownerId)
     if (room.kind !== 'task') {
@@ -213,6 +245,16 @@ export class WorkerRuntimeService {
       intervalMs: input.heartbeatIntervalMs,
     })
 
+    const abortController = new AbortController()
+    if (input.signal) {
+      if (input.signal.aborted) {
+        abortController.abort()
+      } else {
+        input.signal.addEventListener('abort', () => abortController.abort(), { once: true })
+      }
+    }
+    this.runningControllers.set(room.id, abortController)
+
     try {
       const iterator = runtime.executeTask(
         {
@@ -231,8 +273,11 @@ export class WorkerRuntimeService {
             body: event.body,
           })),
           workspacePath: lease?.cwd ?? workspace?.projectPath ?? null,
+          sandboxEnv: buildSandboxEnvFromLease(lease),
+          resumeSessionId: input.resumeSessionId,
+          continueSession: input.continueSession,
         },
-        input.signal,
+        abortController.signal,
       )
 
       let next = await iterator.next()
@@ -313,6 +358,15 @@ export class WorkerRuntimeService {
         appendedEventIds,
       }
 
+      if (rawResult.sessionId && lease?.id) {
+        await runtimeLeaseController.markRunning(lease.id, {
+          metadata: {
+            ...(lease.metadata ?? {}),
+            sessionId: rawResult.sessionId,
+          },
+        })
+      }
+
       await syncRunControllerAfterTaskRoomResult({
         roomId: room.id,
         ownerId: input.ownerId,
@@ -323,6 +377,7 @@ export class WorkerRuntimeService {
       return finalResult
     } finally {
       stopHeartbeat()
+      this.runningControllers.delete(room.id)
     }
   }
 
@@ -459,6 +514,26 @@ export class WorkerRuntimeService {
           },
         })
       }
+      // Look up the latest lease for this room to get the saved sessionId
+      let resumeSessionId: string | undefined
+      try {
+        const [latestLease] = await db
+          .select()
+          .from(runtimeLeases)
+          .where(
+            room.taskId
+              ? and(eq(runtimeLeases.taskId, room.taskId), eq(runtimeLeases.status, 'waiting_for_human'))
+              : eq(runtimeLeases.runId, room.runId),
+          )
+          .orderBy(desc(runtimeLeases.updatedAt))
+          .limit(1)
+        const leaseMetadata = latestLease?.metadata as Record<string, unknown> | undefined
+        if (typeof leaseMetadata?.sessionId === 'string') {
+          resumeSessionId = leaseMetadata.sessionId
+        }
+      } catch {
+        // Best-effort: resume without sessionId if lookup fails
+      }
       try {
         const result = await this.runTaskRoom({
           roomId: room.id,
@@ -467,6 +542,8 @@ export class WorkerRuntimeService {
           prompt: resumePrompt,
           source: 'worker-runtime.resume',
           signal: input.signal,
+          resumeSessionId,
+          continueSession: Boolean(resumeSessionId),
         })
         appendedEventIds.push(...result.appendedEventIds)
       } catch (error: any) {

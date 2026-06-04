@@ -51,7 +51,7 @@ bun run infra:down
 
 ```bash
 AGENTHUB_ROOM_PROVIDER=matrix
-AGENTHUB_MATRIX_HOMESERVER_URL=http://localhost:6167
+AGENTHUB_MATRIX_HOMESERVER_URL=http://127.0.0.1:6167
 AGENTHUB_MATRIX_SERVER_NAME=agenthub.local
 AGENTHUB_MATRIX_REGISTRATION_TOKEN=agenthub-dev-registration-token
 AGENTHUB_MATRIX_AUTO_INVITE_PARTICIPANTS=true
@@ -76,6 +76,8 @@ AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS=true
 - `MatrixRoomEventDispatcher`
 - `roomParticipants` / `matrixIdentities` / `timelineEvents`
 - Matrix 真实 room 创建、identity 注册或登录、invite / join、participant token 发言
+- 普通 group/direct 新消息 Room-first 写入：先写 Room timeline / Matrix event，再生成 `messages` 兼容投影
+- `GET /api/messages/:sessionId` 读取侧 Room-first：优先从 Room timeline 投影，旧 `messages` 表只补历史/特殊兼容行
 - `/sync` 导入、mention 解析、file ref 解析、`mxc://` 下载到 ArtifactStore
 - `/stop` 取消 task room
 - `/approve` 和普通 human reply 回答 pending Worker clarification
@@ -767,9 +769,9 @@ Manager / Worker 可以并行依赖：
 1. ✅ Worker workspace / profile / skill layout — `.agenthub/workers/{id}/` 目录结构已落地，`WorkerController.ensureReady()` 自动创建
 2. ✅ Worker state machine 拆分 — `observedState` 已扩展 `listening / assigned / resuming`，`WorkerController` 和 `MatrixRuntimeSupervisor` 已接入状态流转
 3. ✅ Worker listener claim task — `MatrixRoomEventDispatcher` 已改为 Worker 先检查状态、自己 claim、写"已接单" timeline event、再异步启动 `WorkerRuntimeService`
-4. ⏳ CLI execution AbortController / process cleanup
-5. ⏳ clarification resume 原生化
-6. ⏳ per-agent config/cache/session 隔离
+4. ✅ CLI execution AbortController / process cleanup — `Bun.spawn` 绑定 `signal`，`killProcessTree()` 增强为 async 含进程存活检测+优雅/强制终止+超时等待；`WorkerRuntimeService` 维护 `runningControllers`，`/stop` 真正终止 CLI 子进程
+5. ✅ clarification resume 原生化 — `sessionId` 保存到 `runtimeLeases.metadata`，resume 时从 lease 读取并传入 `continueSession`/`resumeSessionId`，Claude Code 可利用 `--session-id`/`--continue` 保持同一 CLI context
+6. ✅ per-agent config/cache/session 隔离 — `RuntimeLease` 隔离目录通过 `sandboxEnv` 注入 `HOME`/`XDG_CONFIG_HOME`/`XDG_CACHE_HOME`/`XDG_DATA_HOME`/`TMPDIR`/`CODEX_HOME` 等环境变量
 
 ## 六、最终验收场景
 

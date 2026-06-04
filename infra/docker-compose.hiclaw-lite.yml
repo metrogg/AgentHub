@@ -21,7 +21,7 @@ services:
     volumes:
       - agenthub-tuwunel-data:/data/conduwuit
     healthcheck:
-      test: ["CMD", "sh", "-lc", "wget -qO- http://127.0.0.1:6167/_matrix/client/versions >/dev/null"]
+      test: ["CMD", "tuwunel", "--version"]
       interval: 10s
       timeout: 5s
       retries: 20

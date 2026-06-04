@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
 const bridgeApi = await import('../apps/server/src/services/rooms/room-chat-bridge')
+const projectionApi = await import('../apps/server/src/services/rooms/timeline-message-projection')
 
 const {
   db,
@@ -20,7 +21,8 @@ const {
   workspaces,
   eq,
 } = dbApi
-const { stepCoordinatorForGroupMessage } = bridgeApi
+const { appendHumanMessageRoomFirst, stepCoordinatorForGroupMessage } = bridgeApi
+const { listSessionMessagesRoomFirst } = projectionApi
 type CoordinatorRuntime = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorRuntime
 type CoordinatorStepInput = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorStepInput
 type CoordinatorStepResult = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorStepResult
@@ -30,6 +32,87 @@ type WorkerRuntimeEvent = typeof import('../apps/server/src/services/worker-runt
 type WorkerRuntimeResult = typeof import('../apps/server/src/services/worker-runtime').WorkerRuntimeResult
 
 describe('Room chat bridge', () => {
+  test('appends human chat to Room timeline first and creates messages as compatibility projection', async () => {
+    const { session } = await createGroupSession()
+    const { room, event, message } = await appendHumanMessageRoomFirst({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      content: '大家好，看到的人打个招呼',
+      type: 'text',
+      metadata: { displayContent: '大家好，看到的人打个招呼' },
+      replyToMessageId: null,
+    })
+
+    expect(message.id).toBe(`room:${event.id}`)
+    expect(message.metadata?.roomTimelineProjection).toMatchObject({
+      source: 'room-first',
+      roomId: room.id,
+      eventId: event.id,
+      eventType: 'human.message',
+    })
+
+    const timelineBeforeCoordinator = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.roomId, room.id))
+    expect(timelineBeforeCoordinator).toHaveLength(1)
+    expect(timelineBeforeCoordinator[0]?.type).toBe('human.message')
+    expect(timelineBeforeCoordinator[0]?.metadata?.messageId).toBe(message.id)
+    expect(timelineBeforeCoordinator[0]?.metadata?.source).toBe('room-first')
+
+    const coordinatorResult = await stepCoordinatorForGroupMessage({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      message,
+      runtime: new FakeRuntime('reply'),
+    })
+    expect(coordinatorResult.consumed).toBe(true)
+
+    const timelineAfterCoordinator = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.roomId, room.id))
+    expect(timelineAfterCoordinator.map((item) => item.type)).toEqual([
+      'human.message',
+      'manager.message',
+      'manager.message',
+    ])
+    expect(timelineAfterCoordinator.filter((item) => item.type === 'human.message')).toHaveLength(1)
+  })
+
+  test('lists session messages from Room timeline first without duplicating compatibility rows', async () => {
+    const { session } = await createGroupSession()
+    const { event, message } = await appendHumanMessageRoomFirst({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      content: '这条消息应该只显示一次',
+      type: 'text',
+      metadata: null,
+      replyToMessageId: null,
+    })
+
+    const legacyMessages = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, session.id))
+    const projected = await listSessionMessagesRoomFirst({
+      sessionId: session.id,
+      legacyMessages,
+    })
+
+    expect(projected).toHaveLength(1)
+    expect(projected[0]?.id).toBe(`room:${event.id}`)
+    expect(projected[0]?.id).toBe(message.id)
+    expect(projected[0]?.content).toBe('这条消息应该只显示一次')
+    expect(projected[0]?.metadata?.roomTimeline).toMatchObject({
+      eventId: event.id,
+      eventType: 'human.message',
+    })
+  })
+
   test('records group chat in room timeline and mirrors a coordinator reply', async () => {
     const { session, message } = await createGroupMessage()
     const result = await stepCoordinatorForGroupMessage({
@@ -360,6 +443,39 @@ describe('Room chat bridge', () => {
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
   })
 })
+
+async function createGroupSession() {
+  const [workspace] = await db
+    .insert(workspaces)
+    .values({
+      ownerId: 'default-user',
+      name: 'Room First Bridge Workspace',
+      goal: 'Verify Room-first chat ingress',
+    })
+    .returning()
+  const [agent] = await db
+    .insert(workspaceAgents)
+    .values({
+      workspaceId: workspace!.id,
+      name: 'Builder',
+      role: 'Build things',
+      roleType: 'coder',
+      runtimeType: 'code-agent',
+      codeAgentType: 'opencode',
+    })
+    .returning()
+  const [session] = await db
+    .insert(sessions)
+    .values({
+      ownerId: 'default-user',
+      title: 'Room First Bridge Group',
+      type: 'group',
+      workspaceId: workspace!.id,
+      metadata: { kind: 'workspace-agent-group' },
+    })
+    .returning()
+  return { workspace: workspace!, session: session!, agentId: agent!.id }
+}
 
 async function createGroupMessage(input: {
   extraAgents?: Array<{

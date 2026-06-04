@@ -122,8 +122,9 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 ```text
 用户在群聊发消息
-  -> messages.ts 作为 ChatIngress 写入用户消息、鉴权和加载群聊上下文
-  -> RoomController 确保 group room，用户消息进入 Room timeline
+  -> messages.ts 作为 ChatIngress 做鉴权、加载群聊上下文和轻量路由
+  -> RoomController 确保 group room，用户消息先进入 Room timeline
+  -> messages 仅生成 room:{timelineEventId} 兼容投影，供旧 UI/API 过渡读取
   -> OpenClaw/QwenPaw CoordinatorRuntime / ManagerLoop 判断下一步：回复、追问、补员、派活或总结
   -> 简单聊天：Manager 直接写回 group room timeline，并兼容镜像到 messages
   -> 能力不足：Manager 输出结构化 memberProposals，用户确认后才创建/加入真实 Agent
@@ -156,6 +157,12 @@ provisioning -> ready -> listening -> assigned -> busy -> waiting_for_human -> r
 - `resuming`：人类回答澄清后，Worker 恢复执行前的过渡状态。
 
 Worker 本地 workspace 目录位于 `{agentHubUserDataRoot()}/workers/{workerInstanceId}/`，包含 `profile.json`、`SOUL.md`、`AGENTS.md`、`skills/`、`state.json`、`rooms.json`。`WorkerController.ensureReady()` 会在 reconcile 时自动创建该目录并从 DB 同步技能和配置。
+
+### Worker Runtime Phase 2 能力
+
+- **AbortController / 进程清理做实**：`Bun.spawn` 已绑定 `AbortSignal`；`killProcessTree()` 增强为 async，具备进程存活检测、优雅终止（SIGTERM / `taskkill /t`）、5 秒超时等待、强制终止（SIGKILL / `taskkill /t /f`）和二次等待。`WorkerRuntimeService` 维护 `runningControllers` Map，每个 task room 有独立的 `AbortController`；`/stop` 或 `cancelTaskRoom` 时调用 `stopTaskRoom()` 真正终止 CLI 子进程。
+- **per-agent config/cache/session 隔离**：`RuntimeLease` 的 `homeDir/configDir/cacheDir/tmpDir/dataDir` 通过 `sandboxEnv` 注入 CLI 子进程环境变量（`HOME`、`XDG_CONFIG_HOME`、`XDG_CACHE_HOME`、`XDG_DATA_HOME`、`TMPDIR`、`TEMP`、`TMP`、`CODEX_HOME`），确保不同 Worker 的 CLI 配置和缓存互不干扰。
+- **Clarification resume 原生化 + 多轮澄清链**：`runCodeAgentCommand` 支持 `continueSession` / `sessionId` 参数，Claude Code 可利用 `--session-id` / `--continue` 保持同一 CLI context。首次运行后 `sessionId` 保存到 `runtimeLeases.metadata`；resume 时从 lease 读取并传入，实现真正的会话恢复而非重启新进程。`taskClarifications` 表天然支持多轮澄清链，timeline 历史在 resume 时完整保留。
 
 ## Matrix / A2A 通信边界
 
@@ -227,7 +234,7 @@ A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径�
 主要表：
 
 - `sessions`: `direct` / `group` 会话，依赖 `metadata.kind` 区分私聊、群聊任务子对话和旧会话。
-- `messages`: 聊天消息、任务结果消息、产物 metadata。
+- `messages`: 迁移期 UI projection/cache。新发送主路径先写 `timeline_events`，再生成 `room:{timelineEventId}` 兼容消息；不要把它当通信事实源。
 - `workspaces`: 项目工作区。
 - `workspace_agents`: 工作区成员。
 - `workspace_tasks`: DAG 任务、状态、进度、子会话、产物。
@@ -277,13 +284,13 @@ bun test tests/orchestrator-routing.test.ts
 - 不要恢复静态兜底提示词或固定模板计划。快速提示、任务拆解、协作计划都应由模型动态生成；失败时可以提示用户重试或检查模型配置。
 - 不要恢复静态 Agent 路由、关键词分工、自动 Researcher 注入、自动 QA/review/follow-up 任务注入。系统只能校验 Manager / Orchestrator 的显式选择，不能偷偷改派或追加任务。
 - 不要恢复内置 `.agenthub/specs/*.spec.yml` 场景模板，也不要让 `ensureHarnessPresets()` 把 specs 自动复制到新工作区。Spec 后续只可作为用户显式创建的协作契约。
-- 不要把旧 `GroupChatManager` 作为新路径入口。群聊统一从 `messages.ts` 进入 Orchestrator 路由。
+- 不要把旧 `GroupChatManager` 作为新路径入口。群聊统一从 `messages.ts` 作为 ChatIngress 进入 Room-first / Manager / Run 主线。
 - 不要把旧 Git 分支隔离写成当前默认事实。当前默认是项目工作区 + `.agenthub/workdirs` + `.agenthub/shared/tasks`，`.agenthub/handoff` 只是兼容旧路径。
 - 修改 UI 时要保持 IM 产品感：左侧树清晰、主群聊和子对话不重复、运行状态可见、产物入口明确。
 
 ## 重要文件
 
-- `apps/server/src/routes/messages.ts`: ChatIngress，负责写入用户消息、鉴权和进入 Manager/Run 主线；不要继续扩成编排主脑。
+- `apps/server/src/routes/messages.ts`: ChatIngress，负责鉴权、Room-first 写入入口、`messages` 兼容投影读取和进入 Manager/Run 主线；不要继续扩成编排主脑。
 - `apps/server/src/services/orchestrator/manager-loop.ts`: Manager observe/act/review loop。
 - `apps/server/src/services/coordinator-runtime/assign-dispatcher.ts`: Coordinator assign 到 Run/TaskThread/task room/WorkerRuntime 的派发入口。
 - `apps/server/src/services/orchestrator/run-controller.ts`: Run 与 task 生命周期控制面。

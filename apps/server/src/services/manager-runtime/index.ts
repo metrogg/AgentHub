@@ -16,5 +16,6 @@ export type {
 } from './types'
 
 export { LocalManagerRuntime } from './local-manager-runtime'
+export { OpenClawLauncher, openclawLauncher } from './openclaw-launcher'
 export { loadManagerSkills, loadManagerTools, buildToolsPrompt } from './skill-loader'
 export { executeToolCall, getRegisteredToolNames, hasExecutor } from './tool-registry'

@@ -1236,7 +1236,6 @@ async function runCodeAgentCommand(
       stdin: adapter.promptMode === 'stdin' ? 'pipe' : undefined,
       stdout: 'pipe',
       stderr: 'pipe',
-      signal,
     },
   )
   if (runtimeOptions.sandboxContainer?.runtime === 'docker-sandbox' && runtimeOptions.sandboxContainer?.sandboxName && proc.pid) {
@@ -1253,15 +1252,13 @@ async function runCodeAgentCommand(
 
   const heartbeat = setInterval(() => emitLiveMetadata(true), 1000)
   let timedOut = false
-  const stopRun = async () => {
-    await killProcessTree(proc)
-  }
+  const stopRun = () => killProcessTree(proc)
   const timer = setTimeout(() => {
     timedOut = true
-    void stopRun()
+    stopRun()
   }, env.AGENTHUB_CODE_AGENT_TIMEOUT_MS)
   const abortRun = () => {
-    void stopRun()
+    stopRun()
   }
   signal?.addEventListener('abort', abortRun, { once: true })
   let stdout = ''
@@ -1420,7 +1417,7 @@ function jsonStringifyAscii(value: string) {
   })
 }
 
-async function killProcessTree(proc: ReturnType<typeof Bun.spawn>, timeoutMs = 5000) {
+function killProcessTree(proc: ReturnType<typeof Bun.spawn>) {
   const sandboxName = proc.pid ? activeDockerSandboxes.get(proc.pid) : undefined
   if (sandboxName) {
     try {
@@ -1432,57 +1429,20 @@ async function killProcessTree(proc: ReturnType<typeof Bun.spawn>, timeoutMs = 5
       // Best-effort. The spawned CLI process still gets killed below.
     }
   }
-
-  if (!proc.pid || proc.killed) return
-
-  const isRunning = () => {
-    try {
-      process.kill(proc.pid!, 0)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  if (!isRunning()) return
-
-  // Phase 1: graceful termination
   try {
-    if (process.platform === 'win32') {
-      Bun.spawn(['taskkill', '/pid', String(proc.pid), '/t'], {
+    if (process.platform === 'win32' && proc.pid) {
+      Bun.spawn(['taskkill', '/pid', String(proc.pid), '/t', '/f'], {
         stdout: 'ignore',
         stderr: 'ignore',
       })
-    } else {
-      proc.kill('SIGTERM')
+      return
     }
+    proc.kill()
   } catch {
-    // ignore
-  }
-
-  const start = Date.now()
-  while (isRunning() && Date.now() - start < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 100))
-  }
-
-  // Phase 2: force kill if still running
-  if (isRunning()) {
     try {
-      if (process.platform === 'win32') {
-        Bun.spawn(['taskkill', '/pid', String(proc.pid), '/t', '/f'], {
-          stdout: 'ignore',
-          stderr: 'ignore',
-        })
-      } else {
-        proc.kill('SIGKILL')
-      }
+      proc.kill()
     } catch {
-      // ignore
-    }
-
-    const forceStart = Date.now()
-    while (isRunning() && Date.now() - forceStart < 2000) {
-      await new Promise((r) => setTimeout(r, 100))
+      // Process may have exited.
     }
   }
 }

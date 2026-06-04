@@ -54,6 +54,9 @@ export interface WorkerRuntimeContext {
     body: string
   }>
   workspacePath?: string | null
+  sandboxEnv?: Record<string, string>
+  resumeSessionId?: string
+  continueSession?: boolean
 }
 
 export interface WorkerRuntimeResult {
@@ -62,6 +65,7 @@ export interface WorkerRuntimeResult {
   message?: string
   artifacts?: AgentArtifact[]
   metadata?: Record<string, unknown>
+  sessionId?: string
 }
 
 export interface WorkerRuntime {

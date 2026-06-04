@@ -56,10 +56,12 @@ import { blackboard, Blackboard } from '../services/blackboard'
 import { buildDynamicOrchestratorPlan } from '../services/orchestrator/plan-generator'
 import { decideOrchestratorAction } from '../services/orchestrator/orchestrator-decision'
 import {
+  appendHumanMessageRoomFirst,
   recordHumanMessageInRoomTimeline,
   stepCoordinatorForGroupMessage,
   stepTaskRoomAfterHumanMessage,
 } from '../services/rooms/room-chat-bridge'
+import { listSessionMessagesRoomFirst } from '../services/rooms/timeline-message-projection'
 import { dispatchCoordinatorAssignBatch } from '../services/coordinator-runtime/assign-dispatcher'
 import type { CoordinatorAction } from '../services/coordinator-runtime'
 import type { WorkerRuntime } from '../services/worker-runtime'
@@ -162,7 +164,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .from(messages)
       .where(eq(messages.sessionId, sessionId))
       .orderBy(asc(messages.createdAt))
-    return c.json({ items: list })
+    return c.json({ items: await listSessionMessagesRoomFirst({ sessionId, legacyMessages: list }) })
   })
   .delete('/:sessionId/all', async (c) => {
     const user = c.get('user')
@@ -418,29 +420,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             ...(mentions.length ? { mentions } : {}),
           }
         : null
-    const [msg] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: user.sub,
-        senderType: 'user',
-        type,
-        content,
-        metadata: nextMetadata,
-        replyToMessageId: metadata?.replyToMessageId as string | undefined,
-      })
-      .returning()
-    if (msg) {
-      await recordHumanMessageInRoomTimeline({
-        session,
-        userId: user.sub,
-        userName: user.username,
-        message: msg,
-      }).catch((err: any) => {
-        logger.error({ err: err?.message, sessionId }, 'Room timeline human message record failed')
-        return null
-      })
-    }
+    const { message: msg } = await appendHumanMessageRoomFirst({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      content,
+      type,
+      metadata: nextMetadata,
+      replyToMessageId: metadata?.replyToMessageId as string | undefined,
+    })
     // Trigger agent reply asynchronously (do not await to keep response fast).
     if (msg && !metadata?.skipAgentReply) {
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)

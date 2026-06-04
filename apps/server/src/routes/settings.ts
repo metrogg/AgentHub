@@ -704,7 +704,7 @@ async function openSystemPath(path: string) {
 function applyLocalMatrixRuntimeConfig() {
   const config = {
     provider: 'matrix',
-    homeserverUrl: process.env.AGENTHUB_MATRIX_HOMESERVER_URL?.trim() || 'http://localhost:6167',
+    homeserverUrl: process.env.AGENTHUB_MATRIX_HOMESERVER_URL?.trim() || 'http://127.0.0.1:6167',
     serverName: process.env.AGENTHUB_MATRIX_SERVER_NAME?.trim() || 'agenthub.local',
     registrationToken:
       process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN?.trim() || 'agenthub-dev-registration-token',

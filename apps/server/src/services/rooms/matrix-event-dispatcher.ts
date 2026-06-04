@@ -342,6 +342,21 @@ async function cancelTaskRoomFromMatrix(input: {
     workspaceId: room.workspaceId,
     groupSessionId: thread?.groupSessionId ?? room.sessionId ?? room.id,
   }
+
+  const stopped = workerRuntimeService.stopTaskRoom(room.id)
+  if (stopped) {
+    await roomService.appendTimelineEvent({
+      roomId: room.id,
+      senderType: 'system',
+      type: 'task.progress',
+      body: '已终止正在运行的 Worker 进程。',
+      metadata: {
+        kind: 'matrix.control.stop.process-terminated',
+        sourceEventId: input.sourceEventId,
+      },
+    })
+  }
+
   await runController.markTaskCancelled(run, {
     taskId: room.taskId,
     title: task?.title ?? room.title,

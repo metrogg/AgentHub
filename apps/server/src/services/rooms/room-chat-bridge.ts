@@ -1,4 +1,4 @@
-import { asc, db, eq, messages, roomParticipants, sessions, workspaceAgents } from '@agenthub/db'
+import { asc, db, eq, messages, roomParticipants, sessions, timelineEvents, workspaceAgents } from '@agenthub/db'
 import { WsEvent } from '@agenthub/shared'
 import { broadcastSessionEvent } from '../agent-runner'
 import { coordinatorService } from '../coordinator-runtime'
@@ -24,6 +24,16 @@ export interface RecordHumanMessageInput {
   executeInline?: boolean
 }
 
+export interface AppendHumanMessageRoomFirstInput {
+  session: typeof sessions.$inferSelect
+  userId: string
+  userName?: string | null
+  content: string
+  type: string
+  metadata?: Record<string, unknown> | null
+  replyToMessageId?: string | null
+}
+
 export interface CoordinatorFirstResult {
   roomId: string
   consumed: boolean
@@ -38,6 +48,73 @@ export interface TaskRoomHumanReplyResult {
   reason: string
   resumed: boolean
   appendedEventIds: string[]
+}
+
+export async function appendHumanMessageRoomFirst(input: AppendHumanMessageRoomFirstInput) {
+  const room = await roomService.ensureRoomForSession(input.session.id, input.session.ownerId)
+  await ensureSessionRoomParticipants({
+    roomId: room.id,
+    session: input.session,
+    userId: input.userId,
+    userName: input.userName,
+  })
+  const human = await ensureHumanParticipant(room.id, input.userId, input.userName)
+  const event = await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderParticipantId: human.id,
+    senderType: 'human',
+    type: 'human.message',
+    body: input.content,
+    metadata: {
+      ...(input.metadata ?? {}),
+      kind: 'chat.message',
+      sessionId: input.session.id,
+      messageType: input.type,
+      replyToMessageId: input.replyToMessageId ?? null,
+      source: 'room-first',
+    },
+  })
+  const projectionMessageId = `room:${event.id}`
+  const messageMetadata = {
+    ...(input.metadata ?? {}),
+    roomTimelineProjection: {
+      source: 'room-first',
+      roomId: room.id,
+      roomKind: room.kind,
+      providerRoomId: room.providerRoomId,
+      eventId: event.id,
+      providerEventId: event.providerEventId,
+      sequence: event.sequence,
+      eventType: event.type,
+    },
+  }
+  const [message] = await db
+    .insert(messages)
+    .values({
+      id: projectionMessageId,
+      sessionId: input.session.id,
+      senderId: input.userId,
+      senderType: 'user',
+      type: input.type,
+      content: input.content,
+      metadata: messageMetadata,
+      replyToMessageId: input.replyToMessageId ?? undefined,
+    })
+    .returning()
+  if (!message) throw new Error('Room-first message projection create failed')
+
+  await db
+    .update(timelineEvents)
+    .set({
+      metadata: {
+        ...(event.metadata ?? {}),
+        messageId: message.id,
+        projectionMessageId: message.id,
+      },
+    })
+    .where(eq(timelineEvents.id, event.id))
+
+  return { room, event, message }
 }
 
 export async function recordHumanMessageInRoomTimeline(input: RecordHumanMessageInput) {

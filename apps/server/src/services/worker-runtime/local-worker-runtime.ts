@@ -1,6 +1,7 @@
 import type { workspaceAgents } from '@agenthub/db'
 import { buildAgentProfile } from '../agents/profile-builder'
 import { runtimeRegistry } from '../runtime'
+import type { AgentExecutionEnvelope } from '../execution/agent-execution-envelope'
 import type { WorkerRuntime, WorkerRuntimeContext, WorkerRuntimeEvent, WorkerRuntimeResult } from './types'
 
 type WorkspaceAgentRow = typeof workspaceAgents.$inferSelect
@@ -26,6 +27,20 @@ export class LocalWorkerRuntimeAdapter implements WorkerRuntime {
       metadata: { runtimeType: runtime.runtimeType },
     }
 
+    const envelope: AgentExecutionEnvelope = {
+      runId: context.runId ?? context.sessionId,
+      taskId: context.taskId ?? context.sessionId,
+      agentId: context.workspaceAgentId,
+      agentName: this.agent.name,
+      projectPath: context.workspacePath ?? null,
+      worktreePath: context.workspacePath ?? null,
+      sandboxPolicy: profile.sandboxPolicy,
+      envAllowlist: [],
+      sandboxEnv: context.sandboxEnv,
+    }
+
+    let sessionId: string | undefined
+
     try {
       for await (const chunk of runtime.execute({
         sessionId: context.sessionId,
@@ -37,6 +52,9 @@ export class LocalWorkerRuntimeAdapter implements WorkerRuntime {
         profile,
         signal: signal ?? new AbortController().signal,
         workspacePath: context.workspacePath ?? undefined,
+        envelope,
+        continueSession: context.continueSession,
+        resumeSessionId: context.resumeSessionId,
         rawFinalOutput: true,
       })) {
         if (signal?.aborted) {
@@ -45,6 +63,7 @@ export class LocalWorkerRuntimeAdapter implements WorkerRuntime {
             status: 'cancelled',
             message: 'Worker execution was cancelled.',
             artifacts,
+            sessionId,
           }
         }
         if (chunk.kind === 'artifact') {
@@ -57,6 +76,9 @@ export class LocalWorkerRuntimeAdapter implements WorkerRuntime {
           continue
         }
         if (chunk.kind === 'metadata') {
+          if (chunk.metadata?.sessionId && typeof chunk.metadata.sessionId === 'string') {
+            sessionId = chunk.metadata.sessionId
+          }
           yield {
             type: 'progress',
             message: 'Worker runtime metadata updated.',
@@ -76,6 +98,7 @@ export class LocalWorkerRuntimeAdapter implements WorkerRuntime {
         status: 'completed',
         message,
         artifacts,
+        sessionId,
       }
     } catch (error: any) {
       const message = error?.message || 'Worker execution failed.'
@@ -88,6 +111,7 @@ export class LocalWorkerRuntimeAdapter implements WorkerRuntime {
         status: 'failed',
         message,
         artifacts,
+        sessionId,
       }
     }
   }
