@@ -424,6 +424,24 @@ describe('Room chat bridge', () => {
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
   })
 
+  test('does not consume a room message when coordinator returns only invisible actions', async () => {
+    const { session, message } = await createGroupMessage()
+    const result = await stepCoordinatorForGroupMessage({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      message,
+      runtime: new InvisibleReplyRuntime(),
+    })
+
+    expect(result.consumed).toBe(false)
+    expect(result.reason).toContain('invisible actions')
+    expect(result.mirroredMessageIds).toHaveLength(0)
+    const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
+    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
+    expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
+  })
+
   test('does not consume assign when dispatch cannot resolve a worker', async () => {
     const { session, message } = await createGroupMessage()
     const result = await stepCoordinatorForGroupMessage({
@@ -573,6 +591,22 @@ class FakeRuntime implements CoordinatorRuntime {
           type: 'reply',
           message: '我在，大家也可以陆续打个招呼。',
           reason: `saw ${input.timeline.length} room events`,
+        },
+      ],
+    }
+  }
+}
+
+class InvisibleReplyRuntime implements CoordinatorRuntime {
+  readonly runtimeType = 'local-llm' as const
+
+  async step(): Promise<CoordinatorStepResult> {
+    return {
+      runtimeType: this.runtimeType,
+      actions: [
+        {
+          type: 'reply',
+          reason: 'empty reply should fall back',
         },
       ],
     }

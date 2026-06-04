@@ -942,9 +942,8 @@ const ThreadContextRail: FC<{
   const hasProgress = Boolean(taskBoard || directRunProgress || activity)
 
   return (
-    <aside className="agenthub-context-rail pointer-events-none hidden h-full w-[18.5rem] shrink-0 bg-transparent px-5 pb-4 pt-4 lg:block xl:w-[19.5rem] xl:px-8">
-      <div className="pointer-events-none max-h-full overflow-visible bg-transparent">
-        <div className="flex w-full flex-col gap-3 bg-transparent">
+    <aside className="agenthub-context-rail pointer-events-none hidden h-full w-[18.5rem] shrink-0 px-5 pb-4 pt-4 lg:block xl:w-[19.5rem] xl:px-8">
+      <div className="flex max-h-full w-full flex-col gap-3 overflow-visible">
           {hasProgress && (
             <RailCard
               title="进度"
@@ -1022,7 +1021,6 @@ const ThreadContextRail: FC<{
           >
             <WorkspaceFileExplorer workspace={workspace} quickFiles={files} />
           </RailCard>
-        </div>
       </div>
     </aside>
   )
@@ -1035,7 +1033,7 @@ const RailCard: FC<{
   onToggle: () => void
   children: ReactNode
 }> = ({ title, subtitle, open, onToggle, children }) => (
-  <section className="pointer-events-auto rounded-2xl border border-neutral-200 bg-white/95 px-4 py-3.5 shadow-[0_14px_40px_rgba(15,23,42,0.08)] backdrop-blur">
+  <section className="pointer-events-auto rounded-xl border border-neutral-200 bg-white px-4 py-3.5">
     <button
       type="button"
       className="flex w-full items-start justify-between gap-3 text-left"

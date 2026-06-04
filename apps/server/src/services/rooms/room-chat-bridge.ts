@@ -223,6 +223,17 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
     if (message) mirroredMessageIds.push(message.id)
   }
 
+  const hasVisibleCoordinatorOutput = mirroredMessageIds.length > 0
+  if (assignActions.length === 0 && !hasVisibleCoordinatorOutput) {
+    return {
+      roomId: room.id,
+      consumed: false,
+      reason: 'Coordinator returned only invisible actions; keeping legacy orchestrator fallback.',
+      actions: result.actions,
+      mirroredMessageIds,
+    }
+  }
+
   return {
     roomId: room.id,
     consumed: true,

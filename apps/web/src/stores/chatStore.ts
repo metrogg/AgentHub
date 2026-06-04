@@ -3283,6 +3283,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         replyToMessageId: replyToMessageId ?? undefined,
         quotedMessage,
         safetyMode: options?.safetyMode,
+        mentions: options?.mentions,
       })
       updateCachedMessages(sessionId, (messages) => upsertMessage(messages, msg))
       set((s) => ({
@@ -3293,11 +3294,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }))
       await get().fetchSessions()
       set((state) => {
-        if (
-          state.agentActivity?.sessionId === sessionId &&
-          (state.agentActivity.phase === 'planning' || state.agentActivity.phase === 'thinking')
-        ) {
-          return { agentTyping: true, taskBoard: state.taskBoard, agentTabs: state.agentTabs }
+        const hasCurrentSessionRuntime =
+          state.agentActivity?.sessionId === sessionId ||
+          Boolean(state.streamingMessage) ||
+          Boolean(state.streamingCodeAgentRun)
+        if (hasCurrentSessionRuntime) {
+          return {
+            agentTyping: true,
+            agentActivity: state.agentActivity,
+            taskBoard: state.taskBoard,
+            agentTabs: state.agentTabs,
+            streamingMessage: state.streamingMessage,
+            streamingCodeAgentRun: state.streamingCodeAgentRun,
+          }
         }
         return {
           agentTyping: false,

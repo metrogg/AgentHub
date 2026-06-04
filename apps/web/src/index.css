@@ -1143,40 +1143,53 @@
     background: var(--agenthub-app-bg, #f7f7f7);
   }
 
-  .agenthub-chat-shell .agenthub-thread-root {
+  .agenthub-chat-shell .agenthub-thread-root,
+  .agenthub-chat-shell .agenthub-welcome-root {
     --agenthub-thread-grid-line: color-mix(
       in srgb,
-      var(--agenthub-app-text, #111111) 7%,
+      var(--agenthub-app-text, #111111) 6%,
       transparent
     );
     --agenthub-thread-grid-major: color-mix(
       in srgb,
-      var(--agenthub-app-text, #111111) 4%,
+      var(--agenthub-app-text, #111111) 3.5%,
       transparent
     );
-    background-color: var(--agenthub-app-bg, #f7f7f7);
-    background-image:
+    --agenthub-thread-grid-image:
+      linear-gradient(
+        180deg,
+        transparent 0%,
+        transparent 48%,
+        color-mix(in srgb, var(--agenthub-app-bg, #f7f7f7) 58%, transparent) 72%,
+        color-mix(in srgb, var(--agenthub-app-bg, #f7f7f7) 90%, transparent) 100%
+      ),
       radial-gradient(
-        circle at 50% 48%,
-        color-mix(in srgb, var(--agenthub-app-panel, #ffffff) 82%, transparent) 0,
-        transparent 26rem
+        ellipse at 50% 58%,
+        color-mix(in srgb, var(--agenthub-app-panel, #ffffff) 72%, transparent) 0,
+        transparent 20rem
       ),
       linear-gradient(var(--agenthub-thread-grid-line) 1px, transparent 1px),
       linear-gradient(90deg, var(--agenthub-thread-grid-line) 1px, transparent 1px),
       linear-gradient(var(--agenthub-thread-grid-major) 1px, transparent 1px),
       linear-gradient(90deg, var(--agenthub-thread-grid-major) 1px, transparent 1px);
-    background-position:
+    --agenthub-thread-grid-position:
+      center,
       center,
       -1px -1px,
       -1px -1px,
       -1px -1px,
       -1px -1px;
-    background-size:
+    --agenthub-thread-grid-size:
       100% 100%,
-      32px 32px,
-      32px 32px,
-      160px 160px,
-      160px 160px;
+      100% 100%,
+      24px 24px,
+      24px 24px,
+      120px 120px,
+      120px 120px;
+    background-color: var(--agenthub-app-bg, #f7f7f7);
+    background-image: var(--agenthub-thread-grid-image);
+    background-position: var(--agenthub-thread-grid-position);
+    background-size: var(--agenthub-thread-grid-size);
   }
 
   .agenthub-chat-shell .agenthub-welcome-root {
@@ -1195,7 +1208,8 @@
   }
 
   .agenthub-chat-shell .agenthub-context-rail {
-    background: transparent;
+    background: transparent !important;
+    background-image: none !important;
     border-color: transparent;
   }
 
@@ -1232,6 +1246,8 @@
   }
 
   .agenthub-thread-viewport {
+    background: transparent !important;
+    background-image: none !important;
     scrollbar-width: none;
     -ms-overflow-style: none;
   }

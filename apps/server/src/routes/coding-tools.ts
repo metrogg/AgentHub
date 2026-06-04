@@ -33,6 +33,27 @@ interface OpencodeModelItem {
   model: string
 }
 
+type LocalAgentRuntimeFamily = 'coordinator' | 'worker'
+type LocalAgentRuntimeBase = 'openclaw' | 'copaw'
+type LocalAgentRuntimeAdapterStatus = 'candidate' | 'available' | 'blocked'
+
+interface LocalAgentRuntimeCandidate {
+  id: string
+  name: string
+  runtimeFamily: LocalAgentRuntimeFamily
+  runtimeBase: LocalAgentRuntimeBase
+  command: string
+  packageName: string
+  installCommand: string
+  docsUrl: string
+  docsHint: string
+  adapterStatus: LocalAgentRuntimeAdapterStatus
+  adapterMessage: string
+  recommendedUse: string
+  permissions: string[]
+  missingAdapterSteps: string[]
+}
+
 const probes: ToolProbe[] = [
   { id: 'codex', command: 'codex', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
   { id: 'claude-code', command: 'claude', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },

@@ -1,4 +1,5 @@
 import type { TimelineEventType } from '../rooms'
+import type { CodeAgentType } from '@agenthub/shared'
 
 export type CoordinatorRuntimeType = 'local-llm' | 'openclaw' | 'qwenpaw'
 
@@ -23,7 +24,7 @@ export interface CoordinatorWorkerCandidate {
   name: string
   role: string
   runtimeType: 'llm' | 'code-agent'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  codeAgentType?: CodeAgentType | null
   capabilityTags: string[]
   status?: string | null
 }

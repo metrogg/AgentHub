@@ -1,4 +1,5 @@
 import type { TimelineEventType } from '../rooms'
+import type { CodeAgentType } from '@agenthub/shared'
 
 // ─── Manager Runtime Types ───────────────────────────────────────────
 
@@ -106,7 +107,7 @@ export interface ManagerWorkerCandidate {
   name: string
   role: string
   runtimeType: 'llm' | 'code-agent'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  codeAgentType?: CodeAgentType | null
   capabilityTags: string[]
   status?: string | null
 }
