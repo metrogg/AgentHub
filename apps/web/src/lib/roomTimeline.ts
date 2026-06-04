@@ -107,9 +107,24 @@ function timelineProjectionControls(timeline: TimelineEvent[]) {
     redactedDescriptors: [] as Array<Record<string, unknown>>,
     editsByMessageId: new Map<string, RoomTimelineMessageControl>(),
     pinsByMessageId: new Map<string, boolean>(),
+    memberProposalUpdatesByMessageId: new Map<string, { content?: string; patch: Record<string, unknown> }>(),
   }
 
   for (const event of timeline) {
+    const metadata = asRecord(event.metadata)
+    if (event.type === 'system' && asString(metadata?.kind) === 'member-proposal.update') {
+      const content = asString(metadata?.content) ?? asString(event.body)
+      const update = {
+        content,
+        patch: asRecord(metadata?.patch) ?? {},
+      }
+      const targetMessageId = asString(metadata?.targetMessageId)
+      const targetEventId = asString(metadata?.targetEventId)
+      if (targetMessageId) controls.memberProposalUpdatesByMessageId.set(targetMessageId, update)
+      if (targetEventId) controls.memberProposalUpdatesByMessageId.set(`room:${targetEventId}`, update)
+      continue
+    }
+
     const control = timelineEventToMessageControl(event)
     if (!control) continue
     if (control.kind === 'message.clear') {
@@ -167,6 +182,8 @@ function timelineEventToMessageControl(event: TimelineEvent): RoomTimelineMessag
 }
 
 function isMessageControlEvent(event: TimelineEvent) {
+  const metadata = asRecord(event.metadata)
+  if (event.type === 'system' && asString(metadata?.kind) === 'member-proposal.update') return true
   return Boolean(timelineEventToMessageControl(event))
 }
 
@@ -193,8 +210,9 @@ function timelineEventMatchesDescriptor(event: TimelineEvent, descriptor: Record
 function applyTimelineControlsToMessage(message: Message, controls: ReturnType<typeof timelineProjectionControls>) {
   const edit = controls.editsByMessageId.get(message.id)
   const pinned = controls.pinsByMessageId.get(message.id)
-  if (!edit && pinned === undefined) return message
-  return applyRoomTimelineMessageControl(
+  const memberProposalUpdate = controls.memberProposalUpdatesByMessageId.get(message.id)
+  if (!edit && pinned === undefined && !memberProposalUpdate) return message
+  const controlled = applyRoomTimelineMessageControl(
     [message],
     edit ??
       ({
@@ -205,6 +223,21 @@ function applyTimelineControlsToMessage(message: Message, controls: ReturnType<t
         pinned,
       } satisfies RoomTimelineMessageControl),
   )[0] ?? message
+  if (!memberProposalUpdate) return controlled
+  const metadata = asRecord(controlled.metadata) ?? {}
+  return {
+    ...controlled,
+    content: memberProposalUpdate.content ?? controlled.content,
+    metadata: {
+      ...metadata,
+      ...memberProposalUpdate.patch,
+      displayContent: memberProposalUpdate.content ?? controlled.content,
+      roomTimelineMemberProposalUpdate: {
+        source: 'room-timeline-control',
+        targetMessageId: controlled.id,
+      },
+    },
+  }
 }
 
 function messageMatchesControl(message: Message, control: RoomTimelineMessageControl) {
@@ -314,6 +347,9 @@ function displayNameForEvent(event: TimelineEvent, participant?: RoomParticipant
 
 function visibleBodyForEvent(event: TimelineEvent) {
   if (event.body.trim()) return event.body
+  if (event.type === 'approval.requested' && event.metadata?.actionType === 'propose_members') {
+    return '我建议补充一些更合适的成员，请确认。'
+  }
   if (event.type === 'artifact.created') {
     const artifact = asRecord(event.metadata?.artifact)
     return asString(artifact?.title) ?? asString(event.metadata?.title) ?? '产物已创建'

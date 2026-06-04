@@ -88,7 +88,7 @@ interface PreparedAssignedTask {
 
 interface WorkerTaskExecutionOutcome {
   taskId: string
-  status: 'completed' | 'cancelled' | 'failed' | 'waiting_for_human'
+  status: 'completed' | 'cancelled' | 'failed' | 'waiting_for_human' | 'assigned'
   message?: string | null
 }
 
@@ -419,7 +419,7 @@ async function executeAssignBatch(input: {
     for (const task of layer) {
       const blockedBy = task.dependencyTaskIds
         .map((taskId) => outcomeByTaskId.get(taskId))
-        .filter((outcome) => outcome && outcome.status !== 'completed') as WorkerTaskExecutionOutcome[]
+        .filter((outcome) => outcome && outcome.status !== 'completed' && outcome.status !== 'assigned') as WorkerTaskExecutionOutcome[]
       if (blockedBy.length > 0) {
         const outcome = blockedBy.some((outcome) => outcome.status === 'waiting_for_human')
           ? await markTaskWaitingForHumanDependency({ task, blockedBy })
@@ -435,6 +435,14 @@ async function executeAssignBatch(input: {
       outcomes.push(outcome)
       outcomeByTaskId.set(outcome.taskId, outcome)
     }
+  }
+
+  // In mention mode, tasks are assigned but not executed here;
+  // Worker execution is triggered by Matrix @mention asynchronously.
+  const assigned = outcomes.filter((outcome) => outcome.status === 'assigned')
+  if (WORKER_TRIGGER_MODE === 'mention' && assigned.length === outcomes.length) {
+    await runController.markRunning(input.run, { taskCount: input.tasks.length })
+    return outcomes
   }
 
   const failed = outcomes.filter((outcome) => outcome.status === 'failed')
@@ -588,6 +596,8 @@ async function markTaskWaitingForHumanDependency(input: {
 
 // ─── Worker Execution ───────────────────────────────────────────────────
 
+const WORKER_TRIGGER_MODE = (process.env.AGENTHUB_WORKER_TRIGGER_MODE ?? 'direct') as 'direct' | 'mention'
+
 async function executeWorkerTaskRoom(input: {
   run: RunControllerRunContext
   taskId: string
@@ -604,6 +614,69 @@ async function executeWorkerTaskRoom(input: {
   ownerId: string
   workerRuntime?: WorkerRuntime
 }): Promise<WorkerTaskExecutionOutcome> {
+  // HiClaw mode: prepare only, wait for Matrix @mention to trigger execution
+  if (WORKER_TRIGGER_MODE === 'mention') {
+    await runtimeLeaseController.markReady(input.runtimeLeaseId, {})
+    await markWorkerInstanceState(input.workerInstanceId, 'idle', {
+      message: `Task assigned, waiting for @mention: ${input.taskTitle}.`,
+    })
+    await runController.markTaskAssigned(input.run, {
+      taskId: input.taskId,
+      title: input.taskTitle,
+      agentId: input.worker.id,
+      childSessionId: input.childSessionId,
+      taskThreadId: input.taskThreadId,
+      workerInstanceId: input.workerInstanceId ?? null,
+      sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
+      sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
+      extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId, runtimeLeaseId: input.runtimeLeaseId ?? null, triggerMode: 'mention' },
+    })
+    await roomService.appendTimelineEvent({
+      roomId: input.taskRoomId,
+      senderType: 'system',
+      type: 'task.progress',
+      body: `Task assigned to @${input.worker.name}. Waiting for Worker to claim via @mention.`,
+      metadata: { kind: 'task.assigned', workerId: input.worker.id, taskId: input.taskId, triggerMode: 'mention' },
+    })
+    // Also send an explicit @mention to the Worker so it can claim the task
+    // via MatrixRuntimeListener even before Manager OpenClaw sends its own @mention.
+    try {
+      const [workerParticipant] = await db
+        .select()
+        .from(roomParticipants)
+        .where(
+          and(
+            eq(roomParticipants.roomId, input.taskRoomId),
+            eq(roomParticipants.workspaceAgentId, input.worker.id),
+            eq(roomParticipants.participantType, 'worker'),
+          ),
+        )
+        .limit(1)
+      if (workerParticipant) {
+        const mentionBody = `@${input.worker.name} ${input.taskTitle}\n\n${input.taskDescription}`
+        await roomService.appendTimelineEvent({
+          roomId: input.taskRoomId,
+          senderType: 'manager',
+          type: 'manager.message',
+          body: mentionBody,
+          metadata: {
+            kind: 'task.mention',
+            targetWorkerId: input.worker.id,
+            taskId: input.taskId,
+            triggerMode: 'mention',
+            matrix: {
+              mentionedParticipantIds: [workerParticipant.id],
+            },
+          },
+        })
+      }
+    } catch (err) {
+      logger.warn({ err, taskId: input.taskId, taskRoomId: input.taskRoomId }, 'Failed to append mention event for Worker trigger')
+    }
+    return { taskId: input.taskId, status: 'assigned', message: `Waiting for Worker @mention: ${input.taskTitle}.` }
+  }
+
+  // Direct mode: execute immediately (legacy behavior)
   const startedAt = Date.now()
   await runtimeLeaseController.markRunning(input.runtimeLeaseId, { startedAt: new Date() })
   await markWorkerInstanceState(input.workerInstanceId, 'busy', {

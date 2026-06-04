@@ -110,6 +110,7 @@ type TimelineProjectionControls = {
   redactedDescriptors: Array<Record<string, unknown>>
   editsByMessageId: Map<string, Record<string, unknown>>
   pinsByMessageId: Map<string, boolean>
+  memberProposalUpdatesByMessageId: Map<string, { content?: string; patch: Record<string, unknown> }>
 }
 
 function timelineProjectionControls(timeline: TimelineEventRow[]): TimelineProjectionControls {
@@ -121,12 +122,24 @@ function timelineProjectionControls(timeline: TimelineEventRow[]): TimelineProje
     redactedDescriptors: [],
     editsByMessageId: new Map(),
     pinsByMessageId: new Map(),
+    memberProposalUpdatesByMessageId: new Map(),
   }
 
   for (const event of timeline) {
     if (event.type !== 'system') continue
     const metadata = asRecord(event.metadata)
     const kind = asString(metadata.kind)
+    if (kind === 'member-proposal.update') {
+      const update = {
+        content: asString(metadata.content) ?? asString(event.body) ?? undefined,
+        patch: asRecord(metadata.patch),
+      }
+      const targetMessageId = asString(metadata.targetMessageId)
+      const targetEventId = asString(metadata.targetEventId)
+      if (targetMessageId) controls.memberProposalUpdatesByMessageId.set(targetMessageId, update)
+      if (targetEventId) controls.memberProposalUpdatesByMessageId.set(`room:${targetEventId}`, update)
+      continue
+    }
     if (kind === 'message.clear') {
       controls.clearedBeforeOrAtSequence = Math.max(controls.clearedBeforeOrAtSequence, event.sequence)
       controls.clearedAtTime = Math.max(controls.clearedAtTime, event.createdAt.getTime())
@@ -165,7 +178,7 @@ function timelineProjectionControls(timeline: TimelineEventRow[]): TimelineProje
 function isMessageControlEvent(event: TimelineEventRow) {
   if (event.type !== 'system') return false
   const kind = asString(asRecord(event.metadata).kind)
-  return Boolean(kind?.startsWith('message.'))
+  return kind === 'member-proposal.update' || Boolean(kind?.startsWith('message.'))
 }
 
 function timelineEventIsRedacted(event: TimelineEventRow, controls: TimelineProjectionControls) {
@@ -191,20 +204,31 @@ function timelineEventMatchesDescriptor(event: TimelineEventRow, descriptor: Rec
 function applyTimelineEdit(message: MessageRow, controls: TimelineProjectionControls): MessageRow {
   const edit = controls.editsByMessageId.get(message.id)
   const pinned = controls.pinsByMessageId.get(message.id)
-  if (!edit && pinned === undefined) return message
+  const memberProposalUpdate = controls.memberProposalUpdatesByMessageId.get(message.id)
+  if (!edit && pinned === undefined && !memberProposalUpdate) return message
   const content = edit ? asString(edit.content) : null
   const metadata = asRecord(message.metadata)
   return {
     ...message,
-    content: content ?? message.content,
+    content: memberProposalUpdate?.content ?? content ?? message.content,
     isPinned: pinned ?? message.isPinned,
     metadata: {
       ...metadata,
+      ...(memberProposalUpdate?.patch ?? {}),
       ...(content
         ? {
             displayContent: content,
             editedAt: asString(edit?.editedAt) ?? new Date().toISOString(),
             roomTimelineEdit: {
+              source: 'room-timeline-control',
+              targetMessageId: message.id,
+            },
+          }
+        : {}),
+      ...(memberProposalUpdate
+        ? {
+            displayContent: memberProposalUpdate.content ?? content ?? message.content,
+            roomTimelineMemberProposalUpdate: {
               source: 'room-timeline-control',
               targetMessageId: message.id,
             },
@@ -310,6 +334,9 @@ function displayNameForEvent(event: TimelineEventRow, participant?: ParticipantR
 function visibleBodyForEvent(event: TimelineEventRow) {
   if (event.body.trim()) return event.body
   const metadata = asRecord(event.metadata)
+  if (event.type === 'approval.requested' && metadata.actionType === 'propose_members') {
+    return '我建议补充一些更合适的成员，请确认。'
+  }
   if (event.type === 'artifact.created') {
     const artifact = asRecord(metadata.artifact)
     return asString(artifact.title) ?? asString(metadata.title) ?? '产物已创建'

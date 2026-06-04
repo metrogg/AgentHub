@@ -11,7 +11,7 @@ import {
   workerInstances,
   workspaceTasks,
 } from '@agenthub/db'
-import { managerRuntimeService } from '../manager-runtime'
+import { managerRuntimeService, getActiveManagerProvider } from '../manager-runtime'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
@@ -88,12 +88,23 @@ export class MatrixRoomEventDispatcher {
   constructor(handlers: Partial<MatrixRoomEventDispatcherHandlers> = {}) {
     this.handlers = {
       runWorkerTaskRoom: (input) => workerRuntimeService.runTaskRoom(input),
-      stepManagerRoom: (input) => managerRuntimeService.stepRoom({
-        roomId: input.roomId,
-        ownerId: input.ownerId,
-        afterSequence: input.afterSequence,
-        source: input.source,
-      }),
+      stepManagerRoom: async (input) => {
+        // If a resident Manager (OpenClaw/QwenPaw) is running, skip the local step call.
+        // The resident process observes the room via Matrix /sync autonomously.
+        const provider = getActiveManagerProvider()
+        if (provider && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
+          const status = await provider.status()
+          if (status.running || status.endpoint) {
+            return { consumed: true, skipped: true, reason: 'resident-manager-active' }
+          }
+        }
+        return managerRuntimeService.stepRoom({
+          roomId: input.roomId,
+          ownerId: input.ownerId,
+          afterSequence: input.afterSequence,
+          source: input.source,
+        })
+      },
       cancelTaskRoom: (input) => cancelTaskRoomFromMatrix(input),
       recordApprovalControl: (input) => recordApprovalControlFromMatrix(input),
       resumeTaskRoomAfterHumanAnswer: (input) =>

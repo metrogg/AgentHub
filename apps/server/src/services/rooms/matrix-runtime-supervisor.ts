@@ -1,5 +1,7 @@
 import { and, db, eq, matrixIdentities, roomParticipants, rooms, workerInstances } from '@agenthub/db'
 import { logger } from '../../lib/logger'
+import { createMatrixClientFromEnv } from './matrix-client'
+import { MatrixIdentityService, identityOwnerFromParticipant } from './matrix-identity-service'
 import { matrixRuntimeListener, type MatrixRuntimeListener } from './matrix-runtime-listener'
 import type { ParticipantType } from './types'
 
@@ -63,11 +65,40 @@ export class MatrixRuntimeSupervisor {
     if (!participant.providerUserId) {
       return { started: false, reason: 'participant_has_no_matrix_user', participantId }
     }
-    const [identity] = await db
+    let identity = await db
       .select()
       .from(matrixIdentities)
       .where(eq(matrixIdentities.userId, participant.providerUserId))
       .limit(1)
+      .then((rows) => rows[0] ?? null)
+
+    if (!identity?.accessToken) {
+      logger.warn(
+        { participantId, userId: participant.providerUserId },
+        '[MatrixRuntimeSupervisor] Identity missing token, attempting to re-register...',
+      )
+      try {
+        const client = createMatrixClientFromEnv()
+        const identityService = new MatrixIdentityService(client)
+        const ensured = await identityService.ensureIdentity(
+          identityOwnerFromParticipant({
+            participantType: participant.participantType,
+            userId: participant.userId,
+            workspaceAgentId: participant.workspaceAgentId,
+            workerInstanceId: participant.workerInstanceId,
+            displayName: participant.displayName,
+          }),
+        )
+        identity = ensured
+      } catch (err) {
+        logger.error(
+          { err, participantId, userId: participant.providerUserId },
+          '[MatrixRuntimeSupervisor] Failed to re-register Matrix identity',
+        )
+        return { started: false, reason: 'matrix_identity_re_register_failed', participantId }
+      }
+    }
+
     if (!identity?.accessToken) {
       return { started: false, reason: 'matrix_identity_missing_token', participantId }
     }

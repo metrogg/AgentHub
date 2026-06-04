@@ -10,7 +10,6 @@ const { roomService } = await import('../apps/server/src/services/rooms')
 const {
   db,
   eq,
-  messages,
   orchestratorRuns,
   roomParticipants,
   sessions,
@@ -52,10 +51,8 @@ describe('ManagerPatrol Room timeline integration', () => {
       ),
     ).toBe(true)
 
-    const legacyMessages = await db.select().from(messages).where(eq(messages.sessionId, fixture.groupSession.id))
-    expect(
-      legacyMessages.some((message) => message.metadata?.kind === 'manager-patrol-check'),
-    ).toBe(true)
+    const groupPatrolEvents = groupEvents.filter((event) => event.metadata?.kind === 'manager-patrol-check')
+    expect(groupPatrolEvents.length).toBeGreaterThan(0)
   })
 
   test('stale worker heartbeat is visible in group and task room timelines', async () => {

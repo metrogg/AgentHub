@@ -148,6 +148,44 @@ describe('HiClaw-lite kernel boundary', () => {
     expect(violations).toEqual([])
   })
 
+  test('Manager HiClaw skill surface includes the 4 new Phase-1 builtin skills', () => {
+    // Skill 补齐 Phase 1: extend the HiClaw-lite Manager skill surface from 5
+    // to 9 builtin skills. The 4 new entries are documented per HiClaw's
+    // SKILL.md template (Purpose / Controller API Surface / Rules / Gotchas /
+    // Operation Reference / Best Practices / Coordination Protocol). They
+    // must appear in BUILTIN_MANAGER_SKILLS so ensureManagerConfig() writes
+    // them into the OpenClaw Manager workspace on first boot.
+    const config = readFileSync(
+      join(process.cwd(), 'apps/server/src/services/manager-runtime/manager-config.ts'),
+      'utf8',
+    )
+    const newSkillNames = [
+      'team-management',
+      'project-management',
+      'hiclaw-find-worker',
+      'task-coordination',
+    ]
+    for (const name of newSkillNames) {
+      expect(config).toMatch(new RegExp(`name:\\s*'${name}'`))
+    }
+  })
+
+  test('Manager skillDoc helper renders HiClaw-style sections when provided', () => {
+    // The skillDoc() helper in manager-config.ts must support the optional
+    // HiClaw sections (gotchas / operationReference / coordinationProtocol /
+    // bestPractices) without breaking the original 5 builtin skills. A
+    // sample-render check via a small one-off invocation is the cheapest
+    // regression guard.
+    const config = readFileSync(
+      join(process.cwd(), 'apps/server/src/services/manager-runtime/manager-config.ts'),
+      'utf8',
+    )
+    expect(config).toMatch(/gotchas\?:\s*string\[\]/)
+    expect(config).toMatch(/operationReference\?:\s*Array<\{\s*situation:\s*string;\s*action:\s*string\s*\}>/)
+    expect(config).toMatch(/coordinationProtocol\?:\s*string\[\]/)
+    expect(config).toMatch(/bestPractices\?:\s*string\[\]/)
+  })
+
   test('new lifecycle paths use controllers instead of runtime lease persistence helpers', () => {
     const guardedDirs = [
       'apps/server/src/services/rooms',

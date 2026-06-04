@@ -184,6 +184,153 @@ const BUILTIN_MANAGER_SKILLS = [
       ],
     }),
   },
+  {
+    name: 'team-management',
+    body: skillDoc({
+      title: 'Team Management',
+      purpose: 'Group N Workers under a single Team Leader so the Manager only delegates to the Leader, never to team workers directly.',
+      controllerApi: [
+        'POST /api/controller/teams',
+        'GET /api/controller/teams',
+        'POST /api/controller/teams/{teamId}/members',
+        'DELETE /api/controller/teams/{teamId}/members/{agentId}',
+        'POST /api/internal/manager/actions action=delegate_to_team',
+      ],
+      rules: [
+        'A Team = 1 Team Leader container + N Worker containers. Leader must use a team-leader runtime base (closest in AgentHub: qwenpaw).',
+        'Manager only @mentions the Team Leader in the Leader Room. Never @mention team workers directly.',
+        'Team workers’ groupAllowFrom includes [Leader, Team Admin], not Manager.',
+        'Tasks delegated to a team carry metadata.delegatedToTeam=<teamId> so the Manager routes status through the Leader.',
+      ],
+      gotchas: [
+        'Team Leader is a Worker container with team-leader runtime base, not a Manager runtime.',
+        'Team Room = Leader + Team Admin + all team workers. Global Admin is only present if they are also the Team Admin.',
+        'Leader Room is a 3-party room: Manager + Global Admin + Leader (same as a regular Worker Room).',
+        'Deleting a team deletes the Leader container first, then each team worker container, then the team record.',
+      ],
+      operationReference: [
+        { situation: 'Admin asks to start a team-based project', action: 'POST /api/controller/teams, then POST /api/internal/manager/actions with action=delegate_to_team' },
+        { situation: 'Add or remove a worker from an existing team', action: 'POST or DELETE /api/controller/teams/{teamId}/members' },
+        { situation: 'Inspect team composition', action: 'GET /api/controller/teams' },
+        { situation: 'Delete the entire team', action: 'DELETE /api/controller/teams/{teamId} (cascades to containers)' },
+      ],
+    }),
+  },
+  {
+    name: 'project-management',
+    body: skillDoc({
+      title: 'Project Management',
+      purpose: 'Coordinate multi-worker projects through a single plan.md source of truth and a dedicated Project Room.',
+      controllerApi: [
+        'POST /api/controller/projects',
+        'GET /api/controller/projects/{projectId}',
+        'PATCH /api/controller/projects/{projectId}/plan',
+        'POST /api/controller/projects/{projectId}/advance-phase',
+        'POST /api/controller/projects/{projectId}/complete',
+      ],
+      rules: [
+        'Every project has exactly one Project Room (Matrix) and one plan.md (single source of truth).',
+        'The Project Room MUST always include the human admin — non-negotiable.',
+        'Never advance to the next phase while a REVISION_NEEDED marker is pending.',
+        'plan.md is canonical; the SQLite workspace_tasks table is a derived projection.',
+      ],
+      gotchas: [
+        '“All tasks complete” finalization is mandatory even in unattended mode — always update plan.md and notify the admin.',
+        'YOLO mode check: if AGENTHUB_YOLO=1 or ~/yolo-mode exists, auto-confirm the plan in step 1c; never block on a “please confirm” question.',
+        'When the plan changes mid-project, use PATCH /api/controller/projects/{projectId}/plan rather than ad-hoc task edits.',
+        'Always adapt to the admin’s preferred language when posting in rooms or DMs.',
+      ],
+      operationReference: [
+        { situation: 'Admin asks to start a multi-worker project', action: 'POST /api/controller/projects (auto-creates Project Room + plan.md)' },
+        { situation: 'Worker reports task completion in Project Room', action: 'Update plan.md first, then POST /api/controller/projects/{projectId}/advance-phase' },
+        { situation: 'Plan needs adjustment', action: 'PATCH /api/controller/projects/{projectId}/plan' },
+        { situation: 'Project fully complete', action: 'POST /api/controller/projects/{projectId}/complete' },
+      ],
+      bestPractices: [
+        'Always sync plan.md to ArtifactStore after every phase transition.',
+        'Read SOUL.md before composing notifications to use the persona and language defined there.',
+        'Use plan.md as the only place where task status is recorded; avoid duplicating state in chat messages.',
+      ],
+    }),
+  },
+  {
+    name: 'hiclaw-find-worker',
+    body: skillDoc({
+      title: 'Worker Marketplace Discovery',
+      purpose: 'Search and import Worker templates from a marketplace when the admin has not specified an existing Worker.',
+      controllerApi: [
+        'GET /api/controller/worker-marketplace/search?q={query}&limit=3',
+        'GET /api/controller/worker-marketplace/packages/{packageUri}',
+        'POST /api/controller/worker-marketplace/install',
+      ],
+      rules: [
+        'Only use this skill for marketplace search and install — hand-created workers go through worker-management.',
+        'Always confirm with the admin before installing a search result.',
+        'If the admin gives a nacos://... URI directly, treat it as an explicit package import — confirm the Worker name, then install.',
+        'Do not fall back to worker-management after a marketplace install fails unless the admin explicitly asks.',
+      ],
+      gotchas: [
+        'Marketplace only returns nacos:// package URIs; do not interpret them as zip files or other formats.',
+        'Installation creates a Worker with runtimeBase: qwenpaw by default unless the admin specifies otherwise.',
+        'Report install failures with the key error from the response body; do not retry automatically.',
+        'Some templates require additional setup (MCP servers, environment variables) — list these in the install result.',
+      ],
+      operationReference: [
+        { situation: 'Admin assigns work without specifying a Worker', action: 'GET /api/controller/worker-marketplace/search?q={requirement}, then recommend top 3' },
+        { situation: 'Admin gives a nacos:// URI directly', action: 'POST /api/controller/worker-marketplace/install with packageUri' },
+        { situation: 'Admin confirms a specific candidate from search', action: 'POST /api/controller/worker-marketplace/install with templateName' },
+        { situation: 'Marketplace unavailable', action: 'Report failure to admin; do not silently fall back to worker-management' },
+      ],
+      bestPractices: [
+        'Search by capability tags first (e.g., react, rust, ml), then by natural language query.',
+        'Always include name, role, and capabilityTags in the recommendation.',
+        'Prefer templates with high install count and recent activity.',
+      ],
+    }),
+  },
+  {
+    name: 'task-coordination',
+    body: skillDoc({
+      title: 'Task Directory Coordination',
+      purpose: 'Prevent conflicts when both Manager and Worker modify the same task directory by using .processing marker events on the task room timeline.',
+      controllerApi: [
+        'POST /api/controller/tasks/{taskId}/processing-marker',
+        'GET /api/controller/tasks/{taskId}/processing-marker',
+        'DELETE /api/controller/tasks/{taskId}/processing-marker',
+        'POST /api/controller/tasks/{taskId}/acquire (atomic check-and-create)',
+      ],
+      rules: [
+        'Always check for a processing marker before modifying a task directory.',
+        'Always create a marker before doing git ops, plan.md updates, or other workspace-level changes.',
+        'Always remove the marker when work is done; rely on the 15-minute expiration as a safety net.',
+        '15-minute default expiration prevents deadlocks from crashed processes.',
+      ],
+      gotchas: [
+        'The marker payload is a JSON object: { processor, startedAt, expiresAt, operation }.',
+        'Expiration is checked on read; expired markers are treated as “safe to proceed”.',
+        'Never modify a task directory when a valid (non-expired) marker exists — wait or coordinate with the processor.',
+        'This skill is the integration point for git-delegation-management (Manager) and the Worker’s git-delegation skill.',
+      ],
+      coordinationProtocol: [
+        '1. Read the latest task.processing.* event from the task room timeline.',
+        '2. If a non-expired marker exists, do not modify — wait or coordinate.',
+        '3. If safe, append a task.processing.acquired event with the new marker payload.',
+        '4. Perform the modifications.',
+        '5. Append a task.processing.released event to clear the marker.',
+      ],
+      operationReference: [
+        { situation: 'Manager about to modify a Worker’s task workspace', action: 'POST /api/controller/tasks/{taskId}/acquire (atomic check-and-create)' },
+        { situation: 'Worker about to modify its own workspace', action: 'GET /api/controller/tasks/{taskId}/processing-marker, then POST if safe' },
+        { situation: 'Work complete', action: 'DELETE /api/controller/tasks/{taskId}/processing-marker' },
+        { situation: 'Process crashed leaving a stale marker', action: 'Wait for expiration (15 min) or call DELETE with force=true' },
+      ],
+      bestPractices: [
+        'Always include operation in the marker for debugging (e.g., git-delegation, plan-md-update).',
+        'Use short, descriptive processor names (manager, worker-alice, etc.).',
+        'If you find an expired marker, clean it up before creating your own.',
+      ],
+    }),
+  },
 ]
 
 function skillDoc(input: {
@@ -191,8 +338,12 @@ function skillDoc(input: {
   purpose: string
   controllerApi: string[]
   rules: string[]
+  gotchas?: string[]
+  operationReference?: Array<{ situation: string; action: string }>
+  coordinationProtocol?: string[]
+  bestPractices?: string[]
 }) {
-  return [
+  const sections: string[] = [
     `# ${input.title}`,
     '',
     '## Purpose',
@@ -204,11 +355,38 @@ function skillDoc(input: {
     '## Rules',
     ...input.rules.map((item) => `- ${item}`),
     '',
+  ]
+
+  if (input.gotchas && input.gotchas.length > 0) {
+    sections.push('## Gotchas', ...input.gotchas.map((item) => `- ${item}`), '')
+  }
+
+  if (input.operationReference && input.operationReference.length > 0) {
+    sections.push(
+      '## Operation Reference',
+      '| Situation | Action |',
+      '|---|---|',
+      ...input.operationReference.map((item) => `| ${item.situation} | ${item.action} |`),
+      '',
+    )
+  }
+
+  if (input.coordinationProtocol && input.coordinationProtocol.length > 0) {
+    sections.push('## Coordination Protocol', ...input.coordinationProtocol, '')
+  }
+
+  if (input.bestPractices && input.bestPractices.length > 0) {
+    sections.push('## Best Practices', ...input.bestPractices.map((item) => `- ${item}`), '')
+  }
+
+  sections.push(
     '## Decision Pattern',
     '1. Read the Matrix room timeline and shared task refs.',
     '2. Decide whether this skill is necessary.',
     '3. Call the smallest Controller API action that changes real resources.',
     '4. Report the result back to the Matrix room.',
     '',
-  ].join('\n')
+  )
+
+  return sections.join('\n')
 }

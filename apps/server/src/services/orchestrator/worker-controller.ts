@@ -46,8 +46,8 @@ interface WorkerInstanceRow {
   id: string
   workspaceId: string
   workspaceAgentId: string
-  runtimeFamily: 'coordinator' | 'worker' | 'fallback'
-  runtimeBase: 'openclaw' | 'copaw' | 'qwenpaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | 'llm-fallback'
+  runtimeFamily: 'coordinator' | 'worker'
+  runtimeBase: 'openclaw' | 'copaw' | 'qwenpaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini'
   modelId: string | null
   skillIds: string[]
   mcpServerIds: string[]
@@ -751,7 +751,7 @@ export class WorkerController {
     details.modelConfigured = true
 
     // Check runtime base is valid
-    const validRuntimes = ['codex', 'claude-code', 'opencode', 'gemini', 'llm-fallback', 'openclaw', 'copaw']
+    const validRuntimes = ['codex', 'claude-code', 'opencode', 'gemini', 'openclaw', 'copaw', 'qwenpaw']
     if (!validRuntimes.includes(worker.runtimeBase)) {
       return {
         ready: false,
@@ -798,11 +798,6 @@ export class WorkerController {
     }
 
     // --- Ephemeral mode checks ---
-    // For LLM fallback, model is sufficient — no CLI needed
-    if (worker.runtimeBase === 'llm-fallback') {
-      return { ready: true, details: { ...details, fallbackMode: true } }
-    }
-
     // For code agents, verify sandbox policy is valid
     if (worker.sandboxPolicy !== 'workspace-write' && worker.sandboxPolicy !== 'danger-full-access') {
       return {

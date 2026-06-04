@@ -247,6 +247,72 @@ describe('room timeline projection', () => {
     })
   })
 
+  test('merges member proposal update controls into the original approval card', () => {
+    const projection = projectRoomTimeline({
+      room: {
+        ...room,
+        kind: 'group',
+        sessionId: 'group-session-1',
+        taskId: null,
+        taskThreadId: null,
+      },
+      participants: [worker],
+      sessionId: 'group-session-1',
+      timeline: [
+        event({
+          id: 'event-proposal',
+          type: 'approval.requested',
+          sequence: 1,
+          senderType: 'manager',
+          body: '我建议补充一些更合适的成员，请确认。',
+          metadata: {
+            kind: 'coordinator.action',
+            actionType: 'propose_members',
+            memberProposalStatus: 'pending',
+            memberProposals: [
+              {
+                profileId: 'frontend-engineer',
+                name: 'Frontend Engineer',
+                reason: '需要前端实现能力',
+              },
+            ],
+          },
+        }),
+        event({
+          id: 'event-proposal-update',
+          type: 'system',
+          sequence: 2,
+          senderType: 'manager',
+          body: '已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。',
+          metadata: {
+            kind: 'member-proposal.update',
+            targetEventId: 'event-proposal',
+            content: '已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。',
+            patch: {
+              memberProposalStatus: 'confirmed',
+              confirmedProfileIds: ['frontend-engineer'],
+              createdAgentIds: ['agent-new'],
+            },
+          },
+        }),
+      ],
+    })
+
+    expect(projection.messages).toHaveLength(1)
+    expect(projection.messages[0]?.id).toBe('room:event-proposal')
+    expect(projection.messages[0]?.content).toBe('已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。')
+    expect(projection.messages[0]?.metadata).toMatchObject({
+      actionType: 'propose_members',
+      memberProposalStatus: 'confirmed',
+      confirmedProfileIds: ['frontend-engineer'],
+      createdAgentIds: ['agent-new'],
+      roomTimelineMemberProposalUpdate: {
+        source: 'room-timeline-control',
+        targetMessageId: 'room:event-proposal',
+      },
+    })
+  })
+
   test('projects dependency waiting and skipped states without pretending the task is running', () => {
     const projection = projectRoomTimeline({
       room,

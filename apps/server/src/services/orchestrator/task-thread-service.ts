@@ -1,4 +1,4 @@
-import { and, db, desc, eq, messages, sessions, taskThreads, workspaceTasks } from '@agenthub/db'
+import { and, db, desc, eq, sessions, taskThreads, workspaceTasks } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { prepareSharedTaskDirectory } from './shared-task-directory'
 import { type WorkerRuntimeAgentConfig } from './worker-runtime-resources'
@@ -163,7 +163,6 @@ export async function ensureTaskThread(input: EnsureTaskThreadInput) {
       sharedTaskSpecPath: input.sharedTaskSpecPath,
       sharedTaskObjects: input.sharedTaskObjects,
     })
-    await ensurePreparedThreadBootstrapMessage(input, current.id)
     await ensureTaskThreadRoomTimeline(input, current.id)
     return current
   }
@@ -198,7 +197,6 @@ export async function ensureTaskThread(input: EnsureTaskThreadInput) {
     sharedTaskSpecPath: input.sharedTaskSpecPath,
     sharedTaskObjects: input.sharedTaskObjects,
   })
-  await ensurePreparedThreadBootstrapMessage(input, created.id)
   await ensureTaskThreadRoomTimeline(input, created.id)
   return created
 }
@@ -401,39 +399,6 @@ async function syncTaskThreadSessionMetadata(
       updatedAt: new Date(),
     })
     .where(eq(sessions.id, sessionId))
-}
-
-async function ensurePreparedThreadBootstrapMessage(input: EnsureTaskThreadInput, taskThreadId: string) {
-  const existing = await db.select().from(messages).where(eq(messages.sessionId, input.sessionId)).limit(20)
-  const hasBootstrap = existing.some((message) => message.metadata?.kind === 'task-thread-bootstrap')
-  if (hasBootstrap) return
-
-  const lines = [
-    `任务已规划，等待 Manager 分发：${input.taskTitle}`,
-    input.agentName ? `预计负责人：${input.agentName}` : '预计负责人：待分配',
-  ]
-  if (input.sharedTaskSpecPath) {
-    lines.push(`任务说明：${input.sharedTaskSpecPath}`)
-  }
-
-  await db.insert(messages).values({
-    sessionId: input.sessionId,
-    senderId: 'system',
-    senderType: 'system',
-    type: 'task-thread-bootstrap',
-    content: lines.join('\n'),
-    metadata: {
-      kind: 'task-thread-bootstrap',
-      taskThreadId,
-      orchestratorRunId: input.runId,
-      orchestratorTaskId: input.taskId,
-      groupSessionId: input.groupSessionId,
-      status: 'prepared',
-      sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? undefined,
-      sharedTaskSpecPath: input.sharedTaskSpecPath ?? undefined,
-      sharedTaskObjects: input.sharedTaskObjects ?? undefined,
-    },
-  })
 }
 
 async function ensureTaskThreadRoomTimeline(input: EnsureTaskThreadInput, taskThreadId: string) {

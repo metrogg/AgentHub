@@ -681,7 +681,7 @@ export interface LocalMatrixActionResult {
   diagnostics: MatrixDiagnostics
 }
 
-export type ManagerRuntimeType = 'openclaw' | 'qwenpaw'
+export type ManagerRuntimeType = 'openclaw' 
 
 export interface ManagerRuntimeStatus {
   runtimeType: ManagerRuntimeType
@@ -1359,8 +1359,8 @@ export interface OrchestratorRunResourceSnapshot {
     id: string
     workspaceId: string
     workspaceAgentId: string
-    runtimeFamily: 'coordinator' | 'worker' | 'fallback'
-    runtimeBase: 'openclaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | 'llm-fallback'
+    runtimeFamily: 'coordinator' | 'worker' 
+    runtimeBase: 'openclaw' | 'copaw' | 'qwenpaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' 
     modelId: string | null
     skillIds: string[]
     mcpServerIds: string[]

@@ -3,7 +3,6 @@ import {
   asc,
   db,
   eq,
-  messages,
   orchestratorRuns,
   runtimeLeases,
   taskThreads,
@@ -11,8 +10,6 @@ import {
   workerInstances,
   workspaceTasks,
 } from '@agenthub/db'
-import { WsEvent } from '@agenthub/shared'
-import { broadcastSessionEvent } from '../agent-runner'
 import { workerController } from './worker-controller'
 import { emitRunEvent } from './run-events'
 import { updateTaskThreadStatus } from './task-thread-service'
@@ -291,36 +288,6 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
           },
         })
 
-        // Post a visible progress-check message in the group chat
-        try {
-          const [patrolMsg] = await db
-            .insert(messages)
-            .values({
-              sessionId: run.groupSessionId,
-              senderId: 'system',
-              senderType: 'system',
-              type: 'text',
-              content: `🔄 正在检查任务 "${task.title}" 的进度...已经运行了 ${Math.round(elapsedMs / 1000 / 60)} 分钟，还没有完成报告。`,
-              metadata: {
-                kind: 'manager-patrol-check',
-                systemEvent: 'manager_patrol_check',
-                orchestratorRunId: run.id,
-                taskId: task.id,
-                threadId: thread?.id ?? null,
-                elapsedMs,
-              },
-            })
-            .returning()
-
-          if (patrolMsg) {
-            broadcastSessionEvent(run.groupSessionId, {
-              type: WsEvent.MessageCompleted,
-              payload: { sessionId: run.groupSessionId, message: patrolMsg },
-            })
-          }
-        } catch {
-          // Non-critical: message insert failure shouldn't break the patrol
-        }
       }
     }
 

@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test'
 const dbApi = await import('../packages/db/src/index')
 const bridgeApi = await import('../apps/server/src/services/rooms/room-chat-bridge')
 const projectionApi = await import('../apps/server/src/services/rooms/timeline-message-projection')
+const roomServiceApi = await import('../apps/server/src/services/rooms/room-service')
 
 const {
   db,
@@ -24,6 +25,7 @@ const {
 } = dbApi
 const { appendHumanMessageRoomFirst, appendMessageControlEvent, stepCoordinatorForGroupMessage } = bridgeApi
 const { listSessionMessagesRoomFirst } = projectionApi
+const { roomService } = roomServiceApi
 type ManagerRuntime = import('../apps/server/src/services/manager-runtime').ManagerRuntime
 type ManagerStepInput = import('../apps/server/src/services/manager-runtime').ManagerStepInput
 type ManagerStepResult = import('../apps/server/src/services/manager-runtime').ManagerStepResult
@@ -229,6 +231,69 @@ describe('Room chat bridge', () => {
     expect(timeline[1]?.metadata?.sourceMessageId).toBe(message.id)
     expect(timeline[2]?.metadata?.kind).toBe('coordinator.action')
     expect(timeline[2]?.metadata?.actionType).toBe('reply')
+  })
+
+  test('records member proposal cards only in Room timeline and projects updates from control events', async () => {
+    const { session, message } = await createGroupMessage()
+    const result = await stepCoordinatorForGroupMessage({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      message,
+      runtime: new FakeRuntime('propose_members'),
+    })
+
+    expect(result.consumed).toBe(true)
+    expect(result.mirroredMessageIds).toHaveLength(0)
+
+    const legacyMessages = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, session.id))
+    expect(legacyMessages).toHaveLength(1)
+    expect(legacyMessages[0]?.id).toBe(message.id)
+
+    const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
+    const proposalEvent = timeline.find((event) => event.type === 'approval.requested')
+    expect(proposalEvent?.metadata).toMatchObject({
+      kind: 'coordinator.action',
+      actionType: 'propose_members',
+      memberProposalStatus: 'pending',
+      memberProposals: [
+        {
+          expertProfileId: 'frontend-engineer',
+          name: 'Frontend Engineer',
+        },
+      ],
+    })
+
+    await roomService.appendTimelineEvent({
+      roomId: result.roomId,
+      senderType: 'manager',
+      type: 'system',
+      body: '已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。',
+      metadata: {
+        kind: 'member-proposal.update',
+        targetEventId: proposalEvent!.id,
+        content: '已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。',
+        patch: {
+          memberProposalStatus: 'confirmed',
+          confirmedProfileIds: ['frontend-engineer'],
+        },
+      },
+    })
+
+    const projected = await listSessionMessagesRoomFirst({
+      sessionId: session.id,
+      legacyMessages,
+    })
+    const proposalMessage = projected.find((item) => item.id === `room:${proposalEvent!.id}`)
+    expect(proposalMessage?.content).toBe('已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。')
+    expect(proposalMessage?.metadata).toMatchObject({
+      actionType: 'propose_members',
+      memberProposalStatus: 'confirmed',
+      confirmedProfileIds: ['frontend-engineer'],
+    })
   })
 
   test('dispatches assign actions through real task room and WorkerRuntime', async () => {
@@ -668,11 +733,31 @@ class FakeRuntime implements ManagerRuntime {
   readonly runtimeType = 'openclaw' as const
 
   constructor(
-    private readonly action: 'reply' | 'assign',
+    private readonly action: 'reply' | 'assign' | 'propose_members',
     private readonly workerId?: string,
   ) {}
 
   async *step(input: ManagerStepInput): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
+    if (this.action === 'propose_members') {
+      return {
+        runtimeType: this.runtimeType,
+        actions: [
+          {
+            type: 'propose_members',
+            message: '当前群聊缺少前端实现能力，建议补充前端工程师。',
+            reason: `saw ${input.timeline.length} room events`,
+            memberProposals: [
+              {
+                expertProfileId: 'frontend-engineer',
+                name: 'Frontend Engineer',
+                role: '前端工程师',
+                reason: '需要前端实现能力',
+              },
+            ],
+          },
+        ],
+      }
+    }
     if (this.action === 'assign') {
       return {
         runtimeType: this.runtimeType,

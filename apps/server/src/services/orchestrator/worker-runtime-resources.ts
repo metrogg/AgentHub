@@ -348,12 +348,9 @@ async function findWorkerInstance(workspaceId: string, workspaceAgentId: string)
 }
 
 function resolveRuntimeBinding(agent: WorkerRuntimeAgentConfig): {
-  runtimeFamily: 'coordinator' | 'worker' | 'fallback'
-  runtimeBase: 'codex' | 'claude-code' | 'opencode' | 'gemini' | 'llm-fallback'
+  runtimeFamily: 'coordinator' | 'worker'
+  runtimeBase: 'codex' | 'claude-code' | 'opencode' | 'gemini'
 } {
-  if (agent.runtimeType !== 'code-agent') {
-    return { runtimeFamily: 'fallback', runtimeBase: 'llm-fallback' }
-  }
   if (agent.codeAgentType === 'claude-code') {
     return { runtimeFamily: 'worker', runtimeBase: 'claude-code' }
   }

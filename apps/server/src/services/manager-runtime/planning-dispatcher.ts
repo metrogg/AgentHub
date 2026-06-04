@@ -29,6 +29,7 @@ import { runController, type RunControllerRunContext } from '../orchestrator/run
 import type { TaskOutputContract, TaskValidation } from '../orchestrator/types'
 import type { WorkerRuntime } from '../worker-runtime'
 import { dispatchAssignBatch } from '../controller-plane/task-dispatcher'
+import { roomService } from '../rooms'
 import type { ManagerAction } from './types'
 
 export type PlanAgent = {
@@ -241,27 +242,17 @@ export async function generatePlanAndPushTaskBoard(
 
   const guardrails = checkInputGuardrails(content)
   if (!guardrails.ok && guardrails.riskLevel === 'high') {
-    const [blockedMessage] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: 'system',
-        senderType: 'system',
-        type: 'text',
-        content: `请求被安全策略拦截：${guardrails.violations.join('；')}`,
-        metadata: {
-          systemEvent: 'orchestrator_blocked',
-          riskLevel: guardrails.riskLevel,
-          violations: guardrails.violations,
-        },
-      })
-      .returning()
-    if (blockedMessage) {
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message: blockedMessage },
-      })
-    }
+    await appendPlanningStatusTimeline({
+      sessionId,
+      ownerId,
+      content: `请求被安全策略拦截：${guardrails.violations.join('；')}`,
+      metadata: {
+        kind: 'orchestrator-blocked',
+        systemEvent: 'orchestrator_blocked',
+        riskLevel: guardrails.riskLevel,
+        violations: guardrails.violations,
+      },
+    })
     if (options.run) {
       await runController.fail(options.run, {
         error: `请求被安全策略拦截：${guardrails.violations.join('；')}`,
@@ -312,29 +303,39 @@ export async function generatePlanAndPushTaskBoard(
       error: message,
       stage: 'planning',
     })
-    const [failedMessage] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: 'system',
-        senderType: 'system',
-        type: 'text',
-        content: `Orchestrator 规划失败：${message}`,
-        metadata: {
-          systemEvent: 'orchestrator_plan_failed',
-          error: message,
-        },
-      })
-      .returning()
-    if (failedMessage) {
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message: failedMessage },
-      })
-    }
+    await appendPlanningStatusTimeline({
+      sessionId,
+      ownerId,
+      content: `Orchestrator 规划失败：${message}`,
+      metadata: {
+        kind: 'orchestrator-plan-failed',
+        systemEvent: 'orchestrator_plan_failed',
+        error: message,
+      },
+    })
     if (options.propagateErrors) throw err
     return null
   }
+}
+
+async function appendPlanningStatusTimeline(input: {
+  sessionId: string
+  ownerId: string
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  const room = await roomService.ensureRoomForSession(input.sessionId, input.ownerId)
+  await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: 'system',
+    type: 'system',
+    body: input.content,
+    metadata: {
+      ...input.metadata,
+      source: 'planning-dispatcher',
+      legacyMessageProjectionDisabled: true,
+    },
+  })
 }
 
 async function dispatchPlanToExistingGroup(

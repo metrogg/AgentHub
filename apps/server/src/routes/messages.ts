@@ -672,16 +672,12 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
       }
 
-      const [proposalMessage] = await db
-        .select()
-        .from(messages)
-        .where(eq(messages.id, messageId))
-        .limit(1)
-      if (!proposalMessage || proposalMessage.sessionId !== sessionId) {
+      const proposalRef = await loadMemberProposalRef(sessionId, messageId)
+      if (!proposalRef) {
         throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '补员建议消息不存在')
       }
 
-      const metadata = proposalMessage.metadata ?? {}
+      const metadata = proposalRef.metadata
       if (metadata.memberProposalStatus !== 'pending') {
         throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '补员建议已经处理或不可确认')
       }
@@ -750,25 +746,16 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .set({ updatedAt: new Date() })
         .where(eq(workspaces.id, session.workspaceId))
 
-      const [updatedMessage] = await db
-        .update(messages)
-        .set({
-          content: `已加入：${agentsToJoin.map((agent) => agent.name).join('、')}。现在可以让 Orchestrator 重新规划并分发任务。`,
-          metadata: {
-            ...metadata,
-            memberProposalStatus: 'confirmed',
-            confirmedProfileIds: selectedProfileIds,
-            createdAgentIds: createdAgents.map((agent) => agent.id),
-            reusedAgentIds: reusedAgents.map((agent) => agent.id),
-          },
-        })
-        .where(eq(messages.id, messageId))
-        .returning()
-
-      const message = updatedMessage ?? proposalMessage
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message },
+      const message = await updateMemberProposalRef({
+        ref: proposalRef,
+        content: `已加入：${agentsToJoin.map((agent) => agent.name).join('、')}。现在可以让 Manager 重新规划并分发任务。`,
+        metadata: {
+          ...metadata,
+          memberProposalStatus: 'confirmed',
+          confirmedProfileIds: selectedProfileIds,
+          createdAgentIds: createdAgents.map((agent) => agent.id),
+          reusedAgentIds: reusedAgents.map((agent) => agent.id),
+        },
       })
 
       return c.json({ agents: agentsToJoin, message, session: updatedSession ?? session })
@@ -789,32 +776,28 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
     }
 
-    const [proposalMessage] = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.id, messageId))
-      .limit(1)
-    if (!proposalMessage || proposalMessage.sessionId !== sessionId) {
+    const proposalRef = await loadMemberProposalRef(sessionId, messageId)
+    if (!proposalRef) {
       throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '补员建议消息不存在')
     }
 
-    const metadata = proposalMessage.metadata ?? {}
+    const metadata = proposalRef.metadata
     if (metadata.memberProposalStatus !== 'confirmed') {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请先确认补员，再继续分发')
     }
     if (metadata.memberProposalContinueStatus === 'running') {
-      return c.json({ message: proposalMessage, started: false })
+      return c.json({ message: memberProposalRefMessage(proposalRef), started: false })
     }
 
     const goal =
       readString(metadata.memberProposalGoal) ??
-      (await findPreviousUserMessageContent(sessionId, proposalMessage.id))
+      (await findPreviousUserMessageContent(sessionId, proposalRef.id))
     if (!goal) {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '找不到需要继续分发的原始用户目标')
     }
 
     const runningMessage = await updateMemberProposalContinueState({
-      message: proposalMessage,
+      ref: proposalRef,
       metadata,
       content: `已加入建议成员。Orchestrator 正在基于新成员重新规划并分发任务。`,
       status: 'running',
@@ -822,7 +805,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     })
     broadcastMemberProposalContinueStatus({
       sessionId,
-      messageId: proposalMessage.id,
+      messageId: proposalRef.id,
       status: 'running',
       goal,
     })
@@ -831,11 +814,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       session,
       ownerId: user.sub,
       userName: user.username,
-      proposalMessageId: proposalMessage.id,
+      proposalMessageId: proposalRef.id,
       goal,
     }).catch((err: any) =>
       logger.error(
-        { err: err?.message, sessionId, messageId: proposalMessage.id },
+        { err: err?.message, sessionId, messageId: proposalRef.id },
         'Member proposal continue failed',
       ),
     )
@@ -872,11 +855,30 @@ async function loadMemberProposalRef(sessionId: string, messageId: string): Prom
       .where(and(eq(timelineEvents.id, eventId), eq(rooms.sessionId, sessionId)))
       .limit(1)
     if (!row?.event) return null
+    const updates = await db
+      .select()
+      .from(timelineEvents)
+      .where(and(eq(timelineEvents.roomId, row.room.id), eq(timelineEvents.type, 'system')))
+      .orderBy(asc(timelineEvents.sequence))
+    let content = row.event.body
     const metadata = { ...(row.event.metadata ?? {}) }
+    for (const update of updates) {
+      if (update.metadata?.kind !== 'member-proposal.update') continue
+      if (update.metadata?.targetEventId !== row.event.id) continue
+      const patch = update.metadata.patch
+      if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+        Object.assign(metadata, patch as Record<string, unknown>)
+      }
+      if (typeof update.metadata.content === 'string' && update.metadata.content.trim()) {
+        content = update.metadata.content
+      } else if (update.body.trim()) {
+        content = update.body
+      }
+    }
     return {
       id: `room:${row.event.id}`,
       sessionId,
-      content: row.event.body,
+      content,
       metadata,
       legacyMessage: null,
       roomEvent: row.event,
@@ -977,6 +979,33 @@ async function appendTimelineMemberProposalUpdate(input: {
 }
 
 async function findPreviousUserMessageContent(sessionId: string, beforeMessageId: string) {
+  if (beforeMessageId.startsWith('room:')) {
+    const beforeEventId = beforeMessageId.slice('room:'.length).trim()
+    if (beforeEventId) {
+      const [beforeEventRow] = await db
+        .select({
+          event: timelineEvents,
+          room: rooms,
+        })
+        .from(timelineEvents)
+        .innerJoin(rooms, eq(rooms.id, timelineEvents.roomId))
+        .where(and(eq(timelineEvents.id, beforeEventId), eq(rooms.sessionId, sessionId)))
+        .limit(1)
+      if (beforeEventRow?.event) {
+        const timeline = await db
+          .select()
+          .from(timelineEvents)
+          .where(eq(timelineEvents.roomId, beforeEventRow.room.id))
+          .orderBy(asc(timelineEvents.sequence))
+        const previousHuman = timeline
+          .filter((event) => event.sequence < beforeEventRow.event.sequence)
+          .reverse()
+          .find((event) => event.senderType === 'human' && event.body.trim())
+        if (previousHuman?.body.trim()) return previousHuman.body.trim()
+      }
+    }
+  }
+
   const list = await db
     .select()
     .from(messages)
@@ -991,7 +1020,7 @@ async function findPreviousUserMessageContent(sessionId: string, beforeMessageId
 }
 
 async function updateMemberProposalContinueState(params: {
-  message: typeof messages.$inferSelect
+  ref: MemberProposalRef
   metadata: Record<string, unknown>
   content: string
   status: 'running' | 'completed' | 'failed'
@@ -999,7 +1028,7 @@ async function updateMemberProposalContinueState(params: {
   monitor?: DispatchMonitor
   error?: string
 }) {
-  const { message, metadata, content, status, goal, monitor, error } = params
+  const { ref, metadata, content, status, goal, monitor, error } = params
   const nextMetadata: Record<string, unknown> = {
     ...metadata,
     memberProposalGoal: goal,
@@ -1016,17 +1045,7 @@ async function updateMemberProposalContinueState(params: {
   }
   if (error) nextMetadata.memberProposalContinueError = error
 
-  const [updated] = await db
-    .update(messages)
-    .set({ content, metadata: nextMetadata })
-    .where(eq(messages.id, message.id))
-    .returning()
-  const result = updated ?? message
-  broadcastSessionEvent(message.sessionId, {
-    type: WsEvent.MessageCompleted,
-    payload: { sessionId: message.sessionId, message: result },
-  })
-  return result
+  return updateMemberProposalRef({ ref, content, metadata: nextMetadata })
 }
 
 function broadcastMemberProposalContinueStatus(params: {
@@ -1067,14 +1086,10 @@ async function continueMemberProposalPlanning(params: {
   const { session, ownerId, userName, proposalMessageId, goal } = params
   if (!session.workspaceId) return
 
-  const [proposalMessage] = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.id, proposalMessageId))
-    .limit(1)
-  if (!proposalMessage) return
+  const proposalRef = await loadMemberProposalRef(session.id, proposalMessageId)
+  if (!proposalRef) return
 
-  const metadata = proposalMessage.metadata ?? {}
+  const metadata = proposalRef.metadata
   try {
     const { message: continueMessage } = await appendHumanMessageRoomFirst({
       session,
@@ -1084,11 +1099,11 @@ async function continueMemberProposalPlanning(params: {
       type: 'text',
       metadata: {
         kind: 'member-proposal-continue',
-        sourceProposalMessageId: proposalMessage.id,
+        sourceProposalMessageId: proposalRef.id,
         memberProposalGoal: goal,
         noLegacyFallback: true,
       },
-      replyToMessageId: proposalMessage.id,
+      replyToMessageId: proposalRef.id,
     })
     const step = await stepCoordinatorForGroupMessage({
       session,
@@ -1096,35 +1111,27 @@ async function continueMemberProposalPlanning(params: {
       userName,
       message: continueMessage,
     })
-    const [latestMessage] = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.id, proposalMessageId))
-      .limit(1)
+    const latestRef = await loadMemberProposalRef(session.id, proposalMessageId)
     await updateMemberProposalContinueState({
-      message: latestMessage ?? proposalMessage,
-      metadata: (latestMessage?.metadata ?? metadata) as Record<string, unknown>,
+      ref: latestRef ?? proposalRef,
+      metadata: (latestRef?.metadata ?? metadata) as Record<string, unknown>,
       content: '已加入建议成员。Manager Runtime 已收到继续协作请求，并已按其输出继续处理。',
       status: 'completed',
       goal,
     })
     broadcastMemberProposalContinueStatus({
       sessionId: session.id,
-      messageId: proposalMessage.id,
+      messageId: proposalRef.id,
       status: 'completed',
       goal,
       taskIds: step.actions.filter((action) => action.type === 'assign').map((action) => action.taskKey ?? action.taskTitle ?? 'assign'),
     })
   } catch (err: any) {
     const error = err?.message || 'Orchestrator 重新规划失败'
-    const [latestMessage] = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.id, proposalMessageId))
-      .limit(1)
+    const latestRef = await loadMemberProposalRef(session.id, proposalMessageId)
     await updateMemberProposalContinueState({
-      message: latestMessage ?? proposalMessage,
-      metadata: (latestMessage?.metadata ?? metadata) as Record<string, unknown>,
+      ref: latestRef ?? proposalRef,
+      metadata: (latestRef?.metadata ?? metadata) as Record<string, unknown>,
       content: `已加入建议成员，但 Orchestrator 重新规划失败：${error}`,
       status: 'failed',
       goal,
@@ -1132,7 +1139,7 @@ async function continueMemberProposalPlanning(params: {
     })
     broadcastMemberProposalContinueStatus({
       sessionId: session.id,
-      messageId: proposalMessage.id,
+      messageId: proposalRef.id,
       status: 'failed',
       goal,
       error,
@@ -1298,26 +1305,34 @@ async function persistSessionTransparencyMessage(input: {
   content: string
   metadata: Record<string, unknown>
 }) {
-  const [message] = await db
-    .insert(messages)
-    .values({
-      sessionId: input.sessionId,
-      senderId: input.senderId,
-      senderType: input.senderType,
-      type: 'text',
-      content: input.content,
-      metadata: input.metadata,
-    })
-    .returning()
+  const [session] = await db.select().from(sessions).where(eq(sessions.id, input.sessionId)).limit(1)
+  if (!session) return null
+  const { roomService } = await import('../services/rooms')
+  const room = await roomService.ensureRoomForSession(session.id, session.ownerId)
+  const event = await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: input.senderType === 'system' ? 'system' : 'manager',
+    type: input.senderType === 'system' ? 'system' : 'manager.message',
+    body: input.content,
+    metadata: {
+      ...input.metadata,
+      source: 'session-transparency',
+      legacyMessageProjectionDisabled: true,
+    },
+  })
 
-  if (message) {
-    broadcastSessionEvent(input.sessionId, {
-      type: WsEvent.MessageCompleted,
-      payload: { sessionId: input.sessionId, message },
-    })
+  return {
+    id: `room:${event.id}`,
+    sessionId: input.sessionId,
+    senderId: input.senderId,
+    senderType: input.senderType,
+    type: 'text',
+    content: input.content,
+    metadata: input.metadata,
+    isPinned: false,
+    replyToMessageId: null,
+    createdAt: event.createdAt,
   }
-
-  return message ?? null
 }
 
 async function handleHumanInterruptForActiveRun(params: {
@@ -1732,28 +1747,24 @@ async function routeGroupReplyToWorkerTaskRoom(input: {
     .limit(1)
   if (!taskSession || !isOrchestratorTaskSession(taskSession)) return false
 
-  const [taskRoomMessage] = await db
-    .insert(messages)
-    .values({
-      sessionId: taskSession.id,
-      senderId: input.userId,
-      senderType: 'user',
-      type: input.message.type,
-      content: input.message.content,
-      metadata: {
-        ...(input.message.metadata && typeof input.message.metadata === 'object' ? input.message.metadata : {}),
-        source: 'group-worker-reply',
-        groupSessionId: input.groupSessionId,
-        groupMessageId: input.message.id,
-        targetWorkerId: input.targetWorker.id,
-        targetWorkerName: input.targetWorker.name,
-        taskId: targetTask.taskId,
-        taskThreadId: targetTask.taskThreadId,
-      },
-      replyToMessageId: null,
-    })
-    .returning()
-  if (!taskRoomMessage) return false
+  const { message: taskRoomMessage } = await appendHumanMessageRoomFirst({
+    session: taskSession,
+    userId: input.userId,
+    userName: input.userName,
+    type: input.message.type,
+    content: input.message.content,
+    metadata: {
+      ...(input.message.metadata && typeof input.message.metadata === 'object' ? input.message.metadata : {}),
+      source: 'group-worker-reply',
+      groupSessionId: input.groupSessionId,
+      groupMessageId: input.message.id,
+      targetWorkerId: input.targetWorker.id,
+      targetWorkerName: input.targetWorker.name,
+      taskId: targetTask.taskId,
+      taskThreadId: targetTask.taskThreadId,
+    },
+    replyToMessageId: null,
+  })
 
   await stepTaskRoomAfterHumanMessage({
     session: taskSession,

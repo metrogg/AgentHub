@@ -1048,54 +1048,6 @@ function projectRoomResourceSnapshot(
   }
 }
 
-async function loadTaskBoardSnapshotForGroupSession(
-  sessionId: string,
-): Promise<TaskBoardSnapshot | null> {
-  const { items } = await api.listOrchestratorRuns()
-  const runSummary = items.find((item) => item.groupSessionId === sessionId)
-  if (!runSummary) return null
-  const run = await api.getOrchestratorRun(runSummary.id).catch(() => runSummary)
-  const taskBoard = taskBoardFromRun(run)
-  if (!taskBoard || taskBoard.tasks.length === 0) return null
-  const agUiEvents = readRunAgUiEvents(run) ?? (await loadAgUiReplayEvents(run.id))
-  return {
-    taskBoard,
-    agentTabs: agentTabsFromRunSnapshot(run, taskBoard),
-    agUiEvents,
-    run,
-    runtimeActivity: runtimeActivityFromSnapshot({
-      taskBoard,
-      agUiEvents,
-      serverRuntimeActivity: run.runtimeActivitySnapshot,
-    }),
-  }
-}
-
-async function loadTaskBoardSnapshotForSession(session: Session): Promise<TaskBoardSnapshot | null> {
-  if (session.type === SessionType.Group) return loadTaskBoardSnapshotForGroupSession(session.id)
-  const metadata = session.metadata ?? {}
-  const runId =
-    typeof metadata.orchestratorRunId === 'string' && metadata.orchestratorRunId.trim()
-      ? metadata.orchestratorRunId
-      : null
-  if (metadata.kind !== 'orchestrator-task' || !runId) return null
-  const run = await api.getOrchestratorRun(runId)
-  const taskBoard = taskBoardFromRun(run)
-  if (!taskBoard || taskBoard.tasks.length === 0) return null
-  const agUiEvents = readRunAgUiEvents(run) ?? (await loadAgUiReplayEvents(run.id))
-  return {
-    taskBoard,
-    agentTabs: agentTabsFromRunSnapshot(run, taskBoard),
-    agUiEvents,
-    run,
-    runtimeActivity: runtimeActivityFromSnapshot({
-      taskBoard,
-      agUiEvents,
-      serverRuntimeActivity: run.runtimeActivitySnapshot,
-    }),
-  }
-}
-
 interface AgUiEventPayload {
   type?: string
   name?: string
@@ -1649,15 +1601,6 @@ interface RunResourceTaskEntry {
   status: AgentTab['status']
   progress?: number
   progressStatus?: string
-}
-
-async function loadAgUiReplayEvents(runId: string): Promise<AgUiEventPayload[]> {
-  try {
-    const { items } = await api.getAgUiRunEvents(runId)
-    return items as AgUiEventPayload[]
-  } catch {
-    return []
-  }
 }
 
 interface RoomTimelineWsPayload {
@@ -2334,10 +2277,6 @@ function applyAgUiRunStatus(
 ) {
   const status = normalizeAgUiBoardStatus(asString(value.status))
   return applyTaskBoardRunStatus(taskBoard, status)
-}
-
-function readRunAgUiEvents(run: OrchestratorRunListItem): AgUiEventPayload[] | null {
-  return Array.isArray(run.agUiEvents) ? (run.agUiEvents as AgUiEventPayload[]) : null
 }
 
 function applyResourceSnapshotToTaskBoard(
@@ -3188,10 +3127,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           api.getSession(sessionId),
           api.listMessages(sessionId),
         ])
-        const snapshot = await loadTaskBoardSnapshotForSession(session).catch(() => null)
-        const normalizedMessages = snapshot
-          ? applyCanonicalArtifactsToSummaryMessages(sortMessages(items), snapshot.run)
-          : sortMessages(items)
+        const normalizedMessages = sortMessages(items)
         const full = session.workspaceId ? await api.getWorkspace(session.workspaceId).catch(() => null) : null
         if (get().currentSessionId !== sessionId) return
         if (full) {
@@ -3205,25 +3141,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           currentSession: session,
           currentWorkspace: full?.workspace ?? null,
           currentWorkspaceAgents: session.workspaceId && full ? sessionWorkspaceAgents(session, full.agents) : [],
-          sessions: snapshot
-            ? mergeSessionsWithRunProjection(
-                upsertSessionList(s.sessions, session),
-                session,
-                snapshot.run,
-                snapshot.taskBoard,
-              )
-            : upsertSessionList(s.sessions, session),
+          sessions: upsertSessionList(s.sessions, session),
           messages: normalizedMessages,
           loadingMessages: false,
-          ...(snapshot
-            ? {
-                taskBoard: snapshot.taskBoard,
-                agentTabs: snapshot.agentTabs,
-                agentTyping: snapshot.runtimeActivity.agentTyping,
-                agentActivity: snapshot.runtimeActivity.agentActivity,
-                selectedAgentTab: selectedTaskForSession(sessionId, snapshot.taskBoard, snapshot.agentTabs),
-              }
-            : {}),
         }))
       } catch (fallbackError) {
         if (get().currentSessionId !== sessionId) return

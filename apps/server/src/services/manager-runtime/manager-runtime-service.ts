@@ -390,6 +390,7 @@ async function appendManagerAction(
         kind: 'manager.action',
         actionType: action.type,
         memberProposals: action.memberProposals ?? [],
+        memberProposalStatus: 'pending',
         reason: action.reason ?? null,
         runtimeType,
         ...(action.metadata ?? {}),

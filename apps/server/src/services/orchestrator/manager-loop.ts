@@ -5,7 +5,6 @@ import {
   db,
   eq,
   artifacts,
-  messages,
   orchestratorRuns,
   roomParticipants,
   runtimeLeases,
@@ -16,8 +15,8 @@ import {
   workspaces,
   workspaceTasks,
 } from '@agenthub/db'
-import { WsEvent, TaskStatus } from '@agenthub/shared'
-import { broadcastSessionEvent, cancelAgentReply } from '../agent-runner'
+import { TaskStatus } from '@agenthub/shared'
+import { cancelAgentReply } from '../agent-runner'
 import { blackboard, Blackboard } from '../blackboard'
 import { appendHumanInterruptConstraint } from './human-interrupts'
 import { emitRunEvent } from './run-events'
@@ -482,26 +481,33 @@ async function persistManagerLoopMessage(input: {
   content: string
   metadata: Record<string, unknown>
 }) {
-  const [message] = await db
-    .insert(messages)
-    .values({
-      sessionId: input.sessionId,
-      senderId: input.senderId,
-      senderType: input.senderType,
-      type: 'text',
-      content: input.content,
-      metadata: input.metadata,
-    })
-    .returning()
+  const [session] = await db.select().from(sessions).where(eq(sessions.id, input.sessionId)).limit(1)
+  if (!session) return null
+  const room = await roomService.ensureRoomForSession(session.id, session.ownerId)
+  const event = await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: input.senderType === 'system' ? 'system' : 'manager',
+    type: input.senderType === 'system' ? 'system' : 'manager.message',
+    body: input.content,
+    metadata: {
+      ...input.metadata,
+      source: 'manager-loop',
+      legacyMessageProjectionDisabled: true,
+    },
+  })
 
-  if (message) {
-    broadcastSessionEvent(input.sessionId, {
-      type: WsEvent.MessageCompleted,
-      payload: { sessionId: input.sessionId, message },
-    })
+  return {
+    id: `room:${event.id}`,
+    sessionId: input.sessionId,
+    senderId: input.senderId,
+    senderType: input.senderType,
+    type: 'text',
+    content: input.content,
+    metadata: input.metadata,
+    isPinned: false,
+    replyToMessageId: null,
+    createdAt: event.createdAt,
   }
-
-  return message ?? null
 }
 
 async function appendGroupHumanInterruptTimeline(input: {

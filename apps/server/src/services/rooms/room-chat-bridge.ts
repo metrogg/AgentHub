@@ -1,6 +1,4 @@
 import { asc, db, eq, messages, roomParticipants, sessions, workspaceAgents } from '@agenthub/db'
-import { WsEvent } from '@agenthub/shared'
-import { broadcastSessionEvent } from '../agent-runner'
 import { dispatchAssignBatch } from '../controller-plane/task-dispatcher'
 import type { ManagerAction, ManagerActionType, ManagerRuntime } from '../manager-runtime'
 import { managerRuntimeService } from '../manager-runtime'
@@ -282,14 +280,6 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
       runtimeType: result.runtimeType,
       sourceMessageId: input.message.id,
     })
-    const message = await mirrorManagerActionToMessage({
-      sessionId: input.session.id,
-      roomId: room.id,
-      action,
-      runtimeType: result.runtimeType,
-      sourceMessageId: input.message.id,
-    })
-    if (message) mirroredMessageIds.push(message.id)
   }
 
   return {
@@ -384,6 +374,7 @@ async function appendManagerActionToRoomTimeline(input: {
         reason: input.action.reason ?? null,
         runtimeType: input.runtimeType,
         memberProposals: input.action.memberProposals ?? [],
+        memberProposalStatus: 'pending',
         ...(input.action.metadata ?? {}),
       },
     })
@@ -448,53 +439,6 @@ async function ensureManagerParticipant(roomId: string) {
     displayName: 'Manager',
     role: 'manager',
   })
-}
-
-async function mirrorManagerActionToMessage(input: {
-  sessionId: string
-  roomId: string
-  action: ManagerAction
-  runtimeType: string
-  sourceMessageId: string
-}) {
-  if (input.action.type !== 'propose_members') return null
-  const content = visibleManagerActionContent(input.action)
-  if (!content) return null
-  const [message] = await db
-    .insert(messages)
-    .values({
-      sessionId: input.sessionId,
-      senderId: 'manager',
-      senderType: 'agent',
-      type: input.action.type === 'propose_members' ? 'task_card' : 'text',
-      content,
-      metadata: {
-        kind: 'coordinator-runtime-message',
-        systemEvent: 'coordinator_runtime_action',
-        actionType: input.action.type,
-        reason: input.action.reason ?? null,
-        runtimeType: input.runtimeType,
-        sourceMessageId: input.sourceMessageId,
-        roomId: input.roomId,
-        agentName: 'Manager',
-        senderName: 'Manager',
-        ...(input.action.type === 'propose_members'
-          ? {
-              memberProposals: input.action.memberProposals ?? [],
-              memberProposalStatus: 'pending',
-            }
-          : {}),
-        ...(input.action.metadata ?? {}),
-      },
-    })
-    .returning()
-  if (message) {
-    broadcastSessionEvent(input.sessionId, {
-      type: WsEvent.MessageCompleted,
-      payload: { sessionId: input.sessionId, message },
-    })
-  }
-  return message ?? null
 }
 
 function visibleManagerActionContent(action: ManagerAction) {
