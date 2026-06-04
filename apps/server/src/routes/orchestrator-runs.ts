@@ -4,6 +4,7 @@ import { alias } from 'drizzle-orm/sqlite-core'
 import { db, eq, and, desc, asc, sql } from '@agenthub/db'
 import {
   artifacts as artifactRecords,
+  type ConflictReport,
   orchestratorRuns,
   executionLogs,
   workspaces,
@@ -17,7 +18,6 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { listRunEvents } from '../services/orchestrator/run-events'
 import { blackboard, Blackboard } from '../services/blackboard'
 import type { BlackboardSchemaType } from '../services/blackboard-schemas'
-import type { ConflictReport } from '../services/orchestrator/conflict-resolver'
 import { runController, type RunResourceSnapshot } from '../services/orchestrator/run-controller'
 import { buildAgUiEventsFromRunEvent } from '../services/protocols'
 import { OrchestratorRunStatus } from '@agenthub/shared'

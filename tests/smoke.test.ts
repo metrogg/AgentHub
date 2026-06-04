@@ -1255,48 +1255,6 @@ describe('AgentHub smoke tests', () => {
     ).toBe(true)
   })
 
-  test('TaskGraph topological sort and cycle detection', async () => {
-    const { TaskGraph } = await import('../apps/server/src/services/orchestrator/task-graph')
-    const tasks = [
-      { id: 'a', title: 'A', description: '', agentId: '1', dependencies: [], maxRetries: 2 },
-      { id: 'b', title: 'B', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
-      { id: 'c', title: 'C', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
-      {
-        id: 'd',
-        title: 'D',
-        description: '',
-        agentId: '1',
-        dependencies: ['b', 'c'],
-        maxRetries: 2,
-      },
-    ]
-    const graph = new TaskGraph(tasks)
-
-    expect(graph.detectCycles()).toBe(false)
-    const order = graph.getExecutionOrder()
-    expect(order.indexOf('a')).toBeLessThan(order.indexOf('b'))
-    expect(order.indexOf('a')).toBeLessThan(order.indexOf('c'))
-    expect(order.indexOf('b')).toBeLessThan(order.indexOf('d'))
-    expect(order.indexOf('c')).toBeLessThan(order.indexOf('d'))
-
-    graph.setStatus('a', 'done')
-    graph.setStatus('b', 'running')
-    expect(graph.getReadyTasks().map((t) => t.id)).toContain('c')
-    expect(graph.getReadyTasks().map((t) => t.id)).not.toContain('b')
-    expect(graph.getReadyTasks().map((t) => t.id)).not.toContain('d')
-  })
-
-  test('TaskGraph detects circular dependencies', async () => {
-    const { TaskGraph } = await import('../apps/server/src/services/orchestrator/task-graph')
-    const tasks = [
-      { id: 'a', title: 'A', description: '', agentId: '1', dependencies: ['c'], maxRetries: 2 },
-      { id: 'b', title: 'B', description: '', agentId: '1', dependencies: ['a'], maxRetries: 2 },
-      { id: 'c', title: 'C', description: '', agentId: '1', dependencies: ['b'], maxRetries: 2 },
-    ]
-    const graph = new TaskGraph(tasks)
-    expect(graph.detectCycles()).toBe(true)
-  })
-
   test('agent router explains selected coder with reviewer and fallback relations', async () => {
     const { selectAgentForTask } =
       await import('../apps/server/src/services/orchestrator/agent-router')
@@ -2511,34 +2469,6 @@ describe('AgentHub smoke tests', () => {
     expect(parsed.tasks).toHaveLength(1)
   })
 
-  test('ConflictResolver detects file conflicts across agents', async () => {
-    const { ConflictResolver } =
-      await import('../apps/server/src/services/orchestrator/conflict-resolver')
-    const resolver = new ConflictResolver()
-    const results = [
-      {
-        agentId: 'agent-1',
-        agentName: 'Coder A',
-        artifacts: [
-          { kind: 'diff', filePath: 'src/app.ts', diff: '+line A', fullContent: 'line A' },
-        ],
-      },
-      {
-        agentId: 'agent-2',
-        agentName: 'Coder B',
-        artifacts: [
-          { kind: 'diff', filePath: 'src/app.ts', diff: '+line B', fullContent: 'line B' },
-        ],
-      },
-    ]
-
-    const reports = await resolver.detectAndResolve(results)
-    expect(reports.length).toBe(1)
-    expect(reports[0]!.filePath).toBe('src/app.ts')
-    expect(reports[0]!.variants.length).toBe(2)
-    expect(reports[0]!.resolution).toBe('needs-human')
-  })
-
   test('orchestrator run events are persisted and exposed in order', async () => {
     const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {
@@ -3010,62 +2940,6 @@ describe('AgentHub smoke tests', () => {
           event.value?.phase === 'executing',
       ),
     ).toBe(true)
-  })
-
-  test('task result reports normalize artifacts and validation metadata', async () => {
-    const { buildTaskResultReport, taskResultReportEventPayload } = await import(
-      '../apps/server/src/services/orchestrator/orchestrator-engine'
-    )
-
-    const report = buildTaskResultReport({
-      runId: 'report-run',
-      task: {
-        id: 'report-task',
-        title: 'Report task',
-        description: '',
-        agentId: 'report-agent',
-        dependencies: [],
-        maxRetries: 0,
-      } as any,
-      agent: {
-        id: 'report-agent',
-        key: 'report-agent',
-        name: 'Reporter',
-        role: 'Coder',
-        runtimeType: 'llm',
-        capabilityTags: [],
-        toolPermissions: [],
-        sandboxPolicy: 'read-only',
-      } as any,
-      status: 'done' as any,
-      summary: {
-        filesCreated: ['apps/web/src/foo.ts'],
-        filesModified: [],
-        interfaces: [],
-        dependencies: [],
-        decisions: ['采用分层收口'],
-        brief: '已完成收口',
-      },
-      outputRef: { key: 'task_report-task_output', version: 2 } as any,
-      artifacts: [{ id: 'artifact-1', type: 'file', title: 'foo.ts', filePath: 'foo.ts' }],
-      validationResults: [
-        { command: 'bun test', status: 'passed', durationMs: 12, outputSummary: 'ok' } as any,
-      ],
-      contractResult: { status: 'passed', violations: [] } as any,
-      durationMs: 1234,
-      childSessionId: 'child-report',
-      blackboardKeys: ['task_report-task_output', 'artifacts/artifact-1'],
-    })
-
-    expect(report.schemaType).toBe('task_result_report')
-    expect(report.artifactCount).toBe(1)
-    expect(report.validationStatus).toBe('passed')
-    expect(report.blackboardKeys).toContain('task_report-task_output')
-
-    const payload = taskResultReportEventPayload(report)
-    expect(payload.taskResultReport).toBe(report)
-    expect(payload.artifactCount).toBe(1)
-    expect(payload.childSessionId).toBe('child-report')
   })
 
   test('run controller requeues running tasks for resume and resets task thread state', async () => {

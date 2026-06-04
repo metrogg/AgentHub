@@ -53,7 +53,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 修改代码前先确认自己正在改的是哪一层，不要把不同层的概念混用：
 
 - 产品交互层：IM 群聊、Agent 私聊、任务子对话、任务看板、产物卡。
-- 编排层：Manager / Orchestrator、Manager actions、WorkLedger / Task graph、TaskScheduler、Synthesizer、人工确认和运行生命周期。
+- 编排层：Manager / Orchestrator、Manager actions、WorkLedger / dependency 校验、Manager final review、人工确认和运行生命周期。
 - 通信层：Matrix 负责 Room / timeline / participant / mention，是新内核的协作事实源。
 - 协议投影层：AG-UI 负责运行事件到前端 UI 的桥接；A2A 只作为外部互操作或 Matrix event 中的可选任务语义 envelope，不再是内部主通信路径。
 - 执行层：Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Agent 基底；`llm` 只作为内部/兜底能力。
@@ -66,7 +66,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 - `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
 - `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
 
-`内部 LLM 默认模型` 必须保持可见，且只作用于欢迎页动态提示、Manager / Orchestrator、planning skill、Synthesizer 等内部模型链路。
+`内部 LLM 默认模型` 必须保持可见，且只作用于欢迎页动态提示、Manager / Orchestrator、planning skill、Manager final review 等内部模型链路。
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
@@ -140,7 +140,7 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
   -> 主群聊展示 Manager review、成员汇报、产物卡和最终结果
 ```
 
-旧 `OrchestratorEngine -> TaskExecutionService -> LocalA2ATransport` 只允许留在迁移兼容层内部，不能再作为新任务、新 run、新 Room 或新 Worker lifecycle 的主路径。`messages.ts` 不应继续扩展成编排主脑；新增 run 生命周期、Manager 决策、资源 reconcile 和恢复逻辑应优先进入 `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `ManagerLoop`。
+`OrchestratorEngine`、`TaskExecutionService`、`LocalA2ATransport` 已删除。所有任务执行通过 `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `ManagerLoop` / `WorkerRuntimeService`。`messages.ts` 不应继续扩展成编排主脑。
 
 ## Matrix / A2A 通信边界
 
@@ -158,12 +158,11 @@ A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径�
 - 远程 Agent、外部系统调用 AgentHub Agent、跨平台互操作时再启用 A2A。
 - 不允许恢复 `runtimeType = "a2a"`，也不能把 A2A 作为可创建的 Agent 类型展示给用户。
 
-当前代码仍有“内部 A2A envelope + AgentHub local transport”的迁移期实现，但它不是新内核目标。后续通信改造应把 `LocalA2ATransport` 继续隔离在旧兼容层或外部互操作适配里，不再继续扩展为内部主干。
+旧 `LocalA2ATransport` 和 `TaskExecutionService` 已删除。`a2a-internal.ts` 仅保留为可选 taskEnvelope 序列化工具，不再作为内部通信路径。
 
 相关文件：
 
-- `apps/server/src/services/protocols/a2a-internal.ts`: 内部 A2A envelope、message 和 task 映射。
-- `apps/server/src/services/execution/local-a2a-transport.ts`: 旧本地 A2A transport，只允许作为迁移兼容层内部实现。
+- `apps/server/src/services/protocols/a2a-internal.ts`: 可选 A2A envelope 序列化（仅外部互操作）。
 - `apps/server/src/services/protocols/a2a-adapter.ts`: 对外 A2A AgentCard / Task / Artifact 映射。
 
 ## 工作目录与产物交接
@@ -253,7 +252,7 @@ bun test tests/orchestrator-routing.test.ts
 
 - 新增路由使用 `AppError`，不要继续新增裸 `HTTPException`。
 - 日志使用 `apps/server/src/lib/logger.ts`，不要新增 `console.log`。
-- 对复杂目标的意图判断、分工、追加任务和最终内容生成必须来自 Manager / Orchestrator / Synthesizer 的模型输出；系统代码只做 schema 校验、权限校验、状态记录和透明错误呈现。
+- 对复杂目标的意图判断、分工、追加任务和最终内容生成必须来自 Manager / Orchestrator / final-review skill 的模型输出；系统代码只做 schema 校验、权限校验、状态记录和透明错误呈现。
 - Manager / Orchestrator 决策输出解析失败时要透明报错或提示检查模型配置，不允许用关键词启发式兜底成 `plan/reply/clarify`。
 - 运行中补员只能来自 Orchestrator 明确输出的 `memberProposals`；前端只展示确认卡，后端只按用户确认创建/加入真实 workspace agent。
 - 不要恢复静态兜底提示词或固定模板计划。快速提示、任务拆解、协作计划都应由模型动态生成；失败时可以提示用户重试或检查模型配置。
@@ -274,10 +273,7 @@ bun test tests/orchestrator-routing.test.ts
 - `apps/server/src/services/orchestrator/runtime-lease-controller.ts`: RuntimeLease 生命周期控制面。
 - `apps/server/src/services/worker-runtime/worker-runtime-service.ts`: 当前 Worker task room 执行入口。
 - `apps/server/src/services/orchestrator/manager-planner.ts`: Manager-first 团队行动方案生成。
-- `apps/server/src/services/orchestrator/orchestrator-engine.ts`: 迁移期执行兼容层，不能作为新 run / task / room / worker lifecycle 主路径继续扩展。
 - `apps/server/src/services/orchestrator/planner.ts`: 旧 Planner 兼容与计划校验工具来源，不是主脑。
-- `apps/server/src/services/orchestrator/task-scheduler.ts`: 旧 DAG 调度兼容层，后续继续向 ManagerLoop / WorkerRuntime 收口。
-- `apps/server/src/services/execution/task-execution-service.ts`: 旧执行兼容层内部使用，不是当前 Worker 执行主入口。
 - `apps/server/src/services/execution/agent-workdir.ts`: Agent 工作目录。
 - `apps/server/src/services/blackboard.ts`: 黑板。
 - `apps/server/src/services/code-agent-adapter.ts`: CLI 适配。

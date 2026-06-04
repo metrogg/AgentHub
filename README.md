@@ -79,7 +79,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 - `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
 - `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
 
-另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、Manager / Orchestrator、planning skill、Synthesizer 等内部模型调用。
+另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、Manager / Orchestrator、planning skill、Manager final review 等内部模型调用。
 
 ## 技术栈
 
@@ -92,9 +92,9 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | UI | Tailwind CSS + Radix UI + assistant-ui |
 | 状态 | Zustand |
 | 数据库 | SQLite + Drizzle ORM |
-| LLM | OpenAI-compatible + Anthropic-compatible streaming client，用于 Manager / Orchestrator、planning skill、Synthesizer 和 fallback |
+| LLM | OpenAI-compatible + Anthropic-compatible streaming client，用于 Manager / Orchestrator、planning skill、Manager final review 和 fallback |
 | Code Agent | Codex CLI / Claude Code / OpenCode / Gemini CLI |
-| Agent 通信 | 当前迁移期仍有 A2A local transport；目标内核采用 Matrix Room/timeline，A2A 降为外部互操作 |
+| Agent 通信 | 当前主线采用本地 Matrix-compatible Room/timeline；A2A 降为外部互操作 |
 
 ## 项目结构
 
@@ -104,7 +104,7 @@ apps/
     src/
       routes/                 HTTP API
       services/
-        orchestrator/         Manager-first planning、执行兼容层、Scheduler、Synthesizer
+        orchestrator/         Manager-first planning、Run/Worker 控制面、final review
         execution/            任务执行、工作目录、执行信封
         runtime/              AgentRuntime 统一接口
         workspace/            工作区和任务子会话管理

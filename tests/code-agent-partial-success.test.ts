@@ -15,23 +15,6 @@ describe('code agent partial success handling', () => {
     expect(message).not.toContain('模型或 Base URL')
   })
 
-  test('allows non-strict tasks to accept partial results when files were produced', async () => {
-    const { __taskExecutionTestHooks } = await import(
-      '../apps/server/src/services/execution/task-execution-service'
-    )
-
-    expect(
-      __taskExecutionTestHooks.shouldAcceptPartialExecution('research', [{ path: 'report.md' }]),
-    ).toBe(true)
-    expect(
-      __taskExecutionTestHooks.shouldAcceptPartialExecution('design', [{ path: 'mock.html' }]),
-    ).toBe(true)
-    expect(
-      __taskExecutionTestHooks.shouldAcceptPartialExecution('code', [{ path: 'index.ts' }]),
-    ).toBe(false)
-    expect(__taskExecutionTestHooks.shouldAcceptPartialExecution('research', [])).toBe(false)
-  })
-
   test('treats explicit execution failure text as a real failure', async () => {
     const { __agentRunnerTestHooks } = await import('../apps/server/src/services/agent-runner')
 

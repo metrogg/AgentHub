@@ -93,7 +93,7 @@ describe('protocol adapters', () => {
     expect(runStarted.type).toBe('RUN_STARTED')
   })
 
-  test('uses A2A message/send as the internal agent dispatch envelope', () => {
+  test('serializes optional A2A message/send task envelopes for interop', () => {
     const dispatch = buildA2ADispatchEnvelope({
       agent: {
         id: 'agent-1',

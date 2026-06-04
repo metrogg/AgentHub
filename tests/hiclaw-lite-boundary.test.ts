@@ -5,40 +5,28 @@ import { join, relative } from 'node:path'
 const sourceRoot = join(process.cwd(), 'apps/server/src')
 
 describe('HiClaw-lite kernel boundary', () => {
-  test('legacy execution chain stays isolated inside the migration layer', () => {
+  test('legacy execution chain modules do not exist', () => {
+    // The old in-memory orchestrator stack has been deleted. Verify these
+    // modules are not reintroduced as parallel control paths.
+    const legacyModules = [
+      'orchestrator-engine.ts',
+      'task-execution-service.ts',
+      'local-a2a-transport.ts',
+      'task-scheduler.ts',
+      'task-graph.ts',
+      'replanning-engine.ts',
+      'synthesizer.ts',
+      'conflict-resolver.ts',
+    ]
     const files = listSourceFiles(sourceRoot)
     const violations: string[] = []
 
     for (const file of files) {
       const rel = toRepoPath(file)
-      const text = readFileSync(file, 'utf8')
-
-      if (
-        rel !== 'apps/server/src/services/orchestrator/orchestrator-engine.ts' &&
-        references(text, 'task-execution-service')
-      ) {
-        violations.push(`${rel} imports task-execution-service`)
-      }
-
-      if (
-        rel !== 'apps/server/src/services/execution/task-execution-service.ts' &&
-        references(text, 'local-a2a-transport')
-      ) {
-        violations.push(`${rel} imports local-a2a-transport`)
-      }
-
-      if (
-        rel !== 'apps/server/src/services/orchestrator/orchestrator-engine.ts' &&
-        /\bnew\s+OrchestratorEngine\b/.test(text)
-      ) {
-        violations.push(`${rel} instantiates OrchestratorEngine`)
-      }
-
-      if (
-        rel !== 'apps/server/src/services/orchestrator/orchestrator-engine.ts' &&
-        /\bOrchestratorEngine\.(resumeRun|cancelActiveRun|applyHumanInterruptToActiveRun)\b/.test(text)
-      ) {
-        violations.push(`${rel} calls legacy OrchestratorEngine lifecycle statics`)
+      for (const mod of legacyModules) {
+        if (rel.endsWith(mod)) {
+          violations.push(`legacy module reintroduced: ${rel}`)
+        }
       }
     }
 

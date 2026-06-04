@@ -45,7 +45,7 @@ Use `docs/hiclaw-wiki.agent.final.md` and local `hiclaw源码参考/` as the mai
 Before changing code, identify which layer you are working on:
 
 - Product interaction: IM group chat, global agent direct chat, task child conversations, task boards, artifact cards.
-- Orchestration: Manager / Orchestrator, Manager actions, WorkLedger / task graph, TaskScheduler, Synthesizer, approvals, cancellation, retry, resume.
+- Orchestration: Manager / Orchestrator, Manager actions, WorkLedger / dependency validation, Manager final review, approvals, cancellation, retry, resume.
 - Communication: Matrix for Room/timeline/participant/mention semantics. This is the future internal collaboration source of truth.
 - Protocol projection: AG-UI for frontend projections. A2A only for external interoperability or optional task semantic envelopes inside Matrix events.
 - Execution: Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary agent bases. `llm` is internal/fallback support.
@@ -59,7 +59,7 @@ Configuration truth is split deliberately:
 - Coding Tools: CLI readiness, native auth/config, platform diagnostics only.
 - Agent Configuration: the only place allowed to choose `code agent × model × skills × sandbox`.
 
-Keep the internal default model visible and separate. It is only for internal LLM paths such as welcome prompts, Manager / Orchestrator, planning skill, and Synthesizer.
+Keep the internal default model visible and separate. It is only for internal LLM paths such as welcome prompts, Manager / Orchestrator, planning skill, and Manager final review.
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
 
@@ -75,7 +75,7 @@ The next architecture direction is a HiClaw-lite open kernel, not more patches o
 - State: Zustand
 - DB: SQLite via `bun:sqlite` + Drizzle ORM
 - LLM: OpenAI-compatible and Anthropic-compatible streaming client
-- Agent communication: migration path still contains A2A v0.3 `message/send` via AgentHub local transport, but the target internal communication layer is Matrix Room/timeline.
+- Agent communication: internal collaboration uses Room/timeline semantics through the local Matrix-compatible room layer; A2A is external interoperability only.
 - Code agents: Codex CLI, Claude Code, OpenCode, Gemini CLI
 - MCP, Skills, and Rules are tool/capability layers for code agents, not agent runtime types.
 
@@ -105,7 +105,7 @@ POST /api/messages/:sessionId
   -> group simple chat: Orchestrator replies directly
   -> group capability gap: Orchestrator emits structured memberProposals; UI shows an approval card; confirmed proposals create/join real workspace agents
   -> group complex task: Manager creates a team action plan + task board
-  -> dispatch: migration path starts the execution compatibility layer
+  -> dispatch: Coordinator assign creates task rooms, leases, and WorkerRuntime execution
 ```
 
 Old `GroupChatManager` is deprecated. Do not reintroduce it as the active group path.
@@ -114,12 +114,8 @@ Old `GroupChatManager` is deprecated. Do not reintroduce it as the active group 
 
 Core files:
 
-- `apps/server/src/services/orchestrator/orchestrator-engine.ts`
 - `apps/server/src/services/orchestrator/manager-planner.ts`
 - `apps/server/src/services/orchestrator/planner.ts`
-- `apps/server/src/services/orchestrator/task-scheduler.ts`
-- `apps/server/src/services/orchestrator/task-graph.ts`
-- `apps/server/src/services/orchestrator/synthesizer.ts`
 - `apps/server/src/services/orchestrator/run-events.ts`
 
 Execution flow:
@@ -129,20 +125,17 @@ messages.ts works as ChatIngress
   -> RunController / ManagerLoop creates run.started + manager.thinking
   -> RunController asks the Manager runtime for next action
   -> Manager-first planning action produces executable Worker tasks
-  -> migration path still enters OrchestratorEngine.startRun() as an execution compatibility layer
-  -> workspace_tasks + orchestrator_runs persist run state
-  -> TaskThread projection creates orchestrator-task child sessions
-  -> TaskScheduler executes dependency layers
-  -> Orchestrator builds A2A message/send envelope
-  -> TaskExecutionService sends through LocalA2ATransport
-  -> local execution host adapts to LLM fallback / Code Agent runtime
-  -> blackboard stores summaries, decisions, artifact refs as A2A metadata/artifact extensions
-  -> .agenthub/shared/tasks/{taskId}/artifacts materializes readable upstream artifacts
-  -> main group chat receives task result messages
-  -> Synthesizer writes final summary
+  -> CoordinatorRuntime returns assign actions
+  -> dispatchCoordinatorAssignBatch creates task rooms + RuntimeLeases
+  -> WorkerRuntimeService.runTaskRoom executes via Code Agent CLI
+  -> Worker progress/results/artifacts write to Room timeline
+  -> ArtifactStore registers artifacts with S3-compatible object keys
+  -> RunController syncs task/thread/run state
+  -> ManagerLoop does final review from Room timeline + ArtifactStore
+  -> main group chat receives Manager review + artifact cards
 ```
 
-Migration rule: do not keep expanding `messages.ts` as the orchestration brain. New run lifecycle, Manager decisions, reconcile, recovery, and resource state transitions should move into `RunController`, `ManagerLoop`, and later kernel controllers. `OrchestratorEngine` is no longer the future brain; treat it as a migration-period execution compatibility layer to shrink.
+`OrchestratorEngine`, `TaskExecutionService`, `LocalA2ATransport` have been deleted. All execution goes through `RunController` / `ManagerLoop` / `WorkerRuntimeService` / `CoordinatorRuntime` / `RoomService` / `ArtifactStore`.
 
 ### Matrix / A2A Boundary
 
@@ -192,7 +185,7 @@ Important files:
 
 - `apps/server/src/services/execution/agent-workdir.ts`
 - `apps/server/src/services/execution/agent-execution-envelope.ts`
-- `apps/server/src/services/execution/task-execution-service.ts`
+- `apps/server/src/services/worker-runtime/worker-runtime-service.ts`
 
 Rules:
 
