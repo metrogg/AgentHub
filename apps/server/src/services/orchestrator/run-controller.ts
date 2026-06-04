@@ -117,11 +117,11 @@ export interface RunResourceSnapshot {
 }
 
 /**
- * RunController is the first resource-control seam for the HiClaw-lite kernel.
+ * RunController owns Run lifecycle reconciliation for the HiClaw-lite kernel.
  *
- * It intentionally stays thin for now: existing ManagerLoop and OrchestratorEngine
- * still execute the old path, while callers stop mutating run lifecycle directly.
- * Future slices should grow reconcile()/step() here instead of expanding routes.
+ * ManagerLoop drives Observe -> Think -> Act, while RunController is the single
+ * place callers use to mutate run/task/thread status and to resume or cancel
+ * unfinished work. Old OrchestratorEngine paths must not regain ownership here.
  */
 export class RunController {
   async start(input: RunControllerStartInput): Promise<RunControllerRunContext> {

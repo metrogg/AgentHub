@@ -55,7 +55,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 
 当前权威文档索引见 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
-当前路径仍然偏过程式：消息入口会创建 run/task/session 并启动编排器。后续底层要向 HiClaw-lite Open Kernel 收敛：`Room`、`TimelineEvent`、`Run`、`Task`、`WorkerInstance`、`Artifact`、`RuntimeLease` 都成为一等资源；任务看板、进度条、子对话入口和产物卡从 Matrix timeline、资源状态与 AG-UI 投影出来。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
+当前主路径已经开始资源化：群聊消息先进入 Room timeline，复杂任务通过 CoordinatorRuntime / RunController 创建 run 与任务账本，RoomController 确保 group/task room，WorkerController 与 RuntimeLeaseController 管 Worker 和执行租约，WorkerRuntime 从 task room 接单并写回过程。后续还要继续把旧 snapshot/messages/AG-UI cache 降级为投影和兼容读取，让任务看板、进度条、子对话入口和产物卡稳定来自 Matrix timeline、资源状态与 ArtifactStore。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
 
 ## 分层定位
 

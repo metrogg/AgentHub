@@ -16,7 +16,8 @@ import { broadcastSessionEvent } from '../agent-runner'
 import { workerController } from './worker-controller'
 import { emitRunEvent } from './run-events'
 import { updateTaskThreadStatus } from './task-thread-service'
-import { markRuntimeLeaseStale, markWorkerInstanceState } from './worker-runtime-resources'
+import { runtimeLeaseController } from './runtime-lease-controller'
+import { markWorkerInstanceState } from './worker-runtime-resources'
 import { managerLoopStep } from './manager-loop'
 import { roomService } from '../rooms'
 
@@ -196,7 +197,7 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
             .limit(1)
 
           if (activeLease) {
-            await markRuntimeLeaseStale(activeLease.id, {
+            await runtimeLeaseController.markStale(activeLease.id, {
               error: message,
               metadata: { staleReason: 'patrol_heartbeat_lost', lastHeartbeatAgeMs: heartbeatAgeMs },
             })

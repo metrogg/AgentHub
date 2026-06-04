@@ -18,16 +18,11 @@ import { logger } from '../../lib/logger'
 import { agentHubUserCacheRoot, safePathSegment } from '../system-paths'
 import { prepareTaskRuntimeThread } from '../orchestrator/task-thread-service'
 import {
-  createRuntimeLease,
-  markRuntimeLeaseReady,
-  markRuntimeLeaseRunning,
-  markRuntimeLeaseWaitingForHuman,
-  releaseRuntimeLease,
-  failRuntimeLease,
   markWorkerInstanceState,
 } from '../orchestrator/worker-runtime-resources'
 import { runController, type RunControllerRunContext } from '../orchestrator/run-controller'
-import { roomService } from '../rooms'
+import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
+import { roomController, roomService } from '../rooms'
 import { workerRuntimeService } from '../worker-runtime'
 import type { WorkerRuntime } from '../worker-runtime'
 import type { CoordinatorAction } from './types'
@@ -169,7 +164,7 @@ export async function dispatchCoordinatorAssignBatch(
     phaseCount: 1,
   })
 
-  const groupRoom = await roomService.ensureRoomForSession(input.groupSession.id, input.ownerId)
+  const groupRoom = await roomController.ensureSessionRoom(input.groupSession.id, input.ownerId)
   const preparedTasks: PreparedCoordinatorAssignedTask[] = []
   for (const spec of specs) {
     preparedTasks.push(
@@ -316,7 +311,7 @@ async function prepareCoordinatorAssignedTask(input: {
     projectPath: runtimeThread.projectPath,
   })
 
-  const taskRoom = await roomService.ensureRoomForTaskThread({
+  const taskRoom = await roomController.ensureTaskThreadRoomFromInput({
     ownerId: input.ownerId,
     workspaceId: input.workspace.id,
     groupSessionId: input.groupSession.id,
@@ -333,7 +328,6 @@ async function prepareCoordinatorAssignedTask(input: {
       sharedTaskSpecPath: runtimeThread.sharedTaskSpecPath ?? null,
     },
   })
-  await roomService.addWorkerParticipant(taskRoom.id, input.spec.worker.id)
 
   const assignmentMetadata = {
     kind: 'coordinator.assign.dispatched',
@@ -386,7 +380,7 @@ async function prepareCoordinatorAssignedTask(input: {
       runtimeLeaseId: lease?.id ?? null,
     },
   })
-  await markRuntimeLeaseReady(lease?.id, {
+  await runtimeLeaseController.markReady(lease?.id, {
     cwd: lease?.cwd ?? null,
     homeDir: lease?.homeDir ?? null,
     configDir: lease?.configDir ?? null,
@@ -552,7 +546,7 @@ async function markTaskSkippedByDependency(input: {
     },
     severity: 'warning',
   })
-  await failRuntimeLease(input.task.runtimeLeaseId, {
+  await runtimeLeaseController.fail(input.task.runtimeLeaseId, {
     workerInstanceId: input.task.workerInstanceId ?? null,
     error: message,
     metadata: {
@@ -641,7 +635,7 @@ async function executeWorkerTaskRoom(input: {
   workerRuntime?: WorkerRuntime
 }): Promise<WorkerTaskExecutionOutcome> {
   const startedAt = Date.now()
-  await markRuntimeLeaseRunning(input.runtimeLeaseId, { startedAt: new Date() })
+  await runtimeLeaseController.markRunning(input.runtimeLeaseId, { startedAt: new Date() })
   await markWorkerInstanceState(input.workerInstanceId, 'busy', {
     message: `Running task ${input.taskTitle}.`,
   })
@@ -701,7 +695,7 @@ async function executeWorkerTaskRoom(input: {
           message: result.message ?? null,
         },
       })
-      await markRuntimeLeaseWaitingForHuman(input.runtimeLeaseId, {
+      await runtimeLeaseController.markWaitingForHuman(input.runtimeLeaseId, {
         workerInstanceId: input.workerInstanceId ?? null,
         message: clarificationQuestion,
         metadata: {
@@ -737,7 +731,7 @@ async function executeWorkerTaskRoom(input: {
           message: result.message ?? null,
         },
       })
-      await releaseRuntimeLease(input.runtimeLeaseId, {
+      await runtimeLeaseController.release(input.runtimeLeaseId, {
         workerInstanceId: input.workerInstanceId ?? null,
         metadata: { resultStatus: result.status },
       })
@@ -764,7 +758,7 @@ async function executeWorkerTaskRoom(input: {
           taskRoomId: input.taskRoomId,
         },
       })
-      await releaseRuntimeLease(input.runtimeLeaseId, {
+      await runtimeLeaseController.release(input.runtimeLeaseId, {
         workerInstanceId: input.workerInstanceId ?? null,
         metadata: { resultStatus: result.status },
       })
@@ -792,7 +786,7 @@ async function executeWorkerTaskRoom(input: {
         taskRoomId: input.taskRoomId,
       },
     })
-    await failRuntimeLease(input.runtimeLeaseId, {
+    await runtimeLeaseController.fail(input.runtimeLeaseId, {
       workerInstanceId: input.workerInstanceId ?? null,
       error: result.message ?? 'WorkerRuntime failed.',
       metadata: { resultStatus: result.status },
@@ -836,7 +830,7 @@ async function executeWorkerTaskRoom(input: {
         taskRoomId: input.taskRoomId,
       },
     })
-    await failRuntimeLease(input.runtimeLeaseId, {
+    await runtimeLeaseController.fail(input.runtimeLeaseId, {
       workerInstanceId: input.workerInstanceId ?? null,
       error: message,
     })
@@ -879,7 +873,7 @@ async function createTaskRuntimeLease(input: {
   for (const path of [homeDir, configDir, cacheDir, tmpDir, dataDir]) {
     mkdirSync(path, { recursive: true })
   }
-  return createRuntimeLease({
+  return runtimeLeaseController.create({
     workspaceId: input.workspace.id,
     runId: input.run.runId,
     taskId: input.taskId,

@@ -13,13 +13,8 @@ import {
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
-import {
-  failRuntimeLease,
-  markRuntimeLeaseRunning,
-  markRuntimeLeaseWaitingForHuman,
-  markWorkerInstanceState,
-  releaseRuntimeLease,
-} from '../orchestrator/worker-runtime-resources'
+import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
+import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { roomService } from '../rooms'
 import { LocalWorkerRuntimeAdapter } from './local-worker-runtime'
 import { answerPendingTaskClarification, createTaskClarification } from './task-clarification-store'
@@ -125,7 +120,7 @@ export class WorkerRuntimeService {
       room.title
     const runtime = input.runtime ?? new LocalWorkerRuntimeAdapter(agent)
     const appendedEventIds: string[] = []
-    await markRuntimeLeaseRunning(lease?.id, {
+    await runtimeLeaseController.markRunning(lease?.id, {
       cwd: lease?.cwd ?? null,
       homeDir: lease?.homeDir ?? null,
       configDir: lease?.configDir ?? null,
@@ -557,7 +552,7 @@ async function appendWorkerRuntimeEvent(input: {
       question,
       options: input.event.options ?? [],
     })
-    await markRuntimeLeaseWaitingForHuman(input.runtimeLeaseId, {
+    await runtimeLeaseController.markWaitingForHuman(input.runtimeLeaseId, {
       workerInstanceId: input.workerInstanceId ?? null,
       message: question,
       metadata: {
@@ -817,7 +812,7 @@ async function syncRunControllerAfterTaskRoomResult(input: {
 
   if (input.result.status === 'completed') {
     await runController.markTaskCompleted(run, base)
-    await releaseRuntimeLease(lease?.id, {
+    await runtimeLeaseController.release(lease?.id, {
       workerInstanceId: thread?.workerInstanceId ?? null,
       metadata: { resultStatus: input.result.status, source: input.source },
     })
@@ -828,7 +823,7 @@ async function syncRunControllerAfterTaskRoomResult(input: {
       ...base,
       reason: input.result.message ?? 'worker-runtime-cancelled',
     })
-    await releaseRuntimeLease(lease?.id, {
+    await runtimeLeaseController.release(lease?.id, {
       workerInstanceId: thread?.workerInstanceId ?? null,
       metadata: { resultStatus: input.result.status, source: input.source },
     })
@@ -848,7 +843,7 @@ async function syncRunControllerAfterTaskRoomResult(input: {
       question: clarificationQuestion,
       clarificationId,
     })
-    await markRuntimeLeaseWaitingForHuman(lease?.id, {
+    await runtimeLeaseController.markWaitingForHuman(lease?.id, {
       workerInstanceId: thread?.workerInstanceId ?? null,
       message: clarificationQuestion,
       metadata: {
@@ -865,7 +860,7 @@ async function syncRunControllerAfterTaskRoomResult(input: {
     ...base,
     error: input.result.message ?? 'WorkerRuntime failed.',
   })
-  await failRuntimeLease(lease?.id, {
+  await runtimeLeaseController.fail(lease?.id, {
     workerInstanceId: thread?.workerInstanceId ?? null,
     error: input.result.message ?? 'WorkerRuntime failed.',
     metadata: { resultStatus: input.result.status, source: input.source },

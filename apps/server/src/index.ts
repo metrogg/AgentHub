@@ -8,8 +8,8 @@ import { joinRoom, cleanupWebSocket, cancelAllAgentReplies } from './services/ag
 import { db, users, eq, orchestratorRuns, sql } from '@agenthub/db'
 import { DEFAULT_USER } from './middleware/auth'
 import { WsEvent } from '@agenthub/shared'
-import { markInterruptedRuntimeLeasesStale } from './services/orchestrator/worker-runtime-resources'
 import { runController } from './services/orchestrator/run-controller'
+import { runtimeLeaseController } from './services/orchestrator/runtime-lease-controller'
 
 // Seed the local default user (single-user mode, no auth)
 async function seedDefaultUser() {
@@ -156,7 +156,7 @@ async function shutdown(reason: string) {
     }),
   )
 
-  const staleLeases = await markInterruptedRuntimeLeasesStale({
+  const staleLeases = await runtimeLeaseController.recoverInterruptedLeases({
     reason: `Server shutdown: ${reason}`,
   })
   if (staleLeases.staleLeaseCount > 0) {
@@ -186,7 +186,7 @@ if (process.stdin) {
 const runningRuns = await db.query.orchestratorRuns.findMany({
   where: eq(orchestratorRuns.status, 'running'),
 })
-const staleLeases = await markInterruptedRuntimeLeasesStale({
+const staleLeases = await runtimeLeaseController.recoverInterruptedLeases({
   reason: 'Server startup recovery: previous process ended before runtime lease cleanup.',
 })
 if (staleLeases.staleLeaseCount > 0) {

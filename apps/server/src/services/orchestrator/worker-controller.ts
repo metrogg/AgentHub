@@ -3,14 +3,9 @@ import { emitRunEvent } from './run-events'
 import {
   ensureWorkerInstance,
   markWorkerInstanceState,
-  createRuntimeLease,
-  markRuntimeLeaseReady,
-  markRuntimeLeaseRunning,
-  releaseRuntimeLease,
-  failRuntimeLease,
-  markRuntimeLeaseStale,
   type WorkerRuntimeAgentConfig,
 } from './worker-runtime-resources'
+import { runtimeLeaseController } from './runtime-lease-controller'
 import type { ExecutionConfigSummary } from '../execution/execution-config-summary'
 
 export interface ReconcileResult {
@@ -369,7 +364,7 @@ export class WorkerController {
     }
 
     // Create a fresh lease
-    const lease = await createRuntimeLease({
+    const lease = await runtimeLeaseController.create({
       workspaceId: ctx.workspaceId,
       runId: ctx.runId,
       taskId: ctx.taskId,
@@ -381,7 +376,7 @@ export class WorkerController {
       return { changed: false, error: 'Failed to create runtime lease.' }
     }
 
-    await markRuntimeLeaseReady(lease.id)
+    await runtimeLeaseController.markReady(lease.id)
     await markWorkerInstanceState(worker.id, 'busy', {
       message: 'Runtime lease assigned, worker is busy.',
     })
@@ -485,7 +480,7 @@ export class WorkerController {
       )
       .limit(1)
     if (activeLease) {
-      await markRuntimeLeaseStale(activeLease.id, {
+      await runtimeLeaseController.markStale(activeLease.id, {
         error: reason,
         metadata: { staleReason: 'heartbeat_lost' },
       })
@@ -539,7 +534,7 @@ export class WorkerController {
     let recoveredCount = 0
 
     for (const lease of activeLeases) {
-      await markRuntimeLeaseStale(lease.id, {
+      await runtimeLeaseController.markStale(lease.id, {
         error: 'Service restarted while lease was active. Marked stale for recovery.',
         metadata: {
           staleReason: 'service_restart',
@@ -603,7 +598,7 @@ export class WorkerController {
       .limit(1)
 
     if (activeLease) {
-      await releaseRuntimeLease(activeLease.id, {
+      await runtimeLeaseController.release(activeLease.id, {
         metadata: input.leaseMetadata,
         workerInstanceId,
       })

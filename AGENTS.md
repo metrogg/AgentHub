@@ -123,25 +123,24 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 ```text
 用户在群聊发消息
   -> messages.ts 作为 ChatIngress 写入用户消息、鉴权和加载群聊上下文
-  -> RunController / ManagerLoop 创建 run.started、manager.thinking，并调用 Manager runtime 决策下一步
-  -> 简单聊天：Orchestrator 直接回复
-  -> 能力不足：Orchestrator 返回结构化 memberProposals，主群聊展示补员卡，用户确认后才创建/加入真实 Agent
-  -> 复杂任务：Manager 生成团队行动方案和任务看板
-  -> 用户确认/分发
-  -> 迁移期仍由 OrchestratorEngine.startRun() 作为执行兼容层
-  -> Manager planning action 生成可执行 Worker 任务；旧 Planner 只保留为兼容校验/工具函数来源
-  -> TaskScheduler 按依赖层调度
-  -> 每个任务创建 TaskThread，并投影为 orchestrator-task 子对话
-  -> Orchestrator 将任务封装为 A2A message/send envelope
-  -> TaskExecutionService 准备工作目录并经 LocalA2ATransport 派发
-  -> 本地执行宿主适配到 LLM fallback / Code Agent
-  -> 子对话保存完整过程
-  -> shared task directory / ArtifactStore / 黑板写入任务摘要、产物、决策和 handoff refs
-  -> 主群聊广播成员汇报和产物卡
-  -> Synthesizer 生成最终总结
+  -> RoomController 确保 group room，用户消息进入 Room timeline
+  -> CoordinatorRuntime / ManagerLoop 判断下一步：回复、追问、补员、派活或总结
+  -> 简单聊天：Manager 直接写回 group room timeline，并兼容镜像到 messages
+  -> 能力不足：Manager 输出结构化 memberProposals，用户确认后才创建/加入真实 Agent
+  -> 复杂任务：Manager 生成 assign actions / 行动方案，RunController 创建 run 生命周期
+  -> dispatchCoordinatorAssignBatch() 创建 workspace_tasks / TaskThread / task room
+  -> RoomController 确保 task room 和 Worker participant
+  -> WorkerController 确保 WorkerInstance ready / wake / reconcile
+  -> RuntimeLeaseController 创建并推进 RuntimeLease（ready/running/waiting/released/stale）
+  -> WorkerRuntimeService.runTaskRoom() 从 task room 接单并调用本地 Coding Worker runtime
+  -> Worker 进度、澄清、失败、部分产物和最终结果写回 task room timeline
+  -> ArtifactController / ArtifactStore 登记产物，workspace_tasks.artifacts 只作为缓存
+  -> RunController 同步 task/thread/run 状态并发 RunEvent / AG-UI 投影事件
+  -> ManagerLoop 基于 Run/Task/TaskThread/Room timeline/ArtifactStore 做最终复盘
+  -> 主群聊展示 Manager review、成员汇报、产物卡和最终结果
 ```
 
-迁移方向：`messages.ts` 不应继续扩展成编排主脑；新增 run 生命周期、Manager 决策、资源 reconcile 和恢复逻辑应优先进入 `RunController` / `ManagerLoop` / 后续 kernel controllers。`OrchestratorEngine` 不再被视为未来主脑，只能在迁移期作为执行兼容层逐步拆小。
+旧 `OrchestratorEngine -> TaskExecutionService -> LocalA2ATransport` 只允许留在迁移兼容层内部，不能再作为新任务、新 run、新 Room 或新 Worker lifecycle 的主路径。`messages.ts` 不应继续扩展成编排主脑；新增 run 生命周期、Manager 决策、资源 reconcile 和恢复逻辑应优先进入 `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `ManagerLoop`。
 
 ## Matrix / A2A 通信边界
 
@@ -159,12 +158,12 @@ A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径�
 - 远程 Agent、外部系统调用 AgentHub Agent、跨平台互操作时再启用 A2A。
 - 不允许恢复 `runtimeType = "a2a"`，也不能把 A2A 作为可创建的 Agent 类型展示给用户。
 
-当前代码仍有“内部 A2A envelope + AgentHub local transport”的迁移期实现，但它不是新内核目标。后续通信改造应把 `LocalA2ATransport` 降级为兼容/外部互操作适配，不再继续扩展为内部主干。
+当前代码仍有“内部 A2A envelope + AgentHub local transport”的迁移期实现，但它不是新内核目标。后续通信改造应把 `LocalA2ATransport` 继续隔离在旧兼容层或外部互操作适配里，不再继续扩展为内部主干。
 
 相关文件：
 
 - `apps/server/src/services/protocols/a2a-internal.ts`: 内部 A2A envelope、message 和 task 映射。
-- `apps/server/src/services/execution/local-a2a-transport.ts`: 本地 A2A transport，负责把 `message/send` 派发到本地 runtime。
+- `apps/server/src/services/execution/local-a2a-transport.ts`: 旧本地 A2A transport，只允许作为迁移兼容层内部实现。
 - `apps/server/src/services/protocols/a2a-adapter.ts`: 对外 A2A AgentCard / Task / Artifact 映射。
 
 ## 工作目录与产物交接
@@ -266,12 +265,19 @@ bun test tests/orchestrator-routing.test.ts
 
 ## 重要文件
 
-- `apps/server/src/routes/messages.ts`: 消息入口、意图判断、计划生成和分发入口。
+- `apps/server/src/routes/messages.ts`: ChatIngress，负责写入用户消息、鉴权和进入 Manager/Run 主线；不要继续扩成编排主脑。
+- `apps/server/src/services/orchestrator/manager-loop.ts`: Manager observe/act/review loop。
+- `apps/server/src/services/coordinator-runtime/assign-dispatcher.ts`: Coordinator assign 到 Run/TaskThread/task room/WorkerRuntime 的派发入口。
+- `apps/server/src/services/orchestrator/run-controller.ts`: Run 与 task 生命周期控制面。
+- `apps/server/src/services/rooms/room-controller.ts`: group/task room 与 participant reconcile 控制面。
+- `apps/server/src/services/orchestrator/worker-controller.ts`: WorkerInstance reconcile 与 lease 分配控制面。
+- `apps/server/src/services/orchestrator/runtime-lease-controller.ts`: RuntimeLease 生命周期控制面。
+- `apps/server/src/services/worker-runtime/worker-runtime-service.ts`: 当前 Worker task room 执行入口。
 - `apps/server/src/services/orchestrator/manager-planner.ts`: Manager-first 团队行动方案生成。
-- `apps/server/src/services/orchestrator/orchestrator-engine.ts`: 迁移期执行兼容层，后续继续拆小。
+- `apps/server/src/services/orchestrator/orchestrator-engine.ts`: 迁移期执行兼容层，不能作为新 run / task / room / worker lifecycle 主路径继续扩展。
 - `apps/server/src/services/orchestrator/planner.ts`: 旧 Planner 兼容与计划校验工具来源，不是主脑。
-- `apps/server/src/services/orchestrator/task-scheduler.ts`: DAG 调度。
-- `apps/server/src/services/execution/task-execution-service.ts`: 任务执行服务。
+- `apps/server/src/services/orchestrator/task-scheduler.ts`: 旧 DAG 调度兼容层，后续继续向 ManagerLoop / WorkerRuntime 收口。
+- `apps/server/src/services/execution/task-execution-service.ts`: 旧执行兼容层内部使用，不是当前 Worker 执行主入口。
 - `apps/server/src/services/execution/agent-workdir.ts`: Agent 工作目录。
 - `apps/server/src/services/blackboard.ts`: 黑板。
 - `apps/server/src/services/code-agent-adapter.ts`: CLI 适配。

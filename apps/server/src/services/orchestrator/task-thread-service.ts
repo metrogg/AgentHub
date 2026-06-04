@@ -1,8 +1,9 @@
 import { and, db, desc, eq, messages, sessions, taskThreads, workspaceTasks } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { prepareSharedTaskDirectory } from './shared-task-directory'
-import { ensureWorkerInstance, type WorkerRuntimeAgentConfig } from './worker-runtime-resources'
-import { roomService } from '../rooms'
+import { type WorkerRuntimeAgentConfig } from './worker-runtime-resources'
+import { workerController } from './worker-controller'
+import { roomController, roomService } from '../rooms'
 
 export interface EnsureTaskThreadInput {
   workspaceId: string
@@ -78,11 +79,8 @@ export async function prepareTaskRuntimeThread(
     taskId: input.taskId,
     groupSessionId: input.groupSessionId,
   })
-  const workerInstance = input.agent
-    ? await ensureWorkerInstance({
-        workspaceId: input.workspaceId,
-        agent: input.agent,
-      })
+  const workerInstanceId = input.agent
+    ? await workerController.ensureWorkerForAgent(input.workspaceId, input.agent)
     : null
 
   const taskThread = await ensureTaskThread({
@@ -91,7 +89,7 @@ export async function prepareTaskRuntimeThread(
     taskId: input.taskId,
     groupSessionId: input.groupSessionId,
     workspaceAgentId: input.agent?.id ?? null,
-    workerInstanceId: workerInstance?.id ?? null,
+    workerInstanceId: workerInstanceId ?? null,
     sessionId: childSession.id,
     ownerId: input.ownerId,
     taskTitle: input.taskTitle,
@@ -114,7 +112,7 @@ export async function prepareTaskRuntimeThread(
     workspaceId: input.workspaceId,
     projectPath: input.projectPath ?? null,
     taskThreadId: taskThread.id,
-    workerInstanceId: workerInstance?.id ?? null,
+    workerInstanceId: workerInstanceId ?? null,
     sharedTaskRelativeRoot: sharedTaskDirectory?.relativeRoot ?? null,
     sharedTaskSpecPath: sharedTaskDirectory ? `${sharedTaskDirectory.relativeRoot}/spec.md` : null,
   }
@@ -430,7 +428,7 @@ async function ensurePreparedThreadBootstrapMessage(input: EnsureTaskThreadInput
 }
 
 async function ensureTaskThreadRoomTimeline(input: EnsureTaskThreadInput, taskThreadId: string) {
-  const room = await roomService.ensureRoomForTaskThread({
+  const room = await roomController.ensureTaskThreadRoomFromInput({
     ownerId: input.ownerId,
     workspaceId: input.workspaceId,
     groupSessionId: input.groupSessionId,
@@ -446,9 +444,6 @@ async function ensureTaskThreadRoomTimeline(input: EnsureTaskThreadInput, taskTh
       sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
     },
   })
-  if (input.workspaceAgentId) {
-    await roomService.addWorkerParticipant(room.id, input.workspaceAgentId)
-  }
   const events = await roomService.listTimelineEvents({ roomId: room.id, limit: 20 })
   const hasPreparedEvent = events.some((event) => event.metadata?.kind === 'task-thread-prepared')
   if (hasPreparedEvent) return

@@ -15,6 +15,13 @@ import {
   type ExecutionConfigSummary,
 } from './execution-config-summary'
 
+// Migration-only execution service.
+//
+// The HiClaw-lite kernel executes new work through RoomController /
+// WorkerController / RuntimeLeaseController / WorkerRuntimeService. Keep this
+// module only for old OrchestratorEngine compatibility until those remaining
+// branches are deleted. Do not add new internal task-dispatch paths here.
+
 const STRICT_TASK_TYPES = new Set<TaskType>(['code', 'test', 'verify'])
 
 export interface TaskExecutionInput {

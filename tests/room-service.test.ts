@@ -14,11 +14,13 @@ const {
   rooms,
   sessions,
   timelineEvents,
+  workerInstances,
+  workspaceAgents,
   workspaceTasks,
   workspaces,
   eq,
 } = dbApi
-const { roomService } = roomsApi
+const { roomController, roomService } = roomsApi
 const { ensureTaskThread } = taskThreadApi
 const { cleanupWebSocket, joinRoom } = agentRunnerApi
 const { WsEvent } = sharedApi
@@ -128,6 +130,106 @@ describe('RoomService local Matrix-compatible adapter', () => {
     expect(events).toHaveLength(1)
     expect(events[0]?.type).toBe('task.assigned')
     expect(events[0]?.metadata?.kind).toBe('task-thread-prepared')
+  })
+
+  test('RoomController reconciles worker participant binding for task rooms', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Room Controller Workspace',
+        goal: 'Reconcile task rooms',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'Worker One',
+        role: 'Worker',
+        modelId: 'test-model',
+        runtimeType: 'code-agent',
+        codeAgentType: 'codex',
+      })
+      .returning()
+    const [worker] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'codex',
+        modelId: 'test-model',
+        observedState: 'ready',
+      })
+      .returning()
+    const [groupSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Room Controller Group',
+        type: 'group',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+      })
+      .returning()
+    const [childSession] = await db
+      .insert(sessions)
+      .values({
+        title: 'Room Controller Task',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        metadata: { kind: 'orchestrator-task' },
+      })
+      .returning()
+    const [run] = await db
+      .insert(orchestratorRuns)
+      .values({
+        workspaceId: workspace!.id,
+        groupSessionId: groupSession!.id,
+      })
+      .returning()
+    const [task] = await db
+      .insert(workspaceTasks)
+      .values({
+        workspaceId: workspace!.id,
+        title: 'Reconcile participant',
+        description: 'Ensure worker participant is bound to worker instance',
+        runId: run!.id,
+        sessionId: childSession!.id,
+        agentId: agent!.id,
+      })
+      .returning()
+
+    const thread = await ensureTaskThread({
+      workspaceId: workspace!.id,
+      runId: run!.id,
+      taskId: task!.id,
+      groupSessionId: groupSession!.id,
+      sessionId: childSession!.id,
+      ownerId: 'default-user',
+      taskTitle: task!.title,
+      workspaceAgentId: agent!.id,
+      workerInstanceId: null,
+      agentName: agent!.name,
+    })
+
+    await db
+      .update(workerInstances)
+      .set({ observedState: 'ready' })
+      .where(eq(workerInstances.id, worker!.id))
+    await db
+      .update(dbApi.taskThreads)
+      .set({ workerInstanceId: worker!.id })
+      .where(eq(dbApi.taskThreads.id, thread.id))
+
+    const result = await roomController.reconcileTaskThreadRoom(thread.id, 'default-user')
+    expect(result.phase).toBe('task-room')
+
+    const participants = await db.select().from(roomParticipants).where(eq(roomParticipants.roomId, result.roomId))
+    const workerParticipant = participants.find((participant) => participant.participantType === 'worker')
+    expect(workerParticipant?.workspaceAgentId).toBe(agent!.id)
+    expect(workerParticipant?.workerInstanceId).toBe(worker!.id)
   })
 
   test('broadcasts timeline events to room session subscribers and parent group subscribers', async () => {

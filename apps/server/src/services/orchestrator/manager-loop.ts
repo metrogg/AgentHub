@@ -23,7 +23,8 @@ import { emitRunEvent } from './run-events'
 import { roomService } from '../rooms'
 import { updateTaskThreadStatus } from './task-thread-service'
 import type { ExecutionPlan } from './types'
-import { markRuntimeLeaseStale, markWorkerInstanceState } from './worker-runtime-resources'
+import { runtimeLeaseController } from './runtime-lease-controller'
+import { markWorkerInstanceState } from './worker-runtime-resources'
 import { readSharedTaskResult } from './shared-task-directory'
 import type { WorkerRuntime } from '../worker-runtime/types'
 import { buildCoordinatorResourceReviewSummary } from '../coordinator-runtime/final-review-skill'
@@ -314,7 +315,7 @@ export async function processPendingHumanInterrupts(input: {
 
       for (const lease of leases) {
         if (!['creating', 'ready', 'running', 'cleaning'].includes(lease.status)) continue
-        await markRuntimeLeaseStale(lease.id, {
+        await runtimeLeaseController.markStale(lease.id, {
           error: 'Manager interrupted active task after a new human requirement.',
           metadata: {
             previousStatus: lease.status,

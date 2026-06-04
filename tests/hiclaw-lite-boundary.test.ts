@@ -64,6 +64,49 @@ describe('HiClaw-lite kernel boundary', () => {
 
     expect(violations).toEqual([])
   })
+
+  test('new lifecycle paths use controllers instead of runtime lease persistence helpers', () => {
+    const guardedDirs = [
+      'apps/server/src/services/rooms',
+      'apps/server/src/services/coordinator-runtime',
+      'apps/server/src/services/worker-runtime',
+    ]
+    const guardedFiles = [
+      'apps/server/src/index.ts',
+      'apps/server/src/services/orchestrator/manager-loop.ts',
+      'apps/server/src/services/orchestrator/manager-patrol.ts',
+      'apps/server/src/services/orchestrator/task-thread-service.ts',
+      'apps/server/src/services/orchestrator/run-controller.ts',
+    ]
+    const files = [
+      ...guardedDirs.flatMap((dir) => listSourceFiles(join(process.cwd(), dir))),
+      ...guardedFiles.map((file) => join(process.cwd(), file)),
+    ]
+    const forbiddenHelpers = [
+      'createRuntimeLease',
+      'markRuntimeLeaseReady',
+      'markRuntimeLeaseRunning',
+      'markRuntimeLeaseWaitingForHuman',
+      'releaseRuntimeLease',
+      'failRuntimeLease',
+      'markRuntimeLeaseStale',
+      'markInterruptedRuntimeLeasesStale',
+    ]
+    const violations: string[] = []
+
+    for (const file of files) {
+      const rel = toRepoPath(file)
+      const text = readFileSync(file, 'utf8')
+      if (rel.endsWith('runtime-lease-controller.ts')) continue
+      for (const helper of forbiddenHelpers) {
+        if (new RegExp(`\\b${helper}\\b`).test(text)) {
+          violations.push(`${rel} references ${helper} instead of RuntimeLeaseController`)
+        }
+      }
+    }
+
+    expect(violations).toEqual([])
+  })
 })
 
 function listSourceFiles(root: string): string[] {
