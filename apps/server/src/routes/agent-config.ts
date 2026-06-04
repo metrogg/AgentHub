@@ -6,6 +6,7 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 import { streamReply } from '../services/llm'
 import { AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
+import { CODE_AGENT_TYPES } from '@agenthub/shared'
 
 const agentConfigDraftSchema = z.object({
   name: z.string().max(60),
@@ -18,7 +19,7 @@ const agentConfigDraftSchema = z.object({
   color: z.string().max(20).default('#111827'),
   modelId: z.string().max(120).nullable().optional(),
   runtimeType: z.enum(['llm', 'code-agent']).default('code-agent'),
-  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+  codeAgentType: z.enum(CODE_AGENT_TYPES).nullable().optional(),
   capabilityTags: z.array(z.string().max(40)).max(12).default([]),
   skillIds: z.array(z.string().max(120)).max(40).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30).default(['chat']),
@@ -39,7 +40,7 @@ const agentConfigPatchSchema = z.object({
   color: z.string().max(20).optional(),
   modelId: z.string().max(120).nullable().optional(),
   runtimeType: z.enum(['llm', 'code-agent']).optional(),
-  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+  codeAgentType: z.enum(CODE_AGENT_TYPES).nullable().optional(),
   capabilityTags: z.array(z.string().max(40)).max(12).optional(),
   skillIds: z.array(z.string().max(120)).max(40).optional(),
   toolPermissions: z.array(z.string().max(80)).max(30).optional(),
@@ -65,7 +66,7 @@ export const agentConfigRoutes = new Hono<{ Variables: AuthVariables }>()
       '只修改用户明确要求或强相关的字段；不要因为风格偏好重写整份配置。',
       '你只负责生成字段补丁建议，不负责切换全局模型、改动 Coding Tools 配置或执行任何运行时动作。',
       '不要改变 AgentHub 的产品分层：Skills/MCP/Rules/CLI 是能力层，不是 Agent 类型。',
-      'runtimeType 只能是 "code-agent" 或 "llm"；codeAgentType 只能是 "codex"、"claude-code"、"opencode"、"gemini" 或 null。',
+      'runtimeType 只能是 "code-agent" 或 "llm"；codeAgentType 只能是 "codex"、"claude-code"、"opencode"、"gemini"、"openclaw" 或 null。',
       'sandboxPolicy 只能是 "workspace-write" 或 "danger-full-access"；不要输出 read-only。',
       'contextPolicy 只能是 "recent-only"、"pinned-recent"、"workspace-aware"。',
       '返回 JSON 对象格式：{"summary":"一句话说明","patch":{...只包含需要修改的字段...}}。',

@@ -3,7 +3,7 @@ import { streamReply } from '../llm'
 import { runtimeRegistry, type AgentProfile } from '../runtime'
 import { extractJsonObject, parseJsonObject } from './planner'
 import type { PlanningAgentInput } from './plan-generator'
-import { CORE_AGENT_EXPERT_PROFILES } from '@agenthub/shared'
+import { CODE_AGENT_TYPES, CORE_AGENT_EXPERT_PROFILES, type CodeAgentType } from '@agenthub/shared'
 
 export type OrchestratorDecisionAction = 'reply' | 'clarify' | 'plan'
 
@@ -13,7 +13,7 @@ export interface OrchestratorMemberProposal {
   role: string
   category: string
   runtimeType: 'llm' | 'code-agent'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  codeAgentType?: CodeAgentType | null
   color?: string
   capabilityTags: string[]
   reason: string
@@ -261,6 +261,7 @@ async function generateDecisionWithCodeAgent(
     modelId: orchestrator.modelId ?? null,
     runtimeType: 'code-agent',
     codeAgentType,
+    roleProfile: orchestrator.roleProfile ?? null,
     capabilityTags: orchestrator.capabilityTags ?? [],
     toolPermissions: orchestrator.toolPermissions ?? [],
     sandboxPolicy: 'workspace-write',
@@ -299,10 +300,7 @@ function formatOutputPreview(value: string) {
 }
 
 function normalizeCodeAgentType(value?: string | null): AgentProfile['codeAgentType'] | null {
-  if (value === 'codex' || value === 'claude-code' || value === 'opencode' || value === 'gemini') {
-    return value
-  }
-  return null
+  return CODE_AGENT_TYPES.includes(value as any) ? (value as CodeAgentType) : null
 }
 
 function normalizeMessage(value: unknown) {

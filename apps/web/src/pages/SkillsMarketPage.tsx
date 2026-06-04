@@ -205,7 +205,7 @@ export default function SkillsMarketPage() {
       if (!result.items.length) setMessage('SkillHub 暂时没有返回市场内容')
     } catch (error: any) {
       setResults([])
-      setMessage(error?.message || 'SkillHub 市场加载失败')
+      setMessage(error?.message || '远程 Skills 加载失败')
     } finally {
       setSearching(false)
     }
@@ -223,7 +223,7 @@ export default function SkillsMarketPage() {
     try {
       const result = await api.searchSkillhub(trimmed)
       setResults(result.items)
-      if (!result.items.length) setMessage('SkillHub 没有找到匹配的技能')
+      if (!result.items.length) setMessage('远程 Skills 没有找到匹配项')
     } catch (error: any) {
       setResults([])
       setMessage(error?.message || 'SkillHub 搜索失败')
@@ -303,9 +303,9 @@ export default function SkillsMarketPage() {
                 <ArrowLeft className="h-4 w-4" />
               </button>
               <div className="min-w-0">
-                <h1 className="truncate text-lg font-semibold tracking-normal">技能</h1>
+                <h1 className="truncate text-lg font-semibold tracking-normal">Skills 市场</h1>
                 <p className="mt-0.5 truncate text-xs text-neutral-500">
-                  发现、安装，并把 Skills 交给 Agent 使用
+                  远程发现和安装入口；已安装能力的审计请到能力商店。
                 </p>
               </div>
             </div>
@@ -314,7 +314,7 @@ export default function SkillsMarketPage() {
                 type="button"
                 onClick={refreshSkills}
                 className="grid h-9 w-9 place-items-center rounded-lg border border-neutral-200 bg-white text-neutral-600 transition hover:bg-neutral-50"
-                aria-label="刷新本机技能"
+                aria-label="刷新 Skills"
               >
                 <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
               </button>
@@ -338,18 +338,18 @@ export default function SkillsMarketPage() {
                   <ViewModeButton
                     active={viewMode === 'market'}
                     icon={<Store className="h-4 w-4" />}
-                    label="市场"
+                    label="远程发现"
                     onClick={() => setViewMode('market')}
                   />
                   <ViewModeButton
                     active={viewMode === 'installed'}
                     icon={<HardDrive className="h-4 w-4" />}
-                    label="我的"
+                    label="已安装"
                     onClick={() => setViewMode('installed')}
                   />
                 </div>
                 <div className="hidden text-sm text-neutral-500 sm:block">
-                  {viewMode === 'market' ? 'SkillHub 市场' : '本机已安装 Skills'} · {totalCount}
+                  {viewMode === 'market' ? '远程 Skills 库' : '已安装 Skills'} · {totalCount}
                 </div>
               </div>
 
@@ -378,7 +378,7 @@ export default function SkillsMarketPage() {
                     value={activeQuery}
                     onChange={(event) => updateSearchValue(event.target.value)}
                     onKeyDown={handleSearchKeyDown}
-                    placeholder={viewMode === 'market' ? '搜索技能...' : '筛选已安装技能...'}
+                    placeholder={viewMode === 'market' ? '搜索远程 Skills...' : '筛选已安装 Skills...'}
                     className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-neutral-400"
                   />
                   {viewMode === 'market' && searching && (
@@ -510,7 +510,7 @@ function MarketGrid({
   }
 
   if (!items.length) {
-    return <EmptyState icon={<Search className="h-5 w-5" />} text="没有找到匹配的市场技能" />
+    return <EmptyState icon={<Search className="h-5 w-5" />} text="没有找到匹配的远程 Skills" />
   }
 
   return (
@@ -542,11 +542,11 @@ function InstalledGrid({
   selected: SelectedSkill | null
 }) {
   if (loading && !items.length) {
-    return <EmptyState icon={<Loader2 className="h-5 w-5 animate-spin" />} text="正在读取本机 Skills" />
+    return <EmptyState icon={<Loader2 className="h-5 w-5 animate-spin" />} text="正在读取已安装 Skills" />
   }
 
   if (!items.length) {
-    return <EmptyState icon={<BookOpen className="h-5 w-5" />} text="暂无匹配的本机 Skills" />
+    return <EmptyState icon={<BookOpen className="h-5 w-5" />} text="暂无匹配的已安装 Skills" />
   }
 
   return (
@@ -779,7 +779,7 @@ function SourceDialog({
       <section className="w-full max-w-2xl rounded-2xl border border-neutral-200 bg-white shadow-2xl">
         <header className="flex items-start justify-between gap-3 border-b border-neutral-200 px-5 py-4">
           <div>
-            <h2 className="text-base font-semibold">添加技能来源</h2>
+            <h2 className="text-base font-semibold">添加 Skills 来源</h2>
             <p className="mt-1 text-sm text-neutral-500">粘贴 SKILL.md、GitHub 链接或 npx skills 命令。</p>
           </div>
           <button
@@ -809,7 +809,7 @@ function SourceDialog({
           <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
             <div className="text-sm font-semibold">直接安装</div>
             <p className="mt-1 text-xs leading-5 text-neutral-500">
-              会调用现有的 Skills 安装接口，成功后自动刷新本机技能列表。
+              会调用现有的 Skills 安装接口，成功后自动刷新已安装列表。
             </p>
             <button
               type="button"

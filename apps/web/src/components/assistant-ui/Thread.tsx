@@ -133,6 +133,7 @@ import {
   formatPreviewError,
   getPreviewPanelWidthBounds,
   normalizePreviewUrl,
+  previewItemFromAgentArtifact,
   readStoredPreviewPanelWidth,
   requestArtifactPreview,
   storePreviewPanelWidth,
@@ -174,7 +175,18 @@ import {
   getCachedCodeAgentRunMetadata,
   type ThreadCodeAgentRunData,
 } from '../../lib/runtime'
-import { type HeaderAgentStatusProjection, useChatStore } from '../../stores/chatStore'
+import {
+  activityLabel,
+  buildDirectRunProgress,
+  codeAgentStatusLabel,
+  type DirectRunProgressProjection,
+  type DirectRunStepStatus,
+  fileStatusLabel,
+  type HeaderAgentStatusProjection,
+  readFlowArtifacts,
+  taskProgressStats,
+} from '../../lib/runtimeStatusProjection'
+import { useChatStore } from '../../stores/chatStore'
 import {
   makeSelectDirectRunMessages,
   makeSelectMessageAvatarState,
@@ -344,7 +356,7 @@ export const Thread: FC = () => {
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
   const [previewCollapsed, setPreviewCollapsed] = useState(false)
   const threadViewportRef = useRef<HTMLDivElement>(null)
-  const showInlineContextRail = !isGroupSession && showContextRail && (!previewItem || previewCollapsed)
+  const showInlineContextRail = showContextRail && (!previewItem || previewCollapsed)
 
   async function openGroupConversation() {
     selectAgentTab(null)
@@ -894,28 +906,11 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
 
 type LiveTaskBoard = NonNullable<ReturnType<typeof useChatStore.getState>['taskBoard']>
 type LiveAgentActivity = NonNullable<ReturnType<typeof useChatStore.getState>['agentActivity']>
-type DirectRunStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
-type DirectRunProgress = {
-  agentName?: string
-  done: number
-  percent: number
-  run: CodeAgentRunMetadata
-  status: CodeAgentRunMetadata['status']
-  steps: Array<{
-    id: string
-    status: DirectRunStepStatus
-    title: string
-    subtitle?: string
-    detail?: string
-  }>
-  subtitle: string
-  total: number
-}
 
 const ThreadContextRail: FC<{
   taskBoard: LiveTaskBoard | null
   activity: LiveAgentActivity | null
-  directRunProgress?: DirectRunProgress | null
+  directRunProgress?: DirectRunProgressProjection | null
 }> = ({ taskBoard, activity, directRunProgress }) => {
   const workspace = useChatStore((state) => state.currentWorkspace)
   const [progressOpen, setProgressOpen] = useState(true)
@@ -949,83 +944,83 @@ const ThreadContextRail: FC<{
     <aside className="agenthub-context-rail pointer-events-none hidden h-full w-[18.5rem] shrink-0 bg-transparent px-5 pb-4 pt-4 lg:block xl:w-[19.5rem] xl:px-8">
       <div className="pointer-events-none max-h-full overflow-visible bg-transparent">
         <div className="flex w-full flex-col gap-3 bg-transparent">
-        {hasProgress && (
-          <RailCard
-            title="进度"
-            subtitle={directRunProgress?.subtitle}
-            open={progressOpen}
-            onToggle={() => setProgressOpen((open) => !open)}
-          >
-            <div className="space-y-3">
-              <div>
-                <div className="flex items-center justify-between text-[11px] text-neutral-500">
-                  <span>
-                    {directRunProgress
-                      ? `${directRunProgress.done}/${directRunProgress.total} 完成`
-                      : `${stats.done}/${stats.total || 0} 完成`}
-                  </span>
-                  <span>{progressPercent}%</span>
-                </div>
-                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-neutral-100">
-                  <div
-                    className="h-full rounded-full bg-neutral-900 transition-all duration-500"
-                    style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
-                  />
-                </div>
-              </div>
-
-              {directRunProgress ? (
-                <div className="space-y-2">
-                  <div className="text-[11px] font-medium text-neutral-500">任务规划</div>
-                  {directRunProgress.steps.slice(0, 6).map((step) => (
+          {hasProgress && (
+            <RailCard
+              title="进度"
+              subtitle={directRunProgress?.subtitle}
+              open={progressOpen}
+              onToggle={() => setProgressOpen((open) => !open)}
+            >
+              <div className="space-y-3">
+                <div>
+                  <div className="flex items-center justify-between text-[11px] text-neutral-500">
+                    <span>
+                      {directRunProgress
+                        ? `${directRunProgress.done}/${directRunProgress.total} 完成`
+                        : `${stats.done}/${stats.total || 0} 完成`}
+                    </span>
+                    <span>{progressPercent}%</span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-neutral-100">
                     <div
-                      key={step.id}
-                      className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5"
-                    >
-                      <div className="mt-0.5 shrink-0">{directRunStepIcon(step.status)}</div>
-                      <div className="min-w-0">
-                        <div className="truncate text-xs font-medium text-neutral-800">
-                          {step.title}
-                        </div>
-                        {step.subtitle && (
-                          <div className="mt-0.5 truncate text-[11px] text-neutral-500">
-                            {step.subtitle}
-                          </div>
-                        )}
-                        {step.detail && (
-                          <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-neutral-500">
-                            {step.detail}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : activeTask ? (
-                <div className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
-                  <div className="mt-0.5 shrink-0">{taskStatusIcon(activeTask.status)}</div>
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-medium text-neutral-800">
-                      {activeTask.title}
-                    </div>
-                    <div className="mt-0.5 truncate text-[11px] text-neutral-500">
-                      {activeTask.progressStatus || activeTask.agentName || '等待成员执行'}
-                    </div>
+                      className="h-full rounded-full bg-neutral-900 transition-all duration-500"
+                      style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                    />
                   </div>
                 </div>
-              ) : null}
-            </div>
-          </RailCard>
-        )}
 
-        <RailCard
-          title="工作文件夹"
-          subtitle={workspacePath ? compactPath(workspacePath) ?? workspaceName : '当前项目与产物'}
-          open={workspaceOpen}
-          onToggle={() => setWorkspaceOpen((open) => !open)}
-        >
-          <WorkspaceFileExplorer workspace={workspace} quickFiles={files} />
-        </RailCard>
+                {directRunProgress ? (
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-medium text-neutral-500">任务规划</div>
+                    {directRunProgress.steps.slice(0, 6).map((step) => (
+                      <div
+                        key={step.id}
+                        className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5"
+                      >
+                        <div className="mt-0.5 shrink-0">{directRunStepIcon(step.status)}</div>
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-medium text-neutral-800">
+                            {step.title}
+                          </div>
+                          {step.subtitle && (
+                            <div className="mt-0.5 truncate text-[11px] text-neutral-500">
+                              {step.subtitle}
+                            </div>
+                          )}
+                          {step.detail && (
+                            <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-neutral-500">
+                              {step.detail}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : activeTask ? (
+                  <div className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
+                    <div className="mt-0.5 shrink-0">{taskStatusIcon(activeTask.status)}</div>
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-neutral-800">
+                        {activeTask.title}
+                      </div>
+                      <div className="mt-0.5 truncate text-[11px] text-neutral-500">
+                        {activeTask.progressStatus || activeTask.agentName || '等待成员执行'}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </RailCard>
+          )}
+
+          <RailCard
+            title="工作文件夹"
+            subtitle={workspacePath ? compactPath(workspacePath) ?? workspaceName : '当前项目与产物'}
+            open={workspaceOpen}
+            onToggle={() => setWorkspaceOpen((open) => !open)}
+          >
+            <WorkspaceFileExplorer workspace={workspace} quickFiles={files} />
+          </RailCard>
         </div>
       </div>
     </aside>
@@ -1061,193 +1056,12 @@ const RailCard: FC<{
   </section>
 )
 
-function buildDirectRunProgress(input: {
-  activity: LiveAgentActivity | null
-  agentName?: string | null
-  messages: Message[]
-  streamingRun: CodeAgentRunMetadata | null
-}): DirectRunProgress | null {
-  const run = input.streamingRun ?? latestCodeAgentRunFromMessages(input.messages)
-  if (!run) return null
-
-  const steps = buildDirectRunSteps(run)
-  if (!steps.length) return null
-
-  const total = steps.length
-  const done = steps.filter((step) =>
-    step.status === 'done' || step.status === 'failed' || step.status === 'cancelled',
-  ).length
-  const rawPercent = Math.round((done / total) * 100)
-  const percent =
-    run.status === 'running'
-      ? Math.min(95, Math.max(8, rawPercent))
-      : run.status === 'completed'
-        ? 100
-        : Math.max(rawPercent, 100)
-  const summary = [
-    codeAgentRuntimeLabel(run.runtime),
-    codeAgentStatusLabel(run.status, Boolean(run.partialSuccess)),
-    input.agentName || input.activity?.agentName,
-  ].filter(Boolean).join(' · ')
-
-  return {
-    agentName: input.agentName ?? input.activity?.agentName,
-    done,
-    percent,
-    run,
-    status: run.status,
-    steps,
-    subtitle: summary,
-    total,
-  }
-}
-
-function latestCodeAgentRunFromMessages(messages: Message[]) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const value = messages[index]?.metadata?.codeAgentRun
-    if (isCodeAgentRunMetadataLike(value)) return value
-  }
-  return null
-}
-
-function isCodeAgentRunMetadataLike(value: unknown): value is CodeAgentRunMetadata {
-  return Boolean(
-    value &&
-      typeof value === 'object' &&
-      (value as { type?: unknown }).type === 'code-agent-run' &&
-      typeof (value as { status?: unknown }).status === 'string' &&
-      typeof (value as { runtime?: unknown }).runtime === 'string',
-  )
-}
-
-function buildDirectRunSteps(run: CodeAgentRunMetadata): DirectRunProgress['steps'] {
-  const steps = run.steps ?? []
-  if (steps.length) {
-    const rows = steps
-      .filter((step) => step.kind !== 'log')
-      .map((step) => ({
-        detail: step.detail ? trimLongText(step.detail, 120) : undefined,
-        id: step.id,
-        status: directRunStatusFromCodeAgent(step.status),
-        subtitle: [
-          step.subtitle,
-          step.toolName,
-          step.command,
-          step.path ? compactPath(step.path) : null,
-          step.fileStatus ? fileStatusLabel(step.fileStatus) : null,
-        ].filter(Boolean).join(' · ') || undefined,
-        title: step.title,
-      }))
-    const logSteps = steps.filter((step) => step.kind === 'log')
-    if (logSteps.length) {
-      const lastLog = logSteps[logSteps.length - 1]
-      rows.push({
-        detail: lastLog.detail ? trimLongText(lastLog.detail, 120) : undefined,
-        id: 'direct-log-summary',
-        status: logSteps.some((step) => step.status === 'failed') ? 'failed' : 'done',
-        subtitle: `${logSteps.length} 条运行日志`,
-        title: '整理过程输出',
-      })
-    }
-    return rows
-  }
-
-  const inferred: DirectRunProgress['steps'] = [
-    {
-      detail: run.cwd ? compactPath(run.cwd) ?? run.cwd : undefined,
-      id: 'direct-start',
-      status: run.status === 'running' ? 'running' : directRunStatusFromCodeAgent(run.status),
-      subtitle: [codeAgentRuntimeLabel(run.runtime), run.command].filter(Boolean).join(' · '),
-      title: '启动 Coding Tools',
-    },
-  ]
-
-  for (const command of (run.commands ?? []).slice(0, 3)) {
-    inferred.push({
-      detail: command.output ? trimLongText(command.output, 120) : undefined,
-      id: `direct-command-${command.id}`,
-      status: 'done',
-      subtitle: command.cwd ? compactPath(command.cwd) ?? command.cwd : undefined,
-      title: command.command,
-    })
-  }
-
-  for (const call of (run.toolCalls ?? []).slice(0, 3)) {
-    inferred.push({
-      detail: call.detail ? trimLongText(call.detail, 120) : undefined,
-      id: `direct-tool-${call.id}`,
-      status: 'done',
-      subtitle: [call.name, call.target].filter(Boolean).join(' · ') || undefined,
-      title: call.label,
-    })
-  }
-
-  for (const file of (run.files ?? []).slice(0, 4)) {
-    inferred.push({
-      id: `direct-file-${file.path}`,
-      status: directRunStatusFromCodeAgent(run.status === 'running' ? 'running' : 'completed'),
-      subtitle: fileStatusLabel(file.status),
-      title: compactPath(file.path) ?? file.path,
-    })
-  }
-
-  const artifacts = readFlowArtifacts(run.artifacts)
-  if (artifacts.length) {
-    inferred.push({
-      id: 'direct-artifacts',
-      status: directRunStatusFromCodeAgent(run.status === 'running' ? 'running' : 'completed'),
-      subtitle: `${artifacts.length} 个产物`,
-      title: '汇总产物',
-    })
-  }
-
-  if (run.status !== 'running') {
-    inferred.push({
-      detail: run.finalMessage ? trimLongText(run.finalMessage, 120) : undefined,
-      id: 'direct-finish',
-      status: directRunStatusFromCodeAgent(run.status),
-      title: codeAgentStatusLabel(run.status, Boolean(run.partialSuccess)),
-    })
-  }
-
-  return inferred
-}
-
-function directRunStatusFromCodeAgent(status: CodeAgentRunMetadata['status']): DirectRunStepStatus {
-  if (status === 'running') return 'running'
-  if (status === 'failed' || status === 'timed-out') return 'failed'
-  if (status === 'cancelled') return 'cancelled'
-  return 'done'
-}
-
 function directRunStepIcon(status: DirectRunStepStatus) {
   if (status === 'running') return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
   if (status === 'failed') return <XCircle className="h-4 w-4 text-red-600" />
   if (status === 'cancelled') return <Square className="h-4 w-4 text-neutral-400" />
   if (status === 'done') return <CheckCircle2 className="h-4 w-4 text-green-600" />
   return <Clock3 className="h-4 w-4 text-neutral-400" />
-}
-
-function taskProgressStats(taskBoard: LiveTaskBoard | null) {
-  const tasks = taskBoard?.tasks ?? []
-  const done = tasks.filter((task) => task.status === 'done').length
-  const finished =
-    done +
-    tasks.filter((task) =>
-      ['failed', 'blocked', 'cancelled'].includes(task.status),
-    ).length
-  return {
-    done,
-    total: tasks.length,
-    percent: tasks.length ? Math.round((finished / tasks.length) * 100) : 0,
-  }
-}
-
-function activityLabel(activity: LiveAgentActivity | null) {
-  if (activity?.phase === 'thinking') return '理解中'
-  if (activity?.phase === 'planning') return '规划中'
-  if (activity?.phase === 'synthesizing') return '汇总中'
-  return '未开始'
 }
 
 function collectRailFiles(
@@ -1289,7 +1103,7 @@ function collectRailFiles(
 }
 
 function collectDirectRunFiles(
-  progress: DirectRunProgress,
+  progress: DirectRunProgressProjection,
   workspace: Workspace | null,
 ): RailFileItem[] {
   const files: RailFileItem[] = []
@@ -3524,6 +3338,7 @@ const Composer: FC = () => {
             <ComposerPrimitive.Input
               autoFocus
               data-agenthub-composer="true"
+              data-testid="chat-composer-input"
               placeholder={t('发消息给 AgentHub，@ 可提及 Agent')}
               rows={1}
               onPaste={handlePaste}
@@ -4109,6 +3924,7 @@ const ComposerAction: FC<ComposerActionProps> = ({
           disabled={isSubmitting}
           className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:pointer-events-none disabled:bg-neutral-200"
           aria-label="发送"
+          data-testid="chat-composer-send"
         >
           {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
         </button>
@@ -4117,6 +3933,7 @@ const ComposerAction: FC<ComposerActionProps> = ({
           <button
             className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white transition hover:bg-neutral-700 disabled:pointer-events-none disabled:bg-neutral-200"
             aria-label="发送"
+            data-testid="chat-composer-send"
           >
             <ArrowUp className="h-4 w-4" />
           </button>
@@ -4242,6 +4059,7 @@ const UserMessage: FC = () => {
   if (editing) {
     return (
       <MessagePrimitive.Root
+        data-testid={`message-${messageId}`}
         className={cn(
           'group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start gap-3 py-3',
           isFlatMessageStyle ? 'justify-start' : 'justify-end',
@@ -4273,6 +4091,7 @@ const UserMessage: FC = () => {
 
   return (
     <MessagePrimitive.Root
+      data-testid={`message-${messageId}`}
       className={cn(
         'group mx-auto flex w-full max-w-[var(--thread-max-width)] items-start gap-3',
         isFlatMessageStyle ? 'justify-start border-b border-neutral-100 py-3' : 'justify-end py-3',
@@ -4445,6 +4264,7 @@ const AssistantMessage: FC = () => {
 
   return (
     <MessagePrimitive.Root
+      data-testid={`message-${messageId}`}
       className={cn(
         'mx-auto flex w-full max-w-[var(--thread-max-width)] gap-3',
         isFlatMessageStyle ? 'border-b border-neutral-100 py-3' : 'py-4',
@@ -5093,6 +4913,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
       )}
       <aside
         ref={panelRef}
+        data-testid="artifact-preview-panel"
         className={panelClasses}
         style={maximized ? undefined : { width: panelWidth }}
       >
@@ -5762,24 +5583,6 @@ function summarizeDiff(diff: string) {
   return `Diff · +${additions} / -${deletions}`
 }
 
-function readFlowArtifacts(value: unknown): AgentArtifact[] {
-  if (!Array.isArray(value)) return []
-  const seen = new Set<string>()
-  return value.filter((item): item is AgentArtifact => {
-    if (!item || typeof item !== 'object') return false
-    const artifact = item as { id?: unknown; type?: unknown }
-    if (
-      typeof artifact.id !== 'string' ||
-      typeof artifact.type !== 'string' ||
-      seen.has(artifact.id)
-    ) {
-      return false
-    }
-    seen.add(artifact.id)
-    return ['diff', 'preview', 'file', 'deploy', 'workflow'].includes(artifact.type)
-  })
-}
-
 function fileTone(status?: CodeAgentRunMetadata['files'][number]['status']): FlowTone {
   if (status === 'deleted') return 'red'
   if (status === 'created') return 'emerald'
@@ -5831,6 +5634,7 @@ const FileArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'file' }> 
         <button
           type="button"
           onClick={() => requestArtifactPreview(item)}
+          data-testid="artifact-preview-button"
           className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
           title={previewActionLabel(item)}
         >
@@ -5943,6 +5747,7 @@ const InlineDiffReview: FC<{
         <button
           type="button"
           onClick={() => requestArtifactPreview(previewItem)}
+          data-testid="diff-preview-button"
           className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
         >
           <GitBranch className="h-3 w-3" />
@@ -5960,6 +5765,7 @@ const InlineDiffReview: FC<{
         <button
           type="button"
           onClick={() => void applyCurrentDiff()}
+          data-testid="diff-apply-button"
           disabled={applying || applyResult === 'applied'}
           className={cn(
             'inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition disabled:pointer-events-none',
@@ -6020,6 +5826,7 @@ const PreviewArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'previe
         <button
           type="button"
           onClick={() => requestArtifactPreview(item)}
+          data-testid="artifact-preview-button"
           className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
           title="预览网页"
         >
@@ -6059,6 +5866,7 @@ const DeployArtifactCard: FC<{ artifact: Extract<AgentArtifact, { type: 'deploy'
             <button
               type="button"
               onClick={() => requestArtifactPreview(item)}
+              data-testid="artifact-preview-button"
               className="inline-flex h-7 items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 text-[11px] text-neutral-700 transition hover:bg-neutral-200 hover:text-neutral-950"
               title="预览部署"
             >
@@ -6113,76 +5921,12 @@ function deployStatusLabel(status: Extract<AgentArtifact, { type: 'deploy' }>['s
 }
 
 function previewItemFromArtifact(artifact: AgentArtifact): ArtifactPreviewItem {
-  if (artifact.type === 'preview') {
-    return {
-      id: artifact.id,
-      description: artifact.description,
-      kind: 'web',
-      source: artifact.source,
-      subtitle: previewKindName(artifact.previewKind),
-      title: artifact.title,
-      url: artifact.url,
-    }
-  }
-  if (artifact.type === 'deploy') {
-    return {
-      id: artifact.id,
-      description: artifact.description ?? artifact.logs,
-      kind: 'deploy',
-      source: artifact.source,
-      subtitle: `${artifact.provider} · ${deployStatusLabel(artifact.status)}`,
-      title: artifact.title,
-      url: artifact.url,
-    }
-  }
-  if (artifact.type === 'diff') {
-    return {
-      id: artifact.id,
-      description: artifact.description,
-      kind: 'diff',
-      path: artifact.filePath,
-      source: artifact.diff,
-      subtitle: `${fileStatusLabel(artifact.status ?? 'modified')} · Diff`,
-      title: artifact.title || artifact.filePath,
-    }
-  }
-  if (artifact.type === 'workflow') {
-    return {
-      id: artifact.id,
-      description: artifact.description,
-      kind: 'workflow',
-      source: artifact.source,
-      subtitle: `${artifact.nodes.length} 个节点 · ${artifact.edges.length} 条连接`,
-      title: artifact.title,
-    }
-  }
-  // HTML 文件生成预览 URL
-  const ext = artifact.path.split('.').pop()?.toLowerCase()
-  const isHtml = ext === 'html' || ext === 'htm'
-
-  return {
-    id: artifact.id,
-    description: artifact.description,
-    kind: isHtml ? 'web' : filePreviewKind(artifact),
-    mimeType: artifact.mimeType,
-    path: artifact.path,
-    source: artifact.source,
-    subtitle:
-      [artifact.mimeType, artifact.size ? formatBytes(artifact.size) : null]
-        .filter(Boolean)
-        .join(' · ') || fileStatusLabel(artifact.status ?? 'created'),
-    title: artifact.title || artifact.path.split(/[\\/]/).pop() || artifact.path,
-    url: isHtml
-      ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}`
-      : undefined,
-  }
-}
-
-function filePreviewKind(
-  artifact: Extract<AgentArtifact, { type: 'file' }>,
-): ArtifactPreviewItem['kind'] {
-  if (artifact.mimeType?.startsWith('image/')) return 'image'
-  return 'file'
+  return previewItemFromAgentArtifact(artifact, {
+    deployStatusLabel,
+    fileStatusLabel,
+    formatBytes,
+    previewKindName,
+  })
 }
 
 function previewKindName(kind: Extract<AgentArtifact, { type: 'preview' }>['previewKind']) {
@@ -6234,27 +5978,10 @@ function previewIcon(item: ArtifactPreviewItem) {
   return <FileText className="h-4 w-4" />
 }
 
-function codeAgentStatusLabel(status: CodeAgentRunMetadata['status'], partialSuccess = false) {
-  if (status === 'running') return '正在执行'
-  if (status === 'completed') return '执行完成'
-  if (status === 'cancelled') return '已停止'
-  if (status === 'timed-out') return '已超时'
-  if (partialSuccess) return '已产出，需复核'
-  return '执行失败'
-}
-
 function groupChatDisplayTitle(sessionTitle?: string | null, workspaceName?: string | null) {
   const normalized = (sessionTitle || workspaceName || 'Agent 群聊').trim()
   const withoutSuffix = normalized.replace(/\s*\/\s*Agent Group\s*$/i, '').trim()
   return withoutSuffix || workspaceName?.trim() || 'Agent 群聊'
-}
-
-function fileStatusLabel(status: CodeAgentRunMetadata['files'][number]['status']) {
-  if (status === 'created') return '创建'
-  if (status === 'modified') return '修改'
-  if (status === 'deleted') return '删除'
-  if (status === 'renamed') return '重命名'
-  return '未跟踪'
 }
 
 function TaskBoardCard({ data }: { data: any }) {
@@ -6353,6 +6080,7 @@ const AssistantActionBar: FC = () => {
     >
       <MessageActionButton
         aria-label="回复"
+        data-testid={`message-reply-${messageId}`}
         title="回复"
         onClick={reply}
         disabled={!canUseMessage}
@@ -6362,6 +6090,7 @@ const AssistantActionBar: FC = () => {
       </MessageActionButton>
       <MessageActionButton
         aria-label="引用"
+        data-testid={`message-quote-${messageId}`}
         title="引用为卡片"
         onClick={quote}
         disabled={!canUseMessage}
@@ -6371,6 +6100,7 @@ const AssistantActionBar: FC = () => {
       </MessageActionButton>
       <MessageActionButton
         aria-label="重新生成"
+        data-testid={`message-regenerate-${messageId}`}
         title="重新生成"
         onClick={regenerate}
         disabled={!canUseMessage || regenerating}

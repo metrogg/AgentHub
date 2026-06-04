@@ -16,6 +16,7 @@ import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { z } from 'zod'
 import { db, workspaces, workspaceAgents, workspaceAgentRelations, workspaceTasks, sessions, eq, and, desc, asc } from '@agenthub/db'
+import { CODE_AGENT_TYPES } from '@agenthub/shared'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 
@@ -80,7 +81,7 @@ const createAgentSchema = z.object({
   color: z.string().max(20).default('#6366f1'),
   modelId: z.string().max(120).nullable().optional(),
   runtimeType: z.enum(['llm', 'code-agent']).default('code-agent'),
-  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
+  codeAgentType: z.enum(CODE_AGENT_TYPES).nullable().optional(),
   capabilityTags: z.array(z.string().max(40)).max(12).default([]),
   skillIds: z.array(z.string().max(120)).max(40).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30).default([]),

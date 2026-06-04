@@ -147,6 +147,50 @@ export async function syncAgentLibraryStateToServer(state: AgentLibraryState) {
   await api.saveSettings({ [agentLibraryServerSettingKey]: JSON.stringify(normalized) })
 }
 
+export async function syncOpenClawAgentsIntoLibrary() {
+  if (typeof window === 'undefined') return { added: 0, total: 0 }
+
+  const catalog = await api.getOpenClawAgents()
+  if (!catalog.ok || catalog.items.length === 0) {
+    return { added: 0, total: catalog.items.length }
+  }
+
+  const current = loadAgentLibraryState()
+  const agents = [...current.agents]
+  let added = 0
+
+  for (const item of catalog.items) {
+    const existing = agents.find(
+      (agent) =>
+        agent.id === openClawSavedAgentId(item.id) ||
+        (agent.roleProfile?.source === 'openclaw' &&
+          agent.roleProfile?.openclawAgentId === item.id),
+    )
+    if (existing) continue
+
+    const next = normalizeSavedAgent({
+      ...item.agentHubDraft,
+      id: uniqueSavedAgentId(openClawSavedAgentId(item.id), agents),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    if (!next) continue
+    agents.push(next)
+    added += 1
+  }
+
+  if (added > 0) {
+    saveAgentLibraryState({
+      schemaVersion: 2,
+      agents,
+      relations: current.relations,
+    })
+    await flushAgentLibraryServerSync()
+  }
+
+  return { added, total: catalog.items.length }
+}
+
 function writeAgentLibraryStateToStorage(state: AgentLibraryState) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(agentLibraryStorageKey, JSON.stringify(state))
@@ -352,6 +396,24 @@ function normalizeAgentText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+function openClawSavedAgentId(id: string) {
+  const safe = id
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return `openclaw-${safe || 'agent'}`
+}
+
+function uniqueSavedAgentId(preferred: string, agents: SavedAgentConfig[]) {
+  const existing = new Set(agents.map((agent) => agent.id))
+  if (!existing.has(preferred)) return preferred
+  for (let index = 2; ; index += 1) {
+    const candidate = `${preferred}-${index}`
+    if (!existing.has(candidate)) return candidate
+  }
+}
+
 function defaultCodeAgentTypeFor(
   input: Partial<Pick<AgentConfigInput, 'roleType' | 'name' | 'role' | 'capabilityTags'>>,
 ) {
@@ -370,11 +432,18 @@ function dedupeSavedAgents(agents: SavedAgentConfig[]) {
       agent.role.trim().toLowerCase(),
       runtimeType,
       codeAgentType,
+      openClawIdentityKey(agent),
     ].join('|')
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
+}
+
+function openClawIdentityKey(agent: SavedAgentConfig) {
+  if (agent.codeAgentType !== 'openclaw') return ''
+  const id = agent.roleProfile?.openclawAgentId
+  return typeof id === 'string' ? id.trim().toLowerCase() : ''
 }
 
 function normalizeRuntimeType(value?: string | null): SavedAgentConfig['runtimeType'] {

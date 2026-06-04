@@ -76,6 +76,58 @@ describe('code agent partial success handling', () => {
     expect(args).toContain('deepseek/xiaomi-token-plan-cn/mimo-v2.5')
   })
 
+  test('builds OpenClaw args from the local OpenClaw agent identity without model injection', async () => {
+    const { __codeAgentAdapterTestHooks } = await import(
+      '../apps/server/src/services/code-agent-adapter'
+    )
+
+    const args = __codeAgentAdapterTestHooks.buildOpenClawArgs('Read prompt', {
+      roleProfile: { source: 'openclaw', openclawAgentId: 'main' },
+      modelId: 'should-not-pass',
+      modelProvider: 'should-not-pass',
+    })
+
+    expect(args).toEqual([
+      'agent',
+      '--agent',
+      'main',
+      '--message',
+      'Read prompt',
+      '--json',
+      '--local',
+    ])
+    expect(args).not.toContain('--model')
+    expect(args).not.toContain('should-not-pass')
+  })
+
+  test('asks OpenClaw to read the generated prompt file when the task prompt is file-backed', async () => {
+    const { __codeAgentAdapterTestHooks } = await import(
+      '../apps/server/src/services/code-agent-adapter'
+    )
+
+    const args = __codeAgentAdapterTestHooks.buildOpenClawArgs('short wrapper', {
+      roleProfile: { openclawAgentId: 'ops' },
+      promptFile: 'C:\\Temp\\AgentHub\\task-prompt.md',
+    })
+
+    expect(args[2]).toBe('ops')
+    expect(args[3]).toBe('--message')
+    expect(args[4]).toContain('Prompt file path: C:\\Temp\\AgentHub\\task-prompt.md')
+    expect(args[4]).not.toContain('Read the attached prompt file')
+  })
+
+  test('extracts OpenClaw JSON result messages', async () => {
+    const { __codeAgentAdapterTestHooks } = await import(
+      '../apps/server/src/services/code-agent-adapter'
+    )
+
+    expect(
+      __codeAgentAdapterTestHooks.extractOpenClawResultMessage(
+        JSON.stringify({ result: { message: 'ok' } }),
+      ),
+    ).toBe('ok')
+  })
+
   test('explains OpenCode provider/model lookup failures precisely', async () => {
     const { __codeAgentAdapterTestHooks } = await import(
       '../apps/server/src/services/code-agent-adapter'

@@ -11,6 +11,7 @@ import {
   isTextLikeAttachment,
   mimeFromExtension,
   normalizePreviewUrl,
+  previewItemFromAgentArtifact,
   previewPathFromUrl,
   sanitizeDownloadFileName,
 } from '../apps/web/src/lib/artifactPreview'
@@ -91,5 +92,117 @@ describe('artifact preview utilities', () => {
         title: 'preview',
       }),
     ).toBe('preview.png')
+  })
+
+  test('contract: maps agent artifacts into preview card items', () => {
+    const labelOptions = {
+      deployStatusLabel: (status: 'pending' | 'running' | 'ready' | 'failed') =>
+        status === 'ready' ? 'Ready' : status,
+      fileStatusLabel: (status: 'created' | 'modified' | 'deleted' | 'renamed' | 'untracked') =>
+        status === 'modified' ? 'Modified' : status,
+      formatBytes: (value: number) => `${value} B`,
+      previewKindName: (kind: 'dev-server' | 'static-html' | 'iframe') =>
+        kind === 'static-html' ? 'Static HTML' : kind,
+    }
+
+    const htmlPreview = previewItemFromAgentArtifact(
+      {
+        id: 'artifact-html',
+        type: 'file',
+        title: 'index.html',
+        path: 'dist/index.html',
+        status: 'created',
+        mimeType: 'text/html',
+        size: 2048,
+      },
+      labelOptions,
+    )
+    expect(htmlPreview).toMatchObject({
+      id: 'artifact-html',
+      kind: 'web',
+      path: 'dist/index.html',
+      title: 'index.html',
+      url: `/api/artifacts/preview-file?path=${encodeURIComponent('dist/index.html')}`,
+    })
+    expect(enrichPreviewItem(htmlPreview, 'workspace-1').url).toBe(
+      artifactPreviewFileUrl('workspace-1', 'dist/index.html'),
+    )
+
+    const wordPreview = enrichPreviewItem(
+      previewItemFromAgentArtifact(
+        {
+          id: 'artifact-doc',
+          type: 'file',
+          title: 'brief.docx',
+          path: 'docs/brief.docx',
+          status: 'created',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        },
+        labelOptions,
+      ),
+      'workspace-1',
+    )
+    expect(wordPreview).toMatchObject({
+      id: 'artifact-doc',
+      kind: 'file',
+      path: 'docs/brief.docx',
+      url: artifactFileUrl('workspace-1', 'docs/brief.docx'),
+    })
+    expect(isDocxPreviewItem(wordPreview)).toBe(true)
+
+    const deckPreview = enrichPreviewItem(
+      previewItemFromAgentArtifact(
+        {
+          id: 'artifact-deck',
+          type: 'file',
+          title: 'slides.pptx',
+          path: 'slides/slides.pptx',
+          status: 'created',
+        },
+        labelOptions,
+      ),
+      'workspace-1',
+    )
+    expect(deckPreview.url).toBe(artifactFileUrl('workspace-1', 'slides/slides.pptx'))
+    expect(isPptxPreviewItem(deckPreview)).toBe(true)
+
+    expect(
+      previewItemFromAgentArtifact(
+        {
+          id: 'artifact-diff',
+          type: 'diff',
+          title: 'Patch',
+          filePath: 'src/App.tsx',
+          status: 'modified',
+          diff: 'diff --git a/src/App.tsx b/src/App.tsx',
+        },
+        labelOptions,
+      ),
+    ).toMatchObject({
+      id: 'artifact-diff',
+      kind: 'diff',
+      path: 'src/App.tsx',
+      source: 'diff --git a/src/App.tsx b/src/App.tsx',
+      subtitle: 'Modified · Diff',
+    })
+
+    expect(
+      previewItemFromAgentArtifact(
+        {
+          id: 'artifact-deploy',
+          type: 'deploy',
+          title: 'Static deployment',
+          provider: 'static',
+          status: 'ready',
+          url: 'http://127.0.0.1:8000/deploy/run-1',
+        },
+        labelOptions,
+      ),
+    ).toMatchObject({
+      id: 'artifact-deploy',
+      kind: 'deploy',
+      subtitle: 'static · Ready',
+      url: 'http://127.0.0.1:8000/deploy/run-1',
+    })
   })
 })

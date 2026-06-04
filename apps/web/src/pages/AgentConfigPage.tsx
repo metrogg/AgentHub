@@ -24,6 +24,7 @@ import {
   loadAgentLibraryState,
   saveAgentLibraryState,
   saveAgentToLibrary,
+  syncOpenClawAgentsIntoLibrary,
   toAgentConfigInput,
   type SavedAgentRelation,
   type SavedAgentConfig,
@@ -149,6 +150,12 @@ export default function AgentConfigPage() {
       .listSkills()
       .then((result) => setAvailableSkills(result.items))
       .catch(() => setAvailableSkills([]))
+  }, [])
+
+  useEffect(() => {
+    void syncOpenClawAgentsIntoLibrary().catch(() => {
+      // OpenClaw is optional; keep the Agent config page usable when the CLI is unavailable.
+    })
   }, [])
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null
@@ -701,6 +708,7 @@ export default function AgentConfigPage() {
                                   <option value="claude-code">Claude Code</option>
                                   <option value="opencode">OpenCode</option>
                                   <option value="gemini">Gemini CLI</option>
+                                  <option value="openclaw">OpenClaw</option>
                                 </SelectField>
                                 <SelectField label="模型绑定" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
                                   <option value="">{runtimeType === 'code-agent' ? '沿用模型管理默认' : '使用默认模型'}</option>
@@ -1054,6 +1062,7 @@ function labelForCodeAgentType(type: WorkspaceAgent['codeAgentType'] | null | un
   if (type === 'claude-code') return 'Claude Code'
   if (type === 'opencode') return 'OpenCode'
   if (type === 'gemini') return 'Gemini CLI'
+  if (type === 'openclaw') return 'OpenClaw'
   return 'Codex CLI'
 }
 

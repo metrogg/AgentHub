@@ -19,6 +19,7 @@ import {
 import { getLlmRuntimeStatus } from '../services/llm-client'
 import { globalSkillRegistry } from '../services/skill-registry'
 import { readOnlyToolRegistry } from '../services/tool-registry'
+import { getOpenClawAgentsCatalog } from '../services/openclaw-agents'
 
 interface ToolProbe {
   apiKeyEnv?: string
@@ -76,6 +77,7 @@ const probes: ToolProbe[] = [
   { id: 'claude-code', command: 'claude', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
   { id: 'opencode', command: 'opencode', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
   { id: 'gemini', command: 'gemini', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
+  { id: 'openclaw', command: 'openclaw', apiKeyEnv: 'AGENTHUB_MODEL_API_KEY' },
 ]
 
 const agentAdapters = [
@@ -107,6 +109,14 @@ const agentAdapters = [
     envKey: 'AGENTHUB_MODEL_API_KEY',
     docsHint: 'Gemini CLI 会使用 Agent 选择的模型档案注入 GEMINI_API_KEY。',
   },
+  {
+    id: 'openclaw',
+    name: 'OpenClaw',
+    command: 'openclaw',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint:
+      'OpenClaw uses local OpenClaw agents. AgentHub scans openclaw agents list and executes openclaw agent --agent <id> --message <task>.',
+  },
 ] as const
 
 const cliPackages: Record<string, string> = {
@@ -114,6 +124,7 @@ const cliPackages: Record<string, string> = {
   'claude-code': '@anthropic-ai/claude-code@2.1.146',
   opencode: 'opencode-ai@1.15.7',
   gemini: '@google/gemini-cli',
+  openclaw: 'openclaw@latest',
 }
 
 const LOCAL_AGENT_RUNTIME_BINDINGS_KEY = 'LOCAL_AGENT_RUNTIME_BINDINGS'
@@ -122,22 +133,21 @@ export const localAgentRuntimeCandidates: LocalAgentRuntimeCandidate[] = [
   {
     id: 'openclaw',
     name: 'OpenClaw',
-    runtimeFamily: 'coordinator',
+    runtimeFamily: 'worker',
     runtimeBase: 'openclaw',
     command: 'openclaw',
     packageName: 'openclaw',
     installCommand: 'npm install -g openclaw@latest',
     docsUrl: 'https://github.com/openclaw/openclaw',
-    docsHint: 'OpenClaw is detected as a local Manager / Coordinator runtime candidate.',
-    adapterStatus: 'candidate',
+    docsHint: 'OpenClaw can be used as a Coding Tools worker through local OpenClaw agent identities.',
+    adapterStatus: 'available',
     adapterMessage:
-      'OpenClaw is staged as a CoordinatorRuntime candidate. It is not used as a normal Coding Worker until the CoordinatorRuntime adapter, lifecycle control, and timeline projection are implemented.',
-    recommendedUse: 'Manager / Team Leader / Orchestrator runtime candidate',
-    permissions: ['local CLI process', 'workspace events', 'future runtime lifecycle control'],
+      'OpenClaw is available as a Coding Tools adapter. AgentHub scans existing OpenClaw agents and dispatches tasks through the OpenClaw CLI.',
+    recommendedUse: 'Local OpenClaw-backed Coding Agent',
+    permissions: ['local CLI process', 'OpenClaw agent identity', 'workspace read/write'],
     missingAdapterSteps: [
-      'CoordinatorRuntime adapter',
-      'Room / TimelineEvent projection',
-      'Run lifecycle and stop / resume control',
+      'Optional native timeline projection',
+      'Optional stop / resume lifecycle integration',
     ],
   },
 ]
@@ -260,6 +270,9 @@ export const codingToolsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/opencode/models', async (c) => {
     return c.json(await getOpencodeModels(), 200)
+  })
+  .get('/openclaw/agents', async (c) => {
+    return c.json(await getOpenClawAgentsCatalog(), 200)
   })
   .get('/codex/config', async (c) => {
     return c.json(readCodexConfig(), 200)

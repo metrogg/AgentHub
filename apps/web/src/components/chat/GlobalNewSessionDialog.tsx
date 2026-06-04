@@ -9,6 +9,7 @@ import {
   loadAgentLibrary,
   loadAgentLibraryState,
   saveAgentLibraryState,
+  syncOpenClawAgentsIntoLibrary,
   type SavedAgentConfig,
 } from '../../lib/agentLibrary'
 import { defaultConversationTitle, startAgentConversation } from '../../lib/agentConversation'
@@ -51,6 +52,7 @@ export function GlobalNewSessionDialog() {
     setCreatingChoice(null)
     setCreateError('')
     setOpen(true)
+    void syncOpenClawAgentsIntoLibrary().catch(() => undefined)
   }
 
   useEffect(() => {

@@ -677,7 +677,7 @@ export default function SessionList({
         <nav className={cn('space-y-1 px-3 pt-3', activeTab !== 'abilities' && 'hidden')}>
           <NavItem
             icon={Blocks}
-            label="能力中心"
+            label="能力商店"
             strong
             active={location.pathname === '/abilities'}
             onClick={() => navigate('/abilities')}
@@ -1341,6 +1341,7 @@ export default function SessionList({
                         }
                         void openAgentSession(agent)
                       }}
+                      data-testid={`agent-row-${agent.id}`}
                       disabled={!isAgentConfigRoute && opening}
                       className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-left disabled:opacity-60"
                     >
@@ -1594,6 +1595,7 @@ function DockButton({
   return (
     <button
       type="button"
+      data-testid={label === 'Agent' ? 'sidebar-dock-agents' : undefined}
       onClick={onClick}
       className={cn(
         'relative grid h-10 w-10 place-items-center rounded-xl transition',

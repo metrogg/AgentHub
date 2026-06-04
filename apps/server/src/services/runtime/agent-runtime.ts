@@ -1,4 +1,5 @@
 import type { AgentArtifact } from '@agenthub/db'
+import type { CodeAgentType } from '@agenthub/shared'
 
 export interface AgentProfile {
   id: string
@@ -10,7 +11,8 @@ export interface AgentProfile {
   color?: string
   modelId?: string | null
   runtimeType: 'llm' | 'code-agent'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini'
+  codeAgentType?: CodeAgentType
+  roleProfile?: Record<string, unknown> | null
   a2aEndpoint?: string | null
   capabilityTags: string[]
   skillIds?: string[]

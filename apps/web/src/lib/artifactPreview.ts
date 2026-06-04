@@ -1,3 +1,5 @@
+import type { AgentArtifact } from './apiTypes'
+
 export const artifactPreviewEvent = 'agenthub:artifact-preview'
 export const previewPanelWidthStorageKey = 'agenthub:preview-panel-width'
 export const defaultPreviewPanelWidth = 560
@@ -14,6 +16,100 @@ export type ArtifactPreviewItem = {
   source?: string
   /** Used to build workspace-backed HTML preview URLs. */
   workspaceId?: string
+}
+
+type FileArtifactStatus =
+  | Extract<AgentArtifact, { type: 'file' }>['status']
+  | Extract<AgentArtifact, { type: 'diff' }>['status']
+
+export interface AgentArtifactPreviewOptions {
+  deployStatusLabel?: (status: Extract<AgentArtifact, { type: 'deploy' }>['status']) => string
+  fileStatusLabel?: (status: NonNullable<FileArtifactStatus>) => string
+  formatBytes?: (value: number) => string
+  previewKindName?: (kind: Extract<AgentArtifact, { type: 'preview' }>['previewKind']) => string
+}
+
+export function previewItemFromAgentArtifact(
+  artifact: AgentArtifact,
+  options: AgentArtifactPreviewOptions = {},
+): ArtifactPreviewItem {
+  if (artifact.type === 'preview') {
+    return {
+      id: artifact.id,
+      description: artifact.description,
+      kind: 'web',
+      source: artifact.source,
+      subtitle: options.previewKindName?.(artifact.previewKind) ?? artifact.previewKind,
+      title: artifact.title,
+      url: artifact.url,
+    }
+  }
+
+  if (artifact.type === 'deploy') {
+    const statusLabel = options.deployStatusLabel?.(artifact.status) ?? artifact.status
+    return {
+      id: artifact.id,
+      description: artifact.description ?? artifact.logs,
+      kind: 'deploy',
+      source: artifact.source,
+      subtitle: `${artifact.provider} · ${statusLabel}`,
+      title: artifact.title,
+      url: artifact.url,
+    }
+  }
+
+  if (artifact.type === 'diff') {
+    const status = artifact.status ?? 'modified'
+    return {
+      id: artifact.id,
+      description: artifact.description,
+      kind: 'diff',
+      path: artifact.filePath,
+      source: artifact.diff,
+      subtitle: `${options.fileStatusLabel?.(status) ?? status} · Diff`,
+      title: artifact.title || artifact.filePath,
+    }
+  }
+
+  if (artifact.type === 'workflow') {
+    return {
+      id: artifact.id,
+      description: artifact.description,
+      kind: 'workflow',
+      source: artifact.source,
+      subtitle: `${artifact.nodes.length} nodes · ${artifact.edges.length} edges`,
+      title: artifact.title,
+    }
+  }
+
+  const ext = artifact.path.split('.').pop()?.toLowerCase()
+  const isHtml = ext === 'html' || ext === 'htm'
+  const status = artifact.status ?? 'created'
+  const subtitle =
+    [artifact.mimeType, artifact.size ? options.formatBytes?.(artifact.size) ?? String(artifact.size) : null]
+      .filter(Boolean)
+      .join(' · ') || options.fileStatusLabel?.(status) || status
+
+  return {
+    id: artifact.id,
+    description: artifact.description,
+    kind: isHtml ? 'web' : filePreviewKindFromAgentArtifact(artifact),
+    mimeType: artifact.mimeType,
+    path: artifact.path,
+    source: artifact.source,
+    subtitle,
+    title: artifact.title || fileNameFromPath(artifact.path) || artifact.path,
+    url: isHtml
+      ? `/api/artifacts/preview-file?path=${encodeURIComponent(artifact.path)}`
+      : undefined,
+  }
+}
+
+function filePreviewKindFromAgentArtifact(
+  artifact: Extract<AgentArtifact, { type: 'file' }>,
+): ArtifactPreviewItem['kind'] {
+  if (artifact.mimeType?.startsWith('image/')) return 'image'
+  return 'file'
 }
 
 export function requestArtifactPreview(item: ArtifactPreviewItem) {

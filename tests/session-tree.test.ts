@@ -138,4 +138,73 @@ describe('session tree', () => {
     expect(byParentId.get('group-a')?.map((child) => child.id)).toEqual([])
     expect(byParentId.get('group-b')?.map((child) => child.id)).toEqual(['thread-session-1'])
   })
+
+  test('keeps metadata.kind boundaries between groups, agent direct chats and task children', () => {
+    const group = session({
+      id: 'group-1',
+      title: 'Product launch',
+      type: SessionType.Group,
+      workspaceId: 'workspace-1',
+      updatedAt: '2026-06-03T00:00:03.000Z',
+    })
+    const agentDirect = session({
+      id: 'agent-direct-1',
+      title: 'Frontend Expert',
+      type: SessionType.Direct,
+      workspaceId: 'workspace-1',
+      workspaceAgentId: 'agent-1',
+      metadata: {
+        kind: 'agent-direct',
+        savedAgentId: 'saved-agent-1',
+      },
+      updatedAt: '2026-06-03T00:00:02.000Z',
+    })
+    const taskChild = session({
+      id: 'task-child-1',
+      title: 'Product launch / Build landing page',
+      type: SessionType.Direct,
+      workspaceId: 'workspace-1',
+      workspaceAgentId: 'agent-1',
+      metadata: {
+        kind: 'orchestrator-task',
+        groupSessionId: 'group-1',
+        orchestratorRunId: 'run-1',
+        orchestratorTaskId: 'task-1',
+        taskThreadId: 'thread-1',
+      },
+      updatedAt: '2026-06-03T00:00:01.000Z',
+    })
+    const legacyWorkspaceDirect = session({
+      id: 'legacy-workspace-direct',
+      title: 'Old workspace child',
+      type: SessionType.Direct,
+      workspaceId: 'workspace-1',
+      workspaceAgentId: 'agent-1',
+      metadata: {
+        kind: 'workspace-agent-child',
+      },
+    })
+    const incompleteTask = session({
+      id: 'incomplete-task',
+      title: 'Incomplete task',
+      type: SessionType.Direct,
+      workspaceId: 'workspace-1',
+      workspaceAgentId: 'agent-1',
+      metadata: {
+        kind: 'orchestrator-task',
+        groupSessionId: 'group-1',
+        orchestratorRunId: 'run-1',
+      },
+    })
+
+    const tree = buildSessionTree([legacyWorkspaceDirect, incompleteTask, taskChild, agentDirect, group])
+
+    expect(tree.map((item) => item.parent.id)).toEqual(['group-1', 'agent-direct-1'])
+    expect(tree.find((item) => item.parent.id === 'group-1')?.children.map((child) => child.id)).toEqual([
+      'task-child-1',
+    ])
+    expect(tree.find((item) => item.parent.id === 'agent-direct-1')?.children).toEqual([])
+    expect(tree.some((item) => item.parent.id === 'legacy-workspace-direct')).toBe(false)
+    expect(tree.some((item) => item.parent.id === 'incomplete-task')).toBe(false)
+  })
 })

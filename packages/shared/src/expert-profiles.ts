@@ -1,4 +1,5 @@
 import type { AgentRoleType } from './agent-role-presets'
+import type { CodeAgentType } from './enums'
 
 export const EXPERT_CATEGORIES = [
   'coordination',
@@ -25,7 +26,7 @@ export interface AgentExpertProfile {
   systemPrompt: string
   color: string
   runtimeType: 'llm' | 'code-agent'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  codeAgentType?: CodeAgentType | null
   capabilityTags: string[]
   defaultSkillIds: string[]
   recommendedMcpServers: string[]

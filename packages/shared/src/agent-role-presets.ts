@@ -1,3 +1,5 @@
+import type { CodeAgentType } from './enums'
+
 export const AGENT_ROLE_TYPES = [
   'orchestrator',
   'clarifier',
@@ -40,7 +42,7 @@ export interface AgentRolePreset {
   systemPrompt: string
   color: string
   runtimeType: 'llm' | 'code-agent'
-  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  codeAgentType?: CodeAgentType | null
   capabilityTags: string[]
   toolPermissions: string[]
   sandboxPolicy: 'workspace-write' | 'danger-full-access'

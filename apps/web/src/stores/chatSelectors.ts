@@ -1,10 +1,7 @@
 import { useMemo } from 'react'
 import { shallow } from 'zustand/shallow'
-import {
-  buildHeaderAgentStatusProjection,
-  useChatStore,
-  type ChatState,
-} from './chatStore'
+import { buildHeaderAgentStatusProjection } from '../lib/runtimeStatusProjection'
+import { useChatStore, type ChatState } from './chatStore'
 
 const emptyMessages: ChatState['messages'] = []
 const messageByIdCache = new WeakMap<

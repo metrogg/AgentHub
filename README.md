@@ -63,7 +63,7 @@ AgentHub 当前不会把以下旧路径当作主线：
 - 运行控制面：RunController、ManagerLoop、WorkerController、RuntimeLease、Worker 心跳和 idle-stop。
 - 事件与审计：RunEvent replay API、execution logs、AG-UI 前端状态投影。
 - 产物系统：ArtifactStore、产物卡、静态预览、文件和 diff 相关操作。
-- 能力中心：Skills 市场、能力审计页、MCP / Rules / CLI / 沙箱 / 上下文策略入口。
+- 能力商店：已安装 / 已配置能力的可审计能力库；Skills 市场：远程发现和安装 SkillHub 能力的入口。
 - 多端入口：Web、Tauri Desktop、Android 移动端。
 
 部分能力仍在快速迭代中，尤其是 HiClaw-lite 内核迁移、Room / TimelineEvent 一等资源化、远程 A2A、Trace / Eval、移动端完整体验和更强的产物预览。

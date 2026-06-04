@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CODE_AGENT_TYPES } from '../enums'
 
 /**
  * CodeAgent 运行元数据。
@@ -7,7 +8,7 @@ import { z } from 'zod'
 export const codeAgentRunMetadataSchema = z.object({
   type: z.literal('code-agent-run'),
   status: z.enum(['running', 'completed', 'failed', 'cancelled', 'timed-out']),
-  runtime: z.enum(['codex', 'claude-code', 'opencode', 'gemini']),
+  runtime: z.enum(CODE_AGENT_TYPES),
   command: z.string(),
   cwd: z.string().optional(),
   durationMs: z.number(),

@@ -1,4 +1,5 @@
 import type { AgentRunProfile } from '../agent-runner'
+import { CODE_AGENT_TYPES } from '@agenthub/shared'
 
 /**
  * 最小化的 Agent DB 行类型，兼容 workspaceAgents.$inferSelect 和 planner 生成的 agent 对象。
@@ -60,6 +61,7 @@ export function buildAgentProfile(
     modelId: agent.modelId ?? null,
     runtimeType: normalizeRuntimeType(agent.runtimeType),
     codeAgentType: normalizeCodeAgentType(agent),
+    roleProfile: agent.roleProfile ?? null,
     a2aEndpoint: resolveA2AEndpoint(agent),
     capabilityTags: agent.capabilityTags ?? [],
     skillIds: agent.skillIds ?? [],
@@ -89,14 +91,7 @@ function normalizeRuntimeType(value?: string | null): AgentRunProfile['runtimeTy
 
 function normalizeCodeAgentType(agent: AgentRow): AgentRunProfile['codeAgentType'] {
   if (normalizeRuntimeType(agent.runtimeType) !== 'code-agent') return undefined
-  if (
-    agent.codeAgentType === 'codex' ||
-    agent.codeAgentType === 'claude-code' ||
-    agent.codeAgentType === 'opencode' ||
-    agent.codeAgentType === 'gemini'
-  ) {
-    return agent.codeAgentType
-  }
+  if (CODE_AGENT_TYPES.includes(agent.codeAgentType as any)) return agent.codeAgentType as any
   return 'codex'
 }
 

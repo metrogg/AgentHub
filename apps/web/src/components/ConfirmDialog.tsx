@@ -155,6 +155,7 @@ export function GlobalConfirmDialog() {
           <button
             type="button"
             onClick={() => settle(true)}
+            data-testid="confirm-dialog-confirm"
             className={cn(
               'inline-flex h-10 items-center justify-center gap-2 rounded-xl text-sm font-medium text-white transition',
               tone === 'danger'

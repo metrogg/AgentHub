@@ -5,7 +5,7 @@ import {
   type AppendMessage,
   type ThreadMessageLike,
 } from '@assistant-ui/react'
-import { describeRuntimeActivity } from '../stores/chatStore'
+import { describeRuntimeActivity } from './runtimeStatusProjection'
 import { selectRuntimeState, useChatStoreShallow } from '../stores/chatSelectors'
 import type { AgentArtifact, ChatAttachment, Message } from './api'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
@@ -227,7 +227,8 @@ function readAgentAvatarPart(
     runtime !== 'codex' &&
     runtime !== 'claude-code' &&
     runtime !== 'opencode' &&
-    runtime !== 'gemini'
+    runtime !== 'gemini' &&
+    runtime !== 'openclaw'
   )
     return []
   return [{ type: 'data' as const, name: 'agent_avatar', data: { runtime } }]

@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { Hono } from 'hono'
 import { inArray } from 'drizzle-orm'
 import { db, sessions, messages, workspaces, workspaceAgents, workspaceTasks, orchestratorRuns, settings, users, eq, and, desc, asc } from '@agenthub/db'
+import { CODE_AGENT_TYPES } from '@agenthub/shared'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { env } from '../env'
 import { getRuntimeServerPort } from '../lib/runtime-server'
@@ -834,8 +835,7 @@ function normalizeRuntimeType(value?: string | null) {
 }
 
 function normalizeCodeAgentType(value?: string | null) {
-  const allowed = ['codex', 'claude-code', 'opencode', 'gemini']
-  return allowed.includes(value ?? '') ? value! as any : null
+  return CODE_AGENT_TYPES.includes(value as any) ? value! as any : null
 }
 
 function normalizeSandboxPolicy(value?: string | null) {

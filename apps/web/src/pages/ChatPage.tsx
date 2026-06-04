@@ -596,6 +596,7 @@ function Welcome() {
             )}
             <textarea
               ref={messageInputRef}
+              data-testid="welcome-composer-input"
               value={message}
               onChange={handleMessageChange}
               onKeyDown={(event) => {
@@ -674,6 +675,7 @@ function Welcome() {
               <div className="flex items-center gap-2">
                 <button
                   type="submit"
+                  data-testid="welcome-composer-send"
                   disabled={!message.trim() || submitting}
                   className="grid h-9 w-9 place-items-center rounded-full bg-neutral-900 text-white disabled:bg-neutral-200"
                 >

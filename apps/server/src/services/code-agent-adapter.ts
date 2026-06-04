@@ -37,6 +37,7 @@ import {
   validateEnvelope,
   buildExecutionCwd,
 } from './execution/agent-execution-envelope'
+import { buildOpenClawArgs, extractOpenClawResultMessage } from './openclaw-adapter'
 
 type CodeAgentType = NonNullable<AgentRunProfile['codeAgentType']>
 
@@ -55,6 +56,7 @@ interface CodeAgentRunOptions {
   modelProvider?: string | null
   nativeOpenCodeRef?: boolean
   agentRoleType?: string
+  roleProfile?: Record<string, unknown> | null
   outputPath?: string
   sandboxPolicy?: AgentRunProfile['sandboxPolicy']
   toolConfig?: Record<string, unknown>
@@ -86,6 +88,7 @@ interface CodeAgentCommandResult {
 interface CodeAgentRuntimeOptions {
   ignoreModelEnv?: boolean
   skipLocalCodexConfig?: boolean
+  roleProfile?: Record<string, unknown> | null
   sandboxEnv?: Record<string, string>
   sandboxConfigDir?: string
   sandboxTempDir?: string
@@ -281,6 +284,15 @@ const adapters: Record<CodeAgentType, CodeAgentAdapter> = {
       return args
     },
   },
+  openclaw: {
+    command: 'openclaw',
+    displayName: 'OpenClaw',
+    envKey: 'AGENTHUB_MODEL_API_KEY',
+    docsHint:
+      'OpenClaw uses the local OpenClaw agent identity and config. AgentHub passes --agent and --message to the OpenClaw CLI.',
+    promptMode: 'file',
+    buildArgs: buildOpenClawArgs,
+  },
 }
 
 export const __codeAgentAdapterTestHooks = {
@@ -288,8 +300,11 @@ export const __codeAgentAdapterTestHooks = {
     adapters['claude-code'].buildArgs(prompt, options),
   buildOpencodeArgs: (prompt: string, options?: CodeAgentRunOptions) =>
     adapters.opencode.buildArgs(prompt, options),
+  buildOpenClawArgs: (prompt: string, options?: CodeAgentRunOptions) =>
+    adapters.openclaw.buildArgs(prompt, options),
   consumeClaudeStreamJson,
   extractClaudeResultMessage,
+  extractOpenClawResultMessage,
   isOpenCodeNativeModelRef,
   formatModelTargetLabel,
   createNativeOpenCodeModelTarget,
@@ -328,8 +343,8 @@ export async function inspectCodeAgentRuntime(
   }
 
   const toolConfig = await resolveToolConfig(type)
-  const requestedModelId = resolveCodeAgentModelId(profile.modelId, toolConfig)
-  let modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+  const requestedModelId = type === 'openclaw' ? null : resolveCodeAgentModelId(profile.modelId, toolConfig)
+  let modelTarget = type === 'openclaw' ? null : await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
   const nativeOpenCodeModelRef =
     !modelTarget && type === 'opencode' && isOpenCodeNativeModelRef(requestedModelId)
       ? requestedModelId
@@ -430,8 +445,8 @@ export async function* streamCodeAgentReply(
   )
   const prompt = buildCodeAgentPrompt(profile, userMsg, history, cwdInfo.label, skillContext, envelope)
   const toolConfig = await resolveToolConfig(type)
-  const requestedModelId = resolveCodeAgentModelId(profile.modelId, toolConfig)
-  let modelTarget = await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
+  const requestedModelId = type === 'openclaw' ? null : resolveCodeAgentModelId(profile.modelId, toolConfig)
+  let modelTarget = type === 'openclaw' ? null : await resolveCodeAgentModelTarget(type, profile.modelId, toolConfig)
   const nativeOpenCodeModelRef =
     !modelTarget && type === 'opencode' && isOpenCodeNativeModelRef(requestedModelId)
       ? requestedModelId
@@ -448,7 +463,7 @@ export async function* streamCodeAgentReply(
     modelTarget = await resolveRuntimeModelTarget(requestedModelId)
   }
   // 直接使用用户配置的 agent 类型，不因模型 provider 不匹配而静默切换到 OpenCode
-  let runtimeModelTarget = modelTarget ?? null
+  let runtimeModelTarget = type === 'openclaw' ? null : (modelTarget ?? null)
   let installed = await isCommandInstalled(adapter.command)
   let ignoreModelEnv = false
   let skipLocalCodexConfig = false
@@ -521,6 +536,7 @@ export async function* streamCodeAgentReply(
     {
       ignoreModelEnv,
       skipLocalCodexConfig,
+      roleProfile: profile.roleProfile ?? null,
       sandboxEnv: envelope?.sandboxEnv,
       sandboxConfigDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_CONFIG,
       sandboxTempDir: envelope?.sandboxEnv?.AGENTHUB_SANDBOX_TMP,
@@ -769,6 +785,7 @@ async function isRuntimeConfigured(
 ) {
   if (modelTarget?.apiKey) return true
   if (readEnv(adapter.envKey)) return true
+  if (type === 'openclaw') return true
   if (type === 'opencode' && !env.ENABLE_LOCAL_CLI_PROBES) return false
   if (type === 'codex' && !modelId) return true
 
@@ -1008,6 +1025,7 @@ async function runCodeAgentCommand(
     modelId: modelTarget?.modelId,
     modelProvider: modelTarget?.providerKey,
     nativeOpenCodeRef: Boolean(modelTarget?.nativeOpenCodeRef),
+    roleProfile: runtimeOptions.roleProfile,
     outputPath: outputPathRuntime,
     sandboxPolicy,
     toolConfig,
@@ -1342,6 +1360,7 @@ async function runCodeAgentCommand(
     outputFileMessage ||
       claudeFinalMessage.trim() ||
       parsed.finalMessage ||
+      extractOpenClawResultMessage(parsed.output) ||
       extractClaudeResultMessage(parsed.output) ||
       extractCodexAssistantMessage(parsed.output) ||
       '',
@@ -1387,8 +1406,9 @@ function buildFileBackedPrompt(promptFile?: string) {
   return [
     'Read the attached prompt file and follow it exactly.',
     `The attached file is ${fileName}.`,
+    promptFile ? `Prompt file path: ${promptFile}.` : '',
     'Use it as the full task specification and conversation context.',
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 }
 
 function writeCodeAgentPromptFile(command: string, prompt: string, tempRoot = tmpdir()) {

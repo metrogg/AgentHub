@@ -645,5 +645,6 @@ function resolveDockerSandboxAgent(spec: SandboxSpec) {
   if (codeAgentType === 'claude-code' || codeAgentType === 'claude') return 'claude'
   if (codeAgentType === 'opencode') return 'opencode'
   if (codeAgentType === 'gemini') return 'gemini'
+  if (codeAgentType === 'openclaw') return 'openclaw'
   return 'codex'
 }

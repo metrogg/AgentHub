@@ -1464,7 +1464,7 @@ function LocalAgentRuntimePanel({
             {t('本地 Agent Runtime')}
           </div>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-neutral-500">
-            {t('用于扫描 OpenClaw 这类本地 Manager / Coordinator 候选。它不会进入普通 Coding Tools 执行器下拉，也不会静默启动本地进程。')}
+            {t('用于扫描 OpenClaw 这类本地 Coding Tools Worker。已存在的 OpenClaw Agent 会同步到 Agent 列表，执行时由 OpenClaw CLI 承接。')}
           </p>
         </div>
         <button
@@ -1556,7 +1556,7 @@ function LocalAgentRuntimePanel({
             <Stat value={registeredCount} label="已添加" />
           </div>
           <div className="mt-3 rounded-md bg-white px-3 py-2 text-xs leading-5 text-neutral-600">
-            {message || t('OpenClaw 将作为 CoordinatorRuntime 候选登记。')}
+            {message || t('OpenClaw 可作为本地 Coding Tools Worker 登记，并由 Agent 配置页选择具体 OpenClaw Agent。')}
           </div>
           {scanningEnabled === false && (
             <div className="mt-2 rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">

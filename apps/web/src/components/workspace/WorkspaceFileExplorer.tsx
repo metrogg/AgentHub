@@ -233,6 +233,7 @@ export const WorkspaceFileExplorer: FC<{
                     key={entry.path || entry.name}
                     type="button"
                     onClick={() => handleOpenEntry(entry)}
+                    data-testid={`workspace-file-row-${entry.path || entry.name}`}
                     className={cn(
                       'group flex min-h-8 w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition hover:bg-neutral-50',
                       preview?.path === entry.path && 'bg-neutral-50',
@@ -287,6 +288,7 @@ export const WorkspaceFileExplorer: FC<{
                 <button
                   type="button"
                   onClick={openSelectedFileInPreview}
+                  data-testid="workspace-file-open-preview"
                   className="text-[11px] text-neutral-500 transition hover:text-neutral-900"
                 >
                   展开

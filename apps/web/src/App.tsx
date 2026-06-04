@@ -17,7 +17,7 @@ import ExecutionLogsPage from './pages/ExecutionLogsPage'
 import { WorkspaceChatPage } from './pages/WorkspaceChatPage'
 import { api } from './lib/api'
 import { cacheAccountProfileFromSettingsValue } from './lib/accountProfile'
-import { reconcileAgentLibraryWithServer } from './lib/agentLibrary'
+import { reconcileAgentLibraryWithServer, syncOpenClawAgentsIntoLibrary } from './lib/agentLibrary'
 import { applyAppearanceSettings, type AppearanceSettings } from './lib/appearance'
 import { openWorkspaceFolderAsSession, useAppActions } from './lib/app-actions'
 import { ensureCodingToolsStartupLifecycle } from './lib/codingToolsLifecycle'
@@ -89,7 +89,9 @@ function AppShell() {
             applyAppearanceSettings(defaultAppearanceSettings)
           }
         }
-        return reconcileAgentLibraryWithServer(settings)
+        return reconcileAgentLibraryWithServer(settings).then(() =>
+          syncOpenClawAgentsIntoLibrary().catch(() => undefined),
+        )
       })
       .catch(() => undefined)
   }, [])

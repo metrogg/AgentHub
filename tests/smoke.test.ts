@@ -1118,12 +1118,13 @@ describe('AgentHub smoke tests', () => {
     expect(catalog.items.find((item) => item.id === 'codex')?.command).toBe('codex')
   })
 
-  test('local agent runtime catalog keeps OpenClaw as a coordinator candidate', async () => {
+  test('local agent runtime catalog exposes OpenClaw as an available worker runtime', async () => {
     const catalog = await json<{
       localCliProbesEnabled: boolean
       items: Array<{
         id: string
         command: string
+        installed: boolean
         runtimeFamily: string
         runtimeBase: string
         adapterStatus: string
@@ -1133,9 +1134,9 @@ describe('AgentHub smoke tests', () => {
 
     const openclaw = catalog.items.find((item) => item.id === 'openclaw')
     expect(openclaw?.command).toBe('openclaw')
-    expect(openclaw?.runtimeFamily).toBe('coordinator')
+    expect(openclaw?.runtimeFamily).toBe('worker')
     expect(openclaw?.runtimeBase).toBe('openclaw')
-    expect(openclaw?.adapterStatus).toBe('candidate')
+    expect(openclaw?.adapterStatus).toBe('available')
 
     const added = await json<{
       binding: { id: string; runtimeFamily: string; runtimeBase: string; enabled: boolean }
@@ -1149,9 +1150,9 @@ describe('AgentHub smoke tests', () => {
     )
 
     expect(added.binding.id).toBe('openclaw')
-    expect(added.binding.runtimeFamily).toBe('coordinator')
+    expect(added.binding.runtimeFamily).toBe('worker')
     expect(added.binding.runtimeBase).toBe('openclaw')
-    expect(added.binding.enabled).toBe(false)
+    expect(added.binding.enabled).toBe(Boolean(openclaw?.installed))
     expect(added.catalog.items.find((item) => item.id === 'openclaw')?.registered).toBe(true)
   })
 
