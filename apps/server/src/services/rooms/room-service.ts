@@ -165,10 +165,8 @@ export const roomService = new RoomService()
 
 function createDefaultRoomAdapter(): RoomAdapter {
   const configured = process.env.AGENTHUB_ROOM_PROVIDER?.trim()
-  if (configured === 'local-matrix-compatible') return new LocalMatrixCompatibleRoomAdapter()
   if (configured === 'matrix') return new MatrixRoomAdapter()
-  if (process.env.NODE_ENV === 'test') return new LocalMatrixCompatibleRoomAdapter()
-  return new MatrixRoomAdapter()
+  return new LocalMatrixCompatibleRoomAdapter()
 }
 
 function timelineBroadcastSessionIds(room: Awaited<ReturnType<RoomAdapter['getRoom']>>) {
