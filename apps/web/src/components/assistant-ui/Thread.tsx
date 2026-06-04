@@ -4,6 +4,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useAuiState,
   useMessage,
   useThread,
   type EmptyMessagePartComponent,
@@ -437,7 +438,10 @@ export const Thread: FC = () => {
             className="agenthub-thread-viewport flex-1 overflow-y-auto overscroll-contain scroll-auto px-6"
           >
             <ThreadWelcome />
-            <VirtualThreadMessages scrollRef={threadViewportRef} />
+            <VirtualThreadMessages
+              key={currentSession?.id ?? 'no-session'}
+              scrollRef={threadViewportRef}
+            />
             <ThreadPrimitive.If empty={false}>
               <div className="min-h-28" />
             </ThreadPrimitive.If>
@@ -571,13 +575,22 @@ const VirtualThreadMessages: FC<{ scrollRef: RefObject<HTMLDivElement> }> = ({ s
       estimateSize={(index) => estimateThreadMessageHeight(sourceMessages[index])}
       overscanPx={1600}
       renderItem={(index) => (
-        <ThreadPrimitive.MessageByIndex
+        <SafeThreadMessageByIndex
           index={index}
           components={components}
         />
       )}
     />
   )
+}
+
+const SafeThreadMessageByIndex: FC<{
+  components: ComponentPropsWithoutRef<typeof ThreadPrimitive.MessageByIndex>['components']
+  index: number
+}> = ({ components, index }) => {
+  const liveMessageCount = useAuiState((state) => state.thread.messages.length)
+  if (index < 0 || index >= liveMessageCount) return null
+  return <ThreadPrimitive.MessageByIndex index={index} components={components} />
 }
 
 function estimateThreadMessageHeight(message?: Message) {
