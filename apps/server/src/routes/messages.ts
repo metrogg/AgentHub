@@ -44,7 +44,6 @@ import {
   stepTaskRoomAfterHumanMessage,
 } from '../services/rooms/room-chat-bridge'
 import { listSessionMessagesRoomFirst } from '../services/rooms/timeline-message-projection'
-import { dispatchCoordinatorAssignBatch } from '../services/coordinator-runtime/assign-dispatcher'
 import type { CoordinatorAction } from '../services/coordinator-runtime'
 import type { DispatchMonitor } from '../services/coordinator-runtime/planning-dispatcher'
 import {
@@ -372,7 +371,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     await db.delete(messages).where(eq(messages.id, message.id))
     const { cancelAgentReply } = await import('../services/agent-runner')
     cancelAgentReply(sessionId)
-    if (session.type === 'group' && session.workspaceId) {
+    if (session.type === 'group') {
       stepCoordinatorForGroupMessage({
         session,
         userId: user.sub,
@@ -417,64 +416,56 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     // Trigger agent reply asynchronously (do not await to keep response fast).
     if (msg && !metadata?.skipAgentReply) {
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-      if (session?.type === 'group' && session.workspaceId) {
-        const agentRows = await db
-          .select()
-          .from(workspaceAgents)
-          .where(eq(workspaceAgents.workspaceId, session.workspaceId))
-          .orderBy(asc(workspaceAgents.orderIdx))
-        const mentionedAgents = resolveMentionedAgents(mentions, agentRows)
-        if (mentionedAgents.length > 0) {
-          routeGroupMessageToMentionedAgents({
-            sessionId,
-            session,
-            message: msg,
-            metadata: nextMetadata,
-            mentionedAgents,
-            ownerId: user.sub,
-            userName: user.username,
-          }).catch((err: any) =>
-            logger.error({ err: err?.message, sessionId }, 'Group mention routing failed'),
-          )
-          return c.json(msg)
-        }
+      if (session?.type === 'group') {
+        if (session.workspaceId) {
+          const agentRows = await db
+            .select()
+            .from(workspaceAgents)
+            .where(eq(workspaceAgents.workspaceId, session.workspaceId))
+            .orderBy(asc(workspaceAgents.orderIdx))
+          const mentionedAgents = resolveMentionedAgents(mentions, agentRows)
+          // Mention 信息已通过 Room timeline 传递（nextMetadata.mentions），由 ManagerRuntime 统一决策
+          if (mentionedAgents.length > 0) {
+            logger.info({ sessionId, mentionedAgentIds: mentionedAgents.map((a) => a.id) }, 'Group mention detected; delegating to ManagerRuntime')
+          }
 
-        const activeTaskContext = await loadActiveTaskContext(sessionId)
-        const repliedToMessage = msg.replyToMessageId
-          ? ((await db.select().from(messages).where(eq(messages.id, msg.replyToMessageId)).limit(1))[0] as
-              | MessageRow
-              | undefined)
-          : undefined
-        const directWorkerTarget = chooseDirectWorkerReplyTarget({
-          sourceMessage: msg,
-          repliedToMessage,
-          activeTaskContext,
-          agentRows,
-        })
-        if (directWorkerTarget) {
-          const routedToTaskRoom = await routeGroupReplyToWorkerTaskRoom({
-            groupSessionId: sessionId,
-            message: msg,
-            userId: user.sub,
-            userName: user.username,
-            targetWorker: directWorkerTarget,
+          const activeTaskContext = await loadActiveTaskContext(sessionId)
+          const repliedToMessage = msg.replyToMessageId
+            ? ((await db.select().from(messages).where(eq(messages.id, msg.replyToMessageId)).limit(1))[0] as
+                | MessageRow
+                | undefined)
+            : undefined
+          const directWorkerTarget = chooseDirectWorkerReplyTarget({
+            sourceMessage: msg,
+            repliedToMessage,
             activeTaskContext,
+            agentRows,
           })
-          if (routedToTaskRoom) return c.json(msg)
-        }
+          if (directWorkerTarget) {
+            const routedToTaskRoom = await routeGroupReplyToWorkerTaskRoom({
+              groupSessionId: sessionId,
+              message: msg,
+              userId: user.sub,
+              userName: user.username,
+              targetWorker: directWorkerTarget,
+              activeTaskContext,
+            })
+            if (routedToTaskRoom) return c.json(msg)
+          }
 
-        const orchestrator = agentRows.find((agent) => agent.roleType === 'orchestrator')
-        if (orchestrator) {
-          const attachedToActiveRun = await handleHumanInterruptForActiveRun({
-            groupSessionId: sessionId,
-            workspaceId: session.workspaceId,
-            ownerId: user.sub,
-            content,
-            userMessageId: msg.id,
-            orchestrator,
-          })
-          if (attachedToActiveRun) {
-            return c.json(msg)
+          const orchestrator = agentRows.find((agent) => agent.roleType === 'orchestrator')
+          if (orchestrator) {
+            const attachedToActiveRun = await handleHumanInterruptForActiveRun({
+              groupSessionId: sessionId,
+              workspaceId: session.workspaceId,
+              ownerId: user.sub,
+              content,
+              userMessageId: msg.id,
+              orchestrator,
+            })
+            if (attachedToActiveRun) {
+              return c.json(msg)
+            }
           }
         }
 
@@ -1673,53 +1664,6 @@ function resolveMentionedAgents(
     resolved.push(agent)
   }
   return resolved
-}
-
-async function routeGroupMessageToMentionedAgents(params: {
-  sessionId: string
-  session: typeof sessions.$inferSelect
-  message: typeof messages.$inferSelect
-  metadata: Record<string, unknown> | null
-  mentionedAgents: typeof workspaceAgents.$inferSelect[]
-  ownerId: string
-  userName?: string | null
-}) {
-  const workerMentions = params.mentionedAgents.filter((agent) => agent.roleType !== 'orchestrator')
-  const managerMentions = params.mentionedAgents.filter((agent) => agent.roleType === 'orchestrator')
-  if (workerMentions.length > 0) {
-    await dispatchCoordinatorAssignBatch({
-      groupSession: params.session,
-      ownerId: params.ownerId,
-      sourceMessage: params.message,
-      runtimeType: 'matrix-user-mention',
-      executeInline: false,
-      actions: workerMentions.map((agent, index) => ({
-        type: 'assign',
-        targetWorkerId: agent.id,
-        taskKey: `user-mention-${index + 1}-${agent.id}`,
-        taskTitle: `用户 @${agent.name} 的请求`,
-        taskDescription: params.message.content,
-        message: `@${agent.name} ${params.message.content}`,
-        reason: `User explicitly mentioned ${agent.name} in the group room.`,
-        metadata: {
-          source: 'explicit-group-worker-mention',
-          sourceMessageId: params.message.id,
-          groupSessionId: params.sessionId,
-          mentionedAgentIds: params.mentionedAgents.map((mentioned) => mentioned.id),
-        },
-      })),
-    })
-    return
-  }
-
-  if (managerMentions.length > 0) {
-    await stepCoordinatorForGroupMessage({
-      session: params.session,
-      userId: params.ownerId,
-      userName: params.userName,
-      message: params.message,
-    })
-  }
 }
 
 async function profileForDirectSession(session: typeof sessions.$inferSelect) {
