@@ -7,6 +7,7 @@ import type { CoordinatorAction, CoordinatorActionType, CoordinatorRuntime } fro
 import type { WorkerRuntime } from '../worker-runtime'
 import { workerRuntimeService } from '../worker-runtime'
 import { roomService } from './room-service'
+import { getActiveManagerProvider } from '../manager-runtime'
 
 const MESSAGE_ACTION_TYPES = new Set<CoordinatorActionType>([
   'reply',
@@ -188,6 +189,23 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
     roomId: room.id,
     sourceMessageId: input.message.id,
   })
+
+  // If a resident Manager (OpenClaw/QwenPaw) is running, skip the local step call.
+  // The resident process observes the room via Matrix /sync autonomously.
+  const provider = getActiveManagerProvider()
+  if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
+    const status = await provider.status()
+    if (status.running || status.endpoint) {
+      return {
+        roomId: room.id,
+        consumed: true,
+        reason: `Resident Manager (${provider.runtimeType}) is active; message delivered to room timeline for autonomous processing.`,
+        actions: [],
+        mirroredMessageIds: [],
+      }
+    }
+  }
+
   const result = await coordinatorService.stepRoom({
     roomId: room.id,
     ownerId: input.session.ownerId,

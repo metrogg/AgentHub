@@ -11,6 +11,7 @@ import {
   runtimeLeases,
   sessions,
   taskThreads,
+  workerInstances,
   workspaceAgents,
   workspaces,
   workspaceTasks,
@@ -28,6 +29,7 @@ import { markWorkerInstanceState } from './worker-runtime-resources'
 import { readSharedTaskResult } from './shared-task-directory'
 import type { WorkerRuntime } from '../worker-runtime/types'
 import { buildCoordinatorResourceReviewSummary } from '../coordinator-runtime/final-review-skill'
+import { managerRuntimeService, getActiveManagerProvider } from '../manager-runtime'
 
 export interface ManagerDecisionEventContext {
   action: string
@@ -831,7 +833,7 @@ function stringValue(value: unknown): string | null {
  * ManagerLoop.step() brings this cycle to AgentHub as a discrete, callable unit.
  */
 export interface ManagerLoopStepResult {
-  action: 'dispatch_pending' | 'review_running' | 'synthesize' | 'waiting' | 'blocked' | 'completed'
+  action: 'dispatch_pending' | 'review_running' | 'synthesize' | 'waiting' | 'blocked' | 'completed' | 'llm_driven'
   reason: string
   dispatchedTaskIds: string[]
   reviewedTaskIds: string[]
@@ -1127,7 +1129,23 @@ export async function managerLoopStep(
 ): Promise<ManagerLoopStepResult> {
   const terminalStatuses = new Set(['done', 'failed', 'cancelled', 'skipped'])
 
-  // Observe: load current state
+  // ─── Skip if a resident Manager (OpenClaw/QwenPaw) is active ─────────
+  // Resident processes observe rooms via Matrix /sync autonomously.
+  const provider = getActiveManagerProvider()
+  if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
+    const status = await provider.status()
+    if (status.running || status.endpoint) {
+      return {
+        action: 'waiting',
+        reason: `Resident Manager (${provider.runtimeType}) is active; skipping local managerLoopStep.`,
+        dispatchedTaskIds: [],
+        reviewedTaskIds: [],
+        completedRun: false,
+      }
+    }
+  }
+
+  // ─── Observe: load current state ─────────────────────────────────────
   const [run] = await db
     .select()
     .from(orchestratorRuns)
@@ -1162,43 +1180,23 @@ export async function managerLoopStep(
 
   const threadByTaskId = new Map(threads.map((t) => [t.taskId, t]))
 
-  // Classify tasks
-  const pendingTasks = tasks.filter((t) => isDispatchablePendingTask(t))
-  const runningTasks = tasks.filter((t) => t.status === 'running')
+  // Load worker health for runState
+  const workerRows = await db
+    .select()
+    .from(workerInstances)
+    .where(eq(workerInstances.workspaceId, run.workspaceId))
+
+  const [workspace] = await db
+    .select({ ownerId: workspaces.ownerId })
+    .from(workspaces)
+    .where(eq(workspaces.id, run.workspaceId))
+    .limit(1)
+  const ownerId = workspace?.ownerId ?? null
+
+  // ─── Fallback: if all tasks terminal, synthesize immediately ─────────
   const terminalTasks = tasks.filter((t) => terminalStatuses.has(t.status))
-  const waitingForHumanTasks = tasks.filter(
-    (t) => t.status === 'blocked' && t.progressStatus === 'awaiting_human_clarification',
-  )
-  const totalTasks = tasks.length
-
-  // Think: determine action
-  // If all tasks are terminal, we should synthesize → complete
-  if (totalTasks > 0 && terminalTasks.length === totalTasks) {
-    const allDone = terminalTasks.every((t) => t.status === 'done')
-    const anyFailed = terminalTasks.some((t) => t.status === 'failed')
-    const review = await synthesizeCompletedRunFromResources({
-      ctx,
-      tasks: terminalTasks,
-      threads,
-    })
-
-    // Emit observation
-    await emitRunEvent({
-      runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
-      type: 'manager.next_action',
-      payload: {
-        action: 'review_outcomes',
-        reason: allDone
-          ? 'All tasks completed successfully. Manager is preparing the final summary.'
-          : anyFailed
-            ? 'Some tasks failed. Manager will report partial results.'
-            : 'All tasks have reached terminal state.',
-        completedTasks: terminalTasks.length,
-        failedTasks: terminalTasks.filter((t) => t.status === 'failed').length,
-        doneTasks: terminalTasks.filter((t) => t.status === 'done').length,
-      },
-    })
-
+  if (tasks.length > 0 && terminalTasks.length === tasks.length) {
+    const review = await synthesizeCompletedRunFromResources({ ctx, tasks: terminalTasks, threads })
     return {
       action: 'synthesize',
       reason: review.reason,
@@ -1208,104 +1206,207 @@ export async function managerLoopStep(
     }
   }
 
-  // If there are pending tasks that have no thread yet → dispatch them
-  if (pendingTasks.length > 0) {
-    const needsDispatch = pendingTasks.filter((t) => !threadByTaskId.has(t.id) || threadByTaskId.get(t.id)?.status === 'prepared')
-
-    if (needsDispatch.length > 0) {
-      await emitRunEvent({
-        runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
-        type: 'manager.next_action',
-        payload: {
-          action: 'dispatch_pending',
-          reason: `${needsDispatch.length} task(s) are pending dispatch. Manager is preparing to assign workers.`,
-          pendingTaskIds: needsDispatch.map((t) => t.id),
-          pendingTaskTitles: needsDispatch.map((t) => t.title),
-        },
-      })
-
-      // Post a visible status message in the group chat
-      await persistManagerLoopMessage({
-        sessionId: ctx.groupSessionId,
-        senderId: 'system',
-        senderType: 'system',
-        content: `当前还有 ${needsDispatch.length} 个任务等待分派：${needsDispatch.map((t) => t.title).join('、')}`,
-        metadata: {
-          kind: 'manager-loop-status',
-          systemEvent: 'manager_loop_dispatch_pending',
-          orchestratorRunId: runId,
-          pendingTaskIds: needsDispatch.map((t) => t.id),
-          coordinationSource: 'room-timeline',
-        },
-      })
-
-      const dispatchedTaskIds = await dispatchPreparedTaskRooms({
-        ctx,
-        tasks: needsDispatch,
-        threadByTaskId,
-        runtime: options.workerRuntime,
-        executeInline: options.executeInline ?? false,
-      })
-
-      return {
-        action: 'dispatch_pending',
-        reason:
-          dispatchedTaskIds.length > 0
-            ? `${dispatchedTaskIds.length} prepared task room(s) dispatched through WorkerRuntime`
-            : `${needsDispatch.length} pending task(s) need task rooms or workers before dispatch`,
-        dispatchedTaskIds,
-        reviewedTaskIds: [],
-        completedRun: false,
-      }
+  // Load workspace agent names for worker health
+  const workspaceAgentIds = workerRows.map((w) => w.workspaceAgentId).filter(Boolean) as string[]
+  const agentNames = new Map<string, string>()
+  if (workspaceAgentIds.length > 0) {
+    const agents = await db
+      .select({ id: workspaceAgents.id, name: workspaceAgents.name })
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.workspaceId, run.workspaceId))
+    for (const a of agents) {
+      agentNames.set(a.id, a.name)
     }
   }
 
-  // If there are running tasks → review them
-  if (runningTasks.length > 0) {
-    const reviewableTasks = runningTasks.filter((t) => {
-      const thread = threadByTaskId.get(t.id)
-      return thread && thread.status === 'active'
+  // ─── Build ManagerRunState for LLM ───────────────────────────────────
+  const runState = {
+    runId: run.id,
+    status: run.status,
+    goal: null as string | null,
+    tasks: tasks.map((t) => ({
+      taskId: t.id,
+      title: t.title,
+      status: t.status,
+      progressStatus: t.progressStatus ?? null,
+      assignedTo: t.agentId ?? null,
+    })),
+    workers: workerRows.map((w) => ({
+      workspaceAgentId: w.workspaceAgentId ?? w.id,
+      name: agentNames.get(w.workspaceAgentId) ?? w.workspaceAgentId ?? w.id,
+      observedState: w.observedState ?? 'unknown',
+      lastHeartbeatAt: w.lastHeartbeatAt ? new Date(w.lastHeartbeatAt).toISOString() : null,
+    })),
+  }
+
+  // ─── Find group room ─────────────────────────────────────────────────
+  if (!ownerId || !run.groupSessionId) {
+    return { action: 'blocked', reason: 'Missing ownerId or groupSessionId', dispatchedTaskIds: [], reviewedTaskIds: [], completedRun: false }
+  }
+  const groupRoom = await roomService.ensureRoomForSession(run.groupSessionId, ownerId)
+
+  // ─── Think: invoke ManagerRuntime ────────────────────────────────────
+  let stepResult: Awaited<ReturnType<typeof managerRuntimeService.stepRoom>>
+  try {
+    stepResult = await managerRuntimeService.stepRoom({
+      roomId: groupRoom.id,
+      ownerId,
+      source: 'manager-loop',
+      runState,
+      appendActions: true,
     })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    await emitRunEvent({
+      runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
+      type: 'manager.next_action', severity: 'error',
+      payload: { action: 'runtime_error', reason: message },
+    })
+    return { action: 'waiting', reason: `ManagerRuntime error: ${message}`, dispatchedTaskIds: [], reviewedTaskIds: [], completedRun: false }
+  }
 
-    if (reviewableTasks.length > 0) {
-      return {
-        action: 'review_running',
-        reason: `${reviewableTasks.length} task(s) are currently executing. Manager is supervising progress.`,
-        dispatchedTaskIds: [],
-        reviewedTaskIds: reviewableTasks.map((t) => t.id),
-        completedRun: false,
+  // ─── Act: execute returned actions ───────────────────────────────────
+  const dispatchedTaskIds: string[] = []
+  const reviewedTaskIds: string[] = []
+  let hasDispatched = false
+  let hasCancelled = false
+  let hasReworked = false
+
+  for (const action of stepResult.actions) {
+    switch (action.type) {
+      case 'assign': {
+        // Find pending task matching taskKey or taskTitle
+        const targetTask = tasks.find((t) =>
+          (action.taskKey && t.id === action.taskKey) ||
+          (action.taskTitle && t.title === action.taskTitle),
+        )
+        if (targetTask && isDispatchablePendingTask(targetTask)) {
+          const singleDispatched = await dispatchPreparedTaskRooms({
+            ctx, tasks: [targetTask], threadByTaskId,
+            runtime: options.workerRuntime,
+            executeInline: options.executeInline ?? false,
+          })
+          if (singleDispatched.length > 0) {
+            dispatchedTaskIds.push(...singleDispatched)
+            hasDispatched = true
+          }
+        }
+        break
       }
+      case 'rework': {
+        const targetTask = tasks.find((t) =>
+          (action.taskKey && t.id === action.taskKey) ||
+          (action.taskTitle && t.title === action.taskTitle),
+        )
+        if (targetTask) {
+          await db.update(workspaceTasks)
+            .set({ status: 'pending', progressStatus: 'rework_requested', updatedAt: new Date() })
+            .where(eq(workspaceTasks.id, targetTask.id))
+          const thread = threadByTaskId.get(targetTask.id)
+          if (thread) {
+            await updateTaskThreadStatus(thread.id, 'prepared')
+          }
+          await emitRunEvent({
+            runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
+            taskId: targetTask.id, threadId: thread?.id ?? null,
+            type: 'manager.next_action',
+            payload: { action: 'rework', reason: action.reason ?? 'Manager requested rework', taskId: targetTask.id },
+          })
+          hasReworked = true
+        }
+        break
+      }
+      case 'cancel_task': {
+        const targetTask = tasks.find((t) =>
+          (action.taskKey && t.id === action.taskKey) ||
+          (action.taskTitle && t.title === action.taskTitle),
+        )
+        if (targetTask) {
+          await db.update(workspaceTasks)
+            .set({ status: 'cancelled', updatedAt: new Date(), completedAt: new Date() })
+            .where(eq(workspaceTasks.id, targetTask.id))
+          const thread = threadByTaskId.get(targetTask.id)
+          if (thread?.workerInstanceId) {
+            await runtimeLeaseController.release(thread.workerInstanceId, { metadata: { reason: 'Manager cancelled task' } })
+          }
+          await emitRunEvent({
+            runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
+            taskId: targetTask.id, threadId: thread?.id ?? null,
+            type: 'task.cancelled',
+            payload: { reason: action.reason ?? 'Manager cancelled', taskId: targetTask.id },
+          })
+          hasCancelled = true
+        }
+        break
+      }
+      case 'create_worker': {
+        // Placeholder: emit event and let worker-controller handle actual creation
+        await emitRunEvent({
+          runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
+          type: 'manager.next_action',
+          payload: { action: 'create_worker', reason: action.reason ?? 'Manager requested new worker', message: action.message },
+        })
+        break
+      }
+      case 'reply':
+      case 'clarify':
+      case 'propose_members':
+      case 'wait':
+        // Already handled by stepRoom (timeline events written)
+        break
+      default:
+        break
     }
   }
 
-  // All tasks are in some intermediate state (prepared threads without running tasks)
-  // → Manager is waiting for the scheduler or external trigger
-  if (pendingTasks.length > 0) {
+  // Build result
+  const pendingTasks = tasks.filter((t) => isDispatchablePendingTask(t))
+  const runningTasks = tasks.filter((t) => t.status === 'running')
+
+  if (hasDispatched) {
     return {
-      action: 'waiting',
-      reason: `${pendingTasks.length} task(s) are queued. Waiting for scheduler or external trigger.`,
-      dispatchedTaskIds: [],
-      reviewedTaskIds: [],
+      action: 'dispatch_pending',
+      reason: `Manager LLM dispatched ${dispatchedTaskIds.length} task(s)`,
+      dispatchedTaskIds,
+      reviewedTaskIds,
+      completedRun: false,
+    }
+  }
+  if (runningTasks.length > 0) {
+    return {
+      action: 'review_running',
+      reason: stepResult.actions.map((a) => a.reason ?? a.type).join('; ') || `${runningTasks.length} task(s) running`,
+      dispatchedTaskIds,
+      reviewedTaskIds: runningTasks.map((t) => t.id),
       completedRun: false,
     }
   }
 
-  if (waitingForHumanTasks.length > 0) {
-    return {
-      action: 'waiting',
-      reason: `${waitingForHumanTasks.length} task(s) are waiting for human clarification.`,
-      dispatchedTaskIds: [],
-      reviewedTaskIds: waitingForHumanTasks.map((task) => task.id),
-      completedRun: false,
-    }
+  // Persist manager state snapshot for cross-step memory
+  try {
+    const stateNamespace = Blackboard.namespace(run.workspaceId, run.id)
+    await blackboard.write({
+      namespace: stateNamespace,
+      key: `manager_state/steps/${Date.now()}`,
+      value: {
+        observedAt: new Date().toISOString(),
+        taskCount: tasks.length,
+        terminalCount: terminalTasks.length,
+        pendingCount: pendingTasks.length,
+        runningCount: runningTasks.length,
+        actionsTaken: stepResult.actions.map((a) => ({ type: a.type, reason: a.reason })),
+        rawOutputPreview: stepResult.rawOutput?.slice(0, 500) ?? null,
+      },
+    })
+  } catch {
+    // State persistence is best-effort
   }
 
-  // No tasks at all? That's unexpected for a running run.
   return {
-    action: 'blocked',
-    reason: totalTasks === 0 ? 'No tasks in the run. Run may be stuck.' : 'Run has no dispatchable, running, terminal, or human-waiting tasks.',
-    dispatchedTaskIds: [],
-    reviewedTaskIds: [],
+    action: 'llm_driven',
+    reason: stepResult.actions.map((a) => `${a.type}: ${a.reason ?? ''}`).join('; ') || 'Manager observed and decided to wait',
+    dispatchedTaskIds,
+    reviewedTaskIds,
     completedRun: false,
   }
 }

@@ -9,9 +9,9 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - 多个 Agent 在真实子对话里执行，并交付网页、文档、报告、代码、应用等结果资产。
 - 平台逐步形成 `Space / Task Center / Asset Center / Expert Center / Eval & Trace` 的完整结构。
 
-当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向轻量版 HiClaw 内核换血：保留 HiClaw 的 Room / Manager / Worker / HITL 架构范式，但默认用单进程 AgentHub 服务 + CLI 子进程替代容器编排，用自研 UI 替代 Element Web，用本地 filesystem SharedStorage 替代 MinIO 集群，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
+当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向轻量版 HiClaw 内核换血：保留 HiClaw 的 Room / Manager / Worker / HITL 架构范式，但默认用单进程 AgentHub 服务 + CLI 子进程替代容器编排，用自研 UI 替代 Element Web，用本地 filesystem SharedStorage 替代 MinIO 集群。ClawTeam 作为轻量实现参考，用来学习 CLI adapter/profile、git worktree、task lock、LeaderWatcher 和 board snapshot 这些更适合本地第一阶段落地的做法，但不替代真实 Matrix 主通信层。产品壳、资产层和长期任务能力继续对齐 Coze。
 
-如果你是第一次接手项目，先读 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)、[docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md) 和 [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)。它们是当前事实总览，用来区分新主线、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw 参考依据见 [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md) 和本地 `hiclaw源码参考/`。
+如果你是第一次接手项目，先读 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)、[docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md) 和 [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)。它们是当前事实总览，用来区分新主线、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw 参考依据见 [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md) 和本地 `hiclaw源码参考/`；HiClaw / ClawTeam / AgentHub 的三方取舍见 [docs/AgentHub-vs-HiClaw-vs-ClawTeam-对比分析报告.md](docs/AgentHub-vs-HiClaw-vs-ClawTeam-对比分析报告.md) 和本地 `clawteam源码/ClawTeam/`。
 
 ## 核心体验
 
@@ -55,7 +55,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 
 当前权威文档索引见 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
-当前主路径已经开始资源化：群聊/私聊新消息先进入 Room timeline，再生成 `messages` 兼容投影；`GET /api/messages/:sessionId` 也优先从 Room timeline 投影，旧 `messages` 表只补历史/特殊兼容行。复杂任务通过 CoordinatorRuntime / RunController 创建 run 与任务账本，RoomController 确保 group/task room，WorkerController 与 RuntimeLeaseController 管 Worker 和执行租约，WorkerRuntime 从 task room 接单并写回过程。`MatrixRoomAdapter` 已接入 Matrix Client-Server API，并新增 `matrix_identities`：Human、Manager、Worker 会被确保为真实 Matrix account，Controller 负责 invite/join，timeline 发送会优先使用 sender participant 自己的 Matrix access token，而不是由后端统一 app token 假装所有人发言。`MatrixRuntimeListener` 现在可以用真实 identity token 调 `/sync`，导入真实 room event、解析 `m.mentions` / `matrix.to` mention 和 Matrix 文件引用，并提供可 start/stop 的最小轮询 lifecycle；`MatrixRoomEventDispatcher` 会把人类群聊消息调给 Manager，把 task room 中 @ Worker 的消息调给 WorkerRuntime。`LocalMatrixCompatibleRoomAdapter` 只允许作为测试/开发 fallback。`messages` 现在是迁移期 UI projection/cache，不再是通信事实源；编辑、清空、撤回、重发关联撤回、重新生成关联撤回和 pin/unpin 已先写入 Room timeline 的 append-only `message.*` 控制事件，再同步旧 `messages` 缓存。后续要继续把旧 snapshot/AG-UI cache 降级为投影和兼容读取，让任务看板、进度条、子对话入口和产物卡稳定来自 Matrix timeline、资源状态与 ArtifactStore。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
+当前主路径已经开始资源化：群聊/私聊新消息先进入 Room timeline，再生成 `messages` 兼容投影；`GET /api/messages/:sessionId` 也优先从 Room timeline 投影，旧 `messages` 表只补历史/特殊兼容行。复杂任务通过 CoordinatorRuntime / RunController 创建 run 与任务账本，RoomController 确保 group/task room，WorkerController 与 RuntimeLeaseController 管 Worker 和执行租约，WorkerRuntime 从 task room 接单并写回过程。`MatrixRoomAdapter` 已接入 Matrix Client-Server API，并新增 `matrix_identities`：Human、Manager、Worker 会被确保为真实 Matrix account，Controller 负责 invite/join，timeline 发送会优先使用 sender participant 自己的 Matrix access token，而不是由后端统一 app token 假装所有人发言。`MatrixRuntimeListener` 现在可以用真实 identity token 调 `/sync`，导入真实 room event、解析 `m.mentions` / `matrix.to` mention 和 Matrix 文件引用，并提供可 start/stop 的最小轮询 lifecycle；`MatrixRoomEventDispatcher` 会把人类群聊消息调给 Manager，把 task room 中 @ Worker 的消息调给 WorkerRuntime。自动化测试使用独立的 test room adapter，但开发和产品路径必须连接真实 Matrix homeserver。`messages` 现在是迁移期 UI projection/cache，不再是通信事实源；编辑、清空、撤回、重发关联撤回、重新生成关联撤回和 pin/unpin 已先写入 Room timeline 的 append-only `message.*` 控制事件，再同步旧 `messages` 缓存。后续要继续把旧 snapshot/AG-UI cache 降级为投影和兼容读取，让任务看板、进度条、子对话入口和产物卡稳定来自 Matrix timeline、资源状态与 ArtifactStore。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
 
 ## 分层定位
 
@@ -94,7 +94,7 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 数据库 | SQLite + Drizzle ORM |
 | LLM | OpenAI-compatible + Anthropic-compatible streaming client，仅用于动态提示、临时诊断和非核心 fallback |
 | Agent Runtime / Agent Base | Manager: OpenClaw / QwenPaw；Worker: Codex CLI / Claude Code / OpenCode / Gemini CLI，后续可补 OpenClaw / QwenPaw Worker |
-| Agent 通信 | 真实 Matrix / Tuwunel Room timeline 是目标内部事实源；本地 Matrix-compatible adapter 只作测试/开发 fallback；A2A 降为外部互操作 |
+| Agent 通信 | 真实 Matrix / Tuwunel Room timeline 是目标内部事实源；test room adapter 只用于自动化测试；A2A 降为外部互操作 |
 
 ## 项目结构
 
@@ -165,7 +165,7 @@ bun test
 | `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | 是否允许 Code Agent 执行 |
 | `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | Code Agent 超时，建议开发期 `600000` |
 | `AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS` | 是否启用模型动态生成快捷问题 |
-| `AGENTHUB_ROOM_PROVIDER` | `matrix` 使用真实 Matrix homeserver；`local-matrix-compatible` 仅用于测试/开发 fallback |
+| `AGENTHUB_ROOM_PROVIDER` | 固定使用 `matrix`；开发和产品路径都连接真实 Matrix homeserver |
 | `AGENTHUB_MATRIX_HOMESERVER_URL` / `AGENTHUB_MATRIX_ACCESS_TOKEN` / `AGENTHUB_MATRIX_SERVER_NAME` | Matrix / Tuwunel homeserver 连接配置 |
 | `AGENTHUB_MATRIX_LISTENER_POLL_INTERVAL_MS` / `AGENTHUB_MATRIX_LISTENER_TIMEOUT_MS` | Manager / Worker Matrix listener 轮询与 long-poll 超时配置 |
 | `AGENTHUB_OBJECT_STORE_PROVIDER` / `AGENTHUB_S3_ENDPOINT` / `AGENTHUB_S3_ACCESS_KEY_ID` / `AGENTHUB_S3_SECRET_ACCESS_KEY` / `AGENTHUB_S3_BUCKET` | MinIO/S3-compatible SharedStorage 配置 |
@@ -205,10 +205,12 @@ AGENTHUB_SANDBOX_PROVIDER=local-workdir
 - [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)
 - [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)
 - [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)
+- [docs/AgentHub-vs-HiClaw-vs-ClawTeam-对比分析报告.md](docs/AgentHub-vs-HiClaw-vs-ClawTeam-对比分析报告.md)
 - [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)
 - [docs/使用指南.md](docs/使用指南.md)
 - [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md)
 - `hiclaw源码参考/`
+- `clawteam源码/ClawTeam/`
 - [docs/Kimi-Claw群聊系统完整设计规格书(1).md](docs/Kimi-Claw群聊系统完整设计规格书%281%29.md)
 
 `docs/archive/` 和 `docs/old/` 中的内容只作为历史参考，不作为当前工程事实。凡是与上面几份权威文档冲突的，以权威文档为准。

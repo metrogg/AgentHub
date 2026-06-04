@@ -8,6 +8,10 @@ export type CoordinatorActionType =
   | 'propose_members'
   | 'assign'
   | 'wait'
+  | 'create_worker'
+  | 'cancel_task'
+  | 'rework'
+  | 'request_approval'
 
 export interface CoordinatorObservedEvent {
   id: string

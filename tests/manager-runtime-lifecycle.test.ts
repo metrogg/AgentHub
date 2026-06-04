@@ -8,7 +8,6 @@ process.env.AGENTHUB_APP_DATA_DIR = tempDir
 
 import {
   OpenClawManagerRuntimeProvider,
-  LocalSkillRuntimeProvider,
   QwenPawManagerRuntimeProvider,
   getActiveManagerProvider,
   listManagerProviders,
@@ -129,23 +128,6 @@ describe('Manager Runtime Lifecycle', () => {
     })
   })
 
-  describe('LocalSkillRuntimeProvider', () => {
-    test('status always reports available and running', async () => {
-      const provider = new LocalSkillRuntimeProvider()
-      const st = await provider.status()
-      expect(st.runtimeType).toBe('local-skill-runtime')
-      expect(st.available).toBe(true)
-      expect(st.running).toBe(true)
-      expect(st.pid).toBe(process.pid)
-    })
-
-    test('healthCheck always returns healthy', async () => {
-      const provider = new LocalSkillRuntimeProvider()
-      const health = await provider.healthCheck()
-      expect(health.healthy).toBe(true)
-    })
-  })
-
   describe('QwenPawManagerRuntimeProvider', () => {
     test('status reports not implemented', async () => {
       const provider = new QwenPawManagerRuntimeProvider()
@@ -157,38 +139,36 @@ describe('Manager Runtime Lifecycle', () => {
   })
 
   describe('Registry', () => {
-    test('getActiveManagerProvider returns local-skill-runtime when OpenClaw not available', () => {
+    test('getActiveManagerProvider returns openclaw by default with no local LLM fallback', () => {
       // Clear env to ensure no endpoint
       delete process.env.AGENTHUB_MANAGER_RUNTIME
       delete process.env.AGENTHUB_OPENCLAW_MANAGER_ENDPOINT
       delete process.env.AGENTHUB_OPENCLAW_PATH
 
       const provider = getActiveManagerProvider()
-      // Should be local-skill-runtime since OpenClaw is not installed
-      expect(provider.runtimeType).toBe('local-skill-runtime')
+      expect(provider.runtimeType).toBe('openclaw')
     })
 
     test('getActiveManagerProvider respects AGENTHUB_MANAGER_RUNTIME env', () => {
-      process.env.AGENTHUB_MANAGER_RUNTIME = 'local-skill-runtime'
+      process.env.AGENTHUB_MANAGER_RUNTIME = 'qwenpaw'
       const provider = getActiveManagerProvider()
-      expect(provider.runtimeType).toBe('local-skill-runtime')
+      expect(provider.runtimeType).toBe('qwenpaw')
       delete process.env.AGENTHUB_MANAGER_RUNTIME
     })
 
-    test('listManagerProviders returns all three providers', async () => {
+    test('listManagerProviders returns external Manager runtime providers only', async () => {
       const providers = await listManagerProviders()
-      expect(providers.length).toBe(3)
+      expect(providers.length).toBe(2)
       const types = providers.map((p) => p.type)
-      expect(types).toContain('local-skill-runtime')
       expect(types).toContain('openclaw')
       expect(types).toContain('qwenpaw')
     })
 
-    test('getConfiguredRuntimeType returns local-skill-runtime by default', () => {
+    test('getConfiguredRuntimeType returns openclaw by default', () => {
       delete process.env.AGENTHUB_MANAGER_RUNTIME
       delete process.env.AGENTHUB_OPENCLAW_MANAGER_ENDPOINT
       delete process.env.AGENTHUB_OPENCLAW_PATH
-      expect(getConfiguredRuntimeType()).toBe('local-skill-runtime')
+      expect(getConfiguredRuntimeType()).toBe('openclaw')
     })
 
     test('getConfiguredRuntimeType respects env override', () => {

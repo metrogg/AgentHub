@@ -2,55 +2,17 @@ import type { TimelineEventType } from '../rooms'
 
 // ─── Manager Runtime Types ───────────────────────────────────────────
 
-export type ManagerRuntimeType = 'local-skill-runtime' | 'openclaw' | 'qwenpaw'
-
-/**
- * A tool that the Manager LLM can invoke.
- * Aligned with HiClaw's skill-as-tool pattern:
- * each SKILL.md becomes one or more callable tools.
- */
-export interface ManagerTool {
-  name: string
-  description: string
-  parameters: ManagerToolParameter[]
-  skillName: string
-}
-
-export interface ManagerToolParameter {
-  name: string
-  type: 'string' | 'number' | 'boolean' | 'string[]'
-  description: string
-  required?: boolean
-  enum?: string[]
-}
-
-/**
- * A tool call emitted by the LLM.
- */
-export interface ManagerToolCall {
-  id: string
-  name: string
-  arguments: Record<string, unknown>
-}
-
-/**
- * The result of executing a tool call.
- */
-export interface ManagerToolResult {
-  callId: string
-  toolName: string
-  success: boolean
-  output: string
-  metadata?: Record<string, unknown>
-}
+export type ManagerRuntimeType = 'openclaw' | 'qwenpaw'
 
 /**
  * Events emitted during a Manager runtime step.
+ * Aligned with HiClaw's Manager execution pattern:
+ * OpenClaw/QwenPaw process emits thinking, tool calls, and final actions.
  */
 export type ManagerRuntimeEvent =
   | { type: 'thinking'; content: string }
-  | { type: 'tool_call'; call: ManagerToolCall }
-  | { type: 'tool_result'; result: ManagerToolResult }
+  | { type: 'tool_call'; call: { id: string; name: string; arguments: Record<string, unknown> } }
+  | { type: 'tool_result'; result: { callId: string; toolName: string; success: boolean; output: string; metadata?: Record<string, unknown> } }
   | { type: 'room_message'; content: string; messageType: 'reply' | 'clarify' | 'status' }
   | { type: 'task_assigned'; targetWorkerId: string; taskTitle: string; taskDescription: string }
   | { type: 'member_proposed'; proposals: MemberProposal[] }
@@ -65,7 +27,8 @@ export interface MemberProposal {
 
 /**
  * Final actions the Manager wants to take.
- * Superset of CoordinatorAction types.
+ * These are resource/control-plane intents produced by OpenClaw/QwenPaw style
+ * Manager runtimes, then validated and applied by AgentHub controllers.
  */
 export type ManagerActionType =
   | 'reply'
@@ -75,6 +38,7 @@ export type ManagerActionType =
   | 'wait'
   | 'create_worker'
   | 'cancel_task'
+  | 'rework'
   | 'request_approval'
 
 export interface ManagerAction {
@@ -111,6 +75,26 @@ export interface ManagerWorkerCandidate {
   status?: string | null
 }
 
+export interface ManagerRunState {
+  runId: string
+  status: string
+  goal?: string | null
+  tasks: Array<{
+    taskId: string
+    title: string
+    status: string
+    progressStatus: string | null
+    assignedTo: string | null
+    result?: string | null
+  }>
+  workers: Array<{
+    workspaceAgentId: string
+    name: string
+    observedState: string
+    lastHeartbeatAt: string | null
+  }>
+}
+
 export interface ManagerStepInput {
   context: {
     roomId: string
@@ -123,17 +107,13 @@ export interface ManagerStepInput {
     workers?: ManagerWorkerCandidate[]
   }
   timeline: ManagerObservedEvent[]
-  tools?: ManagerTool[]
-  maxIterations?: number
+  runState?: ManagerRunState
   signal?: AbortSignal
 }
 
 export interface ManagerStepResult {
   runtimeType: ManagerRuntimeType
   actions: ManagerAction[]
-  toolCalls: ManagerToolCall[]
-  toolResults: ManagerToolResult[]
-  iterations: number
   rawOutput?: string
 }
 
@@ -146,8 +126,8 @@ export interface ManagerStepResult {
  * - select and invoke skills (tools)
  * - produce actions that change real resources
  *
- * Unlike CoordinatorRuntime (single-step), ManagerRuntime
- * supports iterative tool-calling loops.
+ * ManagerRuntime supports iterative tool-calling loops instead of a local LLM
+ * planner hidden inside AgentHub.
  */
 export interface ManagerRuntime {
   readonly runtimeType: ManagerRuntimeType
@@ -156,22 +136,5 @@ export interface ManagerRuntime {
 
 // ─── Skill Definition ────────────────────────────────────────────────
 
-/**
- * A parsed SKILL.md definition.
- * Mirrors HiClaw's SKILL.md structure:
- * - YAML frontmatter (name, description)
- * - Purpose section
- * - Controller API surface
- * - Rules
- * - Decision pattern
- */
-export interface SkillDefinition {
-  name: string
-  description: string
-  purpose: string
-  controllerApi: string[]
-  rules: string[]
-  decisionPattern: string
-  tools: ManagerTool[]
-  raw: string
-}
+// SkillDefinition removed — Manager skills live in the OpenClaw/QwenPaw process workspace,
+// not in AgentHub's local LLM prompt layer.

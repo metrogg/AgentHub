@@ -1,6 +1,5 @@
 import {
   OpenClawManagerRuntimeProvider,
-  LocalSkillRuntimeProvider,
   QwenPawManagerRuntimeProvider,
   type ManagerRuntimeProvider,
   type ManagerRuntimeType,
@@ -9,11 +8,11 @@ import {
 // ─── Manager Runtime Registry ────────────────────────────────────────
 // Manages available Manager runtime providers and resolves the active one.
 // Aligned with HiClaw's HICLAW_MANAGER_RUNTIME env var pattern.
+// Manager is ALWAYS an external OpenClaw/QwenPaw process — no local LLM fallback.
 
 const providers = new Map<ManagerRuntimeType, ManagerRuntimeProvider>()
 
 // Register built-in providers
-providers.set('local-skill-runtime', new LocalSkillRuntimeProvider())
 providers.set('openclaw', new OpenClawManagerRuntimeProvider())
 providers.set('qwenpaw', new QwenPawManagerRuntimeProvider())
 
@@ -21,20 +20,16 @@ providers.set('qwenpaw', new QwenPawManagerRuntimeProvider())
  * Get the active Manager runtime provider.
  * Priority:
  * 1. Explicit env var AGENTHUB_MANAGER_RUNTIME
- * 2. If an OpenClaw Manager endpoint is configured → openclaw
- * 3. Fallback → local-skill-runtime
+ * 2. Default → openclaw
+ *
+ * There is no local LLM fallback. Manager must be a real OpenClaw/QwenPaw process.
  */
 export function getActiveManagerProvider(): ManagerRuntimeProvider {
   const configured = process.env.AGENTHUB_MANAGER_RUNTIME
   if (configured && providers.has(configured as ManagerRuntimeType)) {
     return providers.get(configured as ManagerRuntimeType)!
   }
-  // Auto-detect only when there is a callable Manager endpoint.
-  // A local OpenClaw binary alone is lifecycle availability, not a synchronous stepRoom runtime.
-  if (hasOpenClawManagerEndpoint()) {
-    return providers.get('openclaw')!
-  }
-  return providers.get('local-skill-runtime')!
+  return providers.get('openclaw')!
 }
 
 /**
@@ -86,10 +81,10 @@ export async function listManagerProviders(): Promise<Array<{
  */
 export function getConfiguredRuntimeType(): ManagerRuntimeType {
   const configured = process.env.AGENTHUB_MANAGER_RUNTIME
-  if (configured === 'openclaw' || configured === 'qwenpaw' || configured === 'local-skill-runtime') {
+  if (configured === 'openclaw' || configured === 'qwenpaw') {
     return configured
   }
-  return hasOpenClawManagerEndpoint() ? 'openclaw' : 'local-skill-runtime'
+  return 'openclaw'
 }
 
 function hasOpenClawManagerEndpoint(): boolean {

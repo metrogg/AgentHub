@@ -72,7 +72,7 @@ describe('ManagerRuntime primary room routing', () => {
     const result = await service.stepRoom({ roomId: room.id, ownerId: 'default-user' })
 
     expect(fakeRuntime.lastInput?.context.ownerId).toBe('default-user')
-    expect(result.runtimeType).toBe('local-skill-runtime')
+    expect(result.runtimeType).toBe('openclaw')
     expect(result.actions[0]?.type).toBe('reply')
     expect(result.actions[0]?.message).toBe('我在，已看到你的消息。')
     const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
@@ -82,10 +82,10 @@ describe('ManagerRuntime primary room routing', () => {
       'manager-runtime.tool_call',
       'manager-runtime.tool_result',
       'manager-runtime.completed',
-      'coordinator.action',
+      'manager.action',
     ])
     expect(events.at(-1)?.type).toBe('manager.message')
-    expect(events.at(-1)?.metadata?.managerRuntimeType).toBe('local-skill-runtime')
+    expect(events.at(-1)?.metadata?.managerRuntimeType).toBe('openclaw')
   })
 
   test('ManagerRuntime unsupported actions are visible but not converted', async () => {
@@ -95,11 +95,8 @@ describe('ManagerRuntime primary room routing', () => {
       title: 'Unsupported Action Room',
     })
     const fakeRuntime = new FakeManagerRuntime([], {
-      runtimeType: 'local-skill-runtime',
-      actions: [{ type: 'create_worker', message: '需要创建新 Worker。' }],
-      toolCalls: [],
-      toolResults: [],
-      iterations: 1,
+      runtimeType: 'openclaw',
+      actions: [{ type: 'request_approval', message: '需要人工确认。' }],
     })
     const service = new ManagerRuntimeService(fakeRuntime)
 
@@ -110,7 +107,7 @@ describe('ManagerRuntime primary room routing', () => {
     })
 
     expect(result.actions).toHaveLength(0)
-    expect(result.rawActions[0]?.type).toBe('create_worker')
+    expect(result.rawActions[0]?.type).toBe('request_approval')
     const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
     expect(events.map((event) => event.metadata?.kind)).toEqual([
       'manager-runtime.completed',
@@ -120,17 +117,14 @@ describe('ManagerRuntime primary room routing', () => {
 })
 
 class FakeManagerRuntime implements ManagerRuntime {
-  readonly runtimeType = 'local-skill-runtime' as const
+  readonly runtimeType = 'openclaw' as const
   lastInput: ManagerStepInput | null = null
 
   constructor(
     private readonly events: ManagerRuntimeEvent[],
     private readonly result: ManagerStepResult = {
-      runtimeType: 'local-skill-runtime',
+      runtimeType: 'openclaw',
       actions: [{ type: 'reply', message: '我在，已看到你的消息。' }],
-      toolCalls: [],
-      toolResults: [],
-      iterations: 1,
       rawOutput: '{"actions":[{"type":"reply","message":"我在，已看到你的消息。"}]}',
     },
   ) {}

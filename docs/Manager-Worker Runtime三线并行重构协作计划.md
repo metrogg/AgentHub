@@ -476,7 +476,7 @@ interface WorkerRuntimeService {
   - `apps/server/src/routes/messages.ts`
   - `apps/server/src/services/coordinator-runtime/assign-dispatcher.ts`
   - `apps/server/src/services/coordinator-runtime/planning-dispatcher.ts`（新增）
-  - `apps/server/src/services/rooms/local-matrix-compatible-adapter.ts`
+  - `apps/server/src/services/rooms/test-room-adapter.ts`
   - `apps/server/src/services/rooms/room-controller.ts`
   - `apps/server/src/services/rooms/room-service.ts`
   - `tests/dynamic-plan-coordinator-dispatch.test.ts`

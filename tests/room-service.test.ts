@@ -150,13 +150,13 @@ async function createTaskRoomWithPendingClarification(label: string) {
   return { room, agent: agent!, workerParticipant, clarificationId }
 }
 
-describe('RoomService local Matrix-compatible adapter', () => {
+describe('RoomService Matrix room adapter contract', () => {
   test('creates a Matrix-compatible room and appends ordered timeline events', async () => {
     const [room] = await db
       .insert(rooms)
       .values({
-        provider: 'local-matrix-compatible',
-        providerRoomId: '!test-room:local.agenthub',
+        provider: 'matrix',
+        providerRoomId: '!test-room:test.agenthub',
         kind: 'group',
         ownerId: 'default-user',
         title: 'Test Room',
@@ -854,7 +854,17 @@ describe('RoomService local Matrix-compatible adapter', () => {
       workspaceId: workspace!.id,
       title: 'Matrix Dispatcher Task',
     })
-    const worker = await roomService.addWorkerParticipant(taskRoom.id, agent!.id)
+    const [workerInstance] = await db
+      .insert(workerInstances)
+      .values({
+        workspaceId: workspace!.id,
+        workspaceAgentId: agent!.id,
+        runtimeFamily: 'worker',
+        runtimeBase: 'opencode',
+        observedState: 'listening',
+      })
+      .returning()
+    const worker = await roomService.addWorkerParticipant(taskRoom.id, agent!.id, workerInstance!.id)
     const [taskEvent] = await db
       .insert(timelineEvents)
       .values({

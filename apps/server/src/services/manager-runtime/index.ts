@@ -6,12 +6,8 @@ export type {
   ManagerRuntimeEvent,
   ManagerAction,
   ManagerActionType,
-  ManagerTool,
-  ManagerToolCall,
-  ManagerToolResult,
   ManagerObservedEvent,
   ManagerWorkerCandidate,
-  SkillDefinition,
   MemberProposal,
 } from './types'
 export type {
@@ -21,14 +17,13 @@ export type {
 } from './openclaw-provider'
 
 // Runtimes
-export { LocalManagerRuntime } from './local-manager-runtime'
 export { OpenClawLauncher, openclawLauncher } from './openclaw-launcher'
+export { ResidentManagerRuntime } from './resident-manager-runtime'
 export { ManagerRuntimeService, managerRuntimeService } from './manager-runtime-service'
 
 // Providers
 export {
   OpenClawManagerRuntimeProvider,
-  LocalSkillRuntimeProvider,
   QwenPawManagerRuntimeProvider,
 } from './openclaw-provider'
 
@@ -39,7 +34,3 @@ export {
   listManagerProviders,
   getConfiguredRuntimeType,
 } from './manager-runtime-registry'
-
-// Skills and tools
-export { loadManagerSkills, loadManagerTools, buildToolsPrompt } from './skill-loader'
-export { executeToolCall, getRegisteredToolNames, hasExecutor } from './tool-registry'

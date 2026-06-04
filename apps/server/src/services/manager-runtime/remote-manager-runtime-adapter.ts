@@ -20,7 +20,7 @@ export interface RemoteManagerRuntimeAdapterOptions {
  */
 export class RemoteManagerRuntimeAdapter implements ManagerRuntime {
   constructor(
-    readonly runtimeType: Exclude<ManagerRuntimeType, 'local-skill-runtime'>,
+    readonly runtimeType: ManagerRuntimeType,
     private readonly options: RemoteManagerRuntimeAdapterOptions = {},
   ) {}
 
@@ -74,9 +74,6 @@ export class RemoteManagerRuntimeAdapter implements ManagerRuntime {
     return {
       runtimeType: this.runtimeType,
       actions,
-      toolCalls: [],
-      toolResults: [],
-      iterations: 1,
       rawOutput,
     }
   }

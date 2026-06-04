@@ -32,6 +32,7 @@ import { env } from '../env'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger, serverFileLoggingEnabled, serverLogDir, serverLogPath } from '../lib/logger'
 import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/auth'
+import { describeControllerPlane } from '../services/controller-plane/diagnostics'
 import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
 import { testLlmConnection } from '../services/llm-client'
@@ -228,6 +229,21 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       config,
       diagnostics: await describeMatrixDiagnostics(),
     })
+  })
+  .post('/matrix/local/stop', async (c) => {
+    const config = applyLocalMatrixRuntimeConfig()
+    const result = await stopLocalTuwunel()
+    logger.warn({ result }, 'Local Tuwunel stop requested from settings')
+    return c.json({
+      ok: result.ok,
+      message: result.message,
+      output: result.output,
+      config,
+      diagnostics: await describeMatrixDiagnostics(),
+    })
+  })
+  .get('/controller-plane/status', async (c) => {
+    return c.json(await describeControllerPlane())
   })
   .get('/manager-runtime/status', async (c) => {
     const activeProvider = getActiveManagerProvider()
@@ -803,7 +819,7 @@ function applyLocalMatrixRuntimeConfig() {
 }
 
 function parseManagerRuntimeType(value: string): ManagerRuntimeType {
-  if (value === 'local-skill-runtime' || value === 'openclaw' || value === 'qwenpaw') return value
+  if (value === 'openclaw' || value === 'qwenpaw') return value
   throw AppError.fromCode(
     AppErrorCodes.VALIDATION_FAILED,
     `不支持的 Manager runtime：${value}`,
@@ -859,6 +875,36 @@ async function startLocalTuwunel() {
       ok: false,
       output: [error?.stdout, error?.stderr].filter(Boolean).join('\n').trim(),
       message: error?.message || '启动 Tuwunel 失败，请确认 Docker Desktop 正在运行。',
+    }
+  }
+}
+
+async function stopLocalTuwunel() {
+  const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
+  if (!existsSync(composeFile)) {
+    return {
+      ok: false,
+      output: '',
+      message: `找不到 Matrix compose 文件：${composeFile}`,
+    }
+  }
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      'docker',
+      ['compose', '-f', composeFile, 'stop', 'tuwunel'],
+      { timeout: 60_000, windowsHide: true },
+    )
+    const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+    return {
+      ok: true,
+      output,
+      message: 'Tuwunel 已停止。AgentHub UI 仍会保留已同步的 Room timeline 索引；重新启动后可继续同步。',
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      output: [error?.stdout, error?.stderr].filter(Boolean).join('\n').trim(),
+      message: error?.message || '停止 Tuwunel 失败，请确认 Docker Desktop 正在运行。',
     }
   }
 }

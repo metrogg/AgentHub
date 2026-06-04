@@ -184,7 +184,7 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
           staleWorkerCount++
           const message = `Worker ${worker.id} (${worker.runtimeBase}) has been busy without a heartbeat for ${Math.round(heartbeatAgeMs / 1000)}s.`
 
-          // Mark the active lease as stale
+          // Mark the active lease as stale so the resource layer knows
           const [activeLease] = await db
             .select()
             .from(runtimeLeases)
@@ -203,46 +203,8 @@ export async function runManagerPatrol(): Promise<PatrolResult> {
             })
           }
 
-          await markWorkerInstanceState(worker.id, 'failed', {
-            message,
-            health: { ...worker.health, patrolStaleDetected: true },
-          })
-
-          // Find the task this worker was working on
+          // Report to timeline — let Manager LLM decide next action
           const workerThread = threads.find((t) => t.workerInstanceId === worker.id)
-          if (workerThread) {
-            await updateTaskThreadStatus(workerThread.id, 'failed')
-            const task = activeTasks.find((t) => t.id === workerThread.taskId)
-            if (task) {
-              await db
-                .update(workspaceTasks)
-                .set({
-                  status: 'failed' as const,
-                  errorLog: message,
-                  completedAt: new Date(),
-                  updatedAt: new Date(),
-                })
-                .where(eq(workspaceTasks.id, task.id))
-
-              await emitRunEvent({
-                runId: run.id,
-                workspaceId: run.workspaceId,
-                groupSessionId: run.groupSessionId,
-                taskId: task.id,
-                threadId: workerThread.id,
-                workerInstanceId: worker.id,
-                type: 'task.failed',
-                severity: 'error',
-                payload: {
-                  taskId: task.id,
-                  error: message,
-                  reason: 'patrol_worker_stale',
-                  workerInstanceId: worker.id,
-                },
-              })
-            }
-          }
-
           actions.push({
             kind: 'worker_stale',
             runId: run.id,

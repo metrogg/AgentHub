@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS rooms (
   id TEXT PRIMARY KEY NOT NULL,
-  provider TEXT NOT NULL DEFAULT 'local-matrix-compatible',
+  provider TEXT NOT NULL DEFAULT 'matrix',
   provider_room_id TEXT NOT NULL,
   kind TEXT NOT NULL,
   owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

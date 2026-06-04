@@ -33,7 +33,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
+import { api, type ControllerPlaneDiagnostics, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
@@ -2408,6 +2408,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const [autoScroll, setAutoScroll] = useState(true)
   const [generalInfo, setGeneralInfo] = useState<SettingsGeneralInfo | null>(null)
   const [matrixDiagnostics, setMatrixDiagnostics] = useState<MatrixDiagnostics | null>(null)
+  const [controllerPlane, setControllerPlane] = useState<ControllerPlaneDiagnostics | null>(null)
   const [managerRuntime, setManagerRuntime] = useState<ManagerRuntimeStatusResponse | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
@@ -2498,6 +2499,23 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         matrixDiagnostics.homeserver.error ? `error=${matrixDiagnostics.homeserver.error}` : null,
       ].filter(Boolean).join(' · ')
     : 'Room、身份、@mention 和 Worker 监听状态会显示在这里'
+  const controllerPlaneStatus = controllerPlane
+    ? controllerPlane.queue.running
+      ? controllerPlane.queue.size > 0
+        ? `调和队列运行中，待处理 ${controllerPlane.queue.size}`
+        : '调和队列运行中'
+      : '调和队列未启动'
+    : '等待刷新'
+  const controllerPlaneDetail = controllerPlane
+    ? [
+        controllerPlane.mode,
+        `kinds=${controllerPlane.queue.registeredKinds.join('/') || 'none'}`,
+        `workers=${controllerPlane.resources.workerInstances}`,
+        `rooms=${controllerPlane.resources.rooms}`,
+        `runs=${controllerPlane.resources.runs}`,
+        `leases=${controllerPlane.resources.runtimeLeases}`,
+      ].join(' · ')
+    : 'Worker、Room、Run、RuntimeLease、Artifact 的内部资源调和状态'
   const managerRuntimeStatus = managerRuntime
     ? managerRuntime.activeRuntimeType === 'openclaw'
       ? managerRuntime.activeStatus.syncReady
@@ -2554,7 +2572,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   async function refreshDiagnostics(visible = true) {
     setBusy('refresh')
     try {
-      const [info, consoleLogs, matrix, manager] = await Promise.all([
+      const [info, consoleLogs, matrix, controller, manager] = await Promise.all([
         api.getSettingsGeneralInfo(),
         api.getSettingsConsoleLogs(180),
         api.getMatrixDiagnostics().catch((error) => {
@@ -2563,6 +2581,15 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             source: '前端',
             module: 'rooms/matrix/diagnostics',
             content: error?.message || 'Matrix 诊断接口不可用',
+          })
+          return null
+        }),
+        api.getControllerPlaneStatus().catch((error) => {
+          appendLog({
+            level: 'Warn',
+            source: '前端',
+            module: 'settings/controller-plane',
+            content: error?.message || 'Controller Plane 诊断接口不可用',
           })
           return null
         }),
@@ -2578,6 +2605,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
       ])
       setGeneralInfo(info)
       setMatrixDiagnostics(matrix)
+      setControllerPlane(controller)
       setManagerRuntime(manager)
       setConsoleSources(consoleLogs.sources)
       setLogs(consoleLogs.items)
@@ -2585,7 +2613,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         level: 'Info',
         source: '后端',
         module: 'settings/general-info',
-        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}, manager=${manager?.activeRuntimeType ?? 'unknown'}/${manager?.activeHealth?.healthy === false ? 'blocked' : 'ok'}`,
+        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}, controller=${controller?.queue.running ? 'running' : 'stopped'}, manager=${manager?.activeRuntimeType ?? 'unknown'}/${manager?.activeHealth?.healthy === false ? 'blocked' : 'ok'}`,
       })
       if (visible) showNotice(t('诊断信息已刷新'))
     } catch (error: any) {
@@ -2742,6 +2770,32 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         source: '后端',
         module: 'matrix/start',
         content: error?.message || '启动 Tuwunel 失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function stopLocalMatrix() {
+    setBusy('matrix-stop')
+    try {
+      const result = await api.stopLocalMatrix()
+      setMatrixDiagnostics(result.diagnostics)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'matrix/stop',
+        content: result.output ? `${result.message} · ${result.output}` : result.message,
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: 'matrix/stop',
+        content: error?.message || '停止 Tuwunel 失败',
       })
       showNotice(error?.message || t('操作失败'))
     } finally {
@@ -2930,6 +2984,17 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
           </div>
           <div className="min-w-[17rem] flex-1">
             <ConsoleDiagnosticCard
+              icon={Server}
+              title="Controller Plane"
+              status={controllerPlaneStatus}
+              detail={controllerPlaneDetail}
+              action="刷新状态"
+              busy={busy === 'refresh'}
+              onAction={() => void refreshDiagnostics()}
+            />
+          </div>
+          <div className="min-w-[17rem] flex-1">
+            <ConsoleDiagnosticCard
               icon={Activity}
               title="Manager Runtime"
               status={managerRuntimeStatus}
@@ -3098,6 +3163,10 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                     {busy === 'matrix-start' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
                     启动 Tuwunel
                   </button>
+                  <button type="button" onClick={() => void stopLocalMatrix()} disabled={busy === 'matrix-stop'} className="settings-soft-button h-8 px-3 text-xs">
+                    {busy === 'matrix-stop' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                    停止 Tuwunel
+                  </button>
                 </div>
               </div>
             </div>
@@ -3144,6 +3213,53 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {controllerPlane && (
+          <div
+            className="mt-4 rounded-2xl border p-4 text-sm shadow-sm"
+            style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">AgentHub 内部 Controller Plane</div>
+                <div className="mt-1 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                  Controller 只做资源调和和状态收敛；回复、追问、补员、派活和复盘仍由 Manager Runtime / skills 决定。
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                  queue {controllerPlane.queue.running ? 'running' : 'stopped'}
+                </span>
+                <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                  pending {controllerPlane.queue.size}
+                </span>
+                <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                  {controllerPlane.apiVersion}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <InfoRow label="registered kinds" value={controllerPlane.queue.registeredKinds.join(', ') || '未注册'} />
+              <InfoRow label="workspace agents" value={String(controllerPlane.resources.workspaceAgents)} />
+              <InfoRow label="worker instances" value={String(controllerPlane.resources.workerInstances)} />
+              <InfoRow label="rooms / participants" value={`${controllerPlane.resources.rooms} / ${controllerPlane.resources.roomParticipants}`} />
+              <InfoRow label="runs / tasks" value={`${controllerPlane.resources.runs} / ${controllerPlane.resources.tasks}`} />
+              <InfoRow label="threads / leases" value={`${controllerPlane.resources.taskThreads} / ${controllerPlane.resources.runtimeLeases}`} />
+            </div>
+
+            {controllerPlane.queue.pendingKeys.length > 0 && (
+              <div className="mt-4 rounded-xl border px-3 py-2" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}>
+                <div className="mb-2 text-xs font-medium" style={{ color: 'var(--settings-muted-text)' }}>待调和资源</div>
+                <div className="max-h-24 overflow-auto font-mono text-xs leading-5">
+                  {controllerPlane.queue.pendingKeys.slice(0, 20).map((key) => (
+                    <div key={key} className="truncate" title={key}>{key}</div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

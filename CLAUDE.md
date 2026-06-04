@@ -27,6 +27,7 @@ The new architecture target is **AgentHub Product Shell + HiClaw-lite Open Kerne
 - Learn Manager Runtime from HiClaw OpenClaw/QwenPaw: Manager is a real coordinator runtime, not a one-shot Planner function.
 - Learn Worker Runtime from HiClaw, while keeping AgentHub's coding-agent advantage: Claude Code, OpenCode, Codex, and Gemini are core Worker bases.
 - Use local filesystem SharedStorage as the default lightweight contract store, but keep S3-compatible object key semantics so MinIO/S3 can be swapped in later.
+- Borrow lightweight implementation tactics from ClawTeam: CLI profiles/adapters, git worktree isolation, task claim locks, LeaderWatcher-style snapshot diff, profile doctor/test, and server-side board snapshots.
 - Abstract AI Gateway. Short term: LocalGateway/LiteLLM. Long term: Higress-style model/MCP/credential governance.
 - A2A is no longer the first-stage internal communication backbone. Keep it for external interoperability or optional task semantic envelopes inside Matrix events.
 - This is still development. Old sessions, tasks, database rows, and workspace/storage data are not architecture constraints. Prefer clearing/rebuilding old data over preserving old execution paths.
@@ -39,6 +40,7 @@ The four highest-priority kernel modules are:
 4. Shared storage: filesystem-first ArtifactStore/SharedStorage with canonical `shared/tasks/{taskId}/...` object refs and S3-compatible object key semantics.
 
 Use `docs/hiclaw-wiki.agent.final.md` and local `hiclaw源码参考/` as the main HiClaw reference materials.
+Use local `clawteam源码/ClawTeam/` only as a lightweight implementation reference. Learn its adapter/profile/worktree/lock/watcher/board patterns, but do not replace AgentHub's real Matrix communication with ClawTeam file inbox transport.
 
 ## Layered Mental Model
 
@@ -46,7 +48,7 @@ Before changing code, identify which layer you are working on:
 
 - Product interaction: IM group chat, global agent direct chat, task child conversations, task boards, artifact cards.
 - Orchestration: Manager / Orchestrator, Manager actions, WorkLedger / dependency validation, Manager final review, approvals, cancellation, retry, resume.
-- Communication: Matrix for Room/timeline/participant/mention semantics. This is the internal collaboration source of truth, backed by a real Matrix homeserver. `LocalMatrixCompatibleRoomAdapter` is test/dev fallback only.
+- Communication: Matrix for Room/timeline/participant/mention semantics. This is the internal collaboration source of truth, backed by a real Matrix homeserver. Local development defaults to Tuwunel; the test room adapter is only for automated tests, never a development/product fallback.
 - Protocol projection: AG-UI for frontend projections. A2A only for external interoperability or optional task semantic envelopes inside Matrix events.
 - Execution: OpenClaw / QwenPaw are preferred Manager / Team Leader bases. Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary Worker bases. Plain `llm` is not a product-path runtime; keep it only for non-core fallback.
 - Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
@@ -63,7 +65,7 @@ Keep the internal default model visible and separate. It is only for welcome pro
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
 
-The next architecture direction is a lightweight HiClaw-style open kernel, not more patches on the old DAG-first path and not a direct copy of HiClaw's enterprise deployment stack. The default shape is one AgentHub server process plus CLI Worker subprocesses, AgentHub's own UI, Room/Matrix timeline semantics, and filesystem-first SharedStorage. Real Matrix/Tuwunel and MinIO/S3 remain adapters, not mandatory first-stage runtime dependencies. Kubernetes/full Higress/enterprise tenancy are not default first-stage dependencies, but their abstractions should shape Gateway and Controller/Reconciler boundaries. Gradually make `Room`, `TimelineEvent`, `Run`, `Task`, `WorkerInstance`, `Artifact`, and `RuntimeLease` first-class resources. `messages.ts` should shrink toward chat ingress and lightweight routing; task boards, child conversations, progress, and artifact cards should be projected from Room timeline, resource state, and AG-UI, not stitched together from legacy message metadata. See `docs/AgentHub-HiClaw-lite开源内核重构方案.md` before changing orchestration, child-thread, artifact, event, or runtime lifecycle code.
+The next architecture direction is a lightweight HiClaw-style open kernel, not more patches on the old DAG-first path and not a direct copy of HiClaw's enterprise deployment stack. The default shape is one AgentHub server process plus CLI Worker subprocesses, AgentHub's own UI, Room/Matrix timeline semantics, and filesystem-first SharedStorage. Local real Matrix defaults to Tuwunel; Synapse/Conduit are compatibility targets for existing homeservers. The test room adapter exists only for automated tests and must not be treated as an offline/dev communication mode. MinIO/S3 remain storage adapters rather than mandatory first-stage runtime dependencies. Kubernetes/full Higress/enterprise tenancy are not default first-stage dependencies, but their abstractions should shape Gateway and Controller/Reconciler boundaries. Gradually make `Room`, `TimelineEvent`, `Run`, `Task`, `WorkerInstance`, `Artifact`, and `RuntimeLease` first-class resources. `messages.ts` should shrink toward chat ingress and lightweight routing; task boards, child conversations, progress, and artifact cards should be projected from Room timeline, resource state, and AG-UI, not stitched together from legacy message metadata. See `docs/AgentHub-HiClaw-lite开源内核重构方案.md` before changing orchestration, child-thread, artifact, event, or runtime lifecycle code.
 
 ## Stack
 
@@ -75,7 +77,7 @@ The next architecture direction is a lightweight HiClaw-style open kernel, not m
 - State: Zustand
 - DB: SQLite via `bun:sqlite` + Drizzle ORM
 - LLM: OpenAI-compatible and Anthropic-compatible streaming client
-- Agent communication: internal collaboration uses real Matrix Room/timeline semantics; local Matrix-compatible adapter is test/dev fallback only; A2A is external interoperability only.
+- Agent communication: internal collaboration uses real Matrix Room/timeline semantics with Tuwunel as the local default homeserver; the in-process room adapter is test-only; A2A is external interoperability only.
 - Agent runtimes / bases: Manager: OpenClaw / QwenPaw. Workers: Codex CLI, Claude Code, OpenCode, Gemini CLI.
 - MCP, Skills, and Rules are tool/capability layers for code agents, not agent runtime types.
 

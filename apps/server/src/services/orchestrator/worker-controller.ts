@@ -9,6 +9,12 @@ import { runtimeLeaseController } from './runtime-lease-controller'
 import { ensureWorkerWorkspace } from '../worker-runtime/worker-workspace'
 import { logger } from '../../lib/logger'
 import type { ExecutionConfigSummary } from '../execution/execution-config-summary'
+import { createMatrixClientFromEnv } from '../rooms/matrix-client'
+import { MatrixIdentityService } from '../rooms/matrix-identity-service'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
+import { agentHubUserDataRoot } from '../system-paths'
 
 export interface ReconcileResult {
   phase: string
@@ -41,12 +47,13 @@ interface WorkerInstanceRow {
   workspaceId: string
   workspaceAgentId: string
   runtimeFamily: 'coordinator' | 'worker' | 'fallback'
-  runtimeBase: string
+  runtimeBase: 'openclaw' | 'copaw' | 'qwenpaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | 'llm-fallback'
   modelId: string | null
   skillIds: string[]
-  sandboxPolicy: string
+  mcpServerIds: string[]
+  sandboxPolicy: 'workspace-write' | 'danger-full-access'
   desiredState: 'running' | 'sleeping' | 'stopped'
-  observedState: string
+  observedState: 'provisioning' | 'ready' | 'listening' | 'assigned' | 'busy' | 'waiting_for_human' | 'resuming' | 'idle' | 'sleeping' | 'stopped' | 'failed'
   health: Record<string, unknown>
   runtimeHome: string | null
   runtimeConfigPath: string | null
@@ -326,17 +333,48 @@ export class WorkerController {
       })
     }
 
-    // Start Matrix listener and transition to listening
-    const listenerResults = await startMatrixWorkerListeners(worker.id)
-    const anyListenerStarted = listenerResults.some((r) => r.started)
-    if (anyListenerStarted) {
-      await markWorkerInstanceState(worker.id, 'listening', {
-        message: 'Worker Matrix listener started and waiting for tasks.',
-        health: {
-          ...worker.health,
-          listeningAt: new Date().toISOString(),
-        },
-      })
+    // For resident workers, generate openclaw.json with Matrix credentials
+    const isResident = worker.runtimeBase === 'openclaw' || worker.runtimeBase === 'copaw'
+    if (isResident) {
+      const [identity] = await db
+        .select()
+        .from(matrixIdentities)
+        .where(and(eq(matrixIdentities.ownerType, 'worker'), eq(matrixIdentities.ownerId, worker.id)))
+        .limit(1)
+      if (identity?.accessToken) {
+        await this.generateWorkerOpenClawConfig(worker, identity).catch((err) => {
+          logger.warn({ err, workerId: worker.id }, 'Failed to generate worker openclaw.json; continuing.')
+        })
+      }
+    }
+
+    // For resident workers, launch OpenClaw process (it handles its own /sync)
+    // For ephemeral workers, start AgentHub-managed Matrix listener
+    let anyListenerStarted = false
+    if (isResident) {
+      const launched = await this.launchResidentWorkerProcess(worker)
+      if (launched) {
+        anyListenerStarted = true
+        await markWorkerInstanceState(worker.id, 'listening', {
+          message: 'Resident Worker OpenClaw process launched and listening via Matrix /sync.',
+          health: {
+            ...worker.health,
+            listeningAt: new Date().toISOString(),
+          },
+        })
+      }
+    } else {
+      const listenerResults = await startMatrixWorkerListeners(worker.id)
+      anyListenerStarted = listenerResults.some((r) => r.started)
+      if (anyListenerStarted) {
+        await markWorkerInstanceState(worker.id, 'listening', {
+          message: 'Worker Matrix listener started and waiting for tasks.',
+          health: {
+            ...worker.health,
+            listeningAt: new Date().toISOString(),
+          },
+        })
+      }
     }
 
     if (ctx.runId && ctx.groupSessionId) {
@@ -610,6 +648,27 @@ export class WorkerController {
     const instance = await ensureWorkerInstance({ workspaceId, agent })
     if (!instance) return null
 
+    // For resident workers, ensure Matrix identity exists before reconcile
+    const isResident = instance.runtimeBase === 'openclaw' || instance.runtimeBase === 'copaw'
+    if (isResident) {
+      try {
+        const client = createMatrixClientFromEnv()
+        const identityService = new MatrixIdentityService(client)
+        await identityService.ensureIdentity({
+          ownerType: 'worker',
+          ownerId: instance.id,
+          displayName: agent.id,
+        })
+        logger.info({ workerInstanceId: instance.id }, 'Worker Matrix identity ensured')
+      } catch (err) {
+        logger.error({ err, workerInstanceId: instance.id }, 'Failed to ensure Worker Matrix identity')
+        await markWorkerInstanceState(instance.id, 'failed', {
+          message: `Failed to create Matrix identity: ${err}`,
+        })
+        return null
+      }
+    }
+
     // Run reconcile to bring it to ready state
     await this.reconcile(instance.id, { workspaceId })
     return instance.id
@@ -756,6 +815,159 @@ export class WorkerController {
 
     return { ready: true, details }
   }
+
+  private async generateWorkerOpenClawConfig(
+    worker: WorkerInstanceRow,
+    identity: { userId: string; accessToken: string | null; serverName: string },
+  ): Promise<string> {
+    const matrixUrl = process.env.AGENTHUB_MATRIX_HOMESERVER_URL || 'http://localhost:6167'
+    const matrixDomain = process.env.AGENTHUB_MATRIX_SERVER_NAME || 'local.agenthub'
+    const llmBaseUrl = process.env.LLM_BASE_URL || 'http://localhost:8000/v1'
+    const llmApiKey = process.env.LLM_API_KEY || 'agenthub-internal'
+    const llmModel = process.env.LLM_MODEL || 'default'
+    const gatewayPort = workerGatewayPort(worker.id)
+    const workerWorkspace = join(agentHubUserDataRoot(), 'workers', worker.id)
+
+    const config = {
+      gateway: {
+        mode: 'local',
+        port: gatewayPort,
+        bind: 'lan',
+        auth: { token: `agenthub-worker-token-${worker.id.slice(0, 8)}` },
+        remote: { token: `agenthub-worker-token-${worker.id.slice(0, 8)}` },
+        controlUi: {
+          dangerouslyDisableDeviceAuth: true,
+          allowInsecureAuth: true,
+          allowedOrigins: ['*'],
+        },
+      },
+      channels: {
+        matrix: {
+          enabled: true,
+          homeserver: matrixUrl,
+          userId: identity.userId,
+          accessToken: identity.accessToken ?? '',
+          encryption: false,
+          network: { dangerouslyAllowPrivateNetwork: true },
+          autoJoin: 'always',
+          dm: { policy: 'allowlist', allowFrom: [`@admin:${matrixDomain}`] },
+          groupPolicy: 'allowlist',
+          groupAllowFrom: [`@admin:${matrixDomain}`],
+          groups: { '*': { allow: true, requireMention: false } },
+          streaming: 'partial',
+          blockStreaming: true,
+        },
+      },
+      models: {
+        mode: 'merge',
+        providers: {
+          'agenthub-llm': {
+            baseUrl: llmBaseUrl,
+            apiKey: llmApiKey,
+            api: 'openai-completions',
+            models: [{ id: llmModel, reasoning: false, contextWindow: 128000, maxTokens: 8192, input: ['text'] }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          timeoutSeconds: 1800,
+          workspace: '~',
+          model: { primary: `agenthub-llm/${llmModel}` },
+          maxConcurrent: 4,
+          subagents: { maxConcurrent: 8 },
+          elevatedDefault: 'full',
+          heartbeat: { every: '1h', prompt: 'Read ~/HEARTBEAT.md and follow the checklist.' },
+        },
+      },
+      tools: {
+        exec: { host: 'gateway', security: 'full', ask: 'off' },
+        elevated: { enabled: true, allowFrom: { matrix: ['*'] } },
+      },
+      session: {
+        dmScope: 'per-channel-peer',
+        resetByType: { dm: { mode: 'daily', atHour: 4 }, group: { mode: 'daily', atHour: 4 } },
+      },
+      plugins: { load: { paths: [] }, entries: {} },
+      commands: { restart: true },
+    }
+
+    mkdirSync(workerWorkspace, { recursive: true })
+    const configPath = join(workerWorkspace, 'openclaw.json')
+    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
+    logger.info({ configPath, workerId: worker.id, gatewayPort }, 'Generated OpenClaw Worker config')
+    return configPath
+  }
+
+  private async launchResidentWorkerProcess(
+    worker: typeof workerInstances.$inferSelect,
+  ): Promise<boolean> {
+    const binaryPath = this.findOpenClawBinary()
+    if (!binaryPath) {
+      logger.error({ workerId: worker.id }, 'OpenClaw binary not found; cannot launch resident worker')
+      return false
+    }
+
+    const workerWorkspace = join(agentHubUserDataRoot(), 'workers', worker.id)
+    const configPath = join(workerWorkspace, 'openclaw.json')
+    if (!existsSync(configPath)) {
+      logger.error({ workerId: worker.id, configPath }, 'OpenClaw config missing; cannot launch resident worker')
+      return false
+    }
+
+    try {
+      const child = spawn(binaryPath, ['gateway', 'run', '-c', configPath], {
+        cwd: workerWorkspace,
+        detached: true,
+        stdio: 'ignore',
+      })
+      child.unref()
+
+      logger.info(
+        { workerId: worker.id, pid: child.pid, configPath },
+        'Launched OpenClaw Worker resident process',
+      )
+      return true
+    } catch (e) {
+      logger.error({ workerId: worker.id, err: e }, 'Failed to launch OpenClaw Worker process')
+      return false
+    }
+  }
+
+  private findOpenClawBinary(): string | undefined {
+    // Try direct binary names
+    const candidates = ['openclaw', 'openclaw.exe']
+    for (const name of candidates) {
+      try {
+        const { status } = spawnSync(name, ['--version'], { stdio: 'ignore' })
+        if (status === 0) return name
+      } catch { /* noop */ }
+    }
+
+    // Try known package manager paths
+    const globalPaths: string[] = []
+    const envPaths = process.env.PATH?.split(process.platform === 'win32' ? ';' : ':') ?? []
+    for (const dir of [...envPaths]) {
+      globalPaths.push(join(dir, 'openclaw'))
+      if (process.platform === 'win32') globalPaths.push(join(dir, 'openclaw.exe'))
+    }
+    for (const p of globalPaths) {
+      try {
+        if (existsSync(p)) return p
+      } catch { /* noop */ }
+    }
+
+    return undefined
+  }
+}
+
+function workerGatewayPort(workerId: string): number {
+  let hash = 0
+  for (let i = 0; i < workerId.length; i++) {
+    hash = ((hash << 5) - hash) + workerId.charCodeAt(i)
+    hash |= 0
+  }
+  return 18800 + (Math.abs(hash) % 200)
 }
 
 export const workerController = new WorkerController()

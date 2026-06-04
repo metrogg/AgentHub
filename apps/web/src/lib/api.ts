@@ -87,6 +87,7 @@ export function friendlyErrorMessage(error: unknown, context?: string): string {
     }
     if (error.code && codeMap[error.code]) {
       if (
+        error.code === AppErrorCodes.VALIDATION_FAILED ||
         error.code === AppErrorCodes.DIFF_APPLY_FAILED ||
         error.code === AppErrorCodes.DIFF_VALIDATION_FAILED
       ) {
@@ -262,7 +263,7 @@ export interface Message {
   createdAt: string
 }
 
-export type RoomProvider = 'local-matrix-compatible' | 'matrix'
+export type RoomProvider = 'matrix'
 export type RoomKind = 'group' | 'manager_dm' | 'task' | 'direct' | 'human_intervention'
 export type RoomStatus = 'active' | 'archived' | 'failed'
 export type RoomParticipantType = 'human' | 'manager' | 'worker' | 'system'
@@ -634,6 +635,33 @@ export interface MatrixDiagnostics {
       lastError: string | null
       consecutiveErrors: number
     }>
+  }
+}
+
+export interface ControllerPlaneDiagnostics {
+  apiVersion: 'agenthub.dev/v1alpha1'
+  mode: 'in-process'
+  queue: {
+    running: boolean
+    size: number
+    pendingKeys: string[]
+    registeredKinds: string[]
+  }
+  resources: {
+    workspaceAgents: number
+    workerInstances: number
+    rooms: number
+    roomParticipants: number
+    runs: number
+    tasks: number
+    taskThreads: number
+    runtimeLeases: number
+    artifacts: number
+  }
+  boundaries: {
+    controllerOwns: string[]
+    managerOwns: string[]
+    uiReadsFrom: string[]
   }
 }
 
@@ -1656,6 +1684,9 @@ export const api = {
     request<LocalMatrixActionResult>('/settings/matrix/local/configure', { method: 'POST' }),
   startLocalMatrix: () =>
     request<LocalMatrixActionResult>('/settings/matrix/local/start', { method: 'POST', timeout: 70_000 }),
+  stopLocalMatrix: () =>
+    request<LocalMatrixActionResult>('/settings/matrix/local/stop', { method: 'POST', timeout: 70_000 }),
+  getControllerPlaneStatus: () => request<ControllerPlaneDiagnostics>('/settings/controller-plane/status'),
   getManagerRuntimeStatus: () => request<ManagerRuntimeStatusResponse>('/settings/manager-runtime/status'),
   startManagerRuntime: (type: ManagerRuntimeType) =>
     request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/start`, {

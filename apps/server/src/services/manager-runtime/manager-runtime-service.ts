@@ -1,12 +1,9 @@
 import { db, eq, roomParticipants, rooms, workspaceAgents } from '@agenthub/db'
 import { roomService } from '../rooms'
-import type {
-  CoordinatorAction,
-  CoordinatorActionType,
-} from '../coordinator-runtime/types'
 import { getActiveManagerProvider } from './manager-runtime-registry'
 import type {
   ManagerAction,
+  ManagerActionType,
   ManagerObservedEvent,
   ManagerRuntime,
   ManagerRuntimeEvent,
@@ -22,26 +19,30 @@ export interface StepManagerRoomInput {
   afterSequence?: number
   limit?: number
   source: string
-  allowedActionTypes?: CoordinatorActionType[]
+  allowedActionTypes?: ManagerActionType[]
   appendActions?: boolean
+  runState?: import('./types').ManagerRunState
   signal?: AbortSignal
 }
 
 export interface StepManagerRoomResult {
   roomId: string
   runtimeType: ManagerRuntimeType
-  actions: CoordinatorAction[]
+  actions: ManagerAction[]
   rawActions: ManagerAction[]
   rawOutput?: string
   appendedEventIds: string[]
 }
 
-const SUPPORTED_ACTION_TYPES = new Set<CoordinatorActionType>([
+const SUPPORTED_ACTION_TYPES = new Set<ManagerActionType>([
   'reply',
   'clarify',
   'propose_members',
   'assign',
   'wait',
+  'create_worker',
+  'cancel_task',
+  'rework',
 ])
 
 export class ManagerRuntimeService {
@@ -87,6 +88,7 @@ export class ManagerRuntimeService {
               body: event.body,
               metadata: event.metadata,
             })) satisfies ManagerObservedEvent[],
+            runState: input.runState,
             signal: input.signal,
           },
           input.signal,
@@ -111,7 +113,7 @@ export class ManagerRuntimeService {
       (!allowedActionTypes || actions.every((action) => allowedActionTypes.has(action.type)))
     if (shouldAppendActions) {
       for (const action of actions) {
-        const event = await appendCoordinatorAction(room.id, action, runtime.runtimeType)
+        const event = await appendManagerAction(room.id, action, runtime.runtimeType)
         if (event) appendedEventIds.push(event.id)
       }
     }
@@ -271,15 +273,15 @@ async function convertManagerActions(
   actions: ManagerAction[],
   runtimeType: ManagerRuntimeType,
   source: string,
-): Promise<CoordinatorAction[]> {
-  const converted: CoordinatorAction[] = []
+): Promise<ManagerAction[]> {
+  const converted: ManagerAction[] = []
   for (const action of actions) {
-    if (!SUPPORTED_ACTION_TYPES.has(action.type as CoordinatorActionType)) {
+    if (!SUPPORTED_ACTION_TYPES.has(action.type as ManagerActionType)) {
       await appendUnsupportedAction(roomId, action, runtimeType, source)
       continue
     }
     converted.push({
-      type: action.type as CoordinatorActionType,
+      type: action.type as ManagerActionType,
       message: action.message,
       reason: action.reason,
       targetWorkerId: action.targetWorkerId,
@@ -320,9 +322,9 @@ async function appendUnsupportedAction(
   })
 }
 
-async function appendCoordinatorAction(
+async function appendManagerAction(
   roomId: string,
-  action: CoordinatorAction,
+  action: ManagerAction,
   runtimeType: string,
 ) {
   const managerParticipant = await findParticipant(roomId, { participantType: 'manager' })
@@ -334,7 +336,7 @@ async function appendCoordinatorAction(
       type: 'system',
       body: action.message ?? 'Manager is waiting.',
       metadata: {
-        kind: 'coordinator.action',
+        kind: 'manager.action',
         actionType: action.type,
         reason: action.reason ?? null,
         runtimeType,
@@ -353,7 +355,7 @@ async function appendCoordinatorAction(
       type: 'task.assigned',
       body: action.message ?? action.taskDescription ?? action.taskTitle ?? 'Manager assigned a task.',
       metadata: {
-        kind: 'coordinator.action',
+        kind: 'manager.action',
         actionType: action.type,
         targetWorkerId: action.targetWorkerId ?? null,
         taskTitle: action.taskTitle ?? null,
@@ -385,7 +387,7 @@ async function appendCoordinatorAction(
       type: 'approval.requested',
       body: action.message ?? 'Manager 建议补充成员，请确认。',
       metadata: {
-        kind: 'coordinator.action',
+        kind: 'manager.action',
         actionType: action.type,
         memberProposals: action.memberProposals ?? [],
         reason: action.reason ?? null,
@@ -401,7 +403,7 @@ async function appendCoordinatorAction(
     type: 'manager.message',
     body: action.message ?? '',
     metadata: {
-      kind: 'coordinator.action',
+      kind: 'manager.action',
       actionType: action.type,
       reason: action.reason ?? null,
       runtimeType,

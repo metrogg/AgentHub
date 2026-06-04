@@ -1,4 +1,4 @@
-import { and, db, eq, matrixIdentities, roomParticipants, rooms } from '@agenthub/db'
+import { and, db, eq, matrixIdentities, roomParticipants, rooms, workerInstances } from '@agenthub/db'
 import { matrixRuntimeListener, type MatrixRuntimeListener } from './matrix-runtime-listener'
 import type { ParticipantType } from './types'
 
@@ -38,6 +38,23 @@ export class MatrixRuntimeSupervisor {
         participantId,
       }
     }
+
+    // Resident workers (OpenClaw/QwenPaw) run their own /sync; skip AgentHub-managed listener
+    if (participant.participantType === 'worker' && participant.workerInstanceId) {
+      const [worker] = await db
+        .select()
+        .from(workerInstances)
+        .where(eq(workerInstances.id, participant.workerInstanceId))
+        .limit(1)
+      if (worker && (worker.runtimeBase === 'openclaw' || worker.runtimeBase === 'copaw' || worker.runtimeBase === 'qwenpaw')) {
+        return {
+          started: false,
+          reason: `resident_worker_${worker.runtimeBase}_runs_own_sync`,
+          participantId,
+        }
+      }
+    }
+
     const [room] = await db.select().from(rooms).where(eq(rooms.id, participant.roomId)).limit(1)
     if (!room || room.provider !== 'matrix') {
       return { started: false, reason: 'room_is_not_matrix', participantId }

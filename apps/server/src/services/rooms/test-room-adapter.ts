@@ -15,11 +15,11 @@ import type {
 } from './types'
 
 function providerRoomId() {
-  return `!agenthub-${randomUUID()}:local.agenthub`
+  return `!agenthub-test-${randomUUID()}:test.agenthub`
 }
 
 function providerEventId() {
-  return `$agenthub-${randomUUID()}`
+  return `$agenthub-test-${randomUUID()}`
 }
 
 function roomKindForSession(input: EnsureRoomForSessionInput): RoomKind {
@@ -27,12 +27,12 @@ function roomKindForSession(input: EnsureRoomForSessionInput): RoomKind {
   return input.sessionType === 'group' ? 'group' : 'direct'
 }
 
-export class LocalMatrixCompatibleRoomAdapter implements RoomAdapter {
+export class TestRoomAdapter implements RoomAdapter {
   async createRoom(input: CreateRoomInput) {
     const [room] = await db
       .insert(rooms)
       .values({
-        provider: 'local-matrix-compatible',
+        provider: 'matrix',
         providerRoomId: providerRoomId(),
         kind: input.kind,
         ownerId: input.ownerId,
@@ -113,6 +113,15 @@ export class LocalMatrixCompatibleRoomAdapter implements RoomAdapter {
       displayName: 'Manager',
       role: 'manager',
     })
+    if (input.workerInstanceId) {
+      await this.addParticipant({
+        roomId: room.id,
+        participantType: 'worker',
+        displayName: `Worker-${input.workerInstanceId.slice(0, 6)}`,
+        role: 'member',
+        workerInstanceId: input.workerInstanceId,
+      })
+    }
     return room
   }
 
@@ -204,7 +213,7 @@ export class LocalMatrixCompatibleRoomAdapter implements RoomAdapter {
           senderUserId: null,
           usedParticipantToken: false,
           mentions: participant?.providerUserId ? [participant.providerUserId] : [],
-          localFallback: true,
+          testOnly: true,
         },
         mentionParticipantId: input.mentionParticipantId,
       },
@@ -251,5 +260,5 @@ function defaultRole(type: ParticipantType) {
 
 function localProviderUserId(type: ParticipantType, displayName: string) {
   const normalizedName = displayName.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-')
-  return `@${type}-${normalizedName || 'participant'}:local.agenthub`
+  return `@${type}-${normalizedName || 'participant'}:test.agenthub`
 }

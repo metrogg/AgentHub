@@ -1,4 +1,4 @@
-export type RoomProvider = 'local-matrix-compatible' | 'matrix'
+export type RoomProvider = 'matrix'
 export type RoomKind = 'group' | 'manager_dm' | 'task' | 'direct' | 'human_intervention'
 export type RoomStatus = 'active' | 'archived' | 'failed'
 export type ParticipantType = 'human' | 'manager' | 'worker' | 'system'

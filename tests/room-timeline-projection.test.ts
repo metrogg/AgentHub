@@ -5,8 +5,8 @@ import { projectRoomTimeline } from '../apps/web/src/lib/roomTimeline'
 
 const room: Room = {
   id: 'room-1',
-  provider: 'local-matrix-compatible',
-  providerRoomId: '!room-1:local.agenthub',
+  provider: 'matrix',
+  providerRoomId: '!room-1:test.agenthub',
   kind: 'task',
   ownerId: 'user-1',
   workspaceId: 'workspace-1',

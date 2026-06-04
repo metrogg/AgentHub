@@ -240,9 +240,9 @@ export const rooms = sqliteTable(
   'rooms',
   {
     id: id(),
-    provider: text('provider', { enum: ['local-matrix-compatible', 'matrix'] })
+    provider: text('provider', { enum: ['matrix'] })
       .notNull()
-      .default('local-matrix-compatible'),
+      .default('matrix'),
     providerRoomId: text('provider_room_id').notNull(),
     kind: text('kind', { enum: ['group', 'manager_dm', 'task', 'direct', 'human_intervention'] })
       .notNull(),
@@ -410,7 +410,7 @@ export const workerInstances = sqliteTable(
       .notNull()
       .default('worker'),
     runtimeBase: text('runtime_base', {
-      enum: ['openclaw', 'copaw', 'codex', 'claude-code', 'opencode', 'gemini', 'llm-fallback'],
+      enum: ['openclaw', 'copaw', 'qwenpaw', 'codex', 'claude-code', 'opencode', 'gemini', 'llm-fallback'],
     }).notNull(),
     modelId: text('model_id'),
     skillIds: text('skill_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),

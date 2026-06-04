@@ -10,6 +10,8 @@ import { DEFAULT_USER } from './middleware/auth'
 import { WsEvent } from '@agenthub/shared'
 import { runController } from './services/orchestrator/run-controller'
 import { runtimeLeaseController } from './services/orchestrator/runtime-lease-controller'
+import { getActiveManagerProvider } from './services/manager-runtime'
+import { controllerReconcileQueue } from './services/controller-plane'
 
 // Seed the local default user (single-user mode, no auth)
 async function seedDefaultUser() {
@@ -26,6 +28,8 @@ async function seedDefaultUser() {
 }
 
 await seedDefaultUser()
+controllerReconcileQueue.start()
+logger.info({ queue: controllerReconcileQueue.describe() }, 'Started AgentHub Controller Plane reconcile queue')
 
 function resolvePortFile() {
   const configured = Bun.env.AGENTHUB_PORT_FILE?.trim()
@@ -93,6 +97,35 @@ if (!server!) {
 const runtimePort = server.port ?? currentPort
 logger.info(`🚀 AgentHub server listening on http://0.0.0.0:${runtimePort}`)
 setRuntimeServerPort(runtimePort)
+
+// ─── Start resident Manager (OpenClaw / QwenPaw) ─────────────────────
+// Resident Managers observe rooms via Matrix /sync autonomously.
+// AgentHub does not invoke their step() directly.
+void (async () => {
+  try {
+    const provider = getActiveManagerProvider()
+    if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
+      const status = await provider.status()
+      if (!status.running && !status.endpoint) {
+        logger.info({ runtimeType: provider.runtimeType }, 'Starting resident Manager process...')
+        if (!provider.ensureStarted) {
+          logger.warn('Provider does not support ensureStarted')
+          return
+        }
+        const result = await provider.ensureStarted()
+        if (result.error) {
+          logger.error({ error: result.error }, 'Failed to start resident Manager')
+        } else {
+          logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
+        }
+      } else {
+        logger.info({ runtimeType: provider.runtimeType, running: status.running, endpoint: status.endpoint }, 'Resident Manager already active')
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, 'Resident Manager startup failed')
+  }
+})()
 
 // Write actual port to file so Vite dev proxy can read it
 const portFile = resolvePortFile()

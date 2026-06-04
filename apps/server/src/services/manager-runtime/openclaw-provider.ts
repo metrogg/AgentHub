@@ -3,17 +3,15 @@ import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
-import { LocalManagerRuntime } from './local-manager-runtime'
-import {
-  RemoteManagerRuntimeAdapter,
-  resolveHealthEndpoint,
-  resolveStepEndpoint,
-} from './remote-manager-runtime-adapter'
+import { createMatrixClientFromEnv } from '../rooms/matrix-client'
+import { MatrixIdentityService } from '../rooms/matrix-identity-service'
+import { resolveHealthEndpoint, resolveStepEndpoint } from './remote-manager-runtime-adapter'
+import { ResidentManagerRuntime } from './resident-manager-runtime'
 import type { ManagerRuntime } from './types'
 
 // ─── Manager Runtime Types ────────────────────────────────────────────
 
-export type ManagerRuntimeType = 'local-skill-runtime' | 'openclaw' | 'qwenpaw'
+export type ManagerRuntimeType = 'openclaw' | 'qwenpaw'
 
 export interface ManagerRuntimeStatus {
   runtimeType: ManagerRuntimeType
@@ -107,10 +105,27 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       return { ...st, error: 'OpenClaw binary not found. Run: bash infra/setup-openclaw.sh' }
     }
 
-    // Generate config if needed
-    if (!existsSync(this.getConfigPath())) {
-      this.generateConfig()
+    // Ensure Manager Matrix identity exists
+    try {
+      const client = createMatrixClientFromEnv()
+      const identityService = new MatrixIdentityService(client)
+      const identity = await identityService.ensureIdentity({
+        ownerType: 'manager',
+        ownerId: 'manager',
+        displayName: 'Manager',
+      })
+      this.config.matrixAccessToken = identity.accessToken ?? undefined
+      this.config.matrixUserId = identity.userId ?? undefined
+      this.config.matrixUrl = client.homeserverUrl
+      this.config.matrixDomain = client.serverName
+      logger.info({ userId: identity.userId }, 'Manager Matrix identity ensured')
+    } catch (err) {
+      logger.error({ err }, 'Failed to ensure Manager Matrix identity')
+      return { ...st, error: `Matrix identity failed: ${err}` }
     }
+
+    // Generate config with Matrix credentials
+    this.generateConfig()
 
     // Copy agent files
     this.copyAgentFiles()
@@ -161,10 +176,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   }
 
   createRuntime(): ManagerRuntime {
-    const target = this.getEndpointOrCommand()
-    return new RemoteManagerRuntimeAdapter('openclaw', {
-      endpoint: target?.endpoint ?? null,
-    })
+    // OpenClaw is a resident process; AgentHub does not invoke its step directly.
+    return new ResidentManagerRuntime('openclaw')
   }
 
   // ─── Internal ────────────────────────────────────────────────────
@@ -360,48 +373,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   }
 }
 
-// ─── Local Skill Runtime Provider (fallback) ──────────────────────────
-
-export class LocalSkillRuntimeProvider implements ManagerRuntimeProvider {
-  readonly runtimeType = 'local-skill-runtime' as const
-
-  async status(): Promise<ManagerRuntimeStatus> {
-    return {
-      runtimeType: this.runtimeType,
-      available: true,
-      syncReady: true,
-      running: true, // always "running" since it's in-process
-      pid: process.pid,
-      workspace: join(agentHubUserDataRoot(), 'manager', 'global'),
-      configPath: null,
-      binaryPath: null,
-      endpoint: null,
-      stepEndpoint: null,
-      healthEndpoint: null,
-      error: null,
-      diagnostics: {
-        inProcess: true,
-        note: 'Local skill runtime runs inside AgentHub server process.',
-      },
-      startedAt: null,
-      uptime: null,
-    }
-  }
-
-  async healthCheck() {
-    return { healthy: true }
-  }
-
-  getEndpointOrCommand() {
-    return null // in-process, no endpoint needed
-  }
-
-  createRuntime(): ManagerRuntime {
-    return new LocalManagerRuntime()
-  }
-}
-
-// ─── QwenPaw Provider (placeholder) ──────────────────────────────────
+// ─── QwenPaw Provider ────────────────────────────────────────────────
 
 export class QwenPawManagerRuntimeProvider implements ManagerRuntimeProvider {
   readonly runtimeType = 'qwenpaw' as const
@@ -438,7 +410,6 @@ export class QwenPawManagerRuntimeProvider implements ManagerRuntimeProvider {
   }
 
   createRuntime(): ManagerRuntime {
-    const endpoint = process.env.AGENTHUB_QWENPAW_MANAGER_ENDPOINT ?? null
-    return new RemoteManagerRuntimeAdapter('qwenpaw', { endpoint })
+    return new ResidentManagerRuntime('qwenpaw')
   }
 }
