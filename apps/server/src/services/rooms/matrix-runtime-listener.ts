@@ -73,6 +73,8 @@ export class MatrixRuntimeListener {
             ...matrixSyncState(identity.metadata),
             nextBatch: synced.next_batch ?? null,
             lastSyncedAt: new Date().toISOString(),
+            lastOkAt: new Date().toISOString(),
+            consecutiveErrors: 0,
           },
         },
         updatedAt: new Date(),
@@ -117,6 +119,10 @@ export class MatrixRuntimeListener {
 
   isRunning(identityId: string) {
     return this.loops.has(identityId)
+  }
+
+  getRunningIdentityIds() {
+    return Array.from(this.loops.keys())
   }
 
   private async runLoop(input: MatrixRuntimeListenerLoopInput) {

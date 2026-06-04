@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { roomService } from '../services/rooms'
+import { describeMatrixDiagnostics } from '../services/rooms/matrix-diagnostics'
 
 const createRoomSchema = z.object({
   kind: z.enum(['group', 'manager_dm', 'task', 'direct', 'human_intervention']),
@@ -93,6 +94,9 @@ export const roomRoutes = new Hono<{ Variables: AuthVariables }>()
     const input = await roomService.buildTaskThreadRoomInput(c.req.valid('json').taskThreadId, user.sub)
     return c.json(await roomService.ensureRoomForTaskThread(input))
   })
+  .get('/matrix/diagnostics', async (c) => {
+    return c.json(await describeMatrixDiagnostics())
+  })
   .get('/:roomId', async (c) => {
     const user = c.get('user')
     return c.json(await roomService.getRoomForOwner(c.req.param('roomId'), user.sub))
@@ -127,4 +131,3 @@ export const roomRoutes = new Hono<{ Variables: AuthVariables }>()
     await roomService.getRoomForOwner(roomId, user.sub)
     return c.json(await roomService.appendTimelineEvent({ roomId, ...c.req.valid('json') }))
   })
-

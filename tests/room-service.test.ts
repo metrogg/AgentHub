@@ -1051,6 +1051,56 @@ describe('RoomService local Matrix-compatible adapter', () => {
     }
   })
 
+  test('Matrix diagnostics reports homeserver config and listener health without leaking secrets', async () => {
+    const diagnosticsApi = await import('../apps/server/src/services/rooms/matrix-diagnostics')
+    const previousProvider = process.env.AGENTHUB_ROOM_PROVIDER
+    const previousHomeserver = process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+    const previousToken = process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN
+    delete process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+    process.env.AGENTHUB_ROOM_PROVIDER = 'matrix'
+    process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN = 'super-secret-token'
+
+    const [identity] = await db
+      .insert(matrixIdentities)
+      .values({
+        ownerType: 'manager',
+        ownerId: 'diagnostics-manager',
+        serverName: 'agenthub.local',
+        localpart: 'manager-diagnostics-manager',
+        userId: '@manager-diagnostics-manager:agenthub.local',
+        accessToken: 'diagnostics-token',
+        password: 'diagnostics-password',
+        displayName: 'Diagnostics Manager',
+        metadata: {
+          matrixSync: {
+            lastSyncedAt: '2026-06-04T00:00:00.000Z',
+            lastOkAt: '2026-06-04T00:00:00.000Z',
+            consecutiveErrors: 0,
+          },
+        },
+      })
+      .returning()
+
+    try {
+      const diagnostics = await diagnosticsApi.describeMatrixDiagnostics()
+      expect(diagnostics.configured).toBe(false)
+      expect(diagnostics.homeserver.reachable).toBe(false)
+      expect(diagnostics.registration.tokenConfigured).toBe(true)
+      expect(JSON.stringify(diagnostics)).not.toContain('super-secret-token')
+      expect(diagnostics.listeners.rows.some((row) => row.identityId === identity!.id)).toBe(true)
+      expect(diagnostics.listeners.rows.find((row) => row.identityId === identity!.id)?.lastOkAt).toBe(
+        '2026-06-04T00:00:00.000Z',
+      )
+    } finally {
+      if (previousProvider === undefined) delete process.env.AGENTHUB_ROOM_PROVIDER
+      else process.env.AGENTHUB_ROOM_PROVIDER = previousProvider
+      if (previousHomeserver === undefined) delete process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+      else process.env.AGENTHUB_MATRIX_HOMESERVER_URL = previousHomeserver
+      if (previousToken === undefined) delete process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN
+      else process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN = previousToken
+    }
+  })
+
   test('Matrix dispatcher applies /stop as task room cancellation', async () => {
     const [workspace] = await db
       .insert(workspaces)

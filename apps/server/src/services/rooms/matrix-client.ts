@@ -69,6 +69,15 @@ export class MatrixClient {
     return this.options.autoJoinParticipants
   }
 
+  async versions() {
+    return this.request<{
+      versions?: string[]
+      unstable_features?: Record<string, boolean>
+    }>('/_matrix/client/versions', {
+      method: 'GET',
+    })
+  }
+
   userId(localpart: string) {
     return `@${localpart}:${this.options.serverName}`
   }

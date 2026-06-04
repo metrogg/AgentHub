@@ -595,6 +595,48 @@ export interface SettingsConsoleLogsResponse {
   }
 }
 
+export interface MatrixDiagnostics {
+  provider: string
+  configured: boolean
+  homeserver: {
+    url: string | null
+    serverName: string
+    reachable: boolean
+    versions: string[]
+    error: string | null
+  }
+  registration: {
+    tokenConfigured: boolean
+    adminAccessTokenConfigured: boolean
+    adminRoomAliasConfigured: boolean
+    autoInviteParticipants: boolean
+    autoJoinParticipants: boolean
+  }
+  resources: {
+    matrixRoomCount: number
+    activeMatrixRoomCount: number
+    identityCount: number
+    identityWithTokenCount: number
+    backendParticipantCount: number
+    joinedBackendParticipantCount: number
+  }
+  listeners: {
+    runningIdentityIds: string[]
+    rows: Array<{
+      identityId: string
+      userId: string
+      ownerType: string
+      ownerId: string
+      runningInMemory: boolean
+      lastSyncedAt: string | null
+      lastOkAt: string | null
+      lastErrorAt: string | null
+      lastError: string | null
+      consecutiveErrors: number
+    }>
+  }
+}
+
 export interface OpencodeModelItem {
   id: string
   provider: string
@@ -1545,6 +1587,7 @@ export const api = {
   getSettingsGeneralInfo: () => request<SettingsGeneralInfo>('/settings/general-info'),
   getSettingsConsoleLogs: (limit = 160) =>
     request<SettingsConsoleLogsResponse>(`/settings/console-logs?limit=${encodeURIComponent(String(limit))}`),
+  getMatrixDiagnostics: () => request<MatrixDiagnostics>('/rooms/matrix/diagnostics'),
   setupDockerSandbox: () =>
     request<{ ok: boolean; message: string; steps: Array<{ command: string; ok: boolean; output: string }>; sandbox: SettingsGeneralInfo['sandbox'] }>(
       '/settings/sandbox/docker/setup',

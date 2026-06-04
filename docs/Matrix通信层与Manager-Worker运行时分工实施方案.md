@@ -11,6 +11,55 @@
 - 默认仍是单进程 AgentHub 服务 + 本地 CLI 子进程 + filesystem SharedStorage。
 - 真实 Matrix homeserver 是目标通信层；`local-matrix-compatible` 只保留为本地开发和测试 fallback。
 
+## 本地真实 Matrix 启动方式
+
+AgentHub 第一阶段默认采用轻量 HiClaw 路线：用本地 Docker Compose 托管一个 Tuwunel homeserver，Agent 执行仍可继续走本机 `local-workdir`。这里的 Docker 只用于通信基础设施，不等于每个 Agent 都进入 Docker sandbox。
+
+启动基础设施：
+
+```bash
+bun run infra:up
+```
+
+只启动 Matrix：
+
+```bash
+bun run matrix:up
+```
+
+查看 Tuwunel 日志：
+
+```bash
+bun run matrix:logs
+```
+
+查看 AgentHub 侧 Matrix 诊断：
+
+```bash
+curl http://localhost:8000/api/rooms/matrix/diagnostics
+```
+
+诊断接口会返回 provider、homeserver `/versions` 探测、注册配置是否存在、Matrix rooms / identities / backend participants 数量，以及 Manager / Worker listener 的 `lastSyncedAt`、`lastOkAt`、`lastErrorAt`、`consecutiveErrors`。该接口只读，不会启动或停止 listener，也不会返回 access token、registration token 或 password。
+
+停止基础设施：
+
+```bash
+bun run infra:down
+```
+
+`.env` 中需要打开真实 Matrix provider：
+
+```bash
+AGENTHUB_ROOM_PROVIDER=matrix
+AGENTHUB_MATRIX_HOMESERVER_URL=http://localhost:6167
+AGENTHUB_MATRIX_SERVER_NAME=agenthub.local
+AGENTHUB_MATRIX_REGISTRATION_TOKEN=agenthub-dev-registration-token
+AGENTHUB_MATRIX_AUTO_INVITE_PARTICIPANTS=true
+AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS=true
+```
+
+当前 compose 文件位于 [../infra/docker-compose.hiclaw-lite.yml](../infra/docker-compose.hiclaw-lite.yml)，Tuwunel 配置对齐 HiClaw 的默认做法：`CONDUWUIT_*` 环境变量、`6167` Matrix client API 端口、允许本地开发注册、持久化数据卷。Synapse / Conduit 不作为默认托管服务；它们只作为“连接已有 Matrix homeserver”的兼容目标。
+
 ## 一句话分工
 
 - **通信层**：Codex 继续推进。目标是让 Matrix 成为 Room 事实源，完成身份、加入、监听、mention、控制消息、文件引用、审计和前端投影闭环。
@@ -809,4 +858,3 @@ Worker 问：
 - 不让前端本地状态代替 Room timeline。
 - 不让 Manager 黑盒伪造 Worker 发言。
 - 不让 Worker 产物只留在本地临时目录。
-
