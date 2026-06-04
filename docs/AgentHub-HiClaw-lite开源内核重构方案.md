@@ -65,7 +65,7 @@ Open-source Infrastructure
 截至 2026-06-04，本轮 HiClaw-lite Kernel 重构已经从本地可验证切片推进到真实开源组件 bridge：
 
 - **Phase 0 已从护栏推进到删除**：`OrchestratorEngine`、`TaskExecutionService`、`LocalA2ATransport` 已删除，边界测试会阻止这些旧模块重新出现。新 Manager 决策、Room 语义、任务执行和生命周期所有权只能继续进入 `ManagerLoop` / `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `WorkerRuntimeService`。
-- **Phase 1 已落地 Room 资源层和真实 Matrix bridge**：数据库新增 `rooms`、`room_participants`、`timeline_events`；服务层新增 `RoomService`、`MatrixRoomAdapter`、`LocalMatrixCompatibleRoomAdapter` 和 `/api/rooms`。`MatrixRoomAdapter` 已通过 Matrix Client-Server API 创建真实 room、发送 `m.room.message`、保存 Matrix `room_id / event_id / user_id`，并记录 Human / Manager / Worker participant 映射。`LocalMatrixCompatibleRoomAdapter` 只保留为测试/开发 fallback。
+- **Phase 1 已落地 Room 资源层和真实 Matrix bridge，并开始接近 HiClaw 的常驻 Room 通信语义**：数据库新增 `rooms`、`room_participants`、`timeline_events` 和 `matrix_identities`；服务层新增 `RoomService`、`MatrixRoomAdapter`、`MatrixClient`、`MatrixIdentityService`、`MatrixRuntimeListener`、`MatrixRuntimeSupervisor`、`MatrixRoomEventDispatcher`、`LocalMatrixCompatibleRoomAdapter` 和 `/api/rooms`。`MatrixRoomAdapter` 已通过 Matrix Client-Server API 创建真实 room/alias、发送 `m.room.message`、保存 Matrix `room_id / event_id / user_id`，并记录 Human / Manager / Worker participant 映射；写 timeline 时优先使用 sender participant 自己的 Matrix access token。`MatrixRuntimeSupervisor` 会在 Room participant reconcile、TaskThread room reconcile、Worker ready 和 server startup recovery 时启动 Manager/Worker listener；Worker stopped / stale-failed 时停止 listener；`/sync` 临时失败会记录到 identity metadata 并退避重试。`MatrixRoomEventDispatcher` 会处理人类群聊消息、task room @ Worker、`/stop` / `/cancel`、`/approve` / `/deny` 和 Matrix file refs。`LocalMatrixCompatibleRoomAdapter` 只保留为测试/开发 fallback。
 - **Phase 2 已落地 CoordinatorRuntime 壳，并开始转向 OpenClaw/QwenPaw Manager runtime**：新增 `CoordinatorRuntime` action schema、`CoordinatorService.stepRoom()` 和 Manager 配置目录化（`SOUL.md`、`AGENTS.md`、`skills/`、`workers-registry.json`、`state.json`）。群聊消息会先写入 Room timeline，并在慢 Manager 决策前追加一条幂等的 `coordinator.observing` Manager timeline event。`resolveCoordinatorRuntime()` 默认已切到 `openclaw`，`qwenpaw` 是同级外部 runtime；`local-llm` 只允许显式作为迁移/测试 fallback。Manager workspace 会生成第一批 AgentHub 版 skill 契约：`worker-management`、`task-management`、`channel-management`、`file-sync-management`、`human-management`，每个 skill 都明确遵循“读 Matrix timeline -> 判断是否调用 skill -> 调 Controller API 改真实资源 -> 回写 Matrix room”。
 - **Phase 3 已落地 WorkerRuntime task room 最小壳，并打通 Coordinator assign / ManagerLoop dispatch 主线**：新增 `WorkerRuntime` 接口、`LocalWorkerRuntimeAdapter` 和 `WorkerRuntimeService.runTaskRoom()`。当前可以从 task room 读取 `task.assigned`，找到 Worker participant，调用 runtime，并把 `task.progress`、`worker.message`、`artifact.created` 写回 Room timeline。WorkerRuntime 流式事件已经支持 `clarification` 和 artifact `status`：Worker 请求澄清会写入 `approval.requested` timeline event，同时创建 `task_clarifications` pending 资源记录并把 `clarificationId` 写回 timeline metadata；partial artifact 会以 `partial` 状态进入 ArtifactStore。澄清不再被伪装成失败：`WorkerRuntimeResult.status` 已扩展为 `waiting_for_human`，`TaskThread.status`、`RuntimeLease.status`、`WorkerInstance.observedState` 会同步进入 `waiting_for_human`，`RunController.markTaskWaitingForHuman()` 会把 task 标成 `blocked + progressStatus=awaiting_human_clarification` 并发出 `approval.requested` RunEvent，run 保持 `running`。用户在同一个 task room 回答澄清后，`stepTaskRoomAfterHumanMessage()` 会记录 `human.message`、把对应 `task_clarifications` 更新为 `answered`、写入 `worker-runtime.resume-requested`，并可重新调用 `WorkerRuntimeService.runTaskRoom()` 继续执行。Coordinator 返回单个或多个 `assign` 时，会创建真实 run / workspace task / TaskThread / task room / Worker participant / RuntimeLease，并启动 WorkerRuntime 执行；多个 `assign` 已收敛到同一个 shared run 下，run completion 由 batch coordinator 在所有 Worker task settle 后统一判定，不再由每个单任务提前结束整个 run。Coordinator action 现在还支持 `taskKey / dependsOn` 的最小依赖账本语义，派发器会把依赖 key 转换成真实 task id 写入 `workspace_tasks.dependencies`、run plan 和 Room timeline metadata，并按依赖层执行 WorkerRuntime；上游失败时，下游 task room 会记录 `worker-runtime.skipped-by-dependency`，不会硬跑；上游等待用户澄清时，下游会保持可见但暂停为 `waiting_on_dependency_human_clarification`，不会误报失败。动态 `OrchestratorPlan` 的成功路径也已开始翻译成 Coordinator `assign` batch：复用同一个 Manager run，创建真实 task room / RuntimeLease / ArtifactStore 记录，并优先走 WorkerRuntime 执行，而不是直接启动旧 `OrchestratorEngine`。运行详情页的单任务 retry 也已切到 `WorkerRuntimeService.rerunTaskRoom()`：先通过 `RunController.resetTaskForRetry()` 重置资源，再从已有 task room 重新接单，不再调用旧 `OrchestratorEngine.retryTask()`。`ManagerLoop.step()` 现在还会把 `pending/blocked + prepared TaskThread` 的任务原生派发到 WorkerRuntime：确保 task room 和 Worker participant，写入 `manager-loop.dispatch` 的 `task.assigned` timeline event，再调用 `WorkerRuntimeService.rerunTaskRoom(source=manager-loop.dispatch-pending)`；等待人类澄清的 blocked task 会保持 waiting，不会被误重启。
 - **Phase 3 生命周期入口继续收口**：`WorkerRuntimeService.runTaskRoom()` 已经从“执行函数”升级为完整任务房间生命周期入口。直接 `runTaskRoom()`、`rerunTaskRoom()`、澄清 resume、Coordinator assign、动态计划分发和 ManagerLoop prepared-task 派发都共享同一条路径；WorkerRuntime 一开始就写入 `worker-runtime.started` timeline event，并同步把 `workspace_task` 标为 `running`、`TaskThread` 标为 `active`、`RuntimeLease` 标为 `running`、`WorkerInstance` 标为 `busy`。运行中会按间隔写入 `worker-runtime.heartbeat` task room timeline event，并刷新 WorkerInstance `lastHeartbeatAt`，最终 completed / failed / cancelled / waiting_for_human 也在 `runTaskRoom()` 内统一同步到 RunController 和资源状态。
@@ -81,7 +81,7 @@ Open-source Infrastructure
 仍未完成：
 
 - 前端已经具备 `/api/rooms` 的最小读取、replay 投影、`room:timeline` realtime WS 增量投影，以及从 Room task event 自举最小任务看板/子对话入口的能力；ManagerPatrol 的监督事件也已进入 Room timeline。但主视图还不是完整事实源：旧 messages、旧 AG-UI replay、run snapshot 和 Room timeline 仍并存，后续要继续把主视图状态统一到 Room/ArtifactStore/资源快照。
-- 真实 Matrix adapter 已接入第一版，但还缺 MatrixIdentity/TokenVault、真实用户注册、invite/join 完整状态机、每 participant 自己 token 发言，以及长期 Worker Matrix listener。
+- 真实 Matrix adapter 已接入第一版，并具备 MatrixIdentity、真实用户注册/登录、invite/join reconcile、每 participant token 发言、listener supervisor、mention dispatch、基础控制消息和 file refs -> ArtifactStore。仍缺的是 TokenVault/加密存储、typing/presence、Matrix media download 到 MinIO/S3、OpenClaw/QwenPaw 原生 Matrix runtime 进程化、完整 room membership 状态机和前端更 Matrix-sync-native 的投影。
 - CoordinatorRuntime 已经接入群聊入口的轻量决策，以及单任务/多任务 `assign` 派工；多个 assign 会共享一个 run 并创建多个 task room，并已具备 `taskKey / dependsOn` 的最小依赖账本和按层执行能力。动态计划成功后也已优先通过 `startPlanRunWithCoordinatorAssignBatch()` 转成 Coordinator assign batch 执行。人工干预、取消、启动恢复、终态 run 复盘也已切到 `Room timeline + RunController/ManagerLoop + coordinator-runtime/final-review-skill`。旧 `TaskScheduler` 已删除；冲突合并后的后续动作、模型化 review skill、复杂返工调度等控制流后续只能继续进入 `ManagerLoop` / `RunController`。
 - WorkerRuntime 已经被 Coordinator assign 主线、动态计划初始分发、运行详情页单任务 retry 和 ManagerLoop prepared-task 原生派发调用，并支持进度、消息、失败、澄清请求、partial artifact 的 task room timeline 写回；澄清请求已经从纯 timeline metadata 提升为 `task_clarifications` pending/answered 资源，且会同步到 TaskThread / RuntimeLease / WorkerInstance / RunEvent 的 `waiting_for_human` 资源状态。用户回复澄清后的最小 resume path 与失败后 rerun path 已经打通。但 resume/rerun 还没有升级成长期 Worker runtime 的原生等待/恢复状态机，进程级 cancel/abort、局部 resume 和更复杂重排仍要继续补齐。
 - RuntimeLease 已经在 Coordinator assign、WorkerRuntime、ManagerLoop prepared-task 派发、ManagerPatrol stale 检测、启动/关闭恢复中统一走 `RuntimeLeaseController`。旧 Engine 已删除；后续任何 lifecycle 能力都不能绕过 `RuntimeLeaseController` 直接散写 persistence helper。
@@ -917,7 +917,7 @@ created_at
 
 - 新代码 review 时能明确判断是否在增加旧路径。
 
-### Phase 1：RoomService + Matrix-compatible 本地 Adapter
+### Phase 1：RoomService + 真实 Matrix 身份基座
 
 目标：通信先换血。
 
@@ -925,17 +925,22 @@ created_at
 
 - 新增 `RoomService`、`ParticipantService`、`TimelineService`。
 - 定义 Matrix-compatible event schema。
-- 第一版实现 `LocalMatrixCompatibleRoomAdapter`：用 SQLite/filesystem 保存 room、participant、timeline event，但字段和语义按 Matrix 设计。
-- 真实 `MatrixRoomAdapter` 只做 POC 或 feature flag，不作为第一阶段必跑依赖。
+- 保留 `LocalMatrixCompatibleRoomAdapter`：仅用于测试/开发 fallback，用 SQLite 保存 room、participant、timeline event，但不能被称为真实通信层。
+- 实现真实 `MatrixRoomAdapter`：通过 Matrix Client-Server API 创建 / 解析 room alias，发送 `m.room.message`。
+- 新增 `MatrixClient` 和 `MatrixIdentityService`：Controller 为 Human、Manager、Worker 注册或登录真实 Matrix account，持久化 `matrix_identities`。
+- 添加 participant 时执行 invite / join reconcile；发送 timeline event 时优先使用 sender participant 自己的 Matrix access token。
+- `EnsureUser` 对齐 HiClaw 基础逻辑：register -> existing user login -> Tuwunel admin reset-password recovery -> retry login。
 - 群聊、task room、direct room 都走 RoomService。
 - 前端先通过兼容 Room API 读取主群聊和 task room，逐步停止从 session metadata 拼。
 
 验收：
 
 - 主群聊和 task room 都有稳定 `roomId`。
-- Manager @ Worker 是 timeline event。
+- Human、Manager、Worker 有真实 Matrix user id 和独立 access token。
+- Manager @ Worker 是 Matrix timeline event，并应包含 `m.mentions` 和可见 `matrix.to` mention。
+- Worker / Manager 消息由对应 participant token 发送，不由后端统一 app token 假装。
 - 用户进入 task room 能看到 Room timeline。
-- 不启动真实 Matrix homeserver 时也能通过本地 adapter 完成以上验收。
+- 不启动真实 Matrix homeserver 时只能通过本地 adapter 完成 UI/资源回归，不能声称完成真实通信验收。
 
 ### Phase 2：CoordinatorRuntime 壳 + Manager 配置
 
@@ -1063,12 +1068,27 @@ AgentHub 发送/读取 room event
 Manager/Worker 用 participant 身份发消息
 ```
 
-### Slice 3：真实 Matrix Adapter POC
+### Slice 3：真实 Matrix Identity / Membership 基座
 
 ```text
 本地启动 Tuwunel / Conduit / Synapse 之一
-MatrixRoomAdapter 创建 room、发消息、读 timeline
+MatrixRoomAdapter 创建/解析 room alias、发消息、记录 event id
+MatrixIdentityService 为 Human / Manager / Worker 确保真实 Matrix account
+matrix_identities 持久化 Matrix userId / localpart / access token / password
+Controller invite / join room membership
+timeline event 优先使用 sender participant token 发出
+MatrixRuntimeListener 调真实 /sync 导入 room event，并提供 start/stop 最小轮询 lifecycle
+MatrixRoomEventDispatcher 根据人类群聊消息和 @ Worker mention 调度 Manager/Worker
 与 LocalMatrixCompatibleRoomAdapter 共用同一 RoomService 接口
+```
+
+仍待补齐：
+
+```text
+把 Matrix listener lifecycle 接入 ManagerRuntime / WorkerController 的真实启停
+typing、/stop、/approve、/deny 控制事件
+media 下载、对象存储落盘、权限校验
+前端从 Matrix sync timeline + resource state 投影
 ```
 
 ### Slice 4：ManagerRuntime 壳

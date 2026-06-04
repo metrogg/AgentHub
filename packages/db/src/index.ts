@@ -631,6 +631,40 @@ function ensureLegacySchema(database: Database) {
     'timeline_events_sender_participant_id_idx',
     'CREATE INDEX timeline_events_sender_participant_id_idx ON timeline_events(sender_participant_id)',
   )
+
+  ensureTable(
+    database,
+    'matrix_identities',
+    `CREATE TABLE matrix_identities (
+      id TEXT PRIMARY KEY NOT NULL,
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      server_name TEXT NOT NULL,
+      localpart TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      access_token TEXT,
+      password TEXT,
+      display_name TEXT NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+  )
+  ensureIndex(
+    database,
+    'matrix_identities_owner_unique',
+    'CREATE UNIQUE INDEX matrix_identities_owner_unique ON matrix_identities(owner_type, owner_id, server_name)',
+  )
+  ensureIndex(
+    database,
+    'matrix_identities_user_id_unique',
+    'CREATE UNIQUE INDEX matrix_identities_user_id_unique ON matrix_identities(user_id)',
+  )
+  ensureIndex(
+    database,
+    'matrix_identities_localpart_idx',
+    'CREATE INDEX matrix_identities_localpart_idx ON matrix_identities(localpart)',
+  )
 }
 
 function ensureColumn(database: Database, table: string, column: string, statement: string) {

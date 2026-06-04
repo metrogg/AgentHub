@@ -6,6 +6,7 @@ import { LocalMatrixCompatibleRoomAdapter } from './local-matrix-compatible-adap
 import { MatrixRoomAdapter } from './matrix-room-adapter'
 import type {
   AddParticipantInput,
+  AppendMentionTimelineEventInput,
   AppendTimelineEventInput,
   CreateRoomInput,
   EnsureRoomForTaskThreadInput,
@@ -20,12 +21,39 @@ export class RoomService {
     return this.adapter.createRoom(input)
   }
 
-  addParticipant(input: AddParticipantInput) {
-    return this.adapter.addParticipant(input)
+  async addParticipant(input: AddParticipantInput) {
+    const participant = await this.adapter.addParticipant(input)
+    const { matrixRuntimeSupervisor } = await import('./matrix-runtime-supervisor')
+    await matrixRuntimeSupervisor.startParticipantListener(participant.id, {
+      reason: 'room-participant-reconciled',
+    }).catch(() => {
+      // Matrix listener startup is supervised separately; room membership remains the source of truth.
+    })
+    return participant
   }
 
   async appendTimelineEvent(input: AppendTimelineEventInput) {
     const event = await this.adapter.appendTimelineEvent(input)
+    await this.broadcastTimelineEvent(input.roomId, event).catch(() => {
+      // Timeline persistence is the source of truth; realtime broadcast is best-effort.
+    })
+    return event
+  }
+
+  async appendMentionTimelineEvent(input: AppendMentionTimelineEventInput) {
+    const event = this.adapter.appendMentionTimelineEvent
+      ? await this.adapter.appendMentionTimelineEvent(input)
+      : await this.adapter.appendTimelineEvent(input)
+    await this.broadcastTimelineEvent(input.roomId, event).catch(() => {
+      // Timeline persistence is the source of truth; realtime broadcast is best-effort.
+    })
+    return event
+  }
+
+  async importTimelineEvent(input: AppendTimelineEventInput & { providerEventId: string }) {
+    const event = this.adapter.importTimelineEvent
+      ? await this.adapter.importTimelineEvent(input)
+      : await this.adapter.appendTimelineEvent(input)
     await this.broadcastTimelineEvent(input.roomId, event).catch(() => {
       // Timeline persistence is the source of truth; realtime broadcast is best-effort.
     })

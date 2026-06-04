@@ -294,6 +294,29 @@ export const roomParticipants = sqliteTable(
   }),
 )
 
+export const matrixIdentities = sqliteTable(
+  'matrix_identities',
+  {
+    id: id(),
+    ownerType: text('owner_type', { enum: ['human', 'manager', 'worker', 'system'] }).notNull(),
+    ownerId: text('owner_id').notNull(),
+    serverName: text('server_name').notNull(),
+    localpart: text('localpart').notNull(),
+    userId: text('user_id').notNull(),
+    accessToken: text('access_token'),
+    password: text('password'),
+    displayName: text('display_name').notNull(),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: now(),
+    updatedAt: ts('updated_at').notNull().$defaultFn(() => new Date()),
+  },
+  (table) => ({
+    ownerUnique: uniqueIndex('matrix_identities_owner_unique').on(table.ownerType, table.ownerId, table.serverName),
+    userIdUnique: uniqueIndex('matrix_identities_user_id_unique').on(table.userId),
+    localpartIdx: index('matrix_identities_localpart_idx').on(table.localpart),
+  }),
+)
+
 export const timelineEvents = sqliteTable(
   'timeline_events',
   {
@@ -311,6 +334,7 @@ export const timelineEvents = sqliteTable(
         'task.progress',
         'artifact.created',
         'approval.requested',
+        'file.shared',
         'system',
       ],
     }).notNull(),

@@ -12,6 +12,7 @@ export type TimelineEventType =
   | 'task.progress'
   | 'artifact.created'
   | 'approval.requested'
+  | 'file.shared'
   | 'system'
 
 export interface CreateRoomInput {
@@ -73,6 +74,14 @@ export interface AppendTimelineEventInput {
   providerEventId?: string
 }
 
+export interface AppendMentionTimelineEventInput extends AppendTimelineEventInput {
+  mentionParticipantId: string
+}
+
+export interface ImportTimelineEventInput extends AppendTimelineEventInput {
+  providerEventId: string
+}
+
 export interface ListTimelineEventsInput {
   roomId: string
   afterSequence?: number
@@ -85,6 +94,8 @@ export interface RoomAdapter {
   ensureRoomForTaskThread(input: EnsureRoomForTaskThreadInput): Promise<any>
   addParticipant(input: AddParticipantInput): Promise<any>
   appendTimelineEvent(input: AppendTimelineEventInput): Promise<any>
+  appendMentionTimelineEvent?(input: AppendMentionTimelineEventInput): Promise<any>
+  importTimelineEvent?(input: ImportTimelineEventInput): Promise<any>
   listTimelineEvents(input: ListTimelineEventsInput): Promise<any[]>
   listRoomsForOwner(ownerId: string, workspaceId?: string | null): Promise<any[]>
   getRoom(roomId: string): Promise<any | null>

@@ -208,6 +208,22 @@ if (recoveredLeaseCount > 0) {
     '[Recovery] WorkerController recovered stale worker instances on startup',
   )
 }
+const { matrixRuntimeSupervisor } = await import('./services/rooms/matrix-runtime-supervisor')
+const matrixListeners = await matrixRuntimeSupervisor.startActiveParticipantListeners({
+  reason: 'server-startup-recovery',
+}).catch((err) => {
+  logger.warn({ err }, '[Recovery] Matrix runtime listener recovery failed')
+  return null
+})
+if (matrixListeners && (matrixListeners.startedCount > 0 || matrixListeners.skippedCount > 0)) {
+  logger.info(
+    {
+      startedCount: matrixListeners.startedCount,
+      skippedCount: matrixListeners.skippedCount,
+    },
+    '[Recovery] Matrix runtime listeners reconciled',
+  )
+}
 if (runningRuns.length > 0) {
   logger.info({ count: runningRuns.length }, '[Recovery] Reconciling unfinished runs through RunController')
   for (const run of runningRuns) {

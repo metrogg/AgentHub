@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto'
 import { gt } from 'drizzle-orm'
-import { and, asc, db, desc, eq, roomParticipants, rooms, sql, timelineEvents } from '@agenthub/db'
+import { and, asc, db, desc, eq, matrixIdentities, roomParticipants, rooms, sql, timelineEvents } from '@agenthub/db'
+import { MatrixClient, matrixBool, matrixLocalpart } from './matrix-client'
+import { MatrixIdentityService, identityOwnerFromParticipant } from './matrix-identity-service'
 import type {
   AddParticipantInput,
   AppendTimelineEventInput,
@@ -13,142 +14,55 @@ import type {
   RoomKind,
 } from './types'
 
-interface MatrixClientOptions {
-  homeserverUrl: string
-  accessToken: string
-  serverName: string
-  autoInviteParticipants: boolean
-  autoJoinParticipants: boolean
+interface MatrixRoomAdapterOptions {
+  homeserverUrl?: string
+  accessToken?: string
+  serverName?: string
+  autoInviteParticipants?: boolean
+  autoJoinParticipants?: boolean
   registrationToken?: string
 }
 
-class MatrixClient {
-  constructor(private readonly options: MatrixClientOptions) {}
-
-  shouldAutoInviteParticipants() {
-    return this.options.autoInviteParticipants
-  }
-
-  shouldAutoJoinParticipants() {
-    return this.options.autoJoinParticipants
-  }
-
-  async createRoom(input: { name: string; topic?: string | null; invite?: string[] }) {
-    return this.request<{ room_id: string }>('/_matrix/client/v3/createRoom', {
-      method: 'POST',
-      body: {
-        name: input.name,
-        topic: input.topic ?? undefined,
-        preset: 'private_chat',
-        invite: input.invite?.length ? input.invite : undefined,
-        visibility: 'private',
-      },
-    })
-  }
-
-  async inviteUser(roomId: string, userId: string) {
-    return this.request<Record<string, never>>(
-      `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`,
-      {
-        method: 'POST',
-        body: { user_id: userId },
-      },
-    )
-  }
-
-  async joinRoom(roomId: string) {
-    return this.request<{ room_id: string }>(
-      `/_matrix/client/v3/join/${encodeURIComponent(roomId)}`,
-      {
-        method: 'POST',
-        body: {},
-      },
-    )
-  }
-
-  async sendTextMessage(roomId: string, body: string, metadata: Record<string, unknown>) {
-    const txId = `agenthub-${randomUUID()}`
-    return this.request<{ event_id: string }>(
-      `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${encodeURIComponent(txId)}`,
-      {
-        method: 'PUT',
-        body: {
-          msgtype: 'm.text',
-          body,
-          'org.agenthub.metadata': metadata,
-        },
-      },
-    )
-  }
-
-  matrixUserId(input: { type: ParticipantType; id?: string | null; displayName: string }) {
-    const localpart = matrixLocalpart(input.id ?? input.displayName)
-    if (input.type === 'human') return `@human-${localpart}:${this.options.serverName}`
-    if (input.type === 'manager') return `@manager-${localpart}:${this.options.serverName}`
-    if (input.type === 'system') return `@system-${localpart}:${this.options.serverName}`
-    return `@worker-${localpart}:${this.options.serverName}`
-  }
-
-  private async request<T>(path: string, init: { method: string; body?: unknown }): Promise<T> {
-    const response = await fetch(`${this.options.homeserverUrl.replace(/\/+$/, '')}${path}`, {
-      method: init.method,
-      headers: {
-        Authorization: `Bearer ${this.options.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    })
-    if (!response.ok) {
-      const text = await response.text().catch(() => '')
-      throw new Error(`Matrix API ${init.method} ${path} failed: ${response.status} ${text.slice(0, 500)}`)
-    }
-    return response.json() as Promise<T>
-  }
-}
-
 export class MatrixRoomAdapter implements RoomAdapter {
-  private readonly options: Partial<MatrixClientOptions>
+  private readonly options: MatrixRoomAdapterOptions
   private clientInstance: MatrixClient | null = null
+  private identityServiceInstance: MatrixIdentityService | null = null
 
-  constructor(options: Partial<MatrixClientOptions> = {}) {
+  constructor(options: MatrixRoomAdapterOptions = {}) {
     this.options = options
   }
 
-  private client() {
-    if (this.clientInstance) return this.clientInstance
-    const homeserverUrl = this.options.homeserverUrl ?? process.env.AGENTHUB_MATRIX_HOMESERVER_URL
-    const accessToken = this.options.accessToken ?? process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
-    const serverName = this.options.serverName ?? process.env.AGENTHUB_MATRIX_SERVER_NAME ?? 'agenthub.local'
-    if (!homeserverUrl || !accessToken) {
-      throw new Error(
-        'Matrix room provider requires AGENTHUB_MATRIX_HOMESERVER_URL and AGENTHUB_MATRIX_ACCESS_TOKEN. ' +
-          'Start Tuwunel/Synapse and configure a real Matrix access token, or set AGENTHUB_ROOM_PROVIDER=local-matrix-compatible only for local tests.',
-      )
-    }
-    this.clientInstance = new MatrixClient({
-      homeserverUrl,
-      accessToken,
-      serverName,
-      autoInviteParticipants:
-        this.options.autoInviteParticipants ?? matrixBool('AGENTHUB_MATRIX_AUTO_INVITE_PARTICIPANTS', true),
-      autoJoinParticipants:
-        this.options.autoJoinParticipants ?? matrixBool('AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS', false),
-      registrationToken:
-        this.options.registrationToken ?? (process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN?.trim() || undefined),
-    })
-    return this.clientInstance
-  }
-
   async createRoom(input: CreateRoomInput) {
-    const matrixRoom = await this.client().createRoom({
-      name: input.title,
-      topic: input.topic ?? null,
-    })
+    const client = this.client()
+    const aliasName = roomAliasName(input)
+    const alias = aliasName ? `#${aliasName}:${client.serverName}` : null
+    let providerRoomId: string | null = null
+    let resolvedByAlias = false
+
+    if (alias) {
+      try {
+        const resolved = await client.resolveRoomAlias(alias)
+        providerRoomId = resolved.room_id
+        resolvedByAlias = true
+      } catch {
+        providerRoomId = null
+      }
+    }
+
+    if (!providerRoomId) {
+      const matrixRoom = await client.createRoom({
+        name: input.title,
+        topic: input.topic ?? null,
+        aliasName,
+      })
+      providerRoomId = matrixRoom.room_id
+    }
+
     const [room] = await db
       .insert(rooms)
       .values({
         provider: 'matrix',
-        providerRoomId: matrixRoom.room_id,
+        providerRoomId,
         kind: input.kind,
         ownerId: input.ownerId,
         workspaceId: input.workspaceId ?? null,
@@ -161,7 +75,9 @@ export class MatrixRoomAdapter implements RoomAdapter {
         metadata: {
           ...(input.metadata ?? {}),
           matrix: {
-            homeserverUrl: process.env.AGENTHUB_MATRIX_HOMESERVER_URL ?? null,
+            homeserverUrl: client.homeserverUrl,
+            alias,
+            resolvedByAlias,
           },
         },
       })
@@ -195,6 +111,14 @@ export class MatrixRoomAdapter implements RoomAdapter {
       displayName: 'You',
       role: 'owner',
     })
+    if (input.sessionType === 'group') {
+      await this.addParticipant({
+        roomId: room.id,
+        participantType: 'manager',
+        displayName: 'Manager',
+        role: 'manager',
+      })
+    }
     return room
   }
 
@@ -237,6 +161,8 @@ export class MatrixRoomAdapter implements RoomAdapter {
   }
 
   async addParticipant(input: AddParticipantInput) {
+    const identity = await this.identityService().ensureIdentity(identityOwnerFromParticipant(input))
+    const providerUserId = input.providerUserId ?? identity.userId
     const [existing] = await db
       .select()
       .from(roomParticipants)
@@ -249,28 +175,27 @@ export class MatrixRoomAdapter implements RoomAdapter {
               ? eq(roomParticipants.workspaceAgentId, input.workspaceAgentId)
               : input.workerInstanceId
                 ? eq(roomParticipants.workerInstanceId, input.workerInstanceId)
-                : eq(roomParticipants.displayName, input.displayName),
+                : eq(roomParticipants.providerUserId, providerUserId),
         ),
       )
       .limit(1)
+
     if (existing) {
-      if (input.workerInstanceId && existing.workerInstanceId !== input.workerInstanceId) {
-        const [updated] = await db
-          .update(roomParticipants)
-          .set({ workerInstanceId: input.workerInstanceId, updatedAt: new Date() })
-          .where(eq(roomParticipants.id, existing.id))
-          .returning()
-        return updated ?? existing
-      }
-      return existing
+      const [updated] = await db
+        .update(roomParticipants)
+        .set({
+          providerUserId,
+          workerInstanceId: input.workerInstanceId ?? existing.workerInstanceId,
+          displayName: input.displayName || existing.displayName,
+          updatedAt: new Date(),
+        })
+        .where(eq(roomParticipants.id, existing.id))
+        .returning()
+      await this.reconcileMatrixMembership(updated ?? existing, input.metadata ?? {})
+      const [reloaded] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, existing.id)).limit(1)
+      return reloaded ?? updated ?? existing
     }
-    const providerUserId =
-      input.providerUserId ??
-      this.client().matrixUserId({
-        type: input.participantType,
-        id: input.userId ?? input.workspaceAgentId ?? input.workerInstanceId ?? null,
-        displayName: input.displayName,
-      })
+
     const [participant] = await db
       .insert(roomParticipants)
       .values({
@@ -283,67 +208,32 @@ export class MatrixRoomAdapter implements RoomAdapter {
         displayName: input.displayName,
         role: input.role ?? defaultRole(input.participantType),
         metadata: input.metadata ?? {},
-    })
+      })
       .returning()
     if (!participant) throw new Error('Matrix room participant create failed')
-    await this.reconcileMatrixMembership(input.roomId, providerUserId, input.metadata ?? {})
+    await this.reconcileMatrixMembership(participant, input.metadata ?? {})
     const [updated] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, participant.id)).limit(1)
     return updated ?? participant
-  }
-
-  private async reconcileMatrixMembership(
-    roomId: string,
-    providerUserId: string,
-    participantMetadata: Record<string, unknown>,
-  ) {
-    const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1)
-    if (!room?.providerRoomId) return
-    const client = this.client()
-    const membership: Record<string, unknown> = {
-      provider: 'matrix',
-      providerRoomId: room.providerRoomId,
-      providerUserId,
-      invited: false,
-      joinedByAppToken: false,
-      note:
-        'AgentHub stores Matrix identity mapping here. Per-participant access tokens are a follow-up MatrixIdentity/TokenVault concern.',
-    }
-    if (client.shouldAutoInviteParticipants()) {
-      try {
-        await client.inviteUser(room.providerRoomId, providerUserId)
-        membership.invited = true
-      } catch (error) {
-        membership.inviteError = (error as Error).message
-      }
-    }
-    if (client.shouldAutoJoinParticipants()) {
-      try {
-        await client.joinRoom(room.providerRoomId)
-        membership.joinedByAppToken = true
-      } catch (error) {
-        membership.joinError = (error as Error).message
-      }
-    }
-    await db
-      .update(roomParticipants)
-      .set({
-        metadata: {
-          ...participantMetadata,
-          matrixMembership: membership,
-        },
-        updatedAt: new Date(),
-      })
-      .where(and(eq(roomParticipants.roomId, roomId), eq(roomParticipants.providerUserId, providerUserId)))
   }
 
   async appendTimelineEvent(input: AppendTimelineEventInput) {
     const [room] = await db.select().from(rooms).where(eq(rooms.id, input.roomId)).limit(1)
     if (!room) throw new Error(`Room not found: ${input.roomId}`)
-    const matrixEvent = await this.client().sendTextMessage(room.providerRoomId, input.body ?? '', {
-      senderType: input.senderType,
-      eventType: input.type,
-      ...(input.metadata ?? {}),
-    })
+    const senderIdentity = input.senderParticipantId
+      ? await this.getIdentityForSenderParticipant(input.senderParticipantId)
+      : null
+    const matrixEvent = await this.client().sendTextMessage(
+      room.providerRoomId,
+      input.body ?? '',
+      {
+        senderType: input.senderType,
+        eventType: input.type,
+        senderParticipantId: input.senderParticipantId ?? null,
+        sentAsMatrixUserId: senderIdentity?.userId ?? null,
+        ...(input.metadata ?? {}),
+      },
+      { accessToken: senderIdentity?.accessToken ?? null },
+    )
     const sequenceRows = await db
       .select({ nextSequence: sql<number>`coalesce(max(${timelineEvents.sequence}), 0) + 1` })
       .from(timelineEvents)
@@ -363,6 +253,8 @@ export class MatrixRoomAdapter implements RoomAdapter {
           matrix: {
             eventId: matrixEvent.event_id,
             roomId: room.providerRoomId,
+            senderUserId: senderIdentity?.userId ?? null,
+            usedParticipantToken: Boolean(senderIdentity?.accessToken),
           },
         },
         sequence: nextSequence ?? 1,
@@ -371,6 +263,53 @@ export class MatrixRoomAdapter implements RoomAdapter {
     if (!event) throw new Error('Matrix timeline event create failed')
     await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, input.roomId))
     return event
+  }
+
+  async appendMentionTimelineEvent(input: AppendTimelineEventInput & { mentionParticipantId: string }) {
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, input.roomId)).limit(1)
+    if (!room) throw new Error(`Room not found: ${input.roomId}`)
+    const senderIdentity = input.senderParticipantId
+      ? await this.getIdentityForSenderParticipant(input.senderParticipantId)
+      : null
+    const mentionParticipant = await this.getParticipant(input.mentionParticipantId)
+    if (!mentionParticipant?.providerUserId) {
+      throw new Error(`Matrix mention target participant is not bound to a Matrix user: ${input.mentionParticipantId}`)
+    }
+    const matrixEvent = await this.client().sendMentionMessage(
+      room.providerRoomId,
+      {
+        body: input.body ?? '',
+        mentionUserId: mentionParticipant.providerUserId,
+        mentionDisplayName: mentionParticipant.displayName,
+        metadata: {
+          senderType: input.senderType,
+          eventType: input.type,
+          senderParticipantId: input.senderParticipantId ?? null,
+          mentionParticipantId: input.mentionParticipantId,
+          mentionUserId: mentionParticipant.providerUserId,
+          ...(input.metadata ?? {}),
+        },
+      },
+      { accessToken: senderIdentity?.accessToken ?? null },
+    )
+    return this.insertLocalTimelineEvent({
+      ...input,
+      providerEventId: input.providerEventId ?? matrixEvent.event_id,
+      metadata: {
+        ...(input.metadata ?? {}),
+        matrix: {
+          eventId: matrixEvent.event_id,
+          roomId: room.providerRoomId,
+          senderUserId: senderIdentity?.userId ?? null,
+          usedParticipantToken: Boolean(senderIdentity?.accessToken),
+          mentions: [mentionParticipant.providerUserId],
+        },
+      },
+    })
+  }
+
+  async importTimelineEvent(input: AppendTimelineEventInput & { providerEventId: string }) {
+    return this.insertLocalTimelineEvent(input)
   }
 
   async listTimelineEvents(input: ListTimelineEventsInput) {
@@ -402,6 +341,132 @@ export class MatrixRoomAdapter implements RoomAdapter {
   async listParticipants(roomId: string) {
     return db.select().from(roomParticipants).where(eq(roomParticipants.roomId, roomId))
   }
+
+  private async insertLocalTimelineEvent(input: AppendTimelineEventInput & { providerEventId: string }) {
+    const [existing] = await db
+      .select()
+      .from(timelineEvents)
+      .where(and(eq(timelineEvents.roomId, input.roomId), eq(timelineEvents.providerEventId, input.providerEventId)))
+      .limit(1)
+    if (existing) return existing
+    const sequenceRows = await db
+      .select({ nextSequence: sql<number>`coalesce(max(${timelineEvents.sequence}), 0) + 1` })
+      .from(timelineEvents)
+      .where(eq(timelineEvents.roomId, input.roomId))
+    const nextSequence = sequenceRows[0]?.nextSequence ?? 1
+    const [event] = await db
+      .insert(timelineEvents)
+      .values({
+        roomId: input.roomId,
+        providerEventId: input.providerEventId,
+        senderParticipantId: input.senderParticipantId ?? null,
+        senderType: input.senderType,
+        type: input.type,
+        body: input.body ?? '',
+        metadata: input.metadata ?? {},
+        sequence: nextSequence ?? 1,
+      })
+      .returning()
+    if (!event) throw new Error('Matrix timeline event import failed')
+    await db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, input.roomId))
+    return event
+  }
+
+  private async reconcileMatrixMembership(
+    participant: typeof roomParticipants.$inferSelect,
+    participantMetadata: Record<string, unknown>,
+  ) {
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, participant.roomId)).limit(1)
+    if (!room?.providerRoomId || !participant.providerUserId) return
+    const identity = await this.getIdentityByUserId(participant.providerUserId)
+    const client = this.client()
+    const membership: Record<string, unknown> = {
+      provider: 'matrix',
+      providerRoomId: room.providerRoomId,
+      providerUserId: participant.providerUserId,
+      identityId: identity?.id ?? null,
+      invited: false,
+      joined: false,
+      joinedWithParticipantToken: false,
+    }
+    if (client.shouldAutoInviteParticipants()) {
+      try {
+        await client.inviteUser(room.providerRoomId, participant.providerUserId)
+        membership.invited = true
+      } catch (error) {
+        membership.inviteError = (error as Error).message
+      }
+    }
+    if (client.shouldAutoJoinParticipants() && identity?.accessToken) {
+      try {
+        await client.joinRoom(room.providerRoomId, identity.accessToken)
+        membership.joined = true
+        membership.joinedWithParticipantToken = true
+      } catch (error) {
+        membership.joinError = (error as Error).message
+      }
+    }
+    await db
+      .update(roomParticipants)
+      .set({
+        status: membership.joined ? 'joined' : membership.invited ? 'invited' : participant.status,
+        metadata: {
+          ...(participant.metadata ?? {}),
+          ...participantMetadata,
+          matrixMembership: membership,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(roomParticipants.id, participant.id))
+  }
+
+  private async getIdentityForSenderParticipant(participantId: string) {
+    const [row] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, participantId)).limit(1)
+    if (!row?.providerUserId) return null
+    return this.getIdentityByUserId(row.providerUserId)
+  }
+
+  private async getParticipant(participantId: string) {
+    const [participant] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, participantId)).limit(1)
+    return participant ?? null
+  }
+
+  private async getIdentityByUserId(userId: string) {
+    const [identity] = await db.select().from(matrixIdentities).where(eq(matrixIdentities.userId, userId)).limit(1)
+    return identity ?? null
+  }
+
+  private client() {
+    if (this.clientInstance) return this.clientInstance
+    const homeserverUrl = this.options.homeserverUrl ?? process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+    const accessToken = this.options.accessToken ?? process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
+    const serverName = this.options.serverName ?? process.env.AGENTHUB_MATRIX_SERVER_NAME ?? 'agenthub.local'
+    if (!homeserverUrl) {
+      throw new Error(
+        'Matrix room provider requires AGENTHUB_MATRIX_HOMESERVER_URL. ' +
+          'Start Tuwunel/Synapse, or set AGENTHUB_ROOM_PROVIDER=local-matrix-compatible only for local tests.',
+      )
+    }
+    this.clientInstance = new MatrixClient({
+      homeserverUrl,
+      adminAccessToken: accessToken,
+      adminRoomAlias: process.env.AGENTHUB_MATRIX_ADMIN_ROOM_ALIAS,
+      serverName,
+      autoInviteParticipants:
+        this.options.autoInviteParticipants ?? matrixBool('AGENTHUB_MATRIX_AUTO_INVITE_PARTICIPANTS', true),
+      autoJoinParticipants:
+        this.options.autoJoinParticipants ?? matrixBool('AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS', true),
+      registrationToken:
+        this.options.registrationToken ?? (process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN?.trim() || undefined),
+    })
+    return this.clientInstance
+  }
+
+  private identityService() {
+    if (this.identityServiceInstance) return this.identityServiceInstance
+    this.identityServiceInstance = new MatrixIdentityService(this.client())
+    return this.identityServiceInstance
+  }
 }
 
 function roomKindForSession(input: EnsureRoomForSessionInput): RoomKind {
@@ -416,20 +481,9 @@ function defaultRole(type: ParticipantType) {
   return 'member'
 }
 
-function matrixLocalpart(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/^@/, '')
-    .replace(/:.+$/, '')
-    .replace(/[^a-z0-9._=-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64) || 'participant'
-}
-
-function matrixBool(name: string, defaultValue: boolean) {
-  const value = process.env[name]?.trim().toLowerCase()
-  if (value === 'true' || value === '1' || value === 'yes') return true
-  if (value === 'false' || value === '0' || value === 'no') return false
-  return defaultValue
+function roomAliasName(input: CreateRoomInput) {
+  if (input.taskThreadId) return `agenthub-task-${matrixLocalpart(input.taskThreadId)}`
+  if (input.sessionId) return `agenthub-session-${matrixLocalpart(input.sessionId)}`
+  if (input.runId) return `agenthub-run-${matrixLocalpart(input.runId)}`
+  return null
 }

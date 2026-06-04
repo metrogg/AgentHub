@@ -55,7 +55,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 
 当前权威文档索引见 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
-当前主路径已经开始资源化：群聊消息先进入 Room timeline，复杂任务通过 CoordinatorRuntime / RunController 创建 run 与任务账本，RoomController 确保 group/task room，WorkerController 与 RuntimeLeaseController 管 Worker 和执行租约，WorkerRuntime 从 task room 接单并写回过程。`MatrixRoomAdapter` 已开始使用 Matrix Client-Server API 创建真实 room、发送 `m.room.message` 并记录 Matrix participant id；`LocalMatrixCompatibleRoomAdapter` 只允许作为测试/开发 fallback。后续还要继续把旧 snapshot/messages/AG-UI cache 降级为投影和兼容读取，让任务看板、进度条、子对话入口和产物卡稳定来自 Matrix timeline、资源状态与 ArtifactStore。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
+当前主路径已经开始资源化：群聊消息先进入 Room timeline，复杂任务通过 CoordinatorRuntime / RunController 创建 run 与任务账本，RoomController 确保 group/task room，WorkerController 与 RuntimeLeaseController 管 Worker 和执行租约，WorkerRuntime 从 task room 接单并写回过程。`MatrixRoomAdapter` 已接入 Matrix Client-Server API，并新增 `matrix_identities`：Human、Manager、Worker 会被确保为真实 Matrix account，Controller 负责 invite/join，timeline 发送会优先使用 sender participant 自己的 Matrix access token，而不是由后端统一 app token 假装所有人发言。`MatrixRuntimeListener` 现在可以用真实 identity token 调 `/sync`，导入真实 room event、解析 `m.mentions` / `matrix.to` mention 和 Matrix 文件引用，并提供可 start/stop 的最小轮询 lifecycle；`MatrixRoomEventDispatcher` 会把人类群聊消息调给 Manager，把 task room 中 @ Worker 的消息调给 WorkerRuntime。`LocalMatrixCompatibleRoomAdapter` 只允许作为测试/开发 fallback。后续还要继续把旧 snapshot/messages/AG-UI cache 降级为投影和兼容读取，并把 listener lifecycle 接入 ManagerRuntime / WorkerController 的真实启停，补 typing/stop/approve/deny 和 media object 落盘，让任务看板、进度条、子对话入口和产物卡稳定来自 Matrix timeline、资源状态与 ArtifactStore。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
 
 ## 分层定位
 
@@ -167,6 +167,7 @@ bun test
 | `AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS` | 是否启用模型动态生成快捷问题 |
 | `AGENTHUB_ROOM_PROVIDER` | `matrix` 使用真实 Matrix homeserver；`local-matrix-compatible` 仅用于测试/开发 fallback |
 | `AGENTHUB_MATRIX_HOMESERVER_URL` / `AGENTHUB_MATRIX_ACCESS_TOKEN` / `AGENTHUB_MATRIX_SERVER_NAME` | Matrix / Tuwunel homeserver 连接配置 |
+| `AGENTHUB_MATRIX_LISTENER_POLL_INTERVAL_MS` / `AGENTHUB_MATRIX_LISTENER_TIMEOUT_MS` | Manager / Worker Matrix listener 轮询与 long-poll 超时配置 |
 | `AGENTHUB_OBJECT_STORE_PROVIDER` / `AGENTHUB_S3_ENDPOINT` / `AGENTHUB_S3_ACCESS_KEY_ID` / `AGENTHUB_S3_SECRET_ACCESS_KEY` / `AGENTHUB_S3_BUCKET` | MinIO/S3-compatible SharedStorage 配置 |
 
 ## 工作区与产物

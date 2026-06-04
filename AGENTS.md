@@ -150,7 +150,9 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 - Manager 分配任务、@ Worker、Worker 回复、澄清、进度、失败、产物引用，都应进入 Room timeline。
 - 主群聊、任务子对话、Manager/Worker DM 都应逐步变成 RoomService / MatrixRoomAdapter 管理的真实 Room。
 - AgentHub 前端继续自研，不使用 Element Web 作为默认 UI。
-- 本轮已新增 `MatrixRoomAdapter`，通过 Matrix Client-Server API 创建真实 room 并发送 `m.room.message`；SQLite 只作为 AgentHub UI 索引，不再被称为 Matrix 实现。
+- 当前 `MatrixRoomAdapter` 已拆出 `MatrixClient` / `MatrixIdentityService`：Controller 会为 Human、Manager、Worker 确保真实 Matrix account，持久化 `matrix_identities`，邀请/加入真实 room，并在写 timeline 时优先使用 sender participant 自己的 Matrix access token 发送 `m.room.message`。SQLite 只作为 AgentHub UI 索引和资源投影，不再被称为 Matrix 实现。
+- 当前还新增了 `MatrixRuntimeListener`、`MatrixRuntimeSupervisor` 和 `MatrixRoomEventDispatcher`：可以用真实 Matrix identity token 调 `/sync`，把真实 room event 导入 AgentHub timeline，解析 `m.mentions` / 可见 `matrix.to` mention 和 `m.file/m.image/...` 文件引用，并把人类群聊消息调给 Manager、把 task room 中 @ Worker 的消息调给 WorkerRuntime。`MatrixRuntimeSupervisor` 会在 Room participant reconcile、TaskThread room reconcile、Worker ready 和 server startup recovery 时托管 Manager / Worker listener；Worker stopped / stale-failed 时会停掉对应 listener。`/sync` 临时失败会记录到 `matrix_identities.metadata.matrixSync` 并退避重试，不会让常驻 listener 直接退出。
+- Matrix Room 内的基础控制消息已经接入控制面：task room 中 `/stop` / `/cancel` 会取消对应 task、释放 RuntimeLease 并写回 timeline；`/approve` / `/deny` 会作为人工控制事件进入 timeline 并触发 Manager 重新观察；`m.file/m.image/m.video/m.audio` 文件引用会登记到 ArtifactStore 并回写 `artifact.created` timeline event。下一步通信层继续补 typing/presence、Matrix media download 到 MinIO/S3、OpenClaw/QwenPaw 原生 Matrix runtime 进程化，以及前端更 Matrix-sync-native 的投影；不能退回后端函数直接写伪 timeline 事件来假装 Agent 交流。
 - 本地开发如需真实基础设施，先用 `infra/docker-compose.hiclaw-lite.yml` 启动 Tuwunel 和 MinIO，再配置 `AGENTHUB_ROOM_PROVIDER=matrix`、`AGENTHUB_MATRIX_HOMESERVER_URL`、`AGENTHUB_MATRIX_ACCESS_TOKEN`、`AGENTHUB_OBJECT_STORE_PROVIDER=s3` 等环境变量。
 
 A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径：
@@ -271,6 +273,8 @@ bun test tests/orchestrator-routing.test.ts
 - `apps/server/src/services/coordinator-runtime/assign-dispatcher.ts`: Coordinator assign 到 Run/TaskThread/task room/WorkerRuntime 的派发入口。
 - `apps/server/src/services/orchestrator/run-controller.ts`: Run 与 task 生命周期控制面。
 - `apps/server/src/services/rooms/room-controller.ts`: group/task room 与 participant reconcile 控制面。
+- `apps/server/src/services/rooms/matrix-runtime-supervisor.ts`: Manager / Worker Matrix listener 生命周期托管；Room participant reconcile、TaskThread room reconcile、Worker ready 和服务启动恢复会通过它启动监听。
+- `apps/server/src/services/rooms/matrix-event-dispatcher.ts`: 真实 Matrix `/sync` 导入事件的调度入口；处理群聊人类消息、task room @ Worker、`/stop`、`/approve` / `/deny` 和 Matrix 文件引用。
 - `apps/server/src/services/orchestrator/worker-controller.ts`: WorkerInstance reconcile 与 lease 分配控制面。
 - `apps/server/src/services/orchestrator/runtime-lease-controller.ts`: RuntimeLease 生命周期控制面。
 - `apps/server/src/services/worker-runtime/worker-runtime-service.ts`: 当前 Worker task room 执行入口。

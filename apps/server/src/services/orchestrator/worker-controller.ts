@@ -80,6 +80,7 @@ export class WorkerController {
       await markWorkerInstanceState(worker.id, 'stopped', {
         message: 'Worker desired state is stopped.',
       })
+      await stopMatrixWorkerListeners(worker.id)
       return { phase: 'stopped', changed: true }
     }
 
@@ -300,6 +301,7 @@ export class WorkerController {
         readyAt: new Date().toISOString(),
       },
     })
+    await startMatrixWorkerListeners(worker.id)
 
     if (ctx.runId && ctx.groupSessionId) {
       await emitRunEvent({
@@ -437,6 +439,7 @@ export class WorkerController {
           detectedAt: new Date().toISOString(),
         },
       })
+      await stopMatrixWorkerListeners(worker.id)
       await this.staleActiveLease(worker, message)
       await this.emitWorkerFailedEvent(worker, ctx, message, 'worker_no_initial_heartbeat')
       return { changed: true, error: message }
@@ -457,6 +460,7 @@ export class WorkerController {
           detectedAt: new Date().toISOString(),
         },
       })
+      await stopMatrixWorkerListeners(worker.id)
       await this.staleActiveLease(worker, message)
       await this.emitWorkerFailedEvent(worker, ctx, message, 'worker_heartbeat_lost')
       return { changed: true, error: message }
@@ -682,3 +686,19 @@ export class WorkerController {
 }
 
 export const workerController = new WorkerController()
+
+async function startMatrixWorkerListeners(workerInstanceId: string) {
+  const { matrixRuntimeSupervisor } = await import('../rooms/matrix-runtime-supervisor')
+  await matrixRuntimeSupervisor.startWorkerInstanceListeners(workerInstanceId, {
+    reason: 'worker-runtime-ready',
+  }).catch(() => {
+    // Worker readiness remains true even if the optional Matrix provider is not configured.
+  })
+}
+
+async function stopMatrixWorkerListeners(workerInstanceId: string) {
+  const { matrixRuntimeSupervisor } = await import('../rooms/matrix-runtime-supervisor')
+  await matrixRuntimeSupervisor.stopWorkerInstanceListeners(workerInstanceId).catch(() => {
+    // Listener shutdown is best-effort; worker state is still the control-plane source.
+  })
+}

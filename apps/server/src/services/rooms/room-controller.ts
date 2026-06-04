@@ -44,6 +44,7 @@ export class RoomController {
     const input = await roomService.buildTaskThreadRoomInput(taskThreadId, ownerId)
     const room = await roomService.ensureRoomForTaskThread(input)
     await this.reconcileTaskRoomParticipants(room.id, input)
+    await startMatrixRoomListeners(room.id, 'task-thread-room-reconciled')
     return {
       roomId: room.id,
       changed: !before,
@@ -61,6 +62,7 @@ export class RoomController {
   async ensureTaskThreadRoomFromInput(input: EnsureRoomForTaskThreadInput) {
     const room = await roomService.ensureRoomForTaskThread(input)
     await this.reconcileTaskRoomParticipants(room.id, input)
+    await startMatrixRoomListeners(room.id, 'task-thread-room-reconciled')
     return room
   }
 
@@ -107,3 +109,10 @@ export class RoomController {
 }
 
 export const roomController = new RoomController()
+
+async function startMatrixRoomListeners(roomId: string, reason: string) {
+  const { matrixRuntimeSupervisor } = await import('./matrix-runtime-supervisor')
+  await matrixRuntimeSupervisor.startRoomListeners(roomId, { reason }).catch(() => {
+    // Matrix listener startup is best-effort; the Room resource remains reconciled.
+  })
+}

@@ -85,9 +85,11 @@ async function appendCoordinatorAction(
   action: CoordinatorAction,
   runtimeType: string,
 ) {
+  const managerParticipant = await findParticipant(roomId, { participantType: 'manager' })
   if (action.type === 'wait') {
     return roomService.appendTimelineEvent({
       roomId,
+      senderParticipantId: managerParticipant?.id ?? null,
       senderType: 'manager',
       type: 'system',
       body: action.message ?? 'Manager is waiting.',
@@ -101,8 +103,12 @@ async function appendCoordinatorAction(
     })
   }
   if (action.type === 'assign') {
-    return roomService.appendTimelineEvent({
+    const targetParticipant = action.targetWorkerId
+      ? await findParticipant(roomId, { workspaceAgentId: action.targetWorkerId })
+      : null
+    const payload = {
       roomId,
+      senderParticipantId: managerParticipant?.id ?? null,
       senderType: 'manager',
       type: 'task.assigned',
       body: action.message ?? action.taskDescription ?? action.taskTitle ?? 'Manager assigned a task.',
@@ -114,13 +120,27 @@ async function appendCoordinatorAction(
         taskDescription: action.taskDescription ?? null,
         reason: action.reason ?? null,
         runtimeType,
+        matrixMention: targetParticipant
+          ? {
+              participantId: targetParticipant.id,
+              providerUserId: targetParticipant.providerUserId ?? null,
+            }
+          : null,
         ...(action.metadata ?? {}),
       },
-    })
+    } as const
+    if (targetParticipant) {
+      return roomService.appendMentionTimelineEvent({
+        ...payload,
+        mentionParticipantId: targetParticipant.id,
+      })
+    }
+    return roomService.appendTimelineEvent(payload)
   }
   if (action.type === 'propose_members') {
     return roomService.appendTimelineEvent({
       roomId,
+      senderParticipantId: managerParticipant?.id ?? null,
       senderType: 'manager',
       type: 'approval.requested',
       body: action.message ?? 'Manager 建议补充成员，请确认。',
@@ -136,6 +156,7 @@ async function appendCoordinatorAction(
   }
   return roomService.appendTimelineEvent({
     roomId,
+    senderParticipantId: managerParticipant?.id ?? null,
     senderType: 'manager',
     type: 'manager.message',
     body: action.message ?? '',
@@ -147,6 +168,18 @@ async function appendCoordinatorAction(
       ...(action.metadata ?? {}),
     },
   })
+}
+
+async function findParticipant(
+  roomId: string,
+  filter: { participantType?: 'manager'; workspaceAgentId?: string },
+) {
+  const rows = await db.select().from(roomParticipants).where(eq(roomParticipants.roomId, roomId))
+  return rows.find((row) => {
+    if (filter.participantType && row.participantType !== filter.participantType) return false
+    if (filter.workspaceAgentId && row.workspaceAgentId !== filter.workspaceAgentId) return false
+    return true
+  }) ?? null
 }
 
 async function listRoomWorkerCandidates(roomId: string): Promise<CoordinatorWorkerCandidate[]> {
