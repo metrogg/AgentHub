@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   ChevronRight,
   Database,
-  ExternalLink,
   FileDiff,
   FileText,
   GitBranch,
@@ -18,6 +17,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { ArtifactPreviewSurface } from '../components/artifacts/ArtifactPreviewSurface'
 import SessionList from '../components/chat/SessionList'
 import {
   api,
@@ -27,6 +27,7 @@ import {
 } from '../lib/api'
 import { cn, relativeTime } from '../lib/utils'
 import { useI18n } from '../lib/i18n'
+import { mimeFromExtension, type ArtifactPreviewItem } from '../lib/artifactPreview'
 
 type AssetKind = 'artifact' | 'handoff' | 'blackboard' | 'diff' | 'preview' | 'file' | 'deploy'
 type AssetTypeFilter = AssetKind | 'all'
@@ -73,6 +74,7 @@ export default function ArtifactsPage() {
   const [query, setQuery] = useState('')
   const [selectedRunId, setSelectedRunId] = useState<string>('all')
   const [typeFilter, setTypeFilter] = useState<AssetTypeFilter>('all')
+  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null)
 
   async function refresh() {
     setLoading(true)
@@ -172,6 +174,14 @@ export default function ArtifactsPage() {
   const partialCount = assets.filter((asset) => asset.status === 'failed' && asset.kind !== 'blackboard').length
   const handoffCount = assets.filter((asset) => asset.kind === 'handoff').length
   const blackboardCount = assets.filter((asset) => asset.kind === 'blackboard').length
+  const previewAsset = useMemo(() => {
+    if (!previewAssetId) return null
+    return assets.find((asset) => asset.id === previewAssetId) ?? null
+  }, [assets, previewAssetId])
+  const previewItem = useMemo(
+    () => (previewAsset ? assetToPreviewItem(previewAsset) : null),
+    [previewAsset],
+  )
 
   return (
     <div className="agenthub-themed-page flex h-screen overflow-hidden bg-[#f7f8f6] text-neutral-950">
@@ -269,6 +279,35 @@ export default function ArtifactsPage() {
               </div>
             )}
 
+            {previewItem && previewAsset && (
+              <section className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
+                <div className="flex min-w-0 items-center justify-between gap-3 border-b border-neutral-200 bg-[#f8f8f5] px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-neutral-950">
+                      {previewItem.title}
+                    </div>
+                    <div className="mt-1 truncate text-xs text-neutral-500">
+                      {previewAsset.path || previewAsset.url || previewAsset.description}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewAssetId(null)}
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
+                    aria-label="Close preview"
+                  >
+                    <XCircle className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="h-[min(52rem,62vh)] min-h-[24rem]">
+                  <ArtifactPreviewSurface
+                    item={previewItem}
+                    workspaceId={previewAsset.workspaceId}
+                  />
+                </div>
+              </section>
+            )}
+
             {loading && assets.length === 0 ? (
               <EmptyState icon={<Loader2 className="h-5 w-5 animate-spin" />} text="正在读取产物资产库" />
             ) : filteredAssets.length === 0 ? (
@@ -279,7 +318,13 @@ export default function ArtifactsPage() {
                 style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(23rem, 1fr))' }}
               >
                 {filteredAssets.map((asset) => (
-                  <AssetCard key={asset.id} asset={asset} language={language} />
+                  <AssetCard
+                    key={asset.id}
+                    asset={asset}
+                    language={language}
+                    onPreview={() => setPreviewAssetId(asset.id)}
+                    selected={asset.id === previewAssetId}
+                  />
                 ))}
               </section>
             )}
@@ -300,15 +345,23 @@ export default function ArtifactsPage() {
 function AssetCard({
   asset,
   language,
+  onPreview,
+  selected,
 }: {
   asset: AssetItem
   language: 'zh' | 'en'
+  onPreview: () => void
+  selected: boolean
 }) {
   const Icon = assetIcon(asset.kind)
-  const openUrl = assetOpenUrl(asset)
   const downloadable = Boolean(asset.path && asset.workspaceId)
   return (
-    <article className="flex min-h-[18rem] flex-col rounded-xl border border-neutral-200 bg-white p-4 shadow-sm transition hover:border-neutral-300">
+    <article
+      className={cn(
+        'flex min-h-[18rem] flex-col rounded-xl border bg-white p-4 shadow-sm transition hover:border-neutral-300',
+        selected ? 'border-neutral-900 ring-2 ring-neutral-900/10' : 'border-neutral-200',
+      )}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <div className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl', assetTone(asset.kind))}>
@@ -341,20 +394,14 @@ function AssetCard({
       </div>
 
       <div className="mt-auto flex flex-wrap gap-2 pt-4">
-        {openUrl && (
-          <button
-            type="button"
-            onClick={() => window.open(openUrl, '_blank', 'noopener,noreferrer')}
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-950 px-3 text-sm font-medium text-white transition hover:bg-neutral-800"
-          >
-            {asset.kind === 'preview' || asset.kind === 'deploy' ? (
-              <Monitor className="h-4 w-4" />
-            ) : (
-              <ExternalLink className="h-4 w-4" />
-            )}
+        <button
+          type="button"
+          onClick={onPreview}
+          className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-950 px-3 text-sm font-medium text-white transition hover:bg-neutral-800"
+        >
+          <Monitor className="h-4 w-4" />
             预览
           </button>
-        )}
         {downloadable && (
           <button
             type="button"
@@ -522,17 +569,43 @@ function artifactDescription(record: Record<string, unknown>) {
   return text(record.mimeType) || text(record.status) || '任务执行生成的文件产物。'
 }
 
-function assetOpenUrl(asset: AssetItem) {
-  if (asset.url) return asset.url
-  if (!asset.path) return ''
-  const lower = asset.path.toLowerCase()
-  if (lower.endsWith('.html') || lower.endsWith('.htm')) {
-    return `/api/artifacts/preview-file?workspaceId=${encodeURIComponent(asset.workspaceId)}&path=${encodeURIComponent(asset.path)}`
+function assetToPreviewItem(asset: AssetItem): ArtifactPreviewItem {
+  const path = asset.path || undefined
+  const extension = path?.match(/\.([A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase()
+  const mimeType = mimeFromExtension(extension)
+  const rawRecord = asRecord(asset.raw)
+  const rawDiff = rawRecord ? text(rawRecord.diff) || text(rawRecord.patch) : ''
+  const source =
+    asset.kind === 'diff'
+      ? asset.source || rawDiff || asset.description
+      : asset.source
+
+  return {
+    id: asset.id,
+    title: asset.title,
+    subtitle: [asset.workspaceName, asset.taskTitle || asset.runTitle].filter(Boolean).join(' / '),
+    description: asset.description,
+    kind: assetPreviewKind(asset, mimeType),
+    url: asset.url || undefined,
+    path,
+    mimeType,
+    source,
+    workspaceId: asset.workspaceId,
   }
-  if (/\.(png|jpe?g|webp|gif|svg|pdf|txt|md|json|csv)$/i.test(asset.path)) {
-    return `/api/artifacts/file?workspaceId=${encodeURIComponent(asset.workspaceId)}&path=${encodeURIComponent(asset.path)}`
-  }
-  return ''
+}
+
+function assetPreviewKind(
+  asset: AssetItem,
+  mimeType?: string,
+): ArtifactPreviewItem['kind'] {
+  const lowerPath = (asset.path ?? '').toLowerCase()
+  const lowerMime = (mimeType ?? '').toLowerCase()
+  if (asset.kind === 'diff') return 'diff'
+  if (asset.kind === 'deploy') return 'deploy'
+  if (asset.kind === 'preview') return 'web'
+  if (lowerMime.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(lowerPath)) return 'image'
+  if (lowerMime.includes('text/html') || /\.(html?|xhtml)$/i.test(lowerPath)) return 'web'
+  return 'file'
 }
 
 function KindBadge({ kind }: { kind: AssetKind }) {

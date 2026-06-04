@@ -15,8 +15,6 @@ import { useEffect, useState, type FC } from 'react'
 import {
   api,
   friendlyErrorMessage,
-  type Workspace,
-  type WorkspaceFileContentResponse,
   type WorkspaceFileEntry,
   type WorkspaceFileListResponse,
 } from '../../lib/api'
@@ -28,26 +26,37 @@ import {
   type ArtifactPreviewItem,
 } from '../../lib/artifactPreview'
 import { openPath } from '../../lib/native'
-import { cn, compactPath, trimLongText } from '../../lib/utils'
+import { cn, compactPath } from '../../lib/utils'
+import { ArtifactPreviewSurface } from '../artifacts/ArtifactPreviewSurface'
 
-export type RailFileItem = {
+export type WorkspaceFileExplorerWorkspace = {
   id: string
-  title: string
-  path?: string
-  url?: string
-  source?: string
-  kind: ArtifactPreviewItem['kind']
+  name: string
+  projectPath?: string | null
 }
 
+export type RailFileItem = ArtifactPreviewItem
+
 export const WorkspaceFileExplorer: FC<{
-  workspace: Workspace | null
-  quickFiles: RailFileItem[]
-}> = ({ workspace, quickFiles }) => {
+  className?: string
+  emptyHint?: string
+  listMaxHeightClassName?: string
+  previewHeightClassName?: string
+  quickFiles?: RailFileItem[]
+  workspace: WorkspaceFileExplorerWorkspace | null
+}> = ({
+  className,
+  emptyHint = '选择工作区后，这里会显示项目文件。',
+  listMaxHeightClassName = 'max-h-64',
+  previewHeightClassName = 'h-44',
+  quickFiles = [],
+  workspace,
+}) => {
   const [currentPath, setCurrentPath] = useState('')
   const [list, setList] = useState<WorkspaceFileListResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [preview, setPreview] = useState<WorkspaceFileContentResponse | null>(null)
+  const [preview, setPreview] = useState<ArtifactPreviewItem | null>(null)
   const [previewLoadingPath, setPreviewLoadingPath] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const workspacePath = workspace?.projectPath ?? null
@@ -61,7 +70,7 @@ export const WorkspaceFileExplorer: FC<{
   }, [workspaceId])
 
   useEffect(() => {
-    if (!workspaceId || !workspacePath) return
+    if (!workspaceId) return
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -82,7 +91,7 @@ export const WorkspaceFileExplorer: FC<{
     return () => {
       cancelled = true
     }
-  }, [currentPath, reloadToken, workspaceId, workspacePath])
+  }, [currentPath, reloadToken, workspaceId])
 
   function openDirectory(path: string) {
     setCurrentPath(path)
@@ -121,8 +130,9 @@ export const WorkspaceFileExplorer: FC<{
       workspaceId,
     }
 
+    setPreview(item)
+
     if (kind !== 'file' || !isTextLikeAttachment(mimeType, entry.extension)) {
-      requestArtifactPreview(item)
       return
     }
 
@@ -131,10 +141,17 @@ export const WorkspaceFileExplorer: FC<{
     try {
       const content = await api.readWorkspaceFile(workspaceId, entry.path)
       if (content.binary) {
-        requestArtifactPreview({ ...item, mimeType: content.mimeType })
+        setPreview({ ...item, mimeType: content.mimeType })
         return
       }
-      setPreview(content)
+      setPreview({
+        ...item,
+        description: content.truncated ? '内容较长，已截断预览。' : undefined,
+        mimeType: content.mimeType,
+        source: content.content,
+        subtitle: content.sizeLabel,
+        title: content.name,
+      })
     } catch (err) {
       setError(friendlyErrorMessage(err, '读取文件失败'))
     } finally {
@@ -143,23 +160,8 @@ export const WorkspaceFileExplorer: FC<{
   }
 
   function openSelectedFileInPreview() {
-    if (!preview || !workspaceId) return
-    requestArtifactPreview({
-      id: `workspace-file-preview-${workspaceId}-${preview.path}`,
-      kind: workspaceFilePreviewKind(
-        {
-          extension: extensionFromName(preview.name),
-          name: preview.name,
-          path: preview.path,
-        },
-        preview.mimeType,
-      ),
-      mimeType: preview.mimeType,
-      path: preview.path,
-      subtitle: preview.sizeLabel,
-      title: preview.name,
-      workspaceId,
-    })
+    if (!preview) return
+    requestArtifactPreview(preview)
   }
 
   const currentLabel = list?.path
@@ -168,21 +170,21 @@ export const WorkspaceFileExplorer: FC<{
   const visibleItems = list?.items ?? []
 
   return (
-    <div className="space-y-3">
+    <div className={cn('space-y-3', className)}>
       <div className="flex min-w-0 items-center gap-1.5">
         <button
           type="button"
           disabled={!workspacePath}
           onClick={() => workspacePath && void openPath(workspacePath)}
           className="inline-flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-left text-xs text-neutral-700 transition hover:border-neutral-300 disabled:cursor-default disabled:text-neutral-400"
-          title={workspacePath ?? undefined}
+          title={workspacePath ?? workspace?.name ?? undefined}
         >
           <FolderOpen className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
           <span className="truncate">{workspace?.name ?? '尚未选择工作区'}</span>
         </button>
         <button
           type="button"
-          disabled={!workspacePath}
+          disabled={!workspaceId}
           onClick={refresh}
           className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-neutral-200 bg-white text-neutral-500 transition hover:border-neutral-300 hover:text-neutral-900 disabled:cursor-default disabled:opacity-50"
           title="刷新"
@@ -191,9 +193,9 @@ export const WorkspaceFileExplorer: FC<{
         </button>
       </div>
 
-      {!workspacePath ? (
+      {!workspaceId ? (
         <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-3 py-4 text-xs text-neutral-500">
-          先在输入框选择或拉取一个工作区，然后这里会显示项目文件。
+          {emptyHint}
         </div>
       ) : (
         <>
@@ -218,7 +220,7 @@ export const WorkspaceFileExplorer: FC<{
             </div>
           )}
 
-          <div className="max-h-64 overflow-y-auto pr-0.5">
+          <div className={cn('overflow-y-auto pr-0.5', listMaxHeightClassName)}>
             <div className="space-y-1">
               {loading && !visibleItems.length ? (
                 <div className="flex items-center gap-2 rounded-lg px-2 py-2 text-xs text-neutral-500">
@@ -280,7 +282,7 @@ export const WorkspaceFileExplorer: FC<{
               <div className="flex min-w-0 items-center gap-2">
                 <FileText className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
                 <div className="min-w-0 flex-1 truncate text-xs font-medium text-neutral-900">
-                  {preview.name}
+                  {preview.title}
                 </div>
                 <button
                   type="button"
@@ -290,11 +292,11 @@ export const WorkspaceFileExplorer: FC<{
                   展开
                 </button>
               </div>
-              <pre className="agenthub-readable-code mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-neutral-600">
-                {trimLongText(preview.content, 4000)}
-              </pre>
-              {preview.truncated && (
-                <div className="mt-1 text-[11px] text-neutral-400">内容较长，已截断预览。</div>
+              <div className={cn('mt-2 overflow-hidden rounded-lg border border-neutral-200 bg-white', previewHeightClassName)}>
+                <ArtifactPreviewSurface item={preview} workspaceId={workspaceId ?? undefined} />
+              </div>
+              {preview.description && (
+                <div className="mt-1 text-[11px] text-neutral-400">{preview.description}</div>
               )}
             </div>
           )}
@@ -365,7 +367,7 @@ function workspaceFileIcon(entry: WorkspaceFileEntry, className = 'h-3.5 w-3.5')
 }
 
 function openRailFile(file: RailFileItem) {
-  if (file.path) {
+  if (file.path && !file.workspaceId) {
     void openPath(file.path)
       .then((opened) => {
         if (!opened) requestArtifactPreview(file)

@@ -29,7 +29,6 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
-import { useChatStore } from '../../stores/chatStore'
 import { cn, relativeTime } from '../../lib/utils'
 import { api, friendlyErrorMessage, type MobileConnectivityStatus, type Session, type WorkspaceAgent } from '../../lib/api'
 import {

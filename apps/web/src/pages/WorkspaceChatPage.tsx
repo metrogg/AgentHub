@@ -7,21 +7,23 @@ import { AgentTabs } from '@/components/AgentTabs'
 import {
   buildControlPanelProjection,
   buildTaskBoardPanelProjection,
-  useChatStore,
 } from '@/stores/chatStore'
+import { selectWorkspaceChatState, useChatStoreShallow } from '@/stores/chatSelectors'
 import { AgentHubRuntimeProvider } from '@/lib/runtime'
 
 export function WorkspaceChatPage() {
   const { sessionId } = useParams<{ workspaceId: string; sessionId: string }>()
-  const taskBoard = useChatStore((s) => s.taskBoard)
-  const previewUrl = useChatStore((s) => s.previewUrl)
-  const previewFileName = useChatStore((s) => s.previewFileName)
-  const setPreviewUrl = useChatStore((s) => s.setPreviewUrl)
-  const agentTabs = useChatStore((s) => s.agentTabs)
-  const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
-  const selectAgentTab = useChatStore((s) => s.selectAgentTab)
-  const agentTyping = useChatStore((s) => s.agentTyping)
-  const agentActivity = useChatStore((s) => s.agentActivity)
+  const {
+    taskBoard,
+    previewUrl,
+    previewFileName,
+    setPreviewUrl,
+    agentTabs,
+    selectedAgentTab,
+    selectAgentTab,
+    agentTyping,
+    agentActivity,
+  } = useChatStoreShallow(selectWorkspaceChatState)
 
   const controlPanel = buildControlPanelProjection({
     taskBoard,

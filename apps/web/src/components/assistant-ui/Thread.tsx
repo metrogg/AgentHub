@@ -42,7 +42,6 @@ import {
   Copy,
   Download,
   ExternalLink,
-  File,
   FileText,
   FolderOpen,
   FolderPlus,
@@ -100,6 +99,12 @@ import { requestConfirmDialog, requestNoticeDialog } from '../ConfirmDialog'
 import DeliveryReport from '@/components/DeliveryReport'
 import type { DeliveryReportData } from '@/components/DeliveryReport'
 import { FileCard } from '@/components/FileCard'
+import {
+  ArtifactDiffViewer,
+  ArtifactPreviewSurface,
+  canInspectArtifactPreviewSource,
+  type DiffEditSaveParams,
+} from '../artifacts/ArtifactPreviewSurface'
 import { VirtualList } from '../VirtualList'
 import {
   api,
@@ -117,9 +122,7 @@ import {
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { codeAgentRuntimeLabel } from '../../lib/agentDisplay'
 import {
-  artifactFileUrl,
   artifactPreviewEvent,
-  canFetchWorkspaceTextSource,
   clampPreviewPanelWidth,
   defaultPreviewPanelWidth,
   downloadFileName,
@@ -128,12 +131,7 @@ import {
   fileNameFromPath,
   formatPreviewError,
   getPreviewPanelWidthBounds,
-  isDocxPreviewItem,
-  isPptxPreviewItem,
-  loadPreviewArrayBuffer,
   normalizePreviewUrl,
-  previewFileName,
-  previewPathFromUrl,
   readStoredPreviewPanelWidth,
   requestArtifactPreview,
   storePreviewPanelWidth,
@@ -183,11 +181,8 @@ import {
   makeSelectMessageWithQuoteSource,
   selectAgentHeaderState,
   selectComposerState,
-  selectCurrentSessionId,
-  selectCurrentWorkspaceId,
   selectGroupHeaderState,
   selectHeaderAgentStatus,
-  selectMessages,
   selectThreadShellState,
   useChatMessageById,
   useChatStoreShallow,
@@ -199,7 +194,7 @@ import {
 } from '../chat/QuickPromptBubbles'
 import { TypewriterHeading } from '../chat/TypewriterHeading'
 import { GroupAvatar } from '../chat/GroupAvatar'
-import { WorkspaceFileExplorer, type RailFileItem } from './WorkspaceFileExplorer'
+import { WorkspaceFileExplorer, type RailFileItem } from '../workspace/WorkspaceFileExplorer'
 import {
   ChatAttachmentsPart,
   PendingAttachmentList,
@@ -272,38 +267,38 @@ type PreviewActionItem = {
   folder?: string
 }
 
-type DiffEditSaveParams = {
-  lineText: string
-  lineNumber?: number
-  fileContent?: string
-}
-
 export const Thread: FC = () => {
-  const currentSession = useChatStore((state) => state.currentSession)
-  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
+  const {
+    currentSession,
+    workspaceAgents,
+    taskBoard,
+    agentActivity,
+    streamingCodeAgentRun,
+    selectedAgentTab,
+    agentTabs,
+    selectAgentTab,
+    selectSession,
+  } = useChatStoreShallow(selectThreadShellState)
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
   const sessionKind = classifyAgentSession(currentSession)
   const isAgentDirectSession = sessionKind === 'agent-direct'
-  const taskBoard = useChatStore((s) => s.taskBoard)
-  const agentActivity = useChatStore((s) => s.agentActivity)
-  const messages = useChatStore((s) => s.messages)
-  const streamingCodeAgentRun = useChatStore((s) => s.streamingCodeAgentRun)
+  const directMessagesSelector = useMemo(
+    () => makeSelectDirectRunMessages(isAgentDirectSession),
+    [isAgentDirectSession],
+  )
+  const messages = useChatStore(directMessagesSelector)
   const visibleTaskBoard =
     taskBoard &&
     taskBoard.sessionId === currentSession?.id &&
     ['planning', 'running', 'synthesizing'].includes(taskBoard.status)
       ? taskBoard
       : null
-  const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
-  const agentTabs = useChatStore((s) => s.agentTabs)
   const railTaskBoard =
     taskBoard &&
     (taskBoard.sessionId === currentSession?.id ||
       agentTabs.some((tab) => tab.childSessionId === currentSession?.id))
       ? taskBoard
       : null
-  const selectAgentTab = useChatStore((s) => s.selectAgentTab)
-  const selectSession = useChatStore((s) => s.selectSession)
   const navigate = useNavigate()
   const planningActivity =
     isGroupSession &&
@@ -552,9 +547,11 @@ const HeaderAgentStatusIndicator: FC = () => {
 
 const VirtualThreadMessages: FC<{ scrollRef: RefObject<HTMLDivElement> }> = ({ scrollRef }) => {
   const messageCount = useThread((state) => state.messages.length)
-  const sourceMessages = useChatStore((state) => state.messages)
-  const streamingMessage = useChatStore((state) => state.streamingMessage)
-  const agentTyping = useChatStore((state) => state.agentTyping)
+  const { sourceMessages, streamingMessage, agentTyping } = useChatStoreShallow((state) => ({
+    sourceMessages: state.messages,
+    streamingMessage: state.streamingMessage,
+    agentTyping: state.agentTyping,
+  }))
   const items = useMemo(() => Array.from({ length: messageCount }, (_, index) => index), [messageCount])
   const components = useMemo(
     () => ({ UserMessage, AssistantMessage, SystemMessage }),
@@ -597,22 +594,7 @@ function estimateThreadMessageHeight(message?: Message) {
 }
 
 function useHeaderAgentStatus(): HeaderAgentStatusProjection {
-  const currentSession = useChatStore((state) => state.currentSession)
-  const agentTyping = useChatStore((state) => state.agentTyping)
-  const agentActivity = useChatStore((state) => state.agentActivity)
-  const streamingMessage = useChatStore((state) => state.streamingMessage)
-  const streamingCodeAgentRun = useChatStore((state) => state.streamingCodeAgentRun)
-  const taskBoard = useChatStore((state) => state.taskBoard)
-  const agentTabs = useChatStore((state) => state.agentTabs)
-  return buildHeaderAgentStatusProjection({
-    sessionId: currentSession?.id ?? null,
-    taskBoard,
-    agentTabs,
-    agentTyping,
-    agentActivity,
-    streamingMessage,
-    streamingCodeAgentRun,
-  })
+  return useChatStoreShallow(selectHeaderAgentStatus)
 }
 
 const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => void }> = ({
@@ -621,10 +603,7 @@ const GroupChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
   previewAvailable,
   onTogglePreview,
 }) => {
-  const session = useChatStore((state) => state.currentSession)
-  const workspace = useChatStore((state) => state.currentWorkspace)
-  const agents = useChatStore((state) => state.currentWorkspaceAgents)
-  const clearMessages = useChatStore((state) => state.clearMessages)
+  const { session, workspace, agents, clearMessages } = useChatStoreShallow(selectGroupHeaderState)
   const navigate = useNavigate()
   const title = groupChatDisplayTitle(session?.title, workspace?.name)
   const memberCount = agents.length + 1
@@ -695,9 +674,7 @@ const AgentChatHeader: FC<PreviewHeaderControlProps & { onToggleDetails: () => v
   previewAvailable,
   onTogglePreview,
 }) => {
-  const session = useChatStore((state) => state.currentSession)
-  const workspace = useChatStore((state) => state.currentWorkspace)
-  const agents = useChatStore((state) => state.currentWorkspaceAgents)
+  const { session, workspace, agents } = useChatStoreShallow(selectAgentHeaderState)
   const agent = agents.find((item) => item.id === session?.workspaceAgentId)
   const title = agent?.name || session?.title || 'Agent'
   const subtitle = [agent?.role, workspace?.name].filter(Boolean).join(' · ') || '单 Agent 会话'
@@ -2693,13 +2670,15 @@ function quotedPreviewFromValue(value: unknown): QuotedMessagePreview | null {
   }
 }
 
-function quotedPreviewForMessage(message: Message, messages: Message[]): QuotedMessagePreview | null {
+function quotedPreviewForMessage(
+  message: Message,
+  quotedSourceMessage?: Message | null,
+): QuotedMessagePreview | null {
   const metadataQuote = quotedPreviewFromValue(messageMetadata(message).quotedMessage)
   if (metadataQuote) return metadataQuote
   const replyToMessageId = typeof message.replyToMessageId === 'string' ? message.replyToMessageId : ''
   if (!replyToMessageId) return null
-  const source = messages.find((item) => item.id === replyToMessageId)
-  return source ? quotedPreviewFromMessage(source) : null
+  return quotedSourceMessage ? quotedPreviewFromMessage(quotedSourceMessage) : null
 }
 
 type LocalChangeTarget = {
@@ -2970,23 +2949,25 @@ const Composer: FC = () => {
   const { sendMode } = useShortcutSettings()
   const { t } = useI18n()
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const currentSessionId = useChatStore((state) => state.currentSessionId)
-  const currentWorkspace = useChatStore((state) => state.currentWorkspace)
-  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
-  const fetchSessions = useChatStore((state) => state.fetchSessions)
-  const setSessionWorkspace = useChatStore((state) => state.setSessionWorkspace)
-  const pendingAttachments = useChatStore((state) => state.pendingAttachments)
-  const addPendingAttachments = useChatStore((state) => state.addPendingAttachments)
-  const removePendingAttachment = useChatStore((state) => state.removePendingAttachment)
-  const replyingToMessage = useChatStore((state) => state.replyingToMessage)
-  const replyingToKind = useChatStore((state) => state.replyingToKind)
-  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
-  const sendMessage = useChatStore((state) => state.sendMessage)
-  const agentTyping = useChatStore((state) => state.agentTyping)
-  const streamingMessage = useChatStore((state) => state.streamingMessage)
-  const safetyMode = useChatStore((state) => state.safetyMode)
-  const setSafetyMode = useChatStore((state) => state.setSafetyMode)
-  const cancelRun = useChatStore((state) => state.cancelRun)
+  const {
+    currentSessionId,
+    currentWorkspace,
+    workspaceAgents,
+    fetchSessions,
+    setSessionWorkspace,
+    pendingAttachments,
+    addPendingAttachments,
+    removePendingAttachment,
+    replyingToMessage,
+    replyingToKind,
+    setReplyingTo,
+    sendMessage,
+    agentTyping,
+    streamingMessage,
+    safetyMode,
+    setSafetyMode,
+    cancelRun,
+  } = useChatStoreShallow(selectComposerState)
   const [menu, setMenu] = useState<'tools' | 'agents' | 'workspace' | null>(null)
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -4147,13 +4128,19 @@ const UserMessage: FC = () => {
   const messageStyleMode = useMessageStyleMode()
   const isFlatMessageStyle = messageStyleMode === 'flat'
   const messageId = useMessage((message) => message.id)
-  const allMessages = useChatStore((state) => state.messages)
-  const sourceMessage = useChatStore((state) =>
-    state.messages.find((message) => message.id === messageId),
+  const selectMessageWithQuoteSource = useMemo(
+    () => makeSelectMessageWithQuoteSource(messageId),
+    [messageId],
   )
-  const editMessage = useChatStore((state) => state.editMessage)
-  const resendMessage = useChatStore((state) => state.resendMessage)
-  const withdrawMessage = useChatStore((state) => state.withdrawMessage)
+  const {
+    message: sourceMessage,
+    quotedSourceMessage,
+  } = useChatStoreShallow(selectMessageWithQuoteSource)
+  const { editMessage, resendMessage, withdrawMessage } = useChatStoreShallow((state) => ({
+    editMessage: state.editMessage,
+    resendMessage: state.resendMessage,
+    withdrawMessage: state.withdrawMessage,
+  }))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState<'edit' | 'withdraw' | null>(null)
@@ -4162,7 +4149,9 @@ const UserMessage: FC = () => {
     typeof sourceMessage?.metadata?.displayContent === 'string'
       ? sourceMessage.metadata.displayContent
       : (sourceMessage?.content ?? '')
-  const quotedPreview = sourceMessage ? quotedPreviewForMessage(sourceMessage, allMessages) : null
+  const quotedPreview = sourceMessage
+    ? quotedPreviewForMessage(sourceMessage, quotedSourceMessage)
+    : null
 
   function startEdit(event?: React.MouseEvent<HTMLButtonElement>) {
     event?.preventDefault()
@@ -4438,9 +4427,7 @@ const AssistantMessage: FC = () => {
   const messageStyleMode = useMessageStyleMode()
   const isFlatMessageStyle = messageStyleMode === 'flat'
   const messageId = useMessage((message) => message.id)
-  const sourceMessage = useChatStore((state) =>
-    state.messages.find((message) => message.id === messageId),
-  )
+  const sourceMessage = useChatMessageById(messageId)
   const timestamp = sourceMessage?.createdAt ? formatTime(sourceMessage.createdAt) : ''
 
   return (
@@ -4781,26 +4768,18 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
   const activeWorkspaceId = useChatStore((state) => state.currentSession?.workspaceId)
   const previewWorkspaceId = item.workspaceId ?? activeWorkspaceId ?? undefined
   const canOpen = Boolean(item.url)
-  const previewSourcePath = item.path ?? previewPathFromUrl(item.url) ?? undefined
-  const canInspectSource =
-    Boolean(item.source?.trim()) || canFetchWorkspaceTextSource(item, previewSourcePath)
+  const canInspectSource = canInspectArtifactPreviewSource(item, previewWorkspaceId)
   const runnablePreview = (item.kind === 'web' || item.kind === 'deploy') && Boolean(item.url)
   const [maximized, setMaximized] = useState(false)
   const [visible, setVisible] = useState(false)
   const [panelWidth, setPanelWidth] = useState(() => readStoredPreviewPanelWidth())
   const [resizing, setResizing] = useState(false)
   const [previewMode, setPreviewMode] = useState<'preview' | 'source'>('preview')
-  const [loadingState, setLoadingState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
-    item.kind === 'web' || item.kind === 'deploy' ? 'loading' : 'ready',
-  )
-  const [loadError, setLoadError] = useState('')
   const [actionPanelOpen, setActionPanelOpen] = useState(false)
   const [actionItems, setActionItems] = useState<PreviewActionItem[]>([])
-  const [reloadToken, setReloadToken] = useState(0)
   const panelRef = useRef<HTMLElement | null>(null)
   const panelWidthRef = useRef(panelWidth)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const previewUrl = useMemo(() => normalizePreviewUrl(item.url), [item.url])
 
   useEffect(() => {
     panelWidthRef.current = panelWidth
@@ -5073,45 +5052,6 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
     return () => window.removeEventListener('resize', syncPanelWidth)
   }, [])
 
-  useEffect(() => {
-    if (!item.url || (item.kind !== 'web' && item.kind !== 'deploy')) {
-      setLoadingState('ready')
-      setLoadError('')
-      return
-    }
-
-    let cancelled = false
-    setLoadingState('loading')
-    setLoadError('')
-
-    async function probePreview() {
-      if (!previewUrl || previewUrl.origin !== window.location.origin) {
-        if (!cancelled) setLoadingState('ready')
-        return
-      }
-
-      try {
-        const response = await fetch(previewUrl.href, { credentials: 'include' })
-        if (cancelled) return
-        if (!response.ok) throw new Error(await extractPreviewErrorMessage(response))
-        const contentType = response.headers.get('content-type') ?? ''
-        if (contentType.includes('application/json')) {
-          throw new Error(await extractPreviewErrorMessage(response))
-        }
-        setLoadingState('ready')
-      } catch (error) {
-        if (cancelled) return
-        setLoadingState('error')
-        setLoadError(formatPreviewError(error))
-      }
-    }
-
-    void probePreview()
-    return () => {
-      cancelled = true
-    }
-  }, [item.kind, item.url, previewUrl, reloadToken])
-
   const panelClasses = cn(
     'relative flex shrink-0 flex-col overflow-hidden border-neutral-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.12)]',
     resizing ? 'transition-none' : 'transition-all duration-300 ease-out',
@@ -5276,57 +5216,14 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
             </div>
           )}
           <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
-            {item.kind === 'image' && item.url ? (
-              <div className="grid h-full place-items-center bg-neutral-950 p-4">
-                <img
-                  src={item.url}
-                  alt={item.title}
-                  className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
-                  decoding="async"
-                  draggable={false}
-                />
-              </div>
-            ) : runnablePreview && previewMode === 'source' && canInspectSource ? (
-              <TextFilePreview item={item} />
-            ) : (item.kind === 'web' || item.kind === 'deploy') && item.url ? (
-              loadingState === 'error' ? (
-                <PreviewErrorState
-                  title={item.title}
-                  error={loadError}
-                  onRetry={() => setReloadToken((value) => value + 1)}
-                />
-              ) : loadingState !== 'ready' ? (
-                <PreviewLoadingState item={item} />
-              ) : (
-                <iframe
-                  title={item.title}
-                  src={item.url}
-                  className="h-full w-full border-0 bg-white"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                />
-              )
-            ) : item.kind === 'diff' ? (
-              <div className="h-full overflow-auto">
-                <DiffViewer
-                  diff={item.source ?? ''}
-                  maxHeightClassName="max-h-none"
-                  filePath={item.path}
-                  onSaveEdit={
-                    previewWorkspaceId && item.path ? handleSaveDiffPreviewEdit : undefined
-                  }
-                />
-              </div>
-            ) : item.kind === 'workflow' ? (
-              <PreviewPlaceholder item={item} />
-            ) : isDocxPreviewItem(item) ? (
-              <WordDocumentPreview item={item} />
-            ) : isPptxPreviewItem(item) ? (
-              <PresentationDocumentPreview item={item} />
-            ) : item.source ? (
-              <TextFilePreview item={item} />
-            ) : (
-              <DocumentPreviewPlaceholder item={item} />
-            )}
+            <ArtifactPreviewSurface
+              item={item}
+              onSaveDiffEdit={
+                previewWorkspaceId && item.path ? handleSaveDiffPreviewEdit : undefined
+              }
+              viewMode={previewMode}
+              workspaceId={previewWorkspaceId}
+            />
           </div>
         </div>
       </aside>
@@ -5414,427 +5311,6 @@ const PreviewActionPanel: FC<{
           </div>
         </div>
       ))}
-    </div>
-  </div>
-)
-
-const PreviewLoadingState: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
-  <div className="grid h-full place-items-center bg-[#f8fafc] p-6">
-    <div className="w-full max-w-md rounded-[22px] border border-neutral-200 bg-white p-6 text-center shadow-sm">
-      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-neutral-100 bg-neutral-50 text-neutral-500">
-        <Loader2 className="h-6 w-6 animate-spin" />
-      </div>
-      <div className="mt-4 text-sm font-semibold text-neutral-950">Loading preview</div>
-      <div className="mt-2 text-xs leading-5 text-neutral-500">
-        {item.subtitle ?? previewKindLabel(item)}
-      </div>
-    </div>
-  </div>
-)
-
-const PreviewErrorState: FC<{ error: string; onRetry: () => void; title: string }> = ({
-  error,
-  onRetry,
-  title,
-}) => (
-  <div className="grid h-full place-items-center bg-[#f8fafc] p-6">
-    <div className="w-full max-w-lg rounded-[22px] border border-red-100 bg-white p-6 text-center shadow-sm">
-      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-red-100 bg-red-50 text-red-500">
-        <AlertTriangle className="h-6 w-6" />
-      </div>
-      <div className="mt-4 text-sm font-semibold text-neutral-950">Preview failed</div>
-      <div className="mt-2 text-xs leading-6 text-neutral-500">{title}</div>
-      <div className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-left text-xs leading-6 text-red-700">
-        {error || 'The preview service returned an error response.'}
-      </div>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800"
-      >
-        <RefreshCw className="h-4 w-4" />
-        Retry
-      </button>
-    </div>
-  </div>
-)
-
-const WordDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
-  const bodyRef = useRef<HTMLDivElement | null>(null)
-  const styleRef = useRef<HTMLDivElement | null>(null)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
-  const [error, setError] = useState('')
-  const [reloadToken, setReloadToken] = useState(0)
-
-  useEffect(() => {
-    const bodyEl = bodyRef.current
-    const styleEl = styleRef.current
-    if (!bodyEl || !styleEl) return
-    const bodyContainer: HTMLElement = bodyEl
-    const styleContainer: HTMLElement = styleEl
-
-    let cancelled = false
-    bodyContainer.innerHTML = ''
-    styleContainer.innerHTML = ''
-    setStatus('loading')
-    setError('')
-
-    async function renderDocument() {
-      const [{ renderAsync }, data] = await Promise.all([
-        import('docx-preview'),
-        loadPreviewArrayBuffer(item),
-      ])
-      if (cancelled) return
-      await renderAsync(data, bodyContainer, styleContainer, {
-        breakPages: true,
-        className: 'agenthub-docx',
-        ignoreFonts: false,
-        inWrapper: true,
-        renderFooters: true,
-        renderHeaders: true,
-        useBase64URL: true,
-      })
-      if (!cancelled) setStatus('ready')
-    }
-
-    void renderDocument().catch((err) => {
-      if (cancelled) return
-      setStatus('error')
-      setError(formatPreviewError(err))
-    })
-
-    return () => {
-      cancelled = true
-      bodyContainer.innerHTML = ''
-      styleContainer.innerHTML = ''
-    }
-  }, [item.id, item.path, item.url, item.workspaceId, reloadToken])
-
-  if (status === 'error') {
-    return (
-      <PreviewErrorState
-        title={item.title}
-        error={error}
-        onRetry={() => setReloadToken((value) => value + 1)}
-      />
-    )
-  }
-
-  return (
-    <div className="agenthub-office-preview flex h-full flex-col bg-[#f6f7f9]">
-      <OfficePreviewHeader item={item} label="Word" />
-      <div className="relative min-h-0 flex-1 overflow-auto">
-        {status === 'loading' && (
-          <div className="absolute inset-0 z-10">
-            <PreviewLoadingState item={item} />
-          </div>
-        )}
-        <div className="agenthub-docx-host">
-          <div ref={styleRef} />
-          <div ref={bodyRef} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const PresentationDocumentPreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  const hostRef = useRef<HTMLDivElement | null>(null)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
-  const [error, setError] = useState('')
-  const [reloadToken, setReloadToken] = useState(0)
-  const [renderWidth, setRenderWidth] = useState(900)
-
-  useEffect(() => {
-    const scrollEl = scrollRef.current
-    if (!scrollEl) return
-
-    const updateWidth = () => {
-      const nextWidth = Math.max(320, Math.min(1120, Math.floor(scrollEl.clientWidth - 32)))
-      setRenderWidth((current) => (Math.abs(current - nextWidth) > 24 ? nextWidth : current))
-    }
-
-    updateWidth()
-    const observer = new ResizeObserver(updateWidth)
-    observer.observe(scrollEl)
-    return () => observer.disconnect()
-  }, [])
-
-  useEffect(() => {
-    const hostEl = hostRef.current
-    if (!hostEl) return
-    const hostContainer: HTMLElement = hostEl
-
-    let cancelled = false
-    let previewer: { destroy?: () => void } | null = null
-    hostContainer.innerHTML = ''
-    setStatus('loading')
-    setError('')
-
-    async function renderPresentation() {
-      const [{ init }, data] = await Promise.all([
-        import('pptx-preview'),
-        loadPreviewArrayBuffer(item),
-      ])
-      if (cancelled) return
-      const width = Math.max(320, Math.floor(renderWidth))
-      const height = Math.round(width * 0.5625)
-      const nextPreviewer = init(hostContainer, { height, mode: 'list', width })
-      previewer = nextPreviewer
-      await nextPreviewer.preview(data)
-      if (!cancelled) setStatus('ready')
-    }
-
-    void renderPresentation().catch((err) => {
-      if (cancelled) return
-      setStatus('error')
-      setError(formatPreviewError(err))
-    })
-
-    return () => {
-      cancelled = true
-      previewer?.destroy?.()
-      hostContainer.innerHTML = ''
-    }
-  }, [item.id, item.path, item.url, item.workspaceId, reloadToken, renderWidth])
-
-  if (status === 'error') {
-    return (
-      <PreviewErrorState
-        title={item.title}
-        error={error}
-        onRetry={() => setReloadToken((value) => value + 1)}
-      />
-    )
-  }
-
-  return (
-    <div className="agenthub-office-preview flex h-full flex-col bg-[#f6f7f9]">
-      <OfficePreviewHeader item={item} label="PowerPoint" />
-      <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-auto">
-        {status === 'loading' && (
-          <div className="absolute inset-0 z-10">
-            <PreviewLoadingState item={item} />
-          </div>
-        )}
-        <div className="agenthub-pptx-host">
-          <div ref={hostRef} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const OfficePreviewHeader: FC<{ item: ArtifactPreviewItem; label: string }> = ({
-  item,
-  label,
-}) => (
-  <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 bg-white px-3 text-xs text-neutral-500">
-    {isPptxPreviewItem(item) ? (
-      <Presentation className="h-4 w-4 text-neutral-400" />
-    ) : (
-      <FileText className="h-4 w-4 text-neutral-400" />
-    )}
-    <span className="min-w-0 flex-1 truncate">{previewFileName(item)}</span>
-    <span className="rounded-md bg-[#f6f7f9] px-2 py-1">{label}</span>
-  </div>
-)
-
-const DocumentPreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
-  const fileName = item.path ?? item.title
-  return (
-    <div className="flex h-full flex-col bg-white">
-      <div className="flex h-11 shrink-0 items-center gap-2 bg-[#f5f5f1] px-3 text-xs text-neutral-500">
-        <FileText className="h-4 w-4 text-neutral-400" />
-        <span className="min-w-0 flex-1 truncate">{fileName}</span>
-        <span className="rounded-md bg-[#F7F7F7] px-2 py-1">只读预览</span>
-      </div>
-      <div className="grid min-h-0 flex-1 place-items-center bg-[#F7F7F7] p-8">
-        <div className="w-full max-w-md rounded-2xl border border-neutral-200 bg-white p-6 text-center shadow-sm">
-          <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#F7F7F7] text-neutral-500">
-            <File className="h-8 w-8" />
-          </div>
-          <div className="mt-4 truncate text-sm font-semibold text-neutral-950">{item.title}</div>
-          <div className="mt-2 text-xs leading-5 text-neutral-500">{previewFileHint(item)}</div>
-          {item.path && (
-            <div className="agenthub-readable-code mt-4 rounded-xl bg-[#F7F7F7] px-3 py-2 text-left text-xs leading-5 text-neutral-500">
-              {item.path}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const TextFilePreview: FC<{ item: ArtifactPreviewItem }> = ({ item }) => {
-  const resolvedPath = item.path ?? previewPathFromUrl(item.url) ?? undefined
-  const fileName = resolvedPath ?? item.title
-  const language = guessLanguageFromPath(fileName) || 'text'
-  const canLoadWorkspaceSource = canFetchWorkspaceTextSource(item, resolvedPath)
-  const [loadedSource, setLoadedSource] = useState<string | null>(null)
-  const [sourceLoadState, setSourceLoadState] = useState<'idle' | 'loading' | 'ready' | 'error'>(
-    'idle',
-  )
-  const [sourceLoadError, setSourceLoadError] = useState('')
-  const source = loadedSource ?? item.source ?? ''
-  const lines = useMemo(() => source.replace(/\n$/, '').split('\n'), [source])
-  const highlightedLines = useMemo(
-    () => lines.map((line) => highlightCode(line, language)),
-    [lines, language],
-  )
-  const selection = useLineSelection(lines.length)
-  const [localChangeTarget, setLocalChangeTarget] = useState<LocalChangeTarget | null>(null)
-
-  useEffect(() => {
-    selection.clearSelection()
-    setLocalChangeTarget(null)
-  }, [source, selection.clearSelection])
-
-  useEffect(() => {
-    setLoadedSource(null)
-    setSourceLoadError('')
-    setSourceLoadState('idle')
-    if (!canLoadWorkspaceSource || !item.workspaceId || !resolvedPath) return
-
-    const controller = new AbortController()
-    setSourceLoadState('loading')
-
-    fetch(artifactFileUrl(item.workspaceId, resolvedPath), {
-      credentials: 'include',
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(await extractPreviewErrorMessage(response))
-        return response.text()
-      })
-      .then((text) => {
-        setLoadedSource(text)
-        setSourceLoadState('ready')
-      })
-      .catch((error) => {
-        if (controller.signal.aborted) return
-        setSourceLoadState('error')
-        setSourceLoadError(formatPreviewError(error))
-      })
-
-    return () => controller.abort()
-  }, [canLoadWorkspaceSource, item.id, item.workspaceId, resolvedPath])
-
-  function buildTextFileTarget(): LocalChangeTarget | null {
-    const selected = selection.sortedSelected
-    if (selected.length === 0) return null
-    const selectedLines = selected.map((index) => lines[index])
-    return {
-      filePath: resolvedPath,
-      language,
-      lineLabel: formatLineRangeLabel(selected[0] + 1, selected[selected.length - 1] + 1),
-      selectedText: selectedLines.join('\n'),
-      sourceLabel: '文件预览',
-    }
-  }
-
-  function handleReference() {
-    const target = buildTextFileTarget()
-    if (!target) return
-    const header = target.filePath
-      ? `\`${target.filePath}\` ${target.lineLabel}:\n`
-      : `${target.lineLabel}:\n`
-    insertTextIntoComposer(`${header}${codeFenceForContent(target.selectedText, language)}\n`)
-    selection.clearSelection()
-    setLocalChangeTarget(null)
-  }
-
-  function handleLocalChange() {
-    const target = buildTextFileTarget()
-    if (target) setLocalChangeTarget(target)
-  }
-
-  function clearTextSelection() {
-    selection.clearSelection()
-    setLocalChangeTarget(null)
-  }
-
-  return (
-    <div className="flex h-full flex-col bg-white">
-      <div className="flex h-11 shrink-0 items-center gap-2 bg-[#f5f5f1] px-3 text-xs text-neutral-500">
-        <FileText className="h-4 w-4 text-neutral-400" />
-        <span className="min-w-0 flex-1 truncate">{fileName}</span>
-        <span className="rounded-md bg-[#F7F7F7] px-2 py-1">{language}</span>
-        {sourceLoadState === 'loading' && (
-          <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-blue-600">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            读取源码
-          </span>
-        )}
-        {sourceLoadState === 'error' && (
-          <span className="max-w-[12rem] truncate rounded-md bg-amber-50 px-2 py-1 text-amber-700" title={sourceLoadError}>
-            使用缓存源码
-          </span>
-        )}
-      </div>
-      <div className="agenthub-file-code-preview min-h-0 flex-1 overflow-auto bg-[#0f172a]">
-        {selection.selectedCount > 0 && (
-          <LineSelectionToolbar
-            selectedCount={selection.selectedCount}
-            onReference={handleReference}
-            onLocalChange={handleLocalChange}
-            onClear={clearTextSelection}
-          />
-        )}
-        {localChangeTarget && (
-          <LocalChangeComposer
-            target={localChangeTarget}
-            onCancel={() => setLocalChangeTarget(null)}
-            onSent={clearTextSelection}
-          />
-        )}
-        <pre className="agenthub-code-pre agenthub-file-code-pre not-prose">
-          <code className={cn('agenthub-code', `language-${language}`)}>
-            <table className="agenthub-code-table">
-              <tbody>
-                {lines.map((_line, index) => (
-                  <tr
-                    key={index}
-                    className={selection.isSelected(index) ? 'agenthub-code-row-selected' : undefined}
-                  >
-                    <td
-                      className="agenthub-code-ln"
-                      onClick={(event) => selection.toggleLine(index, event.shiftKey)}
-                    >
-                      {index + 1}
-                    </td>
-                    <td
-                      className="agenthub-code-content"
-                      onClick={(event) => {
-                        if (shouldSkipLineSelectionClick(event)) return
-                        selection.toggleLine(index, event.shiftKey)
-                      }}
-                    >
-                      <span dangerouslySetInnerHTML={{ __html: highlightedLines[index] || '&nbsp;' }} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </code>
-        </pre>
-      </div>
-    </div>
-  )
-}
-
-const PreviewPlaceholder: FC<{ item: ArtifactPreviewItem }> = ({ item }) => (
-  <div className="grid h-full place-items-center bg-[#F7F7F7] p-8">
-    <div className="max-w-md rounded-2xl border border-neutral-200 bg-white p-6 text-center shadow-sm">
-      <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[#F7F7F7] text-neutral-500">
-        <GitBranch className="h-8 w-8" />
-      </div>
-      <div className="mt-4 text-sm font-semibold text-neutral-950">{item.title}</div>
-      <div className="mt-2 text-xs leading-5 text-neutral-500">
-        {item.description ?? '这个产物当前显示结构化摘要和关联信息。'}
-      </div>
     </div>
   </div>
 )
@@ -6503,7 +5979,7 @@ const InlineDiffReview: FC<{
       )}
       {open && (
         <div className="mt-2 overflow-hidden rounded-xl border border-neutral-200">
-          <DiffViewer
+          <ArtifactDiffViewer
             diff={diff}
             maxHeightClassName={compact ? 'max-h-72' : 'max-h-96'}
             filePath={filePath}
@@ -6511,303 +5987,6 @@ const InlineDiffReview: FC<{
           />
         </div>
       )}
-    </div>
-  )
-}
-
-const DiffViewer: FC<{
-  diff: string
-  maxHeightClassName?: string
-  filePath?: string
-  /** Called when user saves an inline edit. */
-  onSaveEdit?: (params: DiffEditSaveParams) => void | Promise<void>
-}> = ({
-  diff,
-  maxHeightClassName = 'max-h-96',
-  filePath,
-  onSaveEdit,
-}) => {
-  const parsedRows = useMemo(() => parseDiffRows(diff), [diff])
-  const [rowTextOverrides, setRowTextOverrides] = useState<Record<number, string>>({})
-  const rows = useMemo(
-    () =>
-      parsedRows.map((row, index) =>
-        Object.prototype.hasOwnProperty.call(rowTextOverrides, index)
-          ? { ...row, text: rowTextOverrides[index] }
-          : row,
-      ),
-    [parsedRows, rowTextOverrides],
-  )
-  // Only selectable rows are add/del/context (not hunk/meta)
-  const selectableRows = useMemo(
-    () => rows.map((row, i) => ({ ...row, _index: i })).filter((r) => r.kind === 'add' || r.kind === 'del' || r.kind === 'context'),
-    [rows],
-  )
-  const selectableCount = selectableRows.length
-  const selection = useLineSelection(selectableCount)
-  const [editingSelectableIndex, setEditingSelectableIndex] = useState<number | null>(null)
-  const [editDraft, setEditDraft] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [editSaveNotice, setEditSaveNotice] = useState<{
-    tone: 'success' | 'error'
-    message: string
-  } | null>(null)
-  const [localChangeTarget, setLocalChangeTarget] = useState<LocalChangeTarget | null>(null)
-
-  useEffect(() => {
-    setRowTextOverrides({})
-    setEditSaveNotice(null)
-    setEditingSelectableIndex(null)
-    setEditDraft('')
-  }, [diff])
-
-  function isRowSelected(originalIndex: number) {
-    const selIdx = selectableRows.findIndex((r) => r._index === originalIndex)
-    return selIdx >= 0 && selection.isSelected(selIdx)
-  }
-
-  function handleLineNumberClick(originalIndex: number, shiftKey: boolean) {
-    const selIdx = selectableRows.findIndex((r) => r._index === originalIndex)
-    if (selIdx >= 0) selection.toggleLine(selIdx, shiftKey)
-  }
-
-  function handleDiffCodeClick(
-    originalIndex: number,
-    event: ReactMouseEvent<HTMLElement>,
-  ) {
-    if (window.getSelection()?.toString()) return
-    handleLineNumberClick(originalIndex, event.shiftKey)
-  }
-
-  function buildDiffTarget(): LocalChangeTarget | null {
-    const selected = selection.sortedSelected.map((si) => selectableRows[si])
-    if (selected.length === 0) return null
-    const lines = selected.map((r) => {
-      const marker = r.kind === 'add' ? '+' : r.kind === 'del' ? '-' : ' '
-      return `${marker}${r.text}`
-    })
-    const startLine = selected[0].newNumber ?? selected[0].oldNumber ?? '?'
-    const endLine =
-      selected[selected.length - 1].newNumber ?? selected[selected.length - 1].oldNumber ?? startLine
-    return {
-      filePath,
-      language: filePath ? guessLanguageFromPath(filePath) : 'diff',
-      lineLabel: formatLineRangeLabel(startLine, endLine),
-      selectedText: lines.join('\n'),
-      sourceLabel: 'Diff 预览',
-    }
-  }
-
-  function buildReferenceText() {
-    const target = buildDiffTarget()
-    if (!target) return ''
-    const langGuess = filePath ? guessLanguageFromPath(filePath) : ''
-    const header = filePath
-      ? `\`${filePath}\` ${target.lineLabel}:\n`
-      : `${target.lineLabel}:\n`
-    return `${header}${codeFenceForContent(target.selectedText, langGuess)}\n`
-  }
-
-  function handleReference() {
-    const text = buildReferenceText()
-    if (text) insertTextIntoComposer(text)
-    clearDiffSelection()
-  }
-
-  function handleLocalChange() {
-    const target = buildDiffTarget()
-    if (target) setLocalChangeTarget(target)
-  }
-
-  function clearDiffSelection() {
-    selection.clearSelection()
-    setLocalChangeTarget(null)
-  }
-
-  function handleStartEdit() {
-    if (selection.sortedSelected.length === 0) return
-    const firstSelIdx = selection.sortedSelected[0]
-    setEditingSelectableIndex(firstSelIdx)
-    setEditSaveNotice(null)
-    const row = selectableRows[firstSelIdx]
-    const marker = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' '
-    setEditDraft(`${marker}${row.text}`)
-  }
-
-  function handleCancelEdit() {
-    setEditingSelectableIndex(null)
-    setEditDraft('')
-    setEditSaveNotice(null)
-  }
-
-  async function handleSaveEdit() {
-    if (editingSelectableIndex === null || !onSaveEdit) return
-    setSaving(true)
-    setEditSaveNotice(null)
-    try {
-      const row = selectableRows[editingSelectableIndex]
-      // Determine the 1-based line number in the current file
-      // For 'add' and 'context' rows, use newNumber; for 'del', use oldNumber
-      const lineNumber = row.kind === 'del' ? row.oldNumber : row.newNumber
-      if (!lineNumber) {
-        setEditSaveNotice({
-          tone: 'error',
-          message: '当前 Diff 缺少可写入行号，无法保存。',
-        })
-        return
-      }
-      // The editDraft has a prefix marker (+, -, or space); strip it to get just the line text
-      const lineText = editDraft.length > 1 ? editDraft.slice(1) : ''
-      await onSaveEdit({
-        lineText,
-        lineNumber,
-        fileContent: buildEditableDiffFileContent(rows, row._index, lineText),
-      })
-      setRowTextOverrides((current) => ({ ...current, [row._index]: lineText }))
-      setEditSaveNotice({ tone: 'success', message: '已保存到工作区文件。' })
-      setEditingSelectableIndex(null)
-      setEditDraft('')
-      clearDiffSelection()
-    } catch (error) {
-      setEditSaveNotice({
-        tone: 'error',
-        message: friendlyErrorMessage(error, '保存失败'),
-      })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="agenthub-diff-container">
-      {selection.selectedCount > 0 && (
-        <LineSelectionToolbar
-          selectedCount={selection.selectedCount}
-          onReference={handleReference}
-          onLocalChange={handleLocalChange}
-          onEdit={onSaveEdit ? handleStartEdit : undefined}
-          onClear={clearDiffSelection}
-        />
-      )}
-      {localChangeTarget && (
-        <LocalChangeComposer
-          target={localChangeTarget}
-          onCancel={() => setLocalChangeTarget(null)}
-          onSent={clearDiffSelection}
-        />
-      )}
-      {editSaveNotice && (
-        <div
-          className={cn(
-            'border-t px-3 py-2 text-xs',
-            editSaveNotice.tone === 'error'
-              ? 'border-red-100 bg-red-50 text-red-700'
-              : 'border-emerald-100 bg-emerald-50 text-emerald-700',
-          )}
-        >
-          {editSaveNotice.message}
-        </div>
-      )}
-      <div
-        className={cn(
-          'overflow-auto border-t border-neutral-200 bg-white text-[13px]',
-          maxHeightClassName,
-          selection.selectedCount > 0 && 'border-t-0',
-        )}
-      >
-        <div className="agenthub-readable-code min-w-max py-1 leading-7">
-          {rows.map((row, index) => {
-            const selected = isRowSelected(index)
-            const isEditing = selectableRows.findIndex((r) => r._index === index) === editingSelectableIndex
-            const canSelect = row.kind === 'add' || row.kind === 'del' || row.kind === 'context'
-
-            return (
-              <div
-                key={`${index}-${row.text}`}
-                className={cn(
-                  'grid grid-cols-[3.25rem_3.25rem_minmax(32rem,1fr)] border-l-4 pr-4',
-                  row.kind === 'add' && 'border-emerald-500 bg-emerald-50 text-emerald-950',
-                  row.kind === 'del' && 'border-red-500 bg-red-50 text-red-950',
-                  row.kind === 'hunk' && 'border-blue-300 bg-blue-50 text-blue-700',
-                  row.kind === 'meta' && 'border-transparent bg-neutral-50 text-neutral-500',
-                  row.kind === 'context' && 'border-transparent text-neutral-800',
-                  selected && 'agenthub-diff-row-selected',
-                )}
-              >
-                <span
-                  className={cn(
-                    'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
-                    row.kind === 'add' && 'text-emerald-600',
-                    row.kind === 'del' && 'text-red-600',
-                    canSelect && 'agenthub-diff-line-number',
-                  )}
-                  onClick={canSelect ? (e) => handleLineNumberClick(index, e.shiftKey) : undefined}
-                >
-                  {row.oldNumber ?? ''}
-                </span>
-                <span
-                  className={cn(
-                    'select-none border-r border-neutral-100 px-2 text-right text-neutral-400',
-                    row.kind === 'add' && 'text-emerald-600',
-                    row.kind === 'del' && 'text-red-600',
-                    canSelect && 'agenthub-diff-line-number',
-                  )}
-                  onClick={canSelect ? (e) => handleLineNumberClick(index, e.shiftKey) : undefined}
-                >
-                  {row.newNumber ?? ''}
-                </span>
-                {isEditing ? (
-                  <div className="flex flex-col px-1 py-0.5">
-                    <textarea
-                      value={editDraft}
-                      onChange={(e) => setEditDraft(e.target.value)}
-                      className="agenthub-inline-edit"
-                      autoFocus
-                      rows={1}
-                    />
-                    <div className="agenthub-inline-edit-actions">
-                      <button
-                        type="button"
-                        className="agenthub-inline-edit-btn agenthub-inline-edit-btn-save"
-                        onClick={handleSaveEdit}
-                        disabled={saving}
-                      >
-                        {saving ? '保存中...' : '保存'}
-                      </button>
-                      <button
-                        type="button"
-                        className="agenthub-inline-edit-btn agenthub-inline-edit-btn-cancel"
-                        onClick={handleCancelEdit}
-                      >
-                        取消
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <code
-                    className={cn(
-                      'whitespace-pre px-3',
-                      canSelect && 'agenthub-diff-code-selectable',
-                    )}
-                    onClick={canSelect ? (event) => handleDiffCodeClick(index, event) : undefined}
-                  >
-                    <span
-                      className={cn(
-                        'mr-2 inline-block w-3 select-none',
-                        row.kind === 'add' && 'text-emerald-600',
-                        row.kind === 'del' && 'text-red-600',
-                      )}
-                    >
-                      {row.marker}
-                    </span>
-                    {row.text}
-                  </code>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
     </div>
   )
 }
@@ -7024,7 +6203,7 @@ function previewActionIcon(item: ArtifactPreviewItem) {
   return <FileText className="h-3.5 w-3.5" />
 }
 
-function previewFileHint(item: ArtifactPreviewItem) {
+export function previewFileHint(item: ArtifactPreviewItem) {
   const lower = (item.mimeType || item.path || item.title).toLowerCase()
   if (/\.(docx?|pptx?|xlsx?|pdf)$/.test(lower)) {
     return '文档类产物当前展示文件信息，可从产物卡打开文件查看。'
@@ -7040,125 +6219,6 @@ function previewIcon(item: ArtifactPreviewItem) {
   if (item.kind === 'image') return <ImagePlus className="h-4 w-4" />
   if (item.kind === 'diff' || item.kind === 'workflow') return <GitBranch className="h-4 w-4" />
   return <FileText className="h-4 w-4" />
-}
-
-type DiffRow = {
-  kind: 'add' | 'context' | 'del' | 'hunk' | 'meta'
-  marker: string
-  newNumber?: number
-  oldNumber?: number
-  text: string
-}
-
-function parseDiffRows(diff: string): DiffRow[] {
-  const rows: DiffRow[] = []
-  let oldLine: number | undefined
-  let newLine: number | undefined
-  let oldFilePath: string | undefined
-  let newFilePath: string | undefined
-  const rawLines = diff.split(/\r?\n/)
-
-  for (let index = 0; index < rawLines.length; index += 1) {
-    const rawLine = rawLines[index]
-    if (index === rawLines.length - 1 && rawLine === '' && diff.endsWith('\n')) continue
-
-    if (rawLine.startsWith('@@')) {
-      const match = rawLine.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)$/)
-      oldLine = match ? Number(match[1]) : undefined
-      newLine = match ? Number(match[2]) : undefined
-      rows.push({ kind: 'hunk', marker: '@@', text: rawLine })
-      continue
-    }
-
-    if (
-      rawLine.startsWith('diff --git') ||
-      rawLine.startsWith('index ') ||
-      rawLine.startsWith('new file mode ') ||
-      rawLine.startsWith('deleted file mode ') ||
-      rawLine.startsWith('old mode ') ||
-      rawLine.startsWith('new mode ') ||
-      rawLine.startsWith('similarity index ') ||
-      rawLine.startsWith('dissimilarity index ') ||
-      rawLine.startsWith('rename from ') ||
-      rawLine.startsWith('rename to ')
-    ) {
-      rows.push({ kind: 'meta', marker: '', text: rawLine })
-      continue
-    }
-
-    if (rawLine.startsWith('--- ')) {
-      oldFilePath = rawLine.slice(4).trim()
-      oldLine = oldFilePath === '/dev/null' ? undefined : (oldLine ?? 1)
-      rows.push({ kind: 'meta', marker: '', text: rawLine })
-      continue
-    }
-
-    if (rawLine.startsWith('+++ ')) {
-      newFilePath = rawLine.slice(4).trim()
-      newLine = newFilePath === '/dev/null' ? undefined : (newLine ?? 1)
-      rows.push({ kind: 'meta', marker: '', text: rawLine })
-      continue
-    }
-
-    if (rawLine.startsWith('+')) {
-      if (newLine === undefined && newFilePath && newFilePath !== '/dev/null') newLine = 1
-      rows.push({ kind: 'add', marker: '+', newNumber: newLine, text: rawLine.slice(1) })
-      if (newLine !== undefined) newLine += 1
-      continue
-    }
-
-    if (rawLine.startsWith('-')) {
-      if (oldLine === undefined && oldFilePath && oldFilePath !== '/dev/null') oldLine = 1
-      rows.push({ kind: 'del', marker: '-', oldNumber: oldLine, text: rawLine.slice(1) })
-      if (oldLine !== undefined) oldLine += 1
-      continue
-    }
-
-    const text = rawLine.startsWith(' ') ? rawLine.slice(1) : rawLine
-    if (oldLine === undefined && oldFilePath && oldFilePath !== '/dev/null') oldLine = 1
-    if (newLine === undefined && newFilePath && newFilePath !== '/dev/null') newLine = 1
-    rows.push({ kind: 'context', marker: '', oldNumber: oldLine, newNumber: newLine, text })
-    if (oldLine !== undefined) oldLine += 1
-    if (newLine !== undefined) newLine += 1
-  }
-
-  return rows
-}
-
-function buildEditableDiffFileContent(
-  rows: DiffRow[],
-  editedOriginalIndex: number,
-  editedLineText: string,
-) {
-  const isNewFileDiff =
-    rows.some((row) => row.kind === 'meta' && row.text === '--- /dev/null') &&
-    rows.some(
-      (row) =>
-        row.kind === 'meta' &&
-        row.text.startsWith('+++ ') &&
-        row.text.trim() !== '+++ /dev/null',
-    )
-  if (!isNewFileDiff) return undefined
-
-  return rows
-    .flatMap((row, index) => {
-      if (row.kind !== 'add' && row.kind !== 'context') return []
-      return index === editedOriginalIndex ? [editedLineText] : [row.text]
-    })
-    .join('\n')
-}
-
-function guessLanguageFromPath(filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-    py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java',
-    css: 'css', scss: 'css', less: 'css', html: 'xml', xml: 'xml',
-    json: 'json', yaml: 'yaml', yml: 'yaml', md: 'markdown',
-    sh: 'bash', bash: 'bash', zsh: 'bash', sql: 'sql', vue: 'xml',
-    svelte: 'xml',
-  }
-  return map[ext] ?? ''
 }
 
 function codeAgentStatusLabel(status: CodeAgentRunMetadata['status'], partialSuccess = false) {
@@ -7237,11 +6297,15 @@ const SystemMessage: FC = () => (
 
 const AssistantActionBar: FC = () => {
   const messageId = useMessage((message) => message.id)
-  const sourceMessage = useChatStore((state) =>
-    state.messages.find((message) => message.id === messageId),
+  const selectMessageById = useMemo(
+    () => makeSelectMessageById(messageId),
+    [messageId],
   )
-  const setReplyingTo = useChatStore((state) => state.setReplyingTo)
-  const regenerateMessage = useChatStore((state) => state.regenerateMessage)
+  const sourceMessage = useChatStore(selectMessageById)
+  const { setReplyingTo, regenerateMessage } = useChatStoreShallow((state) => ({
+    setReplyingTo: state.setReplyingTo,
+    regenerateMessage: state.regenerateMessage,
+  }))
   const [regenerating, setRegenerating] = useState(false)
   const canUseMessage = Boolean(sourceMessage && messageId !== 'agenthub-thinking')
 
@@ -7345,9 +6409,15 @@ const BranchPicker: FC = () => (
 
 const Avatar: FC<{ role: 'user' | 'assistant'; className?: string }> = ({ className, role }) => {
   const messageId = useMessage((message) => message.id)
-  const sourceMessage = useChatStore((state) => state.messages.find((m) => m.id === messageId))
-  const streamingMessage = useChatStore((state) => state.streamingMessage)
-  const workspaceAgents = useChatStore((state) => state.currentWorkspaceAgents)
+  const selectAvatarState = useMemo(
+    () => makeSelectMessageAvatarState(messageId),
+    [messageId],
+  )
+  const {
+    sourceMessage,
+    streamingMessage,
+    workspaceAgents,
+  } = useChatStoreShallow(selectAvatarState)
 
   // 尝试匹配发送者 workspace agent（优先 senderId，其次 metadata.agentName）
   const senderId =
