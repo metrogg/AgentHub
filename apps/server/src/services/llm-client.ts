@@ -8,6 +8,7 @@ import type { FetchFunction } from '@ai-sdk/provider-utils'
 import { INTERNAL_LLM_DEFAULT_MODEL_ID_SETTING } from '@agenthub/shared'
 import { env } from '../env'
 import { logger } from '../lib/logger'
+import { safeJsonParse, tryJsonParse } from '../lib/safe-json'
 
 export const DEFAULT_AGENT_INSTRUCTIONS =
   '你是 AgentHub Assistant，运行在多 Agent 协作平台中的 AI 协作者。请始终使用中文回复，结合当前对话上下文，给出清晰、实用的下一步。'
@@ -85,22 +86,14 @@ async function getSettingsMap(): Promise<Record<string, string>> {
 
 function parseCatalog(value?: string): ModelCatalogItem[] {
   if (!value) return []
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
+  const parsed = safeJsonParse<unknown>(value, [], 'llm-client.MODEL_CATALOG')
+  return Array.isArray(parsed) ? parsed : []
 }
 
 function parseAppSettings(value?: string): { debugMode?: boolean } {
   if (!value) return {}
-  try {
-    const parsed = JSON.parse(value)
-    return { debugMode: Boolean(parsed?.debugMode) }
-  } catch {
-    return {}
-  }
+  const parsed = safeJsonParse<Record<string, unknown>>(value, {}, 'llm-client.APP_SETTINGS')
+  return { debugMode: Boolean(parsed?.debugMode) }
 }
 
 function defaultDebugDir() {
@@ -657,11 +650,8 @@ function headersToRecord(headers: RequestInit['headers'] | undefined) {
 
 function redactRequestBody(body: RequestInit['body'] | null | undefined, apiKey: string | null) {
   if (typeof body !== 'string') return body ? '[non-string body]' : undefined
-  try {
-    return redactJson(JSON.parse(body), apiKey)
-  } catch {
-    return redactSensitive(body, [apiKey])
-  }
+  const parsed = tryJsonParse<unknown>(body, 'llm-client.debug.requestBody')
+  return parsed === null ? redactSensitive(body, [apiKey]) : redactJson(parsed, apiKey)
 }
 
 function redactJson(value: unknown, apiKey?: string | null): unknown {

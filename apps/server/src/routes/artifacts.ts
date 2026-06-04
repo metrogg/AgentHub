@@ -12,6 +12,7 @@ import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { resolveDefaultWorkDir } from '../services/execution/agent-execution-envelope'
+import { agentHubUserCacheRoot, agentHubUserDataRoot } from '../services/system-paths'
 
 export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -19,28 +20,26 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
     const rawPath = c.req.query('path')?.trim()
     const workspaceId = c.req.query('workspaceId')?.trim()
     if (!rawPath) throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少预览路径', { field: 'path' })
+    if (!workspaceId) {
+      throw AppError.fromCode(AppErrorCodes.MISSING_FIELD, '缺少 workspaceId', { field: 'workspaceId' })
+    }
 
-    let filePath = resolve(rawPath)
-    const ext = extname(filePath).toLowerCase()
+    const ext = extname(rawPath).toLowerCase()
     if (ext !== '.html' && ext !== '.htm') {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '仅支持 HTML 文件预览')
     }
 
-    // 基于 workspace 的 projectPath 做安全校验
-    if (workspaceId) {
-      const user = c.get('user')
-      const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
-      if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
-        throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, 'Workspace not found')
-      }
-      filePath = resolveWorkspaceFilePath(rawPath, resolve(ws.projectPath))
-      if (ws && ws.ownerId === user.sub && ws.projectPath) {
-        const allowedRoot = resolve(ws.projectPath)
-        const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
-        if (filePath !== allowedRoot && !filePath.startsWith(rootWithSep)) {
-          throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
-        }
-      }
+    const user = c.get('user')
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    if (!ws || ws.ownerId !== user.sub || !ws.projectPath) {
+      throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, 'Workspace not found')
+    }
+
+    const allowedRoot = resolve(ws.projectPath)
+    const filePath = resolveWorkspaceFilePath(rawPath, allowedRoot)
+    const rootWithSep = allowedRoot.endsWith(sep) ? allowedRoot : `${allowedRoot}${sep}`
+    if (filePath !== allowedRoot && !filePath.startsWith(rootWithSep)) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在工作区范围内')
     }
 
     if (!existsSync(filePath) || !statSync(filePath).isFile()) {
@@ -70,9 +69,15 @@ export const artifactRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const root = Buffer.from(rootEncoded, 'base64url').toString('utf8')
     const resolvedRoot = resolve(root)
+    const user = c.get('user')
+    if (!(await isPreviewRootAllowed(resolvedRoot, user.sub))) {
+      throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '预览目录不在允许范围内')
+    }
+
     const filePath = resolve(join(resolvedRoot, decodeURIComponent(entry)))
     // Security: ensure the resolved path stays under the preview root
-    if (!filePath.startsWith(resolvedRoot)) {
+    const rootWithSep = resolvedRoot.endsWith(sep) ? resolvedRoot : `${resolvedRoot}${sep}`
+    if (filePath !== resolvedRoot && !filePath.startsWith(rootWithSep)) {
       throw AppError.fromCode(AppErrorCodes.FILE_ACCESS_DENIED, '路径不在预览目录内')
     }
     if (!existsSync(filePath) || !statSync(filePath).isFile()) {
@@ -548,4 +553,25 @@ function contentType(filePath: string) {
 function resolveWorkspaceFilePath(rawPath: string, workspaceRoot: string) {
   const normalizedPath = normalize(rawPath)
   return isAbsolute(normalizedPath) ? resolve(normalizedPath) : resolve(workspaceRoot, normalizedPath)
+}
+
+function isPathUnder(child: string, parent: string) {
+  const resolvedParent = resolve(parent)
+  const parentWithSep = resolvedParent.endsWith(sep) ? resolvedParent : `${resolvedParent}${sep}`
+  return child === resolvedParent || child.startsWith(parentWithSep)
+}
+
+async function isPreviewRootAllowed(resolvedRoot: string, ownerId: string): Promise<boolean> {
+  const managedRoots = [agentHubUserCacheRoot(), agentHubUserDataRoot()]
+  if (managedRoots.some((managed) => isPathUnder(resolvedRoot, managed))) {
+    return true
+  }
+
+  const ownedWorkspaces = await db
+    .select({ projectPath: workspaces.projectPath })
+    .from(workspaces)
+    .where(eq(workspaces.ownerId, ownerId))
+  return ownedWorkspaces.some(
+    (ws) => ws.projectPath && isPathUnder(resolvedRoot, resolve(ws.projectPath)),
+  )
 }
