@@ -28,7 +28,7 @@ import { runtimeLeaseController } from './runtime-lease-controller'
 import { markWorkerInstanceState } from './worker-runtime-resources'
 import { readSharedTaskResult } from './shared-task-directory'
 import type { WorkerRuntime } from '../worker-runtime/types'
-import { buildCoordinatorResourceReviewSummary } from '../coordinator-runtime/final-review-skill'
+import { buildManagerResourceReviewSummary } from '../manager-runtime/final-review-skill'
 import { managerRuntimeService, getActiveManagerProvider } from '../manager-runtime'
 
 export interface ManagerDecisionEventContext {
@@ -651,7 +651,7 @@ async function synthesizeCompletedRunFromResources(
     )
   }
 
-  const summary = buildCoordinatorResourceReviewSummary({
+  const summary = buildManagerResourceReviewSummary({
     goal: goalFromPlan(run.plan) ?? workspace?.goal ?? null,
     tasks,
     threads,

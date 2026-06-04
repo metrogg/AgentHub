@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
+import { getRuntimeServerPort } from '../../lib/runtime-server'
 import { createMatrixClientFromEnv } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
 import { resolveHealthEndpoint, resolveStepEndpoint } from './remote-manager-runtime-adapter'
@@ -49,6 +50,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   private process: ChildProcess | null = null
   private startedAt: string | null = null
   private managerWorkspace: string
+  private managerAccessToken: string | null = null
 
   constructor(private config: {
     openclawPath?: string
@@ -118,6 +120,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       this.config.matrixUserId = identity.userId ?? undefined
       this.config.matrixUrl = client.homeserverUrl
       this.config.matrixDomain = client.serverName
+      this.managerAccessToken = identity.accessToken ?? null
       logger.info({ userId: identity.userId }, 'Manager Matrix identity ensured')
     } catch (err) {
       logger.error({ err }, 'Failed to ensure Manager Matrix identity')
@@ -219,9 +222,11 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     const matrixUrl = this.config.matrixUrl || process.env.AGENTHUB_MATRIX_HOMESERVER_URL || 'http://localhost:6167'
     const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'local.agenthub'
     const matrixUserId = this.config.matrixUserId || `@manager:${matrixDomain}`
-    const llmBaseUrl = this.config.llmBaseUrl || process.env.LLM_BASE_URL || 'http://localhost:8000/v1'
-    const llmApiKey = this.config.llmApiKey || process.env.LLM_API_KEY || 'agenthub-internal'
-    const llmModel = this.config.llmModel || process.env.LLM_MODEL || 'default'
+    const llmBaseUrl = this.config.llmBaseUrl || process.env.AGENTHUB_MANAGER_LLM_BASE_URL || process.env.LLM_BASE_URL || 'http://localhost:8000/v1'
+    const llmApiKey = this.config.llmApiKey || process.env.AGENTHUB_MANAGER_LLM_API_KEY || process.env.LLM_API_KEY || 'agenthub-internal'
+    const llmModel = this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || process.env.LLM_MODEL || 'default'
+    const llmContextWindow = Number(process.env.AGENTHUB_MANAGER_LLM_CONTEXT_WINDOW || '128000')
+    const llmMaxTokens = Number(process.env.AGENTHUB_MANAGER_LLM_MAX_TOKENS || '8192')
 
     const config = {
       gateway: {
@@ -242,9 +247,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
           network: { dangerouslyAllowPrivateNetwork: true },
           autoJoin: 'always',
           dm: { policy: 'allowlist', allowFrom: [`@admin:${matrixDomain}`] },
-          groupPolicy: 'allowlist',
+          groupPolicy: 'open',
           groupAllowFrom: [`@admin:${matrixDomain}`],
-          groups: { '*': { allow: true, requireMention: true } },
           streaming: 'partial',
           blockStreaming: true,
         },
@@ -256,7 +260,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
             baseUrl: llmBaseUrl,
             apiKey: llmApiKey,
             api: 'openai-completions',
-            models: [{ id: llmModel, reasoning: false, contextWindow: 128000, maxTokens: 8192, input: ['text'] }],
+            models: [{ id: llmModel, name: llmModel, reasoning: true, contextWindow: llmContextWindow, maxTokens: llmMaxTokens, input: ['text'] }],
           },
         },
       },
@@ -279,7 +283,10 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
         dmScope: 'per-channel-peer',
         resetByType: { dm: { mode: 'daily', atHour: 4 }, group: { mode: 'daily', atHour: 4 } },
       },
-      plugins: { load: { paths: [] }, entries: {} },
+      plugins: {
+        load: { paths: [join(this.managerWorkspace, 'skills')] },
+        entries: {},
+      },
       commands: { restart: true },
     }
 
@@ -319,19 +326,26 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   }
 
   private launch(binaryPath: string): void {
+    const serverPort = getRuntimeServerPort() ?? Number(process.env.PORT || 3000)
     const env = {
       ...process.env,
       OPENCLAW_CONFIG_PATH: this.getConfigPath(),
       OPENCLAW_NO_RESPAWN: '1',
       HOME: this.managerWorkspace,
+      AGENTHUB_CONTROLLER_URL: `http://localhost:${serverPort}`,
+      AGENTHUB_MANAGER_TOKEN: this.managerAccessToken ?? '',
     }
 
     logger.info({ binaryPath, configPath: this.getConfigPath() }, 'Launching OpenClaw Manager...')
 
+    const isCmd = binaryPath.toLowerCase().endsWith('.cmd')
+    const shell = process.platform === 'win32' || isCmd
     this.process = spawn(binaryPath, ['gateway', 'run', '--verbose', '--force'], {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: this.managerWorkspace,
+      shell,
+      windowsHide: true,
     })
 
     this.process.stdout?.on('data', (data: Buffer) => {

@@ -24,6 +24,8 @@ import {
   workspaceTasks,
   orchestratorRuns,
   taskThreads,
+  rooms,
+  timelineEvents,
   and,
   eq,
   asc,
@@ -44,8 +46,8 @@ import {
   stepTaskRoomAfterHumanMessage,
 } from '../services/rooms/room-chat-bridge'
 import { listSessionMessagesRoomFirst } from '../services/rooms/timeline-message-projection'
-import type { CoordinatorAction } from '../services/coordinator-runtime'
-import type { DispatchMonitor } from '../services/coordinator-runtime/planning-dispatcher'
+import type { ManagerAction } from '../services/manager-runtime'
+import type { DispatchMonitor } from '../services/manager-runtime/planning-dispatcher'
 import {
   confirmAgentDraftSchema,
   type AgentDraft,
@@ -843,6 +845,135 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
 function readString(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+type MemberProposalRef = {
+  id: string
+  sessionId: string
+  content: string
+  metadata: Record<string, unknown>
+  legacyMessage?: typeof messages.$inferSelect | null
+  roomEvent?: typeof timelineEvents.$inferSelect | null
+  roomId?: string | null
+  targetEventId?: string | null
+}
+
+async function loadMemberProposalRef(sessionId: string, messageId: string): Promise<MemberProposalRef | null> {
+  if (messageId.startsWith('room:')) {
+    const eventId = messageId.slice('room:'.length).trim()
+    if (!eventId) return null
+    const [row] = await db
+      .select({
+        event: timelineEvents,
+        room: rooms,
+      })
+      .from(timelineEvents)
+      .innerJoin(rooms, eq(rooms.id, timelineEvents.roomId))
+      .where(and(eq(timelineEvents.id, eventId), eq(rooms.sessionId, sessionId)))
+      .limit(1)
+    if (!row?.event) return null
+    const metadata = { ...(row.event.metadata ?? {}) }
+    return {
+      id: `room:${row.event.id}`,
+      sessionId,
+      content: row.event.body,
+      metadata,
+      legacyMessage: null,
+      roomEvent: row.event,
+      roomId: row.room.id,
+      targetEventId: row.event.id,
+    }
+  }
+
+  const [proposalMessage] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, messageId))
+    .limit(1)
+  if (!proposalMessage || proposalMessage.sessionId !== sessionId) return null
+  return {
+    id: proposalMessage.id,
+    sessionId,
+    content: proposalMessage.content,
+    metadata: proposalMessage.metadata ?? {},
+    legacyMessage: proposalMessage,
+    roomEvent: null,
+    roomId: readNestedString(proposalMessage.metadata ?? {}, ['roomTimeline', 'roomId']) ??
+      readNestedString(proposalMessage.metadata ?? {}, ['roomTimelineProjection', 'roomId']),
+    targetEventId: null,
+  }
+}
+
+function memberProposalRefMessage(ref: MemberProposalRef): typeof messages.$inferSelect {
+  if (ref.legacyMessage) return ref.legacyMessage
+  return {
+    id: ref.id,
+    sessionId: ref.sessionId,
+    senderId: 'manager',
+    senderType: 'agent',
+    type: 'task_card',
+    content: ref.content,
+    metadata: ref.metadata,
+    isPinned: false,
+    replyToMessageId: null,
+    createdAt: ref.roomEvent?.createdAt ?? new Date(),
+  }
+}
+
+async function updateMemberProposalRef(params: {
+  ref: MemberProposalRef
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  if (params.ref.legacyMessage) {
+    const [updated] = await db
+      .update(messages)
+      .set({ content: params.content, metadata: params.metadata })
+      .where(eq(messages.id, params.ref.legacyMessage.id))
+      .returning()
+    const result = updated ?? params.ref.legacyMessage
+    broadcastSessionEvent(params.ref.sessionId, {
+      type: WsEvent.MessageCompleted,
+      payload: { sessionId: params.ref.sessionId, message: result },
+    })
+    return result
+  }
+
+  if (!params.ref.roomId || !params.ref.targetEventId) {
+    throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '补员建议事件不存在')
+  }
+  await appendTimelineMemberProposalUpdate({
+    roomId: params.ref.roomId,
+    targetEventId: params.ref.targetEventId,
+    content: params.content,
+    metadata: params.metadata,
+  })
+  return {
+    ...memberProposalRefMessage(params.ref),
+    content: params.content,
+    metadata: params.metadata,
+  }
+}
+
+async function appendTimelineMemberProposalUpdate(input: {
+  roomId: string
+  targetEventId: string
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  const { roomService } = await import('../services/rooms')
+  return roomService.appendTimelineEvent({
+    roomId: input.roomId,
+    senderType: 'manager',
+    type: 'system',
+    body: input.content,
+    metadata: {
+      kind: 'member-proposal.update',
+      targetEventId: input.targetEventId,
+      content: input.content,
+      patch: input.metadata,
+    },
+  })
 }
 
 async function findPreviousUserMessageContent(sessionId: string, beforeMessageId: string) {

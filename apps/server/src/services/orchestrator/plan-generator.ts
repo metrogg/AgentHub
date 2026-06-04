@@ -1,21 +1,30 @@
-import { db, workspaceAgents, workspaceAgentRelations, workspaces, eq } from '@agenthub/db'
-import {
-  AgentRoleType,
-  RuntimeType,
-  CodeAgentType,
-  SandboxPolicy,
-  TaskStatus,
-  TaskType,
-} from '@agenthub/shared'
-import type { CollaborationMode, ExecutionPlan, TaskOutputContract, TaskValidation } from './types'
-import {
-  formatContractsForPlanner,
-  loadExplicitCollaborationContracts,
-  type CollaborationContract,
-} from './collaboration-contract'
-import { createManagerActionPlan } from './manager-planner'
+/**
+ * Plan generator — fail-loudly stub.
+ *
+ * The legacy `buildDynamicOrchestratorPlan()` used the LLM-driven
+ * `Planner.createPlan()` (via `manager-planner.ts:createManagerActionPlan`)
+ * to synthesize an Orchestrator plan. That path has been removed:
+ * AgentHub Manager / Coordinator decisions must come from
+ *   - `ManagerRuntimeService.stepRoom()` (OpenClaw / QwenPaw Manager), or
+ *   - `ManagerLoop` + Room timeline + Controller API
+ * and NOT from AgentHub's own local LLM.
+ *
+ * Dynamic Orchestrator plans remain a valid *shape* for downstream
+ * `startPlanRunWithCoordinatorAssignBatch({ plan })` callers, but they
+ * must be produced by an external Manager (OpenClaw / QwenPaw) and passed
+ * in explicitly. There is no in-Process LLM fallback that synthesizes
+ * a plan for an arbitrary user message.
+ *
+ * This file is kept so that the `OrchestratorPlan` type and the
+ * `buildDynamicOrchestratorPlan` symbol still exist for type-checkers
+ * and the existing test surface (`dynamic-plan-coordinator-dispatch.test.ts`
+ * passes a pre-built plan and does not call the LLM path).
+ */
 
-type PlanAgent = {
+import type { AgentRoleType, CodeAgentType, RuntimeType, SandboxPolicy, TaskType } from '@agenthub/shared'
+import type { CollaborationMode, TaskOutputContract, TaskValidation } from './types'
+
+export type PlanAgent = {
   key: string
   name: string
   role: string
@@ -32,13 +41,12 @@ type PlanAgent = {
   sandboxPolicy?: SandboxPolicy
 }
 
-type PlanTask = {
+export type PlanTask = {
   id: string
   phaseId?: string
   title: string
   description: string
   agentKey: string
-  status?: TaskStatus
   taskType?: TaskType
   dependencies?: string[]
   parallelGroup?: string
@@ -55,7 +63,7 @@ type PlanTask = {
   }
 }
 
-type PlanPhase = {
+export type PlanPhase = {
   id: string
   title: string
   purpose: string
@@ -90,149 +98,23 @@ export interface PlanningAgentInput {
   sandboxPolicy?: string | null
 }
 
+/**
+ * Legacy LLM-driven dynamic plan generation has been removed.
+ * Dynamic plans must now be produced by an external Manager runtime
+ * (OpenClaw / QwenPaw) and passed in explicitly to the dispatcher.
+ *
+ * This function now throws loudly so callers fail fast instead of
+ * silently producing an empty / fake plan via AgentHub's local LLM.
+ */
 export async function buildDynamicOrchestratorPlan(
   content: string,
-  agents: PlanningAgentInput[],
-  workspaceId?: string | null,
+  _agents: PlanningAgentInput[],
+  _workspaceId?: string | null,
 ): Promise<OrchestratorPlan> {
-  const [workspaceGoal, workspacePath] = await resolveWorkspaceContext(workspaceId)
-  const goal = normalizeOrchestratorGoal(content, workspaceGoal)
-  if (!agents.length) {
-    throw new Error('当前群聊没有可调度的 Agent，请先添加成员后再发起编排')
-  }
-  const planningAgents = agents.map(planAgentFromInput)
-  const orchestratorAgent = planningAgents.find((agent) => agent.roleType === 'orchestrator')
-  const workerPlanningAgents = planningAgents.filter((agent) => agent.roleType !== 'orchestrator')
-  if (!workerPlanningAgents.length) {
-    throw new Error('当前群聊只有 Orchestrator，没有可执行任务的 Agent')
-  }
-
-  const collaborationContracts = await loadExplicitCollaborationContracts(workspacePath)
-  const agentRelations = workspaceId ? await loadWorkspaceAgentRelationsForPlanning(workspaceId) : []
-  const executionPlan = await createManagerActionPlan({
-    goal,
-    agents: workerPlanningAgents.map(toExecutionAgent),
-    agentRelations,
-    workspacePath,
-    collaborationContracts,
-    managerModelId: orchestratorAgent?.modelId,
-    managerSystemPrompt: orchestratorAgent?.systemPrompt,
-    managerAgent: orchestratorAgent ? toExecutionAgent(orchestratorAgent) : null,
-  })
-
-  return executionPlanToOrchestratorPlan(executionPlan, workerPlanningAgents, collaborationContracts)
-}
-
-async function resolveWorkspaceContext(workspaceId?: string | null): Promise<[string | null, string | null]> {
-  if (!workspaceId) return [null, null]
-  const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
-  return [ws?.goal ?? null, ws?.projectPath ?? null]
-}
-
-function normalizeOrchestratorGoal(content: string, workspaceGoal?: string | null) {
-  const userGoal =
-    content
-      .replace(/@orchestrator/gi, '')
-      .replace(/@协调器/g, '')
-      .trim() || '完成一个多 Agent 协作任务'
-  if (!workspaceGoal?.trim()) return userGoal
-  const normalizedWorkspaceGoal = workspaceGoal.trim()
-  if (normalizeGoalText(normalizedWorkspaceGoal) === normalizeGoalText(userGoal)) return userGoal
-  return `群聊目标：${normalizedWorkspaceGoal}\n本次任务：${userGoal}`
-}
-
-function normalizeGoalText(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
-function planAgentFromInput(agent: PlanningAgentInput): PlanAgent {
-  return {
-    key: agent.id,
-    name: agent.name,
-    role: agent.role || '助手',
-    roleType: (agent.roleType as PlanAgent['roleType']) ?? undefined,
-    description: agent.description ?? undefined,
-    roleProfile: agent.roleProfile ?? null,
-    color: agent.color ?? undefined,
-    systemPrompt: agent.systemPrompt ?? undefined,
-    modelId: agent.modelId ?? undefined,
-    runtimeType: (agent.runtimeType as PlanAgent['runtimeType']) ?? 'llm',
-    codeAgentType: (agent.codeAgentType as PlanAgent['codeAgentType']) ?? undefined,
-    capabilityTags: agent.capabilityTags ?? [],
-    toolPermissions: agent.toolPermissions ?? [],
-    sandboxPolicy: (agent.sandboxPolicy as PlanAgent['sandboxPolicy']) ?? 'workspace-write',
-  }
-}
-
-export async function loadWorkspaceAgentRelationsForPlanning(workspaceId: string) {
-  return db
-    .select({
-      sourceAgentId: workspaceAgentRelations.sourceAgentId,
-      targetAgentId: workspaceAgentRelations.targetAgentId,
-      relationType: workspaceAgentRelations.relationType,
-      note: workspaceAgentRelations.note,
-    })
-    .from(workspaceAgentRelations)
-    .where(eq(workspaceAgentRelations.workspaceId, workspaceId))
-}
-
-function executionPlanToOrchestratorPlan(
-  plan: ExecutionPlan,
-  planAgents: PlanAgent[],
-  collaborationContracts: CollaborationContract[],
-): OrchestratorPlan {
-  const contractSummary = formatContractsForPlanner(collaborationContracts)
-  return {
-    kind: 'orchestrator_plan',
-    title: plan.title,
-    goal: plan.goal,
-    summary: [
-      `我已根据当前 Agent 团队把「${plan.title}」拆成 ${plan.tasks.length} 个子任务。确认后会创建或复用 Agent Group 并分发执行。`,
-      contractSummary ? `\n${contractSummary}` : '',
-    ]
-      .filter(Boolean)
-      .join(''),
-    agents: planAgents,
-    phases: plan.phases?.map((p) => ({
-      id: p.id,
-      title: p.title,
-      purpose: p.purpose,
-      taskIds: p.taskIds,
-    })),
-    tasks: plan.tasks.map((t) => ({
-      id: t.id,
-      phaseId: t.phaseId,
-      title: t.title,
-      description: t.description,
-      agentKey: t.agentId,
-      taskType: t.taskType,
-      dependencies: t.dependencies ?? [],
-      parallelGroup: t.parallelGroup,
-      maxRetries: t.maxRetries ?? 2,
-      fallbackAgentId: t.fallbackAgentId,
-      outputContract: t.outputContract,
-      validation: t.validation,
-    })),
-    collaborationMode: plan.collaborationMode,
-  }
-}
-
-function toExecutionAgent(agent: PlanAgent): import('./types').ExecutionAgent {
-  return {
-    id: agent.key,
-    key: agent.key,
-    name: agent.name,
-    role: agent.role,
-    roleType: agent.roleType,
-    description: agent.description,
-    color: agent.color,
-    systemPrompt: agent.systemPrompt,
-    roleProfile: agent.roleProfile,
-    modelId: agent.modelId,
-    runtimeType: agent.runtimeType ?? 'llm',
-    codeAgentType: agent.codeAgentType ?? undefined,
-    capabilityTags: agent.capabilityTags ?? [],
-    toolPermissions: agent.toolPermissions ?? [],
-    sandboxPolicy: agent.sandboxPolicy ?? 'workspace-write',
-  }
+  throw new Error(
+    'buildDynamicOrchestratorPlan: LLM-driven dynamic plan generation is no longer supported. ' +
+      'Dynamic plans must be produced by an external Manager runtime (OpenClaw / QwenPaw) and ' +
+      `passed in explicitly to startPlanRunWithCoordinatorAssignBatch({ plan }). ` +
+      `Original content for diagnostics: "${content.slice(0, 120)}"`,
+  )
 }

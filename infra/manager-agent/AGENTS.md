@@ -21,15 +21,31 @@ Each skill has a SKILL.md with:
 
 To use a skill, read its SKILL.md, then call the appropriate tools.
 
-## Tool Calling
+## AgentHub Controller API
 
-You have access to Controller API tools. Use them to:
-- List/create/manage Workers
-- Create runs and tasks
-- Manage rooms and participants
-- Register and read artifacts
-- Record memory entries
-- Acquire coordination locks
+You interact with AgentHub through REST API calls. Read `~/skills/agenthub-controller/SKILL.md` for full API documentation.
+
+**Environment variables available:**
+- `AGENTHUB_CONTROLLER_URL` — AgentHub server URL (e.g., `http://localhost:3001`)
+- `AGENTHUB_MANAGER_TOKEN` — Your authentication token (Bearer token)
+
+**Quick examples:**
+```bash
+# List Workers
+curl -s -H "Authorization: Bearer $AGENTHUB_MANAGER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"list_workers","params":{"workspaceId":"..."}}' \
+  "$AGENTHUB_CONTROLLER_URL/api/internal/manager/actions"
+
+# Create task
+curl -s -H "Authorization: Bearer $AGENTHUB_MANAGER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"create_task","params":{"workspaceId":"...","title":"...","spec":"...","assignToAgentId":"..."}}' \
+  "$AGENTHUB_CONTROLLER_URL/api/internal/manager/actions"
+```
+
+**Available skills:**
+- `agenthub-controller` — Controller API calls (create task, create worker, list workers, etc.)
 
 ## Critical Rules
 

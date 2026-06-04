@@ -24,16 +24,17 @@ const {
 } = dbApi
 const { appendHumanMessageRoomFirst, appendMessageControlEvent, stepCoordinatorForGroupMessage } = bridgeApi
 const { listSessionMessagesRoomFirst } = projectionApi
-type CoordinatorRuntime = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorRuntime
-type CoordinatorStepInput = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorStepInput
-type CoordinatorStepResult = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorStepResult
+type ManagerRuntime = import('../apps/server/src/services/manager-runtime').ManagerRuntime
+type ManagerStepInput = import('../apps/server/src/services/manager-runtime').ManagerStepInput
+type ManagerStepResult = import('../apps/server/src/services/manager-runtime').ManagerStepResult
+type ManagerRuntimeEvent = import('../apps/server/src/services/manager-runtime').ManagerRuntimeEvent
 type WorkerRuntime = typeof import('../apps/server/src/services/worker-runtime').WorkerRuntime
 type WorkerRuntimeContext = typeof import('../apps/server/src/services/worker-runtime').WorkerRuntimeContext
 type WorkerRuntimeEvent = typeof import('../apps/server/src/services/worker-runtime').WorkerRuntimeEvent
 type WorkerRuntimeResult = typeof import('../apps/server/src/services/worker-runtime').WorkerRuntimeResult
 
 describe('Room chat bridge', () => {
-  test('appends human chat to Room timeline first and creates messages as compatibility projection', async () => {
+  test('appends human chat to Room timeline first without creating a messages projection row', async () => {
     const { session } = await createGroupSession()
     const { room, event, message } = await appendHumanMessageRoomFirst({
       session,
@@ -59,8 +60,13 @@ describe('Room chat bridge', () => {
       .where(eq(timelineEvents.roomId, room.id))
     expect(timelineBeforeCoordinator).toHaveLength(1)
     expect(timelineBeforeCoordinator[0]?.type).toBe('human.message')
-    expect(timelineBeforeCoordinator[0]?.metadata?.messageId).toBe(message.id)
+    expect(timelineBeforeCoordinator[0]?.metadata?.messageId).toBeUndefined()
     expect(timelineBeforeCoordinator[0]?.metadata?.source).toBe('room-first')
+    const compatibilityRows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, session.id))
+    expect(compatibilityRows).toHaveLength(0)
 
     const coordinatorResult = await stepCoordinatorForGroupMessage({
       session,
@@ -203,7 +209,7 @@ describe('Room chat bridge', () => {
     expect(afterClear).toHaveLength(0)
   })
 
-  test('records group chat in room timeline and mirrors a coordinator reply', async () => {
+  test('records group chat and Manager reply in room timeline without mirroring normal replies', async () => {
     const { session, message } = await createGroupMessage()
     const result = await stepCoordinatorForGroupMessage({
       session,
@@ -214,7 +220,7 @@ describe('Room chat bridge', () => {
     })
 
     expect(result.consumed).toBe(true)
-    expect(result.mirroredMessageIds).toHaveLength(1)
+    expect(result.mirroredMessageIds).toHaveLength(0)
 
     const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
     expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message', 'manager.message'])
@@ -223,11 +229,6 @@ describe('Room chat bridge', () => {
     expect(timeline[1]?.metadata?.sourceMessageId).toBe(message.id)
     expect(timeline[2]?.metadata?.kind).toBe('coordinator.action')
     expect(timeline[2]?.metadata?.actionType).toBe('reply')
-
-    const mirrored = await db.select().from(messages).where(eq(messages.id, result.mirroredMessageIds[0]!)).limit(1)
-    expect(mirrored[0]?.content).toBe('我在，大家也可以陆续打个招呼。')
-    expect(mirrored[0]?.metadata?.actionType).toBe('reply')
-    expect(mirrored[0]?.metadata?.roomId).toBe(result.roomId)
   })
 
   test('dispatches assign actions through real task room and WorkerRuntime', async () => {
@@ -248,7 +249,7 @@ describe('Room chat bridge', () => {
     const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
     expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message', 'task.assigned'])
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
-    expect(timeline[2]?.metadata?.kind).toBe('coordinator.assign.dispatched')
+    expect(timeline[2]?.metadata?.kind).toBe('manager.assign.dispatched')
 
     const runRows = await db
       .select()
@@ -275,17 +276,19 @@ describe('Room chat bridge', () => {
       .from(timelineEvents)
       .where(eq(timelineEvents.roomId, taskRoomRows[0]!.id))
     const assignedEvent = taskTimeline.find(
-      (event) => event.type === 'task.assigned' && event.metadata?.kind === 'coordinator.assign.dispatched',
+      (event) => event.type === 'task.assigned' && event.metadata?.kind === 'manager.assign.dispatched',
     )
     expect(assignedEvent?.metadata).toMatchObject({
-      kind: 'coordinator.assign.dispatched',
+      kind: 'manager.assign.dispatched',
       matrixExecutionBus: true,
       coordinationSource: 'matrix-mention',
     })
     expect(assignedEvent?.metadata?.mentionParticipantId).toBeTruthy()
     expect(assignedEvent?.metadata?.matrix).toMatchObject({
-      localFallback: true,
+      testOnly: true,
+      usedParticipantToken: false,
     })
+    expect(Array.isArray(assignedEvent?.metadata?.matrix?.mentions)).toBe(true)
     const [workerParticipant] = await db
       .select()
       .from(roomParticipants)
@@ -363,10 +366,10 @@ describe('Room chat bridge', () => {
     for (const taskRoom of taskRoomRows) {
       const taskTimeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, taskRoom.id))
       const assignedEvent = taskTimeline.find(
-        (event) => event.type === 'task.assigned' && event.metadata?.kind === 'coordinator.assign.dispatched',
+        (event) => event.type === 'task.assigned' && event.metadata?.kind === 'manager.assign.dispatched',
       )
       expect(assignedEvent?.metadata).toMatchObject({
-        kind: 'coordinator.assign.dispatched',
+        kind: 'manager.assign.dispatched',
         matrixExecutionBus: true,
         coordinationSource: 'matrix-mention',
       })
@@ -661,15 +664,15 @@ async function createGroupMessage(input: {
   return { workspace: workspace!, session: session!, message: message!, agentId: agent!.id, secondAgentId }
 }
 
-class FakeRuntime implements CoordinatorRuntime {
-  readonly runtimeType = 'local-llm' as const
+class FakeRuntime implements ManagerRuntime {
+  readonly runtimeType = 'openclaw' as const
 
   constructor(
     private readonly action: 'reply' | 'assign',
     private readonly workerId?: string,
   ) {}
 
-  async step(input: CoordinatorStepInput): Promise<CoordinatorStepResult> {
+  async *step(input: ManagerStepInput): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
     if (this.action === 'assign') {
       return {
         runtimeType: this.runtimeType,
@@ -698,10 +701,10 @@ class FakeRuntime implements CoordinatorRuntime {
   }
 }
 
-class EmptyRuntime implements CoordinatorRuntime {
-  readonly runtimeType = 'local-llm' as const
+class EmptyRuntime implements ManagerRuntime {
+  readonly runtimeType = 'openclaw' as const
 
-  async step(): Promise<CoordinatorStepResult> {
+  async *step(): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
     return {
       runtimeType: this.runtimeType,
       actions: [],
@@ -709,12 +712,12 @@ class EmptyRuntime implements CoordinatorRuntime {
   }
 }
 
-class MultiAssignRuntime implements CoordinatorRuntime {
-  readonly runtimeType = 'local-llm' as const
+class MultiAssignRuntime implements ManagerRuntime {
+  readonly runtimeType = 'openclaw' as const
 
   constructor(private readonly workerIds: string[]) {}
 
-  async step(input: CoordinatorStepInput): Promise<CoordinatorStepResult> {
+  async *step(input: ManagerStepInput): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
     return {
       runtimeType: this.runtimeType,
       actions: this.workerIds.map((workerId, index) => ({
@@ -729,15 +732,15 @@ class MultiAssignRuntime implements CoordinatorRuntime {
   }
 }
 
-class DependentAssignRuntime implements CoordinatorRuntime {
-  readonly runtimeType = 'local-llm' as const
+class DependentAssignRuntime implements ManagerRuntime {
+  readonly runtimeType = 'openclaw' as const
 
   constructor(
     private readonly firstWorkerId: string,
     private readonly secondWorkerId: string,
   ) {}
 
-  async step(): Promise<CoordinatorStepResult> {
+  async *step(): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
     return {
       runtimeType: this.runtimeType,
       actions: [

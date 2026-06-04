@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import { __orchestratorDecisionTestHooks } from '../apps/server/src/services/orchestrator/orchestrator-decision'
 import { selectAgentForTask } from '../apps/server/src/services/orchestrator/agent-router'
 import type { ExecutionAgent } from '../apps/server/src/services/orchestrator/types'
 import { __messageRouteTestHooks } from '../apps/server/src/routes/messages'
@@ -86,15 +85,6 @@ describe('orchestrator routing', () => {
 
     expect(selection.selectedAgentKey).toBe('')
     expect(selection.score).toBe(0)
-  })
-
-  test('does not use keyword heuristics when code-agent output is not parseable', () => {
-    const decision = __orchestratorDecisionTestHooks.buildHeuristicDecision(
-      '帮我生成一个中文 HTML 页面，展示这些项目数据',
-      3,
-    )
-
-    expect(decision).toBeNull()
   })
 
   test('directs explicit replies to an active worker message before orchestrator routing', () => {

@@ -9,6 +9,7 @@ import {
   type QuotedMessagePreview,
   type Room,
   type RoomParticipant,
+  type RoomSessionSnapshot,
   type Session,
   type TimelineEvent,
   type Workspace,
@@ -68,6 +69,30 @@ function agUiEventShouldRefreshSessions(event: AgUiEventPayload) {
   if (name === 'agenthub.member_proposal.continue') return true
   if (name === 'agenthub.task.status' && asString(value?.childSessionId)) return true
   return false
+}
+
+function roomTimelineShouldRefreshResources(
+  projection: RoomTimelineProjection,
+  projectedSessionId: string,
+  currentSessionId: string | null,
+) {
+  if (projectedSessionId !== currentSessionId) return false
+  if (projection.events.some((event) => agUiEventShouldRefreshSessions(event))) return true
+  return projection.messages.some((message) => {
+    const metadata = message.metadata ?? {}
+    const roomTimeline = asRecord(metadata.roomTimeline) ?? asRecord(metadata.roomTimelineProjection)
+    const eventType = asString(roomTimeline?.eventType)
+    const kind = asString(metadata.kind)
+    return (
+      eventType === 'task.assigned' ||
+      eventType === 'task.progress' ||
+      eventType === 'artifact.created' ||
+      eventType === 'file.shared' ||
+      kind === 'coordinator.action' ||
+      kind === 'worker.progress' ||
+      kind === 'artifact.created'
+    )
+  })
 }
 
 function messageTime(message: Message): number {
@@ -932,6 +957,97 @@ function buildProjectionRunFromResourceSnapshot(
   }
 }
 
+function projectRoomResourceSnapshot(
+  snapshot: RoomSessionSnapshot,
+  agents: WorkspaceAgent[] = [],
+): TaskBoardSnapshot | null {
+  const resources = snapshot.resources
+  const run = resources.run ?? resources.activeRun ?? null
+  if (!run || resources.tasks.length === 0) return null
+
+  const agentNames = new Map(agents.map((agent) => [agent.id, agent.name] as const))
+  const threadsByTaskId = new Map(resources.taskThreads.map((thread) => [thread.taskId, thread] as const))
+  const latestLeaseByTaskId = new Map<string, (typeof resources.runtimeLeases)[number]>()
+  for (const lease of resources.runtimeLeases) {
+    if (!lease.taskId) continue
+    latestLeaseByTaskId.set(lease.taskId, lease)
+  }
+  const artifactsByTaskId = new Map<string, typeof resources.artifacts>()
+  for (const artifact of resources.artifacts) {
+    if (!artifact.taskId) continue
+    const list = artifactsByTaskId.get(artifact.taskId) ?? []
+    list.push(artifact)
+    artifactsByTaskId.set(artifact.taskId, list)
+  }
+
+  const tasks: TaskBoardTask[] = resources.tasks
+    .slice()
+    .sort((a, b) => a.orderIdx - b.orderIdx || a.id.localeCompare(b.id))
+    .map((task) => {
+      const thread = threadsByTaskId.get(task.id)
+      const lease = latestLeaseByTaskId.get(task.id)
+      const taskArtifacts = artifactsByTaskId.get(task.id) ?? []
+      return {
+        id: task.id,
+        phaseId: task.phaseId ?? 'execution',
+        title: task.title || task.id,
+        description: task.description ?? '',
+        agentId: task.agentId ?? thread?.workspaceAgentId ?? task.id,
+        agentName:
+          (task.agentId ? agentNames.get(task.agentId) : undefined) ??
+          (thread?.workspaceAgentId ? agentNames.get(thread.workspaceAgentId) : undefined) ??
+          'Agent',
+        status:
+          normalizeTaskStatusFromTaskThread(thread?.status) ??
+          normalizeTaskStatusFromRun(task.status) ??
+          'pending',
+        progress: task.progressPercent ?? undefined,
+        progressStatus: task.progressStatus ?? undefined,
+        dependencies: task.dependencies ?? [],
+        childSessionId: thread?.sessionId ?? task.sessionId ?? null,
+        taskThreadId: thread?.id ?? null,
+        taskThreadStatus: normalizeTaskThreadStatus(thread?.status) ?? null,
+        workerInstanceId: thread?.workerInstanceId ?? lease?.workerInstanceId ?? null,
+        runtimeLeaseId: lease?.runtimeLeaseId ?? lease?.id ?? null,
+        sharedTaskRelativeRoot: thread?.sharedTaskRelativeRoot ?? null,
+        sharedTaskSpecPath: thread?.sharedTaskSpecPath ?? null,
+        artifactCount: taskArtifacts.length,
+        artifacts: readTaskBoardArtifacts(taskArtifacts),
+        outputRef: null,
+        resultError: task.errorLog ?? undefined,
+      }
+    })
+
+  const phaseIds = Array.from(new Set(tasks.map((task) => task.phaseId || 'execution')))
+  const taskBoard: NonNullable<ChatState['taskBoard']> = {
+    runId: run.id,
+    title: snapshot.session.title,
+    goal: '',
+    collaborationMode: 'manager-worker',
+    phases: applyTaskStatusToPhases(
+      phaseIds.map((phaseId) => ({
+        id: phaseId,
+        title: phaseId === 'execution' ? '执行' : phaseId,
+        purpose: '',
+        taskIds: tasks.filter((task) => (task.phaseId || 'execution') === phaseId).map((task) => task.id),
+        status: 'pending' as const,
+      })),
+      tasks,
+    ),
+    tasks,
+    status: run.status as NonNullable<ChatState['taskBoard']>['status'],
+    sessionId: run.groupSessionId,
+  }
+  const projectionRun = buildProjectionRunFromResourceSnapshot(taskBoard, resources as unknown as Record<string, unknown>)
+  return {
+    taskBoard,
+    agentTabs: agentTabsFromRunSnapshot(projectionRun, taskBoard),
+    agUiEvents: [],
+    run: projectionRun,
+    runtimeActivity: deriveRuntimeActivityFromTaskBoard(taskBoard),
+  }
+}
+
 async function loadTaskBoardSnapshotForGroupSession(
   sessionId: string,
 ): Promise<TaskBoardSnapshot | null> {
@@ -1549,37 +1665,6 @@ interface RoomTimelineWsPayload {
   room?: Room
   event?: TimelineEvent
   participants?: RoomParticipant[]
-}
-
-async function loadRoomTimelineProjectionForSession(
-  session: Session,
-): Promise<RoomTimelineProjection | null> {
-  try {
-    const room = await ensureRoomForSessionKind(session)
-    const [{ items: participants }, { items: timeline }] = await Promise.all([
-      api.listRoomParticipants(room.id),
-      api.listRoomTimeline(room.id, { limit: 300 }),
-    ])
-    return projectRoomTimeline({
-      room,
-      participants,
-      timeline,
-      sessionId: session.id,
-    })
-  } catch {
-    return null
-  }
-}
-
-async function ensureRoomForSessionKind(session: Session): Promise<Room> {
-  const taskThreadId =
-    session.metadata?.kind === 'orchestrator-task' &&
-    typeof session.metadata.taskThreadId === 'string' &&
-    session.metadata.taskThreadId.trim()
-      ? session.metadata.taskThreadId
-      : null
-  if (taskThreadId) return api.ensureTaskThreadRoom(taskThreadId)
-  return api.ensureSessionRoom(session.id)
 }
 
 function projectRoomTimelineWsPayload(
@@ -2971,14 +3056,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       optimisticSession?.workspaceId &&
       state.currentSession?.workspaceId === optimisticSession.workspaceId
     const cachedMessages = messageCache.get(sessionId)
-    const shouldRestoreTaskBoard =
-      optimisticSession?.type === SessionType.Group ||
-      (optimisticSession?.metadata?.kind === 'orchestrator-task' &&
-        typeof optimisticSession.metadata?.orchestratorRunId === 'string')
-    const taskBoardSnapshot =
-      !keepTaskBoard && optimisticSession && shouldRestoreTaskBoard
-        ? loadTaskBoardSnapshotForSession(optimisticSession).catch(() => null)
-        : Promise.resolve(null)
 
     set({
       sessions: optimisticSession
@@ -3013,31 +3090,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
     wsClient.joinSessions(taskBoardSessionIds(keepTaskBoard ? state.taskBoard : null, sessionId))
     try {
-      const [session, { items }] = await Promise.all([
-        api.getSession(sessionId),
-        api.listMessages(sessionId),
-      ])
-      const normalizedItems = sortMessages(items)
+      const roomSnapshot = await api.getRoomSessionSnapshot(sessionId)
+      const session = roomSnapshot.session
+      const roomProjection = projectRoomTimeline({
+        room: roomSnapshot.room,
+        participants: roomSnapshot.participants,
+        timeline: roomSnapshot.timeline,
+        sessionId: session.id,
+      })
       if (session.workspaceId) {
-        const [full, snapshot, roomProjection] = await Promise.all([
-          api.getWorkspace(session.workspaceId),
-          taskBoardSnapshot,
-          loadRoomTimelineProjectionForSession(session),
-        ])
-        const resolvedSnapshot =
-          snapshot ?? (!keepTaskBoard ? await loadTaskBoardSnapshotForSession(session).catch(() => null) : null)
+        const full = await api.getWorkspace(session.workspaceId)
         workspaceDetailsCache.set(session.workspaceId, {
           workspace: full.workspace,
           agents: full.agents,
         })
         if (get().currentSessionId !== sessionId) return
         const currentAgents = sessionWorkspaceAgents(session, full.agents)
-        const snapshotMessages = resolvedSnapshot
-          ? applyCanonicalArtifactsToSummaryMessages(normalizedItems, resolvedSnapshot.run)
-          : normalizedItems
-        const normalizedMessages = roomProjection?.messages.length
-          ? mergeMessages(snapshotMessages, roomProjection.messages)
-          : snapshotMessages
+        const resolvedSnapshot = projectRoomResourceSnapshot(roomSnapshot, currentAgents)
+        const normalizedMessages = resolvedSnapshot
+          ? applyCanonicalArtifactsToSummaryMessages(sortMessages(roomProjection.messages), resolvedSnapshot.run)
+          : sortMessages(roomProjection.messages)
         messageCache.set(sessionId, normalizedMessages)
         if (resolvedSnapshot) {
           wsClient.joinSessions(taskBoardSessionIds(resolvedSnapshot.taskBoard, sessionId))
@@ -3070,45 +3142,69 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 }
               : {}),
         }))
-        if (resolvedSnapshot?.agUiEvents.length) {
-          set((state) =>
-            resolvedSnapshot.agUiEvents.reduce(
-              (next, event) => applyAgUiEventToState(next, event, sessionId),
-              state,
-            ),
-          )
-        }
-        if (roomProjection?.events.length) {
-          set((state) =>
-            roomProjection.events.reduce(
-              (next, event) => applyAgUiEventToState(next, event, sessionId),
-              state,
-            ),
-          )
-          wsClient.joinSessions(taskBoardSessionIds(get().taskBoard, get().currentSessionId))
-        }
       } else {
-        const [snapshot, roomProjection] = await Promise.all([
-          taskBoardSnapshot.then((snapshot) =>
-            snapshot ?? (!keepTaskBoard ? loadTaskBoardSnapshotForSession(session).catch(() => null) : null),
-          ),
-          loadRoomTimelineProjectionForSession(session),
-        ])
         if (get().currentSessionId !== sessionId) return
-        const snapshotMessages = snapshot
-          ? applyCanonicalArtifactsToSummaryMessages(normalizedItems, snapshot.run)
-          : normalizedItems
-        const normalizedMessages = roomProjection?.messages.length
-          ? mergeMessages(snapshotMessages, roomProjection.messages)
-          : snapshotMessages
+        const resolvedSnapshot = projectRoomResourceSnapshot(roomSnapshot, [])
+        const normalizedMessages = resolvedSnapshot
+          ? applyCanonicalArtifactsToSummaryMessages(sortMessages(roomProjection.messages), resolvedSnapshot.run)
+          : sortMessages(roomProjection.messages)
         messageCache.set(sessionId, normalizedMessages)
-        if (snapshot) {
-          wsClient.joinSessions(taskBoardSessionIds(snapshot.taskBoard, sessionId))
+        if (resolvedSnapshot) {
+          wsClient.joinSessions(taskBoardSessionIds(resolvedSnapshot.taskBoard, sessionId))
         }
         set((s) => ({
           currentSession: session,
           currentWorkspace: null,
           currentWorkspaceAgents: [],
+          sessions: resolvedSnapshot
+            ? mergeSessionsWithRunProjection(
+                upsertSessionList(s.sessions, session),
+                session,
+                resolvedSnapshot.run,
+                resolvedSnapshot.taskBoard,
+              )
+            : upsertSessionList(s.sessions, session),
+          messages: normalizedMessages,
+          loadingMessages: false,
+          ...(resolvedSnapshot
+            ? {
+                taskBoard: resolvedSnapshot.taskBoard,
+                agentTabs: resolvedSnapshot.agentTabs,
+                agentTyping: resolvedSnapshot.runtimeActivity.agentTyping,
+                agentActivity: resolvedSnapshot.runtimeActivity.agentActivity,
+                selectedAgentTab: selectedTaskForSession(
+                  sessionId,
+                  resolvedSnapshot.taskBoard,
+                  resolvedSnapshot.agentTabs,
+                ),
+              }
+            : {}),
+        }))
+      }
+    } catch (error) {
+      if (get().currentSessionId !== sessionId) return
+      try {
+        const [session, { items }] = await Promise.all([
+          api.getSession(sessionId),
+          api.listMessages(sessionId),
+        ])
+        const snapshot = await loadTaskBoardSnapshotForSession(session).catch(() => null)
+        const normalizedMessages = snapshot
+          ? applyCanonicalArtifactsToSummaryMessages(sortMessages(items), snapshot.run)
+          : sortMessages(items)
+        const full = session.workspaceId ? await api.getWorkspace(session.workspaceId).catch(() => null) : null
+        if (get().currentSessionId !== sessionId) return
+        if (full) {
+          workspaceDetailsCache.set(session.workspaceId!, {
+            workspace: full.workspace,
+            agents: full.agents,
+          })
+        }
+        messageCache.set(sessionId, normalizedMessages)
+        set((s) => ({
+          currentSession: session,
+          currentWorkspace: full?.workspace ?? null,
+          currentWorkspaceAgents: session.workspaceId && full ? sessionWorkspaceAgents(session, full.agents) : [],
           sessions: snapshot
             ? mergeSessionsWithRunProjection(
                 upsertSessionList(s.sessions, session),
@@ -3125,36 +3221,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 agentTabs: snapshot.agentTabs,
                 agentTyping: snapshot.runtimeActivity.agentTyping,
                 agentActivity: snapshot.runtimeActivity.agentActivity,
-                selectedAgentTab: selectedTaskForSession(
-                  sessionId,
-                  snapshot.taskBoard,
-                  snapshot.agentTabs,
-                ),
+                selectedAgentTab: selectedTaskForSession(sessionId, snapshot.taskBoard, snapshot.agentTabs),
               }
             : {}),
         }))
-        if (snapshot?.agUiEvents.length) {
-          set((state) =>
-            snapshot.agUiEvents.reduce(
-              (next, event) => applyAgUiEventToState(next, event, sessionId),
-              state,
-            ),
-          )
-        }
-        if (roomProjection?.events.length) {
-          set((state) =>
-            roomProjection.events.reduce(
-              (next, event) => applyAgUiEventToState(next, event, sessionId),
-              state,
-            ),
-          )
-          wsClient.joinSessions(taskBoardSessionIds(get().taskBoard, get().currentSessionId))
-        }
+      } catch (fallbackError) {
+        if (get().currentSessionId !== sessionId) return
+        set({ loadingMessages: false })
+        throw fallbackError
       }
-    } catch (error) {
-      if (get().currentSessionId !== sessionId) return
-      set({ loadingMessages: false })
-      throw error
     }
   },
 
@@ -3678,19 +3753,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }))
           }
         }
-        if (projected.projection.events.length) {
-          set((state) =>
-            projected.projection.events.reduce(
-              (next, event) => applyAgUiEventToState(next, event, sessionId),
-              state,
-            ),
-          )
-          wsClient.joinSessions(taskBoardSessionIds(get().taskBoard, get().currentSessionId))
-          if (
-            projected.projection.events.some((event) => agUiEventShouldRefreshSessions(event))
-          ) {
-            scheduleSessionRefresh(() => get().fetchSessions())
-          }
+        if (roomTimelineShouldRefreshResources(projected.projection, projectedSessionId, sessionId)) {
+          scheduleSessionRefresh(async () => {
+            if (get().currentSessionId === projectedSessionId) {
+              await get().selectSession(projectedSessionId)
+            } else {
+              await get().fetchSessions()
+            }
+          })
         }
         break
       }

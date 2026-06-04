@@ -1,6 +1,6 @@
 import type { workspaceAgents } from '@agenthub/db'
 import { buildAgentProfile } from '../agents/profile-builder'
-import { runtimeRegistry } from '../runtime'
+import { isCodeAgentProfile, runtimeRegistry } from '../runtime'
 import type { AgentExecutionEnvelope } from '../execution/agent-execution-envelope'
 import type { WorkerRuntime, WorkerRuntimeContext, WorkerRuntimeEvent, WorkerRuntimeResult } from './types'
 
@@ -17,6 +17,14 @@ export class EphemeralCodeAgentWorkerRuntime implements WorkerRuntime {
     signal?: AbortSignal,
   ): AsyncGenerator<WorkerRuntimeEvent, WorkerRuntimeResult, unknown> {
     const profile = buildAgentProfile(this.agent, context.workspacePath ?? null)
+    // AgentHub Worker 必须是真实 Code Agent runtime。
+    // 不再支持 LLM profile 的 Worker fallback；让错误尽早暴露。
+    if (!isCodeAgentProfile(profile)) {
+      throw new Error(
+        `Worker ${profile.name} (${profile.id}) 的 profile.runtimeType=${profile.runtimeType ?? 'undefined'}` +
+          ` 不是 code-agent。AgentHub Worker 必须是真实 Code Agent runtime（codex|claude-code|opencode|gemini），不接受 LLM profile。`,
+      )
+    }
     const runtime = runtimeRegistry.resolveForProfile(profile)
     const chunks: string[] = []
     const artifacts: WorkerRuntimeResult['artifacts'] = []

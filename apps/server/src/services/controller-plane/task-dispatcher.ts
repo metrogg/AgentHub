@@ -17,28 +17,35 @@ import { prepareAgentWorkdir } from '../execution/agent-workdir'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { logger } from '../../lib/logger'
 import { agentHubUserCacheRoot, safePathSegment } from '../system-paths'
+import type { ManagerAction } from '../manager-runtime'
 import { prepareTaskRuntimeThread } from '../orchestrator/task-thread-service'
-import {
-  markWorkerInstanceState,
-} from '../orchestrator/worker-runtime-resources'
+import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { runController, type RunControllerRunContext } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { roomController, roomService } from '../rooms'
 import { workerRuntimeService } from '../worker-runtime'
 import type { WorkerRuntime } from '../worker-runtime'
-import type { CoordinatorAction } from './types'
 
-export interface DispatchCoordinatorAssignInput {
+// ─── Types ──────────────────────────────────────────────────────────────
+
+export interface DispatchAssignBatchInput {
   groupSession: typeof sessions.$inferSelect
   ownerId: string
   sourceMessage: typeof messages.$inferSelect
-  action: CoordinatorAction
+  actions: ManagerAction[]
   runtimeType: string
+  run?: RunControllerRunContext
   workerRuntime?: WorkerRuntime
   executeInline?: boolean
 }
 
-export interface DispatchCoordinatorAssignResult {
+export interface DispatchAssignBatchResult {
+  runId: string
+  tasks: DispatchAssignResult[]
+  workerExecutionStarted: boolean
+}
+
+export interface DispatchAssignResult {
   runId: string
   taskId: string
   taskThreadId: string
@@ -49,51 +56,53 @@ export interface DispatchCoordinatorAssignResult {
   workerExecutionStarted: boolean
 }
 
-export interface DispatchCoordinatorAssignBatchInput {
-  groupSession: typeof sessions.$inferSelect
+interface AssignSpec {
+  action: ManagerAction
+  taskId: string
+  taskKey: string
+  dependsOnKeys: string[]
+  worker: typeof workspaceAgents.$inferSelect
+  taskTitle: string
+  taskDescription: string
+  orderIdx: number
+}
+
+interface PreparedAssignedTask {
+  run: RunControllerRunContext
+  taskId: string
+  taskKey: string
+  dependencyTaskIds: string[]
+  taskTitle: string
+  taskDescription: string
+  worker: typeof workspaceAgents.$inferSelect
+  taskRoomId: string
+  taskThreadId: string
+  childSessionId: string
+  workerInstanceId?: string | null
+  runtimeLeaseId?: string | null
+  sharedTaskRelativeRoot?: string | null
+  sharedTaskSpecPath?: string | null
   ownerId: string
-  sourceMessage: typeof messages.$inferSelect
-  actions: CoordinatorAction[]
-  runtimeType: string
-  run?: RunControllerRunContext
   workerRuntime?: WorkerRuntime
-  executeInline?: boolean
 }
 
-export interface DispatchCoordinatorAssignBatchResult {
-  runId: string
-  tasks: DispatchCoordinatorAssignResult[]
-  workerExecutionStarted: boolean
+interface WorkerTaskExecutionOutcome {
+  taskId: string
+  status: 'completed' | 'cancelled' | 'failed' | 'waiting_for_human'
+  message?: string | null
 }
 
-export async function dispatchCoordinatorAssign(
-  input: DispatchCoordinatorAssignInput,
-): Promise<DispatchCoordinatorAssignResult> {
-  const batch = await dispatchCoordinatorAssignBatch({
-    groupSession: input.groupSession,
-    ownerId: input.ownerId,
-    sourceMessage: input.sourceMessage,
-    actions: [input.action],
-    runtimeType: input.runtimeType,
-    workerRuntime: input.workerRuntime,
-    executeInline: input.executeInline,
-  })
-  const first = batch.tasks[0]
-  if (!first) {
-    throw AppError.fromCode(AppErrorCodes.TASK_EXECUTION_FAILED, 'Coordinator assign dispatch did not create a task')
-  }
-  return first
-}
+// ─── Main Entry Point ───────────────────────────────────────────────────
 
-export async function dispatchCoordinatorAssignBatch(
-  input: DispatchCoordinatorAssignBatchInput,
-): Promise<DispatchCoordinatorAssignBatchResult> {
+export async function dispatchAssignBatch(
+  input: DispatchAssignBatchInput,
+): Promise<DispatchAssignBatchResult> {
   if (!input.groupSession.workspaceId) {
     throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '群聊未绑定工作区，无法派发任务')
   }
   const assignActions = input.actions.filter((action) => action.type === 'assign')
   if (assignActions.length === 0) {
-    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Coordinator 没有返回可派发的 assign action')
+    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Manager 没有返回可派发的 assign action')
   }
   const [workspace] = await db
     .select()
@@ -136,14 +145,8 @@ export async function dispatchCoordinatorAssignBatch(
       groupSessionId: input.groupSession.id,
       goal: input.sourceMessage.content,
       actor: manager
-        ? {
-            id: manager.id,
-            name: manager.name,
-          }
-        : {
-            id: 'manager',
-            name: 'Manager',
-          },
+        ? { id: manager.id, name: manager.name }
+        : { id: 'manager', name: 'Manager' },
       decision: {
         action: 'assign',
         reason: assignActions.map((action) => action.reason).filter(Boolean).join('\n') || undefined,
@@ -154,10 +157,7 @@ export async function dispatchCoordinatorAssignBatch(
         memberProposalCount: 0,
       },
     }))
-  const plan = buildAssignBatchPlan({
-    sourceMessage: input.sourceMessage,
-    specs,
-  })
+  const plan = buildAssignBatchPlan({ sourceMessage: input.sourceMessage, specs })
   await runController.prepareForDispatch(run, {
     plan,
     taskCount: specs.length,
@@ -166,10 +166,10 @@ export async function dispatchCoordinatorAssignBatch(
   })
 
   const groupRoom = await roomController.ensureSessionRoom(input.groupSession.id, input.ownerId)
-  const preparedTasks: PreparedCoordinatorAssignedTask[] = []
+  const preparedTasks: PreparedAssignedTask[] = []
   for (const spec of specs) {
     preparedTasks.push(
-      await prepareCoordinatorAssignedTask({
+      await prepareAssignedTask({
         workspace,
         run,
         ownerId: input.ownerId,
@@ -183,24 +183,16 @@ export async function dispatchCoordinatorAssignBatch(
       }),
     )
   }
-  await runController.markRunning(run, {
-    plan,
-    taskCount: preparedTasks.length,
-  })
+  await runController.markRunning(run, { plan, taskCount: preparedTasks.length })
 
-  const execution = executeCoordinatorAssignBatch({ run, tasks: preparedTasks })
-
+  const execution = executeAssignBatch({ run, tasks: preparedTasks })
   if (input.executeInline) {
     await execution
   } else {
     execution.catch((error: any) => {
       logger.error(
-        {
-          err: error?.message,
-          runId: run.runId,
-          taskCount: preparedTasks.length,
-        },
-        'Coordinator assign batch WorkerRuntime execution failed',
+        { err: error?.message, runId: run.runId, taskCount: preparedTasks.length },
+        'Manager assign batch WorkerRuntime execution failed',
       )
     })
   }
@@ -221,43 +213,9 @@ export async function dispatchCoordinatorAssignBatch(
   }
 }
 
-interface CoordinatorAssignSpec {
-  action: CoordinatorAction
-  taskId: string
-  taskKey: string
-  dependsOnKeys: string[]
-  worker: typeof workspaceAgents.$inferSelect
-  taskTitle: string
-  taskDescription: string
-  orderIdx: number
-}
+// ─── Task Preparation ───────────────────────────────────────────────────
 
-interface PreparedCoordinatorAssignedTask {
-  run: RunControllerRunContext
-  taskId: string
-  taskKey: string
-  dependencyTaskIds: string[]
-  taskTitle: string
-  taskDescription: string
-  worker: typeof workspaceAgents.$inferSelect
-  taskRoomId: string
-  taskThreadId: string
-  childSessionId: string
-  workerInstanceId?: string | null
-  runtimeLeaseId?: string | null
-  sharedTaskRelativeRoot?: string | null
-  sharedTaskSpecPath?: string | null
-  ownerId: string
-  workerRuntime?: WorkerRuntime
-}
-
-interface WorkerTaskExecutionOutcome {
-  taskId: string
-  status: 'completed' | 'cancelled' | 'failed' | 'waiting_for_human'
-  message?: string | null
-}
-
-async function prepareCoordinatorAssignedTask(input: {
+async function prepareAssignedTask(input: {
   workspace: typeof workspaces.$inferSelect
   run: RunControllerRunContext
   ownerId: string
@@ -265,10 +223,10 @@ async function prepareCoordinatorAssignedTask(input: {
   sourceMessage: typeof messages.$inferSelect
   groupRoomId: string
   runtimeType: string
-  spec: CoordinatorAssignSpec
+  spec: AssignSpec
   taskIdByKey: Map<string, string>
   workerRuntime?: WorkerRuntime
-}): Promise<PreparedCoordinatorAssignedTask> {
+}): Promise<PreparedAssignedTask> {
   const dependencyTaskIds = input.spec.dependsOnKeys.map((key) => input.taskIdByKey.get(key)!)
   const [task] = await db
     .insert(workspaceTasks)
@@ -331,7 +289,7 @@ async function prepareCoordinatorAssignedTask(input: {
   })
 
   const assignmentMetadata = {
-    kind: 'coordinator.assign.dispatched',
+    kind: 'manager.assign.dispatched',
     actionType: 'assign',
     runtimeType: input.runtimeType,
     runId: input.run.runId,
@@ -382,7 +340,7 @@ async function prepareCoordinatorAssignedTask(input: {
       type: 'system',
       body: `任务房间缺少 ${input.spec.worker.name} 的 Worker participant，无法写入 Matrix @mention；已降级为普通派发事件。`,
       metadata: {
-        kind: 'coordinator.assign.mention-missing',
+        kind: 'manager.assign.mention-missing',
         runId: input.run.runId,
         taskId: task.id,
         taskRoomId: taskRoom.id,
@@ -412,7 +370,7 @@ async function prepareCoordinatorAssignedTask(input: {
     sharedTaskRelativeRoot: runtimeThread.sharedTaskRelativeRoot ?? null,
     sharedTaskSpecPath: runtimeThread.sharedTaskSpecPath ?? null,
     extraPayload: {
-      source: 'coordinator-runtime.assign',
+      source: 'controller-api.assign',
       taskRoomId: taskRoom.id,
       runtimeLeaseId: lease?.id ?? null,
     },
@@ -446,39 +404,26 @@ async function prepareCoordinatorAssignedTask(input: {
   }
 }
 
-async function resolveTaskRoomWorkerParticipant(roomId: string, workspaceAgentId: string) {
-  const [participant] = await db
-    .select()
-    .from(roomParticipants)
-    .where(and(eq(roomParticipants.roomId, roomId), eq(roomParticipants.workspaceAgentId, workspaceAgentId)))
-    .limit(1)
-  return participant ?? null
-}
+// ─── Batch Execution ────────────────────────────────────────────────────
 
-async function executeCoordinatorAssignBatch(input: {
+async function executeAssignBatch(input: {
   run: RunControllerRunContext
-  tasks: PreparedCoordinatorAssignedTask[]
+  tasks: PreparedAssignedTask[]
 }) {
   const outcomes: WorkerTaskExecutionOutcome[] = []
   const outcomeByTaskId = new Map<string, WorkerTaskExecutionOutcome>()
   const layers = buildExecutionLayers(input.tasks)
 
   for (const layer of layers) {
-    const runnable: PreparedCoordinatorAssignedTask[] = []
+    const runnable: PreparedAssignedTask[] = []
     for (const task of layer) {
       const blockedBy = task.dependencyTaskIds
         .map((taskId) => outcomeByTaskId.get(taskId))
         .filter((outcome) => outcome && outcome.status !== 'completed') as WorkerTaskExecutionOutcome[]
       if (blockedBy.length > 0) {
         const outcome = blockedBy.some((outcome) => outcome.status === 'waiting_for_human')
-          ? await markTaskWaitingForHumanDependency({
-              task,
-              blockedBy,
-            })
-          : await markTaskSkippedByDependency({
-              task,
-              blockedBy,
-            })
+          ? await markTaskWaitingForHumanDependency({ task, blockedBy })
+          : await markTaskSkippedByDependency({ task, blockedBy })
         outcomes.push(outcome)
         outcomeByTaskId.set(outcome.taskId, outcome)
       } else {
@@ -496,9 +441,7 @@ async function executeCoordinatorAssignBatch(input: {
   const cancelled = outcomes.filter((outcome) => outcome.status === 'cancelled')
   const waitingForHuman = outcomes.filter((outcome) => outcome.status === 'waiting_for_human')
   if (waitingForHuman.length > 0 && failed.length === 0 && cancelled.length === 0) {
-    await runController.markRunning(input.run, {
-      taskCount: input.tasks.length,
-    })
+    await runController.markRunning(input.run, { taskCount: input.tasks.length })
     await runController.reconcile(input.run)
     return outcomes
   }
@@ -509,11 +452,7 @@ async function executeCoordinatorAssignBatch(input: {
         failed.length === 1
           ? failed[0]?.message ?? 'A Worker task failed.'
           : `${failed.length}/${outcomes.length} 个 Worker 任务失败。`,
-      payload: {
-        source: 'coordinator-runtime.assign.batch',
-        taskCount: outcomes.length,
-        failedTaskIds: failed.map((outcome) => outcome.taskId),
-      },
+      payload: { source: 'controller-api.assign.batch', taskCount: outcomes.length, failedTaskIds: failed.map((o) => o.taskId) },
     })
     return outcomes
   }
@@ -524,11 +463,7 @@ async function executeCoordinatorAssignBatch(input: {
         cancelled.length === 1
           ? cancelled[0]?.message ?? 'A Worker task was cancelled.'
           : `${cancelled.length}/${outcomes.length} 个 Worker 任务被取消。`,
-      payload: {
-        source: 'coordinator-runtime.assign.batch',
-        taskCount: outcomes.length,
-        cancelledTaskIds: cancelled.map((outcome) => outcome.taskId),
-      },
+      payload: { source: 'controller-api.assign.batch', taskCount: outcomes.length, cancelledTaskIds: cancelled.map((o) => o.taskId) },
     })
     return outcomes
   }
@@ -538,17 +473,15 @@ async function executeCoordinatorAssignBatch(input: {
       outcomes.length === 1
         ? outcomes[0]?.message ?? 'Worker task completed.'
         : `${outcomes.length} 个 Worker 任务已完成。`,
-    payload: {
-      source: 'coordinator-runtime.assign.batch',
-      taskCount: outcomes.length,
-      taskIds: outcomes.map((outcome) => outcome.taskId),
-    },
+    payload: { source: 'controller-api.assign.batch', taskCount: outcomes.length, taskIds: outcomes.map((o) => o.taskId) },
   })
   return outcomes
 }
 
+// ─── Dependency Handling ────────────────────────────────────────────────
+
 async function markTaskSkippedByDependency(input: {
-  task: PreparedCoordinatorAssignedTask
+  task: PreparedAssignedTask
   blockedBy: WorkerTaskExecutionOutcome[]
 }): Promise<WorkerTaskExecutionOutcome> {
   const message = `依赖任务未成功完成，跳过执行：${input.blockedBy.map((outcome) => outcome.taskId).join(', ')}`
@@ -559,7 +492,7 @@ async function markTaskSkippedByDependency(input: {
     body: message,
     metadata: {
       kind: 'worker-runtime.skipped-by-dependency',
-      source: 'coordinator-runtime.assign',
+      source: 'controller-api.assign',
       taskId: input.task.taskId,
       taskKey: input.task.taskKey,
       taskThreadId: input.task.taskThreadId,
@@ -584,7 +517,7 @@ async function markTaskSkippedByDependency(input: {
     sharedTaskRelativeRoot: input.task.sharedTaskRelativeRoot ?? null,
     sharedTaskSpecPath: input.task.sharedTaskSpecPath ?? null,
     extraPayload: {
-      source: 'coordinator-runtime.assign',
+      source: 'controller-api.assign',
       taskRoomId: input.task.taskRoomId,
       taskKey: input.task.taskKey,
       dependencyTaskIds: input.task.dependencyTaskIds,
@@ -595,20 +528,13 @@ async function markTaskSkippedByDependency(input: {
   await runtimeLeaseController.fail(input.task.runtimeLeaseId, {
     workerInstanceId: input.task.workerInstanceId ?? null,
     error: message,
-    metadata: {
-      resultStatus: 'skipped-by-dependency',
-      dependencyTaskIds: input.task.dependencyTaskIds,
-    },
+    metadata: { resultStatus: 'skipped-by-dependency', dependencyTaskIds: input.task.dependencyTaskIds },
   })
-  return {
-    taskId: input.task.taskId,
-    status: 'failed',
-    message,
-  }
+  return { taskId: input.task.taskId, status: 'failed', message }
 }
 
 async function markTaskWaitingForHumanDependency(input: {
-  task: PreparedCoordinatorAssignedTask
+  task: PreparedAssignedTask
   blockedBy: WorkerTaskExecutionOutcome[]
 }): Promise<WorkerTaskExecutionOutcome> {
   const waitingTaskIds = input.blockedBy
@@ -622,7 +548,7 @@ async function markTaskWaitingForHumanDependency(input: {
     body: message,
     metadata: {
       kind: 'worker-runtime.waiting-on-human-dependency',
-      source: 'coordinator-runtime.assign',
+      source: 'controller-api.assign',
       taskId: input.task.taskId,
       taskKey: input.task.taskKey,
       taskThreadId: input.task.taskThreadId,
@@ -649,7 +575,7 @@ async function markTaskWaitingForHumanDependency(input: {
     progressStatus: 'waiting_on_dependency_human_clarification',
     severity: 'warning',
     extraPayload: {
-      source: 'coordinator-runtime.assign',
+      source: 'controller-api.assign',
       taskRoomId: input.task.taskRoomId,
       taskKey: input.task.taskKey,
       dependencyTaskIds: input.task.dependencyTaskIds,
@@ -657,12 +583,10 @@ async function markTaskWaitingForHumanDependency(input: {
       waitingOnHumanDependency: true,
     },
   })
-  return {
-    taskId: input.task.taskId,
-    status: 'waiting_for_human',
-    message,
-  }
+  return { taskId: input.task.taskId, status: 'waiting_for_human', message }
 }
+
+// ─── Worker Execution ───────────────────────────────────────────────────
 
 async function executeWorkerTaskRoom(input: {
   run: RunControllerRunContext
@@ -697,10 +621,7 @@ async function executeWorkerTaskRoom(input: {
     sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
     progressPercent: 5,
     progressStatus: 'worker-runtime-starting',
-    extraPayload: {
-      source: 'coordinator-runtime.assign',
-      taskRoomId: input.taskRoomId,
-    },
+    extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId },
   })
 
   try {
@@ -714,9 +635,7 @@ async function executeWorkerTaskRoom(input: {
     const durationMs = Date.now() - startedAt
     if (result.status === 'waiting_for_human') {
       const clarificationId =
-        typeof result.metadata?.clarificationId === 'string'
-          ? result.metadata.clarificationId
-          : null
+        typeof result.metadata?.clarificationId === 'string' ? result.metadata.clarificationId : null
       const clarificationQuestion =
         typeof result.metadata?.clarificationQuestion === 'string'
           ? result.metadata.clarificationQuestion
@@ -735,7 +654,7 @@ async function executeWorkerTaskRoom(input: {
         sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
         artifacts: artifactsForRunController(result.artifacts),
         extraPayload: {
-          source: 'coordinator-runtime.assign',
+          source: 'controller-api.assign',
           taskRoomId: input.taskRoomId,
           timelineEventCount: result.appendedEventIds.length,
           message: result.message ?? null,
@@ -744,18 +663,9 @@ async function executeWorkerTaskRoom(input: {
       await runtimeLeaseController.markWaitingForHuman(input.runtimeLeaseId, {
         workerInstanceId: input.workerInstanceId ?? null,
         message: clarificationQuestion,
-        metadata: {
-          resultStatus: result.status,
-          clarificationId,
-          clarificationQuestion,
-          taskRoomId: input.taskRoomId,
-        },
+        metadata: { resultStatus: result.status, clarificationId, clarificationQuestion, taskRoomId: input.taskRoomId },
       })
-      return {
-        taskId: input.taskId,
-        status: 'waiting_for_human',
-        message: result.message ?? `${input.taskTitle} waiting for human clarification.`,
-      }
+      return { taskId: input.taskId, status: 'waiting_for_human', message: result.message ?? `${input.taskTitle} waiting for human clarification.` }
     }
     if (result.status === 'completed') {
       await runController.markTaskCompleted(input.run, {
@@ -770,22 +680,13 @@ async function executeWorkerTaskRoom(input: {
         sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
         durationMs,
         artifacts: artifactsForRunController(result.artifacts),
-        extraPayload: {
-          source: 'coordinator-runtime.assign',
-          taskRoomId: input.taskRoomId,
-          timelineEventCount: result.appendedEventIds.length,
-          message: result.message ?? null,
-        },
+        extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId, timelineEventCount: result.appendedEventIds.length, message: result.message ?? null },
       })
       await runtimeLeaseController.release(input.runtimeLeaseId, {
         workerInstanceId: input.workerInstanceId ?? null,
         metadata: { resultStatus: result.status },
       })
-      return {
-        taskId: input.taskId,
-        status: 'completed',
-        message: result.message ?? `${input.taskTitle} completed.`,
-      }
+      return { taskId: input.taskId, status: 'completed', message: result.message ?? `${input.taskTitle} completed.` }
     }
     if (result.status === 'cancelled') {
       await runController.markTaskCancelled(input.run, {
@@ -799,20 +700,13 @@ async function executeWorkerTaskRoom(input: {
         runtimeLeaseId: input.runtimeLeaseId ?? null,
         sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
         sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
-        extraPayload: {
-          source: 'coordinator-runtime.assign',
-          taskRoomId: input.taskRoomId,
-        },
+        extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId },
       })
       await runtimeLeaseController.release(input.runtimeLeaseId, {
         workerInstanceId: input.workerInstanceId ?? null,
         metadata: { resultStatus: result.status },
       })
-      return {
-        taskId: input.taskId,
-        status: 'cancelled',
-        message: result.message ?? `${input.taskTitle} cancelled.`,
-      }
+      return { taskId: input.taskId, status: 'cancelled', message: result.message ?? `${input.taskTitle} cancelled.` }
     }
     await runController.markTaskFailed(input.run, {
       taskId: input.taskId,
@@ -827,21 +721,14 @@ async function executeWorkerTaskRoom(input: {
       sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
       durationMs,
       artifacts: artifactsForRunController(result.artifacts),
-      extraPayload: {
-        source: 'coordinator-runtime.assign',
-        taskRoomId: input.taskRoomId,
-      },
+      extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId },
     })
     await runtimeLeaseController.fail(input.runtimeLeaseId, {
       workerInstanceId: input.workerInstanceId ?? null,
       error: result.message ?? 'WorkerRuntime failed.',
       metadata: { resultStatus: result.status },
     })
-    return {
-      taskId: input.taskId,
-      status: 'failed',
-      message: result.message ?? `${input.taskTitle} failed.`,
-    }
+    return { taskId: input.taskId, status: 'failed', message: result.message ?? `${input.taskTitle} failed.` }
   } catch (error: any) {
     const message = error?.message || 'WorkerRuntime execution failed.'
     await roomService.appendTimelineEvent({
@@ -851,7 +738,7 @@ async function executeWorkerTaskRoom(input: {
       body: `WorkerRuntime 执行失败：${message}`,
       metadata: {
         kind: 'worker-runtime.failed',
-        source: 'coordinator-runtime.assign',
+        source: 'controller-api.assign',
         taskId: input.taskId,
         taskThreadId: input.taskThreadId,
         workerInstanceId: input.workerInstanceId ?? null,
@@ -871,22 +758,17 @@ async function executeWorkerTaskRoom(input: {
       sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
       sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
       durationMs: Date.now() - startedAt,
-      extraPayload: {
-        source: 'coordinator-runtime.assign',
-        taskRoomId: input.taskRoomId,
-      },
+      extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId },
     })
     await runtimeLeaseController.fail(input.runtimeLeaseId, {
       workerInstanceId: input.workerInstanceId ?? null,
       error: message,
     })
-    return {
-      taskId: input.taskId,
-      status: 'failed',
-      message,
-    }
+    return { taskId: input.taskId, status: 'failed', message }
   }
 }
+
+// ─── Runtime Lease ──────────────────────────────────────────────────────
 
 async function createTaskRuntimeLease(input: {
   workspace: typeof workspaces.$inferSelect
@@ -932,12 +814,23 @@ async function createTaskRuntimeLease(input: {
     tmpDir,
     dataDir,
     metadata: {
-      source: 'coordinator-runtime.assign',
+      source: 'controller-api.assign',
       workdirRelativePath: workdir?.relativePath ?? null,
       workspacePath: input.workspace.projectPath ?? null,
       sandboxPolicy: input.worker.sandboxPolicy ?? 'workspace-write',
     },
   })
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────
+
+async function resolveTaskRoomWorkerParticipant(roomId: string, workspaceAgentId: string) {
+  const [participant] = await db
+    .select()
+    .from(roomParticipants)
+    .where(and(eq(roomParticipants.roomId, roomId), eq(roomParticipants.workspaceAgentId, workspaceAgentId)))
+    .limit(1)
+  return participant ?? null
 }
 
 async function resolveTargetWorker(input: { workspaceId: string; targetWorkerId?: string | null }) {
@@ -949,16 +842,11 @@ async function resolveTargetWorker(input: { workspaceId: string; targetWorkerId?
   if (explicitTarget) {
     const worker = rows.find((agent) => agent.id === explicitTarget || agent.name === explicitTarget)
     if (!worker) {
-      throw AppError.fromCode(
-        AppErrorCodes.AGENT_NOT_FOUND,
-        `Manager 指定的 Worker 不存在：${explicitTarget}`,
-      )
+      throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, `Manager 指定的 Worker 不存在：${explicitTarget}`)
     }
     return worker
   }
-  const worker =
-    rows.find((agent) => agent.roleType !== 'orchestrator') ??
-    null
+  const worker = rows.find((agent) => agent.roleType !== 'orchestrator') ?? null
   if (!worker) {
     throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Manager 没有可派发的 Worker')
   }
@@ -976,14 +864,14 @@ async function resolveManagerAgent(workspaceId: string) {
 
 function buildAssignBatchPlan(input: {
   sourceMessage: typeof messages.$inferSelect
-  specs: CoordinatorAssignSpec[]
+  specs: AssignSpec[]
 }) {
   const uniqueWorkers = Array.from(
     new Map(input.specs.map((spec) => [spec.worker.id, spec.worker])).values(),
   )
   return {
     schema: 'agenthub.hiclaw-lite.assign-batch.v1',
-    source: 'coordinator-runtime.assign',
+    source: 'controller-api.assign',
     title:
       input.specs.length === 1
         ? input.specs[0]?.taskTitle ?? 'Manager assigned task'
@@ -1011,7 +899,9 @@ function buildAssignBatchPlan(input: {
       description: spec.taskDescription,
       agentId: spec.worker.id,
       dependsOn: spec.dependsOnKeys,
-      dependencies: spec.dependsOnKeys.map((key) => input.specs.find((candidate) => candidate.taskKey === key)?.taskId).filter(Boolean),
+      dependencies: spec.dependsOnKeys
+        .map((key) => input.specs.find((candidate) => candidate.taskKey === key)?.taskId)
+        .filter(Boolean),
       reason: spec.action.reason ?? null,
     })),
     decision: {
@@ -1032,24 +922,18 @@ function normalizeDependencyKeys(value: string[] | undefined) {
   return Array.from(new Set(value.map((item) => item.trim()).filter(Boolean)))
 }
 
-function validateAssignGraph(specs: CoordinatorAssignSpec[]) {
+function validateAssignGraph(specs: AssignSpec[]) {
   const taskIdByKey = new Map<string, string>()
   for (const spec of specs) {
     if (taskIdByKey.has(spec.taskKey)) {
-      throw AppError.fromCode(
-        AppErrorCodes.VALIDATION_FAILED,
-        `Coordinator assign taskKey 重复：${spec.taskKey}`,
-      )
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Manager assign taskKey 重复：${spec.taskKey}`)
     }
     taskIdByKey.set(spec.taskKey, spec.taskId)
   }
   for (const spec of specs) {
     for (const key of spec.dependsOnKeys) {
       if (!taskIdByKey.has(key)) {
-        throw AppError.fromCode(
-          AppErrorCodes.VALIDATION_FAILED,
-          `Coordinator assign 依赖不存在：${spec.taskKey} dependsOn ${key}`,
-        )
+        throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Manager assign 依赖不存在：${spec.taskKey} dependsOn ${key}`)
       }
     }
   }
@@ -1058,10 +942,7 @@ function validateAssignGraph(specs: CoordinatorAssignSpec[]) {
   const visit = (key: string) => {
     if (visited.has(key)) return
     if (visiting.has(key)) {
-      throw AppError.fromCode(
-        AppErrorCodes.VALIDATION_FAILED,
-        `Coordinator assign 依赖存在环：${key}`,
-      )
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, `Manager assign 依赖存在环：${key}`)
     }
     visiting.add(key)
     const spec = specs.find((candidate) => candidate.taskKey === key)
@@ -1073,19 +954,16 @@ function validateAssignGraph(specs: CoordinatorAssignSpec[]) {
   return taskIdByKey
 }
 
-function buildExecutionLayers(tasks: PreparedCoordinatorAssignedTask[]) {
+function buildExecutionLayers(tasks: PreparedAssignedTask[]) {
   const remaining = new Map(tasks.map((task) => [task.taskId, task]))
   const completed = new Set<string>()
-  const layers: PreparedCoordinatorAssignedTask[][] = []
+  const layers: PreparedAssignedTask[][] = []
   while (remaining.size > 0) {
     const layer = Array.from(remaining.values()).filter((task) =>
       task.dependencyTaskIds.every((dependencyTaskId) => completed.has(dependencyTaskId)),
     )
     if (layer.length === 0) {
-      throw AppError.fromCode(
-        AppErrorCodes.VALIDATION_FAILED,
-        'Coordinator assign dependency graph cannot be scheduled.',
-      )
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Manager assign dependency graph cannot be scheduled.')
     }
     layers.push(layer)
     for (const task of layer) {

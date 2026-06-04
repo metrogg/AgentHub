@@ -277,6 +277,7 @@ export type TimelineEventType =
   | 'task.progress'
   | 'artifact.created'
   | 'approval.requested'
+  | 'file.shared'
   | 'system'
 
 export interface Room {
@@ -680,7 +681,7 @@ export interface LocalMatrixActionResult {
   diagnostics: MatrixDiagnostics
 }
 
-export type ManagerRuntimeType = 'local-skill-runtime' | 'openclaw' | 'qwenpaw'
+export type ManagerRuntimeType = 'openclaw' | 'qwenpaw'
 
 export interface ManagerRuntimeStatus {
   runtimeType: ManagerRuntimeType
@@ -1247,6 +1248,7 @@ export interface OrchestratorRunTaskSnapshot {
 export interface OrchestratorRunRuntimeLeaseSnapshot {
   id: string
   runtimeLeaseId: string
+  taskId?: string | null
   workerInstanceId: string | null
   provider: 'local-workdir' | 'docker-sandbox' | 'remote-container'
   status: 'creating' | 'ready' | 'running' | 'cleaning' | 'released' | 'failed' | 'stale'
@@ -1294,6 +1296,7 @@ export interface OrchestratorRunArtifactSnapshot {
 }
 
 export interface OrchestratorRunResourceSnapshot {
+  activeRun?: OrchestratorRunResourceSnapshot['run']
   run: {
     id: string
     workspaceId: string
@@ -1372,6 +1375,24 @@ export interface OrchestratorRunResourceSnapshot {
     createdAt: string
     updatedAt: string
   }>
+}
+
+export interface RoomSessionSnapshot {
+  session: Session
+  room: Room
+  participants: RoomParticipant[]
+  timeline: TimelineEvent[]
+  resources: OrchestratorRunResourceSnapshot
+  bindings: {
+    parentGroupSessionId: string | null
+    orchestratorRunId: string | null
+    orchestratorTaskId: string | null
+    taskThreadId: string | null
+  }
+  cursors: {
+    timelineSequence: number
+    resourceVersion: string
+  }
 }
 
 export interface ExecutionLog {
@@ -1533,6 +1554,16 @@ export const api = {
     return request<{ items: TimelineEvent[] }>(
       `/rooms/${roomId}/timeline${query ? `?${query}` : ''}`,
     )
+  },
+  getRoomSessionSnapshot: (
+    sessionId: string,
+    options: { afterSequence?: number; includeLegacy?: boolean } = {},
+  ) => {
+    const params = new URLSearchParams()
+    if (options.afterSequence !== undefined) params.set('afterSequence', String(options.afterSequence))
+    if (options.includeLegacy) params.set('includeLegacy', 'true')
+    const query = params.toString()
+    return request<RoomSessionSnapshot>(`/rooms/session/${sessionId}/snapshot${query ? `?${query}` : ''}`)
   },
 
   // Messages

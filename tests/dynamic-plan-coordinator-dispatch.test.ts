@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 const dbApi = await import('../packages/db/src/index')
 const { runController } = await import('../apps/server/src/services/orchestrator/run-controller')
 const { startPlanRunWithCoordinatorAssignBatch } = await import(
-  '../apps/server/src/services/coordinator-runtime/planning-dispatcher'
+  '../apps/server/src/services/manager-runtime/planning-dispatcher'
 )
 
 const {
@@ -107,7 +107,7 @@ describe('dynamic plan dispatch through CoordinatorRuntime', () => {
     const runRows = await db.select().from(orchestratorRuns).where(eq(orchestratorRuns.id, run.runId))
     expect(runRows[0]?.status).toBe('completed')
     expect(runRows[0]?.plan?.schema).toBe('agenthub.hiclaw-lite.assign-batch.v1')
-    expect(runRows[0]?.plan?.source).toBe('coordinator-runtime.assign')
+    expect(runRows[0]?.plan?.source).toBe('controller-api.assign')
 
     const taskRows = await db.select().from(workspaceTasks).where(eq(workspaceTasks.runId, run.runId))
     expect(taskRows).toHaveLength(2)

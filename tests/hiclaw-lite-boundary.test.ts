@@ -33,10 +33,105 @@ describe('HiClaw-lite kernel boundary', () => {
     expect(violations).toEqual([])
   })
 
+  test('LLM is never a Worker / Manager runtime in the AgentHub kernel', () => {
+    // AgentHub Manager must be a real OpenClaw / QwenPaw process and Worker
+    // must be a real Code Agent runtime (codex|claude-code|opencode|gemini).
+    // LLM-backed chat is NOT a valid Worker / Manager / Coordinator runtime
+    // in the kernel. The deleted LlmRuntime, manager-planner,
+    // orchestrator-decision, planner must NOT be reintroduced.
+    const forbiddenFiles = [
+      'runtime/llm-runtime.ts',
+      'orchestrator/manager-planner.ts',
+      'orchestrator/orchestrator-decision.ts',
+      'orchestrator/planner.ts',
+    ]
+    const files = listSourceFiles(sourceRoot)
+    const violations: string[] = []
+
+    for (const file of files) {
+      const rel = toRepoPath(file)
+      for (const forbidden of forbiddenFiles) {
+        if (rel.endsWith(forbidden)) {
+          violations.push(`LLM-driven module reintroduced: ${rel}`)
+        }
+      }
+    }
+
+    expect(violations).toEqual([])
+  })
+
+  test('runtime registry does not register an llm runtime', () => {
+    // The runtime registry is the single source of truth for which Agent
+    // runtimes AgentHub will dispatch to. After removing LlmRuntime, the
+    // registry must NOT contain a runtime registered with runtimeType='llm'.
+    const registry = readFileSync(
+      join(process.cwd(), 'apps/server/src/services/runtime/index.ts'),
+      'utf8',
+    )
+    expect(registry).not.toMatch(/register\s*\(\s*new\s+LlmRuntime\s*\(/)
+    expect(registry).not.toMatch(/LlmRuntime/)
+  })
+
+  test('resolveForProfile throws for non-code-agent profiles (no LLM fallback)', () => {
+    // The runtime-registry must hard-fail on LLM profiles instead of
+    // silently falling back. This protects the invariant that AgentHub
+    // never uses LLM as a Worker runtime.
+    const registry = readFileSync(
+      join(process.cwd(), 'apps/server/src/services/runtime/runtime-registry.ts'),
+      'utf8',
+    )
+    expect(registry).toMatch(/AgentHub 不再支持/)
+    expect(registry).toMatch(/profile is required/)
+  })
+
+  test('agent-runner no longer falls back to LLM when profile is missing', () => {
+    // agent-runner.ts previously had a "无 profile 时回退到默认 LLM" branch.
+    // That branch has been replaced with a hard error. Verify it is gone.
+    const runner = readFileSync(
+      join(process.cwd(), 'apps/server/src/services/agent-runner.ts'),
+      'utf8',
+    )
+    expect(runner).not.toMatch(/回退到默认 LLM/)
+    // The "missing or invalid AgentProfile" hard error must be present.
+    expect(runner).toMatch(/missing or invalid AgentProfile/)
+  })
+
+  test('local-worker-runtime fails fast on non-code-agent profile', () => {
+    // WorkerRuntime must not silently fall back to LLM. It must hard-fail
+    // when the resolved profile is not a code-agent.
+    const worker = readFileSync(
+      join(process.cwd(), 'apps/server/src/services/worker-runtime/local-worker-runtime.ts'),
+      'utf8',
+    )
+    expect(worker).toMatch(/不是 code-agent/)
+    expect(worker).toMatch(/isCodeAgentProfile/)
+  })
+
+  test('coordinator-runtime directory has been fully removed', () => {
+    // The coordinator-runtime directory was the old orchestration layer.
+    // It has been deleted; all logic migrated to manager-runtime/ and
+    // controller-plane/task-dispatcher.ts.
+    const coordinatorDir = join(process.cwd(), 'apps/server/src/services/coordinator-runtime')
+    expect(() => statSync(coordinatorDir)).toThrow()
+  })
+
+  test('plan-generator dynamic build is a fail-loudly stub', () => {
+    // buildDynamicOrchestratorPlan() previously called createManagerActionPlan
+    // (LLM). After cleanup, it must throw instead of silently producing an
+    // empty / fake plan via AgentHub's local LLM.
+    const gen = readFileSync(
+      join(process.cwd(), 'apps/server/src/services/orchestrator/plan-generator.ts'),
+      'utf8',
+    )
+    expect(gen).toMatch(/LLM-driven dynamic plan generation is no longer supported/)
+    const stripped = stripComments(gen)
+    expect(stripped).not.toMatch(/streamReply\s*\(/)
+  })
+
   test('new kernel modules do not use A2A as their internal task transport', () => {
     const kernelDirs = [
       'apps/server/src/services/rooms',
-      'apps/server/src/services/coordinator-runtime',
+      'apps/server/src/services/controller-plane',
       'apps/server/src/services/worker-runtime',
     ]
     const files = kernelDirs.flatMap((dir) => listSourceFiles(join(process.cwd(), dir)))
@@ -56,7 +151,7 @@ describe('HiClaw-lite kernel boundary', () => {
   test('new lifecycle paths use controllers instead of runtime lease persistence helpers', () => {
     const guardedDirs = [
       'apps/server/src/services/rooms',
-      'apps/server/src/services/coordinator-runtime',
+      'apps/server/src/services/controller-plane',
       'apps/server/src/services/worker-runtime',
     ]
     const guardedFiles = [
@@ -124,4 +219,13 @@ function toRepoPath(path: string) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function stripComments(source: string) {
+  // Remove /* ... */ block comments and // line comments, while keeping
+  // string contents intact (approximate but sufficient for boundary
+  // matching).
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
 }

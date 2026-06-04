@@ -6,7 +6,7 @@ import {
 } from '@agenthub/db'
 import { TaskStatus } from '@agenthub/shared'
 
-export interface CoordinatorResourceReviewInput {
+export interface ManagerResourceReviewInput {
   goal: string | null
   tasks: Array<typeof workspaceTasks.$inferSelect>
   threads: Array<typeof taskThreads.$inferSelect>
@@ -24,7 +24,7 @@ export interface CoordinatorResourceReviewInput {
   >
 }
 
-export function buildCoordinatorResourceReviewSummary(input: CoordinatorResourceReviewInput) {
+export function buildManagerResourceReviewSummary(input: ManagerResourceReviewInput) {
   const doneCount = input.tasks.filter((task) => task.status === TaskStatus.Done).length
   const failedCount = input.tasks.filter((task) => task.status === TaskStatus.Failed).length
   const cancelledCount = input.tasks.filter((task) => task.status === TaskStatus.Cancelled).length

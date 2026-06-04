@@ -23,13 +23,13 @@ import { broadcastSessionEvent, type MessageRow } from '../agent-runner'
 import { checkInputGuardrails } from '../orchestrator/input-guardrails'
 import type { ManagerDecisionEventContext } from '../orchestrator/manager-loop'
 import { buildDynamicOrchestratorPlan } from '../orchestrator/plan-generator'
-import { validateRealWorkerAssignments } from '../orchestrator/planner'
+import { validateRealWorkerAssignments } from '../orchestrator/plan-utils'
 import { emitRunEvent } from '../orchestrator/run-events'
 import { runController, type RunControllerRunContext } from '../orchestrator/run-controller'
 import type { TaskOutputContract, TaskValidation } from '../orchestrator/types'
 import type { WorkerRuntime } from '../worker-runtime'
-import { dispatchCoordinatorAssignBatch } from './assign-dispatcher'
-import type { CoordinatorAction } from './types'
+import { dispatchAssignBatch } from '../controller-plane/task-dispatcher'
+import type { ManagerAction } from './types'
 
 export type PlanAgent = {
   key: string
@@ -93,11 +93,11 @@ export type DispatchMonitor = {
   taskIds: string[]
 }
 
-export function coordinatorAssignActionsFromPlan(input: {
+export function managerAssignActionsFromPlan(input: {
   plan: OrchestratorPlan
   agentsByKey: Map<string, typeof workspaceAgents.$inferSelect>
-}): CoordinatorAction[] {
-  const actions: CoordinatorAction[] = []
+}): ManagerAction[] {
+  const actions: ManagerAction[] = []
   const taskKeys = new Set(input.plan.tasks.map((task) => task.id))
   for (const task of input.plan.tasks) {
     const worker = input.agentsByKey.get(task.agentKey)
@@ -184,8 +184,8 @@ export async function startPlanRunWithCoordinatorAssignBatch(params: {
     content: plan.goal,
     sourceMessage: params.sourceMessage ?? null,
   })
-  const actions = coordinatorAssignActionsFromPlan({ plan, agentsByKey })
-  const batch = await dispatchCoordinatorAssignBatch({
+  const actions = managerAssignActionsFromPlan({ plan, agentsByKey })
+  const batch = await dispatchAssignBatch({
     groupSession: sourceSession,
     ownerId,
     sourceMessage,

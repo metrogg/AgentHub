@@ -101,6 +101,9 @@ setRuntimeServerPort(runtimePort)
 // ─── Start resident Manager (OpenClaw / QwenPaw) ─────────────────────
 // Resident Managers observe rooms via Matrix /sync autonomously.
 // AgentHub does not invoke their step() directly.
+//
+// HiClaw design: Manager is the brain. If it cannot start, the system
+// is degraded. We log at fatal level so operators cannot miss it.
 void (async () => {
   try {
     const provider = getActiveManagerProvider()
@@ -109,12 +112,16 @@ void (async () => {
       if (!status.running && !status.endpoint) {
         logger.info({ runtimeType: provider.runtimeType }, 'Starting resident Manager process...')
         if (!provider.ensureStarted) {
-          logger.warn('Provider does not support ensureStarted')
+          logger.fatal('Provider does not support ensureStarted; Manager is unavailable.')
           return
         }
         const result = await provider.ensureStarted()
         if (result.error) {
-          logger.error({ error: result.error }, 'Failed to start resident Manager')
+          logger.fatal(
+            { error: result.error, runtimeType: provider.runtimeType },
+            'FATAL: Resident Manager failed to start. AgentHub cannot coordinate without a Manager. ' +
+              'Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_MANAGER_RUNTIME correctly.',
+          )
         } else {
           logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
         }
@@ -123,7 +130,7 @@ void (async () => {
       }
     }
   } catch (err) {
-    logger.error({ err }, 'Resident Manager startup failed')
+    logger.fatal({ err }, 'FATAL: Resident Manager startup threw an exception. AgentHub is in degraded mode.')
   }
 })()
 

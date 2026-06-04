@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import {
   and,
   db,
@@ -13,6 +15,7 @@ import {
   workspaces,
 } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../../lib/error'
+import { logger } from '../../lib/logger'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
@@ -179,8 +182,30 @@ export class WorkerRuntimeService {
         : []
 
     const timeline = await roomService.listTimelineEvents({ roomId: room.id, limit: 100 })
+
+    // Try to read spec.md from shared task directory (HiClaw-style task file protocol)
+    let specPrompt: string | null = null
+    let sharedTaskRelativeRoot: string | null = null
+    let sharedTaskSpecPath: string | null = null
+    if (room.taskId) {
+      const projectPath = workspace?.projectPath ?? lease?.cwd ?? null
+      if (projectPath) {
+        sharedTaskRelativeRoot = join('.agenthub', 'shared', 'tasks', room.taskId)
+        const specPath = join(projectPath, sharedTaskRelativeRoot, 'spec.md')
+        try {
+          specPrompt = await readFile(specPath, 'utf8')
+          sharedTaskSpecPath = specPath
+        } catch (e: any) {
+          if (e.code !== 'ENOENT') {
+            logger.warn({ err: e, taskId: room.taskId, specPath }, 'Failed to read task spec.md')
+          }
+        }
+      }
+    }
+
     const prompt =
       input.prompt?.trim() ||
+      specPrompt?.trim() ||
       latestAssignedTaskPrompt(timeline) ||
       room.topic ||
       room.title

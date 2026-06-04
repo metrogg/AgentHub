@@ -10,7 +10,11 @@ import type { ManagerRuntime, ManagerRuntimeEvent, ManagerStepInput, ManagerStep
  *   2. Provide Matrix identity + config
  *   3. Provide Controller API for OpenClaw's skills to call
  *
- * This runtime's step() is a no-op: OpenClaw itself is the decision maker.
+ * This runtime's step() THROWS because:
+ * - If OpenClaw is running, AgentHub should NOT call step() at all.
+ *   The skip logic in room-chat-bridge.ts and manager-loop.ts handles this.
+ * - If OpenClaw is NOT running, silent no-op would mask a critical failure.
+ *   The Manager is the brain of the system; without it, nothing works.
  */
 export class ResidentManagerRuntime implements ManagerRuntime {
   readonly runtimeType
@@ -23,13 +27,13 @@ export class ResidentManagerRuntime implements ManagerRuntime {
     _input: ManagerStepInput,
     _signal?: AbortSignal,
   ): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
-    yield {
-      type: 'thinking',
-      content: `${this.runtimeType} is a resident process; AgentHub does not invoke its step directly.`,
-    }
-    return {
-      runtimeType: this.runtimeType,
-      actions: [{ type: 'wait', reason: 'Resident Manager process handles coordination autonomously.' }],
-    }
+    throw new Error(
+      `Resident Manager (${this.runtimeType}) step() was called, but this should never happen. ` +
+        'OpenClaw / QwenPaw is a resident process that handles coordination autonomously via Matrix /sync. ' +
+        'AgentHub should skip calling step() when the resident Manager is active. ' +
+        'If you see this error, it means either: ' +
+        '(1) the resident Manager process is not running, or ' +
+        '(2) the skip logic in room-chat-bridge.ts / manager-loop.ts is broken.',
+    )
   }
 }

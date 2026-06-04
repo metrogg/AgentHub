@@ -273,14 +273,19 @@ async function createLlmWorkspaceAgent(
     sandboxPolicy: string
   }> = {},
 ) {
+  // AgentHub 自身不再使用 LLM 作为 Worker runtime。Smoke 测试现在改用
+  // code-agent (opencode) profile 创建"假 Worker"以保持类型兼容。
+  // 这些 agent 实际执行需要 OpenClaw/OpenCode 真实接入；smoke 测试只
+  // 验证资源创建/状态机本身，不真正跑 agent 任务。
   return json<{ id: string; name: string; role: string }>(
     await postJson(`/api/workspaces/${workspaceId}/agents`, {
-      name: overrides.name ?? 'Smoke LLM Agent',
+      name: overrides.name ?? 'Smoke Code Agent',
       role: overrides.role ?? '测试 Agent',
       roleType: overrides.roleType ?? 'custom',
-      description: overrides.description ?? 'Smoke-test LLM runtime agent.',
+      description: overrides.description ?? 'Smoke-test code-agent runtime agent.',
       systemPrompt: overrides.systemPrompt ?? 'Reply briefly for smoke tests.',
-      runtimeType: 'llm',
+      runtimeType: 'code-agent',
+      codeAgentType: 'opencode',
       capabilityTags: ['smoke'],
       toolPermissions: ['chat'],
       sandboxPolicy: overrides.sandboxPolicy ?? 'workspace-write',
@@ -1362,32 +1367,6 @@ describe('AgentHub smoke tests', () => {
     expect(selection.selectedAgentKey).toBe('designer')
   })
 
-  test('orchestrator decision routes build requests to planning', async () => {
-    const { decideOrchestratorAction } = await import(
-      '../apps/server/src/services/orchestrator/orchestrator-decision'
-    )
-
-    const decision = await decideOrchestratorAction({
-      content: '开发一个坦克大战',
-      agents: [
-        {
-          id: 'orchestrator',
-          name: 'Orchestrator',
-          roleType: 'orchestrator',
-          runtimeType: 'llm',
-        },
-        {
-          id: 'builder',
-          name: 'Builder',
-          roleType: 'coder',
-          runtimeType: 'code-agent',
-        },
-      ] as any,
-    })
-
-    expect(decision.action).toBe('plan')
-  })
-
   test('group build requests auto-start an orchestrator run instead of posting a plan card', async () => {
     const full = await json<{ workspace: { id: string } }>(
       await postJson('/api/workspaces', {
@@ -2409,7 +2388,7 @@ describe('AgentHub smoke tests', () => {
 
   test('task output contract treats model semantic blackboard keys as advisory', async () => {
     const { normalizeTaskOutputContract } =
-      await import('../apps/server/src/services/orchestrator/planner')
+      await import('../apps/server/src/services/orchestrator/plan-utils')
     const { validateTaskOutputContract } =
       await import('../apps/server/src/services/orchestrator/task-contract')
     const taskId = 'design-task'
@@ -2447,7 +2426,7 @@ describe('AgentHub smoke tests', () => {
 
   test('planner JSON parsing tolerates comments without inventing fallback content', async () => {
     const { extractJsonObject, parseJsonObject } =
-      await import('../apps/server/src/services/orchestrator/planner')
+      await import('../apps/server/src/services/orchestrator/plan-utils')
     const text = [
       'planner output:',
       '{',

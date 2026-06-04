@@ -11,7 +11,7 @@ import {
   workerInstances,
   workspaceTasks,
 } from '@agenthub/db'
-import { coordinatorService } from '../coordinator-runtime/coordinator-service'
+import { managerRuntimeService } from '../manager-runtime'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
@@ -88,10 +88,11 @@ export class MatrixRoomEventDispatcher {
   constructor(handlers: Partial<MatrixRoomEventDispatcherHandlers> = {}) {
     this.handlers = {
       runWorkerTaskRoom: (input) => workerRuntimeService.runTaskRoom(input),
-      stepManagerRoom: (input) => coordinatorService.stepRoom({
+      stepManagerRoom: (input) => managerRuntimeService.stepRoom({
         roomId: input.roomId,
         ownerId: input.ownerId,
         afterSequence: input.afterSequence,
+        source: input.source,
       }),
       cancelTaskRoom: (input) => cancelTaskRoomFromMatrix(input),
       recordApprovalControl: (input) => recordApprovalControlFromMatrix(input),

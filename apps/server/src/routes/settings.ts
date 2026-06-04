@@ -835,18 +835,18 @@ function managerRuntimeStatusMessage(status: {
   error?: string | null
 }) {
   if (status.runtimeType === 'openclaw') {
-    if (status.syncReady) {
-      return 'OpenClaw Manager endpoint 已配置，AgentHub 可以通过 POST /step 调用它。'
+    if (status.running) {
+      return 'OpenClaw resident Manager 正在运行，通过 Matrix /sync 自主协调。'
     }
     if (status.available) {
-      return '已检测到 OpenClaw 生命周期能力，但还没有配置 AGENTHUB_OPENCLAW_MANAGER_ENDPOINT；暂不能作为同步 Manager 主脑。'
+      return 'OpenClaw 已安装，但 resident Manager 未运行。请检查日志或点击“启动”。'
     }
-    return status.error || '未检测到 OpenClaw，也没有配置 Manager endpoint。'
+    return status.error || '未检测到 OpenClaw。请安装（bash infra/setup-openclaw.sh）或检查 PATH。'
   }
   if (status.runtimeType === 'qwenpaw') {
     return status.error || 'QwenPaw Manager runtime 尚未接入。'
   }
-  return '当前使用 AgentHub 内置 local skill Manager runtime。'
+  return '未知的 Manager runtime 配置。请检查 AGENTHUB_MANAGER_RUNTIME 环境变量。'
 }
 
 async function startLocalTuwunel() {

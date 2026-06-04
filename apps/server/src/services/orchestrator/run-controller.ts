@@ -24,11 +24,6 @@ import {
 } from '@agenthub/db'
 import { inArray } from 'drizzle-orm'
 import { WsEvent } from '@agenthub/shared'
-import {
-  decideOrchestratorAction,
-  type DecideInput,
-  type OrchestratorDecision,
-} from './orchestrator-decision'
 import { emitRunEvent } from './run-events'
 import { updateTaskThreadStatus } from './task-thread-service'
 import { OrchestratorRunStatus, TaskStatus } from '@agenthub/shared'
@@ -152,22 +147,6 @@ export class RunController {
       actorName: run.actor?.name ?? null,
       decision,
     })
-  }
-
-  async decideNextAction(
-    run: RunControllerRunContext,
-    input: DecideInput,
-  ): Promise<OrchestratorDecision> {
-    const decision = await decideOrchestratorAction(input)
-    await this.recordDecision(run, {
-      action: decision.action,
-      reason: decision.reason,
-      message: decision.message,
-      memberProposalCount: Array.isArray(decision.memberProposals)
-        ? decision.memberProposals.length
-        : 0,
-    })
-    return decision
   }
 
   async requestApproval(

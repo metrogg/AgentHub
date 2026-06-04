@@ -3,7 +3,6 @@ import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
-const coordinatorApi = await import('../apps/server/src/services/coordinator-runtime')
 const managerRuntimeApi = await import('../apps/server/src/services/manager-runtime')
 
 const {
@@ -12,7 +11,6 @@ const {
   eq,
 } = dbApi
 const { roomService } = roomsApi
-const { CoordinatorService } = coordinatorApi
 const { ManagerRuntimeService } = managerRuntimeApi
 type ManagerRuntime = managerRuntimeApi.ManagerRuntime
 type ManagerRuntimeEvent = managerRuntimeApi.ManagerRuntimeEvent
@@ -20,7 +18,7 @@ type ManagerStepInput = managerRuntimeApi.ManagerStepInput
 type ManagerStepResult = managerRuntimeApi.ManagerStepResult
 
 describe('ManagerRuntime primary room routing', () => {
-  test('CoordinatorService defaults to ManagerRuntime and persists runtime events', async () => {
+  test('ManagerRuntimeService persists runtime events to room timeline', async () => {
     const room = await roomService.createRoom({
       kind: 'group',
       ownerId: 'default-user',
@@ -64,12 +62,13 @@ describe('ManagerRuntime primary room routing', () => {
         },
       },
     ])
-    const service = new CoordinatorService(undefined, {
-      managerService: new ManagerRuntimeService(fakeRuntime),
-      useManagerRuntimeByDefault: true,
-    })
+    const service = new ManagerRuntimeService(fakeRuntime)
 
-    const result = await service.stepRoom({ roomId: room.id, ownerId: 'default-user' })
+    const result = await service.stepRoom({
+      roomId: room.id,
+      ownerId: 'default-user',
+      source: 'test',
+    })
 
     expect(fakeRuntime.lastInput?.context.ownerId).toBe('default-user')
     expect(result.runtimeType).toBe('openclaw')

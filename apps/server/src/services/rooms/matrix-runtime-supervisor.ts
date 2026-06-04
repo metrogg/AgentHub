@@ -1,4 +1,5 @@
 import { and, db, eq, matrixIdentities, roomParticipants, rooms, workerInstances } from '@agenthub/db'
+import { logger } from '../../lib/logger'
 import { matrixRuntimeListener, type MatrixRuntimeListener } from './matrix-runtime-listener'
 import type { ParticipantType } from './types'
 
@@ -155,10 +156,17 @@ export class MatrixRuntimeSupervisor {
       .limit(input.limit ?? 1000)
     const results: MatrixRuntimeSupervisorStartResult[] = []
     for (const participant of participants) {
-      results.push(await this.startParticipantListener(participant.id, {
+      const result = await this.startParticipantListener(participant.id, {
         reason: input.reason ?? 'server-startup-recovery',
         dispatch: input.dispatch,
-      }))
+      })
+      results.push(result)
+      if (!result.started) {
+        logger.warn(
+          { participantId: participant.id, reason: result.reason },
+          '[MatrixRuntimeSupervisor] Skipped starting listener for participant',
+        )
+      }
     }
     return {
       startedCount: results.filter((result) => result.started).length,
