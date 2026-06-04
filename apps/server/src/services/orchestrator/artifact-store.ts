@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join } from 'node:path'
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { artifacts, db, eq } from '@agenthub/db'
 import { agentHubUserDataRoot, safePathSegment } from '../system-paths'
 
@@ -20,7 +21,7 @@ export interface RegisterTaskArtifactInput {
 
 export async function registerTaskArtifact(input: RegisterTaskArtifactInput) {
   const normalized = normalizeArtifact(input.artifact)
-  const storageObject = materializeLocalArtifactObject({
+  const storageObject = await materializeArtifactObject({
     workspaceId: input.workspaceId,
     runId: input.runId,
     taskId: input.taskId,
@@ -202,7 +203,7 @@ function normalizeArtifact(artifact: Record<string, unknown>): NormalizedArtifac
   }
 }
 
-function materializeLocalArtifactObject(input: {
+interface ArtifactObjectInput {
   workspaceId: string
   runId: string
   taskId: string
@@ -212,8 +213,27 @@ function materializeLocalArtifactObject(input: {
   workerInstanceId?: string | null
   artifact: Record<string, unknown>
   normalized: NormalizedArtifact
-}) {
-  const bucket = 'agenthub-artifacts'
+}
+
+interface MaterializedArtifactObject {
+  storageProvider: string
+  bucket: string
+  objectKey: string
+  storagePath: string
+  size: number | null
+  checksum: string | null
+  metadata: Record<string, unknown>
+}
+
+async function materializeArtifactObject(input: ArtifactObjectInput): Promise<MaterializedArtifactObject> {
+  if (shouldUseS3ObjectStore()) {
+    return materializeS3ArtifactObject(input)
+  }
+  return materializeLocalArtifactObject(input)
+}
+
+function materializeLocalArtifactObject(input: ArtifactObjectInput): MaterializedArtifactObject {
+  const bucket = artifactBucket()
   const objectKey =
     stringValue(input.artifact.objectKey) ??
     buildArtifactObjectKey({
@@ -287,6 +307,84 @@ function materializeLocalArtifactObject(input: {
   }
 }
 
+async function materializeS3ArtifactObject(input: ArtifactObjectInput): Promise<MaterializedArtifactObject> {
+  const bucket = artifactBucket()
+  const objectKey =
+    stringValue(input.artifact.objectKey) ??
+    buildArtifactObjectKey({
+      workspaceId: input.workspaceId,
+      runId: input.runId,
+      taskId: input.taskId,
+      relativePath: input.normalized.relativePath,
+      title: input.normalized.title,
+      kind: input.normalized.kind,
+    })
+  const sourcePath = resolveArtifactReadableSourcePath(input.artifact, input.normalized)
+  let body: Uint8Array | string
+  let size: number | null = input.normalized.size
+  let checksum: string | null = input.normalized.checksum
+  let materializationMode: 'copy' | 'content' | 'descriptor' = 'descriptor'
+
+  if (sourcePath && existsSync(sourcePath) && statSync(sourcePath).isFile()) {
+    const bytes = readFileSync(sourcePath)
+    body = bytes
+    size = bytes.byteLength
+    checksum = checksum ?? checksumBuffer(bytes)
+    materializationMode = 'copy'
+  } else {
+    const content = stringValue(input.artifact.content) ?? stringValue(input.artifact.text)
+    if (content !== null) {
+      body = content
+      size = Buffer.byteLength(content, 'utf8')
+      checksum = checksum ?? checksumText(content)
+      materializationMode = 'content'
+    } else {
+      const descriptor = `${JSON.stringify(input.artifact, null, 2)}\n`
+      body = descriptor
+      size = Buffer.byteLength(descriptor, 'utf8')
+      checksum = checksum ?? checksumText(descriptor)
+      materializationMode = 'descriptor'
+    }
+  }
+
+  await s3Client().send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: objectKey,
+      Body: body,
+      ContentType: input.normalized.mimeType ?? undefined,
+      Metadata: {
+        workspaceId: input.workspaceId,
+        runId: input.runId,
+        taskId: input.taskId,
+        checksum: checksum ?? '',
+      },
+    }),
+  )
+
+  return {
+    storageProvider: 's3',
+    bucket,
+    objectKey,
+    storagePath: `s3://${bucket}/${objectKey}`,
+    size,
+    checksum,
+    metadata: {
+      provider: 's3',
+      endpoint: process.env.AGENTHUB_S3_ENDPOINT ?? null,
+      bucket,
+      objectKey,
+      storagePath: `s3://${bucket}/${objectKey}`,
+      materialized: true,
+      materializationMode,
+      taskThreadId: input.taskThreadId ?? null,
+      roomId: input.roomId ?? null,
+      workspaceAgentId: input.workspaceAgentId ?? null,
+      workerInstanceId: input.workerInstanceId ?? null,
+    },
+  }
+}
+
 function buildArtifactObjectKey(input: {
   workspaceId: string
   runId: string
@@ -299,12 +397,10 @@ function buildArtifactObjectKey(input: {
   const leaf = safePathSegment(input.relativePath ?? input.title)
   const suffix = leaf.includes('.') || !extension ? leaf : `${leaf}${extension}`
   return [
-    'workspaces',
-    safePathSegment(input.workspaceId),
-    'runs',
-    safePathSegment(input.runId),
+    'shared',
     'tasks',
     safePathSegment(input.taskId),
+    'artifacts',
     safePathSegment(input.kind),
     suffix || 'artifact',
   ].join('/')
@@ -336,8 +432,44 @@ function checksumFile(path: string) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
+function checksumBuffer(value: Uint8Array) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
 function checksumText(value: string) {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function artifactBucket() {
+  return process.env.AGENTHUB_S3_BUCKET?.trim() || process.env.AGENTHUB_ARTIFACT_BUCKET?.trim() || 'agenthub-artifacts'
+}
+
+function shouldUseS3ObjectStore() {
+  return (process.env.AGENTHUB_OBJECT_STORE_PROVIDER ?? '').trim().toLowerCase() === 's3'
+}
+
+let cachedS3Client: S3Client | null = null
+
+function s3Client() {
+  if (cachedS3Client) return cachedS3Client
+  const endpoint = process.env.AGENTHUB_S3_ENDPOINT?.trim()
+  const accessKeyId = process.env.AGENTHUB_S3_ACCESS_KEY_ID?.trim()
+  const secretAccessKey = process.env.AGENTHUB_S3_SECRET_ACCESS_KEY?.trim()
+  if (!endpoint || !accessKeyId || !secretAccessKey) {
+    throw new Error(
+      'S3/MinIO ArtifactStore requires AGENTHUB_S3_ENDPOINT, AGENTHUB_S3_ACCESS_KEY_ID, and AGENTHUB_S3_SECRET_ACCESS_KEY.',
+    )
+  }
+  cachedS3Client = new S3Client({
+    endpoint,
+    region: process.env.AGENTHUB_S3_REGION?.trim() || 'us-east-1',
+    forcePathStyle: process.env.AGENTHUB_S3_FORCE_PATH_STYLE !== 'false',
+    credentials: {
+      accessKeyId,
+      secretAccessKey,
+    },
+  })
+  return cachedS3Client
 }
 
 function normalizeArtifactKind(value: string): 'file' | 'directory' | 'preview' | 'report' | 'log' | 'diff' | 'url' {

@@ -26,7 +26,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 - 通信层采用 Matrix：Room / timeline / participant / mention 是协作事实源。
 - Manager Runtime 学 OpenClaw / QwenPaw：Manager 是真实协调器，不是一次性 Planner。
 - Worker Runtime 学 HiClaw，但保留 AgentHub 的 Coding Agent 优势：Claude Code / OpenCode / Codex / Gemini 是核心 Worker 基底。
-- 共享存储第一阶段使用本地 filesystem，但按 MinIO/S3-compatible 语义设计 ArtifactStore / SharedStorage。
+- 共享存储采用 MinIO/S3-compatible 语义；本地 filesystem 只能作为开发兼容 fallback，不再作为目标主路径。
 - AI Gateway 抽象化：短期 Local/LiteLLM，长期 Higress；不要让 Worker 到处拿真实 key。
 - A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope。
 - 当前仍处开发阶段，旧会话、旧任务、旧数据库和旧 workspace/storage 数据不是架构约束；必要时可以清库重建，不能为了旧数据保留旧路径。
@@ -56,35 +56,35 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 - 编排层：Manager / Orchestrator、Manager actions、WorkLedger / dependency 校验、Manager final review、人工确认和运行生命周期。
 - 通信层：Matrix 负责 Room / timeline / participant / mention，是新内核的协作事实源。
 - 协议投影层：AG-UI 负责运行事件到前端 UI 的桥接；A2A 只作为外部互操作或 Matrix event 中的可选任务语义 envelope，不再是内部主通信路径。
-- 执行层：Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Agent 基底；`llm` 只作为内部/兜底能力。
+- 执行层：OpenClaw / QwenPaw 是 Manager / Team Leader 优先基底；Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Worker Agent 基底。不要把普通内部 LLM 当作产品主路径 Agent runtime。
 - 能力层：MCP、Skills、Rules、shell、文件系统、浏览器等是 Code Agent 能使用的工具能力，不是 Agent 类型。
-- 工作区、存储与状态层：系统默认工作空间根、Worker workdirs、ArtifactStore / SharedStorage、本地 filesystem adapter、兼容旧 `.agenthub/handoff` 的只读读取、run/resource events。
+- 工作区、存储与状态层：系统默认工作空间根、Worker workdirs、ArtifactStore / SharedStorage、MinIO/S3 adapter、本地 filesystem fallback、兼容旧 `.agenthub/handoff` 的只读读取、run/resource events。
 
 配置真相也要分层：
 
 - `模型管理`：模型目录、端点、密钥、模型测试。
-- `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
+- `Agent Runtimes / Agent Bases`：Claude Code、OpenCode、Codex、Gemini、OpenClaw、QwenPaw 等基底的安装状态、原生 auth/config、平台级诊断。旧 UI 里仍可能显示 `Coding Tools`，但架构口径不再把它当作 Agent 类型。
 - `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
 
-`内部 LLM 默认模型` 必须保持可见，且只作用于欢迎页动态提示、Manager / Orchestrator、planning skill、Manager final review 等内部模型链路。
+`内部 LLM 默认模型` 只允许作为非核心体验的辅助/兜底链路，例如欢迎页动态提示或临时诊断。Manager / Orchestrator 的目标主路径必须接 OpenClaw / QwenPaw 这类真实 Agent runtime，不能默认回退到内部 LLM 主脑。
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
-底层重构方向已经进一步明确：建设 AgentHub 自己的 HiClaw-lite Open Kernel，而不是继续手搓低配协作层。第一阶段不默认引入 Kubernetes、完整 MinIO 集群、完整 Higress 集群、企业多租户等重能力，但通信层明确采用 Matrix，存储层按 S3-compatible 设计，Gateway 保留 Higress/LiteLLM adapter 抽象。
+底层重构方向已经进一步明确：建设 AgentHub 自己的 HiClaw-lite Open Kernel，而不是继续手搓低配协作层。第一阶段不默认引入 Kubernetes、完整 Higress 集群、企业多租户等重能力，但通信层必须采用真实 Matrix homeserver（优先 Tuwunel，兼容 Synapse/Conduit），存储层接真实 MinIO/S3-compatible adapter，Gateway 保留 Higress/LiteLLM adapter 抽象。
 
 四个最高优先级模块：
 
 - Manager 协调器：对齐 HiClaw Manager 章节，Manager 要有 runtime、人格配置、skills、state、Worker registry、Room 通信和 heartbeat/patrol。
 - Worker 运行时：对齐 HiClaw Worker 章节，Worker 是真实运行实体，有身份、状态、模型、skills/MCP、Room、heartbeat、sleep/wake/stop。
-- Matrix 通信层：对齐 HiClaw Matrix/Tuwunel 章节，Room / timeline / participant / mention 是协作事实源。
-- 共享存储层：对齐 HiClaw MinIO 章节，第一阶段用 filesystem，但语义按 MinIO/S3 设计，产物和 handoff ref 进入 ArtifactStore / SharedStorage。
+- Matrix 通信层：对齐 HiClaw Matrix/Tuwunel 章节，Room / timeline / participant / mention 是协作事实源；`LocalMatrixCompatibleRoomAdapter` 只能作为测试/开发 fallback，不能被当成真实通信层。
+- 共享存储层：对齐 HiClaw MinIO 章节，产物、任务契约和 handoff ref 进入 ArtifactStore / SharedStorage，并优先通过 MinIO/S3-compatible object store 保存。
 
 目标资源：
 
 - `Room`、`TimelineEvent`、`Run`、`Task`、`WorkerInstance`、`Artifact`、`RuntimeLease` 都应逐步成为一等资源。
 - `messages.ts` 后续只应承担 chat ingress 和轻量路由，不再继续膨胀成创建 task/session/event 并启动执行的总控模块。
 - 子对话、产物卡、任务看板和进度条应从 Matrix timeline、资源状态与 AG-UI 投影出来，不再靠多个旧 metadata 状态拼接。
-- OpenClaw / CoPaw 应优先作为 Orchestrator / Team Leader / Manager 这类指挥型 runtime 候选；Codex / Claude Code / OpenCode / Gemini CLI 更偏执行型 Coding Worker。不要把 OpenClaw 简单硬塞成普通 `codeAgentType`，后续应拆出 `coordinator runtime` 与 `worker runtime`。
+- OpenClaw / QwenPaw 应优先作为 Orchestrator / Team Leader / Manager 这类指挥型 runtime 候选；Codex / Claude Code / OpenCode / Gemini CLI 更偏执行型 Coding Worker。不要把 OpenClaw 简单硬塞成普通 `codeAgentType`，后续应拆出 `coordinator runtime` 与 `worker runtime`。
 - 第一阶段优先做 `RoomService + Matrix Adapter`、`CoordinatorRuntime`、`WorkerRuntime`、`ArtifactStore` 和 Controller/Reconciler 资源化。
 
 详细方案见 `docs/AgentHub-HiClaw-lite开源内核重构方案.md`。后续涉及多 Agent 底层执行、子对话、产物、运行事件、生命周期的改动，应优先向该方案收敛，而不是继续给旧流程链打补丁。
@@ -124,7 +124,7 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 用户在群聊发消息
   -> messages.ts 作为 ChatIngress 写入用户消息、鉴权和加载群聊上下文
   -> RoomController 确保 group room，用户消息进入 Room timeline
-  -> CoordinatorRuntime / ManagerLoop 判断下一步：回复、追问、补员、派活或总结
+  -> OpenClaw/QwenPaw CoordinatorRuntime / ManagerLoop 判断下一步：回复、追问、补员、派活或总结
   -> 简单聊天：Manager 直接写回 group room timeline，并兼容镜像到 messages
   -> 能力不足：Manager 输出结构化 memberProposals，用户确认后才创建/加入真实 Agent
   -> 复杂任务：Manager 生成 assign actions / 行动方案，RunController 创建 run 生命周期
@@ -150,6 +150,8 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 - Manager 分配任务、@ Worker、Worker 回复、澄清、进度、失败、产物引用，都应进入 Room timeline。
 - 主群聊、任务子对话、Manager/Worker DM 都应逐步变成 RoomService / MatrixRoomAdapter 管理的真实 Room。
 - AgentHub 前端继续自研，不使用 Element Web 作为默认 UI。
+- 本轮已新增 `MatrixRoomAdapter`，通过 Matrix Client-Server API 创建真实 room 并发送 `m.room.message`；SQLite 只作为 AgentHub UI 索引，不再被称为 Matrix 实现。
+- 本地开发如需真实基础设施，先用 `infra/docker-compose.hiclaw-lite.yml` 启动 Tuwunel 和 MinIO，再配置 `AGENTHUB_ROOM_PROVIDER=matrix`、`AGENTHUB_MATRIX_HOMESERVER_URL`、`AGENTHUB_MATRIX_ACCESS_TOKEN`、`AGENTHUB_OBJECT_STORE_PROVIDER=s3` 等环境变量。
 
 A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径：
 

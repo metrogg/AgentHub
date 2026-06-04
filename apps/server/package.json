@@ -24,6 +24,7 @@
     "@ag-ui/core": "^0.0.54",
     "@agenthub/db": "workspace:*",
     "@agenthub/shared": "workspace:*",
+    "@aws-sdk/client-s3": "^3.835.0",
     "@ai-sdk/anthropic": "^3.0.78",
     "@ai-sdk/openai": "^3.0.67",
     "@ai-sdk/provider-utils": "^4.0.27",

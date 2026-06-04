@@ -18,6 +18,7 @@ export interface EnsureTaskThreadInput {
   agentName?: string | null
   sharedTaskRelativeRoot?: string | null
   sharedTaskSpecPath?: string | null
+  sharedTaskObjects?: Record<string, unknown> | null
 }
 
 export interface PrepareTaskRuntimeThreadInput {
@@ -45,6 +46,7 @@ export interface PreparedTaskRuntimeThread {
   workerInstanceId?: string | null
   sharedTaskRelativeRoot?: string | null
   sharedTaskSpecPath?: string | null
+  sharedTaskObjects?: Record<string, unknown> | null
 }
 
 export async function prepareTaskRuntimeThread(
@@ -96,6 +98,7 @@ export async function prepareTaskRuntimeThread(
     agentName: input.agent?.name ?? null,
     sharedTaskRelativeRoot: sharedTaskDirectory?.relativeRoot ?? null,
     sharedTaskSpecPath: sharedTaskDirectory ? `${sharedTaskDirectory.relativeRoot}/spec.md` : null,
+    sharedTaskObjects: sharedTaskDirectory?.objects ?? null,
   })
 
   await db
@@ -115,6 +118,7 @@ export async function prepareTaskRuntimeThread(
     workerInstanceId: workerInstanceId ?? null,
     sharedTaskRelativeRoot: sharedTaskDirectory?.relativeRoot ?? null,
     sharedTaskSpecPath: sharedTaskDirectory ? `${sharedTaskDirectory.relativeRoot}/spec.md` : null,
+    sharedTaskObjects: sharedTaskDirectory?.objects ?? null,
   }
 }
 
@@ -157,6 +161,7 @@ export async function ensureTaskThread(input: EnsureTaskThreadInput) {
       status: current.status,
       sharedTaskRelativeRoot: input.sharedTaskRelativeRoot,
       sharedTaskSpecPath: input.sharedTaskSpecPath,
+      sharedTaskObjects: input.sharedTaskObjects,
     })
     await ensurePreparedThreadBootstrapMessage(input, current.id)
     await ensureTaskThreadRoomTimeline(input, current.id)
@@ -191,6 +196,7 @@ export async function ensureTaskThread(input: EnsureTaskThreadInput) {
     status: created.status,
     sharedTaskRelativeRoot: input.sharedTaskRelativeRoot,
     sharedTaskSpecPath: input.sharedTaskSpecPath,
+    sharedTaskObjects: input.sharedTaskObjects,
   })
   await ensurePreparedThreadBootstrapMessage(input, created.id)
   await ensureTaskThreadRoomTimeline(input, created.id)
@@ -369,6 +375,7 @@ async function syncTaskThreadSessionMetadata(
     status?: string | null
     sharedTaskRelativeRoot?: string | null
     sharedTaskSpecPath?: string | null
+    sharedTaskObjects?: Record<string, unknown> | null
   },
 ) {
   const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
@@ -389,6 +396,7 @@ async function syncTaskThreadSessionMetadata(
         taskThreadStatus: metadata.status ?? undefined,
         sharedTaskRelativeRoot: metadata.sharedTaskRelativeRoot ?? undefined,
         sharedTaskSpecPath: metadata.sharedTaskSpecPath ?? undefined,
+        sharedTaskObjects: metadata.sharedTaskObjects ?? undefined,
       },
       updatedAt: new Date(),
     })
@@ -423,6 +431,7 @@ async function ensurePreparedThreadBootstrapMessage(input: EnsureTaskThreadInput
       status: 'prepared',
       sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? undefined,
       sharedTaskSpecPath: input.sharedTaskSpecPath ?? undefined,
+      sharedTaskObjects: input.sharedTaskObjects ?? undefined,
     },
   })
 }
@@ -442,6 +451,7 @@ async function ensureTaskThreadRoomTimeline(input: EnsureTaskThreadInput, taskTh
     metadata: {
       sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
       sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
+      sharedTaskObjects: input.sharedTaskObjects ?? null,
     },
   })
   const events = await roomService.listTimelineEvents({ roomId: room.id, limit: 20 })
@@ -464,6 +474,7 @@ async function ensureTaskThreadRoomTimeline(input: EnsureTaskThreadInput, taskTh
       workerInstanceId: input.workerInstanceId ?? null,
       sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
       sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
+      sharedTaskObjects: input.sharedTaskObjects ?? null,
     },
   })
 }

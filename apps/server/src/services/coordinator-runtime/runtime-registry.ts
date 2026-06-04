@@ -11,7 +11,7 @@ export interface CoordinatorRuntimeSelection {
 export function resolveCoordinatorRuntime(
   selection: CoordinatorRuntimeSelection = {},
 ): CoordinatorRuntime {
-  const type = normalizeCoordinatorRuntimeType(selection.type)
+  const type = normalizeCoordinatorRuntimeType(selection.type, { allowLocalLlm: true })
   if (type === 'openclaw') {
     return new OpenClawCoordinatorRuntime({
       endpoint: selection.endpoint ?? process.env.AGENTHUB_OPENCLAW_COORDINATOR_ENDPOINT,
@@ -33,9 +33,13 @@ export function getDefaultCoordinatorRuntime(): CoordinatorRuntime {
   })
 }
 
-export function normalizeCoordinatorRuntimeType(value: unknown): CoordinatorRuntimeType {
-  if (value === 'openclaw' || value === 'qwenpaw' || value === 'local-llm') {
+export function normalizeCoordinatorRuntimeType(
+  value: unknown,
+  options: { allowLocalLlm?: boolean } = {},
+): CoordinatorRuntimeType {
+  if (value === 'openclaw' || value === 'qwenpaw') {
     return value
   }
-  return 'local-llm'
+  if (value === 'local-llm' && options.allowLocalLlm) return value
+  return 'openclaw'
 }

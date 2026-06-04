@@ -79,3 +79,14 @@ export interface ListTimelineEventsInput {
   limit?: number
 }
 
+export interface RoomAdapter {
+  createRoom(input: CreateRoomInput): Promise<any>
+  ensureRoomForSession(input: EnsureRoomForSessionInput): Promise<any>
+  ensureRoomForTaskThread(input: EnsureRoomForTaskThreadInput): Promise<any>
+  addParticipant(input: AddParticipantInput): Promise<any>
+  appendTimelineEvent(input: AppendTimelineEventInput): Promise<any>
+  listTimelineEvents(input: ListTimelineEventsInput): Promise<any[]>
+  listRoomsForOwner(ownerId: string, workspaceId?: string | null): Promise<any[]>
+  getRoom(roomId: string): Promise<any | null>
+  listParticipants(roomId: string): Promise<any[]>
+}

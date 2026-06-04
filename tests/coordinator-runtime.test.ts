@@ -20,8 +20,8 @@ type CoordinatorStepInput = coordinatorApi.CoordinatorStepInput
 type CoordinatorStepResult = coordinatorApi.CoordinatorStepResult
 
 describe('CoordinatorRuntime Room timeline integration', () => {
-  test('resolves local-llm as the default CoordinatorRuntime and keeps external runtimes explicit', async () => {
-    expect(resolveCoordinatorRuntime().runtimeType).toBe('local-llm')
+  test('resolves OpenClaw as the default CoordinatorRuntime and keeps local-llm explicit only', async () => {
+    expect(resolveCoordinatorRuntime().runtimeType).toBe('openclaw')
     expect(resolveCoordinatorRuntime({ type: 'local-llm' }).runtimeType).toBe('local-llm')
     expect(resolveCoordinatorRuntime({ type: 'openclaw' }).runtimeType).toBe('openclaw')
     expect(resolveCoordinatorRuntime({ type: 'qwenpaw' }).runtimeType).toBe('qwenpaw')

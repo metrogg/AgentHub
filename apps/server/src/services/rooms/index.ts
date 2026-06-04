@@ -1,4 +1,5 @@
 export * from './types'
 export * from './room-service'
 export * from './local-matrix-compatible-adapter'
+export * from './matrix-room-adapter'
 export * from './room-controller'

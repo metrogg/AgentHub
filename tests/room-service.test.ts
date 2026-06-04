@@ -21,6 +21,7 @@ const {
   eq,
 } = dbApi
 const { roomController, roomService } = roomsApi
+const { MatrixRoomAdapter } = roomsApi
 const { ensureTaskThread } = taskThreadApi
 const { cleanupWebSocket, joinRoom } = agentRunnerApi
 const { WsEvent } = sharedApi
@@ -301,5 +302,74 @@ describe('RoomService local Matrix-compatible adapter', () => {
       cleanupWebSocket(taskWs)
       cleanupWebSocket(groupWs)
     }
+  })
+
+  test('Matrix adapter maps participants to real Matrix user ids without local room simulation', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Matrix Workspace',
+        goal: 'Verify Matrix identity mapping',
+      })
+      .returning()
+    const [agent] = await db
+      .insert(workspaceAgents)
+      .values({
+        id: 'matrix-agent-1',
+        workspaceId: workspace!.id,
+        name: 'Researcher',
+        role: 'Research worker',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+      })
+      .returning()
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: '!matrix-room:agenthub.local',
+        kind: 'task',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        title: 'Matrix Task Room',
+      })
+      .returning()
+    const adapter = new MatrixRoomAdapter({
+      homeserverUrl: 'http://matrix.test',
+      accessToken: 'test-token',
+      serverName: 'agenthub.local',
+      autoInviteParticipants: false,
+      autoJoinParticipants: false,
+    })
+
+    const human = await adapter.addParticipant({
+      roomId: room!.id,
+      participantType: 'human',
+      userId: 'default-user',
+      displayName: 'You',
+      role: 'owner',
+      metadata: { source: 'test' },
+    })
+    const manager = await adapter.addParticipant({
+      roomId: room!.id,
+      participantType: 'manager',
+      displayName: 'Manager',
+      role: 'manager',
+    })
+    const worker = await adapter.addParticipant({
+      roomId: room!.id,
+      participantType: 'worker',
+      workspaceAgentId: agent!.id,
+      displayName: 'Researcher',
+      role: 'member',
+    })
+
+    expect(human.providerUserId).toBe('@human-default-user:agenthub.local')
+    expect(manager.providerUserId).toBe('@manager-manager:agenthub.local')
+    expect(worker.providerUserId).toBe('@worker-matrix-agent-1:agenthub.local')
+    expect(human.metadata?.source).toBe('test')
+    expect(human.metadata?.matrixMembership?.providerRoomId).toBe('!matrix-room:agenthub.local')
+    expect(human.metadata?.matrixMembership?.invited).toBe(false)
   })
 })

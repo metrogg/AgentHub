@@ -1,7 +1,7 @@
 # AgentHub HiClaw-lite 开源内核重构方案
 
 最后更新：2026-06-04  
-状态：重构总纲 / Phase 0-5 第一条本地可运行切片已打通
+状态：重构总纲 / 真实 Matrix + MinIO/S3 + OpenClaw/QwenPaw Manager 方向已确立，第一批 bridge 与护栏已落地
 
 ## 0. 一句话结论
 
@@ -26,15 +26,15 @@ Open-source Infrastructure
 
 ## 0.1 开工前审查结论
 
-这份方案可以作为重构总纲开工，但实施时必须收紧第一阶段边界，避免一上来同时引入 Matrix homeserver、OpenClaw/QwenPaw、Gateway、ArtifactStore、前端大改，导致不可验证。
+这份方案可以作为重构总纲开工，但早期“先本地 adapter、后真实组件”的描述已经被新的产品判断修正：**真实 Matrix/Tuwunel、MinIO/S3-compatible SharedStorage、OpenClaw/QwenPaw Manager Runtime 是目标主干，不是远期可选项。** 本地 adapter 只作为测试/开发 fallback，不能再被包装成当前架构终态。
 
 开工约束：
 
-1. **先做接口和本地 adapter，再接真实开源组件。**
-   - Room 层先实现 `RoomService + LocalMatrixCompatibleRoomAdapter`，数据结构按 Matrix event/room/participant 设计。
-   - 等本地 Room API 跑通，再接 Tuwunel/Conduit/Synapse。
-   - Manager 层先实现 `CoordinatorRuntime` 接口和本地 fallback adapter，再做 OpenClaw/QwenPaw POC。
-   - ArtifactStore 先 filesystem adapter，MinIO/S3 只做接口兼容设计。
+1. **真实开源组件是主线，本地实现只能 fallback。**
+   - Room 层目标是 `RoomService + MatrixRoomAdapter + Tuwunel/Synapse/Conduit`，Matrix homeserver 是协作事实源。
+   - `LocalMatrixCompatibleRoomAdapter` 只用于测试、离线开发和降级，不得被当作真实通信层。
+   - Manager 层目标是 OpenClaw/QwenPaw runtime + SOUL/skills/state/worker registry；`local-llm` 只能显式作为迁移/测试 fallback。
+   - ArtifactStore / SharedStorage 目标是 MinIO/S3-compatible object store；本地 filesystem 只作为开发 fallback 和项目镜像。
 
 2. **第一刀不要改完整前端。**
    - 先让后端能创建 Room、写 timeline、查询 timeline、投影到现有消息列表。
@@ -45,10 +45,10 @@ Open-source Infrastructure
    - 如果兼容成本超过新内核推进成本，直接清库重建。
 
 4. **每个阶段必须能独立验收。**
-   - Phase 1 验收 Room/timeline，不要求 Worker 真执行。
-   - Phase 2 验收 Manager 能在 Room 中自然回复和输出结构化 action，不要求 OpenClaw 真接入。
+   - Phase 1 验收真实 Matrix room/timeline/participant 写入，不要求所有 participant token 完成。
+   - Phase 2 验收 Manager workspace、SOUL/skills、OpenClaw/QwenPaw bridge，不再默认内部 LLM。
    - Phase 3 验收 WorkerRuntime 从 task room 接单并写回 timeline，不要求 Matrix 外部 homeserver。
-   - Phase 4 验收 artifact ref 全链路，不要求 MinIO。
+   - Phase 4 验收 shared task contract 和 artifact ref 全链路；MinIO/S3 adapter 是主目标，本地 object store 仅为 fallback。
 
 5. **不要让“像 HiClaw”变成重依赖。**
    - 当前最重要的是 Manager / Worker / Room / Storage 四个内核语义。
@@ -57,19 +57,19 @@ Open-source Infrastructure
 如果后续实现遇到分歧，以这个顺序取舍：
 
 ```text
-体验真实透明 > 内核边界清晰 > 可本地跑通 > 开源组件接入 > 企业级完整性 > 旧数据兼容
+体验真实透明 > 真实开源通信/存储/运行时 > 内核边界清晰 > 可本地跑通 > 企业级完整性 > 旧数据兼容
 ```
 
 ## 0.2 当前实施进度
 
-截至 2026-06-04，本轮 HiClaw-lite Kernel 重构已经打通第一条本地可验证切片：
+截至 2026-06-04，本轮 HiClaw-lite Kernel 重构已经从本地可验证切片推进到真实开源组件 bridge：
 
 - **Phase 0 已从护栏推进到删除**：`OrchestratorEngine`、`TaskExecutionService`、`LocalA2ATransport` 已删除，边界测试会阻止这些旧模块重新出现。新 Manager 决策、Room 语义、任务执行和生命周期所有权只能继续进入 `ManagerLoop` / `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `WorkerRuntimeService`。
-- **Phase 1 已落地本地 Room 资源层**：数据库新增 `rooms`、`room_participants`、`timeline_events`；服务层新增 `RoomService`、`LocalMatrixCompatibleRoomAdapter` 和 `/api/rooms`；新 session 创建和 TaskThread 创建路径已开始 ensure Room 资源并写入 `task.assigned` timeline event。
-- **Phase 2 已落地 CoordinatorRuntime 壳，并开始进入群聊主入口**：新增 `CoordinatorRuntime` action schema、`LocalCoordinatorRuntime`、`CoordinatorService.stepRoom()` 和 Manager 配置目录化（`SOUL.md`、`AGENTS.md`、`skills/`、`workers-registry.json`、`state.json`）。群聊消息会先写入 Room timeline，并在慢模型/Manager 决策前追加一条幂等的 `coordinator.observing` Manager timeline event，透明告诉用户 Manager 已收到并正在判断“直接回复、追问还是分派任务”；这不是规划结果，也不是静态兜底。Coordinator 对 `reply / clarify / propose_members` 会写回 Room timeline 并兼容镜像到旧 messages 表；空 action 不消费消息，避免用户输入被吞。`CoordinatorRuntime` 现在已经有 registry/selection 层：默认仍是本地 `local-llm`，`openclaw` / `qwenpaw` 已作为显式可选的外部 runtime skeleton 预留，后续接真实 OpenClaw/QwenPaw 时不需要再改群聊主入口；但这两个外部 runtime 当前还不是已跑通实现。
+- **Phase 1 已落地 Room 资源层和真实 Matrix bridge**：数据库新增 `rooms`、`room_participants`、`timeline_events`；服务层新增 `RoomService`、`MatrixRoomAdapter`、`LocalMatrixCompatibleRoomAdapter` 和 `/api/rooms`。`MatrixRoomAdapter` 已通过 Matrix Client-Server API 创建真实 room、发送 `m.room.message`、保存 Matrix `room_id / event_id / user_id`，并记录 Human / Manager / Worker participant 映射。`LocalMatrixCompatibleRoomAdapter` 只保留为测试/开发 fallback。
+- **Phase 2 已落地 CoordinatorRuntime 壳，并开始转向 OpenClaw/QwenPaw Manager runtime**：新增 `CoordinatorRuntime` action schema、`CoordinatorService.stepRoom()` 和 Manager 配置目录化（`SOUL.md`、`AGENTS.md`、`skills/`、`workers-registry.json`、`state.json`）。群聊消息会先写入 Room timeline，并在慢 Manager 决策前追加一条幂等的 `coordinator.observing` Manager timeline event。`resolveCoordinatorRuntime()` 默认已切到 `openclaw`，`qwenpaw` 是同级外部 runtime；`local-llm` 只允许显式作为迁移/测试 fallback。Manager workspace 会生成第一批 AgentHub 版 skill 契约：`worker-management`、`task-management`、`channel-management`、`file-sync-management`、`human-management`，每个 skill 都明确遵循“读 Matrix timeline -> 判断是否调用 skill -> 调 Controller API 改真实资源 -> 回写 Matrix room”。
 - **Phase 3 已落地 WorkerRuntime task room 最小壳，并打通 Coordinator assign / ManagerLoop dispatch 主线**：新增 `WorkerRuntime` 接口、`LocalWorkerRuntimeAdapter` 和 `WorkerRuntimeService.runTaskRoom()`。当前可以从 task room 读取 `task.assigned`，找到 Worker participant，调用 runtime，并把 `task.progress`、`worker.message`、`artifact.created` 写回 Room timeline。WorkerRuntime 流式事件已经支持 `clarification` 和 artifact `status`：Worker 请求澄清会写入 `approval.requested` timeline event，同时创建 `task_clarifications` pending 资源记录并把 `clarificationId` 写回 timeline metadata；partial artifact 会以 `partial` 状态进入 ArtifactStore。澄清不再被伪装成失败：`WorkerRuntimeResult.status` 已扩展为 `waiting_for_human`，`TaskThread.status`、`RuntimeLease.status`、`WorkerInstance.observedState` 会同步进入 `waiting_for_human`，`RunController.markTaskWaitingForHuman()` 会把 task 标成 `blocked + progressStatus=awaiting_human_clarification` 并发出 `approval.requested` RunEvent，run 保持 `running`。用户在同一个 task room 回答澄清后，`stepTaskRoomAfterHumanMessage()` 会记录 `human.message`、把对应 `task_clarifications` 更新为 `answered`、写入 `worker-runtime.resume-requested`，并可重新调用 `WorkerRuntimeService.runTaskRoom()` 继续执行。Coordinator 返回单个或多个 `assign` 时，会创建真实 run / workspace task / TaskThread / task room / Worker participant / RuntimeLease，并启动 WorkerRuntime 执行；多个 `assign` 已收敛到同一个 shared run 下，run completion 由 batch coordinator 在所有 Worker task settle 后统一判定，不再由每个单任务提前结束整个 run。Coordinator action 现在还支持 `taskKey / dependsOn` 的最小依赖账本语义，派发器会把依赖 key 转换成真实 task id 写入 `workspace_tasks.dependencies`、run plan 和 Room timeline metadata，并按依赖层执行 WorkerRuntime；上游失败时，下游 task room 会记录 `worker-runtime.skipped-by-dependency`，不会硬跑；上游等待用户澄清时，下游会保持可见但暂停为 `waiting_on_dependency_human_clarification`，不会误报失败。动态 `OrchestratorPlan` 的成功路径也已开始翻译成 Coordinator `assign` batch：复用同一个 Manager run，创建真实 task room / RuntimeLease / ArtifactStore 记录，并优先走 WorkerRuntime 执行，而不是直接启动旧 `OrchestratorEngine`。运行详情页的单任务 retry 也已切到 `WorkerRuntimeService.rerunTaskRoom()`：先通过 `RunController.resetTaskForRetry()` 重置资源，再从已有 task room 重新接单，不再调用旧 `OrchestratorEngine.retryTask()`。`ManagerLoop.step()` 现在还会把 `pending/blocked + prepared TaskThread` 的任务原生派发到 WorkerRuntime：确保 task room 和 Worker participant，写入 `manager-loop.dispatch` 的 `task.assigned` timeline event，再调用 `WorkerRuntimeService.rerunTaskRoom(source=manager-loop.dispatch-pending)`；等待人类澄清的 blocked task 会保持 waiting，不会被误重启。
 - **Phase 3 生命周期入口继续收口**：`WorkerRuntimeService.runTaskRoom()` 已经从“执行函数”升级为完整任务房间生命周期入口。直接 `runTaskRoom()`、`rerunTaskRoom()`、澄清 resume、Coordinator assign、动态计划分发和 ManagerLoop prepared-task 派发都共享同一条路径；WorkerRuntime 一开始就写入 `worker-runtime.started` timeline event，并同步把 `workspace_task` 标为 `running`、`TaskThread` 标为 `active`、`RuntimeLease` 标为 `running`、`WorkerInstance` 标为 `busy`。运行中会按间隔写入 `worker-runtime.heartbeat` task room timeline event，并刷新 WorkerInstance `lastHeartbeatAt`，最终 completed / failed / cancelled / waiting_for_human 也在 `runTaskRoom()` 内统一同步到 RunController 和资源状态。
-- **Phase 4 已落地 filesystem ArtifactStore 最小闭环**：`artifacts` 表新增 `roomId`、`storageProvider`、`bucket`、`objectKey`、`storagePath`；`registerTaskArtifact()` 会按 S3-compatible object key 语义把文件、内联内容或 artifact descriptor materialize 到用户数据目录下的 local filesystem object store；`WorkerRuntimeService` 的 `artifact.created` timeline event 已绑定真实 `artifactId / objectKey / storagePath`。
+- **Phase 4 已落地 MinIO/S3-compatible ArtifactStore / SharedStorage bridge**：`artifacts` 表新增 `roomId`、`storageProvider`、`bucket`、`objectKey`、`storagePath`；`registerTaskArtifact()` 会按 S3-compatible object key 语义把文件、内联内容或 artifact descriptor materialize 到 S3/MinIO（`AGENTHUB_OBJECT_STORE_PROVIDER=s3`）或本地 fallback object store。新增 `SharedStorage` 会发布 `shared/tasks/{taskId}/meta.json`、`spec.md`、`plan.md` 和终态 `result.md`；即使没有项目工作区，也能通过 object refs 完成 Matrix @mention + 共享文件交接。
 - **Phase 5 已落地 Room timeline replay + realtime WS 最小前端投影链路**：前端新增 Room API client 和 `roomTimeline` 纯投影模块；`chatStore.selectSession()` 会 ensure 当前 session/task-thread Room，拉取 participants + timeline，把 Room timeline 投影为可见消息、任务状态事件和 artifact.created 事件，再复用现有 taskBoard / Agent tabs / 产物卡投影链路。`RoomService.appendTimelineEvent()` 现在会广播 `room:timeline` WebSocket 事件；task room event 会同时通知 task session 和父 group session，前端收到后复用同一投影函数实时更新子对话消息、任务看板和 artifact 卡。即使旧 run snapshot / plan 尚未到达，Room timeline 的 `task.assigned / task.progress` 事件也能先创建最小任务看板、Agent tab 和稳定 task room 入口。Worker 的 `worker-runtime.started` 会被投影成 `running + taskThreadStatus=active + progressPercent=5`，让用户一进来就看到真实 Worker 已接单；`approval.requested` 澄清请求、`waiting_for_human` 进度事件和 `waiting-on-human-dependency` 依赖等待事件会投影成 `blocked + taskThreadStatus=waiting_for_human`，`skipped-by-dependency` 会投影成 `failed`，Agent tabs、Header 和 TaskBoard 会明确显示等待补充/依赖跳过，不再把 HITL 或依赖状态误判成 running。Manager 的 `manager-review-started` / `manager-final-review` 也会从 Room timeline 投影成 `agenthub.run.status(synthesizing/completed/failed)`，让刷新或重放时能恢复“正在汇总/最终复盘”状态。刷新、切换回群聊/任务子对话，或执行中实时写入 timeline 时，Manager/Worker 消息、`task.assigned`、`task.progress`、`approval.requested`、`artifact.created` 和 run 状态都能从 Room timeline 投影出来。
 - **ManagerPatrol 开始从旧事件投影收口到 Room timeline**：任务超时巡检和 Worker 心跳异常现在会写入 group room 的 `manager.message` 与 task room 的 `task.progress` timeline event，metadata 使用 `kind=manager-patrol-check`，让 Manager 主动监督也能在群聊/子对话中被审计，而不是只停留在 RunEvent 或旧 messages。巡检还修正了一个跨 run 边界问题：每个 active run 只处理该 run 的 TaskThread 绑定 busy Worker，避免全局 busy Worker 被错误归入当前 run。
 - **旧 Engine 外部入口已完成删除**：运行中用户补充需求的 `human_interrupt` 处理写入 group room / task room timeline，并由 `RunController` 标记任务、TaskThread、RuntimeLease、WorkerInstance 状态；`POST /api/orchestrator-runs/:id/cancel` 只走 `RunController.cancel()`；服务启动恢复将 running task 通过 `RunController.requeueRunningTasksForResume()` 重新挂回 prepared，再 `RunController.reconcile()` 触发 ManagerLoop；终态 run 的最终复盘进入 `ManagerLoop + CoordinatorRuntime resource-review skill`，由 ManagerLoop 读取 `workspace_tasks`、TaskThread、task room timeline、ArtifactStore 和共享任务 `result.md`，再交给 `coordinator-runtime/final-review-skill.ts` 生成确定性资源复盘，写入 `manager-review-started` / `manager-final-review` group room timeline event 与兼容 messages，并发出 `run.synthesizing` / `run.completed|run.failed`。
@@ -81,7 +81,7 @@ Open-source Infrastructure
 仍未完成：
 
 - 前端已经具备 `/api/rooms` 的最小读取、replay 投影、`room:timeline` realtime WS 增量投影，以及从 Room task event 自举最小任务看板/子对话入口的能力；ManagerPatrol 的监督事件也已进入 Room timeline。但主视图还不是完整事实源：旧 messages、旧 AG-UI replay、run snapshot 和 Room timeline 仍并存，后续要继续把主视图状态统一到 Room/ArtifactStore/资源快照。
-- 真实 Matrix adapter 还没有接入。
+- 真实 Matrix adapter 已接入第一版，但还缺 MatrixIdentity/TokenVault、真实用户注册、invite/join 完整状态机、每 participant 自己 token 发言，以及长期 Worker Matrix listener。
 - CoordinatorRuntime 已经接入群聊入口的轻量决策，以及单任务/多任务 `assign` 派工；多个 assign 会共享一个 run 并创建多个 task room，并已具备 `taskKey / dependsOn` 的最小依赖账本和按层执行能力。动态计划成功后也已优先通过 `startPlanRunWithCoordinatorAssignBatch()` 转成 Coordinator assign batch 执行。人工干预、取消、启动恢复、终态 run 复盘也已切到 `Room timeline + RunController/ManagerLoop + coordinator-runtime/final-review-skill`。旧 `TaskScheduler` 已删除；冲突合并后的后续动作、模型化 review skill、复杂返工调度等控制流后续只能继续进入 `ManagerLoop` / `RunController`。
 - WorkerRuntime 已经被 Coordinator assign 主线、动态计划初始分发、运行详情页单任务 retry 和 ManagerLoop prepared-task 原生派发调用，并支持进度、消息、失败、澄清请求、partial artifact 的 task room timeline 写回；澄清请求已经从纯 timeline metadata 提升为 `task_clarifications` pending/answered 资源，且会同步到 TaskThread / RuntimeLease / WorkerInstance / RunEvent 的 `waiting_for_human` 资源状态。用户回复澄清后的最小 resume path 与失败后 rerun path 已经打通。但 resume/rerun 还没有升级成长期 Worker runtime 的原生等待/恢复状态机，进程级 cancel/abort、局部 resume 和更复杂重排仍要继续补齐。
 - RuntimeLease 已经在 Coordinator assign、WorkerRuntime、ManagerLoop prepared-task 派发、ManagerPatrol stale 检测、启动/关闭恢复中统一走 `RuntimeLeaseController`。旧 Engine 已删除；后续任何 lifecycle 能力都不能绕过 `RuntimeLeaseController` 直接散写 persistence helper。
@@ -144,7 +144,7 @@ Open-source Infrastructure
 - AgentHub 自己的前端 UI。
 - Coze / Kimi 风格工作台体验。
 - 本地 Coding Agent 作为 Worker 的优势。
-- 专家配置、模型配置、Coding Tools、Skills/MCP 能力配置。
+- 专家配置、模型配置、Agent Runtimes / Agent Bases、Skills/MCP 能力配置。旧 UI 中的 `Coding Tools` 只是历史命名。
 
 我们要替换：
 
@@ -261,7 +261,7 @@ TraceService
 1. **Manager 协调器**：对应 [hiclaw-wiki.agent.final.md](./hiclaw-wiki.agent.final.md) 第 4 章。AgentHub 的 Manager 必须成为真实协调者，而不是一个后端函数或一次性 Planner。它要有自己的 runtime、人格配置、skills、状态文件、Worker registry 和 Room 通信能力。
 2. **Worker 运行时**：对应 [hiclaw-wiki.agent.final.md](./hiclaw-wiki.agent.final.md) 第 5 章。Worker 必须是可观察、可唤醒、可休眠、可回收的运行实体。Claude Code / OpenCode / Codex / Gemini 是 AgentHub 的核心 Coding Worker，OpenClaw / QwenPaw 可作为通用 Worker runtime 补充。
 3. **Matrix 通信层**：对应 [hiclaw-wiki.agent.final.md](./hiclaw-wiki.agent.final.md) 第 6 章。Room / timeline / participant / mention 是协作事实源。用户、Manager、Worker 的交流必须在 Room 里可见、可审计、可插话。
-4. **共享存储层**：对应 [hiclaw-wiki.agent.final.md](./hiclaw-wiki.agent.final.md) 第 7 章。第一阶段用本地 filesystem，但语义必须对齐 MinIO/S3：所有任务输入、结果、artifact、handoff ref 都进入统一 ArtifactStore / SharedStorage，不再散落在消息 metadata 或黑板里。
+4. **共享存储层**：对应 [hiclaw-wiki.agent.final.md](./hiclaw-wiki.agent.final.md) 第 7 章。目标主路径采用 MinIO/S3-compatible SharedStorage；本地 filesystem 只是 fallback/镜像。所有任务输入、结果、artifact、handoff ref 都进入统一 ArtifactStore / SharedStorage，不再散落在消息 metadata 或黑板里。
 
 这四块比外围能力更重要。Trace、Eval、企业权限、Gateway、Sandbox、Task Center 都要围绕这四块服务，不能反过来喧宾夺主。
 
@@ -413,16 +413,17 @@ AgentHub 的差异化在于 WorkerRuntime 不只支持 OpenClaw/QwenPaw：
 - Code Agent 执行不再只是一段 `runAgentReply()` 临时调用。
 - 不再允许工具页模型配置影响 Worker 执行，模型只来自 Agent/Worker 绑定和 Gateway。
 
-### 4.4 共享存储：先 filesystem，接口按 S3-compatible
+### 4.4 共享存储：MinIO/S3-compatible 为目标，filesystem 只作 fallback
 
-决策：**第一阶段不引入 MinIO 默认依赖，但 ArtifactStore 必须按 S3-compatible 心智设计。**
+决策：**MinIO/S3-compatible object store 是目标主路径；本地 filesystem 只作为测试/开发 fallback 和项目镜像。**
 
 短期：
 
 ```text
 LocalFilesystemArtifactStore
-  root = 用户数据目录 / AgentHub / artifacts
-  shared task = 用户数据目录 / AgentHub / shared/tasks/{taskId}
+  仅作为 fallback / mirror
+  root = 用户数据目录 / AgentHub / storage / objects
+  shared task object keys = shared/tasks/{taskId}/{meta.json|spec.md|plan.md|result.md|artifacts/...}
 ```
 
 长期：
@@ -434,8 +435,8 @@ S3CompatibleArtifactStore
 
 注意：
 
-- MinIO 可作为可选 adapter，不作为第一阶段必装依赖。
-- filesystem 是实现 adapter，不是架构真相。
+- MinIO/Tuwunel 一样属于 HiClaw-lite 基础设施目标；开发期可以一键 compose 启动，不要求企业级部署。
+- filesystem 是 fallback adapter，不是架构真相。
 - 所有产物必须登记到 ArtifactStore，不再只靠扫描或消息 metadata。
 
 共享存储要承担四类内容：
@@ -454,7 +455,7 @@ handoff refs
   上下游任务之间传递的稳定引用，而不是相对路径猜测。
 ```
 
-第一阶段本地目录建议按对象存储语义组织：
+fallback 本地目录按对象存储语义组织：
 
 ```text
 {agenthubDataRoot}/storage/
@@ -468,7 +469,7 @@ handoff refs
   tasks/{taskId}/artifacts/{artifactId}/...
 ```
 
-以后切到 MinIO/S3 时，以上路径可以直接变成 object key，不需要重写上层业务。
+使用 MinIO/S3 时，以上路径就是 object key，不需要重写上层业务。
 
 旧路径下线：
 

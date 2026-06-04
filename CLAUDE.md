@@ -26,7 +26,7 @@ The new architecture target is **AgentHub Product Shell + HiClaw-lite Open Kerne
 - Use Matrix as the internal collaboration source of truth: Room, timeline, participant, and mention are first-class.
 - Learn Manager Runtime from HiClaw OpenClaw/QwenPaw: Manager is a real coordinator runtime, not a one-shot Planner function.
 - Learn Worker Runtime from HiClaw, while keeping AgentHub's coding-agent advantage: Claude Code, OpenCode, Codex, and Gemini are core Worker bases.
-- Use local filesystem first for shared storage, but design ArtifactStore/SharedStorage with S3-compatible semantics.
+- Use MinIO/S3-compatible SharedStorage as the target contract store; local filesystem is only a development fallback and optional project mirror.
 - Abstract AI Gateway. Short term: LocalGateway/LiteLLM. Long term: Higress-style model/MCP/credential governance.
 - A2A is no longer the first-stage internal communication backbone. Keep it for external interoperability or optional task semantic envelopes inside Matrix events.
 - This is still development. Old sessions, tasks, database rows, and workspace/storage data are not architecture constraints. Prefer clearing/rebuilding old data over preserving old execution paths.
@@ -35,8 +35,8 @@ The four highest-priority kernel modules are:
 
 1. Manager coordinator: runtime, persona config, skills, state, worker registry, Room communication, heartbeat/patrol.
 2. Worker runtime: real participant identity, model binding, skills/MCP scope, heartbeat, sleep/wake/stop, runtime lease.
-3. Matrix communication: real Room/timeline/participant/mention instead of session metadata pretending to be rooms.
-4. Shared storage: filesystem-first ArtifactStore/SharedStorage with MinIO/S3-compatible object key semantics.
+3. Matrix communication: real Matrix homeserver Room/timeline/participant/mention instead of session metadata or local tables pretending to be rooms. Prefer Tuwunel; keep Synapse/Conduit compatible.
+4. Shared storage: MinIO/S3-compatible ArtifactStore/SharedStorage with canonical `shared/tasks/{taskId}/...` object refs.
 
 Use `docs/hiclaw-wiki.agent.final.md` and local `hiclaw源码参考/` as the main HiClaw reference materials.
 
@@ -46,24 +46,24 @@ Before changing code, identify which layer you are working on:
 
 - Product interaction: IM group chat, global agent direct chat, task child conversations, task boards, artifact cards.
 - Orchestration: Manager / Orchestrator, Manager actions, WorkLedger / dependency validation, Manager final review, approvals, cancellation, retry, resume.
-- Communication: Matrix for Room/timeline/participant/mention semantics. This is the future internal collaboration source of truth.
+- Communication: Matrix for Room/timeline/participant/mention semantics. This is the internal collaboration source of truth, backed by a real Matrix homeserver. `LocalMatrixCompatibleRoomAdapter` is test/dev fallback only.
 - Protocol projection: AG-UI for frontend projections. A2A only for external interoperability or optional task semantic envelopes inside Matrix events.
-- Execution: Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary agent bases. `llm` is internal/fallback support.
+- Execution: OpenClaw / QwenPaw are preferred Manager / Team Leader bases. Codex CLI, Claude Code, OpenCode, and Gemini CLI are the primary Worker bases. Plain `llm` is not a product-path runtime; keep it only for non-core fallback.
 - Capabilities: MCP, Skills, Rules, shell, files, browser, and other tools are capabilities used by code agents, not agent runtime types.
 - Collaboration contracts: user-explicit Specs may describe scope, allowed paths, required outputs, and acceptance criteria; they must not be trigger-based scenario templates.
-- Workspace, storage, and state: the system default workspace root, Worker workdirs, ArtifactStore/SharedStorage, filesystem adapter, compatibility-only old `.agenthub/handoff`, resource events, trace events, and persisted task state.
+- Workspace, storage, and state: the system default workspace root, Worker workdirs, ArtifactStore/SharedStorage, MinIO/S3 adapter, local filesystem fallback, compatibility-only old `.agenthub/handoff`, resource events, trace events, and persisted task state.
 
 Configuration truth is split deliberately:
 
 - Model Management: model catalog, endpoints, credentials, model connectivity tests.
-- Coding Tools: CLI readiness, native auth/config, platform diagnostics only.
+- Agent Runtimes / Agent Bases: Claude Code, OpenCode, Codex, Gemini, OpenClaw, QwenPaw installation status, native auth/config, and platform diagnostics only. Legacy UI may still say `Coding Tools`, but do not treat that as the architecture term.
 - Agent Configuration: the only place allowed to choose `code agent × model × skills × sandbox`.
 
-Keep the internal default model visible and separate. It is only for internal LLM paths such as welcome prompts, Manager / Orchestrator, planning skill, and Manager final review.
+Keep the internal default model visible and separate. It is only for welcome prompts, temporary diagnostics, and non-core fallback paths. Manager / Orchestrator should run through OpenClaw / QwenPaw-style runtime and skills, not default to an internal LLM brain.
 
 AgentHub should not become a fixed-role CrewAI clone or a thin LangGraph-only backend. The intended product is an IM-style collaboration workspace for multiple coding agents, with workflow/checkpoint/event-trace discipline behind it.
 
-The next architecture direction is a HiClaw-lite open kernel, not more patches on the old DAG-first path. Matrix is the chosen communication layer. MinIO/Higress/Kubernetes-style enterprise pieces are not default first-stage dependencies, but their abstractions should shape ArtifactStore, Gateway, and Controller/Reconciler boundaries. Gradually make `Room`, `TimelineEvent`, `Run`, `Task`, `WorkerInstance`, `Artifact`, and `RuntimeLease` first-class resources. `messages.ts` should shrink toward chat ingress and lightweight routing; task boards, child conversations, progress, and artifact cards should be projected from Matrix timeline, resource state, and AG-UI, not stitched together from legacy message metadata. See `docs/AgentHub-HiClaw-lite开源内核重构方案.md` before changing orchestration, child-thread, artifact, event, or runtime lifecycle code.
+The next architecture direction is a HiClaw-lite open kernel, not more patches on the old DAG-first path. Matrix/Tuwunel is the chosen communication layer, and MinIO/S3-compatible SharedStorage is the target artifact/task-contract store. Kubernetes/full Higress/enterprise tenancy are not default first-stage dependencies, but their abstractions should shape Gateway and Controller/Reconciler boundaries. Gradually make `Room`, `TimelineEvent`, `Run`, `Task`, `WorkerInstance`, `Artifact`, and `RuntimeLease` first-class resources. `messages.ts` should shrink toward chat ingress and lightweight routing; task boards, child conversations, progress, and artifact cards should be projected from Matrix timeline, resource state, and AG-UI, not stitched together from legacy message metadata. See `docs/AgentHub-HiClaw-lite开源内核重构方案.md` before changing orchestration, child-thread, artifact, event, or runtime lifecycle code.
 
 ## Stack
 
@@ -75,8 +75,8 @@ The next architecture direction is a HiClaw-lite open kernel, not more patches o
 - State: Zustand
 - DB: SQLite via `bun:sqlite` + Drizzle ORM
 - LLM: OpenAI-compatible and Anthropic-compatible streaming client
-- Agent communication: internal collaboration uses Room/timeline semantics through the local Matrix-compatible room layer; A2A is external interoperability only.
-- Code agents: Codex CLI, Claude Code, OpenCode, Gemini CLI
+- Agent communication: internal collaboration uses real Matrix Room/timeline semantics; local Matrix-compatible adapter is test/dev fallback only; A2A is external interoperability only.
+- Agent runtimes / bases: Manager: OpenClaw / QwenPaw. Workers: Codex CLI, Claude Code, OpenCode, Gemini CLI.
 - MCP, Skills, and Rules are tool/capability layers for code agents, not agent runtime types.
 
 ## Commands

@@ -9,6 +9,7 @@ import type {
   EnsureRoomForTaskThreadInput,
   ListTimelineEventsInput,
   ParticipantType,
+  RoomAdapter,
   RoomKind,
 } from './types'
 
@@ -25,7 +26,7 @@ function roomKindForSession(input: EnsureRoomForSessionInput): RoomKind {
   return input.sessionType === 'group' ? 'group' : 'direct'
 }
 
-export class LocalMatrixCompatibleRoomAdapter {
+export class LocalMatrixCompatibleRoomAdapter implements RoomAdapter {
   async createRoom(input: CreateRoomInput) {
     const [room] = await db
       .insert(rooms)

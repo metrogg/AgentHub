@@ -9,7 +9,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - 多个 Agent 在真实子对话里执行，并交付网页、文档、报告、代码、应用等结果资产。
 - 平台逐步形成 `Space / Task Center / Asset Center / Expert Center / Eval & Trace` 的完整结构。
 
-当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向 HiClaw-lite 内核换血：先把 Matrix Room 通信、Manager Runtime、Worker Runtime、filesystem ArtifactStore 和本地轻量 Controller/Reconciler 跑通，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
+当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向 HiClaw-lite 内核换血：先接入真实 Matrix / Tuwunel Room 通信、OpenClaw / QwenPaw Manager Runtime、Worker Runtime、MinIO/S3-compatible SharedStorage 和本地轻量 Controller/Reconciler，再逐步把产品壳、资产层和长期任务能力对齐 Coze。
 
 如果你是第一次接手项目，先读 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)、[docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md) 和 [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)。它们是当前事实总览，用来区分新主线、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw 参考依据见 [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md) 和本地 `hiclaw源码参考/`。
 
@@ -27,8 +27,8 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - **Matrix 通信主线**：新内核以 Matrix Room / timeline / participant / mention 作为协作事实源。Manager 怎么 @ Worker、Worker 怎么回应、用户怎么插话，都应该在 Room 中可见。
 - **A2A 外部互操作**：A2A 暂不作为内部主通信路径，只保留为外部互操作或 Matrix event 中的可选任务语义 envelope；A2A 是协议，不是 Agent 类型。
 - **显式分工**：执行任务只接受 Manager / Orchestrator 的模型选择，系统不再用关键词路由、默认团队或自动 follow-up 改写分工。
-- **Code Agent 执行**：统一适配 Codex CLI、Claude Code、OpenCode、Gemini CLI；自建 Agent 是在这些 Coding Agent 基底上配置角色、提示词、Skills/MCP 能力和权限。
-- **工作目录与共享存储**：每个 Worker 有自己的工作目录和 RuntimeLease；共享存储第一阶段使用本地 filesystem，但按 MinIO/S3-compatible 语义设计 ArtifactStore / SharedStorage。
+- **Agent Runtime / Agent Base 执行**：OpenClaw / QwenPaw 优先作为 Manager / Team Leader 基底；Codex CLI、Claude Code、OpenCode、Gemini CLI 是主要 Worker 基底。自建 Agent 是在这些基底上配置角色、提示词、Skills/MCP 能力和权限。
+- **工作目录与共享存储**：每个 Worker 有自己的工作目录和 RuntimeLease；任务契约优先发布为 `shared/tasks/{taskId}/meta.json|spec.md|plan.md|result.md` 对象引用，MinIO/S3-compatible SharedStorage 是目标主路径，本地 filesystem 只作为开发 fallback 和项目镜像。
 - **产物可见**：文件、网页、diff、诊断产物进入 ArtifactStore，并从主群聊、任务 Room 和产物卡稳定投影。
 - **Coze 对标方向**：后续产品层要逐步补齐 Space、Task Center、Asset Center、Expert Center、Eval / Trace、部署与长期主动任务能力。
 
@@ -55,7 +55,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 
 当前权威文档索引见 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)。底层重构方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
-当前主路径已经开始资源化：群聊消息先进入 Room timeline，复杂任务通过 CoordinatorRuntime / RunController 创建 run 与任务账本，RoomController 确保 group/task room，WorkerController 与 RuntimeLeaseController 管 Worker 和执行租约，WorkerRuntime 从 task room 接单并写回过程。后续还要继续把旧 snapshot/messages/AG-UI cache 降级为投影和兼容读取，让任务看板、进度条、子对话入口和产物卡稳定来自 Matrix timeline、资源状态与 ArtifactStore。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
+当前主路径已经开始资源化：群聊消息先进入 Room timeline，复杂任务通过 CoordinatorRuntime / RunController 创建 run 与任务账本，RoomController 确保 group/task room，WorkerController 与 RuntimeLeaseController 管 Worker 和执行租约，WorkerRuntime 从 task room 接单并写回过程。`MatrixRoomAdapter` 已开始使用 Matrix Client-Server API 创建真实 room、发送 `m.room.message` 并记录 Matrix participant id；`LocalMatrixCompatibleRoomAdapter` 只允许作为测试/开发 fallback。后续还要继续把旧 snapshot/messages/AG-UI cache 降级为投影和兼容读取，让任务看板、进度条、子对话入口和产物卡稳定来自 Matrix timeline、资源状态与 ArtifactStore。这个方向不是照搬 HiClaw 的企业重栈，而是重点吸收 Manager、Worker、Matrix/Tuwunel、共享存储/MinIO 这四个内核模块。
 
 ## 分层定位
 
@@ -66,20 +66,20 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | 产品交互层 | 群聊、私聊、任务子对话、任务看板、产物卡，并逐步进化为 Space / Task / Asset 工作台 |
 | 编排层 | Manager / Orchestrator 生成团队行动方案，通过任务账本调度、取消、重试、验收和汇总 |
 | 通信层 | Matrix 承载 Room / timeline / participant / mention，A2A 只保留为外部互操作或可选任务语义 envelope |
-| 执行层 | Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Agent 基底，LLM 为内部/兜底 |
+| 执行层 | OpenClaw / QwenPaw 为 Manager / Team Leader 优先基底；Codex CLI / Claude Code / OpenCode / Gemini CLI 为主要 Worker 基底；普通内部 LLM 只作非核心 fallback |
 | 能力层 | MCP、Skills、Rules、shell、文件、浏览器等作为 Code Agent 能力 |
 | 协作契约层 | 用户显式 Spec/Contract 描述范围、产出、验收和路径边界，不做固定场景模板 |
-| 工作区与存储层 | 系统默认工作空间根 + Worker workdirs + RuntimeLease + filesystem ArtifactStore / SharedStorage，后续可接 MinIO/S3 |
+| 工作区与存储层 | 系统默认工作空间根 + Worker workdirs + RuntimeLease + MinIO/S3-compatible ArtifactStore / SharedStorage；本地 filesystem 只作开发 fallback |
 
 产品北极星与 Coze 对标判断见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw-lite Kernel 方向见 [docs/HiClaw架构调研与AgentHub底层重构方案.md](docs/HiClaw架构调研与AgentHub底层重构方案.md)。
 
 当前配置真相也分三层：
 
 - `模型管理`：模型目录、双端点、密钥、模型测试。
-- `Coding Tools`：CLI 安装状态、原生 auth/config、平台级诊断。
+- `Agent Runtimes / Agent Bases`：Claude Code、OpenCode、Codex、Gemini、OpenClaw、QwenPaw 等基底的安装状态、原生 auth/config、平台级诊断。旧界面里若仍出现 `Coding Tools`，它只是历史命名，不是架构概念。
 - `Agent 配置`：唯一允许选择 `code agent × model × skills × sandbox` 组合的地方。
 
-另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、Manager / Orchestrator、planning skill、Manager final review 等内部模型调用。
+另有单独可见的 `内部 LLM 默认模型`，只用于欢迎页动态提示、临时诊断或非核心 fallback。Manager / Orchestrator 的目标主路径必须接 OpenClaw / QwenPaw 这类真实 Agent runtime，不能默认回退到内部 LLM 主脑。
 
 ## 技术栈
 
@@ -92,9 +92,9 @@ AgentHub 的目标不是做一个固定角色模板系统，也不只是做一�
 | UI | Tailwind CSS + Radix UI + assistant-ui |
 | 状态 | Zustand |
 | 数据库 | SQLite + Drizzle ORM |
-| LLM | OpenAI-compatible + Anthropic-compatible streaming client，用于 Manager / Orchestrator、planning skill、Manager final review 和 fallback |
-| Code Agent | Codex CLI / Claude Code / OpenCode / Gemini CLI |
-| Agent 通信 | 当前主线采用本地 Matrix-compatible Room/timeline；A2A 降为外部互操作 |
+| LLM | OpenAI-compatible + Anthropic-compatible streaming client，仅用于动态提示、临时诊断和非核心 fallback |
+| Agent Runtime / Agent Base | Manager: OpenClaw / QwenPaw；Worker: Codex CLI / Claude Code / OpenCode / Gemini CLI，后续可补 OpenClaw / QwenPaw Worker |
+| Agent 通信 | 真实 Matrix / Tuwunel Room timeline 是目标内部事实源；本地 Matrix-compatible adapter 只作测试/开发 fallback；A2A 降为外部互操作 |
 
 ## 项目结构
 
@@ -158,13 +158,16 @@ bun test
 | --- | --- |
 | `DATABASE_URL` | SQLite 文件路径，默认 `./storage/agenthub.db` |
 | `PORT` | Server 起始端口，默认 `8000` |
-| `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 默认模型配置 |
+| `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 内部 LLM fallback 配置，不是 Manager 主路径 |
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI-compatible 配置 |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` | Anthropic 配置 |
 | `ENABLE_LOCAL_CLI_PROBES` | 是否探测本机 CLI |
 | `AGENTHUB_ENABLE_CODE_AGENT_EXECUTION` | 是否允许 Code Agent 执行 |
 | `AGENTHUB_CODE_AGENT_TIMEOUT_MS` | Code Agent 超时，建议开发期 `600000` |
 | `AGENTHUB_ENABLE_DYNAMIC_QUICK_PROMPTS` | 是否启用模型动态生成快捷问题 |
+| `AGENTHUB_ROOM_PROVIDER` | `matrix` 使用真实 Matrix homeserver；`local-matrix-compatible` 仅用于测试/开发 fallback |
+| `AGENTHUB_MATRIX_HOMESERVER_URL` / `AGENTHUB_MATRIX_ACCESS_TOKEN` / `AGENTHUB_MATRIX_SERVER_NAME` | Matrix / Tuwunel homeserver 连接配置 |
+| `AGENTHUB_OBJECT_STORE_PROVIDER` / `AGENTHUB_S3_ENDPOINT` / `AGENTHUB_S3_ACCESS_KEY_ID` / `AGENTHUB_S3_SECRET_ACCESS_KEY` / `AGENTHUB_S3_BUCKET` | MinIO/S3-compatible SharedStorage 配置 |
 
 ## 工作区与产物
 
@@ -173,7 +176,8 @@ bun test
 ```text
 .agenthub/
   workdirs/{runId}/{agentName}/{taskId}/   每个 Agent 的执行目录
-  handoff/{runId}/{taskId}/                可交接给下游的上游产物
+  shared/tasks/{taskId}/                   spec.md / meta.json / plan.md / result.md / artifacts 协作契约镜像
+  handoff/{runId}/{taskId}/                旧历史兼容路径
 ```
 
 如果没有选择工作区，系统会自动在默认工作空间存储路径下创建一个可写工作区。默认位置使用系统用户数据目录，例如 Windows 的 `%LOCALAPPDATA%\AgentHub\workspaces`，避免写进 AgentHub 源码目录。可在设置里调整默认工作区存储路径。
@@ -215,5 +219,5 @@ AGENTHUB_SANDBOX_PROVIDER=local-workdir
 - 不要恢复旧的 `workspace-agent-child` 群聊入口。
 - 不要把“任务失败但已有部分产物”显示成完全无产物。
 - 不要让下游 Agent 假设上游相对路径存在；优先使用黑板中的 `handoffPath`。
-- `runtimeType` 只应为 `code-agent` 或 `llm`；A2A/MCP/Skills 都不是 Agent 类型。
+- 不要把 `llm` 当作产品主路径 Agent runtime；A2A/MCP/Skills 都不是 Agent 类型。后续公开心智应收敛到 Agent Runtime / Agent Base。
 - UI 改动要保持主群聊、私聊、任务子对话的边界清晰。

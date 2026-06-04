@@ -3,16 +3,18 @@ import { WsEvent } from '@agenthub/shared'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { broadcastSessionEvent } from '../agent-runner'
 import { LocalMatrixCompatibleRoomAdapter } from './local-matrix-compatible-adapter'
+import { MatrixRoomAdapter } from './matrix-room-adapter'
 import type {
   AddParticipantInput,
   AppendTimelineEventInput,
   CreateRoomInput,
   EnsureRoomForTaskThreadInput,
   ListTimelineEventsInput,
+  RoomAdapter,
 } from './types'
 
 export class RoomService {
-  constructor(private readonly adapter = new LocalMatrixCompatibleRoomAdapter()) {}
+  constructor(private readonly adapter: RoomAdapter = createDefaultRoomAdapter()) {}
 
   createRoom(input: CreateRoomInput) {
     return this.adapter.createRoom(input)
@@ -111,7 +113,7 @@ export class RoomService {
     })
   }
 
-  private async broadcastTimelineEvent(roomId: string, event: Awaited<ReturnType<LocalMatrixCompatibleRoomAdapter['appendTimelineEvent']>>) {
+  private async broadcastTimelineEvent(roomId: string, event: Awaited<ReturnType<RoomAdapter['appendTimelineEvent']>>) {
     const room = await this.adapter.getRoom(roomId)
     if (!room) return
     const participants = await this.adapter.listParticipants(roomId)
@@ -133,7 +135,15 @@ export class RoomService {
 
 export const roomService = new RoomService()
 
-function timelineBroadcastSessionIds(room: Awaited<ReturnType<LocalMatrixCompatibleRoomAdapter['getRoom']>>) {
+function createDefaultRoomAdapter(): RoomAdapter {
+  const configured = process.env.AGENTHUB_ROOM_PROVIDER?.trim()
+  if (configured === 'local-matrix-compatible') return new LocalMatrixCompatibleRoomAdapter()
+  if (configured === 'matrix') return new MatrixRoomAdapter()
+  if (process.env.NODE_ENV === 'test') return new LocalMatrixCompatibleRoomAdapter()
+  return new MatrixRoomAdapter()
+}
+
+function timelineBroadcastSessionIds(room: Awaited<ReturnType<RoomAdapter['getRoom']>>) {
   if (!room) return []
   const ids = new Set<string>()
   if (room.sessionId) ids.add(room.sessionId)

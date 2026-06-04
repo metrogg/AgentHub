@@ -26,9 +26,10 @@ describe('shared task directory', () => {
     })
     expect(prepared).toBeTruthy()
 
-    await updateSharedTaskDirectoryStatus({
+    const statusRefs = await updateSharedTaskDirectoryStatus({
       projectPath,
       sharedTaskRelativeRoot: prepared!.relativeRoot,
+      taskId: 'task-1',
       status: 'completed',
       summary: 'Report page delivered.',
       artifacts: [
@@ -41,6 +42,8 @@ describe('shared task directory', () => {
       ],
       timestamps: { updatedAt: '2026-06-03T00:00:00.000Z' },
     })
+    expect(statusRefs.meta?.objectKey).toBe('shared/tasks/task-1/meta.json')
+    expect(statusRefs.result?.objectKey).toBe('shared/tasks/task-1/result.md')
 
     const resultText = readFileSync(join(prepared!.rootPath, 'result.md'), 'utf8')
     expect(resultText).toContain('STATUS: SUCCESS')
@@ -54,6 +57,38 @@ describe('shared task directory', () => {
       deliverables: [`${prepared!.relativeRoot}/artifacts/report.html`],
       notes: [],
     })
+  })
+
+  test('publishes shared task contract objects even when there is no project workspace mirror', async () => {
+    const prepared = await prepareSharedTaskDirectory({
+      projectPath: null,
+      runId: 'run-object-only',
+      taskId: 'task-object-only',
+      taskTitle: 'Object-only task',
+      taskDescription: 'Create a task contract without local project files',
+      goal: 'Exercise Matrix + shared storage handoff',
+    })
+
+    expect(prepared).toBeTruthy()
+    expect(prepared!.rootPath).toBeNull()
+    expect(prepared!.specPath).toBeNull()
+    expect(prepared!.objects.meta.objectKey).toBe('shared/tasks/task-object-only/meta.json')
+    expect(prepared!.objects.spec.objectKey).toBe('shared/tasks/task-object-only/spec.md')
+    expect(prepared!.objects.plan.objectKey).toBe('shared/tasks/task-object-only/plan.md')
+    expect(prepared!.objects.spec.storageProvider).toBe('local-filesystem')
+
+    const statusRefs = await updateSharedTaskDirectoryStatus({
+      projectPath: null,
+      sharedTaskRelativeRoot: prepared!.relativeRoot,
+      taskId: 'task-object-only',
+      status: 'blocked',
+      summary: 'Waiting for human clarification.',
+      timestamps: { updatedAt: '2026-06-04T00:00:00.000Z' },
+    })
+
+    expect(statusRefs.meta?.objectKey).toBe('shared/tasks/task-object-only/meta.json')
+    expect(statusRefs.result?.objectKey).toBe('shared/tasks/task-object-only/result.md')
+    expect(statusRefs.result?.storageProvider).toBe('local-filesystem')
   })
 
   test('documents the result contract in spec.md', async () => {
