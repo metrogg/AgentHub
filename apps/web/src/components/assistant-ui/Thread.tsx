@@ -4952,7 +4952,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
             )}
           />
         )}
-        <div className="flex h-16 shrink-0 items-center gap-3 bg-[#f5f5f1] px-3 backdrop-blur">
+        <div className="flex h-16 shrink-0 items-center gap-3 bg-white px-3">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-neutral-200 bg-gradient-to-br from-white to-neutral-100 text-neutral-500 shadow-sm">
               {previewIcon(item)}
@@ -5062,7 +5062,7 @@ const ArtifactPreviewPanel: FC<{ item: ArtifactPreviewItem; onClose: () => void 
           />
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col bg-[#f6f7f9] p-2">
+        <div className="flex min-h-0 flex-1 flex-col bg-white p-2">
           {item.description && (
             <div className="mb-2 rounded-2xl border border-neutral-200 bg-white/90 px-3 py-2 text-xs leading-5 text-neutral-600 shadow-sm">
               {item.description}
