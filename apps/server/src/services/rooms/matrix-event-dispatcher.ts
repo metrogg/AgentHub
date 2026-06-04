@@ -8,12 +8,14 @@ import {
   runtimeLeases,
   taskThreads,
   timelineEvents,
+  workerInstances,
   workspaceTasks,
 } from '@agenthub/db'
 import { coordinatorService } from '../coordinator-runtime/coordinator-service'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
+import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { workerRuntimeService } from '../worker-runtime/worker-runtime-service'
 import { createMatrixClientFromEnv } from './matrix-client'
 import { roomService } from './room-service'
@@ -207,7 +209,50 @@ export class MatrixRoomEventDispatcher {
         .limit(1)
       if (!participant) continue
       if (participant.participantType === 'worker' && room.kind === 'task' && participant.workspaceAgentId) {
-        await this.handlers.runWorkerTaskRoom({
+        const canClaim = await canWorkerClaimTask(participant.workerInstanceId)
+        if (!canClaim) {
+          await roomService.appendTimelineEvent({
+            roomId: room.id,
+            senderParticipantId: participant.id,
+            senderType: 'worker',
+            type: 'task.progress',
+            body: '当前正忙，无法接单。',
+            metadata: {
+              kind: 'worker-runtime.busy',
+              workspaceAgentId: participant.workspaceAgentId,
+              workerInstanceId: participant.workerInstanceId,
+            },
+          })
+          return true
+        }
+
+        // Worker claims the task: write "已接单" and update state
+        await roomService.appendTimelineEvent({
+          roomId: room.id,
+          senderParticipantId: participant.id,
+          senderType: 'worker',
+          type: 'task.progress',
+          body: '已接单，准备执行任务。',
+          metadata: {
+            kind: 'worker-runtime.claimed',
+            workspaceAgentId: participant.workspaceAgentId,
+            workerInstanceId: participant.workerInstanceId,
+            sourceEventId: event.id,
+          },
+        })
+        if (participant.workerInstanceId) {
+          await markWorkerInstanceState(participant.workerInstanceId, 'assigned', {
+            message: 'Worker claimed task from Matrix mention.',
+            health: {
+              claimedRoomId: room.id,
+              claimedAt: new Date().toISOString(),
+              sourceEventId: event.id,
+            },
+          })
+        }
+
+        // Async dispatch to WorkerRuntimeService
+        void this.handlers.runWorkerTaskRoom({
           roomId: room.id,
           ownerId: room.ownerId,
           workspaceAgentId: participant.workspaceAgentId,
@@ -536,6 +581,18 @@ function matrixFileRef(metadata: Record<string, unknown> | null | undefined) {
         }
       : null,
   }
+}
+
+async function canWorkerClaimTask(workerInstanceId: string | null | undefined): Promise<boolean> {
+  if (!workerInstanceId) return false
+  const [worker] = await db
+    .select()
+    .from(workerInstances)
+    .where(eq(workerInstances.id, workerInstanceId))
+    .limit(1)
+  if (!worker) return false
+  const claimableStates = ['listening', 'idle', 'ready']
+  return claimableStates.includes(worker.observedState)
 }
 
 function matrixMentionedParticipantIds(metadata: Record<string, unknown> | null | undefined) {

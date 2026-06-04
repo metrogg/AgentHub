@@ -2663,6 +2663,58 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     }
   }
 
+  async function configureLocalMatrix() {
+    setBusy('matrix-configure')
+    try {
+      const result = await api.configureLocalMatrix()
+      setMatrixDiagnostics(result.diagnostics)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'matrix/configure',
+        content: result.message,
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: 'matrix/configure',
+        content: error?.message || '应用本地 Matrix 配置失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function startLocalMatrix() {
+    setBusy('matrix-start')
+    try {
+      const result = await api.startLocalMatrix()
+      setMatrixDiagnostics(result.diagnostics)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'matrix/start',
+        content: result.output ? `${result.message} · ${result.output}` : result.message,
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: 'matrix/start',
+        content: error?.message || '启动 Tuwunel 失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   function exportLogs() {
     const blob = new Blob([formatConsoleLogs(filteredLogs)], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -2874,16 +2926,28 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
                   {matrixDiagnostics.homeserver.serverName} · {matrixDiagnostics.homeserver.url ?? '未配置 homeserver'} · {matrixDiagnostics.homeserver.versions.slice(0, 3).join(', ') || '未读取版本'}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2 text-xs">
-                <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
-                  active rooms {matrixDiagnostics.resources.activeMatrixRoomCount}
-                </span>
-                <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
-                  identities {matrixDiagnostics.resources.identityWithTokenCount}/{matrixDiagnostics.resources.identityCount}
-                </span>
-                <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
-                  listeners {matrixRunningListenerCount}
-                </span>
+              <div className="flex flex-col items-start gap-2 sm:items-end">
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                    active rooms {matrixDiagnostics.resources.activeMatrixRoomCount}
+                  </span>
+                  <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                    identities {matrixDiagnostics.resources.identityWithTokenCount}/{matrixDiagnostics.resources.identityCount}
+                  </span>
+                  <span className="rounded-full px-2 py-1" style={{ background: 'var(--settings-panel)', color: 'var(--settings-text)' }}>
+                    listeners {matrixRunningListenerCount}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void configureLocalMatrix()} disabled={busy === 'matrix-configure'} className="settings-soft-button h-8 px-3 text-xs">
+                    {busy === 'matrix-configure' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Settings className="h-3.5 w-3.5" />}
+                    应用本地配置
+                  </button>
+                  <button type="button" onClick={() => void startLocalMatrix()} disabled={busy === 'matrix-start'} className="settings-soft-button h-8 px-3 text-xs">
+                    {busy === 'matrix-start' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
+                    启动 Tuwunel
+                  </button>
+                </div>
               </div>
             </div>
 

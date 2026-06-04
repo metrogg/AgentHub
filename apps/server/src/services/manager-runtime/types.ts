@@ -116,6 +116,7 @@ export interface ManagerStepInput {
     roomId: string
     workspaceId?: string | null
     runId?: string | null
+    groupSessionId?: string | null
     goal?: string | null
     managerName?: string | null
     workers?: ManagerWorkerCandidate[]

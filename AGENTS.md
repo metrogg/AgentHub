@@ -142,6 +142,21 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 `OrchestratorEngine`、`TaskExecutionService`、`LocalA2ATransport` 已删除。所有任务执行通过 `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `ManagerLoop` / `WorkerRuntimeService`。`messages.ts` 不应继续扩展成编排主脑。
 
+### Worker Runtime 状态机
+
+WorkerInstance.observedState 已扩展为 HiClaw 风格状态机：
+
+```
+provisioning -> ready -> listening -> assigned -> busy -> waiting_for_human -> resuming -> idle -> sleeping -> stopped / failed
+```
+
+- `listening`：Worker Matrix listener 已启动，等待被 @ 接单。
+- `assigned`：Worker 在 task room 中被 @ 后自己 claim 任务，尚未启动 CLI。
+- `busy`：CLI 子进程正在执行。
+- `resuming`：人类回答澄清后，Worker 恢复执行前的过渡状态。
+
+Worker 本地 workspace 目录位于 `{agentHubUserDataRoot()}/workers/{workerInstanceId}/`，包含 `profile.json`、`SOUL.md`、`AGENTS.md`、`skills/`、`state.json`、`rooms.json`。`WorkerController.ensureReady()` 会在 reconcile 时自动创建该目录并从 DB 同步技能和配置。
+
 ## Matrix / A2A 通信边界
 
 新内核以 Matrix 作为内部通信事实源：
@@ -278,6 +293,7 @@ bun test tests/orchestrator-routing.test.ts
 - `apps/server/src/services/orchestrator/worker-controller.ts`: WorkerInstance reconcile 与 lease 分配控制面。
 - `apps/server/src/services/orchestrator/runtime-lease-controller.ts`: RuntimeLease 生命周期控制面。
 - `apps/server/src/services/worker-runtime/worker-runtime-service.ts`: 当前 Worker task room 执行入口。
+- `apps/server/src/services/worker-runtime/worker-workspace.ts`: Worker 本地 workspace 目录管理（profile/SOUL/skills）。
 - `apps/server/src/services/orchestrator/manager-planner.ts`: Manager-first 团队行动方案生成。
 - `apps/server/src/services/orchestrator/planner.ts`: 旧 Planner 兼容与计划校验工具来源，不是主脑。
 - `apps/server/src/services/execution/agent-workdir.ts`: Agent 工作目录。

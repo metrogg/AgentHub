@@ -764,12 +764,12 @@ Manager / Worker 可以并行依赖：
 
 ### Slice C：Worker Runtime
 
-1. Worker workspace / profile / skill layout
-2. Worker state machine 拆分
-3. Worker listener claim task
-4. CLI execution AbortController / process cleanup
-5. clarification resume 原生化
-6. per-agent config/cache/session 隔离
+1. ✅ Worker workspace / profile / skill layout — `.agenthub/workers/{id}/` 目录结构已落地，`WorkerController.ensureReady()` 自动创建
+2. ✅ Worker state machine 拆分 — `observedState` 已扩展 `listening / assigned / resuming`，`WorkerController` 和 `MatrixRuntimeSupervisor` 已接入状态流转
+3. ✅ Worker listener claim task — `MatrixRoomEventDispatcher` 已改为 Worker 先检查状态、自己 claim、写"已接单" timeline event、再异步启动 `WorkerRuntimeService`
+4. ⏳ CLI execution AbortController / process cleanup
+5. ⏳ clarification resume 原生化
+6. ⏳ per-agent config/cache/session 隔离
 
 ## 六、最终验收场景
 

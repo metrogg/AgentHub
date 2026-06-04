@@ -421,7 +421,7 @@ export const workerInstances = sqliteTable(
     desiredState: text('desired_state', { enum: ['running', 'sleeping', 'stopped'] })
       .notNull()
       .default('running'),
-    observedState: text('observed_state', { enum: ['provisioning', 'ready', 'busy', 'waiting_for_human', 'idle', 'sleeping', 'stopped', 'failed'] })
+    observedState: text('observed_state', { enum: ['provisioning', 'ready', 'listening', 'assigned', 'busy', 'waiting_for_human', 'resuming', 'idle', 'sleeping', 'stopped', 'failed'] })
       .notNull()
       .default('provisioning'),
     health: text('health', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default({}),

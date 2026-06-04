@@ -637,6 +637,21 @@ export interface MatrixDiagnostics {
   }
 }
 
+export interface LocalMatrixActionResult {
+  ok: boolean
+  message: string
+  output?: string
+  config: {
+    provider: string
+    homeserverUrl: string
+    serverName: string
+    registrationTokenConfigured: boolean
+    autoInviteParticipants: boolean
+    autoJoinParticipants: boolean
+  }
+  diagnostics: MatrixDiagnostics
+}
+
 export interface OpencodeModelItem {
   id: string
   provider: string
@@ -1588,6 +1603,10 @@ export const api = {
   getSettingsConsoleLogs: (limit = 160) =>
     request<SettingsConsoleLogsResponse>(`/settings/console-logs?limit=${encodeURIComponent(String(limit))}`),
   getMatrixDiagnostics: () => request<MatrixDiagnostics>('/rooms/matrix/diagnostics'),
+  configureLocalMatrix: () =>
+    request<LocalMatrixActionResult>('/settings/matrix/local/configure', { method: 'POST' }),
+  startLocalMatrix: () =>
+    request<LocalMatrixActionResult>('/settings/matrix/local/start', { method: 'POST', timeout: 70_000 }),
   setupDockerSandbox: () =>
     request<{ ok: boolean; message: string; steps: Array<{ command: string; ok: boolean; output: string }>; sandbox: SettingsGeneralInfo['sandbox'] }>(
       '/settings/sandbox/docker/setup',

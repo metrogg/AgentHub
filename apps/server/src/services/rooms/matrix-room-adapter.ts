@@ -27,6 +27,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
   private readonly options: MatrixRoomAdapterOptions
   private clientInstance: MatrixClient | null = null
   private identityServiceInstance: MatrixIdentityService | null = null
+  private clientSignature: string | null = null
 
   constructor(options: MatrixRoomAdapterOptions = {}) {
     this.options = options
@@ -437,7 +438,6 @@ export class MatrixRoomAdapter implements RoomAdapter {
   }
 
   private client() {
-    if (this.clientInstance) return this.clientInstance
     const homeserverUrl = this.options.homeserverUrl ?? process.env.AGENTHUB_MATRIX_HOMESERVER_URL
     const accessToken = this.options.accessToken ?? process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
     const serverName = this.options.serverName ?? process.env.AGENTHUB_MATRIX_SERVER_NAME ?? 'agenthub.local'
@@ -447,6 +447,18 @@ export class MatrixRoomAdapter implements RoomAdapter {
           'Start Tuwunel/Synapse, or set AGENTHUB_ROOM_PROVIDER=local-matrix-compatible only for local tests.',
       )
     }
+    const signature = [
+      homeserverUrl,
+      accessToken ?? '',
+      serverName,
+      process.env.AGENTHUB_MATRIX_ADMIN_ROOM_ALIAS ?? '',
+      String(this.options.autoInviteParticipants ?? matrixBool('AGENTHUB_MATRIX_AUTO_INVITE_PARTICIPANTS', true)),
+      String(this.options.autoJoinParticipants ?? matrixBool('AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS', true)),
+      this.options.registrationToken ?? process.env.AGENTHUB_MATRIX_REGISTRATION_TOKEN?.trim() ?? '',
+    ].join('|')
+    if (this.clientInstance && this.clientSignature === signature) return this.clientInstance
+    this.clientSignature = signature
+    this.identityServiceInstance = null
     this.clientInstance = new MatrixClient({
       homeserverUrl,
       adminAccessToken: accessToken,

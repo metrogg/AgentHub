@@ -446,6 +446,19 @@ export class WorkerRuntimeService {
     const appendedEventIds = [resumeEvent.id]
 
     const runResume = async () => {
+      const workerInstanceId =
+        typeof clarification.metadata?.workerInstanceId === 'string'
+          ? clarification.metadata.workerInstanceId
+          : null
+      if (workerInstanceId) {
+        await markWorkerInstanceState(workerInstanceId, 'resuming', {
+          message: 'Worker resuming after human clarification.',
+          health: {
+            resumedAt: new Date().toISOString(),
+            clarificationId: answeredClarification?.id ?? clarificationId,
+          },
+        })
+      }
       try {
         const result = await this.runTaskRoom({
           roomId: room.id,

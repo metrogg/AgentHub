@@ -102,9 +102,35 @@ describe('Manager Runtime', () => {
   describe('Tool Registry', () => {
     test('has registered executors', () => {
       const names = getRegisteredToolNames()
+      // Worker management
       expect(names).toContain('controller.workers.list')
+      expect(names).toContain('controller.workers.wake')
+      expect(names).toContain('controller.workers.stop')
+      expect(names).toContain('controller.workers.idle-stop')
+      // Run management
+      expect(names).toContain('controller.runs.list')
+      expect(names).toContain('controller.runs.create')
+      expect(names).toContain('controller.runs.reconcile')
+      expect(names).toContain('controller.runs.cancel')
+      // Task management
       expect(names).toContain('controller.tasks.list')
+      expect(names).toContain('controller.tasks.status')
+      expect(names).toContain('controller.tasks.complete')
+      expect(names).toContain('controller.tasks.retry')
+      // Room management
       expect(names).toContain('controller.rooms.create')
+      expect(names).toContain('controller.rooms.events.create')
+      expect(names).toContain('controller.rooms.mention')
+      expect(names).toContain('controller.rooms.participants.add')
+      // Artifact management
+      expect(names).toContain('controller.artifacts.list')
+      expect(names).toContain('controller.artifacts.register')
+      // Human management
+      expect(names).toContain('controller.interventions.create')
+      // Memory management
+      expect(names).toContain('controller.memory.create')
+      // Coordination
+      expect(names).toContain('controller.coordination.lock')
     })
 
     test('hasExecutor checks correctly', () => {
@@ -129,6 +155,81 @@ describe('Manager Runtime', () => {
       )
       expect(result.success).toBe(false)
       expect(result.output).toContain('no executor registered')
+    })
+
+    test('rooms.create creates a room', async () => {
+      const result = await executeToolCall(
+        { id: 'test-3', name: 'controller.rooms.create', arguments: { title: 'Test Room' } },
+        { roomId: 'test-room', ownerId: 'default-user' },
+      )
+      expect(result.success).toBe(true)
+      expect(result.output).toContain('Room created')
+    })
+
+    test('rooms.events.create sends a message', async () => {
+      // First create a room
+      const roomResult = await executeToolCall(
+        { id: 'test-4a', name: 'controller.rooms.create', arguments: { title: 'Event Test Room' } },
+        { roomId: 'test-room', ownerId: 'default-user' },
+      )
+      expect(roomResult.success).toBe(true)
+      const roomId = roomResult.metadata?.roomId as string
+
+      // Then send a message to it
+      const result = await executeToolCall(
+        { id: 'test-4b', name: 'controller.rooms.events.create', arguments: { roomId, body: 'Hello from Manager' } },
+        { roomId, ownerId: 'default-user' },
+      )
+      expect(result.success).toBe(true)
+      expect(result.output).toContain('Message sent')
+    })
+
+    test('tasks.list requires runId', async () => {
+      const result = await executeToolCall(
+        { id: 'test-5', name: 'controller.tasks.list', arguments: {} },
+        { roomId: 'test-room', ownerId: 'test-user' },
+      )
+      expect(result.success).toBe(false)
+      expect(result.output).toContain('No runId')
+    })
+
+    test('memory.create stores an entry', async () => {
+      // First create a room
+      const roomResult = await executeToolCall(
+        { id: 'test-6a', name: 'controller.rooms.create', arguments: { title: 'Memory Test Room' } },
+        { roomId: 'test-room', ownerId: 'default-user' },
+      )
+      const roomId = roomResult.metadata?.roomId as string
+
+      const result = await executeToolCall(
+        {
+          id: 'test-6b',
+          name: 'controller.memory.create',
+          arguments: { roomId, content: 'Test memory entry', category: 'test' },
+        },
+        { roomId, ownerId: 'default-user' },
+      )
+      expect(result.success).toBe(true)
+      expect(result.output).toContain('Memory entry created')
+    })
+
+    test('coordination.lock acquires a lock', async () => {
+      const roomResult = await executeToolCall(
+        { id: 'test-7a', name: 'controller.rooms.create', arguments: { title: 'Lock Test Room' } },
+        { roomId: 'test-room', ownerId: 'default-user' },
+      )
+      const roomId = roomResult.metadata?.roomId as string
+
+      const result = await executeToolCall(
+        {
+          id: 'test-7b',
+          name: 'controller.coordination.lock',
+          arguments: { roomId, lockKey: 'test-lock', owner: 'manager' },
+        },
+        { roomId, ownerId: 'default-user' },
+      )
+      expect(result.success).toBe(true)
+      expect(result.output).toContain('Lock acquired')
     })
   })
 })

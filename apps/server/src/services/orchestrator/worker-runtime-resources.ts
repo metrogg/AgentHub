@@ -57,8 +57,11 @@ export async function markWorkerInstanceState(
   state:
     | 'provisioning'
     | 'ready'
+    | 'listening'
+    | 'assigned'
     | 'busy'
     | 'waiting_for_human'
+    | 'resuming'
     | 'idle'
     | 'sleeping'
     | 'stopped'
