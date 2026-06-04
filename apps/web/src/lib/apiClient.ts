@@ -67,6 +67,7 @@ export function friendlyErrorMessage(error: unknown, context?: string): string {
     }
     if (error.code && codeMap[error.code]) {
       if (
+        error.code === AppErrorCodes.VALIDATION_FAILED ||
         error.code === AppErrorCodes.DIFF_APPLY_FAILED ||
         error.code === AppErrorCodes.DIFF_VALIDATION_FAILED
       ) {

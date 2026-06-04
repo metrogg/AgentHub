@@ -110,6 +110,7 @@ import { VirtualList } from '../VirtualList'
 import {
   api,
   friendlyErrorMessage,
+  SessionType,
   type AgentArtifact,
   type MemberProposal,
   type Message,
@@ -2778,9 +2779,11 @@ const Composer: FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const {
     currentSessionId,
+    currentSession,
     currentWorkspace,
     workspaceAgents,
     fetchSessions,
+    selectSession,
     setSessionWorkspace,
     pendingAttachments,
     addPendingAttachments,
@@ -2789,12 +2792,14 @@ const Composer: FC = () => {
     replyingToKind,
     setReplyingTo,
     sendMessage,
+    sendMessageToSession,
     agentTyping,
     streamingMessage,
     safetyMode,
     setSafetyMode,
     cancelRun,
   } = useChatStoreShallow(selectComposerState)
+  const navigate = useNavigate()
   const [menu, setMenu] = useState<'tools' | 'agents' | 'workspace' | null>(null)
   const [skills, setSkills] = useState<SkillSummary[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
@@ -2865,6 +2870,26 @@ const Composer: FC = () => {
   function showHint(text: string) {
     setHint(text)
     window.setTimeout(() => setHint(null), 1800)
+  }
+
+  async function applyWorkspaceToComposer(workspaceId: string): Promise<string | null> {
+    if (!currentSessionId) return null
+
+    const shouldEnterWorkspaceGroup =
+      currentSession?.type === SessionType.Group ||
+      currentSession?.metadata?.kind === 'orchestrator-task'
+
+    if (shouldEnterWorkspaceGroup) {
+      const { session } = await api.openWorkspaceGroupSession(workspaceId, [])
+      await fetchSessions()
+      await selectSession(session.id)
+      navigate(`/chat/${session.id}`)
+      return session.id
+    }
+
+    await setSessionWorkspace(currentSessionId, workspaceId)
+    await fetchSessions()
+    return currentSessionId
   }
 
   async function handleFiles(files: FileList | File[] | null) {
@@ -3071,9 +3096,8 @@ const Composer: FC = () => {
     setOpeningWorkspaceId(workspaceId)
     showHint('正在选择工作区...')
     try {
-      await setSessionWorkspace(currentSessionId, workspaceId)
+      await applyWorkspaceToComposer(workspaceId)
       setMenu(null)
-      await fetchSessions()
       showHint('工作区已应用到当前会话')
     } catch (err) {
       showHint(friendlyErrorMessage(err, '选择工作区失败'))
@@ -3096,9 +3120,8 @@ const Composer: FC = () => {
         ...items.filter((item) => item.id !== full.workspace.id),
       ])
       setOpeningWorkspaceId(full.workspace.id)
-      if (currentSessionId) await setSessionWorkspace(currentSessionId, full.workspace.id)
+      await applyWorkspaceToComposer(full.workspace.id)
       setMenu(null)
-      await fetchSessions()
       showHint('已创建并应用工作区')
     } catch (err) {
       showHint(friendlyErrorMessage(err, '创建工作区失败'))
@@ -3131,9 +3154,8 @@ const Composer: FC = () => {
         ).workspace
       setWorkspaces((items) => [workspace, ...items.filter((item) => item.id !== workspace.id)])
       setOpeningWorkspaceId(workspace.id)
-      if (currentSessionId) await setSessionWorkspace(currentSessionId, workspace.id)
+      await applyWorkspaceToComposer(workspace.id)
       setMenu(null)
-      await fetchSessions()
       showHint('工作区已应用到当前会话')
     } catch (err) {
       showHint(friendlyErrorMessage(err, '处理工作区失败'))
@@ -3167,12 +3189,11 @@ const Composer: FC = () => {
         ...items.filter((item) => item.id !== full.workspace.id),
       ])
       setOpeningWorkspaceId(full.workspace.id)
-      await setSessionWorkspace(currentSessionId, full.workspace.id)
+      const targetSessionId = await applyWorkspaceToComposer(full.workspace.id)
       setMenu(null)
-      await fetchSessions()
       showHint(deployAfterClone ? '已拉取，正在部署...' : 'GitHub 仓库已应用到当前会话')
-      if (deployAfterClone) {
-        await sendMessage('部署', { usePendingAttachments: false })
+      if (deployAfterClone && targetSessionId) {
+        await sendMessageToSession(targetSessionId, '部署', { usePendingAttachments: false })
       }
     } catch (err) {
       showHint(friendlyErrorMessage(err, 'GitHub 拉取失败'))

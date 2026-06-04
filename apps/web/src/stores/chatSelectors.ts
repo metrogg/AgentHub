@@ -97,9 +97,11 @@ export const selectAgentHeaderState = (state: ChatState) => ({
 
 export const selectComposerState = (state: ChatState) => ({
   currentSessionId: state.currentSessionId,
+  currentSession: state.currentSession,
   currentWorkspace: state.currentWorkspace,
   workspaceAgents: state.currentWorkspaceAgents,
   fetchSessions: state.fetchSessions,
+  selectSession: state.selectSession,
   setSessionWorkspace: state.setSessionWorkspace,
   pendingAttachments: state.pendingAttachments,
   addPendingAttachments: state.addPendingAttachments,
@@ -108,6 +110,7 @@ export const selectComposerState = (state: ChatState) => ({
   replyingToKind: state.replyingToKind,
   setReplyingTo: state.setReplyingTo,
   sendMessage: state.sendMessage,
+  sendMessageToSession: state.sendMessageToSession,
   agentTyping: state.agentTyping,
   streamingMessage: state.streamingMessage,
   safetyMode: state.safetyMode,

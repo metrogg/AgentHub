@@ -19,20 +19,12 @@ import { projectRoomTimeline, type RoomTimelineProjection } from '../lib/roomTim
 import { wsClient, type WSEvent } from '../lib/ws'
 import type { CodeAgentRunMetadata } from '@agenthub/shared'
 import { WsEvent, MessageType, SessionType, SenderType } from '@agenthub/shared'
-import {
-  applyLiveMessageMetadataProjection,
-  applyLiveMessageStreamProjection,
-  buildHeaderAgentStatusProjection,
-  buildReplyingRuntimeProjection,
-  clearLiveRuntimeProjection,
-  deriveRuntimeActivityFromTaskBoard,
-  describeRuntimeActivity,
-  reduceRuntimeActivityProjection,
-  runtimeActivityFromSnapshot,
-  runtimeActivityLabel,
-  type AgentActivity,
-  type AgUiEventPayload,
-  type RuntimeActivityProjection,
+import { codeAgentRuntimeLabel } from '../lib/agentDisplay'
+import type {
+  AgentActivity,
+  HeaderAgentStatusProjection,
+  LiveRuntimeProjection,
+  RuntimeActivityProjection,
 } from '../lib/runtimeStatusProjection'
 
 let pendingStream: {

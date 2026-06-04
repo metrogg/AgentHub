@@ -1143,6 +1143,42 @@
     background: var(--agenthub-app-bg, #f7f7f7);
   }
 
+  .agenthub-chat-shell .agenthub-thread-root {
+    --agenthub-thread-grid-line: color-mix(
+      in srgb,
+      var(--agenthub-app-text, #111111) 7%,
+      transparent
+    );
+    --agenthub-thread-grid-major: color-mix(
+      in srgb,
+      var(--agenthub-app-text, #111111) 4%,
+      transparent
+    );
+    background-color: var(--agenthub-app-bg, #f7f7f7);
+    background-image:
+      radial-gradient(
+        circle at 50% 48%,
+        color-mix(in srgb, var(--agenthub-app-panel, #ffffff) 82%, transparent) 0,
+        transparent 26rem
+      ),
+      linear-gradient(var(--agenthub-thread-grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--agenthub-thread-grid-line) 1px, transparent 1px),
+      linear-gradient(var(--agenthub-thread-grid-major) 1px, transparent 1px),
+      linear-gradient(90deg, var(--agenthub-thread-grid-major) 1px, transparent 1px);
+    background-position:
+      center,
+      -1px -1px,
+      -1px -1px,
+      -1px -1px,
+      -1px -1px;
+    background-size:
+      100% 100%,
+      32px 32px,
+      32px 32px,
+      160px 160px,
+      160px 160px;
+  }
+
   .agenthub-chat-shell .agenthub-welcome-root {
     position: relative;
     overflow: hidden;

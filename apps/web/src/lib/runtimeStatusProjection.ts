@@ -7,7 +7,7 @@ export interface RuntimeAgentTabProjection {
   agentId: string
   agentName: string
   childSessionId: string | null
-  status: 'pending' | 'assigned' | 'running' | 'done' | 'failed'
+  status: 'pending' | 'assigned' | 'running' | 'waiting' | 'done' | 'failed'
 }
 
 export interface RuntimeTaskProjection {
@@ -491,11 +491,16 @@ export function buildHeaderAgentStatusProjection(input: {
   const currentTab =
     sessionId && agentTabs.length
       ? agentTabs.find((tab) => tab.childSessionId === sessionId) ??
-        agentTabs.find((tab) => tab.status === 'running') ??
+        agentTabs.find((tab) => tab.status === 'running' || tab.status === 'waiting') ??
         null
       : null
 
-  if (currentTask?.status === 'running' || currentTask?.status === 'blocked' || currentTab?.status === 'running') {
+  if (
+    currentTask?.status === 'running' ||
+    currentTask?.status === 'blocked' ||
+    currentTab?.status === 'running' ||
+    currentTab?.status === 'waiting'
+  ) {
     return {
       label: currentTask?.status === 'blocked' ? '等待补充' : '工作中',
       detail: currentTask?.agentName ?? currentTab?.agentName ?? 'Agent',
