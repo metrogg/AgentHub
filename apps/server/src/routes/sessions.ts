@@ -2,10 +2,11 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { createSessionSchema, updateSessionSchema } from '@agenthub/shared'
-import { db, sessions, sessionMembers, workspaceAgents, workspaces, messages, eq, desc, and, sql } from '@agenthub/db'
+import { db, sessions, sessionMembers, workspaceAgents, workspaces, eq, desc, and } from '@agenthub/db'
 import { inArray } from 'drizzle-orm'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { roomService } from '../services/rooms'
+import { listRoomLastMessagePreviews } from '../services/rooms/room-last-message'
 
 export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -17,36 +18,8 @@ export const sessionRoutes = new Hono<{ Variables: AuthVariables }>()
       : eq(sessions.ownerId, user.sub)
     const list = await db.select().from(sessions).where(conditions).orderBy(desc(sessions.updatedAt))
 
-    // 附加每条会话的最后消息预览
     const selectedSessionIds = list.map((s) => s.id)
-    const lastMessages: Record<string, { content: string; senderType: string }> = {}
-    if (selectedSessionIds.length > 0) {
-      const rankedMessages = db
-        .select({
-          sessionId: messages.sessionId,
-          content: messages.content,
-          senderType: messages.senderType,
-          rank: sql<number>`row_number() over (partition by ${messages.sessionId} order by ${messages.createdAt} desc, ${messages.id} desc)`.as('rank'),
-        })
-        .from(messages)
-        .where(and(inArray(messages.sessionId, selectedSessionIds), eq(messages.type, 'text')))
-        .as('ranked_messages')
-      const latestRows = await db
-        .select({
-          sessionId: rankedMessages.sessionId,
-          content: rankedMessages.content,
-          senderType: rankedMessages.senderType,
-        })
-        .from(rankedMessages)
-        .where(eq(rankedMessages.rank, 1))
-
-      for (const row of latestRows) {
-        lastMessages[row.sessionId] = {
-          content: row.content.slice(0, 120),
-          senderType: row.senderType,
-        }
-      }
-    }
+    const lastMessages = await listRoomLastMessagePreviews(selectedSessionIds)
 
     return c.json({
       items: list.map((s) => ({

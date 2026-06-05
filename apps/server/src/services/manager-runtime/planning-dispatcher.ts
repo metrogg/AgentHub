@@ -329,7 +329,7 @@ async function appendPlanningStatusTimeline(input: {
     metadata: {
       ...input.metadata,
       source: 'planning-dispatcher',
-      legacyMessageProjectionDisabled: true,
+      messageProjectionDisabled: true,
     },
   })
 }

@@ -23,7 +23,6 @@ export interface RoomSessionSnapshotInput {
   sessionId: string
   ownerId: string
   afterSequence?: number
-  includeLegacy?: boolean
 }
 
 export async function loadRoomSessionSnapshot(input: RoomSessionSnapshotInput) {
@@ -78,14 +77,8 @@ async function ensureSnapshotRoom(session: SessionRow, ownerId: string): Promise
   const metadata = asRecord(session.metadata)
   const taskThreadId = stringValue(metadata.taskThreadId)
   if (metadata.kind === 'orchestrator-task' && taskThreadId) {
-    try {
-      const input = await roomService.buildTaskThreadRoomInput(taskThreadId, ownerId)
-      return await roomService.ensureRoomForTaskThread(input)
-    } catch {
-      // Some legacy task sessions have incomplete metadata. They still get a
-      // normal session room so the UI can recover without falling back to
-      // messages as the current fact source.
-    }
+    const input = await roomService.buildTaskThreadRoomInput(taskThreadId, ownerId)
+    return roomService.ensureRoomForTaskThread(input)
   }
   return roomService.ensureRoomForSession(session.id, ownerId)
 }

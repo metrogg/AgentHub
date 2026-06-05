@@ -4,7 +4,6 @@ import {
   asc,
   db,
   eq,
-  artifacts,
   orchestratorRuns,
   roomParticipants,
   runtimeLeases,
@@ -27,7 +26,6 @@ import { runtimeLeaseController } from './runtime-lease-controller'
 import { markWorkerInstanceState } from './worker-runtime-resources'
 import { readSharedTaskResult } from './shared-task-directory'
 import type { WorkerRuntime } from '../worker-runtime/types'
-import { buildManagerResourceReviewSummary } from '../manager-runtime/final-review-skill'
 import { managerRuntimeService, getActiveManagerProvider } from '../manager-runtime'
 import { MatrixRoomEventDispatcher } from '../rooms/matrix-event-dispatcher'
 
@@ -493,7 +491,7 @@ async function persistManagerLoopMessage(input: {
     metadata: {
       ...input.metadata,
       source: 'manager-loop',
-      legacyMessageProjectionDisabled: true,
+      messageProjectionDisabled: true,
     },
   })
 
@@ -568,227 +566,6 @@ async function appendTaskHumanInterruptTimeline(input: {
   })
 }
 
-interface CompletedRunReviewInput {
-  ctx: StepContext
-  tasks: Array<typeof workspaceTasks.$inferSelect>
-  threads: Array<typeof taskThreads.$inferSelect>
-}
-
-interface CompletedRunReviewResult {
-  reason: string
-  summary: string
-  summaryMessageId: string | null
-  finalStatus: 'completed' | 'failed'
-}
-
-async function synthesizeCompletedRunFromResources(
-  input: CompletedRunReviewInput,
-): Promise<CompletedRunReviewResult> {
-  const { ctx, tasks, threads } = input
-  const [run] = await db
-    .select()
-    .from(orchestratorRuns)
-    .where(eq(orchestratorRuns.id, ctx.runId))
-    .limit(1)
-  if (!run || run.status !== 'running') {
-    return {
-      reason: `Run status is ${run?.status ?? 'missing'}; final review skipped.`,
-      summary: '',
-      summaryMessageId: run?.summaryMessageId ?? null,
-      finalStatus: run?.status === 'failed' ? 'failed' : 'completed',
-    }
-  }
-
-  const [workspace] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.id, ctx.workspaceId))
-    .limit(1)
-  const taskIds = new Set(tasks.map((task) => task.id))
-  const agentIds = new Set(tasks.map((task) => task.agentId).filter((id): id is string => Boolean(id)))
-  const [artifactRows, agentRows] = await Promise.all([
-    db
-      .select()
-      .from(artifacts)
-      .where(eq(artifacts.runId, ctx.runId))
-      .orderBy(asc(artifacts.createdAt)),
-    agentIds.size > 0 ? db.select().from(workspaceAgents) : Promise.resolve([]),
-  ])
-  const agentNameById = new Map(
-    agentRows
-      .filter((agent) => agentIds.has(agent.id))
-      .map((agent) => [agent.id, agent.name] as const),
-  )
-  const threadByTaskId = new Map(threads.map((thread) => [thread.taskId, thread] as const))
-  const timelineByTaskId = new Map<string, Awaited<ReturnType<typeof roomService.listTimelineEvents>>>()
-  for (const thread of threads) {
-    if (!taskIds.has(thread.taskId)) continue
-    try {
-      const taskRoomInput = await roomService.buildTaskThreadRoomInput(thread.id, workspace?.ownerId ?? '')
-      const room = await roomService.ensureRoomForTaskThread(taskRoomInput)
-      timelineByTaskId.set(
-        thread.taskId,
-        await roomService.listTimelineEvents({ roomId: room.id, limit: 200 }),
-      )
-    } catch {
-      // Final review should be transparent even if a legacy task lacks a task room.
-    }
-  }
-
-  const sharedResults = new Map<string, Awaited<ReturnType<typeof readSharedTaskResult>>>()
-  const childSessions =
-    threads.length > 0
-      ? await db.select().from(sessions)
-      : []
-  const sessionMetadataById = new Map(childSessions.map((session) => [session.id, session.metadata] as const))
-  for (const task of tasks) {
-    const thread = threadByTaskId.get(task.id)
-    const metadata = thread ? sessionMetadataById.get(thread.sessionId) : null
-    const sharedTaskRelativeRoot = stringValue(metadata?.sharedTaskRelativeRoot)
-    if (!sharedTaskRelativeRoot) {
-      sharedResults.set(task.id, null)
-      continue
-    }
-    sharedResults.set(
-      task.id,
-      await readSharedTaskResult({
-        projectPath: workspace?.projectPath ?? null,
-        sharedTaskRelativeRoot,
-      }).catch(() => null),
-    )
-  }
-
-  const summary = buildManagerResourceReviewSummary({
-    goal: goalFromPlan(run.plan) ?? workspace?.goal ?? null,
-    tasks,
-    threads,
-    artifactRows,
-    agentNameById,
-    timelineByTaskId,
-    sharedResults,
-  })
-  const doneCount = tasks.filter((task) => task.status === TaskStatus.Done).length
-  const failedCount = tasks.filter((task) => task.status === TaskStatus.Failed).length
-  const cancelledCount = tasks.filter((task) => task.status === TaskStatus.Cancelled).length
-  const blockedCount = tasks.filter((task) => task.status === TaskStatus.Blocked).length
-  const finalStatus: 'completed' | 'failed' =
-    failedCount > 0 || cancelledCount > 0 || blockedCount > 0 ? 'failed' : 'completed'
-
-  await markRunSynthesizing(ctx, {
-    artifactCount: artifactRows.length,
-    taskCount: tasks.length,
-    summary: `Manager reviewed ${tasks.length} terminal task(s).`,
-  })
-  const groupRoom = workspace?.ownerId
-    ? await roomService.ensureRoomForSession(ctx.groupSessionId, workspace.ownerId)
-    : null
-  const finalReviewEvent = groupRoom
-    ? await roomService.appendTimelineEvent({
-        roomId: groupRoom.id,
-        senderType: 'manager',
-        type: 'manager.message',
-        body: summary,
-        metadata: {
-          kind: 'manager-final-review',
-          runId: ctx.runId,
-          finalStatus,
-          doneCount,
-          failedCount,
-          cancelledCount,
-          blockedCount,
-          artifactCount: artifactRows.length,
-          coordinationSource: 'coordinator-runtime.resource-review',
-        },
-      })
-    : null
-  await finishRunFromManager(ctx, {
-    status: finalStatus,
-    summary,
-    // Final review is Room timeline-native. orchestrator_runs.summaryMessageId
-    // still references legacy messages.id, so do not store room:{eventId} here.
-    summaryMessageId: null,
-    payload: {
-      summaryTimelineMessageId: finalReviewEvent ? `room:${finalReviewEvent.id}` : null,
-      doneCount,
-      failedCount,
-      cancelledCount,
-      blockedCount,
-      artifactCount: artifactRows.length,
-      reviewedTaskIds: tasks.map((task) => task.id),
-      coordinationSource: 'coordinator-runtime.resource-review',
-    },
-  })
-
-  return {
-    reason: `All ${tasks.length} tasks reached terminal state (${doneCount} done, ${failedCount} failed, ${cancelledCount} cancelled, ${blockedCount} blocked). Manager final review completed.`,
-    summary,
-    summaryMessageId: null,
-    finalStatus,
-  }
-}
-
-async function markRunSynthesizing(
-  ctx: StepContext,
-  input: { artifactCount: number; taskCount: number; summary: string },
-) {
-  await db
-    .update(orchestratorRuns)
-    .set({
-      status: 'synthesizing',
-      updatedAt: new Date(),
-    })
-    .where(eq(orchestratorRuns.id, ctx.runId))
-  await emitRunEvent({
-    runId: ctx.runId,
-    workspaceId: ctx.workspaceId,
-    groupSessionId: ctx.groupSessionId,
-    agentId: ctx.actorId,
-    type: 'run.synthesizing',
-    payload: input,
-  })
-}
-
-async function finishRunFromManager(
-  ctx: StepContext,
-  input: {
-    status: 'completed' | 'failed'
-    summary: string
-    summaryMessageId: string | null
-    payload: Record<string, unknown>
-  },
-) {
-  await db
-    .update(orchestratorRuns)
-    .set({
-      status: input.status,
-      summaryMessageId: input.summaryMessageId,
-      updatedAt: new Date(),
-    })
-    .where(eq(orchestratorRuns.id, ctx.runId))
-  await emitRunEvent({
-    runId: ctx.runId,
-    workspaceId: ctx.workspaceId,
-    groupSessionId: ctx.groupSessionId,
-    agentId: ctx.actorId,
-    type: input.status === 'completed' ? 'run.completed' : 'run.failed',
-    severity: input.status === 'completed' ? 'info' : 'warning',
-    payload: {
-      summary: input.summary,
-      summaryMessageId: input.summaryMessageId,
-      status: input.status,
-      ...input.payload,
-    },
-  })
-}
-
-function goalFromPlan(plan: unknown): string | null {
-  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return null
-  return stringValue((plan as Record<string, unknown>).goal)
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null
-}
 
 /**
  * ManagerLoopStepResult — the outcome of one HiClaw-style Observe → Think → Act cycle.
@@ -931,10 +708,8 @@ async function dispatchPreparedTaskRooms(input: {
       },
     })
 
-    void dispatchManagerLoopMentionEvent({
-      eventId: assignedEvent.id,
-      runtime: input.runtime,
-    })
+    // HiClaw model: @mention written to task room, Worker picks up via /sync.
+    void Promise.resolve()
       .catch((error: any) =>
         recordTaskRoomDispatchFailure({
           ctx: input.ctx,
@@ -968,21 +743,7 @@ async function ensureWorkerParticipantForDispatch(
   return roomService.addWorkerParticipant(roomId, workspaceAgentId, workerInstanceId ?? null)
 }
 
-async function dispatchManagerLoopMentionEvent(input: {
-  eventId: string
-  runtime?: WorkerRuntime
-}) {
-  const dispatcher = new MatrixRoomEventDispatcher({
-    runWorkerTaskRoom: async (taskRoom) => {
-      const { workerRuntimeService } = await import('../worker-runtime/worker-runtime-service')
-      return workerRuntimeService.runTaskRoom({
-        ...taskRoom,
-        runtime: input.runtime,
-      })
-    },
-  })
-  await dispatcher.dispatchImportedEvents({ eventIds: [input.eventId] })
-}
+// dispatchManagerLoopMentionEvent removed — Workers pick up @mentions via /sync
 
 async function markPendingTaskDispatchBlocked(
   ctx: StepContext,
@@ -1165,251 +926,14 @@ export async function managerLoopStep(
     .limit(1)
   const ownerId = workspace?.ownerId ?? null
 
-  // ─── Fallback: if all tasks terminal, synthesize immediately ─────────
-  const terminalTasks = tasks.filter((t) => terminalStatuses.has(t.status))
-  if (tasks.length > 0 && terminalTasks.length === tasks.length) {
-    const review = await synthesizeCompletedRunFromResources({ ctx, tasks: terminalTasks, threads })
-    return {
-      action: 'synthesize',
-      reason: review.reason,
-      dispatchedTaskIds: [],
-      reviewedTaskIds: terminalTasks.map((t) => t.id),
-      completedRun: true,
-    }
-  }
-
-  const pendingResourceTasks = tasks.filter((t) => isDispatchablePendingTask(t))
-  if (pendingResourceTasks.length > 0) {
-    const dispatchedTaskIds = await dispatchPreparedTaskRooms({
-      ctx,
-      tasks: pendingResourceTasks,
-      threadByTaskId,
-      runtime: options.workerRuntime,
-    })
-    if (dispatchedTaskIds.length > 0) {
-      return {
-        action: 'dispatch_pending',
-        reason: `Manager dispatched ${dispatchedTaskIds.length} pending task(s) through Matrix @mention.`,
-        dispatchedTaskIds,
-        reviewedTaskIds: [],
-        completedRun: false,
-      }
-    }
-  }
-
-  const waitingForHumanTasks = tasks.filter(
-    (task) => task.status === 'blocked' && task.progressStatus === 'awaiting_human_clarification',
-  )
-  if (waitingForHumanTasks.length > 0) {
-    return {
-      action: 'waiting',
-      reason: `${waitingForHumanTasks.length} task(s) waiting for human clarification.`,
-      dispatchedTaskIds: [],
-      reviewedTaskIds: waitingForHumanTasks.map((task) => task.id),
-      completedRun: false,
-    }
-  }
-
-  // Load workspace agent names for worker health
-  const workspaceAgentIds = workerRows.map((w) => w.workspaceAgentId).filter(Boolean) as string[]
-  const agentNames = new Map<string, string>()
-  if (workspaceAgentIds.length > 0) {
-    const agents = await db
-      .select({ id: workspaceAgents.id, name: workspaceAgents.name })
-      .from(workspaceAgents)
-      .where(eq(workspaceAgents.workspaceId, run.workspaceId))
-    for (const a of agents) {
-      agentNames.set(a.id, a.name)
-    }
-  }
-
-  // ─── Build ManagerRunState for LLM ───────────────────────────────────
-  const runState = {
-    runId: run.id,
-    status: run.status,
-    goal: null as string | null,
-    tasks: tasks.map((t) => ({
-      taskId: t.id,
-      title: t.title,
-      status: t.status,
-      progressStatus: t.progressStatus ?? null,
-      assignedTo: t.agentId ?? null,
-    })),
-    workers: workerRows.map((w) => ({
-      workspaceAgentId: w.workspaceAgentId ?? w.id,
-      name: agentNames.get(w.workspaceAgentId) ?? w.workspaceAgentId ?? w.id,
-      observedState: w.observedState ?? 'unknown',
-      lastHeartbeatAt: w.lastHeartbeatAt ? new Date(w.lastHeartbeatAt).toISOString() : null,
-    })),
-  }
-
-  // ─── Find group room ─────────────────────────────────────────────────
-  if (!ownerId || !run.groupSessionId) {
-    return { action: 'blocked', reason: 'Missing ownerId or groupSessionId', dispatchedTaskIds: [], reviewedTaskIds: [], completedRun: false }
-  }
-  const groupRoom = await roomService.ensureRoomForSession(run.groupSessionId, ownerId)
-
-  // ─── Think: invoke ManagerRuntime ────────────────────────────────────
-  let stepResult: Awaited<ReturnType<typeof managerRuntimeService.stepRoom>>
-  try {
-    stepResult = await managerRuntimeService.stepRoom({
-      roomId: groupRoom.id,
-      ownerId,
-      source: 'manager-loop',
-      runState,
-      appendActions: true,
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    await emitRunEvent({
-      runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
-      type: 'manager.next_action', severity: 'error',
-      payload: { action: 'runtime_error', reason: message },
-    })
-    return { action: 'waiting', reason: `ManagerRuntime error: ${message}`, dispatchedTaskIds: [], reviewedTaskIds: [], completedRun: false }
-  }
-
-  // ─── Act: execute returned actions ───────────────────────────────────
-  const dispatchedTaskIds: string[] = []
-  const reviewedTaskIds: string[] = []
-  let hasDispatched = false
-  let hasCancelled = false
-  let hasReworked = false
-
-  for (const action of stepResult.actions) {
-    switch (action.type) {
-      case 'assign': {
-        // Find pending task matching taskKey or taskTitle
-        const targetTask = tasks.find((t) =>
-          (action.taskKey && t.id === action.taskKey) ||
-          (action.taskTitle && t.title === action.taskTitle),
-        )
-        if (targetTask && isDispatchablePendingTask(targetTask)) {
-          const singleDispatched = await dispatchPreparedTaskRooms({
-            ctx, tasks: [targetTask], threadByTaskId,
-            runtime: options.workerRuntime,
-          })
-          if (singleDispatched.length > 0) {
-            dispatchedTaskIds.push(...singleDispatched)
-            hasDispatched = true
-          }
-        }
-        break
-      }
-      case 'rework': {
-        const targetTask = tasks.find((t) =>
-          (action.taskKey && t.id === action.taskKey) ||
-          (action.taskTitle && t.title === action.taskTitle),
-        )
-        if (targetTask) {
-          await db.update(workspaceTasks)
-            .set({ status: 'pending', progressStatus: 'rework_requested', updatedAt: new Date() })
-            .where(eq(workspaceTasks.id, targetTask.id))
-          const thread = threadByTaskId.get(targetTask.id)
-          if (thread) {
-            await updateTaskThreadStatus(thread.id, 'prepared')
-          }
-          await emitRunEvent({
-            runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
-            taskId: targetTask.id, threadId: thread?.id ?? null,
-            type: 'manager.next_action',
-            payload: { action: 'rework', reason: action.reason ?? 'Manager requested rework', taskId: targetTask.id },
-          })
-          hasReworked = true
-        }
-        break
-      }
-      case 'cancel_task': {
-        const targetTask = tasks.find((t) =>
-          (action.taskKey && t.id === action.taskKey) ||
-          (action.taskTitle && t.title === action.taskTitle),
-        )
-        if (targetTask) {
-          await db.update(workspaceTasks)
-            .set({ status: 'cancelled', updatedAt: new Date(), completedAt: new Date() })
-            .where(eq(workspaceTasks.id, targetTask.id))
-          const thread = threadByTaskId.get(targetTask.id)
-          if (thread?.workerInstanceId) {
-            await runtimeLeaseController.release(thread.workerInstanceId, { metadata: { reason: 'Manager cancelled task' } })
-          }
-          await emitRunEvent({
-            runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
-            taskId: targetTask.id, threadId: thread?.id ?? null,
-            type: 'task.cancelled',
-            payload: { reason: action.reason ?? 'Manager cancelled', taskId: targetTask.id },
-          })
-          hasCancelled = true
-        }
-        break
-      }
-      case 'create_worker': {
-        // Placeholder: emit event and let worker-controller handle actual creation
-        await emitRunEvent({
-          runId, workspaceId: ctx.workspaceId, groupSessionId: ctx.groupSessionId,
-          type: 'manager.next_action',
-          payload: { action: 'create_worker', reason: action.reason ?? 'Manager requested new worker', message: action.message },
-        })
-        break
-      }
-      case 'reply':
-      case 'clarify':
-      case 'propose_members':
-      case 'wait':
-        // Already handled by stepRoom (timeline events written)
-        break
-      default:
-        break
-    }
-  }
-
-  // Build result
-  const pendingTasks = tasks.filter((t) => isDispatchablePendingTask(t))
-  const runningTasks = tasks.filter((t) => t.status === 'running')
-
-  if (hasDispatched) {
-    return {
-      action: 'dispatch_pending',
-      reason: `Manager LLM dispatched ${dispatchedTaskIds.length} task(s)`,
-      dispatchedTaskIds,
-      reviewedTaskIds,
-      completedRun: false,
-    }
-  }
-  if (runningTasks.length > 0) {
-    return {
-      action: 'review_running',
-      reason: stepResult.actions.map((a) => a.reason ?? a.type).join('; ') || `${runningTasks.length} task(s) running`,
-      dispatchedTaskIds,
-      reviewedTaskIds: runningTasks.map((t) => t.id),
-      completedRun: false,
-    }
-  }
-
-  // Persist manager state snapshot for cross-step memory
-  try {
-    const stateNamespace = Blackboard.namespace(run.workspaceId, run.id)
-    await blackboard.write({
-      namespace: stateNamespace,
-      key: `manager_state/steps/${Date.now()}`,
-      value: {
-        observedAt: new Date().toISOString(),
-        taskCount: tasks.length,
-        terminalCount: terminalTasks.length,
-        pendingCount: pendingTasks.length,
-        runningCount: runningTasks.length,
-        actionsTaken: stepResult.actions.map((a) => ({ type: a.type, reason: a.reason })),
-        rawOutputPreview: stepResult.rawOutput?.slice(0, 500) ?? null,
-      },
-    })
-  } catch {
-    // State persistence is best-effort
-  }
-
+  // HiClaw model: when OpenClaw is active, it handles all coordination autonomously.
+  // When OpenClaw is not running, we do not fall back to local LLM or rule-based dispatch.
+  // The Manager must be a real OpenClaw / QwenPaw process.
   return {
-    action: 'llm_driven',
-    reason: stepResult.actions.map((a) => `${a.type}: ${a.reason ?? ''}`).join('; ') || 'Manager observed and decided to wait',
-    dispatchedTaskIds,
-    reviewedTaskIds,
+    action: 'waiting',
+    reason: 'Manager runtime is not running. Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_OPENCLAW_MANAGER_ENDPOINT.',
+    dispatchedTaskIds: [],
+    reviewedTaskIds: [],
     completedRun: false,
   }
 }

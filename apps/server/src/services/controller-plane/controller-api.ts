@@ -583,6 +583,30 @@ export class ControllerApi {
       memberIds.push(result.agentId)
     }
 
+    // Ensure group session and room exist, and reconcile participants (HiClaw model)
+    const [workspace] = await db
+      .select({ ownerId: workspaces.ownerId })
+      .from(workspaces)
+      .where(eq(workspaces.id, input.workspaceId))
+      .limit(1)
+    if (workspace) {
+      const { ensureGroupSession } = await import('../workspace/session-manager')
+      const session = await ensureGroupSession(input.workspaceId, workspace.ownerId)
+      const room = await roomService.ensureRoomForSession(session.id, workspace.ownerId)
+      await roomService.addParticipant({
+        roomId: room.id,
+        participantType: 'manager',
+        displayName: 'Manager',
+        role: 'manager',
+      })
+      for (const agentId of memberIds) {
+        await roomService.addWorkerParticipant(room.id, agentId)
+      }
+      if (leaderAgentId) {
+        await roomService.addWorkerParticipant(room.id, leaderAgentId)
+      }
+    }
+
     return { name: input.name, workspaceId: input.workspaceId, leaderAgentId, memberIds, description: input.description ?? null }
   }
 

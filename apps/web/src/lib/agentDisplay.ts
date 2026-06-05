@@ -7,7 +7,7 @@ import type { WorkspaceAgent } from './api'
  */
 export function runtimeLabel(value: WorkspaceAgent['runtimeType']): string {
   const map: Record<string, string> = {
-    'code-agent': 'Coding Tools',
+    'code-agent': 'Code Worker',
     llm: 'LLM Agent (deprecated)',
   }
   return map[value] ?? value
