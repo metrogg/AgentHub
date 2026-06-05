@@ -38,7 +38,6 @@ import { buildAgUiMemberProposalContinueEvent } from '../services/protocols'
 import {
   appendMessageControlEvent,
   appendHumanMessageRoomFirst,
-  stepCoordinatorForGroupMessage,
 } from '../services/rooms/room-chat-bridge'
 import { roomService } from '../services/rooms/room-service'
 import { listSessionMessagesRoomFirst } from '../services/rooms/timeline-message-projection'
@@ -1146,7 +1145,9 @@ async function continueMemberProposalPlanning(params: {
 
   const metadata = proposalRef.metadata
   try {
-    const { message: continueMessage } = await appendHumanMessageRoomFirst({
+    // HiClaw model: write message to Room timeline, dispatcher handles the rest.
+    // appendHumanMessageRoomFirst() dispatches via matrixRoomEventDispatcher automatically.
+    await appendHumanMessageRoomFirst({
       session,
       userId: ownerId,
       userName,
@@ -1160,17 +1161,11 @@ async function continueMemberProposalPlanning(params: {
       },
       replyToMessageId: proposalRef.id,
     })
-    const step = await stepCoordinatorForGroupMessage({
-      session,
-      userId: ownerId,
-      userName,
-      message: continueMessage,
-    })
     const latestRef = await loadMemberProposalRef(session.id, proposalMessageId)
     await updateMemberProposalContinueState({
       ref: latestRef ?? proposalRef,
       metadata: (latestRef?.metadata ?? metadata) as Record<string, unknown>,
-      content: '已加入建议成员。Manager Runtime 已收到继续协作请求，并已按其输出继续处理。',
+      content: '已加入建议成员。Manager Runtime 已收到继续协作请求。',
       status: 'completed',
       goal,
     })
@@ -1179,7 +1174,7 @@ async function continueMemberProposalPlanning(params: {
       messageId: proposalRef.id,
       status: 'completed',
       goal,
-      taskIds: step.actions.filter((action) => action.type === 'assign').map((action) => action.taskKey ?? action.taskTitle ?? 'assign'),
+      taskIds: [],
     })
   } catch (err: any) {
     const error = err?.message || 'Orchestrator 重新规划失败'
