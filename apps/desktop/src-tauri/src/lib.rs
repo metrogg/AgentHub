@@ -281,6 +281,35 @@ fn env_path(name: &str) -> Option<PathBuf> {
     env::var_os(name).map(PathBuf::from)
 }
 
+fn env_is_unset_or_empty(name: &str) -> bool {
+    env::var(name)
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(true)
+}
+
+fn command_env_default(command: &mut Command, name: &str, value: &str) {
+    if env_is_unset_or_empty(name) {
+        command.env(name, value);
+    }
+}
+
+fn apply_desktop_matrix_env_defaults(command: &mut Command) {
+    command_env_default(command, "AGENTHUB_ROOM_PROVIDER", "matrix");
+    command_env_default(
+        command,
+        "AGENTHUB_MATRIX_HOMESERVER_URL",
+        "http://127.0.0.1:6167",
+    );
+    command_env_default(command, "AGENTHUB_MATRIX_SERVER_NAME", "agenthub.local");
+    command_env_default(
+        command,
+        "AGENTHUB_MATRIX_REGISTRATION_TOKEN",
+        "agenthub-dev-registration-token",
+    );
+    command_env_default(command, "AGENTHUB_MATRIX_AUTO_INVITE_PARTICIPANTS", "true");
+    command_env_default(command, "AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS", "true");
+}
+
 #[cfg(target_os = "windows")]
 fn parse_reg_value(output: &str, name: &str) -> Option<String> {
     output.lines().find_map(|line| {
@@ -881,6 +910,7 @@ fn start_desktop_server(app: tauri::AppHandle, window: WebviewWindow, server_sta
         .env("AGENTHUB_LOG_DIR", &paths.log_dir)
         .env("AGENTHUB_WEB_DIST", &web_dist)
         .env("DATABASE_URL", paths.data_dir.join("agenthub.db"));
+    apply_desktop_matrix_env_defaults(&mut command);
 
     if let Some(root) = workspace_root.as_ref() {
         command.env("PROJECT_ROOT", root);
