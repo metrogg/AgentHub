@@ -1,4 +1,4 @@
-import { db, eq, sessions, taskThreads, workspaceAgents, workspaces, workspaceTasks } from '@agenthub/db'
+import { and, db, eq, roomParticipants, rooms, sessions, taskThreads, workerInstances, workspaceAgents, workspaces, workspaceTasks } from '@agenthub/db'
 import { WsEvent } from '@agenthub/shared'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { broadcastSessionEvent } from '../agent-runner'
@@ -132,13 +132,80 @@ export class RoomService {
   async addWorkerParticipant(roomId: string, workspaceAgentId: string, workerInstanceId?: string | null) {
     const [agent] = await db.select().from(workspaceAgents).where(eq(workspaceAgents.id, workspaceAgentId)).limit(1)
     if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
-    return this.addParticipant({
+    const participant = await this.addParticipant({
       roomId,
       participantType: 'worker',
       workspaceAgentId,
       workerInstanceId: workerInstanceId ?? null,
       displayName: agent.name,
       role: 'member',
+    })
+    if (workerInstanceId) {
+      const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
+      if (worker && isActiveWorkerState(worker.observedState)) {
+        await this.appendWorkerSelfIntroduction(roomId, participant.id, {
+          sourceEventId: null,
+        })
+      }
+    }
+    return participant
+  }
+
+  async announceWorkerPresenceInJoinedRooms(
+    workerInstanceId: string,
+    input: { mode: 'intro' | 'ready' | 'listening'; sourceEventId?: string | null } = { mode: 'intro' },
+  ) {
+    const participantRows = await db
+      .select({
+        participant: roomParticipants,
+        room: rooms,
+        agent: workspaceAgents,
+      })
+      .from(roomParticipants)
+      .innerJoin(rooms, eq(roomParticipants.roomId, rooms.id))
+      .innerJoin(workspaceAgents, eq(roomParticipants.workspaceAgentId, workspaceAgents.id))
+      .where(
+        and(
+          eq(roomParticipants.participantType, 'worker'),
+          eq(roomParticipants.workerInstanceId, workerInstanceId),
+          eq(roomParticipants.status, 'joined'),
+        ),
+      )
+
+    const announcements: Array<{ roomId: string; eventId: string | null }> = []
+    for (const row of participantRows) {
+      if (row.room.kind !== 'group' && row.room.kind !== 'manager_dm') continue
+      const eventId = await this.appendWorkerPresenceAnnouncement(row, {
+        mode: input.mode,
+        sourceEventId: input.sourceEventId ?? null,
+      })
+      if (eventId) {
+        announcements.push({ roomId: row.room.id, eventId })
+      }
+    }
+    return announcements
+  }
+
+  async appendWorkerSelfIntroduction(
+    roomId: string,
+    workerParticipantId: string,
+    input: { sourceEventId?: string | null } = {},
+  ) {
+    const [row] = await db
+      .select({
+        participant: roomParticipants,
+        room: rooms,
+        agent: workspaceAgents,
+      })
+      .from(roomParticipants)
+      .innerJoin(rooms, eq(roomParticipants.roomId, rooms.id))
+      .innerJoin(workspaceAgents, eq(roomParticipants.workspaceAgentId, workspaceAgents.id))
+      .where(and(eq(roomParticipants.id, workerParticipantId), eq(roomParticipants.roomId, roomId)))
+      .limit(1)
+    if (!row || (row.room.kind !== 'group' && row.room.kind !== 'manager_dm')) return null
+    return this.appendWorkerPresenceAnnouncement(row, {
+      mode: 'intro',
+      sourceEventId: input.sourceEventId ?? null,
     })
   }
 
@@ -159,6 +226,59 @@ export class RoomService {
         },
       })
     }
+  }
+
+  private async appendWorkerPresenceAnnouncement(
+    row: {
+      participant: typeof roomParticipants.$inferSelect
+      room: typeof rooms.$inferSelect
+      agent: typeof workspaceAgents.$inferSelect
+    },
+    input: { mode: 'intro' | 'ready' | 'listening'; sourceEventId?: string | null },
+  ) {
+    const metadata = (row.participant.metadata ?? {}) as Record<string, unknown>
+    const announcementKey =
+      input.mode === 'ready'
+        ? 'workerReadyAnnouncedAt'
+        : input.mode === 'listening'
+          ? 'workerListeningAnnouncedAt'
+          : 'workerIntroAnnouncedAt'
+    const announcedAt = typeof metadata[announcementKey] === 'string' ? metadata[announcementKey] : null
+    if (announcedAt) return null
+
+    const body =
+      input.mode === 'ready'
+        ? `大家好，我是 ${row.agent.name}，我已经在线，随时待命。`
+        : input.mode === 'listening'
+          ? `大家好，我是 ${row.agent.name}，我已经进入监听状态，随时可以接任务。`
+          : `大家好，我是 ${row.agent.name}，负责 ${row.agent.role}。我已经加入群聊，随时可以协作。`
+
+    const event = await this.appendTimelineEvent({
+      roomId: row.room.id,
+      senderParticipantId: row.participant.id,
+      senderType: 'worker',
+      type: 'worker.message',
+      body,
+      metadata: {
+        kind: `worker-runtime.${input.mode}-announcement`,
+        workspaceAgentId: row.agent.id,
+        workerInstanceId: row.participant.workerInstanceId ?? null,
+        sourceEventId: input.sourceEventId ?? null,
+      },
+    })
+
+    await db
+      .update(roomParticipants)
+      .set({
+        metadata: {
+          ...metadata,
+          [announcementKey]: new Date().toISOString(),
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(roomParticipants.id, row.participant.id))
+
+    return event.id
   }
 }
 
@@ -194,4 +314,8 @@ function timelineBroadcastSessionIds(room: Awaited<ReturnType<RoomAdapter['getRo
     }
   }
   return Array.from(ids)
+}
+
+function isActiveWorkerState(state: string) {
+  return ['ready', 'listening', 'assigned', 'busy', 'waiting_for_human', 'resuming', 'idle'].includes(state)
 }

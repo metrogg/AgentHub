@@ -1,14 +1,20 @@
 {
   "gateway": {
     "mode": "local",
-    "port": 0,
+    "port": 18800,
     "bind": "lan",
-    "auth": { "token": "agenthub-worker-token" },
-    "remote": { "token": "agenthub-worker-token" },
+    "auth": {
+      "token": "agenthub-worker-token"
+    },
+    "remote": {
+      "token": "agenthub-worker-token"
+    },
     "controlUi": {
       "dangerouslyDisableDeviceAuth": true,
       "allowInsecureAuth": true,
-      "allowedOrigins": ["*"]
+      "allowedOrigins": [
+        "*"
+      ]
     }
   },
   "channels": {
@@ -16,18 +22,28 @@
       "enabled": true,
       "homeserver": "http://localhost:6167",
       "userId": "@worker:agenthub.local",
-      "accessToken": "",
+      "accessToken": "vExVfW3Eo37xTXTyddhehSmMwUOVSy8N",
       "encryption": false,
-      "network": { "dangerouslyAllowPrivateNetwork": true },
+      "network": {
+        "dangerouslyAllowPrivateNetwork": true
+      },
       "autoJoin": "always",
       "dm": {
         "policy": "allowlist",
-        "allowFrom": ["@admin:agenthub.local", "@manager:agenthub.local"]
+        "allowFrom": [
+          "@admin:agenthub.local",
+          "@manager:agenthub.local"
+        ]
       },
       "groupPolicy": "allowlist",
-      "groupAllowFrom": ["@admin:agenthub.local", "@manager:agenthub.local"],
+      "groupAllowFrom": [
+        "@admin:agenthub.local",
+        "@manager:agenthub.local"
+      ],
       "groups": {
-        "*": { "allow": true, "requireMention": true }
+        "*": {
+          "requireMention": true
+        }
       },
       "streaming": "partial",
       "blockStreaming": true
@@ -46,7 +62,10 @@
             "reasoning": false,
             "contextWindow": 128000,
             "maxTokens": 8192,
-            "input": ["text"]
+            "input": [
+              "text"
+            ],
+            "name": "default"
           }
         ]
       }
@@ -55,10 +74,14 @@
   "agents": {
     "defaults": {
       "timeoutSeconds": 600,
-      "workspace": "~",
-      "model": { "primary": "agenthub-llm/default" },
+      "workspace": "/mnt/c/Users/wzd/Desktop/速通ing/字节ai全栈挑战赛(agenthub)/AgentHub/infra",
+      "model": {
+        "primary": "agenthub-llm/default"
+      },
       "maxConcurrent": 4,
-      "subagents": { "maxConcurrent": 8 },
+      "subagents": {
+        "maxConcurrent": 8
+      },
       "elevatedDefault": "full"
     }
   },
@@ -70,11 +93,17 @@
     },
     "elevated": {
       "enabled": true,
-      "allowFrom": { "matrix": ["*"] }
+      "allowFrom": {
+        "matrix": [
+          "*"
+        ]
+      }
     }
   },
   "plugins": {
-    "load": { "paths": [] },
+    "load": {
+      "paths": []
+    },
     "entries": {}
   }
 }

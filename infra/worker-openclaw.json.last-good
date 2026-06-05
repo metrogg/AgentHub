@@ -1,13 +1,13 @@
 {
   "gateway": {
     "mode": "local",
-    "port": 18799,
+    "port": 18800,
     "bind": "lan",
     "auth": {
-      "token": "agenthub-manager-token"
+      "token": "agenthub-worker-token"
     },
     "remote": {
-      "token": "agenthub-manager-token"
+      "token": "agenthub-worker-token"
     },
     "controlUi": {
       "dangerouslyDisableDeviceAuth": true,
@@ -21,8 +21,8 @@
     "matrix": {
       "enabled": true,
       "homeserver": "http://localhost:6167",
-      "userId": "@manager:agenthub.local",
-      "accessToken": "uWnVfeCIz8jxvzpnTcmpujiZ3uU5fVhz",
+      "userId": "@worker:agenthub.local",
+      "accessToken": "h6LoqGrBTtIWPxM6yuZQwsYGOHEbVt1a",
       "encryption": false,
       "network": {
         "dangerouslyAllowPrivateNetwork": true
@@ -31,12 +31,14 @@
       "dm": {
         "policy": "allowlist",
         "allowFrom": [
-          "@admin:agenthub.local"
+          "@admin:agenthub.local",
+          "@manager:agenthub.local"
         ]
       },
       "groupPolicy": "allowlist",
       "groupAllowFrom": [
-        "@admin:agenthub.local"
+        "@admin:agenthub.local",
+        "@manager:agenthub.local"
       ],
       "groups": {
         "*": {
@@ -71,20 +73,16 @@
   },
   "agents": {
     "defaults": {
-      "timeoutSeconds": 1800,
+      "timeoutSeconds": 600,
       "workspace": "~",
       "model": {
         "primary": "agenthub-llm/default"
       },
-      "maxConcurrent": 8,
+      "maxConcurrent": 4,
       "subagents": {
-        "maxConcurrent": 16
+        "maxConcurrent": 8
       },
-      "elevatedDefault": "full",
-      "heartbeat": {
-        "every": "1h",
-        "prompt": "Read ~/HEARTBEAT.md and follow the checklist."
-      }
+      "elevatedDefault": "full"
     }
   },
   "tools": {
@@ -102,26 +100,10 @@
       }
     }
   },
-  "session": {
-    "dmScope": "per-channel-peer",
-    "resetByType": {
-      "dm": {
-        "mode": "daily",
-        "atHour": 4
-      },
-      "group": {
-        "mode": "daily",
-        "atHour": 4
-      }
-    }
-  },
   "plugins": {
     "load": {
       "paths": []
     },
     "entries": {}
-  },
-  "commands": {
-    "restart": true
   }
 }

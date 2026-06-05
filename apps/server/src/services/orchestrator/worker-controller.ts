@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { agentHubUserDataRoot } from '../system-paths'
+import { roomService } from '../rooms'
 
 export interface ReconcileResult {
   phase: string
@@ -395,6 +396,9 @@ export class WorkerController {
               gatewayPort,
             },
           })
+          await roomService.announceWorkerPresenceInJoinedRooms(worker.id, {
+            mode: 'listening',
+          }).catch(() => {})
         } else {
           logger.warn({ workerId: worker.id, error: readiness.error }, 'Worker gateway did not become healthy')
         }
@@ -408,6 +412,9 @@ export class WorkerController {
           containerBackendPending: true,
         },
       })
+      await roomService.announceWorkerPresenceInJoinedRooms(worker.id, {
+        mode: 'ready',
+      }).catch(() => {})
     } else {
       const listenerResults = await startMatrixWorkerListeners(worker.id)
       anyListenerStarted = listenerResults.some((r) => r.started)
@@ -419,6 +426,9 @@ export class WorkerController {
             listeningAt: new Date().toISOString(),
           },
         })
+        await roomService.announceWorkerPresenceInJoinedRooms(worker.id, {
+          mode: 'listening',
+        }).catch(() => {})
       }
     }
 
