@@ -15,9 +15,11 @@ import {
   PackageOpen,
   RefreshCw,
   Search,
+  X,
   XCircle,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { ArtifactPreviewSurface } from '../components/artifacts/ArtifactPreviewSurface'
 import SessionList from '../components/chat/SessionList'
 import {
   api,
@@ -25,6 +27,7 @@ import {
   type OrchestratorRunTaskSnapshot,
   type TypedBlackboardEntry,
 } from '../lib/api'
+import type { ArtifactPreviewItem } from '../lib/artifactPreview'
 import { cn, relativeTime } from '../lib/utils'
 import { useI18n } from '../lib/i18n'
 
@@ -73,6 +76,7 @@ export default function ArtifactsPage() {
   const [query, setQuery] = useState('')
   const [selectedRunId, setSelectedRunId] = useState<string>('all')
   const [typeFilter, setTypeFilter] = useState<AssetTypeFilter>('all')
+  const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
 
   async function refresh() {
     setLoading(true)
@@ -279,7 +283,12 @@ export default function ArtifactsPage() {
                 style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(23rem, 1fr))' }}
               >
                 {filteredAssets.map((asset) => (
-                  <AssetCard key={asset.id} asset={asset} language={language} />
+                  <AssetCard
+                    key={asset.id}
+                    asset={asset}
+                    language={language}
+                    onPreview={() => setPreviewItem(assetToPreviewItem(asset))}
+                  />
                 ))}
               </section>
             )}
@@ -293,6 +302,30 @@ export default function ArtifactsPage() {
           </div>
         </div>
       </main>
+      {previewItem && (
+        <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(58rem,calc(100vw-2rem))] flex-col border-l border-neutral-200 bg-white shadow-2xl">
+          <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-neutral-950">{previewItem.title}</div>
+              <div className="truncate text-xs text-neutral-500">{previewItem.subtitle ?? previewItem.path ?? previewItem.url ?? '产物预览'}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPreviewItem(null)}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+              aria-label="关闭预览"
+              title="关闭预览"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <ArtifactPreviewSurface
+            className="min-h-0 flex-1"
+            item={previewItem}
+            workspaceId={previewItem.workspaceId}
+          />
+        </aside>
+      )}
     </div>
   )
 }
@@ -300,13 +333,16 @@ export default function ArtifactsPage() {
 function AssetCard({
   asset,
   language,
+  onPreview,
 }: {
   asset: AssetItem
   language: 'zh' | 'en'
+  onPreview: () => void
 }) {
   const Icon = assetIcon(asset.kind)
   const openUrl = assetOpenUrl(asset)
   const downloadable = Boolean(asset.path && asset.workspaceId)
+  const previewable = asset.kind !== 'blackboard' && (Boolean(openUrl) || Boolean(asset.path) || Boolean(asset.source))
   return (
     <article className="flex min-h-[18rem] flex-col rounded-xl border border-neutral-200 bg-white p-4 shadow-sm transition hover:border-neutral-300">
       <div className="flex items-start justify-between gap-3">
@@ -341,10 +377,10 @@ function AssetCard({
       </div>
 
       <div className="mt-auto flex flex-wrap gap-2 pt-4">
-        {openUrl && (
+        {previewable && (
           <button
             type="button"
-            onClick={() => window.open(openUrl, '_blank', 'noopener,noreferrer')}
+            onClick={onPreview}
             className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-950 px-3 text-sm font-medium text-white transition hover:bg-neutral-800"
           >
             {asset.kind === 'preview' || asset.kind === 'deploy' ? (
@@ -353,6 +389,16 @@ function AssetCard({
               <ExternalLink className="h-4 w-4" />
             )}
             预览
+          </button>
+        )}
+        {openUrl && (
+          <button
+            type="button"
+            onClick={() => window.open(openUrl, '_blank', 'noopener,noreferrer')}
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50"
+          >
+            <ExternalLink className="h-4 w-4" />
+            新窗口
           </button>
         )}
         {downloadable && (
@@ -533,6 +579,35 @@ function assetOpenUrl(asset: AssetItem) {
     return `/api/artifacts/file?workspaceId=${encodeURIComponent(asset.workspaceId)}&path=${encodeURIComponent(asset.path)}`
   }
   return ''
+}
+
+function assetToPreviewItem(asset: AssetItem): ArtifactPreviewItem {
+  const openUrl = assetOpenUrl(asset)
+  return {
+    id: asset.id,
+    title: asset.title,
+    subtitle: asset.path ?? asset.source ?? assetKindLabel(asset.kind),
+    description: asset.description,
+    kind:
+      asset.kind === 'preview'
+        ? 'web'
+        : asset.kind === 'deploy'
+          ? 'deploy'
+          : asset.kind === 'diff'
+            ? 'diff'
+            : inferPreviewKindFromAsset(asset),
+    url: openUrl || asset.url || undefined,
+    path: asset.path,
+    source: asset.kind === 'diff' ? text(asRecord(asset.raw)?.diff) || asset.source : asset.source,
+    workspaceId: asset.workspaceId,
+  }
+}
+
+function inferPreviewKindFromAsset(asset: AssetItem): ArtifactPreviewItem['kind'] {
+  const lower = `${asset.path ?? asset.url ?? asset.title}`.toLowerCase()
+  if (/\.(png|jpe?g|webp|gif|svg)$/i.test(lower)) return 'image'
+  if (/\.html?$/i.test(lower)) return 'web'
+  return 'file'
 }
 
 function KindBadge({ kind }: { kind: AssetKind }) {

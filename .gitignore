@@ -91,6 +91,10 @@ captures/
 output/
 SCRIPT
 
+# Local tool artifacts
+.mavis/
+.opencode/
+
 # Reference source code (not part of the project)
 hiclaw源码参考/
 

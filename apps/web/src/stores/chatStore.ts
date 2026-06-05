@@ -3308,6 +3308,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         replyToMessageId: replyToMessageId ?? undefined,
         quotedMessage,
         safetyMode: options?.safetyMode,
+        mentions: options?.mentions,
       })
       updateCachedMessages(sessionId, (messages) => upsertMessage(messages, msg))
       set((s) => ({

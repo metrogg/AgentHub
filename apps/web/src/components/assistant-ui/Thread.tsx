@@ -4,7 +4,9 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useAuiState,
   useMessage,
+  useThread,
   type EmptyMessagePartComponent,
 } from '@assistant-ui/react'
 import {
@@ -86,6 +88,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type RefObject,
   useEffect,
   useMemo,
   useRef,
@@ -161,6 +164,7 @@ import {
 import { workspaceNameFromPath } from '@agenthub/shared'
 import { useLineSelection } from './useLineSelection'
 import LineSelectionToolbar from './LineSelectionToolbar'
+import { VirtualList } from '../VirtualList'
 
 const highlightLanguageMap = {
   bash,
@@ -352,6 +356,7 @@ export const Thread: FC = () => {
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
   const [previewCollapsed, setPreviewCollapsed] = useState(false)
+  const viewportRef = useRef<HTMLDivElement>(null)
   const showInlineContextRail = !isGroupSession && showContextRail && (!previewItem || previewCollapsed)
 
   async function openGroupConversation() {
@@ -441,10 +446,14 @@ export const Thread: FC = () => {
               onOpenTasks={() => setGroupTasksOpen(true)}
             />
           )}
-          <ThreadPrimitive.Viewport className="agenthub-thread-viewport flex-1 overflow-y-auto overscroll-contain scroll-auto px-6">
+          <ThreadPrimitive.Viewport
+            ref={viewportRef}
+            className="agenthub-thread-viewport flex-1 overflow-y-auto overscroll-contain scroll-auto px-6"
+          >
             <ThreadWelcome />
-            <ThreadPrimitive.Messages
-              components={{ UserMessage, AssistantMessage, SystemMessage }}
+            <VirtualThreadMessages
+              key={currentSession?.id ?? 'no-session'}
+              scrollRef={viewportRef}
             />
             <ThreadPrimitive.If empty={false}>
               <div className="min-h-28" />
@@ -551,6 +560,61 @@ const HeaderAgentStatusIndicator: FC = () => {
       )}
     </div>
   )
+}
+
+const VirtualThreadMessages: FC<{ scrollRef: RefObject<HTMLElement> }> = ({ scrollRef }) => {
+  const messageCount = useThread((state) => state.messages.length)
+  const sourceMessages = useChatStore((state) => state.messages)
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const agentTyping = useChatStore((state) => state.agentTyping)
+  const items = useMemo(() => Array.from({ length: messageCount }, (_, index) => index), [messageCount])
+  const components = useMemo(
+    () => ({ UserMessage, AssistantMessage, SystemMessage }),
+    [],
+  )
+
+  return (
+    <VirtualList
+      className="agenthub-thread-virtual-list"
+      scrollRef={scrollRef}
+      items={items}
+      getKey={(index) =>
+        sourceMessages[index]?.id ??
+        (index === sourceMessages.length && streamingMessage?.id) ??
+        (index === sourceMessages.length && agentTyping ? 'agenthub-thinking' : `message-${index}`)
+      }
+      estimateSize={(index) => estimateThreadMessageHeight(sourceMessages[index])}
+      overscanPx={1600}
+      renderItem={(index) => (
+        <SafeThreadMessageByIndex
+          index={index}
+          components={components}
+        />
+      )}
+    />
+  )
+}
+
+const SafeThreadMessageByIndex: FC<{
+  components: ComponentPropsWithoutRef<typeof ThreadPrimitive.MessageByIndex>['components']
+  index: number
+}> = ({ components, index }) => {
+  const liveMessageCount = useAuiState((state) => state.thread.messages.length)
+  if (index < 0 || index >= liveMessageCount) return null
+  return <ThreadPrimitive.MessageByIndex index={index} components={components} />
+}
+
+function estimateThreadMessageHeight(message?: Message) {
+  if (!message) return 120
+  const contentLength = (message.content ?? '').length
+  const lineCount = Math.max(1, Math.ceil(contentLength / 80))
+  let height = 72 + Math.min(520, lineCount * 24)
+  const metadata = message.metadata ?? {}
+  if (metadata.codeAgentRun) height += 240
+  if (metadata.artifacts || metadata.file_card || metadata.delivery_report) height += 150
+  if (metadata.attachments) height += 96
+  if (message.type === 'task_board') height += 320
+  return height
 }
 
 function useHeaderAgentStatus(): HeaderAgentStatusProjection {
