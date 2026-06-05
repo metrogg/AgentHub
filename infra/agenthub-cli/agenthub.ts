@@ -3,6 +3,8 @@
  * agenthub CLI — AgentHub Controller command-line interface.
  * Aligned with HiClaw's `hiclaw` CLI pattern.
  *
+ * Routes: /api/controller/* (REST) + /api/internal/manager/actions (legacy)
+ *
  * Environment:
  *   AGENTHUB_CONTROLLER_URL  (default: http://localhost:3001)
  *   AGENTHUB_MANAGER_TOKEN   (Matrix access token for auth)
@@ -43,10 +45,6 @@ async function api(path: string, options: ApiOptions = {}): Promise<unknown> {
   return data
 }
 
-async function managerAction(action: string, params: Record<string, unknown> = {}): Promise<unknown> {
-  return api('/api/internal/manager/actions', { method: 'POST', body: { action, params } })
-}
-
 // ─── Argument Parser ──────────────────────────────────────────────────
 
 function parseArgs(args: string[]): { flags: Record<string, string>; positional: string[] } {
@@ -75,7 +73,6 @@ function parseArgs(args: string[]): { flags: Record<string, string>; positional:
   return { flags, positional }
 }
 
-function flag(flags: Record<string, string>, key: string): string | undefined { return flags[key] }
 function requireFlag(flags: Record<string, string>, key: string): string {
   const val = flags[key]
   if (!val) { console.error(`Error: --${key} is required`); process.exit(1) }
@@ -97,29 +94,32 @@ async function cmdWorker(args: string[]) {
     case 'create': {
       const name = requireFlag(f, 'name')
       const workspaceId = requireFlag(f, 'workspace')
-      const result = await managerAction('create_worker', {
-        workspaceId, name,
-        runtimeType: f.runtime || 'code-agent',
-        codeAgentType: f['code-agent'] || 'codex',
-        modelId: f.model || undefined,
+      const result = await api('/api/controller/workers', {
+        method: 'POST',
+        body: {
+          workspaceId, name,
+          runtimeType: f.runtime || 'code-agent',
+          codeAgentType: f['code-agent'] || 'codex',
+          modelId: f.model || undefined,
+          skillIds: f.skills ? f.skills.split(',') : undefined,
+          soul: f.soul || undefined,
+        },
       })
       output(result, f)
       break
     }
     case 'list': {
       const workspaceId = requireFlag(f, 'workspace')
-      const result = await managerAction('list_workers', { workspaceId })
+      const result = await api('/api/controller/workers', { query: { workspaceId } })
       output(result, f)
       break
     }
     case 'get': {
-      // agenthub worker get <name> — alias for status by name
       const name = positional[0]
       if (!name) { console.error('Error: worker name is required'); process.exit(1) }
       const workspaceId = f.workspace || ''
-      const result = await managerAction('list_workers', { workspaceId })
-      // Filter by name client-side
-      const workers = (result as any)?.workers || (result as any)?.result?.workers || []
+      const result = await api('/api/controller/workers', { query: { workspaceId } })
+      const workers = (result as any)?.workers || []
       const found = workers.find((w: any) => w.name === name)
       if (!found) { console.error(`Worker not found: ${name}`); process.exit(1) }
       output(found, f)
@@ -149,13 +149,13 @@ async function cmdWorker(args: string[]) {
     }
     case 'stop': case 'sleep': {
       const id = requireFlag(f, 'id')
-      const result = await api(`/api/controller/workers/${id}/stop`, { method: 'POST' })
+      const result = await api(`/api/controller/workers/${id}/sleep`, { method: 'POST' })
       output(result, f)
       break
     }
     case 'ensure-ready': {
       const id = requireFlag(f, 'id')
-      const result = await api(`/api/controller/workers/${id}/reconcile`, { method: 'POST' })
+      const result = await api(`/api/controller/workers/${id}/reconcile`, { method: 'POST', body: {} })
       output(result, f)
       break
     }
@@ -166,22 +166,24 @@ async function cmdWorker(args: string[]) {
       break
     }
     case 'apply': {
-      // agenthub worker apply --name <N> --model <M> [--expose 8080] [--package nacos://...]
       const name = requireFlag(f, 'name')
       const workspaceId = f.workspace || ''
-      const result = await managerAction('create_worker', {
-        workspaceId, name,
-        runtimeType: f.runtime || 'code-agent',
-        codeAgentType: f['code-agent'] || 'codex',
-        modelId: f.model || undefined,
+      const result = await api('/api/controller/workers', {
+        method: 'POST',
+        body: {
+          workspaceId, name,
+          runtimeType: f.runtime || 'code-agent',
+          codeAgentType: f['code-agent'] || 'codex',
+          modelId: f.model || undefined,
+          skillIds: f.skills ? f.skills.split(',') : undefined,
+        },
       })
       output(result, f)
       break
     }
     case 'report-ready': {
-      // Used by Worker process to report readiness
       const name = f.name || process.env.AGENTHUB_WORKER_NAME || ''
-      const result = await api('/api/internal/worker/report-ready', {
+      const result = await api('/api/controller/worker/report-ready', {
         method: 'POST',
         body: { workerName: name },
       })
@@ -204,32 +206,41 @@ async function cmdTask(args: string[]) {
     case 'create': {
       const workspaceId = requireFlag(f, 'workspace')
       const title = requireFlag(f, 'title')
-      const result = await managerAction('create_task', {
-        workspaceId,
-        runId: f.run || undefined,
-        title,
-        spec: f.spec || title,
-        assignToAgentId: f['assign-to'] || f.agent || undefined,
-        assignToWorkerInstanceId: f['worker-instance'] || undefined,
+      const result = await api('/api/controller/tasks', {
+        method: 'POST',
+        body: {
+          workspaceId, title,
+          runId: f.run || undefined,
+          spec: f.spec || f.description || title,
+          assignToAgentId: f['assign-to'] || f.agent || undefined,
+          runtimeType: f.runtime || 'code-agent',
+        },
       })
       output(result, f)
       break
     }
     case 'list': {
       const runId = requireFlag(f, 'run')
-      const result = await api(`/api/orchestrator-runs/${runId}/tasks`)
-      output(result, f)
+      const result = await api(`/api/controller/runs/${runId}`)
+      output((result as any)?.tasks || result, f)
       break
     }
     case 'status': {
       const id = requireFlag(f, 'id')
-      const result = await api(`/api/workspace-tasks/${id}`)
-      output(result, f)
+      // Get task from run endpoint
+      const runs = await api('/api/controller/runs', { query: { workspaceId: f.workspace || '' } })
+      let task = null
+      for (const run of (runs as any)?.runs || []) {
+        const runDetail = await api(`/api/controller/runs/${run.id}`)
+        task = (runDetail as any)?.tasks?.find((t: any) => t.id === id)
+        if (task) break
+      }
+      output(task || { error: 'Task not found' }, f)
       break
     }
     case 'complete': {
       const id = requireFlag(f, 'id')
-      const result = await api(`/api/controller/tasks/${id}/complete`, { method: 'POST', body: { runId: f.run || '' } })
+      const result = await api(`/api/controller/tasks/${id}/complete`, { method: 'POST', body: {} })
       output(result, f)
       break
     }
@@ -246,6 +257,7 @@ async function cmdTask(args: string[]) {
       break
     }
     case 'retry': {
+      // Retry = re-dispatch the same task
       const id = requireFlag(f, 'id')
       const result = await api(`/api/workspace-tasks/${id}/retry`, { method: 'POST' })
       output(result, f)
@@ -267,22 +279,22 @@ async function cmdRun(args: string[]) {
     case 'create': {
       const workspaceId = requireFlag(f, 'workspace')
       const goal = requireFlag(f, 'goal')
-      const result = await api('/api/orchestrator-runs', {
+      const result = await api('/api/controller/runs', {
         method: 'POST',
-        body: { workspaceId, groupSessionId: f.session || '', goal },
+        body: { workspaceId, goal, groupSessionId: f.session || '' },
       })
       output(result, f)
       break
     }
     case 'status': {
       const id = requireFlag(f, 'id')
-      const result = await managerAction('get_run_status', { runId: id })
+      const result = await api(`/api/controller/runs/${id}`)
       output(result, f)
       break
     }
     case 'cancel': {
       const id = requireFlag(f, 'id')
-      const result = await api(`/api/orchestrator-runs/${id}/cancel`, {
+      const result = await api(`/api/controller/runs/${id}/cancel`, {
         method: 'POST', body: { reason: f.reason || 'Cancelled by manager' },
       })
       output(result, f)
@@ -290,7 +302,7 @@ async function cmdRun(args: string[]) {
     }
     case 'list': {
       const workspaceId = requireFlag(f, 'workspace')
-      const result = await api(`/api/orchestrator-runs?workspaceId=${workspaceId}`)
+      const result = await api('/api/controller/runs', { query: { workspaceId } })
       output(result, f)
       break
     }
@@ -349,19 +361,22 @@ async function cmdTeam(args: string[]) {
     case 'create': {
       const name = requireFlag(f, 'name')
       const workspaceId = requireFlag(f, 'workspace')
-      const result = await managerAction('create_team', {
-        workspaceId, name,
-        leaderName: f['leader-name'] || undefined,
-        leaderModel: f['leader-model'] || undefined,
-        workers: f.workers ? f.workers.split(',').map((w: string) => w.trim()) : undefined,
-        description: f.description || undefined,
+      const result = await api('/api/controller/teams', {
+        method: 'POST',
+        body: {
+          workspaceId, name,
+          leaderName: f['leader-name'] || undefined,
+          leaderModel: f['leader-model'] || undefined,
+          workers: f.workers ? f.workers.split(',').map((w: string) => w.trim()) : undefined,
+          description: f.description || undefined,
+        },
       })
       output(result, f)
       break
     }
     case 'list': {
       const workspaceId = requireFlag(f, 'workspace')
-      const result = await managerAction('list_teams', { workspaceId })
+      const result = await api('/api/controller/teams', { query: { workspaceId } })
       output(result, f)
       break
     }
@@ -369,25 +384,24 @@ async function cmdTeam(args: string[]) {
       const name = f.name || args[0]
       if (!name) { console.error('Error: team name is required'); process.exit(1) }
       const workspaceId = f.workspace || ''
-      const result = await managerAction('get_team', { workspaceId, teamName: name })
+      const result = await api(`/api/controller/teams/${name}`, { query: { workspaceId } })
       output(result, f)
       break
     }
     case 'update': {
       const name = requireFlag(f, 'name')
-      const workspaceId = f.workspace || ''
-      const body: Record<string, unknown> = { teamName: name, workspaceId }
+      const body: Record<string, unknown> = {}
       if (f.description) body.description = f.description
       if (f['leader-model']) body.leaderModel = f['leader-model']
       if (f.workers) body.workers = f.workers.split(',').map((w: string) => w.trim())
-      const result = await managerAction('update_team', body)
+      const result = await api(`/api/controller/teams/${name}`, { method: 'PATCH', body })
       output(result, f)
       break
     }
     case 'delete': {
       const name = requireFlag(f, 'name')
       const workspaceId = f.workspace || ''
-      const result = await managerAction('delete_team', { workspaceId, teamName: name })
+      const result = await api(`/api/controller/teams/${name}`, { method: 'DELETE', query: { workspaceId } })
       output(result, f)
       break
     }
@@ -407,25 +421,25 @@ async function cmdHuman(args: string[]) {
     case 'create': {
       const name = requireFlag(f, 'name')
       const displayName = requireFlag(f, 'display-name')
-      const workspaceId = f.workspace || ''
-      const result = await managerAction('create_human', {
-        workspaceId, name, displayName,
-        email: f.email || undefined,
-        permissionLevel: f['permission-level'] ? Number(f['permission-level']) : undefined,
+      const result = await api('/api/controller/humans', {
+        method: 'POST',
+        body: {
+          name, displayName,
+          email: f.email || undefined,
+          permissionLevel: f['permission-level'] ? Number(f['permission-level']) : undefined,
+        },
       })
       output(result, f)
       break
     }
     case 'list': {
-      const workspaceId = requireFlag(f, 'workspace')
-      const result = await managerAction('list_humans', { workspaceId })
+      const result = await api('/api/controller/humans')
       output(result, f)
       break
     }
     case 'delete': {
       const name = requireFlag(f, 'name')
-      const workspaceId = f.workspace || ''
-      const result = await managerAction('delete_human', { workspaceId, humanName: name })
+      const result = await api(`/api/controller/humans/${name}`, { method: 'DELETE' })
       output(result, f)
       break
     }
@@ -435,41 +449,52 @@ async function cmdHuman(args: string[]) {
   }
 }
 
-// ─── Apply Command (Declarative) ─────────────────────────────────────
+// ─── Apply Command ───────────────────────────────────────────────────
 
 async function cmdApply(args: string[]) {
   const { flags: f } = parseArgs(args)
   const file = f.file || f.f
-  if (!file) {
-    // Inline apply: agenthub apply worker --name <N> ...
+  if (file) {
+    const { readFileSync } = require('node:fs')
+    const content = readFileSync(file, 'utf8')
+    const result = await api('/api/controller/apply', { method: 'POST', body: { yaml: content } })
+    output(result, f)
+  } else {
     const resource = args[0]
-    if (resource === 'worker') {
-      return cmdWorker(['apply', ...args.slice(1)])
-    }
+    if (resource === 'worker') return cmdWorker(['apply', ...args.slice(1)])
     console.error('Usage: agenthub apply -f <yaml-file>  OR  agenthub apply worker --name <N> ...')
     process.exit(1)
   }
-  // Read YAML file and POST to controller
-  const { readFileSync } = require('node:fs')
-  const content = readFileSync(file, 'utf8')
-  const result = await api('/api/controller/apply', {
-    method: 'POST',
-    body: { yaml: content },
-  })
-  output(result, f)
 }
 
 // ─── Status & Version ────────────────────────────────────────────────
 
 async function cmdStatus(args: string[]) {
   const { flags: f } = parseArgs(args)
-  const result = await managerAction('get_platform_status')
+  const result = await api('/api/controller/status')
   output(result, f)
 }
 
 async function cmdVersion(args: string[]) {
   const { flags: f } = parseArgs(args)
   output({ version: VERSION, controllerUrl: CONTROLLER_URL }, f)
+}
+
+async function cmdState(args: string[]) {
+  const { flags: f } = parseArgs(args)
+  const workspaceId = requireFlag(f, 'workspace')
+  const result = await api('/api/controller/workspace-state', { query: { workspaceId } })
+  output(result, f)
+}
+
+async function cmdHeartbeat(args: string[]) {
+  const { flags: f } = parseArgs(args)
+  const workspaceId = requireFlag(f, 'workspace')
+  const result = await api('/api/controller/heartbeat', {
+    method: 'POST',
+    body: { workspaceId },
+  })
+  output(result, f)
 }
 
 // ─── Main ────────────────────────────────────────────────────────────
@@ -494,16 +519,7 @@ Environment:
   AGENTHUB_MANAGER_TOKEN    (Matrix access token for auth)
 
 Common flags:
-  -o, --output json|raw     Output format (default: json)
-
-Examples:
-  agenthub worker list --workspace ws-123
-  agenthub worker create --workspace ws-123 --name builder --code-agent codex
-  agenthub worker update --id wk-456 --model gpt-4o
-  agenthub team create --workspace ws-123 --name dev-team --leader-name leader --workers a,b,c
-  agenthub task create --workspace ws-123 --title "Build UI" --assign-to ag-456
-  agenthub run status --id run-789
-  agenthub room mention --room rm-abc --agent ag-456 --body "Please start task tk-def"`
+  -o, --output json|raw     Output format (default: json)`
 
 async function main() {
   const args = process.argv.slice(2)
@@ -531,20 +547,6 @@ async function main() {
     console.error(`Error: ${err.message}`)
     process.exit(1)
   }
-}
-
-async function cmdState(args: string[]) {
-  const { flags: f } = parseArgs(args)
-  const workspaceId = requireFlag(f, 'workspace')
-  const result = await managerAction('get_workspace_state', { workspaceId })
-  output(result, f)
-}
-
-async function cmdHeartbeat(args: string[]) {
-  const { flags: f } = parseArgs(args)
-  const workspaceId = requireFlag(f, 'workspace')
-  const result = await managerAction('heartbeat', { workspaceId })
-  output(result, f)
 }
 
 main()

@@ -1,3 +1,15 @@
+/**
+ * ⚠️ 内部 LLM 调用层（非核心路径）
+ *
+ * 允许调用方白名单：
+ * - agent-draft.ts        : Agent 草案生成（辅助链路）
+ * - coding-tools.ts       : Coding Tools 诊断接口
+ * - mobile.ts             : 移动端诊断接口
+ *
+ * 禁止调用方（核心路径必须使用真实 Agent runtime）：
+ * - Manager 决策 / Worker 执行 / Run 控制
+ * - 任何 orchestrator / task / room 事件处理
+ */
 import { logger } from '../lib/logger'
 import {
   createLlmClient,

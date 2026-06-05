@@ -43,10 +43,3 @@ export type { ManagerConfigPaths } from './manager-config'
 export { buildManagerResourceReviewSummary } from './final-review-skill'
 export type { ManagerResourceReviewInput } from './final-review-skill'
 
-// Planning dispatcher
-export {
-  startPlanRunWithCoordinatorAssignBatch,
-  managerAssignActionsFromPlan,
-  generatePlanAndPushTaskBoard,
-} from './planning-dispatcher'
-export type { DispatchMonitor, OrchestratorPlan, PlanAgent, PlanTask, PlanPhase } from './planning-dispatcher'

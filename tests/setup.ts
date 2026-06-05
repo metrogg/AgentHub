@@ -43,3 +43,34 @@ await dbApi.db
     passwordHash: 'test-only',
   })
   .onConflictDoNothing()
+
+export async function waitForCondition<T>(
+  read: () => T | Promise<T>,
+  predicate: (value: T) => boolean,
+  options: {
+    timeoutMs?: number
+    intervalMs?: number
+    description?: string
+  } = {},
+): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? 5_000
+  const intervalMs = options.intervalMs ?? 25
+  const startedAt = Date.now()
+  let lastValue: T
+  let lastError: unknown
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      lastValue = await read()
+      if (predicate(lastValue)) return lastValue
+    } catch (error) {
+      lastError = error
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+
+  const detail = lastError
+    ? ` Last error: ${(lastError as Error)?.message ?? String(lastError)}`
+    : ` Last value: ${JSON.stringify(lastValue!)}`
+  throw new Error(`Timed out waiting for condition${options.description ? `: ${options.description}` : ''}.${detail}`)
+}

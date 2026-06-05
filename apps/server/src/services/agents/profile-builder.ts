@@ -130,3 +130,32 @@ export function buildAgentProfileWithExecutionDir(
 }
 
 export { buildAgentProfileWithExecutionDir as buildAgentProfileWithWorktree }
+
+/**
+ * 应用安全模式覆盖到 Agent Profile。
+ */
+export function applySafetyMode(profile: AgentRunProfile, mode: string): AgentRunProfile {
+  switch (mode) {
+    case 'full-access':
+      return { ...profile, sandboxPolicy: 'workspace-write', approvalRequired: false }
+    case 'ask':
+    default:
+      return { ...profile, sandboxPolicy: 'workspace-write', approvalRequired: true }
+  }
+}
+
+/**
+ * 构建 Coordinator (Orchestrator) 专用 Profile。
+ * Coordinator 需要更宽松的 workspace 读取权限。
+ */
+export function buildCoordinatorProfile(
+  agent: AgentRow,
+  projectPath?: string | null,
+): AgentRunProfile {
+  return {
+    ...buildAgentProfile(agent, projectPath),
+    sandboxPolicy: 'workspace-write',
+    toolPermissions: ['chat', 'workspace:read'],
+    approvalRequired: false,
+  }
+}

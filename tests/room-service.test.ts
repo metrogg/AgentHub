@@ -894,7 +894,7 @@ describe('RoomService Matrix room adapter contract', () => {
         roomId: groupRoom.id,
         ownerId: 'default-user',
         afterSequence: 0,
-        source: 'matrix-human-room-message',
+        source: 'matrix-sync',
       },
     ])
     expect(workerCalls).toEqual([

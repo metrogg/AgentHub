@@ -17,7 +17,7 @@ import {
   OPENCLAW_RUNTIME_IMAGE,
 } from '../container-runtime/agent-runtime-containers'
 import { dockerRuntime } from '../container-runtime/docker-runtime'
-import { resolveHealthEndpoint, resolveStepEndpoint } from './remote-manager-runtime-adapter'
+import { RemoteManagerRuntimeAdapter, resolveHealthEndpoint, resolveStepEndpoint } from './remote-manager-runtime-adapter'
 import { ResidentManagerRuntime } from './resident-manager-runtime'
 import type { ManagerRuntime } from './types'
 
@@ -215,7 +215,11 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   }
 
   createRuntime(): ManagerRuntime {
-    // OpenClaw is a resident process; AgentHub does not invoke its step directly.
+    const endpoint = this.config.endpoint || process.env.AGENTHUB_OPENCLAW_MANAGER_ENDPOINT || null
+    if (endpoint) {
+      return new RemoteManagerRuntimeAdapter('openclaw', { endpoint })
+    }
+    // OpenClaw without an HTTP endpoint is a resident process; AgentHub does not invoke its step directly.
     return new ResidentManagerRuntime('openclaw')
   }
 

@@ -1,4 +1,4 @@
-import './setup'
+import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
@@ -225,15 +225,24 @@ describe('WorkerRuntime task room integration', () => {
       userName: 'Tester',
       message: answer!,
       workerRuntime: runtime,
-      executeInline: true,
     })
 
     expect(result.consumed).toBe(true)
     expect(result.resumed).toBe(true)
+    const events = await waitForCondition(
+      () => db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id)),
+      (items) =>
+        runtime.prompts.length === 1 &&
+        items.some(
+          (event) =>
+            event.metadata?.kind === 'worker-runtime.completed' &&
+            event.metadata?.status === 'completed',
+        ),
+      { description: 'WorkerRuntime resume completion' },
+    )
     expect(runtime.prompts[0]).toContain('用户已经在任务房间回答了 Worker 的澄清问题')
     expect(runtime.prompts[0]).toContain('按最新市场数据继续')
 
-    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
     expect(events.some((event) => event.metadata?.messageId === answer!.id)).toBe(true)
     const resumeEvent = events.find((event) => event.metadata?.kind === 'worker-runtime.resume-requested')
     expect(resumeEvent?.type).toBe('task.progress')
@@ -305,10 +314,16 @@ describe('WorkerRuntime task room integration', () => {
       userName: 'Tester',
       message: answer!,
       workerRuntime: firstResumeRuntime,
-      executeInline: true,
     })
     expect(firstResume.consumed).toBe(true)
     expect(firstResume.resumed).toBe(true)
+    await waitForCondition(
+      () => db.select().from(artifacts).where(eq(artifacts.roomId, room.id)),
+      (items) =>
+        firstResumeRuntime.prompts.length === 1 &&
+        items.some((artifact) => artifact.title === 'final-report.html'),
+      { description: 'first clarification resume completion' },
+    )
     expect(firstResumeRuntime.prompts).toHaveLength(1)
 
     const duplicateRuntime = new ResumeAwareWorkerRuntime()
@@ -318,7 +333,6 @@ describe('WorkerRuntime task room integration', () => {
       userName: 'Tester',
       message: answer!,
       workerRuntime: duplicateRuntime,
-      executeInline: true,
     })
 
     expect(duplicateResume.consumed).toBe(true)
@@ -361,14 +375,19 @@ describe('WorkerRuntime task room integration', () => {
       userName: 'Tester',
       message: answer!,
       workerRuntime: runtime,
-      executeInline: true,
     })
 
     expect(resume.consumed).toBe(true)
     expect(resume.resumed).toBe(true)
+    const events = await waitForCondition(
+      () => db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id)),
+      (items) =>
+        runtime.prompts.length === 1 &&
+        items.filter((event) => event.metadata?.kind === 'worker-runtime.clarification-requested').length === 2,
+      { description: 'second clarification after resume' },
+    )
     expect(runtime.prompts).toHaveLength(1)
 
-    const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))
     const clarificationEvents = events.filter(
       (event) => event.metadata?.kind === 'worker-runtime.clarification-requested',
     )

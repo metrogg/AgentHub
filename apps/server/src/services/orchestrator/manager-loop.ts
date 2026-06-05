@@ -16,7 +16,7 @@ import {
   workspaceTasks,
 } from '@agenthub/db'
 import { TaskStatus } from '@agenthub/shared'
-import { cancelAgentReply } from '../agent-runner'
+
 import { blackboard, Blackboard } from '../blackboard'
 import { appendHumanInterruptConstraint } from './human-interrupts'
 import { emitRunEvent } from './run-events'
@@ -29,6 +29,7 @@ import { readSharedTaskResult } from './shared-task-directory'
 import type { WorkerRuntime } from '../worker-runtime/types'
 import { buildManagerResourceReviewSummary } from '../manager-runtime/final-review-skill'
 import { managerRuntimeService, getActiveManagerProvider } from '../manager-runtime'
+import { MatrixRoomEventDispatcher } from '../rooms/matrix-event-dispatcher'
 
 export interface ManagerDecisionEventContext {
   action: string
@@ -305,7 +306,7 @@ export async function processPendingHumanInterrupts(input: {
     }
 
     for (const { task, thread } of activeThreadsToInterrupt) {
-      cancelAgentReply(thread.sessionId)
+      // Legacy cancelAgentReply removed; WorkerRuntime manages its own lifecycle.
       interruptedActiveTaskIds.add(task.id)
       entryInterruptedActiveTaskIds.push(task.id)
 
@@ -681,48 +682,33 @@ async function synthesizeCompletedRunFromResources(
   const groupRoom = workspace?.ownerId
     ? await roomService.ensureRoomForSession(ctx.groupSessionId, workspace.ownerId)
     : null
-  if (groupRoom) {
-    await roomService.appendTimelineEvent({
-      roomId: groupRoom.id,
-      senderType: 'manager',
-      type: 'manager.message',
-      body: summary,
-      metadata: {
-        kind: 'manager-final-review',
-        runId: ctx.runId,
-        finalStatus,
-        doneCount,
-        failedCount,
-        cancelledCount,
-        blockedCount,
-        artifactCount: artifactRows.length,
-        coordinationSource: 'coordinator-runtime.resource-review',
-      },
-    })
-  }
-  const message = await persistManagerLoopMessage({
-    sessionId: ctx.groupSessionId,
-    senderId: ctx.actorId ?? 'system',
-    senderType: ctx.actorId ? 'agent' : 'system',
-    content: summary,
-    metadata: {
-      kind: 'manager-final-review',
-      systemEvent: 'manager_final_review',
-      orchestratorRunId: ctx.runId,
-      finalStatus,
-      doneCount,
-      failedCount,
-      cancelledCount,
-      blockedCount,
-      artifactCount: artifactRows.length,
-      coordinationSource: 'coordinator-runtime.resource-review',
-    },
-  })
+  const finalReviewEvent = groupRoom
+    ? await roomService.appendTimelineEvent({
+        roomId: groupRoom.id,
+        senderType: 'manager',
+        type: 'manager.message',
+        body: summary,
+        metadata: {
+          kind: 'manager-final-review',
+          runId: ctx.runId,
+          finalStatus,
+          doneCount,
+          failedCount,
+          cancelledCount,
+          blockedCount,
+          artifactCount: artifactRows.length,
+          coordinationSource: 'coordinator-runtime.resource-review',
+        },
+      })
+    : null
   await finishRunFromManager(ctx, {
     status: finalStatus,
     summary,
-    summaryMessageId: message?.id ?? null,
+    // Final review is Room timeline-native. orchestrator_runs.summaryMessageId
+    // still references legacy messages.id, so do not store room:{eventId} here.
+    summaryMessageId: null,
     payload: {
+      summaryTimelineMessageId: finalReviewEvent ? `room:${finalReviewEvent.id}` : null,
       doneCount,
       failedCount,
       cancelledCount,
@@ -736,7 +722,7 @@ async function synthesizeCompletedRunFromResources(
   return {
     reason: `All ${tasks.length} tasks reached terminal state (${doneCount} done, ${failedCount} failed, ${cancelledCount} cancelled, ${blockedCount} blocked). Manager final review completed.`,
     summary,
-    summaryMessageId: message?.id ?? null,
+    summaryMessageId: null,
     finalStatus,
   }
 }
@@ -760,28 +746,6 @@ async function markRunSynthesizing(
     type: 'run.synthesizing',
     payload: input,
   })
-  const [workspace] = await db
-    .select({ ownerId: workspaces.ownerId })
-    .from(workspaces)
-    .where(eq(workspaces.id, ctx.workspaceId))
-    .limit(1)
-  if (workspace?.ownerId) {
-    const groupRoom = await roomService.ensureRoomForSession(ctx.groupSessionId, workspace.ownerId)
-    await roomService.appendTimelineEvent({
-      roomId: groupRoom.id,
-      senderType: 'manager',
-      type: 'manager.message',
-      body: input.summary,
-      metadata: {
-        kind: 'manager-review-started',
-        runId: ctx.runId,
-        status: 'synthesizing',
-        taskCount: input.taskCount,
-        artifactCount: input.artifactCount,
-        coordinationSource: 'coordinator-runtime.resource-review',
-      },
-    })
-  }
 }
 
 async function finishRunFromManager(
@@ -848,19 +812,6 @@ export interface ManagerLoopStepResult {
 
 export interface ManagerLoopStepOptions {
   workerRuntime?: WorkerRuntime
-  executeInline?: boolean
-}
-
-interface WorkerRuntimeDispatcher {
-  rerunTaskRoom(input: {
-    roomId: string
-    ownerId: string
-    workspaceAgentId?: string | null
-    prompt?: string | null
-    runtime?: WorkerRuntime
-    source?: string
-    signal?: AbortSignal
-  }): Promise<{ status: string }>
 }
 
 interface StepContext {
@@ -876,7 +827,6 @@ async function dispatchPreparedTaskRooms(input: {
   tasks: Array<typeof workspaceTasks.$inferSelect>
   threadByTaskId: Map<string, typeof taskThreads.$inferSelect>
   runtime?: WorkerRuntime
-  executeInline: boolean
 }): Promise<string[]> {
   const [workspace] = await db
     .select({ ownerId: workspaces.ownerId })
@@ -901,9 +851,7 @@ async function dispatchPreparedTaskRooms(input: {
     return []
   }
 
-  const dispatcher = await loadWorkerRuntimeDispatcher()
   const dispatchedTaskIds: string[] = []
-  const backgroundJobs: Array<Promise<unknown>> = []
 
   for (const task of input.tasks) {
     const thread = input.threadByTaskId.get(task.id)
@@ -926,22 +874,39 @@ async function dispatchPreparedTaskRooms(input: {
 
     const roomInput = await roomService.buildTaskThreadRoomInput(thread.id, ownerId)
     const room = await roomService.ensureRoomForTaskThread(roomInput)
-    await ensureWorkerParticipantForDispatch(room.id, workspaceAgentId)
+    const workerParticipant = await ensureWorkerParticipantForDispatch(
+      room.id,
+      workspaceAgentId,
+      thread.workerInstanceId ?? null,
+    )
+    await markWorkerInstanceState(thread.workerInstanceId ?? null, 'idle', {
+      message: `Manager assigned ${task.title}; waiting for Matrix @mention claim.`,
+      health: {
+        taskRoomId: room.id,
+        taskId: task.id,
+        taskThreadId: thread.id,
+        coordinationSource: 'matrix-mention',
+      },
+    })
     await updateTaskThreadStatus(thread.id, 'assigned')
 
-    const assignedEvent = await roomService.appendTimelineEvent({
+    const assignedEvent = await roomService.appendMentionTimelineEvent({
       roomId: room.id,
+      mentionParticipantId: workerParticipant.id,
       senderType: 'manager',
       type: 'task.assigned',
-      body: `Manager 正式派发任务：${task.title}`,
+      body: `@${workerParticipant.displayName} Manager 正式派发任务：${task.title}\n\n${task.description}`,
       metadata: {
         kind: 'manager-loop.dispatch',
         runId: input.ctx.runId,
         taskId: task.id,
         taskThreadId: thread.id,
         workspaceAgentId,
+        workerInstanceId: thread.workerInstanceId ?? null,
+        mentionParticipantId: workerParticipant.id,
         taskDescription: task.description,
-        coordinationSource: 'room-timeline',
+        coordinationSource: 'matrix-mention',
+        matrixExecutionBus: true,
       },
     })
 
@@ -966,15 +931,10 @@ async function dispatchPreparedTaskRooms(input: {
       },
     })
 
-    const runWorker = dispatcher
-      .rerunTaskRoom({
-        roomId: room.id,
-        ownerId,
-        workspaceAgentId,
-        prompt: task.description,
-        runtime: input.runtime,
-        source: 'manager-loop.dispatch-pending',
-      })
+    void dispatchManagerLoopMentionEvent({
+      eventId: assignedEvent.id,
+      runtime: input.runtime,
+    })
       .catch((error: any) =>
         recordTaskRoomDispatchFailure({
           ctx: input.ctx,
@@ -986,25 +946,15 @@ async function dispatchPreparedTaskRooms(input: {
         }),
       )
     dispatchedTaskIds.push(task.id)
-    if (input.executeInline) {
-      await runWorker
-    } else {
-      backgroundJobs.push(runWorker)
-    }
-  }
-
-  if (!input.executeInline && backgroundJobs.length > 0) {
-    Promise.allSettled(backgroundJobs).catch(() => {})
   }
   return dispatchedTaskIds
 }
 
-async function loadWorkerRuntimeDispatcher(): Promise<WorkerRuntimeDispatcher> {
-  const { workerRuntimeService } = await import('../worker-runtime/worker-runtime-service')
-  return workerRuntimeService
-}
-
-async function ensureWorkerParticipantForDispatch(roomId: string, workspaceAgentId: string) {
+async function ensureWorkerParticipantForDispatch(
+  roomId: string,
+  workspaceAgentId: string,
+  workerInstanceId?: string | null,
+) {
   const participants = await db
     .select()
     .from(roomParticipants)
@@ -1015,7 +965,23 @@ async function ensureWorkerParticipantForDispatch(roomId: string, workspaceAgent
       participant.workspaceAgentId === workspaceAgentId,
   )
   if (existing) return existing
-  return roomService.addWorkerParticipant(roomId, workspaceAgentId)
+  return roomService.addWorkerParticipant(roomId, workspaceAgentId, workerInstanceId ?? null)
+}
+
+async function dispatchManagerLoopMentionEvent(input: {
+  eventId: string
+  runtime?: WorkerRuntime
+}) {
+  const dispatcher = new MatrixRoomEventDispatcher({
+    runWorkerTaskRoom: async (taskRoom) => {
+      const { workerRuntimeService } = await import('../worker-runtime/worker-runtime-service')
+      return workerRuntimeService.runTaskRoom({
+        ...taskRoom,
+        runtime: input.runtime,
+      })
+    },
+  })
+  await dispatcher.dispatchImportedEvents({ eventIds: [input.eventId] })
 }
 
 async function markPendingTaskDispatchBlocked(
@@ -1140,7 +1106,7 @@ export async function managerLoopStep(
   const provider = getActiveManagerProvider()
   if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
     const status = await provider.status()
-    if (status.running || status.endpoint) {
+    if (status.running) {
       return {
         action: 'waiting',
         reason: `Resident Manager (${provider.runtimeType}) is active; skipping local managerLoopStep.`,
@@ -1209,6 +1175,38 @@ export async function managerLoopStep(
       dispatchedTaskIds: [],
       reviewedTaskIds: terminalTasks.map((t) => t.id),
       completedRun: true,
+    }
+  }
+
+  const pendingResourceTasks = tasks.filter((t) => isDispatchablePendingTask(t))
+  if (pendingResourceTasks.length > 0) {
+    const dispatchedTaskIds = await dispatchPreparedTaskRooms({
+      ctx,
+      tasks: pendingResourceTasks,
+      threadByTaskId,
+      runtime: options.workerRuntime,
+    })
+    if (dispatchedTaskIds.length > 0) {
+      return {
+        action: 'dispatch_pending',
+        reason: `Manager dispatched ${dispatchedTaskIds.length} pending task(s) through Matrix @mention.`,
+        dispatchedTaskIds,
+        reviewedTaskIds: [],
+        completedRun: false,
+      }
+    }
+  }
+
+  const waitingForHumanTasks = tasks.filter(
+    (task) => task.status === 'blocked' && task.progressStatus === 'awaiting_human_clarification',
+  )
+  if (waitingForHumanTasks.length > 0) {
+    return {
+      action: 'waiting',
+      reason: `${waitingForHumanTasks.length} task(s) waiting for human clarification.`,
+      dispatchedTaskIds: [],
+      reviewedTaskIds: waitingForHumanTasks.map((task) => task.id),
+      completedRun: false,
     }
   }
 
@@ -1290,7 +1288,6 @@ export async function managerLoopStep(
           const singleDispatched = await dispatchPreparedTaskRooms({
             ctx, tasks: [targetTask], threadByTaskId,
             runtime: options.workerRuntime,
-            executeInline: options.executeInline ?? false,
           })
           if (singleDispatched.length > 0) {
             dispatchedTaskIds.push(...singleDispatched)

@@ -19,7 +19,6 @@ import {
   sessions,
   sessionMembers,
   workspaceAgents,
-  workspaceAgentRelations,
   workspaces,
   workspaceTasks,
   orchestratorRuns,
@@ -33,20 +32,16 @@ import {
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
-import { broadcastSessionEvent, runAgentReply } from '../services/agent-runner'
+import { broadcastSessionEvent } from '../services/agent-runner'
 import { emitRunEvent } from '../services/orchestrator/run-events'
-import { runController } from '../services/orchestrator/run-controller'
 import { buildAgUiMemberProposalContinueEvent } from '../services/protocols'
-import { blackboard, Blackboard } from '../services/blackboard'
 import {
   appendMessageControlEvent,
   appendHumanMessageRoomFirst,
-  recordHumanMessageInRoomTimeline,
   stepCoordinatorForGroupMessage,
-  stepTaskRoomAfterHumanMessage,
 } from '../services/rooms/room-chat-bridge'
+import { roomService } from '../services/rooms/room-service'
 import { listSessionMessagesRoomFirst } from '../services/rooms/timeline-message-projection'
-import type { ManagerAction } from '../services/manager-runtime'
 import type { DispatchMonitor } from '../services/manager-runtime/planning-dispatcher'
 import {
   confirmAgentDraftSchema,
@@ -110,8 +105,9 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
-    const { cancelAgentReply } = await import('../services/agent-runner')
-    return c.json({ cancelled: cancelAgentReply(sessionId) })
+    // Legacy runAgentReply path removed; cancellation is now handled by WorkerRuntime.stopTaskRoom
+    // for task rooms, and direct room dispatch does not support mid-flight cancellation yet.
+    return c.json({ cancelled: false, reason: 'legacy-cancel-removed' })
   })
   .patch('/:sessionId/:messageId', zValidator('json', updateMessageSchema), async (c) => {
     const user = c.get('user')
@@ -203,8 +199,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       await db.delete(messages).where(eq(messages.id, item.id))
     }
     const removedMessageIds = affected.map((item) => item.id)
-    const { cancelAgentReply } = await import('../services/agent-runner')
-    cancelAgentReply(sessionId)
     if (removedMessageIds.length) {
       broadcastSessionEvent(sessionId, {
         type: WsEvent.MessageCancelled,
@@ -212,20 +206,13 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       })
     }
 
-    if (session.type === 'group' && session.workspaceId) {
-      stepCoordinatorForGroupMessage({
-        session,
-        userId: user.sub,
-        userName: user.username,
-        message,
-      }).catch((err: any) =>
-        logger.error({ err: err?.message, sessionId }, 'ManagerRuntime room step failed on resend'),
-      )
-    } else {
-      const profile = await profileForDirectSession(session)
-      runAgentReply(sessionId, message, profile).catch((err: any) =>
-        logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on resend'),
-      )
+    // HiClaw model: dispatch the existing timeline event to trigger Manager/Worker
+    const { matrixRoomEventDispatcher } = await import('../services/rooms/matrix-event-dispatcher')
+    const room = await roomService.ensureRoomForSession(sessionId, session.ownerId)
+    const timelineEvents = await roomService.listTimelineEvents({ roomId: room.id, limit: 500 })
+    const matchingEvent = timelineEvents.find((e) => e.metadata?.messageId === message.id)
+    if (matchingEvent) {
+      await matrixRoomEventDispatcher.dispatchTimelineEvent(matchingEvent.id).catch(() => {})
     }
 
     return c.json({ removedMessageIds })
@@ -332,8 +319,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     for (const id of ids) {
       await db.delete(messages).where(eq(messages.id, id))
     }
-    const { cancelAgentReply } = await import('../services/agent-runner')
-    cancelAgentReply(sessionId)
     return c.json({ removedMessageIds: ids, rollback: rollbackResult })
   })
   .post('/:sessionId/:messageId/regenerate', async (c) => {
@@ -371,25 +356,16 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       }),
     })
     await db.delete(messages).where(eq(messages.id, message.id))
-    const { cancelAgentReply } = await import('../services/agent-runner')
-    cancelAgentReply(sessionId)
-    if (session.type === 'group') {
-      stepCoordinatorForGroupMessage({
-        session,
-        userId: user.sub,
-        userName: user.username,
-        message: previousUser,
-      }).catch((err: any) =>
-        logger.error({ err: err?.message, sessionId }, 'ManagerRuntime room step failed on regenerate'),
-      )
-    } else {
-      const profile = await profileForDirectSession(session)
-      import('../services/agent-runner').then(({ runAgentReply }) => {
-        runAgentReply(sessionId, previousUser, profile).catch((err: any) =>
-          logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on regenerate'),
-        )
-      })
+
+    // HiClaw model: dispatch the previous user message to trigger Manager/Worker
+    const { matrixRoomEventDispatcher } = await import('../services/rooms/matrix-event-dispatcher')
+    const room = await roomService.ensureRoomForSession(sessionId, session.ownerId)
+    const timelineEvents = await roomService.listTimelineEvents({ roomId: room.id, limit: 500 })
+    const matchingEvent = timelineEvents.find((e) => e.metadata?.messageId === previousUser.id)
+    if (matchingEvent) {
+      await matrixRoomEventDispatcher.dispatchTimelineEvent(matchingEvent.id).catch(() => {})
     }
+
     return c.json({ removedMessageId: message.id })
   })
   .post('/:sessionId', zValidator('json', sendMessageSchema), async (c) => {
@@ -415,105 +391,9 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       metadata: nextMetadata,
       replyToMessageId: metadata?.replyToMessageId as string | undefined,
     })
-    // Trigger agent reply asynchronously (do not await to keep response fast).
-    if (msg && !metadata?.skipAgentReply) {
-      const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-      if (session?.type === 'group') {
-        if (session.workspaceId) {
-          const agentRows = await db
-            .select()
-            .from(workspaceAgents)
-            .where(eq(workspaceAgents.workspaceId, session.workspaceId))
-            .orderBy(asc(workspaceAgents.orderIdx))
-          const mentionedAgents = resolveMentionedAgents(mentions, agentRows)
-          // Mention 信息已通过 Room timeline 传递（nextMetadata.mentions），由 ManagerRuntime 统一决策
-          if (mentionedAgents.length > 0) {
-            logger.info({ sessionId, mentionedAgentIds: mentionedAgents.map((a) => a.id) }, 'Group mention detected; delegating to ManagerRuntime')
-          }
-
-          const activeTaskContext = await loadActiveTaskContext(sessionId)
-          const repliedToMessage = msg.replyToMessageId
-            ? ((await db.select().from(messages).where(eq(messages.id, msg.replyToMessageId)).limit(1))[0] as
-                | MessageRow
-                | undefined)
-            : undefined
-          const directWorkerTarget = chooseDirectWorkerReplyTarget({
-            sourceMessage: msg,
-            repliedToMessage,
-            activeTaskContext,
-            agentRows,
-          })
-          if (directWorkerTarget) {
-            const routedToTaskRoom = await routeGroupReplyToWorkerTaskRoom({
-              groupSessionId: sessionId,
-              message: msg,
-              userId: user.sub,
-              userName: user.username,
-              targetWorker: directWorkerTarget,
-              activeTaskContext,
-            })
-            if (routedToTaskRoom) return c.json(msg)
-          }
-
-          const orchestrator = agentRows.find((agent) => agent.roleType === 'orchestrator')
-          if (orchestrator) {
-            const attachedToActiveRun = await handleHumanInterruptForActiveRun({
-              groupSessionId: sessionId,
-              workspaceId: session.workspaceId,
-              ownerId: user.sub,
-              content,
-              userMessageId: msg.id,
-              orchestrator,
-            })
-            if (attachedToActiveRun) {
-              return c.json(msg)
-            }
-          }
-        }
-
-        await stepCoordinatorForGroupMessage({
-          session,
-          userId: user.sub,
-          userName: user.username,
-          message: msg,
-        }).catch((err: any) => {
-          logger.error({ err: err?.message, sessionId }, 'ManagerRuntime room step failed')
-          return null
-        })
-        return c.json(msg)
-      } else {
-        if (session && isOrchestratorTaskSession(session)) {
-          const taskRoomResult = await stepTaskRoomAfterHumanMessage({
-            session,
-            userId: user.sub,
-            userName: user.username,
-            message: msg,
-          }).catch((err: any) => {
-            logger.error({ err: err?.message, sessionId }, 'Task room WorkerRuntime resume step failed')
-            return null
-          })
-          if (taskRoomResult?.consumed) {
-            return c.json(msg)
-          }
-          const attachedToTaskThread = await handleHumanInterruptFromTaskThreadSession({
-            session,
-            ownerId: user.sub,
-            content,
-            userMessageId: msg.id,
-          })
-          if (attachedToTaskThread) {
-            return c.json(msg)
-          }
-        }
-        let profile = session ? await profileForDirectSession(session) : undefined
-        if (profile && metadata?.safetyMode && typeof metadata.safetyMode === 'string') {
-          profile = applySafetyMode(profile, metadata.safetyMode)
-        }
-        runAgentReply(sessionId, msg, profile).catch((err: any) =>
-          logger.error({ err: err?.message, sessionId }, 'runAgentReply failed on new message'),
-        )
-      }
-    }
+    // HiClaw model: appendHumanMessageRoomFirst() already wrote the message to the Room timeline
+    // and dispatched it via MatrixRoomEventDispatcher. The Manager/Worker will pick it up
+    // via /sync or platform-timeline dispatch. No manual step trigger needed here.
     return c.json(msg)
   })
   .post('/:sessionId/agent-draft', zValidator('json', agentDraftSchema), async (c) => {
@@ -1451,536 +1331,6 @@ function toCoordinatorProfile(
   }
 }
 
-async function findLatestInterruptibleRun(groupSessionId: string) {
-  const runs = await db
-    .select()
-    .from(orchestratorRuns)
-    .where(eq(orchestratorRuns.groupSessionId, groupSessionId))
-    .orderBy(desc(orchestratorRuns.updatedAt), desc(orchestratorRuns.createdAt))
-    .limit(20)
-
-  return runs.find((run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status)) ?? null
-}
-
-async function findInterruptibleRunById(runId: string, groupSessionId: string) {
-  const [run] = await db
-    .select()
-    .from(orchestratorRuns)
-    .where(and(eq(orchestratorRuns.id, runId), eq(orchestratorRuns.groupSessionId, groupSessionId)))
-    .limit(1)
-
-  return run && INTERRUPTIBLE_RUN_STATUSES.has(run.status) ? run : null
-}
-
-async function persistSessionTransparencyMessage(input: {
-  sessionId: string
-  senderId: string
-  senderType: 'agent' | 'system'
-  content: string
-  metadata: Record<string, unknown>
-}) {
-  const [session] = await db.select().from(sessions).where(eq(sessions.id, input.sessionId)).limit(1)
-  if (!session) return null
-  const { roomService } = await import('../services/rooms')
-  const room = await roomService.ensureRoomForSession(session.id, session.ownerId)
-  const event = await roomService.appendTimelineEvent({
-    roomId: room.id,
-    senderType: input.senderType === 'system' ? 'system' : 'manager',
-    type: input.senderType === 'system' ? 'system' : 'manager.message',
-    body: input.content,
-    metadata: {
-      ...input.metadata,
-      source: 'session-transparency',
-      legacyMessageProjectionDisabled: true,
-    },
-  })
-
-  return {
-    id: `room:${event.id}`,
-    sessionId: input.sessionId,
-    senderId: input.senderId,
-    senderType: input.senderType,
-    type: 'text',
-    content: input.content,
-    metadata: input.metadata,
-    isPinned: false,
-    replyToMessageId: null,
-    createdAt: event.createdAt,
-  }
-}
-
-async function handleHumanInterruptForActiveRun(params: {
-  groupSessionId: string
-  workspaceId: string
-  ownerId: string
-  content: string
-  userMessageId: string
-  orchestrator: typeof workspaceAgents.$inferSelect
-  runId?: string | null
-  source?: {
-    kind: 'group' | 'task_thread'
-    taskThreadId?: string | null
-    taskId?: string | null
-    childSessionId?: string | null
-    workerInstanceId?: string | null
-    workspaceAgentId?: string | null
-  }
-}) {
-  const activeRun = params.runId
-    ? await findInterruptibleRunById(params.runId, params.groupSessionId)
-    : await findLatestInterruptibleRun(params.groupSessionId)
-  if (!activeRun) return false
-
-  const namespace = Blackboard.namespace(params.workspaceId, activeRun.id)
-  const interruptKey = `human_interrupts/${params.userMessageId}`
-  const createdAt = new Date().toISOString()
-  const note = await blackboard.write({
-    namespace,
-    key: interruptKey,
-    value: {
-      kind: 'human_interrupt',
-      source: params.source?.kind ?? 'group',
-      messageId: params.userMessageId,
-      groupSessionId: params.groupSessionId,
-      taskThreadId: params.source?.taskThreadId ?? null,
-      taskId: params.source?.taskId ?? null,
-      childSessionId: params.source?.childSessionId ?? null,
-      workerInstanceId: params.source?.workerInstanceId ?? null,
-      workspaceAgentId: params.source?.workspaceAgentId ?? null,
-      content: params.content,
-      actorType: 'user',
-      actorId: params.ownerId,
-      acknowledgedBy: {
-        agentId: params.orchestrator.id,
-        agentName: params.orchestrator.name,
-      },
-      createdAt,
-    },
-    agentId: params.orchestrator.id,
-    taskId: params.source?.taskId ?? undefined,
-    tags: [
-      'human-interrupt',
-      'hitl',
-      ...(params.source?.kind === 'task_thread' ? ['task-thread'] : []),
-    ],
-  })
-
-  await emitRunEvent({
-    runId: activeRun.id,
-    workspaceId: params.workspaceId,
-    groupSessionId: params.groupSessionId,
-    taskId: params.source?.taskId ?? undefined,
-    threadId: params.source?.taskThreadId ?? undefined,
-    workerInstanceId: params.source?.workerInstanceId ?? undefined,
-    agentId: params.orchestrator.id,
-    type: 'blackboard.written',
-    payload: {
-      key: interruptKey,
-      version: note.version,
-      summary:
-        params.source?.kind === 'task_thread'
-          ? 'Human provided an in-flight correction inside a TaskThread room.'
-          : 'Human provided an in-flight correction for the current run.',
-      source: 'human_interrupt',
-      interruptSource: params.source?.kind ?? 'group',
-      taskThreadId: params.source?.taskThreadId ?? null,
-      childSessionId: params.source?.childSessionId ?? null,
-      taskId: params.source?.taskId ?? null,
-      taskTitle: 'Human interrupt',
-      agentName: params.orchestrator.name,
-      contentPreview: params.content.slice(0, 200),
-    },
-  })
-
-  await runController.recordDecision(
-    {
-      runId: activeRun.id,
-      workspaceId: params.workspaceId,
-      groupSessionId: params.groupSessionId,
-      actor: {
-        id: params.orchestrator.id,
-        name: params.orchestrator.name,
-      },
-    },
-    {
-      action: 'human_interrupt_received',
-      reason: 'A human participant added or corrected requirements while the run is active.',
-      message:
-        params.source?.kind === 'task_thread'
-          ? `Merged a TaskThread human instruction into the active run: ${params.content.slice(0, 160)}`
-          : `Merged a new human instruction into the active run: ${params.content.slice(0, 160)}`,
-    },
-  )
-
-  const liveThreads = await db
-    .select()
-    .from(taskThreads)
-    .where(eq(taskThreads.runId, activeRun.id))
-    .orderBy(desc(taskThreads.updatedAt), desc(taskThreads.createdAt))
-
-  const forwardTargets = liveThreads.filter((thread) =>
-    ['prepared', 'assigned', 'active'].includes(thread.status),
-  )
-
-  const groupAckContent =
-    params.source?.kind === 'task_thread'
-      ? forwardTargets.length > 0
-        ? `我看到你在任务子对话里的补充要求，已并入当前协作，并同步给 ${forwardTargets.length} 个进行中的任务。`
-        : '我看到你在任务子对话里的补充要求，已并入当前协作，并会在后续调度中按这个约束继续推进。'
-      : forwardTargets.length > 0
-        ? `收到新的补充要求，我已并入当前协作，并同步给 ${forwardTargets.length} 个进行中的任务。`
-        : '收到新的补充要求，我已并入当前协作，并会在后续调度中按这个约束继续推进。'
-
-  await persistSessionTransparencyMessage({
-    sessionId: params.groupSessionId,
-    senderId: params.orchestrator.id,
-    senderType: 'agent',
-    content: groupAckContent,
-    metadata: {
-      kind: 'manager-human-interrupt',
-      systemEvent: 'manager_human_interrupt_ack',
-      orchestratorRunId: activeRun.id,
-      sourceMessageId: params.userMessageId,
-      interruptSource: params.source?.kind ?? 'group',
-      sourceTaskThreadId: params.source?.taskThreadId ?? null,
-      sourceChildSessionId: params.source?.childSessionId ?? null,
-      sourceTaskId: params.source?.taskId ?? null,
-      blackboardRef: note,
-      forwardedThreadCount: forwardTargets.length,
-    },
-  })
-
-  for (const thread of forwardTargets) {
-    await persistSessionTransparencyMessage({
-      sessionId: thread.sessionId,
-      senderId: params.orchestrator.id,
-      senderType: 'agent',
-      content: `用户补充了一条新的约束，请以此为准继续当前任务：${params.content}`,
-      metadata: {
-        kind: 'manager-human-interrupt-forwarded',
-        systemEvent: 'manager_human_interrupt_forwarded',
-        orchestratorRunId: activeRun.id,
-        orchestratorTaskThreadId: thread.id,
-        sourceMessageId: params.userMessageId,
-        interruptSource: params.source?.kind ?? 'group',
-        sourceTaskThreadId: params.source?.taskThreadId ?? null,
-        sourceChildSessionId: params.source?.childSessionId ?? null,
-        sourceTaskId: params.source?.taskId ?? null,
-        blackboardRef: note,
-      },
-    })
-  }
-
-  await runController.reconcile({
-    runId: activeRun.id,
-    workspaceId: params.workspaceId,
-    groupSessionId: params.groupSessionId,
-    actor: {
-      id: params.orchestrator.id,
-      name: params.orchestrator.name,
-    },
-  })
-
-  return true
-}
-
-function isOrchestratorTaskSession(session: typeof sessions.$inferSelect | null | undefined) {
-  if (!session || session.type !== 'direct') return false
-  const metadata =
-    session.metadata && typeof session.metadata === 'object'
-      ? (session.metadata as Record<string, unknown>)
-      : null
-  return metadata?.kind === 'orchestrator-task'
-}
-
-async function handleHumanInterruptFromTaskThreadSession(params: {
-  session: typeof sessions.$inferSelect
-  ownerId: string
-  content: string
-  userMessageId: string
-}) {
-  if (!isOrchestratorTaskSession(params.session)) return false
-
-  const [thread] = await db
-    .select()
-    .from(taskThreads)
-    .where(eq(taskThreads.sessionId, params.session.id))
-    .limit(1)
-
-  if (!thread) {
-    await persistSessionTransparencyMessage({
-      sessionId: params.session.id,
-      senderId: 'system',
-      senderType: 'system',
-      content: '这条消息已保留在任务子对话里，但没有找到对应的 TaskThread 资源，无法接入当前协作控制面。',
-      metadata: {
-        kind: 'task-thread-human-interrupt-unlinked',
-        systemEvent: 'task_thread_human_interrupt_unlinked',
-        sourceMessageId: params.userMessageId,
-      },
-    })
-    return true
-  }
-
-  const [orchestrator] = await db
-    .select()
-    .from(workspaceAgents)
-    .where(and(eq(workspaceAgents.workspaceId, thread.workspaceId), eq(workspaceAgents.roleType, 'orchestrator')))
-    .orderBy(asc(workspaceAgents.orderIdx))
-    .limit(1)
-
-  if (!orchestrator) {
-    await persistSessionTransparencyMessage({
-      sessionId: params.session.id,
-      senderId: 'system',
-      senderType: 'system',
-      content: '这条消息已保留在任务子对话里，但当前工作区没有 Orchestrator，无法把它并入协作控制面。',
-      metadata: {
-        kind: 'task-thread-human-interrupt-no-orchestrator',
-        systemEvent: 'task_thread_human_interrupt_no_orchestrator',
-        sourceMessageId: params.userMessageId,
-        taskThreadId: thread.id,
-        orchestratorRunId: thread.runId,
-        orchestratorTaskId: thread.taskId,
-        groupSessionId: thread.groupSessionId,
-      },
-    })
-    return true
-  }
-
-  const attached = await handleHumanInterruptForActiveRun({
-    groupSessionId: thread.groupSessionId,
-    workspaceId: thread.workspaceId,
-    ownerId: params.ownerId,
-    content: params.content,
-    userMessageId: params.userMessageId,
-    orchestrator,
-    runId: thread.runId,
-    source: {
-      kind: 'task_thread',
-      taskThreadId: thread.id,
-      taskId: thread.taskId,
-      childSessionId: params.session.id,
-      workerInstanceId: thread.workerInstanceId,
-      workspaceAgentId: thread.workspaceAgentId,
-    },
-  })
-
-  if (!attached) {
-    await persistSessionTransparencyMessage({
-      sessionId: params.session.id,
-      senderId: orchestrator.id,
-      senderType: 'agent',
-      content: '我看到你在这个任务子对话里的补充，但当前没有可接管的运行。请回到主群聊继续发起或恢复协作。',
-      metadata: {
-        kind: 'task-thread-human-interrupt-inactive',
-        systemEvent: 'task_thread_human_interrupt_inactive',
-        sourceMessageId: params.userMessageId,
-        taskThreadId: thread.id,
-        orchestratorRunId: thread.runId,
-        orchestratorTaskId: thread.taskId,
-        groupSessionId: thread.groupSessionId,
-      },
-    })
-  }
-
-  return true
-}
-
-async function loadActiveTaskContext(sessionId: string) {
-  const tasks = await db
-    .select({
-      taskId: workspaceTasks.id,
-      taskTitle: workspaceTasks.title,
-      taskStatus: workspaceTasks.status,
-      progressStatus: workspaceTasks.progressStatus,
-      agentId: workspaceTasks.agentId,
-      taskThreadId: taskThreads.id,
-      taskThreadSessionId: taskThreads.sessionId,
-      threadStatus: taskThreads.status,
-      agentName: workspaceAgents.name,
-      clarificationCount: workspaceTasks.clarificationCount,
-      errorLog: workspaceTasks.errorLog,
-    })
-    .from(workspaceTasks)
-    .leftJoin(taskThreads, eq(taskThreads.taskId, workspaceTasks.id))
-    .leftJoin(workspaceAgents, eq(workspaceAgents.id, workspaceTasks.agentId))
-    .where(eq(taskThreads.groupSessionId, sessionId))
-    .orderBy(desc(taskThreads.updatedAt), desc(workspaceTasks.updatedAt))
-    .limit(8)
-
-  return tasks
-    .filter((task) => {
-      const threadStatus = task.threadStatus ?? null
-      const taskStatus = task.taskStatus ?? null
-      return (
-        threadStatus === 'prepared' ||
-        threadStatus === 'assigned' ||
-        threadStatus === 'active' ||
-        taskStatus === 'pending' ||
-        taskStatus === 'running' ||
-        taskStatus === 'blocked'
-      )
-    })
-    .map((task) => ({
-      taskId: task.taskId,
-      taskTitle: task.taskTitle,
-      taskStatus: task.taskStatus,
-      taskThreadId: task.taskThreadId ?? null,
-      taskThreadSessionId: task.taskThreadSessionId ?? null,
-      taskThreadStatus: task.threadStatus ?? null,
-      agentId: task.agentId ?? null,
-      agentName: task.agentName ?? null,
-      progressStatus: task.progressStatus ?? task.errorLog ?? null,
-      awaitingClarification: (task.clarificationCount ?? 0) > 0 || task.taskStatus === 'blocked',
-    }))
-}
-
-function chooseDirectWorkerReplyTarget(input: {
-  sourceMessage?: MessageRow
-  repliedToMessage?: MessageRow
-  activeTaskContext: Awaited<ReturnType<typeof loadActiveTaskContext>>
-  agentRows: typeof workspaceAgents.$inferSelect[]
-}) {
-  const metadata =
-    input.sourceMessage?.metadata && typeof input.sourceMessage.metadata === 'object'
-      ? (input.sourceMessage.metadata as Record<string, unknown>)
-      : null
-  const replyToMessageId =
-    input.sourceMessage?.replyToMessageId && typeof input.sourceMessage.replyToMessageId === 'string'
-      ? input.sourceMessage.replyToMessageId
-      : null
-
-  const mentionedAgentIds = Array.isArray(metadata?.mentions)
-    ? metadata!.mentions.filter((item): item is string => typeof item === 'string')
-    : []
-  if (mentionedAgentIds.length > 0) return null
-
-  const workersById = new Map(
-    input.agentRows.filter((agent) => agent.roleType !== 'orchestrator').map((agent) => [agent.id, agent] as const),
-  )
-  if (!replyToMessageId && !metadata?.replyToMessageId) return null
-
-  const repliedToMetadata =
-    input.repliedToMessage?.metadata && typeof input.repliedToMessage.metadata === 'object'
-      ? (input.repliedToMessage.metadata as Record<string, unknown>)
-      : null
-  if (!input.repliedToMessage || input.repliedToMessage.senderType !== 'agent') return null
-
-  const targetAgentId = typeof repliedToMetadata?.agentId === 'string'
-    ? repliedToMetadata.agentId
-    : typeof repliedToMetadata?.workerAgentId === 'string'
-      ? repliedToMetadata.workerAgentId
-      : typeof repliedToMetadata?.workspaceAgentId === 'string'
-        ? repliedToMetadata.workspaceAgentId
-        : input.repliedToMessage.senderId
-  const targetWorker = workersById.get(targetAgentId)
-  if (!targetWorker) return null
-
-  const repliedTaskId =
-    typeof repliedToMetadata?.orchestratorTaskId === 'string'
-      ? repliedToMetadata.orchestratorTaskId
-      : typeof repliedToMetadata?.taskId === 'string'
-        ? repliedToMetadata.taskId
-        : null
-  const relatedActiveTask = input.activeTaskContext.find((task) => {
-    if (task.agentId !== targetWorker.id) return false
-    if (repliedTaskId && task.taskId !== repliedTaskId) return false
-    return (
-      task.awaitingClarification ||
-      task.taskThreadStatus === 'active' ||
-      task.taskStatus === 'running' ||
-      task.taskStatus === 'blocked'
-    )
-  })
-
-  return relatedActiveTask ? targetWorker : null
-}
-
-async function routeGroupReplyToWorkerTaskRoom(input: {
-  groupSessionId: string
-  message: typeof messages.$inferSelect
-  userId: string
-  userName?: string | null
-  targetWorker: typeof workspaceAgents.$inferSelect
-  activeTaskContext: Awaited<ReturnType<typeof loadActiveTaskContext>>
-}) {
-  const targetTask = input.activeTaskContext.find(
-    (task) =>
-      task.agentId === input.targetWorker.id &&
-      (task.awaitingClarification ||
-        task.taskThreadStatus === 'active' ||
-        task.taskStatus === 'running' ||
-        task.taskStatus === 'blocked'),
-  )
-  if (!targetTask?.taskThreadSessionId) return false
-  const [taskSession] = await db
-    .select()
-    .from(sessions)
-    .where(eq(sessions.id, targetTask.taskThreadSessionId))
-    .limit(1)
-  if (!taskSession || !isOrchestratorTaskSession(taskSession)) return false
-
-  const { message: taskRoomMessage } = await appendHumanMessageRoomFirst({
-    session: taskSession,
-    userId: input.userId,
-    userName: input.userName,
-    type: input.message.type,
-    content: input.message.content,
-    metadata: {
-      ...(input.message.metadata && typeof input.message.metadata === 'object' ? input.message.metadata : {}),
-      source: 'group-worker-reply',
-      groupSessionId: input.groupSessionId,
-      groupMessageId: input.message.id,
-      targetWorkerId: input.targetWorker.id,
-      targetWorkerName: input.targetWorker.name,
-      taskId: targetTask.taskId,
-      taskThreadId: targetTask.taskThreadId,
-    },
-    replyToMessageId: null,
-  })
-
-  await stepTaskRoomAfterHumanMessage({
-    session: taskSession,
-    userId: input.userId,
-    userName: input.userName,
-    message: taskRoomMessage,
-  }).catch((err: any) => {
-    logger.error(
-      {
-        err: err?.message,
-        groupSessionId: input.groupSessionId,
-        taskSessionId: taskSession.id,
-        targetWorkerId: input.targetWorker.id,
-      },
-      'Group reply to Worker task room failed',
-    )
-    return null
-  })
-  return true
-}
-
-export const __messageRouteTestHooks = {
-  chooseDirectWorkerReplyTarget,
-  isOrchestratorTaskSession,
-}
-
-function resolveMentionedAgents(
-  mentions: string[],
-  agentRows: typeof workspaceAgents.$inferSelect[],
-) {
-  if (!mentions.length) return []
-  const agentsById = new Map(agentRows.map((agent) => [agent.id, agent]))
-  const resolved: typeof workspaceAgents.$inferSelect[] = []
-  const seen = new Set<string>()
-  for (const mention of mentions) {
-    const agent = agentsById.get(mention)
-    if (!agent || seen.has(agent.id)) continue
-    seen.add(agent.id)
-    resolved.push(agent)
-  }
-  return resolved
-}
 
 async function profileForDirectSession(session: typeof sessions.$inferSelect) {
   if (!session.workspaceAgentId) return undefined

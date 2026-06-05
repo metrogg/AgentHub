@@ -23,7 +23,6 @@ import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resource
 import { runController, type RunControllerRunContext } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { roomController, roomService } from '../rooms'
-import { workerRuntimeService } from '../worker-runtime'
 import type { WorkerRuntime } from '../worker-runtime'
 
 // ─── Types ──────────────────────────────────────────────────────────────
@@ -31,12 +30,11 @@ import type { WorkerRuntime } from '../worker-runtime'
 export interface DispatchAssignBatchInput {
   groupSession: typeof sessions.$inferSelect
   ownerId: string
-  sourceMessage: typeof messages.$inferSelect
+  goal: string
   actions: ManagerAction[]
   runtimeType: string
   run?: RunControllerRunContext
   workerRuntime?: WorkerRuntime
-  executeInline?: boolean
 }
 
 export interface DispatchAssignBatchResult {
@@ -82,13 +80,14 @@ interface PreparedAssignedTask {
   runtimeLeaseId?: string | null
   sharedTaskRelativeRoot?: string | null
   sharedTaskSpecPath?: string | null
+  mentionEventId?: string | null
   ownerId: string
   workerRuntime?: WorkerRuntime
 }
 
 interface WorkerTaskExecutionOutcome {
   taskId: string
-  status: 'completed' | 'cancelled' | 'failed' | 'waiting_for_human' | 'assigned'
+  status: 'assigned'
   message?: string | null
 }
 
@@ -123,7 +122,7 @@ export async function dispatchAssignBatch(
       const taskDescription =
         action.taskDescription?.trim() ||
         action.message?.trim() ||
-        input.sourceMessage.content
+        input.goal
       return {
         action,
         taskId: randomUUID(),
@@ -143,7 +142,7 @@ export async function dispatchAssignBatch(
     (await runController.start({
       workspaceId: workspace.id,
       groupSessionId: input.groupSession.id,
-      goal: input.sourceMessage.content,
+      goal: input.goal,
       actor: manager
         ? { id: manager.id, name: manager.name }
         : { id: 'manager', name: 'Manager' },
@@ -157,7 +156,7 @@ export async function dispatchAssignBatch(
         memberProposalCount: 0,
       },
     }))
-  const plan = buildAssignBatchPlan({ sourceMessage: input.sourceMessage, specs })
+  const plan = buildAssignBatchPlan({ goal: input.goal, specs })
   await runController.prepareForDispatch(run, {
     plan,
     taskCount: specs.length,
@@ -174,7 +173,7 @@ export async function dispatchAssignBatch(
         run,
         ownerId: input.ownerId,
         groupSession: input.groupSession,
-        sourceMessage: input.sourceMessage,
+        goal: input.goal,
         groupRoomId: groupRoom.id,
         runtimeType: input.runtimeType,
         spec,
@@ -185,17 +184,12 @@ export async function dispatchAssignBatch(
   }
   await runController.markRunning(run, { plan, taskCount: preparedTasks.length })
 
-  const execution = executeAssignBatch({ run, tasks: preparedTasks })
-  if (input.executeInline) {
-    await execution
-  } else {
-    execution.catch((error: any) => {
-      logger.error(
-        { err: error?.message, runId: run.runId, taskCount: preparedTasks.length },
-        'Manager assign batch WorkerRuntime execution failed',
-      )
-    })
-  }
+  void executeAssignBatch({ run, tasks: preparedTasks }).catch((error: any) => {
+    logger.error(
+      { err: error?.message, runId: run.runId, taskCount: preparedTasks.length },
+      'Manager assign batch async dispatch failed',
+    )
+  })
 
   return {
     runId: run.runId,
@@ -207,9 +201,9 @@ export async function dispatchAssignBatch(
       childSessionId: task.childSessionId,
       workerInstanceId: task.workerInstanceId ?? null,
       runtimeLeaseId: task.runtimeLeaseId ?? null,
-      workerExecutionStarted: true,
+      workerExecutionStarted: false,
     })),
-    workerExecutionStarted: true,
+    workerExecutionStarted: false,
   }
 }
 
@@ -220,7 +214,7 @@ async function prepareAssignedTask(input: {
   run: RunControllerRunContext
   ownerId: string
   groupSession: typeof sessions.$inferSelect
-  sourceMessage: typeof messages.$inferSelect
+  goal: string
   groupRoomId: string
   runtimeType: string
   spec: AssignSpec
@@ -267,7 +261,7 @@ async function prepareAssignedTask(input: {
     projectPath: input.workspace.projectPath,
     taskTitle: input.spec.taskTitle,
     taskDescription: input.spec.taskDescription,
-    goal: input.sourceMessage.content,
+    goal: input.goal,
     agent: input.spec.worker,
   })
 
@@ -328,8 +322,9 @@ async function prepareAssignedTask(input: {
   const taskRoomAssignmentBody =
     input.spec.action.message ||
     `@${input.spec.worker.name} 请接手：${input.spec.taskTitle}\n\n${input.spec.taskDescription}`
+  let mentionEventId: string | null = null
   if (taskRoomWorkerParticipant) {
-    await roomService.appendMentionTimelineEvent({
+    const mentionEvent = await roomService.appendMentionTimelineEvent({
       roomId: taskRoom.id,
       mentionParticipantId: taskRoomWorkerParticipant.id,
       senderType: 'manager',
@@ -343,6 +338,7 @@ async function prepareAssignedTask(input: {
         workerInstanceId: taskRoomWorkerParticipant.workerInstanceId ?? runtimeThread.workerInstanceId ?? null,
       },
     })
+    mentionEventId = mentionEvent.id
   } else {
     await roomService.appendTimelineEvent({
       roomId: taskRoom.id,
@@ -409,6 +405,7 @@ async function prepareAssignedTask(input: {
     runtimeLeaseId: lease?.id ?? null,
     sharedTaskRelativeRoot: runtimeThread.sharedTaskRelativeRoot ?? null,
     sharedTaskSpecPath: runtimeThread.sharedTaskSpecPath ?? null,
+    mentionEventId,
     ownerId: input.ownerId,
     workerRuntime: input.workerRuntime,
   }
@@ -420,193 +417,15 @@ async function executeAssignBatch(input: {
   run: RunControllerRunContext
   tasks: PreparedAssignedTask[]
 }) {
-  const outcomes: WorkerTaskExecutionOutcome[] = []
-  const outcomeByTaskId = new Map<string, WorkerTaskExecutionOutcome>()
-  const layers = buildExecutionLayers(input.tasks)
-
-  for (const layer of layers) {
-    const runnable: PreparedAssignedTask[] = []
-    for (const task of layer) {
-      const blockedBy = task.dependencyTaskIds
-        .map((taskId) => outcomeByTaskId.get(taskId))
-        .filter((outcome) => outcome && outcome.status !== 'completed' && outcome.status !== 'assigned') as WorkerTaskExecutionOutcome[]
-      if (blockedBy.length > 0) {
-        const outcome = blockedBy.some((outcome) => outcome.status === 'waiting_for_human')
-          ? await markTaskWaitingForHumanDependency({ task, blockedBy })
-          : await markTaskSkippedByDependency({ task, blockedBy })
-        outcomes.push(outcome)
-        outcomeByTaskId.set(outcome.taskId, outcome)
-      } else {
-        runnable.push(task)
-      }
-    }
-    const layerOutcomes = await Promise.all(runnable.map((task) => executeWorkerTaskRoom(task)))
-    for (const outcome of layerOutcomes) {
-      outcomes.push(outcome)
-      outcomeByTaskId.set(outcome.taskId, outcome)
-    }
-  }
-
-  // In mention mode, tasks are assigned but not executed here;
-  // Worker execution is triggered by Matrix @mention asynchronously.
-  const assigned = outcomes.filter((outcome) => outcome.status === 'assigned')
-  if (WORKER_TRIGGER_MODE === 'mention' && assigned.length === outcomes.length) {
-    await runController.markRunning(input.run, { taskCount: input.tasks.length })
-    return outcomes
-  }
-
-  const failed = outcomes.filter((outcome) => outcome.status === 'failed')
-  const cancelled = outcomes.filter((outcome) => outcome.status === 'cancelled')
-  const waitingForHuman = outcomes.filter((outcome) => outcome.status === 'waiting_for_human')
-  if (waitingForHuman.length > 0 && failed.length === 0 && cancelled.length === 0) {
-    await runController.markRunning(input.run, { taskCount: input.tasks.length })
-    await runController.reconcile(input.run)
-    return outcomes
-  }
-  if (failed.length > 0) {
-    await runController.finish(input.run, {
-      status: 'failed',
-      summary:
-        failed.length === 1
-          ? failed[0]?.message ?? 'A Worker task failed.'
-          : `${failed.length}/${outcomes.length} 个 Worker 任务失败。`,
-      payload: { source: 'controller-api.assign.batch', taskCount: outcomes.length, failedTaskIds: failed.map((o) => o.taskId) },
-    })
-    return outcomes
-  }
-  if (cancelled.length > 0) {
-    await runController.finish(input.run, {
-      status: 'cancelled',
-      summary:
-        cancelled.length === 1
-          ? cancelled[0]?.message ?? 'A Worker task was cancelled.'
-          : `${cancelled.length}/${outcomes.length} 个 Worker 任务被取消。`,
-      payload: { source: 'controller-api.assign.batch', taskCount: outcomes.length, cancelledTaskIds: cancelled.map((o) => o.taskId) },
-    })
-    return outcomes
-  }
-  await runController.finish(input.run, {
-    status: 'completed',
-    summary:
-      outcomes.length === 1
-        ? outcomes[0]?.message ?? 'Worker task completed.'
-        : `${outcomes.length} 个 Worker 任务已完成。`,
-    payload: { source: 'controller-api.assign.batch', taskCount: outcomes.length, taskIds: outcomes.map((o) => o.taskId) },
-  })
+  // HiClaw mode: assign all tasks and let Workers claim via Matrix @mention.
+  // Dependency ordering is managed by the Manager (OpenClaw) through state.json
+  // and controlled @mention dispatch; the backend only prepares environments.
+  const outcomes = await Promise.all(input.tasks.map((task) => executeWorkerTaskRoom(task)))
+  await runController.markRunning(input.run, { taskCount: input.tasks.length })
   return outcomes
 }
 
-// ─── Dependency Handling ────────────────────────────────────────────────
-
-async function markTaskSkippedByDependency(input: {
-  task: PreparedAssignedTask
-  blockedBy: WorkerTaskExecutionOutcome[]
-}): Promise<WorkerTaskExecutionOutcome> {
-  const message = `依赖任务未成功完成，跳过执行：${input.blockedBy.map((outcome) => outcome.taskId).join(', ')}`
-  await roomService.appendTimelineEvent({
-    roomId: input.task.taskRoomId,
-    senderType: 'system',
-    type: 'task.progress',
-    body: message,
-    metadata: {
-      kind: 'worker-runtime.skipped-by-dependency',
-      source: 'controller-api.assign',
-      taskId: input.task.taskId,
-      taskKey: input.task.taskKey,
-      taskThreadId: input.task.taskThreadId,
-      dependencyTaskIds: input.task.dependencyTaskIds,
-      blockedBy: input.blockedBy.map((outcome) => ({
-        taskId: outcome.taskId,
-        status: outcome.status,
-        message: outcome.message ?? null,
-      })),
-    },
-  })
-  await runController.markTaskFailed(input.task.run, {
-    taskId: input.task.taskId,
-    title: input.task.taskTitle,
-    agentId: input.task.worker.id,
-    error: message,
-    progressStatus: 'skipped-by-dependency',
-    childSessionId: input.task.childSessionId,
-    taskThreadId: input.task.taskThreadId,
-    workerInstanceId: input.task.workerInstanceId ?? null,
-    runtimeLeaseId: input.task.runtimeLeaseId ?? null,
-    sharedTaskRelativeRoot: input.task.sharedTaskRelativeRoot ?? null,
-    sharedTaskSpecPath: input.task.sharedTaskSpecPath ?? null,
-    extraPayload: {
-      source: 'controller-api.assign',
-      taskRoomId: input.task.taskRoomId,
-      taskKey: input.task.taskKey,
-      dependencyTaskIds: input.task.dependencyTaskIds,
-      skippedByDependency: true,
-    },
-    severity: 'warning',
-  })
-  await runtimeLeaseController.fail(input.task.runtimeLeaseId, {
-    workerInstanceId: input.task.workerInstanceId ?? null,
-    error: message,
-    metadata: { resultStatus: 'skipped-by-dependency', dependencyTaskIds: input.task.dependencyTaskIds },
-  })
-  return { taskId: input.task.taskId, status: 'failed', message }
-}
-
-async function markTaskWaitingForHumanDependency(input: {
-  task: PreparedAssignedTask
-  blockedBy: WorkerTaskExecutionOutcome[]
-}): Promise<WorkerTaskExecutionOutcome> {
-  const waitingTaskIds = input.blockedBy
-    .filter((outcome) => outcome.status === 'waiting_for_human')
-    .map((outcome) => outcome.taskId)
-  const message = `依赖任务正在等待用户澄清，当前任务暂停分发：${waitingTaskIds.join(', ')}`
-  await roomService.appendTimelineEvent({
-    roomId: input.task.taskRoomId,
-    senderType: 'system',
-    type: 'task.progress',
-    body: message,
-    metadata: {
-      kind: 'worker-runtime.waiting-on-human-dependency',
-      source: 'controller-api.assign',
-      taskId: input.task.taskId,
-      taskKey: input.task.taskKey,
-      taskThreadId: input.task.taskThreadId,
-      dependencyTaskIds: input.task.dependencyTaskIds,
-      waitingTaskIds,
-      blockedBy: input.blockedBy.map((outcome) => ({
-        taskId: outcome.taskId,
-        status: outcome.status,
-        message: outcome.message ?? null,
-      })),
-    },
-  })
-  await runController.markTaskProgress(input.task.run, {
-    taskId: input.task.taskId,
-    title: input.task.taskTitle,
-    agentId: input.task.worker.id,
-    childSessionId: input.task.childSessionId,
-    taskThreadId: input.task.taskThreadId,
-    workerInstanceId: input.task.workerInstanceId ?? null,
-    runtimeLeaseId: input.task.runtimeLeaseId ?? null,
-    sharedTaskRelativeRoot: input.task.sharedTaskRelativeRoot ?? null,
-    sharedTaskSpecPath: input.task.sharedTaskSpecPath ?? null,
-    percent: 0,
-    progressStatus: 'waiting_on_dependency_human_clarification',
-    severity: 'warning',
-    extraPayload: {
-      source: 'controller-api.assign',
-      taskRoomId: input.task.taskRoomId,
-      taskKey: input.task.taskKey,
-      dependencyTaskIds: input.task.dependencyTaskIds,
-      waitingTaskIds,
-      waitingOnHumanDependency: true,
-    },
-  })
-  return { taskId: input.task.taskId, status: 'waiting_for_human', message }
-}
-
 // ─── Worker Execution ───────────────────────────────────────────────────
-
-const WORKER_TRIGGER_MODE = (process.env.AGENTHUB_WORKER_TRIGGER_MODE ?? 'direct') as 'direct' | 'mention'
 
 async function executeWorkerTaskRoom(input: {
   run: RunControllerRunContext
@@ -621,234 +440,61 @@ async function executeWorkerTaskRoom(input: {
   runtimeLeaseId?: string | null
   sharedTaskRelativeRoot?: string | null
   sharedTaskSpecPath?: string | null
+  mentionEventId?: string | null
   ownerId: string
   workerRuntime?: WorkerRuntime
 }): Promise<WorkerTaskExecutionOutcome> {
-  // HiClaw mode: prepare only, wait for Matrix @mention to trigger execution
-  if (WORKER_TRIGGER_MODE === 'mention') {
-    await runtimeLeaseController.markReady(input.runtimeLeaseId, {})
-    await markWorkerInstanceState(input.workerInstanceId, 'idle', {
-      message: `Task assigned, waiting for @mention: ${input.taskTitle}.`,
-    })
-    await runController.markTaskAssigned(input.run, {
-      taskId: input.taskId,
-      title: input.taskTitle,
-      agentId: input.worker.id,
-      childSessionId: input.childSessionId,
-      taskThreadId: input.taskThreadId,
-      workerInstanceId: input.workerInstanceId ?? null,
-      sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
-      sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
-      extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId, runtimeLeaseId: input.runtimeLeaseId ?? null, triggerMode: 'mention' },
-    })
-    await roomService.appendTimelineEvent({
-      roomId: input.taskRoomId,
-      senderType: 'system',
-      type: 'task.progress',
-      body: `Task assigned to @${input.worker.name}. Waiting for Worker to claim via @mention.`,
-      metadata: { kind: 'task.assigned', workerId: input.worker.id, taskId: input.taskId, triggerMode: 'mention' },
-    })
-    // Also send an explicit @mention to the Worker so it can claim the task
-    // via MatrixRuntimeListener even before Manager OpenClaw sends its own @mention.
-    try {
-      const [workerParticipant] = await db
-        .select()
-        .from(roomParticipants)
-        .where(
-          and(
-            eq(roomParticipants.roomId, input.taskRoomId),
-            eq(roomParticipants.workspaceAgentId, input.worker.id),
-            eq(roomParticipants.participantType, 'worker'),
-          ),
-        )
-        .limit(1)
-      if (workerParticipant) {
-        const mentionBody = `@${input.worker.name} ${input.taskTitle}\n\n${input.taskDescription}`
-        await roomService.appendTimelineEvent({
-          roomId: input.taskRoomId,
-          senderType: 'manager',
-          type: 'manager.message',
-          body: mentionBody,
-          metadata: {
-            kind: 'task.mention',
-            targetWorkerId: input.worker.id,
-            taskId: input.taskId,
-            triggerMode: 'mention',
-            matrix: {
-              mentionedParticipantIds: [workerParticipant.id],
-            },
-          },
-        })
-      }
-    } catch (err) {
-      logger.warn({ err, taskId: input.taskId, taskRoomId: input.taskRoomId }, 'Failed to append mention event for Worker trigger')
-    }
-    return { taskId: input.taskId, status: 'assigned', message: `Waiting for Worker @mention: ${input.taskTitle}.` }
-  }
-
-  // Direct mode: execute immediately (legacy behavior)
-  const startedAt = Date.now()
-  await runtimeLeaseController.markRunning(input.runtimeLeaseId, { startedAt: new Date() })
-  await markWorkerInstanceState(input.workerInstanceId, 'busy', {
-    message: `Running task ${input.taskTitle}.`,
+  await runtimeLeaseController.markReady(input.runtimeLeaseId, {})
+  await markWorkerInstanceState(input.workerInstanceId, 'idle', {
+    message: `Task assigned, waiting for @mention: ${input.taskTitle}.`,
   })
-  await runController.markTaskActive(input.run, {
+  await runController.markTaskAssigned(input.run, {
     taskId: input.taskId,
     title: input.taskTitle,
     agentId: input.worker.id,
     childSessionId: input.childSessionId,
     taskThreadId: input.taskThreadId,
     workerInstanceId: input.workerInstanceId ?? null,
-    runtimeLeaseId: input.runtimeLeaseId ?? null,
     sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
     sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
-    progressPercent: 5,
-    progressStatus: 'worker-runtime-starting',
-    extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId },
+    extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId, runtimeLeaseId: input.runtimeLeaseId ?? null },
   })
-
-  try {
-    const result = await workerRuntimeService.runTaskRoom({
-      roomId: input.taskRoomId,
-      ownerId: input.ownerId,
-      workspaceAgentId: input.worker.id,
-      prompt: input.taskDescription,
-      runtime: input.workerRuntime,
+  await roomService.appendTimelineEvent({
+    roomId: input.taskRoomId,
+    senderType: 'system',
+    type: 'task.progress',
+    body: `Task assigned to @${input.worker.name}. Waiting for Worker to claim via @mention.`,
+    metadata: { kind: 'task.assigned', workerId: input.worker.id, taskId: input.taskId },
+  })
+  if (input.mentionEventId) {
+    await dispatchLocalMentionEvent({
+      eventId: input.mentionEventId,
+      workerRuntime: input.workerRuntime,
+    }).catch((err) => {
+      logger.warn(
+        { err, taskId: input.taskId, taskRoomId: input.taskRoomId },
+        'Failed to dispatch Matrix mention event for Worker trigger',
+      )
     })
-    const durationMs = Date.now() - startedAt
-    if (result.status === 'waiting_for_human') {
-      const clarificationId =
-        typeof result.metadata?.clarificationId === 'string' ? result.metadata.clarificationId : null
-      const clarificationQuestion =
-        typeof result.metadata?.clarificationQuestion === 'string'
-          ? result.metadata.clarificationQuestion
-          : result.message ?? null
-      await runController.markTaskWaitingForHuman(input.run, {
-        taskId: input.taskId,
-        title: input.taskTitle,
-        agentId: input.worker.id,
-        question: clarificationQuestion,
-        clarificationId,
-        childSessionId: input.childSessionId,
-        taskThreadId: input.taskThreadId,
-        workerInstanceId: input.workerInstanceId ?? null,
-        runtimeLeaseId: input.runtimeLeaseId ?? null,
-        sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
-        sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
-        artifacts: artifactsForRunController(result.artifacts),
-        extraPayload: {
-          source: 'controller-api.assign',
-          taskRoomId: input.taskRoomId,
-          timelineEventCount: result.appendedEventIds.length,
-          message: result.message ?? null,
-        },
-      })
-      await runtimeLeaseController.markWaitingForHuman(input.runtimeLeaseId, {
-        workerInstanceId: input.workerInstanceId ?? null,
-        message: clarificationQuestion,
-        metadata: { resultStatus: result.status, clarificationId, clarificationQuestion, taskRoomId: input.taskRoomId },
-      })
-      return { taskId: input.taskId, status: 'waiting_for_human', message: result.message ?? `${input.taskTitle} waiting for human clarification.` }
-    }
-    if (result.status === 'completed') {
-      await runController.markTaskCompleted(input.run, {
-        taskId: input.taskId,
-        title: input.taskTitle,
-        agentId: input.worker.id,
-        childSessionId: input.childSessionId,
-        taskThreadId: input.taskThreadId,
-        workerInstanceId: input.workerInstanceId ?? null,
-        runtimeLeaseId: input.runtimeLeaseId ?? null,
-        sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
-        sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
-        durationMs,
-        artifacts: artifactsForRunController(result.artifacts),
-        extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId, timelineEventCount: result.appendedEventIds.length, message: result.message ?? null },
-      })
-      await runtimeLeaseController.release(input.runtimeLeaseId, {
-        workerInstanceId: input.workerInstanceId ?? null,
-        metadata: { resultStatus: result.status },
-      })
-      return { taskId: input.taskId, status: 'completed', message: result.message ?? `${input.taskTitle} completed.` }
-    }
-    if (result.status === 'cancelled') {
-      await runController.markTaskCancelled(input.run, {
-        taskId: input.taskId,
-        title: input.taskTitle,
-        agentId: input.worker.id,
-        reason: result.message ?? 'worker-runtime-cancelled',
-        childSessionId: input.childSessionId,
-        taskThreadId: input.taskThreadId,
-        workerInstanceId: input.workerInstanceId ?? null,
-        runtimeLeaseId: input.runtimeLeaseId ?? null,
-        sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
-        sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
-        extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId },
-      })
-      await runtimeLeaseController.release(input.runtimeLeaseId, {
-        workerInstanceId: input.workerInstanceId ?? null,
-        metadata: { resultStatus: result.status },
-      })
-      return { taskId: input.taskId, status: 'cancelled', message: result.message ?? `${input.taskTitle} cancelled.` }
-    }
-    await runController.markTaskFailed(input.run, {
-      taskId: input.taskId,
-      title: input.taskTitle,
-      agentId: input.worker.id,
-      error: result.message ?? 'WorkerRuntime failed.',
-      childSessionId: input.childSessionId,
-      taskThreadId: input.taskThreadId,
-      workerInstanceId: input.workerInstanceId ?? null,
-      runtimeLeaseId: input.runtimeLeaseId ?? null,
-      sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
-      sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
-      durationMs,
-      artifacts: artifactsForRunController(result.artifacts),
-      extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId },
-    })
-    await runtimeLeaseController.fail(input.runtimeLeaseId, {
-      workerInstanceId: input.workerInstanceId ?? null,
-      error: result.message ?? 'WorkerRuntime failed.',
-      metadata: { resultStatus: result.status },
-    })
-    return { taskId: input.taskId, status: 'failed', message: result.message ?? `${input.taskTitle} failed.` }
-  } catch (error: any) {
-    const message = error?.message || 'WorkerRuntime execution failed.'
-    await roomService.appendTimelineEvent({
-      roomId: input.taskRoomId,
-      senderType: 'system',
-      type: 'task.progress',
-      body: `WorkerRuntime 执行失败：${message}`,
-      metadata: {
-        kind: 'worker-runtime.failed',
-        source: 'controller-api.assign',
-        taskId: input.taskId,
-        taskThreadId: input.taskThreadId,
-        workerInstanceId: input.workerInstanceId ?? null,
-        runtimeLeaseId: input.runtimeLeaseId ?? null,
-        error: message,
-      },
-    })
-    await runController.markTaskFailed(input.run, {
-      taskId: input.taskId,
-      title: input.taskTitle,
-      agentId: input.worker.id,
-      error: message,
-      childSessionId: input.childSessionId,
-      taskThreadId: input.taskThreadId,
-      workerInstanceId: input.workerInstanceId ?? null,
-      runtimeLeaseId: input.runtimeLeaseId ?? null,
-      sharedTaskRelativeRoot: input.sharedTaskRelativeRoot ?? null,
-      sharedTaskSpecPath: input.sharedTaskSpecPath ?? null,
-      durationMs: Date.now() - startedAt,
-      extraPayload: { source: 'controller-api.assign', taskRoomId: input.taskRoomId },
-    })
-    await runtimeLeaseController.fail(input.runtimeLeaseId, {
-      workerInstanceId: input.workerInstanceId ?? null,
-      error: message,
-    })
-    return { taskId: input.taskId, status: 'failed', message }
   }
+  return { taskId: input.taskId, status: 'assigned', message: `Waiting for Worker @mention: ${input.taskTitle}.` }
+}
+
+async function dispatchLocalMentionEvent(input: {
+  eventId: string
+  workerRuntime?: WorkerRuntime
+}) {
+  const { MatrixRoomEventDispatcher } = await import('../rooms/matrix-event-dispatcher')
+  const dispatcher = new MatrixRoomEventDispatcher({
+    runWorkerTaskRoom: async (taskRoom) => {
+      const { workerRuntimeService } = await import('../worker-runtime/worker-runtime-service')
+      return workerRuntimeService.runTaskRoom({
+        ...taskRoom,
+        runtime: input.workerRuntime,
+      })
+    },
+  })
+  await dispatcher.dispatchImportedEvents({ eventIds: [input.eventId] })
 }
 
 // ─── Runtime Lease ──────────────────────────────────────────────────────
@@ -946,7 +592,7 @@ async function resolveManagerAgent(workspaceId: string) {
 }
 
 function buildAssignBatchPlan(input: {
-  sourceMessage: typeof messages.$inferSelect
+  goal: string
   specs: AssignSpec[]
 }) {
   const uniqueWorkers = Array.from(
@@ -959,7 +605,7 @@ function buildAssignBatchPlan(input: {
       input.specs.length === 1
         ? input.specs[0]?.taskTitle ?? 'Manager assigned task'
         : `Manager assigned ${input.specs.length} worker tasks`,
-    goal: input.sourceMessage.content,
+    goal: input.goal,
     phases: [
       {
         id: 'phase-1',
@@ -1037,29 +683,7 @@ function validateAssignGraph(specs: AssignSpec[]) {
   return taskIdByKey
 }
 
-function buildExecutionLayers(tasks: PreparedAssignedTask[]) {
-  const remaining = new Map(tasks.map((task) => [task.taskId, task]))
-  const completed = new Set<string>()
-  const layers: PreparedAssignedTask[][] = []
-  while (remaining.size > 0) {
-    const layer = Array.from(remaining.values()).filter((task) =>
-      task.dependencyTaskIds.every((dependencyTaskId) => completed.has(dependencyTaskId)),
-    )
-    if (layer.length === 0) {
-      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Manager assign dependency graph cannot be scheduled.')
-    }
-    layers.push(layer)
-    for (const task of layer) {
-      remaining.delete(task.taskId)
-      completed.add(task.taskId)
-    }
-  }
-  return layers
-}
 
-function artifactsForRunController(value: unknown) {
-  return Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []
-}
 
 /**
  * Write spec.md to shared storage for the Worker to read.

@@ -4,7 +4,7 @@ import { app } from './app'
 import { env } from './env'
 import { logger } from './lib/logger'
 import { setRuntimeServerPort } from './lib/runtime-server'
-import { joinRoom, cleanupWebSocket, cancelAllAgentReplies } from './services/agent-runner'
+import { joinRoom, cleanupWebSocket } from './services/agent-runner'
 import { db, users, eq, orchestratorRuns, sql } from '@agenthub/db'
 import { DEFAULT_USER } from './middleware/auth'
 import { WsEvent } from '@agenthub/shared'
@@ -30,6 +30,36 @@ async function seedDefaultUser() {
 await seedDefaultUser()
 controllerReconcileQueue.start()
 logger.info({ queue: controllerReconcileQueue.describe() }, 'Started AgentHub Controller Plane reconcile queue')
+
+// ─── Start resident Manager (OpenClaw / QwenPaw) ─────────────────────
+// Resident Managers observe rooms via Matrix /sync autonomously.
+// AgentHub does not invoke their step() directly.
+//
+// HiClaw design: Manager is the brain. If it cannot start, the system
+// cannot function. We block server startup until the Manager is ready.
+const provider = getActiveManagerProvider()
+if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
+  const status = await provider.status()
+  if (!status.running && !status.endpoint) {
+    logger.info({ runtimeType: provider.runtimeType }, 'Starting resident Manager process...')
+    if (!provider.ensureStarted) {
+      logger.error('Provider does not support ensureStarted; Manager is unavailable.')
+      process.exit(1)
+    }
+    const result = await provider.ensureStarted()
+    if (result.error) {
+      logger.error(
+        { error: result.error, runtimeType: provider.runtimeType },
+        'FATAL: Resident Manager failed to start. AgentHub cannot coordinate without a Manager. ' +
+          'Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_MANAGER_RUNTIME correctly.',
+      )
+      process.exit(1)
+    }
+    logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
+  } else {
+    logger.info({ runtimeType: provider.runtimeType, running: status.running, endpoint: status.endpoint }, 'Resident Manager already active')
+  }
+}
 
 function resolvePortFile() {
   const configured = Bun.env.AGENTHUB_PORT_FILE?.trim()
@@ -98,42 +128,6 @@ const runtimePort = server.port ?? currentPort
 logger.info(`🚀 AgentHub server listening on http://0.0.0.0:${runtimePort}`)
 setRuntimeServerPort(runtimePort)
 
-// ─── Start resident Manager (OpenClaw / QwenPaw) ─────────────────────
-// Resident Managers observe rooms via Matrix /sync autonomously.
-// AgentHub does not invoke their step() directly.
-//
-// HiClaw design: Manager is the brain. If it cannot start, the system
-// is degraded. We log at fatal level so operators cannot miss it.
-void (async () => {
-  try {
-    const provider = getActiveManagerProvider()
-    if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
-      const status = await provider.status()
-      if (!status.running && !status.endpoint) {
-        logger.info({ runtimeType: provider.runtimeType }, 'Starting resident Manager process...')
-        if (!provider.ensureStarted) {
-          logger.fatal('Provider does not support ensureStarted; Manager is unavailable.')
-          return
-        }
-        const result = await provider.ensureStarted()
-        if (result.error) {
-          logger.fatal(
-            { error: result.error, runtimeType: provider.runtimeType },
-            'FATAL: Resident Manager failed to start. AgentHub cannot coordinate without a Manager. ' +
-              'Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_MANAGER_RUNTIME correctly.',
-          )
-        } else {
-          logger.info({ pid: result.pid, runtimeType: result.runtimeType }, 'Resident Manager started')
-        }
-      } else {
-        logger.info({ runtimeType: provider.runtimeType, running: status.running, endpoint: status.endpoint }, 'Resident Manager already active')
-      }
-    }
-  } catch (err) {
-    logger.fatal({ err }, 'FATAL: Resident Manager startup threw an exception. AgentHub is in degraded mode.')
-  }
-})()
-
 // Write actual port to file so Vite dev proxy can read it
 const portFile = resolvePortFile()
 try {
@@ -156,7 +150,6 @@ async function shutdown(reason: string) {
   shuttingDown = true
   logger.info({ reason }, 'AgentHub server shutting down')
 
-  const activeSessionIds = cancelAllAgentReplies()
   const activeRuns = await db
     .select({
       id: orchestratorRuns.id,
@@ -167,10 +160,10 @@ async function shutdown(reason: string) {
     .where(sql`${orchestratorRuns.status} in ('planning', 'running', 'synthesizing')`)
   const activeRunIds = activeRuns.map((run) => run.id)
 
-  if (activeRunIds.length > 0 || activeSessionIds.length > 0) {
+  if (activeRunIds.length > 0) {
     logger.warn(
-      { activeRunIds, activeSessionIds },
-      'Cancelled active Agent work before process exit',
+      { activeRunIds },
+      'Active runs found before process exit',
     )
   }
 

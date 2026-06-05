@@ -1,4 +1,4 @@
-import './setup'
+import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
@@ -46,6 +46,7 @@ describe('Room chat bridge', () => {
       type: 'text',
       metadata: { displayContent: '大家好，看到的人打个招呼' },
       replyToMessageId: null,
+      skipDispatch: true,
     })
 
     expect(message.id).toBe(`room:${event.id}`)
@@ -101,6 +102,7 @@ describe('Room chat bridge', () => {
       type: 'text',
       metadata: null,
       replyToMessageId: null,
+      skipDispatch: true,
     })
 
     const legacyMessages = await db
@@ -132,6 +134,7 @@ describe('Room chat bridge', () => {
       type: 'text',
       metadata: null,
       replyToMessageId: null,
+      skipDispatch: true,
     })
     const second = await appendHumanMessageRoomFirst({
       session,
@@ -141,6 +144,7 @@ describe('Room chat bridge', () => {
       type: 'text',
       metadata: null,
       replyToMessageId: null,
+      skipDispatch: true,
     })
 
     await appendMessageControlEvent({
@@ -305,7 +309,6 @@ describe('Room chat bridge', () => {
       message,
       runtime: new FakeRuntime('assign', agentId),
       workerRuntime: new FakeWorkerRuntime(),
-      executeInline: true,
     })
 
     expect(result.consumed).toBe(true)
@@ -316,10 +319,11 @@ describe('Room chat bridge', () => {
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
     expect(timeline[2]?.metadata?.kind).toBe('manager.assign.dispatched')
 
-    const runRows = await db
-      .select()
-      .from(orchestratorRuns)
-      .where(eq(orchestratorRuns.groupSessionId, session.id))
+    const runRows = await waitForCondition(
+      () => db.select().from(orchestratorRuns).where(eq(orchestratorRuns.groupSessionId, session.id)),
+      (rows) => rows.length === 1 && rows[0]?.status === 'completed',
+      { description: 'single assign run completed' },
+    )
     expect(runRows).toHaveLength(1)
 
     const taskRows = await db.select().from(workspaceTasks).where(eq(workspaceTasks.runId, runRows[0]!.id))
@@ -393,15 +397,15 @@ describe('Room chat bridge', () => {
       message,
       runtime: new MultiAssignRuntime([agentId, secondAgentId!]),
       workerRuntime: new FakeWorkerRuntime(),
-      executeInline: true,
     })
 
     expect(result.consumed).toBe(true)
 
-    const runRows = await db
-      .select()
-      .from(orchestratorRuns)
-      .where(eq(orchestratorRuns.groupSessionId, session.id))
+    const runRows = await waitForCondition(
+      () => db.select().from(orchestratorRuns).where(eq(orchestratorRuns.groupSessionId, session.id)),
+      (rows) => rows.length === 1 && rows[0]?.status === 'completed',
+      { description: 'multi assign run completed' },
+    )
     expect(runRows).toHaveLength(1)
     expect(runRows[0]?.status).toBe('completed')
     expect(runRows[0]?.plan?.schema).toBe('agenthub.hiclaw-lite.assign-batch.v1')
@@ -417,15 +421,20 @@ describe('Room chat bridge', () => {
     expect(new Set(taskRoomRows.map((room) => room.runId))).toEqual(new Set([runRows[0]!.id]))
 
     const groupTimeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
-    expect(groupTimeline.map((event) => event.type)).toEqual([
+    expect(groupTimeline.slice(0, 4).map((event) => event.type)).toEqual([
       'human.message',
       'manager.message',
       'task.assigned',
       'task.assigned',
     ])
     expect(groupTimeline[1]?.metadata?.kind).toBe('coordinator.observing')
+    expect(groupTimeline.some((event) => event.metadata?.kind === 'manager-final-review')).toBe(true)
     expect(
-      new Set(groupTimeline.slice(2).map((event) => event.metadata?.taskRoomId as string)),
+      new Set(
+        groupTimeline
+          .filter((event) => event.type === 'task.assigned')
+          .map((event) => event.metadata?.taskRoomId as string),
+      ),
     ).toEqual(new Set(taskRoomRows.map((room) => room.id)))
 
     for (const taskRoom of taskRoomRows) {
@@ -456,7 +465,7 @@ describe('Room chat bridge', () => {
     )
   })
 
-  test('dispatches dependent assign actions as one run and executes dependency layers in order', async () => {
+  test('records dependent assign actions as one run and leaves execution order to Manager-controlled mentions', async () => {
     const { session, message, agentId, secondAgentId } = await createGroupMessage({
       extraAgents: [
         {
@@ -474,15 +483,15 @@ describe('Room chat bridge', () => {
       message,
       runtime: new DependentAssignRuntime(agentId, secondAgentId!),
       workerRuntime: new RecordingWorkerRuntime(executionOrder),
-      executeInline: true,
     })
 
     expect(result.consumed).toBe(true)
 
-    const runRows = await db
-      .select()
-      .from(orchestratorRuns)
-      .where(eq(orchestratorRuns.groupSessionId, session.id))
+    const runRows = await waitForCondition(
+      () => db.select().from(orchestratorRuns).where(eq(orchestratorRuns.groupSessionId, session.id)),
+      (rows) => rows.length === 1 && rows[0]?.status === 'completed',
+      { description: 'dependent assign run completed' },
+    )
     expect(runRows).toHaveLength(1)
     expect(runRows[0]?.status).toBe('completed')
 
@@ -496,7 +505,7 @@ describe('Room chat bridge', () => {
     expect(runRows[0]?.plan?.tasks?.find((task: any) => task.taskKey === 'write')?.dependencies).toEqual([
       firstTask!.id,
     ])
-    expect(executionOrder).toEqual(['收集事实', '撰写报告'])
+    expect(new Set(executionOrder)).toEqual(new Set(['收集事实', '撰写报告']))
 
     const groupTimeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
     const writeAssignment = groupTimeline.find((event) => event.metadata?.taskKey === 'write')
@@ -504,7 +513,7 @@ describe('Room chat bridge', () => {
     expect(writeAssignment?.metadata?.dependencyTaskIds).toEqual([firstTask!.id])
   })
 
-  test('skips dependent assign tasks when an upstream dependency fails', async () => {
+  test('does not run an implicit dependency skipper when one Matrix-mentioned task fails', async () => {
     const { session, message, agentId, secondAgentId } = await createGroupMessage({
       extraAgents: [
         {
@@ -522,15 +531,15 @@ describe('Room chat bridge', () => {
       message,
       runtime: new DependentAssignRuntime(agentId, secondAgentId!),
       workerRuntime: new FailingFirstWorkerRuntime(executionOrder),
-      executeInline: true,
     })
 
     expect(result.consumed).toBe(true)
 
-    const runRows = await db
-      .select()
-      .from(orchestratorRuns)
-      .where(eq(orchestratorRuns.groupSessionId, session.id))
+    const runRows = await waitForCondition(
+      () => db.select().from(orchestratorRuns).where(eq(orchestratorRuns.groupSessionId, session.id)),
+      (rows) => rows.length === 1 && rows[0]?.status === 'failed',
+      { description: 'failed dependent assign run settled' },
+    )
     expect(runRows).toHaveLength(1)
     expect(runRows[0]?.status).toBe('failed')
 
@@ -538,14 +547,15 @@ describe('Room chat bridge', () => {
     const firstTask = taskRows.find((task) => task.title === '收集事实')
     const secondTask = taskRows.find((task) => task.title === '撰写报告')
     expect(firstTask?.status).toBe('failed')
-    expect(secondTask?.status).toBe('failed')
-    expect(secondTask?.progressStatus).toBe('skipped-by-dependency')
-    expect(executionOrder).toEqual(['收集事实'])
+    expect(secondTask?.status).toBe('done')
+    expect(secondTask?.progressStatus).toBe('completed')
+    expect(new Set(executionOrder)).toEqual(new Set(['收集事实', '撰写报告']))
 
     const taskRoomRows = await db.select().from(rooms).where(eq(rooms.runId, runRows[0]!.id))
-    const skippedRoom = taskRoomRows.find((room) => room.taskId === secondTask!.id)
-    const skippedTimeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, skippedRoom!.id))
-    expect(skippedTimeline.some((event) => event.metadata?.kind === 'worker-runtime.skipped-by-dependency')).toBe(true)
+    for (const taskRoom of taskRoomRows) {
+      const taskTimeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, taskRoom.id))
+      expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.skipped-by-dependency')).toBe(false)
+    }
   })
 
   test('keeps assign run open when a Worker asks for human clarification', async () => {
@@ -557,19 +567,29 @@ describe('Room chat bridge', () => {
       message,
       runtime: new FakeRuntime('assign', agentId),
       workerRuntime: new ClarifyingWorkerRuntime(),
-      executeInline: true,
     })
 
     expect(result.consumed).toBe(true)
 
-    const runRows = await db
-      .select()
-      .from(orchestratorRuns)
-      .where(eq(orchestratorRuns.groupSessionId, session.id))
+    const taskRows = await waitForCondition(
+      async () => {
+        const runs = await db
+          .select()
+          .from(orchestratorRuns)
+          .where(eq(orchestratorRuns.groupSessionId, session.id))
+        if (runs.length !== 1 || runs[0]?.status !== 'running') return []
+        return db.select().from(workspaceTasks).where(eq(workspaceTasks.runId, runs[0]!.id))
+      },
+      (rows) =>
+        rows.length === 1 &&
+        rows[0]?.status === 'blocked' &&
+        rows[0]?.progressStatus === 'awaiting_human_clarification',
+      { description: 'clarifying assign run waiting' },
+    )
+    const runRows = await db.select().from(orchestratorRuns).where(eq(orchestratorRuns.groupSessionId, session.id))
     expect(runRows).toHaveLength(1)
     expect(runRows[0]?.status).toBe('running')
 
-    const taskRows = await db.select().from(workspaceTasks).where(eq(workspaceTasks.runId, runRows[0]!.id))
     expect(taskRows).toHaveLength(1)
     expect(taskRows[0]?.status).toBe('blocked')
     expect(taskRows[0]?.progressStatus).toBe('awaiting_human_clarification')
@@ -618,7 +638,6 @@ describe('Room chat bridge', () => {
       message,
       runtime: new FakeRuntime('assign', 'missing-worker'),
       workerRuntime: new FakeWorkerRuntime(),
-      executeInline: true,
     })
 
     expect(result.consumed).toBe(true)

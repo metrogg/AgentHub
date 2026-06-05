@@ -1,11 +1,12 @@
-import { randomUUID } from 'node:crypto'
+
 import {
   asc,
   db,
   desc,
   eq,
-  messages,
+  
   sessions,
+  timelineEvents,
   workspaceAgents,
   workspaces,
 } from '@agenthub/db'
@@ -144,9 +145,8 @@ export async function startPlanRunWithCoordinatorAssignBatch(params: {
   ownerId: string
   runId?: string
   run: RunControllerRunContext
-  sourceMessage?: typeof messages.$inferSelect | MessageRow | null
+  
   workerRuntime?: WorkerRuntime
-  executeInline?: boolean
 }): Promise<DispatchMonitor> {
   const { sessionId, plan, workspaceId, ownerId } = params
   const [sourceSession] = await db
@@ -179,22 +179,20 @@ export async function startPlanRunWithCoordinatorAssignBatch(params: {
     throw AppError.fromCode(AppErrorCodes.ORCHESTRATOR_PLAN_INVALID, validationError)
   }
 
-  const sourceMessage = await resolvePlanSourceMessage({
+  const goal = await resolvePlanGoal({
     sessionId,
     ownerId,
     content: plan.goal,
-    sourceMessage: params.sourceMessage ?? null,
   })
   const actions = managerAssignActionsFromPlan({ plan, agentsByKey })
   const batch = await dispatchAssignBatch({
     groupSession: sourceSession,
     ownerId,
-    sourceMessage,
+    goal,
     actions,
     runtimeType: 'code-agent',
     run: params.run,
     workerRuntime: params.workerRuntime,
-    executeInline: params.executeInline,
   })
 
   await emitRunEvent({
@@ -233,9 +231,8 @@ export async function generatePlanAndPushTaskBoard(
     decision?: ManagerDecisionEventContext
     run?: RunControllerRunContext
     runId?: string
-    sourceMessage?: typeof messages.$inferSelect | MessageRow | null
+    
     workerRuntime?: WorkerRuntime
-    executeInline?: boolean
   } = {},
 ): Promise<DispatchMonitor | null> {
   const orchestratorAgent = agents.find((a: any) => a.roleType === 'orchestrator')
@@ -292,9 +289,8 @@ export async function generatePlanAndPushTaskBoard(
       ownerId,
       runId,
       run: managerRun,
-      sourceMessage: options.sourceMessage ?? null,
+      
       workerRuntime: options.workerRuntime,
-      executeInline: options.executeInline,
     })
   } catch (err: any) {
     const message = err?.message || '模型没有返回可执行的任务计划'
@@ -398,35 +394,27 @@ async function dispatchPlanToExistingGroup(
   return { workspaceId: workspace.id, groupSessionId: session.id, agentsByKey }
 }
 
-async function resolvePlanSourceMessage(input: {
+
+/**
+ * Resolve plan goal from room timeline (Room-first source of truth).
+ * HiClaw-style: Manager reads timeline directly; backend no longer constructs MessageRow.
+ */
+async function resolvePlanGoal(input: {
   sessionId: string
   ownerId: string
   content: string
-  sourceMessage?: typeof messages.$inferSelect | MessageRow | null
-}): Promise<typeof messages.$inferSelect> {
-  if (input.sourceMessage && 'isPinned' in input.sourceMessage) {
-    return input.sourceMessage as typeof messages.$inferSelect
-  }
-  const [latestUserMessage] = await db
+}): Promise<string> {
+  const { roomService } = await import('../rooms')
+  const room = await roomService.ensureRoomForSession(input.sessionId, input.ownerId)
+  const timeline = await db
     .select()
-    .from(messages)
-    .where(eq(messages.sessionId, input.sessionId))
-    .orderBy(desc(messages.createdAt))
+    .from(timelineEvents)
+    .where(eq(timelineEvents.roomId, room.id))
+    .orderBy(desc(timelineEvents.sequence))
     .limit(1)
-  if (latestUserMessage?.senderType === 'user') return latestUserMessage
-  return {
-    id: input.sourceMessage?.id ?? randomUUID(),
-    sessionId: input.sessionId,
-    senderId: input.ownerId,
-    senderType: 'user',
-    type: 'text',
-    content: input.sourceMessage?.content ?? input.content,
-    metadata:
-      input.sourceMessage?.metadata && typeof input.sourceMessage.metadata === 'object'
-        ? input.sourceMessage.metadata
-        : null,
-    isPinned: false,
-    replyToMessageId: null,
-    createdAt: input.sourceMessage?.createdAt ?? new Date(),
+  const latestEvent = timeline[0]
+  if (latestEvent?.senderType === 'human' && latestEvent.body?.trim()) {
+    return latestEvent.body.trim()
   }
+  return input.content
 }

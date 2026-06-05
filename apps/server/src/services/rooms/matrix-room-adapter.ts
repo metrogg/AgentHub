@@ -162,6 +162,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
       await this.addParticipant({
         roomId: room.id,
         participantType: 'worker',
+        workspaceAgentId: input.workspaceAgentId ?? null,
         displayName: `Worker-${input.workerInstanceId.slice(0, 6)}`,
         role: 'member',
         workerInstanceId: input.workerInstanceId,
@@ -313,6 +314,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
           senderUserId: senderIdentity?.userId ?? null,
           usedParticipantToken: Boolean(senderIdentity?.accessToken),
           mentions: [mentionParticipant.providerUserId],
+          mentionedParticipantIds: [input.mentionParticipantId],
         },
       },
     })

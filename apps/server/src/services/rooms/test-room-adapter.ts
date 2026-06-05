@@ -117,6 +117,7 @@ export class TestRoomAdapter implements RoomAdapter {
       await this.addParticipant({
         roomId: room.id,
         participantType: 'worker',
+        workspaceAgentId: input.workspaceAgentId ?? null,
         displayName: `Worker-${input.workerInstanceId.slice(0, 6)}`,
         role: 'member',
         workerInstanceId: input.workerInstanceId,
@@ -213,6 +214,7 @@ export class TestRoomAdapter implements RoomAdapter {
           senderUserId: null,
           usedParticipantToken: false,
           mentions: participant?.providerUserId ? [participant.providerUserId] : [],
+          mentionedParticipantIds: [input.mentionParticipantId],
           testOnly: true,
         },
         mentionParticipantId: input.mentionParticipantId,

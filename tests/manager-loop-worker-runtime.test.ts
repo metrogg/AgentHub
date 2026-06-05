@@ -1,4 +1,4 @@
-import './setup'
+import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
 import type {
   WorkerRuntime,
@@ -36,11 +36,15 @@ describe('ManagerLoop dispatches prepared task rooms through WorkerRuntime', () 
 
     const result = await managerLoopStep(fixture.run.id, {
       workerRuntime: runtime,
-      executeInline: true,
     })
 
     expect(result.action).toBe('dispatch_pending')
     expect(result.dispatchedTaskIds).toEqual([fixture.task.id])
+    await waitForCondition(
+      () => db.select().from(workspaceTasks).where(eq(workspaceTasks.id, fixture.task.id)),
+      (rows) => rows[0]?.status === 'done',
+      { description: 'ManagerLoop Matrix-mentioned task completed' },
+    )
     expect(runtime.prompts).toEqual(['完成这份透明协作报告。'])
 
     const taskRows = await db.select().from(workspaceTasks).where(eq(workspaceTasks.id, fixture.task.id))
@@ -100,7 +104,6 @@ describe('ManagerLoop dispatches prepared task rooms through WorkerRuntime', () 
 
     const result = await managerLoopStep(fixture.run.id, {
       workerRuntime: runtime,
-      executeInline: true,
     })
 
     expect(result.action).toBe('waiting')
