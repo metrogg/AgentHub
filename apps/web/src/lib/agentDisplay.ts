@@ -6,9 +6,9 @@ import type { WorkspaceAgent } from './api'
  * 替代 Thread.tsx、AgentConfigPage.tsx、AgentWorldPage.tsx 中的重复 runtimeLabel。
  */
 export function runtimeLabel(value: WorkspaceAgent['runtimeType']): string {
-  const map: Record<WorkspaceAgent['runtimeType'], string> = {
-    llm: 'LLM Agent',
+  const map: Record<string, string> = {
     'code-agent': 'Coding Tools',
+    llm: 'LLM Agent (deprecated)',
   }
   return map[value] ?? value
 }

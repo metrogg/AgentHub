@@ -627,7 +627,7 @@ export default function AgentConfigPage() {
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
                               <span className="truncate">{draft.role || '未设置角色'}</span>
                               <span className="text-neutral-300">·</span>
-                              <span>{runtimeType === 'code-agent' ? labelForCodeAgentType(draft.codeAgentType ?? 'codex') : 'LLM'}</span>
+                              <span>{labelForCodeAgentType(draft.codeAgentType ?? 'codex')}</span>
                               <span className="text-neutral-300">·</span>
                               <span>{modelName(draft.modelId ?? null, models)}</span>
                             </div>
@@ -695,14 +695,13 @@ export default function AgentConfigPage() {
                                   setDraft({
                                     ...draft,
                                     runtimeType: nextRuntime,
-                                    codeAgentType: nextRuntime === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
-                                    approvalRequired: nextRuntime === 'code-agent' ? false : (draft.approvalRequired ?? true),
+                                    codeAgentType: draft.codeAgentType ?? 'codex',
+                                    approvalRequired: false,
                                   })
                                 }}>
                                   <option value="code-agent">Coding Tools / CLI 运行器</option>
-                                  <option value="llm">{t('普通 LLM Agent')}</option>
                                 </SelectField>
-                                <SelectField label="CLI 运行器" value={draft.codeAgentType ?? 'codex'} disabled={runtimeType !== 'code-agent'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
+                                <SelectField label="CLI 运行器" value={draft.codeAgentType ?? 'codex'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
                                   <option value="">{t('不绑定 CLI')}</option>
                                   <option value="codex">Codex CLI</option>
                                   <option value="claude-code">Claude Code</option>
@@ -711,7 +710,7 @@ export default function AgentConfigPage() {
                                   <option value="openclaw">OpenClaw</option>
                                 </SelectField>
                                 <SelectField label="模型绑定" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
-                                  <option value="">{runtimeType === 'code-agent' ? '沿用模型管理默认' : '使用默认模型'}</option>
+                                  <option value="">沿用模型管理默认</option>
                                   {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
                                 </SelectField>
                                 <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
@@ -719,9 +718,7 @@ export default function AgentConfigPage() {
                                   <option value="danger-full-access">{t('完全访问')}</option>
                                 </SelectField>
                               </div>
-                              {runtimeType === 'code-agent' && (
-                                <p className="mt-3 text-xs leading-5 text-neutral-500">{modelCompatibilityMessage}</p>
-                              )}
+                              <p className="mt-3 text-xs leading-5 text-neutral-500">{modelCompatibilityMessage}</p>
                             </div>
 
                             {selectedExpertProfile && (
@@ -1005,7 +1002,6 @@ export default function AgentConfigPage() {
   )
 }
 function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
-  const runtimeType = draft.runtimeType ?? 'code-agent'
   const capabilityTags = draft.capabilityTags ?? []
   return {
     name: draft.name.trim(),
@@ -1016,14 +1012,14 @@ function normalizeDraft(draft: AgentConfigInput): AgentConfigInput {
     skillIds: draft.skillIds ?? [],
     color: draft.color || '#111827',
     modelId: draft.modelId ?? null,
-    runtimeType,
-    codeAgentType: runtimeType === 'code-agent' ? (draft.codeAgentType ?? 'codex') : null,
+    runtimeType: 'code-agent' as const,
+    codeAgentType: draft.codeAgentType ?? 'codex',
     capabilityTags,
     toolPermissions: draft.toolPermissions?.length ? draft.toolPermissions : ['chat'],
     sandboxPolicy: draft.sandboxPolicy ?? 'workspace-write',
     contextPolicy: draft.contextPolicy ?? 'workspace-aware',
     autoInvoke: draft.autoInvoke ?? true,
-    approvalRequired: runtimeType === 'code-agent' ? false : (draft.approvalRequired ?? true),
+    approvalRequired: false,
     roleType: draft.roleType ?? 'custom',
     roleProfile: draft.roleProfile ?? null,
   }

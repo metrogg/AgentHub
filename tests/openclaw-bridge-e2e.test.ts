@@ -1,4 +1,4 @@
-import './setup'
+import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
@@ -43,7 +43,6 @@ describe('OpenClaw Manager bridge e2e contract', () => {
         userName: 'Tester',
         message,
         workerRuntime: new FakeWorkerRuntime(),
-        executeInline: true,
       })
 
       expect(result.consumed).toBe(true)
@@ -72,13 +71,14 @@ describe('OpenClaw Manager bridge e2e contract', () => {
       ])
       expect(groupTimeline[2]?.metadata?.kind).toBe('manager-runtime.thinking')
       expect(groupTimeline[3]?.metadata?.kind).toBe('manager-runtime.completed')
-      expect(groupTimeline[4]?.metadata?.kind).toBe('coordinator.assign.dispatched')
+      expect(groupTimeline[4]?.metadata?.kind).toBe('manager.assign.dispatched')
       expect(groupTimeline.some((event) => event.metadata?.kind === 'coordinator.runtime-blocked')).toBe(false)
 
-      const runRows = await db
-        .select()
-        .from(orchestratorRuns)
-        .where(eq(orchestratorRuns.groupSessionId, session.id))
+      const runRows = await waitForCondition(
+        () => db.select().from(orchestratorRuns).where(eq(orchestratorRuns.groupSessionId, session.id)),
+        (rows) => rows.length === 1 && rows[0]?.status === 'completed',
+        { description: 'OpenClaw bridge assign run completed' },
+      )
       expect(runRows).toHaveLength(1)
       expect(runRows[0]?.status).toBe('completed')
       expect(runRows[0]?.plan?.schema).toBe('agenthub.hiclaw-lite.assign-batch.v1')
@@ -99,10 +99,10 @@ describe('OpenClaw Manager bridge e2e contract', () => {
 
       const taskTimeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, taskRoomRows[0]!.id))
       const assignedEvent = taskTimeline.find(
-        (event) => event.type === 'task.assigned' && event.metadata?.kind === 'coordinator.assign.dispatched',
+        (event) => event.type === 'task.assigned' && event.metadata?.kind === 'manager.assign.dispatched',
       )
       expect(assignedEvent?.metadata).toMatchObject({
-        kind: 'coordinator.assign.dispatched',
+        kind: 'manager.assign.dispatched',
         matrixExecutionBus: true,
         coordinationSource: 'matrix-mention',
       })

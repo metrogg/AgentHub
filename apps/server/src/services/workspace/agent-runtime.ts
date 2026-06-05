@@ -1,5 +1,5 @@
 import { db, workspaceTasks, eq } from '@agenthub/db'
-import { getActiveRunSessionIds, type AgentRunProfile } from '../agent-runner'
+import type { AgentRunProfile } from '../agent-runner'
 import { buildAgentProfile, type AgentRow } from '../agents/profile-builder'
 import { cleanProjectPath } from './utils'
 import { TaskStatus } from '@agenthub/shared'
@@ -20,5 +20,3 @@ export async function markWorkspaceTaskAfterRun(taskId: string, ok: boolean) {
     .set({ status: ok ? TaskStatus.Done : TaskStatus.Failed, updatedAt: new Date() })
     .where(eq(workspaceTasks.id, taskId))
 }
-
-export { getActiveRunSessionIds }

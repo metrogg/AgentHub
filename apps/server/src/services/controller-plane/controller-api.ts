@@ -1,14 +1,18 @@
 import {
+  and,
   artifacts,
   db,
   eq,
+  matrixIdentities,
   orchestratorRuns,
   roomParticipants,
   rooms,
   runtimeLeases,
+  sessions,
   workspaceAgents,
   workspaceTasks,
   workerInstances,
+  workspaces,
 } from '@agenthub/db'
 import type { RoomKind, TimelineEventType } from '../rooms/types'
 import { roomService } from '../rooms/room-service'
@@ -428,6 +432,256 @@ export class ControllerApi {
           changed: false,
           error: `ControllerApi does not reconcile ${request.ref.kind} yet.`,
         }
+    }
+  }
+
+  // ─── Worker Lifecycle (HiClaw-style) ──────────────────────────────────
+
+  async createWorker(input: {
+    workspaceId: string
+    name: string
+    runtimeType?: string
+    codeAgentType?: string
+    modelId?: string | null
+    skillIds?: string[]
+    role?: string
+    roleType?: string
+    sandboxPolicy?: string
+  }) {
+    const existing = await db
+      .select()
+      .from(workspaceAgents)
+      .where(and(eq(workspaceAgents.workspaceId, input.workspaceId), eq(workspaceAgents.name, input.name)))
+      .limit(1)
+
+    let agentId: string
+    if (existing.length > 0 && existing[0]) {
+      agentId = existing[0].id
+    } else {
+      const [inserted] = await db
+        .insert(workspaceAgents)
+        .values({
+          workspaceId: input.workspaceId,
+          name: input.name,
+          role: (input.role as any) || 'worker',
+          roleType: (input.roleType as any) || undefined,
+          runtimeType: (input.runtimeType as any) || 'code-agent',
+          codeAgentType: (input.codeAgentType as any) || 'codex',
+          modelId: input.modelId ?? null,
+          skillIds: input.skillIds ?? [],
+          toolPermissions: [],
+          sandboxPolicy: (input.sandboxPolicy as any) || 'workspace-write',
+        })
+        .returning()
+      if (!inserted) throw new Error('Failed to create workspace agent')
+      agentId = inserted.id
+    }
+
+    const worker = await this.applyWorker({ workspaceId: input.workspaceId, workspaceAgentId: agentId })
+    return { agentId, worker }
+  }
+
+  async updateWorker(workerInstanceId: string, input: {
+    modelId?: string
+    runtimeType?: string
+    skillIds?: string[]
+  }) {
+    const [existing] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
+    if (!existing) throw new Error(`Worker ${workerInstanceId} not found`)
+
+    const updates: Record<string, unknown> = {}
+    if (input.modelId) updates.modelId = input.modelId
+    if (input.runtimeType) updates.runtimeBase = input.runtimeType
+    if (input.skillIds) updates.skillIds = input.skillIds
+
+    if (Object.keys(updates).length > 0) {
+      await db.update(workerInstances).set(updates).where(eq(workerInstances.id, workerInstanceId))
+    }
+
+    if (input.modelId && existing.workspaceAgentId) {
+      await db.update(workspaceAgents).set({ modelId: input.modelId }).where(eq(workspaceAgents.id, existing.workspaceAgentId))
+    }
+
+    return this.getWorker(workerInstanceId)
+  }
+
+  async deleteWorker(workerInstanceId: string) {
+    const [existing] = await db.select().from(workerInstances).where(eq(workerInstances.id, workerInstanceId)).limit(1)
+    if (!existing) throw new Error(`Worker ${workerInstanceId} not found`)
+
+    await this.stopWorker({ workerInstanceId, reason: 'api-delete' })
+    await db.delete(workerInstances).where(eq(workerInstances.id, workerInstanceId))
+    if (existing.workspaceAgentId) {
+      await db.delete(workspaceAgents).where(eq(workspaceAgents.id, existing.workspaceAgentId))
+    }
+    return { deleted: true, id: workerInstanceId }
+  }
+
+  async reportWorkerReady(workerName: string) {
+    const [agent] = await db.select().from(workspaceAgents).where(eq(workspaceAgents.name, workerName)).limit(1)
+    if (!agent) return { found: false, workerName }
+
+    const [worker] = await db.select().from(workerInstances).where(eq(workerInstances.workspaceAgentId, agent.id)).limit(1)
+    if (!worker) return { found: false, workerName }
+
+    const { markWorkerInstanceState } = await import('../orchestrator/worker-runtime-resources')
+    await markWorkerInstanceState(worker.id, 'ready', {
+      message: 'Worker reported ready via API.',
+      health: { ...worker.health, reportedReadyAt: new Date().toISOString() },
+    })
+    return { found: true, workerName, workerInstanceId: worker.id }
+  }
+
+  // ─── Task Lifecycle ─────────────────────────────────────────────────
+
+  async cancelTask(input: { runId: string; taskId: string; reason?: string }) {
+    const run = await this.getRunContext(input.runId)
+    if (!run) throw new Error(`Run ${input.runId} not found.`)
+    await runController.markTaskCancelled(run, {
+      taskId: input.taskId,
+      reason: input.reason || 'Cancelled by API.',
+    })
+  }
+
+  // ─── Team Management (HiClaw-style) ─────────────────────────────────
+
+  async createTeam(input: {
+    workspaceId: string
+    name: string
+    leaderName?: string
+    leaderModel?: string
+    workers?: string[]
+    description?: string
+  }) {
+    let leaderAgentId: string | null = null
+    if (input.leaderName) {
+      const [existing] = await db.select().from(workspaceAgents)
+        .where(and(eq(workspaceAgents.workspaceId, input.workspaceId), eq(workspaceAgents.name, input.leaderName)))
+        .limit(1)
+      if (existing) {
+        leaderAgentId = existing.id
+      } else {
+        const [inserted] = await db.insert(workspaceAgents).values({
+          workspaceId: input.workspaceId,
+          name: input.leaderName,
+          role: 'team-leader',
+          roleType: 'orchestrator' as any,
+          runtimeType: 'code-agent' as any,
+          codeAgentType: 'codex' as any,
+          modelId: input.leaderModel || null,
+        }).returning()
+        leaderAgentId = inserted?.id ?? null
+      }
+    }
+
+    const memberIds: string[] = []
+    for (const workerName of input.workers ?? []) {
+      const result = await this.createWorker({
+        workspaceId: input.workspaceId,
+        name: workerName,
+      })
+      memberIds.push(result.agentId)
+    }
+
+    return { name: input.name, workspaceId: input.workspaceId, leaderAgentId, memberIds, description: input.description ?? null }
+  }
+
+  async listTeams(workspaceId: string) {
+    const agents = await db.select().from(workspaceAgents).where(eq(workspaceAgents.workspaceId, workspaceId))
+    const leaders = agents.filter(a => a.roleType === 'orchestrator')
+    const workers = agents.filter(a => a.roleType !== 'orchestrator')
+    return leaders.map(leader => ({ name: leader.name, leader, members: workers }))
+  }
+
+  async getTeam(workspaceId: string, teamName: string) {
+    const [leader] = await db.select().from(workspaceAgents)
+      .where(and(
+        eq(workspaceAgents.workspaceId, workspaceId),
+        eq(workspaceAgents.name, teamName),
+      ))
+      .limit(1)
+    if (!leader) return null
+    const allAgents = await db.select().from(workspaceAgents).where(eq(workspaceAgents.workspaceId, workspaceId))
+    const members = allAgents.filter(a => a.roleType !== 'orchestrator')
+    return { name: teamName, leader, members }
+  }
+
+  async deleteTeam(workspaceId: string, teamName: string) {
+    await db.delete(workspaceAgents)
+      .where(and(eq(workspaceAgents.workspaceId, workspaceId), eq(workspaceAgents.name, teamName)))
+    return { deleted: true, name: teamName }
+  }
+
+  // ─── Human Management (HiClaw-style) ────────────────────────────────
+
+  async createHuman(input: { name: string; displayName: string; email?: string; permissionLevel?: number }) {
+    let matrixUserId: string | null = null
+    try {
+      const { createMatrixClientFromEnv } = await import('../rooms/matrix-client')
+      const { MatrixIdentityService } = await import('../rooms/matrix-identity-service')
+      const client = createMatrixClientFromEnv()
+      const identityService = new MatrixIdentityService(client)
+      const identity = await identityService.ensureIdentity({
+        ownerType: 'human',
+        ownerId: input.name,
+        displayName: input.displayName,
+      })
+      matrixUserId = identity.userId ?? null
+    } catch (err) {
+      // Matrix identity creation is best-effort
+    }
+    return { name: input.name, displayName: input.displayName, matrixUserId, permissionLevel: input.permissionLevel ?? 1 }
+  }
+
+  async listHumans() {
+    return db.select().from(matrixIdentities).where(eq(matrixIdentities.ownerType, 'human'))
+  }
+
+  async deleteHuman(name: string) {
+    await db.delete(matrixIdentities)
+      .where(and(eq(matrixIdentities.ownerType, 'human'), eq(matrixIdentities.ownerId, name)))
+    return { deleted: true, name }
+  }
+
+  // ─── Workspace & Platform State ─────────────────────────────────────
+
+  async getWorkspaceState(workspaceId: string) {
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+    const tasks = await db.select().from(workspaceTasks).where(eq(workspaceTasks.workspaceId, workspaceId)).limit(50)
+    const workers = await db.select().from(workerInstances).where(eq(workerInstances.workspaceId, workspaceId))
+    const agents = await db.select().from(workspaceAgents).where(eq(workspaceAgents.workspaceId, workspaceId))
+    const [run] = await db.select().from(orchestratorRuns)
+      .where(eq(orchestratorRuns.workspaceId, workspaceId))
+      .orderBy(orchestratorRuns.createdAt)
+      .limit(1)
+    return {
+      workspaceId,
+      latestRun: run ?? null,
+      tasks: tasks.map(t => ({ id: t.id, title: t.title, status: t.status, agentId: t.agentId, progressStatus: t.progressStatus, createdAt: t.createdAt })),
+      workers: workers.map(w => ({ id: w.id, workspaceAgentId: w.workspaceAgentId, runtimeBase: w.runtimeBase, observedState: w.observedState, lastHeartbeatAt: w.lastHeartbeatAt })),
+      agents: agents.map(a => ({ id: a.id, name: a.name, runtimeType: a.runtimeType, codeAgentType: a.codeAgentType })),
+    }
+  }
+
+  async getPlatformStatus() {
+    const allWorkspaces = await db.select().from(workspaces)
+    const allWorkers = await db.select().from(workerInstances)
+    const allRuns = await db.select().from(orchestratorRuns)
+    return {
+      workspaces: allWorkspaces.length,
+      workers: allWorkers.length,
+      runs: allRuns.length,
+      workersByState: {
+        ready: allWorkers.filter(w => w.observedState === 'ready').length,
+        busy: allWorkers.filter(w => w.observedState === 'busy').length,
+        sleeping: allWorkers.filter(w => w.observedState === 'sleeping').length,
+        failed: allWorkers.filter(w => w.observedState === 'failed').length,
+      },
+      runsByState: {
+        running: allRuns.filter(r => r.status === 'running').length,
+        completed: allRuns.filter(r => r.status === 'completed').length,
+        failed: allRuns.filter(r => r.status === 'failed').length,
+      },
     }
   }
 

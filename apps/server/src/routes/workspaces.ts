@@ -15,8 +15,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { z } from 'zod'
-import { db, workspaces, workspaceAgents, workspaceAgentRelations, workspaceTasks, sessions, eq, and, desc, asc } from '@agenthub/db'
-import { CODE_AGENT_TYPES } from '@agenthub/shared'
+import { db, workspaces, workspaceAgents, workspaceAgentRelations, workspaceTasks, sessions, orchestratorRuns, eq, and, desc, asc } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { logger } from '../lib/logger'
 
@@ -28,7 +27,7 @@ import {
 import { pickNativeFolder } from '../services/workspace/folder-picker'
 import { loadWorkspaceFull, ensureWorkspace } from '../services/workspace/workspace-queries'
 import { ensureGroupSession } from '../services/workspace/session-manager'
-import { getActiveRunSessionIds } from '../services/workspace/agent-runtime'
+
 import { AGENT_RELATION_TYPES, AGENT_ROLE_TYPES } from '../services/workspace/agent-role-presets'
 import { createAutoWorkspaceFolder } from '../services/workspace/auto-workspace'
 
@@ -762,16 +761,16 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
     const user = c.get('user')
     const id = c.req.param('id')
     await ensureWorkspace(id, user.sub)
-    const activeSessionIds = new Set(getActiveRunSessionIds())
-    if (!activeSessionIds.size) return c.json({ items: [] })
-    const workspaceSessions = await db.select().from(sessions).where(eq(sessions.workspaceId, id))
+    const activeRuns = await db
+      .select()
+      .from(orchestratorRuns)
+      .where(and(eq(orchestratorRuns.workspaceId, id), eq(orchestratorRuns.status, 'running')))
     return c.json({
-      items: workspaceSessions
-        .filter((session) => activeSessionIds.has(session.id))
-        .map((session) => ({
-          agentId: session.workspaceAgentId,
-          sessionId: session.id,
-        })),
+      items: activeRuns.map((run) => ({
+        runId: run.id,
+        sessionId: run.groupSessionId,
+        status: run.status,
+      })),
     })
   })
 

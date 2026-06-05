@@ -18,16 +18,16 @@
 
 当前代码已经有三类相关模块：
 
-- `coordinator-runtime/`：当前主路径仍在用的 Manager 决策壳，输出 `reply / clarify / propose_members / assign / wait` actions。
-- `manager-runtime/`：更接近 HiClaw 的新模块，有 `ManagerRuntime` interface、`LocalManagerRuntime` tool-calling loop、skill loader、tool registry、OpenClaw launcher，但尚未成为主路径。
-- `worker-runtime/`：当前任务执行闭环较实，能从 task room 接单，调用 Claude Code / OpenCode / Codex / Gemini，写回 progress / artifact / clarification / completed。但它仍主要是服务端托管的一次性执行，不是完整常驻 Worker Agent。
+- `manager-runtime/`：已成为群聊入口主路径，负责读取 Room timeline、调用 Manager provider、写回 ManagerRuntime 过程事件和 actions；OpenClaw / QwenPaw 通过 provider registry 接入，`CoordinatorRuntime` 只保留为显式测试/兼容 adapter。
+- `coordinator-runtime/`：保留 action schema、final-review skill 和 planning-dispatcher 兼容工具；`startPlanRunWithCoordinatorAssignBatch()` 不再从公共 `manager-runtime/index.ts` 导出，普通群聊不应直接调用旧动态 Planner。
+- `worker-runtime/`：当前任务执行闭环较实，能从 task room 接单，调用 Claude Code / OpenCode / Codex / Gemini，写回 progress / artifact / clarification / completed；生产调度入口已经收口为 Matrix mention-first timeline event -> `MatrixRoomEventDispatcher` -> `WorkerRuntimeService.runTaskRoom()`。
 
 本轮最重要的断层：
 
-- `LocalManagerRuntime` 仍未接入主路径。
-- OpenClaw Manager lifecycle 还没有成为可配置、可检查、可启动、可停止的正式 runtime provider。
+- 真实 OpenClaw Manager bridge endpoint 和真实 Matrix homeserver 端到端现场验收尚未完成。
 - Worker Runtime 没有明确区分 `ephemeral code-agent worker` 和 `resident room worker`。
-- Manager -> Worker 很多地方仍由服务端直接调用 `WorkerRuntimeService.runTaskRoom()`，还没有完全变成 Matrix @mention 执行总线。
+- Ephemeral WorkerRuntime 仍由 AgentHub 服务进程托管 CLI 子进程；它已经由 Matrix mention dispatcher 触发 claim 和执行，但还不是 HiClaw 式独立 resident Worker 只靠自身 Matrix listener 自主执行。
+- `messages` 已降级为历史读取和 legacy 操作兼容；后续还要继续把旧 snapshot / AG-UI cache 从聊天主视图事实源中拿掉。
 
 ## 三线分工
 
@@ -452,6 +452,32 @@ interface WorkerRuntimeService {
   - `docs/Manager-Worker Runtime三线并行重构协作计划.md`
   - `docs/当前状态与下一步路线.md`
   - `docs/OpenClaw接入指南.md`
+
+### 2026-06-05 - Room / Matrix mention 主线收口 / Codex
+
+- 改动文件：
+  - `apps/server/src/services/rooms/direct-room-dispatcher.ts`
+  - `apps/server/src/routes/orchestrator-runs.ts`
+  - `apps/server/src/services/manager-runtime/index.ts`
+  - `tests/room-chat-bridge.test.ts`
+  - `docs/当前状态与下一步路线.md`
+  - `docs/AgentHub-HiClaw-lite开源内核重构方案.md`
+  - `docs/Manager-Worker Runtime三线并行重构协作计划.md`
+- 完成内容：
+  - 新群聊、任务子对话和直聊 Agent 回复不再新增 `messages` 投影行；直聊 Agent 回复改为只写 `worker.message` Room timeline，并通过 `room:{timelineEventId}` 投影消息通知前端。
+  - 运行详情页 retry 从“路由直接调用 `WorkerRuntimeService.rerunTaskRoom()`”改为“重置 Run/Task/Lease/Worker 状态 -> task room 写 `manager.retry.dispatched` Matrix mention -> `MatrixRoomEventDispatcher` -> Worker claim -> `WorkerRuntimeService.runTaskRoom()`”。
+  - `manager-runtime/index.ts` 不再导出 `startPlanRunWithCoordinatorAssignBatch()` / `generatePlanAndPushTaskBoard()`；它们保留在 `planning-dispatcher.ts` 作为 planning skill / 测试兼容工具。
+  - `room-chat-bridge` 测试删除 `executeInline` 语义，改为等待 Room timeline / 资源状态自然收敛；多 Agent assign 允许 Manager final review 出现在主群聊。
+- 当前验证：
+  - `bun test tests/room-chat-bridge.test.ts tests/manager-loop-worker-runtime.test.ts tests/worker-runtime.test.ts tests/dynamic-plan-coordinator-dispatch.test.ts tests/openclaw-bridge-e2e.test.ts` PASS，24 pass / 0 fail。
+  - `bun --filter @agenthub/server typecheck` PASS。
+- 已知问题：
+  - `WorkerRuntimeService.rerunTaskRoom()` 仍保留为低层兼容/测试 helper，后续可继续缩小外部可见面。
+  - 真实 OpenClaw resident Worker 还没有完全替代 AgentHub service 托管的 ephemeral CLI 子进程。
+- 需要其他线配合：
+  - B/C 线继续推进真实 OpenClaw bridge、resident Worker process、Matrix identity/token vault 和真实 Tuwunel 现场 e2e。
+- 下一步：
+  - 将聊天主视图剩余旧 snapshot / AG-UI cache 读取继续降级为运行详情/调试视图，把主群聊和 task room 恢复彻底收敛到 Room timeline + resource snapshot。
 - 完成内容：
   - E2E1: 新增 Matrix room adapter 协议级 e2e。测试用本地 fake Matrix homeserver 覆盖真实 Client-Server API 形态，验证 `MatrixRoomAdapter + RoomService` 会创建 Matrix-backed group room、注册 Human / Manager / Worker 三类 Matrix identity、执行 invite / join、使用 participant token 发言，并发送带 `m.mentions.user_ids` 的 @mention message。
   - E2E2: 新增 OpenClaw bridge contract e2e。测试通过 `AGENTHUB_OPENCLAW_MANAGER_ENDPOINT` 激活真实 `OpenClawManagerRuntimeProvider -> RemoteManagerRuntimeAdapter -> POST /step` 链路，fake bridge 返回 `assign` 后，AgentHub 继续创建 run / workspace task / TaskThread / task room / RuntimeLease，并通过 `WorkerRuntimeService` 写入 started / progress / artifact / completed。

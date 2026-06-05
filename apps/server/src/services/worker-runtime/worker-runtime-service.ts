@@ -72,7 +72,6 @@ export interface ResumeTaskRoomAfterHumanAnswerInput {
   sourceEventId?: string
   answer: string
   runtime?: WorkerRuntime
-  executeInline?: boolean
   runAfterResume?: boolean
   signal?: AbortSignal
 }
@@ -116,6 +115,10 @@ export class WorkerRuntimeService {
   private readonly runningControllers = new Map<string, AbortController>()
   private readonly roomRuntimeKind = new Map<string, import('./types').WorkerRuntimeKind>()
 
+  isRoomRunning(roomId: string): boolean {
+    return this.runningControllers.has(roomId)
+  }
+
   async stopTaskRoom(roomId: string): Promise<boolean> {
     const kind = this.roomRuntimeKind.get(roomId)
     if (kind === 'resident-openclaw' || kind === 'resident-qwenpaw') {
@@ -134,6 +137,156 @@ export class WorkerRuntimeService {
     controller.abort()
     this.roomRuntimeKind.delete(roomId)
     return true
+  }
+  /**
+   * Run Agent in a direct room (agent-direct session).
+   * This is the HiClaw-style worker execution for private chats:
+   * the worker listens to the room timeline and executes autonomously.
+   */
+  async runDirectRoom(input: {
+    roomId: string
+    ownerId: string
+    workspaceAgentId: string
+    prompt?: string
+    signal?: AbortSignal
+    overrides?: { sandboxPolicy?: string; approvalRequired?: boolean }
+  }): Promise<{ roomId: string; appendedEventIds: string[] }> {
+    const room = await roomService.getRoomForOwner(input.roomId, input.ownerId)
+    if (room.kind !== 'direct') {
+      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'WorkerRuntime 只能从 direct room 执行私聊')
+    }
+
+    const workerParticipant = await findWorkerParticipant(room.id, input.workspaceAgentId)
+    if (!workerParticipant?.workspaceAgentId) {
+      throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Direct room 还没有 Agent participant')
+    }
+
+    if (this.runningControllers.has(room.id)) {
+      logger.info({ roomId: room.id }, 'Direct room already has a running worker; skipping duplicate execution')
+      return { roomId: room.id, appendedEventIds: [] }
+    }
+
+    const [agentRow] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(eq(workspaceAgents.id, workerParticipant.workspaceAgentId))
+      .limit(1)
+    if (!agentRow) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
+
+    // Apply safetyMode overrides if provided
+    const agent = input.overrides
+      ? {
+          ...agentRow,
+          sandboxPolicy: (input.overrides.sandboxPolicy as typeof agentRow.sandboxPolicy) ?? agentRow.sandboxPolicy,
+          approvalRequired: input.overrides.approvalRequired ?? agentRow.approvalRequired,
+        }
+      : agentRow
+
+    const [workspace] = room.workspaceId
+      ? await db.select().from(workspaces).where(eq(workspaces.id, room.workspaceId)).limit(1)
+      : []
+
+    const timeline = await roomService.listTimelineEvents({ roomId: room.id, limit: 100 })
+    const prompt = input.prompt?.trim() || latestHumanMessageBody(timeline) || room.title
+
+    const runtime = new EphemeralCodeAgentWorkerRuntime(agent)
+    this.roomRuntimeKind.set(room.id, runtime.kind)
+
+    const abortController = new AbortController()
+    if (input.signal) {
+      if (input.signal.aborted) {
+        abortController.abort()
+      } else {
+        input.signal.addEventListener('abort', () => abortController.abort(), { once: true })
+      }
+    }
+    this.runningControllers.set(room.id, abortController)
+
+    const appendedEventIds: string[] = []
+    try {
+      const iterator = runtime.executeTask(
+        {
+          roomId: room.id,
+          sessionId: room.sessionId ?? room.id,
+          workspaceId: room.workspaceId ?? agent.workspaceId,
+          workspaceAgentId: agent.id,
+          workerInstanceId: null,
+          taskId: null,
+          taskThreadId: null,
+          runId: null,
+          prompt,
+          history: timeline.map((event) => ({
+            senderType: event.senderType,
+            type: event.type,
+            body: event.body,
+          })),
+          workspacePath: workspace?.projectPath ?? null,
+        },
+        abortController.signal,
+      )
+
+      let next = await iterator.next()
+      while (!next.done) {
+        const event = next.value
+        const timelineEvent = await roomService.appendTimelineEvent({
+          roomId: room.id,
+          senderParticipantId: workerParticipant.id,
+          senderType: 'worker',
+          type: event.type === 'message' ? 'worker.message' : 'task.progress',
+          body: event.message ?? '',
+          metadata: {
+            kind: `worker-runtime.${event.type}`,
+            workspaceAgentId: agent.id,
+            runtimeType: runtime.runtimeType,
+            ...(event.type === 'progress'
+              ? { progressPercent: event.progressPercent }
+              : event.type === 'artifact'
+                ? { artifact: event.artifact }
+                : {}),
+          },
+        })
+        appendedEventIds.push(timelineEvent.id)
+        next = await iterator.next()
+      }
+
+      // Final result event
+      const result = next.value
+      const resultEvent = await roomService.appendTimelineEvent({
+        roomId: room.id,
+        senderParticipantId: workerParticipant.id,
+        senderType: 'worker',
+        type: result.status === 'completed' ? 'worker.message' : 'task.progress',
+        body: result.message ?? (result.status === 'completed' ? '执行完成。' : '执行失败。'),
+        metadata: {
+          kind: 'worker-runtime.completed',
+          status: result.status,
+          workspaceAgentId: agent.id,
+          runtimeType: runtime.runtimeType,
+          artifacts: result.artifacts ?? [],
+        },
+      })
+      appendedEventIds.push(resultEvent.id)
+    } catch (error: any) {
+      logger.error({ err: error?.message, roomId: room.id, agentId: agent.id }, 'Direct room execution failed')
+      const failEvent = await roomService.appendTimelineEvent({
+        roomId: room.id,
+        senderParticipantId: workerParticipant.id,
+        senderType: 'worker',
+        type: 'task.progress',
+        body: `[错误：${error?.message || '执行失败'}]`,
+        metadata: {
+          kind: 'worker-runtime.failed',
+          workspaceAgentId: agent.id,
+          runtimeType: runtime.runtimeType,
+        },
+      })
+      appendedEventIds.push(failEvent.id)
+    } finally {
+      this.runningControllers.delete(room.id)
+      this.roomRuntimeKind.delete(room.id)
+    }
+
+    return { roomId: room.id, appendedEventIds }
   }
 
   async runTaskRoom(input: RunTaskRoomInput): Promise<RunTaskRoomResult> {
@@ -561,7 +714,6 @@ export class WorkerRuntimeService {
         question,
         answer,
         clarificationStatus: answeredClarification?.status ?? null,
-        executeInline: input.executeInline ?? false,
       },
     })
     const appendedEventIds = [resumeEvent.id]
@@ -641,11 +793,7 @@ export class WorkerRuntimeService {
       }
     }
 
-    if (input.executeInline) {
-      await runResume()
-    } else {
-      void runResume()
-    }
+    void runResume()
 
     return {
       roomId: room.id,
@@ -1003,6 +1151,11 @@ function latestAssignedTaskPrompt(events: Array<{ type: string; body: string; me
   if (typeof description === 'string' && description.trim()) return description.trim()
   if (assigned?.body.trim()) return assigned.body.trim()
   return null
+}
+
+function latestHumanMessageBody(events: Array<{ senderType: string; body: string }>): string | null {
+  const human = [...events].reverse().find((event) => event.senderType === 'human')
+  return human?.body.trim() || null
 }
 
 async function ensureManagerParticipant(roomId: string) {

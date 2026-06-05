@@ -96,6 +96,13 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 `direct + metadata.kind === "agent-direct"` 是全局 Agent 私聊，只出现在左侧“Agent 私聊”区域。
 
+私聊执行已完全 HiClaw 化：
+- 用户消息通过 `appendHumanMessageRoomFirst` 写入 direct room timeline
+- `appendHumanMessageRoomFirst` 自动调用 `MatrixEventDispatcher.dispatchTimelineEvent()`
+- `MatrixEventDispatcher` 统一处理所有 room 类型，direct room human message → `WorkerRuntimeService.runDirectRoom()`
+- Worker 从 room timeline 读取历史，执行 Code Agent runtime，结果写回 room timeline
+- `messages` 表仅作为 UI 兼容投影，不再作为执行事实源
+
 ### 群聊
 
 `group` 是用户和 Orchestrator/成员的主对话。主对话负责：
@@ -122,24 +129,37 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 ## 当前执行路径
 
 ```text
-用户在群聊发消息
-  -> messages.ts 作为 ChatIngress 做鉴权、加载群聊上下文和轻量路由
-  -> RoomController 确保 group room，用户消息先进入 Room timeline
-  -> messages 仅生成 room:{timelineEventId} 兼容投影，供旧 UI/API 过渡读取
-  -> OpenClaw/QwenPaw CoordinatorRuntime / ManagerLoop 判断下一步：回复、追问、补员、派活或总结
-  -> 简单聊天：Manager 直接写回 group room timeline，并兼容镜像到 messages
-  -> 能力不足：Manager 输出结构化 memberProposals，用户确认后才创建/加入真实 Agent
-  -> 复杂任务：Manager 生成 assign actions / 行动方案，RunController 创建 run 生命周期
-  -> dispatchCoordinatorAssignBatch() 创建 workspace_tasks / TaskThread / task room
-  -> RoomController 确保 task room 和 Worker participant
-  -> WorkerController 确保 WorkerInstance ready / wake / reconcile
-  -> RuntimeLeaseController 创建并推进 RuntimeLease（ready/running/waiting/released/stale）
-  -> WorkerRuntimeService.runTaskRoom() 从 task room 接单并调用本地 Coding Worker runtime
-  -> Worker 进度、澄清、失败、部分产物和最终结果写回 task room timeline
-  -> ArtifactController / ArtifactStore 登记产物，workspace_tasks.artifacts 只作为缓存
-  -> RunController 同步 task/thread/run 状态并发 RunEvent / AG-UI 投影事件
-  -> ManagerLoop 基于 Run/Task/TaskThread/Room timeline/ArtifactStore 做最终复盘
-  -> 主群聊展示 Manager review、成员汇报、产物卡和最终结果
+用户发消息（群聊/私聊/任务子对话统一路径）
+  -> messages.ts 作为 ChatIngress 只做鉴权和写 Room timeline
+  -> appendHumanMessageRoomFirst() 写入 timeline 后自动 dispatchTimelineEvent()
+  -> MatrixEventDispatcher 是唯一处理入口，根据 room kind 路由：
+
+    group room human message:
+      -> MatrixEventDispatcher 检查活跃 run 并写入 human_interrupt 黑板
+      -> stepManagerRoom() → ManagerLoop 判断下一步：回复、追问、补员、派活或总结
+      -> 简单聊天：Manager 直接写回 group room timeline
+      -> 能力不足：Manager 输出结构化 memberProposals，用户确认后才创建/加入真实 Agent
+      -> 复杂任务：Manager 生成 assign actions，RunController 创建 run 生命周期
+      -> dispatchCoordinatorAssignBatch() 创建 workspace_tasks / TaskThread / task room
+      -> RoomController 确保 task room 和 Worker participant
+      -> WorkerController 确保 WorkerInstance ready / wake / reconcile
+      -> RuntimeLeaseController 创建并推进 RuntimeLease
+      -> WorkerRuntimeService.runTaskRoom() 从 task room 接单并执行
+      -> Worker 结果写回 task room timeline
+      -> ArtifactController / ArtifactStore 登记产物
+      -> RunController 同步状态并发 RunEvent / AG-UI 投影
+      -> ManagerLoop 基于 timeline/ArtifactStore 做最终复盘
+
+    direct room human message:
+      -> MatrixEventDispatcher → WorkerRuntimeService.runDirectRoom()
+      -> Worker 从 direct room timeline 读取历史，执行 Code Agent runtime
+      -> Agent 响应写回 direct room timeline
+
+    task room human message:
+      -> MatrixEventDispatcher → WorkerRuntimeService.resumeTaskRoomAfterHumanAnswer()
+      -> Worker 继续执行并写回 task room timeline
+
+  -> messages 表仅作为 UI 兼容投影，不再作为执行事实源
 ```
 
 `OrchestratorEngine`、`TaskExecutionService`、`LocalA2ATransport` 已删除。所有任务执行通过 `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `ManagerLoop` / `WorkerRuntimeService`。`messages.ts` 不应继续扩展成编排主脑。

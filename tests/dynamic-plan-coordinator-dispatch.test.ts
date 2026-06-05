@@ -1,4 +1,4 @@
-import './setup'
+import { waitForCondition } from './setup'
 import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
@@ -49,7 +49,6 @@ describe('dynamic plan dispatch through CoordinatorRuntime', () => {
       ownerId: 'default-user',
       run,
       sourceMessage: message,
-      executeInline: true,
       workerRuntime: new FakePlanWorkerRuntime(),
       plan: {
         kind: 'orchestrator_plan',
@@ -104,7 +103,11 @@ describe('dynamic plan dispatch through CoordinatorRuntime', () => {
     expect(monitor.dispatchId).toBe(run.runId)
     expect(monitor.taskIds).toHaveLength(2)
 
-    const runRows = await db.select().from(orchestratorRuns).where(eq(orchestratorRuns.id, run.runId))
+    const runRows = await waitForCondition(
+      () => db.select().from(orchestratorRuns).where(eq(orchestratorRuns.id, run.runId)),
+      (rows) => rows.length === 1 && rows[0]?.status === 'completed',
+      { description: 'dynamic plan run completed' },
+    )
     expect(runRows[0]?.status).toBe('completed')
     expect(runRows[0]?.plan?.schema).toBe('agenthub.hiclaw-lite.assign-batch.v1')
     expect(runRows[0]?.plan?.source).toBe('controller-api.assign')

@@ -10,6 +10,7 @@ import {
   workspaces,
   sessions,
   runtimeLeases,
+  roomParticipants,
   rooms,
   workspaceTasks,
   taskThreads,
@@ -21,7 +22,10 @@ import type { BlackboardSchemaType } from '../services/blackboard-schemas'
 import { runController, type RunResourceSnapshot } from '../services/orchestrator/run-controller'
 import { buildAgUiEventsFromRunEvent } from '../services/protocols'
 import { OrchestratorRunStatus } from '@agenthub/shared'
-import { workerRuntimeService } from '../services/worker-runtime'
+import { roomService } from '../services/rooms'
+import { MatrixRoomEventDispatcher } from '../services/rooms/matrix-event-dispatcher'
+import { runtimeLeaseController } from '../services/orchestrator/runtime-lease-controller'
+import { markWorkerInstanceState } from '../services/orchestrator/worker-runtime-resources'
 
 const taskThreadSessions = alias(sessions, 'task_thread_sessions')
 
@@ -198,6 +202,12 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     if (taskRow.status !== 'failed' && taskRow.status !== 'cancelled') {
       return c.json({ ok: false, message: 'Only failed or cancelled tasks can be retried' }, 400)
     }
+    if (!taskRow.agentId) {
+      return c.json({
+        ok: false,
+        message: '该任务没有目标 Worker，无法通过 Matrix @mention 重试。请先由 Manager 重新分配任务。',
+      }, 409)
+    }
 
     const [thread] = await db
       .select({
@@ -258,15 +268,67 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
       groupSessionId: run.groupSessionId,
     })
 
-    const result = await workerRuntimeService.rerunTaskRoom({
-      roomId: taskRoom.id,
-      ownerId: user.sub,
-      workspaceAgentId: taskRow.agentId,
-      prompt: taskRow.description,
-      source: 'orchestrator-runs.retry-task',
+    const [lease] = await db
+      .select()
+      .from(runtimeLeases)
+      .where(and(eq(runtimeLeases.runId, id), eq(runtimeLeases.taskId, taskId)))
+      .limit(1)
+    await runtimeLeaseController.markReady(lease?.id, {
+      metadata: {
+        source: 'orchestrator-runs.retry-task',
+        retryCount: (taskRow.retryCount ?? 0) + 1,
+      },
+    })
+    await markWorkerInstanceState(thread.workerInstanceId ?? lease?.workerInstanceId ?? null, 'idle', {
+      message: 'Task reset for retry; waiting for Matrix @mention.',
+      health: {
+        retryTaskId: taskId,
+        retryRunId: id,
+        retryAt: new Date().toISOString(),
+      },
     })
 
-    return c.json({ ok: true, result })
+    const workerParticipant = await ensureRetryWorkerParticipant({
+      roomId: taskRoom.id,
+      workspaceAgentId: taskRow.agentId,
+      workerInstanceId: thread.workerInstanceId ?? lease?.workerInstanceId ?? null,
+    })
+    const mentionEvent = await roomService.appendMentionTimelineEvent({
+      roomId: taskRoom.id,
+      mentionParticipantId: workerParticipant.id,
+      senderType: 'manager',
+      type: 'task.assigned',
+      body: `@${workerParticipant.displayName || 'Worker'} 请重新执行：${taskRow.title}\n\n${taskRow.description}`,
+      metadata: {
+        kind: 'manager.retry.dispatched',
+        actionType: 'retry',
+        matrixExecutionBus: true,
+        coordinationSource: 'matrix-mention',
+        runId: id,
+        taskId,
+        taskRoomId: taskRoom.id,
+        taskThreadId: thread.id,
+        childSessionId: thread.sessionId,
+        targetWorkerId: taskRow.agentId,
+        workerInstanceId: thread.workerInstanceId ?? lease?.workerInstanceId ?? null,
+        runtimeLeaseId: lease?.id ?? null,
+        retryCount: (taskRow.retryCount ?? 0) + 1,
+      },
+    })
+
+    const dispatcher = new MatrixRoomEventDispatcher()
+    const dispatch = await dispatcher.dispatchImportedEvents({ eventIds: [mentionEvent.id] })
+
+    return c.json({
+      ok: true,
+      result: {
+        source: 'matrix-mention',
+        roomId: taskRoom.id,
+        mentionEventId: mentionEvent.id,
+        dispatchedEventIds: dispatch.dispatchedEventIds,
+        ignoredEventIds: dispatch.ignoredEventIds,
+      },
+    })
   })
 
   // Get timeline events for a run. Supports ?afterSequence=N for incremental
@@ -1293,6 +1355,29 @@ function normalizeRuntimeLeaseRowForTask(lease: Awaited<ReturnType<typeof loadRu
     createdAt: lease.createdAt,
     updatedAt: lease.updatedAt,
   }
+}
+
+async function ensureRetryWorkerParticipant(input: {
+  roomId: string
+  workspaceAgentId: string
+  workerInstanceId?: string | null
+}) {
+  const [existing] = await db
+    .select()
+    .from(roomParticipants)
+    .where(
+      and(
+        eq(roomParticipants.roomId, input.roomId),
+        eq(roomParticipants.workspaceAgentId, input.workspaceAgentId),
+      ),
+    )
+    .limit(1)
+  if (existing) return existing
+  return roomService.addWorkerParticipant(
+    input.roomId,
+    input.workspaceAgentId,
+    input.workerInstanceId ?? null,
+  )
 }
 
 async function tableSafe<T>(promise: Promise<T>, fallback: T): Promise<T> {

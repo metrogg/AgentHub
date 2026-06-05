@@ -20,7 +20,6 @@ export interface RecordHumanMessageInput {
   message: typeof messages.$inferSelect
   runtime?: ManagerRuntime
   workerRuntime?: WorkerRuntime
-  executeInline?: boolean
 }
 
 export interface AppendHumanMessageRoomFirstInput {
@@ -31,6 +30,7 @@ export interface AppendHumanMessageRoomFirstInput {
   type: string
   metadata?: Record<string, unknown> | null
   replyToMessageId?: string | null
+  skipDispatch?: boolean
 }
 
 export interface AppendMessageControlEventInput {
@@ -106,6 +106,13 @@ export async function appendHumanMessageRoomFirst(input: AppendHumanMessageRoomF
     isPinned: false,
     replyToMessageId: input.replyToMessageId ?? null,
     createdAt: event.createdAt,
+  }
+
+  // HiClaw model: after writing the human message, dispatch it so
+  // the Manager/Worker can pick it up (equivalent to Matrix /sync detecting it).
+  if (!input.skipDispatch) {
+    const { matrixRoomEventDispatcher } = await import('./matrix-event-dispatcher')
+    await matrixRoomEventDispatcher.dispatchTimelineEvent(event.id).catch(() => {})
   }
 
   return { room, event, message }
@@ -190,7 +197,7 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
   const provider = getActiveManagerProvider()
   if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
     const status = await provider.status()
-    if (status.running || status.endpoint) {
+    if (status.running) {
       return {
         roomId: room.id,
         consumed: true,
@@ -249,11 +256,10 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
       await dispatchAssignBatch({
         groupSession: input.session,
         ownerId: input.session.ownerId,
-        sourceMessage: input.message,
+        goal: input.message.content,
         actions: assignActions,
         runtimeType: result.runtimeType,
         workerRuntime: input.workerRuntime,
-        executeInline: input.executeInline,
       })
     } catch (error: any) {
       await appendCoordinatorRuntimeBlockedEvent({
@@ -361,7 +367,6 @@ export async function stepTaskRoomAfterHumanMessage(input: RecordHumanMessageInp
     sourceMessageId: input.message.id,
     answer: input.message.content,
     runtime: input.workerRuntime,
-    executeInline: input.executeInline,
   })
 }
 
@@ -414,6 +419,16 @@ async function ensureSessionRoomParticipants(input: {
   userName?: string | null
 }) {
   await ensureHumanParticipant(input.roomId, input.userId, input.userName)
+
+  // Direct sessions only need the specific agent participant (no manager)
+  if (input.session.type === 'direct') {
+    if (input.session.workspaceAgentId) {
+      await roomService.addWorkerParticipant(input.roomId, input.session.workspaceAgentId)
+    }
+    return
+  }
+
+  // Group sessions need manager + all workspace agents
   await ensureManagerParticipant(input.roomId)
   if (!input.session.workspaceId) return
   const agents = await db

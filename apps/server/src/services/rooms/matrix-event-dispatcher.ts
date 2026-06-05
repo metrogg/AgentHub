@@ -1,22 +1,30 @@
 import {
   and,
+  asc,
   db,
+  desc,
   eq,
   matrixIdentities,
+  orchestratorRuns,
   roomParticipants,
   rooms,
   runtimeLeases,
+  sessions,
   taskThreads,
   timelineEvents,
   workerInstances,
+  workspaceAgents,
   workspaceTasks,
 } from '@agenthub/db'
 import { managerRuntimeService, getActiveManagerProvider } from '../manager-runtime'
+import { logger } from '../../lib/logger'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
+import { emitRunEvent } from '../orchestrator/run-events'
 import { workerRuntimeService } from '../worker-runtime/worker-runtime-service'
+import { blackboard, Blackboard } from '../blackboard'
 import { createMatrixClientFromEnv } from './matrix-client'
 import { roomService } from './room-service'
 
@@ -80,6 +88,12 @@ export interface MatrixRoomEventDispatcherHandlers {
     ownerId: string
     sourceEventId: string
   }): Promise<unknown>
+  runDirectRoom?(input: {
+    roomId: string
+    ownerId: string
+    workspaceAgentId: string
+    source: string
+  }): Promise<unknown>
 }
 
 export class MatrixRoomEventDispatcher {
@@ -94,16 +108,60 @@ export class MatrixRoomEventDispatcher {
         const provider = getActiveManagerProvider()
         if (provider && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
           const status = await provider.status()
-          if (status.running || status.endpoint) {
+          if (status.running) {
             return { consumed: true, skipped: true, reason: 'resident-manager-active' }
           }
         }
-        return managerRuntimeService.stepRoom({
+        const result = await managerRuntimeService.stepRoom({
           roomId: input.roomId,
           ownerId: input.ownerId,
           afterSequence: input.afterSequence,
+          appendActions: false,
           source: input.source,
         })
+        if (result.actions.length === 0) return result
+
+        // Separate assign actions from conversational actions
+        const assignActions = result.actions.filter((a) => a.type === 'assign')
+        const otherActions = result.actions.filter((a) => a.type !== 'assign')
+
+        // Append conversational actions (reply, clarify, propose_members) to timeline
+        for (const action of otherActions) {
+          await roomService.appendTimelineEvent({
+            roomId: input.roomId,
+            senderType: 'manager',
+            type: action.type === 'propose_members' ? 'approval.requested' : 'manager.message',
+            body: action.message || '',
+            metadata: {
+              kind: 'manager.action',
+              actionType: action.type,
+              runtimeType: result.runtimeType,
+              source: input.source,
+            },
+          }).catch(() => {})
+        }
+
+        // Dispatch assign actions (creates tasks, rooms, @mentions workers)
+        if (assignActions.length > 0) {
+          const { dispatchAssignBatch } = await import('../controller-plane/task-dispatcher')
+          const [roomRow] = await db.select().from(rooms).where(eq(rooms.id, input.roomId)).limit(1)
+          if (roomRow?.sessionId) {
+            const sessionRows = await db.select().from(sessions).where(eq(sessions.id, roomRow.sessionId)).limit(1)
+            const session = sessionRows[0] ?? null
+            if (session) {
+              await dispatchAssignBatch({
+                groupSession: session,
+                ownerId: input.ownerId,
+                goal: assignActions.map((a) => a.message || a.taskDescription || '').join('\n'),
+                actions: assignActions,
+                runtimeType: result.runtimeType,
+              }).catch((err: any) => {
+                logger.error({ err: err?.message, roomId: input.roomId }, 'Dispatcher assign dispatch failed')
+              })
+            }
+          }
+        }
+        return result
       },
       cancelTaskRoom: (input) => cancelTaskRoomFromMatrix(input),
       recordApprovalControl: (input) => recordApprovalControlFromMatrix(input),
@@ -123,6 +181,12 @@ export class MatrixRoomEventDispatcher {
           reason: input.reason,
         }),
       registerFileArtifact: (input) => registerMatrixFileArtifact(input),
+      runDirectRoom: (input) =>
+        workerRuntimeService.runDirectRoom({
+          roomId: input.roomId,
+          ownerId: input.ownerId,
+          workspaceAgentId: input.workspaceAgentId,
+        }),
       ...handlers,
     }
     this.handlers.resumeTaskRoomAfterApproval ??= this.handlers.resumeTaskRoomAfterHumanAnswer
@@ -139,14 +203,51 @@ export class MatrixRoomEventDispatcher {
     return { dispatchedEventIds, ignoredEventIds }
   }
 
+  /**
+   * Dispatch a single timeline event regardless of source.
+   * This is the HiClaw-style entry point: after the platform writes a timeline
+   * event (human message, worker protocol, @mention), it calls this method
+   * to let the dispatcher route it to the appropriate handler.
+   *
+   * Unlike dispatchImportedEvent, this does NOT require metadata.kind === 'matrix.sync.imported'.
+   */
+  async dispatchTimelineEvent(eventId: string): Promise<boolean> {
+    return this.dispatchAnyEvent(eventId)
+  }
+
   private async dispatchImportedEvent(eventId: string) {
     const [event] = await db.select().from(timelineEvents).where(eq(timelineEvents.id, eventId)).limit(1)
     if (!event) return false
-    if (event.metadata?.kind !== 'matrix.sync.imported') return false
     const [room] = await db.select().from(rooms).where(eq(rooms.id, event.roomId)).limit(1)
     if (!room) return false
+    const mentionedParticipantIds = matrixMentionedParticipantIds(event.metadata)
 
-    if (event.type === 'file.shared') {
+    // Imported-only filter: skip events that aren't from Matrix /sync and have no mentions
+    if (event.metadata?.kind !== 'matrix.sync.imported' && mentionedParticipantIds.length === 0) {
+      return false
+    }
+
+    return this.dispatchEventByType(event, room, mentionedParticipantIds)
+  }
+
+  /**
+   * Core dispatch logic shared by both imported and platform-written events.
+   */
+  private async dispatchAnyEvent(eventId: string): Promise<boolean> {
+    const [event] = await db.select().from(timelineEvents).where(eq(timelineEvents.id, eventId)).limit(1)
+    if (!event) return false
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, event.roomId)).limit(1)
+    if (!room) return false
+    const mentionedParticipantIds = matrixMentionedParticipantIds(event.metadata)
+    return this.dispatchEventByType(event, room, mentionedParticipantIds)
+  }
+
+  private async dispatchEventByType(
+    event: typeof timelineEvents.$inferSelect,
+    room: typeof rooms.$inferSelect,
+    mentionedParticipantIds: string[],
+  ): Promise<boolean> {
+    if (event.metadata?.kind === 'matrix.sync.imported' && event.type === 'file.shared') {
       await this.handlers.registerFileArtifact?.({
         roomId: room.id,
         ownerId: room.ownerId,
@@ -217,6 +318,30 @@ export class MatrixRoomEventDispatcher {
     }
 
     if (event.senderType === 'human' && room.kind === 'task') {
+      // Handle human interrupt for active run before resuming Worker
+      if (room.workspaceId && room.runId) {
+        const [thread] = room.taskThreadId
+          ? await db.select().from(taskThreads).where(eq(taskThreads.id, room.taskThreadId)).limit(1)
+          : []
+        const groupSessionId = thread?.groupSessionId ?? room.sessionId ?? room.id
+        if (groupSessionId) {
+          await this.maybeHandleHumanInterrupt({
+            groupSessionId,
+            workspaceId: room.workspaceId,
+            ownerId: room.ownerId,
+            content: event.body,
+            eventId: event.id,
+            source: {
+              kind: 'task_thread',
+              taskThreadId: room.taskThreadId ?? thread?.id ?? null,
+              taskId: room.taskId ?? thread?.taskId ?? null,
+              childSessionId: room.sessionId ?? null,
+              workerInstanceId: thread?.workerInstanceId ?? null,
+              workspaceAgentId: thread?.workspaceAgentId ?? null,
+            },
+          }).catch(() => {})
+        }
+      }
       const resumeResult = await this.handlers.resumeTaskRoomAfterHumanAnswer?.({
         roomId: room.id,
         ownerId: room.ownerId,
@@ -226,7 +351,27 @@ export class MatrixRoomEventDispatcher {
       if (isConsumedResult(resumeResult)) return true
     }
 
-    const mentionedParticipantIds = matrixMentionedParticipantIds(event.metadata)
+    // Human message in group room → trigger Manager step (HiClaw model)
+    if (event.senderType === 'human' && (room.kind === 'group' || room.kind === 'manager_dm')) {
+      // Handle human interrupt for active run before stepping Manager
+      if (room.workspaceId && room.sessionId) {
+        await this.maybeHandleHumanInterrupt({
+          groupSessionId: room.sessionId,
+          workspaceId: room.workspaceId,
+          ownerId: room.ownerId,
+          content: event.body,
+          eventId: event.id,
+        }).catch(() => {})
+      }
+      await this.handlers.stepManagerRoom({
+        roomId: room.id,
+        ownerId: room.ownerId,
+        afterSequence: Math.max(0, event.sequence - 1),
+        source: event.metadata?.kind === 'matrix.sync.imported' ? 'matrix-sync' : 'platform-timeline',
+      })
+      return true
+    }
+
     for (const participantId of mentionedParticipantIds) {
       const [participant] = await db
         .select()
@@ -297,17 +442,144 @@ export class MatrixRoomEventDispatcher {
       }
     }
 
-    if (event.senderType === 'human' && room.kind === 'group') {
-      await this.handlers.stepManagerRoom({
-        roomId: room.id,
-        ownerId: room.ownerId,
-        afterSequence: Math.max(0, event.sequence - 1),
-        source: 'matrix-human-room-message',
-      })
-      return true
+    if (event.senderType === 'human' && room.kind === 'direct') {
+      const participants = await db
+        .select()
+        .from(roomParticipants)
+        .where(eq(roomParticipants.roomId, room.id))
+      const worker = participants.find((p) => p.participantType === 'worker')
+      if (worker?.workspaceAgentId) {
+        void this.handlers.runDirectRoom!({
+          roomId: room.id,
+          ownerId: room.ownerId,
+          workspaceAgentId: worker.workspaceAgentId,
+          source: 'matrix-human-direct-message',
+        })
+        return true
+      }
     }
 
     return false
+  }
+
+  private async maybeHandleHumanInterrupt(params: {
+    groupSessionId: string
+    workspaceId: string
+    ownerId: string
+    content: string
+    eventId: string
+    source?: {
+      kind: 'group' | 'task_thread'
+      taskThreadId?: string | null
+      taskId?: string | null
+      childSessionId?: string | null
+      workerInstanceId?: string | null
+      workspaceAgentId?: string | null
+    }
+  }): Promise<boolean> {
+    const activeRun = await this.findLatestInterruptibleRun(params.groupSessionId)
+    if (!activeRun) return false
+
+    const [orchestrator] = await db
+      .select()
+      .from(workspaceAgents)
+      .where(and(eq(workspaceAgents.workspaceId, params.workspaceId), eq(workspaceAgents.roleType, 'orchestrator')))
+      .orderBy(asc(workspaceAgents.orderIdx))
+      .limit(1)
+    if (!orchestrator) return false
+
+    const source = params.source ?? { kind: 'group' as const }
+    const namespace = Blackboard.namespace(params.workspaceId, activeRun.id)
+    const interruptKey = `human_interrupts/room:${params.eventId}`
+    const createdAt = new Date().toISOString()
+    await blackboard.write({
+      namespace,
+      key: interruptKey,
+      value: {
+        kind: 'human_interrupt',
+        source: source.kind,
+        messageId: `room:${params.eventId}`,
+        groupSessionId: params.groupSessionId,
+        taskThreadId: source.taskThreadId ?? null,
+        taskId: source.taskId ?? null,
+        childSessionId: source.childSessionId ?? null,
+        workerInstanceId: source.workerInstanceId ?? null,
+        workspaceAgentId: source.workspaceAgentId ?? null,
+        content: params.content,
+        actorType: 'user',
+        actorId: params.ownerId,
+        acknowledgedBy: { agentId: orchestrator.id, agentName: orchestrator.name },
+        createdAt,
+      },
+      agentId: orchestrator.id,
+      taskId: source.taskId ?? undefined,
+      tags: [
+        'human-interrupt',
+        'hitl',
+        ...(source.kind === 'task_thread' ? ['task-thread'] : []),
+      ],
+    })
+
+    await emitRunEvent({
+      runId: activeRun.id,
+      workspaceId: params.workspaceId,
+      groupSessionId: params.groupSessionId,
+      agentId: orchestrator.id,
+      type: 'blackboard.written',
+      payload: {
+        key: interruptKey,
+        version: 1,
+        summary:
+          source.kind === 'task_thread'
+            ? 'Human provided an in-flight correction inside a TaskThread room.'
+            : 'Human provided an in-flight correction for the current run.',
+        source: 'human_interrupt',
+        interruptSource: source.kind,
+        taskThreadId: source.taskThreadId ?? null,
+        childSessionId: source.childSessionId ?? null,
+        taskId: source.taskId ?? null,
+        taskTitle: 'Human interrupt',
+        agentName: orchestrator.name,
+        contentPreview: params.content.slice(0, 200),
+      },
+    })
+
+    await runController.recordDecision(
+      {
+        runId: activeRun.id,
+        workspaceId: params.workspaceId,
+        groupSessionId: params.groupSessionId,
+        actor: { id: orchestrator.id, name: orchestrator.name },
+      },
+      {
+        action: 'human_interrupt_received',
+        reason: 'A human participant added or corrected requirements while the run is active.',
+        message:
+          source.kind === 'task_thread'
+            ? `Merged a TaskThread human instruction into the active run: ${params.content.slice(0, 160)}`
+            : `Merged a new human instruction into the active run: ${params.content.slice(0, 160)}`,
+      },
+    )
+
+    await runController.reconcile({
+      runId: activeRun.id,
+      workspaceId: params.workspaceId,
+      groupSessionId: params.groupSessionId,
+      actor: { id: orchestrator.id, name: orchestrator.name },
+    })
+
+    return true
+  }
+
+  private async findLatestInterruptibleRun(groupSessionId: string) {
+    const runs = await db
+      .select()
+      .from(orchestratorRuns)
+      .where(eq(orchestratorRuns.groupSessionId, groupSessionId))
+      .orderBy(desc(orchestratorRuns.updatedAt), desc(orchestratorRuns.createdAt))
+      .limit(20)
+    const INTERRUPTIBLE_RUN_STATUSES = new Set(['planning', 'running', 'synthesizing'])
+    return runs.find((run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status)) ?? null
   }
 }
 
