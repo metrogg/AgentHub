@@ -9,12 +9,12 @@ import {
   FileDiff,
   FileText,
   GitBranch,
+  ExternalLink,
   Loader2,
   Monitor,
   PackageOpen,
   RefreshCw,
   Search,
-  X,
   XCircle,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -33,7 +33,6 @@ import {
 import type { ArtifactPreviewItem } from '../lib/artifactPreview'
 import { cn, relativeTime } from '../lib/utils'
 import { useI18n } from '../lib/i18n'
-import { mimeFromExtension, type ArtifactPreviewItem } from '../lib/artifactPreview'
 
 type AssetKind = 'artifact' | 'handoff' | 'blackboard' | 'diff' | 'preview' | 'file' | 'deploy'
 type AssetTypeFilter = AssetKind | 'all'
@@ -81,7 +80,7 @@ export default function ArtifactsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string>('all')
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<AssetTypeFilter>('all')
-  const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
+  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null)
 
   async function refresh() {
     setLoading(true)
@@ -189,6 +188,10 @@ export default function ArtifactsPage() {
     () => (previewAsset ? assetToPreviewItem(previewAsset) : null),
     [previewAsset],
   )
+  useEffect(() => {
+    if (!previewAssetId || previewAsset) return
+    setPreviewAssetId(null)
+  }, [previewAsset, previewAssetId])
   const workspaceOptions = useMemo<WorkspaceFileExplorerWorkspace[]>(() => {
     const workspaceMap = new Map<string, WorkspaceFileExplorerWorkspace>()
     const sourceRuns = selectedRuns.length > 0 ? selectedRuns : runs
@@ -377,7 +380,8 @@ export default function ArtifactsPage() {
                     key={asset.id}
                     asset={asset}
                     language={language}
-                    onPreview={() => setPreviewItem(assetToPreviewItem(asset))}
+                    selected={asset.id === previewAssetId}
+                    onPreview={() => setPreviewAssetId(asset.id)}
                   />
                 ))}
               </section>
@@ -431,30 +435,6 @@ export default function ArtifactsPage() {
           </div>
         </div>
       </main>
-      {previewItem && (
-        <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(58rem,calc(100vw-2rem))] flex-col border-l border-neutral-200 bg-white shadow-2xl">
-          <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-neutral-950">{previewItem.title}</div>
-              <div className="truncate text-xs text-neutral-500">{previewItem.subtitle ?? previewItem.path ?? previewItem.url ?? '产物预览'}</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setPreviewItem(null)}
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
-              aria-label="关闭预览"
-              title="关闭预览"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <ArtifactPreviewSurface
-            className="min-h-0 flex-1"
-            item={previewItem}
-            workspaceId={previewItem.workspaceId}
-          />
-        </aside>
-      )}
     </div>
   )
 }
@@ -462,14 +442,17 @@ export default function ArtifactsPage() {
 function AssetCard({
   asset,
   language,
+  selected,
   onPreview,
 }: {
   asset: AssetItem
   language: 'zh' | 'en'
+  selected: boolean
   onPreview: () => void
 }) {
   const Icon = assetIcon(asset.kind)
   const downloadable = Boolean(asset.path && asset.workspaceId)
+  const openUrl = assetOpenUrl(asset)
   const previewable = asset.kind !== 'blackboard' && (Boolean(openUrl) || Boolean(asset.path) || Boolean(asset.source))
   return (
     <article
