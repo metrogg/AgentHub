@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
@@ -350,6 +350,13 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       mkdirSync(skillsTarget, { recursive: true })
       this.copyDirSync(skillsSource, skillsTarget)
     }
+    // Copy agenthub CLI to Manager workspace so skills can use it
+    const cliSource = join(process.cwd(), 'infra', 'agenthub-cli', 'agenthub.ts')
+    if (existsSync(cliSource)) {
+      const cliDst = join(this.managerWorkspace, 'agenthub')
+      writeFileSync(cliDst, readFileSync(cliSource, 'utf8'), 'utf8')
+      chmodSync(cliDst, 0o755)
+    }
     // Ensure state files exist
     const statePath = join(this.managerWorkspace, 'state.json')
     if (!existsSync(statePath)) {
@@ -363,11 +370,13 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
 
   private launch(binaryPath: string): void {
     const serverPort = getRuntimeServerPort() ?? Number(process.env.PORT || 3000)
+    const pathSeparator = process.platform === 'win32' ? ';' : ':'
     const env = {
       ...process.env,
       OPENCLAW_CONFIG_PATH: this.getConfigPath(),
       OPENCLAW_NO_RESPAWN: '1',
       HOME: this.managerWorkspace,
+      PATH: `${this.managerWorkspace}${pathSeparator}${process.env.PATH || ''}`,
       AGENTHUB_CONTROLLER_URL: `http://localhost:${serverPort}`,
       AGENTHUB_MANAGER_TOKEN: this.managerAccessToken ?? '',
     }

@@ -1,167 +1,130 @@
-# Skill: AgentHub Controller API
+---
+name: agenthub-controller
+description: Use when you need to interact with the AgentHub Controller — create tasks, create workers, check status, send heartbeat.
+---
 
-## When to Use
+# AgentHub Controller CLI
 
-Use this skill whenever you need to:
-- Create a new task for a Worker
-- Create a new Worker
-- Check the status of a run or task
-- List available Workers
-- Send a heartbeat to AgentHub
+Use the `agenthub` CLI to interact with the AgentHub Controller. It wraps the Controller API into clean commands.
 
 ## Authentication
 
-Your Manager token is available in the environment:
+Your Manager token is set in the environment:
 ```
 AGENTHUB_MANAGER_TOKEN=<your-matrix-access-token>
 AGENTHUB_CONTROLLER_URL=http://localhost:3001
 ```
 
-Always include the token in the Authorization header:
-```
-Authorization: Bearer $AGENTHUB_MANAGER_TOKEN
-```
+The CLI reads these automatically. No manual header injection needed.
 
-## API Endpoints
+## Commands
 
-### 1. Create Task
-
-Create a task and assign it to a Worker.
+### Worker Management
 
 ```bash
-curl -s -X POST "$AGENTHUB_CONTROLLER_URL/api/internal/manager/actions" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $AGENTHUB_MANAGER_TOKEN" \
-  -d '{
-    "action": "create_task",
-    "params": {
-      "workspaceId": "<workspace-id>",
-      "runId": "<run-id-or-omit>",
-      "title": "Task title",
-      "spec": "## Goal\nWhat to do.\n\n## Requirements\n- Requirement 1\n- Requirement 2",
-      "assignToAgentId": "<agent-id>"
-    }
-  }'
+# List all workers in a workspace
+agenthub worker list --workspace <workspace-id>
+
+# Create a new worker
+agenthub worker create --workspace <workspace-id> --name builder --code-agent codex
+
+# Check worker status
+agenthub worker status --id <worker-id>
+
+# Wake a sleeping worker
+agenthub worker wake --id <worker-id>
+
+# Stop a running worker
+agenthub worker stop --id <worker-id>
 ```
 
-**Rules:**
-- `workspaceId` is required. Get it from the room metadata or workspace context.
-- `runId` is optional. If omitted, a new run will be created.
-- `spec` should be a markdown document with clear goal and requirements.
-- Either `assignToAgentId` or `assignToWorkerInstanceId` is required.
-- The response contains `result.runId`, `result.tasks[].taskId`, `result.tasks[].taskRoomId`.
-
-### 2. Create Worker
-
-Create a new Worker agent.
+### Task Management
 
 ```bash
-curl -s -X POST "$AGENTHUB_CONTROLLER_URL/api/internal/manager/actions" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $AGENTHUB_MANAGER_TOKEN" \
-  -d '{
-    "action": "create_worker",
-    "params": {
-      "workspaceId": "<workspace-id>",
-      "name": "builder-1",
-      "runtimeType": "code-agent",
-      "codeAgentType": "codex",
-      "modelId": "gpt-4o"
-    }
-  }'
+# Create and assign a task
+agenthub task create --workspace <workspace-id> --title "Build UI" --assign-to <agent-id> --spec "## Goal\nBuild a React dashboard"
+
+# List tasks in a run
+agenthub task list --run <run-id>
+
+# Check task status
+agenthub task status --id <task-id>
+
+# Mark task complete
+agenthub task complete --id <task-id>
+
+# Mark task failed
+agenthub task fail --id <task-id> --reason "timeout"
+
+# Retry a failed task
+agenthub task retry --id <task-id>
 ```
 
-**Rules:**
-- `name` must be unique within the workspace.
-- `runtimeType`: `code-agent` (default) or `llm`.
-- `codeAgentType`: `codex`, `claude-code`, `opencode`, `gemini`.
-- The response contains `agentId` and `worker` details.
-
-### 3. List Workers
-
-List all Workers in a workspace.
+### Run Management
 
 ```bash
-curl -s -X POST "$AGENTHUB_CONTROLLER_URL/api/internal/manager/actions" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $AGENTHUB_MANAGER_TOKEN" \
-  -d '{
-    "action": "list_workers",
-    "params": {
-      "workspaceId": "<workspace-id>"
-    }
-  }'
+# Create a new run
+agenthub run create --workspace <workspace-id> --goal "Build a website"
+
+# Check run status (includes all tasks)
+agenthub run status --id <run-id>
+
+# Cancel a run
+agenthub run cancel --id <run-id> --reason "user requested"
+
+# List recent runs
+agenthub run list --workspace <workspace-id>
 ```
 
-### 4. Get Workspace State
-
-Get the full state of a workspace: latest run, tasks, workers, agents.
+### Room Operations
 
 ```bash
-curl -s -X POST "$AGENTHUB_CONTROLLER_URL/api/internal/manager/actions" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $AGENTHUB_MANAGER_TOKEN" \
-  -d '{
-    "action": "get_workspace_state",
-    "params": {
-      "workspaceId": "<workspace-id>"
-    }
-  }'
+# Create a room
+agenthub room create --owner <owner-id> --title "Worker: builder" --kind task
+
+# Read room timeline
+agenthub room events --room <room-id> --limit 20
+
+# @mention a participant
+agenthub room mention --room <room-id> --agent <agent-id> --body "Please start task task-123"
 ```
 
-### 5. Heartbeat
-
-Send a heartbeat to AgentHub.
+### Workspace State
 
 ```bash
-curl -s -X POST "$AGENTHUB_CONTROLLER_URL/api/internal/manager/actions" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $AGENTHUB_MANAGER_TOKEN" \
-  -d '{
-    "action": "heartbeat",
-    "params": {
-      "workspaceId": "<workspace-id>"
-    }
-  }'
+# Get full workspace state (tasks, workers, agents, latest run)
+agenthub state --workspace <workspace-id>
+
+# Send heartbeat
+agenthub heartbeat --workspace <workspace-id>
 ```
 
-## Task File Protocol
+## Output
 
-When you create a task, AgentHub automatically writes files to:
+All commands output JSON by default. Parse with `jq` when needed:
+```bash
+agenthub worker list --workspace ws-123 | jq '.workers[] | .name'
+agenthub run status --id run-456 | jq '.tasks[] | {title, status}'
 ```
-.agenthub/shared/tasks/<task-id>/
-  meta.json     # Task metadata
-  spec.md       # Task specification (you should write this before creating the task)
-  plan.md       # Execution plan (Worker writes this)
-  result.md     # Final result (Worker writes this)
-  artifacts/    # Deliverables (Worker writes this)
-```
-
-**Rules:**
-1. Write `spec.md` BEFORE calling `create_task` if you want full control over the specification.
-2. The `spec` param in `create_task` will be used as the task description if `spec.md` is not pre-written.
-3. Workers read `spec.md` before executing.
-4. After creating a task, @mention the Worker in their task room with the task ID.
 
 ## Decision Pattern
 
 ### Simple goal (1 task, 1 Worker)
-1. Check available Workers via `list_workers`
-2. If no suitable Worker, create one via `create_worker`
-3. Create task via `create_task`
-4. @mention Worker in task room with task ID and spec path
+1. `agenthub worker list --workspace <id>` — check existing workers
+2. If no suitable worker: `agenthub worker create --workspace <id> --name <name> --code-agent codex`
+3. `agenthub task create --workspace <id> --title "..." --assign-to <agent-id> --spec "..."`
+4. `agenthub room mention --room <task-room> --agent <agent-id> --body "Please start task <id>"`
 
 ### Complex goal (multiple tasks)
-1. Analyze dependencies
-2. Create Workers if needed
-3. Create run + tasks in dependency order
-4. @mention each Worker when their dependencies are met
-5. Monitor progress via `get_run_status`
-6. Synthesize results when all tasks complete
+1. `agenthub run create --workspace <id> --goal "..."` — create run
+2. `agenthub task create` for each task with `--run <run-id>` and dependency info
+3. `agenthub room mention` for each worker when dependencies are met
+4. `agenthub run status --id <run-id>` to monitor progress
+5. Synthesize results when all tasks complete
 
 ## Error Handling
 
-- HTTP 401: Token expired or invalid. Do not retry; report to human.
-- HTTP 404: Resource not found. Check IDs.
-- HTTP 422: Validation failed. Read the error message and fix params.
-- Network errors: Retry up to 3 times with 2s backoff.
+- `Error: HTTP 401` — Token expired. Report to human admin.
+- `Error: HTTP 404` — Resource not found. Check IDs.
+- `Error: HTTP 422` — Validation failed. Read error message and fix params.
+- Network errors — Retry up to 3 times with 2s delay.
