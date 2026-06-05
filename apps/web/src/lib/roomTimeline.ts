@@ -108,6 +108,7 @@ function timelineProjectionControls(timeline: TimelineEvent[]) {
     editsByMessageId: new Map<string, RoomTimelineMessageControl>(),
     pinsByMessageId: new Map<string, boolean>(),
     memberProposalUpdatesByMessageId: new Map<string, { content?: string; patch: Record<string, unknown> }>(),
+    agentDraftUpdatesByMessageId: new Map<string, { content?: string; patch: Record<string, unknown> }>(),
   }
 
   for (const event of timeline) {
@@ -122,6 +123,18 @@ function timelineProjectionControls(timeline: TimelineEvent[]) {
       const targetEventId = asString(metadata?.targetEventId)
       if (targetMessageId) controls.memberProposalUpdatesByMessageId.set(targetMessageId, update)
       if (targetEventId) controls.memberProposalUpdatesByMessageId.set(`room:${targetEventId}`, update)
+      continue
+    }
+    if (event.type === 'system' && asString(metadata?.kind) === 'agent-draft.update') {
+      const content = asString(metadata?.content) ?? asString(event.body)
+      const update = {
+        content,
+        patch: asRecord(metadata?.patch) ?? {},
+      }
+      const targetMessageId = asString(metadata?.targetMessageId)
+      const targetEventId = asString(metadata?.targetEventId)
+      if (targetMessageId) controls.agentDraftUpdatesByMessageId.set(targetMessageId, update)
+      if (targetEventId) controls.agentDraftUpdatesByMessageId.set(`room:${targetEventId}`, update)
       continue
     }
 
@@ -184,6 +197,7 @@ function timelineEventToMessageControl(event: TimelineEvent): RoomTimelineMessag
 function isMessageControlEvent(event: TimelineEvent) {
   const metadata = asRecord(event.metadata)
   if (event.type === 'system' && asString(metadata?.kind) === 'member-proposal.update') return true
+  if (event.type === 'system' && asString(metadata?.kind) === 'agent-draft.update') return true
   return Boolean(timelineEventToMessageControl(event))
 }
 
@@ -211,7 +225,8 @@ function applyTimelineControlsToMessage(message: Message, controls: ReturnType<t
   const edit = controls.editsByMessageId.get(message.id)
   const pinned = controls.pinsByMessageId.get(message.id)
   const memberProposalUpdate = controls.memberProposalUpdatesByMessageId.get(message.id)
-  if (!edit && pinned === undefined && !memberProposalUpdate) return message
+  const agentDraftUpdate = controls.agentDraftUpdatesByMessageId.get(message.id)
+  if (!edit && pinned === undefined && !memberProposalUpdate && !agentDraftUpdate) return message
   const controlled = applyRoomTimelineMessageControl(
     [message],
     edit ??
@@ -223,21 +238,39 @@ function applyTimelineControlsToMessage(message: Message, controls: ReturnType<t
         pinned,
       } satisfies RoomTimelineMessageControl),
   )[0] ?? message
-  if (!memberProposalUpdate) return controlled
-  const metadata = asRecord(controlled.metadata) ?? {}
-  return {
-    ...controlled,
-    content: memberProposalUpdate.content ?? controlled.content,
+  let next = controlled
+  if (memberProposalUpdate) {
+    const metadata = asRecord(next.metadata) ?? {}
+    next = {
+      ...next,
+      content: memberProposalUpdate.content ?? next.content,
+      metadata: {
+        ...metadata,
+        ...memberProposalUpdate.patch,
+        displayContent: memberProposalUpdate.content ?? next.content,
+        roomTimelineMemberProposalUpdate: {
+          source: 'room-timeline-control',
+          targetMessageId: next.id,
+        },
+      },
+    }
+  }
+  if (!agentDraftUpdate) return next
+  const nextMetadata = asRecord(next.metadata) ?? {}
+  next = {
+    ...next,
+    content: agentDraftUpdate.content ?? next.content,
     metadata: {
-      ...metadata,
-      ...memberProposalUpdate.patch,
-      displayContent: memberProposalUpdate.content ?? controlled.content,
-      roomTimelineMemberProposalUpdate: {
+      ...nextMetadata,
+      ...agentDraftUpdate.patch,
+      displayContent: agentDraftUpdate.content ?? next.content,
+      roomTimelineAgentDraftUpdate: {
         source: 'room-timeline-control',
-        targetMessageId: controlled.id,
+        targetMessageId: next.id,
       },
     },
   }
+  return next
 }
 
 function messageMatchesControl(message: Message, control: RoomTimelineMessageControl) {
@@ -310,7 +343,7 @@ function timelineEventToMessage(
       event.senderParticipantId ??
       event.senderType,
     senderType,
-    type: MessageType.Text,
+    type: normalizeTimelineMessageType(event.metadata?.messageType),
     content,
     metadata: {
       ...(event.metadata ?? {}),
@@ -347,6 +380,7 @@ function displayNameForEvent(event: TimelineEvent, participant?: RoomParticipant
 
 function visibleBodyForEvent(event: TimelineEvent) {
   if (event.body.trim()) return event.body
+  if (event.type === 'system' && event.metadata?.systemEvent === 'agent_draft_created') return '已生成 Agent 草案。确认后会加入当前 Agent Group。'
   if (event.type === 'approval.requested' && event.metadata?.actionType === 'propose_members') {
     return '我建议补充一些更合适的成员，请确认。'
   }
@@ -358,6 +392,23 @@ function visibleBodyForEvent(event: TimelineEvent) {
   if (event.type === 'task.assigned') return asString(event.metadata?.taskTitle) ?? '任务已分配'
   if (event.type === 'approval.requested') return '需要用户确认'
   return ''
+}
+
+function normalizeTimelineMessageType(value: unknown): MessageType {
+  const text = asString(value)
+  if (
+    text === MessageType.Text ||
+    text === MessageType.Markdown ||
+    text === MessageType.Code ||
+    text === MessageType.Diff ||
+    text === MessageType.Image ||
+    text === MessageType.File ||
+    text === MessageType.TaskCard ||
+    text === MessageType.TaskBoard
+  ) {
+    return text
+  }
+  return MessageType.Text
 }
 
 function timelineEventToAgUiEvents(

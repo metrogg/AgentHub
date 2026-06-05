@@ -116,7 +116,7 @@ export interface RunResourceSnapshot {
  *
  * ManagerLoop drives Observe -> Think -> Act, while RunController is the single
  * place callers use to mutate run/task/thread status and to resume or cancel
- * unfinished work. Old OrchestratorEngine paths must not regain ownership here.
+ * unfinished work. RunController owns run/task/thread status mutations.
  */
 export class RunController {
   async start(input: RunControllerStartInput): Promise<RunControllerRunContext> {

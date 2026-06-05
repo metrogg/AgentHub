@@ -90,7 +90,7 @@ export class OpenClawLauncher {
    */
   generateConfig(): string {
     const matrixUrl = this.config.matrixUrl || 'http://localhost:6167'
-    const matrixDomain = this.config.matrixDomain || 'local.agenthub'
+    const matrixDomain = this.config.matrixDomain || 'agenthub.local'
     const matrixUserId = this.config.matrixUserId || `@manager:${matrixDomain}`
     const llmBaseUrl = this.config.llmBaseUrl || 'http://localhost:8000/v1'
     const llmApiKey = this.config.llmApiKey || 'agenthub-internal'
@@ -327,7 +327,7 @@ export class OpenClawLauncher {
     const workerWorkspace = join(agentHubUserDataRoot(), 'workers', workerName)
     mkdirSync(workerWorkspace, { recursive: true })
 
-    const matrixDomain = this.config.matrixDomain || 'local.agenthub'
+    const matrixDomain = this.config.matrixDomain || 'agenthub.local'
     const matrixUserId = options.matrixUserId || `@worker-${workerName}:${matrixDomain}`
     const llmBaseUrl = this.config.llmBaseUrl || 'http://localhost:8000/v1'
     const llmApiKey = this.config.llmApiKey || 'agenthub-internal'

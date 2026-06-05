@@ -90,6 +90,24 @@ export class MatrixRuntimeSupervisor {
           }),
         )
         identity = ensured
+        if (ensured.userId && ensured.userId !== participant.providerUserId) {
+          await db
+            .update(roomParticipants)
+            .set({
+              providerUserId: ensured.userId,
+              metadata: {
+                ...(participant.metadata ?? {}),
+                matrixIdentityMigration: {
+                  from: participant.providerUserId,
+                  to: ensured.userId,
+                  migratedAt: new Date().toISOString(),
+                  reason: 'listener-start-identity-reconcile',
+                },
+              },
+              updatedAt: new Date(),
+            })
+            .where(eq(roomParticipants.id, participant.id))
+        }
       } catch (err) {
         logger.error(
           { err, participantId, userId: participant.providerUserId },

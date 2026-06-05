@@ -9,7 +9,7 @@ AgentHub 当前的明确产品目标，不再只是“IM 式多 Agent 协作平�
 - 多个 Agent 在真实子对话里执行，并交付网页、文档、报告、代码、应用等结果资产。
 - 平台逐步形成 `Space / Task Center / Asset Center / Expert Center / Eval & Trace` 的完整结构。
 
-当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向轻量版 HiClaw 内核换血：保留 HiClaw 的 Room / Manager / Worker / HITL 架构范式，但默认用单进程 AgentHub 服务 + CLI 子进程替代容器编排，用自研 UI 替代 Element Web，用本地 filesystem SharedStorage 替代 MinIO 集群。ClawTeam 作为轻量实现参考，用来学习 CLI adapter/profile、git worktree、task lock、LeaderWatcher 和 board snapshot 这些更适合本地第一阶段落地的做法，但不替代真实 Matrix 主通信层。产品壳、资产层和长期任务能力继续对齐 Coze。
+当前项目仍处于快速迭代阶段，近期优先目标已经从“继续补旧 A2A/DAG 流程”转向轻量版 HiClaw 内核换血：保留 HiClaw 的 Room / Manager / Worker / HITL 架构范式，但产品形态采用嵌入式本地控制器：AgentHub Server 仍在本机作为 Controller API / UI backend / Room adapter 运行，Tuwunel、MinIO、OpenClaw Manager、OpenClaw Worker 可通过 Docker resident runtime 承载。自研 UI 替代 Element Web，本地 filesystem SharedStorage 仍是默认产物存储，MinIO/S3-compatible 是可切换 adapter。ClawTeam 作为轻量实现参考，用来学习 CLI adapter/profile、git worktree、task lock、LeaderWatcher 和 board snapshot 这些更适合本地第一阶段落地的做法，但不替代真实 Matrix 主通信层。产品壳、资产层和长期任务能力继续对齐 Coze。
 
 如果你是第一次接手项目，先读 [docs/文档索引与权威口径.md](docs/文档索引与权威口径.md)、[docs/当前状态与下一步路线.md](docs/当前状态与下一步路线.md) 和 [docs/AgentHub-HiClaw-lite开源内核重构方案.md](docs/AgentHub-HiClaw-lite开源内核重构方案.md)。它们是当前事实总览，用来区分新主线、后续路线和历史遗留设计。Coze 对标拆解见 [docs/Coze新版本对标拆解与开源复刻路线.md](docs/Coze新版本对标拆解与开源复刻路线.md)。HiClaw 参考依据见 [docs/hiclaw-wiki.agent.final.md](docs/hiclaw-wiki.agent.final.md) 和本地 `hiclaw源码参考/`；HiClaw / ClawTeam / AgentHub 的三方取舍见 [docs/AgentHub-vs-HiClaw-vs-ClawTeam-对比分析报告.md](docs/AgentHub-vs-HiClaw-vs-ClawTeam-对比分析报告.md) 和本地 `clawteam源码/ClawTeam/`。
 
@@ -134,6 +134,48 @@ bun run dev
 - Server: 默认从 `http://localhost:8000` 开始，端口占用时自动递增。
 - Web: Vite 默认从 `http://localhost:5173` 开始，端口占用时自动递增。
 
+### 推荐运行模式
+
+**默认轻量开发模式**
+
+适合先打开 UI、调前端、检查基础群聊和设置页。需要 Docker Desktop，因为当前通信层默认连接真实 Tuwunel：
+
+```bash
+bun install
+bun run infra:up
+bun run dev
+```
+
+打开 `http://localhost:5173` 后，进入“设置 -> 控制台”，检查 Matrix、Controller Plane、Manager Runtime、容器运行时和执行隔离状态。
+
+**HiClaw-lite 容器 resident runtime 模式**
+
+适合验证 OpenClaw Manager / Worker 作为常驻容器运行。AgentHub Server 仍在本机跑，Docker 只承载 Tuwunel、MinIO、OpenClaw Manager 和 OpenClaw Worker：
+
+```bash
+bun run infra:up
+docker build -t agenthub/openclaw-runtime:local -f infra/openclaw-runtime/Dockerfile .
+```
+
+然后在 `.env` 中设置：
+
+```env
+AGENTHUB_ROOM_PROVIDER=matrix
+AGENTHUB_MATRIX_HOMESERVER_URL=http://127.0.0.1:6167
+AGENTHUB_MATRIX_SERVER_NAME=agenthub.local
+AGENTHUB_MATRIX_REGISTRATION_TOKEN=agenthub-dev-registration-token
+
+AGENTHUB_CONTAINER_RUNTIME=docker
+AGENTHUB_CONTAINER_CONTROLLER_URL=http://host.docker.internal:8000
+AGENTHUB_CONTAINER_MATRIX_URL=http://host.docker.internal:6167
+AGENTHUB_CONTAINER_LLM_BASE_URL=http://host.docker.internal:8000/v1
+AGENTHUB_OPENCLAW_RUNTIME_IMAGE=agenthub/openclaw-runtime:local
+```
+
+重启 `bun run dev`。环境变量不会在已启动的 Server 进程里自动生效。
+
+也可以在设置页“控制台 -> 容器运行时控制面”点击“准备本地容器运行时”，它会启动 Tuwunel / MinIO 并确保 OpenClaw runtime 镜像可用；随后复制页面给出的环境变量，写入 `.env` 后重启 Server。
+
 单独启动：
 
 ```bash
@@ -169,6 +211,10 @@ bun test
 | `AGENTHUB_MATRIX_HOMESERVER_URL` / `AGENTHUB_MATRIX_ACCESS_TOKEN` / `AGENTHUB_MATRIX_SERVER_NAME` | Matrix / Tuwunel homeserver 连接配置 |
 | `AGENTHUB_MATRIX_LISTENER_POLL_INTERVAL_MS` / `AGENTHUB_MATRIX_LISTENER_TIMEOUT_MS` | Manager / Worker Matrix listener 轮询与 long-poll 超时配置 |
 | `AGENTHUB_OBJECT_STORE_PROVIDER` / `AGENTHUB_S3_ENDPOINT` / `AGENTHUB_S3_ACCESS_KEY_ID` / `AGENTHUB_S3_SECRET_ACCESS_KEY` / `AGENTHUB_S3_BUCKET` | MinIO/S3-compatible SharedStorage 配置 |
+| `AGENTHUB_CONTAINER_RUNTIME=docker` | 同时启用 Manager / Worker Docker resident runtime 后端 |
+| `AGENTHUB_MANAGER_BACKEND=docker` / `AGENTHUB_WORKER_BACKEND=docker` | 分别启用 Manager 或 Worker 容器后端 |
+| `AGENTHUB_CONTAINER_CONTROLLER_URL` / `AGENTHUB_CONTAINER_MATRIX_URL` / `AGENTHUB_CONTAINER_LLM_BASE_URL` | 容器内访问 AgentHub Controller、Matrix homeserver 和 LLM gateway 的 URL，默认使用 `host.docker.internal` |
+| `AGENTHUB_OPENCLAW_RUNTIME_IMAGE` | OpenClaw runtime 镜像名，默认 `agenthub/openclaw-runtime:local` |
 
 ## 工作区与产物
 

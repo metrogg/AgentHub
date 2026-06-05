@@ -82,13 +82,11 @@ function resolveA2AEndpoint(agent: AgentRow): string | null {
   return null
 }
 
-function normalizeRuntimeType(value?: string | null): AgentRunProfile['runtimeType'] {
-  if (value === 'llm') return 'llm'
+function normalizeRuntimeType(_value?: string | null): AgentRunProfile['runtimeType'] {
   return 'code-agent'
 }
 
 function normalizeCodeAgentType(agent: AgentRow): AgentRunProfile['codeAgentType'] {
-  if (normalizeRuntimeType(agent.runtimeType) !== 'code-agent') return undefined
   if (
     agent.codeAgentType === 'codex' ||
     agent.codeAgentType === 'claude-code' ||

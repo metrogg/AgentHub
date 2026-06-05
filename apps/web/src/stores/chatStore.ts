@@ -3676,7 +3676,68 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (roomTimelineShouldRefreshResources(projected.projection, projectedSessionId, sessionId)) {
           scheduleSessionRefresh(async () => {
             if (get().currentSessionId === projectedSessionId) {
-              await get().selectSession(projectedSessionId)
+              const roomSnapshot = await api.getRoomSessionSnapshot(projectedSessionId)
+              if (get().currentSessionId !== projectedSessionId) return
+              const session = roomSnapshot.session
+              const roomProjection = projectRoomTimeline({
+                room: roomSnapshot.room,
+                participants: roomSnapshot.participants,
+                timeline: roomSnapshot.timeline,
+                sessionId: session.id,
+              })
+              let full: { workspace: Workspace; agents: WorkspaceAgent[] } | null = null
+              if (session.workspaceId) {
+                full =
+                  workspaceDetailsCache.get(session.workspaceId) ??
+                  (await api.getWorkspace(session.workspaceId).catch(() => null))
+                if (full) {
+                  workspaceDetailsCache.set(session.workspaceId, {
+                    workspace: full.workspace,
+                    agents: full.agents,
+                  })
+                }
+              }
+              if (get().currentSessionId !== projectedSessionId) return
+              const currentAgents =
+                session.workspaceId && full ? sessionWorkspaceAgents(session, full.agents) : []
+              const resolvedSnapshot = projectRoomResourceSnapshot(roomSnapshot, currentAgents)
+              const normalizedMessages = resolvedSnapshot
+                ? applyCanonicalArtifactsToSummaryMessages(
+                    sortMessages(roomProjection.messages),
+                    resolvedSnapshot.run,
+                  )
+                : sortMessages(roomProjection.messages)
+              messageCache.set(projectedSessionId, normalizedMessages)
+              if (resolvedSnapshot) {
+                wsClient.joinSessions(taskBoardSessionIds(resolvedSnapshot.taskBoard, projectedSessionId))
+              }
+              set((s) => ({
+                currentSession: session,
+                currentWorkspace: full?.workspace ?? (session.workspaceId ? s.currentWorkspace : null),
+                currentWorkspaceAgents: currentAgents,
+                sessions: resolvedSnapshot
+                  ? mergeSessionsWithRunProjection(
+                      upsertSessionList(s.sessions, session),
+                      session,
+                      resolvedSnapshot.run,
+                      resolvedSnapshot.taskBoard,
+                    )
+                  : upsertSessionList(s.sessions, session),
+                messages: normalizedMessages,
+                ...(resolvedSnapshot
+                  ? {
+                      taskBoard: resolvedSnapshot.taskBoard,
+                      agentTabs: resolvedSnapshot.agentTabs,
+                      agentTyping: resolvedSnapshot.runtimeActivity.agentTyping,
+                      agentActivity: resolvedSnapshot.runtimeActivity.agentActivity,
+                      selectedAgentTab: selectedTaskForSession(
+                        projectedSessionId,
+                        resolvedSnapshot.taskBoard,
+                        resolvedSnapshot.agentTabs,
+                      ),
+                    }
+                  : {}),
+              }))
             } else {
               await get().fetchSessions()
             }

@@ -297,12 +297,6 @@ export const Thread: FC = () => {
   const agentActivity = useChatStore((s) => s.agentActivity)
   const messages = useChatStore((s) => s.messages)
   const streamingCodeAgentRun = useChatStore((s) => s.streamingCodeAgentRun)
-  const visibleTaskBoard =
-    taskBoard &&
-    taskBoard.sessionId === currentSession?.id &&
-    ['planning', 'running', 'synthesizing'].includes(taskBoard.status)
-      ? taskBoard
-      : null
   const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
   const agentTabs = useChatStore((s) => s.agentTabs)
   const railTaskBoard =
@@ -311,6 +305,8 @@ export const Thread: FC = () => {
       agentTabs.some((tab) => tab.childSessionId === currentSession?.id))
       ? taskBoard
       : null
+  const roomTaskBoard =
+    isGroupSession && taskBoard?.sessionId === currentSession?.id ? taskBoard : null
   const selectAgentTab = useChatStore((s) => s.selectAgentTab)
   const selectSession = useChatStore((s) => s.selectSession)
   const navigate = useNavigate()
@@ -437,9 +433,9 @@ export const Thread: FC = () => {
       )}
       <div className="flex min-h-0 flex-1 pt-14">
         <div className="flex min-w-0 flex-1 flex-col">
-          {isGroupSession && selectedAgentTab === null && (visibleTaskBoard || planningActivity) && (
+          {isGroupSession && selectedAgentTab === null && (roomTaskBoard || planningActivity) && (
             <LeaderViewBanner
-              taskBoard={visibleTaskBoard}
+              taskBoard={roomTaskBoard}
               agentTabs={agentTabs}
               activity={planningActivity}
               onOpenTasks={() => setGroupTasksOpen(true)}
@@ -460,7 +456,7 @@ export const Thread: FC = () => {
           <RoomTaskDrawer
             open={groupTasksOpen}
             onClose={() => setGroupTasksOpen(false)}
-            taskBoard={visibleTaskBoard}
+            taskBoard={roomTaskBoard}
             agentTabs={agentTabs}
             activity={planningActivity}
           />
@@ -809,7 +805,7 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
     : activity?.phase === 'synthesizing'
       ? '汇总中'
       : activity?.phase === 'planning'
-        ? '规划中'
+        ? '协调中'
         : '理解中'
 
   return (
@@ -850,7 +846,7 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
           className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-xs text-neutral-600 transition hover:border-blue-200 hover:text-blue-700"
         >
           <ListTodo className="h-3.5 w-3.5" />
-          任务与线程
+          线程与产物
         </button>
       </div>
     </div>
@@ -941,7 +937,7 @@ const ThreadContextRail: FC<{
 
               {directRunProgress ? (
                 <div className="space-y-2">
-                  <div className="text-[11px] font-medium text-neutral-500">任务规划</div>
+                  <div className="text-[11px] font-medium text-neutral-500">执行步骤</div>
                   {directRunProgress.steps.slice(0, 6).map((step) => (
                     <div
                       key={step.id}
@@ -1454,7 +1450,7 @@ function TaskRuntimeStrip({
   const runtime =
     executionConfig.adapterName ||
     executionConfig.codeAgentType ||
-    (executionConfig.runtimeType === 'llm' ? 'LLM fallback' : executionConfig.runtimeType)
+    executionConfig.runtimeType
   const model = executionConfig.modelLabel || executionConfig.modelId
   const sandbox = [
     executionConfig.sandboxProvider,
@@ -1796,7 +1792,7 @@ const RoomTaskDrawer: FC<{
                                 )}
                                 {pendingChildNoticeTaskId === task.id && !canOpenChild && (
                                   <p className="mt-1 text-xs text-blue-600">
-                                    线程正在准备，正式分配后会自动变为可打开。
+                                    线程记录尚未创建；Manager 分发后会自动出现在这里。
                                   </p>
                                 )}
                                 {task.artifacts && task.artifacts.length > 0 && (
@@ -1832,14 +1828,14 @@ const RoomTaskDrawer: FC<{
                                     ? 'border-neutral-200 bg-white text-neutral-700 hover:border-blue-200 hover:text-blue-700'
                                     : 'border-neutral-100 bg-neutral-50 text-neutral-400 hover:border-blue-100 hover:text-blue-600',
                                 )}
-                                title={canOpenChild ? '打开成员线程' : '线程准备中'}
+                                title={canOpenChild ? '打开成员线程' : '线程记录尚未创建'}
                               >
                                 {canOpenChild ? (
                                   <ExternalLink className="h-3.5 w-3.5" />
                                 ) : (
                                   <Clock3 className="h-3.5 w-3.5" />
                                 )}
-                                {canOpenChild ? '线程' : '准备中'}
+                                {canOpenChild ? '打开' : '待建'}
                               </button>
                             </div>
                           </div>

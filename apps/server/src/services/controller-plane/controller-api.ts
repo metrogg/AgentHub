@@ -17,6 +17,8 @@ import { runController, type RunControllerRunContext } from '../orchestrator/run
 import { workerController } from '../orchestrator/worker-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { registerArtifactBatch } from '../orchestrator/artifact-controller'
+import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
+import { dockerWorkerBackend } from './docker-worker-backend'
 import { localCliWorkerBackend, type WorkerBackend } from './worker-backend'
 import {
   condition,
@@ -34,7 +36,7 @@ export class ControllerApi {
   private readonly workerBackend: WorkerBackend
 
   constructor(options: ControllerApiOptions = {}) {
-    this.workerBackend = options.workerBackend ?? localCliWorkerBackend
+    this.workerBackend = options.workerBackend ?? (workerContainersEnabled() ? dockerWorkerBackend : localCliWorkerBackend)
   }
 
   async applyWorker(input: {

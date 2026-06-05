@@ -88,7 +88,7 @@ function RuntimeStrip({ config }: { config?: TaskBoardPanelProjection['phases'][
   const runtime =
     config.adapterName ||
     config.codeAgentType ||
-    (config.runtimeType === 'llm' ? 'LLM fallback' : config.runtimeType)
+    config.runtimeType
   const model = config.modelLabel || config.modelId
   const sandbox = [config.sandboxProvider, config.isolation, config.sandboxPolicy]
     .filter(Boolean)

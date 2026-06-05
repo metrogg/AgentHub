@@ -15,17 +15,17 @@
     "matrix": {
       "enabled": true,
       "homeserver": "http://localhost:6167",
-      "userId": "@worker:local.agenthub",
+      "userId": "@worker:agenthub.local",
       "accessToken": "",
       "encryption": false,
       "network": { "dangerouslyAllowPrivateNetwork": true },
       "autoJoin": "always",
       "dm": {
         "policy": "allowlist",
-        "allowFrom": ["@admin:local.agenthub", "@manager:local.agenthub"]
+        "allowFrom": ["@admin:agenthub.local", "@manager:agenthub.local"]
       },
       "groupPolicy": "allowlist",
-      "groupAllowFrom": ["@admin:local.agenthub", "@manager:local.agenthub"],
+      "groupAllowFrom": ["@admin:agenthub.local", "@manager:agenthub.local"],
       "groups": {
         "*": { "allow": true, "requireMention": true }
       },

@@ -33,7 +33,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { api, type ControllerPlaneDiagnostics, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
+import { api, type ContainerRuntimeDiagnostics, type ControllerPlaneDiagnostics, type ManagerRuntimeStatusResponse, type ManagerRuntimeType, type MatrixDiagnostics, type Message, type MobileConnectivityStatus, type ModelCatalogItem, type Session, type SettingsConsoleLog, type SettingsGeneralInfo } from '../lib/api'
 import { accentColor, applyAppearanceSettings, fontStack, hexToRgba, readableAccentColor, resolveTheme, themePalette } from '../lib/appearance'
 import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
@@ -2410,6 +2410,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   const [matrixDiagnostics, setMatrixDiagnostics] = useState<MatrixDiagnostics | null>(null)
   const [controllerPlane, setControllerPlane] = useState<ControllerPlaneDiagnostics | null>(null)
   const [managerRuntime, setManagerRuntime] = useState<ManagerRuntimeStatusResponse | null>(null)
+  const [containerRuntime, setContainerRuntime] = useState<ContainerRuntimeDiagnostics | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
   const tableRef = useRef<HTMLDivElement | null>(null)
@@ -2539,6 +2540,27 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         managerRuntime.activeStatus.error ? `error=${managerRuntime.activeStatus.error}` : null,
       ].filter(Boolean).join(' · ')
     : 'Manager 负责理解目标、追问、补员、派活和复盘'
+  const containerRunningWorkers = containerRuntime?.workerContainers.filter((item) => item.container.running).length ?? 0
+  const containerRuntimeStatus = containerRuntime
+    ? !containerRuntime.enabled
+      ? '未启用容器后端'
+      : !containerRuntime.docker.available
+        ? 'Docker 不可用'
+        : !containerRuntime.imagePresent
+          ? 'OpenClaw 镜像未构建'
+          : containerRuntime.managerEnabled && !containerRuntime.managerContainer.running
+            ? 'Manager 容器未运行'
+            : '容器后端可用'
+    : '等待刷新'
+  const containerRuntimeDetail = containerRuntime
+    ? [
+        `docker=${containerRuntime.docker.version ?? (containerRuntime.docker.available ? 'ok' : 'missing')}`,
+        `manager=${containerRuntime.managerEnabled ? (containerRuntime.managerContainer.running ? 'running' : 'enabled') : 'local'}`,
+        `workers=${containerRunningWorkers}/${containerRuntime.workerContainers.length}`,
+        `image=${containerRuntime.imagePresent ? containerRuntime.image : 'missing'}`,
+        containerRuntime.docker.error ? `error=${containerRuntime.docker.error}` : null,
+      ].filter(Boolean).join(' · ')
+    : 'Manager / Worker 容器、OpenClaw 镜像和容器内 URL 会显示在这里'
 
   useEffect(() => {
     void refreshDiagnostics(false)
@@ -2572,7 +2594,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
   async function refreshDiagnostics(visible = true) {
     setBusy('refresh')
     try {
-      const [info, consoleLogs, matrix, controller, manager] = await Promise.all([
+      const [info, consoleLogs, matrix, controller, manager, containers] = await Promise.all([
         api.getSettingsGeneralInfo(),
         api.getSettingsConsoleLogs(180),
         api.getMatrixDiagnostics().catch((error) => {
@@ -2602,18 +2624,28 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
           })
           return null
         }),
+        api.getContainerRuntimeStatus().catch((error) => {
+          appendLog({
+            level: 'Warn',
+            source: '前端',
+            module: 'settings/container-runtime',
+            content: error?.message || 'Container Runtime 诊断接口不可用',
+          })
+          return null
+        }),
       ])
       setGeneralInfo(info)
       setMatrixDiagnostics(matrix)
       setControllerPlane(controller)
       setManagerRuntime(manager)
+      setContainerRuntime(containers)
       setConsoleSources(consoleLogs.sources)
       setLogs(consoleLogs.items)
       appendLog({
         level: 'Info',
         source: '后端',
         module: 'settings/general-info',
-        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}, controller=${controller?.queue.running ? 'running' : 'stopped'}, manager=${manager?.activeRuntimeType ?? 'unknown'}/${manager?.activeHealth?.healthy === false ? 'blocked' : 'ok'}`,
+        content: `诊断刷新完成：data=${info.storage.sizeLabel}, debug=${info.debug.sizeLabel}, git=${info.git.ok ? 'ok' : 'missing'}, python=${info.python.ok ? 'ok' : 'missing'}, sandbox=${info.sandbox.configuredProvider}/${info.sandbox.sandboxRunnable ? 'ok' : 'blocked'}, matrix=${matrix?.configured ? (matrix.homeserver.reachable ? 'ok' : 'blocked') : 'unconfigured'}, controller=${controller?.queue.running ? 'running' : 'stopped'}, manager=${manager?.activeRuntimeType ?? 'unknown'}/${manager?.activeHealth?.healthy === false ? 'blocked' : 'ok'}, containers=${containers?.enabled ? (containers.docker.available ? 'docker' : 'blocked') : 'disabled'}`,
       })
       if (visible) showNotice(t('诊断信息已刷新'))
     } catch (error: any) {
@@ -2834,6 +2866,80 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
     }
   }
 
+  async function copyContainerEnv() {
+    if (!containerRuntime) return
+    const lines = [
+      'AGENTHUB_CONTAINER_RUNTIME=docker',
+      'AGENTHUB_MANAGER_BACKEND=docker',
+      'AGENTHUB_WORKER_BACKEND=docker',
+      `AGENTHUB_CONTAINER_CONTROLLER_URL=${containerRuntime.controllerUrlForContainers}`,
+      `AGENTHUB_CONTAINER_MATRIX_URL=${containerRuntime.matrixUrlForContainers}`,
+      `AGENTHUB_CONTAINER_LLM_BASE_URL=${containerRuntime.llmBaseUrlForContainers}`,
+    ]
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'))
+      appendLog({ level: 'Info', source: '前端', module: 'container-runtime', content: 'copied container runtime env' })
+      showNotice(t('容器运行时环境变量已复制'))
+    } catch {
+      showNotice(t('复制失败'))
+    }
+  }
+
+  async function prepareLocalContainerRuntime() {
+    setBusy('container-prepare')
+    try {
+      const result = await api.prepareLocalContainerRuntime()
+      setContainerRuntime(result.diagnostics)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: 'container-runtime/prepare-local',
+        content: [
+          result.message,
+          result.infra.output ? `infra=${result.infra.output}` : null,
+          result.image.output ? `image=${result.image.output.slice(-1500)}` : null,
+          result.image.error ? `imageError=${result.image.error}` : null,
+        ].filter(Boolean).join('\n'),
+      })
+      showNotice(result.message)
+      await refreshDiagnostics(false)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: 'container-runtime/prepare-local',
+        content: error?.message || '准备本地容器运行时失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function viewContainerLogs(name: string) {
+    setBusy(`container-logs-${name}`)
+    try {
+      const result = await api.getContainerRuntimeLogs(name, 160)
+      appendLog({
+        level: result.ok ? 'Info' : 'Warn',
+        source: '后端',
+        module: `container/${name}`,
+        content: result.output ? `${result.message}\n${result.output.slice(-3000)}` : result.message,
+      })
+      showNotice(result.message)
+    } catch (error: any) {
+      appendLog({
+        level: 'Error',
+        source: '后端',
+        module: `container/${name}`,
+        content: error?.message || '读取容器日志失败',
+      })
+      showNotice(error?.message || t('操作失败'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   function exportLogs() {
     const blob = new Blob([formatConsoleLogs(filteredLogs)], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -3006,6 +3112,17 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
           </div>
           <div className="min-w-[17rem] flex-1">
             <ConsoleDiagnosticCard
+              icon={Monitor}
+              title="容器运行时"
+              status={containerRuntimeStatus}
+              detail={containerRuntimeDetail}
+              action="复制环境变量"
+              busy={busy === 'refresh'}
+              onAction={() => void copyContainerEnv()}
+            />
+          </div>
+          <div className="min-w-[17rem] flex-1">
+            <ConsoleDiagnosticCard
               icon={Database}
               title="本地数据"
               status={generalInfo?.storage.exists ? '目录可用' : '等待刷新'}
@@ -3127,6 +3244,81 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
               OpenClaw 是 Manager Runtime provider，不是普通 Agent 类型。检测到 OpenClaw CLI 只代表可管理生命周期；只有配置了 Manager endpoint 后，群聊才能通过 POST /step 同步调用它。
             </div>
+          </div>
+        )}
+
+        {containerRuntime && (
+          <div
+            className="mt-4 rounded-2xl border p-4 text-sm shadow-sm"
+            style={{ background: 'var(--settings-panel-muted)', borderColor: 'var(--settings-border)', color: 'var(--settings-text)' }}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">容器运行时控制面</div>
+                <div className="mt-1 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
+                  {'推荐顺序：准备本地容器运行时 -> 复制环境变量 -> 重启 AgentHub Server -> 启动 OpenClaw Manager。AgentHub Server 仍在本机运行；Docker 只承载 Tuwunel / MinIO / OpenClaw Manager / OpenClaw Worker。'}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => void prepareLocalContainerRuntime()} disabled={busy === 'container-prepare'} className="settings-soft-button h-8 px-3 text-xs">
+                  {busy === 'container-prepare' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
+                  准备本地容器运行时
+                </button>
+                <button type="button" onClick={() => void copyContainerEnv()} className="settings-soft-button h-8 px-3 text-xs">
+                  <Copy className="h-3.5 w-3.5" />
+                  复制容器环境变量
+                </button>
+                <button type="button" onClick={() => void refreshDiagnostics()} disabled={busy === 'refresh'} className="settings-soft-button h-8 px-3 text-xs">
+                  <RefreshCw className={cn('h-3.5 w-3.5', busy === 'refresh' && 'animate-spin')} />
+                  刷新
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <InfoRow label="Docker" value={containerRuntime.docker.available ? `可用 ${containerRuntime.docker.version ?? ''}` : containerRuntime.docker.error ?? '不可用'} />
+              <InfoRow label="OpenClaw 镜像" value={containerRuntime.imagePresent ? containerRuntime.image : `未构建：${containerRuntime.image}`} />
+              <InfoRow label="Controller URL" value={containerRuntime.controllerUrlForContainers} />
+              <InfoRow label="Matrix URL" value={containerRuntime.matrixUrlForContainers} />
+              <InfoRow label="LLM Gateway URL" value={containerRuntime.llmBaseUrlForContainers} />
+              <InfoRow label="Workspace Root" value={containerRuntime.workspaceRoot} />
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              <ContainerRuntimeRow
+                name={containerRuntime.managerContainer.name}
+                kind="manager"
+                status={containerRuntime.managerContainer.status ?? (containerRuntime.managerContainer.exists ? 'created' : 'missing')}
+                running={containerRuntime.managerContainer.running}
+                detail={containerRuntime.managerContainer.image ?? containerRuntime.image}
+                busy={busy === `container-logs-${containerRuntime.managerContainer.name}`}
+                onLogs={() => void viewContainerLogs(containerRuntime.managerContainer.name)}
+              />
+              {containerRuntime.workerContainers.length === 0 ? (
+                <div className="rounded-xl border px-3 py-6 text-center text-xs" style={{ borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}>
+                  还没有 Worker 容器。创建 OpenClaw Worker 并分配任务后会出现在这里。
+                </div>
+              ) : (
+                containerRuntime.workerContainers.map((item) => (
+                  <ContainerRuntimeRow
+                    key={item.workerInstanceId}
+                    name={item.containerName}
+                    kind={item.runtimeBase}
+                    status={`${item.observedState} / ${item.container.status ?? (item.container.exists ? 'created' : 'missing')}`}
+                    running={item.container.running}
+                    detail={item.workerInstanceId}
+                    busy={busy === `container-logs-${item.containerName}`}
+                    onLogs={() => void viewContainerLogs(item.containerName)}
+                  />
+                ))
+              )}
+            </div>
+
+            {!containerRuntime.enabled && (
+              <div className="mt-3 rounded-xl border px-3 py-2 text-xs leading-5" style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)', color: 'var(--settings-muted-text)' }}>
+                当前未启用容器后端。先点“准备本地容器运行时”启动 Tuwunel / MinIO 并构建 OpenClaw 镜像；再复制环境变量写入 `.env`，重启 AgentHub Server 后，Manager / Worker 才会进入 Docker resident runtime 路径。环境变量不会在当前已启动的 server 进程里自动生效。
+              </div>
+            )}
           </div>
         )}
 
@@ -3374,6 +3566,48 @@ function ConsoleDiagnosticCard({
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function ContainerRuntimeRow({
+  name,
+  kind,
+  status,
+  running,
+  detail,
+  busy,
+  onLogs,
+}: {
+  name: string
+  kind: string
+  status: string
+  running: boolean
+  detail: string
+  busy?: boolean
+  onLogs: () => void
+}) {
+  return (
+    <div
+      className="grid gap-2 rounded-xl border px-3 py-2 text-xs md:grid-cols-[minmax(0,1fr)_7rem_8rem_auto]"
+      style={{ background: 'var(--settings-panel)', borderColor: 'var(--settings-border)' }}
+    >
+      <div className="min-w-0">
+        <div className="truncate font-mono font-semibold" style={{ color: 'var(--settings-text)' }} title={name}>
+          {name}
+        </div>
+        <div className="mt-1 truncate" style={{ color: 'var(--settings-muted-text)' }} title={detail}>
+          {detail}
+        </div>
+      </div>
+      <div className="font-mono" style={{ color: 'var(--settings-muted-text)' }}>{kind}</div>
+      <div style={{ color: running ? '#047857' : 'var(--settings-muted-text)' }}>
+        {running ? 'running' : status}
+      </div>
+      <button type="button" onClick={onLogs} disabled={busy} className="settings-soft-button h-7 px-2 text-xs">
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+        日志
+      </button>
     </div>
   )
 }

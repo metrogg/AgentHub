@@ -6,6 +6,16 @@ import { logger } from '../../lib/logger'
 import { getRuntimeServerPort } from '../../lib/runtime-server'
 import { createMatrixClientFromEnv } from '../rooms/matrix-client'
 import { MatrixIdentityService } from '../rooms/matrix-identity-service'
+import {
+  containerControllerUrl,
+  containerLlmBaseUrl,
+  containerMatrixUrl,
+  ensureOpenClawRuntimeImage,
+  managerContainerName,
+  managerContainersEnabled,
+  OPENCLAW_RUNTIME_IMAGE,
+} from '../container-runtime/agent-runtime-containers'
+import { dockerRuntime } from '../container-runtime/docker-runtime'
 import { resolveHealthEndpoint, resolveStepEndpoint } from './remote-manager-runtime-adapter'
 import { ResidentManagerRuntime } from './resident-manager-runtime'
 import type { ManagerRuntime } from './types'
@@ -51,6 +61,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   private startedAt: string | null = null
   private managerWorkspace: string
   private managerAccessToken: string | null = null
+  private containerStartedAt: string | null = null
 
   constructor(private config: {
     openclawPath?: string
@@ -70,31 +81,43 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   async status(): Promise<ManagerRuntimeStatus> {
     const binaryPath = this.findBinary()
     const endpoint = this.config.endpoint || process.env.AGENTHUB_OPENCLAW_MANAGER_ENDPOINT || null
-    const running = this.process !== null && !this.process.killed
+    const containerMode = managerContainersEnabled()
+    const container = containerMode ? await dockerRuntime.inspect(managerContainerName(this.runtimeType)) : null
+    const running = containerMode
+      ? Boolean(container?.running)
+      : this.process !== null && !this.process.killed
 
     return {
       runtimeType: this.runtimeType,
-      available: binaryPath !== null || endpoint !== null,
+      available: containerMode || binaryPath !== null || endpoint !== null,
       syncReady: endpoint !== null,
       running,
-      pid: running ? this.process!.pid ?? null : null,
+      pid: containerMode ? null : running ? this.process!.pid ?? null : null,
       workspace: this.managerWorkspace,
       configPath: this.getConfigPath(),
-      binaryPath,
+      binaryPath: containerMode ? null : binaryPath,
       endpoint,
       stepEndpoint: endpoint ? resolveStepEndpoint(endpoint) : null,
       healthEndpoint: endpoint ? resolveHealthEndpoint(endpoint) : null,
-      error: !binaryPath && !endpoint ? 'OpenClaw binary not found and no endpoint configured' : null,
+      error: !containerMode && !binaryPath && !endpoint ? 'OpenClaw binary not found and no endpoint configured' : null,
       diagnostics: {
+        backend: containerMode ? 'docker' : 'local-process',
+        containerName: containerMode ? managerContainerName(this.runtimeType) : null,
+        containerStatus: container,
+        image: containerMode ? OPENCLAW_RUNTIME_IMAGE : null,
         binaryInstalled: binaryPath !== null,
         endpointConfigured: endpoint !== null,
         synchronousStepReady: endpoint !== null,
         note: endpoint
           ? 'OpenClaw Manager endpoint is configured; AgentHub can call POST /step.'
-          : 'OpenClaw binary availability only means lifecycle can be managed. Configure AGENTHUB_OPENCLAW_MANAGER_ENDPOINT for synchronous Manager steps.',
+          : containerMode
+            ? 'OpenClaw Manager is managed as a resident Docker container and coordinates through Matrix.'
+            : 'OpenClaw binary availability only means lifecycle can be managed. Configure AGENTHUB_OPENCLAW_MANAGER_ENDPOINT for synchronous Manager steps.',
       },
-      startedAt: this.startedAt,
-      uptime: this.startedAt ? Date.now() - new Date(this.startedAt).getTime() : null,
+      startedAt: containerMode ? this.containerStartedAt : this.startedAt,
+      uptime: (containerMode ? this.containerStartedAt : this.startedAt)
+        ? Date.now() - new Date((containerMode ? this.containerStartedAt : this.startedAt)!).getTime()
+        : null,
     }
   }
 
@@ -103,7 +126,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     if (st.running) return st
     if (st.endpoint) return st // external endpoint, no need to start
 
-    if (!st.binaryPath) {
+    if (!managerContainersEnabled() && !st.binaryPath) {
       return { ...st, error: 'OpenClaw binary not found. Run: bash infra/setup-openclaw.sh' }
     }
 
@@ -134,7 +157,11 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     this.copyAgentFiles()
 
     // Launch
-    this.launch(st.binaryPath)
+    if (managerContainersEnabled()) {
+      await this.launchContainer()
+    } else {
+      this.launch(st.binaryPath!)
+    }
     return this.status()
   }
 
@@ -144,6 +171,10 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       this.process.kill('SIGTERM')
       this.process = null
       this.startedAt = null
+    }
+    if (managerContainersEnabled()) {
+      await dockerRuntime.stop(managerContainerName(this.runtimeType))
+      this.containerStartedAt = null
     }
     return this.status()
   }
@@ -219,10 +250,10 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   }
 
   private generateConfig(): string {
-    const matrixUrl = this.config.matrixUrl || process.env.AGENTHUB_MATRIX_HOMESERVER_URL || 'http://localhost:6167'
-    const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'local.agenthub'
+    const matrixUrl = this.config.matrixUrl || (managerContainersEnabled() ? containerMatrixUrl() : process.env.AGENTHUB_MATRIX_HOMESERVER_URL) || 'http://localhost:6167'
+    const matrixDomain = this.config.matrixDomain || process.env.AGENTHUB_MATRIX_SERVER_NAME || 'agenthub.local'
     const matrixUserId = this.config.matrixUserId || `@manager:${matrixDomain}`
-    const llmBaseUrl = this.config.llmBaseUrl || process.env.AGENTHUB_MANAGER_LLM_BASE_URL || process.env.LLM_BASE_URL || 'http://localhost:8000/v1'
+    const llmBaseUrl = this.config.llmBaseUrl || process.env.AGENTHUB_MANAGER_LLM_BASE_URL || (managerContainersEnabled() ? containerLlmBaseUrl() : process.env.LLM_BASE_URL) || 'http://localhost:8000/v1'
     const llmApiKey = this.config.llmApiKey || process.env.AGENTHUB_MANAGER_LLM_API_KEY || process.env.LLM_API_KEY || 'agenthub-internal'
     const llmModel = this.config.llmModel || process.env.AGENTHUB_MANAGER_LLM_MODEL || process.env.LLM_MODEL || 'default'
     const llmContextWindow = Number(process.env.AGENTHUB_MANAGER_LLM_CONTEXT_WINDOW || '128000')
@@ -370,6 +401,32 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     })
 
     this.startedAt = new Date().toISOString()
+  }
+
+  private async launchContainer(): Promise<void> {
+    const image = await ensureOpenClawRuntimeImage()
+    if (!image.present) {
+      throw new Error(`OpenClaw runtime image unavailable: ${image.error || OPENCLAW_RUNTIME_IMAGE}`)
+    }
+    await dockerRuntime.run({
+      name: managerContainerName(this.runtimeType),
+      image: OPENCLAW_RUNTIME_IMAGE,
+      volumes: [{ host: this.managerWorkspace, container: '/workspace' }],
+      env: {
+        OPENCLAW_CONFIG_PATH: '/workspace/openclaw.json',
+        OPENCLAW_NO_RESPAWN: '1',
+        HOME: '/workspace',
+        AGENTHUB_CONTROLLER_URL: containerControllerUrl(),
+        AGENTHUB_MANAGER_TOKEN: this.managerAccessToken ?? '',
+      },
+      ports: [{ host: 18799, container: 18799 }],
+      labels: {
+        'dev.agenthub.kind': 'manager',
+        'dev.agenthub.runtime': this.runtimeType,
+      },
+      restart: 'unless-stopped',
+    })
+    this.containerStartedAt = new Date().toISOString()
   }
 
   private copyDirSync(src: string, dst: string): void {

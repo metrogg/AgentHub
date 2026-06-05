@@ -59,7 +59,7 @@ const createAgentSchema = z.object({
   roleProfile: z.record(z.unknown()).nullable().optional(),
   color: z.string().max(20).default('#6366f1'),
   modelId: z.string().max(120).nullable().optional(),
-  runtimeType: z.enum(['llm', 'code-agent']).default('code-agent'),
+  runtimeType: z.enum(['code-agent']).default('code-agent'),
   codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
   capabilityTags: z.array(z.string().max(40)).max(12).default([]),
   skillIds: z.array(z.string().max(120)).max(40).default([]),
@@ -117,7 +117,7 @@ function normalizeAgentUpdateDefaults(
   currentRuntimeType?: string | null,
 ): z.infer<typeof updateAgentSchema> {
   const result = { ...input }
-  const normalizedCurrentRuntime = normalizeRuntimeType(currentRuntimeType)
+  const normalizedCurrentRuntime = 'code-agent'
   const nextRuntimeType = input.runtimeType ?? normalizedCurrentRuntime
   if (!input.runtimeType && currentRuntimeType && currentRuntimeType !== normalizedCurrentRuntime) {
     result.runtimeType = normalizedCurrentRuntime
@@ -136,16 +136,9 @@ function normalizeAgentUpdateDefaults(
       result.approvalRequired = false
     }
   }
-  if (input.runtimeType === 'llm' && currentRuntimeType === 'code-agent' && input.modelId === undefined) {
-    result.modelId = null
-  }
-  if (nextRuntimeType === 'llm') result.codeAgentType = null
   return result
 }
 
-function normalizeRuntimeType(value?: string | null): 'llm' | 'code-agent' {
-  return value === 'llm' ? 'llm' : 'code-agent'
-}
 
 type GithubRepoRemote = {
   cloneUrl: string

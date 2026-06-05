@@ -58,6 +58,7 @@ export async function loadRoomSessionSnapshot(input: RoomSessionSnapshotInput) {
     ? normalizeResourceSnapshot(await runController.loadResourceSnapshot(activeRunId))
     : emptyResourceSnapshot()
   const fullTimelineCursor = await loadTimelineCursor(room.id)
+  const bindings = await buildRoomSessionBindings(session, room, resourceSnapshot)
 
   return {
     session,
@@ -65,7 +66,7 @@ export async function loadRoomSessionSnapshot(input: RoomSessionSnapshotInput) {
     participants,
     timeline,
     resources: resourceSnapshot,
-    bindings: buildRoomSessionBindings(session, room, resourceSnapshot),
+    bindings,
     cursors: {
       timelineSequence: fullTimelineCursor,
       resourceVersion: resourceVersion([session, room, ...timeline], resourceSnapshot),
@@ -276,7 +277,7 @@ function normalizeResourceSnapshot(snapshot: RunResourceSnapshot) {
   }
 }
 
-function buildRoomSessionBindings(
+async function buildRoomSessionBindings(
   session: SessionRow,
   room: RoomRow,
   resources: ReturnType<typeof normalizeResourceSnapshot> | ReturnType<typeof emptyResourceSnapshot>,
@@ -286,16 +287,46 @@ function buildRoomSessionBindings(
   const taskThread = taskThreadId
     ? resources.taskThreads.find((thread) => thread.id === taskThreadId) ?? null
     : null
+  const taskId = room.taskId ?? taskThread?.taskId ?? stringValue(metadata.orchestratorTaskId)
+  const task = taskId ? resources.tasks.find((item) => item.id === taskId) ?? null : null
+  const runtimeLease =
+    taskId
+      ? [...resources.runtimeLeases]
+          .reverse()
+          .find((lease) => lease.taskId === taskId || lease.workerInstanceId === taskThread?.workerInstanceId) ?? null
+      : taskThread?.workerInstanceId
+        ? [...resources.runtimeLeases].reverse().find((lease) => lease.workerInstanceId === taskThread.workerInstanceId) ?? null
+        : null
+  const workerInstanceId = taskThread?.workerInstanceId ?? runtimeLease?.workerInstanceId ?? null
+  const workerInstance = workerInstanceId
+    ? resources.workerInstances.find((worker) => worker.id === workerInstanceId) ?? null
+    : null
+  const parentGroupSessionId =
+    room.kind === 'task'
+      ? taskThread?.groupSessionId ?? stringValue(metadata.groupSessionId) ?? null
+      : null
+  const parentGroupRoomId = parentGroupSessionId
+    ? ((await db
+        .select({ id: rooms.id })
+        .from(rooms)
+        .where(eq(rooms.sessionId, parentGroupSessionId))
+        .limit(1))[0]?.id ?? null)
+    : null
   return {
-    parentGroupSessionId:
-      room.kind === 'task'
-        ? taskThread?.groupSessionId ?? stringValue(metadata.groupSessionId) ?? null
-        : null,
+    roomKind: room.kind,
+    parentGroupSessionId,
+    parentGroupRoomId,
     orchestratorRunId:
       resources.activeRun?.id ?? room.runId ?? stringValue(metadata.orchestratorRunId) ?? null,
-    orchestratorTaskId:
-      room.taskId ?? taskThread?.taskId ?? stringValue(metadata.orchestratorTaskId) ?? null,
+    orchestratorTaskId: taskId ?? null,
     taskThreadId: taskThreadId ?? null,
+    taskRoomId: room.kind === 'task' ? room.id : null,
+    taskSessionId: taskThread?.sessionId ?? task?.sessionId ?? (room.kind === 'task' ? room.sessionId : null),
+    taskStatus: task?.status ?? null,
+    taskThreadStatus: taskThread?.status ?? null,
+    workspaceAgentId: taskThread?.workspaceAgentId ?? task?.agentId ?? workerInstance?.workspaceAgentId ?? null,
+    workerInstanceId,
+    runtimeLeaseId: runtimeLease?.runtimeLeaseId ?? runtimeLease?.id ?? null,
   }
 }
 

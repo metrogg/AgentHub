@@ -41,7 +41,6 @@ export async function ensureWorkspace(id: string, ownerId: string) {
 }
 
 function normalizeWorkspaceAgentRuntime<T extends { runtimeType: string; codeAgentType: string | null }>(agent: T): T {
-  if (agent.runtimeType === 'llm') return { ...agent, codeAgentType: null }
   if (agent.runtimeType === 'code-agent' && agent.codeAgentType) return agent
   return {
     ...agent,
@@ -49,4 +48,3 @@ function normalizeWorkspaceAgentRuntime<T extends { runtimeType: string; codeAge
     codeAgentType: agent.codeAgentType ?? 'codex',
   }
 }
-

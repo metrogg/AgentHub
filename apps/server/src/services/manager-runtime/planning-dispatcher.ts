@@ -191,7 +191,7 @@ export async function startPlanRunWithCoordinatorAssignBatch(params: {
     ownerId,
     sourceMessage,
     actions,
-    runtimeType: 'local-llm',
+    runtimeType: 'code-agent',
     run: params.run,
     workerRuntime: params.workerRuntime,
     executeInline: params.executeInline,

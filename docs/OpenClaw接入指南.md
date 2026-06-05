@@ -144,7 +144,7 @@ Worker 也可以用 OpenClaw，和 Manager 一样：
 ```bash
 # 生成 Worker 配置并启动
 const launcher = new OpenClawLauncher({ matrixUrl, llmBaseUrl, ... })
-launcher.launchWorker('builder', { matrixUserId: '@worker-builder:local.agenthub' })
+launcher.launchWorker('builder', { matrixUserId: '@worker-builder:agenthub.local' })
 ```
 
 Worker 和 Manager 的区别：

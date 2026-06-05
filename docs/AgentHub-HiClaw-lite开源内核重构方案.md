@@ -26,7 +26,7 @@ Open-source Infrastructure
 
 ## 0.1 开工前审查结论
 
-这份方案可以作为重构总纲开工，但早期“先本地 adapter、后真实组件”的描述需要进一步校准：**AgentHub 的核心定位是轻量版 HiClaw**。我们保留 Room / Manager / Worker / HITL 架构范式，但默认用单进程 AgentHub 服务 + CLI 子进程替代容器编排，用自研 UI 替代 Element Web，用本地 filesystem SharedStorage 替代 MinIO 集群。HiClaw 是架构上限和透明协作范式，ClawTeam 是轻量实现参考：CLI adapter/profile、git worktree、task claim lock、LeaderWatcher、profile doctor/test、board snapshot 可以直接启发第一阶段落地；但 ClawTeam 的 file inbox 不能替代 AgentHub 已确定的真实 Matrix 主通信。真实 Matrix/Tuwunel、MinIO/S3-compatible SharedStorage、OpenClaw/QwenPaw Manager Runtime 都是 adapter / runtime 方向，不是第一阶段必须默认拉起的重依赖。
+这份方案可以作为重构总纲开工，但早期“先本地 adapter、后真实组件”的描述需要进一步校准：**AgentHub 的核心定位是轻量版 HiClaw**。我们保留 Room / Manager / Worker / HITL 架构范式，产品形态采用嵌入式本地控制器：AgentHub Server 仍在本机作为 Controller API / UI backend / Room adapter 运行；Tuwunel、MinIO、OpenClaw Manager、OpenClaw Worker 可以通过 Docker resident runtime 承载。自研 UI 替代 Element Web，本地 filesystem SharedStorage 仍是默认产物存储，MinIO/S3-compatible 是可切换 adapter。HiClaw 是架构上限和透明协作范式，ClawTeam 是轻量实现参考：CLI adapter/profile、git worktree、task claim lock、LeaderWatcher、profile doctor/test、board snapshot 可以直接启发第一阶段落地；但 ClawTeam 的 file inbox 不能替代 AgentHub 已确定的真实 Matrix 主通信。真实 Matrix/Tuwunel、MinIO/S3-compatible SharedStorage、OpenClaw/QwenPaw Manager Runtime 都是 adapter / runtime 方向，其中真实 Matrix 与容器化 resident runtime 已开始进入可诊断、可启动的产品路径。
 
 开工约束：
 

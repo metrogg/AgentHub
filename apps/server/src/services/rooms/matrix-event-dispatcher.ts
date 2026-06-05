@@ -155,6 +155,20 @@ export class MatrixRoomEventDispatcher {
       return true
     }
 
+    // Check for Worker protocol messages (TASK_COMPLETED, BLOCKED, QUESTION, NO_REPLY)
+    if (event.senderType === 'worker') {
+      const { handleWorkerProtocolMessage } = await import('../worker-runtime/worker-result-listener')
+      const handled = await handleWorkerProtocolMessage({
+        roomId: room.id,
+        roomKind: room.kind,
+        body: event.body,
+        senderParticipantId: event.senderParticipantId,
+        senderType: event.senderType,
+        eventId: event.id,
+      })
+      if (handled) return true
+    }
+
     const command = parseMatrixControlCommand(event.body)
     if (command?.type === 'stop' && room.kind === 'task') {
       await this.handlers.cancelTaskRoom?.({

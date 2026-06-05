@@ -89,7 +89,7 @@ export function buildManagerResourceReviewSummary(input: ManagerResourceReviewIn
   lines.push(
     '',
     '## 透明性说明',
-    '这份复盘来自 Run/Task/TaskThread/Room timeline/ArtifactStore 的当前事实记录；没有调用旧 OrchestratorEngine 最终汇总路径。',
+    '这份复盘来自 Run/Task/TaskThread/Room timeline/ArtifactStore 的当前事实记录；基于实时运行数据生成。',
   )
   return `${lines.join('\n').replace(/\s+$/g, '')}\n`
 }

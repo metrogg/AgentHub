@@ -444,7 +444,7 @@ async function listRoomWorkerCandidates(roomId: string): Promise<ManagerWorkerCa
     workspaceAgentId: row.workspaceAgentId,
     name: row.name,
     role: row.role,
-    runtimeType: row.runtimeType,
+    runtimeType: row.runtimeType as 'code-agent',
     codeAgentType: row.codeAgentType,
     capabilityTags: row.capabilityTags ?? [],
     status: row.participantStatus,

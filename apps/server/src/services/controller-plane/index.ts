@@ -25,4 +25,5 @@ export {
   type WorkerBackendStartInput,
   type WorkerBackendStopInput,
 } from './worker-backend'
+export { DockerWorkerBackend, dockerWorkerBackend } from './docker-worker-backend'
 export { controllerReconcileQueue } from './controller-reconciler'

@@ -666,6 +666,74 @@ export interface ControllerPlaneDiagnostics {
   }
 }
 
+export interface ContainerRuntimeDiagnostics {
+  provider: 'docker'
+  enabled: boolean
+  managerEnabled: boolean
+  workerEnabled: boolean
+  docker: {
+    available: boolean
+    version: string | null
+    error: string | null
+  }
+  image: string
+  imagePresent: boolean
+  imageError: string | null
+  managerContainer: DockerContainerStatus
+  workerContainers: Array<{
+    workerInstanceId: string
+    workspaceAgentId: string
+    runtimeBase: string
+    observedState: string
+    containerName: string
+    container: DockerContainerStatus
+  }>
+  workspaceRoot: string
+  controllerUrlForContainers: string
+  matrixUrlForContainers: string
+  llmBaseUrlForContainers: string
+  env: {
+    AGENTHUB_CONTAINER_RUNTIME: string | null
+    AGENTHUB_MANAGER_BACKEND: string | null
+    AGENTHUB_WORKER_BACKEND: string | null
+  }
+}
+
+export interface DockerContainerStatus {
+  name: string
+  exists: boolean
+  running: boolean
+  id: string | null
+  image: string | null
+  status: string | null
+  createdAt: string | null
+  labels: Record<string, string>
+}
+
+export interface ContainerRuntimeLogsResponse {
+  ok: boolean
+  output: string
+  message: string
+}
+
+export interface PrepareLocalContainerRuntimeResult {
+  ok: boolean
+  message: string
+  infra: {
+    ok: boolean
+    output: string
+    message: string
+  }
+  image: {
+    present: boolean
+    pulled?: boolean
+    built?: boolean
+    error: string | null
+    output?: string
+  }
+  diagnostics: ContainerRuntimeDiagnostics
+}
+
 export interface LocalMatrixActionResult {
   ok: boolean
   message: string
@@ -681,7 +749,7 @@ export interface LocalMatrixActionResult {
   diagnostics: MatrixDiagnostics
 }
 
-export type ManagerRuntimeType = 'openclaw' 
+export type ManagerRuntimeType = 'openclaw' | 'qwenpaw'
 
 export interface ManagerRuntimeStatus {
   runtimeType: ManagerRuntimeType
@@ -1384,10 +1452,19 @@ export interface RoomSessionSnapshot {
   timeline: TimelineEvent[]
   resources: OrchestratorRunResourceSnapshot
   bindings: {
+    roomKind: 'group' | 'task' | 'dm' | 'system'
     parentGroupSessionId: string | null
+    parentGroupRoomId: string | null
     orchestratorRunId: string | null
     orchestratorTaskId: string | null
     taskThreadId: string | null
+    taskRoomId: string | null
+    taskSessionId: string | null
+    taskStatus: string | null
+    taskThreadStatus: string | null
+    workspaceAgentId: string | null
+    workerInstanceId: string | null
+    runtimeLeaseId: string | null
   }
   cursors: {
     timelineSequence: number
@@ -1718,6 +1795,16 @@ export const api = {
   stopLocalMatrix: () =>
     request<LocalMatrixActionResult>('/settings/matrix/local/stop', { method: 'POST', timeout: 70_000 }),
   getControllerPlaneStatus: () => request<ControllerPlaneDiagnostics>('/settings/controller-plane/status'),
+  getContainerRuntimeStatus: () => request<ContainerRuntimeDiagnostics>('/settings/container-runtime/status'),
+  prepareLocalContainerRuntime: () =>
+    request<PrepareLocalContainerRuntimeResult>('/settings/container-runtime/prepare-local', {
+      method: 'POST',
+      timeout: 180_000,
+    }),
+  getContainerRuntimeLogs: (name: string, tail = 160) =>
+    request<ContainerRuntimeLogsResponse>(
+      `/settings/container-runtime/logs/${encodeURIComponent(name)}?tail=${encodeURIComponent(String(tail))}`,
+    ),
   getManagerRuntimeStatus: () => request<ManagerRuntimeStatusResponse>('/settings/manager-runtime/status'),
   startManagerRuntime: (type: ManagerRuntimeType) =>
     request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/start`, {

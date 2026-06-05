@@ -1086,10 +1086,16 @@ describe('AgentHub smoke tests', () => {
       }),
     )
 
+    expect(draftCard.id.startsWith('room:')).toBe(true)
     expect(draftCard.metadata.agentDraft?.runtimeType).toBe('code-agent')
     expect(draftCard.metadata.agentDraft?.codeAgentType).toBe('codex')
     expect(draftCard.metadata.agentDraft?.toolPermissions).toContain('workspace:read')
     expect(draftCard.metadata.agentDraft?.toolPermissions).toContain('workspace:write')
+    const draftLegacyRows = await dbApi.db
+      .select()
+      .from(dbApi.messages)
+      .where(dbApi.eq(dbApi.messages.sessionId, group.session.id))
+    expect(draftLegacyRows).toHaveLength(0)
 
     const confirmed = await json<{
       agent: { id: string; name: string; codeAgentType: string | null }
@@ -1123,6 +1129,7 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/sessions', { title: 'Direct agent builder', type: 'direct' }),
     )
     const prompt = await json<{
+      id: string
       content: string
       metadata: { agentDraftStatus?: string; agentDraft?: unknown }
     }>(
@@ -1131,9 +1138,15 @@ describe('AgentHub smoke tests', () => {
       }),
     )
 
+    expect(prompt.id.startsWith('room:')).toBe(true)
     expect(prompt.content).toContain('Agent Group')
     expect(prompt.metadata.agentDraftStatus).toBe('requires_group')
     expect(prompt.metadata.agentDraft).toBeUndefined()
+    const directLegacyRows = await dbApi.db
+      .select()
+      .from(dbApi.messages)
+      .where(dbApi.eq(dbApi.messages.sessionId, session.id))
+    expect(directLegacyRows).toHaveLength(0)
   })
 
   test('confirmed member proposal can continue into a dynamic DAG run', async () => {
@@ -2743,6 +2756,11 @@ describe('AgentHub smoke tests', () => {
         kind: 'orchestrator-task',
         orchestratorRunId: run.runId,
         orchestratorTaskId: taskId,
+        groupSessionId: group.session.id,
+        taskThreadId,
+        workspaceAgentId: runAgent.id,
+        workerInstanceId,
+        taskThreadStatus: 'active',
         sharedTaskRelativeRoot,
         sharedTaskSpecPath,
       },
@@ -2829,6 +2847,41 @@ describe('AgentHub smoke tests', () => {
       status: 'registered',
       visibility: 'team',
       metadata: { source: 'smoke-test' },
+    })
+
+    const groupRoomSnapshot = await json<any>(
+      await app.request(`/api/rooms/session/${group.session.id}/snapshot`),
+    )
+    const taskRoomSnapshot = await json<any>(
+      await app.request(`/api/rooms/session/${childSessionId}/snapshot`),
+    )
+    expect(groupRoomSnapshot.room.kind).toBe('group')
+    expect(taskRoomSnapshot.room.kind).toBe('task')
+    expect(taskRoomSnapshot.bindings).toMatchObject({
+      roomKind: 'task',
+      parentGroupSessionId: group.session.id,
+      parentGroupRoomId: groupRoomSnapshot.room.id,
+      orchestratorRunId: run.runId,
+      orchestratorTaskId: taskId,
+      taskThreadId,
+      taskRoomId: taskRoomSnapshot.room.id,
+      taskSessionId: childSessionId,
+      taskStatus: 'running',
+      taskThreadStatus: 'active',
+      workspaceAgentId: runAgent.id,
+      workerInstanceId,
+      runtimeLeaseId,
+    })
+    expect(taskRoomSnapshot.resources.taskThreads[0]).toMatchObject({
+      id: taskThreadId,
+      groupSessionId: group.session.id,
+      sessionId: childSessionId,
+      workerInstanceId,
+    })
+    expect(taskRoomSnapshot.resources.artifacts[0]).toMatchObject({
+      artifactId,
+      taskThreadId,
+      workerInstanceId,
     })
 
     const detail = await json<any>(await app.request(`/api/orchestrator-runs/${run.runId}`))

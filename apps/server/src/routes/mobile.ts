@@ -569,7 +569,7 @@ function contactsFromSavedAgents(agentList: SavedAgentConfig[]) {
       description: agent.description ?? '',
       avatar: agent.avatar ?? null,
       color: agent.color ?? '#111827',
-      runtimeType: agent.runtimeType ?? 'llm',
+      runtimeType: agent.runtimeType ?? 'code-agent',
       codeAgentType: agent.codeAgentType ?? null,
       capabilityTags: agent.capabilityTags ?? [],
     }]

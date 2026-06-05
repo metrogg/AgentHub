@@ -69,7 +69,7 @@ export interface ManagerWorkerCandidate {
   workspaceAgentId: string
   name: string
   role: string
-  runtimeType: 'llm' | 'code-agent'
+  runtimeType: 'code-agent'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   status?: string | null

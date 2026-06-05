@@ -340,7 +340,7 @@ async function _runAgentReply(
             agentName,
             role: profile.role ?? null,
             color: profile.color ?? null,
-            runtimeType: profile.runtimeType ?? 'llm',
+            runtimeType: profile.runtimeType ?? 'code-agent',
             codeAgentType: profile.codeAgentType ?? null,
             modelId: profile.modelId ?? null,
             sandboxPolicy: profile.sandboxPolicy ?? null,

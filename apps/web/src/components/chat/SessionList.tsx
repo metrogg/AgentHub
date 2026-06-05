@@ -1177,10 +1177,10 @@ export default function SessionList({
                           const opening = childSessionId ? openingSessionId === childSessionId : false
                           const taskStateText = canOpenChild
                             ? childTaskStatusText(task.status)
-                            : '准备中'
+                            : '待建线程'
                           const openTaskChild = () => {
                             if (!childSessionId) {
-                              showHint('子对话准备中，正式分配后即可打开')
+                              showHint('线程记录尚未创建，Manager 分发后会自动出现')
                               return
                             }
                             if (openingSessionId === childSessionId) return
@@ -1228,7 +1228,7 @@ export default function SessionList({
                                 title={
                                   canOpenChild
                                     ? '打开任务子对话'
-                                    : '任务已规划，等待正式分配后即可打开子对话'
+                                    : '任务已在房间中出现，线程记录创建后即可打开'
                                 }
                               >
                                 <span className="relative h-5 w-5 shrink-0">
@@ -1822,6 +1822,8 @@ function groupMemberCount(session: Session, childCount: number, loadedCount?: nu
 
 function childTaskStatusText(status?: string) {
   switch (status) {
+    case 'assigned':
+      return '已分配'
     case 'running':
       return '执行中'
     case 'done':
@@ -1832,6 +1834,7 @@ function childTaskStatusText(status?: string) {
     case 'cancelled':
       return '已取消'
     case 'pending':
+      return '准备中'
     default:
       return '等待执行'
   }

@@ -32,6 +32,8 @@ import { env } from '../env'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger, serverFileLoggingEnabled, serverLogDir, serverLogPath } from '../lib/logger'
 import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/auth'
+import { describeContainerRuntime, ensureOpenClawRuntimeImage } from '../services/container-runtime/agent-runtime-containers'
+import { dockerRuntime } from '../services/container-runtime/docker-runtime'
 import { describeControllerPlane } from '../services/controller-plane/diagnostics'
 import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
@@ -244,6 +246,39 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/controller-plane/status', async (c) => {
     return c.json(await describeControllerPlane())
+  })
+  .get('/container-runtime/status', async (c) => {
+    return c.json(await describeContainerRuntime())
+  })
+  .post('/container-runtime/prepare-local', async (c) => {
+    const infra = await startLocalHiclawLiteInfra()
+    const image = await ensureOpenClawRuntimeImage()
+    const diagnostics = await describeContainerRuntime()
+    const ok = infra.ok && image.present && diagnostics.docker.available
+    logger.warn({ infra, image, ok }, 'Local container runtime prepare requested from settings')
+    return c.json({
+      ok,
+      message: ok
+        ? '本地容器运行时已准备好：Tuwunel / MinIO 已启动，OpenClaw runtime 镜像可用。'
+        : infra.message || image.error || diagnostics.docker.error || '本地容器运行时准备失败。',
+      infra,
+      image,
+      diagnostics,
+    })
+  })
+  .get('/container-runtime/logs/:name', async (c) => {
+    const name = c.req.param('name')
+    if (!/^agenthub-(manager|worker)-[a-zA-Z0-9_.-]+$/.test(name)) {
+      return c.json({ ok: false, output: '', message: '只能读取 AgentHub runtime 容器日志。' }, 400)
+    }
+    const limitParam = Number(c.req.query('tail') ?? 160)
+    const tail = Number.isFinite(limitParam) ? Math.min(Math.max(Math.trunc(limitParam), 20), 500) : 160
+    const logs = await dockerRuntime.logs(name, tail)
+    return c.json({
+      ok: logs.ok,
+      output: logs.output,
+      message: logs.ok ? '容器日志已读取。' : logs.error ?? '读取容器日志失败。',
+    })
   })
   .get('/manager-runtime/status', async (c) => {
     const activeProvider = getActiveManagerProvider()
@@ -875,6 +910,36 @@ async function startLocalTuwunel() {
       ok: false,
       output: [error?.stdout, error?.stderr].filter(Boolean).join('\n').trim(),
       message: error?.message || '启动 Tuwunel 失败，请确认 Docker Desktop 正在运行。',
+    }
+  }
+}
+
+async function startLocalHiclawLiteInfra() {
+  const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
+  if (!existsSync(composeFile)) {
+    return {
+      ok: false,
+      output: '',
+      message: `找不到 HiClaw-lite compose 文件：${composeFile}`,
+    }
+  }
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      'docker',
+      ['compose', '-f', composeFile, 'up', '-d'],
+      { timeout: 90_000, windowsHide: true, maxBuffer: 1024 * 1024 * 5 },
+    )
+    const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+    return {
+      ok: true,
+      output,
+      message: 'Tuwunel / MinIO 已启动。',
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      output: [error?.stdout, error?.stderr].filter(Boolean).join('\n').trim(),
+      message: error?.message || '启动 Tuwunel / MinIO 失败，请确认 Docker Desktop 正在运行。',
     }
   }
 }

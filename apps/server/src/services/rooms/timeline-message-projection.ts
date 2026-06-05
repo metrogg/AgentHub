@@ -111,6 +111,7 @@ type TimelineProjectionControls = {
   editsByMessageId: Map<string, Record<string, unknown>>
   pinsByMessageId: Map<string, boolean>
   memberProposalUpdatesByMessageId: Map<string, { content?: string; patch: Record<string, unknown> }>
+  agentDraftUpdatesByMessageId: Map<string, { content?: string; patch: Record<string, unknown> }>
 }
 
 function timelineProjectionControls(timeline: TimelineEventRow[]): TimelineProjectionControls {
@@ -123,6 +124,7 @@ function timelineProjectionControls(timeline: TimelineEventRow[]): TimelineProje
     editsByMessageId: new Map(),
     pinsByMessageId: new Map(),
     memberProposalUpdatesByMessageId: new Map(),
+    agentDraftUpdatesByMessageId: new Map(),
   }
 
   for (const event of timeline) {
@@ -138,6 +140,17 @@ function timelineProjectionControls(timeline: TimelineEventRow[]): TimelineProje
       const targetEventId = asString(metadata.targetEventId)
       if (targetMessageId) controls.memberProposalUpdatesByMessageId.set(targetMessageId, update)
       if (targetEventId) controls.memberProposalUpdatesByMessageId.set(`room:${targetEventId}`, update)
+      continue
+    }
+    if (kind === 'agent-draft.update') {
+      const update = {
+        content: asString(metadata.content) ?? asString(event.body) ?? undefined,
+        patch: asRecord(metadata.patch),
+      }
+      const targetMessageId = asString(metadata.targetMessageId)
+      const targetEventId = asString(metadata.targetEventId)
+      if (targetMessageId) controls.agentDraftUpdatesByMessageId.set(targetMessageId, update)
+      if (targetEventId) controls.agentDraftUpdatesByMessageId.set(`room:${targetEventId}`, update)
       continue
     }
     if (kind === 'message.clear') {
@@ -178,7 +191,7 @@ function timelineProjectionControls(timeline: TimelineEventRow[]): TimelineProje
 function isMessageControlEvent(event: TimelineEventRow) {
   if (event.type !== 'system') return false
   const kind = asString(asRecord(event.metadata).kind)
-  return kind === 'member-proposal.update' || Boolean(kind?.startsWith('message.'))
+  return kind === 'member-proposal.update' || kind === 'agent-draft.update' || Boolean(kind?.startsWith('message.'))
 }
 
 function timelineEventIsRedacted(event: TimelineEventRow, controls: TimelineProjectionControls) {
@@ -205,16 +218,18 @@ function applyTimelineEdit(message: MessageRow, controls: TimelineProjectionCont
   const edit = controls.editsByMessageId.get(message.id)
   const pinned = controls.pinsByMessageId.get(message.id)
   const memberProposalUpdate = controls.memberProposalUpdatesByMessageId.get(message.id)
-  if (!edit && pinned === undefined && !memberProposalUpdate) return message
+  const agentDraftUpdate = controls.agentDraftUpdatesByMessageId.get(message.id)
+  if (!edit && pinned === undefined && !memberProposalUpdate && !agentDraftUpdate) return message
   const content = edit ? asString(edit.content) : null
   const metadata = asRecord(message.metadata)
+  const cardUpdate = memberProposalUpdate ?? agentDraftUpdate
   return {
     ...message,
-    content: memberProposalUpdate?.content ?? content ?? message.content,
+    content: cardUpdate?.content ?? content ?? message.content,
     isPinned: pinned ?? message.isPinned,
     metadata: {
       ...metadata,
-      ...(memberProposalUpdate?.patch ?? {}),
+      ...(cardUpdate?.patch ?? {}),
       ...(content
         ? {
             displayContent: content,
@@ -229,6 +244,15 @@ function applyTimelineEdit(message: MessageRow, controls: TimelineProjectionCont
         ? {
             displayContent: memberProposalUpdate.content ?? content ?? message.content,
             roomTimelineMemberProposalUpdate: {
+              source: 'room-timeline-control',
+              targetMessageId: message.id,
+            },
+          }
+        : {}),
+      ...(agentDraftUpdate
+        ? {
+            displayContent: agentDraftUpdate.content ?? content ?? message.content,
+            roomTimelineAgentDraftUpdate: {
               source: 'room-timeline-control',
               targetMessageId: message.id,
             },

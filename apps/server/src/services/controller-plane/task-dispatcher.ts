@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   and,
@@ -16,7 +16,7 @@ import { TaskStatus } from '@agenthub/shared'
 import { prepareAgentWorkdir } from '../execution/agent-workdir'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { logger } from '../../lib/logger'
-import { agentHubUserCacheRoot, safePathSegment } from '../system-paths'
+import { agentHubUserCacheRoot, agentHubUserDataRoot, safePathSegment } from '../system-paths'
 import type { ManagerAction } from '../manager-runtime'
 import { prepareTaskRuntimeThread } from '../orchestrator/task-thread-service'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
@@ -246,6 +246,16 @@ async function prepareAssignedTask(input: {
     })
     .returning()
   if (!task) throw AppError.fromCode(AppErrorCodes.TASK_EXECUTION_FAILED, '任务创建失败')
+
+  // Write spec.md to shared storage — the Worker reads this as its task brief
+  writeTaskSpecMd({
+    taskId: task.id,
+    taskTitle: input.spec.taskTitle,
+    taskDescription: input.spec.taskDescription,
+    workerName: input.spec.worker.name,
+    runId: input.run.runId,
+    dependsOn: dependencyTaskIds,
+  })
 
   const runtimeThread = await prepareTaskRuntimeThread({
     workspaceId: input.workspace.id,
@@ -1049,4 +1059,44 @@ function buildExecutionLayers(tasks: PreparedAssignedTask[]) {
 
 function artifactsForRunController(value: unknown) {
   return Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []
+}
+
+/**
+ * Write spec.md to shared storage for the Worker to read.
+ * Aligns with HiClaw's task protocol: Manager writes spec.md,
+ * Worker reads it as its task brief.
+ */
+function writeTaskSpecMd(input: {
+  taskId: string
+  taskTitle: string
+  taskDescription: string
+  workerName: string
+  runId: string
+  dependsOn: string[]
+}) {
+  const specDir = resolve(agentHubUserDataRoot(), 'storage', 'objects', 'shared', 'tasks', input.taskId)
+  mkdirSync(specDir, { recursive: true })
+
+  const lines = [
+    `# ${input.taskTitle}`,
+    '',
+    `**Task ID**: ${input.taskId}`,
+    `**Assigned to**: ${input.workerName}`,
+    `**Assigned at**: ${new Date().toISOString()}`,
+    `**Run ID**: ${input.runId}`,
+    '',
+    '## Description',
+    '',
+    input.taskDescription,
+  ]
+
+  if (input.dependsOn.length > 0) {
+    lines.push('', '## Dependencies', '', ...input.dependsOn.map((dep) => `- ${dep}`))
+  }
+
+  lines.push('', '## Expected Output', '', 'result.md in this task directory.')
+
+  const specPath = resolve(specDir, 'spec.md')
+  writeFileSync(specPath, lines.join('\n'), 'utf8')
+  logger.info({ specPath, taskId: input.taskId }, 'Wrote task spec.md to shared storage')
 }

@@ -524,35 +524,25 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     if (session.type !== 'group' || !session.workspaceId) {
-      const [prompt] = await db
-        .insert(messages)
-        .values({
-          sessionId,
-          senderId: 'system',
-          senderType: 'system',
-          type: 'text',
-          content:
-            '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和Agent 联系人列表。',
-          metadata: { systemEvent: 'agent_draft_requires_group', agentDraftStatus: 'requires_group' },
-        })
-        .returning()
-      if (!prompt) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 群组提示创建失败')
+      const prompt = await appendAgentDraftTimelineCard({
+        session,
+        userId: user.sub,
+        content:
+          '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和 Agent 联系人列表。',
+        metadata: { systemEvent: 'agent_draft_requires_group', agentDraftStatus: 'requires_group' },
+        messageType: 'text',
+      })
       return c.json(prompt)
     }
 
     const draft = await buildAgentDraft(content)
-    const [card] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: 'system',
-        senderType: 'system',
-        type: 'task_card',
-        content: `已生成 ${draft.name} Agent 草案。确认后会加入当前 Agent Group。`,
-        metadata: { systemEvent: 'agent_draft_created', agentDraft: draft, agentDraftStatus: 'draft' },
-      })
-      .returning()
-    if (!card) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 草案创建失败')
+    const card = await appendAgentDraftTimelineCard({
+      session,
+      userId: user.sub,
+      content: `已生成 ${draft.name} Agent 草案。确认后会加入当前 Agent Group。`,
+      metadata: { systemEvent: 'agent_draft_created', agentDraft: draft, agentDraftStatus: 'draft' },
+      messageType: 'task_card',
+    })
     return c.json(card)
   })
   .post(
@@ -573,15 +563,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       ) {
         throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
       }
-      const [card] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-      if (!card || card.sessionId !== sessionId)
+      const draftRef = await loadAgentDraftRef(sessionId, messageId)
+      if (!draftRef)
         throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 草案不存在')
 
-      const cardMetadata = card.metadata as {
+      const cardMetadata = draftRef.metadata as {
         agentDraftStatus?: unknown
         createdAgentId?: unknown
       } | null
-      if (card.type !== 'task_card')
+      if (draftRef.messageType !== 'task_card')
         throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '消息不是 Agent 草案')
       if (cardMetadata?.agentDraftStatus === 'confirmed') {
         if (typeof cardMetadata.createdAgentId !== 'string') {
@@ -605,13 +595,13 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             AppErrorCodes.AGENT_NOT_FOUND,
             '已确认的 Agent 草案指向不存在的 Agent',
           )
-        return c.json({ agent: existingAgent, message: card })
+        return c.json({ agent: existingAgent, message: agentDraftRefMessage(draftRef) })
       }
       if (cardMetadata?.agentDraftStatus !== 'draft') {
         throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '消息不是可编辑的 Agent 草案')
       }
 
-      const metadataDraft = parseAgentDraft(card.metadata)
+      const metadataDraft = parseAgentDraft(draftRef.metadata)
       if (!metadataDraft)
         throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 草案元数据无效')
       const draft = normalizeAgentDraftInput(draftOverride ?? metadataDraft)
@@ -636,21 +626,18 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .update(workspaces)
         .set({ updatedAt: new Date() })
         .where(eq(workspaces.id, session.workspaceId))
-      const [updatedCard] = await db
-        .update(messages)
-        .set({
-          content: `${agent.name} 已加入当前 Agent Group。`,
-          metadata: {
-            ...(card.metadata ?? {}),
-            agentDraft: draft,
-            agentDraftStatus: 'confirmed',
-            createdAgentId: agent.id,
-          },
-        })
-        .where(eq(messages.id, messageId))
-        .returning()
+      const updatedCard = await updateAgentDraftRef({
+        ref: draftRef,
+        content: `${agent.name} 已加入当前 Agent Group。`,
+        metadata: {
+          ...draftRef.metadata,
+          agentDraft: draft,
+          agentDraftStatus: 'confirmed',
+          createdAgentId: agent.id,
+        },
+      })
 
-      return c.json({ agent, message: updatedCard ?? card })
+      return c.json({ agent, message: updatedCard })
     },
   )
   .post(
@@ -828,6 +815,193 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
 function readString(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+type AgentDraftRef = {
+  id: string
+  sessionId: string
+  content: string
+  metadata: Record<string, unknown>
+  messageType: string
+  legacyMessage?: typeof messages.$inferSelect | null
+  roomEvent?: typeof timelineEvents.$inferSelect | null
+  roomId?: string | null
+  targetEventId?: string | null
+}
+
+async function appendAgentDraftTimelineCard(input: {
+  session: typeof sessions.$inferSelect
+  userId: string
+  content: string
+  metadata: Record<string, unknown>
+  messageType: 'text' | 'task_card'
+}) {
+  const { roomService } = await import('../services/rooms')
+  const room = await roomService.ensureRoomForSession(input.session.id, input.userId)
+  const event = await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: 'system',
+    type: 'system',
+    body: input.content,
+    metadata: {
+      ...input.metadata,
+      messageType: input.messageType,
+      source: 'agent-draft',
+      legacyMessageProjectionDisabled: true,
+    },
+  })
+  return agentDraftRefMessage({
+    id: `room:${event.id}`,
+    sessionId: input.session.id,
+    content: input.content,
+    metadata: {
+      ...input.metadata,
+      messageType: input.messageType,
+      source: 'agent-draft',
+    },
+    messageType: input.messageType,
+    legacyMessage: null,
+    roomEvent: event,
+    roomId: room.id,
+    targetEventId: event.id,
+  })
+}
+
+async function loadAgentDraftRef(sessionId: string, messageId: string): Promise<AgentDraftRef | null> {
+  if (messageId.startsWith('room:')) {
+    const eventId = messageId.slice('room:'.length).trim()
+    if (!eventId) return null
+    const [row] = await db
+      .select({
+        event: timelineEvents,
+        room: rooms,
+      })
+      .from(timelineEvents)
+      .innerJoin(rooms, eq(rooms.id, timelineEvents.roomId))
+      .where(and(eq(timelineEvents.id, eventId), eq(rooms.sessionId, sessionId)))
+      .limit(1)
+    if (!row?.event) return null
+    const updates = await db
+      .select()
+      .from(timelineEvents)
+      .where(and(eq(timelineEvents.roomId, row.room.id), eq(timelineEvents.type, 'system')))
+      .orderBy(asc(timelineEvents.sequence))
+    let content = row.event.body
+    const metadata = { ...(row.event.metadata ?? {}) }
+    for (const update of updates) {
+      if (update.metadata?.kind !== 'agent-draft.update') continue
+      if (update.metadata?.targetEventId !== row.event.id) continue
+      const patch = update.metadata.patch
+      if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+        Object.assign(metadata, patch as Record<string, unknown>)
+      }
+      if (typeof update.metadata.content === 'string' && update.metadata.content.trim()) {
+        content = update.metadata.content
+      } else if (update.body.trim()) {
+        content = update.body
+      }
+    }
+    const messageType = readString(metadata.messageType) ?? 'text'
+    return {
+      id: `room:${row.event.id}`,
+      sessionId,
+      content,
+      metadata,
+      messageType,
+      legacyMessage: null,
+      roomEvent: row.event,
+      roomId: row.room.id,
+      targetEventId: row.event.id,
+    }
+  }
+
+  const [draftMessage] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
+  if (!draftMessage || draftMessage.sessionId !== sessionId) return null
+  return {
+    id: draftMessage.id,
+    sessionId,
+    content: draftMessage.content,
+    metadata: draftMessage.metadata ?? {},
+    messageType: draftMessage.type,
+    legacyMessage: draftMessage,
+    roomEvent: null,
+    roomId:
+      readNestedString(draftMessage.metadata ?? {}, ['roomTimeline', 'roomId']) ??
+      readNestedString(draftMessage.metadata ?? {}, ['roomTimelineProjection', 'roomId']),
+    targetEventId: null,
+  }
+}
+
+function agentDraftRefMessage(ref: AgentDraftRef): typeof messages.$inferSelect {
+  if (ref.legacyMessage) return ref.legacyMessage
+  return {
+    id: ref.id,
+    sessionId: ref.sessionId,
+    senderId: 'system',
+    senderType: 'system',
+    type: ref.messageType,
+    content: ref.content,
+    metadata: ref.metadata,
+    isPinned: false,
+    replyToMessageId: null,
+    createdAt: ref.roomEvent?.createdAt ?? new Date(),
+  }
+}
+
+async function updateAgentDraftRef(params: {
+  ref: AgentDraftRef
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  if (params.ref.legacyMessage) {
+    const [updated] = await db
+      .update(messages)
+      .set({ content: params.content, metadata: params.metadata })
+      .where(eq(messages.id, params.ref.legacyMessage.id))
+      .returning()
+    const result = updated ?? params.ref.legacyMessage
+    broadcastSessionEvent(params.ref.sessionId, {
+      type: WsEvent.MessageCompleted,
+      payload: { sessionId: params.ref.sessionId, message: result },
+    })
+    return result
+  }
+
+  if (!params.ref.roomId || !params.ref.targetEventId) {
+    throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 草案事件不存在')
+  }
+  await appendTimelineAgentDraftUpdate({
+    roomId: params.ref.roomId,
+    targetEventId: params.ref.targetEventId,
+    content: params.content,
+    metadata: params.metadata,
+  })
+  return {
+    ...agentDraftRefMessage(params.ref),
+    content: params.content,
+    metadata: params.metadata,
+  }
+}
+
+async function appendTimelineAgentDraftUpdate(input: {
+  roomId: string
+  targetEventId: string
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  const { roomService } = await import('../services/rooms')
+  return roomService.appendTimelineEvent({
+    roomId: input.roomId,
+    senderType: 'system',
+    type: 'system',
+    body: input.content,
+    metadata: {
+      kind: 'agent-draft.update',
+      targetEventId: input.targetEventId,
+      content: input.content,
+      patch: input.metadata,
+    },
+  })
 }
 
 type MemberProposalRef = {
@@ -1174,14 +1348,14 @@ function expertProfileToAgentInsert(profile: AgentExpertProfile) {
     color: profile.color,
     modelId: null,
     runtimeType: profile.runtimeType,
-    codeAgentType: profile.runtimeType === 'code-agent' ? (profile.codeAgentType ?? 'codex') : null,
+    codeAgentType: profile.codeAgentType ?? 'codex',
     capabilityTags: profile.capabilityTags,
     skillIds: profile.defaultSkillIds,
     toolPermissions: profile.toolPermissions,
     sandboxPolicy: profile.sandboxPolicy,
     contextPolicy: profile.contextPolicy,
     autoInvoke: profile.autoInvoke,
-    approvalRequired: profile.runtimeType === 'code-agent' ? false : profile.approvalRequired,
+    approvalRequired: false,
   }
 }
 

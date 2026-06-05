@@ -24,7 +24,7 @@ export interface AgentExpertProfile {
   background: string
   systemPrompt: string
   color: string
-  runtimeType: 'llm' | 'code-agent'
+  runtimeType: 'code-agent'
   codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
   capabilityTags: string[]
   defaultSkillIds: string[]

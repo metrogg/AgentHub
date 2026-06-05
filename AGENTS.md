@@ -70,7 +70,7 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
-底层重构方向已经进一步明确：建设 AgentHub 自己的轻量版 HiClaw Open Kernel，而不是继续手搓低配协作层，也不是照搬 HiClaw 的企业部署栈。HiClaw 给出 Room / Manager / Worker / Human / Storage 的正确协作范式；ClawTeam 给出更适合本地第一阶段的轻量实现技巧，例如 CLI profile、worktree 隔离、任务 claim lock、watcher 和服务端 snapshot。第一阶段默认形态是单进程 AgentHub 服务 + CLI 子进程 Worker + 自研 UI + 本地 filesystem 共享存储；通信层以 Matrix Room/timeline/participant/mention 语义作为协作事实源，本地真实 Matrix 默认采用 Tuwunel，兼容连接已有 Synapse/Conduit；`TestRoomAdapter` 只允许自动化测试使用，不能作为开发/产品通信层或故障降级路径，也不能用 ClawTeam 的 file inbox 替代内部主通信。Gateway 保留 Higress/LiteLLM adapter 抽象。
+底层重构方向已经进一步明确：建设 AgentHub 自己的轻量版 HiClaw Open Kernel，而不是继续手搓低配协作层，也不是照搬 HiClaw 的企业部署栈。HiClaw 给出 Room / Manager / Worker / Human / Storage 的正确协作范式；ClawTeam 给出更适合本地第一阶段的轻量实现技巧，例如 CLI profile、worktree 隔离、任务 claim lock、watcher 和服务端 snapshot。第一阶段产品形态是嵌入式本地控制器：AgentHub Server 仍在本机作为 Controller API / UI backend / Room adapter 运行；Tuwunel、MinIO、OpenClaw Manager、OpenClaw Worker 可通过 Docker resident runtime 承载。自研 UI 替代 Element Web，本地 filesystem 仍是默认 SharedStorage，MinIO/S3-compatible 是可切换 adapter。通信层以 Matrix Room/timeline/participant/mention 语义作为协作事实源，本地真实 Matrix 默认采用 Tuwunel，兼容连接已有 Synapse/Conduit；`TestRoomAdapter` 只允许自动化测试使用，不能作为开发/产品通信层或故障降级路径，也不能用 ClawTeam 的 file inbox 替代内部主通信。Gateway 保留 Higress/LiteLLM adapter 抽象。
 
 四个最高优先级模块：
 
@@ -144,7 +144,19 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 `OrchestratorEngine`、`TaskExecutionService`、`LocalA2ATransport` 已删除。所有任务执行通过 `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `ManagerLoop` / `WorkerRuntimeService`。`messages.ts` 不应继续扩展成编排主脑。
 
-`apps/server/src/services/controller-plane/` 是轻量 Controller Plane 第一版：`ControllerApi` 是 Manager skill / 后续 CLI/API 应调用的统一控制面门面，`ReconcileQueue` 是资源 reconcile 请求入口，`WorkerBackend` 是 Local CLI、OpenClaw、QwenPaw、Docker sandbox 等 Worker backend 的 seam。Manager Runtime 不应直接 import `roomService`、`runController`、`workerController` 或 `runtimeLeaseController`。
+`apps/server/src/services/controller-plane/` 是轻量 Controller Plane 第一版：`ControllerApi` 是 Manager skill / 后续 CLI/API 应调用的统一控制面门面，`ReconcileQueue` 是资源 reconcile 请求入口，`WorkerBackend` 是 Local CLI、OpenClaw/QwenPaw resident Worker、Docker runtime Worker 等 Worker backend 的 seam。Manager Runtime 不应直接 import `roomService`、`runController`、`workerController` 或 `runtimeLeaseController`。
+
+### Docker Resident Runtime
+
+当前已经开始把 HiClaw 式常驻 Manager / Worker 接入 Docker，但不要把它理解成“把整个 AgentHub Server 容器化”：
+
+- AgentHub Server 仍在本机运行，负责 Controller API、Room adapter、设置页诊断和前端数据接口。
+- `infra/docker-compose.hiclaw-lite.yml` 提供本地 Tuwunel 和 MinIO。
+- `infra/openclaw-runtime/Dockerfile` 构建统一 OpenClaw runtime 镜像，默认 tag 是 `agenthub/openclaw-runtime:local`。
+- `AGENTHUB_CONTAINER_RUNTIME=docker` 会同时启用 Manager / Worker Docker 后端；也可以分别用 `AGENTHUB_MANAGER_BACKEND=docker`、`AGENTHUB_WORKER_BACKEND=docker`。
+- 容器内访问本机 Controller / Matrix / LLM gateway 默认使用 `host.docker.internal`：`AGENTHUB_CONTAINER_CONTROLLER_URL`、`AGENTHUB_CONTAINER_MATRIX_URL`、`AGENTHUB_CONTAINER_LLM_BASE_URL` 可覆盖。
+- 设置页“控制台 / 本机诊断”已经能查看容器 runtime 状态、OpenClaw 镜像、Manager/Worker 容器和日志。
+- Matrix server name 默认统一为 `agenthub.local`，必须和 Tuwunel compose、Manager identity、Worker identity 保持一致。
 
 ### Worker Runtime 状态机
 
