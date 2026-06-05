@@ -466,35 +466,10 @@ async function executeWorkerTaskRoom(input: {
     body: `Task assigned to @${input.worker.name}. Waiting for Worker to claim via @mention.`,
     metadata: { kind: 'task.assigned', workerId: input.worker.id, taskId: input.taskId },
   })
-  if (input.mentionEventId) {
-    await dispatchLocalMentionEvent({
-      eventId: input.mentionEventId,
-      workerRuntime: input.workerRuntime,
-    }).catch((err) => {
-      logger.warn(
-        { err, taskId: input.taskId, taskRoomId: input.taskRoomId },
-        'Failed to dispatch Matrix mention event for Worker trigger',
-      )
-    })
-  }
+  // HiClaw model: @mention is written to the task room. The Worker picks it up
+  // via its own /sync loop (resident mode) or the platform's autoDispatchEvent
+  // (local mode). No explicit dispatch call needed.
   return { taskId: input.taskId, status: 'assigned', message: `Waiting for Worker @mention: ${input.taskTitle}.` }
-}
-
-async function dispatchLocalMentionEvent(input: {
-  eventId: string
-  workerRuntime?: WorkerRuntime
-}) {
-  const { MatrixRoomEventDispatcher } = await import('../rooms/matrix-event-dispatcher')
-  const dispatcher = new MatrixRoomEventDispatcher({
-    runWorkerTaskRoom: async (taskRoom) => {
-      const { workerRuntimeService } = await import('../worker-runtime/worker-runtime-service')
-      return workerRuntimeService.runTaskRoom({
-        ...taskRoom,
-        runtime: input.workerRuntime,
-      })
-    },
-  })
-  await dispatcher.dispatchImportedEvents({ eventIds: [input.eventId] })
 }
 
 // ─── Runtime Lease ──────────────────────────────────────────────────────

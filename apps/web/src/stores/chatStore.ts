@@ -86,9 +86,15 @@ function roomTimelineShouldRefreshResources(
     return (
       eventType === 'task.assigned' ||
       eventType === 'task.progress' ||
+      eventType === 'approval.requested' ||
+      eventType === 'worker.message' ||
       eventType === 'artifact.created' ||
       eventType === 'file.shared' ||
       kind === 'coordinator.action' ||
+      kind === 'approval.control' ||
+      kind === 'runtime-lease.updated' ||
+      kind === 'worker.instance.updated' ||
+      kind === 'worker.claimed' ||
       kind === 'worker.progress' ||
       kind === 'artifact.created'
     )
@@ -3122,34 +3128,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     } catch (error) {
       if (get().currentSessionId !== sessionId) return
-      try {
-        const [session, { items }] = await Promise.all([
-          api.getSession(sessionId),
-          api.listMessages(sessionId),
-        ])
-        const normalizedMessages = sortMessages(items)
-        const full = session.workspaceId ? await api.getWorkspace(session.workspaceId).catch(() => null) : null
-        if (get().currentSessionId !== sessionId) return
-        if (full) {
-          workspaceDetailsCache.set(session.workspaceId!, {
-            workspace: full.workspace,
-            agents: full.agents,
-          })
-        }
-        messageCache.set(sessionId, normalizedMessages)
-        set((s) => ({
-          currentSession: session,
-          currentWorkspace: full?.workspace ?? null,
-          currentWorkspaceAgents: session.workspaceId && full ? sessionWorkspaceAgents(session, full.agents) : [],
-          sessions: upsertSessionList(s.sessions, session),
-          messages: normalizedMessages,
-          loadingMessages: false,
-        }))
-      } catch (fallbackError) {
-        if (get().currentSessionId !== sessionId) return
-        set({ loadingMessages: false })
-        throw fallbackError
-      }
+      set({ loadingMessages: false })
+      throw error
     }
   },
 

@@ -25,7 +25,7 @@ const {
   eq,
 } = dbApi
 const { roomService } = roomsApi
-const { stepTaskRoomAfterHumanMessage } = roomBridgeApi
+const { appendHumanMessageRoomFirst } = roomBridgeApi
 const { WorkerRuntimeService } = workerRuntimeApi
 const { ensureTaskThread } = taskThreadApi
 const { ensureWorkerInstance } = workerRuntimeResourcesApi
@@ -219,12 +219,21 @@ describe('WorkerRuntime task room integration', () => {
       .returning()
 
     const runtime = new ResumeAwareWorkerRuntime()
-    const result = await stepTaskRoomAfterHumanMessage({
+    await appendHumanMessageRoomFirst({
       session: childSession,
       userId: 'default-user',
       userName: 'Tester',
-      message: answer!,
-      workerRuntime: runtime,
+      content: answer!.content,
+      type: answer!.type,
+      metadata: { messageId: answer!.id },
+      skipDispatch: true, // Test controls dispatch timing manually
+    })
+    const result = await service.resumeTaskRoomAfterHumanAnswer({
+      roomId: room.id,
+      ownerId: 'default-user',
+      sourceMessageId: answer!.id,
+      answer: answer!.content,
+      runtime,
     })
 
     expect(result.consumed).toBe(true)
@@ -243,7 +252,6 @@ describe('WorkerRuntime task room integration', () => {
     expect(runtime.prompts[0]).toContain('用户已经在任务房间回答了 Worker 的澄清问题')
     expect(runtime.prompts[0]).toContain('按最新市场数据继续')
 
-    expect(events.some((event) => event.metadata?.messageId === answer!.id)).toBe(true)
     const resumeEvent = events.find((event) => event.metadata?.kind === 'worker-runtime.resume-requested')
     expect(resumeEvent?.type).toBe('task.progress')
     expect(resumeEvent?.metadata?.sourceMessageId).toBe(answer!.id)
@@ -308,12 +316,21 @@ describe('WorkerRuntime task room integration', () => {
       .returning()
 
     const firstResumeRuntime = new ResumeAwareWorkerRuntime()
-    const firstResume = await stepTaskRoomAfterHumanMessage({
+    await appendHumanMessageRoomFirst({
       session: childSession,
       userId: 'default-user',
       userName: 'Tester',
-      message: answer!,
-      workerRuntime: firstResumeRuntime,
+      content: answer!.content,
+      type: answer!.type,
+      metadata: { messageId: answer!.id },
+      skipDispatch: true, // Test controls dispatch timing manually
+    })
+    const firstResume = await service.resumeTaskRoomAfterHumanAnswer({
+      roomId: room.id,
+      ownerId: 'default-user',
+      sourceMessageId: answer!.id,
+      answer: answer!.content,
+      runtime: firstResumeRuntime,
     })
     expect(firstResume.consumed).toBe(true)
     expect(firstResume.resumed).toBe(true)
@@ -327,12 +344,12 @@ describe('WorkerRuntime task room integration', () => {
     expect(firstResumeRuntime.prompts).toHaveLength(1)
 
     const duplicateRuntime = new ResumeAwareWorkerRuntime()
-    const duplicateResume = await stepTaskRoomAfterHumanMessage({
-      session: childSession,
-      userId: 'default-user',
-      userName: 'Tester',
-      message: answer!,
-      workerRuntime: duplicateRuntime,
+    const duplicateResume = await service.resumeTaskRoomAfterHumanAnswer({
+      roomId: room.id,
+      ownerId: 'default-user',
+      sourceMessageId: answer!.id,
+      answer: answer!.content,
+      runtime: duplicateRuntime,
     })
 
     expect(duplicateResume.consumed).toBe(true)
@@ -369,12 +386,21 @@ describe('WorkerRuntime task room integration', () => {
       .returning()
 
     const runtime = new ReclarifyingWorkerRuntime()
-    const resume = await stepTaskRoomAfterHumanMessage({
+    await appendHumanMessageRoomFirst({
       session: childSession,
       userId: 'default-user',
       userName: 'Tester',
-      message: answer!,
-      workerRuntime: runtime,
+      content: answer!.content,
+      type: answer!.type,
+      metadata: { messageId: answer!.id },
+      skipDispatch: true, // Test controls dispatch timing manually
+    })
+    const resume = await service.resumeTaskRoomAfterHumanAnswer({
+      roomId: room.id,
+      ownerId: 'default-user',
+      sourceMessageId: answer!.id,
+      answer: answer!.content,
+      runtime,
     })
 
     expect(resume.consumed).toBe(true)

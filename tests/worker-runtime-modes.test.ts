@@ -77,7 +77,7 @@ describe('WorkerRuntime modes', () => {
     expect(result.metadata?.dispatched).toBe(true)
     expect(result.metadata?.listener).toMatchObject({
       started: false,
-      reason: 'room_is_not_matrix',
+      reason: 'resident_worker_openclaw_runs_own_sync',
     })
 
     const events = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, room.id))

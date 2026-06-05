@@ -368,7 +368,7 @@ function ModelManagement({
       </div>
 
       <p className="mt-4 text-xs text-neutral-400">
-        {t('提示：模型管理页只维护目录。内部 LLM 默认模型在设置页维护；具体 Agent 的 CLI × 模型组合请在 Agent 配置页设置。')}
+        {t('提示：模型管理页只维护模型目录、端点和密钥；内部 LLM 默认模型在设置页维护；具体 Agent 的 CLI × 模型组合请在 Agent 配置页设置。')}
       </p>
     </div>
   )

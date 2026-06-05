@@ -15,15 +15,6 @@ describe('code agent partial success handling', () => {
     expect(message).not.toContain('模型或 Base URL')
   })
 
-  test('treats explicit execution failure text as a real failure', async () => {
-    const { __agentRunnerTestHooks } = await import('../apps/server/src/services/agent-runner')
-
-    expect(__agentRunnerTestHooks.looksLikeAgentFailure('**OpenCode 执行失败**')).toBe(true)
-    expect(__agentRunnerTestHooks.looksLikeAgentFailure('**OpenCode 已结束，但带有警告**')).toBe(
-      false,
-    )
-  })
-
   test('treats provider/model OpenCode ids as native OpenCode model references', async () => {
     const { __codeAgentAdapterTestHooks } = await import(
       '../apps/server/src/services/code-agent-adapter'

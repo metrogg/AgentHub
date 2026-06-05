@@ -1,6 +1,5 @@
 import {
   emitManagerDecisionEvents,
-  managerLoopStep,
   processPendingHumanInterrupts,
   startManagerLoopRun,
   type ManagerDecisionEventContext,
@@ -456,10 +455,6 @@ export class RunController {
     })
     await processPendingHumanInterrupts({ run })
 
-    // Run ManagerLoop.step() to drive the Observe → Think → Act cycle.
-    // This is the HiClaw pattern: after every reconcile, the Manager decides
-    // what needs to happen next — dispatch, review, or synthesize.
-    scheduleManagerLoopStep(run.runId)
 
     return snapshot
   }
@@ -633,7 +628,6 @@ export class RunController {
         taskThreadStatus: 'failed',
       },
     })
-    scheduleManagerLoopStep(run.runId)
   }
 
   async markTaskFailed(
@@ -727,7 +721,6 @@ export class RunController {
         ...(input.extraPayload ?? {}),
       },
     })
-    scheduleManagerLoopStep(run.runId)
   }
 
   async markTaskCompleted(
@@ -817,7 +810,6 @@ export class RunController {
         ...(input.extraPayload ?? {}),
       },
     })
-    scheduleManagerLoopStep(run.runId)
   }
 
   async markTaskAssigned(
@@ -1650,11 +1642,6 @@ export class RunController {
 
 export const runController = new RunController()
 
-function scheduleManagerLoopStep(runId: string) {
-  setTimeout(() => {
-    managerLoopStep(runId).catch(() => {})
-  }, 25)
-}
 
 function countBy<T>(items: T[], pick: (item: T) => string | null | undefined): Record<string, number> {
   const counts: Record<string, number> = {}

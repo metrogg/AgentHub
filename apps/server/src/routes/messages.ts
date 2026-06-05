@@ -2,10 +2,6 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { z } from 'zod'
-import { randomUUID } from 'node:crypto'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { unlink, writeFile } from 'node:fs/promises'
 import {
   sendMessageSchema,
   WsEvent,
@@ -15,25 +11,19 @@ import {
 import { logger } from '../lib/logger'
 import {
   db,
-  messages,
   sessions,
   sessionMembers,
   workspaceAgents,
   workspaces,
-  workspaceTasks,
-  orchestratorRuns,
-  taskThreads,
   rooms,
   timelineEvents,
   and,
   eq,
   asc,
-  desc,
 } from '@agenthub/db'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 import { broadcastSessionEvent } from '../services/agent-runner'
-import { emitRunEvent } from '../services/orchestrator/run-events'
 import { buildAgUiMemberProposalContinueEvent } from '../services/protocols'
 import {
   appendMessageControlEvent,
@@ -74,12 +64,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
-    const list = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.sessionId, sessionId))
-      .orderBy(asc(messages.createdAt))
-    return c.json({ items: await listSessionMessagesRoomFirst({ sessionId, legacyMessages: list }) })
+    return c.json({ items: await listSessionMessagesRoomFirst({ sessionId }) })
   })
   .delete('/:sessionId/all', async (c) => {
     const user = c.get('user')
@@ -95,7 +80,6 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       body: '已清空本会话消息显示。',
       metadata: { clearedAt: new Date().toISOString() },
     })
-    await db.delete(messages).where(eq(messages.sessionId, sessionId))
     return c.json({ deleted: true })
   })
   .post('/:sessionId/cancel', async (c) => {
@@ -104,9 +88,11 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
-    // Legacy runAgentReply path removed; cancellation is now handled by WorkerRuntime.stopTaskRoom
-    // for task rooms, and direct room dispatch does not support mid-flight cancellation yet.
-    return c.json({ cancelled: false, reason: 'legacy-cancel-removed' })
+    return c.json({
+      cancelled: false,
+      reason: 'room-native-cancel-unavailable',
+      message: '当前会话未绑定可取消的 RuntimeLease；任务子对话请使用 /stop 或任务控制入口。',
+    })
   })
   .patch('/:sessionId/:messageId', zValidator('json', updateMessageSchema), async (c) => {
     const user = c.get('user')
@@ -117,18 +103,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
 
-    const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-    if (
-      !message ||
-      message.sessionId !== sessionId ||
-      message.senderType !== 'user' ||
-      message.senderId !== user.sub
-    ) {
+    const target = await loadRoomTimelineMessageTarget(sessionId, messageId)
+    if (!target || target.event.senderType !== 'human') {
       throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     }
-
-    const metadata =
-      message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
     const editedAt = new Date().toISOString()
     await appendMessageControlEvent({
       session,
@@ -137,84 +115,25 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       kind: 'message.edit',
       body: content,
       metadata: {
-        targetMessageId: message.id,
-        targetEventId: extractRoomEventId(message),
+        targetMessageId: messageId,
+        targetEventId: target.event.id,
         content,
         editedAt,
       },
     })
-    const [updated] = await db
-      .update(messages)
-      .set({
-        content,
-        metadata: {
-          ...metadata,
-          ...(typeof metadata.displayContent === 'string' ? { displayContent: content } : {}),
-          editedAt,
-        },
-      })
-      .where(eq(messages.id, messageId))
-      .returning()
-    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_UPDATE_FAILED, '消息更新失败')
-    return c.json(updated)
+    return c.json({ ...roomTimelineTargetToMessage(target, sessionId), content })
   })
   .post('/:sessionId/:messageId/resend', async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
-    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub)
-      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Session not found')
-
-    const list = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.sessionId, sessionId))
-      .orderBy(asc(messages.createdAt))
-    const messageIndex = list.findIndex((message) => message.id === messageId)
-    const message = messageIndex >= 0 ? list[messageIndex] : null
-    if (
-      !message ||
-      message.senderType !== 'user' ||
-      message.senderId !== user.sub ||
-      message.sessionId !== sessionId
-    ) {
-      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'User message not found')
-    }
-
-    const affected = collectAffectedMessages(list, messageIndex)
-    await appendMessageControlEvent({
-      session,
-      userId: user.sub,
-      userName: user.username,
-      kind: 'message.redact',
-      body: '已撤回旧回复，准备重新发送。',
-      metadata: buildMessageRedactionMetadata(affected, {
-        reason: 'resend',
-        sourceMessageId: message.id,
-      }),
-    })
-    for (const item of affected) {
-      await db.delete(messages).where(eq(messages.id, item.id))
-    }
-    const removedMessageIds = affected.map((item) => item.id)
-    if (removedMessageIds.length) {
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCancelled,
-        payload: { sessionId, removedMessageIds },
-      })
-    }
-
-    // HiClaw model: dispatch the existing timeline event to trigger Manager/Worker
-    const { matrixRoomEventDispatcher } = await import('../services/rooms/matrix-event-dispatcher')
-    const room = await roomService.ensureRoomForSession(sessionId, session.ownerId)
-    const timelineEvents = await roomService.listTimelineEvents({ roomId: room.id, limit: 500 })
-    const matchingEvent = timelineEvents.find((e) => e.metadata?.messageId === message.id)
-    if (matchingEvent) {
-      await matrixRoomEventDispatcher.dispatchTimelineEvent(matchingEvent.id).catch(() => {})
-    }
-
-    return c.json({ removedMessageIds })
+    void user
+    void sessionId
+    void messageId
+    throw AppError.fromCode(
+      AppErrorCodes.VALIDATION_FAILED,
+      '重新发送旧消息链路已删除；请在 Room 中发送新的消息触发 Manager/Worker。',
+    )
   })
   .patch('/:sessionId/:messageId/pin', async (c) => {
     const user = c.get('user')
@@ -223,9 +142,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
-    const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-    if (!message || message.sessionId !== sessionId)
-      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
+    const target = await loadRoomTimelineMessageTarget(sessionId, messageId)
+    if (!target) throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     await appendMessageControlEvent({
       session,
       userId: user.sub,
@@ -233,19 +151,13 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       kind: 'message.pin',
       body: '已置顶消息。',
       metadata: {
-        targetMessageId: message.id,
-        targetEventId: extractRoomEventId(message),
+        targetMessageId: messageId,
+        targetEventId: target.event.id,
         pinned: true,
         pinnedAt: new Date().toISOString(),
       },
     })
-    const [updated] = await db
-      .update(messages)
-      .set({ isPinned: true })
-      .where(eq(messages.id, messageId))
-      .returning()
-    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_PIN_FAILED, '消息置顶失败')
-    return c.json(updated)
+    return c.json({ ...roomTimelineTargetToMessage(target, sessionId), isPinned: true })
   })
   .patch('/:sessionId/:messageId/unpin', async (c) => {
     const user = c.get('user')
@@ -254,9 +166,8 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
-    const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-    if (!message || message.sessionId !== sessionId)
-      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
+    const target = await loadRoomTimelineMessageTarget(sessionId, messageId)
+    if (!target) throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     await appendMessageControlEvent({
       session,
       userId: user.sub,
@@ -264,108 +175,51 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       kind: 'message.pin',
       body: '已取消置顶消息。',
       metadata: {
-        targetMessageId: message.id,
-        targetEventId: extractRoomEventId(message),
+        targetMessageId: messageId,
+        targetEventId: target.event.id,
         pinned: false,
         unpinnedAt: new Date().toISOString(),
       },
     })
-    const [updated] = await db
-      .update(messages)
-      .set({ isPinned: false })
-      .where(eq(messages.id, messageId))
-      .returning()
-    if (!updated) throw AppError.fromCode(AppErrorCodes.MESSAGE_PIN_FAILED, '消息取消置顶失败')
-    return c.json(updated)
+    return c.json({ ...roomTimelineTargetToMessage(target, sessionId), isPinned: false })
   })
   .delete('/:sessionId/:messageId', async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
-    const rollback = c.req.query('rollback') !== 'false'
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
 
-    const list = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.sessionId, sessionId))
-      .orderBy(asc(messages.createdAt))
-    const targetIndex = list.findIndex((message) => message.id === messageId)
-    const target = targetIndex >= 0 ? list[targetIndex] : null
-    if (!target || target.senderType !== 'user' || target.senderId !== user.sub) {
+    const target = await loadRoomTimelineMessageTarget(sessionId, messageId)
+    if (!target || target.event.senderType !== 'human') {
       throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
     }
-
-    const affected = collectAffectedMessages(list, targetIndex)
-    const rollbackResult = rollback
-      ? await rollbackCodeAgentChanges(session, affected)
-      : { reverted: 0, failed: 0 }
-    const ids = [target.id, ...affected.map((message) => message.id)]
     await appendMessageControlEvent({
       session,
       userId: user.sub,
       userName: user.username,
       kind: 'message.redact',
-      body: '已撤回消息及其关联回复。',
-      metadata: buildMessageRedactionMetadata([target, ...affected], {
+      body: '已撤回消息。',
+      metadata: buildTimelineRedactionMetadata({
         reason: 'delete',
-        rollback,
-        rollbackResult,
+        targetMessageId: messageId,
+        targetEventId: target.event.id,
       }),
     })
-    for (const id of ids) {
-      await db.delete(messages).where(eq(messages.id, id))
-    }
-    return c.json({ removedMessageIds: ids, rollback: rollbackResult })
+    return c.json({ removedMessageIds: [messageId], rollback: { reverted: 0, failed: 0 } })
   })
   .post('/:sessionId/:messageId/regenerate', async (c) => {
     const user = c.get('user')
     const sessionId = c.req.param('sessionId')
     const messageId = c.req.param('messageId')
-    const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-    if (!session || session.ownerId !== user.sub)
-      throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
-
-    const list = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.sessionId, sessionId))
-      .orderBy(asc(messages.createdAt))
-    const messageIndex = list.findIndex((message) => message.id === messageId)
-    const message = messageIndex >= 0 ? list[messageIndex] : null
-    if (!message || message.senderType !== 'agent')
-      throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 消息不存在')
-    const previousUser = [...list.slice(0, messageIndex)]
-      .reverse()
-      .find((item) => item.senderType === 'user')
-    if (!previousUser)
-      throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '没有可重新生成的用户消息')
-
-    await appendMessageControlEvent({
-      session,
-      userId: user.sub,
-      userName: user.username,
-      kind: 'message.redact',
-      body: '已撤回旧回复，准备重新生成。',
-      metadata: buildMessageRedactionMetadata([message], {
-        reason: 'regenerate',
-        sourceMessageId: previousUser.id,
-      }),
-    })
-    await db.delete(messages).where(eq(messages.id, message.id))
-
-    // HiClaw model: dispatch the previous user message to trigger Manager/Worker
-    const { matrixRoomEventDispatcher } = await import('../services/rooms/matrix-event-dispatcher')
-    const room = await roomService.ensureRoomForSession(sessionId, session.ownerId)
-    const timelineEvents = await roomService.listTimelineEvents({ roomId: room.id, limit: 500 })
-    const matchingEvent = timelineEvents.find((e) => e.metadata?.messageId === previousUser.id)
-    if (matchingEvent) {
-      await matrixRoomEventDispatcher.dispatchTimelineEvent(matchingEvent.id).catch(() => {})
-    }
-
-    return c.json({ removedMessageId: message.id })
+    void user
+    void sessionId
+    void messageId
+    throw AppError.fromCode(
+      AppErrorCodes.VALIDATION_FAILED,
+      '重新生成旧回复链路已删除；请在 Room 中发送新的消息触发 Manager/Worker。',
+    )
   })
   .post('/:sessionId', zValidator('json', sendMessageSchema), async (c) => {
     const user = c.get('user')
@@ -702,10 +556,18 @@ type AgentDraftRef = {
   content: string
   metadata: Record<string, unknown>
   messageType: string
-  legacyMessage?: typeof messages.$inferSelect | null
   roomEvent?: typeof timelineEvents.$inferSelect | null
   roomId?: string | null
   targetEventId?: string | null
+}
+
+type ProjectedMessageRow = MessageRow & {
+  replyToMessageId?: string | null
+}
+
+type RoomTimelineMessageTarget = {
+  event: typeof timelineEvents.$inferSelect
+  room: typeof rooms.$inferSelect
 }
 
 async function appendAgentDraftTimelineCard(input: {
@@ -726,7 +588,7 @@ async function appendAgentDraftTimelineCard(input: {
       ...input.metadata,
       messageType: input.messageType,
       source: 'agent-draft',
-      legacyMessageProjectionDisabled: true,
+      messageProjectionDisabled: true,
     },
   })
   return agentDraftRefMessage({
@@ -739,7 +601,6 @@ async function appendAgentDraftTimelineCard(input: {
       source: 'agent-draft',
     },
     messageType: input.messageType,
-    legacyMessage: null,
     roomEvent: event,
     roomId: room.id,
     targetEventId: event.id,
@@ -787,32 +648,16 @@ async function loadAgentDraftRef(sessionId: string, messageId: string): Promise<
       content,
       metadata,
       messageType,
-      legacyMessage: null,
       roomEvent: row.event,
       roomId: row.room.id,
       targetEventId: row.event.id,
     }
   }
 
-  const [draftMessage] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-  if (!draftMessage || draftMessage.sessionId !== sessionId) return null
-  return {
-    id: draftMessage.id,
-    sessionId,
-    content: draftMessage.content,
-    metadata: draftMessage.metadata ?? {},
-    messageType: draftMessage.type,
-    legacyMessage: draftMessage,
-    roomEvent: null,
-    roomId:
-      readNestedString(draftMessage.metadata ?? {}, ['roomTimeline', 'roomId']) ??
-      readNestedString(draftMessage.metadata ?? {}, ['roomTimelineProjection', 'roomId']),
-    targetEventId: null,
-  }
+  return null
 }
 
-function agentDraftRefMessage(ref: AgentDraftRef): typeof messages.$inferSelect {
-  if (ref.legacyMessage) return ref.legacyMessage
+function agentDraftRefMessage(ref: AgentDraftRef): ProjectedMessageRow {
   return {
     id: ref.id,
     sessionId: ref.sessionId,
@@ -832,20 +677,6 @@ async function updateAgentDraftRef(params: {
   content: string
   metadata: Record<string, unknown>
 }) {
-  if (params.ref.legacyMessage) {
-    const [updated] = await db
-      .update(messages)
-      .set({ content: params.content, metadata: params.metadata })
-      .where(eq(messages.id, params.ref.legacyMessage.id))
-      .returning()
-    const result = updated ?? params.ref.legacyMessage
-    broadcastSessionEvent(params.ref.sessionId, {
-      type: WsEvent.MessageCompleted,
-      payload: { sessionId: params.ref.sessionId, message: result },
-    })
-    return result
-  }
-
   if (!params.ref.roomId || !params.ref.targetEventId) {
     throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 草案事件不存在')
   }
@@ -888,7 +719,6 @@ type MemberProposalRef = {
   sessionId: string
   content: string
   metadata: Record<string, unknown>
-  legacyMessage?: typeof messages.$inferSelect | null
   roomEvent?: typeof timelineEvents.$inferSelect | null
   roomId?: string | null
   targetEventId?: string | null
@@ -933,34 +763,16 @@ async function loadMemberProposalRef(sessionId: string, messageId: string): Prom
       sessionId,
       content,
       metadata,
-      legacyMessage: null,
       roomEvent: row.event,
       roomId: row.room.id,
       targetEventId: row.event.id,
     }
   }
 
-  const [proposalMessage] = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.id, messageId))
-    .limit(1)
-  if (!proposalMessage || proposalMessage.sessionId !== sessionId) return null
-  return {
-    id: proposalMessage.id,
-    sessionId,
-    content: proposalMessage.content,
-    metadata: proposalMessage.metadata ?? {},
-    legacyMessage: proposalMessage,
-    roomEvent: null,
-    roomId: readNestedString(proposalMessage.metadata ?? {}, ['roomTimeline', 'roomId']) ??
-      readNestedString(proposalMessage.metadata ?? {}, ['roomTimelineProjection', 'roomId']),
-    targetEventId: null,
-  }
+  return null
 }
 
-function memberProposalRefMessage(ref: MemberProposalRef): typeof messages.$inferSelect {
-  if (ref.legacyMessage) return ref.legacyMessage
+function memberProposalRefMessage(ref: MemberProposalRef): ProjectedMessageRow {
   return {
     id: ref.id,
     sessionId: ref.sessionId,
@@ -980,20 +792,6 @@ async function updateMemberProposalRef(params: {
   content: string
   metadata: Record<string, unknown>
 }) {
-  if (params.ref.legacyMessage) {
-    const [updated] = await db
-      .update(messages)
-      .set({ content: params.content, metadata: params.metadata })
-      .where(eq(messages.id, params.ref.legacyMessage.id))
-      .returning()
-    const result = updated ?? params.ref.legacyMessage
-    broadcastSessionEvent(params.ref.sessionId, {
-      type: WsEvent.MessageCompleted,
-      payload: { sessionId: params.ref.sessionId, message: result },
-    })
-    return result
-  }
-
   if (!params.ref.roomId || !params.ref.targetEventId) {
     throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '补员建议事件不存在')
   }
@@ -1032,44 +830,18 @@ async function appendTimelineMemberProposalUpdate(input: {
 }
 
 async function findPreviousUserMessageContent(sessionId: string, beforeMessageId: string) {
-  if (beforeMessageId.startsWith('room:')) {
-    const beforeEventId = beforeMessageId.slice('room:'.length).trim()
-    if (beforeEventId) {
-      const [beforeEventRow] = await db
-        .select({
-          event: timelineEvents,
-          room: rooms,
-        })
-        .from(timelineEvents)
-        .innerJoin(rooms, eq(rooms.id, timelineEvents.roomId))
-        .where(and(eq(timelineEvents.id, beforeEventId), eq(rooms.sessionId, sessionId)))
-        .limit(1)
-      if (beforeEventRow?.event) {
-        const timeline = await db
-          .select()
-          .from(timelineEvents)
-          .where(eq(timelineEvents.roomId, beforeEventRow.room.id))
-          .orderBy(asc(timelineEvents.sequence))
-        const previousHuman = timeline
-          .filter((event) => event.sequence < beforeEventRow.event.sequence)
-          .reverse()
-          .find((event) => event.senderType === 'human' && event.body.trim())
-        if (previousHuman?.body.trim()) return previousHuman.body.trim()
-      }
-    }
-  }
-
-  const list = await db
+  const before = await loadRoomTimelineMessageTarget(sessionId, beforeMessageId)
+  if (!before) return null
+  const timeline = await db
     .select()
-    .from(messages)
-    .where(eq(messages.sessionId, sessionId))
-    .orderBy(asc(messages.createdAt))
-  const index = list.findIndex((message) => message.id === beforeMessageId)
-  if (index < 0) return null
-  const previousUser = [...list.slice(0, index)]
+    .from(timelineEvents)
+    .where(eq(timelineEvents.roomId, before.room.id))
+    .orderBy(asc(timelineEvents.sequence))
+  const previousHuman = timeline
+    .filter((event) => event.sequence < before.event.sequence)
     .reverse()
-    .find((message) => message.senderType === 'user' && message.content.trim())
-  return previousUser?.content.trim() || null
+    .find((event) => event.senderType === 'human' && event.body.trim())
+  return previousHuman?.body.trim() || null
 }
 
 async function updateMemberProposalContinueState(params: {
@@ -1156,7 +928,7 @@ async function continueMemberProposalPlanning(params: {
         kind: 'member-proposal-continue',
         sourceProposalMessageId: proposalRef.id,
         memberProposalGoal: goal,
-        noLegacyFallback: true,
+        roomNativeDispatch: true,
       },
       replyToMessageId: proposalRef.id,
     })
@@ -1345,118 +1117,75 @@ async function profileForDirectSession(session: typeof sessions.$inferSelect) {
   return toAgentProfile(agent, workspace?.projectPath)
 }
 
-function collectAffectedMessages(list: Array<typeof messages.$inferSelect>, targetIndex: number) {
-  const affected: Array<typeof messages.$inferSelect> = []
-  for (const message of list.slice(targetIndex + 1)) {
-    if (message.senderType === 'user') break
-    affected.push(message)
+async function loadRoomTimelineMessageTarget(
+  sessionId: string,
+  messageId: string,
+): Promise<RoomTimelineMessageTarget | null> {
+  if (!messageId.startsWith('room:')) return null
+  const eventId = messageId.slice('room:'.length).trim()
+  if (!eventId) return null
+  const [row] = await db
+    .select({
+      event: timelineEvents,
+      room: rooms,
+    })
+    .from(timelineEvents)
+    .innerJoin(rooms, eq(rooms.id, timelineEvents.roomId))
+    .where(and(eq(timelineEvents.id, eventId), eq(rooms.sessionId, sessionId)))
+    .limit(1)
+  if (!row?.event) return null
+  return row
+}
+
+function roomTimelineTargetToMessage(
+  target: RoomTimelineMessageTarget,
+  sessionId: string,
+): ProjectedMessageRow {
+  const metadata =
+    target.event.metadata && typeof target.event.metadata === 'object'
+      ? (target.event.metadata as Record<string, unknown>)
+      : {}
+  const senderType =
+    target.event.senderType === 'human'
+      ? 'user'
+      : target.event.senderType === 'system' || target.event.type === 'system'
+        ? 'system'
+        : 'agent'
+  return {
+    id: `room:${target.event.id}`,
+    sessionId,
+    senderId: target.event.senderParticipantId ?? target.event.senderType,
+    senderType,
+    type: typeof metadata.messageType === 'string' ? metadata.messageType : 'text',
+    content: target.event.body,
+    metadata: {
+      ...metadata,
+      roomTimeline: {
+        roomId: target.room.id,
+        roomKind: target.room.kind,
+        providerRoomId: target.room.providerRoomId,
+        eventId: target.event.id,
+        providerEventId: target.event.providerEventId,
+        sequence: target.event.sequence,
+        eventType: target.event.type,
+      },
+      displayContent: target.event.body,
+    },
+    isPinned: false,
+    replyToMessageId: typeof metadata.replyToMessageId === 'string' ? metadata.replyToMessageId : null,
+    createdAt: target.event.createdAt,
   }
-  return affected
 }
 
-function extractRoomEventId(message: typeof messages.$inferSelect) {
-  if (message.id.startsWith('room:')) return message.id.slice('room:'.length)
-  const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
-  return (
-    readNestedString(metadata, ['roomTimeline', 'eventId']) ??
-    readNestedString(metadata, ['roomTimelineProjection', 'eventId'])
-  )
-}
-
-function buildMessageRedactionMetadata(
-  affected: Array<typeof messages.$inferSelect>,
-  extra: Record<string, unknown> = {},
-) {
+function buildTimelineRedactionMetadata(extra: {
+  reason: string
+  targetMessageId: string
+  targetEventId: string
+}) {
   return {
     ...extra,
     redactedAt: new Date().toISOString(),
-    targetMessageIds: affected.map((message) => message.id),
-    targetEventIds: affected.map(extractRoomEventId).filter((id): id is string => Boolean(id)),
-    targetMessages: affected.map((message) => {
-      const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
-      return {
-        messageId: message.id,
-        senderType: message.senderType,
-        sourceMessageId: typeof metadata.sourceMessageId === 'string' ? metadata.sourceMessageId : undefined,
-        actionType: typeof metadata.actionType === 'string' ? metadata.actionType : undefined,
-        roomId: readNestedString(metadata, ['roomTimeline', 'roomId']) ?? readNestedString(metadata, ['roomTimelineProjection', 'roomId']),
-      }
-    }),
+    targetMessageIds: [extra.targetMessageId],
+    targetEventIds: [extra.targetEventId],
   }
-}
-
-function readNestedString(record: Record<string, unknown>, path: string[]) {
-  let current: unknown = record
-  for (const key of path) {
-    if (!current || typeof current !== 'object' || Array.isArray(current)) return null
-    current = (current as Record<string, unknown>)[key]
-  }
-  return typeof current === 'string' && current.trim() ? current : null
-}
-
-async function rollbackCodeAgentChanges(
-  session: typeof sessions.$inferSelect,
-  affected: Array<typeof messages.$inferSelect>,
-) {
-  const cwd = await rollbackCwd(session)
-  if (!cwd) return { reverted: 0, failed: 0 }
-  let reverted = 0
-  let failed = 0
-
-  for (const message of [...affected].reverse()) {
-    const run = readCodeAgentRun(message.metadata)
-    if (!run) continue
-    for (const file of [...(run.files ?? [])].reverse()) {
-      if (!file.diff || !file.diff.trim()) continue
-      const ok = await reverseApplyDiff(cwd, file.diff)
-      if (ok) reverted += 1
-      else failed += 1
-    }
-  }
-  return { reverted, failed }
-}
-
-async function rollbackCwd(session: typeof sessions.$inferSelect) {
-  if (!session.workspaceId) return null
-  const [workspace] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.id, session.workspaceId))
-    .limit(1)
-  return workspace?.projectPath?.trim() || null
-}
-
-function readCodeAgentRun(metadata: Record<string, unknown> | null) {
-  const value = metadata?.codeAgentRun
-  if (!value || typeof value !== 'object') return null
-  const run = value as { type?: unknown; files?: unknown }
-  if (run.type !== 'code-agent-run' || !Array.isArray(run.files)) return null
-  return run as { files: Array<{ diff?: string }> }
-}
-
-async function reverseApplyDiff(cwd: string, diff: string) {
-  const file = join(tmpdir(), `agenthub-revert-${randomUUID()}.patch`)
-  try {
-    await writeFile(file, diff, 'utf8')
-    const check = await runGit(cwd, ['apply', '--check', '-R', '--whitespace=nowarn', file])
-    if (check !== 0) return false
-    return (await runGit(cwd, ['apply', '-R', '--whitespace=nowarn', file])) === 0
-  } catch {
-    return false
-  } finally {
-    await unlink(file).catch(() => undefined)
-  }
-}
-
-async function runGit(cwd: string, args: string[]) {
-  const proc = Bun.spawn(['git', ...args], {
-    cwd,
-    stdout: 'ignore',
-    stderr: 'ignore',
-    env: process.env,
-  })
-  return await Promise.race([
-    proc.exited,
-    new Promise<number>((resolve) => setTimeout(() => resolve(124), 5000)),
-  ])
 }

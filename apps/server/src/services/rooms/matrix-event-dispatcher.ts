@@ -38,12 +38,6 @@ export interface MatrixRoomEventDispatcherResult {
 }
 
 export interface MatrixRoomEventDispatcherHandlers {
-  runWorkerTaskRoom(input: {
-    roomId: string
-    ownerId: string
-    workspaceAgentId: string
-    source: string
-  }): Promise<unknown>
   stepManagerRoom(input: {
     roomId: string
     ownerId: string
@@ -88,12 +82,6 @@ export interface MatrixRoomEventDispatcherHandlers {
     ownerId: string
     sourceEventId: string
   }): Promise<unknown>
-  runDirectRoom?(input: {
-    roomId: string
-    ownerId: string
-    workspaceAgentId: string
-    source: string
-  }): Promise<unknown>
 }
 
 export class MatrixRoomEventDispatcher {
@@ -101,67 +89,24 @@ export class MatrixRoomEventDispatcher {
 
   constructor(handlers: Partial<MatrixRoomEventDispatcherHandlers> = {}) {
     this.handlers = {
-      runWorkerTaskRoom: (input) => workerRuntimeService.runTaskRoom(input),
       stepManagerRoom: async (input) => {
-        // If a resident Manager (OpenClaw/QwenPaw) is running, skip the local step call.
-        // The resident process observes the room via Matrix /sync autonomously.
+        // HiClaw model: Manager is always an external OpenClaw/QwenPaw process.
+        // When resident Manager is active, it observes rooms via Matrix /sync autonomously.
+        // When it is NOT active, we do NOT fall back to local LLM or rule-based dispatch.
         const provider = getActiveManagerProvider()
         if (provider && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
           const status = await provider.status()
           if (status.running) {
             return { consumed: true, skipped: true, reason: 'resident-manager-active' }
           }
-        }
-        const result = await managerRuntimeService.stepRoom({
-          roomId: input.roomId,
-          ownerId: input.ownerId,
-          afterSequence: input.afterSequence,
-          appendActions: false,
-          source: input.source,
-        })
-        if (result.actions.length === 0) return result
-
-        // Separate assign actions from conversational actions
-        const assignActions = result.actions.filter((a) => a.type === 'assign')
-        const otherActions = result.actions.filter((a) => a.type !== 'assign')
-
-        // Append conversational actions (reply, clarify, propose_members) to timeline
-        for (const action of otherActions) {
-          await roomService.appendTimelineEvent({
-            roomId: input.roomId,
-            senderType: 'manager',
-            type: action.type === 'propose_members' ? 'approval.requested' : 'manager.message',
-            body: action.message || '',
-            metadata: {
-              kind: 'manager.action',
-              actionType: action.type,
-              runtimeType: result.runtimeType,
-              source: input.source,
-            },
-          }).catch(() => {})
-        }
-
-        // Dispatch assign actions (creates tasks, rooms, @mentions workers)
-        if (assignActions.length > 0) {
-          const { dispatchAssignBatch } = await import('../controller-plane/task-dispatcher')
-          const [roomRow] = await db.select().from(rooms).where(eq(rooms.id, input.roomId)).limit(1)
-          if (roomRow?.sessionId) {
-            const sessionRows = await db.select().from(sessions).where(eq(sessions.id, roomRow.sessionId)).limit(1)
-            const session = sessionRows[0] ?? null
-            if (session) {
-              await dispatchAssignBatch({
-                groupSession: session,
-                ownerId: input.ownerId,
-                goal: assignActions.map((a) => a.message || a.taskDescription || '').join('\n'),
-                actions: assignActions,
-                runtimeType: result.runtimeType,
-              }).catch((err: any) => {
-                logger.error({ err: err?.message, roomId: input.roomId }, 'Dispatcher assign dispatch failed')
-              })
-            }
+          return {
+            consumed: false,
+            skipped: true,
+            reason: 'resident-manager-not-running',
+            error: 'Manager runtime is not running. Install OpenClaw (bash infra/setup-openclaw.sh) or set AGENTHUB_OPENCLAW_MANAGER_ENDPOINT.',
           }
         }
-        return result
+        return { consumed: false, skipped: true, reason: 'no-resident-manager-provider' }
       },
       cancelTaskRoom: (input) => cancelTaskRoomFromMatrix(input),
       recordApprovalControl: (input) => recordApprovalControlFromMatrix(input),
@@ -181,12 +126,6 @@ export class MatrixRoomEventDispatcher {
           reason: input.reason,
         }),
       registerFileArtifact: (input) => registerMatrixFileArtifact(input),
-      runDirectRoom: (input) =>
-        workerRuntimeService.runDirectRoom({
-          roomId: input.roomId,
-          ownerId: input.ownerId,
-          workspaceAgentId: input.workspaceAgentId,
-        }),
       ...handlers,
     }
     this.handlers.resumeTaskRoomAfterApproval ??= this.handlers.resumeTaskRoomAfterHumanAnswer
@@ -422,15 +361,50 @@ export class MatrixRoomEventDispatcher {
           })
         }
 
-        // Async dispatch to WorkerRuntimeService
-        void this.handlers.runWorkerTaskRoom({
-          roomId: room.id,
-          ownerId: room.ownerId,
-          workspaceAgentId: participant.workspaceAgentId,
-          source: 'matrix-mention',
-        })
+        // HiClaw model: Worker picks up @mention via its own /sync loop
+        // (resident) or Matrix listener (ephemeral). No platform dispatch.
         return true
       }
+
+      // Group room @Worker → forward to active task room if any (HiClaw model)
+      if (participant.participantType === 'worker' && room.kind === 'group' && participant.workspaceAgentId && participant.workerInstanceId) {
+        const [activeThread] = await db
+          .select()
+          .from(taskThreads)
+          .where(
+            and(
+              eq(taskThreads.workerInstanceId, participant.workerInstanceId),
+              eq(taskThreads.status, 'active'),
+            ),
+          )
+          .orderBy(desc(taskThreads.updatedAt))
+          .limit(1)
+        if (activeThread) {
+          const [taskRoom] = await db
+            .select()
+            .from(rooms)
+            .where(eq(rooms.taskThreadId, activeThread.id))
+            .limit(1)
+          if (taskRoom) {
+            await roomService.appendTimelineEvent({
+              roomId: taskRoom.id,
+              senderType: 'human',
+              type: 'human.message',
+              body: event.body,
+              metadata: {
+                kind: 'chat.message.forwarded',
+                sourceRoomId: room.id,
+                sourceEventId: event.id,
+                sourceParticipantId: event.senderParticipantId,
+                note: `Forwarded from group room mention of ${participant.displayName}`,
+              },
+            })
+          }
+        }
+        // Even if no active task, the mention is already in group timeline; no further action needed.
+        return true
+      }
+
       if (participant.participantType === 'manager' && (room.kind === 'group' || room.kind === 'manager_dm')) {
         await this.handlers.stepManagerRoom({
           roomId: room.id,
@@ -442,22 +416,9 @@ export class MatrixRoomEventDispatcher {
       }
     }
 
-    if (event.senderType === 'human' && room.kind === 'direct') {
-      const participants = await db
-        .select()
-        .from(roomParticipants)
-        .where(eq(roomParticipants.roomId, room.id))
-      const worker = participants.find((p) => p.participantType === 'worker')
-      if (worker?.workspaceAgentId) {
-        void this.handlers.runDirectRoom!({
-          roomId: room.id,
-          ownerId: room.ownerId,
-          workspaceAgentId: worker.workspaceAgentId,
-          source: 'matrix-human-direct-message',
-        })
-        return true
-      }
-    }
+    // Direct room: Worker picks up human messages via its own /sync loop.
+    // No platform dispatch needed — the Worker's OpenClaw process sees the message
+    // and responds autonomously.
 
     return false
   }
@@ -906,6 +867,15 @@ async function canWorkerClaimTask(workerInstanceId: string | null | undefined): 
   if (!worker) return false
   const claimableStates = ['listening', 'idle', 'ready']
   return claimableStates.includes(worker.observedState)
+}
+
+async function isResidentWorker(workerInstanceId: string): Promise<boolean> {
+  const [worker] = await db
+    .select({ runtimeBase: workerInstances.runtimeBase })
+    .from(workerInstances)
+    .where(eq(workerInstances.id, workerInstanceId))
+    .limit(1)
+  return worker?.runtimeBase === 'openclaw' || worker?.runtimeBase === 'copaw'
 }
 
 function matrixMentionedParticipantIds(metadata: Record<string, unknown> | null | undefined) {

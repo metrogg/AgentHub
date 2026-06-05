@@ -104,11 +104,11 @@ function normalizeAction(value: unknown): ManagerAction | null {
   const record = value as Record<string, unknown>
   const type = typeof record.type === 'string' ? record.type : ''
   if (!ACTION_TYPES.has(type)) throw new Error(`Invalid ManagerRuntime action: ${type || 'unknown'}`)
-  return {
-    type: type as ManagerAction['type'],
-    message: optionalText(record.message),
-    reason: optionalText(record.reason),
-    targetWorkerId: optionalText(record.targetWorkerId),
+    return {
+      type: type as ManagerAction['type'],
+      message: optionalText(record.message),
+      reason: optionalText(record.reason),
+      targetWorkerId: optionalText(record.targetWorkerId),
     taskKey: optionalText(record.taskKey),
     dependsOn: stringArray(record.dependsOn),
     taskTitle: optionalText(record.taskTitle),
@@ -132,9 +132,23 @@ function memberProposals(value: unknown): ManagerAction['memberProposals'] {
       const reason = optionalText(record.reason)
       if (!name || !role || !reason) return null
       return {
+        expertProfileId: optionalText(record.expertProfileId),
         name,
         role,
         reason,
+        category: optionalText(record.category),
+        roleType: optionalText(record.roleType) as NonNullable<ManagerAction['memberProposals']>[number]['roleType'],
+        description: optionalText(record.description),
+        systemPrompt: optionalText(record.systemPrompt),
+        runtimeType: optionalText(record.runtimeType) as NonNullable<ManagerAction['memberProposals']>[number]['runtimeType'],
+        codeAgentType: optionalText(record.codeAgentType) as NonNullable<ManagerAction['memberProposals']>[number]['codeAgentType'],
+        color: optionalText(record.color),
+        modelId: optionalText(record.modelId) ?? null,
+        capabilityTags: stringArray(record.capabilityTags),
+        skillIds: stringArray(record.skillIds),
+        toolPermissions: stringArray(record.toolPermissions),
+        sandboxPolicy: optionalText(record.sandboxPolicy) as NonNullable<ManagerAction['memberProposals']>[number]['sandboxPolicy'],
+        contextPolicy: optionalText(record.contextPolicy) as NonNullable<ManagerAction['memberProposals']>[number]['contextPolicy'],
         expectedContribution: optionalText(record.expectedContribution),
       }
     })

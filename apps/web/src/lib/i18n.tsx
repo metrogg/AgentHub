@@ -245,8 +245,8 @@ const zhToEn: Record<string, string> = {
   '凭据或本机配置未就绪': 'Credentials or local configuration are not ready',
   'Codex 使用本机 auth.json 与 config.toml；AgentHub 不再维护额外的 Codex 模型配置。':
     'Codex reads local auth.json and config.toml; AgentHub no longer maintains extra Codex model settings.',
-  '配置会写入 AgentHub 设置，并作为 Coding Tools 的默认运行参数。':
-    'Configuration is written to AgentHub settings and used as default Coding Tools runtime parameters.',
+  '这里只保存 CLI 平台自身参数和原生诊断状态；Agent 使用的模型、Skills 和沙箱由 Agent 配置页决定。':
+    'Only CLI platform parameters and native diagnostics are saved here; each Agent chooses its model, Skills, and sandbox on the Agent configuration page.',
   文档: 'Docs',
   检测: 'Check',
   安装中: 'Installing',
@@ -509,7 +509,7 @@ const zhToEn: Record<string, string> = {
   '环境变量': 'Environment Variables',
   '变量名': 'Name',
   值: 'Value',
-  'AgentHub 设置，并作为 Coding Tools 的默认运行参数。': 'AgentHub settings, used as the default runtime parameters for Coding Tools.',
+  'Agent Runtime 基底诊断': 'Agent Runtime base diagnostics',
   重置: 'Reset',
   保存设置: 'Save settings',
   上次会话: 'Last chat',
@@ -568,12 +568,10 @@ const zhToEn: Record<string, string> = {
   归档: 'Archive',
   添加模型: 'Add Model',
   编辑模型: 'Edit Model',
-  '提示：模型变更会自动保存并同步到聊天后端。不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。':
-    'Tip: model changes are auto-saved and synced to the chat backend. CLI tool configs with different API protocols are managed on the Coding Tools page.',
-  '提示：模型变更会自动保存，并作为 Agent 配置和 Coding Tools 的可选模型来源。':
-    'Tip: model changes are auto-saved and used as selectable model sources for Agent configuration and Coding Tools.',
-  '提示：模型变更会自动保存并同步到聊天后端。当前是本地单用户 Demo 模式，API Key 会保存在本机 SQLite settings 中；不同 API 协议的 CLI 工具配置在“Coding Tools”页面管理。':
-    'Tip: model changes are auto-saved and synced to the chat backend. This is a local single-user demo mode, so API keys are stored in the local SQLite settings table. CLI tool configs with different API protocols are managed on the Coding Tools page.',
+  '提示：模型管理页只维护模型目录、端点和密钥；具体 Agent 的 CLI × 模型组合请在 Agent 配置页设置。':
+    'Tip: model management only maintains the model catalog, endpoints, and keys; configure each Agent CLI × model pairing on the Agent configuration page.',
+  '提示：模型管理页只维护模型目录、端点和密钥；内部 LLM 默认模型在设置页维护；具体 Agent 的 CLI × 模型组合请在 Agent 配置页设置。':
+    'Tip: model management only maintains the model catalog, endpoints, and keys; the internal LLM default model is configured in Settings; configure each Agent CLI × model pairing on the Agent configuration page.',
   自动保存中: 'Auto-saving',
   已自动保存: 'Auto-saved',
   自动保存失败: 'Auto-save failed',
@@ -601,7 +599,8 @@ const zhToEn: Record<string, string> = {
   '配置启动行为、语言、保存策略和基础交互习惯。': 'Configure startup behavior, language, save policy, and basic interaction habits.',
   '调整主题、强调色、字体尺寸和聊天阅读密度。': 'Adjust theme, accent color, font size, and chat reading density.',
   '管理高频操作快捷键，提升聊天和编程效率。': 'Manage frequent shortcuts to improve chat and coding efficiency.',
-  '选择默认模型，并让聊天后端同步使用当前模型配置。': 'Choose the default model and sync it to the chat backend.',
+  '选择内部 LLM 默认模型；它只用于欢迎页动态提示、诊断和非核心兜底。':
+    'Choose the internal LLM default model; it is only used for welcome prompts, diagnostics, and non-core fallback calls.',
   '配置 Agent 可调用的工具、MCP 服务、自动化钩子和敏感操作确认。': 'Configure agent tools, MCP services, automation hooks, and sensitive operation confirmations.',
   '管理归档会话的保留、恢复和清理策略。': 'Manage retention, recovery, and cleanup policies for archived chats.',
   '查看日志与本机诊断状态。': 'View logs and local diagnostics.',

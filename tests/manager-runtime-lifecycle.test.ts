@@ -117,8 +117,7 @@ describe('Manager Runtime Lifecycle', () => {
         },
         timeline: [],
       })
-      await iterator.next()
-      await expect(iterator.next()).rejects.toThrow('requires an endpoint')
+      await expect(iterator.next()).rejects.toThrow('Resident Manager')
     })
 
     test('stop is safe when not running', async () => {

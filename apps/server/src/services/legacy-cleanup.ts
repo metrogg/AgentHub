@@ -77,12 +77,10 @@ export async function cleanupLegacyApplicationData(): Promise<LegacyCleanupResul
     result.deletedWorkspaceTasks = legacyWorkspaceTaskIds.length
 
     for (const sessionId of legacySessionIds) {
-      const messageRows = await tx.select({ id: messages.id }).from(messages).where(eq(messages.sessionId, sessionId))
       const memberRows = await tx
         .select({ id: sessionMembers.id })
         .from(sessionMembers)
         .where(eq(sessionMembers.sessionId, sessionId))
-      result.deletedMessages += messageRows.length
       result.deletedSessionMembers += memberRows.length
       await tx.delete(messages).where(eq(messages.sessionId, sessionId))
       await tx.delete(sessionMembers).where(eq(sessionMembers.sessionId, sessionId))

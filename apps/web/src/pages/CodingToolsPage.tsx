@@ -602,7 +602,7 @@ export default function CodingToolsPage() {
             <div>
               <div className="inline-flex h-7 items-center gap-2 rounded-md border border-neutral-300 bg-white px-2.5 text-xs text-neutral-600">
                 <Terminal className="h-3.5 w-3.5 text-teal-700" />
-                {t('本机 Coding Tools 工具台')}
+                {t('Agent Runtime 基底诊断')}
               </div>
               <h1 className="mt-3 text-2xl font-semibold tracking-normal">
                 Coding Tools
@@ -774,10 +774,10 @@ export default function CodingToolsPage() {
                   <p className="mt-1 text-sm text-neutral-500">
                     {activeTool.id === 'codex'
                       ? t(
-                          'Codex 仍可读取本机 auth.json 与 config.toml；AgentHub 会在运行时注入当前 Agent 绑定的模型和执行参数。',
+                          'Codex 读取官方 auth.json 与 config.toml；AgentHub 不向 Codex 注入通用 OpenAI / Anthropic Base URL。',
                         )
                       : t(
-                          '配置会写入 AgentHub 设置，并作为 Coding Tools 的默认运行参数。',
+                          '这里只保存 CLI 平台自身参数和原生诊断状态；Agent 使用的模型、Skills 和沙箱由 Agent 配置页决定。',
                         )}
                   </p>
                 </div>
@@ -873,7 +873,7 @@ export default function CodingToolsPage() {
                       )}
                       {activeTool.id === 'opencode' && (
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                          <span>OpenCode 本机模型仅用于诊断，不再作为 AgentHub 的运行时真相。</span>
+                          <span>OpenCode 本机模型仅作为原生配置诊断，不作为 AgentHub 的运行时真相。</span>
                           <button
                             type="button"
                             onClick={refreshOpencodeModels}

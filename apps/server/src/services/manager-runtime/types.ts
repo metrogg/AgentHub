@@ -19,9 +19,23 @@ export type ManagerRuntimeEvent =
   | { type: 'completed'; actions: ManagerAction[] }
 
 export interface MemberProposal {
+  expertProfileId?: string
   name: string
   role: string
   reason: string
+  category?: string
+  roleType?: 'orchestrator' | 'clarifier' | 'architect' | 'researcher' | 'coder' | 'verifier' | 'reviewer' | 'integrator' | 'custom'
+  description?: string
+  systemPrompt?: string
+  runtimeType?: 'code-agent'
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini' | null
+  color?: string
+  modelId?: string | null
+  capabilityTags?: string[]
+  skillIds?: string[]
+  toolPermissions?: string[]
+  sandboxPolicy?: 'workspace-write' | 'danger-full-access'
+  contextPolicy?: 'recent-only' | 'pinned-recent' | 'workspace-aware'
   expectedContribution?: string
 }
 

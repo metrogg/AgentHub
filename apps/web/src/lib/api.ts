@@ -1634,11 +1634,10 @@ export const api = {
   },
   getRoomSessionSnapshot: (
     sessionId: string,
-    options: { afterSequence?: number; includeLegacy?: boolean } = {},
+    options: { afterSequence?: number } = {},
   ) => {
     const params = new URLSearchParams()
     if (options.afterSequence !== undefined) params.set('afterSequence', String(options.afterSequence))
-    if (options.includeLegacy) params.set('includeLegacy', 'true')
     const query = params.toString()
     return request<RoomSessionSnapshot>(`/rooms/session/${sessionId}/snapshot${query ? `?${query}` : ''}`)
   },

@@ -1925,17 +1925,15 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
   const workspace = useChatStore((state) => state.currentWorkspace)
   const agents = useChatStore((state) => state.currentWorkspaceAgents)
   const selectSession = useChatStore((state) => state.selectSession)
+  const navigate = useNavigate()
   const agent = agents.find((item) => item.id === session?.workspaceAgentId)
   const [models, setModels] = useState<ModelCatalogItem[]>([])
-  const usesCodingCli = agent?.runtimeType === 'code-agent'
   const [draft, setDraft] = useState({
     role: '',
     description: '',
     systemPrompt: '',
-    modelId: '',
   })
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const modelChoices = models
 
   useEffect(() => {
     if (!open) return
@@ -1957,7 +1955,6 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
       role: agent?.role ?? '',
       description: agent?.description ?? '',
       systemPrompt: agent?.systemPrompt ?? '',
-      modelId: agent?.modelId ?? '',
     })
     setSaveState('idle')
   }, [
@@ -1965,12 +1962,11 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     agent?.role,
     agent?.description,
     agent?.systemPrompt,
-    agent?.modelId,
     agent?.runtimeType,
   ])
 
   async function saveAgentPatch(
-    patch: Partial<Pick<WorkspaceAgent, 'role' | 'description' | 'systemPrompt' | 'modelId'>>,
+    patch: Partial<Pick<WorkspaceAgent, 'role' | 'description' | 'systemPrompt'>>,
   ) {
     if (!workspace || !agent || saveState === 'saving') return
     setSaveState('saving')
@@ -1991,11 +1987,6 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
     const next = draft[field].trim()
     if (next === agent[field]) return
     void saveAgentPatch({ [field]: next })
-  }
-
-  function updateModel(modelId: string) {
-    setDraft((current) => ({ ...current, modelId }))
-    void saveAgentPatch({ modelId: modelId || null })
   }
 
   return (
@@ -2028,7 +2019,7 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                 {agent?.name ?? 'Agent 设置'}
               </div>
               <div className="mt-1 truncate text-xs text-neutral-500">
-                {agent?.role ? `${agent.role} · 快捷配置` : '模型与系统提示词'}
+                {agent?.role ? `${agent.role} · 快捷配置` : 'Worker Runtime 配置'}
               </div>
             </div>
             <button
@@ -2069,35 +2060,29 @@ const WorkspaceChildSessionDrawer: FC<{ open: boolean; onClose: () => void }> = 
                   <AgentQuickSaveState state={saveState} />
                 </div>
 
-                {usesCodingCli ? (
-                  <div className="rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
-                    <div className="font-medium text-neutral-900">模型</div>
-                    <div className="mt-1">
-                      模型、Base URL 和 API Key 由 Coding Tools 页面统一管理；这里仅维护 Agent
-                      角色和提示词。
+                <div className="rounded-2xl border border-neutral-200 bg-white p-3 text-xs leading-5 text-neutral-500">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-medium text-neutral-900">运行组合</div>
+                      <div className="mt-1">
+                        {quickCodeAgentLabel(agent.codeAgentType)} · {quickModelName(agent.modelId, models)} · {agent.sandboxPolicy === 'danger-full-access' ? '完全访问' : '工作区写入'}
+                      </div>
+                      <div className="mt-1">
+                        Skills {(agent.skillIds ?? []).length} 个 · 工具权限 {(agent.toolPermissions ?? []).length} 项
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-neutral-500">模型</span>
-                    <select
-                      value={draft.modelId}
-                      onChange={(event) => updateModel(event.target.value)}
-                      disabled={saveState === 'saving'}
-                      className="h-9 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-300 disabled:opacity-60"
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/agents?agentId=${encodeURIComponent(agent.id)}`)}
+                      className="shrink-0 rounded-lg border border-neutral-200 px-2 py-1 text-xs font-medium text-neutral-700 transition hover:bg-neutral-50"
                     >
-                      <option value="">默认模型</option>
-                      {modelChoices.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.name || model.modelId}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="mt-1 block text-xs leading-5 text-neutral-400">
-                      LLM Agent 可以单独覆盖默认模型。
-                    </span>
-                  </label>
-                )}
+                      完整配置
+                    </button>
+                  </div>
+                  <div className="mt-2 text-neutral-400">
+                    模型、CLI 基底、Skills 和沙箱只在 Agent 配置页装配；这里保留角色、简介和系统提示词的轻量编辑。
+                  </div>
+                </div>
 
                 <label className="block">
                   <span className="mb-1 block text-xs font-medium text-neutral-500">角色</span>
@@ -2172,6 +2157,19 @@ const AgentQuickSaveState: FC<{ state: 'idle' | 'saving' | 'saved' | 'error' }> 
   if (state === 'saved') return <span className="text-xs text-emerald-600">已保存</span>
   if (state === 'error') return <span className="text-xs text-red-500">保存失败</span>
   return <span className="text-xs text-neutral-300">自动保存</span>
+}
+
+function quickModelName(modelId: string | null | undefined, models: ModelCatalogItem[]) {
+  if (!modelId) return '未绑定模型'
+  const model = models.find((item) => item.id === modelId || item.modelId === modelId)
+  return model?.name || model?.modelId || modelId
+}
+
+function quickCodeAgentLabel(type: WorkspaceAgent['codeAgentType'] | null | undefined) {
+  if (type === 'claude-code') return 'Claude Code'
+  if (type === 'opencode') return 'OpenCode'
+  if (type === 'gemini') return 'Gemini CLI'
+  return 'Codex CLI'
 }
 
 function syncAgentLibraryFromWorkspaceAgent(agent: WorkspaceAgent) {

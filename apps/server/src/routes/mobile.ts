@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Hono } from 'hono'
 import { inArray } from 'drizzle-orm'
-import { db, sessions, messages, workspaces, workspaceAgents, workspaceTasks, orchestratorRuns, settings, users, eq, and, desc, asc } from '@agenthub/db'
+import { db, sessions, workspaces, workspaceAgents, workspaceTasks, orchestratorRuns, settings, users, eq, and, desc, asc } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { env } from '../env'
 import { getRuntimeServerPort } from '../lib/runtime-server'
@@ -15,6 +15,7 @@ import { globalSkillRegistry } from '../services/skill-registry'
 import { getStarOfficeRuntimeStatus } from '../services/star-office-service'
 import { createAutoWorkspaceFolder } from '../services/workspace/auto-workspace'
 import { ensureGroupSession } from '../services/workspace/session-manager'
+import { listRoomLastMessagePreviews } from '../services/rooms/room-last-message'
 
 const PAIRING_TTL_MS = 2 * 60 * 1000
 const AGENT_LIBRARY_SETTING_KEY = 'AGENT_LIBRARY'
@@ -59,16 +60,7 @@ export const mobileRoutes = new Hono<{ Variables: AuthVariables }>()
       contactsFromWorkspaceAgents(agentList),
       savedLibrary.found ? contactsFromSavedAgents(savedLibrary.agents) : [],
     )
-    const lastMessages: Record<string, { content: string; senderType: string }> = {}
-    for (const session of sessionList) {
-      const [last] = await db
-        .select({ content: messages.content, senderType: messages.senderType })
-        .from(messages)
-        .where(and(eq(messages.sessionId, session.id), eq(messages.type, 'text')))
-        .orderBy(desc(messages.createdAt))
-        .limit(1)
-      if (last) lastMessages[session.id] = { content: last.content.slice(0, 120), senderType: last.senderType }
-    }
+    const lastMessages = await listRoomLastMessagePreviews(sessionList.map((session) => session.id))
 
     return c.json({
       sessions: sessionList.map((session) => ({

@@ -101,13 +101,11 @@ export const roomRoutes = new Hono<{ Variables: AuthVariables }>()
   .get('/session/:sessionId/snapshot', async (c) => {
     const user = c.get('user')
     const afterSequence = Number(c.req.query('afterSequence') ?? 0)
-    const includeLegacy = c.req.query('includeLegacy') === 'true'
     return c.json(
       await loadRoomSessionSnapshot({
         sessionId: c.req.param('sessionId'),
         ownerId: user.sub,
         afterSequence: Number.isFinite(afterSequence) ? afterSequence : 0,
-        includeLegacy,
       }),
     )
   })

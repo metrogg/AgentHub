@@ -164,7 +164,7 @@ export default function AgentConfigPage() {
     const modelId = draft.modelId ?? null
     const codeAgentType = draft.codeAgentType ?? null
     const model = selectedModel
-    if (!modelId) return '未绑定独立模型时，会使用模型管理里的默认模型。'
+    if (!modelId) return '未绑定模型不会使用内部 LLM 默认模型；Code Agent 执行前需要显式绑定或匹配到兼容模型。'
     if (!model) return '当前绑定的模型不在模型目录中，运行前需要先补齐模型条目。'
     if (codeAgentType === 'claude-code' && !/claude|sonnet|opus|haiku|anthropic/i.test(`${model.provider} ${model.modelId} ${model.apiEndpoint ?? ''} ${model.anthropicEndpoint ?? ''}`)) {
       return '建议 Claude Code 绑定 Claude/Anthropic 兼容模型。'
@@ -679,7 +679,7 @@ export default function AgentConfigPage() {
                                     approvalRequired: false,
                                   })
                                 }}>
-                                  <option value="code-agent">Coding Tools / CLI 运行器</option>
+                                  <option value="code-agent">Worker Runtime / CLI 基底</option>
                                 </SelectField>
                                 <SelectField label="CLI 运行器" value={draft.codeAgentType ?? 'codex'} onChange={(value) => setDraft({ ...draft, codeAgentType: (value || null) as WorkspaceAgent['codeAgentType'] })}>
                                   <option value="">{t('不绑定 CLI')}</option>
@@ -689,7 +689,7 @@ export default function AgentConfigPage() {
                                   <option value="gemini">Gemini CLI</option>
                                 </SelectField>
                                 <SelectField label="模型绑定" value={draft.modelId ?? ''} onChange={(value) => setDraft({ ...draft, modelId: value || null })}>
-                                  <option value="">沿用模型管理默认</option>
+                                  <option value="">未绑定模型，运行前需补齐</option>
                                   {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.modelId} / {model.provider}</option>)}
                                 </SelectField>
                                 <SelectField label={t('沙箱策略')} value={draft.sandboxPolicy ?? 'workspace-write'} onChange={(value) => setDraft({ ...draft, sandboxPolicy: value as WorkspaceAgent['sandboxPolicy'] })}>
@@ -1028,7 +1028,7 @@ function saveLibrary(agents: SavedAgentConfig[], relations: SavedAgentRelation[]
 }
 
 function modelName(modelId: string | null, models: ModelCatalogItem[]) {
-  if (!modelId) return '默认模型'
+  if (!modelId) return '未绑定模型'
   const model = models.find((item) => item.id === modelId || item.modelId === modelId)
   return model?.name || model?.modelId || modelId
 }
@@ -1109,8 +1109,8 @@ function agentConfigFieldLabel(key: keyof AgentConfigInput) {
     roleProfile: '角色画像',
     color: '颜色',
     modelId: '模型绑定',
-    runtimeType: 'Agent 基底',
-    codeAgentType: 'CLI 运行器',
+    runtimeType: 'Worker Runtime',
+    codeAgentType: 'CLI 基底',
     capabilityTags: '能力标签',
     skillIds: 'Skills',
     toolPermissions: '工具权限',

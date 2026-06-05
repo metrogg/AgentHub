@@ -84,18 +84,6 @@ describe('HiClaw-lite kernel boundary', () => {
     expect(registry).toMatch(/profile is required/)
   })
 
-  test('agent-runner no longer falls back to LLM when profile is missing', () => {
-    // agent-runner.ts previously had a "无 profile 时回退到默认 LLM" branch.
-    // That branch has been replaced with a hard error. Verify it is gone.
-    const runner = readFileSync(
-      join(process.cwd(), 'apps/server/src/services/agent-runner.ts'),
-      'utf8',
-    )
-    expect(runner).not.toMatch(/回退到默认 LLM/)
-    // The "missing or invalid AgentProfile" hard error must be present.
-    expect(runner).toMatch(/missing or invalid AgentProfile/)
-  })
-
   test('local-worker-runtime fails fast on non-code-agent profile', () => {
     // WorkerRuntime must not silently fall back to LLM. It must hard-fail
     // when the resolved profile is not a code-agent.

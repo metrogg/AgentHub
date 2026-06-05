@@ -39,6 +39,7 @@ import { clearLegacyAgentLibraryStorage } from '../lib/agentLibrary'
 import { languageToSettingValue, normalizeLanguage, useI18n } from '../lib/i18n'
 import { messageStyleOptions, normalizeMessageStyleMode, normalizeMessageStyleSetting } from '../lib/messageStyle'
 import { getDesktopInfo, isDesktopApp, openPath, pickWorkspaceFolder } from '../lib/native'
+import { projectRoomTimeline } from '../lib/roomTimeline'
 import { loadSessionListPrefs, saveSessionListPrefs, sessionArchiveChangeEvent } from '../lib/sessionArchive'
 import {
   defaultShortcutBindings,
@@ -695,13 +696,13 @@ function SettingsContent({
           </SettingsSection>
           <SettingsSection
             title="内部 LLM 默认模型"
-            desc="只影响欢迎页动态提示、Orchestrator / Planner / Synthesizer 等内部模型调用，不决定具体专家的 CLI × 模型组合。"
+            desc="只影响欢迎页动态提示、诊断和非核心兜底调用；不参与 Manager / Worker 主路径，也不决定具体专家的 CLI × 模型组合。"
           >
             <InsetPanel>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <StatusPill
                   ok={Boolean(internalDefaultModelId)}
-                  label={internalDefaultModelId ? '已指定内部默认模型' : '未指定，仍会兼容旧默认值'}
+                  label={internalDefaultModelId ? '已指定内部默认模型' : '未指定，仅影响非核心兜底'}
                 />
                 <button
                   type="button"
@@ -737,7 +738,7 @@ function SettingsContent({
                   ))}
                 </select>
               </label>
-              <Notice>{t('具体专家的 Code Agent × 模型 × Skills × 沙箱组合，请在 Agent 配置页完成；Coding Tools 页只检查 CLI 平台是否可用。')}</Notice>
+              <Notice>{t('具体专家的 Worker Runtime × 模型 × Skills × 沙箱组合，请在 Agent 配置页完成；Agent Runtime 基底诊断页只检查 CLI 平台是否可用。')}</Notice>
             </InsetPanel>
           </SettingsSection>
           <SettingsSection title="移动端扫码连接" desc="让手机在同一局域网内扫码连接这台电脑的 AgentHub。二维码 2 分钟有效，用后即失效。">
@@ -1454,9 +1455,16 @@ function ArchivedSessionsPanel({
     let cancelled = false
     setLoadingMessages(true)
     api
-      .listMessages(selectedSession.id)
-      .then(({ items }) => {
-        if (!cancelled) setMessages(items)
+      .getRoomSessionSnapshot(selectedSession.id)
+      .then((snapshot) => {
+        if (cancelled) return
+        const projection = projectRoomTimeline({
+          room: snapshot.room,
+          participants: snapshot.participants,
+          timeline: snapshot.timeline,
+          sessionId: selectedSession.id,
+        })
+        setMessages(projection.messages)
       })
       .catch(() => {
         if (!cancelled) setMessages([])
@@ -2487,7 +2495,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
         ? 'Homeserver 不可达'
         : matrixDiagnostics.provider === 'matrix'
           ? 'Matrix 未配置完整'
-          : '当前为本地兼容通信'
+          : '真实 Matrix 未就绪，Room 主线不可用'
     : '等待刷新'
   const matrixDetail = matrixDiagnostics
     ? [
@@ -2528,7 +2536,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
           : 'OpenClaw 未就绪'
       : managerRuntime.activeRuntimeType === 'qwenpaw'
         ? 'QwenPaw 尚未接入'
-        : '内置 Manager Runtime'
+        : '开发占位 Manager Runtime'
     : '等待刷新'
   const managerRuntimeDetail = managerRuntime
     ? [
@@ -3242,7 +3250,7 @@ function ConsolePanel({ debugEnabled }: { debugEnabled: boolean }) {
             </div>
 
             <div className="mt-3 text-xs leading-5" style={{ color: 'var(--settings-muted-text)' }}>
-              OpenClaw 是 Manager Runtime provider，不是普通 Agent 类型。检测到 OpenClaw CLI 只代表可管理生命周期；只有配置了 Manager endpoint 后，群聊才能通过 POST /step 同步调用它。
+              OpenClaw 是 Manager Runtime provider，不是普通 Agent 类型。检测到 OpenClaw CLI 只代表可管理生命周期；产品主路径应由 OpenClaw / QwenPaw 作为常驻 Manager 监听 Matrix Room。
             </div>
           </div>
         )}
