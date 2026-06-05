@@ -1,6 +1,6 @@
 import { gt } from 'drizzle-orm'
 import { and, asc, db, desc, eq, matrixIdentities, roomParticipants, rooms, sql, timelineEvents } from '@agenthub/db'
-import { MatrixClient, matrixBool, matrixLocalpart } from './matrix-client'
+import { MatrixClient, defaultMatrixHomeserverUrl, matrixBool, matrixLocalpart } from './matrix-client'
 import { MatrixIdentityService, identityOwnerFromParticipant } from './matrix-identity-service'
 import type {
   AddParticipantInput,
@@ -189,6 +189,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
   }
 
   async addParticipant(input: AddParticipantInput) {
+    const room = await this.ensureRoomOnCurrentHomeserver(input.roomId)
     const identity = await this.identityService().ensureIdentity(identityOwnerFromParticipant(input))
     const providerUserId = input.providerUserId ?? identity.userId
     const [existing] = await db
@@ -219,7 +220,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
         })
         .where(eq(roomParticipants.id, existing.id))
         .returning()
-      await this.reconcileMatrixMembership(updated ?? existing, input.metadata ?? {})
+      await this.reconcileMatrixMembership(updated ?? existing, input.metadata ?? {}, room)
       const [reloaded] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, existing.id)).limit(1)
       return reloaded ?? updated ?? existing
     }
@@ -239,14 +240,13 @@ export class MatrixRoomAdapter implements RoomAdapter {
       })
       .returning()
     if (!participant) throw new Error('Matrix room participant create failed')
-    await this.reconcileMatrixMembership(participant, input.metadata ?? {})
+    await this.reconcileMatrixMembership(participant, input.metadata ?? {}, room)
     const [updated] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, participant.id)).limit(1)
     return updated ?? participant
   }
 
   async appendTimelineEvent(input: AppendTimelineEventInput) {
-    const [room] = await db.select().from(rooms).where(eq(rooms.id, input.roomId)).limit(1)
-    if (!room) throw new Error(`Room not found: ${input.roomId}`)
+    const room = await this.ensureRoomOnCurrentHomeserver(input.roomId)
     const senderIdentity = input.senderParticipantId
       ? await this.getIdentityForSenderParticipant(input.senderParticipantId)
       : null
@@ -294,8 +294,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
   }
 
   async appendMentionTimelineEvent(input: AppendTimelineEventInput & { mentionParticipantId: string }) {
-    const [room] = await db.select().from(rooms).where(eq(rooms.id, input.roomId)).limit(1)
-    if (!room) throw new Error(`Room not found: ${input.roomId}`)
+    const room = await this.ensureRoomOnCurrentHomeserver(input.roomId)
     const senderIdentity = input.senderParticipantId
       ? await this.getIdentityForSenderParticipant(input.senderParticipantId)
       : null
@@ -404,8 +403,9 @@ export class MatrixRoomAdapter implements RoomAdapter {
   private async reconcileMatrixMembership(
     participant: typeof roomParticipants.$inferSelect,
     participantMetadata: Record<string, unknown>,
+    roomInput?: typeof rooms.$inferSelect,
   ) {
-    const [room] = await db.select().from(rooms).where(eq(rooms.id, participant.roomId)).limit(1)
+    const room = roomInput ?? (await db.select().from(rooms).where(eq(rooms.id, participant.roomId)).limit(1))[0]
     if (!room?.providerRoomId || !participant.providerUserId) return
     const identity = await this.getIdentityByUserId(participant.providerUserId)
     const client = this.client()
@@ -447,6 +447,23 @@ export class MatrixRoomAdapter implements RoomAdapter {
         updatedAt: new Date(),
       })
       .where(eq(roomParticipants.id, participant.id))
+  }
+
+  private async ensureRoomOnCurrentHomeserver(roomId: string) {
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1)
+    if (!room) throw new Error(`Room not found: ${roomId}`)
+    return this.ensureCurrentProviderRoom(room, {
+      kind: room.kind,
+      ownerId: room.ownerId,
+      title: room.title,
+      topic: room.topic ?? null,
+      workspaceId: room.workspaceId ?? null,
+      sessionId: room.sessionId ?? null,
+      runId: room.runId ?? null,
+      taskId: room.taskId ?? null,
+      taskThreadId: room.taskThreadId ?? null,
+      metadata: room.metadata ?? {},
+    })
   }
 
   private async ensureCurrentProviderRoom(
@@ -522,7 +539,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
   }
 
   private client() {
-    const homeserverUrl = this.options.homeserverUrl ?? process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+    const homeserverUrl = this.options.homeserverUrl ?? defaultMatrixHomeserverUrl()
     const accessToken = this.options.accessToken ?? process.env.AGENTHUB_MATRIX_ACCESS_TOKEN
     const serverName = this.options.serverName ?? process.env.AGENTHUB_MATRIX_SERVER_NAME ?? 'agenthub.local'
     if (!homeserverUrl) {

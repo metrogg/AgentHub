@@ -79,7 +79,10 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       .from(messages)
       .where(eq(messages.sessionId, sessionId))
       .orderBy(asc(messages.createdAt))
-    const items = await projectPlanningFailureArtifacts(list, session.workspaceId)
+    const items = await listSessionMessagesRoomFirst({
+      sessionId,
+      legacyMessages: list,
+    })
     return c.json({ items })
   })
   .delete('/:sessionId/all', async (c) => {

@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
 const roomsApi = await import('../apps/server/src/services/rooms')
+const roomSessionSnapshotApi = await import('../apps/server/src/services/rooms/room-session-snapshot')
 const taskThreadApi = await import('../apps/server/src/services/orchestrator/task-thread-service')
 const agentRunnerApi = await import('../apps/server/src/services/agent-runner')
 const workerRuntimeApi = await import('../apps/server/src/services/worker-runtime/worker-runtime-service')
@@ -28,6 +29,7 @@ const {
   eq,
 } = dbApi
 const { roomController, roomService } = roomsApi
+const { loadRoomSessionSnapshot } = roomSessionSnapshotApi
 const {
   MatrixRoomAdapter,
   MatrixRuntimeListener,
@@ -555,6 +557,7 @@ describe('RoomService Matrix room adapter contract', () => {
   })
 
   test('Matrix adapter repairs stale room ids from a previous homeserver name', async () => {
+    const repairedRoomId = `!new-room-${randomUUID()}:agenthub.local`
     const calls: Array<{ method: string; path: string; body: any }> = []
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -565,7 +568,7 @@ describe('RoomService Matrix room adapter contract', () => {
         return Response.json({ errcode: 'M_NOT_FOUND' }, { status: 404 })
       }
       if (parsed.pathname.endsWith('/createRoom')) {
-        return Response.json({ room_id: '!new-room:agenthub.local' })
+        return Response.json({ room_id: repairedRoomId })
       }
       return Response.json({})
     }) as typeof fetch
@@ -613,7 +616,7 @@ describe('RoomService Matrix room adapter contract', () => {
       })
 
       expect(repaired.id).toBe(room!.id)
-      expect(repaired.providerRoomId).toBe('!new-room:agenthub.local')
+      expect(repaired.providerRoomId).toBe(repairedRoomId)
       expect(repaired.metadata?.matrix?.repairedFromProviderRoomId).toBe('!old-room:local.agenthub')
       expect(calls.some((call) => call.path.endsWith('/createRoom'))).toBe(true)
       expect(calls.find((call) => call.path.endsWith('/createRoom'))?.body.room_alias_name).toBe(
@@ -621,6 +624,192 @@ describe('RoomService Matrix room adapter contract', () => {
       )
     } finally {
       globalThis.fetch = originalFetch
+    }
+  })
+
+  test('Matrix adapter repairs stale room ids before appending timeline events', async () => {
+    const repairedRoomId = `!new-room-${randomUUID()}:agenthub.local`
+    const calls: Array<{ method: string; path: string; auth: string | null; body: any }> = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const parsed = new URL(String(url))
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      const auth = init?.headers
+        ? ((init.headers as Record<string, string>).Authorization ?? null)
+        : null
+      calls.push({ method: init?.method ?? 'GET', path: parsed.pathname, auth, body })
+      if (parsed.pathname.endsWith('/register')) {
+        return Response.json({
+          user_id: '@human-default-user:agenthub.local',
+          access_token: 'token-human-default-user',
+        })
+      }
+      if (parsed.pathname.includes('/profile/')) return Response.json({})
+      if (parsed.pathname.includes('/directory/room/')) {
+        return Response.json({ errcode: 'M_NOT_FOUND' }, { status: 404 })
+      }
+      if (parsed.pathname.endsWith('/createRoom')) {
+        return Response.json({ room_id: repairedRoomId })
+      }
+      if (parsed.pathname.includes('/send/m.room.message/')) {
+        return Response.json({ event_id: '$matrix-event-2' })
+      }
+      return Response.json({}, { status: 404 })
+    }) as typeof fetch
+
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Matrix Stale Event Workspace',
+        goal: 'Verify stale room repair before send',
+      })
+      .returning()
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: 'Matrix Stale Event Session',
+        type: 'group',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+      })
+      .returning()
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: '!old-room:local.agenthub',
+        kind: 'group',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        sessionId: session!.id,
+        title: session!.title,
+        metadata: {
+          matrix: {
+            homeserverUrl: 'http://old-matrix.test',
+          },
+        },
+      })
+      .returning()
+
+    const adapter = new MatrixRoomAdapter({
+      homeserverUrl: 'http://matrix.test',
+      accessToken: 'admin-token',
+      serverName: 'agenthub.local',
+      autoInviteParticipants: false,
+      autoJoinParticipants: false,
+    })
+
+    try {
+      const participant = await adapter.addParticipant({
+        roomId: room!.id,
+        participantType: 'human',
+        userId: 'default-user',
+        displayName: 'You',
+        role: 'owner',
+      })
+      await adapter.appendTimelineEvent({
+        roomId: room!.id,
+        senderParticipantId: participant.id,
+        senderType: 'human',
+        type: 'human.message',
+        body: 'hello after repair',
+      })
+
+      expect(calls.some((call) => call.path.endsWith('/createRoom'))).toBe(true)
+      expect(calls.some((call) => call.path.includes('/send/m.room.message/'))).toBe(true)
+      const refreshed = await db.select().from(rooms).where(eq(rooms.id, room!.id)).limit(1)
+      expect(refreshed[0]?.providerRoomId).toBe(repairedRoomId)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('Room session snapshot repairs stale Matrix room ids without requiring explicit Matrix env', async () => {
+    const repairedRoomId = `!snapshot-room-${randomUUID()}:agenthub.local`
+    const calls: Array<{ method: string; path: string; body: any }> = []
+    const originalFetch = globalThis.fetch
+    const originalHomeserverUrl = process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+    const originalRoomAdapter = (roomService as any).adapter
+    delete process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const parsed = new URL(String(url))
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      calls.push({ method: init?.method ?? 'GET', path: parsed.pathname, body })
+      if (parsed.pathname.includes('/directory/room/')) {
+        return Response.json({ errcode: 'M_NOT_FOUND' }, { status: 404 })
+      }
+      if (parsed.pathname.endsWith('/createRoom')) {
+        return Response.json({ room_id: repairedRoomId })
+      }
+      return Response.json({})
+    }) as typeof fetch
+
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Matrix Snapshot Workspace',
+        goal: 'Verify snapshot repair without explicit Matrix env',
+      })
+      .returning()
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        title: 'Matrix Snapshot Session',
+        type: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        workspaceAgentId: null,
+      })
+      .returning()
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: '!snapshot-old-room:local.agenthub',
+        kind: 'direct',
+        ownerId: 'default-user',
+        workspaceId: workspace!.id,
+        sessionId: session!.id,
+        title: session!.title,
+        metadata: {
+          kind: 'agent-direct',
+          matrix: {
+            homeserverUrl: 'http://old-matrix.test',
+          },
+        },
+      })
+      .returning()
+
+    try {
+      ;(roomService as any).adapter = new MatrixRoomAdapter({
+        homeserverUrl: 'http://matrix.test',
+        accessToken: 'admin-token',
+        serverName: 'agenthub.local',
+        autoInviteParticipants: false,
+        autoJoinParticipants: false,
+      })
+
+      const snapshot = await loadRoomSessionSnapshot({
+        sessionId: session!.id,
+        ownerId: 'default-user',
+      })
+
+      expect(snapshot.room.id).toBe(room!.id)
+      expect(snapshot.room.providerRoomId).toBe(repairedRoomId)
+      expect(snapshot.room.metadata?.matrix?.repairedFromProviderRoomId).toBe(
+        '!snapshot-old-room:local.agenthub',
+      )
+      expect(calls.some((call) => call.path.endsWith('/createRoom'))).toBe(true)
+      expect(calls.find((call) => call.path.endsWith('/createRoom'))?.body.room_alias_name).toBe(
+        'agenthub-session-' + session!.id,
+      )
+    } finally {
+      ;(roomService as any).adapter = originalRoomAdapter
+      globalThis.fetch = originalFetch
+      if (originalHomeserverUrl === undefined) delete process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+      else process.env.AGENTHUB_MATRIX_HOMESERVER_URL = originalHomeserverUrl
     }
   })
 

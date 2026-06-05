@@ -470,8 +470,14 @@ export function matrixLocalpart(value: string) {
   )
 }
 
+export function defaultMatrixHomeserverUrl() {
+  const configured = process.env.AGENTHUB_MATRIX_HOMESERVER_URL?.trim()
+  if (configured) return configured
+  return process.env.NODE_ENV === 'production' ? null : 'http://127.0.0.1:6167'
+}
+
 export function createMatrixClientFromEnv() {
-  const homeserverUrl = process.env.AGENTHUB_MATRIX_HOMESERVER_URL
+  const homeserverUrl = defaultMatrixHomeserverUrl()
   const serverName = process.env.AGENTHUB_MATRIX_SERVER_NAME ?? 'agenthub.local'
   if (!homeserverUrl) {
     throw new Error('Matrix client requires AGENTHUB_MATRIX_HOMESERVER_URL')
