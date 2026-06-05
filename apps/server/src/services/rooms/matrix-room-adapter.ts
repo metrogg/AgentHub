@@ -89,7 +89,14 @@ export class MatrixRoomAdapter implements RoomAdapter {
 
   async ensureRoomForSession(input: EnsureRoomForSessionInput) {
     const [existing] = await db.select().from(rooms).where(eq(rooms.sessionId, input.sessionId)).limit(1)
-    if (existing) return existing
+    if (existing) return this.ensureCurrentProviderRoom(existing, {
+      kind: roomKindForSession(input),
+      ownerId: input.ownerId,
+      title: input.title,
+      workspaceId: input.workspaceId ?? null,
+      sessionId: input.sessionId,
+      metadata: input.metadata ?? {},
+    })
     const room = await this.createRoom({
       kind: roomKindForSession(input),
       ownerId: input.ownerId,
@@ -125,7 +132,17 @@ export class MatrixRoomAdapter implements RoomAdapter {
 
   async ensureRoomForTaskThread(input: EnsureRoomForTaskThreadInput) {
     const [existing] = await db.select().from(rooms).where(eq(rooms.taskThreadId, input.taskThreadId)).limit(1)
-    if (existing) return existing
+    if (existing) return this.ensureCurrentProviderRoom(existing, {
+      kind: 'task',
+      ownerId: input.ownerId,
+      title: input.title,
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      runId: input.runId,
+      taskId: input.taskId,
+      taskThreadId: input.taskThreadId,
+      metadata: input.metadata ?? {},
+    })
     const room = await this.createRoom({
       kind: 'task',
       ownerId: input.ownerId,
@@ -432,6 +449,62 @@ export class MatrixRoomAdapter implements RoomAdapter {
       .where(eq(roomParticipants.id, participant.id))
   }
 
+  private async ensureCurrentProviderRoom(
+    room: typeof rooms.$inferSelect,
+    input: CreateRoomInput,
+  ): Promise<typeof rooms.$inferSelect> {
+    const client = this.client()
+    if (matrixRoomServerName(room.providerRoomId) === client.serverName) return room
+
+    const aliasName = roomAliasName(input)
+    const alias = aliasName ? `#${aliasName}:${client.serverName}` : null
+    let providerRoomId: string | null = null
+    let resolvedByAlias = false
+    if (alias) {
+      try {
+        const resolved = await client.resolveRoomAlias(alias)
+        providerRoomId = resolved.room_id
+        resolvedByAlias = true
+      } catch {
+        providerRoomId = null
+      }
+    }
+    if (!providerRoomId) {
+      const matrixRoom = await client.createRoom({
+        name: input.title || room.title,
+        topic: input.topic ?? room.topic ?? null,
+        aliasName,
+      })
+      providerRoomId = matrixRoom.room_id
+    }
+
+    const [updated] = await db
+      .update(rooms)
+      .set({
+        providerRoomId,
+        metadata: {
+          ...(room.metadata ?? {}),
+          matrix: {
+            ...((room.metadata?.matrix as Record<string, unknown> | undefined) ?? {}),
+            homeserverUrl: client.homeserverUrl,
+            alias,
+            resolvedByAlias,
+            repairedFromProviderRoomId: room.providerRoomId,
+            repairedAt: new Date().toISOString(),
+          },
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(rooms.id, room.id))
+      .returning()
+    const repairedRoom = updated ?? { ...room, providerRoomId }
+    const participants = await db.select().from(roomParticipants).where(eq(roomParticipants.roomId, room.id))
+    for (const participant of participants) {
+      await this.reconcileMatrixMembership(participant, {})
+    }
+    return repairedRoom
+  }
+
   private async getIdentityForSenderParticipant(participantId: string) {
     const [row] = await db.select().from(roomParticipants).where(eq(roomParticipants.id, participantId)).limit(1)
     if (!row?.providerUserId) return null
@@ -509,4 +582,8 @@ function roomAliasName(input: CreateRoomInput) {
   if (input.sessionId) return `agenthub-session-${matrixLocalpart(input.sessionId)}`
   if (input.runId) return `agenthub-run-${matrixLocalpart(input.runId)}`
   return null
+}
+
+function matrixRoomServerName(providerRoomId: string) {
+  return providerRoomId.match(/^![^:]+:(.+)$/)?.[1] ?? null
 }

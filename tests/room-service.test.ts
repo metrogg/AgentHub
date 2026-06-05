@@ -554,6 +554,76 @@ describe('RoomService Matrix room adapter contract', () => {
     }
   })
 
+  test('Matrix adapter repairs stale room ids from a previous homeserver name', async () => {
+    const calls: Array<{ method: string; path: string; body: any }> = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const parsed = new URL(String(url))
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      calls.push({ method: init?.method ?? 'GET', path: parsed.pathname, body })
+      if (parsed.pathname.includes('/directory/room/')) {
+        return Response.json({ errcode: 'M_NOT_FOUND' }, { status: 404 })
+      }
+      if (parsed.pathname.endsWith('/createRoom')) {
+        return Response.json({ room_id: '!new-room:agenthub.local' })
+      }
+      return Response.json({})
+    }) as typeof fetch
+
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        id: 'matrix-stale-room-session',
+        title: 'Matrix Stale Room',
+        type: 'group',
+        ownerId: 'default-user',
+      })
+      .returning()
+    const [room] = await db
+      .insert(rooms)
+      .values({
+        provider: 'matrix',
+        providerRoomId: '!old-room:local.agenthub',
+        kind: 'group',
+        ownerId: 'default-user',
+        sessionId: session!.id,
+        title: session!.title,
+        metadata: {
+          matrix: {
+            homeserverUrl: 'http://old-matrix.test',
+          },
+        },
+      })
+      .returning()
+
+    const adapter = new MatrixRoomAdapter({
+      homeserverUrl: 'http://matrix.test',
+      accessToken: 'admin-token',
+      serverName: 'agenthub.local',
+      autoInviteParticipants: false,
+      autoJoinParticipants: false,
+    })
+
+    try {
+      const repaired = await adapter.ensureRoomForSession({
+        sessionId: session!.id,
+        sessionType: 'group',
+        ownerId: 'default-user',
+        title: session!.title,
+      })
+
+      expect(repaired.id).toBe(room!.id)
+      expect(repaired.providerRoomId).toBe('!new-room:agenthub.local')
+      expect(repaired.metadata?.matrix?.repairedFromProviderRoomId).toBe('!old-room:local.agenthub')
+      expect(calls.some((call) => call.path.endsWith('/createRoom'))).toBe(true)
+      expect(calls.find((call) => call.path.endsWith('/createRoom'))?.body.room_alias_name).toBe(
+        'agenthub-session-matrix-stale-room-session',
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('Matrix runtime listener imports real room events with mentions and file refs without echoing them', async () => {
     const calls: Array<{ method: string; path: string; auth: string | null }> = []
     const originalFetch = globalThis.fetch
