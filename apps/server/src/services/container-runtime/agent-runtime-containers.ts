@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { db, desc, workerInstances } from '@agenthub/db'
+import { getRuntimeServerPort } from '../../lib/runtime-server'
 import { agentHubUserDataRoot } from '../system-paths'
 import { dockerRuntime } from './docker-runtime'
 
@@ -37,7 +38,9 @@ export function workerContainerName(workerInstanceId: string) {
 }
 
 export function containerControllerUrl() {
-  return process.env.AGENTHUB_CONTAINER_CONTROLLER_URL?.trim() || 'http://host.docker.internal:8000'
+  const configured = process.env.AGENTHUB_CONTAINER_CONTROLLER_URL?.trim()
+  if (configured) return configured
+  return `http://host.docker.internal:${getRuntimeServerPort() ?? Number(process.env.PORT || 8000)}`
 }
 
 export function containerMatrixUrl() {
@@ -45,7 +48,9 @@ export function containerMatrixUrl() {
 }
 
 export function containerLlmBaseUrl() {
-  return process.env.AGENTHUB_CONTAINER_LLM_BASE_URL?.trim() || 'http://host.docker.internal:8000/v1'
+  const configured = process.env.AGENTHUB_CONTAINER_LLM_BASE_URL?.trim()
+  if (configured) return configured
+  return `http://host.docker.internal:${getRuntimeServerPort() ?? Number(process.env.PORT || 8000)}/v1`
 }
 
 export function runtimeContainerWorkspaceRoot() {

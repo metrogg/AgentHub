@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { createServer } from 'node:net'
 import { agentHubUserDataRoot } from '../system-paths'
 import { logger } from '../../lib/logger'
 import { getRuntimeServerPort } from '../../lib/runtime-server'
@@ -62,6 +63,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
   private managerWorkspace: string
   private managerAccessToken: string | null = null
   private containerStartedAt: string | null = null
+  private managerGatewayPort = preferredManagerGatewayPort()
 
   constructor(private config: {
     openclawPath?: string
@@ -108,6 +110,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
         binaryInstalled: binaryPath !== null,
         endpointConfigured: endpoint !== null,
         synchronousStepReady: endpoint !== null,
+        gatewayPort: this.managerGatewayPort,
         note: endpoint
           ? 'OpenClaw Manager endpoint is configured; AgentHub can call POST /step.'
           : containerMode
@@ -129,6 +132,8 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     if (!managerContainersEnabled() && !st.binaryPath) {
       return { ...st, error: 'OpenClaw binary not found. Run: bash infra/setup-openclaw.sh' }
     }
+
+    this.managerGatewayPort = await findAvailablePort(preferredManagerGatewayPort(), 40)
 
     // Ensure Manager Matrix identity exists
     try {
@@ -262,7 +267,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     const config = {
       gateway: {
         mode: 'local',
-        port: 18799,
+        port: this.managerGatewayPort,
         bind: 'lan',
         auth: { token: 'agenthub-manager-token' },
         remote: { token: 'agenthub-manager-token' },
@@ -324,7 +329,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
     mkdirSync(this.managerWorkspace, { recursive: true })
     const configPath = this.getConfigPath()
     writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8')
-    logger.info({ configPath }, 'Generated OpenClaw Manager config')
+    logger.info({ configPath, gatewayPort: this.managerGatewayPort }, 'Generated OpenClaw Manager config')
     return configPath
   }
 
@@ -367,7 +372,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
       AGENTHUB_MANAGER_TOKEN: this.managerAccessToken ?? '',
     }
 
-    logger.info({ binaryPath, configPath: this.getConfigPath() }, 'Launching OpenClaw Manager...')
+    logger.info({ binaryPath, configPath: this.getConfigPath(), gatewayPort: this.managerGatewayPort }, 'Launching OpenClaw Manager...')
 
     const isCmd = binaryPath.toLowerCase().endsWith('.cmd')
     const shell = process.platform === 'win32' || isCmd
@@ -419,7 +424,7 @@ export class OpenClawManagerRuntimeProvider implements ManagerRuntimeProvider {
         AGENTHUB_CONTROLLER_URL: containerControllerUrl(),
         AGENTHUB_MANAGER_TOKEN: this.managerAccessToken ?? '',
       },
-      ports: [{ host: 18799, container: 18799 }],
+      ports: [{ host: this.managerGatewayPort, container: this.managerGatewayPort }],
       labels: {
         'dev.agenthub.kind': 'manager',
         'dev.agenthub.runtime': this.runtimeType,
@@ -483,4 +488,28 @@ export class QwenPawManagerRuntimeProvider implements ManagerRuntimeProvider {
   createRuntime(): ManagerRuntime {
     return new ResidentManagerRuntime('qwenpaw')
   }
+}
+
+function preferredManagerGatewayPort() {
+  const raw = Number(process.env.AGENTHUB_OPENCLAW_MANAGER_PORT || '18799')
+  return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 18799
+}
+
+async function findAvailablePort(start: number, attempts: number) {
+  for (let offset = 0; offset < attempts; offset += 1) {
+    const port = start + offset
+    if (await isPortAvailable(port)) return port
+  }
+  return start
+}
+
+function isPortAvailable(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const server = createServer()
+    server.unref()
+    server.once('error', () => resolve(false))
+    server.listen({ host: '0.0.0.0', port }, () => {
+      server.close(() => resolve(true))
+    })
+  })
 }

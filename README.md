@@ -166,13 +166,11 @@ AGENTHUB_MATRIX_SERVER_NAME=agenthub.local
 AGENTHUB_MATRIX_REGISTRATION_TOKEN=agenthub-dev-registration-token
 
 AGENTHUB_CONTAINER_RUNTIME=docker
-AGENTHUB_CONTAINER_CONTROLLER_URL=http://host.docker.internal:8000
 AGENTHUB_CONTAINER_MATRIX_URL=http://host.docker.internal:6167
-AGENTHUB_CONTAINER_LLM_BASE_URL=http://host.docker.internal:8000/v1
 AGENTHUB_OPENCLAW_RUNTIME_IMAGE=agenthub/openclaw-runtime:local
 ```
 
-重启 `bun run dev`。环境变量不会在已启动的 Server 进程里自动生效。
+`AGENTHUB_CONTAINER_CONTROLLER_URL` 和 `AGENTHUB_CONTAINER_LLM_BASE_URL` 可以留空；AgentHub 会按当前实际 Server 端口生成 `host.docker.internal` URL。如果你固定了端口或反向代理，再显式填写。重启 `bun run dev`。环境变量不会在已启动的 Server 进程里自动生效。
 
 也可以在设置页“控制台 -> 容器运行时控制面”点击“准备本地容器运行时”，它会启动 Tuwunel / MinIO 并确保 OpenClaw runtime 镜像可用；随后复制页面给出的环境变量，写入 `.env` 后重启 Server。
 
