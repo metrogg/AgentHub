@@ -4,11 +4,13 @@ import { describe, expect, test } from 'bun:test'
 const dbApi = await import('../packages/db/src/index')
 const bridgeApi = await import('../apps/server/src/services/rooms/room-chat-bridge')
 const projectionApi = await import('../apps/server/src/services/rooms/timeline-message-projection')
+const roomServiceApi = await import('../apps/server/src/services/rooms/room-service')
 
 const {
   db,
   artifacts,
   messages,
+  roomParticipants,
   rooms,
   runtimeLeases,
   workerInstances,
@@ -21,18 +23,20 @@ const {
   workspaces,
   eq,
 } = dbApi
-const { appendHumanMessageRoomFirst, stepCoordinatorForGroupMessage } = bridgeApi
+const { appendHumanMessageRoomFirst, appendMessageControlEvent, stepCoordinatorForGroupMessage } = bridgeApi
 const { listSessionMessagesRoomFirst } = projectionApi
-type CoordinatorRuntime = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorRuntime
-type CoordinatorStepInput = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorStepInput
-type CoordinatorStepResult = typeof import('../apps/server/src/services/coordinator-runtime').CoordinatorStepResult
+const { roomService } = roomServiceApi
+type ManagerRuntime = import('../apps/server/src/services/manager-runtime').ManagerRuntime
+type ManagerStepInput = import('../apps/server/src/services/manager-runtime').ManagerStepInput
+type ManagerStepResult = import('../apps/server/src/services/manager-runtime').ManagerStepResult
+type ManagerRuntimeEvent = import('../apps/server/src/services/manager-runtime').ManagerRuntimeEvent
 type WorkerRuntime = typeof import('../apps/server/src/services/worker-runtime').WorkerRuntime
 type WorkerRuntimeContext = typeof import('../apps/server/src/services/worker-runtime').WorkerRuntimeContext
 type WorkerRuntimeEvent = typeof import('../apps/server/src/services/worker-runtime').WorkerRuntimeEvent
 type WorkerRuntimeResult = typeof import('../apps/server/src/services/worker-runtime').WorkerRuntimeResult
 
 describe('Room chat bridge', () => {
-  test('appends human chat to Room timeline first and creates messages as compatibility projection', async () => {
+  test('appends human chat to Room timeline first without creating a messages projection row', async () => {
     const { session } = await createGroupSession()
     const { room, event, message } = await appendHumanMessageRoomFirst({
       session,
@@ -58,8 +62,13 @@ describe('Room chat bridge', () => {
       .where(eq(timelineEvents.roomId, room.id))
     expect(timelineBeforeCoordinator).toHaveLength(1)
     expect(timelineBeforeCoordinator[0]?.type).toBe('human.message')
-    expect(timelineBeforeCoordinator[0]?.metadata?.messageId).toBe(message.id)
+    expect(timelineBeforeCoordinator[0]?.metadata?.messageId).toBeUndefined()
     expect(timelineBeforeCoordinator[0]?.metadata?.source).toBe('room-first')
+    const compatibilityRows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, session.id))
+    expect(compatibilityRows).toHaveLength(0)
 
     const coordinatorResult = await stepCoordinatorForGroupMessage({
       session,
@@ -113,7 +122,96 @@ describe('Room chat bridge', () => {
     })
   })
 
-  test('records group chat in room timeline and mirrors a coordinator reply', async () => {
+  test('projects message edit pin redact and clear from append-only Room control events', async () => {
+    const { session } = await createGroupSession()
+    const first = await appendHumanMessageRoomFirst({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      content: '旧内容',
+      type: 'text',
+      metadata: null,
+      replyToMessageId: null,
+    })
+    const second = await appendHumanMessageRoomFirst({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      content: '稍后撤回',
+      type: 'text',
+      metadata: null,
+      replyToMessageId: null,
+    })
+
+    await appendMessageControlEvent({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      kind: 'message.edit',
+      body: '新内容',
+      metadata: {
+        targetMessageId: first.message.id,
+        targetEventId: first.event.id,
+        content: '新内容',
+        editedAt: '2026-06-04T00:00:00.000Z',
+      },
+    })
+    await appendMessageControlEvent({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      kind: 'message.pin',
+      metadata: {
+        targetMessageId: first.message.id,
+        targetEventId: first.event.id,
+        pinned: true,
+      },
+    })
+    await appendMessageControlEvent({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      kind: 'message.redact',
+      metadata: {
+        targetMessageIds: [second.message.id],
+        targetEventIds: [second.event.id],
+      },
+    })
+
+    const legacyMessages = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, session.id))
+    const projected = await listSessionMessagesRoomFirst({
+      sessionId: session.id,
+      legacyMessages,
+    })
+
+    expect(projected).toHaveLength(1)
+    expect(projected[0]?.id).toBe(first.message.id)
+    expect(projected[0]?.content).toBe('新内容')
+    expect(projected[0]?.isPinned).toBe(true)
+    expect(projected[0]?.metadata?.roomTimelineEdit).toMatchObject({
+      source: 'room-timeline-control',
+      targetMessageId: first.message.id,
+    })
+
+    await appendMessageControlEvent({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      kind: 'message.clear',
+      metadata: { clearedAt: '2026-06-04T00:00:01.000Z' },
+    })
+
+    const afterClear = await listSessionMessagesRoomFirst({
+      sessionId: session.id,
+      legacyMessages,
+    })
+    expect(afterClear).toHaveLength(0)
+  })
+
+  test('records group chat and Manager reply in room timeline without mirroring normal replies', async () => {
     const { session, message } = await createGroupMessage()
     const result = await stepCoordinatorForGroupMessage({
       session,
@@ -124,7 +222,7 @@ describe('Room chat bridge', () => {
     })
 
     expect(result.consumed).toBe(true)
-    expect(result.mirroredMessageIds).toHaveLength(1)
+    expect(result.mirroredMessageIds).toHaveLength(0)
 
     const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
     expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message', 'manager.message'])
@@ -133,11 +231,69 @@ describe('Room chat bridge', () => {
     expect(timeline[1]?.metadata?.sourceMessageId).toBe(message.id)
     expect(timeline[2]?.metadata?.kind).toBe('coordinator.action')
     expect(timeline[2]?.metadata?.actionType).toBe('reply')
+  })
 
-    const mirrored = await db.select().from(messages).where(eq(messages.id, result.mirroredMessageIds[0]!)).limit(1)
-    expect(mirrored[0]?.content).toBe('我在，大家也可以陆续打个招呼。')
-    expect(mirrored[0]?.metadata?.actionType).toBe('reply')
-    expect(mirrored[0]?.metadata?.roomId).toBe(result.roomId)
+  test('records member proposal cards only in Room timeline and projects updates from control events', async () => {
+    const { session, message } = await createGroupMessage()
+    const result = await stepCoordinatorForGroupMessage({
+      session,
+      userId: 'default-user',
+      userName: 'Tester',
+      message,
+      runtime: new FakeRuntime('propose_members'),
+    })
+
+    expect(result.consumed).toBe(true)
+    expect(result.mirroredMessageIds).toHaveLength(0)
+
+    const legacyMessages = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.sessionId, session.id))
+    expect(legacyMessages).toHaveLength(1)
+    expect(legacyMessages[0]?.id).toBe(message.id)
+
+    const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
+    const proposalEvent = timeline.find((event) => event.type === 'approval.requested')
+    expect(proposalEvent?.metadata).toMatchObject({
+      kind: 'coordinator.action',
+      actionType: 'propose_members',
+      memberProposalStatus: 'pending',
+      memberProposals: [
+        {
+          expertProfileId: 'frontend-engineer',
+          name: 'Frontend Engineer',
+        },
+      ],
+    })
+
+    await roomService.appendTimelineEvent({
+      roomId: result.roomId,
+      senderType: 'manager',
+      type: 'system',
+      body: '已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。',
+      metadata: {
+        kind: 'member-proposal.update',
+        targetEventId: proposalEvent!.id,
+        content: '已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。',
+        patch: {
+          memberProposalStatus: 'confirmed',
+          confirmedProfileIds: ['frontend-engineer'],
+        },
+      },
+    })
+
+    const projected = await listSessionMessagesRoomFirst({
+      sessionId: session.id,
+      legacyMessages,
+    })
+    const proposalMessage = projected.find((item) => item.id === `room:${proposalEvent!.id}`)
+    expect(proposalMessage?.content).toBe('已加入：Frontend Engineer。现在可以让 Manager 重新规划并分发任务。')
+    expect(proposalMessage?.metadata).toMatchObject({
+      actionType: 'propose_members',
+      memberProposalStatus: 'confirmed',
+      confirmedProfileIds: ['frontend-engineer'],
+    })
   })
 
   test('dispatches assign actions through real task room and WorkerRuntime', async () => {
@@ -158,7 +314,7 @@ describe('Room chat bridge', () => {
     const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
     expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message', 'task.assigned'])
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
-    expect(timeline[2]?.metadata?.kind).toBe('coordinator.assign.dispatched')
+    expect(timeline[2]?.metadata?.kind).toBe('manager.assign.dispatched')
 
     const runRows = await db
       .select()
@@ -184,7 +340,26 @@ describe('Room chat bridge', () => {
       .select()
       .from(timelineEvents)
       .where(eq(timelineEvents.roomId, taskRoomRows[0]!.id))
-    expect(taskTimeline.some((event) => event.type === 'task.assigned')).toBe(true)
+    const assignedEvent = taskTimeline.find(
+      (event) => event.type === 'task.assigned' && event.metadata?.kind === 'manager.assign.dispatched',
+    )
+    expect(assignedEvent?.metadata).toMatchObject({
+      kind: 'manager.assign.dispatched',
+      matrixExecutionBus: true,
+      coordinationSource: 'matrix-mention',
+    })
+    expect(assignedEvent?.metadata?.mentionParticipantId).toBeTruthy()
+    expect(assignedEvent?.metadata?.matrix).toMatchObject({
+      testOnly: true,
+      usedParticipantToken: false,
+    })
+    expect(Array.isArray(assignedEvent?.metadata?.matrix?.mentions)).toBe(true)
+    const [workerParticipant] = await db
+      .select()
+      .from(roomParticipants)
+      .where(eq(roomParticipants.id, assignedEvent!.metadata!.mentionParticipantId as string))
+    expect(workerParticipant?.workspaceAgentId).toBe(agentId)
+    expect(workerParticipant?.workerInstanceId).toBe(threadRows[0]?.workerInstanceId)
     expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.progress')).toBe(true)
     expect(taskTimeline.some((event) => event.type === 'artifact.created')).toBe(true)
     expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.completed')).toBe(true)
@@ -255,7 +430,15 @@ describe('Room chat bridge', () => {
 
     for (const taskRoom of taskRoomRows) {
       const taskTimeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, taskRoom.id))
-      expect(taskTimeline.some((event) => event.type === 'task.assigned')).toBe(true)
+      const assignedEvent = taskTimeline.find(
+        (event) => event.type === 'task.assigned' && event.metadata?.kind === 'manager.assign.dispatched',
+      )
+      expect(assignedEvent?.metadata).toMatchObject({
+        kind: 'manager.assign.dispatched',
+        matrixExecutionBus: true,
+        coordinationSource: 'matrix-mention',
+      })
+      expect(assignedEvent?.metadata?.mentionParticipantId).toBeTruthy()
       expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.started')).toBe(true)
       expect(taskTimeline.some((event) => event.type === 'artifact.created')).toBe(true)
       expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.completed')).toBe(true)
@@ -407,7 +590,7 @@ describe('Room chat bridge', () => {
     expect(taskTimeline.some((event) => event.metadata?.kind === 'worker-runtime.waiting-for-human')).toBe(true)
   })
 
-  test('does not consume a room message when coordinator returns no action', async () => {
+  test('records a blocked event instead of falling back when ManagerRuntime returns no action', async () => {
     const { session, message } = await createGroupMessage()
     const result = await stepCoordinatorForGroupMessage({
       session,
@@ -417,11 +600,13 @@ describe('Room chat bridge', () => {
       runtime: new EmptyRuntime(),
     })
 
-    expect(result.consumed).toBe(false)
+    expect(result.consumed).toBe(true)
     expect(result.reason).toContain('no actions')
     const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
-    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
+    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message', 'system'])
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
+    expect(timeline[2]?.metadata?.kind).toBe('coordinator.runtime-blocked')
+    expect(timeline[2]?.metadata?.noLegacyFallback).toBe(true)
   })
 
   test('does not consume a room message when coordinator returns only invisible actions', async () => {
@@ -438,11 +623,13 @@ describe('Room chat bridge', () => {
     expect(result.reason).toContain('invisible actions')
     expect(result.mirroredMessageIds).toHaveLength(0)
     const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
-    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
+    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message', 'system'])
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
+    expect(timeline[2]?.metadata?.kind).toBe('coordinator.runtime-blocked')
+    expect(timeline[2]?.metadata?.noLegacyFallback).toBe(true)
   })
 
-  test('does not consume assign when dispatch cannot resolve a worker', async () => {
+  test('records a blocked event instead of falling back when assign dispatch fails', async () => {
     const { session, message } = await createGroupMessage()
     const result = await stepCoordinatorForGroupMessage({
       session,
@@ -454,11 +641,13 @@ describe('Room chat bridge', () => {
       executeInline: true,
     })
 
-    expect(result.consumed).toBe(false)
+    expect(result.consumed).toBe(true)
     expect(result.reason).toContain('dispatch failed')
     const timeline = await db.select().from(timelineEvents).where(eq(timelineEvents.roomId, result.roomId))
-    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message'])
+    expect(timeline.map((event) => event.type)).toEqual(['human.message', 'manager.message', 'system'])
     expect(timeline[1]?.metadata?.kind).toBe('coordinator.observing')
+    expect(timeline[2]?.metadata?.kind).toBe('coordinator.runtime-blocked')
+    expect(timeline[2]?.metadata?.noLegacyFallback).toBe(true)
   })
 })
 
@@ -560,15 +749,35 @@ async function createGroupMessage(input: {
   return { workspace: workspace!, session: session!, message: message!, agentId: agent!.id, secondAgentId }
 }
 
-class FakeRuntime implements CoordinatorRuntime {
-  readonly runtimeType = 'local-llm' as const
+class FakeRuntime implements ManagerRuntime {
+  readonly runtimeType = 'openclaw' as const
 
   constructor(
-    private readonly action: 'reply' | 'assign',
+    private readonly action: 'reply' | 'assign' | 'propose_members',
     private readonly workerId?: string,
   ) {}
 
-  async step(input: CoordinatorStepInput): Promise<CoordinatorStepResult> {
+  async *step(input: ManagerStepInput): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
+    if (this.action === 'propose_members') {
+      return {
+        runtimeType: this.runtimeType,
+        actions: [
+          {
+            type: 'propose_members',
+            message: '当前群聊缺少前端实现能力，建议补充前端工程师。',
+            reason: `saw ${input.timeline.length} room events`,
+            memberProposals: [
+              {
+                expertProfileId: 'frontend-engineer',
+                name: 'Frontend Engineer',
+                role: '前端工程师',
+                reason: '需要前端实现能力',
+              },
+            ],
+          },
+        ],
+      }
+    }
     if (this.action === 'assign') {
       return {
         runtimeType: this.runtimeType,
@@ -597,26 +806,10 @@ class FakeRuntime implements CoordinatorRuntime {
   }
 }
 
-class InvisibleReplyRuntime implements CoordinatorRuntime {
-  readonly runtimeType = 'local-llm' as const
+class EmptyRuntime implements ManagerRuntime {
+  readonly runtimeType = 'openclaw' as const
 
-  async step(): Promise<CoordinatorStepResult> {
-    return {
-      runtimeType: this.runtimeType,
-      actions: [
-        {
-          type: 'reply',
-          reason: 'empty reply should fall back',
-        },
-      ],
-    }
-  }
-}
-
-class EmptyRuntime implements CoordinatorRuntime {
-  readonly runtimeType = 'local-llm' as const
-
-  async step(): Promise<CoordinatorStepResult> {
+  async *step(): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
     return {
       runtimeType: this.runtimeType,
       actions: [],
@@ -624,12 +817,12 @@ class EmptyRuntime implements CoordinatorRuntime {
   }
 }
 
-class MultiAssignRuntime implements CoordinatorRuntime {
-  readonly runtimeType = 'local-llm' as const
+class MultiAssignRuntime implements ManagerRuntime {
+  readonly runtimeType = 'openclaw' as const
 
   constructor(private readonly workerIds: string[]) {}
 
-  async step(input: CoordinatorStepInput): Promise<CoordinatorStepResult> {
+  async *step(input: ManagerStepInput): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
     return {
       runtimeType: this.runtimeType,
       actions: this.workerIds.map((workerId, index) => ({
@@ -644,15 +837,15 @@ class MultiAssignRuntime implements CoordinatorRuntime {
   }
 }
 
-class DependentAssignRuntime implements CoordinatorRuntime {
-  readonly runtimeType = 'local-llm' as const
+class DependentAssignRuntime implements ManagerRuntime {
+  readonly runtimeType = 'openclaw' as const
 
   constructor(
     private readonly firstWorkerId: string,
     private readonly secondWorkerId: string,
   ) {}
 
-  async step(): Promise<CoordinatorStepResult> {
+  async *step(): AsyncGenerator<ManagerRuntimeEvent, ManagerStepResult> {
     return {
       runtimeType: this.runtimeType,
       actions: [

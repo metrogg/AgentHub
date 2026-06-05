@@ -1,14 +1,13 @@
-import { asc, db, eq, messages, roomParticipants, sessions, timelineEvents, workspaceAgents } from '@agenthub/db'
-import { WsEvent } from '@agenthub/shared'
-import { broadcastSessionEvent } from '../agent-runner'
-import { coordinatorService } from '../coordinator-runtime'
-import { dispatchCoordinatorAssignBatch } from '../coordinator-runtime/assign-dispatcher'
-import type { CoordinatorAction, CoordinatorActionType, CoordinatorRuntime } from '../coordinator-runtime'
+import { asc, db, eq, messages, roomParticipants, sessions, workspaceAgents } from '@agenthub/db'
+import { dispatchAssignBatch } from '../controller-plane/task-dispatcher'
+import type { ManagerAction, ManagerActionType, ManagerRuntime } from '../manager-runtime'
+import { managerRuntimeService } from '../manager-runtime'
 import type { WorkerRuntime } from '../worker-runtime'
 import { workerRuntimeService } from '../worker-runtime'
 import { roomService } from './room-service'
+import { getActiveManagerProvider } from '../manager-runtime'
 
-const MESSAGE_ACTION_TYPES = new Set<CoordinatorActionType>([
+const MESSAGE_ACTION_TYPES = new Set<ManagerActionType>([
   'reply',
   'clarify',
   'propose_members',
@@ -19,7 +18,7 @@ export interface RecordHumanMessageInput {
   userId: string
   userName?: string | null
   message: typeof messages.$inferSelect
-  runtime?: CoordinatorRuntime
+  runtime?: ManagerRuntime
   workerRuntime?: WorkerRuntime
   executeInline?: boolean
 }
@@ -34,11 +33,20 @@ export interface AppendHumanMessageRoomFirstInput {
   replyToMessageId?: string | null
 }
 
-export interface CoordinatorFirstResult {
+export interface AppendMessageControlEventInput {
+  session: typeof sessions.$inferSelect
+  userId: string
+  userName?: string | null
+  kind: 'message.clear' | 'message.edit' | 'message.redact' | 'message.pin'
+  body?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface ManagerFirstResult {
   roomId: string
   consumed: boolean
   reason: string
-  actions: CoordinatorAction[]
+  actions: ManagerAction[]
   mirroredMessageIds: string[]
 }
 
@@ -74,7 +82,6 @@ export async function appendHumanMessageRoomFirst(input: AppendHumanMessageRoomF
       source: 'room-first',
     },
   })
-  const projectionMessageId = `room:${event.id}`
   const messageMetadata = {
     ...(input.metadata ?? {}),
     roomTimelineProjection: {
@@ -88,33 +95,46 @@ export async function appendHumanMessageRoomFirst(input: AppendHumanMessageRoomF
       eventType: event.type,
     },
   }
-  const [message] = await db
-    .insert(messages)
-    .values({
-      id: projectionMessageId,
-      sessionId: input.session.id,
-      senderId: input.userId,
-      senderType: 'user',
-      type: input.type,
-      content: input.content,
-      metadata: messageMetadata,
-      replyToMessageId: input.replyToMessageId ?? undefined,
-    })
-    .returning()
-  if (!message) throw new Error('Room-first message projection create failed')
-
-  await db
-    .update(timelineEvents)
-    .set({
-      metadata: {
-        ...(event.metadata ?? {}),
-        messageId: message.id,
-        projectionMessageId: message.id,
-      },
-    })
-    .where(eq(timelineEvents.id, event.id))
+  const message: typeof messages.$inferSelect = {
+    id: `room:${event.id}`,
+    sessionId: input.session.id,
+    senderId: input.userId,
+    senderType: 'user',
+    type: input.type,
+    content: input.content,
+    metadata: messageMetadata,
+    isPinned: false,
+    replyToMessageId: input.replyToMessageId ?? null,
+    createdAt: event.createdAt,
+  }
 
   return { room, event, message }
+}
+
+export async function appendMessageControlEvent(input: AppendMessageControlEventInput) {
+  const room = await roomService.ensureRoomForSession(input.session.id, input.session.ownerId)
+  await ensureSessionRoomParticipants({
+    roomId: room.id,
+    session: input.session,
+    userId: input.userId,
+    userName: input.userName,
+  })
+  const human = await ensureHumanParticipant(room.id, input.userId, input.userName)
+  const event = await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderParticipantId: human.id,
+    senderType: 'human',
+    type: 'system',
+    body: input.body ?? '',
+    metadata: {
+      ...(input.metadata ?? {}),
+      kind: input.kind,
+      sessionId: input.session.id,
+      actorUserId: input.userId,
+      source: 'room-timeline-control',
+    },
+  })
+  return { room, event }
 }
 
 export async function recordHumanMessageInRoomTimeline(input: RecordHumanMessageInput) {
@@ -126,7 +146,12 @@ export async function recordHumanMessageInRoomTimeline(input: RecordHumanMessage
     userName: input.userName,
   })
   const existingEvents = await roomService.listTimelineEvents({ roomId: room.id, limit: 500 })
-  const hasEvent = existingEvents.some((event) => event.metadata?.messageId === input.message.id)
+  const projectedEventId = projectedEventIdFromMessage(input.message)
+  const hasEvent = existingEvents.some((event) => {
+    if (event.metadata?.messageId === input.message.id) return true
+    if (event.metadata?.projectionMessageId === input.message.id) return true
+    return Boolean(projectedEventId && event.id === projectedEventId)
+  })
   if (hasEvent) return room
   const human = await ensureHumanParticipant(room.id, input.userId, input.userName)
   await roomService.appendTimelineEvent({
@@ -147,23 +172,53 @@ export async function recordHumanMessageInRoomTimeline(input: RecordHumanMessage
   return room
 }
 
-export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageInput): Promise<CoordinatorFirstResult> {
+function projectedEventIdFromMessage(message: typeof messages.$inferSelect) {
+  if (!message.id.startsWith('room:')) return null
+  const eventId = message.id.slice('room:'.length).trim()
+  return eventId || null
+}
+
+export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageInput): Promise<ManagerFirstResult> {
   const room = await recordHumanMessageInRoomTimeline(input)
   await appendCoordinatorObservingEvent({
     roomId: room.id,
     sourceMessageId: input.message.id,
   })
-  const result = await coordinatorService.stepRoom({
+
+  // If a resident Manager (OpenClaw/QwenPaw) is running, skip the local step call.
+  // The resident process observes the room via Matrix /sync autonomously.
+  const provider = getActiveManagerProvider()
+  if (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw') {
+    const status = await provider.status()
+    if (status.running || status.endpoint) {
+      return {
+        roomId: room.id,
+        consumed: true,
+        reason: `Resident Manager (${provider.runtimeType}) is active; message delivered to room timeline for autonomous processing.`,
+        actions: [],
+        mirroredMessageIds: [],
+      }
+    }
+  }
+
+  const result = await managerRuntimeService.stepRoom({
     roomId: room.id,
     ownerId: input.session.ownerId,
     appendActions: false,
     runtime: input.runtime,
+    source: 'room-chat-bridge',
   })
   if (result.actions.length === 0) {
+    await appendCoordinatorRuntimeBlockedEvent({
+      roomId: room.id,
+      sourceMessageId: input.message.id,
+      reason: 'ManagerRuntime returned no actions.',
+      runtimeType: result.runtimeType,
+    })
     return {
       roomId: room.id,
-      consumed: false,
-      reason: 'Coordinator returned no actions; keeping legacy orchestrator fallback.',
+      consumed: true,
+      reason: 'ManagerRuntime returned no actions; no legacy orchestrator fallback will run.',
       actions: [],
       mirroredMessageIds: [],
     }
@@ -172,10 +227,16 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
     (action) => !MESSAGE_ACTION_TYPES.has(action.type) && action.type !== 'assign',
   )
   if (unsupportedAction) {
+    await appendCoordinatorRuntimeBlockedEvent({
+      roomId: room.id,
+      sourceMessageId: input.message.id,
+      reason: `ManagerRuntime returned unsupported action ${unsupportedAction.type}.`,
+      runtimeType: result.runtimeType,
+    })
     return {
       roomId: room.id,
-      consumed: false,
-      reason: `Coordinator returned unsupported action ${unsupportedAction.type}; keeping legacy orchestrator fallback.`,
+      consumed: true,
+      reason: `ManagerRuntime returned unsupported action ${unsupportedAction.type}; no legacy orchestrator fallback will run.`,
       actions: result.actions,
       mirroredMessageIds: [],
     }
@@ -185,7 +246,7 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
   const assignActions = result.actions.filter((action) => action.type === 'assign')
   if (assignActions.length > 0) {
     try {
-      await dispatchCoordinatorAssignBatch({
+      await dispatchAssignBatch({
         groupSession: input.session,
         ownerId: input.session.ownerId,
         sourceMessage: input.message,
@@ -195,9 +256,15 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
         executeInline: input.executeInline,
       })
     } catch (error: any) {
+      await appendCoordinatorRuntimeBlockedEvent({
+        roomId: room.id,
+        sourceMessageId: input.message.id,
+        reason: `ManagerRuntime assign dispatch failed: ${error?.message || 'unknown error'}`,
+        runtimeType: result.runtimeType,
+      })
       return {
         roomId: room.id,
-        consumed: false,
+        consumed: true,
         reason: `Coordinator assign dispatch failed: ${error?.message || 'unknown error'}`,
         actions: result.actions,
         mirroredMessageIds: [],
@@ -207,20 +274,12 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
 
   for (const action of result.actions) {
     if (action.type === 'assign') continue
-    await appendCoordinatorActionToRoomTimeline({
+    await appendManagerActionToRoomTimeline({
       roomId: room.id,
       action,
       runtimeType: result.runtimeType,
       sourceMessageId: input.message.id,
     })
-    const message = await mirrorCoordinatorActionToMessage({
-      sessionId: input.session.id,
-      roomId: room.id,
-      action,
-      runtimeType: result.runtimeType,
-      sourceMessageId: input.message.id,
-    })
-    if (message) mirroredMessageIds.push(message.id)
   }
 
   const hasVisibleCoordinatorOutput = mirroredMessageIds.length > 0
@@ -243,6 +302,27 @@ export async function stepCoordinatorForGroupMessage(input: RecordHumanMessageIn
     actions: result.actions,
     mirroredMessageIds,
   }
+}
+
+async function appendCoordinatorRuntimeBlockedEvent(input: {
+  roomId: string
+  sourceMessageId: string
+  reason: string
+  runtimeType: string
+}) {
+  return roomService.appendTimelineEvent({
+    roomId: input.roomId,
+    senderType: 'manager',
+    type: 'system',
+    body: `Manager Runtime 未能继续执行：${input.reason}`,
+    metadata: {
+      kind: 'coordinator.runtime-blocked',
+      sourceMessageId: input.sourceMessageId,
+      runtimeType: input.runtimeType,
+      reason: input.reason,
+      noLegacyFallback: true,
+    },
+  })
 }
 
 async function appendCoordinatorObservingEvent(input: {
@@ -285,13 +365,13 @@ export async function stepTaskRoomAfterHumanMessage(input: RecordHumanMessageInp
   })
 }
 
-async function appendCoordinatorActionToRoomTimeline(input: {
+async function appendManagerActionToRoomTimeline(input: {
   roomId: string
-  action: CoordinatorAction
+  action: ManagerAction
   runtimeType: string
   sourceMessageId: string
 }) {
-  const content = visibleCoordinatorActionContent(input.action)
+  const content = visibleManagerActionContent(input.action)
   if (input.action.type === 'propose_members') {
     return roomService.appendTimelineEvent({
       roomId: input.roomId,
@@ -305,6 +385,7 @@ async function appendCoordinatorActionToRoomTimeline(input: {
         reason: input.action.reason ?? null,
         runtimeType: input.runtimeType,
         memberProposals: input.action.memberProposals ?? [],
+        memberProposalStatus: 'pending',
         ...(input.action.metadata ?? {}),
       },
     })
@@ -371,53 +452,7 @@ async function ensureManagerParticipant(roomId: string) {
   })
 }
 
-async function mirrorCoordinatorActionToMessage(input: {
-  sessionId: string
-  roomId: string
-  action: CoordinatorAction
-  runtimeType: string
-  sourceMessageId: string
-}) {
-  const content = visibleCoordinatorActionContent(input.action)
-  if (!content) return null
-  const [message] = await db
-    .insert(messages)
-    .values({
-      sessionId: input.sessionId,
-      senderId: 'manager',
-      senderType: 'agent',
-      type: input.action.type === 'propose_members' ? 'task_card' : 'text',
-      content,
-      metadata: {
-        kind: 'coordinator-runtime-message',
-        systemEvent: 'coordinator_runtime_action',
-        actionType: input.action.type,
-        reason: input.action.reason ?? null,
-        runtimeType: input.runtimeType,
-        sourceMessageId: input.sourceMessageId,
-        roomId: input.roomId,
-        agentName: 'Manager',
-        senderName: 'Manager',
-        ...(input.action.type === 'propose_members'
-          ? {
-              memberProposals: input.action.memberProposals ?? [],
-              memberProposalStatus: 'pending',
-            }
-          : {}),
-        ...(input.action.metadata ?? {}),
-      },
-    })
-    .returning()
-  if (message) {
-    broadcastSessionEvent(input.sessionId, {
-      type: WsEvent.MessageCompleted,
-      payload: { sessionId: input.sessionId, message },
-    })
-  }
-  return message ?? null
-}
-
-function visibleCoordinatorActionContent(action: CoordinatorAction) {
+function visibleManagerActionContent(action: ManagerAction) {
   if (action.message?.trim()) return action.message.trim()
   if (action.type === 'wait') return null
   if (action.type === 'clarify') return '我需要再确认一些信息。'

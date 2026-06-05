@@ -2,8 +2,8 @@ import { db, eq, sessions, taskThreads, workspaceAgents, workspaces, workspaceTa
 import { WsEvent } from '@agenthub/shared'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { broadcastSessionEvent } from '../agent-runner'
-import { LocalMatrixCompatibleRoomAdapter } from './local-matrix-compatible-adapter'
 import { MatrixRoomAdapter } from './matrix-room-adapter'
+import { TestRoomAdapter } from './test-room-adapter'
 import type {
   AddParticipantInput,
   AppendMentionTimelineEventInput,
@@ -129,13 +129,14 @@ export class RoomService {
     }
   }
 
-  async addWorkerParticipant(roomId: string, workspaceAgentId: string) {
+  async addWorkerParticipant(roomId: string, workspaceAgentId: string, workerInstanceId?: string | null) {
     const [agent] = await db.select().from(workspaceAgents).where(eq(workspaceAgents.id, workspaceAgentId)).limit(1)
     if (!agent) throw AppError.fromCode(AppErrorCodes.AGENT_NOT_FOUND, 'Agent 不存在')
     return this.addParticipant({
       roomId,
       participantType: 'worker',
       workspaceAgentId,
+      workerInstanceId: workerInstanceId ?? null,
       displayName: agent.name,
       role: 'member',
     })
@@ -165,8 +166,20 @@ export const roomService = new RoomService()
 
 function createDefaultRoomAdapter(): RoomAdapter {
   const configured = process.env.AGENTHUB_ROOM_PROVIDER?.trim()
+  if (process.env.AGENTHUB_TEST_ROOM_ADAPTER === '1') {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('AGENTHUB_TEST_ROOM_ADAPTER is test-only and cannot be used outside NODE_ENV=test.')
+    }
+    return new TestRoomAdapter()
+  }
+  if (configured === 'local-matrix-compatible') {
+    throw new Error(
+      'AGENTHUB_ROOM_PROVIDER=local-matrix-compatible has been removed. Start a real Matrix homeserver such as Tuwunel and use AGENTHUB_ROOM_PROVIDER=matrix.',
+    )
+  }
   if (configured === 'matrix') return new MatrixRoomAdapter()
-  return new LocalMatrixCompatibleRoomAdapter()
+  if (process.env.NODE_ENV === 'test') return new TestRoomAdapter()
+  return new MatrixRoomAdapter()
 }
 
 function timelineBroadcastSessionIds(room: Awaited<ReturnType<RoomAdapter['getRoom']>>) {

@@ -38,9 +38,8 @@ export const officeRoutes = new Hono<{ Variables: AuthVariables }>()
           name: agent.name,
           role: agent.role,
           description: agent.description,
-          runtimeType: agent.runtimeType as 'llm' | 'code-agent',
-          codeAgentType: agent.codeAgentType as AgentProfile['codeAgentType'],
-          roleProfile: agent.roleProfile as Record<string, unknown> | null,
+          runtimeType: agent.runtimeType as 'code-agent',
+          codeAgentType: agent.codeAgentType as 'codex' | 'claude-code' | 'opencode' | 'gemini' | undefined,
           capabilityTags: agent.capabilityTags ?? [],
           toolPermissions: agent.toolPermissions ?? [],
           sandboxPolicy:

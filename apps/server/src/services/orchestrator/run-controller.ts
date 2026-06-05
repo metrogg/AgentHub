@@ -24,11 +24,6 @@ import {
 } from '@agenthub/db'
 import { inArray } from 'drizzle-orm'
 import { WsEvent } from '@agenthub/shared'
-import {
-  decideOrchestratorAction,
-  type DecideInput,
-  type OrchestratorDecision,
-} from './orchestrator-decision'
 import { emitRunEvent } from './run-events'
 import { updateTaskThreadStatus } from './task-thread-service'
 import { OrchestratorRunStatus, TaskStatus } from '@agenthub/shared'
@@ -121,7 +116,7 @@ export interface RunResourceSnapshot {
  *
  * ManagerLoop drives Observe -> Think -> Act, while RunController is the single
  * place callers use to mutate run/task/thread status and to resume or cancel
- * unfinished work. Old OrchestratorEngine paths must not regain ownership here.
+ * unfinished work. RunController owns run/task/thread status mutations.
  */
 export class RunController {
   async start(input: RunControllerStartInput): Promise<RunControllerRunContext> {
@@ -152,22 +147,6 @@ export class RunController {
       actorName: run.actor?.name ?? null,
       decision,
     })
-  }
-
-  async decideNextAction(
-    run: RunControllerRunContext,
-    input: DecideInput,
-  ): Promise<OrchestratorDecision> {
-    const decision = await decideOrchestratorAction(input)
-    await this.recordDecision(run, {
-      action: decision.action,
-      reason: decision.reason,
-      message: decision.message,
-      memberProposalCount: Array.isArray(decision.memberProposals)
-        ? decision.memberProposals.length
-        : 0,
-    })
-    return decision
   }
 
   async requestApproval(

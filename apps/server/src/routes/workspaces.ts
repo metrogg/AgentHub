@@ -24,7 +24,6 @@ import {
   ensureProjectDirectory,
   findWorkspaceByProjectPath,
   touchWorkspace,
-  ensureHarnessPresets,
 } from '../services/workspace/utils'
 import { pickNativeFolder } from '../services/workspace/folder-picker'
 import { loadWorkspaceFull, ensureWorkspace } from '../services/workspace/workspace-queries'
@@ -80,8 +79,8 @@ const createAgentSchema = z.object({
   roleProfile: z.record(z.unknown()).nullable().optional(),
   color: z.string().max(20).default('#6366f1'),
   modelId: z.string().max(120).nullable().optional(),
-  runtimeType: z.enum(['llm', 'code-agent']).default('code-agent'),
-  codeAgentType: z.enum(CODE_AGENT_TYPES).nullable().optional(),
+  runtimeType: z.enum(['code-agent']).default('code-agent'),
+  codeAgentType: z.enum(['codex', 'claude-code', 'opencode', 'gemini']).nullable().optional(),
   capabilityTags: z.array(z.string().max(40)).max(12).default([]),
   skillIds: z.array(z.string().max(120)).max(40).default([]),
   toolPermissions: z.array(z.string().max(80)).max(30).default([]),
@@ -138,7 +137,7 @@ function normalizeAgentUpdateDefaults(
   currentRuntimeType?: string | null,
 ): z.infer<typeof updateAgentSchema> {
   const result = { ...input }
-  const normalizedCurrentRuntime = normalizeRuntimeType(currentRuntimeType)
+  const normalizedCurrentRuntime = 'code-agent'
   const nextRuntimeType = input.runtimeType ?? normalizedCurrentRuntime
   if (!input.runtimeType && currentRuntimeType && currentRuntimeType !== normalizedCurrentRuntime) {
     result.runtimeType = normalizedCurrentRuntime
@@ -157,16 +156,9 @@ function normalizeAgentUpdateDefaults(
       result.approvalRequired = false
     }
   }
-  if (input.runtimeType === 'llm' && currentRuntimeType === 'code-agent' && input.modelId === undefined) {
-    result.modelId = null
-  }
-  if (nextRuntimeType === 'llm') result.codeAgentType = null
   return result
 }
 
-function normalizeRuntimeType(value?: string | null): 'llm' | 'code-agent' {
-  return value === 'llm' ? 'llm' : 'code-agent'
-}
 
 type GithubRepoRemote = {
   cloneUrl: string
@@ -581,7 +573,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .returning()
     if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
 
-    ensureHarnessPresets(projectPath)
     return c.json(await loadWorkspaceFull(ws.id, user.sub))
   })
 
@@ -602,7 +593,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       .returning()
     if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
 
-    ensureHarnessPresets(folder.projectPath)
     return c.json(await loadWorkspaceFull(ws.id, user.sub))
   })
 
@@ -667,7 +657,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
         .returning()
       if (!ws) throw AppError.fromCode(AppErrorCodes.WORKSPACE_CREATE_FAILED, '工作区创建失败')
 
-      ensureHarnessPresets(folder.projectPath)
       logger.info(
         { userId: user.sub, workspaceId: ws.id, repo: remote.safeRef },
         'GitHub repository cloned into workspace',
@@ -736,9 +725,6 @@ export const workspaceRoutes = new Hono<{ Variables: AuthVariables }>()
       updatedAt: new Date(),
     }
     await db.update(workspaces).set(patch).where(eq(workspaces.id, id))
-    if (input.projectPath !== undefined) {
-      ensureHarnessPresets(patch.projectPath)
-    }
     return c.json(await loadWorkspaceFull(id, user.sub))
   })
 

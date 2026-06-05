@@ -1,7 +1,5 @@
-import { statSync, existsSync, cpSync, mkdirSync } from 'node:fs'
-import { isAbsolute, normalize, resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { logger } from '../../lib/logger'
+import { statSync } from 'node:fs'
+import { isAbsolute, normalize, resolve } from 'node:path'
 import { AppError, AppErrorCodes } from '../../lib/error'
 import { db, workspaces, eq } from '@agenthub/db'
 import { workspaceNameFromPath } from '@agenthub/shared'
@@ -40,40 +38,4 @@ export async function findWorkspaceByProjectPath(ownerId: string, projectPath: s
 
 export function touchWorkspace(id: string) {
   return db.update(workspaces).set({ updatedAt: new Date() }).where(eq(workspaces.id, id))
-}
-
-const serviceDir = dirname(fileURLToPath(import.meta.url))
-const presetAgenthubDir = resolve(serviceDir, '../../../../../.agenthub')
-const presetAgenthubEntries = ['rules', 'skills'] as const
-
-export function ensureHarnessPresets(projectPath: string | null | undefined) {
-  if (!projectPath) return
-  const targetDir = resolve(projectPath, '.agenthub')
-  if (!existsSync(presetAgenthubDir)) {
-    logger.warn('Preset .agenthub/ not found at repo root, skipping copy')
-    return
-  }
-  try {
-    mkdirSync(targetDir, { recursive: true })
-    const copiedEntries: string[] = []
-    const missingEntries: string[] = []
-
-    for (const entry of presetAgenthubEntries) {
-      const source = resolve(presetAgenthubDir, entry)
-      const target = resolve(targetDir, entry)
-      if (!existsSync(source)) {
-        missingEntries.push(entry)
-        continue
-      }
-      if (existsSync(target)) continue
-      cpSync(source, target, { recursive: true, force: false })
-      copiedEntries.push(entry)
-    }
-
-    if (copiedEntries.length > 0) {
-      logger.info({ targetDir, copiedEntries, missingEntries }, 'Copied preset .agenthub entries to workspace')
-    }
-  } catch (err: any) {
-    logger.warn({ err: err?.message, targetDir }, 'Failed to copy preset .agenthub entries to workspace')
-  }
 }

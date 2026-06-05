@@ -273,14 +273,19 @@ async function createLlmWorkspaceAgent(
     sandboxPolicy: string
   }> = {},
 ) {
+  // AgentHub 自身不再使用 LLM 作为 Worker runtime。Smoke 测试现在改用
+  // code-agent (opencode) profile 创建"假 Worker"以保持类型兼容。
+  // 这些 agent 实际执行需要 OpenClaw/OpenCode 真实接入；smoke 测试只
+  // 验证资源创建/状态机本身，不真正跑 agent 任务。
   return json<{ id: string; name: string; role: string }>(
     await postJson(`/api/workspaces/${workspaceId}/agents`, {
-      name: overrides.name ?? 'Smoke LLM Agent',
+      name: overrides.name ?? 'Smoke Code Agent',
       role: overrides.role ?? '测试 Agent',
       roleType: overrides.roleType ?? 'custom',
-      description: overrides.description ?? 'Smoke-test LLM runtime agent.',
+      description: overrides.description ?? 'Smoke-test code-agent runtime agent.',
       systemPrompt: overrides.systemPrompt ?? 'Reply briefly for smoke tests.',
-      runtimeType: 'llm',
+      runtimeType: 'code-agent',
+      codeAgentType: 'opencode',
       capabilityTags: ['smoke'],
       toolPermissions: ['chat'],
       sandboxPolicy: overrides.sandboxPolicy ?? 'workspace-write',
@@ -1138,10 +1143,16 @@ describe('AgentHub smoke tests', () => {
       }),
     )
 
+    expect(draftCard.id.startsWith('room:')).toBe(true)
     expect(draftCard.metadata.agentDraft?.runtimeType).toBe('code-agent')
     expect(draftCard.metadata.agentDraft?.codeAgentType).toBe('codex')
     expect(draftCard.metadata.agentDraft?.toolPermissions).toContain('workspace:read')
     expect(draftCard.metadata.agentDraft?.toolPermissions).toContain('workspace:write')
+    const draftLegacyRows = await dbApi.db
+      .select()
+      .from(dbApi.messages)
+      .where(dbApi.eq(dbApi.messages.sessionId, group.session.id))
+    expect(draftLegacyRows).toHaveLength(0)
 
     const confirmed = await json<{
       agent: { id: string; name: string; codeAgentType: string | null }
@@ -1175,6 +1186,7 @@ describe('AgentHub smoke tests', () => {
       await postJson('/api/sessions', { title: 'Direct agent builder', type: 'direct' }),
     )
     const prompt = await json<{
+      id: string
       content: string
       metadata: { agentDraftStatus?: string; agentDraft?: unknown }
     }>(
@@ -1183,9 +1195,15 @@ describe('AgentHub smoke tests', () => {
       }),
     )
 
+    expect(prompt.id.startsWith('room:')).toBe(true)
     expect(prompt.content).toContain('Agent Group')
     expect(prompt.metadata.agentDraftStatus).toBe('requires_group')
     expect(prompt.metadata.agentDraft).toBeUndefined()
+    const directLegacyRows = await dbApi.db
+      .select()
+      .from(dbApi.messages)
+      .where(dbApi.eq(dbApi.messages.sessionId, session.id))
+    expect(directLegacyRows).toHaveLength(0)
   })
 
   test('confirmed member proposal can continue into a dynamic DAG run', async () => {
@@ -1417,32 +1435,6 @@ describe('AgentHub smoke tests', () => {
     })
 
     expect(selection.selectedAgentKey).toBe('designer')
-  })
-
-  test('orchestrator decision routes build requests to planning', async () => {
-    const { decideOrchestratorAction } = await import(
-      '../apps/server/src/services/orchestrator/orchestrator-decision'
-    )
-
-    const decision = await decideOrchestratorAction({
-      content: '开发一个坦克大战',
-      agents: [
-        {
-          id: 'orchestrator',
-          name: 'Orchestrator',
-          roleType: 'orchestrator',
-          runtimeType: 'llm',
-        },
-        {
-          id: 'builder',
-          name: 'Builder',
-          roleType: 'coder',
-          runtimeType: 'code-agent',
-        },
-      ] as any,
-    })
-
-    expect(decision.action).toBe('plan')
   })
 
   test('group build requests auto-start an orchestrator run instead of posting a plan card', async () => {
@@ -2466,7 +2458,7 @@ describe('AgentHub smoke tests', () => {
 
   test('task output contract treats model semantic blackboard keys as advisory', async () => {
     const { normalizeTaskOutputContract } =
-      await import('../apps/server/src/services/orchestrator/planner')
+      await import('../apps/server/src/services/orchestrator/plan-utils')
     const { validateTaskOutputContract } =
       await import('../apps/server/src/services/orchestrator/task-contract')
     const taskId = 'design-task'
@@ -2504,7 +2496,7 @@ describe('AgentHub smoke tests', () => {
 
   test('planner JSON parsing tolerates comments without inventing fallback content', async () => {
     const { extractJsonObject, parseJsonObject } =
-      await import('../apps/server/src/services/orchestrator/planner')
+      await import('../apps/server/src/services/orchestrator/plan-utils')
     const text = [
       'planner output:',
       '{',
@@ -2821,6 +2813,11 @@ describe('AgentHub smoke tests', () => {
         kind: 'orchestrator-task',
         orchestratorRunId: run.runId,
         orchestratorTaskId: taskId,
+        groupSessionId: group.session.id,
+        taskThreadId,
+        workspaceAgentId: runAgent.id,
+        workerInstanceId,
+        taskThreadStatus: 'active',
         sharedTaskRelativeRoot,
         sharedTaskSpecPath,
       },
@@ -2907,6 +2904,41 @@ describe('AgentHub smoke tests', () => {
       status: 'registered',
       visibility: 'team',
       metadata: { source: 'smoke-test' },
+    })
+
+    const groupRoomSnapshot = await json<any>(
+      await app.request(`/api/rooms/session/${group.session.id}/snapshot`),
+    )
+    const taskRoomSnapshot = await json<any>(
+      await app.request(`/api/rooms/session/${childSessionId}/snapshot`),
+    )
+    expect(groupRoomSnapshot.room.kind).toBe('group')
+    expect(taskRoomSnapshot.room.kind).toBe('task')
+    expect(taskRoomSnapshot.bindings).toMatchObject({
+      roomKind: 'task',
+      parentGroupSessionId: group.session.id,
+      parentGroupRoomId: groupRoomSnapshot.room.id,
+      orchestratorRunId: run.runId,
+      orchestratorTaskId: taskId,
+      taskThreadId,
+      taskRoomId: taskRoomSnapshot.room.id,
+      taskSessionId: childSessionId,
+      taskStatus: 'running',
+      taskThreadStatus: 'active',
+      workspaceAgentId: runAgent.id,
+      workerInstanceId,
+      runtimeLeaseId,
+    })
+    expect(taskRoomSnapshot.resources.taskThreads[0]).toMatchObject({
+      id: taskThreadId,
+      groupSessionId: group.session.id,
+      sessionId: childSessionId,
+      workerInstanceId,
+    })
+    expect(taskRoomSnapshot.resources.artifacts[0]).toMatchObject({
+      artifactId,
+      taskThreadId,
+      workerInstanceId,
     })
 
     const detail = await json<any>(await app.request(`/api/orchestrator-runs/${run.runId}`))

@@ -263,7 +263,7 @@ export interface Message {
   createdAt: string
 }
 
-export type RoomProvider = 'local-matrix-compatible' | 'matrix'
+export type RoomProvider = 'matrix'
 export type RoomKind = 'group' | 'manager_dm' | 'task' | 'direct' | 'human_intervention'
 export type RoomStatus = 'active' | 'archived' | 'failed'
 export type RoomParticipantType = 'human' | 'manager' | 'worker' | 'system'
@@ -277,6 +277,7 @@ export type TimelineEventType =
   | 'task.progress'
   | 'artifact.created'
   | 'approval.requested'
+  | 'file.shared'
   | 'system'
 
 export interface Room {
@@ -715,6 +716,101 @@ export interface MatrixDiagnostics {
   }
 }
 
+export interface ControllerPlaneDiagnostics {
+  apiVersion: 'agenthub.dev/v1alpha1'
+  mode: 'in-process'
+  queue: {
+    running: boolean
+    size: number
+    pendingKeys: string[]
+    registeredKinds: string[]
+  }
+  resources: {
+    workspaceAgents: number
+    workerInstances: number
+    rooms: number
+    roomParticipants: number
+    runs: number
+    tasks: number
+    taskThreads: number
+    runtimeLeases: number
+    artifacts: number
+  }
+  boundaries: {
+    controllerOwns: string[]
+    managerOwns: string[]
+    uiReadsFrom: string[]
+  }
+}
+
+export interface ContainerRuntimeDiagnostics {
+  provider: 'docker'
+  enabled: boolean
+  managerEnabled: boolean
+  workerEnabled: boolean
+  docker: {
+    available: boolean
+    version: string | null
+    error: string | null
+  }
+  image: string
+  imagePresent: boolean
+  imageError: string | null
+  managerContainer: DockerContainerStatus
+  workerContainers: Array<{
+    workerInstanceId: string
+    workspaceAgentId: string
+    runtimeBase: string
+    observedState: string
+    containerName: string
+    container: DockerContainerStatus
+  }>
+  workspaceRoot: string
+  controllerUrlForContainers: string
+  matrixUrlForContainers: string
+  llmBaseUrlForContainers: string
+  env: {
+    AGENTHUB_CONTAINER_RUNTIME: string | null
+    AGENTHUB_MANAGER_BACKEND: string | null
+    AGENTHUB_WORKER_BACKEND: string | null
+  }
+}
+
+export interface DockerContainerStatus {
+  name: string
+  exists: boolean
+  running: boolean
+  id: string | null
+  image: string | null
+  status: string | null
+  createdAt: string | null
+  labels: Record<string, string>
+}
+
+export interface ContainerRuntimeLogsResponse {
+  ok: boolean
+  output: string
+  message: string
+}
+
+export interface PrepareLocalContainerRuntimeResult {
+  ok: boolean
+  message: string
+  infra: {
+    ok: boolean
+    output: string
+    message: string
+  }
+  image: {
+    present: boolean
+    pulled?: boolean
+    built?: boolean
+    error: string | null
+    output?: string
+  }
+  diagnostics: ContainerRuntimeDiagnostics
+}
+
 export interface LocalMatrixActionResult {
   ok: boolean
   message: string
@@ -728,6 +824,55 @@ export interface LocalMatrixActionResult {
     autoJoinParticipants: boolean
   }
   diagnostics: MatrixDiagnostics
+}
+
+export type ManagerRuntimeType = 'openclaw' | 'qwenpaw'
+
+export interface ManagerRuntimeStatus {
+  runtimeType: ManagerRuntimeType
+  available: boolean
+  syncReady?: boolean
+  running: boolean
+  pid: number | null
+  workspace: string
+  configPath: string | null
+  binaryPath: string | null
+  endpoint: string | null
+  stepEndpoint?: string | null
+  healthEndpoint?: string | null
+  error: string | null
+  diagnostics?: Record<string, unknown>
+  startedAt: string | null
+  uptime: number | null
+}
+
+export interface ManagerRuntimeHealth {
+  healthy: boolean
+  latencyMs?: number
+  error?: string
+}
+
+export interface ManagerRuntimeProviderSummary {
+  type: ManagerRuntimeType
+  available: boolean
+  running: boolean
+  error: string | null
+}
+
+export interface ManagerRuntimeStatusResponse {
+  configuredRuntimeType: ManagerRuntimeType
+  activeRuntimeType: ManagerRuntimeType
+  activeStatus: ManagerRuntimeStatus
+  activeHealth: ManagerRuntimeHealth | null
+  providers: ManagerRuntimeProviderSummary[]
+  message: string
+}
+
+export interface ManagerRuntimeActionResult {
+  ok: boolean
+  status: ManagerRuntimeStatus
+  health?: ManagerRuntimeHealth | null
+  message: string
 }
 
 export interface OpencodeModelItem {
@@ -1281,6 +1426,7 @@ export interface OrchestratorRunTaskSnapshot {
 export interface OrchestratorRunRuntimeLeaseSnapshot {
   id: string
   runtimeLeaseId: string
+  taskId?: string | null
   workerInstanceId: string | null
   provider: 'local-workdir' | 'docker-sandbox' | 'remote-container'
   status: 'creating' | 'ready' | 'running' | 'cleaning' | 'released' | 'failed' | 'stale'
@@ -1328,6 +1474,7 @@ export interface OrchestratorRunArtifactSnapshot {
 }
 
 export interface OrchestratorRunResourceSnapshot {
+  activeRun?: OrchestratorRunResourceSnapshot['run']
   run: {
     id: string
     workspaceId: string
@@ -1390,8 +1537,8 @@ export interface OrchestratorRunResourceSnapshot {
     id: string
     workspaceId: string
     workspaceAgentId: string
-    runtimeFamily: 'coordinator' | 'worker' | 'fallback'
-    runtimeBase: 'openclaw' | 'copaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' | 'llm-fallback'
+    runtimeFamily: 'coordinator' | 'worker' 
+    runtimeBase: 'openclaw' | 'copaw' | 'qwenpaw' | 'codex' | 'claude-code' | 'opencode' | 'gemini' 
     modelId: string | null
     skillIds: string[]
     mcpServerIds: string[]
@@ -1406,6 +1553,33 @@ export interface OrchestratorRunResourceSnapshot {
     createdAt: string
     updatedAt: string
   }>
+}
+
+export interface RoomSessionSnapshot {
+  session: Session
+  room: Room
+  participants: RoomParticipant[]
+  timeline: TimelineEvent[]
+  resources: OrchestratorRunResourceSnapshot
+  bindings: {
+    roomKind: 'group' | 'task' | 'dm' | 'system'
+    parentGroupSessionId: string | null
+    parentGroupRoomId: string | null
+    orchestratorRunId: string | null
+    orchestratorTaskId: string | null
+    taskThreadId: string | null
+    taskRoomId: string | null
+    taskSessionId: string | null
+    taskStatus: string | null
+    taskThreadStatus: string | null
+    workspaceAgentId: string | null
+    workerInstanceId: string | null
+    runtimeLeaseId: string | null
+  }
+  cursors: {
+    timelineSequence: number
+    resourceVersion: string
+  }
 }
 
 export interface ExecutionLog {
@@ -1568,6 +1742,16 @@ export const api = {
       `/rooms/${roomId}/timeline${query ? `?${query}` : ''}`,
     )
   },
+  getRoomSessionSnapshot: (
+    sessionId: string,
+    options: { afterSequence?: number; includeLegacy?: boolean } = {},
+  ) => {
+    const params = new URLSearchParams()
+    if (options.afterSequence !== undefined) params.set('afterSequence', String(options.afterSequence))
+    if (options.includeLegacy) params.set('includeLegacy', 'true')
+    const query = params.toString()
+    return request<RoomSessionSnapshot>(`/rooms/session/${sessionId}/snapshot${query ? `?${query}` : ''}`)
+  },
 
   // Messages
   listMessages: (sessionId: string) => request<{ items: Message[] }>(`/messages/${sessionId}`),
@@ -1718,6 +1902,35 @@ export const api = {
     request<LocalMatrixActionResult>('/settings/matrix/local/configure', { method: 'POST' }),
   startLocalMatrix: () =>
     request<LocalMatrixActionResult>('/settings/matrix/local/start', { method: 'POST', timeout: 70_000 }),
+  stopLocalMatrix: () =>
+    request<LocalMatrixActionResult>('/settings/matrix/local/stop', { method: 'POST', timeout: 70_000 }),
+  getControllerPlaneStatus: () => request<ControllerPlaneDiagnostics>('/settings/controller-plane/status'),
+  getContainerRuntimeStatus: () => request<ContainerRuntimeDiagnostics>('/settings/container-runtime/status'),
+  prepareLocalContainerRuntime: () =>
+    request<PrepareLocalContainerRuntimeResult>('/settings/container-runtime/prepare-local', {
+      method: 'POST',
+      timeout: 180_000,
+    }),
+  getContainerRuntimeLogs: (name: string, tail = 160) =>
+    request<ContainerRuntimeLogsResponse>(
+      `/settings/container-runtime/logs/${encodeURIComponent(name)}?tail=${encodeURIComponent(String(tail))}`,
+    ),
+  getManagerRuntimeStatus: () => request<ManagerRuntimeStatusResponse>('/settings/manager-runtime/status'),
+  startManagerRuntime: (type: ManagerRuntimeType) =>
+    request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/start`, {
+      method: 'POST',
+      timeout: 70_000,
+    }),
+  stopManagerRuntime: (type: ManagerRuntimeType) =>
+    request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/stop`, {
+      method: 'POST',
+      timeout: 30_000,
+    }),
+  checkManagerRuntimeHealth: (type: ManagerRuntimeType) =>
+    request<ManagerRuntimeActionResult>(`/settings/manager-runtime/${encodeURIComponent(type)}/health`, {
+      method: 'POST',
+      timeout: 20_000,
+    }),
   setupDockerSandbox: () =>
     request<{ ok: boolean; message: string; steps: Array<{ command: string; ok: boolean; output: string }>; sandbox: SettingsGeneralInfo['sandbox'] }>(
       '/settings/sandbox/docker/setup',

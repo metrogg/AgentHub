@@ -229,6 +229,7 @@ import {
 import { workspaceNameFromPath } from '@agenthub/shared'
 import { useLineSelection } from './useLineSelection'
 import LineSelectionToolbar from './LineSelectionToolbar'
+import { VirtualList } from '../VirtualList'
 
 const highlightLanguageMap = {
   bash,
@@ -296,23 +297,22 @@ export const Thread: FC = () => {
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
   const sessionKind = classifyAgentSession(currentSession)
   const isAgentDirectSession = sessionKind === 'agent-direct'
-  const directMessagesSelector = useMemo(
-    () => makeSelectDirectRunMessages(isAgentDirectSession),
-    [isAgentDirectSession],
-  )
-  const messages = useChatStore(directMessagesSelector)
-  const visibleTaskBoard =
-    taskBoard &&
-    taskBoard.sessionId === currentSession?.id &&
-    ['planning', 'running', 'synthesizing'].includes(taskBoard.status)
-      ? taskBoard
-      : null
+  const taskBoard = useChatStore((s) => s.taskBoard)
+  const agentActivity = useChatStore((s) => s.agentActivity)
+  const messages = useChatStore((s) => s.messages)
+  const streamingCodeAgentRun = useChatStore((s) => s.streamingCodeAgentRun)
+  const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
+  const agentTabs = useChatStore((s) => s.agentTabs)
   const railTaskBoard =
     taskBoard &&
     (taskBoard.sessionId === currentSession?.id ||
       agentTabs.some((tab) => tab.childSessionId === currentSession?.id))
       ? taskBoard
       : null
+  const roomTaskBoard =
+    isGroupSession && taskBoard?.sessionId === currentSession?.id ? taskBoard : null
+  const selectAgentTab = useChatStore((s) => s.selectAgentTab)
+  const selectSession = useChatStore((s) => s.selectSession)
   const navigate = useNavigate()
   const planningActivity =
     isGroupSession &&
@@ -356,8 +356,8 @@ export const Thread: FC = () => {
   const [childDetailsOpen, setChildDetailsOpen] = useState(false)
   const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
   const [previewCollapsed, setPreviewCollapsed] = useState(false)
-  const threadViewportRef = useRef<HTMLDivElement>(null)
-  const showInlineContextRail = showContextRail && (!previewItem || previewCollapsed)
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const showInlineContextRail = !isGroupSession && showContextRail && (!previewItem || previewCollapsed)
 
   async function openGroupConversation() {
     selectAgentTab(null)
@@ -438,22 +438,22 @@ export const Thread: FC = () => {
       )}
       <div className="flex min-h-0 flex-1 pt-14">
         <div className="flex min-w-0 flex-1 flex-col">
-          {isGroupSession && selectedAgentTab === null && (visibleTaskBoard || planningActivity) && (
+          {isGroupSession && selectedAgentTab === null && (roomTaskBoard || planningActivity) && (
             <LeaderViewBanner
-              taskBoard={visibleTaskBoard}
+              taskBoard={roomTaskBoard}
               agentTabs={agentTabs}
               activity={planningActivity}
               onOpenTasks={() => setGroupTasksOpen(true)}
             />
           )}
           <ThreadPrimitive.Viewport
-            ref={threadViewportRef}
+            ref={viewportRef}
             className="agenthub-thread-viewport flex-1 overflow-y-auto overscroll-contain scroll-auto px-6"
           >
             <ThreadWelcome />
             <VirtualThreadMessages
               key={currentSession?.id ?? 'no-session'}
-              scrollRef={threadViewportRef}
+              scrollRef={viewportRef}
             />
             <ThreadPrimitive.If empty={false}>
               <div className="min-h-28" />
@@ -465,7 +465,7 @@ export const Thread: FC = () => {
           <RoomTaskDrawer
             open={groupTasksOpen}
             onClose={() => setGroupTasksOpen(false)}
-            taskBoard={visibleTaskBoard}
+            taskBoard={roomTaskBoard}
             agentTabs={agentTabs}
             activity={planningActivity}
           />
@@ -562,13 +562,11 @@ const HeaderAgentStatusIndicator: FC = () => {
   )
 }
 
-const VirtualThreadMessages: FC<{ scrollRef: RefObject<HTMLDivElement> }> = ({ scrollRef }) => {
+const VirtualThreadMessages: FC<{ scrollRef: RefObject<HTMLElement> }> = ({ scrollRef }) => {
   const messageCount = useThread((state) => state.messages.length)
-  const { sourceMessages, streamingMessage, agentTyping } = useChatStoreShallow((state) => ({
-    sourceMessages: state.messages,
-    streamingMessage: state.streamingMessage,
-    agentTyping: state.agentTyping,
-  }))
+  const sourceMessages = useChatStore((state) => state.messages)
+  const streamingMessage = useChatStore((state) => state.streamingMessage)
+  const agentTyping = useChatStore((state) => state.agentTyping)
   const items = useMemo(() => Array.from({ length: messageCount }, (_, index) => index), [messageCount])
   const components = useMemo(
     () => ({ UserMessage, AssistantMessage, SystemMessage }),
@@ -857,7 +855,7 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
     : activity?.phase === 'synthesizing'
       ? '汇总中'
       : activity?.phase === 'planning'
-        ? '规划中'
+        ? '协调中'
         : '理解中'
 
   return (
@@ -898,7 +896,7 @@ const LeaderViewBanner: FC<LeaderViewBannerProps> = ({
           className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-xs text-neutral-600 transition hover:border-blue-200 hover:text-blue-700"
         >
           <ListTodo className="h-3.5 w-3.5" />
-          任务与线程
+          线程与产物
         </button>
       </div>
     </div>
@@ -969,49 +967,49 @@ const ThreadContextRail: FC<{
                   </div>
                 </div>
 
-                {directRunProgress ? (
-                  <div className="space-y-2">
-                    <div className="text-[11px] font-medium text-neutral-500">任务规划</div>
-                    {directRunProgress.steps.slice(0, 6).map((step) => (
-                      <div
-                        key={step.id}
-                        className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5"
-                      >
-                        <div className="mt-0.5 shrink-0">{directRunStepIcon(step.status)}</div>
-                        <div className="min-w-0">
-                          <div className="truncate text-xs font-medium text-neutral-800">
-                            {step.title}
-                          </div>
-                          {step.subtitle && (
-                            <div className="mt-0.5 truncate text-[11px] text-neutral-500">
-                              {step.subtitle}
-                            </div>
-                          )}
-                          {step.detail && (
-                            <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-neutral-500">
-                              {step.detail}
-                            </div>
-                          )}
+              {directRunProgress ? (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-medium text-neutral-500">执行步骤</div>
+                  {directRunProgress.steps.slice(0, 6).map((step) => (
+                    <div
+                      key={step.id}
+                      className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5"
+                    >
+                      <div className="mt-0.5 shrink-0">{directRunStepIcon(step.status)}</div>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-neutral-800">
+                          {step.title}
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : activeTask ? (
-                  <div className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
-                    <div className="mt-0.5 shrink-0">{taskStatusIcon(activeTask.status)}</div>
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-medium text-neutral-800">
-                        {activeTask.title}
-                      </div>
-                      <div className="mt-0.5 truncate text-[11px] text-neutral-500">
-                        {activeTask.progressStatus || activeTask.agentName || '等待成员执行'}
+                        {step.subtitle && (
+                          <div className="mt-0.5 truncate text-[11px] text-neutral-500">
+                            {step.subtitle}
+                          </div>
+                        )}
+                        {step.detail && (
+                          <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-neutral-500">
+                            {step.detail}
+                          </div>
+                        )}
                       </div>
                     </div>
+                  ))}
+                </div>
+              ) : activeTask ? (
+                <div className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2.5">
+                  <div className="mt-0.5 shrink-0">{taskStatusIcon(activeTask.status)}</div>
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-medium text-neutral-800">
+                      {activeTask.title}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-neutral-500">
+                      {activeTask.progressStatus || activeTask.agentName || '等待成员执行'}
+                    </div>
                   </div>
-                ) : null}
-              </div>
-            </RailCard>
-          )}
+                </div>
+              ) : null}
+            </div>
+          </RailCard>
+        )}
 
           <RailCard
             title="工作文件夹"
@@ -1229,7 +1227,7 @@ function TaskRuntimeStrip({
   const runtime =
     executionConfig.adapterName ||
     executionConfig.codeAgentType ||
-    (executionConfig.runtimeType === 'llm' ? 'LLM fallback' : executionConfig.runtimeType)
+    executionConfig.runtimeType
   const model = executionConfig.modelLabel || executionConfig.modelId
   const sandbox = [
     executionConfig.sandboxProvider,
@@ -1564,7 +1562,7 @@ const RoomTaskDrawer: FC<{
                                 )}
                                 {pendingChildNoticeTaskId === task.id && !canOpenChild && (
                                   <p className="mt-1 text-xs text-blue-600">
-                                    线程正在准备，正式分配后会自动变为可打开。
+                                    线程记录尚未创建；Manager 分发后会自动出现在这里。
                                   </p>
                                 )}
                                 {task.artifacts && task.artifacts.length > 0 && (
@@ -1600,14 +1598,14 @@ const RoomTaskDrawer: FC<{
                                     ? 'border-neutral-200 bg-white text-neutral-700 hover:border-blue-200 hover:text-blue-700'
                                     : 'border-neutral-100 bg-neutral-50 text-neutral-400 hover:border-blue-100 hover:text-blue-600',
                                 )}
-                                title={canOpenChild ? '打开成员线程' : '线程准备中'}
+                                title={canOpenChild ? '打开成员线程' : '线程记录尚未创建'}
                               >
                                 {canOpenChild ? (
                                   <ExternalLink className="h-3.5 w-3.5" />
                                 ) : (
                                   <Clock3 className="h-3.5 w-3.5" />
                                 )}
-                                {canOpenChild ? '线程' : '准备中'}
+                                {canOpenChild ? '打开' : '待建'}
                               </button>
                             </div>
                           </div>

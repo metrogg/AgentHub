@@ -20,7 +20,7 @@ export interface ExecutionConfigSummary {
   executionEnabled?: boolean
   cwdValid?: boolean
   canExecute?: boolean
-  readinessStatus: 'ready' | 'blocked' | 'fallback' | 'unknown'
+  readinessStatus: 'ready' | 'blocked' | 'unknown'
   blockers?: string[]
   commandPreview?: string
   requestedSandboxPolicy?: AgentRunProfile['sandboxPolicy']
@@ -65,14 +65,11 @@ export async function buildExecutionConfigSummary(input: {
     input.profile.runtimeType === 'code-agent'
       ? await inspectCodeAgentRuntime(input.profile, executionPath)
       : null
-  const readinessStatus =
-    input.profile.runtimeType === 'llm'
-      ? 'fallback'
-      : inspection?.canExecute
-        ? 'ready'
-        : inspection
-          ? 'blocked'
-          : 'unknown'
+  const readinessStatus = inspection?.canExecute
+    ? 'ready'
+    : inspection
+      ? 'blocked'
+      : 'unknown'
 
   return {
     runtimeType: input.profile.runtimeType,

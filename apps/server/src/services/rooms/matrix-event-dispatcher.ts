@@ -11,7 +11,7 @@ import {
   workerInstances,
   workspaceTasks,
 } from '@agenthub/db'
-import { coordinatorService } from '../coordinator-runtime/coordinator-service'
+import { managerRuntimeService, getActiveManagerProvider } from '../manager-runtime'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
@@ -88,11 +88,23 @@ export class MatrixRoomEventDispatcher {
   constructor(handlers: Partial<MatrixRoomEventDispatcherHandlers> = {}) {
     this.handlers = {
       runWorkerTaskRoom: (input) => workerRuntimeService.runTaskRoom(input),
-      stepManagerRoom: (input) => coordinatorService.stepRoom({
-        roomId: input.roomId,
-        ownerId: input.ownerId,
-        afterSequence: input.afterSequence,
-      }),
+      stepManagerRoom: async (input) => {
+        // If a resident Manager (OpenClaw/QwenPaw) is running, skip the local step call.
+        // The resident process observes the room via Matrix /sync autonomously.
+        const provider = getActiveManagerProvider()
+        if (provider && (provider.runtimeType === 'openclaw' || provider.runtimeType === 'qwenpaw')) {
+          const status = await provider.status()
+          if (status.running || status.endpoint) {
+            return { consumed: true, skipped: true, reason: 'resident-manager-active' }
+          }
+        }
+        return managerRuntimeService.stepRoom({
+          roomId: input.roomId,
+          ownerId: input.ownerId,
+          afterSequence: input.afterSequence,
+          source: input.source,
+        })
+      },
       cancelTaskRoom: (input) => cancelTaskRoomFromMatrix(input),
       recordApprovalControl: (input) => recordApprovalControlFromMatrix(input),
       resumeTaskRoomAfterHumanAnswer: (input) =>
@@ -141,6 +153,20 @@ export class MatrixRoomEventDispatcher {
         sourceEventId: event.id,
       })
       return true
+    }
+
+    // Check for Worker protocol messages (TASK_COMPLETED, BLOCKED, QUESTION, NO_REPLY)
+    if (event.senderType === 'worker') {
+      const { handleWorkerProtocolMessage } = await import('../worker-runtime/worker-result-listener')
+      const handled = await handleWorkerProtocolMessage({
+        roomId: room.id,
+        roomKind: room.kind,
+        body: event.body,
+        senderParticipantId: event.senderParticipantId,
+        senderType: event.senderType,
+        eventId: event.id,
+      })
+      if (handled) return true
     }
 
     const command = parseMatrixControlCommand(event.body)
@@ -343,7 +369,7 @@ async function cancelTaskRoomFromMatrix(input: {
     groupSessionId: thread?.groupSessionId ?? room.sessionId ?? room.id,
   }
 
-  const stopped = workerRuntimeService.stopTaskRoom(room.id)
+  const stopped = await workerRuntimeService.stopTaskRoom(room.id)
   if (stopped) {
     await roomService.appendTimelineEvent({
       roomId: room.id,

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   normalizePlannerOutput,
   validateRealWorkerAssignments,
-} from '../apps/server/src/services/orchestrator/planner'
+} from '../apps/server/src/services/orchestrator/plan-utils'
 import type { CollaborationContract } from '../apps/server/src/services/orchestrator/collaboration-contract'
 import type { ExecutionAgent } from '../apps/server/src/services/orchestrator/types'
 

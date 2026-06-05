@@ -32,9 +32,19 @@ import { env } from '../env'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger, serverFileLoggingEnabled, serverLogDir, serverLogPath } from '../lib/logger'
 import { DEFAULT_USER, authMiddleware, type AuthVariables } from '../middleware/auth'
+import { describeContainerRuntime, ensureOpenClawRuntimeImage } from '../services/container-runtime/agent-runtime-containers'
+import { dockerRuntime } from '../services/container-runtime/docker-runtime'
+import { describeControllerPlane } from '../services/controller-plane/diagnostics'
 import { describeSandboxRuntimeStatus } from '../services/execution/sandbox-provider'
 import { cleanupLegacyApplicationData } from '../services/legacy-cleanup'
 import { testLlmConnection } from '../services/llm-client'
+import {
+  getActiveManagerProvider,
+  getConfiguredRuntimeType,
+  getManagerProvider,
+  listManagerProviders,
+  type ManagerRuntimeType,
+} from '../services/manager-runtime'
 import { describeMatrixDiagnostics } from '../services/rooms/matrix-diagnostics'
 import { resolveWorkspaceStorageRoot } from '../services/workspace/auto-workspace'
 
@@ -220,6 +230,122 @@ export const settingsRoutes = new Hono<{ Variables: AuthVariables }>()
       output: result.output,
       config,
       diagnostics: await describeMatrixDiagnostics(),
+    })
+  })
+  .post('/matrix/local/stop', async (c) => {
+    const config = applyLocalMatrixRuntimeConfig()
+    const result = await stopLocalTuwunel()
+    logger.warn({ result }, 'Local Tuwunel stop requested from settings')
+    return c.json({
+      ok: result.ok,
+      message: result.message,
+      output: result.output,
+      config,
+      diagnostics: await describeMatrixDiagnostics(),
+    })
+  })
+  .get('/controller-plane/status', async (c) => {
+    return c.json(await describeControllerPlane())
+  })
+  .get('/container-runtime/status', async (c) => {
+    return c.json(await describeContainerRuntime())
+  })
+  .post('/container-runtime/prepare-local', async (c) => {
+    const infra = await startLocalHiclawLiteInfra()
+    const image = await ensureOpenClawRuntimeImage()
+    const diagnostics = await describeContainerRuntime()
+    const ok = infra.ok && image.present && diagnostics.docker.available
+    logger.warn({ infra, image, ok }, 'Local container runtime prepare requested from settings')
+    return c.json({
+      ok,
+      message: ok
+        ? '本地容器运行时已准备好：Tuwunel / MinIO 已启动，OpenClaw runtime 镜像可用。'
+        : infra.message || image.error || diagnostics.docker.error || '本地容器运行时准备失败。',
+      infra,
+      image,
+      diagnostics,
+    })
+  })
+  .get('/container-runtime/logs/:name', async (c) => {
+    const name = c.req.param('name')
+    if (!/^agenthub-(manager|worker)-[a-zA-Z0-9_.-]+$/.test(name)) {
+      return c.json({ ok: false, output: '', message: '只能读取 AgentHub runtime 容器日志。' }, 400)
+    }
+    const limitParam = Number(c.req.query('tail') ?? 160)
+    const tail = Number.isFinite(limitParam) ? Math.min(Math.max(Math.trunc(limitParam), 20), 500) : 160
+    const logs = await dockerRuntime.logs(name, tail)
+    return c.json({
+      ok: logs.ok,
+      output: logs.output,
+      message: logs.ok ? '容器日志已读取。' : logs.error ?? '读取容器日志失败。',
+    })
+  })
+  .get('/manager-runtime/status', async (c) => {
+    const activeProvider = getActiveManagerProvider()
+    const [providers, activeStatus, activeHealth] = await Promise.all([
+      listManagerProviders(),
+      activeProvider.status(),
+      activeProvider.healthCheck?.().catch((error: any) => ({
+        healthy: false,
+        error: error?.message || String(error),
+      })),
+    ])
+    return c.json({
+      configuredRuntimeType: getConfiguredRuntimeType(),
+      activeRuntimeType: activeProvider.runtimeType,
+      activeStatus,
+      activeHealth: activeHealth ?? null,
+      providers,
+      message: managerRuntimeStatusMessage(activeStatus),
+    })
+  })
+  .post('/manager-runtime/:type/start', async (c) => {
+    const type = parseManagerRuntimeType(c.req.param('type'))
+    const provider = getManagerProvider(type)
+    if (!provider) return c.json({ ok: false, message: `未知 Manager runtime：${type}` }, 404)
+    const status = provider.ensureStarted
+      ? await provider.ensureStarted()
+      : await provider.status()
+    const health = await provider.healthCheck?.().catch((error: any) => ({
+      healthy: false,
+      error: error?.message || String(error),
+    }))
+    logger.warn({ type, status, health }, 'Manager runtime start requested from settings')
+    return c.json({
+      ok: !status.error,
+      status,
+      health: health ?? null,
+      message: managerRuntimeStatusMessage(status),
+    })
+  })
+  .post('/manager-runtime/:type/stop', async (c) => {
+    const type = parseManagerRuntimeType(c.req.param('type'))
+    const provider = getManagerProvider(type)
+    if (!provider) return c.json({ ok: false, message: `未知 Manager runtime：${type}` }, 404)
+    const status = provider.stop ? await provider.stop() : await provider.status()
+    logger.warn({ type, status }, 'Manager runtime stop requested from settings')
+    return c.json({
+      ok: true,
+      status,
+      message: `${type} Manager runtime 已停止或无需停止。`,
+    })
+  })
+  .post('/manager-runtime/:type/health', async (c) => {
+    const type = parseManagerRuntimeType(c.req.param('type'))
+    const provider = getManagerProvider(type)
+    if (!provider) return c.json({ ok: false, message: `未知 Manager runtime：${type}` }, 404)
+    const [status, health] = await Promise.all([
+      provider.status(),
+      provider.healthCheck?.().catch((error: any) => ({
+        healthy: false,
+        error: error?.message || String(error),
+      })),
+    ])
+    return c.json({
+      ok: health?.healthy ?? status.running,
+      status,
+      health: health ?? null,
+      message: managerRuntimeStatusMessage(status),
     })
   })
   .post('/storage/ensure', async (c) => {
@@ -727,6 +853,37 @@ function applyLocalMatrixRuntimeConfig() {
   }
 }
 
+function parseManagerRuntimeType(value: string): ManagerRuntimeType {
+  if (value === 'openclaw' || value === 'qwenpaw') return value
+  throw AppError.fromCode(
+    AppErrorCodes.VALIDATION_FAILED,
+    `不支持的 Manager runtime：${value}`,
+  )
+}
+
+function managerRuntimeStatusMessage(status: {
+  runtimeType: ManagerRuntimeType
+  available: boolean
+  running: boolean
+  syncReady?: boolean
+  endpoint?: string | null
+  error?: string | null
+}) {
+  if (status.runtimeType === 'openclaw') {
+    if (status.running) {
+      return 'OpenClaw resident Manager 正在运行，通过 Matrix /sync 自主协调。'
+    }
+    if (status.available) {
+      return 'OpenClaw 已安装，但 resident Manager 未运行。请检查日志或点击“启动”。'
+    }
+    return status.error || '未检测到 OpenClaw。请安装（bash infra/setup-openclaw.sh）或检查 PATH。'
+  }
+  if (status.runtimeType === 'qwenpaw') {
+    return status.error || 'QwenPaw Manager runtime 尚未接入。'
+  }
+  return '未知的 Manager runtime 配置。请检查 AGENTHUB_MANAGER_RUNTIME 环境变量。'
+}
+
 async function startLocalTuwunel() {
   const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
   if (!existsSync(composeFile)) {
@@ -753,6 +910,66 @@ async function startLocalTuwunel() {
       ok: false,
       output: [error?.stdout, error?.stderr].filter(Boolean).join('\n').trim(),
       message: error?.message || '启动 Tuwunel 失败，请确认 Docker Desktop 正在运行。',
+    }
+  }
+}
+
+async function startLocalHiclawLiteInfra() {
+  const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
+  if (!existsSync(composeFile)) {
+    return {
+      ok: false,
+      output: '',
+      message: `找不到 HiClaw-lite compose 文件：${composeFile}`,
+    }
+  }
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      'docker',
+      ['compose', '-f', composeFile, 'up', '-d'],
+      { timeout: 90_000, windowsHide: true, maxBuffer: 1024 * 1024 * 5 },
+    )
+    const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+    return {
+      ok: true,
+      output,
+      message: 'Tuwunel / MinIO 已启动。',
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      output: [error?.stdout, error?.stderr].filter(Boolean).join('\n').trim(),
+      message: error?.message || '启动 Tuwunel / MinIO 失败，请确认 Docker Desktop 正在运行。',
+    }
+  }
+}
+
+async function stopLocalTuwunel() {
+  const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
+  if (!existsSync(composeFile)) {
+    return {
+      ok: false,
+      output: '',
+      message: `找不到 Matrix compose 文件：${composeFile}`,
+    }
+  }
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      'docker',
+      ['compose', '-f', composeFile, 'stop', 'tuwunel'],
+      { timeout: 60_000, windowsHide: true },
+    )
+    const output = [stdout, stderr].filter(Boolean).join('\n').trim()
+    return {
+      ok: true,
+      output,
+      message: 'Tuwunel 已停止。AgentHub UI 仍会保留已同步的 Room timeline 索引；重新启动后可继续同步。',
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      output: [error?.stdout, error?.stderr].filter(Boolean).join('\n').trim(),
+      message: error?.message || '停止 Tuwunel 失败，请确认 Docker Desktop 正在运行。',
     }
   }
 }

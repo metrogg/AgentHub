@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import { roomService } from '../services/rooms'
 import { describeMatrixDiagnostics } from '../services/rooms/matrix-diagnostics'
+import { loadRoomSessionSnapshot } from '../services/rooms/room-session-snapshot'
 
 const createRoomSchema = z.object({
   kind: z.enum(['group', 'manager_dm', 'task', 'direct', 'human_intervention']),
@@ -96,6 +97,19 @@ export const roomRoutes = new Hono<{ Variables: AuthVariables }>()
   })
   .get('/matrix/diagnostics', async (c) => {
     return c.json(await describeMatrixDiagnostics())
+  })
+  .get('/session/:sessionId/snapshot', async (c) => {
+    const user = c.get('user')
+    const afterSequence = Number(c.req.query('afterSequence') ?? 0)
+    const includeLegacy = c.req.query('includeLegacy') === 'true'
+    return c.json(
+      await loadRoomSessionSnapshot({
+        sessionId: c.req.param('sessionId'),
+        ownerId: user.sub,
+        afterSequence: Number.isFinite(afterSequence) ? afterSequence : 0,
+        includeLegacy,
+      }),
+    )
   })
   .get('/:roomId', async (c) => {
     const user = c.get('user')

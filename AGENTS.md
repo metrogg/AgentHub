@@ -1,7 +1,7 @@
 # AgentHub
 
 本文档给 AI Coding Agent 阅读。人类开发者可以先看 `README.md`，再看 `docs/文档索引与权威口径.md`、`docs/当前状态与下一步路线.md`、`docs/AgentHub-HiClaw-lite开源内核重构方案.md`、`docs/HiClaw架构调研与AgentHub底层重构方案.md`、`docs/Coze新版本对标拆解与开源复刻路线.md` 和 `docs/使用指南.md`。
-`docs/hiclaw-wiki.agent.final.md` 和本地 `hiclaw源码参考/` 是本轮 HiClaw-lite 内核重构的主要参考依据；`docs/Kimi-Claw群聊系统完整设计规格书(1).md`、`docs/Coze新版本对标拆解与开源复刻路线.md` 是重要产品参考。如果参考资料与当前工程口径冲突，以 `AGENTS.md`、`README.md`、`docs/文档索引与权威口径.md`、`docs/当前状态与下一步路线.md` 和 `docs/AgentHub-HiClaw-lite开源内核重构方案.md` 为准。
+`docs/hiclaw-wiki.agent.final.md` 和本地 `hiclaw源码参考/` 是本轮 HiClaw-lite 内核重构的主要架构参考；本地 `clawteam源码/ClawTeam/` 是轻量落地参考，重点学习 CLI adapter、git worktree、task lock、LeaderWatcher、profile doctor/test、board snapshot。`docs/Kimi-Claw群聊系统完整设计规格书(1).md`、`docs/Coze新版本对标拆解与开源复刻路线.md` 是重要产品参考。如果参考资料与当前工程口径冲突，以 `AGENTS.md`、`README.md`、`docs/文档索引与权威口径.md`、`docs/当前状态与下一步路线.md` 和 `docs/AgentHub-HiClaw-lite开源内核重构方案.md` 为准。
 
 ## 当前目标
 
@@ -70,14 +70,15 @@ AgentHub 是字节跳动 AI 全栈挑战赛项目。当前产品北极星已经�
 
 AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直接变成只有后端图编排的 LangGraph wrapper。当前产品目标是：先用 IM 产品体验承载多 Coding Agent 协作，再把它升级成 Coze 风格的 AI 工作台；用 DAG/checkpoint/event trace 等工程能力保证它可信、可看、可控。
 
-底层重构方向已经进一步明确：建设 AgentHub 自己的轻量版 HiClaw Open Kernel，而不是继续手搓低配协作层，也不是照搬 HiClaw 的企业部署栈。第一阶段默认形态是单进程 AgentHub 服务 + CLI 子进程 Worker + 自研 UI + 本地 filesystem 共享存储；通信层保留 Matrix Room/timeline/participant/mention 语义，并提供真实 Matrix homeserver adapter（优先 Tuwunel，兼容 Synapse/Conduit），但本地开发可用 RoomService/local adapter；Gateway 保留 Higress/LiteLLM adapter 抽象。
+底层重构方向已经进一步明确：建设 AgentHub 自己的轻量版 HiClaw Open Kernel，而不是继续手搓低配协作层，也不是照搬 HiClaw 的企业部署栈。HiClaw 给出 Room / Manager / Worker / Human / Storage 的正确协作范式；ClawTeam 给出更适合本地第一阶段的轻量实现技巧，例如 CLI profile、worktree 隔离、任务 claim lock、watcher 和服务端 snapshot。第一阶段产品形态是嵌入式本地控制器：AgentHub Server 仍在本机作为 Controller API / UI backend / Room adapter 运行；Tuwunel、MinIO、OpenClaw Manager、OpenClaw Worker 可通过 Docker resident runtime 承载。自研 UI 替代 Element Web，本地 filesystem 仍是默认 SharedStorage，MinIO/S3-compatible 是可切换 adapter。通信层以 Matrix Room/timeline/participant/mention 语义作为协作事实源，本地真实 Matrix 默认采用 Tuwunel，兼容连接已有 Synapse/Conduit；`TestRoomAdapter` 只允许自动化测试使用，不能作为开发/产品通信层或故障降级路径，也不能用 ClawTeam 的 file inbox 替代内部主通信。Gateway 保留 Higress/LiteLLM adapter 抽象。
 
 四个最高优先级模块：
 
 - Manager 协调器：对齐 HiClaw Manager 章节，Manager 要有 runtime、人格配置、skills、state、Worker registry、Room 通信和 heartbeat/patrol。
 - Worker 运行时：对齐 HiClaw Worker 章节，Worker 是真实运行实体，有身份、状态、模型、skills/MCP、Room、heartbeat、sleep/wake/stop。
-- Matrix 通信层：对齐 HiClaw Matrix/Tuwunel 章节，Room / timeline / participant / mention 是协作事实源；`LocalMatrixCompatibleRoomAdapter` 只能作为测试/开发 fallback，不能被当成真实通信层。
+- Matrix 通信层：对齐 HiClaw Matrix/Tuwunel 章节，Room / timeline / participant / mention 是协作事实源；本地真实 homeserver 默认用 Tuwunel；开发和产品路径必须连接真实 Matrix homeserver，`TestRoomAdapter` 只允许自动化测试使用。
 - 共享存储层：对齐 HiClaw MinIO 章节的“共享任务树/产物引用”思想，但第一阶段默认由本地 filesystem object store 实现；产物、任务契约和 handoff ref 进入 ArtifactStore / SharedStorage，object key 语义保持 S3-compatible，后续可切 MinIO/S3 adapter。
+- 轻量执行可靠性：参考 ClawTeam 的 `FileTaskStore`、`WorkspaceManager`、`NativeCliAdapter`、`LeaderWatcher` 和 `Board`，补齐 Worker claim/lock、git worktree 模式、profile doctor/test、ManagerPatrol snapshot diff、服务端 run/team snapshot；这些只能作为轻量实现手段，不能替代真实 Matrix Room 通信。
 
 目标资源：
 
@@ -87,7 +88,7 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 - OpenClaw / QwenPaw 应优先作为 Orchestrator / Team Leader / Manager 这类指挥型 runtime 候选；Codex / Claude Code / OpenCode / Gemini CLI 更偏执行型 Coding Worker。不要把 OpenClaw 简单硬塞成普通 `codeAgentType`，后续应拆出 `coordinator runtime` 与 `worker runtime`。
 - 第一阶段优先做 `RoomService + Matrix Adapter`、`CoordinatorRuntime`、`WorkerRuntime`、`ArtifactStore` 和 Controller/Reconciler 资源化。
 
-详细方案见 `docs/AgentHub-HiClaw-lite开源内核重构方案.md`。后续涉及多 Agent 底层执行、子对话、产物、运行事件、生命周期的改动，应优先向该方案收敛，而不是继续给旧流程链打补丁。
+详细方案见 `docs/AgentHub-HiClaw-lite开源内核重构方案.md`，三方取舍见 `docs/AgentHub-vs-HiClaw-vs-ClawTeam-对比分析报告.md`。后续涉及多 Agent 底层执行、子对话、产物、运行事件、生命周期的改动，应优先向这些方案收敛，而不是继续给旧流程链打补丁。
 
 ## 关键交互边界
 
@@ -143,6 +144,20 @@ AgentHub 不应该变成纯 CrewAI 式固定角色任务模板，也不应该直
 
 `OrchestratorEngine`、`TaskExecutionService`、`LocalA2ATransport` 已删除。所有任务执行通过 `RunController` / `RoomController` / `WorkerController` / `RuntimeLeaseController` / `ManagerLoop` / `WorkerRuntimeService`。`messages.ts` 不应继续扩展成编排主脑。
 
+`apps/server/src/services/controller-plane/` 是轻量 Controller Plane 第一版：`ControllerApi` 是 Manager skill / 后续 CLI/API 应调用的统一控制面门面，`ReconcileQueue` 是资源 reconcile 请求入口，`WorkerBackend` 是 Local CLI、OpenClaw/QwenPaw resident Worker、Docker runtime Worker 等 Worker backend 的 seam。Manager Runtime 不应直接 import `roomService`、`runController`、`workerController` 或 `runtimeLeaseController`。
+
+### Docker Resident Runtime
+
+当前已经开始把 HiClaw 式常驻 Manager / Worker 接入 Docker，但不要把它理解成“把整个 AgentHub Server 容器化”：
+
+- AgentHub Server 仍在本机运行，负责 Controller API、Room adapter、设置页诊断和前端数据接口。
+- `infra/docker-compose.hiclaw-lite.yml` 提供本地 Tuwunel 和 MinIO。
+- `infra/openclaw-runtime/Dockerfile` 构建统一 OpenClaw runtime 镜像，默认 tag 是 `agenthub/openclaw-runtime:local`。
+- `AGENTHUB_CONTAINER_RUNTIME=docker` 会同时启用 Manager / Worker Docker 后端；也可以分别用 `AGENTHUB_MANAGER_BACKEND=docker`、`AGENTHUB_WORKER_BACKEND=docker`。
+- 容器内访问本机 Controller / Matrix / LLM gateway 默认使用 `host.docker.internal`：`AGENTHUB_CONTAINER_CONTROLLER_URL`、`AGENTHUB_CONTAINER_MATRIX_URL`、`AGENTHUB_CONTAINER_LLM_BASE_URL` 可覆盖。
+- 设置页“控制台 / 本机诊断”已经能查看容器 runtime 状态、OpenClaw 镜像、Manager/Worker 容器和日志。
+- Matrix server name 默认统一为 `agenthub.local`，必须和 Tuwunel compose、Manager identity、Worker identity 保持一致。
+
 ### Worker Runtime 状态机
 
 WorkerInstance.observedState 已扩展为 HiClaw 风格状态机：
@@ -175,7 +190,7 @@ Worker 本地 workspace 目录位于 `{agentHubUserDataRoot()}/workers/{workerIn
 - 当前 `MatrixRoomAdapter` 已拆出 `MatrixClient` / `MatrixIdentityService`：Controller 会为 Human、Manager、Worker 确保真实 Matrix account，持久化 `matrix_identities`，邀请/加入真实 room，并在写 timeline 时优先使用 sender participant 自己的 Matrix access token 发送 `m.room.message`。SQLite 只作为 AgentHub UI 索引和资源投影，不再被称为 Matrix 实现。
 - 当前还新增了 `MatrixRuntimeListener`、`MatrixRuntimeSupervisor` 和 `MatrixRoomEventDispatcher`：可以用真实 Matrix identity token 调 `/sync`，把真实 room event 导入 AgentHub timeline，解析 `m.mentions` / 可见 `matrix.to` mention 和 `m.file/m.image/...` 文件引用，并把人类群聊消息调给 Manager、把 task room 中 @ Worker 的消息调给 WorkerRuntime。`MatrixRuntimeSupervisor` 会在 Room participant reconcile、TaskThread room reconcile、Worker ready 和 server startup recovery 时托管 Manager / Worker listener；Worker stopped / stale-failed 时会停掉对应 listener。`/sync` 临时失败会记录到 `matrix_identities.metadata.matrixSync` 并退避重试，不会让常驻 listener 直接退出。
 - Matrix Room 内的基础控制消息已经接入控制面：task room 中 `/stop` / `/cancel` 会取消对应 task、释放 RuntimeLease 并写回 timeline；`/approve` / `/deny` 会作为人工控制事件进入 timeline 并触发 Manager 重新观察；`m.file/m.image/m.video/m.audio` 文件事件会优先通过 Matrix media API 下载真实 `mxc://` 内容，并物化到 ArtifactStore / MinIO/S3-compatible object store，失败时才透明降级为保留文件引用和下载错误的 `partial` artifact。下一步通信层继续补 typing/presence、人工确认与 pending proposal 的强绑定、OpenClaw/QwenPaw 原生 Matrix runtime 进程化、TokenVault，以及前端更 Matrix-sync-native 的投影；不能退回后端函数直接写伪 timeline 事件来假装 Agent 交流。
-- 本地开发如需真实基础设施，先用 `infra/docker-compose.hiclaw-lite.yml` 启动 Tuwunel 和 MinIO，再配置 `AGENTHUB_ROOM_PROVIDER=matrix`、`AGENTHUB_MATRIX_HOMESERVER_URL`、`AGENTHUB_MATRIX_ACCESS_TOKEN`、`AGENTHUB_OBJECT_STORE_PROVIDER=s3` 等环境变量。
+- 本地开发如需真实基础设施，先用 `infra/docker-compose.hiclaw-lite.yml` 启动 Tuwunel 和 MinIO，或在设置页点击“应用本地配置 / 启动 Tuwunel”；Matrix 配置使用 `AGENTHUB_ROOM_PROVIDER=matrix`、`AGENTHUB_MATRIX_HOMESERVER_URL`、`AGENTHUB_MATRIX_REGISTRATION_TOKEN` 等环境变量，S3/MinIO 存储使用 `AGENTHUB_OBJECT_STORE_PROVIDER=s3` 等配置。
 
 A2A 调整为外部互操作层，不再作为第一阶段内部主通信路径：
 
@@ -292,6 +307,9 @@ bun test tests/orchestrator-routing.test.ts
 
 - `apps/server/src/routes/messages.ts`: ChatIngress，负责鉴权、Room-first 写入入口、`messages` 兼容投影读取和进入 Manager/Run 主线；不要继续扩成编排主脑。
 - `apps/server/src/services/orchestrator/manager-loop.ts`: Manager observe/act/review loop。
+- `apps/server/src/services/controller-plane/controller-api.ts`: Manager skill 和后续 Controller API 的统一控制面门面。
+- `apps/server/src/services/controller-plane/reconcile-queue.ts`: 轻量资源 reconcile queue，当前为内存实现。
+- `apps/server/src/services/controller-plane/worker-backend.ts`: WorkerBackend seam，当前默认 Local CLI backend。
 - `apps/server/src/services/coordinator-runtime/assign-dispatcher.ts`: Coordinator assign 到 Run/TaskThread/task room/WorkerRuntime 的派发入口。
 - `apps/server/src/services/orchestrator/run-controller.ts`: Run 与 task 生命周期控制面。
 - `apps/server/src/services/rooms/room-controller.ts`: group/task room 与 participant reconcile 控制面。

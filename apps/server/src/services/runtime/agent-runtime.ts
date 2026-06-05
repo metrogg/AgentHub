@@ -10,9 +10,8 @@ export interface AgentProfile {
   systemPrompt?: string
   color?: string
   modelId?: string | null
-  runtimeType: 'llm' | 'code-agent'
-  codeAgentType?: CodeAgentType
-  roleProfile?: Record<string, unknown> | null
+  runtimeType: 'code-agent'
+  codeAgentType?: 'codex' | 'claude-code' | 'opencode' | 'gemini'
   a2aEndpoint?: string | null
   capabilityTags: string[]
   skillIds?: string[]

@@ -158,6 +158,15 @@ export class MatrixRoomAdapter implements RoomAdapter {
       displayName: 'Manager',
       role: 'manager',
     })
+    if (input.workerInstanceId) {
+      await this.addParticipant({
+        roomId: room.id,
+        participantType: 'worker',
+        displayName: `Worker-${input.workerInstanceId.slice(0, 6)}`,
+        role: 'member',
+        workerInstanceId: input.workerInstanceId,
+      })
+    }
     return room
   }
 
@@ -444,7 +453,7 @@ export class MatrixRoomAdapter implements RoomAdapter {
     if (!homeserverUrl) {
       throw new Error(
         'Matrix room provider requires AGENTHUB_MATRIX_HOMESERVER_URL. ' +
-          'Start Tuwunel/Synapse, or set AGENTHUB_ROOM_PROVIDER=local-matrix-compatible only for local tests.',
+          'Start Tuwunel/Synapse/Conduit and keep AGENTHUB_ROOM_PROVIDER=matrix.',
       )
     }
     const signature = [

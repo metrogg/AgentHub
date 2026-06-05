@@ -126,7 +126,7 @@ export function cancelAllAgentReplies() {
 import type { AgentExecutionEnvelope } from './execution/agent-execution-envelope'
 import { DEFAULT_ENV_ALLOWLIST } from './execution/agent-execution-envelope'
 import { isCodeAgentProfile } from './runtime'
-import { buildA2AAgentMessage } from './protocols/a2a-internal'
+import { buildA2AAgentMessage } from './protocols/a2a-adapter'
 
 export async function runAgentReply(
   sessionId: string,
@@ -290,33 +290,12 @@ async function _runAgentReply(
         }
       }
     } else {
-      // 无 profile 时回退到默认 LLM
-      const { streamReply } = await import('./llm')
-      const { DEFAULT_AGENT_INSTRUCTIONS } = await import('./llm-client')
-      const llmMessages = historyAsc.map((m) => {
-        let content = m.content
-        if (m.replyToMessageId) {
-          const repliedTo = historyAsc.find((x) => x.id === m.replyToMessageId)
-          if (repliedTo) {
-            const preview = repliedTo.content.slice(0, 200)
-            content = `[回复 ${repliedTo.senderType === 'user' ? '用户' : 'Agent'}: ${preview}${repliedTo.content.length > 200 ? '...' : ''}]\n${m.content}`
-          }
-        }
-        return {
-          role: (m.senderType === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-          content,
-        }
-      })
-      const userContext = await userProfileSystemContext()
-      const systemContext = userContext ? `${DEFAULT_AGENT_INSTRUCTIONS}\n\n${userContext}` : undefined
-      for await (const delta of streamReply(llmMessages, systemContext, undefined, run.controller.signal)) {
-        if (run.cancelled) break
-        fullContent += delta
-        broadcast(sessionId, {
-          type: WsEvent.MessageStream,
-          payload: { sessionId, messageId: streamMsgId, delta, agentId, agentName },
-        })
-      }
+      // AgentHub 自身不再作为 LLM runtime。没有 profile / profile.runtimeType
+      // 不是 'code-agent' 的调用都应在上游被拒绝；这里留显式错误，
+      // 避免静默 fallback 到内部 LLM。
+      throw new Error(
+        `runAgentReply: missing or invalid AgentProfile. AgentHub Worker 必须是真实 Code Agent runtime（codex|claude-code|opencode|gemini），不接受 LLM profile 或空 profile。`,
+      )
     }
   } catch (error: any) {
     if (run.cancelled || isAbortError(error)) {
@@ -361,7 +340,7 @@ async function _runAgentReply(
             agentName,
             role: profile.role ?? null,
             color: profile.color ?? null,
-            runtimeType: profile.runtimeType ?? 'llm',
+            runtimeType: profile.runtimeType ?? 'code-agent',
             codeAgentType: profile.codeAgentType ?? null,
             modelId: profile.modelId ?? null,
             sandboxPolicy: profile.sandboxPolicy ?? null,

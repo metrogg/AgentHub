@@ -527,7 +527,7 @@ function ensureLegacySchema(database: Database) {
     'rooms',
     `CREATE TABLE rooms (
       id TEXT PRIMARY KEY NOT NULL,
-      provider TEXT NOT NULL DEFAULT 'local-matrix-compatible',
+      provider TEXT NOT NULL DEFAULT 'matrix',
       provider_room_id TEXT NOT NULL,
       kind TEXT NOT NULL,
       owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -554,6 +554,9 @@ function ensureLegacySchema(database: Database) {
   ensureIndex(database, 'rooms_session_id_idx', 'CREATE INDEX rooms_session_id_idx ON rooms(session_id)')
   ensureIndex(database, 'rooms_run_id_idx', 'CREATE INDEX rooms_run_id_idx ON rooms(run_id)')
   ensureIndex(database, 'rooms_task_thread_id_idx', 'CREATE INDEX rooms_task_thread_id_idx ON rooms(task_thread_id)')
+  if (tableExists(database, 'rooms') && hasColumn(database, 'rooms', 'provider')) {
+    database.exec("UPDATE rooms SET provider = 'matrix' WHERE provider = 'local-matrix-compatible'")
+  }
 
   ensureTable(
     database,

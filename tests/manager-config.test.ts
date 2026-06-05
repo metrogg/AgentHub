@@ -10,7 +10,7 @@ describe('Manager config workspace', () => {
     process.env.AGENTHUB_APP_DATA_DIR = appDataDir
     Bun.env.AGENTHUB_APP_DATA_DIR = appDataDir
 
-    const { ensureManagerConfig } = await import('../apps/server/src/services/coordinator-runtime/manager-config')
+    const { ensureManagerConfig } = await import('../apps/server/src/services/manager-runtime/manager-config')
     const paths = ensureManagerConfig('workspace-1')
 
     expect(existsSync(paths.soulPath)).toBe(true)

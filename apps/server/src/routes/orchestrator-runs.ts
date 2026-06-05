@@ -212,7 +212,7 @@ export const orchestratorRunRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!thread?.id) {
       return c.json({
         ok: false,
-        message: '该任务没有 TaskThread，无法通过 WorkerRuntime 重试。旧 OrchestratorEngine retry 已不再作为主路径。',
+        message: '该任务没有 TaskThread，无法通过 WorkerRuntime 重试。WorkerRuntime retry 需要 task thread。',
       }, 409)
     }
 

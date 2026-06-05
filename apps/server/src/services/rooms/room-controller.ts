@@ -104,7 +104,7 @@ export class RoomController {
       }
       return
     }
-    await roomService.addWorkerParticipant(roomId, input.workspaceAgentId)
+    await roomService.addWorkerParticipant(roomId, input.workspaceAgentId, input.workerInstanceId ?? null)
   }
 }
 

@@ -1,19 +1,19 @@
 # Matrix 通信层与 Manager / Worker 运行时分工实施方案
 
-最后更新：2026-06-04
+最后更新：2026-06-05（Tuwunel 本地真实 Matrix 与 Controller Plane 诊断收口）
 
 本文档用于下一阶段并行重构分工。目标不是把 AgentHub 直接搬成完整 HiClaw 企业栈，而是做成轻量版 HiClaw：
 
-- 前端仍保留 AgentHub 自己的 IM / Coze 风格产品壳。
+- 前端仍保留 AgentHub 自己的 IM / Coze / Kimi 风格产品壳，不使用 Element Web 作为默认产品入口。
 - 内部协作事实源改成 Matrix Room / timeline / participant / mention。
 - Manager 是真实协调器，通过 skills 操作 Controller API。
 - Worker 是真实运行实体，通过 Room 接单、澄清、汇报、交付。
 - 默认仍是单进程 AgentHub 服务 + 本地 CLI 子进程 + filesystem SharedStorage。
-- 真实 Matrix homeserver 是目标通信层；`local-matrix-compatible` 只保留为本地开发和测试 fallback。
+- 本地真实 Matrix 默认采用 Tuwunel；开发和产品路径必须连接真实 Matrix homeserver。`TestRoomAdapter` 只允许自动化测试使用，不是离线开发或故障降级通信层。
 
 ## 本地真实 Matrix 启动方式
 
-AgentHub 第一阶段默认采用轻量 HiClaw 路线：用本地 Docker Compose 托管一个 Tuwunel homeserver，Agent 执行仍可继续走本机 `local-workdir`。这里的 Docker 只用于通信基础设施，不等于每个 Agent 都进入 Docker sandbox。
+AgentHub 第一阶段默认采用轻量 HiClaw 路线：用本地 Docker Compose 托管一个 Tuwunel homeserver，Agent 执行仍可继续走本机 `local-workdir`。这里的 Docker 只用于通信基础设施，不等于每个 Agent 都进入 Docker sandbox。AgentHub UI 自己消费 Matrix Room / timeline / participant / mention 语义；Element Web 只可作为外部 Matrix 调试客户端。
 
 启动基础设施：
 
@@ -47,6 +47,13 @@ curl http://localhost:8000/api/rooms/matrix/diagnostics
 bun run infra:down
 ```
 
+设置页也提供同一条本地体验路径：
+
+- `应用本地配置`：把当前 AgentHub 进程配置为 `AGENTHUB_ROOM_PROVIDER=matrix`，并指向本地 Tuwunel。
+- `启动 Tuwunel`：执行 `docker compose -f infra/docker-compose.hiclaw-lite.yml up -d tuwunel`。
+- `停止 Tuwunel`：执行 `docker compose -f infra/docker-compose.hiclaw-lite.yml stop tuwunel`，只停止 homeserver，不清理已同步的 Room timeline 索引。
+- `Matrix 通信层` 诊断卡会显示 provider、homeserver、active rooms、identities、listeners 和 listener error。
+
 `.env` 中需要打开真实 Matrix provider：
 
 ```bash
@@ -58,7 +65,7 @@ AGENTHUB_MATRIX_AUTO_INVITE_PARTICIPANTS=true
 AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS=true
 ```
 
-当前 compose 文件位于 [../infra/docker-compose.hiclaw-lite.yml](../infra/docker-compose.hiclaw-lite.yml)，Tuwunel 配置对齐 HiClaw 的默认做法：`CONDUWUIT_*` 环境变量、`6167` Matrix client API 端口、允许本地开发注册、持久化数据卷。Synapse / Conduit 不作为默认托管服务；它们只作为“连接已有 Matrix homeserver”的兼容目标。
+当前 compose 文件位于 [../infra/docker-compose.hiclaw-lite.yml](../infra/docker-compose.hiclaw-lite.yml)，Tuwunel 配置对齐 HiClaw 的默认做法：`CONDUWUIT_*` 环境变量、`6167` Matrix client API 端口、允许本地开发注册、持久化数据卷。Synapse / Conduit 不作为 AgentHub 本地默认托管服务；它们只作为“连接已有 Matrix homeserver”的兼容目标。
 
 ## 一句话分工
 
@@ -78,6 +85,7 @@ AGENTHUB_MATRIX_AUTO_JOIN_PARTICIPANTS=true
 - Matrix 真实 room 创建、identity 注册或登录、invite / join、participant token 发言
 - 普通 group/direct 新消息 Room-first 写入：先写 Room timeline / Matrix event，再生成 `messages` 兼容投影
 - `GET /api/messages/:sessionId` 读取侧 Room-first：优先从 Room timeline 投影，旧 `messages` 表只补历史/特殊兼容行
+- 编辑、清空、撤回、重发关联撤回、重新生成关联撤回、pin/unpin 已写成 Room timeline 的 append-only `message.*` 控制事件，旧 `messages` 更新/删除只作为迁移期 UI 缓存同步
 - `/sync` 导入、mention 解析、file ref 解析、`mxc://` 下载到 ArtifactStore
 - `/stop` 取消 task room
 - `/approve` 和普通 human reply 回答 pending Worker clarification
@@ -134,31 +142,41 @@ flowchart LR
 
 现状：
 
-- `AGENTHUB_ROOM_PROVIDER=matrix` 时使用真实 Matrix homeserver。
-- test / local fallback 使用 `local-matrix-compatible`。
-- 默认非 test 已经倾向 `MatrixRoomAdapter`，但启动提示、设置页和诊断还不完整。
+- `AGENTHUB_ROOM_PROVIDER=matrix` 时使用真实 Matrix homeserver，AgentHub 本地默认推荐 Tuwunel。
+- `AGENTHUB_ROOM_PROVIDER` 不再提供本地假 provider 选项；显式配置旧 provider 会直接报错。
+- 自动化测试可通过 `NODE_ENV=test` + `AGENTHUB_TEST_ROOM_ADAPTER=1` 使用 `TestRoomAdapter`，但该 adapter 不从产品模块公开，也不能在开发/生产启用。
+- 默认非 test 使用 `MatrixRoomAdapter`。
+- 设置页已提供本地 Tuwunel 配置、启动、停止和 Matrix 诊断入口。
 
-要做：
+已做：
 
 1. 增加 Matrix runtime diagnostic：
    - homeserver URL 是否配置
    - server name 是否配置
    - admin token / registration token 是否可用
-   - register / login / createRoom / sync / send 是否可用
+   - homeserver `/versions` 是否可达
+   - room / identity / participant / listener 数量
    - auto invite / auto join 是否生效
 2. 设置页明确显示：
-   - 当前 provider：`matrix` 或 `local-matrix-compatible`
-   - `local-matrix-compatible` 是开发 fallback，不是最终协作层
+   - 当前 provider 固定为真实 `matrix`
+   - 未配置或不可达时明确显示 Matrix 未 ready，不伪装成可用通信层
    - 真实 Matrix homeserver 推荐 Tuwunel，兼容 Synapse / Conduit
-3. 服务启动时输出清晰日志：
-   - Matrix ready
-   - Matrix configured but unhealthy
-   - fallback local provider
+   - 可以在 AgentHub UI 内应用本地配置、启动 Tuwunel、停止 Tuwunel
 
 验收：
 
 - 用户能在 UI 或日志中明确知道当前是不是跑真实 Matrix。
 - Matrix 未配置时不能假装“真实 Matrix 已启用”。
+- 用户不需要打开 Element Web；AgentHub 自己的 UI 消费 Matrix Room timeline / participant / mention 语义。
+
+下一步：
+
+1. 服务启动时输出更清晰日志：
+   - Matrix ready
+   - Matrix configured but unhealthy
+   - Matrix not configured / not ready
+2. 跑真实 Tuwunel 现场 e2e，而不是只用 fake Matrix homeserver。
+3. 把设置页 Matrix 诊断和 `/api/rooms/matrix/diagnostics` 的字段继续对齐到 register / login / createRoom / sync / send 分项。
 
 ### 1.2 Matrix Identity 与 Membership
 
@@ -757,12 +775,14 @@ Manager / Worker 可以并行依赖：
 
 ### Slice B：Manager Runtime
 
-1. Manager workspace 目录和默认 SOUL / AGENTS / skills
-2. ManagerRuntime interface
-3. local skill runtime 打通 Controller API
-4. OpenClaw adapter prototype
-5. Manager 常驻 Matrix listener
-6. Manager skill audit events
+1. ✅ ManagerLoop 硬编码状态机 → LLM 驱动认知循环 — `managerLoopStep` 已重写为调用 `ManagerRuntimeService.stepRoom()`，加载完整 runState（tasks + workers）后让 LLM 决策
+2. ✅ ManagerAction 扩展 — 新增 `create_worker` / `cancel_task` / `rework`，补齐 action 处理器
+3. ✅ ManagerRunState 注入 prompt — `ManagerStepInput` 扩展 `runState` 字段，`LocalManagerRuntime` prompt 渲染完整任务和 Worker 健康状态
+4. ✅ Patrol 改造 — 发现 Worker stale 后不再硬编码标记 failed，改为写入 Room timeline 作为 Manager 观察源，由 Manager LLM 决定后续动作
+5. ✅ Manager state 轻量持久化 — 每次 `managerLoopStep` 后将决策快照写入 blackboard `manager_state/steps/{timestamp}`
+6. ⏳ Manager workspace 目录和默认 SOUL / AGENTS / skills
+7. ⏳ OpenClaw / QwenPaw adapter 作为 Manager runtime 主路径（当前 fallback 为 `local-skill-runtime`）
+8. ⏳ Manager 常驻 Matrix listener（当前通过 `stepRoom` 调用，非常驻 `/sync`）
 
 ### Slice C：Worker Runtime
 
@@ -860,3 +880,140 @@ Worker 问：
 - 不让前端本地状态代替 Room timeline。
 - 不让 Manager 黑盒伪造 Worker 发言。
 - 不让 Worker 产物只留在本地临时目录。
+
+## 附录：Manager Loop LLM 驱动重构记录（2026-06-04）
+
+### 改动范围
+
+**类型扩展**
+- `apps/server/src/services/manager-runtime/types.ts` — 新增 `ManagerRunState` 接口；`ManagerStepInput` 扩展 `runState` 字段；`ManagerActionType` 新增 `rework`
+- `apps/server/src/services/coordinator-runtime/types.ts` — `CoordinatorActionType` 新增 `create_worker` / `cancel_task` / `rework`
+
+**Runtime 层**
+- `apps/server/src/services/manager-runtime/local-manager-runtime.ts` — `buildStepPrompt` 渲染 `runState`（任务列表 + Worker 健康）到 LLM prompt
+- `apps/server/src/services/manager-runtime/manager-runtime-service.ts` — `StepManagerRoomInput` 扩展 `runState`；`stepRoom` 传递 `runState` 到 runtime；`SUPPORTED_ACTION_TYPES` 扩展新 action 类型
+
+**控制面**
+- `apps/server/src/services/orchestrator/manager-loop.ts` — `managerLoopStep` 完全重写：
+  - 加载 run + tasks + threads + workers
+  - 构造 `ManagerRunState`
+  - 调用 `ManagerRuntimeService.stepRoom()` 做 LLM 驱动决策
+  - 根据返回 action 执行：
+    - `assign` → `dispatchPreparedTaskRooms`
+    - `rework` → 更新 task 为 pending + thread 为 prepared
+    - `cancel_task` → 标记 cancelled + 释放 lease
+    - `create_worker` → emit 事件（后续由 worker-controller 实现）
+  - 兜底：所有任务 terminal → 自动 `synthesizeCompletedRunFromResources`
+  - 每次 step 后将决策快照写入 blackboard `manager_state/steps/{timestamp}`
+  - `ManagerLoopStepResult.action` 扩展 `'llm_driven'`
+
+- `apps/server/src/services/orchestrator/manager-patrol.ts` — Worker stale 处理改为只写 Room timeline + 标记 lease stale，不再硬编码标记 worker/task failed；让 Manager LLM 在后续 `managerLoopStep` 中决定如何处理
+
+**兼容性修复**
+- `apps/server/src/services/controller-plane/controller-api.ts` — `appendRoomEvent` / `mentionRoomParticipant` 的 `type` 参数类型修正为 `TimelineEventType`
+- `tests/manager-runtime-routing.test.ts` — 不支持的 action 测试改用 `request_approval`（因为 `create_worker` 已变为支持）
+
+### 验证结果
+
+- `bun --filter @agenthub/server typecheck` ✅
+- `bun test tests/manager-runtime-routing.test.ts tests/worker-runtime-modes.test.ts tests/room-chat-bridge.test.ts tests/worker-runtime.test.ts` — 28 pass / 0 fail
+
+### 与 HiClaw 的对齐程度
+
+| HiClaw 设计 | AgentHub 当前状态 |
+|---|---|
+| Manager 是长期在线进程，通过 `/sync` 监听 Room | ⚠️ `managerLoopStep` 被动触发（用户消息 / patrol / task 完成），非常驻 listener。下一步：Matrix 常驻 listener |
+| Manager 有 SOUL.md + AGENTS.md + skills | ⚠️ OpenClaw 进程自己管理 workspace 下的 SOUL/AGENTS/skills。AgentHub 负责创建目录和基础文件 |
+| Manager 通过 skills 操作 Controller API | ⚠️ tool registry 在 OpenClaw 进程内，AgentHub 提供 Controller API endpoint 供其调用 |
+| Manager 做 Observe→Think→Act→Review | ✅ `managerLoopStep` 加载 runState → `stepRoom()` → 执行 actions |
+| Manager 输出 create_worker / cancel / rework | ✅ Action 类型已扩展，处理器已落地 |
+| Patrol 发现问题写入 timeline，Manager 决策 | ✅ Patrol 不再硬编码失败，改为 timeline 驱动 |
+| Manager state.json + workers-registry.json | ⚠️ 轻量 blackboard 持久化已落地，完整文件化 state 待后续 |
+| Manager 接 OpenClaw / QwenPaw runtime | ✅ 唯一路径。`RemoteManagerRuntimeAdapter` 通过 HTTP endpoint 与 OpenClaw 通信。无本地 LLM fallback |
+
+---
+
+## 附录：删除本地 LLM 路径（2026-06-04）
+
+**原则：Manager 必须是真实 OpenClaw / QwenPaw 进程，不存在本地 LLM fallback。**
+
+### 删除的文件
+
+- `apps/server/src/services/manager-runtime/local-manager-runtime.ts` — 本地 LLM ReAct tool loop（`streamReply` + prompt 工程 + tool call 解析）
+- `apps/server/src/services/manager-runtime/skill-loader.ts` — 本地 SKILL.md 解析和 tool 提取
+- `apps/server/src/services/manager-runtime/tool-registry.ts` — 本地 tool 注册和执行（Controller API 映射层）
+
+### 修改的文件
+
+- `apps/server/src/services/manager-runtime/types.ts` — `ManagerRuntimeType` 从 `'local-skill-runtime' | 'openclaw' | 'qwenpaw'` 改为 `'openclaw' | 'qwenpaw'`；删除 `ManagerTool`/`ManagerToolCall`/`ManagerToolResult`/`SkillDefinition`；简化 `ManagerStepResult`
+- `apps/server/src/services/manager-runtime/openclaw-provider.ts` — 删除 `LocalSkillRuntimeProvider` 类；删除 `LocalManagerRuntime` import
+- `apps/server/src/services/manager-runtime/manager-runtime-registry.ts` — 删除 `local-skill-runtime` 注册；默认返回 `openclaw`；`getConfiguredRuntimeType()` 不再回退到本地 LLM
+- `apps/server/src/services/manager-runtime/index.ts` — 删除 `LocalManagerRuntime`、`LocalSkillRuntimeProvider`、`loadManagerSkills`、`loadManagerTools`、`buildToolsPrompt`、`executeToolCall` 等导出
+- `apps/server/src/services/manager-runtime/remote-manager-runtime-adapter.ts` — `runtimeType` 类型移除 `'local-skill-runtime'` 排除
+- `apps/server/src/routes/settings.ts` — `parseManagerRuntimeType` 不再接受 `'local-skill-runtime'`
+- `apps/server/src/services/controller-plane/controller-api.ts` — `type` 参数类型修正（无关但顺手修复）
+
+### 架构变化
+
+**之前**：
+```
+ManagerRuntimeService.stepRoom()
+  → getActiveManagerProvider() → LocalSkillRuntimeProvider
+    → LocalManagerRuntime.step()
+      → streamReply() 本地 LLM
+      → parse tool calls / actions
+```
+
+**之后**：
+```
+AgentHub Server startup
+  → OpenClawManagerRuntimeProvider.ensureStarted()
+    → MatrixIdentityService.ensureIdentity() → Manager Matrix account
+    → generateConfig() → openclaw.json (with Matrix creds)
+    → copyAgentFiles() → SOUL.md + AGENTS.md + skills/
+    → spawn openclaw gateway run --verbose --force
+      → OpenClaw 进程自己 /sync 监听 Room
+      → 自己决策、调用 skills、写 Room timeline
+
+用户发消息 → Room timeline
+  → OpenClaw /sync 看到 → 自己处理
+  → AgentHub managerLoopStep / stepCoordinatorForGroupMessage 跳过
+
+Patrol 发现问题 → Room timeline
+  → OpenClaw /sync 看到 → 自己处理
+  → AgentHub managerLoopStep 跳过
+```
+
+### 新增改动（2026-06-04 续）
+
+**ResidentManagerRuntime**
+- 新建 `apps/server/src/services/manager-runtime/resident-manager-runtime.ts`
+- `step()` 为 no-op：OpenClaw 是常驻进程，AgentHub 不调用其 step
+- `OpenClawManagerRuntimeProvider.createRuntime()` / `QwenPawManagerRuntimeProvider.createRuntime()` 返回 `ResidentManagerRuntime`
+
+**OpenClawManagerRuntimeProvider 启动流程**
+- `ensureStarted()` 先调用 `MatrixIdentityService.ensureIdentity()` 创建/获取 Manager Matrix account
+- 将 `accessToken` / `userId` / `homeserverUrl` / `serverName` 注入 `openclaw.json`
+- 复制 `infra/manager-agent/` 下的 SOUL.md / AGENTS.md / HEARTBEAT.md / TOOLS.md / skills/
+- 启动 `openclaw gateway run --verbose --force`
+
+**AgentHub 控制流跳过**
+- `managerLoopStep()` 开头检查 resident Manager 是否运行，如果运行则跳过
+- `stepCoordinatorForGroupMessage()` 检查 resident Manager 是否运行，如果运行则跳过 `coordinatorService.stepRoom()`
+- 消息仍然写入 Room timeline，OpenClaw 通过 `/sync` 自主处理
+
+**Server startup 自动启动**
+- `apps/server/src/index.ts` 在 server bind 成功后 fire-and-forget 启动 resident Manager
+- 支持 clean shutdown（后续完善）
+
+### 验证
+
+- `bun --filter @agenthub/server typecheck` ✅
+- `bun test` (28 tests) — 28 pass / 0 fail ✅
+
+### 下一步
+
+1. **OpenClaw 实际联调** — 启动 AgentHub server，验证 OpenClaw 进程能正确连接 Matrix、加入 group room、响应 @mention
+2. **Controller API 供 OpenClaw skills 调用** — OpenClaw skills 使用 curl 调用 AgentHub API，需要验证这些 endpoint 的可用性和权限
+3. **Manager 参与 Room 的自动邀请** — 创建 group room 时自动邀请 Manager Matrix identity 加入
+4. **Clean shutdown** — server 关闭时优雅停止 OpenClaw 进程

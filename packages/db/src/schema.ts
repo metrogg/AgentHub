@@ -61,8 +61,8 @@ export const workspaceAgents = sqliteTable(
   roleProfile: text('role_profile', { mode: 'json' }).$type<Record<string, unknown>>(),
   color: text('color').notNull().default('#6366f1'),
   modelId: text('model_id'),
-  runtimeType: text('runtime_type', { enum: ['llm', 'code-agent'] }).notNull().default('code-agent'),
-  codeAgentType: text('code_agent_type', { enum: ['codex', 'claude-code', 'opencode', 'gemini', 'openclaw'] }),
+  runtimeType: text('runtime_type', { enum: ['code-agent'] }).notNull().default('code-agent'),
+  codeAgentType: text('code_agent_type', { enum: ['codex', 'claude-code', 'opencode', 'gemini'] }),
   capabilityTags: text('capability_tags', { mode: 'json' }).$type<string[]>().notNull().default([]),
   skillIds: text('skill_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
   toolPermissions: text('tool_permissions', { mode: 'json' }).$type<string[]>().notNull().default([]),
@@ -240,9 +240,9 @@ export const rooms = sqliteTable(
   'rooms',
   {
     id: id(),
-    provider: text('provider', { enum: ['local-matrix-compatible', 'matrix'] })
+    provider: text('provider', { enum: ['matrix'] })
       .notNull()
-      .default('local-matrix-compatible'),
+      .default('matrix'),
     providerRoomId: text('provider_room_id').notNull(),
     kind: text('kind', { enum: ['group', 'manager_dm', 'task', 'direct', 'human_intervention'] })
       .notNull(),
@@ -406,11 +406,11 @@ export const workerInstances = sqliteTable(
     id: id(),
     workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
     workspaceAgentId: text('workspace_agent_id').notNull().references(() => workspaceAgents.id, { onDelete: 'cascade' }),
-    runtimeFamily: text('runtime_family', { enum: ['coordinator', 'worker', 'fallback'] })
+    runtimeFamily: text('runtime_family', { enum: ['coordinator', 'worker'] })
       .notNull()
       .default('worker'),
     runtimeBase: text('runtime_base', {
-      enum: ['openclaw', 'copaw', 'codex', 'claude-code', 'opencode', 'gemini', 'llm-fallback'],
+      enum: ['openclaw', 'copaw', 'qwenpaw', 'codex', 'claude-code', 'opencode', 'gemini'],
     }).notNull(),
     modelId: text('model_id'),
     skillIds: text('skill_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),

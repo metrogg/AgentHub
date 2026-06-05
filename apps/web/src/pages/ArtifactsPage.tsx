@@ -14,6 +14,7 @@ import {
   PackageOpen,
   RefreshCw,
   Search,
+  X,
   XCircle,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -29,6 +30,7 @@ import {
   type OrchestratorRunTaskSnapshot,
   type TypedBlackboardEntry,
 } from '../lib/api'
+import type { ArtifactPreviewItem } from '../lib/artifactPreview'
 import { cn, relativeTime } from '../lib/utils'
 import { useI18n } from '../lib/i18n'
 import { mimeFromExtension, type ArtifactPreviewItem } from '../lib/artifactPreview'
@@ -79,7 +81,7 @@ export default function ArtifactsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string>('all')
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<AssetTypeFilter>('all')
-  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null)
+  const [previewItem, setPreviewItem] = useState<ArtifactPreviewItem | null>(null)
 
   async function refresh() {
     setLoading(true)
@@ -375,11 +377,7 @@ export default function ArtifactsPage() {
                     key={asset.id}
                     asset={asset}
                     language={language}
-                    onPreview={() => {
-                      setPreviewAssetId(asset.id)
-                      setSelectedWorkspaceId(asset.workspaceId)
-                    }}
-                    selected={asset.id === previewAssetId}
+                    onPreview={() => setPreviewItem(assetToPreviewItem(asset))}
                   />
                 ))}
               </section>
@@ -433,6 +431,30 @@ export default function ArtifactsPage() {
           </div>
         </div>
       </main>
+      {previewItem && (
+        <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(58rem,calc(100vw-2rem))] flex-col border-l border-neutral-200 bg-white shadow-2xl">
+          <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-neutral-950">{previewItem.title}</div>
+              <div className="truncate text-xs text-neutral-500">{previewItem.subtitle ?? previewItem.path ?? previewItem.url ?? '产物预览'}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPreviewItem(null)}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+              aria-label="关闭预览"
+              title="关闭预览"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <ArtifactPreviewSurface
+            className="min-h-0 flex-1"
+            item={previewItem}
+            workspaceId={previewItem.workspaceId}
+          />
+        </aside>
+      )}
     </div>
   )
 }
@@ -441,15 +463,14 @@ function AssetCard({
   asset,
   language,
   onPreview,
-  selected,
 }: {
   asset: AssetItem
   language: 'zh' | 'en'
   onPreview: () => void
-  selected: boolean
 }) {
   const Icon = assetIcon(asset.kind)
   const downloadable = Boolean(asset.path && asset.workspaceId)
+  const previewable = asset.kind !== 'blackboard' && (Boolean(openUrl) || Boolean(asset.path) || Boolean(asset.source))
   return (
     <article
       className={cn(
@@ -489,14 +510,30 @@ function AssetCard({
       </div>
 
       <div className="mt-auto flex flex-wrap gap-2 pt-4">
-        <button
-          type="button"
-          onClick={onPreview}
-          className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-950 px-3 text-sm font-medium text-white transition hover:bg-neutral-800"
-        >
-          <Monitor className="h-4 w-4" />
+        {previewable && (
+          <button
+            type="button"
+            onClick={onPreview}
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-neutral-950 px-3 text-sm font-medium text-white transition hover:bg-neutral-800"
+          >
+            {asset.kind === 'preview' || asset.kind === 'deploy' ? (
+              <Monitor className="h-4 w-4" />
+            ) : (
+              <ExternalLink className="h-4 w-4" />
+            )}
             预览
           </button>
+        )}
+        {openUrl && (
+          <button
+            type="button"
+            onClick={() => window.open(openUrl, '_blank', 'noopener,noreferrer')}
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50"
+          >
+            <ExternalLink className="h-4 w-4" />
+            新窗口
+          </button>
+        )}
         {downloadable && (
           <button
             type="button"
@@ -664,42 +701,45 @@ function artifactDescription(record: Record<string, unknown>) {
   return text(record.mimeType) || text(record.status) || '任务执行生成的文件产物。'
 }
 
-function assetToPreviewItem(asset: AssetItem): ArtifactPreviewItem {
-  const path = asset.path || undefined
-  const extension = path?.match(/\.([A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase()
-  const mimeType = mimeFromExtension(extension)
-  const rawRecord = asRecord(asset.raw)
-  const rawDiff = rawRecord ? text(rawRecord.diff) || text(rawRecord.patch) : ''
-  const source =
-    asset.kind === 'diff'
-      ? asset.source || rawDiff || asset.description
-      : asset.source
+function assetOpenUrl(asset: AssetItem) {
+  if (asset.url) return asset.url
+  if (!asset.path) return ''
+  const lower = asset.path.toLowerCase()
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+    return `/api/artifacts/preview-file?workspaceId=${encodeURIComponent(asset.workspaceId)}&path=${encodeURIComponent(asset.path)}`
+  }
+  if (/\.(png|jpe?g|webp|gif|svg|pdf|txt|md|json|csv)$/i.test(asset.path)) {
+    return `/api/artifacts/file?workspaceId=${encodeURIComponent(asset.workspaceId)}&path=${encodeURIComponent(asset.path)}`
+  }
+  return ''
+}
 
+function assetToPreviewItem(asset: AssetItem): ArtifactPreviewItem {
+  const openUrl = assetOpenUrl(asset)
   return {
     id: asset.id,
     title: asset.title,
-    subtitle: [asset.workspaceName, asset.taskTitle || asset.runTitle].filter(Boolean).join(' / '),
+    subtitle: asset.path ?? asset.source ?? assetKindLabel(asset.kind),
     description: asset.description,
-    kind: assetPreviewKind(asset, mimeType),
-    url: asset.url || undefined,
-    path,
-    mimeType,
-    source,
+    kind:
+      asset.kind === 'preview'
+        ? 'web'
+        : asset.kind === 'deploy'
+          ? 'deploy'
+          : asset.kind === 'diff'
+            ? 'diff'
+            : inferPreviewKindFromAsset(asset),
+    url: openUrl || asset.url || undefined,
+    path: asset.path,
+    source: asset.kind === 'diff' ? text(asRecord(asset.raw)?.diff) || asset.source : asset.source,
     workspaceId: asset.workspaceId,
   }
 }
 
-function assetPreviewKind(
-  asset: AssetItem,
-  mimeType?: string,
-): ArtifactPreviewItem['kind'] {
-  const lowerPath = (asset.path ?? '').toLowerCase()
-  const lowerMime = (mimeType ?? '').toLowerCase()
-  if (asset.kind === 'diff') return 'diff'
-  if (asset.kind === 'deploy') return 'deploy'
-  if (asset.kind === 'preview') return 'web'
-  if (lowerMime.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(lowerPath)) return 'image'
-  if (lowerMime.includes('text/html') || /\.(html?|xhtml)$/i.test(lowerPath)) return 'web'
+function inferPreviewKindFromAsset(asset: AssetItem): ArtifactPreviewItem['kind'] {
+  const lower = `${asset.path ?? asset.url ?? asset.title}`.toLowerCase()
+  if (/\.(png|jpe?g|webp|gif|svg)$/i.test(lower)) return 'image'
+  if (/\.html?$/i.test(lower)) return 'web'
   return 'file'
 }
 

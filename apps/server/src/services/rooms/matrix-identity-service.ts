@@ -13,8 +13,8 @@ export class MatrixIdentityService {
   constructor(private readonly client: MatrixClient) {}
 
   async ensureIdentity(input: MatrixIdentityOwner) {
-    const localpart = localpartForOwner(input)
-    const userId = this.client.userId(localpart)
+    let localpart = localpartForOwner(input)
+    let userId = this.client.userId(localpart)
     const [existing] = await db
       .select()
       .from(matrixIdentities)
@@ -32,11 +32,31 @@ export class MatrixIdentityService {
     }
 
     const password = existing?.password || generatedMatrixPassword()
-    const ensured = await this.client.ensureUser({
-      localpart,
-      password,
-      displayName: input.displayName,
-    })
+    let ensured
+    try {
+      ensured = await this.client.ensureUser({
+        localpart,
+        password,
+        displayName: input.displayName,
+      })
+    } catch (error) {
+      if (!canRecoverByChangingLocalpart(error)) throw error
+      const originalLocalpart = localpart
+      localpart = `${originalLocalpart}-${randomBytes(4).toString('hex')}`
+      userId = this.client.userId(localpart)
+      const retryPassword = generatedMatrixPassword()
+      ensured = await this.client.ensureUser({
+        localpart,
+        password: retryPassword,
+        displayName: input.displayName,
+      })
+      if (existing) {
+        existing.metadata = {
+          ...(existing.metadata ?? {}),
+          replacedUnrecoverableLocalpart: originalLocalpart,
+        }
+      }
+    }
 
     if (existing) {
       const [updated] = await db
@@ -45,7 +65,7 @@ export class MatrixIdentityService {
           localpart,
           userId: ensured.userId,
           accessToken: ensured.accessToken,
-          password,
+          password: ensured.password,
           displayName: input.displayName,
           metadata: {
             ...(existing.metadata ?? {}),
@@ -68,7 +88,7 @@ export class MatrixIdentityService {
         localpart,
         userId: ensured.userId || userId,
         accessToken: ensured.accessToken,
-        password,
+        password: ensured.password,
         displayName: input.displayName,
         metadata: {
           lastEnsureCreatedUser: ensured.created,
@@ -116,4 +136,13 @@ export function localpartForOwner(input: MatrixIdentityOwner) {
 
 function generatedMatrixPassword() {
   return `agenthub-${randomBytes(24).toString('base64url')}`
+}
+
+function canRecoverByChangingLocalpart(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return (
+    /already exists but login failed/i.test(message) ||
+    /Wrong username or password/i.test(message) ||
+    /M_FORBIDDEN/i.test(message)
+  )
 }

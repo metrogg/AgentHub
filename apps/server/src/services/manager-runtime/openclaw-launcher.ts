@@ -90,7 +90,7 @@ export class OpenClawLauncher {
    */
   generateConfig(): string {
     const matrixUrl = this.config.matrixUrl || 'http://localhost:6167'
-    const matrixDomain = this.config.matrixDomain || 'local.agenthub'
+    const matrixDomain = this.config.matrixDomain || 'agenthub.local'
     const matrixUserId = this.config.matrixUserId || `@manager:${matrixDomain}`
     const llmBaseUrl = this.config.llmBaseUrl || 'http://localhost:8000/v1'
     const llmApiKey = this.config.llmApiKey || 'agenthub-internal'
@@ -327,7 +327,7 @@ export class OpenClawLauncher {
     const workerWorkspace = join(agentHubUserDataRoot(), 'workers', workerName)
     mkdirSync(workerWorkspace, { recursive: true })
 
-    const matrixDomain = this.config.matrixDomain || 'local.agenthub'
+    const matrixDomain = this.config.matrixDomain || 'agenthub.local'
     const matrixUserId = options.matrixUserId || `@worker-${workerName}:${matrixDomain}`
     const llmBaseUrl = this.config.llmBaseUrl || 'http://localhost:8000/v1'
     const llmApiKey = this.config.llmApiKey || 'agenthub-internal'
@@ -519,6 +519,87 @@ export class OpenClawLauncher {
    */
   listRunningWorkers(): string[] {
     return Array.from(this.workerProcesses.keys())
+  }
+
+  // ─── User OpenClaw Integration ──────────────────────────────────
+
+  /**
+   * Configure AgentHub to use a user's existing OpenClaw installation.
+   * Supports three modes:
+   * 1. openclawPath: user provides path to OpenClaw binary → AgentHub manages lifecycle
+   * 2. endpoint: user already has OpenClaw running → AgentHub connects via HTTP
+   * 3. both: user provides binary path AND endpoint (for health checks)
+   */
+  configureFromUserOpenClaw(input: {
+    openclawPath?: string
+    endpoint?: string
+    matrixUrl?: string
+    matrixDomain?: string
+    llmBaseUrl?: string
+    llmApiKey?: string
+    llmModel?: string
+  }): { mode: 'managed' | 'external' | 'none'; details: string } {
+    // Mode 1: User has OpenClaw binary, AgentHub manages it
+    if (input.openclawPath) {
+      if (!existsSync(input.openclawPath)) {
+        return { mode: 'none', details: `OpenClaw binary not found at: ${input.openclawPath}` }
+      }
+      this.config.openclawPath = input.openclawPath
+      if (input.matrixUrl) this.config.matrixUrl = input.matrixUrl
+      if (input.matrixDomain) this.config.matrixDomain = input.matrixDomain
+      if (input.llmBaseUrl) this.config.llmBaseUrl = input.llmBaseUrl
+      if (input.llmApiKey) this.config.llmApiKey = input.llmApiKey
+      if (input.llmModel) this.config.llmModel = input.llmModel
+
+      // Generate config and copy agent files
+      this.generateConfig()
+      this.copyAgentFiles()
+
+      return {
+        mode: 'managed',
+        details: `Using OpenClaw at ${input.openclawPath}. Config generated at ${join(this.managerWorkspace, 'openclaw.json')}. Launch with: openclaw gateway run`,
+      }
+    }
+
+    // Mode 2: User already has OpenClaw running, just set endpoint
+    if (input.endpoint) {
+      process.env.AGENTHUB_OPENCLAW_MANAGER_ENDPOINT = input.endpoint
+      return {
+        mode: 'external',
+        details: `Connecting to external OpenClaw at ${input.endpoint}. AgentHub will use it as ManagerRuntimeProvider endpoint.`,
+      }
+    }
+
+    return { mode: 'none', details: 'No OpenClaw path or endpoint provided.' }
+  }
+
+  /**
+   * Get current OpenClaw integration status.
+   */
+  getStatus(): {
+    available: boolean
+    mode: 'managed' | 'external' | 'none'
+    binaryPath: string | null
+    endpoint: string | null
+    managerRunning: boolean
+    workerCount: number
+  } {
+    const binaryPath = this.config.openclawPath || this.findOpenClawBinary()
+    const endpoint = process.env.AGENTHUB_OPENCLAW_MANAGER_ENDPOINT || null
+
+    let mode: 'managed' | 'external' | 'none' = 'none'
+    if (this.isRunning()) mode = 'managed'
+    else if (binaryPath) mode = 'managed'
+    else if (endpoint) mode = 'external'
+
+    return {
+      available: mode !== 'none',
+      mode,
+      binaryPath,
+      endpoint,
+      managerRunning: this.isRunning(),
+      workerCount: this.workerProcesses.size,
+    }
   }
 
   // ─── Private helpers ─────────────────────────────────────────────

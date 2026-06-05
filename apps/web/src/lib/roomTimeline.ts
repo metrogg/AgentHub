@@ -6,6 +6,18 @@ export interface RoomTimelineProjection {
   participantsById: Map<string, RoomParticipant>
   messages: Message[]
   events: RoomTimelineAgUiEvent[]
+  messageControl?: RoomTimelineMessageControl
+}
+
+export interface RoomTimelineMessageControl {
+  kind: 'message.clear' | 'message.edit' | 'message.redact' | 'message.pin'
+  targetMessageIds: string[]
+  targetEventIds: string[]
+  targetMessages: Array<Record<string, unknown>>
+  content?: string
+  editedAt?: string
+  pinned?: boolean
+  clearedAt?: string
 }
 
 export interface RoomTimelineAgUiEvent {
@@ -24,16 +36,274 @@ export function projectRoomTimeline(input: {
   sessionId: string
 }): RoomTimelineProjection {
   const participantsById = new Map(input.participants.map((participant) => [participant.id, participant]))
+  const controls = timelineProjectionControls(input.timeline)
   const messages = input.timeline
+    .filter((event) => event.sequence > controls.clearedBeforeOrAtSequence)
+    .filter((event) => !isMessageControlEvent(event))
+    .filter((event) => !timelineEventIsRedacted(event, controls))
     .map((event) => timelineEventToMessage(event, input.room, input.sessionId, participantsById))
     .filter((message): message is Message => Boolean(message))
+    .map((message) => applyTimelineControlsToMessage(message, controls))
   const events = input.timeline.flatMap((event) => timelineEventToAgUiEvents(event, input.room, input.sessionId))
   return {
     room: input.room,
     participantsById,
     messages,
     events,
+    messageControl: input.timeline.length === 1 ? timelineEventToMessageControl(input.timeline[0]!) : undefined,
   }
+}
+
+export function applyRoomTimelineMessageControl(
+  messages: Message[],
+  control: RoomTimelineMessageControl,
+): Message[] {
+  if (control.kind === 'message.clear') return []
+  if (control.kind === 'message.redact') {
+    return messages.filter((message) => !messageMatchesControl(message, control))
+  }
+  return messages.map((message) => {
+    if (!messageMatchesControl(message, control)) return message
+    const metadata = asRecord(message.metadata) ?? {}
+    if (control.kind === 'message.edit') {
+      if (!control.content) return message
+      return {
+        ...message,
+        content: control.content,
+        metadata: {
+          ...metadata,
+          displayContent: control.content,
+          editedAt: control.editedAt ?? new Date().toISOString(),
+          roomTimelineEdit: {
+            source: 'room-timeline-control',
+            targetMessageId: message.id,
+          },
+        },
+      }
+    }
+    if (control.kind === 'message.pin') {
+      return {
+        ...message,
+        isPinned: control.pinned ?? false,
+        metadata: {
+          ...metadata,
+          roomTimelinePin: {
+            source: 'room-timeline-control',
+            targetMessageId: message.id,
+            pinned: control.pinned ?? false,
+          },
+        },
+      }
+    }
+    return message
+  })
+}
+
+function timelineProjectionControls(timeline: TimelineEvent[]) {
+  const controls = {
+    clearedBeforeOrAtSequence: 0,
+    redactedMessageIds: new Set<string>(),
+    redactedEventIds: new Set<string>(),
+    redactedDescriptors: [] as Array<Record<string, unknown>>,
+    editsByMessageId: new Map<string, RoomTimelineMessageControl>(),
+    pinsByMessageId: new Map<string, boolean>(),
+    memberProposalUpdatesByMessageId: new Map<string, { content?: string; patch: Record<string, unknown> }>(),
+    agentDraftUpdatesByMessageId: new Map<string, { content?: string; patch: Record<string, unknown> }>(),
+  }
+
+  for (const event of timeline) {
+    const metadata = asRecord(event.metadata)
+    if (event.type === 'system' && asString(metadata?.kind) === 'member-proposal.update') {
+      const content = asString(metadata?.content) ?? asString(event.body)
+      const update = {
+        content,
+        patch: asRecord(metadata?.patch) ?? {},
+      }
+      const targetMessageId = asString(metadata?.targetMessageId)
+      const targetEventId = asString(metadata?.targetEventId)
+      if (targetMessageId) controls.memberProposalUpdatesByMessageId.set(targetMessageId, update)
+      if (targetEventId) controls.memberProposalUpdatesByMessageId.set(`room:${targetEventId}`, update)
+      continue
+    }
+    if (event.type === 'system' && asString(metadata?.kind) === 'agent-draft.update') {
+      const content = asString(metadata?.content) ?? asString(event.body)
+      const update = {
+        content,
+        patch: asRecord(metadata?.patch) ?? {},
+      }
+      const targetMessageId = asString(metadata?.targetMessageId)
+      const targetEventId = asString(metadata?.targetEventId)
+      if (targetMessageId) controls.agentDraftUpdatesByMessageId.set(targetMessageId, update)
+      if (targetEventId) controls.agentDraftUpdatesByMessageId.set(`room:${targetEventId}`, update)
+      continue
+    }
+
+    const control = timelineEventToMessageControl(event)
+    if (!control) continue
+    if (control.kind === 'message.clear') {
+      controls.clearedBeforeOrAtSequence = Math.max(controls.clearedBeforeOrAtSequence, event.sequence)
+      continue
+    }
+    if (control.kind === 'message.redact') {
+      for (const id of control.targetMessageIds) controls.redactedMessageIds.add(id)
+      for (const id of control.targetEventIds) controls.redactedEventIds.add(id)
+      controls.redactedDescriptors.push(...control.targetMessages)
+      continue
+    }
+    if (control.kind === 'message.edit') {
+      for (const id of controlTargetIds(control)) controls.editsByMessageId.set(id, control)
+      continue
+    }
+    if (control.kind === 'message.pin') {
+      for (const id of controlTargetIds(control)) controls.pinsByMessageId.set(id, control.pinned ?? false)
+    }
+  }
+
+  return controls
+}
+
+function timelineEventToMessageControl(event: TimelineEvent): RoomTimelineMessageControl | undefined {
+  if (event.type !== 'system') return undefined
+  const metadata = asRecord(event.metadata)
+  const kind = asString(metadata?.kind)
+  if (
+    kind !== 'message.clear' &&
+    kind !== 'message.edit' &&
+    kind !== 'message.redact' &&
+    kind !== 'message.pin'
+  ) {
+    return undefined
+  }
+  const targetMessageId = asString(metadata?.targetMessageId)
+  const targetEventId = asString(metadata?.targetEventId)
+  return {
+    kind,
+    targetMessageIds: [
+      ...(targetMessageId ? [targetMessageId] : []),
+      ...asStringArray(metadata?.targetMessageIds),
+    ],
+    targetEventIds: [
+      ...(targetEventId ? [targetEventId] : []),
+      ...asStringArray(metadata?.targetEventIds),
+    ],
+    targetMessages: asRecordArray(metadata?.targetMessages),
+    content: asString(metadata?.content),
+    editedAt: asString(metadata?.editedAt),
+    pinned: typeof metadata?.pinned === 'boolean' ? metadata.pinned : undefined,
+    clearedAt: asString(metadata?.clearedAt),
+  }
+}
+
+function isMessageControlEvent(event: TimelineEvent) {
+  const metadata = asRecord(event.metadata)
+  if (event.type === 'system' && asString(metadata?.kind) === 'member-proposal.update') return true
+  if (event.type === 'system' && asString(metadata?.kind) === 'agent-draft.update') return true
+  return Boolean(timelineEventToMessageControl(event))
+}
+
+function timelineEventIsRedacted(event: TimelineEvent, controls: ReturnType<typeof timelineProjectionControls>) {
+  if (controls.redactedEventIds.has(event.id)) return true
+  if (controls.redactedMessageIds.has(`room:${event.id}`)) return true
+  const metadata = asRecord(event.metadata)
+  const messageId = asString(metadata?.messageId)
+  const projectionMessageId = asString(metadata?.projectionMessageId)
+  if (messageId && controls.redactedMessageIds.has(messageId)) return true
+  if (projectionMessageId && controls.redactedMessageIds.has(projectionMessageId)) return true
+  return controls.redactedDescriptors.some((descriptor) => timelineEventMatchesDescriptor(event, descriptor))
+}
+
+function timelineEventMatchesDescriptor(event: TimelineEvent, descriptor: Record<string, unknown>) {
+  const metadata = asRecord(event.metadata)
+  const sourceMessageId = asString(descriptor.sourceMessageId)
+  const actionType = asString(descriptor.actionType)
+  if (sourceMessageId && asString(metadata?.sourceMessageId) !== sourceMessageId) return false
+  if (actionType && asString(metadata?.actionType) !== actionType) return false
+  return Boolean(sourceMessageId || actionType)
+}
+
+function applyTimelineControlsToMessage(message: Message, controls: ReturnType<typeof timelineProjectionControls>) {
+  const edit = controls.editsByMessageId.get(message.id)
+  const pinned = controls.pinsByMessageId.get(message.id)
+  const memberProposalUpdate = controls.memberProposalUpdatesByMessageId.get(message.id)
+  const agentDraftUpdate = controls.agentDraftUpdatesByMessageId.get(message.id)
+  if (!edit && pinned === undefined && !memberProposalUpdate && !agentDraftUpdate) return message
+  const controlled = applyRoomTimelineMessageControl(
+    [message],
+    edit ??
+      ({
+        kind: 'message.pin',
+        targetMessageIds: [message.id],
+        targetEventIds: [],
+        targetMessages: [],
+        pinned,
+      } satisfies RoomTimelineMessageControl),
+  )[0] ?? message
+  let next = controlled
+  if (memberProposalUpdate) {
+    const metadata = asRecord(next.metadata) ?? {}
+    next = {
+      ...next,
+      content: memberProposalUpdate.content ?? next.content,
+      metadata: {
+        ...metadata,
+        ...memberProposalUpdate.patch,
+        displayContent: memberProposalUpdate.content ?? next.content,
+        roomTimelineMemberProposalUpdate: {
+          source: 'room-timeline-control',
+          targetMessageId: next.id,
+        },
+      },
+    }
+  }
+  if (!agentDraftUpdate) return next
+  const nextMetadata = asRecord(next.metadata) ?? {}
+  next = {
+    ...next,
+    content: agentDraftUpdate.content ?? next.content,
+    metadata: {
+      ...nextMetadata,
+      ...agentDraftUpdate.patch,
+      displayContent: agentDraftUpdate.content ?? next.content,
+      roomTimelineAgentDraftUpdate: {
+        source: 'room-timeline-control',
+        targetMessageId: next.id,
+      },
+    },
+  }
+  return next
+}
+
+function messageMatchesControl(message: Message, control: RoomTimelineMessageControl) {
+  if (control.targetMessageIds.includes(message.id)) return true
+  const eventId = readRoomTimelineEventId(message)
+  if (eventId && control.targetEventIds.includes(eventId)) return true
+  if (eventId && control.targetMessageIds.includes(`room:${eventId}`)) return true
+  return control.targetMessages.some((descriptor) => messageMatchesDescriptor(message, descriptor))
+}
+
+function messageMatchesDescriptor(message: Message, descriptor: Record<string, unknown>) {
+  const metadata = asRecord(message.metadata)
+  const sourceMessageId = asString(descriptor.sourceMessageId)
+  const actionType = asString(descriptor.actionType)
+  if (sourceMessageId && asString(metadata?.sourceMessageId) !== sourceMessageId) return false
+  if (actionType && asString(metadata?.actionType) !== actionType) return false
+  return Boolean(sourceMessageId || actionType)
+}
+
+function readRoomTimelineEventId(message: Message) {
+  if (message.id.startsWith('room:')) return message.id.slice('room:'.length)
+  const metadata = asRecord(message.metadata)
+  return (
+    asString(asRecord(metadata?.roomTimeline)?.eventId) ??
+    asString(asRecord(metadata?.roomTimelineProjection)?.eventId)
+  )
+}
+
+function controlTargetIds(control: RoomTimelineMessageControl) {
+  return [
+    ...control.targetMessageIds,
+    ...control.targetEventIds.map((id) => `room:${id}`),
+  ]
 }
 
 function timelineEventToMessage(
@@ -73,7 +343,7 @@ function timelineEventToMessage(
       event.senderParticipantId ??
       event.senderType,
     senderType,
-    type: MessageType.Text,
+    type: normalizeTimelineMessageType(event.metadata?.messageType),
     content,
     metadata: {
       ...(event.metadata ?? {}),
@@ -110,6 +380,10 @@ function displayNameForEvent(event: TimelineEvent, participant?: RoomParticipant
 
 function visibleBodyForEvent(event: TimelineEvent) {
   if (event.body.trim()) return event.body
+  if (event.type === 'system' && event.metadata?.systemEvent === 'agent_draft_created') return '已生成 Agent 草案。确认后会加入当前 Agent Group。'
+  if (event.type === 'approval.requested' && event.metadata?.actionType === 'propose_members') {
+    return '我建议补充一些更合适的成员，请确认。'
+  }
   if (event.type === 'artifact.created') {
     const artifact = asRecord(event.metadata?.artifact)
     return asString(artifact?.title) ?? asString(event.metadata?.title) ?? '产物已创建'
@@ -118,6 +392,23 @@ function visibleBodyForEvent(event: TimelineEvent) {
   if (event.type === 'task.assigned') return asString(event.metadata?.taskTitle) ?? '任务已分配'
   if (event.type === 'approval.requested') return '需要用户确认'
   return ''
+}
+
+function normalizeTimelineMessageType(value: unknown): MessageType {
+  const text = asString(value)
+  if (
+    text === MessageType.Text ||
+    text === MessageType.Markdown ||
+    text === MessageType.Code ||
+    text === MessageType.Diff ||
+    text === MessageType.Image ||
+    text === MessageType.File ||
+    text === MessageType.TaskCard ||
+    text === MessageType.TaskBoard
+  ) {
+    return text
+  }
+  return MessageType.Text
 }
 
 function timelineEventToAgUiEvents(
@@ -376,4 +667,19 @@ function asString(value: unknown): string | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+}
+
+function asRecordArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> =>
+          Boolean(item && typeof item === 'object' && !Array.isArray(item)),
+      )
+    : []
 }

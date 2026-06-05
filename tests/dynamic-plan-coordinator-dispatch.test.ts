@@ -3,7 +3,9 @@ import { describe, expect, test } from 'bun:test'
 
 const dbApi = await import('../packages/db/src/index')
 const { runController } = await import('../apps/server/src/services/orchestrator/run-controller')
-const { __messageRouteTestHooks } = await import('../apps/server/src/routes/messages')
+const { startPlanRunWithCoordinatorAssignBatch } = await import(
+  '../apps/server/src/services/manager-runtime/planning-dispatcher'
+)
 
 const {
   db,
@@ -41,7 +43,7 @@ describe('dynamic plan dispatch through CoordinatorRuntime', () => {
       },
     })
 
-    const monitor = await __messageRouteTestHooks.startPlanRunWithCoordinatorAssignBatch({
+    const monitor = await startPlanRunWithCoordinatorAssignBatch({
       sessionId: session.id,
       workspaceId: workspace.id,
       ownerId: 'default-user',
@@ -105,7 +107,7 @@ describe('dynamic plan dispatch through CoordinatorRuntime', () => {
     const runRows = await db.select().from(orchestratorRuns).where(eq(orchestratorRuns.id, run.runId))
     expect(runRows[0]?.status).toBe('completed')
     expect(runRows[0]?.plan?.schema).toBe('agenthub.hiclaw-lite.assign-batch.v1')
-    expect(runRows[0]?.plan?.source).toBe('coordinator-runtime.assign')
+    expect(runRows[0]?.plan?.source).toBe('controller-api.assign')
 
     const taskRows = await db.select().from(workspaceTasks).where(eq(workspaceTasks.runId, run.runId))
     expect(taskRows).toHaveLength(2)

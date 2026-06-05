@@ -1,4 +1,4 @@
-import type { AgentArtifact } from './apiTypes'
+import type { AgentArtifact } from './api'
 
 export const artifactPreviewEvent = 'agenthub:artifact-preview'
 export const previewPanelWidthStorageKey = 'agenthub:preview-panel-width'

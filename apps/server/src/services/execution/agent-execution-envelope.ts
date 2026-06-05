@@ -1,8 +1,37 @@
 import { mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { AgentHubA2AEnvelope } from '../protocols/a2a-internal'
+import type { Message } from '@a2a-js/sdk'
 import type { SandboxContainerSpec } from './sandbox-provider'
 import { agentHubUserCacheRoot, defaultNoProjectExecutionRoot, safePathSegment } from '../system-paths'
+
+/** 可选 A2A task envelope，仅用于外部互操作或任务语义序列化；内部通信事实源是 Room timeline。 */
+export interface AgentHubA2AEnvelope {
+  protocolVersion: '0.3.0'
+  method: 'message/send'
+  params: {
+    configuration?: {
+      acceptedOutputModes?: string[]
+      blocking?: boolean
+      historyLength?: number
+    }
+    message: Message
+    metadata?: Record<string, unknown>
+  }
+  contextId: string
+  taskId: string
+  runId: string
+  workspaceId: string
+  groupSessionId: string
+  childSessionId: string
+  taskThreadId?: string | null
+  sharedTaskRelativeRoot?: string | null
+  sharedTaskSpecPath?: string | null
+  fromAgentId: string
+  fromAgentName: string
+  toAgentId: string
+  toAgentName: string
+  referenceTaskIds: string[]
+}
 
 /**
  * AgentExecutionEnvelope — 每次 Agent 执行的强制上下文信封。

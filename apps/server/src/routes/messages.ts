@@ -8,11 +8,6 @@ import { join } from 'node:path'
 import { unlink, writeFile } from 'node:fs/promises'
 import {
   sendMessageSchema,
-  AgentRoleType,
-  RuntimeType,
-  CodeAgentType,
-  SandboxPolicy,
-  TaskType,
   WsEvent,
   CORE_AGENT_EXPERT_PROFILES,
   type AgentExpertProfile,
@@ -29,6 +24,8 @@ import {
   workspaceTasks,
   orchestratorRuns,
   taskThreads,
+  rooms,
+  timelineEvents,
   and,
   eq,
   asc,
@@ -37,41 +34,20 @@ import {
 import { authMiddleware, type AuthVariables } from '../middleware/auth'
 import type { AgentRunProfile, MessageRow } from '../services/agent-runner'
 import { broadcastSessionEvent, runAgentReply } from '../services/agent-runner'
-import {
-  extractJsonObject,
-  cleanPlanText,
-  validateRealWorkerAssignments,
-  titleFromGoal,
-} from '../services/orchestrator/planner'
-import type {
-  TaskOutputContract,
-  TaskValidation,
-} from '../services/orchestrator/types'
 import { emitRunEvent } from '../services/orchestrator/run-events'
-import { checkInputGuardrails } from '../services/orchestrator/input-guardrails'
-import { type ManagerDecisionEventContext } from '../services/orchestrator/manager-loop'
-import { runController, type RunControllerRunContext } from '../services/orchestrator/run-controller'
+import { runController } from '../services/orchestrator/run-controller'
 import { buildAgUiMemberProposalContinueEvent } from '../services/protocols'
 import { blackboard, Blackboard } from '../services/blackboard'
 import {
-  buildDynamicOrchestratorPlan,
-  loadWorkspaceAgentRelationsForPlanning,
-} from '../services/orchestrator/plan-generator'
-import {
-  buildPlanningFailureArtifactMetadata,
-  extractPlanningFailureArtifacts,
-} from '../services/orchestrator/planning-failure-artifacts'
-import { decideOrchestratorAction } from '../services/orchestrator/orchestrator-decision'
-import {
+  appendMessageControlEvent,
   appendHumanMessageRoomFirst,
   recordHumanMessageInRoomTimeline,
   stepCoordinatorForGroupMessage,
   stepTaskRoomAfterHumanMessage,
 } from '../services/rooms/room-chat-bridge'
 import { listSessionMessagesRoomFirst } from '../services/rooms/timeline-message-projection'
-import { dispatchCoordinatorAssignBatch } from '../services/coordinator-runtime/assign-dispatcher'
-import type { CoordinatorAction } from '../services/coordinator-runtime'
-import type { WorkerRuntime } from '../services/worker-runtime'
+import type { ManagerAction } from '../services/manager-runtime'
+import type { DispatchMonitor } from '../services/manager-runtime/planning-dispatcher'
 import {
   confirmAgentDraftSchema,
   type AgentDraft,
@@ -94,120 +70,7 @@ const updateMessageSchema = z.object({
   content: z.string().min(1).max(10000),
 })
 
-type PlanAgent = {
-  key: string
-  name: string
-  role: string
-  roleType?: AgentRoleType
-  color?: string
-  systemPrompt?: string
-  description?: string
-  roleProfile?: Record<string, unknown> | null
-  modelId?: string | null
-  runtimeType?: RuntimeType
-  codeAgentType?: CodeAgentType | null
-  capabilityTags?: string[]
-  toolPermissions?: string[]
-  sandboxPolicy?: SandboxPolicy
-}
-
-type PlanTask = {
-  id: string
-  phaseId?: string
-  title: string
-  description: string
-  agentKey: string
-  taskType?: TaskType
-  dependencies?: string[]
-  parallelGroup?: string
-  maxRetries?: number
-  fallbackAgentId?: string
-  outputContract?: TaskOutputContract
-  validation?: TaskValidation
-  agentSelection?: {
-    selectedAgentKey: string
-    score: number
-    rationale: string[]
-    reviewerAgentKey?: string
-    fallbackAgentKey?: string
-  }
-}
-
-type PlanPhase = {
-  id: string
-  title: string
-  purpose: string
-  taskIds: string[]
-}
-
-type OrchestratorPlan = {
-  kind: 'orchestrator_plan'
-  title: string
-  goal: string
-  summary: string
-  agents: PlanAgent[]
-  phases?: PlanPhase[]
-  tasks: PlanTask[]
-}
-
 const INTERRUPTIBLE_RUN_STATUSES = new Set(['planning', 'running', 'synthesizing'])
-
-type DispatchMonitor = {
-  dispatchId: string
-  groupSessionId?: string
-  taskIds: string[]
-}
-
-async function projectPlanningFailureArtifacts(
-  list: Array<typeof messages.$inferSelect>,
-  workspaceId?: string | null,
-) {
-  if (!workspaceId || !list.some((message) => needsPlanningFailureArtifactProjection(message))) {
-    return list
-  }
-
-  const [workspaceRecord] = await db
-    .select({ projectPath: workspaces.projectPath })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1)
-  if (!workspaceRecord?.projectPath) return list
-
-  return list.map((message) => {
-    if (!needsPlanningFailureArtifactProjection(message)) return message
-
-    const metadata = asMessageMetadata(message.metadata)
-    const error = typeof metadata.error === 'string' ? metadata.error : message.content
-    const recoveredArtifacts = extractPlanningFailureArtifacts(error, workspaceRecord.projectPath)
-    if (!recoveredArtifacts.length) return message
-
-    const runId =
-      typeof metadata.runId === 'string' && metadata.runId.trim()
-        ? metadata.runId
-        : `planning-failure-${message.id}`
-    return {
-      ...message,
-      metadata: {
-        ...metadata,
-        ...buildPlanningFailureArtifactMetadata(recoveredArtifacts, runId, workspaceId),
-      },
-    }
-  })
-}
-
-function needsPlanningFailureArtifactProjection(message: typeof messages.$inferSelect) {
-  const metadata = asMessageMetadata(message.metadata)
-  if (metadata.systemEvent !== 'orchestrator_plan_failed') return false
-  if (metadata.recoveredPlanningArtifacts === true) return false
-  if (metadata.file_card) return false
-  return typeof metadata.error === 'string' || message.content.includes('Orchestrator')
-}
-
-function asMessageMetadata(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
-}
 
 export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
   .use('*', authMiddleware)
@@ -231,6 +94,14 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.clear',
+      body: '已清空本会话消息显示。',
+      metadata: { clearedAt: new Date().toISOString() },
+    })
     await db.delete(messages).where(eq(messages.sessionId, sessionId))
     return c.json({ deleted: true })
   })
@@ -264,6 +135,20 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
 
     const metadata =
       message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+    const editedAt = new Date().toISOString()
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.edit',
+      body: content,
+      metadata: {
+        targetMessageId: message.id,
+        targetEventId: extractRoomEventId(message),
+        content,
+        editedAt,
+      },
+    })
     const [updated] = await db
       .update(messages)
       .set({
@@ -271,7 +156,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         metadata: {
           ...metadata,
           ...(typeof metadata.displayContent === 'string' ? { displayContent: content } : {}),
-          editedAt: new Date().toISOString(),
+          editedAt,
         },
       })
       .where(eq(messages.id, messageId))
@@ -304,6 +189,17 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     const affected = collectAffectedMessages(list, messageIndex)
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.redact',
+      body: '已撤回旧回复，准备重新发送。',
+      metadata: buildMessageRedactionMetadata(affected, {
+        reason: 'resend',
+        sourceMessageId: message.id,
+      }),
+    })
     for (const item of affected) {
       await db.delete(messages).where(eq(messages.id, item.id))
     }
@@ -318,21 +214,13 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     }
 
     if (session.type === 'group' && session.workspaceId) {
-      const agentRows = await db
-        .select()
-        .from(workspaceAgents)
-        .where(eq(workspaceAgents.workspaceId, session.workspaceId))
-        .orderBy(asc(workspaceAgents.orderIdx))
-
-      routeGroupMessageThroughOrchestrator(
-        sessionId,
-        message.content,
-        agentRows,
-        session.workspaceId,
-        user.sub,
+      stepCoordinatorForGroupMessage({
+        session,
+        userId: user.sub,
+        userName: user.username,
         message,
-      ).catch((err: any) =>
-        logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed on resend'),
+      }).catch((err: any) =>
+        logger.error({ err: err?.message, sessionId }, 'ManagerRuntime room step failed on resend'),
       )
     } else {
       const profile = await profileForDirectSession(session)
@@ -353,6 +241,19 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!message || message.sessionId !== sessionId)
       throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.pin',
+      body: '已置顶消息。',
+      metadata: {
+        targetMessageId: message.id,
+        targetEventId: extractRoomEventId(message),
+        pinned: true,
+        pinnedAt: new Date().toISOString(),
+      },
+    })
     const [updated] = await db
       .update(messages)
       .set({ isPinned: true })
@@ -371,6 +272,19 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     const [message] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
     if (!message || message.sessionId !== sessionId)
       throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '消息不存在')
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.pin',
+      body: '已取消置顶消息。',
+      metadata: {
+        targetMessageId: message.id,
+        targetEventId: extractRoomEventId(message),
+        pinned: false,
+        unpinnedAt: new Date().toISOString(),
+      },
+    })
     const [updated] = await db
       .update(messages)
       .set({ isPinned: false })
@@ -404,6 +318,18 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       ? await rollbackCodeAgentChanges(session, affected)
       : { reverted: 0, failed: 0 }
     const ids = [target.id, ...affected.map((message) => message.id)]
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.redact',
+      body: '已撤回消息及其关联回复。',
+      metadata: buildMessageRedactionMetadata([target, ...affected], {
+        reason: 'delete',
+        rollback,
+        rollbackResult,
+      }),
+    })
     for (const id of ids) {
       await db.delete(messages).where(eq(messages.id, id))
     }
@@ -434,26 +360,28 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!previousUser)
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '没有可重新生成的用户消息')
 
+    await appendMessageControlEvent({
+      session,
+      userId: user.sub,
+      userName: user.username,
+      kind: 'message.redact',
+      body: '已撤回旧回复，准备重新生成。',
+      metadata: buildMessageRedactionMetadata([message], {
+        reason: 'regenerate',
+        sourceMessageId: previousUser.id,
+      }),
+    })
     await db.delete(messages).where(eq(messages.id, message.id))
     const { cancelAgentReply } = await import('../services/agent-runner')
     cancelAgentReply(sessionId)
-    if (session.type === 'group' && session.workspaceId) {
-      const agentRows = await db
-        .select()
-        .from(workspaceAgents)
-        .where(eq(workspaceAgents.workspaceId, session.workspaceId))
-        .orderBy(asc(workspaceAgents.orderIdx))
-
-      const content = previousUser.content
-      routeGroupMessageThroughOrchestrator(
-        sessionId,
-        content,
-        agentRows,
-        session.workspaceId,
-        user.sub,
-        previousUser,
-      ).catch((err: any) =>
-        logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed on regenerate'),
+    if (session.type === 'group') {
+      stepCoordinatorForGroupMessage({
+        session,
+        userId: user.sub,
+        userName: user.username,
+        message: previousUser,
+      }).catch((err: any) =>
+        logger.error({ err: err?.message, sessionId }, 'ManagerRuntime room step failed on regenerate'),
       )
     } else {
       const profile = await profileForDirectSession(session)
@@ -491,97 +419,69 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     // Trigger agent reply asynchronously (do not await to keep response fast).
     if (msg && !metadata?.skipAgentReply) {
       const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
-      if (session?.type === 'group' && session.workspaceId) {
-        const agentRows = await db
-          .select()
-          .from(workspaceAgents)
-          .where(eq(workspaceAgents.workspaceId, session.workspaceId))
-          .orderBy(asc(workspaceAgents.orderIdx))
-        const mentionedAgents = resolveMentionedAgents(mentions, agentRows)
-        if (mentionedAgents.length > 0) {
-          routeGroupMessageToMentionedAgents({
-            sessionId,
-            session,
-            message: msg,
-            metadata: nextMetadata,
-            mentionedAgents,
-          }).catch((err: any) =>
-            logger.error({ err: err?.message, sessionId }, 'Group mention routing failed'),
-          )
-          return c.json(msg)
-        }
+      if (session?.type === 'group') {
+        if (session.workspaceId) {
+          const agentRows = await db
+            .select()
+            .from(workspaceAgents)
+            .where(eq(workspaceAgents.workspaceId, session.workspaceId))
+            .orderBy(asc(workspaceAgents.orderIdx))
+          const mentionedAgents = resolveMentionedAgents(mentions, agentRows)
+          // Mention 信息已通过 Room timeline 传递（nextMetadata.mentions），由 ManagerRuntime 统一决策
+          if (mentionedAgents.length > 0) {
+            logger.info({ sessionId, mentionedAgentIds: mentionedAgents.map((a) => a.id) }, 'Group mention detected; delegating to ManagerRuntime')
+          }
 
-        const activeTaskContext = await loadActiveTaskContext(sessionId)
-        const repliedToMessage = msg.replyToMessageId
-          ? ((await db.select().from(messages).where(eq(messages.id, msg.replyToMessageId)).limit(1))[0] as
-              | MessageRow
-              | undefined)
-          : undefined
-        const directWorkerTarget = chooseDirectWorkerReplyTarget({
-          sourceMessage: msg,
-          repliedToMessage,
-          activeTaskContext,
-          agentRows,
-        })
-        if (directWorkerTarget) {
-          const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, session.workspaceId)).limit(1)
-          const profile = toAgentProfile(directWorkerTarget, workspace?.projectPath)
-          runAgentReply(
-            sessionId,
-            {
-              ...msg,
-              metadata: {
-                ...(msg.metadata && typeof msg.metadata === 'object' ? msg.metadata : {}),
-                directWorkerReply: true,
-                replyTargetAgentId: directWorkerTarget.id,
-                replyTargetAgentName: directWorkerTarget.name,
-              },
-            },
-            profile,
-          ).catch((err: any) =>
-            logger.error({ err: err?.message, sessionId }, 'Direct worker room reply failed'),
-          )
-          return c.json(msg)
-        }
-
-        const orchestrator = agentRows.find((agent) => agent.roleType === 'orchestrator')
-        if (orchestrator) {
-          const attachedToActiveRun = await handleHumanInterruptForActiveRun({
-            groupSessionId: sessionId,
-            workspaceId: session.workspaceId,
-            ownerId: user.sub,
-            content,
-            userMessageId: msg.id,
-            orchestrator,
+          const activeTaskContext = await loadActiveTaskContext(sessionId)
+          const repliedToMessage = msg.replyToMessageId
+            ? ((await db.select().from(messages).where(eq(messages.id, msg.replyToMessageId)).limit(1))[0] as
+                | MessageRow
+                | undefined)
+            : undefined
+          const directWorkerTarget = chooseDirectWorkerReplyTarget({
+            sourceMessage: msg,
+            repliedToMessage,
+            activeTaskContext,
+            agentRows,
           })
-          if (attachedToActiveRun) {
-            return c.json(msg)
+          if (directWorkerTarget) {
+            const routedToTaskRoom = await routeGroupReplyToWorkerTaskRoom({
+              groupSessionId: sessionId,
+              message: msg,
+              userId: user.sub,
+              userName: user.username,
+              targetWorker: directWorkerTarget,
+              activeTaskContext,
+            })
+            if (routedToTaskRoom) return c.json(msg)
+          }
+
+          const orchestrator = agentRows.find((agent) => agent.roleType === 'orchestrator')
+          if (orchestrator) {
+            const attachedToActiveRun = await handleHumanInterruptForActiveRun({
+              groupSessionId: sessionId,
+              workspaceId: session.workspaceId,
+              ownerId: user.sub,
+              content,
+              userMessageId: msg.id,
+              orchestrator,
+            })
+            if (attachedToActiveRun) {
+              return c.json(msg)
+            }
           }
         }
 
-        const coordinatorResult = await stepCoordinatorForGroupMessage({
+        await stepCoordinatorForGroupMessage({
           session,
           userId: user.sub,
           userName: user.username,
           message: msg,
         }).catch((err: any) => {
-          logger.error({ err: err?.message, sessionId }, 'CoordinatorRuntime room step failed')
+          logger.error({ err: err?.message, sessionId }, 'ManagerRuntime room step failed')
           return null
         })
-        if (coordinatorResult?.consumed) {
-          return c.json(msg)
-        }
-
-        routeGroupMessageThroughOrchestrator(
-          sessionId,
-          content,
-          agentRows,
-          session.workspaceId,
-          user.sub,
-          msg,
-        ).catch((err: any) =>
-          logger.error({ err: err?.message, sessionId }, 'Orchestrator routing failed'),
-        )
+        return c.json(msg)
       } else {
         if (session && isOrchestratorTaskSession(session)) {
           const taskRoomResult = await stepTaskRoomAfterHumanMessage({
@@ -625,35 +525,25 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     if (!session || session.ownerId !== user.sub)
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '会话不存在')
     if (session.type !== 'group' || !session.workspaceId) {
-      const [prompt] = await db
-        .insert(messages)
-        .values({
-          sessionId,
-          senderId: 'system',
-          senderType: 'system',
-          type: 'text',
-          content:
-            '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和Agent 联系人列表。',
-          metadata: { systemEvent: 'agent_draft_requires_group', agentDraftStatus: 'requires_group' },
-        })
-        .returning()
-      if (!prompt) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 群组提示创建失败')
+      const prompt = await appendAgentDraftTimelineCard({
+        session,
+        userId: user.sub,
+        content:
+          '请先打开或创建一个 Agent Group，再通过聊天创建 Agent。这样新 Agent 才能加入明确的 workspace 和 Agent 联系人列表。',
+        metadata: { systemEvent: 'agent_draft_requires_group', agentDraftStatus: 'requires_group' },
+        messageType: 'text',
+      })
       return c.json(prompt)
     }
 
     const draft = await buildAgentDraft(content)
-    const [card] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: 'system',
-        senderType: 'system',
-        type: 'task_card',
-        content: `已生成 ${draft.name} Agent 草案。确认后会加入当前 Agent Group。`,
-        metadata: { systemEvent: 'agent_draft_created', agentDraft: draft, agentDraftStatus: 'draft' },
-      })
-      .returning()
-    if (!card) throw AppError.fromCode(AppErrorCodes.INTERNAL_ERROR, 'Agent 草案创建失败')
+    const card = await appendAgentDraftTimelineCard({
+      session,
+      userId: user.sub,
+      content: `已生成 ${draft.name} Agent 草案。确认后会加入当前 Agent Group。`,
+      metadata: { systemEvent: 'agent_draft_created', agentDraft: draft, agentDraftStatus: 'draft' },
+      messageType: 'task_card',
+    })
     return c.json(card)
   })
   .post(
@@ -674,15 +564,15 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       ) {
         throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
       }
-      const [card] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
-      if (!card || card.sessionId !== sessionId)
+      const draftRef = await loadAgentDraftRef(sessionId, messageId)
+      if (!draftRef)
         throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 草案不存在')
 
-      const cardMetadata = card.metadata as {
+      const cardMetadata = draftRef.metadata as {
         agentDraftStatus?: unknown
         createdAgentId?: unknown
       } | null
-      if (card.type !== 'task_card')
+      if (draftRef.messageType !== 'task_card')
         throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '消息不是 Agent 草案')
       if (cardMetadata?.agentDraftStatus === 'confirmed') {
         if (typeof cardMetadata.createdAgentId !== 'string') {
@@ -706,13 +596,13 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
             AppErrorCodes.AGENT_NOT_FOUND,
             '已确认的 Agent 草案指向不存在的 Agent',
           )
-        return c.json({ agent: existingAgent, message: card })
+        return c.json({ agent: existingAgent, message: agentDraftRefMessage(draftRef) })
       }
       if (cardMetadata?.agentDraftStatus !== 'draft') {
         throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '消息不是可编辑的 Agent 草案')
       }
 
-      const metadataDraft = parseAgentDraft(card.metadata)
+      const metadataDraft = parseAgentDraft(draftRef.metadata)
       if (!metadataDraft)
         throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, 'Agent 草案元数据无效')
       const draft = normalizeAgentDraftInput(draftOverride ?? metadataDraft)
@@ -737,21 +627,18 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .update(workspaces)
         .set({ updatedAt: new Date() })
         .where(eq(workspaces.id, session.workspaceId))
-      const [updatedCard] = await db
-        .update(messages)
-        .set({
-          content: `${agent.name} 已加入当前 Agent Group。`,
-          metadata: {
-            ...(card.metadata ?? {}),
-            agentDraft: draft,
-            agentDraftStatus: 'confirmed',
-            createdAgentId: agent.id,
-          },
-        })
-        .where(eq(messages.id, messageId))
-        .returning()
+      const updatedCard = await updateAgentDraftRef({
+        ref: draftRef,
+        content: `${agent.name} 已加入当前 Agent Group。`,
+        metadata: {
+          ...draftRef.metadata,
+          agentDraft: draft,
+          agentDraftStatus: 'confirmed',
+          createdAgentId: agent.id,
+        },
+      })
 
-      return c.json({ agent, message: updatedCard ?? card })
+      return c.json({ agent, message: updatedCard })
     },
   )
   .post(
@@ -773,16 +660,12 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
       }
 
-      const [proposalMessage] = await db
-        .select()
-        .from(messages)
-        .where(eq(messages.id, messageId))
-        .limit(1)
-      if (!proposalMessage || proposalMessage.sessionId !== sessionId) {
+      const proposalRef = await loadMemberProposalRef(sessionId, messageId)
+      if (!proposalRef) {
         throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '补员建议消息不存在')
       }
 
-      const metadata = proposalMessage.metadata ?? {}
+      const metadata = proposalRef.metadata
       if (metadata.memberProposalStatus !== 'pending') {
         throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '补员建议已经处理或不可确认')
       }
@@ -851,25 +734,16 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
         .set({ updatedAt: new Date() })
         .where(eq(workspaces.id, session.workspaceId))
 
-      const [updatedMessage] = await db
-        .update(messages)
-        .set({
-          content: `已加入：${agentsToJoin.map((agent) => agent.name).join('、')}。现在可以让 Orchestrator 重新规划并分发任务。`,
-          metadata: {
-            ...metadata,
-            memberProposalStatus: 'confirmed',
-            confirmedProfileIds: selectedProfileIds,
-            createdAgentIds: createdAgents.map((agent) => agent.id),
-            reusedAgentIds: reusedAgents.map((agent) => agent.id),
-          },
-        })
-        .where(eq(messages.id, messageId))
-        .returning()
-
-      const message = updatedMessage ?? proposalMessage
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message },
+      const message = await updateMemberProposalRef({
+        ref: proposalRef,
+        content: `已加入：${agentsToJoin.map((agent) => agent.name).join('、')}。现在可以让 Manager 重新规划并分发任务。`,
+        metadata: {
+          ...metadata,
+          memberProposalStatus: 'confirmed',
+          confirmedProfileIds: selectedProfileIds,
+          createdAgentIds: createdAgents.map((agent) => agent.id),
+          reusedAgentIds: reusedAgents.map((agent) => agent.id),
+        },
       })
 
       return c.json({ agents: agentsToJoin, message, session: updatedSession ?? session })
@@ -890,32 +764,28 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
       throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'Agent 群组会话不存在')
     }
 
-    const [proposalMessage] = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.id, messageId))
-      .limit(1)
-    if (!proposalMessage || proposalMessage.sessionId !== sessionId) {
+    const proposalRef = await loadMemberProposalRef(sessionId, messageId)
+    if (!proposalRef) {
       throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '补员建议消息不存在')
     }
 
-    const metadata = proposalMessage.metadata ?? {}
+    const metadata = proposalRef.metadata
     if (metadata.memberProposalStatus !== 'confirmed') {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '请先确认补员，再继续分发')
     }
     if (metadata.memberProposalContinueStatus === 'running') {
-      return c.json({ message: proposalMessage, started: false })
+      return c.json({ message: memberProposalRefMessage(proposalRef), started: false })
     }
 
     const goal =
       readString(metadata.memberProposalGoal) ??
-      (await findPreviousUserMessageContent(sessionId, proposalMessage.id))
+      (await findPreviousUserMessageContent(sessionId, proposalRef.id))
     if (!goal) {
       throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '找不到需要继续分发的原始用户目标')
     }
 
     const runningMessage = await updateMemberProposalContinueState({
-      message: proposalMessage,
+      ref: proposalRef,
       metadata,
       content: `已加入建议成员。Orchestrator 正在基于新成员重新规划并分发任务。`,
       status: 'running',
@@ -923,7 +793,7 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     })
     broadcastMemberProposalContinueStatus({
       sessionId,
-      messageId: proposalMessage.id,
+      messageId: proposalRef.id,
       status: 'running',
       goal,
     })
@@ -931,11 +801,12 @@ export const messageRoutes = new Hono<{ Variables: AuthVariables }>()
     continueMemberProposalPlanning({
       session,
       ownerId: user.sub,
-      proposalMessageId: proposalMessage.id,
+      userName: user.username,
+      proposalMessageId: proposalRef.id,
       goal,
     }).catch((err: any) =>
       logger.error(
-        { err: err?.message, sessionId, messageId: proposalMessage.id },
+        { err: err?.message, sessionId, messageId: proposalRef.id },
         'Member proposal continue failed',
       ),
     )
@@ -947,7 +818,369 @@ function readString(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+type AgentDraftRef = {
+  id: string
+  sessionId: string
+  content: string
+  metadata: Record<string, unknown>
+  messageType: string
+  legacyMessage?: typeof messages.$inferSelect | null
+  roomEvent?: typeof timelineEvents.$inferSelect | null
+  roomId?: string | null
+  targetEventId?: string | null
+}
+
+async function appendAgentDraftTimelineCard(input: {
+  session: typeof sessions.$inferSelect
+  userId: string
+  content: string
+  metadata: Record<string, unknown>
+  messageType: 'text' | 'task_card'
+}) {
+  const { roomService } = await import('../services/rooms')
+  const room = await roomService.ensureRoomForSession(input.session.id, input.userId)
+  const event = await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: 'system',
+    type: 'system',
+    body: input.content,
+    metadata: {
+      ...input.metadata,
+      messageType: input.messageType,
+      source: 'agent-draft',
+      legacyMessageProjectionDisabled: true,
+    },
+  })
+  return agentDraftRefMessage({
+    id: `room:${event.id}`,
+    sessionId: input.session.id,
+    content: input.content,
+    metadata: {
+      ...input.metadata,
+      messageType: input.messageType,
+      source: 'agent-draft',
+    },
+    messageType: input.messageType,
+    legacyMessage: null,
+    roomEvent: event,
+    roomId: room.id,
+    targetEventId: event.id,
+  })
+}
+
+async function loadAgentDraftRef(sessionId: string, messageId: string): Promise<AgentDraftRef | null> {
+  if (messageId.startsWith('room:')) {
+    const eventId = messageId.slice('room:'.length).trim()
+    if (!eventId) return null
+    const [row] = await db
+      .select({
+        event: timelineEvents,
+        room: rooms,
+      })
+      .from(timelineEvents)
+      .innerJoin(rooms, eq(rooms.id, timelineEvents.roomId))
+      .where(and(eq(timelineEvents.id, eventId), eq(rooms.sessionId, sessionId)))
+      .limit(1)
+    if (!row?.event) return null
+    const updates = await db
+      .select()
+      .from(timelineEvents)
+      .where(and(eq(timelineEvents.roomId, row.room.id), eq(timelineEvents.type, 'system')))
+      .orderBy(asc(timelineEvents.sequence))
+    let content = row.event.body
+    const metadata = { ...(row.event.metadata ?? {}) }
+    for (const update of updates) {
+      if (update.metadata?.kind !== 'agent-draft.update') continue
+      if (update.metadata?.targetEventId !== row.event.id) continue
+      const patch = update.metadata.patch
+      if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+        Object.assign(metadata, patch as Record<string, unknown>)
+      }
+      if (typeof update.metadata.content === 'string' && update.metadata.content.trim()) {
+        content = update.metadata.content
+      } else if (update.body.trim()) {
+        content = update.body
+      }
+    }
+    const messageType = readString(metadata.messageType) ?? 'text'
+    return {
+      id: `room:${row.event.id}`,
+      sessionId,
+      content,
+      metadata,
+      messageType,
+      legacyMessage: null,
+      roomEvent: row.event,
+      roomId: row.room.id,
+      targetEventId: row.event.id,
+    }
+  }
+
+  const [draftMessage] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1)
+  if (!draftMessage || draftMessage.sessionId !== sessionId) return null
+  return {
+    id: draftMessage.id,
+    sessionId,
+    content: draftMessage.content,
+    metadata: draftMessage.metadata ?? {},
+    messageType: draftMessage.type,
+    legacyMessage: draftMessage,
+    roomEvent: null,
+    roomId:
+      readNestedString(draftMessage.metadata ?? {}, ['roomTimeline', 'roomId']) ??
+      readNestedString(draftMessage.metadata ?? {}, ['roomTimelineProjection', 'roomId']),
+    targetEventId: null,
+  }
+}
+
+function agentDraftRefMessage(ref: AgentDraftRef): typeof messages.$inferSelect {
+  if (ref.legacyMessage) return ref.legacyMessage
+  return {
+    id: ref.id,
+    sessionId: ref.sessionId,
+    senderId: 'system',
+    senderType: 'system',
+    type: ref.messageType,
+    content: ref.content,
+    metadata: ref.metadata,
+    isPinned: false,
+    replyToMessageId: null,
+    createdAt: ref.roomEvent?.createdAt ?? new Date(),
+  }
+}
+
+async function updateAgentDraftRef(params: {
+  ref: AgentDraftRef
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  if (params.ref.legacyMessage) {
+    const [updated] = await db
+      .update(messages)
+      .set({ content: params.content, metadata: params.metadata })
+      .where(eq(messages.id, params.ref.legacyMessage.id))
+      .returning()
+    const result = updated ?? params.ref.legacyMessage
+    broadcastSessionEvent(params.ref.sessionId, {
+      type: WsEvent.MessageCompleted,
+      payload: { sessionId: params.ref.sessionId, message: result },
+    })
+    return result
+  }
+
+  if (!params.ref.roomId || !params.ref.targetEventId) {
+    throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, 'Agent 草案事件不存在')
+  }
+  await appendTimelineAgentDraftUpdate({
+    roomId: params.ref.roomId,
+    targetEventId: params.ref.targetEventId,
+    content: params.content,
+    metadata: params.metadata,
+  })
+  return {
+    ...agentDraftRefMessage(params.ref),
+    content: params.content,
+    metadata: params.metadata,
+  }
+}
+
+async function appendTimelineAgentDraftUpdate(input: {
+  roomId: string
+  targetEventId: string
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  const { roomService } = await import('../services/rooms')
+  return roomService.appendTimelineEvent({
+    roomId: input.roomId,
+    senderType: 'system',
+    type: 'system',
+    body: input.content,
+    metadata: {
+      kind: 'agent-draft.update',
+      targetEventId: input.targetEventId,
+      content: input.content,
+      patch: input.metadata,
+    },
+  })
+}
+
+type MemberProposalRef = {
+  id: string
+  sessionId: string
+  content: string
+  metadata: Record<string, unknown>
+  legacyMessage?: typeof messages.$inferSelect | null
+  roomEvent?: typeof timelineEvents.$inferSelect | null
+  roomId?: string | null
+  targetEventId?: string | null
+}
+
+async function loadMemberProposalRef(sessionId: string, messageId: string): Promise<MemberProposalRef | null> {
+  if (messageId.startsWith('room:')) {
+    const eventId = messageId.slice('room:'.length).trim()
+    if (!eventId) return null
+    const [row] = await db
+      .select({
+        event: timelineEvents,
+        room: rooms,
+      })
+      .from(timelineEvents)
+      .innerJoin(rooms, eq(rooms.id, timelineEvents.roomId))
+      .where(and(eq(timelineEvents.id, eventId), eq(rooms.sessionId, sessionId)))
+      .limit(1)
+    if (!row?.event) return null
+    const updates = await db
+      .select()
+      .from(timelineEvents)
+      .where(and(eq(timelineEvents.roomId, row.room.id), eq(timelineEvents.type, 'system')))
+      .orderBy(asc(timelineEvents.sequence))
+    let content = row.event.body
+    const metadata = { ...(row.event.metadata ?? {}) }
+    for (const update of updates) {
+      if (update.metadata?.kind !== 'member-proposal.update') continue
+      if (update.metadata?.targetEventId !== row.event.id) continue
+      const patch = update.metadata.patch
+      if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+        Object.assign(metadata, patch as Record<string, unknown>)
+      }
+      if (typeof update.metadata.content === 'string' && update.metadata.content.trim()) {
+        content = update.metadata.content
+      } else if (update.body.trim()) {
+        content = update.body
+      }
+    }
+    return {
+      id: `room:${row.event.id}`,
+      sessionId,
+      content,
+      metadata,
+      legacyMessage: null,
+      roomEvent: row.event,
+      roomId: row.room.id,
+      targetEventId: row.event.id,
+    }
+  }
+
+  const [proposalMessage] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, messageId))
+    .limit(1)
+  if (!proposalMessage || proposalMessage.sessionId !== sessionId) return null
+  return {
+    id: proposalMessage.id,
+    sessionId,
+    content: proposalMessage.content,
+    metadata: proposalMessage.metadata ?? {},
+    legacyMessage: proposalMessage,
+    roomEvent: null,
+    roomId: readNestedString(proposalMessage.metadata ?? {}, ['roomTimeline', 'roomId']) ??
+      readNestedString(proposalMessage.metadata ?? {}, ['roomTimelineProjection', 'roomId']),
+    targetEventId: null,
+  }
+}
+
+function memberProposalRefMessage(ref: MemberProposalRef): typeof messages.$inferSelect {
+  if (ref.legacyMessage) return ref.legacyMessage
+  return {
+    id: ref.id,
+    sessionId: ref.sessionId,
+    senderId: 'manager',
+    senderType: 'agent',
+    type: 'task_card',
+    content: ref.content,
+    metadata: ref.metadata,
+    isPinned: false,
+    replyToMessageId: null,
+    createdAt: ref.roomEvent?.createdAt ?? new Date(),
+  }
+}
+
+async function updateMemberProposalRef(params: {
+  ref: MemberProposalRef
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  if (params.ref.legacyMessage) {
+    const [updated] = await db
+      .update(messages)
+      .set({ content: params.content, metadata: params.metadata })
+      .where(eq(messages.id, params.ref.legacyMessage.id))
+      .returning()
+    const result = updated ?? params.ref.legacyMessage
+    broadcastSessionEvent(params.ref.sessionId, {
+      type: WsEvent.MessageCompleted,
+      payload: { sessionId: params.ref.sessionId, message: result },
+    })
+    return result
+  }
+
+  if (!params.ref.roomId || !params.ref.targetEventId) {
+    throw AppError.fromCode(AppErrorCodes.MESSAGE_NOT_FOUND, '补员建议事件不存在')
+  }
+  await appendTimelineMemberProposalUpdate({
+    roomId: params.ref.roomId,
+    targetEventId: params.ref.targetEventId,
+    content: params.content,
+    metadata: params.metadata,
+  })
+  return {
+    ...memberProposalRefMessage(params.ref),
+    content: params.content,
+    metadata: params.metadata,
+  }
+}
+
+async function appendTimelineMemberProposalUpdate(input: {
+  roomId: string
+  targetEventId: string
+  content: string
+  metadata: Record<string, unknown>
+}) {
+  const { roomService } = await import('../services/rooms')
+  return roomService.appendTimelineEvent({
+    roomId: input.roomId,
+    senderType: 'manager',
+    type: 'system',
+    body: input.content,
+    metadata: {
+      kind: 'member-proposal.update',
+      targetEventId: input.targetEventId,
+      content: input.content,
+      patch: input.metadata,
+    },
+  })
+}
+
 async function findPreviousUserMessageContent(sessionId: string, beforeMessageId: string) {
+  if (beforeMessageId.startsWith('room:')) {
+    const beforeEventId = beforeMessageId.slice('room:'.length).trim()
+    if (beforeEventId) {
+      const [beforeEventRow] = await db
+        .select({
+          event: timelineEvents,
+          room: rooms,
+        })
+        .from(timelineEvents)
+        .innerJoin(rooms, eq(rooms.id, timelineEvents.roomId))
+        .where(and(eq(timelineEvents.id, beforeEventId), eq(rooms.sessionId, sessionId)))
+        .limit(1)
+      if (beforeEventRow?.event) {
+        const timeline = await db
+          .select()
+          .from(timelineEvents)
+          .where(eq(timelineEvents.roomId, beforeEventRow.room.id))
+          .orderBy(asc(timelineEvents.sequence))
+        const previousHuman = timeline
+          .filter((event) => event.sequence < beforeEventRow.event.sequence)
+          .reverse()
+          .find((event) => event.senderType === 'human' && event.body.trim())
+        if (previousHuman?.body.trim()) return previousHuman.body.trim()
+      }
+    }
+  }
+
   const list = await db
     .select()
     .from(messages)
@@ -962,7 +1195,7 @@ async function findPreviousUserMessageContent(sessionId: string, beforeMessageId
 }
 
 async function updateMemberProposalContinueState(params: {
-  message: typeof messages.$inferSelect
+  ref: MemberProposalRef
   metadata: Record<string, unknown>
   content: string
   status: 'running' | 'completed' | 'failed'
@@ -970,7 +1203,7 @@ async function updateMemberProposalContinueState(params: {
   monitor?: DispatchMonitor
   error?: string
 }) {
-  const { message, metadata, content, status, goal, monitor, error } = params
+  const { ref, metadata, content, status, goal, monitor, error } = params
   const nextMetadata: Record<string, unknown> = {
     ...metadata,
     memberProposalGoal: goal,
@@ -987,17 +1220,7 @@ async function updateMemberProposalContinueState(params: {
   }
   if (error) nextMetadata.memberProposalContinueError = error
 
-  const [updated] = await db
-    .update(messages)
-    .set({ content, metadata: nextMetadata })
-    .where(eq(messages.id, message.id))
-    .returning()
-  const result = updated ?? message
-  broadcastSessionEvent(message.sessionId, {
-    type: WsEvent.MessageCompleted,
-    payload: { sessionId: message.sessionId, message: result },
-  })
-  return result
+  return updateMemberProposalRef({ ref, content, metadata: nextMetadata })
 }
 
 function broadcastMemberProposalContinueStatus(params: {
@@ -1031,70 +1254,59 @@ function broadcastMemberProposalContinueStatus(params: {
 async function continueMemberProposalPlanning(params: {
   session: typeof sessions.$inferSelect
   ownerId: string
+  userName?: string | null
   proposalMessageId: string
   goal: string
 }) {
-  const { session, ownerId, proposalMessageId, goal } = params
+  const { session, ownerId, userName, proposalMessageId, goal } = params
   if (!session.workspaceId) return
 
-  const [proposalMessage] = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.id, proposalMessageId))
-    .limit(1)
-  if (!proposalMessage) return
+  const proposalRef = await loadMemberProposalRef(session.id, proposalMessageId)
+  if (!proposalRef) return
 
-  const metadata = proposalMessage.metadata ?? {}
+  const metadata = proposalRef.metadata
   try {
-    const agentRows = await db
-      .select()
-      .from(workspaceAgents)
-      .where(eq(workspaceAgents.workspaceId, session.workspaceId))
-      .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
-    const monitor = await generatePlanAndPushTaskBoard(
-      session.id,
-      goal,
-      agentRows,
-      session.workspaceId,
-      ownerId,
-      { propagateErrors: true },
-    )
-    if (!monitor) throw new Error('Orchestrator 规划没有启动')
-    const [latestMessage] = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.id, proposalMessageId))
-      .limit(1)
+    const { message: continueMessage } = await appendHumanMessageRoomFirst({
+      session,
+      userId: ownerId,
+      userName,
+      content: `补员已确认。请 Manager 基于当前群聊成员继续处理原始目标，并把需要执行的工作分派到真实任务子对话：${goal}`,
+      type: 'text',
+      metadata: {
+        kind: 'member-proposal-continue',
+        sourceProposalMessageId: proposalRef.id,
+        memberProposalGoal: goal,
+        noLegacyFallback: true,
+      },
+      replyToMessageId: proposalRef.id,
+    })
+    const step = await stepCoordinatorForGroupMessage({
+      session,
+      userId: ownerId,
+      userName,
+      message: continueMessage,
+    })
+    const latestRef = await loadMemberProposalRef(session.id, proposalMessageId)
     await updateMemberProposalContinueState({
-      message: latestMessage ?? proposalMessage,
-      metadata: (latestMessage?.metadata ?? metadata) as Record<string, unknown>,
-      content: '已加入建议成员。Orchestrator 已重新规划并开始分发任务。',
+      ref: latestRef ?? proposalRef,
+      metadata: (latestRef?.metadata ?? metadata) as Record<string, unknown>,
+      content: '已加入建议成员。Manager Runtime 已收到继续协作请求，并已按其输出继续处理。',
       status: 'completed',
       goal,
-      monitor,
     })
-    await emitRunEvent({
-      runId: monitor.dispatchId,
-      workspaceId: session.workspaceId,
-      groupSessionId: session.id,
-      type: 'member_proposal.continued',
-      payload: {
-        messageId: proposalMessage.id,
-        status: 'completed',
-        goal,
-        taskIds: monitor.taskIds,
-      },
+    broadcastMemberProposalContinueStatus({
+      sessionId: session.id,
+      messageId: proposalRef.id,
+      status: 'completed',
+      goal,
+      taskIds: step.actions.filter((action) => action.type === 'assign').map((action) => action.taskKey ?? action.taskTitle ?? 'assign'),
     })
   } catch (err: any) {
     const error = err?.message || 'Orchestrator 重新规划失败'
-    const [latestMessage] = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.id, proposalMessageId))
-      .limit(1)
+    const latestRef = await loadMemberProposalRef(session.id, proposalMessageId)
     await updateMemberProposalContinueState({
-      message: latestMessage ?? proposalMessage,
-      metadata: (latestMessage?.metadata ?? metadata) as Record<string, unknown>,
+      ref: latestRef ?? proposalRef,
+      metadata: (latestRef?.metadata ?? metadata) as Record<string, unknown>,
       content: `已加入建议成员，但 Orchestrator 重新规划失败：${error}`,
       status: 'failed',
       goal,
@@ -1102,7 +1314,7 @@ async function continueMemberProposalPlanning(params: {
     })
     broadcastMemberProposalContinueStatus({
       sessionId: session.id,
-      messageId: proposalMessage.id,
+      messageId: proposalRef.id,
       status: 'failed',
       goal,
       error,
@@ -1137,14 +1349,14 @@ function expertProfileToAgentInsert(profile: AgentExpertProfile) {
     color: profile.color,
     modelId: null,
     runtimeType: profile.runtimeType,
-    codeAgentType: profile.runtimeType === 'code-agent' ? (profile.codeAgentType ?? 'codex') : null,
+    codeAgentType: profile.codeAgentType ?? 'codex',
     capabilityTags: profile.capabilityTags,
     skillIds: profile.defaultSkillIds,
     toolPermissions: profile.toolPermissions,
     sandboxPolicy: profile.sandboxPolicy,
     contextPolicy: profile.contextPolicy,
     autoInvoke: profile.autoInvoke,
-    approvalRequired: profile.runtimeType === 'code-agent' ? false : profile.approvalRequired,
+    approvalRequired: false,
   }
 }
 
@@ -1268,26 +1480,34 @@ async function persistSessionTransparencyMessage(input: {
   content: string
   metadata: Record<string, unknown>
 }) {
-  const [message] = await db
-    .insert(messages)
-    .values({
-      sessionId: input.sessionId,
-      senderId: input.senderId,
-      senderType: input.senderType,
-      type: 'text',
-      content: input.content,
-      metadata: input.metadata,
-    })
-    .returning()
+  const [session] = await db.select().from(sessions).where(eq(sessions.id, input.sessionId)).limit(1)
+  if (!session) return null
+  const { roomService } = await import('../services/rooms')
+  const room = await roomService.ensureRoomForSession(session.id, session.ownerId)
+  const event = await roomService.appendTimelineEvent({
+    roomId: room.id,
+    senderType: input.senderType === 'system' ? 'system' : 'manager',
+    type: input.senderType === 'system' ? 'system' : 'manager.message',
+    body: input.content,
+    metadata: {
+      ...input.metadata,
+      source: 'session-transparency',
+      legacyMessageProjectionDisabled: true,
+    },
+  })
 
-  if (message) {
-    broadcastSessionEvent(input.sessionId, {
-      type: WsEvent.MessageCompleted,
-      payload: { sessionId: input.sessionId, message },
-    })
+  return {
+    id: `room:${event.id}`,
+    sessionId: input.sessionId,
+    senderId: input.senderId,
+    senderType: input.senderType,
+    type: 'text',
+    content: input.content,
+    metadata: input.metadata,
+    isPinned: false,
+    replyToMessageId: null,
+    createdAt: event.createdAt,
   }
-
-  return message ?? null
 }
 
 async function handleHumanInterruptForActiveRun(params: {
@@ -1568,268 +1788,6 @@ async function handleHumanInterruptFromTaskThreadSession(params: {
   return true
 }
 
-async function routeGroupMessageThroughOrchestrator(
-  sessionId: string,
-  content: string,
-  agentRows: typeof workspaceAgents.$inferSelect[],
-  workspaceId: string,
-  ownerId: string,
-  sourceMessage?: MessageRow,
-) {
-  const orchestrator = agentRows.find((a) => a.roleType === 'orchestrator')
-  if (!orchestrator) {
-    const [message] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: 'system',
-        senderType: 'system',
-        type: 'text',
-        content: '⚠️ 群聊中未配置 Orchestrator。请先添加 Orchestrator Agent。',
-        metadata: { systemEvent: 'no_orchestrator' },
-      })
-      .returning()
-    if (message) {
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message },
-      })
-    }
-    return
-  }
-
-  const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
-  const recentMessages = await loadRecentRoomMessages(sessionId, agentRows)
-  const activeTaskContext = await loadActiveTaskContext(sessionId)
-
-  let decision: Awaited<ReturnType<typeof decideOrchestratorAction>>
-  try {
-    decision = await decideOrchestratorAction({
-      content,
-      agents: agentRows,
-      workspaceGoal: workspace?.goal ?? null,
-      workspacePath: workspace?.projectPath ?? null,
-      activeTaskContext,
-      recentMessages,
-    })
-  } catch (err: any) {
-    const message = err?.message || '模型没有返回有效的 Orchestrator 决策'
-    logger.warn({ err: message, sessionId }, 'Orchestrator decision failed')
-    const [failedMessage] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: orchestrator.id,
-        senderType: 'agent',
-        type: 'text',
-        content: `Orchestrator 决策失败：${message}。请检查当前 Orchestrator 模型配置后重试。`,
-        metadata: {
-          systemEvent: 'orchestrator_decision_failed',
-          error: message,
-        },
-      })
-      .returning()
-    if (failedMessage) {
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message: failedMessage },
-      })
-    }
-    return
-  }
-
-  const memberProposals = Array.isArray(decision.memberProposals) ? decision.memberProposals : []
-
-  if (decision.action === 'plan') {
-    const managerRun = await runController.start({
-      workspaceId,
-      groupSessionId: sessionId,
-      goal: content,
-      actor: orchestrator,
-      decision: {
-        action: decision.action,
-        reason: decision.reason,
-        message: decision.message,
-        memberProposalCount: memberProposals.length,
-      },
-    })
-    await generatePlanAndPushTaskBoard(sessionId, content, agentRows, workspaceId, ownerId, {
-      sourceMessage,
-      run: managerRun,
-      decision: {
-        action: decision.action,
-        reason: decision.reason,
-        message: decision.message,
-        memberProposalCount: memberProposals.length,
-      },
-    })
-    return
-  }
-
-  const decisionContent = decision.message?.trim() || ''
-  const replyTarget = resolveReplyTargetAgent(agentRows, orchestrator, decision)
-
-  if (decision.action === 'reply' && replyTarget && memberProposals.length === 0) {
-    const profile =
-      replyTarget.roleType === 'orchestrator'
-        ? toCoordinatorProfile(replyTarget, workspace?.projectPath)
-        : toAgentProfile(replyTarget, workspace?.projectPath)
-    const replyMessage: MessageRow = sourceMessage
-      ? {
-          ...sourceMessage,
-          metadata: {
-            ...(sourceMessage.metadata && typeof sourceMessage.metadata === 'object'
-              ? sourceMessage.metadata
-              : {}),
-            routedByOrchestrator: true,
-            orchestratorDecision: decision.action,
-            decisionReason: decision.reason,
-            replyTargetAgentId: replyTarget.id,
-            replyTargetAgentName: replyTarget.name,
-            ...(decisionContent ? { orchestratorRoutingHint: decisionContent } : {}),
-          },
-        }
-      : {
-          id: randomUUID(),
-          sessionId,
-          senderId: ownerId,
-          senderType: 'user',
-          type: 'text',
-          content,
-          metadata: {
-            routedByOrchestrator: true,
-            orchestratorDecision: decision.action,
-            decisionReason: decision.reason,
-            replyTargetAgentId: replyTarget.id,
-            replyTargetAgentName: replyTarget.name,
-            ...(decisionContent ? { orchestratorRoutingHint: decisionContent } : {}),
-          },
-          createdAt: new Date(),
-        }
-
-    await runAgentReply(sessionId, replyMessage, profile)
-    return
-  }
-
-  if (decisionContent || memberProposals.length) {
-    const [message] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: orchestrator.id,
-        senderType: 'agent',
-        type: 'text',
-        content: decisionContent || '模型返回了补员建议，但没有提供可展示说明。请在下方确认建议成员。',
-        metadata: {
-          systemEvent: 'orchestrator_decision',
-          orchestratorDecision: decision.action,
-          decisionReason: decision.reason,
-          ...(memberProposals.length
-            ? {
-                memberProposalStatus: 'pending',
-                memberProposals,
-                memberProposalGoal: content,
-              }
-            : {}),
-        },
-      })
-      .returning()
-    if (message) {
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message },
-      })
-    }
-    return
-  }
-
-  const profile = toCoordinatorProfile(orchestrator, workspace?.projectPath)
-  const agentUserMsg: MessageRow = {
-    id: randomUUID(),
-    sessionId,
-    senderId: orchestrator.id,
-    senderType: 'user',
-    type: 'text',
-    content,
-    metadata: { isOrchestratorHandoff: true, orchestratorDecision: decision.action, decisionReason: decision.reason },
-    createdAt: new Date(),
-  }
-
-  try {
-    await runAgentReply(sessionId, agentUserMsg, profile)
-  } catch (err: any) {
-    throw err
-  }
-}
-
-function resolveReplyTargetAgent(
-  agentRows: typeof workspaceAgents.$inferSelect[],
-  orchestrator: typeof workspaceAgents.$inferSelect,
-  decision: Awaited<ReturnType<typeof decideOrchestratorAction>>,
-) {
-  const targetId = decision.replyTargetAgentId?.trim()
-  if (targetId) {
-    const byId = agentRows.find((agent) => agent.id === targetId)
-    if (byId) return byId
-  }
-
-  const targetName = decision.replyTargetAgentName?.trim().toLowerCase()
-  if (targetName) {
-    const byName = agentRows.find((agent) => agent.name.trim().toLowerCase() === targetName)
-    if (byName) return byName
-  }
-
-  return decision.action === 'reply' && orchestrator ? orchestrator : null
-}
-
-async function loadRecentRoomMessages(
-  sessionId: string,
-  agentRows: typeof workspaceAgents.$inferSelect[],
-  limit = 8,
-) {
-  const recent = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.sessionId, sessionId))
-    .orderBy(desc(messages.createdAt))
-    .limit(limit * 2)
-
-  const agentNames = new Map(agentRows.map((agent) => [agent.id, agent.name]))
-  return recent
-    .filter((message) => {
-      if (message.type !== 'text') return false
-      if (!message.content.trim()) return false
-      return message.senderType === 'user' || message.senderType === 'agent' || message.senderType === 'system'
-    })
-    .slice()
-    .reverse()
-    .slice(-limit)
-    .map((message) => {
-      const metadata =
-        message.metadata && typeof message.metadata === 'object'
-          ? (message.metadata as Record<string, unknown>)
-          : null
-      const metadataName =
-        typeof metadata?.agentName === 'string'
-          ? metadata.agentName
-          : typeof metadata?.managerName === 'string'
-            ? metadata.managerName
-            : typeof metadata?.workerName === 'string'
-              ? metadata.workerName
-              : null
-      return {
-        senderType: message.senderType as 'user' | 'agent' | 'system',
-        senderName:
-          message.senderType === 'agent'
-            ? agentNames.get(message.senderId) ?? metadataName ?? null
-            : message.senderType === 'user'
-              ? '用户'
-              : metadataName,
-        content: message.content.trim(),
-      }
-    })
-}
-
 async function loadActiveTaskContext(sessionId: string) {
   const tasks = await db
     .select({
@@ -1838,6 +1796,8 @@ async function loadActiveTaskContext(sessionId: string) {
       taskStatus: workspaceTasks.status,
       progressStatus: workspaceTasks.progressStatus,
       agentId: workspaceTasks.agentId,
+      taskThreadId: taskThreads.id,
+      taskThreadSessionId: taskThreads.sessionId,
       threadStatus: taskThreads.status,
       agentName: workspaceAgents.name,
       clarificationCount: workspaceTasks.clarificationCount,
@@ -1867,6 +1827,8 @@ async function loadActiveTaskContext(sessionId: string) {
       taskId: task.taskId,
       taskTitle: task.taskTitle,
       taskStatus: task.taskStatus,
+      taskThreadId: task.taskThreadId ?? null,
+      taskThreadSessionId: task.taskThreadSessionId ?? null,
       taskThreadStatus: task.threadStatus ?? null,
       agentId: task.agentId ?? null,
       agentName: task.agentName ?? null,
@@ -1936,54 +1898,72 @@ function chooseDirectWorkerReplyTarget(input: {
   return relatedActiveTask ? targetWorker : null
 }
 
+async function routeGroupReplyToWorkerTaskRoom(input: {
+  groupSessionId: string
+  message: typeof messages.$inferSelect
+  userId: string
+  userName?: string | null
+  targetWorker: typeof workspaceAgents.$inferSelect
+  activeTaskContext: Awaited<ReturnType<typeof loadActiveTaskContext>>
+}) {
+  const targetTask = input.activeTaskContext.find(
+    (task) =>
+      task.agentId === input.targetWorker.id &&
+      (task.awaitingClarification ||
+        task.taskThreadStatus === 'active' ||
+        task.taskStatus === 'running' ||
+        task.taskStatus === 'blocked'),
+  )
+  if (!targetTask?.taskThreadSessionId) return false
+  const [taskSession] = await db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, targetTask.taskThreadSessionId))
+    .limit(1)
+  if (!taskSession || !isOrchestratorTaskSession(taskSession)) return false
+
+  const { message: taskRoomMessage } = await appendHumanMessageRoomFirst({
+    session: taskSession,
+    userId: input.userId,
+    userName: input.userName,
+    type: input.message.type,
+    content: input.message.content,
+    metadata: {
+      ...(input.message.metadata && typeof input.message.metadata === 'object' ? input.message.metadata : {}),
+      source: 'group-worker-reply',
+      groupSessionId: input.groupSessionId,
+      groupMessageId: input.message.id,
+      targetWorkerId: input.targetWorker.id,
+      targetWorkerName: input.targetWorker.name,
+      taskId: targetTask.taskId,
+      taskThreadId: targetTask.taskThreadId,
+    },
+    replyToMessageId: null,
+  })
+
+  await stepTaskRoomAfterHumanMessage({
+    session: taskSession,
+    userId: input.userId,
+    userName: input.userName,
+    message: taskRoomMessage,
+  }).catch((err: any) => {
+    logger.error(
+      {
+        err: err?.message,
+        groupSessionId: input.groupSessionId,
+        taskSessionId: taskSession.id,
+        targetWorkerId: input.targetWorker.id,
+      },
+      'Group reply to Worker task room failed',
+    )
+    return null
+  })
+  return true
+}
+
 export const __messageRouteTestHooks = {
   chooseDirectWorkerReplyTarget,
   isOrchestratorTaskSession,
-  coordinatorAssignActionsFromPlan,
-  startPlanRunWithCoordinatorAssignBatch,
-}
-
-function coordinatorAssignActionsFromPlan(input: {
-  plan: OrchestratorPlan
-  agentsByKey: Map<string, typeof workspaceAgents.$inferSelect>
-}): CoordinatorAction[] {
-  const actions: CoordinatorAction[] = []
-  const taskKeys = new Set(input.plan.tasks.map((task) => task.id))
-  for (const task of input.plan.tasks) {
-    const worker = input.agentsByKey.get(task.agentKey)
-    if (!worker) continue
-    actions.push({
-      type: 'assign',
-      targetWorkerId: worker.id,
-      taskKey: task.id,
-      dependsOn: (task.dependencies ?? []).filter((dependency) => taskKeys.has(dependency)),
-      taskTitle: task.title,
-      taskDescription: task.description,
-      message: `@${worker.name} 请接手：${task.title}\n\n${task.description}`,
-      reason: task.agentSelection?.rationale?.join('\n') || `Dynamic Manager plan assigned ${task.title} to ${worker.name}.`,
-      metadata: {
-        source: 'dynamic-orchestrator-plan',
-        planTitle: input.plan.title,
-        planGoal: input.plan.goal,
-        phaseId: task.phaseId ?? null,
-        taskType: task.taskType ?? null,
-        parallelGroup: task.parallelGroup ?? null,
-        outputContract: task.outputContract ?? null,
-        validation: task.validation ?? null,
-        agentSelection: task.agentSelection ?? null,
-      },
-    })
-  }
-  if (actions.length !== input.plan.tasks.length) {
-    const missingTasks = input.plan.tasks
-      .filter((task) => !input.agentsByKey.has(task.agentKey))
-      .map((task) => `${task.title} -> ${task.agentKey}`)
-    throw AppError.fromCode(
-      AppErrorCodes.ORCHESTRATOR_PLAN_INVALID,
-      `动态计划引用了当前群聊中不存在的 Worker：${missingTasks.join('；')}`,
-    )
-  }
-  return actions
 }
 
 function resolveMentionedAgents(
@@ -2001,33 +1981,6 @@ function resolveMentionedAgents(
     resolved.push(agent)
   }
   return resolved
-}
-
-async function routeGroupMessageToMentionedAgents(params: {
-  sessionId: string
-  session: typeof sessions.$inferSelect
-  message: typeof messages.$inferSelect
-  metadata: Record<string, unknown> | null
-  mentionedAgents: typeof workspaceAgents.$inferSelect[]
-}) {
-  const [workspace] = params.session.workspaceId
-    ? await db
-        .select()
-        .from(workspaces)
-        .where(eq(workspaces.id, params.session.workspaceId))
-        .limit(1)
-    : [null]
-
-  for (const agent of params.mentionedAgents) {
-    let profile =
-      agent.roleType === 'orchestrator'
-        ? toCoordinatorProfile(agent, workspace?.projectPath ?? null)
-        : toAgentProfile(agent, workspace?.projectPath ?? null)
-    if (params.metadata?.safetyMode && typeof params.metadata.safetyMode === 'string') {
-      profile = applySafetyMode(profile, params.metadata.safetyMode)
-    }
-    await runAgentReply(params.sessionId, params.message, profile)
-  }
 }
 
 async function profileForDirectSession(session: typeof sessions.$inferSelect) {
@@ -2048,67 +2001,6 @@ async function profileForDirectSession(session: typeof sessions.$inferSelect) {
   return toAgentProfile(agent, workspace?.projectPath)
 }
 
-async function dispatchPlanToExistingGroup(
-  session: typeof sessions.$inferSelect,
-  ownerId: string,
-  plan: OrchestratorPlan,
-): Promise<{
-  workspaceId: string
-  groupSessionId: string
-  agentsByKey: Map<string, typeof workspaceAgents.$inferSelect>
-}> {
-  if (!session.workspaceId)
-    throw AppError.fromCode(AppErrorCodes.VALIDATION_FAILED, '会话未关联工作区')
-
-  const [workspace] = await db
-    .select()
-    .from(workspaces)
-    .where(eq(workspaces.id, session.workspaceId))
-    .limit(1)
-  if (!workspace || workspace.ownerId !== ownerId) {
-    throw AppError.fromCode(AppErrorCodes.WORKSPACE_NOT_FOUND, '工作区不存在')
-  }
-
-  const existingAgents = await db
-    .select()
-    .from(workspaceAgents)
-    .where(eq(workspaceAgents.workspaceId, workspace.id))
-    .orderBy(asc(workspaceAgents.orderIdx), asc(workspaceAgents.createdAt))
-  const agentsByKey = new Map<string, typeof workspaceAgents.$inferSelect>()
-  for (const agent of existingAgents) {
-    const direct = plan.agents.find((item) => item.key === agent.id)
-    if (direct) {
-      agentsByKey.set(direct.key, agent)
-      continue
-    }
-    const name = agent.name.toLowerCase()
-    const role = agent.role.toLowerCase()
-    const roleType = agent.roleType.toLowerCase()
-    const matched = plan.agents.find((item) => {
-      const key = item.key.toLowerCase()
-      return (
-        name === item.name.toLowerCase() ||
-        name.includes(key) ||
-        role.includes(key) ||
-        roleType === key ||
-        (item.roleType ? roleType === item.roleType : false)
-      )
-    })
-    if (matched) agentsByKey.set(matched.key, agent)
-  }
-
-  // 不再自动创建计划中的 Agent；所有 Agent 必须已在 workspace 中存在
-  const missingAgents = plan.agents.filter((a) => !agentsByKey.has(a.key))
-  if (missingAgents.length > 0) {
-    logger.warn(
-      { missing: missingAgents.map((a) => a.name), workspaceId: workspace.id },
-      'dispatchPlanToExistingGroup: plan references agents not in workspace, skipping missing tasks',
-    )
-  }
-
-  return { workspaceId: workspace.id, groupSessionId: session.id, agentsByKey }
-}
-
 function collectAffectedMessages(list: Array<typeof messages.$inferSelect>, targetIndex: number) {
   const affected: Array<typeof messages.$inferSelect> = []
   for (const message of list.slice(targetIndex + 1)) {
@@ -2116,6 +2008,46 @@ function collectAffectedMessages(list: Array<typeof messages.$inferSelect>, targ
     affected.push(message)
   }
   return affected
+}
+
+function extractRoomEventId(message: typeof messages.$inferSelect) {
+  if (message.id.startsWith('room:')) return message.id.slice('room:'.length)
+  const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+  return (
+    readNestedString(metadata, ['roomTimeline', 'eventId']) ??
+    readNestedString(metadata, ['roomTimelineProjection', 'eventId'])
+  )
+}
+
+function buildMessageRedactionMetadata(
+  affected: Array<typeof messages.$inferSelect>,
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    ...extra,
+    redactedAt: new Date().toISOString(),
+    targetMessageIds: affected.map((message) => message.id),
+    targetEventIds: affected.map(extractRoomEventId).filter((id): id is string => Boolean(id)),
+    targetMessages: affected.map((message) => {
+      const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
+      return {
+        messageId: message.id,
+        senderType: message.senderType,
+        sourceMessageId: typeof metadata.sourceMessageId === 'string' ? metadata.sourceMessageId : undefined,
+        actionType: typeof metadata.actionType === 'string' ? metadata.actionType : undefined,
+        roomId: readNestedString(metadata, ['roomTimeline', 'roomId']) ?? readNestedString(metadata, ['roomTimelineProjection', 'roomId']),
+      }
+    }),
+  }
+}
+
+function readNestedString(record: Record<string, unknown>, path: string[]) {
+  let current: unknown = record
+  for (const key of path) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return null
+    current = (current as Record<string, unknown>)[key]
+  }
+  return typeof current === 'string' && current.trim() ? current : null
 }
 
 async function rollbackCodeAgentChanges(
@@ -2183,250 +2115,4 @@ async function runGit(cwd: string, args: string[]) {
     proc.exited,
     new Promise<number>((resolve) => setTimeout(() => resolve(124), 5000)),
   ])
-}
-
-async function startPlanRunWithCoordinatorAssignBatch(params: {
-  sessionId: string
-  plan: OrchestratorPlan
-  workspaceId: string
-  ownerId: string
-  runId?: string
-  run: RunControllerRunContext
-  sourceMessage?: typeof messages.$inferSelect | MessageRow | null
-  workerRuntime?: WorkerRuntime
-  executeInline?: boolean
-}): Promise<DispatchMonitor> {
-  const { sessionId, plan, workspaceId, ownerId } = params
-  const [sourceSession] = await db
-    .select()
-    .from(sessions)
-    .where(eq(sessions.id, sessionId))
-    .limit(1)
-  if (!sourceSession || sourceSession.ownerId !== ownerId || sourceSession.workspaceId !== workspaceId) {
-    throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, '群聊会话不存在')
-  }
-
-  const { agentsByKey } = await dispatchPlanToExistingGroup(sourceSession, ownerId, plan)
-  const validationAgents = plan.agents.map((agent) => {
-    const dbAgent = agentsByKey.get(agent.key)
-    return {
-      id: dbAgent?.id ?? agent.key,
-      key: agent.key,
-      name: dbAgent?.name ?? agent.name,
-      roleType: dbAgent?.roleType ?? agent.roleType,
-    }
-  })
-  const validationError = validateRealWorkerAssignments({
-    agents: validationAgents,
-    tasks: plan.tasks.map((task) => ({
-      agentId: agentsByKey.get(task.agentKey)?.id ?? task.agentKey,
-      title: task.title,
-    })),
-  })
-  if (validationError) {
-    throw AppError.fromCode(AppErrorCodes.ORCHESTRATOR_PLAN_INVALID, validationError)
-  }
-
-  const sourceMessage = await resolvePlanSourceMessage({
-    sessionId,
-    ownerId,
-    content: plan.goal,
-    sourceMessage: params.sourceMessage ?? null,
-  })
-  const actions = coordinatorAssignActionsFromPlan({ plan, agentsByKey })
-  const batch = await dispatchCoordinatorAssignBatch({
-    groupSession: sourceSession,
-    ownerId,
-    sourceMessage,
-    actions,
-    runtimeType: 'local-llm',
-    run: params.run,
-    workerRuntime: params.workerRuntime,
-    executeInline: params.executeInline,
-  })
-
-  await emitRunEvent({
-    runId: batch.runId,
-    workspaceId,
-    groupSessionId: sessionId,
-    type: 'plan.created',
-    payload: {
-      source: 'dynamic-plan-to-coordinator-assign',
-      title: plan.title,
-      goal: plan.goal,
-      summary: plan.summary,
-      phases: plan.phases ?? [],
-      taskCount: plan.tasks.length,
-      agentCount: plan.agents.length,
-      legacyRunId: params.runId ?? null,
-      coordinatorAssignTaskIds: batch.tasks.map((task) => task.taskId),
-    },
-  })
-
-  return {
-    dispatchId: batch.runId,
-    groupSessionId: sessionId,
-    taskIds: batch.tasks.map((task) => task.taskId),
-  }
-}
-
-async function resolvePlanSourceMessage(input: {
-  sessionId: string
-  ownerId: string
-  content: string
-  sourceMessage?: typeof messages.$inferSelect | MessageRow | null
-}): Promise<typeof messages.$inferSelect> {
-  if (input.sourceMessage && 'isPinned' in input.sourceMessage) {
-    return input.sourceMessage as typeof messages.$inferSelect
-  }
-  const [latestUserMessage] = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.sessionId, input.sessionId))
-    .orderBy(desc(messages.createdAt))
-    .limit(1)
-  if (latestUserMessage?.senderType === 'user') return latestUserMessage
-  return {
-    id: input.sourceMessage?.id ?? randomUUID(),
-    sessionId: input.sessionId,
-    senderId: input.ownerId,
-    senderType: 'user',
-    type: 'text',
-    content: input.sourceMessage?.content ?? input.content,
-    metadata:
-      input.sourceMessage?.metadata && typeof input.sourceMessage.metadata === 'object'
-        ? input.sourceMessage.metadata
-        : null,
-    isPinned: false,
-    replyToMessageId: null,
-    createdAt: input.sourceMessage?.createdAt ?? new Date(),
-  }
-}
-
-async function generatePlanAndPushTaskBoard(
-  sessionId: string,
-  content: string,
-  agents: any[],
-  workspaceId: string,
-  ownerId: string,
-  options: {
-    propagateErrors?: boolean
-    decision?: ManagerDecisionEventContext
-    run?: RunControllerRunContext
-    runId?: string
-    sourceMessage?: typeof messages.$inferSelect | MessageRow | null
-    workerRuntime?: WorkerRuntime
-    executeInline?: boolean
-  } = {},
-): Promise<DispatchMonitor | null> {
-  const orchestratorAgent = agents.find((a: any) => a.roleType === 'orchestrator')
-
-  const guardrails = checkInputGuardrails(content)
-  if (!guardrails.ok && guardrails.riskLevel === 'high') {
-    const [blockedMessage] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: 'system',
-        senderType: 'system',
-        type: 'text',
-        content: `请求被安全策略拦截：${guardrails.violations.join('；')}`,
-        metadata: {
-          systemEvent: 'orchestrator_blocked',
-          riskLevel: guardrails.riskLevel,
-          violations: guardrails.violations,
-        },
-      })
-      .returning()
-    if (blockedMessage) {
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message: blockedMessage },
-      })
-    }
-    if (options.run) {
-      await runController.fail(options.run, {
-        error: `请求被安全策略拦截：${guardrails.violations.join('；')}`,
-        stage: 'guardrails',
-      })
-    }
-    return null
-  }
-
-  broadcastSessionEvent(sessionId, {
-    type: WsEvent.AgentTyping,
-    payload: {
-      sessionId,
-      agentId: orchestratorAgent?.id ?? 'orchestrator',
-      agentName: orchestratorAgent?.name ?? 'Orchestrator',
-      phase: 'planning',
-    },
-  })
-
-  const managerRun =
-    options.run ??
-    (await runController.start({
-      workspaceId,
-      groupSessionId: sessionId,
-      goal: content,
-      actor: orchestratorAgent,
-      decision: options.decision ?? null,
-    }))
-  const runId = options.runId ?? managerRun.runId
-
-  try {
-    const plan = await buildDynamicOrchestratorPlan(content, agents, workspaceId)
-    return await startPlanRunWithCoordinatorAssignBatch({
-      sessionId,
-      plan,
-      workspaceId,
-      ownerId,
-      runId,
-      run: managerRun,
-      sourceMessage: options.sourceMessage ?? null,
-      workerRuntime: options.workerRuntime,
-      executeInline: options.executeInline,
-    })
-  } catch (err: any) {
-    const message = err?.message || '模型没有返回可执行的任务计划'
-    logger.warn({ err: message, sessionId }, 'Dynamic orchestrator plan failed')
-    const [workspaceRecord] = await db
-      .select({ projectPath: workspaces.projectPath })
-      .from(workspaces)
-      .where(eq(workspaces.id, workspaceId))
-      .limit(1)
-    const recoveredArtifacts = extractPlanningFailureArtifacts(message, workspaceRecord?.projectPath)
-    const recoveredArtifactMetadata = buildPlanningFailureArtifactMetadata(
-      recoveredArtifacts,
-      runId,
-      workspaceId,
-    )
-    await runController.fail(managerRun, {
-      error: message,
-      stage: 'planning',
-    })
-    const [failedMessage] = await db
-      .insert(messages)
-      .values({
-        sessionId,
-        senderId: 'system',
-        senderType: 'system',
-        type: 'text',
-        content: `Orchestrator 规划失败：${message}`,
-        metadata: {
-          systemEvent: 'orchestrator_plan_failed',
-          error: message,
-          ...recoveredArtifactMetadata,
-        },
-      })
-      .returning()
-    if (failedMessage) {
-      broadcastSessionEvent(sessionId, {
-        type: WsEvent.MessageCompleted,
-        payload: { sessionId, message: failedMessage },
-      })
-    }
-    if (options.propagateErrors) throw err
-    return null
-  }
 }

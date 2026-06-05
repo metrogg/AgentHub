@@ -223,6 +223,51 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value?.trim()))))
 }
 
+export function buildA2AAgentMessage(params: {
+  envelope: {
+    contextId: string
+    taskId: string
+    runId: string
+    workspaceId: string
+    childSessionId: string
+    taskThreadId?: string | null
+    sharedTaskRelativeRoot?: string | null
+    sharedTaskSpecPath?: string | null
+    toAgentId: string
+    toAgentName: string
+    fromAgentId: string
+    fromAgentName: string
+  }
+  content: string
+  messageId: string
+  artifacts?: Array<Record<string, unknown> | unknown>
+}): A2AMessage {
+  const message = buildA2AMessage({
+    id: params.messageId,
+    role: 'agent',
+    content: params.content,
+    contextId: params.envelope.contextId,
+    taskId: params.envelope.taskId,
+    metadata: {
+      'agenthub.dev/a2a/internal': {
+        runId: params.envelope.runId,
+        workspaceId: params.envelope.workspaceId,
+        childSessionId: params.envelope.childSessionId,
+        taskThreadId: params.envelope.taskThreadId ?? null,
+        sharedTaskRelativeRoot: params.envelope.sharedTaskRelativeRoot ?? null,
+        sharedTaskSpecPath: params.envelope.sharedTaskSpecPath ?? null,
+        fromAgentId: params.envelope.toAgentId,
+        fromAgentName: params.envelope.toAgentName,
+        toAgentId: params.envelope.fromAgentId,
+        toAgentName: params.envelope.fromAgentName,
+        artifactCount: params.artifacts?.length ?? 0,
+      },
+    },
+  })
+  message.extensions = ['https://agenthub.dev/extensions/a2a/internal/v1']
+  return message
+}
+
 function toIsoString(value: Date | string | number | null | undefined): string {
   if (value instanceof Date) return value.toISOString()
   if (typeof value === 'string') return new Date(value).toISOString()

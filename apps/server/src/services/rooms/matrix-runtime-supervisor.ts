@@ -1,4 +1,7 @@
-import { and, db, eq, matrixIdentities, roomParticipants, rooms } from '@agenthub/db'
+import { and, db, eq, matrixIdentities, roomParticipants, rooms, workerInstances } from '@agenthub/db'
+import { logger } from '../../lib/logger'
+import { createMatrixClientFromEnv } from './matrix-client'
+import { MatrixIdentityService, identityOwnerFromParticipant } from './matrix-identity-service'
 import { matrixRuntimeListener, type MatrixRuntimeListener } from './matrix-runtime-listener'
 import type { ParticipantType } from './types'
 
@@ -38,6 +41,23 @@ export class MatrixRuntimeSupervisor {
         participantId,
       }
     }
+
+    // Resident workers (OpenClaw/QwenPaw) run their own /sync; skip AgentHub-managed listener
+    if (participant.participantType === 'worker' && participant.workerInstanceId) {
+      const [worker] = await db
+        .select()
+        .from(workerInstances)
+        .where(eq(workerInstances.id, participant.workerInstanceId))
+        .limit(1)
+      if (worker && (worker.runtimeBase === 'openclaw' || worker.runtimeBase === 'copaw' || worker.runtimeBase === 'qwenpaw')) {
+        return {
+          started: false,
+          reason: `resident_worker_${worker.runtimeBase}_runs_own_sync`,
+          participantId,
+        }
+      }
+    }
+
     const [room] = await db.select().from(rooms).where(eq(rooms.id, participant.roomId)).limit(1)
     if (!room || room.provider !== 'matrix') {
       return { started: false, reason: 'room_is_not_matrix', participantId }
@@ -45,11 +65,58 @@ export class MatrixRuntimeSupervisor {
     if (!participant.providerUserId) {
       return { started: false, reason: 'participant_has_no_matrix_user', participantId }
     }
-    const [identity] = await db
+    let identity = await db
       .select()
       .from(matrixIdentities)
       .where(eq(matrixIdentities.userId, participant.providerUserId))
       .limit(1)
+      .then((rows) => rows[0] ?? null)
+
+    if (!identity?.accessToken) {
+      logger.warn(
+        { participantId, userId: participant.providerUserId },
+        '[MatrixRuntimeSupervisor] Identity missing token, attempting to re-register...',
+      )
+      try {
+        const client = createMatrixClientFromEnv()
+        const identityService = new MatrixIdentityService(client)
+        const ensured = await identityService.ensureIdentity(
+          identityOwnerFromParticipant({
+            participantType: participant.participantType,
+            userId: participant.userId,
+            workspaceAgentId: participant.workspaceAgentId,
+            workerInstanceId: participant.workerInstanceId,
+            displayName: participant.displayName,
+          }),
+        )
+        identity = ensured
+        if (ensured.userId && ensured.userId !== participant.providerUserId) {
+          await db
+            .update(roomParticipants)
+            .set({
+              providerUserId: ensured.userId,
+              metadata: {
+                ...(participant.metadata ?? {}),
+                matrixIdentityMigration: {
+                  from: participant.providerUserId,
+                  to: ensured.userId,
+                  migratedAt: new Date().toISOString(),
+                  reason: 'listener-start-identity-reconcile',
+                },
+              },
+              updatedAt: new Date(),
+            })
+            .where(eq(roomParticipants.id, participant.id))
+        }
+      } catch (err) {
+        logger.error(
+          { err, participantId, userId: participant.providerUserId },
+          '[MatrixRuntimeSupervisor] Failed to re-register Matrix identity',
+        )
+        return { started: false, reason: 'matrix_identity_re_register_failed', participantId }
+      }
+    }
+
     if (!identity?.accessToken) {
       return { started: false, reason: 'matrix_identity_missing_token', participantId }
     }
@@ -138,10 +205,17 @@ export class MatrixRuntimeSupervisor {
       .limit(input.limit ?? 1000)
     const results: MatrixRuntimeSupervisorStartResult[] = []
     for (const participant of participants) {
-      results.push(await this.startParticipantListener(participant.id, {
+      const result = await this.startParticipantListener(participant.id, {
         reason: input.reason ?? 'server-startup-recovery',
         dispatch: input.dispatch,
-      }))
+      })
+      results.push(result)
+      if (!result.started) {
+        logger.warn(
+          { participantId: participant.id, reason: result.reason },
+          '[MatrixRuntimeSupervisor] Skipped starting listener for participant',
+        )
+      }
     }
     return {
       startedCount: results.filter((result) => result.started).length,

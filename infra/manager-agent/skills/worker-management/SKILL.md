@@ -3,29 +3,27 @@ name: worker-management
 description: Use when you need to create, inspect, wake, sleep, stop, or update Worker agents.
 ---
 
-## Purpose
+# Worker Management
 
-Manage the lifecycle of Worker agents. Workers are the execution units that handle concrete tasks.
+Manage the lifecycle of Worker agents via the `agenthub` CLI.
 
-## Tools
+## Commands
 
-Use the AgentHub Controller API to manage workers:
-
-### List Workers
 ```bash
-curl -s http://localhost:8000/api/workspaces/{workspaceId}/agents | jq .
-```
+# List all workers
+agenthub worker list --workspace <workspace-id>
 
-### Create Worker
-```bash
-curl -s -X POST http://localhost:8000/api/workspaces/{workspaceId}/agents \
-  -H "Content-Type: application/json" \
-  -d '{"name":"builder","role":"Frontend Builder","roleType":"coder","runtimeType":"code-agent","codeAgentType":"opencode"}'
-```
+# Create a new worker
+agenthub worker create --workspace <workspace-id> --name builder --code-agent codex
 
-### Get Worker Status
-```bash
-curl -s http://localhost:8000/api/workspaces/{workspaceId}/agents/{agentId} | jq .
+# Check worker status
+agenthub worker status --id <worker-id>
+
+# Wake a sleeping worker
+agenthub worker wake --id <worker-id>
+
+# Stop a running worker
+agenthub worker stop --id <worker-id>
 ```
 
 ## Rules
@@ -33,11 +31,11 @@ curl -s http://localhost:8000/api/workspaces/{workspaceId}/agents/{agentId} | jq
 - Prefer existing suitable workers before creating a new one.
 - New worker creation must be visible in the room — announce it.
 - Worker names must be lowercase alphanumeric with hyphens.
-- Each Worker needs: name, role, roleType, runtimeType, and optionally codeAgentType.
+- Each Worker needs: name, runtimeType, codeAgentType.
 
 ## Decision Pattern
 
 1. Read the room timeline to understand what worker capability is needed.
-2. Check existing workers with the list tool.
+2. `agenthub worker list --workspace <id>` to check existing workers.
 3. If a suitable worker exists, use it. If not, propose creating one.
 4. After creating a worker, announce it in the room.

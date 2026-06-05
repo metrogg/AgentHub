@@ -84,14 +84,19 @@ function resolveA2AEndpoint(agent: AgentRow): string | null {
   return null
 }
 
-function normalizeRuntimeType(value?: string | null): AgentRunProfile['runtimeType'] {
-  if (value === 'llm') return 'llm'
+function normalizeRuntimeType(_value?: string | null): AgentRunProfile['runtimeType'] {
   return 'code-agent'
 }
 
 function normalizeCodeAgentType(agent: AgentRow): AgentRunProfile['codeAgentType'] {
-  if (normalizeRuntimeType(agent.runtimeType) !== 'code-agent') return undefined
-  if (CODE_AGENT_TYPES.includes(agent.codeAgentType as any)) return agent.codeAgentType as any
+  if (
+    agent.codeAgentType === 'codex' ||
+    agent.codeAgentType === 'claude-code' ||
+    agent.codeAgentType === 'opencode' ||
+    agent.codeAgentType === 'gemini'
+  ) {
+    return agent.codeAgentType
+  }
   return 'codex'
 }
 

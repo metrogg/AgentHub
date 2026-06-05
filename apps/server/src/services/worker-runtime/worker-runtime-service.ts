@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import {
   and,
   db,
@@ -7,17 +9,20 @@ import {
   rooms,
   runtimeLeases,
   taskThreads,
+  workerInstances,
   workspaceTasks,
   workspaceAgents,
   workspaces,
 } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../../lib/error'
+import { logger } from '../../lib/logger'
 import { registerTaskArtifact, toCanonicalArtifactRecord } from '../orchestrator/artifact-store'
 import { runController } from '../orchestrator/run-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { markWorkerInstanceState } from '../orchestrator/worker-runtime-resources'
 import { roomService } from '../rooms'
-import { LocalWorkerRuntimeAdapter } from './local-worker-runtime'
+import { EphemeralCodeAgentWorkerRuntime } from './local-worker-runtime'
+import { ResidentRoomWorkerRuntime } from './resident-worker-runtime'
 import { answerPendingTaskClarification, createTaskClarification } from './task-clarification-store'
 import type { WorkerRuntime, WorkerRuntimeEvent, WorkerRuntimeResult } from './types'
 
@@ -109,11 +114,25 @@ export interface RerunTaskRoomInput {
 
 export class WorkerRuntimeService {
   private readonly runningControllers = new Map<string, AbortController>()
+  private readonly roomRuntimeKind = new Map<string, import('./types').WorkerRuntimeKind>()
 
-  stopTaskRoom(roomId: string): boolean {
+  async stopTaskRoom(roomId: string): Promise<boolean> {
+    const kind = this.roomRuntimeKind.get(roomId)
+    if (kind === 'resident-openclaw' || kind === 'resident-qwenpaw') {
+      await roomService.appendTimelineEvent({
+        roomId,
+        senderType: 'system',
+        type: 'task.progress',
+        body: '已请求停止 Resident Worker。',
+        metadata: { kind: 'matrix.control.stop.resident-requested', workerKind: kind },
+      })
+      this.roomRuntimeKind.delete(roomId)
+      return true
+    }
     const controller = this.runningControllers.get(roomId)
     if (!controller) return false
     controller.abort()
+    this.roomRuntimeKind.delete(roomId)
     return true
   }
 
@@ -163,12 +182,58 @@ export class WorkerRuntimeService {
         : []
 
     const timeline = await roomService.listTimelineEvents({ roomId: room.id, limit: 100 })
+
+    // Try to read spec.md from shared task directory (HiClaw-style task file protocol)
+    let specPrompt: string | null = null
+    let sharedTaskRelativeRoot: string | null = null
+    let sharedTaskSpecPath: string | null = null
+    if (room.taskId) {
+      const projectPath = workspace?.projectPath ?? lease?.cwd ?? null
+      if (projectPath) {
+        sharedTaskRelativeRoot = join('.agenthub', 'shared', 'tasks', room.taskId)
+        const specPath = join(projectPath, sharedTaskRelativeRoot, 'spec.md')
+        try {
+          specPrompt = await readFile(specPath, 'utf8')
+          sharedTaskSpecPath = specPath
+        } catch (e: any) {
+          if (e.code !== 'ENOENT') {
+            logger.warn({ err: e, taskId: room.taskId, specPath }, 'Failed to read task spec.md')
+          }
+        }
+      }
+    }
+
     const prompt =
       input.prompt?.trim() ||
+      specPrompt?.trim() ||
       latestAssignedTaskPrompt(timeline) ||
       room.topic ||
       room.title
-    const runtime = input.runtime ?? new LocalWorkerRuntimeAdapter(agent)
+
+    // Resolve worker instance to infer runtime mode
+    const [workerInstance] = thread?.workerInstanceId
+      ? await db.select().from(workerInstances).where(eq(workerInstances.id, thread.workerInstanceId)).limit(1)
+      : []
+
+    // Choose runtime by mode
+    let runtime: WorkerRuntime
+    if (input.runtime) {
+      runtime = input.runtime
+    } else if (
+      workerInstance?.runtimeBase === 'openclaw' ||
+      workerInstance?.runtimeBase === 'copaw'
+    ) {
+      runtime = new ResidentRoomWorkerRuntime({
+        runtimeType: workerInstance.runtimeBase === 'openclaw' ? 'openclaw' : 'qwenpaw',
+        workerParticipantId: workerParticipant.id,
+      })
+    } else {
+      runtime = new EphemeralCodeAgentWorkerRuntime(agent)
+    }
+
+    // Record runtime kind for stopTaskRoom dispatch
+    this.roomRuntimeKind.set(room.id, runtime.kind)
+
     const appendedEventIds: string[] = []
     await runtimeLeaseController.markRunning(lease?.id, {
       cwd: lease?.cwd ?? null,
@@ -378,6 +443,7 @@ export class WorkerRuntimeService {
     } finally {
       stopHeartbeat()
       this.runningControllers.delete(room.id)
+      this.roomRuntimeKind.delete(room.id)
     }
   }
 
