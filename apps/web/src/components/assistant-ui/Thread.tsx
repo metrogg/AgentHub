@@ -189,7 +189,6 @@ import {
 } from '../../lib/runtimeStatusProjection'
 import { useChatStore } from '../../stores/chatStore'
 import {
-  makeSelectDirectRunMessages,
   makeSelectMessageAvatarState,
   makeSelectMessageById,
   makeSelectMessageWithQuoteSource,
@@ -229,7 +228,6 @@ import {
 import { workspaceNameFromPath } from '@agenthub/shared'
 import { useLineSelection } from './useLineSelection'
 import LineSelectionToolbar from './LineSelectionToolbar'
-import { VirtualList } from '../VirtualList'
 
 const highlightLanguageMap = {
   bash,
@@ -297,12 +295,7 @@ export const Thread: FC = () => {
   const isGroupSession = currentSession?.type === 'group' && Boolean(currentSession.workspaceId)
   const sessionKind = classifyAgentSession(currentSession)
   const isAgentDirectSession = sessionKind === 'agent-direct'
-  const taskBoard = useChatStore((s) => s.taskBoard)
-  const agentActivity = useChatStore((s) => s.agentActivity)
   const messages = useChatStore((s) => s.messages)
-  const streamingCodeAgentRun = useChatStore((s) => s.streamingCodeAgentRun)
-  const selectedAgentTab = useChatStore((s) => s.selectedAgentTab)
-  const agentTabs = useChatStore((s) => s.agentTabs)
   const railTaskBoard =
     taskBoard &&
     (taskBoard.sessionId === currentSession?.id ||
@@ -311,8 +304,6 @@ export const Thread: FC = () => {
       : null
   const roomTaskBoard =
     isGroupSession && taskBoard?.sessionId === currentSession?.id ? taskBoard : null
-  const selectAgentTab = useChatStore((s) => s.selectAgentTab)
-  const selectSession = useChatStore((s) => s.selectSession)
   const navigate = useNavigate()
   const planningActivity =
     isGroupSession &&

@@ -1,5 +1,4 @@
 import type { AgentRoleType } from './agent-role-presets'
-import type { CodeAgentType } from './enums'
 
 export const EXPERT_CATEGORIES = [
   'coordination',
