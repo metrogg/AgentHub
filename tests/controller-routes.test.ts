@@ -7,7 +7,12 @@ const {
   db,
   eq,
   matrixIdentities,
+  roomParticipants,
+  rooms,
+  taskThreads,
   timelineEvents,
+  workspaceAgents,
+  workspaceTasks,
   workspaces,
 } = dbApi
 
@@ -94,16 +99,122 @@ describe('Controller HTTP API', () => {
     expect(reconcile.result.ref).toMatchObject({ kind: 'Room', id: created.room.id })
     expect(reconcile.result.phase).toBe('observed')
   })
+
+  test('assigns tasks through ControllerApi and writes Matrix mention-first task rooms', async () => {
+    const token = await createManagerToken()
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Controller Task Workspace',
+        goal: 'Validate Controller task assignment',
+      })
+      .returning()
+    const [workerAgent] = await db
+      .insert(workspaceAgents)
+      .values({
+        workspaceId: workspace!.id,
+        name: 'OpenCode Engineer',
+        role: 'Implementation Worker',
+        roleType: 'coder',
+        description: 'Implements assigned tasks from Matrix rooms.',
+        systemPrompt: 'Read SOUL.md, AGENTS.md, and the shared task contract before acting.',
+        runtimeType: 'code-agent',
+        codeAgentType: 'opencode',
+        modelId: 'test-model',
+        roleProfile: { workerRuntimeBase: 'opencode' },
+        skillIds: ['task-management'],
+      })
+      .returning()
+
+    const assigned = await controllerJson<{
+      success: boolean
+      result: {
+        runId: string
+        tasks: Array<{
+          taskId: string
+          taskThreadId: string
+          taskRoomId: string
+          childSessionId: string
+          workerInstanceId: string | null
+        }>
+      }
+    }>('/api/controller/tasks', token, {
+      method: 'POST',
+      body: {
+        workspaceId: workspace!.id,
+        title: 'Write task result contract',
+        spec: 'Create result.md and report progress in the task room.',
+        assignToAgentId: workerAgent!.id,
+      },
+    })
+
+    expect(assigned.success).toBe(true)
+    expect(assigned.result.runId).toBeString()
+    expect(assigned.result.tasks).toHaveLength(1)
+    const taskResult = assigned.result.tasks[0]!
+    expect(taskResult.workerInstanceId).toBeString()
+
+    const [task] = await db
+      .select()
+      .from(workspaceTasks)
+      .where(eq(workspaceTasks.id, taskResult.taskId))
+      .limit(1)
+    expect(task?.workspaceId).toBe(workspace!.id)
+    expect(task?.agentId).toBe(workerAgent!.id)
+    expect(task?.runId).toBe(assigned.result.runId)
+    expect(task?.progressStatus).toBe('thread-assigned')
+
+    const [thread] = await db
+      .select()
+      .from(taskThreads)
+      .where(eq(taskThreads.id, taskResult.taskThreadId))
+      .limit(1)
+    expect(thread?.workspaceAgentId).toBe(workerAgent!.id)
+    expect(thread?.workerInstanceId).toBe(taskResult.workerInstanceId)
+    expect(thread?.status).toBe('assigned')
+
+    const [taskRoom] = await db
+      .select()
+      .from(rooms)
+      .where(eq(rooms.id, taskResult.taskRoomId))
+      .limit(1)
+    expect(taskRoom?.kind).toBe('task')
+    expect(taskRoom?.taskThreadId).toBe(taskResult.taskThreadId)
+
+    const participants = await db
+      .select()
+      .from(roomParticipants)
+      .where(eq(roomParticipants.roomId, taskResult.taskRoomId))
+      .limit(10)
+    const workerParticipant = participants.find((item) => item.workspaceAgentId === workerAgent!.id)
+    expect(workerParticipant?.participantType).toBe('worker')
+
+    const taskRoomEvents = await db
+      .select()
+      .from(timelineEvents)
+      .where(eq(timelineEvents.roomId, taskResult.taskRoomId))
+    const mention = taskRoomEvents.find(
+      (event) =>
+        event.type === 'task.assigned' &&
+        event.metadata?.matrixExecutionBus === true &&
+        event.metadata?.coordinationSource === 'matrix-mention',
+    )
+    expect(mention?.metadata?.mentionParticipantId).toBe(workerParticipant?.id)
+    expect(mention?.metadata?.targetWorkerId).toBe(workerAgent!.id)
+  })
 })
 
 async function createManagerToken() {
-  const token = `manager-token-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const token = `manager-token-${suffix}`
+  const localpart = `manager-http-test-${suffix}`
   await db.insert(matrixIdentities).values({
     ownerType: 'manager',
-    ownerId: 'manager-http-test',
+    ownerId: localpart,
     serverName: 'agenthub.local',
-    localpart: 'manager-http-test',
-    userId: '@manager-http-test:agenthub.local',
+    localpart,
+    userId: `@${localpart}:agenthub.local`,
     accessToken: token,
     displayName: 'HTTP Test Manager',
   })

@@ -41,6 +41,13 @@ Human / Manager / Worker 都是 Room participant
 - `heartbeat`: runtime 心跳和健康状态。
 - `contract`: `shared/tasks/{taskId}/spec.md / plan.md / result.md / artifacts/`。
 
+落地原则：
+
+- Manager runtime 和 Worker runtime 都是 `Agent Runtime Base`，不是“模型类型”。OpenClaw / QwenPaw 可以作为 Manager / Team Leader，也可以作为 resident Worker；Claude Code / OpenCode / Codex / Gemini 当前主要作为 Worker bridge，后续可以升级为长期 bridge process。
+- 上层 Controller / Room / Manager 只依赖统一 contract，不直接依赖某个 CLI 的私有参数。不同基座的差异只留在 adapter：OpenClaw 是 gateway mode，QwenPaw 是 workspace mode，OpenCode/Claude/Codex/Gemini 是 CLI bridge mode。
+- Bridge mode 不是低一等的逻辑旁路。它必须读取同一份 `SOUL.md / AGENTS.md / skills / runtime.json / rooms.json / tasks.json`，必须通过 Matrix timeline 输入输出，必须创建 `WorkerInstance / RuntimeLease / Artifact`，只是监听和执行由 AgentHub 托管。
+- Controller 每次 reconcile 都要向 `AGENTS.md` 注入当前协作上下文，包括 Room、Controller API、SharedStorage、任务契约、mention/澄清/停止规则、runtime base、model binding、sandbox 和 output rules。不能只在一次性 prompt 里塞这些信息。
+
 ## 标准 Workspace 结构
 
 Manager workspace：
@@ -244,6 +251,43 @@ Bridge 模式要求：
 - 不把 CLI 输出伪装成 Manager 输出。
 - 失败要保留真实 runtime base、model、command、cwd、stderr 摘要。
 - 后续可以替换为 resident runtime，而不改变上层 Manager/Room/Task 语义。
+
+当前 bridge projection 的规范路径：
+
+```text
+Worker contract root
+  -> SOUL.md / AGENTS.md / skills / profile.json / runtime.json / state.json / rooms.json / tasks.json
+  -> projection
+  -> execution cwd/.agenthub/worker-contract/*
+  -> execution cwd/AGENTS.md 注入 AGENTHUB:BRIDGE-RUNTIME-CONTEXT
+```
+
+这样即使是 OpenCode / Claude Code / Codex / Gemini，本次执行也能“像一个 AgentHub Worker”一样知道自己是谁、在哪个 Room、接了哪个 task、产物写到哪里、如何澄清和如何停止。
+
+## Controller Skill 调用路径
+
+Manager skill 的目标形态是：
+
+```text
+自然语言意图
+  -> Manager 选择 skill
+  -> skill 调 /api/controller/*
+  -> Controller 创建/调和真实资源
+  -> Matrix Room timeline 写入过程、@mention、结果和诊断
+```
+
+当前已收口的关键入口：
+
+- `create_worker`: 进入 `ControllerApi.createWorker()`，走 Member Reconcile 5 阶段。
+- `assign_task`: 进入 `ControllerApi.assignTask()`，创建 Run / WorkspaceTask / TaskThread / task room / RuntimeLease，并向 task room 写 Matrix @mention-first `task.assigned` 事件。
+- `room create/events/mention`: 进入 `/api/controller/rooms*`，不再绕到产品态 `/api/rooms`。
+
+仍需补强：
+
+- Controller API schema / OpenAPI / YAML apply。
+- 危险操作 approval 和审计字段。
+- Team / Human / Manager controller 的完整资源化。
+- durable reconcile queue 和 config generation bump。
 
 ## Heartbeat 与 Patrol
 

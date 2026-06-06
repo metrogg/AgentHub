@@ -38,7 +38,8 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
   - 后续仍可补 `QwenPawWorkerBackend`、更完整的 Docker sandbox backend 和 durable backend health reconcile。
 - `apps/server/src/services/controller-plane/controller-api.ts`
   - 提供 Manager skill 应该调用的统一门面。
-  - 当前封装 Worker apply/reconcile/wake/stop/idle-stop、Run create/list/reconcile/cancel、Task list/status/complete/fail、Room create/reconcile/event/mention/participant、RuntimeLease summary、Artifact register/list。
+  - 当前封装 Worker apply/reconcile/wake/stop/idle-stop、Run create/list/reconcile/cancel、Task assign/list/status/complete/fail、Room create/reconcile/event/mention/participant、RuntimeLease summary、Artifact register/list。
+  - `assignTask()` 已成为 Manager skill 派活入口：它会创建或复用 group session，启动 Run，创建 WorkspaceTask / TaskThread / task room / RuntimeLease，写入共享任务契约，并向 task room 写 Matrix @mention-first `task.assigned` 事件；route 层不再构造 fake message 或直接拼调度上下文。
   - 内部仍会调用现有 `RunController / WorkerController / RoomController / RuntimeLeaseController / ArtifactController`，但外部不再直接依赖这些底层控制器。
 - `apps/server/src/routes/controller.ts`
   - 提供受 Manager Matrix token 保护的 `/api/controller/*` HTTP API 第一版。
@@ -88,6 +89,7 @@ AgentHub 之前虽然已经拆出了 `RunController`、`WorkerController`、`Roo
 - Controller Plane 诊断已补上 Worker runtime 明细：设置页现在可以直接看出某个 Worker 是 `resident-openclaw`、`resident-qwenpaw` 还是 `bridge`，是否拥有 Matrix identity/participant，SOUL/AGENTS/skills/state/rooms/tasks 是否齐全，以及最近 heartbeat/error。bridge Worker 还会展示 `inspectCodeAgentRuntime()` 的结果，例如 CLI 未安装、模型凭据缺失、执行开关关闭或 cwd 无效。
 - Resident Worker 自检已接入 Controller Plane：设置页可对 OpenClaw/QwenPaw resident worker 做 dry-run readiness 检查；自动化测试覆盖 `dispatch=true` 的 Matrix probe，确保 self-test request 写入 Room timeline 后能观察到 Worker 协议回复。
 - `/api/controller/*` 第一版已可用：Manager token 鉴权、Room 创建/事件读取/事件写入、通用 reconcile 已有路由级测试覆盖；`agenthub room create/events/mention` 也改为走 `/api/controller/rooms*`，不再绕过控制面。
+- `POST /api/controller/tasks` 已切到 `ControllerApi.assignTask()`：受 Manager token 保护的 HTTP 入口会创建真实 Run / Task / TaskThread / task room / RuntimeLease，并在 task room 生成 Matrix mention-first assignment。测试已覆盖该入口不会停留在路由层 fake message，而是能从 DB 观察到 `workspace_tasks`、`task_threads`、`rooms`、`room_participants` 和 `timeline_events(metadata.matrixExecutionBus=true)`。
 
 Manager Runtime 已调整：
 
@@ -108,6 +110,10 @@ Manager Runtime 已调整：
   - 验证 resident Worker self-test 能检查 readiness，并能通过 Matrix probe 观察到 Worker 协议回复。
 - `tests/manager-runtime.test.ts`
   - 验证 Manager tools 仍可执行。
+- `tests/controller-routes.test.ts`
+  - 验证 Manager Matrix token 鉴权。
+  - 验证 `/api/controller/rooms` 能创建 Room、写入/读取 timeline event，并通过通用 reconcile 观察 Room。
+  - 验证 `/api/controller/tasks` 能通过 `ControllerApi.assignTask()` 创建真实任务资源和 Matrix @mention-first task room。
 
 ## 当前不是完整 HiClaw Controller
 

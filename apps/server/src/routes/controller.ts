@@ -1,11 +1,9 @@
 import { Hono, type Context } from 'hono'
-import { and, db, eq, matrixIdentities, sessions } from '@agenthub/db'
+import { and, db, eq, matrixIdentities } from '@agenthub/db'
 import { AppError, AppErrorCodes } from '../lib/error'
 import { logger } from '../lib/logger'
 import { controllerApi } from '../services/controller-plane/controller-api'
 import { controllerReconcileQueue, resourceRef, type ControllerResourceKind } from '../services/controller-plane'
-import { dispatchAssignBatch } from '../services/controller-plane/task-dispatcher'
-import type { RunControllerRunContext } from '../services/orchestrator/run-controller'
 
 // ─── Auth Middleware ───────────────────────────────────────────────────
 
@@ -206,45 +204,20 @@ controllerRoutes.post('/rooms/:id/mentions', async (c) => {
 
 controllerRoutes.post('/tasks', async (c) => {
   const body = await c.req.json()
-  const workspaceId = requireP(body, 'workspaceId')
-  const title = requireP(body, 'title')
-
-  const [groupSession] = await db.select().from(sessions).where(eq(sessions.workspaceId, workspaceId)).limit(1)
-  if (!groupSession) throw AppError.fromCode(AppErrorCodes.SESSION_NOT_FOUND, 'No session found for workspace')
-
-  const fakeMessage = {
-    id: `controller-task-${Date.now()}`,
-    sessionId: groupSession.id,
-    senderId: 'manager',
-    senderType: 'system' as const,
-    type: 'text',
-    content: title,
-    metadata: {},
-    isPinned: false,
-    replyToMessageId: null,
-    createdAt: new Date(),
-  }
-
-  let runContext: RunControllerRunContext | undefined
-  if (body.runId) {
-    const ctx = await controllerApi.getRunContext(body.runId)
-    if (ctx) runContext = ctx
-  }
-
-  const result = await dispatchAssignBatch({
-    groupSession,
-    ownerId: groupSession.ownerId,
-    goal: fakeMessage.content,
-    actions: [{
-      type: 'assign',
-      targetWorkerId: body.assignToAgentId || body['assign-to'] || undefined,
-      taskTitle: title,
-      taskDescription: body.spec || body.description || title,
-      message: body.spec || title,
-      reason: 'Controller API: create_task',
-    }],
+  const result = await controllerApi.assignTask({
+    workspaceId: requireP(body, 'workspaceId'),
+    title: requireP(body, 'title'),
+    description: body.description || null,
+    spec: body.spec || null,
+    message: body.message || null,
+    goal: body.goal || null,
+    targetWorkerId: body.targetWorkerId || body.assignToAgentId || body['assign-to'] || null,
+    taskKey: body.taskKey || null,
+    dependsOn: Array.isArray(body.dependsOn) ? body.dependsOn : undefined,
+    runId: body.runId || null,
+    groupSessionId: body.groupSessionId || body.sessionId || null,
+    ownerId: body.ownerId || null,
     runtimeType: body.runtimeType || 'code-agent',
-    run: runContext,
   })
 
   return c.json({ success: true, result })

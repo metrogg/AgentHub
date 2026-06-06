@@ -22,10 +22,13 @@ import { runController, type RunControllerRunContext } from '../orchestrator/run
 import { workerController } from '../orchestrator/worker-controller'
 import { runtimeLeaseController } from '../orchestrator/runtime-lease-controller'
 import { registerArtifactBatch } from '../orchestrator/artifact-controller'
+import type { ManagerAction } from '../manager-runtime'
+import { ensureGroupSession } from '../workspace/session-manager'
 import { workerContainersEnabled } from '../container-runtime/agent-runtime-containers'
 import { dockerWorkerBackend } from './docker-worker-backend'
 import { localCliWorkerBackend, type WorkerBackend } from './worker-backend'
 import { MemberReconciler } from './member-reconciler'
+import { dispatchAssignBatch } from './task-dispatcher'
 import {
   condition,
   resourceRef,
@@ -226,6 +229,59 @@ export class ControllerApi {
 
   async listTasks(runId: string) {
     return db.select().from(workspaceTasks).where(eq(workspaceTasks.runId, runId))
+  }
+
+  async assignTask(input: {
+    workspaceId: string
+    title: string
+    description?: string | null
+    spec?: string | null
+    message?: string | null
+    goal?: string | null
+    targetWorkerId?: string | null
+    assignToAgentId?: string | null
+    taskKey?: string | null
+    dependsOn?: string[]
+    runId?: string | null
+    groupSessionId?: string | null
+    ownerId?: string | null
+    runtimeType?: string | null
+  }) {
+    const [workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(eq(workspaces.id, input.workspaceId))
+      .limit(1)
+    if (!workspace) throw new Error(`Workspace ${input.workspaceId} not found.`)
+    const ownerId = input.ownerId ?? workspace.ownerId
+    if (ownerId !== workspace.ownerId) throw new Error(`Owner ${ownerId} cannot assign tasks in workspace ${workspace.id}.`)
+
+    const groupSession = input.groupSessionId
+      ? await this.loadWorkspaceGroupSession(input.groupSessionId, input.workspaceId)
+      : await ensureGroupSession(input.workspaceId, ownerId)
+    if (!groupSession) throw new Error(`Group session ${input.groupSessionId} not found in workspace ${input.workspaceId}.`)
+
+    const runContext = input.runId ? await this.getRunContext(input.runId) : null
+    const description = input.spec?.trim() || input.description?.trim() || input.message?.trim() || input.title
+    const action: ManagerAction = {
+      type: 'assign',
+      targetWorkerId: input.targetWorkerId ?? input.assignToAgentId ?? undefined,
+      taskKey: input.taskKey ?? undefined,
+      dependsOn: input.dependsOn,
+      taskTitle: input.title,
+      taskDescription: description,
+      message: input.message?.trim() || description,
+      reason: 'Controller API: task.assign',
+    }
+
+    return dispatchAssignBatch({
+      groupSession,
+      ownerId,
+      goal: input.goal?.trim() || input.title,
+      actions: [action],
+      runtimeType: input.runtimeType ?? 'code-agent',
+      run: runContext ?? undefined,
+    })
   }
 
   async getTask(taskId: string) {
@@ -754,6 +810,15 @@ export class ControllerApi {
       .where(eq(workspaceAgents.id, workspaceAgentId))
       .limit(1)
     return agent ?? null
+  }
+
+  private async loadWorkspaceGroupSession(sessionId: string, workspaceId: string) {
+    const [session] = await db
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.id, sessionId), eq(sessions.workspaceId, workspaceId)))
+      .limit(1)
+    return session ?? null
   }
 }
 
