@@ -321,6 +321,104 @@ describe('Agent contract generator', () => {
     expect(runtime.runtimeBase).toBe('opencode')
     expect(runtime.runtimeMode).toBe('bridge')
     expect(runtime.modelId).toBe('mimo-v2.5')
+    const adapterContract = runtime.adapterContract as Record<string, unknown>
+    expect(adapterContract.parityCapabilities).toEqual(expect.arrayContaining([
+      'matrix_identity',
+      'room_timeline_io',
+      'SOUL.md',
+      'AGENTS.md',
+      'heartbeat',
+      'clarification_resume',
+    ]))
+    const baseProfile = adapterContract.baseProfile as {
+      label: string
+      implementation: { architectureMode: string; processModel: string; healthSource: string }
+      matrixIntegration: { owner: string; pattern: string }
+    }
+    expect(baseProfile.label).toBe('OpenCode Worker')
+    expect(baseProfile.implementation.architectureMode).toBe('bridge')
+    expect(baseProfile.matrixIntegration.owner).toBe('agenthub-supervisor')
+  })
+
+  test('Worker runtime adapter contract records base-specific parity profiles', async () => {
+    const [workspace] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: 'default-user',
+        name: 'Runtime Adapter Contract Workspace',
+        goal: 'Verify per-base runtime contract parity',
+      })
+      .returning()
+
+    const expected = [
+      { base: 'openclaw', mode: 'resident', label: 'OpenClaw Worker', architectureMode: 'gateway', listenerOwner: 'runtime-native', managerEligible: true },
+      { base: 'qwenpaw', mode: 'resident', label: 'QwenPaw Worker', architectureMode: 'workspace', listenerOwner: 'runtime-native', managerEligible: true },
+      { base: 'claude-code', mode: 'bridge', label: 'Claude Code Worker', architectureMode: 'bridge', listenerOwner: 'agenthub-supervisor', managerEligible: false },
+      { base: 'opencode', mode: 'bridge', label: 'OpenCode Worker', architectureMode: 'bridge', listenerOwner: 'agenthub-supervisor', managerEligible: false },
+      { base: 'codex', mode: 'bridge', label: 'Codex Worker', architectureMode: 'bridge', listenerOwner: 'agenthub-supervisor', managerEligible: false },
+      { base: 'gemini', mode: 'bridge', label: 'Gemini CLI Worker', architectureMode: 'bridge', listenerOwner: 'agenthub-supervisor', managerEligible: false },
+    ]
+
+    for (const item of expected) {
+      const [agent] = await db
+        .insert(workspaceAgents)
+        .values({
+          workspaceId: workspace!.id,
+          name: `${item.label} Contract`,
+          role: 'Runtime parity worker',
+          roleType: 'builder',
+          runtimeType: 'code-agent',
+          codeAgentType: item.mode === 'bridge' ? item.base : null,
+          modelId: 'test-model',
+          roleProfile: { workerRuntimeBase: item.base },
+          skillIds: [],
+        })
+        .returning()
+      const ws = await ensureWorkerAgentContract({
+        workerInstanceId: `runtime-contract-${item.base}-${Date.now()}`,
+        agent: agent!,
+        runtimeBase: item.base,
+      })
+      const runtime = JSON.parse(readFileSync(ws.runtimePath, 'utf8')) as {
+        runtimeBase: string
+        runtimeMode: string
+        adapterContract: {
+          mode: string
+          parityCapabilities: string[]
+          baseProfile: {
+            label: string
+            roleEligibility: { manager: boolean; worker: boolean }
+            implementation: { architectureMode: string }
+            matrixIntegration: { owner: string }
+            currentLimits: string[]
+          }
+        }
+      }
+
+      expect(runtime.runtimeBase).toBe(item.base)
+      expect(runtime.runtimeMode).toBe(item.mode)
+      expect(runtime.adapterContract.mode).toBe(item.mode)
+      expect(runtime.adapterContract.parityCapabilities).toEqual(expect.arrayContaining([
+        'matrix_identity',
+        'room_timeline_io',
+        'mention_dispatch',
+        'workspace_contract',
+        'shared_task_contract',
+        'heartbeat',
+        'transparent_blockers',
+      ]))
+      expect(runtime.adapterContract.baseProfile.label).toBe(item.label)
+      expect(runtime.adapterContract.baseProfile.roleEligibility.manager).toBe(item.managerEligible)
+      expect(runtime.adapterContract.baseProfile.roleEligibility.worker).toBe(true)
+      expect(runtime.adapterContract.baseProfile.implementation.architectureMode).toBe(item.architectureMode)
+      expect(runtime.adapterContract.baseProfile.matrixIntegration.owner).toBe(item.listenerOwner)
+      if (item.base === 'qwenpaw') {
+        expect(runtime.adapterContract.baseProfile.currentLimits.join(' ')).toContain('WorkerBackend is not implemented')
+      }
+      if (item.mode === 'bridge') {
+        expect(runtime.adapterContract.baseProfile.currentLimits.join(' ')).toContain('not yet a runtime-native Matrix listener')
+      }
+    }
   })
 
   test('projects Worker contract into bridge CLI execution cwd idempotently', async () => {

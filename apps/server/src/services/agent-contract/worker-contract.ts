@@ -9,6 +9,22 @@ type WorkspaceAgentRow = typeof workspaceAgents.$inferSelect
 const CONTEXT_START = '<!-- AGENTHUB:COLLABORATION-CONTEXT:START -->'
 const CONTEXT_END = '<!-- AGENTHUB:COLLABORATION-CONTEXT:END -->'
 
+const RUNTIME_PARITY_CAPABILITIES = [
+  'matrix_identity',
+  'room_timeline_io',
+  'mention_dispatch',
+  'SOUL.md',
+  'AGENTS.md',
+  'skills',
+  'workspace_contract',
+  'shared_task_contract',
+  'artifact_refs',
+  'heartbeat',
+  'stop_or_cancel',
+  'clarification_resume',
+  'transparent_blockers',
+]
+
 export interface WorkerAgentContractWorkspace {
   root: string
   profilePath: string
@@ -243,12 +259,137 @@ function runtimeModeForBase(runtimeBase: string | null): 'resident' | 'bridge' |
 
 function runtimeAdapterContract(runtimeBase: string | null) {
   const mode = runtimeModeForBase(runtimeBase)
+  const baseProfile = runtimeBaseProfile(runtimeBase)
   return {
+    base: runtimeBase ?? 'unconfigured',
     mode,
-    listensToMatrix: mode === 'resident' ? 'runtime-native' : mode === 'bridge' ? 'agenthub-supervisor' : 'unconfigured',
+    baseProfile,
+    listensToMatrix: baseProfile.matrixIntegration.owner,
     workspaceContract: ['profile.json', 'runtime.json', 'SOUL.md', 'AGENTS.md', 'skills/', 'state.json', 'rooms.json', 'tasks.json'],
     taskContract: ['shared/tasks/{taskId}/spec.md', 'plan.md', 'result.md', 'artifacts/'],
+    parityCapabilities: RUNTIME_PARITY_CAPABILITIES,
     heartbeat: ['lastHeartbeatAt', 'lastMatrixSyncAt', 'lastRuntimeReadyAt', 'lastTaskStartedAt', 'lastTaskCompletedAt', 'lastError', 'queueDepth'],
+  }
+}
+
+function runtimeBaseProfile(runtimeBase: string | null) {
+  switch (runtimeBase) {
+    case 'openclaw':
+      return {
+        label: 'OpenClaw Worker',
+        roleEligibility: { manager: true, worker: true },
+        implementation: {
+          language: 'Node.js',
+          architectureMode: 'gateway',
+          processModel: 'resident gateway process or Docker container',
+          toolIntegration: 'OpenClaw tools and MCP-compatible gateway tools',
+          configStrategy: 'openclaw.json plus mirrored SOUL/AGENTS/skills workspace',
+          healthSource: 'gateway health, Matrix sync, heartbeat, and Controller runtime state',
+          sessionStrategy: 'long-running gateway session',
+        },
+        matrixIntegration: {
+          owner: 'runtime-native',
+          pattern: 'OpenClaw Matrix channel listens to joined rooms and replies through Matrix timeline',
+        },
+        currentLimits: [],
+      }
+    case 'qwenpaw':
+      return {
+        label: 'QwenPaw Worker',
+        roleEligibility: { manager: true, worker: true },
+        implementation: {
+          language: 'Python',
+          architectureMode: 'workspace',
+          processModel: 'resident workspace process or Docker container',
+          toolIntegration: 'QwenPaw/CoPaw channels and Controller skills',
+          configStrategy: 'workspace files plus mirrored SOUL/AGENTS/skills workspace',
+          healthSource: 'workspace loop health, Matrix sync, heartbeat, and Controller runtime state',
+          sessionStrategy: 'lightweight resident workspace loop',
+        },
+        matrixIntegration: {
+          owner: 'runtime-native',
+          pattern: 'QwenPaw channel listens to joined rooms and replies through Matrix timeline',
+        },
+        currentLimits: ['AgentHub recognizes this base, but QwenPaw WorkerBackend is not implemented yet.'],
+      }
+    case 'claude-code':
+      return bridgeRuntimeBaseProfile({
+        label: 'Claude Code Worker',
+        command: 'claude',
+        toolIntegration: 'Claude Code native tools and project instructions',
+        configStrategy: 'native Claude Code auth/config plus projected SOUL/AGENTS/skills contract',
+        sessionStrategy: 'CLI session resume when Claude Code exposes a session id or continue flag',
+      })
+    case 'opencode':
+      return bridgeRuntimeBaseProfile({
+        label: 'OpenCode Worker',
+        command: 'opencode',
+        toolIntegration: 'OpenCode native tools and auth/config',
+        configStrategy: 'native OpenCode config plus projected SOUL/AGENTS/skills contract',
+        sessionStrategy: 'AgentHub-managed task session bridge',
+      })
+    case 'codex':
+      return bridgeRuntimeBaseProfile({
+        label: 'Codex Worker',
+        command: 'codex',
+        toolIntegration: 'Codex CLI native tools and auth/config',
+        configStrategy: 'native Codex auth/config plus projected SOUL/AGENTS/skills contract',
+        sessionStrategy: 'AgentHub-managed task session bridge',
+      })
+    case 'gemini':
+      return bridgeRuntimeBaseProfile({
+        label: 'Gemini CLI Worker',
+        command: 'gemini',
+        toolIntegration: 'Gemini CLI native tools and auth/config',
+        configStrategy: 'native Gemini config plus projected SOUL/AGENTS/skills contract',
+        sessionStrategy: 'AgentHub-managed task session bridge',
+      })
+    default:
+      return {
+        label: 'Unconfigured Worker',
+        roleEligibility: { manager: false, worker: false },
+        implementation: {
+          language: 'none',
+          architectureMode: 'unconfigured',
+          processModel: 'blocked',
+          toolIntegration: 'none',
+          configStrategy: 'requires explicit Worker runtime base and compatible model',
+          healthSource: 'Controller validation only',
+          sessionStrategy: 'blocked until configured',
+        },
+        matrixIntegration: {
+          owner: 'unconfigured',
+          pattern: 'no runtime listener until Controller receives an explicit base',
+        },
+        currentLimits: ['Worker runtime base is missing.'],
+      }
+  }
+}
+
+function bridgeRuntimeBaseProfile(input: {
+  label: string
+  command: string
+  toolIntegration: string
+  configStrategy: string
+  sessionStrategy: string
+}) {
+  return {
+    label: input.label,
+    roleEligibility: { manager: false, worker: true },
+    implementation: {
+      language: 'native CLI',
+      architectureMode: 'bridge',
+      processModel: 'AgentHub-managed CLI subprocess; long-running bridge is a later upgrade',
+      toolIntegration: input.toolIntegration,
+      configStrategy: input.configStrategy,
+      healthSource: `${input.command} command probe, native version check, model/auth/config, cwd, and WorkerRuntime heartbeat`,
+      sessionStrategy: input.sessionStrategy,
+    },
+    matrixIntegration: {
+      owner: 'agenthub-supervisor',
+      pattern: 'AgentHub Matrix listener imports room events, invokes the CLI bridge, then writes replies back to Matrix timeline',
+    },
+    currentLimits: ['Bridge mode is compatible with the common contract but is not yet a runtime-native Matrix listener.'],
   }
 }
 
@@ -300,11 +441,18 @@ function runtimeSoulLines(runtimeBase: string | null): string[] {
 
 function runtimeContextLines(runtimeBase: string | null): string[] {
   const mode = runtimeModeForBase(runtimeBase)
+  const profile = runtimeBaseProfile(runtimeBase)
   return [
     `- Mode: ${mode}`,
-    `- Matrix listener owner: ${mode === 'resident' ? 'runtime-native when available; AgentHub supervisor verifies health' : mode === 'bridge' ? 'AgentHub supervisor imports room events and invokes the CLI bridge' : 'none'}`,
-    `- Runtime readiness: ${mode === 'resident' ? 'gateway/process health + Matrix sync + heartbeat' : mode === 'bridge' ? 'CLI installed + native probe + model/auth/config + cwd validity' : 'blocked until configured'}`,
+    `- Base profile: ${profile.label}`,
+    `- Architecture mode: ${profile.implementation.architectureMode}`,
+    `- Process model: ${profile.implementation.processModel}`,
+    `- Matrix listener owner: ${profile.matrixIntegration.owner}`,
+    `- Matrix pattern: ${profile.matrixIntegration.pattern}`,
+    `- Runtime readiness: ${profile.implementation.healthSource}`,
     '- The upper-layer Manager should see the same worker capabilities regardless of runtime base: identity, skills, workspace, heartbeat, room listener, and task contract.',
+    `- Parity capabilities: ${RUNTIME_PARITY_CAPABILITIES.join(', ')}`,
+    profile.currentLimits.length ? `- Current limits: ${profile.currentLimits.join(' ')}` : '- Current limits: none recorded.',
   ]
 }
 
