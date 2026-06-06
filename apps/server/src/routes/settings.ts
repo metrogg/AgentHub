@@ -957,6 +957,12 @@ function managerRuntimeStatusMessage(status: {
   return '未知的 Manager runtime 配置。请检查 AGENTHUB_MANAGER_RUNTIME 环境变量。'
 }
 
+function firstFailedStepMessage(steps: Array<{ ok: boolean; label: string; message?: string | null }>) {
+  const failed = steps.find((step) => !step.ok)
+  if (!failed) return ''
+  return `${failed.label}失败：${failed.message || '请查看日志。'}`
+}
+
 async function startLocalTuwunel() {
   const composeFile = resolve(process.cwd(), 'infra', 'docker-compose.hiclaw-lite.yml')
   if (!existsSync(composeFile)) {

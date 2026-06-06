@@ -798,6 +798,24 @@ export interface ManagerRuntimeActionResult {
   message: string
 }
 
+export interface LocalRuntimePrepareResult {
+  ok: boolean
+  message: string
+  steps: Array<{
+    id: string
+    label: string
+    ok: boolean
+    message: string
+    output?: string
+  }>
+  diagnostics: {
+    matrix: MatrixDiagnostics
+    containerRuntime: ContainerRuntimeDiagnostics
+    controllerPlane: ControllerPlaneDiagnostics
+    managerRuntime: ManagerRuntimeStatusResponse
+  }
+}
+
 export interface OpencodeModelItem {
   id: string
   provider: string
@@ -1799,6 +1817,11 @@ export const api = {
     request<PrepareLocalContainerRuntimeResult>('/settings/container-runtime/prepare-local', {
       method: 'POST',
       timeout: 180_000,
+    }),
+  prepareLocalRuntime: () =>
+    request<LocalRuntimePrepareResult>('/settings/local-runtime/prepare', {
+      method: 'POST',
+      timeout: 240_000,
     }),
   getContainerRuntimeLogs: (name: string, tail = 160) =>
     request<ContainerRuntimeLogsResponse>(
